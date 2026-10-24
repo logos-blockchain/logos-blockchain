@@ -138,8 +138,10 @@ cargo test -p logos-blockchain-zone-sdk-testing
   catalogue, by theme: `publishing.rs` (messages, checkpoints, same-key
   instances, turns, a foreign writer, the stale window's edge), `configs.rs` (re-keying, orphaning
   by config, posting timeouts), `notes.rs` (deposits, withdraws, pins,
-  refunds, the wallet view), `bundles.rs` (multi-sig rounds and hand-built
-  custom txs), `tiers.rs` (the catalogue's self-check and the pairs tier)
+  refunds, the wallet view), `bundles.rs` (multi-sig rounds, the
+  prepare-then-submit boundary: a submit refused for a moved channel, a
+  stale config or missing signatures leaves nothing pending, a late one on
+  an unmoved channel lands; and hand-built custom txs), `tiers.rs` (the catalogue's self-check and the pairs tier)
   and `known_issues.rs` (ignored single tests with the issue in the
   reason). `main.rs` holds the
   shared helpers and the `scenario!` macro. Every story runs the reference
@@ -161,7 +163,13 @@ cargo test -p logos-blockchain-zone-sdk-testing
   the reversed order of what the sequencers posted, beside whatever the
   writers in turn put in. The client's condition: a dropped stream, a node
   outage, a restart from checkpoint or from scratch, failing fetches, a gas
-  price move, a user deposit, a withdraw. One to three sequencers and one
+  price move, a user deposit, a withdraw. A config may raise the transfer
+  threshold to two, and a withdraw or pin then runs the two-phase round:
+  prepared now, co-signed by another sequencer, submitted zero to three
+  events later, or now and then past the fee note's reservation, so the
+  submit often finds the channel moved and is refused; a refused bundle
+  must leave nothing pending, and is prepared again at once or dropped.
+  One to three sequencers and one
   or two writers share the channel under random posting rules, on one node
   or two partitioning ones, and in half the schedules another zone runs
   its own channel on the chain beside them. Only invariants are asserted: every planned

@@ -22,20 +22,34 @@ pub enum Event {
     /// The user deposits one of its pre-minted notes into the channel.
     Deposit,
     /// Sequencer `index` withdraws `amount` to the user, from finalized
-    /// notes or, with `unfinalized`, from any the SDK picks.
+    /// notes or, with `unfinalized`, from any the SDK picks. On a channel
+    /// whose transfer threshold is one and with no `delay` the one-shot
+    /// helper; otherwise the bundle is prepared now, co-signed by the other
+    /// sequencers up to the threshold, and submitted `delay` events later,
+    /// so the channel may have moved under it. A refused bundle is prepared
+    /// again at once with `retry`, or dropped.
     Withdraw {
         index: usize,
         amount: u64,
         unfinalized: bool,
+        delay: usize,
+        retry: bool,
     },
-    /// Sequencer `index` pins a deposit whose notes its wallet holds.
-    Pin { index: usize },
-    /// Sequencer `index` submits a config accrediting itself and `names`.
+    /// Sequencer `index` pins a deposit whose notes its wallet holds; `delay`
+    /// and `retry` as for [`Self::Withdraw`].
+    Pin {
+        index: usize,
+        delay: usize,
+        retry: bool,
+    },
+    /// Sequencer `index` submits a config accrediting itself and `names`,
+    /// with `threshold` signatures required on transfers and withdraws.
     Config {
         index: usize,
         names: Vec<String>,
         timeframe: u32,
         timeout: u32,
+        threshold: u16,
     },
     /// Sequencer `index` submits a hand-built tx chaining `payloads`. A
     /// `priced_out` one is followed by a gas price rise, so the fee it

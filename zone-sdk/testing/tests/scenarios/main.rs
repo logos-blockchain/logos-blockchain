@@ -25,7 +25,8 @@ use lb_core::{
 };
 use lb_key_management_system_service::keys::ZkSignature;
 use lb_zone_sdk::sequencer::{
-    FinalizedOp, PendingTx, PreparedChannelConfig, SequencerConfig, WithdrawArg, WithdrawInputs,
+    Error as SdkError, FinalizedOp, PendingTx, PreparedAtomicBundle, PreparedChannelConfig,
+    SequencerConfig, WithdrawArg, WithdrawInputs,
 };
 use logos_blockchain_zone_sdk_testing::{
     chains::{self, Chain, Shape},
@@ -33,7 +34,7 @@ use logos_blockchain_zone_sdk_testing::{
     for_each_base_condition, for_each_chain,
     harness::RECONNECT_DELAY,
     layers::Layer,
-    node::{BlockSpec, TxSelection},
+    node::{BlockSpec, PENDING_NOTE_EXPIRY_BLOCKS, TxSelection},
     policy::payload_str,
     txs, world as common,
     writers::WriterOp,
@@ -180,9 +181,22 @@ fn count_payload(payloads: &[String], payload: &str) -> usize {
 async fn submit_bundle(
     world: &mut World,
     index: usize,
-    prepared: lb_zone_sdk::sequencer::PreparedAtomicBundle,
+    prepared: PreparedAtomicBundle,
     signers: &[&str],
 ) -> lb_zone_sdk::node_types::TxHash {
+    try_submit_bundle(world, index, prepared, signers)
+        .await
+        .expect("bundle submitted")
+}
+
+/// Sign `prepared` with `signers` and submit it from `index`, as the SDK
+/// takes it.
+async fn try_submit_bundle(
+    world: &mut World,
+    index: usize,
+    prepared: PreparedAtomicBundle,
+    signers: &[&str],
+) -> Result<lb_zone_sdk::node_types::TxHash, SdkError> {
     let mut signatures = IndexedSignatures::empty();
     for name in signers {
         let signature = prepared
@@ -192,14 +206,14 @@ async fn submit_bundle(
             .try_insert(signature.channel_key_index, signature.signature)
             .expect("one signature per key");
     }
-    let (result, _) = world
+    let result = world
         .harness
         .seq(index)
         .handle()
         .submit_atomic_bundle(prepared, signatures)
-        .expect("bundle submitted");
+        .map(|(result, _)| result.inscription_id());
     world.harness.settle().await;
-    result.inscription_id()
+    result
 }
 
 /// Step until a running sequencer's wallet holds every note of `ids`, and

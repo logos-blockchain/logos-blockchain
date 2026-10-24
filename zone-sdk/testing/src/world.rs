@@ -16,13 +16,15 @@ use lb_core::{
         traits::Hashable,
         transactions::states::Unverified,
     },
+    proofs::channel_multi_sig_proof::IndexedSignatures,
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkKey, ZkPublicKey};
 use lb_zone_sdk::{
     node_types::TxHash,
     sequencer::{
-        ChannelWalletView, FinalizedOp, FinalizedTx, PublishResult, SequencerChannelView,
-        SequencerCheckpoint, SequencerConfig, WithdrawArg, WithdrawInputs, ZoneSequencer,
+        ChannelWalletView, FinalizedOp, FinalizedTx, PreparedAtomicBundle, PublishResult,
+        SequencerChannelView, SequencerCheckpoint, SequencerConfig, WithdrawArg, WithdrawInputs,
+        ZoneSequencer,
     },
 };
 use num_bigint::BigUint;
@@ -90,6 +92,13 @@ pub struct World {
     /// Deposits made through [`Self::deposit`]: op id, the channel notes it
     /// created, and whether a sequencer pinned them.
     deposits: Vec<(Hash, Vec<NoteId>, bool)>,
+    /// Bundles prepared by an event and not yet submitted, with the event
+    /// count at which they are due.
+    prepared: Vec<PreparedBundle>,
+    /// Events applied so far.
+    events: usize,
+    /// Bundles the SDK refused at submit because the channel had moved.
+    pub bundle_refusals: usize,
     /// Checkpoints of sequencers stopped by [`Event::Stop`].
     stopped: Vec<Option<SequencerCheckpoint>>,
     /// Payloads published through [`Event::Publish`], [`Event::Burst`]
@@ -105,6 +114,27 @@ pub struct EventPayloads {
     /// Submitted as hand-built txs or pins: not republished by the
     /// reference consumer, so expected at most once.
     pub at_most_once: Vec<String>,
+}
+
+/// A bundle prepared by an event, waiting for its submit.
+struct PreparedBundle {
+    index: usize,
+    bundle: PreparedAtomicBundle,
+    payload: String,
+    kind: BundleKind,
+    due: usize,
+    retry: bool,
+}
+
+/// What a prepared bundle does, enough to prepare it again.
+#[derive(Clone, Copy, Debug)]
+enum BundleKind {
+    Withdraw {
+        amount: u64,
+        unfinalized: bool,
+    },
+    /// The position in `World::deposits`.
+    Pin(usize),
 }
 
 /// A branch that lost or never caught up.
@@ -241,6 +271,9 @@ impl World {
             choices: Vec::new(),
             claims: Claims::default(),
             deposits: Vec::new(),
+            prepared: Vec::new(),
+            events: 0,
+            bundle_refusals: 0,
             stopped: Vec::new(),
             event_payloads: EventPayloads::default(),
         }
@@ -1597,6 +1630,8 @@ impl World {
     /// the merge stays within what the primary can reorg; plain growth on
     /// two nodes is the chain's own gossip step.
     pub async fn apply_event(&mut self, event: Event) {
+        self.events += 1;
+        self.submit_due_bundles().await;
         match event {
             Event::Chain { shape, posted } => {
                 if self.partitioned()
@@ -1636,43 +1671,34 @@ impl World {
                 index,
                 amount,
                 unfinalized,
+                delay,
+                retry,
             } => {
                 if running(self, index) {
-                    let tag = self.steps;
-                    let _ = self
-                        .withdraw(index, amount, unfinalized, &format!("withdraw {tag}"))
+                    self.withdraw_event(index, amount, unfinalized, delay, retry)
                         .await;
                 }
             }
-            Event::Pin { index } => self.pin_from(index).await,
+            Event::Pin {
+                index,
+                delay,
+                retry,
+            } => {
+                if running(self, index) {
+                    self.pin_event(index, delay, retry).await;
+                }
+            }
             Event::Config {
                 index,
                 names,
                 timeframe,
                 timeout,
+                threshold,
             } => {
-                // A config that drops a running sequencer strands its queue,
-                // and both rules at zero freeze the turn on the first key for
-                // ever (the Mantle round robin): neither is a config a zone
-                // would submit. Every sequencer stays accredited, and rules
-                // both zero are skipped when there is more than one key.
-                if !running(self, index) {
-                    return;
+                if running(self, index) {
+                    self.config_event(index, names, timeframe, timeout, threshold)
+                        .await;
                 }
-                let mut accredited: Vec<String> =
-                    self.harness.seqs.iter().map(|s| s.name.clone()).collect();
-                for name in names {
-                    if !accredited.contains(&name) {
-                        accredited.push(name);
-                    }
-                }
-                if accredited.len() > 1 && timeframe == 0 && timeout == 0 {
-                    return;
-                }
-                let names: Vec<&str> = accredited.iter().map(String::as_str).collect();
-                let _ = self
-                    .try_submit_config(index, &names, timeframe, timeout)
-                    .await;
             }
             Event::Custom {
                 index,
@@ -1720,10 +1746,79 @@ impl World {
 
     /// Sequencer `index` pins the first unpinned deposit whose notes its
     /// wallet holds; nothing without one or when the SDK refuses.
-    async fn pin_from(&mut self, index: usize) {
-        if index >= self.harness.seqs.len() || !self.harness.seqs[index].is_running() {
+    /// [`Event::Config`]. A config that drops a running sequencer strands
+    /// its queue, and both rules at zero freeze the turn on the first key
+    /// for ever (the Mantle round robin): neither is a config a zone would
+    /// submit. Every sequencer stays accredited, and rules both zero are
+    /// skipped when there is more than one key.
+    async fn config_event(
+        &mut self,
+        index: usize,
+        names: Vec<String>,
+        timeframe: u32,
+        timeout: u32,
+        threshold: u16,
+    ) {
+        let mut accredited: Vec<String> =
+            self.harness.seqs.iter().map(|s| s.name.clone()).collect();
+        for name in names {
+            if !accredited.contains(&name) {
+                accredited.push(name);
+            }
+        }
+        if accredited.len() > 1 && timeframe == 0 && timeout == 0 {
             return;
         }
+        // The co-signers are the other sequencers: no more required than
+        // there are.
+        let threshold = threshold.min(u16::try_from(self.harness.seqs.len()).expect("few"));
+        let names: Vec<&str> = accredited.iter().map(String::as_str).collect();
+        let _ = self
+            .try_submit_config(index, &names, timeframe, timeout, threshold)
+            .await;
+    }
+
+    /// [`Event::Withdraw`]: the one-shot helper where it applies, else the
+    /// two-phase round. The payload is unique per event, so a refusal can
+    /// tell its bundle apart from the others' in the pending set.
+    async fn withdraw_event(
+        &mut self,
+        index: usize,
+        amount: u64,
+        unfinalized: bool,
+        delay: usize,
+        retry: bool,
+    ) {
+        let payload = format!("withdraw {}", self.events);
+        if delay == 0 && self.transfer_threshold() <= 1 {
+            let _ = self.withdraw(index, amount, unfinalized, &payload).await;
+        } else {
+            let kind = BundleKind::Withdraw {
+                amount,
+                unfinalized,
+            };
+            self.prepare_bundle(index, kind, payload, delay, retry)
+                .await;
+        }
+    }
+
+    /// [`Event::Pin`]: as [`Self::withdraw_event`], on a deposit the
+    /// sequencer's wallet holds.
+    async fn pin_event(&mut self, index: usize, delay: usize, retry: bool) {
+        if delay == 0 && self.transfer_threshold() <= 1 {
+            self.pin_from(index).await;
+        } else if let Some(position) = self.pinnable_deposit(index) {
+            let (op_id, _, _) = &self.deposits[position];
+            let payload = payload_str(&pin_payload(op_id));
+            // Reserved for this bundle: a refusal releases it.
+            self.deposits[position].2 = true;
+            self.prepare_bundle(index, BundleKind::Pin(position), payload, delay, retry)
+                .await;
+        }
+    }
+
+    /// An unpinned deposit whose notes sequencer `index`'s wallet holds.
+    fn pinnable_deposit(&mut self, index: usize) -> Option<usize> {
         let wallet = self.wallet(index);
         let held = |id: &NoteId| {
             wallet
@@ -1732,11 +1827,24 @@ impl World {
                 .chain(wallet.unfinalized.iter())
                 .any(|n| n.note_id == *id)
         };
-        let Some(position) = self
-            .deposits
+        self.deposits
             .iter()
             .position(|(_, ids, pinned)| !pinned && !ids.is_empty() && ids.iter().all(held))
-        else {
+    }
+
+    /// The channel's transfer threshold at the node's tip.
+    fn transfer_threshold(&self) -> u16 {
+        let channel = self.channel_id();
+        self.node()
+            .channel_state_at_tip(channel)
+            .map_or(1, |state| state.transfer_threshold)
+    }
+
+    async fn pin_from(&mut self, index: usize) {
+        if index >= self.harness.seqs.len() || !self.harness.seqs[index].is_running() {
+            return;
+        }
+        let Some(position) = self.pinnable_deposit(index) else {
             return;
         };
         let (op_id, ids, _) = self.deposits[position].clone();
@@ -1754,6 +1862,200 @@ impl World {
                 .push(payload_str(&pin_payload(&op_id)));
         }
         self.harness.settle().await;
+    }
+
+    /// Sequencer `index` prepares the bundle `kind` carries and queues it for
+    /// submit `delay` events from now, or submits it at once. Nothing when
+    /// the SDK refuses to prepare it: out of turn, unfunded, no such notes.
+    async fn prepare_bundle(
+        &mut self,
+        index: usize,
+        kind: BundleKind,
+        payload: String,
+        delay: usize,
+        retry: bool,
+    ) {
+        let Some(bundle) = self.prepare(index, kind, &payload).await else {
+            self.release_bundle(kind);
+            return;
+        };
+        let prepared = PreparedBundle {
+            index,
+            bundle,
+            payload,
+            kind,
+            due: self.events + delay,
+            retry,
+        };
+        if delay == 0 {
+            self.submit_with_retry(prepared).await;
+        } else {
+            self.prepared.push(prepared);
+        }
+    }
+
+    /// Submit `prepared`; refused for a moved channel and marked for retry,
+    /// it is prepared again on the channel as it is now and submitted once
+    /// more.
+    async fn submit_with_retry(&mut self, prepared: PreparedBundle) {
+        let (index, kind, payload) = (prepared.index, prepared.kind, prepared.payload.clone());
+        if !self.submit_prepared(prepared).await {
+            return;
+        }
+        match self.prepare(index, kind, &payload).await {
+            Some(bundle) => {
+                let again = PreparedBundle {
+                    index,
+                    bundle,
+                    payload,
+                    kind,
+                    due: 0,
+                    retry: false,
+                };
+                self.submit_prepared(again).await;
+            }
+            None => self.release_bundle(kind),
+        }
+    }
+
+    async fn prepare(
+        &mut self,
+        index: usize,
+        kind: BundleKind,
+        payload: &str,
+    ) -> Option<PreparedAtomicBundle> {
+        let prepared = match kind {
+            BundleKind::Withdraw {
+                amount,
+                unfinalized,
+            } => {
+                let inputs = if unfinalized {
+                    WithdrawInputs::Auto
+                } else {
+                    WithdrawInputs::Explicit(self.finalized_inputs(index, amount)?)
+                };
+                let outputs = Outputs::new([Note::new(amount, self.user_pk())]);
+                self.harness
+                    .seq(index)
+                    .handle()
+                    .prepare_atomic_withdraw(
+                        make_inscription(payload),
+                        vec![WithdrawArg { outputs }],
+                        inputs,
+                    )
+                    .await
+            }
+            BundleKind::Pin(position) => {
+                let (op_id, ids, _) = self.deposits[position].clone();
+                self.harness
+                    .seq(index)
+                    .handle()
+                    .prepare_pin_deposit(pin_payload(&op_id), ids)
+                    .await
+            }
+        };
+        self.harness.settle().await;
+        prepared.ok()
+    }
+
+    /// A pin that will not be submitted hands its deposit back.
+    fn release_bundle(&mut self, kind: BundleKind) {
+        if let BundleKind::Pin(position) = kind {
+            self.deposits[position].2 = false;
+        }
+    }
+
+    /// Submit every prepared bundle that is due. A stopped preparer drops
+    /// its bundle: the zone would prepare afresh on restart.
+    async fn submit_due_bundles(&mut self) {
+        let due: Vec<PreparedBundle> = {
+            let (due, later) = std::mem::take(&mut self.prepared)
+                .into_iter()
+                .partition(|p| p.due <= self.events);
+            self.prepared = later;
+            due
+        };
+        for prepared in due {
+            let running = prepared.index < self.harness.seqs.len()
+                && self.harness.seqs[prepared.index].is_running();
+            if running {
+                self.submit_with_retry(prepared).await;
+            } else {
+                self.release_bundle(prepared.kind);
+            }
+        }
+    }
+
+    /// Submit every prepared bundle now, due or not.
+    pub async fn flush_prepared(&mut self) {
+        for prepared in &mut self.prepared {
+            prepared.due = 0;
+        }
+        self.submit_due_bundles().await;
+    }
+
+    /// Sign `prepared` with its preparer and the other sequencers up to the
+    /// threshold and submit it. Refused for a moved channel, nothing of it
+    /// may stay pending; `true` then asks for the retry it was marked for.
+    /// Refused signatures are a defect of this bed.
+    async fn submit_prepared(&mut self, prepared: PreparedBundle) -> bool {
+        let PreparedBundle {
+            index,
+            bundle,
+            payload,
+            kind,
+            retry,
+            ..
+        } = prepared;
+        let mut signatures = IndexedSignatures::empty();
+        let own = self.harness.seqs[index].key.clone();
+        let others = self
+            .harness
+            .seqs
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != index)
+            .map(|(_, seq)| seq.key.clone());
+        let needed = usize::from(bundle.signing_threshold.max(1));
+        for key in std::iter::once(own).chain(others).take(needed) {
+            let Ok(signature) = bundle.sign_with(&key) else {
+                break;
+            };
+            let _ = signatures.try_insert(signature.channel_key_index, signature.signature);
+        }
+        let result = self
+            .harness
+            .seq(index)
+            .handle()
+            .submit_atomic_bundle(bundle, signatures);
+        self.harness.settle().await;
+        match result {
+            Ok(_) => self.event_payloads.at_most_once.push(payload),
+            Err(lb_zone_sdk::sequencer::Error::ChannelStateChanged(reason)) => {
+                self.bundle_refusals += 1;
+                tracing::debug!(payload, %reason, retry, "bundle refused: channel moved");
+                assert!(
+                    !self.pending_payloads(index).contains(&payload),
+                    "a refused bundle stayed pending: {payload}\n{}",
+                    self.diagnostics()
+                );
+                if retry {
+                    return true;
+                }
+                self.release_bundle(kind);
+            }
+            Err(lb_zone_sdk::sequencer::Error::InvalidMultiSig(reason)) => {
+                panic!(
+                    "the bed signed a bundle wrongly: {reason}\n{}",
+                    self.diagnostics()
+                );
+            }
+            Err(error) => {
+                tracing::debug!(payload, %error, "bundle not submitted");
+                self.release_bundle(kind);
+            }
+        }
+        false
     }
 
     /// Sequencer `index` builds and submits one tx chaining `payloads` on
@@ -1806,6 +2108,7 @@ impl World {
         names: &[&str],
         timeframe: u32,
         timeout: u32,
+        transfer_threshold: u16,
     ) -> Option<TxHash> {
         let submitter = self.harness.seqs[index].key.public_key();
         let mut keys = vec![submitter];
@@ -1820,7 +2123,13 @@ impl World {
             .harness
             .seq(index)
             .handle()
-            .channel_config(keys.clone(), timeframe.into(), timeout.into(), 1, 1)
+            .channel_config(
+                keys.clone(),
+                timeframe.into(),
+                timeout.into(),
+                1,
+                transfer_threshold,
+            )
             .await
             .ok()?;
         self.channel_keys = Some(keys);

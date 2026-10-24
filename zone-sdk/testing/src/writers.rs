@@ -234,7 +234,9 @@ impl Writer {
         let op = match self.next_op() {
             WriterOp::Transfer | WriterOp::Withdraw if notes.is_empty() => WriterOp::Inscribe,
             WriterOp::Deposit if self.deposits.is_empty() => WriterOp::Inscribe,
-            WriterOp::Withdraw if state.transfer_threshold != 1 => WriterOp::Inscribe,
+            WriterOp::Transfer | WriterOp::Withdraw if state.transfer_threshold != 1 => {
+                WriterOp::Inscribe
+            }
             WriterOp::Config if state.configuration_threshold != 1 => WriterOp::Inscribe,
             op => op,
         };

@@ -107,6 +107,175 @@ pub async fn multisig_deposit_lifecycle(chain: Chain) {
 }
 scenario!(s08_multisig_deposit_lifecycle, multisig_deposit_lifecycle);
 
+/// Two sequencers on a 2-of-2 channel whose first key, `SEQ_A`, holds the
+/// turn for good, with one finalized deposit in `SEQ_A`'s wallet: the
+/// world, `SEQ_A`'s index, the deposit's op id and its notes.
+async fn two_of_two_with_deposit(chain: Chain) -> (World, usize, Hash, Vec<NoteId>) {
+    let mut world = World::new(chain);
+    world.coin_split(&[5]).await;
+    let a = world.start("SEQ_A", passive()).await;
+    world.start("SEQ_B", passive()).await;
+    // The channel opens unkeyed: the first config needs no signature.
+    escalate_config(&mut world, a, a, &["SEQ_A"], 1, 0, &[]).await;
+    escalate_config(&mut world, a, a, &["SEQ_A", "SEQ_B"], 2, 0, &["SEQ_A"]).await;
+    let notes = world.take_user_notes(&[5]);
+    let (hash, op, channel_notes) = world.deposit(&notes, "Mint 5 to channel").await;
+    world.include(hash).await;
+    world.finalize_tx(hash).await;
+    let op_id = lb_core::mantle::ops::OpId::op_id(&op);
+    let ids: Vec<NoteId> = channel_notes.iter().map(Utxo::id).collect();
+    wait_wallet_holds(&mut world, &ids, Some(a)).await;
+    (world, a, op_id, ids)
+}
+
+/// Prepare the pin of `op_id`'s deposit on `index`.
+async fn prepare_pin(
+    world: &mut World,
+    index: usize,
+    op_id: &Hash,
+    ids: &[NoteId],
+) -> PreparedAtomicBundle {
+    let prepared = world
+        .harness
+        .seq(index)
+        .handle()
+        .prepare_pin_deposit(pin_payload(op_id), ids.to_vec())
+        .await
+        .expect("pin prepared");
+    world.harness.settle().await;
+    prepared
+}
+
+/// Submit `prepared` with both signatures and step until it is finalized.
+async fn land_pin(world: &mut World, index: usize, prepared: PreparedAtomicBundle, pin: &str) {
+    let hash = submit_bundle(world, index, prepared, &["SEQ_A", "SEQ_B"]).await;
+    world.include(hash).await;
+    world.finalize_tx(hash).await;
+    assert!(
+        world.is_payload_finalized(pin),
+        "the pin did not finalize:\n{}",
+        world.diagnostics()
+    );
+    assert_eq!(
+        count_payload(&world.indexer_payloads().await, pin),
+        1,
+        "the pin finalized more than once"
+    );
+}
+
+/// S29: a bundle prepared on the channel tip is submitted after its
+/// preparer published past it. The submit is refused as the channel moved,
+/// nothing of the bundle stays pending, and the round run again on the
+/// new tip lands.
+pub async fn late_bundle_submit_is_refused_and_leaves_nothing_pending(chain: Chain) {
+    let (mut world, a, op_id, ids) = two_of_two_with_deposit(chain).await;
+    let pin = payload_str(&pin_payload(&op_id));
+    let prepared = prepare_pin(&mut world, a, &op_id, &ids).await;
+    world.publish_included(a, "takes the parent").await;
+
+    let result = try_submit_bundle(&mut world, a, prepared, &["SEQ_A", "SEQ_B"]).await;
+    assert!(
+        matches!(result, Err(SdkError::ChannelStateChanged(_))),
+        "a bundle on a moved channel was not refused as such: {result:?}"
+    );
+    assert!(
+        !world.pending_payloads(a).contains(&pin),
+        "the refused bundle stayed pending:\n{}",
+        world.diagnostics()
+    );
+
+    let prepared = prepare_pin(&mut world, a, &op_id, &ids).await;
+    land_pin(&mut world, a, prepared, &pin).await;
+    world.finish();
+}
+scenario!(
+    s29_late_bundle_submit_is_refused_and_leaves_nothing_pending,
+    late_bundle_submit_is_refused_and_leaves_nothing_pending
+);
+
+/// S30: the channel's keys change between prepare and submit. The
+/// signatures were collected under the old config, so the submit is refused
+/// and the round is run again under the new one.
+pub async fn bundle_prepared_under_an_old_config_is_refused(chain: Chain) {
+    let (mut world, a, op_id, ids) = two_of_two_with_deposit(chain).await;
+    let pin = payload_str(&pin_payload(&op_id));
+    let prepared = prepare_pin(&mut world, a, &op_id, &ids).await;
+    escalate_config(
+        &mut world,
+        a,
+        a,
+        &["SEQ_A", "SEQ_B", "SEQ_C"],
+        2,
+        0,
+        &["SEQ_A", "SEQ_B"],
+    )
+    .await;
+
+    let result = try_submit_bundle(&mut world, a, prepared, &["SEQ_A", "SEQ_B"]).await;
+    assert!(
+        matches!(result, Err(SdkError::ChannelStateChanged(_))),
+        "a bundle under a stale config was not refused as such: {result:?}"
+    );
+    assert!(
+        !world.pending_payloads(a).contains(&pin),
+        "the refused bundle stayed pending:\n{}",
+        world.diagnostics()
+    );
+
+    let prepared = prepare_pin(&mut world, a, &op_id, &ids).await;
+    land_pin(&mut world, a, prepared, &pin).await;
+    world.finish();
+}
+scenario!(
+    s30_bundle_prepared_under_an_old_config_is_refused,
+    bundle_prepared_under_an_old_config_is_refused
+);
+
+/// S31: one signature on a 2-of-2 channel. The submit is refused for its
+/// signatures, nothing stays pending, and the same prepared bundle submitted
+/// with both lands.
+pub async fn undersigned_bundle_is_refused(chain: Chain) {
+    let (mut world, a, op_id, ids) = two_of_two_with_deposit(chain).await;
+    let pin = payload_str(&pin_payload(&op_id));
+    let prepared = prepare_pin(&mut world, a, &op_id, &ids).await;
+
+    let result = try_submit_bundle(&mut world, a, prepared.clone(), &["SEQ_A"]).await;
+    assert!(
+        matches!(result, Err(SdkError::InvalidMultiSig(_))),
+        "an undersigned bundle was not refused as such: {result:?}"
+    );
+    assert!(
+        !world.pending_payloads(a).contains(&pin),
+        "the refused bundle stayed pending:\n{}",
+        world.diagnostics()
+    );
+
+    land_pin(&mut world, a, prepared, &pin).await;
+    world.finish();
+}
+scenario!(
+    s31_undersigned_bundle_is_refused,
+    undersigned_bundle_is_refused
+);
+
+/// S32: signatures take longer than the fee note's reservation while the
+/// channel stays put. Nobody else drew the note, so the late submit is
+/// taken and lands.
+pub async fn late_bundle_submit_on_an_unmoved_channel_lands(chain: Chain) {
+    let (mut world, a, op_id, ids) = two_of_two_with_deposit(chain).await;
+    let pin = payload_str(&pin_payload(&op_id));
+    let prepared = prepare_pin(&mut world, a, &op_id, &ids).await;
+    world
+        .steps(usize::try_from(PENDING_NOTE_EXPIRY_BLOCKS).expect("fits") + 2)
+        .await;
+    land_pin(&mut world, a, prepared, &pin).await;
+    world.finish();
+}
+scenario!(
+    s32_late_bundle_submit_on_an_unmoved_channel_lands,
+    late_bundle_submit_on_an_unmoved_channel_lands
+);
+
 /// S22: two sequencers submit hand-built five-inscription txs, chained;
 /// whatever a conflict drops is rebuilt on the new tip until every payload
 /// is on chain.

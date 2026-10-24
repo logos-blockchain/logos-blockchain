@@ -31,6 +31,7 @@ use logos_blockchain_zone_sdk_testing::{
     chains::{self, Chain, Condition, Shape},
     events::Event,
     layers::Layer,
+    node::PENDING_NOTE_EXPIRY_BLOCKS,
     policy::payload_str,
     world as common,
     writers::{OP_CYCLE, OTHER_ZONE_OPS, WriterOp},
@@ -138,6 +139,12 @@ fn channel_arms(top: Layer, sequencers: usize) -> Vec<Arm> {
     let notes = u32::from(top >= Layer::Notes);
     let index = move || 0..sequencers;
     let writer_names: Vec<String> = WRITERS.iter().map(|s| (*s).to_owned()).collect();
+    // Two signatures only where a second sequencer can give one.
+    let threshold = if sequencers > 1 {
+        prop_oneof![3 => Just(1u16), 1 => Just(2u16)].boxed()
+    } else {
+        Just(1u16).boxed()
+    };
     vec![
         (
             configs,
@@ -152,30 +159,62 @@ fn channel_arms(top: Layer, sequencers: usize) -> Vec<Arm> {
                     Just((5u32, 0u32)),
                     Just((5u32, 6u32)),
                 ],
+                threshold,
             )
-                .prop_map(|(index, names, (timeframe, timeout))| Event::Config {
-                    index,
-                    names,
-                    timeframe,
-                    timeout,
-                })
+                .prop_map(
+                    |(index, names, (timeframe, timeout), threshold)| Event::Config {
+                        index,
+                        names,
+                        timeframe,
+                        timeout,
+                        threshold,
+                    },
+                )
                 .boxed(),
         ),
         (2 * notes, Just(Event::Deposit).boxed()),
         (
             2 * notes,
-            (index(), 1..=3u64, prop::bool::ANY)
-                .prop_map(move |(index, amount, unfinalized)| Event::Withdraw {
-                    index,
-                    amount,
-                    unfinalized,
-                })
+            (
+                index(),
+                1..=3u64,
+                prop::bool::ANY,
+                submit_delay(),
+                prop::bool::ANY,
+            )
+                .prop_map(
+                    move |(index, amount, unfinalized, delay, retry)| Event::Withdraw {
+                        index,
+                        amount,
+                        unfinalized,
+                        delay,
+                        retry,
+                    },
+                )
                 .boxed(),
         ),
         (
             notes,
-            index().prop_map(|index| Event::Pin { index }).boxed(),
+            (index(), submit_delay(), prop::bool::ANY)
+                .prop_map(|(index, delay, retry)| Event::Pin {
+                    index,
+                    delay,
+                    retry,
+                })
+                .boxed(),
         ),
+    ]
+}
+
+/// Events between preparing a bundle and submitting it: mostly at once, a
+/// few events later while the channel moves, and now and then longer than
+/// the fee note's reservation, so the submit carries a note the wallet may
+/// have handed out again.
+fn submit_delay() -> impl Strategy<Value = usize> {
+    prop_oneof![
+        6 => Just(0usize),
+        3 => 1..=3usize,
+        1 => Just(PENDING_NOTE_EXPIRY_BLOCKS as usize + 2),
     ]
 }
 
@@ -417,6 +456,7 @@ async fn run(scenario: Scenario, recognise_known_issues: bool) {
     for index in 0..world.harness.seqs.len() {
         world.apply_event(Event::Start { index }).await;
     }
+    world.flush_prepared().await;
     let settled = world.try_settle_chain(400).await;
     if let Some(issue) = world
         .known_issue(settled)
