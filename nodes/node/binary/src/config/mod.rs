@@ -1,7 +1,6 @@
 use std::{
     net::{IpAddr, SocketAddr, ToSocketAddrs as _},
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 use clap::{Parser, ValueEnum, builder::OsStr};
@@ -15,9 +14,7 @@ use lb_key_management_system_service::{
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use lb_tracing::{
     filter::envfilter::{default_envfilter_config, parse_filter_directives},
-    logging::local::{
-        AppenderType, CompressionType, LogFormat, RetentionType, RollingConfig, TextKind,
-    },
+    logging::local::{LogFormat, TextKind},
 };
 use lb_utils::yaml::{OnUnknownKeys, deserialize_from_value, deserialize_value_at_path, merge};
 use num_bigint::BigUint;
@@ -38,7 +35,10 @@ use crate::config::{
     network::serde::nat,
     tracing::serde::{
         filter::{EnvConfig, Layer},
-        logger::{FileConfig, GelfConfig},
+        logger::{
+            AppenderType, CompressionType, FileConfig, GelfConfig, RetentionType, RollingConfig,
+            default_compression_threshold, default_max_files,
+        },
     },
 };
 
@@ -284,11 +284,7 @@ pub struct LogArgs {
     #[clap(long = "log-file-appender", env = "LOG_APPENDER")]
     pub file_appender: Option<LogFileAppenderType>,
 
-    #[clap(
-        long = "log-max-files",
-        env = "LOG_APPENDER_MAX_FILES",
-        required_if_eq("file_appender", LogFileAppenderType::RollingMaxFiles)
-    )]
+    #[clap(long = "log-max-files", env = "LOG_APPENDER_MAX_FILES")]
     pub max_files: Option<usize>,
 
     #[clap(long = "log-format", env = "LOG_FORMAT")]
@@ -443,7 +439,7 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
                         AppenderType::Rolling(RollingConfig {
                             retention: RetentionType::None,
                             compression: CompressionType::Gzip {
-                                compression_threshold: Duration::from_hours(2),
+                                compression_threshold: default_compression_threshold(),
                             },
                             ..RollingConfig::default()
                         })
@@ -451,7 +447,7 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
                     Some(LogFileAppenderType::RollingMaxFiles) => {
                         AppenderType::Rolling(RollingConfig {
                             retention: RetentionType::MaxFiles {
-                                max_files: max_files.expect("Max files should be set"),
+                                max_files: max_files.unwrap_or_else(default_max_files),
                             },
                             ..RollingConfig::default()
                         })

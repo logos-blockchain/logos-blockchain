@@ -1075,7 +1075,8 @@ mod auto_claim_override_tests {
         )
         .expect("auto-claim override should apply");
 
-        assert_eq!(config.pow.auto_claim.targets, settings.targets);
-        assert_eq!(config.pow.auto_claim.tick, settings.tick);
+        let applied: AutoClaimSettings = config.pow.auto_claim.into();
+        assert_eq!(applied.targets, settings.targets);
+        assert_eq!(applied.tick, settings.tick);
     }
 }

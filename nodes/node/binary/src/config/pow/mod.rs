@@ -25,7 +25,7 @@ impl ServiceConfig {
     ) -> PoWServiceSettings {
         PoWServiceSettings {
             mining: self.user.mining,
-            auto_claim: self.user.auto_claim,
+            auto_claim: self.user.auto_claim.into(),
             slot_window,
             rewards_enabled,
             recovery_data,

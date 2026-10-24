@@ -43,7 +43,7 @@ network:
         disjoint_query_paths: null
         max_packet_size: null
         kbucket_inserts: null
-        caching: null
+        cache_size: 1
         periodic_bootstrap_interval: null
       identify:
         agent_version: null
