@@ -27,8 +27,8 @@ use lb_key_management_system_service::keys::UnverifiedEd25519PublicKey;
 use lb_zone_sdk::{
     node_types::TxHash,
     sequencer::{
-        ChannelNote, Event, FinalizedOp, InscriptionInfo, SequencerChannelView,
-        SequencerCheckpoint, ZoneSequencer, channel_inscriptions,
+        ChannelNote, Event, FinalizedOp, InscriptionInfo, SequencerCheckpoint, ZoneSequencer,
+        channel_inscriptions,
     },
 };
 use tokio::time::Instant;
@@ -84,9 +84,11 @@ pub struct Oracles {
     /// Hand-built txs the test submitted whole: the SDK posts those without
     /// a turn, as the caller asked, so they are not judged.
     exempt: HashSet<TxHash>,
-    /// The sequencer's own turn claim at each slot its view named, in the
-    /// order published: what it believed when it decided a post.
-    views: Vec<(Slot, bool)>,
+    /// The turns the sequencer announced, in order, each with how many
+    /// events its stream had delivered by then: what it believed when it
+    /// decided a post. Announcements are in band with the block events, so
+    /// the order is the sequencer's own.
+    claims: Vec<(usize, bool)>,
     /// Whether the previous check found the sequencer in turn.
     was_in_turn: bool,
     /// For each own pending tx chaining on the channel tip, the in-turn
@@ -162,24 +164,13 @@ impl Oracles {
         self.exempt.insert(hash);
     }
 
-    /// Record the sequencer's view as published after an event: its slot
-    /// and whether it claims the turn.
-    pub fn observe_view(&mut self, view: &SequencerChannelView) {
-        let claim = (view.current_slot, view.our_turn_to_write);
-        match self.views.last_mut() {
-            Some(last) if last.0 == claim.0 => *last = claim,
-            Some(last) if *last == claim => {}
-            _ => self.views.push(claim),
-        }
-    }
-
-    /// Whether the view the sequencer had published at or before `slot`
-    /// claimed the turn.
-    fn claimed_turn_at(&self, slot: Slot) -> Option<bool> {
-        self.views
+    /// Whether the last turn the sequencer announced by the time its
+    /// stream had delivered `delivered` events claimed the turn.
+    fn claimed_turn_at(&self, delivered: usize) -> Option<bool> {
+        self.claims
             .iter()
             .rev()
-            .find(|(view_slot, _)| *view_slot <= slot)
+            .find(|(by, _)| *by <= delivered)
             .map(|(_, claim)| *claim)
     }
 
@@ -242,25 +233,21 @@ impl Oracles {
             {
                 continue;
             }
+            let claimed = [post.delivered - 1, post.delivered]
+                .iter()
+                .any(|delivered| self.claimed_turn_at(*delivered).is_none_or(|claim| claim));
+            if claimed {
+                continue;
+            }
             let slots: Vec<Slot> = node
                 .delivered_tips(post.delivered.saturating_sub(2), post.delivered)
                 .into_iter()
                 .filter_map(|tip| node.block_slot(tip))
                 .collect();
-            let claims: Vec<Option<bool>> = slots
-                .iter()
-                .map(|slot| self.claimed_turn_at(*slot))
-                .collect();
-            if claims
-                .iter()
-                .any(|claim| claim.is_none_or(|claimed| claimed))
-            {
-                continue;
-            }
             self.record(
                 Layer::Configs,
                 format!(
-                    "{name}: posted {:?} at stream slots {slots:?} while its own view claimed no turn",
+                    "{name}: posted {:?} at stream slots {slots:?} after announcing no turn",
                     post.hash
                 ),
             );
@@ -400,6 +387,11 @@ impl Oracles {
     /// event named (the node may have moved on since it emitted the event);
     /// every finalized tx is reported once.
     pub fn observe(&mut self, event: &Event, node: &SimNode, name: &str) {
+        if let Event::TurnNotification { notification } = event {
+            self.claims
+                .push((node.delivered_count(), notification.our_turn_to_write));
+            return;
+        }
         let Event::BlocksProcessed {
             checkpoint,
             channel_update,

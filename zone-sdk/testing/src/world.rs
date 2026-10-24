@@ -46,9 +46,11 @@ pub const FINALITY_DEPTH: u64 = 30;
 /// Quiet steps after which a wait gives up.
 ///
 /// Quiet is no new post, no mempool change, no canonical tx and no change
-/// of a sequencer's pending set. A finality depth passes everything that
-/// was going to finalize, so twice that of quiet means what is waited for
-/// will not come.
+/// of a sequencer's pending set, with every running sequencer connected
+/// and at the node's tip: one still reconnecting or backfilling, under an
+/// outage or failing fetches, may act once it catches up. A finality depth
+/// passes everything that was going to finalize, so twice that of quiet
+/// means what is waited for will not come.
 pub const STUCK_STEPS: usize = 2 * FINALITY_DEPTH as usize;
 
 /// A submitted deposit: its tx hash, the op and the channel notes it creates.
@@ -137,11 +139,25 @@ pub enum KnownIssue {
     /// A config landing sheds a pending inscription but not the custom tx
     /// chained on it, which leaves the view unreported.
     CustomTxUnderConfigShed,
+    /// Another sequencer's config mined on a branch the chain abandons stays
+    /// pending in the view: not reported orphaned, not re-posted, not shed.
+    OthersConfigOnAbandonedBranch,
+    /// A restored pending publish whose parent another sequencer took in a
+    /// block that finalized while this one was down stays pending: never
+    /// posted, never reported orphaned.
+    RestoredPublishOnTakenParent,
+    /// After a deep fork the pending entries chained on the abandoned branch,
+    /// own publishes and mirrored inscriptions alike, are re-posted forever:
+    /// the node rejects each for its parent, the view never reports them
+    /// orphaned, the chain never settles.
+    PendingOnAbandonedParent,
 }
 
 /// The first writer's name; a second one is [`FOREIGN_2`].
 pub const FOREIGN: &str = "FOREIGN";
 pub const FOREIGN_2: &str = "FOREIGN_2";
+/// The writer running another zone's channel on the same chain.
+pub const OTHER_ZONE: &str = "ZONE_B";
 
 #[must_use]
 pub fn seq_key(name: &str) -> Ed25519Key {
@@ -151,6 +167,7 @@ pub fn seq_key(name: &str) -> Ed25519Key {
         "SEQ_C" => key(3),
         FOREIGN => key(4),
         FOREIGN_2 => key(5),
+        OTHER_ZONE => key(6),
         other => panic!("unknown sequencer {other}"),
     }
 }
@@ -525,8 +542,24 @@ impl World {
     /// [`Self::add_writer`] with the writer cycling through `ops` only.
     pub fn add_writer_with(&mut self, name: &str, ops: &'static [WriterOp]) {
         let recipient = ZkKey::from(BigUint::from(20 + self.writers.len() as u64)).to_public_key();
-        let mut writer = Writer::new(name, seq_key(name), recipient);
+        let mut writer = Writer::new(name, seq_key(name), recipient, self.channel_id());
         writer.ops = ops;
+        self.writers.push(writer);
+    }
+
+    /// Add a writer running another zone's channel on this chain, keyed to
+    /// `name`, cycling through `ops`; its first inscription opens the
+    /// channel and it holds `deposits` plain notes to deposit there. Its
+    /// traffic is what the sequencers must leave out of their views.
+    pub fn add_other_zone(&mut self, name: &str, ops: &'static [WriterOp], deposits: usize) {
+        let recipient = ZkKey::from(BigUint::from(20 + self.writers.len() as u64)).to_public_key();
+        let key = seq_key(name);
+        let channel = ChannelId::from(key.public_key().to_bytes());
+        let mut writer = Writer::new(name, key, recipient, channel);
+        writer.ops = ops;
+        writer.deposits = std::iter::repeat_with(|| self.node().mint(3, recipient))
+            .take(deposits)
+            .collect();
         self.writers.push(writer);
     }
 
@@ -556,11 +589,7 @@ impl World {
         if self.writers.is_empty() {
             return Vec::new();
         }
-        let channel_id = self.channel_id();
         let Some(ledger) = node.block(parent).map(|block| block.ledger) else {
-            return Vec::new();
-        };
-        let Some(state) = ledger.channel(&channel_id).cloned() else {
             return Vec::new();
         };
         let Some(funding_pk) = node.funding_pk() else {
@@ -570,53 +599,58 @@ impl World {
             return Vec::new();
         };
         let prices = node.gas_prices();
-        // Like a sequencer, a writer never re-lands a message whose payload
-        // the branch already carries, under whatever hash it got there.
-        let on_branch = node.inscription_payloads_at(parent, channel_id);
-        let landed = |tx: &SignedOps<Unverified, StandardMode>| {
-            if node.is_included_at(parent, &tx.hash()) {
-                return true;
-            }
-            let payloads = lb_zone_sdk::sequencer::channel_inscriptions(tx, channel_id);
-            !payloads.is_empty()
-                && payloads
-                    .iter()
-                    .all(|info| on_branch.contains(&info.payload))
-        };
+        let mut priced = ledger.clone();
+        priced.set_gas_prices(prices.clone());
         let budget = &mut self.foreign_budget;
+        let mut txs = Vec::new();
+        // One transaction per writer in turn on its channel; a channel that
+        // does not exist yet is its writer's to open.
         for writer in &mut self.writers {
-            if !writer.in_turn(&state, slot.into()) {
+            let channel_id = writer.channel;
+            if let Some(state) = ledger.channel(&channel_id)
+                && !writer.in_turn(state, slot.into())
+            {
                 continue;
             }
+            // Like a sequencer, a writer never re-lands a message whose
+            // payload the branch already carries, under whatever hash it
+            // got there.
+            let on_branch = node.inscription_payloads_at(parent, channel_id);
+            let landed = |tx: &SignedOps<Unverified, StandardMode>| {
+                if node.is_included_at(parent, &tx.hash()) {
+                    return true;
+                }
+                let payloads = lb_zone_sdk::sequencer::channel_inscriptions(tx, channel_id);
+                !payloads.is_empty()
+                    && payloads
+                        .iter()
+                        .all(|info| on_branch.contains(&info.payload))
+            };
             if let Some(orphan) = writer.reland(&ledger, &prices, slot.into(), landed) {
-                return vec![orphan];
+                txs.push(orphan);
+                continue;
             }
-            let mut priced = ledger.clone();
-            priced.set_gas_prices(prices.clone());
             if let Some(rebuilt) = writer
-                .rebuild(node, &priced, channel_id, funding_pk, slot.into(), landed)
+                .rebuild(node, &priced, funding_pk, slot.into(), landed)
                 .await
             {
-                return vec![rebuilt];
+                txs.push(rebuilt);
+                continue;
             }
             if *budget == 0 {
-                return Vec::new();
+                continue;
             }
-            match writer
-                .build(node, &ledger, channel_id, funding_pk, &keys)
-                .await
-            {
+            match writer.build(node, &ledger, funding_pk, &keys).await {
                 Ok(tx) => {
                     *budget -= 1;
-                    return vec![tx];
+                    txs.push(tx);
                 }
                 Err(error) => {
                     tracing::warn!(writer = %writer.name, %error, "writer could not build its transaction");
-                    return Vec::new();
                 }
             }
         }
-        Vec::new()
+        txs
     }
 
     /// Mine one block on `node`'s tip with the mempool and the writers'
@@ -921,7 +955,7 @@ impl World {
             }
             self.step().await;
             let progress = self.progress();
-            if progress == last {
+            if progress == last && self.all_caught_up() {
                 quiet += 1;
                 if quiet >= STUCK_STEPS {
                     return done(self);
@@ -932,6 +966,15 @@ impl World {
             }
         }
         done(self)
+    }
+
+    /// Whether every running sequencer is connected and has been told the
+    /// node's tip.
+    fn all_caught_up(&mut self) -> bool {
+        (0..self.harness.seqs.len()).all(|index| {
+            let seq = &mut self.harness.seqs[index];
+            !seq.is_running() || (seq.sequencer().is_connected() && seq.node.subscriber_at_tip())
+        })
     }
 
     /// What a wait can be waiting on: the distinct txs posted, the mempool,
@@ -1010,6 +1053,15 @@ impl World {
     }
 
     /// Put a user's transaction the node evicted back into the mempool.
+    /// Post a transaction the story built, retried like the world's own
+    /// user transactions while a story waits for it.
+    pub fn submit_user_tx(&mut self, tx: SignedOps<Unverified, StandardMode>) -> TxHash {
+        let hash = tx.hash();
+        self.user_txs.push(tx.clone());
+        self.node().submit(tx);
+        hash
+    }
+
     fn resubmit_user_tx(&self, hash: TxHash) {
         let Some(tx) = self.user_txs.iter().find(|tx| tx.hash() == hash) else {
             return;
@@ -1161,13 +1213,42 @@ impl World {
                         .iter()
                         .any(|hash| violation.contains(&format!("Tx({hash:?})")))
             };
+            if chain_violations.iter().all(stranded_custom_tx) {
+                return Some(KnownIssue::CustomTxUnderConfigShed);
+            }
+            // A mirror still holding another sequencer's config that the
+            // chain abandoned: a config the run saw land that is not
+            // canonical now (its block may have been pruned since).
+            let abandoned_configs: Vec<TxHash> = self
+                .node()
+                .mined_txs()
+                .iter()
+                .chain(self.node().posted().iter())
+                .chain(self.writers.iter().flat_map(|writer| writer.posted.iter()))
+                .chain(self.writers.iter().flat_map(|writer| writer.rebuilt.iter()))
+                .filter(|tx| {
+                    tx.op_refs_iter()
+                        .any(|op| matches!(op, OpRef::ChannelConfig(config) if config.channel == channel))
+                })
+                .map(Hashable::hash)
+                .filter(|hash| !self.node().is_included(hash))
+                .collect();
+            let stranded_config = |violation: &String| {
+                violation.contains("which the node never saw")
+                    && abandoned_configs
+                        .iter()
+                        .any(|hash| violation.contains(&format!("{hash:?}")))
+            };
             return chain_violations
                 .iter()
-                .all(stranded_custom_tx)
-                .then_some(KnownIssue::CustomTxUnderConfigShed);
+                .all(stranded_config)
+                .then_some(KnownIssue::OthersConfigOnAbandonedBranch);
         }
         if settled {
             return None;
+        }
+        if self.stranded_publish(channel) {
+            return Some(KnownIssue::RestoredPublishOnTakenParent);
         }
         let ledger = self.node().ledger_at_tip();
         let dead_input = pending.iter().any(|(_, tx)| {
@@ -1183,7 +1264,53 @@ impl World {
                 _ => false,
             })
         });
-        dead_input.then_some(KnownIssue::DeadInputBundle)
+        if dead_input {
+            return Some(KnownIssue::DeadInputBundle);
+        }
+        self.pending_on_abandoned_parent(channel)
+            .then_some(KnownIssue::PendingOnAbandonedParent)
+    }
+
+    /// Whether a sequencer still holds an entry, its own or mirrored, whose
+    /// parent sits only in abandoned blocks.
+    fn pending_on_abandoned_parent(&self, channel: ChannelId) -> bool {
+        self.harness.seqs.iter().any(|seq| {
+            seq.checkpoint().is_some_and(|checkpoint| {
+                checkpoint.pending_txs.iter().any(|(_, tx)| {
+                    lb_zone_sdk::sequencer::channel_inscriptions(tx, channel)
+                        .iter()
+                        .any(|info| {
+                            seq.node.message_status(channel, &info.parent_msg) == "abandoned"
+                        })
+                })
+            })
+        })
+    }
+
+    /// Whether a sequencer holds an own publish never posted, chained on a
+    /// message that is neither the channel tip nor canonical: its parent
+    /// was taken under it.
+    fn stranded_publish(&self, channel: ChannelId) -> bool {
+        let channel_tip = self
+            .node()
+            .channel_state_at_tip(channel)
+            .map(|state| state.tip_message);
+        self.harness.seqs.iter().any(|seq| {
+            let own = seq.key.public_key().into_unverified();
+            seq.checkpoint().is_some_and(|checkpoint| {
+                checkpoint.pending_txs.iter().any(|(hash, tx)| {
+                    let inscriptions = lb_zone_sdk::sequencer::channel_inscriptions(tx, channel);
+                    inscriptions.len() == 1
+                        && inscriptions[0].signer == Some(own)
+                        && seq.node.post_count(hash) == 0
+                        && Some(inscriptions[0].parent_msg) != channel_tip
+                        && seq
+                            .node
+                            .message_status(channel, &inscriptions[0].parent_msg)
+                            != "canonical"
+                })
+            })
+        })
     }
 
     /// Where every transaction is, for a failing assertion.
@@ -1247,17 +1374,30 @@ impl World {
             }
             let view = self.view(index);
             let checkpoint = self.checkpoint(index);
+            let channel_tip = node
+                .channel_state_at_tip(channel_id)
+                .map(|state| state.tip_message);
             let pending: Vec<String> = checkpoint
                 .pending_txs
                 .iter()
                 .map(|(hash, tx)| {
-                    let payloads: Vec<String> =
-                        lb_zone_sdk::sequencer::channel_inscriptions(tx, channel_id)
-                            .into_iter()
-                            .map(|i| payload_str(&i.payload))
-                            .collect();
+                    let inscriptions = lb_zone_sdk::sequencer::channel_inscriptions(tx, channel_id);
+                    let payloads: Vec<String> = inscriptions
+                        .iter()
+                        .map(|i| payload_str(&i.payload))
+                        .collect();
+                    // Where the first inscription's parent is: what the tx
+                    // chains on, and whether the chain can still take it.
+                    let parent = inscriptions.first().map_or_else(String::new, |info| {
+                        let status = if Some(info.parent_msg) == channel_tip {
+                            "channel tip"
+                        } else {
+                            node.message_status(channel_id, &info.parent_msg)
+                        };
+                        format!(" parent {:?}.. {status}", &info.parent_msg.as_ref()[..4])
+                    });
                     format!(
-                        "{hash:?} [{}] {payloads:?} included={}",
+                        "{hash:?} [{}] {payloads:?} included={}{parent}",
                         op_kinds(tx),
                         node.is_included(hash)
                     )
@@ -1534,7 +1674,11 @@ impl World {
                     .try_submit_config(index, &names, timeframe, timeout)
                     .await;
             }
-            Event::Custom { index, payloads } => self.custom_from(index, payloads).await,
+            Event::Custom {
+                index,
+                payloads,
+                priced_out,
+            } => self.custom_from(index, payloads, priced_out).await,
             Event::Abandon { index } => {
                 if let Some(Some(choices)) = self.choices.get(index) {
                     choices.lock().expect("choices").abandon_next();
@@ -1614,16 +1758,17 @@ impl World {
 
     /// Sequencer `index` builds and submits one tx chaining `payloads` on
     /// its view's tip; nothing when the SDK refuses the parent.
-    async fn custom_from(&mut self, index: usize, payloads: Vec<String>) {
+    async fn custom_from(&mut self, index: usize, payloads: Vec<String>, priced_out: bool) {
         if index >= self.harness.seqs.len() || !self.harness.seqs[index].is_running() {
             return;
         }
+        let channel_id = self.channel_id();
         let parent = self.view(index).tip_message;
         let key = self.harness.seqs[index].key.clone();
         let inscriptions: Vec<Inscription> = payloads.iter().map(|p| make_inscription(p)).collect();
         let Ok((signed_tx, msg_id)) = txs::build_funded_custom_tx(
             self.node(),
-            self.channel_id(),
+            channel_id,
             &key,
             self.funding_pk(),
             &inscriptions,
@@ -1634,14 +1779,22 @@ impl World {
             return;
         };
         self.harness.seqs[index].oracles.exempt(signed_tx.hash());
-        if self
+        let hash = signed_tx.hash();
+        if let Err(error) = self
             .harness
             .seq(index)
             .handle()
             .submit_signed_tx(signed_tx, msg_id)
-            .is_ok()
         {
-            self.event_payloads.at_most_once.extend(payloads);
+            tracing::debug!(%error, ?hash, "hand-built tx refused at submit");
+            return;
+        }
+        self.event_payloads.at_most_once.extend(payloads);
+        if priced_out {
+            // Priced at the old prices, the tx never covers a block again.
+            let prices = self.node().gas_prices();
+            let price = prices.execution_base_gas_price.into_inner() * 11 / 10;
+            self.set_gas_prices(price);
         }
         self.harness.settle().await;
     }

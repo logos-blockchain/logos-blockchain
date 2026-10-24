@@ -6,10 +6,10 @@
 
 use lb_common_http_client::Slot;
 use lb_core::mantle::{
-    Note, OpRef, SignedOps,
+    Note, OpRef, SignedOps, Utxo,
     channel::ChannelState,
     ledger::verification_mode::StandardMode,
-    ops::channel::{ChannelId, VerifiedChannelKeys, inscribe::Inscription},
+    ops::channel::{ChannelId, MsgId, VerifiedChannelKeys, inscribe::Inscription},
     transactions::{GasPrices, states::Unverified},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
@@ -34,6 +34,8 @@ pub enum WriterOp {
     Withdraw,
     /// Rotate the accredited keys and change the posting rules.
     Config,
+    /// Deposit one of the plain notes handed to the writer into its channel.
+    Deposit,
 }
 
 /// The op cycle a writer runs through: mostly inscriptions, with note and
@@ -49,6 +51,18 @@ pub const OP_CYCLE: [WriterOp; 8] = [
     WriterOp::Config,
 ];
 
+/// The op cycle of another zone's writer: it opens its channel, deposits
+/// into it and spends there, never configures.
+pub const OTHER_ZONE_OPS: [WriterOp; 7] = [
+    WriterOp::Inscribe,
+    WriterOp::Deposit,
+    WriterOp::Inscribe,
+    WriterOp::Transfer,
+    WriterOp::InscribeTwo,
+    WriterOp::Withdraw,
+    WriterOp::Inscribe,
+];
+
 /// Posting rules a writer's configs cycle through; never both zero, which
 /// would freeze the turn on the first key forever.
 const RULES: [(u32, u32); 4] = [(3, 0), (5, 4), (3, 6), (4, 0)];
@@ -56,6 +70,11 @@ const RULES: [(u32, u32); 4] = [(3, 0), (5, 4), (3, 6), (4, 0)];
 pub struct Writer {
     pub name: String,
     pub key: Ed25519Key,
+    /// The channel this writer writes to: the zone's own, or another zone's
+    /// on the same chain, which its first inscription opens.
+    pub channel: ChannelId,
+    /// Plain notes handed to this writer to deposit, one per deposit op.
+    pub deposits: Vec<Utxo>,
     /// Receives the notes this writer transfers and withdraws.
     pub recipient: ZkPublicKey,
     /// Transactions this writer put into blocks, in order.
@@ -69,10 +88,12 @@ pub struct Writer {
 
 impl Writer {
     #[must_use]
-    pub fn new(name: &str, key: Ed25519Key, recipient: ZkPublicKey) -> Self {
+    pub fn new(name: &str, key: Ed25519Key, recipient: ZkPublicKey, channel: ChannelId) -> Self {
         Self {
             name: name.to_owned(),
             key,
+            channel,
+            deposits: Vec::new(),
             recipient,
             posted: Vec::new(),
             rebuilt: Vec::new(),
@@ -135,11 +156,11 @@ impl Writer {
         &mut self,
         node: &crate::SimNode,
         ledger: &SimLedger,
-        channel_id: ChannelId,
         funding_pk: ZkPublicKey,
         slot: Slot,
         included: impl Fn(&SignedOps<Unverified, StandardMode>) -> bool,
     ) -> Option<SignedOps<Unverified, StandardMode>> {
+        let channel_id = self.channel;
         let state = ledger.channel(&channel_id)?;
         let position = self.posted.iter().position(|tx| {
             if included(tx) {
@@ -175,18 +196,33 @@ impl Writer {
 
     /// Build the next op against `ledger`, the state of the block's parent;
     /// `keys` is the accredited list a config rotates. Falls back to an
-    /// inscription when the op has nothing to work on.
+    /// inscription when the op has nothing to work on. On a channel that
+    /// does not exist yet the first inscription opens it, this writer
+    /// accredited.
+    #[expect(clippy::too_many_lines, reason = "one arm per writer op")]
     pub async fn build(
         &mut self,
         node: &crate::SimNode,
         ledger: &SimLedger,
-        channel_id: ChannelId,
         funding_pk: ZkPublicKey,
         keys: &VerifiedChannelKeys,
     ) -> Result<SignedOps<Unverified, StandardMode>, TxError> {
-        let state = ledger
-            .channel(&channel_id)
-            .ok_or_else(|| TxError::Assembly("channel does not exist".to_owned()))?;
+        let channel_id = self.channel;
+        let n = self.built;
+        let Some(state) = ledger.channel(&channel_id) else {
+            let (tx, _) = txs::build_funded_custom_tx(
+                node,
+                channel_id,
+                &self.key,
+                funding_pk,
+                &[make_inscription(&format!("{} {n}", self.name))],
+                MsgId::root(),
+            )
+            .await?;
+            self.built += 1;
+            self.posted.push(tx.clone());
+            return Ok(tx);
+        };
         let index = self
             .index_in(state)
             .ok_or_else(|| TxError::Assembly(format!("{} is not accredited", self.name)))?;
@@ -194,10 +230,10 @@ impl Writer {
             key: &self.key,
             index,
         };
-        let n = self.built;
         let notes = ledger.channel_notes(&channel_id);
         let op = match self.next_op() {
             WriterOp::Transfer | WriterOp::Withdraw if notes.is_empty() => WriterOp::Inscribe,
+            WriterOp::Deposit if self.deposits.is_empty() => WriterOp::Inscribe,
             WriterOp::Withdraw if state.transfer_threshold != 1 => WriterOp::Inscribe,
             WriterOp::Config if state.configuration_threshold != 1 => WriterOp::Inscribe,
             op => op,
@@ -246,6 +282,21 @@ impl Writer {
                     },
                 )
                 .await?
+            }
+            WriterOp::Deposit => {
+                // The fee comes from the funding wallet like every writer
+                // tx; the deposited note is one handed to this writer.
+                let utxo = self.deposits[0];
+                let (tx, _) = txs::deposit_tx(
+                    node,
+                    channel_id,
+                    &[utxo],
+                    &format!("{} {n}", self.name),
+                    funding_pk,
+                )
+                .await?;
+                self.deposits.remove(0);
+                tx
             }
             WriterOp::Config => {
                 let mut rotated: Vec<_> = keys.iter().copied().collect();

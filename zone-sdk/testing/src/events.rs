@@ -37,8 +37,16 @@ pub enum Event {
         timeframe: u32,
         timeout: u32,
     },
-    /// Sequencer `index` submits a hand-built tx chaining `payloads`.
-    Custom { index: usize, payloads: Vec<String> },
+    /// Sequencer `index` submits a hand-built tx chaining `payloads`. A
+    /// `priced_out` one is followed by a gas price rise, so the fee it
+    /// carries never covers a block again and the chain never takes it:
+    /// the SDK cannot re-fund what it did not build and has to shed it once
+    /// it expires.
+    Custom {
+        index: usize,
+        payloads: Vec<String>,
+        priced_out: bool,
+    },
     /// Sequencer `index` lets its next orphan die.
     Abandon { index: usize },
     /// Sequencer `index` publishes `payloads` at once on its next turn.

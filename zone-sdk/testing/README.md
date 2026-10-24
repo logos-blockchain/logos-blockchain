@@ -42,6 +42,10 @@ cargo test -p logos-blockchain-zone-sdk-testing
   config changes straight into the blocks it mines, plain or fork, so forks
   can carry different notes and rules than the chain they replace. Like a
   sequencer it re-lands its own orphans while the chain would accept them.
+  A writer may run another zone's channel on the same chain instead
+  (`add_other_zone`): its first inscription opens it and it deposits,
+  inscribes, transfers and withdraws there, traffic every sequencer must
+  leave out of its views.
 - `src/chains.rs`: the catalogue. The SDK sees one thing, an ordered
   stream of block events plus the answers to its own calls, so a network
   condition is a shape of that stream and the shapes that matter are a
@@ -62,7 +66,8 @@ cargo test -p logos-blockchain-zone-sdk-testing
   about two thousand tests, where order is what is tested.
 - `src/events.rs`: one `Event` per operation the world exposes, chain
   moves, client conditions and the zone's own actions (publish, deposit,
-  withdraw, pin, config, hand-built tx, abandon, burst, adopt, stop and
+  withdraw, pin, config, hand-built tx, affordable or priced out by a
+  rise right after it, abandon, burst, adopt, stop and
   start a sequencer), applied by `World::apply_event`, which resolves what
   the state cannot do the way the network would: an impossible fork
   becomes a plain block, an action on an absent sequencer is skipped, a
@@ -103,11 +108,12 @@ cargo test -p logos-blockchain-zone-sdk-testing
   with `round_robin`, and the finalized history it reported is the chain's,
   once each and in order. Four judge promptness on the sequencer's own two
   clocks, the stream and the paused tokio time its resubmit timer runs on:
-  every post of an own inscription was made while the sequencer's own
-  view, as published at the stream position of the post or the one before,
-  claimed the turn (the node records the tips each subscriber's stream had
-  delivered by the post), and the view itself names the rotation's
-  sequencer and claims the turn only with the configured margin left; an
+  every post of an own inscription was made after the sequencer's last
+  turn announcement, at the stream position of the post or the one before,
+  claimed the turn (the node records how many events each subscriber's
+  stream had delivered by the post), and the view itself names the
+  rotation's sequencer and claims the turn only with the configured margin
+  left; an
   own pending inscription chaining on the channel tip is posted as its
   owner sees the turn, or on the timer's next tick in turn, whose instants
   are known since the timer starts with the sequencer; a posted own
@@ -157,7 +163,8 @@ cargo test -p logos-blockchain-zone-sdk-testing
   outage, a restart from checkpoint or from scratch, failing fetches, a gas
   price move, a user deposit, a withdraw. One to three sequencers and one
   or two writers share the channel under random posting rules, on one node
-  or two partitioning ones. Only invariants are asserted: every planned
+  or two partitioning ones, and in half the schedules another zone runs
+  its own channel on the chain beside them. Only invariants are asserted: every planned
   payload finalizes exactly once in one lineage, the sequencers' own
   pending sets drain, and every layer holds, reported lowest first.
   The vocabulary is drawn one layer at a time, so the tests form a ladder
@@ -189,9 +196,19 @@ lands. Today: a pending atomic withdraw or pin deposit whose channel input
 vanished with a reorged-out deposit is re-funded and resubmitted forever
 while later publishes chain behind it; a config landing sheds the pending inscriptions
 chained on the channel tip but not a custom (multi-inscription) tx chained
-on one of them, which leaves the view unreported until the next event. The
-property tests draw both, withdraws that may spend unfinalized notes and
-writers' two-inscription txs, and recognise the two outcomes. The
+on one of them, which leaves the view unreported until the next event;
+another sequencer's config mined on a branch the chain abandons stays in
+the view as pending, never reported orphaned, re-posted or shed; a publish
+queued out of turn whose parent another sequencer takes, in a block that
+finalizes while this one is stopped, is restored from the checkpoint as
+pending for good, never posted or reported orphaned; after a deep fork on
+partitioning nodes the pending entries chained on the abandoned branch,
+own publishes and mirrored inscriptions alike, are re-posted forever,
+rejected by the node for their parent and never reported orphaned (kept as
+the recorded schedule, its mechanism not yet named). The property tests
+draw all five, withdraws that may spend unfinalized notes, writers'
+two-inscription txs, writers' configs under forks and stops across the
+others' turns, and recognise the five outcomes. The
 frozen-LIB backlog stall of #3858 was one of these until the fix landed;
 its story now runs green with the others.
 

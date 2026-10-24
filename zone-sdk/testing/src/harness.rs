@@ -362,11 +362,19 @@ impl Harness {
                 };
                 while let Some(event) = poll_event(sequencer).await {
                     progressed = true;
+                    // The SDK's own log lines are its actor's; this names
+                    // the sequencer the lines just above belong to.
+                    tracing::debug!(
+                        seq = %seq.name,
+                        event = match &event {
+                            Event::BlocksProcessed { .. } => "blocks processed",
+                            Event::Ready => "ready",
+                            Event::TurnNotification { .. } => "turn notification",
+                        }
+                    );
                     seq.checker.observe(&event);
                     seq.mirror.observe(&event);
                     seq.oracles.observe(&event, &seq.node, &seq.name);
-                    let view = sequencer.subscribe_channel_view().borrow().clone();
-                    seq.oracles.observe_view(&view);
                     seq.policy.on_event(sequencer, &event).await;
                     seq.events.push(event);
                     budget -= 1;

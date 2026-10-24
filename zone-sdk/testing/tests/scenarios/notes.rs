@@ -52,6 +52,62 @@ scenario!(
     channel_wallet_tracks_deposits
 );
 
+/// S28: another zone's channel on the same chain is not ours. A deposit
+/// into it stays out of the channel wallet, its inscriptions out of the
+/// channel view, while a deposit into our channel beside it is tracked.
+pub async fn other_channels_notes_are_not_ours(chain: Chain) {
+    let mut world = World::new(chain);
+    world.coin_split(&[1, 2, 3]).await;
+    let a = world.start("SEQ_A", passive()).await;
+    world.publish_included(a, "ours").await;
+
+    // The other zone: a channel keyed to another sequencer, created by its
+    // first inscription.
+    let other_key = seq_key("SEQ_B");
+    let other = lb_core::mantle::ops::channel::ChannelId::from(other_key.public_key().to_bytes());
+    let (genesis, _) = txs::build_funded_custom_tx(
+        world.node(),
+        other,
+        &other_key,
+        world.funding_pk(),
+        &[inscription("theirs")],
+        MsgId::root(),
+    )
+    .await
+    .expect("built");
+    let genesis = world.submit_user_tx(genesis);
+    world.include(genesis).await;
+
+    let ours = world.take_user_notes(&[1]);
+    let theirs = world.take_user_notes(&[2, 3]);
+    let (ours, _, _) = world.deposit(&ours, "into ours").await;
+    let (theirs, _) = txs::deposit_tx(world.node(), other, &theirs, "into theirs", world.user_pk())
+        .await
+        .expect("funded");
+    let theirs = world.submit_user_tx(theirs);
+    world.include(ours).await;
+    world.include(theirs).await;
+    world.finalize_tx(theirs).await;
+
+    let (finalized, unfinalized) = wallet_values(&world.wallet(a));
+    let all: Vec<u64> = finalized.iter().chain(&unfinalized).copied().collect();
+    assert!(
+        all.contains(&1),
+        "our deposit is missing from the wallet: {all:?}"
+    );
+    assert!(
+        !all.contains(&2) && !all.contains(&3),
+        "the wallet holds the other channel's notes: {all:?}"
+    );
+    let payloads = world.indexer_payloads().await;
+    assert_eq!(count_payload(&payloads, "theirs"), 0, "{payloads:?}");
+    world.finish();
+}
+scenario!(
+    s28_other_channels_notes_are_not_ours,
+    other_channels_notes_are_not_ours
+);
+
 /// S17: finalized deposits are returned by the indexer.
 pub async fn finalized_deposit_indexed(chain: Chain) {
     let mut world = World::new(chain);

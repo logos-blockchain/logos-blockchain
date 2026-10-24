@@ -23,7 +23,9 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use common::{FINALITY_DEPTH, FOREIGN, FOREIGN_2, KnownIssue, Posted, World, inscription, passive};
+use common::{
+    FINALITY_DEPTH, FOREIGN, FOREIGN_2, KnownIssue, OTHER_ZONE, Posted, World, inscription, passive,
+};
 use lb_zone_sdk::sequencer::{FinalizedOp, FinalizedTx};
 use logos_blockchain_zone_sdk_testing::{
     chains::{self, Chain, Condition, Shape},
@@ -31,7 +33,7 @@ use logos_blockchain_zone_sdk_testing::{
     layers::Layer,
     policy::payload_str,
     world as common,
-    writers::{OP_CYCLE, WriterOp},
+    writers::{OP_CYCLE, OTHER_ZONE_OPS, WriterOp},
 };
 use proptest::{prelude::*, strategy::Union};
 
@@ -116,8 +118,12 @@ fn zone_arms(top: Layer, sequencers: usize) -> Vec<Arm> {
         ),
         (
             lineage,
-            (index(), payloads(1..=3usize))
-                .prop_map(|(index, payloads)| Event::Custom { index, payloads })
+            (index(), payloads(1..=3usize), prop::bool::ANY)
+                .prop_map(|(index, payloads, priced_out)| Event::Custom {
+                    index,
+                    payloads,
+                    priced_out,
+                })
                 .boxed(),
         ),
     ]
@@ -238,6 +244,8 @@ struct Scenario {
     chain: Chain,
     sequencers: usize,
     writers: usize,
+    /// Whether another zone runs its own channel on the chain beside ours.
+    other_zone: bool,
     messages: usize,
     timeframe: u32,
     timeout: u32,
@@ -260,6 +268,16 @@ impl Scenario {
             Layer::Chain | Layer::Lineage => &INSCRIPTIONS,
             Layer::Configs => &WITH_CONFIGS,
             Layer::Notes | Layer::Restarts => &OP_CYCLE,
+        }
+    }
+
+    /// The other zone's ops: inscriptions on its channel, and from
+    /// [`Layer::Notes`] deposits into it and spends there.
+    const fn other_zone_ops(&self) -> &'static [WriterOp] {
+        const INSCRIPTIONS: [WriterOp; 1] = [WriterOp::Inscribe];
+        match self.top {
+            Layer::Chain | Layer::Lineage | Layer::Configs => &INSCRIPTIONS,
+            Layer::Notes | Layer::Restarts => &OTHER_ZONE_OPS,
         }
     }
 }
@@ -286,9 +304,10 @@ fn scenario(top: Layer) -> impl Strategy<Value = Scenario> {
         prop_oneof![3 => Just(chains::linear()), 1 => Just(chains::partitions())],
         1..=3usize,
         1..=2usize,
+        prop::bool::ANY,
         messages,
     )
-        .prop_flat_map(move |(chain, sequencers, writers, messages)| {
+        .prop_flat_map(move |(chain, sequencers, writers, other_zone, messages)| {
             let rules = if top >= Layer::Configs {
                 let timeframe = if sequencers == 1 {
                     prop_oneof![Just(0u32), Just(3u32)].boxed()
@@ -306,6 +325,7 @@ fn scenario(top: Layer) -> impl Strategy<Value = Scenario> {
                 chain: chain.clone(),
                 sequencers,
                 writers,
+                other_zone,
                 messages,
                 timeframe,
                 timeout,
@@ -349,6 +369,9 @@ async fn world_for(scenario: &Scenario) -> (World, Vec<String>) {
     for writer in writers {
         world.add_writer_with(writer, scenario.writer_ops());
     }
+    if scenario.other_zone {
+        world.add_other_zone(OTHER_ZONE, scenario.other_zone_ops(), 8);
+    }
     world.enable_foreign_traffic(scenario.schedule.len());
     // The notes the schedule deposits exist before the first event.
     let deposits = scenario
@@ -372,7 +395,7 @@ async fn world_for(scenario: &Scenario) -> (World, Vec<String>) {
     (world, expected)
 }
 
-async fn run(scenario: Scenario) {
+async fn run(scenario: Scenario, recognise_known_issues: bool) {
     let (mut world, mut expected) = world_for(&scenario).await;
     for event in scenario.schedule.clone() {
         tracing::debug!(?event, tip = ?world.node().tip(), lib = ?world.node().lib(), "event");
@@ -395,7 +418,10 @@ async fn run(scenario: Scenario) {
         world.apply_event(Event::Start { index }).await;
     }
     let settled = world.try_settle_chain(400).await;
-    if let Some(issue) = world.known_issue(settled) {
+    if let Some(issue) = world
+        .known_issue(settled)
+        .filter(|_| recognise_known_issues)
+    {
         record_known_issue(issue, &scenario);
         return;
     }
@@ -488,7 +514,13 @@ fn assert_one_lineage(finalized: &[FinalizedTx]) {
 /// shows how often it got there (`--no-capture` or `--success-output
 /// immediate`), and reaches zero once the fix lands.
 fn record_known_issue(issue: KnownIssue, scenario: &Scenario) {
-    static HITS: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];
+    static HITS: [AtomicUsize; 5] = [
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    ];
     let hits = HITS[issue as usize].fetch_add(1, Ordering::Relaxed) + 1;
     eprintln!(
         "known issue {issue:?}: {hits} schedule(s) so far ({} events, {} sequencers, {} writers)",
@@ -499,13 +531,16 @@ fn record_known_issue(issue: KnownIssue, scenario: &Scenario) {
     tracing::warn!(?issue, schedule = ?scenario.schedule, "known issue hit");
 }
 
-fn block_on(scenario: Scenario) {
-    let runtime = tokio::runtime::Builder::new_current_thread()
+fn runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .start_paused(true)
         .build()
-        .expect("runtime");
-    runtime.block_on(run(scenario));
+        .expect("runtime")
+}
+
+fn block_on(scenario: Scenario) {
+    runtime().block_on(run(scenario, true));
 }
 
 // The ladder: each rung draws from one more layer than the one below, so
@@ -514,6 +549,7 @@ proptest! {
     #![proptest_config(ProptestConfig {
         cases: 24,
         max_shrink_iters: 200,
+        max_shrink_time: 120_000,
         ..ProptestConfig::default()
     })]
 
@@ -541,6 +577,7 @@ proptest! {
 proptest! {
     #![proptest_config(ProptestConfig {
         cases: 48,
+        max_shrink_time: 120_000,
         max_shrink_iters: 200,
         ..ProptestConfig::default()
     })]
@@ -549,4 +586,507 @@ proptest! {
     fn every_schedule_finalizes_each_payload_once(scenario in scenario(Layer::Restarts)) {
         block_on(scenario);
     }
+}
+
+/// Recorded by `own_messages_land_once` (seed `2e33448f…`): one sequencer on
+/// two partitioning nodes beside another zone's channel. After a deep fork
+/// the sequencer holds some thirty pending entries, its own publishes and
+/// the mirrored writer inscriptions alike, all chained on the abandoned
+/// branch; it re-posts them every tick, the node rejects each for its
+/// parent, none is ever reported orphaned and the chain never settles.
+#[test]
+#[ignore = "known issue: pending entries chained on an abandoned branch are re-posted forever and never reported orphaned"]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the recorded schedule, event by event"
+)]
+fn pending_on_an_abandoned_branch_is_reported_orphaned() {
+    let scenario = Scenario {
+        top: Layer::Lineage,
+        chain: chains::partitions(),
+        sequencers: 1,
+        writers: 2,
+        other_zone: true,
+        messages: 3,
+        timeframe: 3,
+        timeout: 0,
+        schedule: vec![
+            Event::Chain {
+                shape: Shape::Extend { gap: 3 },
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 1 },
+                posted: Posted::Half,
+            },
+            Event::Publish {
+                index: 0,
+                payload: "event-91f36310".into(),
+            },
+            Event::Abandon { index: 0 },
+            Event::Chain {
+                shape: Shape::Extend { gap: 2 },
+                posted: Posted::Half,
+            },
+            Event::Chain {
+                shape: Shape::Fork {
+                    depth: 27,
+                    length: 2,
+                },
+                posted: Posted::Half,
+            },
+            Event::Chain {
+                shape: Shape::Duplicate,
+                posted: Posted::Half,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 1 },
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 1 },
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Revive { blocks: 4 },
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::FreezeLib,
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 2 },
+                posted: Posted::All,
+            },
+            Event::Publish {
+                index: 0,
+                payload: "event-2424a036".into(),
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 3 },
+                posted: Posted::Half,
+            },
+            Event::Chain {
+                shape: Shape::SplitTip,
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 3 },
+                posted: Posted::Half,
+            },
+            Event::Chain {
+                shape: Shape::Revive { blocks: 3 },
+                posted: Posted::None,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 1 },
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Fork {
+                    depth: 28,
+                    length: 9,
+                },
+                posted: Posted::Half,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 1 },
+                posted: Posted::Reversed,
+            },
+            Event::Chain {
+                shape: Shape::SplitTip,
+                posted: Posted::None,
+            },
+            Event::Custom {
+                index: 0,
+                payloads: vec![
+                    "event-3f674ae6".into(),
+                    "event-5e11be33".into(),
+                    "event-6e743271".into(),
+                ],
+                priced_out: true,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 1 },
+                posted: Posted::All,
+            },
+            Event::Adopt { index: 0, on: true },
+            Event::Chain {
+                shape: Shape::Extend { gap: 2 },
+                posted: Posted::Half,
+            },
+            Event::Chain {
+                shape: Shape::Duplicate,
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Prune,
+                posted: Posted::Half,
+            },
+            Event::Abandon { index: 0 },
+            Event::Chain {
+                shape: Shape::Extend { gap: 2 },
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Lagging { silent: 2 },
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 1 },
+                posted: Posted::Half,
+            },
+            Event::Adopt {
+                index: 0,
+                on: false,
+            },
+            Event::Abandon { index: 0 },
+            Event::Chain {
+                shape: Shape::Extend { gap: 3 },
+                posted: Posted::All,
+            },
+            Event::Custom {
+                index: 0,
+                payloads: vec!["event-1934f06e".into()],
+                priced_out: false,
+            },
+            Event::Chain {
+                shape: Shape::Lagging { silent: 3 },
+                posted: Posted::None,
+            },
+            Event::Chain {
+                shape: Shape::Fork {
+                    depth: 27,
+                    length: 27,
+                },
+                posted: Posted::Half,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 2 },
+                posted: Posted::Half,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 3 },
+                posted: Posted::Half,
+            },
+            Event::Adopt {
+                index: 0,
+                on: false,
+            },
+            Event::Burst {
+                index: 0,
+                payloads: vec!["event-31d7305f".into(), "event-ee6e3fa8".into()],
+            },
+            Event::Chain {
+                shape: Shape::FreezeLib,
+                posted: Posted::Half,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 1 },
+                posted: Posted::All,
+            },
+            Event::Publish {
+                index: 0,
+                payload: "event-cbb8a9e8".into(),
+            },
+            Event::Chain {
+                shape: Shape::FreezeLib,
+                posted: Posted::Reversed,
+            },
+            Event::Chain {
+                shape: Shape::Revive { blocks: 2 },
+                posted: Posted::All,
+            },
+            Event::Custom {
+                index: 0,
+                payloads: vec!["event-08689d33".into()],
+                priced_out: true,
+            },
+            Event::Chain {
+                shape: Shape::Prune,
+                posted: Posted::Half,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 2 },
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 2 },
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 1 },
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 1 },
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::SplitTip,
+                posted: Posted::None,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 2 },
+                posted: Posted::Half,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 3 },
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Fork {
+                    depth: 14,
+                    length: 14,
+                },
+                posted: Posted::Half,
+            },
+            Event::Adopt { index: 0, on: true },
+            Event::Chain {
+                shape: Shape::Fork {
+                    depth: 24,
+                    length: 22,
+                },
+                posted: Posted::All,
+            },
+            Event::Custom {
+                index: 0,
+                payloads: vec![
+                    "event-0caf1b26".into(),
+                    "event-2bf47c21".into(),
+                    "event-cdfe1bcb".into(),
+                ],
+                priced_out: true,
+            },
+            Event::Chain {
+                shape: Shape::Revive { blocks: 3 },
+                posted: Posted::Half,
+            },
+            Event::Chain {
+                shape: Shape::Lagging { silent: 3 },
+                posted: Posted::All,
+            },
+            Event::Burst {
+                index: 0,
+                payloads: vec![
+                    "event-db80f2db".into(),
+                    "event-13491803".into(),
+                    "event-b10a4291".into(),
+                ],
+            },
+            Event::Chain {
+                shape: Shape::ThawLib,
+                posted: Posted::Reversed,
+            },
+            Event::Chain {
+                shape: Shape::Revive { blocks: 2 },
+                posted: Posted::All,
+            },
+            Event::Custom {
+                index: 0,
+                payloads: vec!["event-2204c170".into()],
+                priced_out: false,
+            },
+            Event::Chain {
+                shape: Shape::Lagging { silent: 1 },
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Fork {
+                    depth: 6,
+                    length: 7,
+                },
+                posted: Posted::All,
+            },
+            Event::Publish {
+                index: 0,
+                payload: "event-2125bd26".into(),
+            },
+            Event::Chain {
+                shape: Shape::SplitTip,
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Fork {
+                    depth: 22,
+                    length: 19,
+                },
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::ThawLib,
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::SplitTip,
+                posted: Posted::Half,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 1 },
+                posted: Posted::Half,
+            },
+            Event::Publish {
+                index: 0,
+                payload: "event-f3a8ae3c".into(),
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 2 },
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 1 },
+                posted: Posted::Half,
+            },
+            Event::Adopt { index: 0, on: true },
+            Event::Chain {
+                shape: Shape::Extend { gap: 3 },
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Prune,
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Lagging { silent: 1 },
+                posted: Posted::All,
+            },
+            Event::Adopt {
+                index: 0,
+                on: false,
+            },
+            Event::Publish {
+                index: 0,
+                payload: "event-3eebab6f".into(),
+            },
+            Event::Abandon { index: 0 },
+            Event::Chain {
+                shape: Shape::Extend { gap: 1 },
+                posted: Posted::Half,
+            },
+            Event::Abandon { index: 0 },
+            Event::Chain {
+                shape: Shape::Fork {
+                    depth: 20,
+                    length: 7,
+                },
+                posted: Posted::Half,
+            },
+            Event::Publish {
+                index: 0,
+                payload: "event-5f598eb3".into(),
+            },
+            Event::Publish {
+                index: 0,
+                payload: "event-741c12e0".into(),
+            },
+            Event::Custom {
+                index: 0,
+                payloads: vec!["event-7a1c8c23".into(), "event-e06a160a".into()],
+                priced_out: true,
+            },
+            Event::Chain {
+                shape: Shape::Fork {
+                    depth: 22,
+                    length: 3,
+                },
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Fork {
+                    depth: 1,
+                    length: 2,
+                },
+                posted: Posted::All,
+            },
+            Event::Abandon { index: 0 },
+            Event::Chain {
+                shape: Shape::FreezeLib,
+                posted: Posted::All,
+            },
+            Event::Custom {
+                index: 0,
+                payloads: vec!["event-2e1842e8".into(), "event-60f91bce".into()],
+                priced_out: false,
+            },
+            Event::Burst {
+                index: 0,
+                payloads: vec!["event-b4a74930".into()],
+            },
+            Event::Chain {
+                shape: Shape::FreezeLib,
+                posted: Posted::None,
+            },
+            Event::Adopt {
+                index: 0,
+                on: false,
+            },
+            Event::Chain {
+                shape: Shape::FreezeLib,
+                posted: Posted::Reversed,
+            },
+            Event::Chain {
+                shape: Shape::FreezeLib,
+                posted: Posted::Half,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 1 },
+                posted: Posted::None,
+            },
+            Event::Burst {
+                index: 0,
+                payloads: vec!["event-1e2567c9".into()],
+            },
+            Event::Publish {
+                index: 0,
+                payload: "event-e8db46ed".into(),
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 1 },
+                posted: Posted::All,
+            },
+            Event::Custom {
+                index: 0,
+                payloads: vec![
+                    "event-fd8ba243".into(),
+                    "event-9affce74".into(),
+                    "event-1b38eef7".into(),
+                ],
+                priced_out: true,
+            },
+            Event::Chain {
+                shape: Shape::Fork {
+                    depth: 27,
+                    length: 28,
+                },
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 2 },
+                posted: Posted::None,
+            },
+            Event::Chain {
+                shape: Shape::ThawLib,
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::SplitTip,
+                posted: Posted::None,
+            },
+            Event::Abandon { index: 0 },
+            Event::Publish {
+                index: 0,
+                payload: "event-2fb27f30".into(),
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 2 },
+                posted: Posted::All,
+            },
+            Event::Chain {
+                shape: Shape::Extend { gap: 3 },
+                posted: Posted::All,
+            },
+        ],
+    };
+    runtime().block_on(run(scenario, false));
 }

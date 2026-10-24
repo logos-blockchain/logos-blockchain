@@ -28,7 +28,10 @@ use lb_core::{
         channel::ChannelState,
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
-        ops::{channel::ChannelId, op_proof::samples::SampleProof as _},
+        ops::{
+            channel::{ChannelId, MsgId},
+            op_proof::samples::SampleProof as _,
+        },
         traits::Hashable as _,
         transactions::{
             GasPrices, MantleTxBuilder, TxBuilderError, states::Unverified,
@@ -808,6 +811,44 @@ impl SimNode {
         drop(state);
         found.sort_by_key(|(id, _, _)| *id);
         found
+    }
+
+    /// The message the channel tip's inscription chains on: the tip before
+    /// it, which the chain has passed. `None` without a tip inscription.
+    #[must_use]
+    pub fn channel_tip_parent(&self, channel: ChannelId) -> Option<MsgId> {
+        let tip = self.channel_state_at_tip(channel)?.tip_message;
+        self.canonical_txs().iter().find_map(|tx| {
+            lb_zone_sdk::sequencer::channel_inscriptions(tx, channel)
+                .into_iter()
+                .find(|info| info.this_msg == tip)
+                .map(|info| info.parent_msg)
+        })
+    }
+
+    /// Where the inscription carrying message `msg` of `channel` is: in a
+    /// canonical block, only in abandoned ones, or in none the node holds.
+    #[must_use]
+    pub fn message_status(&self, channel: ChannelId, msg: &MsgId) -> &'static str {
+        let state = self.lock();
+        let canonical: HashSet<HeaderId> = state.ancestors(state.tip).into_iter().collect();
+        let mut status = "unknown";
+        for block in state.blocks.values() {
+            let carried = block.txs.iter().any(|tx| {
+                lb_zone_sdk::sequencer::channel_inscriptions(tx, channel)
+                    .iter()
+                    .any(|info| info.this_msg == *msg)
+            });
+            if carried && canonical.contains(&block.id) {
+                status = "canonical";
+                break;
+            }
+            if carried {
+                status = "abandoned";
+            }
+        }
+        drop(state);
+        status
     }
 
     /// The payloads of every channel inscription on the branch ending at

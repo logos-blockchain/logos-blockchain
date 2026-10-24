@@ -64,3 +64,4 @@ testnet/cfgsync/deployment-settings.yaml
 
 # proptest seeds of failing zone-sdk simulation schedules; replayed locally, never a regression test
 zone-sdk/testing/tests/*.proptest-regressions
+zone-sdk/testing/mutants/

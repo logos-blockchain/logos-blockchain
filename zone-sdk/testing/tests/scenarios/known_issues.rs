@@ -34,6 +34,178 @@ async fn deposit_in_losing_fork_is_not_reported() {
     world.harness.assert_layers();
 }
 
+/// Known SDK issue: a publish queued out of turn on the channel tip is
+/// stranded when another sequencer takes that parent while the sequencer
+/// is down and the taking block finalizes before it is back. Restored from
+/// the checkpoint, the pending entry no longer chains on the tip, so it is
+/// never posted, never re-funded and, the displacement lying in finalized
+/// history the restore replays without a shed, never reported orphaned:
+/// the consumer is not told and the payload never lands.
+#[tokio::test(start_paused = true)]
+#[ignore = "known issue: a restored pending publish whose parent was taken by a block finalized while the sequencer was down stays pending, unreported and never posted"]
+async fn publish_queued_out_of_turn_is_stranded_when_its_parent_is_taken_while_down() {
+    let mut world = World::new(chains::linear());
+    let a = world.start("SEQ_A", reference("SEQ_A")).await;
+    world.config_finalized(a, &["SEQ_B"], 3, 0).await;
+    let channel_id = world.channel_id();
+    let state = world
+        .node()
+        .channel_state_at_tip(channel_id)
+        .expect("channel");
+    assert_eq!(
+        state.tip_message,
+        MsgId::root(),
+        "a config-made channel starts at the root"
+    );
+    // Step until the turn is SEQ_B's, so SEQ_A's publish is queued unposted.
+    let other = seq_key("SEQ_B");
+    let other_pk = other.public_key().into_unverified();
+    let in_turn = |world: &mut World| {
+        let state = world
+            .node()
+            .channel_state_at_tip(channel_id)
+            .expect("channel");
+        let (index, _) = state.round_robin(world.node().tip_slot());
+        state.accredited_keys.iter().nth(usize::from(index)) == Some(&other_pk)
+    };
+    assert!(
+        world.step_until(6, in_turn).await,
+        "SEQ_B never got the turn"
+    );
+    let queued = world
+        .publish(a, "queued out of turn")
+        .await
+        .expect("queued")
+        .inscription_id();
+    assert!(
+        !world.node().in_mempool(&queued),
+        "must be queued, not posted"
+    );
+    let checkpoint = world.checkpoint(a);
+    world.stop(a);
+
+    // SEQ_B takes the root while SEQ_A is down.
+    let (taken, _) = txs::build_funded_custom_tx(
+        world.node(),
+        channel_id,
+        &other,
+        world.funding_pk(),
+        &[inscription("taken by SEQ_B")],
+        MsgId::root(),
+    )
+    .await
+    .expect("built");
+    let taken_hash = taken.hash();
+    let slot = world.node().tip_slot().into_inner() + 1;
+    let _ = world.node().mine_block(BlockSpec {
+        slot: Some(slot.into()),
+        txs: TxSelection::None,
+        extra_txs: vec![taken],
+        ..Default::default()
+    });
+    world.harness.settle().await;
+    // The taking block finalizes before SEQ_A comes back.
+    world.finalize_tx(taken_hash).await;
+    world.restart(a, Some(checkpoint)).await;
+
+    // Displaced: reported orphaned, republished by the consumer on the new
+    // tip, and landed.
+    world.settle_chain(100).await;
+    let payloads = world.indexer_payloads().await;
+    assert_eq!(
+        count_payload(&payloads, "queued out of turn"),
+        1,
+        "the displaced publish never landed: {payloads:?}\n{}",
+        world.diagnostics()
+    );
+    world.finish();
+}
+
+/// Known SDK issue: another sequencer's config mined on a branch the chain
+/// abandons is never reported orphaned. The config joins the view when its
+/// block is canonical; when a longer fork from below it wins, the sequencer
+/// keeps it as a pending entry chained on the config tip and reports no
+/// change, never re-posts it and, since it is another sequencer's, never
+/// sheds it: the view carries it for good.
+#[tokio::test(start_paused = true)]
+#[ignore = "known issue: another sequencer's config on an abandoned branch stays pending, unreported, never re-posted"]
+async fn others_config_on_an_abandoned_branch_is_not_reported_orphaned() {
+    let mut world = World::new(chains::linear());
+    let a = world.start("SEQ_A", passive()).await;
+    world.config_finalized(a, &["SEQ_B"], 3, 0).await;
+    let channel_id = world.channel_id();
+    let state = world
+        .node()
+        .channel_state_at_tip(channel_id)
+        .expect("channel");
+    let key = seq_key("SEQ_B");
+    let index = state
+        .accredited_keys
+        .iter()
+        .position(|k| *k == key.public_key().into_unverified())
+        .expect("SEQ_B accredited");
+    let config = txs::build_channel_config_tx(
+        world.node(),
+        channel_id,
+        txs::Signer {
+            key: &key,
+            index: u16::try_from(index).expect("fits"),
+        },
+        world.funding_pk(),
+        state.config_tip_hash,
+        txs::ConfigRules {
+            keys: keys(&["SEQ_A", "SEQ_B"]),
+            posting_timeframe: 4,
+            posting_timeout: 0,
+            configuration_threshold: 1,
+            transfer_threshold: 1,
+        },
+    )
+    .await
+    .expect("built");
+    let config_hash = config.hash();
+    let mine = |world: &World, parent: lb_core::header::HeaderId, slot: u64, extra| {
+        world.node().mine_block(BlockSpec {
+            parent: Some(parent),
+            slot: Some(slot.into()),
+            txs: TxSelection::None,
+            extra_txs: extra,
+            ..Default::default()
+        })
+    };
+
+    // The config lands and joins the view.
+    let fork_parent = world.node().tip();
+    let slot = world.node().tip_slot().into_inner();
+    mine(&world, fork_parent, slot + 1, vec![config]);
+    world.harness.settle().await;
+    assert!(
+        world.node().is_included(&config_hash),
+        "the config must land"
+    );
+
+    // A longer fork from below it wins.
+    let first = mine(&world, fork_parent, slot + 2, vec![]);
+    let winner = mine(&world, first, slot + 3, vec![]);
+    world.harness.settle().await;
+    assert_eq!(world.node().tip(), winner, "the fork must win");
+    assert!(!world.node().is_included(&config_hash));
+    world.steps(3).await;
+
+    // Reported orphaned, the config leaves the pending set and the view.
+    let pending: Vec<_> = world
+        .checkpoint(a)
+        .pending_txs
+        .iter()
+        .map(|(hash, _)| *hash)
+        .collect();
+    assert!(
+        !pending.contains(&config_hash),
+        "the orphaned config is still pending: {pending:?}"
+    );
+    world.harness.assert_layers();
+}
+
 /// Known SDK issue: a writer's inscription and the two-inscription tx chained
 /// on it are mined, then reorged out while a price rise keeps the writer from
 /// re-landing them, so both sit in the pending tail when the writer's config
