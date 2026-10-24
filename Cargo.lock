@@ -5741,6 +5741,7 @@ dependencies = [
  "num-bigint",
  "proptest",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -23,6 +23,7 @@ lb-key-management-system-service = { workspace = true }
 lb-zone-sdk                      = { workspace = true }
 num-bigint                       = { workspace = true }
 thiserror                        = { workspace = true }
+time                             = { features = ["std"], workspace = true }
 tokio                            = { features = ["macros", "rt", "sync", "test-util", "time"], workspace = true }
 tracing                          = { workspace = true }
 tracing-subscriber               = { features = ["env-filter", "fmt"], workspace = true }

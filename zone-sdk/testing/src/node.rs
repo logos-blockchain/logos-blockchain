@@ -6,18 +6,18 @@
 
 use std::{
     cmp::Ordering,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
+    num::NonZero,
     sync::{
         Arc, Mutex, MutexGuard,
         atomic::{AtomicU64, Ordering as AtomicOrdering},
     },
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
 use futures::{StreamExt as _, channel::mpsc};
 use lb_common_http_client::{
-    ApiBlock, ApiHeader, BlockInfo, ChainServiceInfo, CryptarchiaInfo, Events, PhaseTag,
+    ApiBlock, ApiHeader, BlockInfo, ChainServiceInfo, CryptarchiaInfo, EraTiming, Events, PhaseTag,
     ProcessedBlockEvent, Slot, State, TimeInfo,
 };
 use lb_core::{
@@ -213,7 +213,7 @@ struct ChainState {
     lib_frozen: bool,
     /// Block and block-events fetches left to fail.
     fetch_failures: usize,
-    genesis_time_unix_ms: i64,
+    genesis_time: time::UtcDateTime,
     funding: Option<FundingWallet>,
     gas_prices: GasPrices,
     reorgs: usize,
@@ -262,16 +262,6 @@ fn block_id(salt: u64, counter: u64) -> HeaderId {
     HeaderId::from(bytes)
 }
 
-fn now_unix_ms() -> i64 {
-    i64::try_from(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock after epoch")
-            .as_millis(),
-    )
-    .expect("fits")
-}
-
 impl Default for SimNode {
     fn default() -> Self {
         Self::new(5)
@@ -314,7 +304,7 @@ impl SimNode {
             up: true,
             lib_frozen: false,
             fetch_failures: 0,
-            genesis_time_unix_ms: now_unix_ms(),
+            genesis_time: time::OffsetDateTime::now_utc().to_utc(),
             funding: None,
             gas_prices: GasPrices::default(),
             reorgs: 0,
@@ -1447,11 +1437,16 @@ impl adapter::Node for SimNode {
         let state = self.lock();
         state.require_up()?;
         Ok(TimeInfo {
-            slot_duration_ms: SLOT_DURATION_MS,
-            genesis_time_unix_ms: state.genesis_time_unix_ms,
+            genesis_time: state.genesis_time,
             current_slot: state.blocks[&state.tip].slot.into_inner(),
             current_epoch: 0,
-            slots_per_epoch: 1_000_000,
+            era_timings: BTreeMap::from([(
+                0,
+                EraTiming {
+                    slot_duration: core::time::Duration::from_millis(SLOT_DURATION_MS),
+                    slots_per_epoch: NonZero::new(1_000_000).expect("non-zero"),
+                },
+            )]),
         })
     }
 

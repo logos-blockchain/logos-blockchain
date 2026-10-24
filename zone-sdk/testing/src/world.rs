@@ -11,7 +11,9 @@ use lb_core::{
         ledger::{Outputs, verification_mode::StandardMode},
         ops::{
             OpId as _, OpRef,
-            channel::{ChannelId, VerifiedChannelKeys, deposit::DepositOp, inscribe::Inscription},
+            channel::{
+                ChannelId, MsgId, VerifiedChannelKeys, deposit::DepositOp, inscribe::Inscription,
+            },
         },
         traits::Hashable,
         transactions::states::Unverified,
@@ -173,8 +175,8 @@ pub enum KnownIssue {
     /// pending in the view: not reported orphaned, not re-posted, not shed.
     OthersConfigOnAbandonedBranch,
     /// A restored pending publish whose parent another sequencer took in a
-    /// block that finalized while this one was down stays pending: never
-    /// posted, never reported orphaned.
+    /// block that finalized while this one was down stays pending: not
+    /// posted again, never reported orphaned.
     RestoredPublishOnTakenParent,
     /// After a deep fork the pending entries chained on the abandoned branch,
     /// own publishes and mirrored inscriptions alike, are re-posted forever:
@@ -1320,9 +1322,11 @@ impl World {
         })
     }
 
-    /// Whether a sequencer holds an own publish never posted, chained on a
-    /// message that is neither the channel tip nor canonical: its parent
-    /// was taken under it.
+    /// Whether a sequencer holds an own publish whose parent was taken under
+    /// it: a message that is not the channel tip, mined on some branch or
+    /// the channel root, so the publish can never land and should have been
+    /// reported orphaned. A parent that is one of its own pending messages
+    /// is a plain chain, not this.
     fn stranded_publish(&self, channel: ChannelId) -> bool {
         let channel_tip = self
             .node()
@@ -1331,16 +1335,15 @@ impl World {
         self.harness.seqs.iter().any(|seq| {
             let own = seq.key.public_key().into_unverified();
             seq.checkpoint().is_some_and(|checkpoint| {
-                checkpoint.pending_txs.iter().any(|(hash, tx)| {
+                checkpoint.pending_txs.iter().any(|(_, tx)| {
                     let inscriptions = lb_zone_sdk::sequencer::channel_inscriptions(tx, channel);
-                    inscriptions.len() == 1
-                        && inscriptions[0].signer == Some(own)
-                        && seq.node.post_count(hash) == 0
-                        && Some(inscriptions[0].parent_msg) != channel_tip
-                        && seq
-                            .node
-                            .message_status(channel, &inscriptions[0].parent_msg)
-                            != "canonical"
+                    let [info] = inscriptions.as_slice() else {
+                        return false;
+                    };
+                    let parent = info.parent_msg;
+                    let taken = parent == MsgId::root()
+                        || seq.node.message_status(channel, &parent) != "unknown";
+                    info.signer == Some(own) && Some(parent) != channel_tip && taken
                 })
             })
         })
@@ -1407,6 +1410,7 @@ impl World {
             }
             let view = self.view(index);
             let checkpoint = self.checkpoint(index);
+            let seq_node = self.harness.seqs[index].node.clone();
             let channel_tip = node
                 .channel_state_at_tip(channel_id)
                 .map(|state| state.tip_message);
@@ -1430,9 +1434,10 @@ impl World {
                         format!(" parent {:?}.. {status}", &info.parent_msg.as_ref()[..4])
                     });
                     format!(
-                        "{hash:?} [{}] {payloads:?} included={}{parent}",
+                        "{hash:?} [{}] {payloads:?} included={} posted={}{parent}",
                         op_kinds(tx),
-                        node.is_included(hash)
+                        node.is_included(hash),
+                        seq_node.post_count(hash)
                     )
                 })
                 .collect();
