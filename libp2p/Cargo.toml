@@ -19,7 +19,9 @@ blake2 = { workspace = true }
 either = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
+hickory-resolver = { features = ["system-config"], workspace = true }
 igd-next = { features = ["aio_tokio", "tokio"], workspace = true }
+lb-core = { workspace = true }
 lb-cryptarchia-sync = { workspace = true }
 lb-log-targets = { workspace = true }
 lb-utils = { features = ["time"], workspace = true }

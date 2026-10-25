@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use futures::{StreamExt as _, stream::BoxStream};
-use lb_network_service::{NetworkService, backends::NetworkBackend};
+use lb_cryptarchia_engine::Era;
+use lb_network_service::{backends::NetworkBackend, message::BackendNetworkMsg};
 use overwatch::{
     overwatch::OverwatchHandle,
     services::{ServiceData, relay::OutboundRelay},
@@ -60,17 +61,20 @@ where
     type Settings = ();
 
     fn new(
-        _network_relay: OutboundRelay<
-            <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-        >,
+        _network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
         _mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
         _chain_network_relay: OutboundRelay<<Self::ChainNetworkService as ServiceData>::Message>,
         (): Self::Settings,
+        _current_era: Era,
     ) -> Self {
         Self::new().0
     }
 
-    async fn dispatch(&self, payload: DataPayload) {
+    async fn rotate_era(&mut self, _era: Era) {}
+
+    async fn complete_era_transition(&mut self, _ended_era: Era) {}
+
+    async fn dispatch(&self, payload: DataPayload, _era: Era) {
         drop(self.dispatched.send(payload));
     }
 
@@ -90,11 +94,19 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for TestNetworkBackend {
     type PubSubEvent = ();
     type ChainSyncEvent = ();
 
-    fn new((): Self::Settings, _overwatch_handle: OverwatchHandle<RuntimeServiceId>) -> Self {
+    fn new(
+        (): Self::Settings,
+        _current_era: Era,
+        _overwatch_handle: OverwatchHandle<RuntimeServiceId>,
+    ) -> Self {
         Self
     }
 
     async fn process(&self, (): Self::Message) {}
+
+    async fn rotate_era(&mut self, _era: Era) {}
+
+    async fn complete_era_transition(&mut self, _ended_era: Era) {}
 
     async fn subscribe_to_pubsub(&mut self) -> BroadcastStream<Self::PubSubEvent> {
         BroadcastStream::new(broadcast::channel(CHANNEL_SIZE).0.subscribe())

@@ -24,6 +24,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Epoch, PrunedBlocks, Slot};
 use lb_cryptarchia_sync::{BlocksUnavailableReason, GetTipResponseReason, ProviderResponse};
+use lb_ledger::config::{config_for_slot, stake_distribution_snapshot};
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_network_service::message::ChainSyncEvent;
 use lb_storage_service::api::StorageApi;
@@ -337,9 +338,12 @@ where
                     error!(target: LOG_TARGET, "Could not send ledger state through channel");
                 });
             }
-            Query::GetLedgerConfig { reply_channel } => {
+            Query::GetLedgerConfigAtSlot {
+                slot,
+                reply_channel,
+            } => {
                 reply_channel
-                    .send(self.cryptarchia.ledger.config().clone())
+                    .send(config_for_slot(self.cryptarchia.ledger.era_schedule(), slot).clone())
                     .unwrap_or_else(|_| {
                         error!(target: LOG_TARGET, "Could not send ledger config through channel");
                     });
@@ -407,14 +411,6 @@ where
                 reply_channel.send(result).unwrap_or_else(|_| {
                     error!(target: LOG_TARGET, "Could not send epoch state through channel");
                 });
-            }
-            Query::GetEpochConfig { reply_channel } => {
-                let config = self.cryptarchia.ledger.config();
-                reply_channel
-                    .send((config.epoch_config, config.consensus_config.clone()))
-                    .unwrap_or_else(|_| {
-                        error!(target: LOG_TARGET, "Could not send epoch config through channel");
-                    });
             }
             Query::GetBlockEvents { id, reply_channel } => {
                 let events = self.relays.storage().get_block_events(&id).await;
@@ -592,15 +588,14 @@ where
             else {
                 continue;
             };
-            let inactivity_period = cryptarchia
-                .ledger
-                .config()
-                .sdp_config
-                .service_params
-                .get(&new_declaration.service_type)
-                .map_or(0, |params| {
-                    params.inactivity_period.into_inner().into_inner()
-                });
+            let inactivity_period =
+                config_for_slot(cryptarchia.ledger.era_schedule(), block.header().slot())
+                    .sdp_config
+                    .service_params
+                    .get(&new_declaration.service_type)
+                    .map_or(0, |params| {
+                        params.inactivity_period.into_inner().into_inner()
+                    });
 
             info!(
                 target: LOG_TARGET,
@@ -734,7 +729,6 @@ fn log_canonical_blend_snapshots<Tx>(cryptarchia: &Cryptarchia, block: &Block<Tx
         );
     }
 
-    let config = cryptarchia.ledger.config();
     for epoch_state in [
         committed_state.epoch_state(),
         committed_state.next_epoch_state(),
@@ -743,7 +737,13 @@ fn log_canonical_blend_snapshots<Tx>(cryptarchia: &Cryptarchia, block: &Block<Tx
         if target_epoch <= Epoch::new(1) {
             continue;
         }
-        let snapshot_slot = config.stake_distribution_snapshot(target_epoch);
+        let snapshot_slot = stake_distribution_snapshot(
+            cryptarchia.ledger.era_schedule(),
+            target_epoch
+                .into_inner()
+                .try_into()
+                .expect("Non-genesis epoch checked."),
+        );
         if parent_state.slot() < snapshot_slot && committed_state.slot() >= snapshot_slot {
             log_blend_snapshot_provider_decisions(
                 target_epoch,

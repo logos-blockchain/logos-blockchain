@@ -55,7 +55,7 @@ Feature: Blend diagnostics
     And the cluster uses cryptarchia security parameter <k>
     # Cap W at k-1 (floor 1) to reduce pruning-related instability while retaining uncle activity.
     And I have deployment config override "eras.0.cryptarchia.uncle_reference_window_in_block" as "<uncle_window>"
-    And I have deployment config override "eras.0.time.slot_duration" as "seconds(1)"
+    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "1"
     And I have deployment config override "eras.0.cryptarchia.epoch_config.epoch_stake_distribution_stabilization" as "<p1>"
     And I have deployment config override "eras.0.cryptarchia.epoch_config.epoch_period_nonce_buffer" as "<p2>"
     And I have deployment config override "eras.0.cryptarchia.epoch_config.epoch_period_nonce_stabilization" as "<p3>"

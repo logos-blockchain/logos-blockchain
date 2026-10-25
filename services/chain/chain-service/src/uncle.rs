@@ -20,6 +20,7 @@ impl Cryptarchia {
     ///
     /// # Rules
     /// - Each uncle's slot must be older than the block's slot.
+    /// - Each uncle must be of the era of the block.
     /// - Each uncle must not be on the chain that the block extends.
     /// - Each uncle's parent must be on the chain the block extends, within the
     ///   uncle reference window.
@@ -40,21 +41,29 @@ impl Cryptarchia {
                 info: Box::new(self.info()),
             })?;
 
-        // Each uncle's slot must be older than the block's slot.
+        // Each uncle's slot must be older than the block's slot, and of the
+        // block's era, which starts at its first slot.
+        let era = self.ledger.era_schedule().at_slot(slot);
         for uncle in block.uncle_headers().iter() {
-            if uncle.header().slot() >= slot {
+            let uncle_slot = uncle.header().slot();
+            if uncle_slot >= slot {
                 return Err(Error::InvalidUncle {
                     uncle: uncle.header().id(),
                     reason: UncleError::NotStrictlyOlder,
                 });
             }
+            if uncle_slot < era.first_slot {
+                return Err(Error::InvalidUncle {
+                    uncle: uncle.header().id(),
+                    reason: UncleError::OtherEra,
+                });
+            }
         }
 
         // Each uncle's parent must be on the chain the block extends, within the
-        // uncle reference window.
-        let uncle_reference_window = self
-            .ledger
-            .config()
+        // uncle reference window of the block's era.
+        let uncle_reference_window = era
+            .parameters
             .consensus_config
             .uncle_reference_window_in_slot()
             .get();
@@ -136,7 +145,7 @@ impl Cryptarchia {
             .verify_proof_of_leadership::<_, HeaderId>(
                 uncle.header().slot(),
                 uncle.header().leader_proof(),
-                self.ledger.config(),
+                self.ledger.era_schedule(),
             )
             .map_err(|_| UncleError::InvalidProof)
     }
@@ -148,6 +157,8 @@ impl Cryptarchia {
 pub enum UncleError {
     #[error("not strictly older than the block")]
     NotStrictlyOlder,
+    #[error("of another era than the block")]
+    OtherEra,
     #[error("parent not on the chain that the block is extending, within the window")]
     ParentNotOnChain,
     #[error("on the chain that the block is extending")]
@@ -188,7 +199,10 @@ mod tests {
     use rand::thread_rng;
 
     use super::*;
-    use crate::tests::{chain_with_fork, signed_header, try_build_block};
+    use crate::tests::{
+        chain_with_fork, chain_with_fork_on, ledger_config, schedule, signed_header,
+        try_build_block,
+    };
 
     #[test]
     fn test_accept_valid_uncle() {
@@ -247,6 +261,37 @@ mod tests {
     }
 
     #[test]
+    fn reject_uncle_of_another_era() {
+        // With k=1, an epoch lasts 100 slots and the uncle window 120. Era 1
+        // starts at epoch 1, at slot 100: a block at slot 101 has `U1` (slot 1)
+        // within its window, through `U1`'s parent `G` (slot 0), but `U1` is of
+        // era 0.
+        let config = ledger_config(1.try_into().unwrap());
+        let (mut cryptarchia, _, u1, u1_key, ..) =
+            chain_with_fork_on(schedule(config.clone(), [(1, config)]));
+
+        let block = craft_block_with_uncles(
+            cryptarchia.tip(),
+            Slot::new(101),
+            UncleHeaders::new(BoundedVec::from(signed_header(&u1))),
+            u1.header().leader_proof(),
+            &u1_key,
+        );
+
+        let block_header_slot = block.header().slot();
+        let Err(err) = cryptarchia.try_apply_block(block, block_header_slot) else {
+            panic!("expected the block to be rejected");
+        };
+        assert!(matches!(
+            err,
+            Error::InvalidUncle {
+                reason: UncleError::OtherEra,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn test_reject_uncle_whose_parent_is_outside_window() {
         let (mut cryptarchia, _, u1, u1_key, ..) = chain_with_fork();
 
@@ -254,7 +299,9 @@ mod tests {
         // parent, which puts the uncle's parent outside the window.
         let uncle_reference_window = cryptarchia
             .ledger
-            .config()
+            .era_schedule()
+            .genesis()
+            .parameters
             .consensus_config
             .uncle_reference_window_in_slot()
             .get();

@@ -55,9 +55,9 @@ pub struct RewardPowState {
     /// expires.
     nullifiers: HashTrieMapSync<PowNullifier, Slot>,
     /// Slots of recently seen blocks by hash, retained for the
-    /// window-of-acceptance check and pruned as they age out of the
-    /// configured acceptance window
-    /// ([`slot_window`](crate::config::RewardPoWConfig::slot_window)). Keyed
+    /// window-of-acceptance check and pruned once no acceptance window
+    /// ([`slot_window`](crate::config::RewardPoWConfig::slot_window)) of a
+    /// claim still to come reaches them. Keyed
     /// by the wire-format block hash — the same
     /// value a `ClaimPowRewardOp` anchors to — so consensus state stays
     /// independent of the node's header-id type.
@@ -77,16 +77,17 @@ pub struct BlendPowState {
 }
 
 impl PowState {
-    /// Create the genesis `PoW` state from `config`: pool and per-claim reward
-    /// seeded from the genesis endowment, difficulty taken straight from the
-    /// configured exponent, and no claims or seen blocks yet.
+    /// Create the genesis `PoW` state: the pool seeded with `pow_reward_pool`,
+    /// the per-claim reward derived from it as at every refill, so that claims
+    /// pay from the first epoch, difficulty taken straight from the configured
+    /// exponent, and no claims or seen blocks yet.
     #[must_use]
-    pub fn from_reward_config(config: &RewardPoWConfig) -> Self {
+    pub fn from_reward_pool_and_config(pow_reward_pool: PowReward, config: &Config) -> Self {
         Self {
             reward: RewardPowState {
-                reward_pool: config.reward_pool_genesis,
-                epoch_reward: config.epoch_reward_genesis,
-                reward_difficulty: PowTarget::from(config.minimum_difficulty),
+                reward_pool: pow_reward_pool,
+                epoch_reward: compute_epoch_pow_reward(pow_reward_pool, config),
+                reward_difficulty: PowTarget::from(config.pow_config.reward.minimum_difficulty),
                 refill_rewards: 0,
                 nullifiers: HashTrieMapSync::new_sync(),
                 block_slots: HashTrieMapSync::new_sync(),
@@ -294,14 +295,11 @@ mod tests {
     /// Genesis endowment values used by [`reward_config`], pinned here so the
     /// assertions read against a fixed number.
     const POW_REWARD_POOL_GENESIS: PowReward = 1_000_000_000;
-    const POW_EPOCH_REWARD_POOL_GENESIS: PowReward = 1_000_000;
 
     /// A reward config with claiming disabled (`rate_num = 0`), standing in for
     /// a real deployment config in tests that don't exercise the payout rate.
     fn reward_config() -> RewardPoWConfig {
         RewardPoWConfig {
-            reward_pool_genesis: POW_REWARD_POOL_GENESIS,
-            epoch_reward_genesis: POW_EPOCH_REWARD_POOL_GENESIS,
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).expect("10 is non-zero"),
@@ -315,9 +313,9 @@ mod tests {
         }
     }
 
-    /// Genesis `PoW` state built from [`reward_config`].
+    /// Genesis `PoW` state built from [`ledger_config`].
     fn pow_state() -> PowState {
-        PowState::from_reward_config(&reward_config())
+        PowState::from_reward_pool_and_config(POW_REWARD_POOL_GENESIS, &ledger_config())
     }
 
     /// A ledger config carrying [`reward_config`]. Its consensus schedule
@@ -347,9 +345,11 @@ mod tests {
 
     #[test]
     fn new_state_starts_with_genesis_values() {
-        let state = pow_state();
+        let state =
+            PowState::from_reward_pool_and_config(POW_REWARD_POOL_GENESIS, &test_pool_config());
         assert_eq!(state.reward_pool(), POW_REWARD_POOL_GENESIS);
-        assert_eq!(state.epoch_reward(), POW_EPOCH_REWARD_POOL_GENESIS);
+        // The per-claim reward the pool pays at its payout rate of `1/100`.
+        assert_eq!(state.epoch_reward(), POW_REWARD_POOL_GENESIS / 100);
         // The genesis difficulty is exactly the configured exponent, not a
         // value derived from it. Asserting only that it is non-zero would not
         // notice a target off by orders of magnitude, which is what deriving

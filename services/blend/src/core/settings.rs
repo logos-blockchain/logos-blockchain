@@ -1,57 +1,46 @@
 use core::time::Duration;
-use std::{num::NonZeroU64, sync::Arc};
+use std::num::NonZeroU64;
 
 use lb_core::blend::core_quota;
-use lb_key_management_system_service::{backend::preload::KeyId, keys::UnsecuredEd25519Key};
+use lb_cryptarchia_engine::EraSchedule;
+use lb_key_management_system_service::backend::preload::KeyId;
 use lb_poq::Quota;
 use lb_services_utils::overwatch::{RecoveryData, StorageRecoverySettings};
 use lb_utils::math::PositiveF64;
-use rayon::ThreadPool;
-use serde::{Deserialize, Serialize};
 
-use crate::settings::{TimingSettings, max_data_message_delay_in_rounds};
+use crate::settings::{EraTimingSettings, max_data_message_delay_in_rounds};
 
 #[derive(Clone, Debug)]
-pub struct StartingBlendConfig<BackendSettings, NetworkSettings> {
-    pub backend: BackendSettings,
-    pub network: NetworkSettings,
-    pub scheduler: SchedulerSettings,
-    pub time: TimingSettings,
-    pub zk: ZkSettings,
+pub struct CoreServiceSettings<BackendSettings, DispatcherSettings> {
     pub non_ephemeral_signing_key_id: KeyId,
-    pub num_blend_layers: NonZeroU64,
-    pub minimum_network_size: NonZeroU64,
-    pub recovery_data: RecoveryData,
-    /// `R_c`: replication factor for data messages.
-    pub data_replication_factor: u64,
-    pub activity_threshold_sensitivity: u64,
-    pub abstain_on_failure: bool,
-}
-
-/// Same values as [`StartingBlendConfig`] but with the secret key exfiltrated
-/// from the KMS.
-#[derive(Clone)]
-pub struct RunningBlendConfig<BackendSettings> {
-    pub backend: BackendSettings,
-    pub scheduler: SchedulerSettings,
-    pub time: TimingSettings,
     pub zk: ZkSettings,
-    pub non_ephemeral_signing_key: UnsecuredEd25519Key,
+    pub abstain_on_failure: bool,
+    pub backend: BackendSettings,
+    pub dispatcher: DispatcherSettings,
+    pub era_schedule: EraSchedule<CoreServiceEraSettings>,
+    pub recovery_data: RecoveryData,
+}
+
+/// The core service's settings in an era.
+#[derive(Clone, Debug)]
+pub struct CoreServiceEraSettings {
+    pub scheduler: EraSchedulerSettings,
+    pub time: EraTimingSettings,
     pub num_blend_layers: NonZeroU64,
     pub minimum_network_size: NonZeroU64,
     pub data_replication_factor: u64,
     pub activity_threshold_sensitivity: u64,
-    pub pow_mining_pool: Arc<ThreadPool>,
-    pub abstain_on_failure: bool,
 }
 
-impl<BackendSettings> RunningBlendConfig<BackendSettings> {
+impl CoreServiceEraSettings {
+    #[must_use]
     pub fn epoch_core_quota(&self, membership_size: usize) -> Quota {
         self.scheduler
             .cover
             .epoch_core_quota(self.num_blend_layers, &self.time, membership_size)
     }
 
+    #[must_use]
     pub fn epoch_pow_quota(&self) -> Quota {
         self.num_blend_layers
             .get()
@@ -59,6 +48,7 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
             .expect("PoW Quota must fit within the width the `PoQ` circuit allows.")
     }
 
+    #[must_use]
     pub const fn epoch_leadership_quota(&self) -> Quota {
         let num_blend_layers = self.num_blend_layers.get();
         let additional_encapsulations = num_blend_layers
@@ -96,10 +86,18 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
             self.time.network_absorption_in_rounds,
         )
     }
+
+    /// `T_M` as a duration: how long the network has to deliver a data
+    /// message released under these settings.
+    #[must_use]
+    pub const fn max_data_message_delay(&self) -> Duration {
+        self.time
+            .duration_of(self.max_data_message_delay_in_rounds().get())
+    }
 }
 
-impl<BackendSettings, NetworkSettings> StorageRecoverySettings
-    for StartingBlendConfig<BackendSettings, NetworkSettings>
+impl<BackendSettings, DispatcherSettings> StorageRecoverySettings
+    for CoreServiceSettings<BackendSettings, DispatcherSettings>
 {
     const RECOVERY_KEY_SUFFIX: &'static [u8] = b"blend/core";
 
@@ -108,20 +106,20 @@ impl<BackendSettings, NetworkSettings> StorageRecoverySettings
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct SchedulerSettings {
-    pub cover: CoverTrafficSettings,
-    pub delayer: MessageDelayerSettings,
+#[derive(Clone, Debug)]
+pub struct EraSchedulerSettings {
+    pub cover: EraCoverTrafficSettings,
+    pub delayer: EraMessageDelayerSettings,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct CoverTrafficSettings {
+#[derive(Clone, Debug)]
+pub struct EraCoverTrafficSettings {
     /// `F_c`: frequency at which cover messages are generated per round.
     pub message_frequency_per_round: PositiveF64,
 }
 
 #[cfg(test)]
-impl Default for CoverTrafficSettings {
+impl Default for EraCoverTrafficSettings {
     fn default() -> Self {
         Self {
             message_frequency_per_round: 1.try_into().unwrap(),
@@ -129,12 +127,12 @@ impl Default for CoverTrafficSettings {
     }
 }
 
-impl CoverTrafficSettings {
+impl EraCoverTrafficSettings {
     #[must_use]
     pub(crate) fn epoch_core_quota(
         &self,
         num_blend_layers: NonZeroU64,
-        timings: &TimingSettings,
+        timings: &EraTimingSettings,
         membership_size: usize,
     ) -> Quota {
         core_quota(
@@ -146,12 +144,12 @@ impl CoverTrafficSettings {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct MessageDelayerSettings {
+#[derive(Clone, Debug)]
+pub struct EraMessageDelayerSettings {
     pub maximum_release_delay_in_rounds: NonZeroU64,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct ZkSettings {
     pub secret_key_kms_id: KeyId,
 }

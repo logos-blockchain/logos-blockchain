@@ -18,7 +18,10 @@ use overwatch::overwatch::OverwatchHandle;
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
 
-use crate::edge::{RunningSettings as Settings, backends::BlendBackend};
+use crate::{
+    edge::{backends::BlendBackend, settings::EdgeServiceEraSettings},
+    settings::RuntimeComponents,
+};
 
 pub struct MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId> {
     cryptographic_processor: EpochCryptographicProcessor<NodeId, ProofsGenerator>,
@@ -48,15 +51,18 @@ where
     /// edge node condition:
     /// 1. The membership size is at least `settings.minimum_network_size`.
     /// 2. The local node is not a core node.
+    #[expect(clippy::too_many_arguments, reason = "categorize args")]
     pub(super) fn new(
-        settings: Settings<Backend, NodeId, RuntimeServiceId>,
+        settings: &EdgeServiceEraSettings<Backend::EraSettings>,
+        backend_settings: Backend::Settings,
+        runtime_components: &RuntimeComponents,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
         winning_pol_info_stream: WinningPolInfoStream,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         epoch: Epoch,
     ) -> Self {
-        let pow_mining_pool = Arc::clone(&settings.pow_mining_pool);
+        let pow_mining_pool = Arc::clone(&runtime_components.pow_mining_pool);
         let cryptographic_processor = EpochCryptographicProcessor::new(
             settings.num_blend_layers,
             membership.clone(),
@@ -66,11 +72,12 @@ where
             pow_mining_pool,
         );
         let backend = Backend::new(
-            settings.backend,
+            backend_settings,
+            settings.backend.clone(),
             overwatch_handle,
             membership,
             ChaCha20Rng::from_entropy(),
-            settings.non_ephemeral_signing_key,
+            runtime_components.non_ephemeral_signing_key.clone(),
         );
         Self {
             cryptographic_processor,

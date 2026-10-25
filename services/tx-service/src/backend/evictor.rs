@@ -5,10 +5,8 @@ use lb_core::mantle::traits::Hashable;
 use lb_cryptarchia_engine::Slot;
 
 use crate::backend::{
-    policy::{
-        BlockSlots, EvictableTx, EvictionPolicy, PolicyClock, PolicySnapshot, PowClaimPolicy,
-        TtlPolicy,
-    },
+    AdmissionTime,
+    policy::{BlockSlots, EvictableTx, EvictionPolicy, PolicyClock, PowClaimPolicy, TtlPolicy},
     pool::MempoolSettings,
 };
 
@@ -33,18 +31,10 @@ where
 {
     #[must_use]
     pub fn new(settings: &MempoolSettings) -> Self {
-        Self::with_ttl(settings, TtlPolicy::new(settings.tx_ttl))
-    }
-
-    #[must_use]
-    pub fn recover(settings: &MempoolSettings, state: IndexMap<Tx::Hash, u64>) -> Self {
-        Self::with_ttl(settings, TtlPolicy::recover(settings.tx_ttl, state))
-    }
-
-    fn with_ttl(settings: &MempoolSettings, ttl: TtlPolicy<Tx::Hash>) -> Self {
-        let mut policies: Vec<Box<dyn EvictionPolicy<Tx, BlockId>>> = vec![Box::new(ttl)];
-        if let Some(pow_claim) = settings.pow_claim {
-            policies.push(Box::new(PowClaimPolicy::new(pow_claim)));
+        let mut policies: Vec<Box<dyn EvictionPolicy<Tx, BlockId>>> =
+            vec![Box::new(TtlPolicy::new(settings.tx_ttl))];
+        if let Some(pow_claim) = &settings.pow_claim {
+            policies.push(Box::new(PowClaimPolicy::new(pow_claim.clone())));
         }
         Self {
             policies,
@@ -99,29 +89,21 @@ where
     }
 
     /// Keys the pool should stop carrying at wall-clock time `now_millis`,
+    /// among the `pending_txs` keys mapped to their admission timestamp,
     /// according to the enabled policies. The cause stays internal to the
     /// policies; a key wanted by several of them is returned once.
     #[must_use]
-    pub fn select_evictions(&self, now_millis: u64) -> Vec<Tx::Hash> {
+    pub fn select_evictions(
+        &self,
+        now_millis: u64,
+        pending_txs: &IndexMap<Tx::Hash, AdmissionTime>,
+    ) -> Vec<Tx::Hash> {
         let clock = self.clock(now_millis);
         self.policies
             .iter()
-            .flat_map(|policy| policy.select(&clock))
+            .flat_map(|policy| policy.select(&clock, pending_txs))
             .collect::<IndexSet<_>>()
             .into_iter()
             .collect()
-    }
-
-    /// Insertion timestamp of every pending transaction, as the TTL policy
-    /// tracks it. This doubles as the pool's pending set on recovery.
-    #[must_use]
-    pub fn save(&self) -> IndexMap<Tx::Hash, u64> {
-        self.policies
-            .iter()
-            .find_map(|policy| match policy.save() {
-                PolicySnapshot::Ttl(inserted) => Some(inserted),
-                PolicySnapshot::Stateless => None,
-            })
-            .unwrap_or_default()
     }
 }

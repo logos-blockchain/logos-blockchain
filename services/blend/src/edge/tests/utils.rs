@@ -8,16 +8,17 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures::StreamExt as _;
+use futures::{StreamExt as _, stream};
 use lb_blend::{
     message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
     scheduling::{
-        epoch::UninitializedEpochEventStream,
+        epoch::EpochEventStream,
         membership::Membership,
         message_blend::provers::{
             BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
             leader_and_pow::LeaderAndPowProofsGenerator,
         },
+        stream::UninitializedFirstReadyStream,
     },
 };
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
@@ -28,18 +29,19 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
-    core::settings::CoverTrafficSettings,
+    core::settings::EraCoverTrafficSettings,
     edge::{
-        backends::BlendBackend, handlers::Error, run, settings::RunningBlendConfig as BlendConfig,
+        backends::BlendBackend, handlers::Error, run, settings::EdgeServiceEraSettings,
         tests::test_blend_epoch_state,
     },
     epoch_info::PolInfoProvider,
     message::ServiceMessage,
-    settings::{TimingSettings, max_data_message_delay_in_rounds},
+    settings::{EraTimingSettings, RuntimeComponents, max_data_message_delay_in_rounds},
     test_utils::{
         crypto::mock_blend_proof,
         dispatcher::{TestBroadcastingChannel, TestPayloadDispatcher},
         epoch::OncePolStreamProvider,
+        era::single_era,
         membership::key,
     },
 };
@@ -151,10 +153,14 @@ where
     let epoch_stream = ReceiverStream::new(epoch_receiver)
         .map(|membership| test_blend_epoch_state(0.into(), membership));
 
-    let mut settings = settings(local_node, minimal_network_size, node_id_sender);
-    settings.abstain_on_failure = abstain_on_failure;
+    let (settings, local) = settings(local_node, minimal_network_size);
     let (payload_dispatcher, broadcasting_channel) = TestPayloadDispatcher::new();
     let join_handle = tokio::spawn(async move {
+        let (current_epoch_info, remaining_epoch_stream) =
+            UninitializedFirstReadyStream::new(epoch_stream)
+                .first()
+                .await
+                .expect("The current epoch info must be available.");
         Box::pin(run::<
             TestBackend,
             _,
@@ -163,10 +169,15 @@ where
             PolProvider,
             _,
         >(
-            UninitializedEpochEventStream::new(epoch_stream, Duration::ZERO),
+            current_epoch_info,
+            EpochEventStream::new(remaining_epoch_stream, Duration::ZERO),
+            stream::pending(),
             ReceiverStream::new(msg_receiver),
             local_node,
-            settings,
+            single_era(settings),
+            node_id_sender,
+            local,
+            abstain_on_failure,
             payload_dispatcher,
             &overwatch_handle(),
             || {},
@@ -183,30 +194,34 @@ where
     }
 }
 
+/// The edge service's settings in an era, for these tests, and the
+/// [`LocalNode`] of the node `local_id`.
 pub fn settings(
     local_id: NodeId,
     minimum_network_size: u64,
-    msg_sender: NodeIdSender,
-) -> BlendConfig<NodeIdSender> {
-    BlendConfig {
-        abstain_on_failure: false,
-        time: TimingSettings {
-            rounds_per_epoch: NonZeroU64::new(1).unwrap(),
-            round_duration_in_seconds: TEST_ROUND_IN_SECONDS,
-            core_handshake_deadline_in_rounds: NonZeroU128::new(2).unwrap(),
-            network_absorption_in_rounds: NonZeroU64::new(2).unwrap(),
-            rounds_per_observation_window: NonZeroU128::new(1).unwrap(),
-            epoch_transition_period: Duration::from_secs(1),
+) -> (EdgeServiceEraSettings<()>, RuntimeComponents) {
+    (
+        EdgeServiceEraSettings {
+            time: EraTimingSettings {
+                rounds_per_epoch: NonZeroU64::new(1).unwrap(),
+                round_duration_in_seconds: TEST_ROUND_IN_SECONDS,
+                core_handshake_deadline_in_rounds: NonZeroU128::new(2).unwrap(),
+                network_absorption_in_rounds: NonZeroU64::new(2).unwrap(),
+                rounds_per_observation_window: NonZeroU128::new(1).unwrap(),
+                epoch_transition_period: Duration::from_secs(1),
+            },
+            num_blend_layers: TEST_BLEND_LAYERS,
+            max_blend_delay_in_rounds: TEST_MAX_BLEND_DELAY,
+            minimum_network_size: NonZeroU64::new(minimum_network_size).unwrap(),
+            cover: EraCoverTrafficSettings::default(),
+            data_replication_factor: 0,
+            backend: (),
         },
-        non_ephemeral_signing_key: key(local_id).0,
-        num_blend_layers: TEST_BLEND_LAYERS,
-        max_blend_delay_in_rounds: TEST_MAX_BLEND_DELAY,
-        backend: msg_sender,
-        minimum_network_size: NonZeroU64::new(minimum_network_size).unwrap(),
-        cover: CoverTrafficSettings::default(),
-        data_replication_factor: 0,
-        pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
-    }
+        RuntimeComponents {
+            non_ephemeral_signing_key: key(local_id).0,
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+        },
+    )
 }
 
 pub type NodeIdSender = mpsc::Sender<NodeId>;
@@ -223,9 +238,11 @@ where
     RuntimeServiceId: Debug + Sync + Display,
 {
     type Settings = NodeIdSender;
+    type EraSettings = ();
 
     fn new<Rng>(
         settings: Self::Settings,
+        (): Self::EraSettings,
         _: OverwatchHandle<RuntimeServiceId>,
         membership: Membership<NodeId>,
         _: Rng,

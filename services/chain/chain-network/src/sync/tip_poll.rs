@@ -5,6 +5,7 @@ use lb_chain_service::{
 };
 use lb_cryptarchia_sync::{GetTipResponse, HeaderId};
 use lb_time_service::SlotTick;
+use lb_utils::math::NonNegativeRatio;
 use overwatch::DynError;
 use tracing::{debug, warn};
 
@@ -127,7 +128,7 @@ pub struct PolledTip {
     pub local: lb_chain_service::CryptarchiaInfo,
 }
 
-/// Derived parameters for the proactive tip-poll lag watchdog.
+/// Derived parameters for the proactive tip-poll lag watchdog in an era.
 #[derive(Clone, Copy)]
 pub struct TipPollParams {
     /// Act every this many slots (≈ one expected block interval, `1/f`).
@@ -139,27 +140,18 @@ pub struct TipPollParams {
 }
 
 impl TipPollParams {
-    /// Derive the polling cadence and lag threshold from the active slot
+    /// Derive the polling cadence and lag threshold from an era's active slot
     /// coefficient `f`. The expected number of slots between blocks is `1/f`,
     /// so the cadence is `ceil(1/f)` slots and the lag threshold is
     /// `lag_threshold_blocks` such intervals.
-    pub async fn derive<Cryptarchia>(
+    pub fn derive(
         config: &TipPollConfig,
-        cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
-    ) -> Result<Self, DynError>
-    where
-        Cryptarchia: CryptarchiaServiceData<Tx: Send>,
-    {
-        let (_, consensus_config) = cryptarchia
-            .get_epoch_config()
-            .await
-            .map_err(|e| DynError::from(format!("failed to fetch epoch config: {e}")))?;
-
+        slot_activation_coeff: NonNegativeRatio,
+    ) -> Result<Self, DynError> {
         // `f = numerator / denominator`, so `1/f = denominator / numerator`.
         // Compute `ceil(1/f)` with integer arithmetic to avoid float casts.
-        let coeff = consensus_config.slot_activation_coeff();
-        let numerator = u64::from(coeff.numerator);
-        let denominator = core::num::NonZeroU64::from(coeff.denominator).get();
+        let numerator = u64::from(slot_activation_coeff.numerator);
+        let denominator = core::num::NonZeroU64::from(slot_activation_coeff.denominator).get();
         if numerator == 0 {
             return Err(DynError::from(
                 "active slot coefficient f must be > 0 for tip polling",

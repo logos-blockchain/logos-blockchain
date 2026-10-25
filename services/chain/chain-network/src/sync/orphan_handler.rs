@@ -8,6 +8,7 @@ use std::{
 
 use futures::{Stream, StreamExt as _};
 use lb_core::header::HeaderId;
+use lb_cryptarchia_engine::Era;
 use overwatch::DynError;
 use tracing::{debug, error, warn};
 
@@ -136,6 +137,16 @@ where
             waker: None,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    pub async fn rotate_era(&mut self, era: Era) {
+        self.network_adapter.rotate_era(era).await;
+    }
+
+    pub async fn complete_era_transition(&mut self, ended_era: Era) {
+        self.network_adapter
+            .complete_era_transition(ended_era)
+            .await;
     }
 
     /// Marks a block as rejected so the orphan pipeline will refuse to
@@ -507,8 +518,11 @@ mod tests {
 
     use futures::stream;
     use lb_cryptarchia_sync::GetTipResponse;
-    use lb_network_service::{NetworkService, backends::mock::Mock, message::ChainSyncEvent};
-    use overwatch::services::{ServiceData, relay::OutboundRelay};
+    use lb_network_service::{
+        backends::mock::Mock,
+        message::{BackendNetworkMsg, ChainSyncEvent},
+    };
+    use overwatch::services::relay::OutboundRelay;
     use tokio::time::timeout;
 
     use super::*;
@@ -652,12 +666,15 @@ mod tests {
 
         async fn new(
             _settings: Self::Settings,
-            _network_relay: OutboundRelay<
-                <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-            >,
+            _current_era: Era,
+            _network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
         ) -> Self {
             Self::new()
         }
+
+        async fn rotate_era(&mut self, _era: Era) {}
+
+        async fn complete_era_transition(&mut self, _ended_era: Era) {}
 
         async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
             unimplemented!()

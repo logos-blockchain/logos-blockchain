@@ -13,7 +13,7 @@ use lb_blend::{
     network::{message::OutgoingMessage, send_msg},
     scheduling::membership::{Membership, Node},
 };
-use lb_libp2p::{DialError, DialErrorExt as _, DialOpts, SwarmEvent};
+use lb_libp2p::{DialError, DialErrorExt as _, DialOpts, SwarmEvent, system_dns_config};
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
     identity::Keypair,
@@ -23,7 +23,6 @@ use rand::RngCore;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 
-use super::settings::Libp2pBlendBackendSettings;
 use crate::edge::backends::libp2p::LOG_TARGET;
 
 #[derive(Debug)]
@@ -116,17 +115,19 @@ where
     Rng: RngCore + 'static,
 {
     pub(super) fn new(
-        settings: Libp2pBlendBackendSettings,
+        max_dial_attempts_per_connection: NonZeroU64,
+        replication_factor: NonZeroU64,
+        protocol_name: StreamProtocol,
         membership: Membership<PeerId>,
         rng: Rng,
         command_receiver: mpsc::Receiver<Command>,
         identity: Keypair,
     ) -> Self {
+        let (dns_config, dns_options) = system_dns_config();
         let swarm = SwarmBuilder::with_existing_identity(identity)
             .with_tokio()
             .with_quic()
-            .with_dns()
-            .expect("DNS transport should be supported")
+            .with_dns_config(dns_config, dns_options)
             .with_behaviour(|_| libp2p_stream::Behaviour::new())
             .expect("Behaviour should be built")
             .with_swarm_config(|cfg| {
@@ -140,7 +141,7 @@ where
 
         let stream_control = swarm.behaviour().new_control();
 
-        let replication_factor: NonZeroUsize = settings.replication_factor.try_into().unwrap();
+        let replication_factor: NonZeroUsize = replication_factor.try_into().unwrap();
         let membership_size = membership.size();
 
         if membership_size < replication_factor.get() {
@@ -155,8 +156,8 @@ where
             rng,
             pending_dials: HashMap::new(),
             pending_events: FuturesUnordered::new(),
-            max_dial_attempts_per_connection: settings.max_dial_attempts_per_peer_per_message,
-            protocol_name: settings.protocol_name.into_inner(),
+            max_dial_attempts_per_connection,
+            protocol_name,
             replication_factor,
             unrecoverable_peers: HashSet::new(),
         }

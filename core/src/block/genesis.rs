@@ -1301,7 +1301,7 @@ mod tests {
         block::SignedHeader,
         header::HeaderId,
         mantle::{
-            CryptarchiaParameter, GenesisTime, NoteId,
+            ConsensusExcludedKeys, GenesisParameters, GenesisTime, NoteId,
             ledger::verification_mode::GenesisMode,
             ops::{
                 OpRef,
@@ -1318,10 +1318,12 @@ mod tests {
         InscriptionOp {
             channel_id: ChannelId::from([0; 32]),
             inscription: Inscription::new_unchecked(
-                CryptarchiaParameter {
+                GenesisParameters {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
-                    genesis_time: GenesisTime::new(1000),
+                    start_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
+                    pow_reward_pool: 0,
+                    consensus_excluded_keys: ConsensusExcludedKeys::empty(),
                 }
                 .encode_to_vec(),
             ),
@@ -1334,10 +1336,12 @@ mod tests {
         InscriptionOp {
             channel_id: ChannelId::from([1; 32]), // non-zero — invalid
             inscription: Inscription::new_unchecked(
-                CryptarchiaParameter {
+                GenesisParameters {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
-                    genesis_time: GenesisTime::new(1000),
+                    start_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
+                    pow_reward_pool: 0,
+                    consensus_excluded_keys: ConsensusExcludedKeys::empty(),
                 }
                 .encode_to_vec(),
             ),

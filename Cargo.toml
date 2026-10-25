@@ -85,6 +85,7 @@ members = [
   "tests/tf_integration/logos",
   "tests/tf_integration/nimbos",
   "tests/tf_integration/support",
+  "time",
   "tools/blockchain-tools",
   "tools/config",
   "tracing",
@@ -166,6 +167,7 @@ lb-services-utils                  = { default-features = false, package = "logo
 lb-storage-service                 = { default-features = false, package = "logos-blockchain-storage-service", path = "./services/storage" }
 lb-system-sig-service              = { default-features = false, package = "logos-blockchain-system-sig-service", path = "./services/system-sig" }
 lb-testing-framework               = { default-features = false, package = "blockchain-test-logos", path = "./tests/tf_integration/logos" }
+lb-time                            = { default-features = false, package = "logos-blockchain-time", path = "./time" }
 lb-time-service                    = { default-features = false, package = "logos-blockchain-time-service", path = "./services/time" }
 lb-tracing                         = { default-features = false, package = "logos-blockchain-tracing", path = "./tracing" }
 lb-tracing-service                 = { default-features = false, package = "logos-blockchain-tracing-service", path = "./services/tracing" }
@@ -237,6 +239,7 @@ futures-timer                      = { default-features = false, version = "3.0.
 futures-util                       = { default-features = false, version = "0.3.32" }
 generic-array                      = { default-features = false, version = "1.2" }
 hex                                = { default-features = false, version = "0.4" }
+hickory-resolver                   = { default-features = false, version = "0.25" }
 http                               = { default-features = false, version = "1.3" }
 humantime                          = { default-features = false, version = "2.1" }
 igd-next                           = { default-features = false, version = "0.16.1" }
@@ -264,7 +267,6 @@ opentelemetry_sdk                  = { default-features = false, version = "0.32
 overwatch                          = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "fc71a844886f9fb8f382ecfadcebff455e33474b" }
 overwatch-derive                   = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "fc71a844886f9fb8f382ecfadcebff455e33474b" }
 owo-colors                         = { default-features = false, version = "4.2.3" }
-percent-encoding                   = { default-features = false, version = "2.3.2" }
 pprof                              = { default-features = false, version = "0.15" }
 proc-macro2                        = { default-features = false, version = "1" }
 prometheus                         = { default-features = false, version = "0.14" }

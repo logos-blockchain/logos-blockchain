@@ -88,9 +88,13 @@ pub trait OperationVerificationHelper {
     /// used for the window-of-acceptance check.
     fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot>;
 
-    /// Acceptance window, in slots, for the window-of-acceptance check.
-    /// Configured per-deployment.
-    fn get_pow_slot_window(&self) -> NonZeroU64;
+    /// Acceptance window, in slots, of the claims for the current epoch: that
+    /// of the era of the current epoch.
+    fn get_current_epoch_pow_slot_window(&self) -> NonZeroU64;
+
+    /// Acceptance window, in slots, of the claims for the epoch preceding
+    /// [`Self::get_epoch`]: that of the era of that epoch.
+    fn get_previous_epoch_pow_slot_window(&self) -> NonZeroU64;
 }
 
 #[cfg(test)]
@@ -135,7 +139,8 @@ pub mod test_utils {
         current_epoch_nonce: ZkHash,
         previous_epoch_nonce: ZkHash,
         blocks_slot: HashTrieMapSync<Hash, Slot>,
-        pow_slot_window: NonZeroU64,
+        current_epoch_pow_slot_window: NonZeroU64,
+        previous_epoch_pow_slot_window: NonZeroU64,
     }
 
     impl TestOperationVerificationHelper {
@@ -165,7 +170,8 @@ pub mod test_utils {
                 current_epoch_nonce: ZkHash::default(),
                 previous_epoch_nonce: ZkHash::default(),
                 blocks_slot: HashTrieMapSync::new_sync(),
-                pow_slot_window: NonZeroU64::new(100).expect("100 is not 0"),
+                current_epoch_pow_slot_window: NonZeroU64::new(100).expect("100 is not 0"),
+                previous_epoch_pow_slot_window: NonZeroU64::new(100).expect("100 is not 0"),
             }
         }
 
@@ -228,12 +234,6 @@ pub mod test_utils {
             blocks_slot: impl IntoIterator<Item = (Hash, Slot)>,
         ) -> Self {
             self.blocks_slot = blocks_slot.into_iter().collect();
-            self
-        }
-
-        #[must_use]
-        pub const fn with_pow_slot_window(mut self, slot_window: NonZeroU64) -> Self {
-            self.pow_slot_window = slot_window;
             self
         }
     }
@@ -339,8 +339,12 @@ pub mod test_utils {
             self.blocks_slot.clone()
         }
 
-        fn get_pow_slot_window(&self) -> NonZeroU64 {
-            self.pow_slot_window
+        fn get_current_epoch_pow_slot_window(&self) -> NonZeroU64 {
+            self.current_epoch_pow_slot_window
+        }
+
+        fn get_previous_epoch_pow_slot_window(&self) -> NonZeroU64 {
+            self.previous_epoch_pow_slot_window
         }
     }
 }

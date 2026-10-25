@@ -1,4 +1,5 @@
 use futures::{Stream, StreamExt as _, future::join_all};
+use lb_cryptarchia_engine::Era;
 
 pub use self::failure_detection::FailureDetector;
 use crate::{LOG_TARGET, core::dispatcher::PayloadDispatcher, message::DataPayload, metrics};
@@ -26,11 +27,12 @@ where
     }
 }
 
-/// Broadcasts, in the clear, the payloads the Blend network did not deliver
-/// within the delivery deadline.
+/// Broadcasts, in the clear and over the identifiers of `era`, the payloads the
+/// Blend network did not deliver within the delivery deadline.
 pub async fn broadcast_undelivered_messages<Dispatcher, UndeliveredPayloads, RuntimeServiceId>(
     undelivered: UndeliveredPayloads,
     payload_dispatcher: &Dispatcher,
+    era: Era,
 ) where
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
     UndeliveredPayloads: ExactSizeIterator<Item = DataPayload> + Send,
@@ -54,7 +56,7 @@ pub async fn broadcast_undelivered_messages<Dispatcher, UndeliveredPayloads, Run
             );
         }
         metrics::data_payload_bypassed_blend(payload.payload_type());
-        payload_dispatcher.dispatch(payload)
+        payload_dispatcher.dispatch(payload, era)
     }))
     .await;
 }

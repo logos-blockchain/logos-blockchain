@@ -230,46 +230,29 @@ impl BlendDiagnosticParameterSet {
     }
 
     fn apply_to(&self, settings: &mut DeploymentSettings) {
-        settings
-            .genesis_era_parameters_mut()
-            .cryptarchia
-            .security_param = NonZero::new(self.security_parameter)
-            .expect("named Blend diagnostic security parameter must be non-zero");
-        settings
-            .genesis_era_parameters_mut()
-            .cryptarchia
-            .uncle_reference_window_in_block =
-            NonZeroU32::new(self.uncle_reference_window_in_block())
-                .expect("named Blend diagnostic uncle reference window must be non-zero");
-        settings.genesis_era_parameters_mut().time.slot_duration =
-            Duration::from_secs(self.slot_duration_secs);
-        settings
-            .genesis_era_parameters_mut()
-            .cryptarchia
-            .epoch_config
-            .epoch_stake_distribution_stabilization =
-            NonZero::new(self.epoch_stake_distribution_stabilization)
+        settings.update_genesis_era_parameters(|parameters| {
+            parameters.cryptarchia.security_param = NonZero::new(self.security_parameter)
+                .expect("named Blend diagnostic security parameter must be non-zero");
+            parameters.cryptarchia.uncle_reference_window_in_block =
+                NonZeroU32::new(self.uncle_reference_window_in_block())
+                    .expect("named Blend diagnostic uncle reference window must be non-zero");
+            parameters.time.slot_duration_in_seconds = NonZero::new(self.slot_duration_secs)
+                .expect("named Blend diagnostic slot duration must be non-zero");
+            let epoch_config = &mut parameters.cryptarchia.epoch_config;
+            epoch_config.epoch_stake_distribution_stabilization =
+                NonZero::new(self.epoch_stake_distribution_stabilization)
+                    .expect("named Blend diagnostic phase must be non-zero");
+            epoch_config.epoch_period_nonce_buffer = NonZero::new(self.epoch_period_nonce_buffer)
                 .expect("named Blend diagnostic phase must be non-zero");
-        settings
-            .genesis_era_parameters_mut()
-            .cryptarchia
-            .epoch_config
-            .epoch_period_nonce_buffer = NonZero::new(self.epoch_period_nonce_buffer)
-            .expect("named Blend diagnostic phase must be non-zero");
-        settings
-            .genesis_era_parameters_mut()
-            .cryptarchia
-            .epoch_config
-            .epoch_period_nonce_stabilization = NonZero::new(self.epoch_period_nonce_stabilization)
-            .expect("named Blend diagnostic phase must be non-zero");
-        settings
-            .genesis_era_parameters_mut()
-            .cryptarchia
-            .slot_activation_coeff = NonNegativeRatio::new(
-            1,
-            NonZeroU32::new(self.slot_activation_coeff_denominator)
-                .expect("named Blend diagnostic slot coefficient denominator must be non-zero"),
-        );
+            epoch_config.epoch_period_nonce_stabilization =
+                NonZero::new(self.epoch_period_nonce_stabilization)
+                    .expect("named Blend diagnostic phase must be non-zero");
+            parameters.cryptarchia.slot_activation_coeff = NonNegativeRatio::new(
+                1,
+                NonZeroU32::new(self.slot_activation_coeff_denominator)
+                    .expect("named Blend diagnostic slot coefficient denominator must be non-zero"),
+            );
+        });
     }
 
     fn effective_deployment_settings(self) -> DeploymentSettings {
@@ -408,8 +391,8 @@ pub fn set_blend_diagnostic_parameter_set(
     set_deployment_config_override(
         world,
         step,
-        "eras.0.time.slot_duration",
-        &format!("seconds({})", parameter_set.slot_duration_secs),
+        "eras.0.time.slot_duration_in_seconds",
+        &parameter_set.slot_duration_secs.to_string(),
     )?;
     set_deployment_config_override(
         world,
@@ -458,7 +441,7 @@ pub fn set_blend_diagnostic_parameter_set(
             .cryptarchia
             .uncle_reference_window_in_block
             .get(),
-        slot_duration_secs = settings.genesis_era_parameters().time.slot_duration.as_secs(),
+        slot_duration_secs = settings.genesis_era_parameters().time.slot_duration().as_secs(),
         epoch_stake_distribution_stabilization = settings
             .genesis_era_parameters().cryptarchia
             .epoch_config
@@ -530,8 +513,8 @@ pub fn set_blend_diagnostic_parameter_set(
                 .cryptarchia
                 .uncle_reference_window_in_block
                 .get(),
-            "slot_duration_secs": settings.genesis_era_parameters().time.slot_duration.as_secs(),
-            "slot_duration_ms": settings.genesis_era_parameters().time.slot_duration.as_millis(),
+            "slot_duration_secs": settings.genesis_era_parameters().time.slot_duration().as_secs(),
+            "slot_duration_ms": settings.genesis_era_parameters().time.slot_duration().as_millis(),
             "epoch_stake_distribution_stabilization": settings
                 .genesis_era_parameters().cryptarchia
                 .epoch_config
@@ -776,7 +759,7 @@ fn observation_timeout_secs(settings: &DeploymentSettings, transition_count: usi
     settings
         .genesis_era_parameters()
         .time
-        .slot_duration
+        .slot_duration()
         .as_secs()
         .saturating_mul(
             settings
@@ -798,7 +781,7 @@ fn observation_poll_interval(settings: &DeploymentSettings) -> Duration {
             (settings
                 .genesis_era_parameters()
                 .time
-                .slot_duration
+                .slot_duration()
                 .as_millis()
                 / 4)
             .clamp(100, 1_000),
@@ -1198,8 +1181,8 @@ async fn log_epoch_checkpoint(
                         "node": node_name,
                         "clock_epoch": observation.time_info.current_epoch,
                         "clock_slot": observation.time_info.current_slot,
-                        "slot_duration_ms": observation.time_info.slot_duration_ms,
-                        "genesis_time_unix_ms": observation.time_info.genesis_time_unix_ms,
+                        "genesis_time": observation.time_info.genesis_time.to_string(),
+                        "eras": observation.time_info.era_timings,
                         "chain_tip_epoch": chain_tip_epoch,
                         "chain_tip_slot": chain_tip_slot,
                         "chain_tip_lag_slots": chain_tip_lag_slots,
@@ -1291,8 +1274,8 @@ fn log_diagnostic_identities(world: &CucumberWorld) -> StepResult {
                 .cryptarchia
                 .uncle_reference_window_in_block
                 .get(),
-            "slot_duration_secs": parameters.time.slot_duration.as_secs(),
-            "slot_duration_ms": parameters.time.slot_duration.as_millis(),
+            "slot_duration_secs": parameters.time.slot_duration().as_secs(),
+            "slot_duration_ms": parameters.time.slot_duration().as_millis(),
             "slot_activation_coeff_numerator": parameters
                 .cryptarchia
                 .slot_activation_coeff
@@ -1333,8 +1316,8 @@ fn log_diagnostic_identities(world: &CucumberWorld) -> StepResult {
             .cryptarchia
             .uncle_reference_window_in_block
             .get(),
-        "slot_duration_secs": parameters.time.slot_duration.as_secs(),
-        "slot_duration_ms": parameters.time.slot_duration.as_millis(),
+        "slot_duration_secs": parameters.time.slot_duration().as_secs(),
+        "slot_duration_ms": parameters.time.slot_duration().as_millis(),
         "slot_activation_coeff_numerator": parameters
             .cryptarchia
             .slot_activation_coeff
@@ -1379,8 +1362,8 @@ fn log_diagnostic_identities(world: &CucumberWorld) -> StepResult {
                 .cryptarchia
                 .uncle_reference_window_in_block
                 .get(),
-            "slot_duration_secs": node_parameters.time.slot_duration.as_secs(),
-            "slot_duration_ms": node_parameters.time.slot_duration.as_millis(),
+            "slot_duration_secs": node_parameters.time.slot_duration().as_secs(),
+            "slot_duration_ms": node_parameters.time.slot_duration().as_millis(),
             "slot_activation_coeff_numerator": node_parameters
                 .cryptarchia
                 .slot_activation_coeff
@@ -1435,7 +1418,7 @@ fn log_diagnostic_identities(world: &CucumberWorld) -> StepResult {
         append_timeline_record(world, &record);
     }
     let declared_provider_ids = deployment
-        .genesis_block
+        .genesis_block()
         .genesis_tx()
         .sdp_declarations()
         .filter(|declaration| declaration.operation().service_type == ServiceType::BlendNetwork)
@@ -1767,7 +1750,7 @@ mod tests {
                 uncle_reference_window
             );
             assert_eq!(
-                settings.genesis_era_parameters().time.slot_duration,
+                settings.genesis_era_parameters().time.slot_duration(),
                 Duration::from_secs(1)
             );
             assert_eq!(

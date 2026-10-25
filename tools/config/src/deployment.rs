@@ -1,7 +1,4 @@
-use core::{
-    num::{NonZero, NonZeroU32, NonZeroU64, NonZeroU128},
-    time::Duration,
-};
+use core::num::{NonZero, NonZeroU32, NonZeroU64, NonZeroU128};
 
 use lb_core::{
     block::genesis::GenesisBlock,
@@ -9,17 +6,22 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::ModulusShift;
-use lb_node::config::{
-    blend::deployment::{
-        CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
-        CoverTrafficSettings, MessageDelayerSettings, MinimumNetworkSize, SchedulerSettings,
-        Settings as BlendDeploymentSettings,
+use lb_node::config::deployment::{
+    DeploymentSettings, EraDeclarations,
+    era::ruleset::{
+        EraRuleset, v1,
+        v1::{
+            blend::{
+                CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
+                CoverTrafficSettings, MessageDelayerSettings, MinimumNetworkSize,
+                SchedulerSettings, Settings as BlendDeploymentSettings,
+            },
+            cryptarchia::{
+                EpochConfig, ServiceParameters, Settings as CryptarchiaDeploymentSettings,
+            },
+            time::Settings as TimeDeploymentSettings,
+        },
     },
-    cryptarchia::deployment::{
-        EpochConfig, ServiceParameters, Settings as CryptarchiaDeploymentSettings,
-    },
-    deployment::{DeploymentSettings, EraParameters, EraSchedule},
-    time::deployment::Settings as TimeDeploymentSettings,
 };
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
@@ -62,8 +64,6 @@ const BLEND_POW_DAMPING_NUM: u32 = 1;
 const BLEND_POW_DAMPING_DEN_OFFSET: u32 = 1;
 
 // Token-reward PoW parameters. Payout is disabled (`rate_num = 0`).
-const REWARD_POW_POOL_GENESIS: u64 = 1_000_000_000;
-const REWARD_POW_EPOCH_REWARD_GENESIS: u64 = 1_000_000;
 const REWARD_POW_MINIMUM_DIFFICULTY_EXPONENT: u32 = 19;
 const REWARD_POW_EMA_SMOOTHING_FACTOR: u64 = 9;
 const REWARD_POW_EMA_SMOOTHING_PRECISION: u64 = 10;
@@ -87,8 +87,8 @@ pub fn e2e_deployment_settings_with_genesis_block(
     let slot_duration_in_secs = std::env::var(CONSENSUS_SLOT_TIME_VAR)
         .map_or(DEFAULT_SLOT_TIME_IN_SECS, |s| s.parse::<u64>().unwrap());
 
-    DeploymentSettings {
-        eras: EraSchedule::new_genesis(EraParameters {
+    DeploymentSettings::new(
+        &EraDeclarations::new_genesis(EraRuleset::V1(v1::Parameters {
             blend: BlendDeploymentSettings {
                 common: BlendCommonSettings {
                     minimum_network_size: MinimumNetworkSize::try_new(MINIMUM_BLEND_NETWORK_SIZE)
@@ -151,7 +151,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     )
                     .unwrap(),
                 },
-                sdp_config: lb_node::config::cryptarchia::deployment::SdpConfig {
+                sdp_config: v1::cryptarchia::SdpConfig {
                     service_params: (
                         ServiceType::BlendNetwork,
                         ServiceParameters {
@@ -166,10 +166,8 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     },
                 },
                 learning_rate: LEARNING_RATE.try_into().expect("1 > 0"),
-                consensus_excluded_keys:
-                    lb_node::config::cryptarchia::deployment::ConsensusExcludedKeys::empty(),
-                pow_config: lb_node::config::cryptarchia::deployment::PoWConfig {
-                    blend: lb_node::config::cryptarchia::deployment::BlendPoWConfig {
+                pow_config: v1::cryptarchia::PoWConfig {
+                    blend: v1::cryptarchia::BlendPoWConfig {
                         base_difficulty: ModulusShift::new::<BLEND_POW_BASE_DIFFICULTY_EXPONENT>(),
                         target_transactions_per_block: NonZero::new(BLEND_POW_TARGET_TXS_PER_BLOCK)
                             .unwrap(),
@@ -177,9 +175,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                         damping_num: NonZero::new(BLEND_POW_DAMPING_NUM).unwrap(),
                         damping_den_offset: BLEND_POW_DAMPING_DEN_OFFSET,
                     },
-                    reward: lb_node::config::cryptarchia::deployment::RewardPoWConfig {
-                        reward_pool_genesis: REWARD_POW_POOL_GENESIS,
-                        epoch_reward_genesis: REWARD_POW_EPOCH_REWARD_GENESIS,
+                    reward: v1::cryptarchia::RewardPoWConfig {
                         minimum_difficulty: ModulusShift::new::<
                             REWARD_POW_MINIMUM_DIFFICULTY_EXPONENT,
                         >(),
@@ -198,9 +194,10 @@ pub fn e2e_deployment_settings_with_genesis_block(
                 },
             },
             time: TimeDeploymentSettings {
-                slot_duration: Duration::from_secs(slot_duration_in_secs),
+                slot_duration_in_seconds: NonZero::new(slot_duration_in_secs)
+                    .expect("The slot duration cannot be zero seconds."),
             },
-        }),
-        genesis_block: GenesisBlock::genesis(genesis_tx.clone()),
-    }
+        })),
+        GenesisBlock::genesis(genesis_tx.clone()),
+    )
 }

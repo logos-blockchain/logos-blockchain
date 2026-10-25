@@ -332,7 +332,8 @@ impl SignedOp<Preverified, StandardMode> {
                     current_epoch_nonce: helper.get_current_epoch_nonce(),
                     previous_epoch_nonce: helper.get_previous_epoch_nonce(),
                     blocks_slot: helper.get_blocks_slot(),
-                    slot_window: helper.get_pow_slot_window(),
+                    current_epoch_slot_window: helper.get_current_epoch_pow_slot_window(),
+                    previous_epoch_slot_window: helper.get_previous_epoch_pow_slot_window(),
                 };
                 op.into_verified(&context)
                     .map(Into::into)

@@ -8,7 +8,10 @@ use std::{
 use async_trait::async_trait;
 use futures::StreamExt as _;
 pub use lb_blend::message::{crypto::proofs::RealProofsVerifier, encap::ProofsVerifier};
-use lb_blend::scheduling::epoch::UninitializedEpochEventStream;
+use lb_blend::scheduling::{
+    epoch::{EpochEvent, EpochEventStream},
+    stream::UninitializedFirstReadyStream,
+};
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     mantle::NoteId,
@@ -38,8 +41,7 @@ use crate::{
     core::{
         dispatcher::PayloadDispatcher as PayloadDispatcherTrait,
         service_components::{
-            BlendBackendSettingsOfService, ChainNetworkOfService, MempoolOfService,
-            NetworkBackendOfService, PayloadDispatcherSettingsOfService,
+            ChainNetworkOfService, MempoolOfService, NetworkBackendOfService,
             ServiceComponents as CoreServiceComponents,
         },
     },
@@ -49,7 +51,7 @@ use crate::{
     message::{ProxyServiceMessage, ServiceMessage},
     mode::ModeMembership,
     orchestrator::Instance,
-    settings::Settings,
+    settings::OrchestratorSettings,
 };
 
 pub mod api;
@@ -91,11 +93,7 @@ where
     CoreService: ServiceData + CoreServiceComponents<RuntimeServiceId>,
     EdgeService: EdgeServiceComponents,
 {
-    type Settings = Settings<
-        BlendBackendSettingsOfService<CoreService, RuntimeServiceId>,
-        <EdgeService as EdgeServiceComponents>::BackendSettings,
-        PayloadDispatcherSettingsOfService<CoreService, RuntimeServiceId>,
-    >;
+    type Settings = OrchestratorSettings;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
     type Message = ProxyServiceMessage<CoreService::Message>;
@@ -115,14 +113,12 @@ where
             RuntimeServiceId,
             PayloadDispatcher: PayloadDispatcherTrait<RuntimeServiceId> + Send + Sync + 'static,
             NodeId: Clone + Debug + Hash + Eq + Send + Sync + node_id::TryFrom + 'static,
-            BackendSettings: Clone + Send + Sync,
         > + Send
         + 'static,
     // The core and edge services are tied to the same message type, so a node
     // cannot be wired up with two modes that answer different requests.
     EdgeService: ServiceData<Message = CoreService::Message>
         + EdgeServiceComponents<
-            BackendSettings: Clone + Send + Sync,
             ChainService: CryptarchiaServiceData<Tx: Send>,
             TimeBackend: lb_time_service::backends::TimeBackend + Send,
         > + Send
@@ -145,6 +141,7 @@ where
         + AsServiceId<
             NetworkService<
                 NetworkBackendOfService<CoreService, RuntimeServiceId>,
+                <EdgeService as EdgeServiceComponents>::TimeBackend,
                 RuntimeServiceId,
             >,
         > + AsServiceId<MempoolOfService<CoreService, RuntimeServiceId>>
@@ -181,15 +178,26 @@ where
             ..
         } = self;
 
-        let settings = settings_handle.notifier().get_updated_settings();
-        let minimal_network_size = settings.common.minimum_network_size;
+        let OrchestratorSettings {
+            non_ephemeral_signing_key_id,
+            zk_secret_key_kms_id,
+            era_schedule,
+        } = settings_handle.notifier().get_updated_settings();
 
+        // Wait for services (except Chain and SDP) to become ready, with timeout
         wait_until_services_are_ready!(
             &overwatch_handle,
             Some(Duration::from_mins(1)),
-            PreloadKmsService<_>,
-            SdpService,
-            <EdgeService as EdgeServiceComponents>::ChainService
+            PreloadKmsService<_>
+        )
+        .await?;
+        // Wait for Chain, which becomes ready after recovering blocks, and SDP,
+        // which becomes ready after Chain, without timeout.
+        wait_until_services_are_ready!(
+            &overwatch_handle,
+            None,
+            <EdgeService as EdgeServiceComponents>::ChainService,
+            SdpService
         )
         .await?;
 
@@ -201,7 +209,7 @@ where
         );
 
         let PublicKeyEncoding::Zk(zk_public_key) = kms
-            .public_key(settings.core.zk.secret_key_kms_id.clone())
+            .public_key(zk_secret_key_kms_id)
             .await
             .expect("ZK public key for provided ID should be stored in KMS.")
         else {
@@ -209,7 +217,7 @@ where
         };
 
         let PublicKeyEncoding::Ed25519(non_ephemeral_signing_key_public) = kms
-            .public_key(settings.common.non_ephemeral_signing_key_id)
+            .public_key(non_ephemeral_signing_key_id)
             .await
             .expect("KMS does not have key with the specified ID.")
         else {
@@ -231,7 +239,7 @@ where
             .expect("Waiting for chain to be online should succeed");
         info!(target: LOG_TARGET, "Chain is now Online.");
 
-        let membership_stream = membership::chain::subscribe::<
+        let membership_with_epoch_number_stream = membership::chain::subscribe::<
             <EdgeService as EdgeServiceComponents>::ChainService,
             CoreService::NodeId,
             <EdgeService as EdgeServiceComponents>::TimeBackend,
@@ -245,18 +253,21 @@ where
             "blend_orchestrator_service",
         )
         .await
-        // We take only the membership info from the epoch stream since the proxy service does not
-        // need anything else.
-        .map(|(_, membership_info)| membership_info);
-
-        let (membership_info, mut remaining_membership_stream) =
-            UninitializedEpochEventStream::new(
-                membership_stream,
-                settings.common.time.epoch_transition_period,
-            )
-            .await_first_ready()
-            .await
-            .expect("The current epoch state must be ready");
+        // We take only the epoch and its membership from the epoch stream since the
+        // proxy service does not need anything else.
+        .map(|(epoch_state, membership_info)| (epoch_state.epoch, membership_info));
+        let ((epoch, membership_info), remaining_membership_stream) =
+            UninitializedFirstReadyStream::new(membership_with_epoch_number_stream)
+                .first()
+                .await
+                .expect("The current epoch state must be ready");
+        let mut remaining_membership_stream = EpochEventStream::new(
+            remaining_membership_stream,
+            era_schedule
+                .at_epoch(epoch)
+                .parameters
+                .epoch_transition_period,
+        );
 
         info!(
             target: LOG_TARGET,
@@ -264,9 +275,13 @@ where
             "current membership is ready",
         );
 
+        // The mode of an epoch follows from its membership and the minimum
+        // network size of its era.
+        let mut era_minimum_network_size =
+            era_schedule.at_epoch(epoch).parameters.minimum_network_size;
         let mut instance =
             Instance::<CoreService, EdgeService, BroadcastService, RuntimeServiceId>::new(
-                ModeMembership::resolve(membership_info, minimal_network_size).mode(),
+                ModeMembership::resolve(membership_info, era_minimum_network_size).mode(),
                 overwatch_handle,
             )
             .await?;
@@ -282,12 +297,18 @@ where
             tokio::select! {
                 Some(epoch_event) = remaining_membership_stream.next() => {
                     debug!(target: LOG_TARGET, ?epoch_event, "received epoch event");
+                    let epoch_event = match epoch_event {
+                        EpochEvent::NewEpoch((epoch, membership_info)) => {
+                            let era_settings = era_schedule.at_epoch(epoch).parameters;
+                            era_minimum_network_size = era_settings.minimum_network_size;
+                            // The transition out of this epoch lasts its era's period. For same-era epoch events, this is a no-op.
+                            remaining_membership_stream.set_transition_period(era_settings.epoch_transition_period);
+                            EpochEvent::NewEpoch(membership_info)
+                        }
+                        EpochEvent::TransitionPeriodExpired => EpochEvent::TransitionPeriodExpired,
+                    };
                     instance = instance
-                        .handle_epoch_event(
-                            epoch_event,
-                            overwatch_handle,
-                            minimal_network_size,
-                        )
+                        .handle_epoch_event(epoch_event, overwatch_handle, era_minimum_network_size)
                         .await?;
                 },
                 Some(message) = inbound_relay.next() => {

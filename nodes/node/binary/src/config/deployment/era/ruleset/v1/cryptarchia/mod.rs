@@ -8,9 +8,10 @@ use lb_cryptarchia_engine::{
     expected_blocks_per_epoch, time::epoch_length,
 };
 use lb_groth16::ModulusShift;
-pub use lb_ledger::ConsensusExcludedKeys;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 use serde::{Deserialize, Serialize};
+
+pub(crate) mod codec;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Settings {
@@ -21,8 +22,6 @@ pub struct Settings {
     /// `W`, the uncle reference window in expected block-intervals.
     pub uncle_reference_window_in_block: NonZeroU32,
     pub sdp_config: SdpConfig,
-    #[serde(default)]
-    pub consensus_excluded_keys: ConsensusExcludedKeys,
     pub pow_config: PoWConfig,
 }
 

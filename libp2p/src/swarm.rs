@@ -13,20 +13,22 @@ use std::{
     time::Duration,
 };
 
+use hickory_resolver::system_conf::read_system_conf;
 use lb_log_targets::libp2p as lb_log_targets_libp2p;
 use libp2p::{
     Multiaddr, PeerId, TransportError,
+    dns::{ResolverConfig, ResolverOpts},
     identity::ed25519,
     swarm::{ConnectionId, DialError, SwarmEvent, dial_opts::DialOpts},
 };
 use multiaddr::multiaddr;
 use rand::RngCore;
 
-use crate::behaviour::BehaviourConfig;
 pub use crate::{
     SwarmConfig,
     behaviour::{Behaviour, BehaviourEvent},
 };
+use crate::{behaviour::BehaviourConfig, protocol_name::StreamProtocol};
 
 /// How long to keep a connection alive once it is idling.
 const IDLE_CONN_TIMEOUT: Duration = Duration::from_mins(5);
@@ -44,6 +46,7 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
     /// tokio executor.
     pub fn build(
         config: SwarmConfig,
+        chain_sync_protocol_name: StreamProtocol,
         max_data_size_by_topic: HashMap<libp2p::gossipsub::TopicHash, usize>,
         rng: R,
     ) -> Result<Self, Box<dyn Error>> {
@@ -60,16 +63,16 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
             nat_config,
             identify_protocol_name,
             kad_protocol_name,
-            chain_sync_protocol_name,
             host,
             port,
             ..
         } = config;
 
+        let (dns_config, dns_options) = system_dns_config();
         let swarm = libp2p::SwarmBuilder::with_existing_identity(keypair)
             .with_tokio()
             .with_quic()
-            .with_dns()?
+            .with_dns_config(dns_config, dns_options)
             .with_behaviour(move |keypair| {
                 Behaviour::new(
                     BehaviourConfig {
@@ -138,4 +141,26 @@ impl<R: Clone + Send + RngCore + 'static> futures::Stream for Swarm<R> {
 #[must_use]
 pub fn multiaddr(ip: Ipv4Addr, port: u16) -> Multiaddr {
     multiaddr!(Ip4(ip), Udp(port), QuicV1)
+}
+
+/// The host's DNS resolver configuration, to build a swarm with
+/// [`SwarmBuilder::with_dns_config`](libp2p::SwarmBuilder::with_dns_config).
+///
+/// Unlike [`SwarmBuilder::with_dns`](libp2p::SwarmBuilder::with_dns), which
+/// reads the same configuration, this does not fail when the host has no
+/// nameserver configured, as a Mac has none while offline. A swarm built at
+/// such a time gets a resolver without nameservers: its DNS addresses fail to
+/// dial until the swarm is built again, and every other address dials as
+/// usual.
+#[must_use]
+pub fn system_dns_config() -> (ResolverConfig, ResolverOpts) {
+    read_system_conf().unwrap_or_else(|e| {
+        tracing::warn!(
+            target: LOG_TARGET,
+            "Failed to read the system DNS configuration, so DNS addresses will fail to dial until the swarm is built again: {e}"
+        );
+        // Not `ResolverConfig::default()`, which sends every lookup to
+        // Google's public resolvers.
+        (ResolverConfig::new(), ResolverOpts::default())
+    })
 }

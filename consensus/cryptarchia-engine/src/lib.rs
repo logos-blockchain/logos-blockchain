@@ -1,12 +1,11 @@
 pub mod config;
 pub mod time;
 
-mod fixtures;
-
 use core::{fmt::Debug, hash::Hash};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     num::NonZero,
+    sync::Arc,
 };
 
 pub use config::*;
@@ -14,7 +13,7 @@ use lb_log_targets::cryptarchia;
 use lb_utils::bounded::UpperBoundedVec;
 use rpds::{HashTrieMapSync, HashTrieSetSync};
 use thiserror::Error;
-pub use time::{Epoch, EpochConfig, Slot};
+pub use time::{Epoch, EpochConfig, Era, EraEntryView, EraSchedule, Slot};
 
 pub(crate) const LOG_TARGET: &str = cryptarchia::engine::ROOT;
 
@@ -40,20 +39,24 @@ impl State {
     }
 
     /// Runs the fork choice rule and returns the selected new local chain tip.
+    ///
+    /// Two chains are compared using the rules of the era of the slot of their
+    /// common ancestor.
     fn fork_choice<Id>(cryptarchia: &Cryptarchia<Id>) -> &Branch<Id>
     where
         Id: Eq + Hash + Copy,
     {
         match cryptarchia.state {
             Self::Bootstrapping => {
-                let k = cryptarchia.config.security_param().get().into();
-                let s_gen = cryptarchia.config.s_gen();
-                maxvalid_bg(&cryptarchia.local_chain, &cryptarchia.branches, k, s_gen)
+                maxvalid_bg(&cryptarchia.local_chain, &cryptarchia.branches, |slot| {
+                    let config = cryptarchia.era_schedule.at_slot(slot).parameters;
+                    (config.security_param().get().into(), config.s_gen())
+                })
             }
-            Self::Online => {
-                let k = cryptarchia.config.security_param().get().into();
-                maxvalid_mc(&cryptarchia.local_chain, &cryptarchia.branches, k)
-            }
+            Self::Online => maxvalid_mc(&cryptarchia.local_chain, &cryptarchia.branches, |slot| {
+                let config = cryptarchia.era_schedule.at_slot(slot).parameters;
+                config.security_param().get().into()
+            }),
         }
     }
 
@@ -63,13 +66,21 @@ impl State {
     {
         match cryptarchia.state {
             Self::Bootstrapping => cryptarchia.branches.lib,
-            Self::Online => cryptarchia
-                .branches
-                .nth_ancestor(
-                    &cryptarchia.local_chain,
-                    cryptarchia.config.security_param().get().into(),
-                )
-                .id(),
+            Self::Online => {
+                // The LIB moves up the local chain while it lies deeper than
+                // the `k` of the era of its own slot.
+                let tip = &cryptarchia.local_chain;
+                let is_block_within_the_k_of_its_era = |block: &Branch<Id>| {
+                    let config = cryptarchia.era_schedule.at_slot(block.slot).parameters;
+                    tip.length.saturating_sub(block.length) <= config.security_param().get().into()
+                };
+                cryptarchia
+                    .branches
+                    .lib_to_tip_blocks(tip)
+                    .find(|block| is_block_within_the_k_of_its_era(block))
+                    .expect("The tip is within the `k` of its era.")
+                    .id
+            }
         }
     }
 }
@@ -78,14 +89,14 @@ impl State {
 /// paper k defines the forking depth of chain we accept without more
 /// analysis s defines the length of time (unit of slots) after the fork
 /// happened we will inspect for chain density
-fn maxvalid_bg<'b, Id>(
+fn maxvalid_bg<'b, Id, SlotParams>(
     local_chain: &'b Branch<Id>,
     branches: &'b Branches<Id>,
-    k: u64,
-    s_gen: NonZero<u64>,
+    params_at: SlotParams,
 ) -> &'b Branch<Id>
 where
     Id: Eq + Hash + Copy,
+    SlotParams: Fn(Slot) -> (u64, NonZero<u64>),
 {
     let mut cmax = local_chain;
 
@@ -94,6 +105,7 @@ where
         let lowest_common_ancestor = branches
             .lca(cmax, chain)
             .expect("local chain and fork must have a common ancestor");
+        let (k, s_gen) = params_at(lowest_common_ancestor.slot);
         let m = cmax.length - lowest_common_ancestor.length;
         if m <= k {
             // Classic longest chain rule with parameter k
@@ -116,13 +128,14 @@ where
 
 /// Implementation of the fork choice rule as defined in the Ouroboros Praos
 /// paper k defines the forking depth of chain we can accept.
-fn maxvalid_mc<'b, Id>(
+fn maxvalid_mc<'b, Id, SecurityParamAtSlot>(
     local_chain: &'b Branch<Id>,
     branches: &'b Branches<Id>,
-    k: u64,
+    security_param_at_slot: SecurityParamAtSlot,
 ) -> &'b Branch<Id>
 where
     Id: Eq + Hash + Copy,
+    SecurityParamAtSlot: Fn(Slot) -> u64,
 {
     let mut cmax = local_chain;
 
@@ -131,6 +144,7 @@ where
         let lowest_common_ancestor = branches
             .lca(cmax, chain)
             .expect("local chain and fork must have a common ancestor");
+        let k = security_param_at_slot(lowest_common_ancestor.slot);
         let m = cmax.length - lowest_common_ancestor.length;
         if m <= k && cmax.length < chain.length {
             // Classic longest chain rule with parameter k
@@ -147,7 +161,7 @@ where
 {
     local_chain: Branch<Id>,
     branches: Branches<Id>,
-    config: Config,
+    era_schedule: Arc<EraSchedule<Config>>,
     state: State,
 }
 
@@ -352,18 +366,23 @@ where
         })
     }
 
-    /// Returns the min(n, A)-th ancestor of the provided block, where A is the
-    /// number of ancestors of this block.
-    fn nth_ancestor<'a>(&'a self, branch: &'a Branch<Id>, mut n: u64) -> &'a Branch<Id> {
-        let mut current = branch;
-        while n > 0 {
-            n -= 1;
-            let Some(parent) = self.parent(current) else {
-                return current;
-            };
-            current = parent;
-        }
-        current
+    /// The blocks of the chain of `tip`, from the LIB up to `tip`.
+    ///
+    /// Starts at the oldest block in the tree if the LIB is not an ancestor of
+    /// `tip`.
+    fn lib_to_tip_blocks<'a>(
+        &'a self,
+        tip: &'a Branch<Id>,
+    ) -> impl Iterator<Item = &'a Branch<Id>> {
+        let tip_to_lib_blocks: Vec<_> = core::iter::successors(Some(tip), |block| {
+            if block.id == self.lib {
+                None
+            } else {
+                self.parent(block)
+            }
+        })
+        .collect();
+        tip_to_lib_blocks.into_iter().rev()
     }
 
     /// Walks back from `branch`, newest first, while the slot is newer than
@@ -420,11 +439,11 @@ where
     Id: Eq + Hash + Copy + Debug,
 {
     /// Creates the chain with `genesis` as its only block.
-    pub fn from_genesis(genesis: Id, config: Config, state: State) -> Self {
+    pub fn from_genesis(genesis: Id, era_schedule: Arc<EraSchedule<Config>>, state: State) -> Self {
         Self::from_lib(
             genesis,
             genesis,
-            config,
+            era_schedule,
             state,
             Slot::genesis(),
             0,
@@ -435,7 +454,7 @@ where
     pub fn from_lib(
         id: Id,
         parent: Id,
-        config: Config,
+        era_schedule: Arc<EraSchedule<Config>>,
         state: State,
         slot: Slot,
         length: u64,
@@ -450,7 +469,7 @@ where
                 length,
                 uncle_slots,
             },
-            config,
+            era_schedule,
             state,
         }
     }
@@ -702,16 +721,19 @@ where
         (self, pruned_blocks)
     }
 
-    pub const fn config(&self) -> &Config {
-        &self.config
+    pub fn era_schedule(&self) -> &EraSchedule<Config> {
+        &self.era_schedule
     }
 
-    /// Selects uncles for a new block extending `parent` at `slot`.
+    /// Selects uncles for a new block extending `parent` at `slot`, under the
+    /// era of `slot`.
     ///
     /// First, this function filters candidates which meet all of the following
     /// conditions:
     /// - An uncle is the 1st block of a fork off the chain of `parent`.
     /// - An uncle's slot is `< slot`.
+    /// - An uncle is of the era of the new block: its slot is not before the
+    ///   era's first slot.
     /// - An uncle's parent slot is within the uncle reference window.
     ///   - `0 < slot - uncle.parent.slot <= uncle_reference_window_in_slot`.
     /// - An uncle's slot is not already occupied by the ancestors of `parent`
@@ -748,17 +770,23 @@ where
     where
         Id: Ord,
     {
+        let era = self.era_schedule.at_slot(slot);
         let window_start =
-            u64::from(slot).saturating_sub(self.config.uncle_reference_window_in_slot().get());
+            u64::from(slot).saturating_sub(era.parameters.uncle_reference_window_in_slot().get());
 
         let (ancestors, occupied_slots) = self.collect_chain_within_window(parent, window_start);
-        let mut candidates = self.uncle_candidates(slot, window_start, &ancestors, &occupied_slots);
+        let candidates = {
+            let mut candidates =
+                self.uncle_candidates(slot, window_start, &ancestors, &occupied_slots);
+            candidates.retain(|(_, uncle)| uncle.slot >= era.first_slot);
+            // Oldest parent first, because the slot window moves and the oldest candidates
+            // are the closest to expiring.
+            // One uncle per slot, breaking ties by the uncle's slot and ID.
+            candidates
+                .sort_unstable_by_key(|(parent_slot, uncle)| (*parent_slot, uncle.slot, uncle.id));
+            candidates
+        };
 
-        // Oldest parent first, because the slot window moves and the oldest candidates
-        // are the closest to expiring.
-        // One uncle per slot, breaking ties by the uncle's slot and ID.
-        candidates
-            .sort_unstable_by_key(|(parent_slot, uncle)| (*parent_slot, uncle.slot, uncle.id));
         let mut selected_slots = HashSet::new();
         candidates
             .into_iter()
@@ -937,16 +965,58 @@ pub mod tests {
     use std::{
         hash::{DefaultHasher, Hash, Hasher as _},
         num::NonZero,
+        sync::Arc,
+        time::Duration,
     };
 
+    use lb_time::era::{EraEntriesAfterGenesis, EraTiming};
     use lb_utils::math::NonNegativeRatio;
 
     use super::{Cryptarchia, Error, Slot, UncleSlots, maxvalid_bg};
-    use crate::{Config, ReorgedBlocks, State};
+    use crate::{Config, EraSchedule, ReorgedBlocks, State};
 
     #[must_use]
     pub fn config() -> Config {
         config_with(1)
+    }
+
+    /// `config` as the only era, from genesis.
+    #[must_use]
+    pub fn single_era(config: Config) -> Arc<EraSchedule<Config>> {
+        schedule(1, config, [])
+    }
+
+    /// `genesis` from genesis, then each config of `after_genesis` from the
+    /// epoch it is paired with, every epoch holding `slots_per_epoch` slots.
+    #[must_use]
+    pub fn schedule(
+        slots_per_epoch: u64,
+        genesis: Config,
+        after_genesis: impl IntoIterator<Item = (u32, Config)>,
+    ) -> Arc<EraSchedule<Config>> {
+        let timing = EraTiming {
+            slot_duration: Duration::from_secs(1),
+            epoch_length: NonZero::new(slots_per_epoch).unwrap(),
+        };
+        let after_genesis = after_genesis.into_iter().collect::<Vec<_>>();
+        let timings_after_genesis = EraEntriesAfterGenesis::try_from_iter(
+            after_genesis
+                .iter()
+                .map(|(first_epoch, _)| (NonZero::new(*first_epoch).unwrap(), timing)),
+        )
+        .unwrap();
+        let configs = std::iter::once(genesis)
+            .chain(after_genesis.into_iter().map(|(_, config)| config))
+            .collect::<Vec<_>>();
+        Arc::new(
+            EraSchedule::new(
+                ::time::OffsetDateTime::UNIX_EPOCH,
+                timing,
+                timings_after_genesis,
+            )
+            .unwrap()
+            .map(|era| configs[usize::from(era.era.into_inner())].clone()),
+        )
     }
 
     #[must_use]
@@ -975,8 +1045,16 @@ pub mod tests {
     /// index, so for a chain of length 10, the sequence of block IDs will be
     /// `[0, hash(1), hash(2), ..., hash(9)]`.
     fn create_canonical_chain(length: NonZero<u64>, c: Option<Config>) -> Cryptarchia<[u8; 32]> {
-        let mut engine =
-            Cryptarchia::from_genesis(hash(&0u64), c.unwrap_or_else(config), State::Bootstrapping);
+        create_canonical_chain_over(length, single_era(c.unwrap_or_else(config)))
+    }
+
+    /// [`create_canonical_chain`] over the eras of `era_schedule`, block `i`
+    /// at slot `i`.
+    fn create_canonical_chain_over(
+        length: NonZero<u64>,
+        era_schedule: Arc<EraSchedule<Config>>,
+    ) -> Cryptarchia<[u8; 32]> {
+        let mut engine = Cryptarchia::from_genesis(hash(&0u64), era_schedule, State::Bootstrapping);
         let mut parent = engine.lib();
         for i in 1..length.get() {
             let new_block = hash(&i);
@@ -1151,8 +1229,9 @@ pub mod tests {
 
             // however, if we set k to the fork length, it will be accepted
             let k = long_branch.length;
+            let s_gen = engine.era_schedule.genesis().parameters.s_gen();
             assert_eq!(
-                maxvalid_bg(short_branch, engine.branches(), k, engine.config.s_gen()).id,
+                maxvalid_bg(short_branch, engine.branches(), |_| (k, s_gen)).id,
                 long_p
             );
 
@@ -1239,7 +1318,8 @@ pub mod tests {
 
     #[test]
     fn test_getters() {
-        let engine = <Cryptarchia<_>>::from_genesis(hash(&0u64), config(), State::Bootstrapping);
+        let engine =
+            <Cryptarchia<_>>::from_genesis(hash(&0u64), single_era(config()), State::Bootstrapping);
         let id_0 = engine.lib();
 
         // Get branch directly from HashMap
@@ -1374,6 +1454,91 @@ pub mod tests {
             pruned_blocks.immutable_blocks,
             (0..=47u64).rev().map(|i| (i.into(), hash(&i))).collect()
         );
+    }
+
+    #[test]
+    fn the_lib_keeps_the_k_of_its_own_era_when_the_next_era_lowers_it() {
+        // An online chain of 50 blocks with k=10, block `i` at slot `i`, which
+        // an era with k=5 follows from slot 50.
+        // b0 - ... - b39(LIB) - ... - b49
+        let eras = schedule(50, config_with(10), [(1, config_with(5))]);
+        let (mut cryptarchia, _) =
+            create_canonical_chain_over(50.try_into().unwrap(), eras).online();
+        assert_eq!(cryptarchia.lib(), hash(&39u64));
+
+        // The blocks of the first era become immutable 10 deep, so the LIB
+        // keeps following 10 blocks behind the tip, up to b49 at b59. Those of
+        // the next era become immutable 5 deep, so b60 moves it up to b55.
+        for i in 50..=60u64 {
+            cryptarchia
+                .receive_block(hash(&i), hash(&(i - 1)), i.into(), UncleSlots::default())
+                .expect("test block to be applied successfully.");
+            let expected_lib = if i < 60 { i - 10 } else { 55 };
+            assert_eq!(cryptarchia.lib(), hash(&expected_lib));
+        }
+    }
+
+    #[test]
+    fn the_lib_keeps_the_k_of_its_own_era_when_the_next_era_raises_it() {
+        // An online chain of 50 blocks with k=10, block `i` at slot `i`, which
+        // an era with k=20 follows from slot 50.
+        // b0 - ... - b39(LIB) - ... - b49
+        let eras = schedule(50, config_with(10), [(1, config_with(20))]);
+        let (mut cryptarchia, _) =
+            create_canonical_chain_over(50.try_into().unwrap(), eras).online();
+        assert_eq!(cryptarchia.lib(), hash(&39u64));
+
+        // The blocks of the first era become immutable 10 deep, so the LIB
+        // keeps following 10 blocks behind the tip, up to b50 at b60. Those of
+        // the next era become immutable 20 deep, so it holds at b50 up to b70
+        // and moves up with b71.
+        for i in 50..=71u64 {
+            cryptarchia
+                .receive_block(hash(&i), hash(&(i - 1)), i.into(), UncleSlots::default())
+                .expect("test block to be applied successfully.");
+            let expected_lib = match i {
+                ..=60 => i - 10,
+                61..=70 => 50,
+                _ => 51,
+            };
+            assert_eq!(cryptarchia.lib(), hash(&expected_lib));
+        }
+    }
+
+    #[test]
+    fn fork_choice_compares_chains_under_the_era_of_their_common_ancestor() {
+        // An online chain of 25 blocks, block `i` at slot `i`, over an era with
+        // k=10 and, from slot 20, an era with k=2, which the tip is in.
+        // b0 - ... - b14(LIB) - b15 - ... - b21 - ... - b24
+        let eras = schedule(20, config_with(10), [(1, config_with(2))]);
+        let (mut cryptarchia, _) =
+            create_canonical_chain_over(25.try_into().unwrap(), eras).online();
+        assert_eq!(cryptarchia.lib(), hash(&14u64));
+
+        // A longer fork off b21 is 3 blocks deep from the tip, beyond the k=2 of
+        // the era of the common ancestor, so it is not adopted.
+        let mut parent = hash(&21u64);
+        for i in 0..4u64 {
+            let block = hash(&format!("a-{i}"));
+            cryptarchia
+                .receive_block(block, parent, (25 + i).into(), UncleSlots::default())
+                .expect("test block to be applied successfully.");
+            parent = block;
+        }
+        assert_eq!(cryptarchia.tip(), hash(&24u64));
+
+        // A longer fork off b15 is 9 blocks deep: beyond the k=2 of the tip's
+        // era, but within the k=10 of the era of the common ancestor, and
+        // adopted.
+        let mut parent = hash(&15u64);
+        for i in 0..10u64 {
+            let block = hash(&format!("b-{i}"));
+            cryptarchia
+                .receive_block(block, parent, (30 + i).into(), UncleSlots::default())
+                .expect("test block to be applied successfully.");
+            parent = block;
+        }
+        assert_eq!(cryptarchia.tip(), parent);
     }
 
     #[test]
@@ -1650,11 +1815,17 @@ pub mod tests {
 
 #[cfg(test)]
 mod uncle_tests {
-    use std::num::{NonZero, NonZeroU32};
+    use std::{
+        num::{NonZero, NonZeroU32},
+        sync::Arc,
+    };
 
     use lb_utils::math::NonNegativeRatio;
 
-    use crate::{Branch, Config, Cryptarchia, Slot, State, UncleSlots};
+    use crate::{
+        Branch, Config, Cryptarchia, EraSchedule, Slot, State, UncleSlots,
+        tests::{schedule, single_era},
+    };
 
     #[test]
     fn select_uncles_honors_the_window() {
@@ -1722,7 +1893,7 @@ mod uncle_tests {
         );
 
         assert_eq!(
-            engine.select_uncles(engine.branches().get(&b1).unwrap(), 11.into()),
+            engine.select_uncles(engine.branches().get(&b1).unwrap(), 11.into(),),
             Vec::<&Branch<u64>>::new()
         );
     }
@@ -1761,6 +1932,69 @@ mod uncle_tests {
             .map(|uncle| uncle.id())
             .collect();
         assert_eq!(selected, [u1, u2, u3, u4]);
+    }
+
+    #[test]
+    fn select_uncles_takes_only_uncles_of_the_era_of_the_block() {
+        // The tree of `select_uncles_takes_at_most_max_uncles`, with the era of
+        // the new block starting at slot 3: u1 and u2 are of the previous era,
+        // and dropped before `MAX_UNCLES` are taken, so u5 makes it.
+        let [g, b1, u1, u2, u3, u4, u5] = [0u64, 1, 2, 3, 4, 5, 6];
+        let window = config(10.try_into().unwrap());
+        let engine = build_tree_over(
+            schedule(3, window.clone(), [(1, window)]),
+            g,
+            [
+                (b1, g, 6.into()),
+                (u1, g, 1.into()),
+                (u2, g, 2.into()),
+                (u3, g, 3.into()),
+                (u4, g, 4.into()),
+                (u5, g, 5.into()),
+            ],
+        );
+
+        let selected: Vec<_> = engine
+            .select_uncles(engine.branches().get(&b1).unwrap(), 7.into())
+            .iter()
+            .map(|uncle| uncle.id())
+            .collect();
+        assert_eq!(selected, [u3, u4, u5]);
+    }
+
+    #[test]
+    fn select_uncles_takes_the_window_of_the_era_of_the_block() {
+        //               |-- window of the block's era --|
+        //               |                               |
+        // g(0) ------- b1(5) ----------------------- b2(9)  <- adding b3(10)
+        //  |            |
+        //  |- u1(4)     |- u2(6)
+        //
+        // The era of the new block starts at slot 3, with a window of 5 slots,
+        // which holds only u2's parent: only u2 is selected, though the window
+        // of 10 slots of the era before would hold u1's parent too.
+        let [g, b1, b2, u1, u2] = [0u64, 1, 2, 3, 4];
+        let engine = build_tree_over(
+            schedule(
+                3,
+                config(10.try_into().unwrap()),
+                [(1, config(5.try_into().unwrap()))],
+            ),
+            g,
+            [
+                (b1, g, 5.into()),
+                (b2, b1, 9.into()),
+                (u1, g, 4.into()),
+                (u2, b1, 6.into()),
+            ],
+        );
+
+        let selected: Vec<_> = engine
+            .select_uncles(engine.branches().get(&b2).unwrap(), 10.into())
+            .iter()
+            .map(|uncle| uncle.id())
+            .collect();
+        assert_eq!(selected, [u2]);
     }
 
     #[test]
@@ -1926,8 +2160,21 @@ mod uncle_tests {
         genesis: HeaderId,
         blocks: impl IntoIterator<Item = (HeaderId, HeaderId, Slot)>,
     ) -> Cryptarchia<HeaderId> {
-        build_tree_with_uncle_slots(
-            uncle_reference_window_in_slot,
+        build_tree_over(
+            single_era(config(uncle_reference_window_in_slot.try_into().unwrap())),
+            genesis,
+            blocks,
+        )
+    }
+
+    /// [`build_tree`] over the eras of `era_schedule`.
+    fn build_tree_over(
+        era_schedule: Arc<EraSchedule<Config>>,
+        genesis: HeaderId,
+        blocks: impl IntoIterator<Item = (HeaderId, HeaderId, Slot)>,
+    ) -> Cryptarchia<HeaderId> {
+        build_tree_with_uncle_slots_over(
+            era_schedule,
             genesis,
             blocks
                 .into_iter()
@@ -1940,11 +2187,19 @@ mod uncle_tests {
         genesis: HeaderId,
         blocks: impl IntoIterator<Item = (HeaderId, HeaderId, Slot, UncleSlots)>,
     ) -> Cryptarchia<HeaderId> {
-        let mut engine = Cryptarchia::from_genesis(
+        build_tree_with_uncle_slots_over(
+            single_era(config(uncle_reference_window_in_slot.try_into().unwrap())),
             genesis,
-            config(uncle_reference_window_in_slot.try_into().unwrap()),
-            State::Bootstrapping,
-        );
+            blocks,
+        )
+    }
+
+    fn build_tree_with_uncle_slots_over(
+        era_schedule: Arc<EraSchedule<Config>>,
+        genesis: HeaderId,
+        blocks: impl IntoIterator<Item = (HeaderId, HeaderId, Slot, UncleSlots)>,
+    ) -> Cryptarchia<HeaderId> {
+        let mut engine = Cryptarchia::from_genesis(genesis, era_schedule, State::Bootstrapping);
         for (id, parent, slot, uncle_slots) in blocks {
             engine.receive_block(id, parent, slot, uncle_slots).unwrap();
         }

@@ -2,6 +2,7 @@ use core::{
     fmt::{Debug, Display},
     future::ready,
     marker::PhantomData,
+    mem,
 };
 
 use futures::{Stream, StreamExt as _, stream, stream::BoxStream};
@@ -11,11 +12,11 @@ use lb_core::{
     header::HeaderId,
     mantle::{traits::Hashable, transactions::hash::PrefixedKey},
 };
+use lb_cryptarchia_engine::{Era, EraSchedule};
 use lb_log_targets::blend;
 use lb_network_service::{
-    NetworkService,
     backends::libp2p::{Command, Libp2p, Message as PubSubMessage, PubSubCommand},
-    message::{ChainSyncEvent, NetworkMsg},
+    message::{BackendNetworkMsg, ChainSyncEvent, NetworkMsg},
 };
 use lb_storage_service::StorageService;
 use lb_tx_service::{
@@ -38,26 +39,49 @@ type ChainNetworkRelay<Item> = OutboundRelay<ChainNetworkMsg<Item>>;
 
 /// A payload dispatcher for a node whose network service uses the libp2p
 /// backend.
-pub struct Libp2pPayloadDispatcher<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId>
-where
+pub struct Libp2pPayloadDispatcher<
+    MempoolNetAdapter,
+    Mempool,
+    ChainNetwork,
+    TimeBackend,
+    RuntimeServiceId,
+> where
     Mempool: RecoverableMempool<BlockId = HeaderId>,
 {
     network_relay: NetworkRelay,
     mempool_relay: MempoolRelay<Mempool::Item, Mempool::Key>,
     chain_network_relay: ChainNetworkRelay<Mempool::Item>,
-    settings: Libp2pBroadcastSettings,
+    current_era: Era,
+    previous_era: Option<Era>,
+    era_schedule: EraSchedule<Libp2pBroadcastSettings>,
     #[expect(
         clippy::type_complexity,
         reason = "Phantom data stuff to not require Send/Sync on type parameters that are only used as tags"
     )]
-    _phantom: PhantomData<fn() -> (MempoolNetAdapter, ChainNetwork, RuntimeServiceId)>,
+    _phantom: PhantomData<
+        fn() -> (
+            MempoolNetAdapter,
+            ChainNetwork,
+            TimeBackend,
+            RuntimeServiceId,
+        ),
+    >,
 }
 
 /// Settings used to broadcast messages to the network service that uses libp2p
-/// backend.
+/// backend, in an era.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct Libp2pBroadcastSettings {
     pub topic: String,
+}
+
+fn proposal_topic_for_era(era_schedule: &EraSchedule<Libp2pBroadcastSettings>, era: Era) -> String {
+    era_schedule
+        .get(era)
+        .expect("The eras of the dispatcher are scheduled.")
+        .parameters
+        .topic
+        .clone()
 }
 
 /// Broadcast an unencrypted block proposal to the network by publishing it
@@ -228,8 +252,15 @@ where
 }
 
 #[async_trait::async_trait]
-impl<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId> PayloadDispatcher<RuntimeServiceId>
-    for Libp2pPayloadDispatcher<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId>
+impl<MempoolNetAdapter, Mempool, ChainNetwork, TimeBackend, RuntimeServiceId>
+    PayloadDispatcher<RuntimeServiceId>
+    for Libp2pPayloadDispatcher<
+        MempoolNetAdapter,
+        Mempool,
+        ChainNetwork,
+        TimeBackend,
+        RuntimeServiceId,
+    >
 where
     Mempool: RecoverableMempool<BlockId = HeaderId, RecoveryState: 'static> + Send + Sync + 'static,
     Mempool::Item:
@@ -243,6 +274,7 @@ where
         + 'static,
     MempoolNetAdapter::Settings: Clone + Send + Sync,
     ChainNetwork: ServiceData<Message = ChainNetworkMsg<Mempool::Item>> + Send + Sync + 'static,
+    TimeBackend: 'static,
     RuntimeServiceId: Clone
         + Debug
         + Display
@@ -253,36 +285,91 @@ where
 {
     type Backend = Libp2p;
     type ChainNetworkService = ChainNetwork;
-    type MempoolService =
-        TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>;
-    type Settings = Libp2pBroadcastSettings;
+    type MempoolService = TxMempoolService<
+        MempoolNetAdapter,
+        Mempool,
+        Mempool::Storage,
+        TimeBackend,
+        RuntimeServiceId,
+    >;
+    type Settings = EraSchedule<Libp2pBroadcastSettings>;
 
     fn new(
-        network_relay: OutboundRelay<
-            <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-        >,
+        network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
         mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
         chain_network_relay: OutboundRelay<<Self::ChainNetworkService as ServiceData>::Message>,
-        settings: Self::Settings,
+        era_schedule: Self::Settings,
+        current_era: Era,
     ) -> Self {
         Self {
             network_relay,
             mempool_relay,
             chain_network_relay,
-            settings,
+            current_era,
+            previous_era: None,
+            era_schedule,
             _phantom: PhantomData,
         }
     }
 
-    async fn dispatch(&self, payload: DataPayload) {
+    async fn rotate_era(&mut self, era: Era) {
+        let Some(era_settings) = self.era_schedule.get(era) else {
+            tracing::error!(
+                target: LOG_TARGET,
+                "Asked to enter era {}, which is not scheduled",
+                era.into_inner()
+            );
+            return;
+        };
+        if era == self.current_era {
+            return;
+        }
+        // An earlier era still held has had its transition period end
+        // already: only the report of its end went missing. Entering the new
+        // era below replaces it.
+        if let Some(lingering_era) = self.previous_era {
+            tracing::warn!(
+                target: LOG_TARGET,
+                "The end of the previous era's transition period was never reported: block proposals are no longer broadcast in era {}",
+                lingering_era.into_inner()
+            );
+        }
+        tracing::info!(
+            target: LOG_TARGET,
+            "Entered era {}: block proposals are broadcast on {}",
+            era.into_inner(),
+            era_settings.parameters.topic
+        );
+        self.previous_era = Some(mem::replace(&mut self.current_era, era));
+    }
+
+    async fn complete_era_transition(&mut self, ended_era: Era) {
+        if self.previous_era != Some(ended_era) {
+            return;
+        }
+        self.previous_era = None;
+        tracing::info!(
+            target: LOG_TARGET,
+            "Transition period for era {} is over.",
+            ended_era.into_inner(),
+        );
+    }
+
+    async fn dispatch(&self, payload: DataPayload, era: Era) {
         match payload {
             DataPayload::BlockProposal(proposal) => {
-                broadcast_block_proposal(
-                    &self.network_relay,
-                    self.settings.topic.clone(),
-                    proposal,
-                )
-                .await;
+                // This node serves the current era, and the previous one during
+                // its transition period.
+                if era != self.current_era && self.previous_era != Some(era) {
+                    tracing::error!(
+                        target: LOG_TARGET,
+                        "Refusing to broadcast a block proposal in era {}, which this node no longer serves",
+                        era.into_inner()
+                    );
+                    return;
+                }
+                let topic = proposal_topic_for_era(&self.era_schedule, era);
+                broadcast_block_proposal(&self.network_relay, topic, proposal).await;
             }
             DataPayload::Transaction(transaction) => {
                 submit_transaction(&self.mempool_relay, transaction).await;

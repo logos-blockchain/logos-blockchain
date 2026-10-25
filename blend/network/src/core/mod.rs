@@ -79,11 +79,44 @@ where
         &mut self,
         new_epoch_info: (Membership<PeerId>, Epoch),
         new_proofs_verifier: ProofsVerifier,
+        new_era: Option<(&Config, StreamProtocol)>,
     ) {
-        self.with_core_mut()
-            .start_new_epoch(new_epoch_info.clone(), new_proofs_verifier.clone());
-        self.with_edge_mut()
-            .start_new_epoch(new_epoch_info, new_proofs_verifier);
+        let new_era_components = new_era.map(|(new_era_config, new_era_protocol_name)| {
+            let new_era_round_duration = new_era_config.common.round_duration_in_seconds;
+            let new_era_round_clock = (new_era_round_duration
+                != self.with_core().round_duration_in_seconds())
+            .then(|| {
+                self.with_core()
+                    .new_round_clock_with_updated_round_duration(new_era_round_duration)
+            });
+            (new_era_config, new_era_round_clock, new_era_protocol_name)
+        });
+        self.with_core_mut().start_new_epoch(
+            new_epoch_info.clone(),
+            new_proofs_verifier.clone(),
+            new_era_components.as_ref().map(
+                |(new_era_config, new_era_round_clock, new_era_protocol_name)| {
+                    (
+                        (&new_era_config.common, &new_era_config.with_core),
+                        new_era_round_clock.clone(),
+                        new_era_protocol_name.clone(),
+                    )
+                },
+            ),
+        );
+        self.with_edge_mut().start_new_epoch(
+            new_epoch_info,
+            new_proofs_verifier,
+            new_era_components.map(
+                |(new_era_config, new_era_round_clock, new_era_protocol_name)| {
+                    (
+                        (&new_era_config.common, &new_era_config.with_edge),
+                        new_era_round_clock,
+                        new_era_protocol_name,
+                    )
+                },
+            ),
+        );
     }
 
     pub const fn with_core(&self) -> &CoreToCoreBehaviour<ProofsVerifier> {

@@ -29,6 +29,7 @@ lb-mmr                        = { workspace = true }
 lb-poc                        = { workspace = true }
 lb-pol                        = { workspace = true }
 lb-poseidon2                  = { workspace = true }
+lb-time                       = { workspace = true }
 lb-utils                      = { workspace = true }
 lb-utxotree                   = { workspace = true }
 lb-zksign                     = { workspace = true }

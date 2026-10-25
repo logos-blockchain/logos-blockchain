@@ -11,7 +11,7 @@ use std::{
 use futures::{Stream, StreamExt as _, future::OptionFuture, stream::FuturesUnordered};
 use lb_blend::{
     message::encap::{
-        ProofsVerifier as ProofsVerifierTrait, encapsulated_message_encoded_size,
+        ProofsVerifier as ProofsVerifierTrait,
         validated::EncapsulatedMessageWithVerifiedPublicHeader,
     },
     network::core::{
@@ -27,9 +27,13 @@ use lb_blend::{
     },
 };
 use lb_chain_service::Epoch;
-use lb_libp2p::{DialError, DialErrorExt as _, DialOpts, SwarmEvent};
+use lb_libp2p::{DialError, DialErrorExt as _, DialOpts, SwarmEvent, system_dns_config};
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
-use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder, swarm::dial_opts::PeerCondition};
+use libp2p::{
+    Multiaddr, PeerId, Swarm, SwarmBuilder,
+    identity::Keypair,
+    swarm::{ConnectionId, dial_opts::PeerCondition},
+};
 use rand::RngCore;
 use tokio::{
     sync::{broadcast, mpsc, oneshot},
@@ -37,15 +41,12 @@ use tokio::{
 };
 
 use crate::{
-    core::{
-        backends::{
-            BackendEpochInfo,
-            libp2p::{
-                LOG_TARGET, Libp2pBlendBackendSettings,
-                behaviour::{BlendBehaviour, BlendBehaviourEvent},
-            },
+    core::backends::{
+        BackendEpochInfo,
+        libp2p::{
+            LOG_TARGET, Libp2pBlendBackendEraSettings, Libp2pBlendBackendSettings,
+            behaviour::{BlendBehaviour, BlendBehaviourEvent, network_config},
         },
-        settings::RunningBlendConfig as BlendConfig,
     },
     message::{CoreInfo, NetworkInfo},
     metrics,
@@ -64,7 +65,10 @@ pub enum BlendSwarmMessage<ProofsVerifier> {
         message: Box<EncapsulatedMessageWithVerifiedPublicHeader>,
         epoch: Epoch,
     },
-    StartNewEpoch(BackendEpochInfo<PeerId, ProofsVerifier>),
+    StartNewEpoch {
+        new_epoch_info: BackendEpochInfo<PeerId, ProofsVerifier>,
+        new_era_settings: Option<Box<Libp2pBlendBackendEraSettings>>,
+    },
     CompleteEpochTransition,
     GetNetworkInfo {
         reply: oneshot::Sender<Option<NetworkInfo<PeerId>>>,
@@ -74,19 +78,40 @@ pub enum BlendSwarmMessage<ProofsVerifier> {
 pub struct DialAttempt {
     /// Address of peer being dialed.
     address: Multiaddr,
-    /// The latest (ongoing) attempt number.
+    /// The number of the attempt in flight, or of the next one while the peer
+    /// backs off.
     attempt_number: NonZeroU64,
-    /// Peers that have already been tried and failed for this dial cycle.
-    /// When all available peers have been tried, this set is cleared to allow
-    /// retrying from scratch.
-    failed_peers: HashSet<PeerId>,
 }
 
-/// [`DialAttempt`] with epoch information, i.e., whether the attempt was made
-/// at this epoch or the previous one.
-pub enum EpochDialAttempt {
-    OngoingEpoch(Option<DialAttempt>),
-    PreviousEpoch,
+/// Where dialing a core peer stands in the current epoch.
+///
+/// A peer has at most one, so it cannot be dialed twice at once, nor dialed
+/// while it has been given up on.
+pub enum PeerDialState {
+    /// A dial is in flight on `connection_id`, until the connection fails or
+    /// its Blend handshake settles.
+    InFlight {
+        attempt: DialAttempt,
+        connection_id: ConnectionId,
+    },
+    /// The last attempt failed, and the next one waits out a backoff. Only its
+    /// pending retry moves the peer on.
+    BackingOff(DialAttempt),
+    /// The peer ran out of dial attempts. It is dialed again once no other
+    /// peer is left to try and the full-membership retry fires.
+    Exhausted,
+    /// The dial failed for a reason that retrying cannot fix. The peer is not
+    /// dialed again this epoch.
+    Unrecoverable,
+}
+
+impl PeerDialState {
+    /// Whether the peer is being dialed, or waiting out a backoff between two
+    /// attempts.
+    #[must_use]
+    pub const fn is_under_active_dialing(&self) -> bool {
+        matches!(self, Self::InFlight { .. } | Self::BackingOff(_))
+    }
 }
 
 #[cfg(test)]
@@ -100,32 +125,7 @@ impl DialAttempt {
     }
 }
 
-/// The bytes a connection may hold for us before its sender feels backpressure.
-///
-/// One round's share, which a neighbour sending at the rate the protocol
-/// expects may have in flight before this node has read it, plus the `η` rounds
-/// that neighbour waits for a stalled connection before giving up on a message.
-/// Sized this way, a pause in reading shorter than the sender's own patience
-/// costs nothing, and one longer than it is felt within a round or two instead
-/// of being swallowed by buffer.
-fn connection_receive_window(
-    connection_share_per_round: NonZeroU64,
-    network_absorption_in_rounds: NonZeroU64,
-    num_blend_layers: NonZeroU64,
-) -> u32 {
-    let frame_size = encapsulated_message_encoded_size(num_blend_layers).get();
-
-    let rounds_of_slack = network_absorption_in_rounds.get().saturating_add(1);
-    u32::try_from(
-        connection_share_per_round
-            .get()
-            .saturating_mul(rounds_of_slack)
-            .saturating_mul(u64::try_from(frame_size).unwrap()),
-    )
-    .unwrap_or(u32::MAX)
-}
-
-type PendingRetries = FuturesUnordered<Pin<Box<dyn Future<Output = (PeerId, DialAttempt)> + Send>>>;
+type PendingRetries = FuturesUnordered<Pin<Box<dyn Future<Output = PeerId> + Send>>>;
 type FullMembershipRetry = Option<Pin<Box<dyn Future<Output = ()> + Send>>>;
 
 pub struct BlendSwarm<Rng, ProofsVerifier>
@@ -139,10 +139,9 @@ where
     current_epoch_info: BackendEpochInfo<PeerId, ProofsVerifier>,
     rng: Rng,
     max_dial_attempts_per_connection: NonZeroU64,
-    ongoing_dials: HashMap<PeerId, DialAttempt>,
-    /// Peers whose dial failed for a reason that retrying cannot fix. Excluded
-    /// from dialing until the next epoch rebuilds the membership.
-    unrecoverable_peers: HashSet<PeerId>,
+    /// Where dialing each peer stands in this epoch. A peer without an entry
+    /// is free to be dialed.
+    peer_dials: HashMap<PeerId, PeerDialState>,
     pending_retries: PendingRetries,
     pending_full_membership_retry: FullMembershipRetry,
     minimum_network_size: NonZeroUsize,
@@ -151,8 +150,15 @@ where
     peering_degree_check_clock: Pin<Box<dyn Stream<Item = ()> + Send>>,
 }
 
-pub struct SwarmParams<'config, Rng, ProofsVerifier> {
-    pub config: &'config BlendConfig<Libp2pBlendBackendSettings>,
+pub struct SwarmParams<'settings, Rng, ProofsVerifier> {
+    pub settings: &'settings Libp2pBlendBackendSettings,
+    /// The settings of the era of the current epoch.
+    pub era_settings: &'settings Libp2pBlendBackendEraSettings,
+    pub keypair: Keypair,
+    /// The QUIC receive window. The transport is built once, when the swarm
+    /// starts, so the window is sized for the era that needs the largest (see
+    /// [`connection_receive_window`]).
+    pub receive_window_size: u32,
     pub current_epoch_info: BackendEpochInfo<PeerId, ProofsVerifier>,
     pub rng: Rng,
     pub swarm_message_receiver: mpsc::Receiver<BlendSwarmMessage<ProofsVerifier>>,
@@ -174,7 +180,10 @@ where
 {
     pub(super) fn new(
         SwarmParams {
-            config,
+            settings,
+            era_settings,
+            keypair,
+            receive_window_size: receive_window,
             current_epoch_info,
             rng,
             swarm_message_receiver: swarm_messages_receiver,
@@ -182,7 +191,8 @@ where
             minimum_network_size,
         }: SwarmParams<Rng, ProofsVerifier>,
     ) -> Self {
-        let listening_address = config.backend.listening_address.clone();
+        let listening_address = settings.listening_address.clone();
+        let local_peer_id = keypair.public().to_peer_id();
         // The read share only pushes back on a neighbour if the transport stops
         // accepting what it is not being read. libp2p-quic's default receive
         // window is 10 MB per stream, which at Blend's frame size is some five
@@ -192,12 +202,8 @@ where
         // that a neighbour sending at the rate the protocol expects never
         // stalls, and that the `η` rounds it may hold a message for are not
         // spent waiting on flow control.
-        let receive_window = connection_receive_window(
-            config.backend.connection_share_per_round,
-            config.time.network_absorption_in_rounds,
-            config.num_blend_layers,
-        );
-        let mut swarm = SwarmBuilder::with_existing_identity(config.keypair())
+        let (dns_config, dns_options) = system_dns_config();
+        let mut swarm = SwarmBuilder::with_existing_identity(keypair)
             .with_tokio()
             .with_quic_config(|mut quic| {
                 quic.max_stream_data = receive_window;
@@ -206,11 +212,11 @@ where
                 quic.max_connection_data = receive_window.saturating_mul(2);
                 quic
             })
-            .with_dns()
-            .expect("DNS transport should be supported")
+            .with_dns_config(dns_config, dns_options)
             .with_behaviour(|_| {
                 BlendBehaviour::new(
-                    config,
+                    era_settings,
+                    local_peer_id,
                     (
                         current_epoch_info.membership.clone(),
                         current_epoch_info.epoch,
@@ -239,15 +245,12 @@ where
             incoming_message_sender,
             current_epoch_info,
             rng,
-            max_dial_attempts_per_connection: config.backend.max_dial_attempts_per_peer,
-            unrecoverable_peers: HashSet::new(),
-            ongoing_dials: HashMap::with_capacity(
-                config.backend.target_peering_degree.get() as usize
-            ),
+            max_dial_attempts_per_connection: settings.max_dial_attempts_per_peer,
+            peer_dials: HashMap::with_capacity(era_settings.target_peering_degree.get() as usize),
             pending_retries: FuturesUnordered::new(),
             pending_full_membership_retry: None,
             minimum_network_size,
-            peering_degree_check_clock: config.peering_degree_check_clock(),
+            peering_degree_check_clock: settings.peering_degree_check_clock(),
         };
 
         self_instance.check_and_dial_new_peers();
@@ -257,8 +260,8 @@ where
 
     /// Dial random peers from the membership list,
     /// excluding the peers with a negotiated connection in the ongoing epoch,
-    /// the peers that we are already trying to dial, the blocked peers, and
-    /// any extra peers specified in `except`.
+    /// the peers with a dial entry (being dialed, or given up on), the blocked
+    /// peers, and any extra peers specified in `except`.
     fn dial_random_peers_except(&mut self, amount: usize, except: &HashSet<PeerId>) {
         // Nothing to do when the peering degree is already satisfied.
         if amount == 0 {
@@ -283,8 +286,7 @@ where
                     .with_core()
                     .peers_with_handshake_in_progress(),
             )
-            .chain(self.ongoing_dials.keys())
-            .chain(self.unrecoverable_peers.iter())
+            .chain(self.peer_dials.keys())
             .chain(except.iter())
             .copied()
             .collect();
@@ -299,32 +301,37 @@ where
         let no_more_peers_to_dial = peers_to_dial.peek().is_none();
 
         // When no membership peer is eligible to be dialed but we still have peers
-        // we gave up on earlier in this dial cycle (`except`), we want to clear
-        // that memory and retry the whole membership from scratch. Rather than
-        // doing so immediately — which spins at event-loop speed when every peer
-        // keeps rejecting us (e.g. a node locked out after an epoch transition
-        // because all peers are already at their maximum peering degree) — we
-        // schedule a single delayed retry. When `except` is empty there is
-        // genuinely nobody left to dial (everyone is already negotiated,
-        // in-flight, or blocked), so we stop.
+        // we gave up on earlier in this dial cycle (the exhausted ones, or
+        // `except`), we want to clear that memory and retry the whole membership
+        // from scratch. Rather than doing so immediately — which spins at
+        // event-loop speed when every peer keeps rejecting us (e.g. a node locked
+        // out after an epoch transition because all peers are already at their
+        // maximum peering degree) — we schedule a single delayed retry. When there
+        // are none, there is genuinely nobody left to dial (everyone is already
+        // negotiated, in-flight, or blocked), so we stop.
         // Peers abandoned as unrecoverable count as "tried this cycle" too:
         // without them a membership made entirely of undialable peers would
         // look like "nobody left to dial" and stop silently.
-        if no_more_peers_to_dial && !(except.is_empty() && self.unrecoverable_peers.is_empty()) {
+        let gave_up_on_peers = !except.is_empty()
+            || self
+                .peer_dials
+                .values()
+                .any(|peer| !peer.is_under_active_dialing());
+        if no_more_peers_to_dial && gave_up_on_peers {
             self.schedule_full_membership_retry();
             return;
         }
 
         for (peer_id, peer_address) in peers_to_dial {
-            self.dial(peer_id, peer_address, except.clone());
+            self.dial(peer_id, peer_address);
         }
     }
 
     /// Schedule a delayed re-dial of the entire membership, used when every
     /// eligible peer has already been tried and failed in the current cycle.
     /// Only one retry is kept pending at a time; when it fires, the peering
-    /// degree is re-checked and dialing starts over from scratch (with an empty
-    /// failed-peers set).
+    /// degree is re-checked and dialing starts over from scratch (with the
+    /// exhausted peers eligible again).
     fn schedule_full_membership_retry(&mut self) {
         if self.pending_full_membership_retry.is_some() {
             // A retry is already pending; don't stack another.
@@ -343,66 +350,134 @@ where
     /// Drop a peer that can never be dialed successfully and immediately look
     /// for a replacement, instead of retrying it with exponential backoff.
     ///
-    /// The peer stays excluded for the rest of the epoch; a new epoch rebuilds
-    /// the membership and clears the set.
+    /// The peer stays excluded for the rest of the epoch, until a new epoch
+    /// rebuilds the membership.
     fn abandon_peer(&mut self, peer_id: PeerId, error: &DialError) {
-        let previously_failed = self
-            .ongoing_dials
-            .remove(&peer_id)
-            .map(|attempt| attempt.failed_peers)
-            .unwrap_or_default();
-        self.unrecoverable_peers.insert(peer_id);
+        self.peer_dials
+            .insert(peer_id, PeerDialState::Unrecoverable);
         tracing::debug!(
             target: LOG_TARGET,
             "Unrecoverable dial failure for peer {peer_id:?}: {error}. Not retrying; excluding it for this epoch and dialing another peer."
         );
-        self.check_and_dial_new_peers_except(&previously_failed);
+        self.check_and_dial_new_peers();
     }
 
     fn check_and_dial_new_peers(&mut self) {
         self.check_and_dial_new_peers_except(&HashSet::new());
     }
 
-    /// It tries to dial the specified peer.
-    ///
-    /// This function always tries to dial and update the counter of attempted
-    /// dials. Any checks about the maximum allowed dials must be performed in
-    /// the context of the calling function.
-    fn dial(&mut self, peer_id: PeerId, address: Multiaddr, failed_peers: HashSet<PeerId>) {
+    /// It tries to dial the specified peer, unless the peer has a dial entry
+    /// already: a peer is dialed at most once at a time, and not at all once it
+    /// has been given up on.
+    fn dial(&mut self, peer_id: PeerId, address: Multiaddr) {
+        if self.peer_dials.contains_key(&peer_id) {
+            tracing::trace!(target: LOG_TARGET, "Not dialing peer {peer_id:?}, which has a dial entry already.");
+            return;
+        }
         tracing::trace!(target: LOG_TARGET, "Dialing peer {peer_id:?} at address {address:?}.");
-        self.ongoing_dials.insert(
+        self.start_dial_attempt(
             peer_id,
             DialAttempt {
-                address: address.clone(),
+                address,
                 attempt_number: 1.try_into().unwrap(),
-                failed_peers,
             },
         );
+    }
 
-        if let Err(e) = self.swarm.dial(
-            DialOpts::peer_id(peer_id)
-                .addresses(vec![address])
-                // We use `Always` since we want to be able to dial a peer even if we already have
-                // an established connection with it that belongs to the previous epoch.
-                .condition(PeerCondition::Always)
-                .build(),
-        ) {
+    /// Dial `peer_id` for `attempt`, which is then in flight until its
+    /// connection fails or its handshake settles.
+    fn start_dial_attempt(&mut self, peer_id: PeerId, attempt: DialAttempt) {
+        let dial_opts = DialOpts::peer_id(peer_id)
+            .addresses(vec![attempt.address.clone()])
+            // We use `Always` since we want to be able to dial a peer even if we already have
+            // an established connection with it that belongs to the previous epoch.
+            .condition(PeerCondition::Always)
+            .build();
+        let connection_id = dial_opts.connection_id();
+        if let Err(e) = self.swarm.dial(dial_opts) {
             tracing::error!(target: LOG_TARGET, "Failed to dial peer {peer_id:?}: {e:?}");
             // `Swarm::dial` rejects some dials synchronously (our own id, no
             // address, a behaviour refusing it). They carry the same
             // recoverable/unrecoverable distinction as an asynchronous
             // `OutgoingConnectionError` and must be classified identically.
-            if e.is_recoverable() {
-                self.schedule_retry(peer_id);
-            } else {
-                self.abandon_peer(peer_id, &e);
-            }
+            self.handle_dial_error(peer_id, attempt, &e);
+            return;
         }
+        self.peer_dials.insert(
+            peer_id,
+            PeerDialState::InFlight {
+                attempt,
+                connection_id,
+            },
+        );
+    }
+
+    /// Handle the failure of a dial attempt, which has been taken out of the
+    /// map of dials.
+    fn handle_dial_error(&mut self, peer_id: PeerId, attempt: DialAttempt, error: &DialError) {
+        // A permanent failure is not worth a backoff ladder: drop the
+        // peer for this epoch and spend the dial budget on another one.
+        if error.is_recoverable() {
+            self.retry_or_give_up(peer_id, attempt);
+        } else {
+            self.abandon_peer(peer_id, error);
+        }
+    }
+
+    /// Retry a dial attempt that failed for a reason worth retrying, after an
+    /// exponential backoff, or give up on the peer and dial another one
+    /// instead.
+    ///
+    /// While it backs off, the peer keeps its entry in the map of dials, so
+    /// that no other dial picks it in the meantime, and a delayed future is
+    /// pushed into `pending_retries`. When the future fires, `execute_retry`
+    /// will re-check the peering degree before actually dialing. A peer that
+    /// has reached the maximum attempts is set aside as exhausted instead, and
+    /// a blacklisted one is dropped.
+    fn retry_or_give_up(&mut self, peer_id: PeerId, attempt: DialAttempt) {
+        // Blacklisting a peer closes the connection this node was still shaking
+        // hands on, which surfaces here as a dial failure. Do not retry with that peer
+        // anymore.
+        if self.is_peer_blacklisted(&peer_id) {
+            tracing::debug!(target: LOG_TARGET, "Not retrying blacklisted peer {peer_id:?}. Dialing another peer instead.");
+            self.check_and_dial_new_peers();
+            return;
+        }
+        let new_attempt_number = attempt.attempt_number.checked_add(1).unwrap();
+        if new_attempt_number > self.max_dial_attempts_per_connection {
+            tracing::debug!(target: LOG_TARGET, "Maximum attempts ({}) reached for peer {peer_id:?}. Re-dialing stopped.", self.max_dial_attempts_per_connection);
+            self.peer_dials.insert(peer_id, PeerDialState::Exhausted);
+            self.check_and_dial_new_peers();
+            return;
+        }
+        let delay = Duration::from_secs(
+            1u64.checked_shl((new_attempt_number.get() - 1) as u32)
+                .unwrap_or_else(|| {
+                    tracing::warn!(target: LOG_TARGET, "Shift overflow when calculating delay for peer {peer_id:?}. Using maximum delay.");
+                    u64::MAX
+                }),
+        );
+        tracing::debug!(
+            target: LOG_TARGET,
+            "Scheduling retry {new_attempt_number} for peer {peer_id:?} in {} seconds.",
+            delay.as_secs()
+        );
+        self.peer_dials.insert(
+            peer_id,
+            PeerDialState::BackingOff(DialAttempt {
+                attempt_number: new_attempt_number,
+                ..attempt
+            }),
+        );
+        self.pending_retries.push(Box::pin(async move {
+            sleep(delay).await;
+            peer_id
+        }));
     }
 
     #[cfg(test)]
     pub fn dial_peer_at_addr(&mut self, peer_id: PeerId, address: Multiaddr) {
-        self.dial(peer_id, address, HashSet::new());
+        self.dial(peer_id, address);
     }
 
     /// Called when a pending retry fires. Re-checks peering degree before
@@ -411,11 +486,23 @@ where
         clippy::cognitive_complexity,
         reason = "TODO: Address in a dedicated refactor"
     )]
-    fn execute_retry(&mut self, peer_id: PeerId, dial_attempt: DialAttempt) {
-        if self.connections_to_open() == 0 {
+    fn execute_retry(&mut self, peer_id: PeerId) {
+        // Only a peer backing off has a retry pending, and only the retry moves
+        // it on.
+        let Some(PeerDialState::BackingOff(attempt)) = self.peer_dials.remove(&peer_id) else {
+            return;
+        };
+        let core = self.swarm.behaviour().blend.with_core();
+        // The peer may have connected to this node, or started to, while this
+        // retry was sleeping.
+        if core.negotiated_peers().contains_key(&peer_id)
+            || core
+                .peers_with_handshake_in_progress()
+                .any(|pending| *pending == peer_id)
+        {
             tracing::debug!(
                 target: LOG_TARGET,
-                "Skipping retry for peer {peer_id:?}: peering degree already satisfied."
+                "Dropping retry for peer {peer_id:?}: it has connected to this node since the retry was scheduled."
             );
             return;
         }
@@ -425,29 +512,23 @@ where
                 target: LOG_TARGET,
                 "Dropping retry for peer {peer_id:?}: it has been blacklisted since the retry was scheduled. Dialing another peer instead."
             );
-            self.check_and_dial_new_peers_except(&dial_attempt.failed_peers);
+            self.check_and_dial_new_peers();
+            return;
+        }
+        // The other dials may have made up the shortfall in the meantime.
+        if self.connections_to_dial() == 0 {
+            tracing::debug!(
+                target: LOG_TARGET,
+                "Skipping retry for peer {peer_id:?}: no further connection is needed, counting the other dials under way."
+            );
             return;
         }
         tracing::debug!(
             target: LOG_TARGET,
             "Executing backoff retry for peer {peer_id:?} (attempt {}).",
-            dial_attempt.attempt_number
+            attempt.attempt_number
         );
-        let address = dial_attempt.address.clone();
-        self.ongoing_dials.insert(peer_id, dial_attempt);
-        if let Err(e) = self.swarm.dial(
-            DialOpts::peer_id(peer_id)
-                .addresses(vec![address])
-                .condition(PeerCondition::Always)
-                .build(),
-        ) {
-            tracing::error!(target: LOG_TARGET, "Failed to redial peer {peer_id:?}: {e:?}");
-            if e.is_recoverable() {
-                self.schedule_retry(peer_id);
-            } else {
-                self.abandon_peer(peer_id, &e);
-            }
-        }
+        self.start_dial_attempt(peer_id, attempt);
     }
 
     /// Dial new peers, if necessary, to maintain the peering degree.
@@ -460,7 +541,7 @@ where
             tracing::warn!(target: LOG_TARGET, "Not dialing any peers because set of core nodes is smaller than the minimum network size. {membership_size} < {}", self.minimum_network_size.get());
             return;
         }
-        let connections_to_establish = self.connections_to_open();
+        let connections_to_establish = self.connections_to_dial();
         self.dial_random_peers_except(connections_to_establish, except);
     }
 
@@ -533,16 +614,10 @@ where
                             "Outbound Blend peer connection failed",
                             LogLevel::Debug,
                         );
-                        // If we ran out of dial attempts, we try to connect to another random peer that we are not yet connected to, if the dial attempt was performed in the current epoch.
-                        let EpochDialAttempt::OngoingEpoch(Some(dial_attempt)) = self.schedule_retry(peer) else {
-                            return;
-                        };
-                        let failed_peers = {
-                            let mut failed_peers = dial_attempt.failed_peers;
-                            failed_peers.insert(peer);
-                            failed_peers
-                        };
-                        self.check_and_dial_new_peers_except(&failed_peers);
+                        // If this is the dial in flight to the peer, we retry it, or, once we run out of dial attempts, try to connect to another random peer that we are not yet connected to.
+                        if let Some(attempt) = self.take_in_flight_dial(peer, None) {
+                            self.retry_or_give_up(peer, attempt);
+                        }
                     }
                     upgrade_error @ (ConnectionUpgradeFailureReason::DuplicateConnection | ConnectionUpgradeFailureReason::MaximumPeeringDegreeReached | ConnectionUpgradeFailureReason::ReverseDirectionPreferred | ConnectionUpgradeFailureReason::Refused) => {
                         Self::log_blend_peer_negotiation_failure(
@@ -552,19 +627,16 @@ where
                             "Outbound connection upgrade failed; trying with a different peer if necessary",
                             LogLevel::Trace,
                         );
-                        self.ongoing_dials.remove(&peer);
-                        self.check_and_dial_new_peers_except(&HashSet::from([peer]));
+                        if self.take_in_flight_dial(peer, None).is_some() {
+                            self.check_and_dial_new_peers_except(&HashSet::from([peer]));
+                        }
                     }
                 }
             }
             lb_blend::network::core::with_core::behaviour::Event::OutboundConnectionUpgradeSucceeded(peer_id) => {
-                // The peer is normally tracked in `ongoing_dials` (we dialed it),
-                // but it can legitimately be absent if its entry was cleared while
-                // this upgrade was in flight: e.g. an epoch rotation cleared the
-                // map (`StartNewEpoch`), or a sibling connection to the same peer
-                // resolved first (e.g., a different attempt was failed and we picked the same node again due to lack of alternatives).
-                if self.ongoing_dials.remove(&peer_id).is_none() {
-                    tracing::trace!(target: LOG_TARGET, "Outbound connection upgrade succeeded for peer {peer_id:?} that was no longer tracked in ongoing dials. Keeping the connection.");
+                // The connection is kept whether or not this node tracks a dial in flight to the peer.
+                if self.take_in_flight_dial(peer_id, None).is_none() {
+                    tracing::trace!(target: LOG_TARGET, "Outbound connection upgrade succeeded for peer {peer_id:?}, which has no dial in flight. Keeping the connection.");
                 }
             }
             lb_blend::network::core::with_core::behaviour::Event::InboundConnectionUpgradeFailed { peer, reason } => {
@@ -632,28 +704,16 @@ where
                     return;
                 };
 
-                // A permanent failure is not worth a backoff ladder: drop the
-                // peer for this epoch and spend the dial budget on another one.
-                if !error.is_recoverable() {
-                    self.abandon_peer(peer_id, &error);
+                // Only the dial on this very connection failed: an error about
+                // another one is stale, e.g. from a dial of the previous epoch
+                // failing after this one dialed the peer again.
+                let Some(current_epoch_attempt) =
+                    self.take_in_flight_dial(peer_id, Some(connection_id))
+                else {
+                    tracing::debug!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} on connection {connection_id:?}, which is not the dial in flight to it. No retry will be performed.");
                     return;
-                }
-
-                match self.schedule_retry(peer_id) {
-                    EpochDialAttempt::PreviousEpoch => {
-                        tracing::debug!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new epoch has cleared the map of pending dials. No retry will be performed.");
-                    }
-                    EpochDialAttempt::OngoingEpoch(Some(dial_attempt)) => {
-                        let failed_peers = {
-                            let mut failed_peers = dial_attempt.failed_peers;
-                            failed_peers.insert(peer_id);
-                            failed_peers
-                        };
-                        self.check_and_dial_new_peers_except(&failed_peers);
-                    }
-                    // Retry in progress.
-                    EpochDialAttempt::OngoingEpoch(None) => {}
-                }
+                };
+                self.handle_dial_error(peer_id, current_epoch_attempt, &error);
             }
             _ => {
                 tracing::trace!(target: LOG_TARGET, "Received event from blend network that will be ignored: {event:?}.");
@@ -666,18 +726,33 @@ where
             BlendSwarmMessage::Publish { message, epoch } => {
                 self.handle_publish_swarm_message(&message, epoch);
             }
-            BlendSwarmMessage::StartNewEpoch(new_epoch_info) => {
+            BlendSwarmMessage::StartNewEpoch {
+                new_epoch_info,
+                new_era_settings,
+            } => {
                 self.current_epoch_info = new_epoch_info;
+                if let Some(new_era_settings) = &new_era_settings {
+                    self.minimum_network_size =
+                        new_era_settings.minimum_network_size.try_into().unwrap();
+                }
+                let new_era = new_era_settings.map(|new_era| {
+                    (
+                        network_config(&new_era),
+                        new_era.protocol_name.clone().into_inner(),
+                    )
+                });
                 self.swarm.behaviour_mut().blend.start_new_epoch(
                     (
                         self.current_epoch_info.membership.clone(),
                         self.current_epoch_info.epoch,
                     ),
                     self.current_epoch_info.proofs_verifier.clone(),
+                    new_era
+                        .as_ref()
+                        .map(|(config, protocol_name)| (config, protocol_name.clone())),
                 );
-                self.ongoing_dials.clear();
+                self.peer_dials.clear();
                 self.pending_retries.clear();
-                self.unrecoverable_peers.clear();
                 self.pending_full_membership_retry = None;
                 self.check_and_dial_new_peers();
             }
@@ -718,8 +793,8 @@ where
                 self.handle_event(event);
                 predicate_matched
             }
-            Some((peer_id, dial_attempt)) = self.pending_retries.next() => {
-                self.execute_retry(peer_id, dial_attempt);
+            Some(peer_id) = self.pending_retries.next() => {
+                self.execute_retry(peer_id);
                 false
             }
             Some(()) = self.peering_degree_check_clock.next() => {
@@ -730,6 +805,7 @@ where
             Some(()) = OptionFuture::from(self.pending_full_membership_retry.as_mut()) => {
                 self.pending_full_membership_retry = None;
                 tracing::debug!(target: LOG_TARGET, "Cooldown elapsed: retrying to dial the full membership from scratch.");
+                self.peer_dials.retain(|_, dial| !matches!(dial, PeerDialState::Exhausted));
                 self.check_and_dial_new_peers();
                 false
             }
@@ -756,7 +832,7 @@ where
     #[cfg(test)]
     #[expect(clippy::too_many_arguments, reason = "necessary for testing")]
     pub fn new_test<BehaviourConstructor, PeeringDegreeCheckClock>(
-        identity: &libp2p::identity::Keypair,
+        identity: &Keypair,
         behaviour_constructor: BehaviourConstructor,
         swarm_messages_receiver: mpsc::Receiver<BlendSwarmMessage<ProofsVerifier>>,
         incoming_message_sender: broadcast::Sender<(
@@ -783,8 +859,7 @@ where
             incoming_message_sender,
             current_epoch_info,
             max_dial_attempts_per_connection,
-            ongoing_dials: HashMap::new(),
-            unrecoverable_peers: HashSet::new(),
+            peer_dials: HashMap::new(),
             pending_retries: FuturesUnordered::new(),
             pending_full_membership_retry: None,
             rng,
@@ -865,13 +940,8 @@ where
     }
 
     #[cfg(test)]
-    pub const fn unrecoverable_peers(&self) -> &HashSet<PeerId> {
-        &self.unrecoverable_peers
-    }
-
-    #[cfg(test)]
-    pub const fn ongoing_dials(&self) -> &HashMap<PeerId, DialAttempt> {
-        &self.ongoing_dials
+    pub const fn peer_dials(&self) -> &HashMap<PeerId, PeerDialState> {
+        &self.peer_dials
     }
 
     #[cfg(test)]
@@ -884,74 +954,29 @@ where
         self.pending_full_membership_retry.is_some()
     }
 
-    #[cfg(test)]
-    pub fn failed_peers_for(&self, peer_id: &PeerId) -> Option<&HashSet<PeerId>> {
-        self.ongoing_dials
-            .get(peer_id)
-            .map(|attempt| &attempt.failed_peers)
-    }
-
-    /// Schedule a retry for a failed dial attempt with exponential backoff.
+    /// Take the dial in flight to `peer_id` out of the map of dials, for an
+    /// event about it.
     ///
-    /// The dial attempt is removed from `ongoing_dials` and, if the maximum
-    /// number of attempts has not been reached, a delayed future is pushed
-    /// into `pending_retries`. When the future fires, `execute_retry` will
-    /// re-check the peering degree before actually dialing.
-    ///
-    /// It returns:
-    ///
-    /// * `EpochDialAttempt::PreviousEpoch` if the peer is not being tracked in
-    ///   the map of ongoing dials, which means that a new epoch has been
-    ///   started and the dial attempts have been reset;
-    /// * `EpochDialAttempt::OngoingEpoch(None)` if a retry has been scheduled
-    ///   with exponential backoff;
-    /// * `EpochDialAttempt::OngoingEpoch(Some)` if the maximum attempts have
-    ///   been reached and the peer has been removed from the map of ongoing
-    ///   dials.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: Address in a dedicated refactor"
-    )]
-    fn schedule_retry(&mut self, peer_id: PeerId) -> EpochDialAttempt {
-        let Some(dial_attempt) = self.ongoing_dials.remove(&peer_id) else {
-            tracing::debug!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new epoch has cleared the map of pending dials.");
-            return EpochDialAttempt::PreviousEpoch;
-        };
-        // Blacklisting a peer closes the connection this node was still shaking
-        // hands on, which surfaces here as a dial failure. Do not retry with that peer
-        // anymore.
-        if self.is_peer_blacklisted(&peer_id) {
-            tracing::debug!(target: LOG_TARGET, "Not retrying blacklisted peer {peer_id:?}. Dialing another peer instead.");
-            return EpochDialAttempt::OngoingEpoch(Some(dial_attempt));
+    /// Given the connection the event is about, only the dial on that
+    /// connection is taken: an event about another connection with the peer is
+    /// stale, hence discarded. Any other entry, a peer backing off or given up
+    /// on, is left as it is.
+    fn take_in_flight_dial(
+        &mut self,
+        peer_id: PeerId,
+        event_connection_id: Option<ConnectionId>,
+    ) -> Option<DialAttempt> {
+        match self.peer_dials.remove(&peer_id) {
+            Some(PeerDialState::InFlight {
+                attempt,
+                connection_id,
+            }) if event_connection_id.is_none_or(|id| id == connection_id) => Some(attempt),
+            Some(other) => {
+                self.peer_dials.insert(peer_id, other);
+                None
+            }
+            None => None,
         }
-        let new_attempt_number = dial_attempt.attempt_number.checked_add(1).unwrap();
-        if new_attempt_number > self.max_dial_attempts_per_connection {
-            tracing::debug!(target: LOG_TARGET, "Maximum attempts ({}) reached for peer {peer_id:?}. Re-dialing stopped.", self.max_dial_attempts_per_connection);
-            return EpochDialAttempt::OngoingEpoch(Some(dial_attempt));
-        }
-        let delay = Duration::from_secs(
-            1u64.checked_shl((new_attempt_number.get() - 1) as u32)
-                .unwrap_or_else(|| {
-                    tracing::warn!(target: LOG_TARGET, "Shift overflow when calculating delay for peer {peer_id:?}. Using maximum delay.");
-                    u64::MAX
-                }),
-        );
-        tracing::debug!(
-            target: LOG_TARGET,
-            "Scheduling retry {new_attempt_number} for peer {peer_id:?} in {} seconds.",
-            delay.as_secs()
-        );
-        self.pending_retries.push(Box::pin(async move {
-            sleep(delay).await;
-            (
-                peer_id,
-                DialAttempt {
-                    attempt_number: new_attempt_number,
-                    ..dial_attempt
-                },
-            )
-        }));
-        EpochDialAttempt::OngoingEpoch(None)
     }
 
     fn publish_received_edge_message(
@@ -1038,12 +1063,19 @@ where
         }
     }
 
-    fn connections_to_open(&self) -> usize {
+    /// How many more peers to dial, on top of the dials in flight or backing
+    /// off.
+    fn connections_to_dial(&self) -> usize {
         self.swarm
             .behaviour()
             .blend
             .with_core()
-            .connections_to_open()
+            .connections_to_open(
+                self.peer_dials
+                    .iter()
+                    .filter(|(_, dial)| dial.is_under_active_dialing())
+                    .map(|(peer_id, _)| peer_id),
+            )
     }
 
     fn handle_blend_edge_behaviour_event(&mut self, blend_event: CoreToEdgeEvent) {

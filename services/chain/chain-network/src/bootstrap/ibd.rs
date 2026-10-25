@@ -368,18 +368,19 @@ mod tests {
         block::Proposal,
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
-    use lb_cryptarchia_engine::{EpochConfig, Slot, UncleSlots};
+    use lb_cryptarchia_engine::{EpochConfig, Era, Slot, UncleSlots};
     use lb_ledger::{
-        LedgerState,
-        config::{BlendPoWConfig, ConsensusExcludedKeys, ModulusShift, PoWConfig, RewardPoWConfig},
+        ConsensusExcludedKeys, LedgerState,
+        config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
-    use lb_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
-    use lb_utils::math::{NonNegativeRatio, PositiveF64};
-    use overwatch::{
-        overwatch::OverwatchHandle,
-        services::{ServiceData, relay::OutboundRelay},
+    use lb_network_service::{
+        backends::NetworkBackend,
+        message::{BackendNetworkMsg, ChainSyncEvent},
     };
+    use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
+    use lb_utils::math::{NonNegativeRatio, PositiveF64};
+    use overwatch::{overwatch::OverwatchHandle, services::relay::OutboundRelay};
     use tokio_stream::wrappers::BroadcastStream;
 
     use super::*;
@@ -829,12 +830,15 @@ mod tests {
 
         async fn new(
             _settings: Self::Settings,
-            _network_relay: OutboundRelay<
-                <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-            >,
+            _current_era: Era,
+            _network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
         ) -> Self {
             unimplemented!()
         }
+
+        async fn rotate_era(&mut self, _era: Era) {}
+
+        async fn complete_era_transition(&mut self, _ended_era: Era) {}
 
         async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
             unimplemented!()
@@ -917,12 +921,21 @@ mod tests {
 
         fn new(
             _config: Self::Settings,
+            _current_era: Era,
             _overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         ) -> Self {
             unimplemented!()
         }
 
         async fn process(&self, _msg: Self::Message) {
+            unimplemented!()
+        }
+
+        async fn rotate_era(&mut self, _era: Era) {
+            unimplemented!()
+        }
+
+        async fn complete_era_transition(&mut self, _ended_era: Era) {
             unimplemented!()
         }
 
@@ -939,9 +952,25 @@ mod tests {
         let ledger_config = ledger_config();
         lb_chain_service::Cryptarchia::from_genesis(
             [GENESIS_ID; 32].into(),
-            LedgerState::from_utxos(empty(), &ledger_config),
-            ledger_config,
+            LedgerState::from_utxos(empty(), &ledger_config, 0, &ConsensusExcludedKeys::empty()),
+            single_era(ledger_config),
             lb_cryptarchia_engine::State::Bootstrapping,
+        )
+    }
+
+    /// `config` as the only era, from genesis.
+    fn single_era(config: lb_ledger::Config) -> Arc<EraScheduledConfig> {
+        Arc::new(
+            EraSchedule::new(
+                time::OffsetDateTime::UNIX_EPOCH,
+                EraTiming {
+                    slot_duration: Duration::from_secs(1),
+                    epoch_length: EpochLength::epoch_length(&config),
+                },
+                EraEntriesAfterGenesis::empty(),
+            )
+            .expect("a single era resolves")
+            .map(move |_| config.clone()),
         )
     }
 
@@ -949,8 +978,6 @@ mod tests {
     /// deployment config in tests.
     fn disabled_reward_config() -> RewardPoWConfig {
         RewardPoWConfig {
-            reward_pool_genesis: 1_000_000_000,
-            epoch_reward_genesis: 1_000_000,
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
@@ -1008,7 +1035,6 @@ mod tests {
                     timestamp: 0,
                 },
             },
-            consensus_excluded_keys: ConsensusExcludedKeys::empty(),
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),

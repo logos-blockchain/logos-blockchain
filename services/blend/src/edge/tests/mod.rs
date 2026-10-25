@@ -442,7 +442,7 @@ async fn handle_new_secret_epoch_info_recreates_handler() {
     let core_node = NodeId(0);
     let (node_id_sender, _node_id_receiver) = mpsc::channel(1);
 
-    let settings = settings(local_node, 1, node_id_sender);
+    let (settings, local) = settings(local_node, 1);
     let overwatch = overwatch_handle();
 
     // Public + secret for epoch 2 -> handler is created.
@@ -451,7 +451,13 @@ async fn handle_new_secret_epoch_info_recreates_handler() {
     let current_epoch: CurrentEpoch<TestBackend, NodeId, MockLeaderProofsGenerator, usize> =
         CurrentEpoch::try_new(public_2, &settings)
             .unwrap()
-            .with_secret_info(secret_2, settings.clone(), overwatch.clone());
+            .with_secret_info(
+                secret_2,
+                &settings,
+                &node_id_sender,
+                &local,
+                overwatch.clone(),
+            );
     assert!(
         current_epoch.has_handler(),
         "Handler should be created when public and secret info for the same epoch are present"
@@ -464,7 +470,7 @@ async fn handle_new_secret_epoch_info_recreates_handler() {
     let current_epoch: CurrentEpoch<TestBackend, NodeId, MockLeaderProofsGenerator, usize> =
         CurrentEpoch::try_new(public_3, &settings)
             .unwrap()
-            .with_secret_info(secret_3, settings, overwatch);
+            .with_secret_info(secret_3, &settings, &node_id_sender, &local, overwatch);
     assert!(current_epoch.has_handler());
     assert_eq!(current_epoch.info().epoch, Epoch::new(3));
 }
@@ -490,9 +496,8 @@ fn test_blend_epoch_state(epoch: Epoch, membership: Membership<NodeId>) -> Blend
 async fn two_publics_without_private_in_between() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
-    let (node_id_sender, _node_id_receiver) = mpsc::channel(1);
 
-    let settings = settings(local_node, 1, node_id_sender);
+    let (settings, _) = settings(local_node, 1);
     let _overwatch = overwatch_handle();
 
     // First public, no secret yet -> handler must stay down.
@@ -528,7 +533,7 @@ async fn public_then_private_same_epoch_creates_handler() {
     let core_node = NodeId(0);
     let (node_id_sender, _node_id_receiver) = mpsc::channel(1);
 
-    let settings = settings(local_node, 1, node_id_sender);
+    let (settings, local) = settings(local_node, 1);
     let overwatch = overwatch_handle();
 
     let public_1 = test_blend_epoch_state(Epoch::new(1), membership(&[core_node], local_node));
@@ -539,8 +544,13 @@ async fn public_then_private_same_epoch_creates_handler() {
     assert!(!current_epoch.has_handler());
 
     // Secret for epoch 1 arrives on the *same* epoch value -> handler is built.
-    let current_epoch =
-        current_epoch.with_secret_info(test_pol_epoch_info(Epoch::new(1)), settings, overwatch);
+    let current_epoch = current_epoch.with_secret_info(
+        test_pol_epoch_info(Epoch::new(1)),
+        &settings,
+        &node_id_sender,
+        &local,
+        overwatch,
+    );
     assert!(
         current_epoch.has_handler(),
         "Handler must be created once public and secret line up"
@@ -556,7 +566,7 @@ async fn private_then_public_same_epoch_creates_handler() {
     let core_node = NodeId(0);
     let (node_id_sender, _node_id_receiver) = mpsc::channel(1);
 
-    let settings = settings(local_node, 1, node_id_sender);
+    let (settings, local) = settings(local_node, 1);
     let overwatch = overwatch_handle();
 
     // Secret for epoch 1 while public is still on epoch 0 -> epochs mismatch,
@@ -568,7 +578,13 @@ async fn private_then_public_same_epoch_creates_handler() {
             &settings,
         )
         .unwrap()
-        .with_available_secret_info(&mut secret_1, settings.clone(), overwatch.clone());
+        .with_available_secret_info(
+            &mut secret_1,
+            &settings,
+            &node_id_sender,
+            &local,
+            overwatch.clone(),
+        );
     assert!(!current_epoch.has_handler());
     assert!(
         secret_1.is_some(),
@@ -582,7 +598,13 @@ async fn private_then_public_same_epoch_creates_handler() {
             &settings,
         )
         .unwrap()
-        .with_available_secret_info(&mut secret_1, settings, overwatch);
+        .with_available_secret_info(
+            &mut secret_1,
+            &settings,
+            &node_id_sender,
+            &local,
+            overwatch,
+        );
     assert!(
         current_epoch.has_handler(),
         "Handler must be created once public and secret line up"
@@ -705,7 +727,7 @@ async fn secret_pol_info_arriving_keeps_queued_proposals() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
     let (node_id_sender, _node_id_receiver) = mpsc::channel(1);
-    let settings = settings(local_node, 1, node_id_sender);
+    let (settings, local) = settings(local_node, 1);
 
     let mut current_epoch: CurrentEpoch<TestBackend, NodeId, MockLeaderProofsGenerator, usize> =
         CurrentEpoch::try_new(
@@ -719,7 +741,9 @@ async fn secret_pol_info_arriving_keeps_queued_proposals() {
     // rebuilds the handler and must leave everything else this epoch owns.
     let current_epoch = current_epoch.with_secret_info(
         test_pol_epoch_info(Epoch::new(1)),
-        settings,
+        &settings,
+        &node_id_sender,
+        &local,
         overwatch_handle(),
     );
 
@@ -742,7 +766,7 @@ async fn secret_pol_info_for_another_epoch_leaves_this_one_alone() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
     let (node_id_sender, _node_id_receiver) = mpsc::channel(1);
-    let settings = settings(local_node, 1, node_id_sender);
+    let (settings, local) = settings(local_node, 1);
     let overwatch = overwatch_handle();
 
     let current_epoch: CurrentEpoch<TestBackend, NodeId, MockLeaderProofsGenerator, usize> =
@@ -753,15 +777,22 @@ async fn secret_pol_info_for_another_epoch_leaves_this_one_alone() {
         .unwrap()
         .with_secret_info(
             test_pol_epoch_info(Epoch::new(1)),
-            settings.clone(),
+            &settings,
+            &node_id_sender,
+            &local,
             overwatch.clone(),
         );
     assert!(current_epoch.has_handler());
 
     // Info for an epoch this node has not reached yet.
     let mut stashed_secret_info = Some(test_pol_epoch_info(Epoch::new(2)));
-    let current_epoch =
-        current_epoch.with_available_secret_info(&mut stashed_secret_info, settings, overwatch);
+    let current_epoch = current_epoch.with_available_secret_info(
+        &mut stashed_secret_info,
+        &settings,
+        &node_id_sender,
+        &local,
+        overwatch,
+    );
 
     assert!(
         current_epoch.has_handler(),

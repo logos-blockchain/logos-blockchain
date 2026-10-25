@@ -411,7 +411,7 @@ fn get_at_path<'a>(current: &'a YamlValue, path: &[&str]) -> Option<&'a YamlValu
     let mut current = current;
 
     for segment in path {
-        current = match current {
+        current = match untagged(current) {
             YamlValue::Sequence(sequence) => sequence.get(segment.parse::<usize>().ok()?)?,
             YamlValue::Mapping(mapping) => mapping.get(mapping_key(mapping, segment))?,
             _ => return None,
@@ -432,6 +432,9 @@ fn set_at_path(
         return Ok(());
     }
 
+    // A tag, such as an era's ruleset (`eras.0` is `!V1 {...}`), is stepped
+    // through: the segment reads the value it tags.
+    let current = untagged_mut(current);
     let segment = path[0];
     let rest = &path[1..];
     let is_last = rest.is_empty();
@@ -510,6 +513,23 @@ fn set_map(
     }
 
     set_at_path(child, rest, value, full_path)
+}
+
+/// The value `value` tags, through any number of tags, or `value` itself when
+/// it carries none.
+fn untagged(mut value: &YamlValue) -> &YamlValue {
+    while let YamlValue::Tagged(tagged) = value {
+        value = &tagged.value;
+    }
+    value
+}
+
+/// See [`untagged`].
+fn untagged_mut(mut value: &mut YamlValue) -> &mut YamlValue {
+    while let YamlValue::Tagged(tagged) = value {
+        value = &mut tagged.value;
+    }
+    value
 }
 
 /// The key `segment` names in `mapping`: the integer key it spells out when
@@ -715,8 +735,8 @@ mod tests {
             .security_param
             .get();
         let override_4 = ConfigOverride {
-            path: "eras.0.time.slot_duration".to_owned(),
-            value: "1s".into(),
+            path: "eras.0.time.slot_duration_in_seconds".to_owned(),
+            value: serde_yaml::to_value(1u64).expect("yaml value"),
         };
         let override_5 = ConfigOverride {
             path: "eras.0.cryptarchia.security_param".to_owned(),
@@ -728,7 +748,7 @@ mod tests {
                 .deployment
                 .genesis_era_parameters()
                 .time
-                .slot_duration,
+                .slot_duration(),
             Duration::from_secs(1)
         );
         assert_eq!(
@@ -828,10 +848,10 @@ mod tests {
         set_deployment_config_override(
             &mut world,
             "test-step",
-            "eras.0.time.slot_duration",
-            "seconds(1)",
+            "eras.0.time.slot_duration_in_seconds",
+            "1",
         )
-        .expect("deployment duration override");
+        .expect("deployment slot duration override");
         set_deployment_config_override(
             &mut world,
             "test-step",
@@ -869,7 +889,7 @@ mod tests {
                 .deployment
                 .genesis_era_parameters()
                 .time
-                .slot_duration,
+                .slot_duration(),
             Duration::from_secs(1)
         );
     }
@@ -1075,7 +1095,8 @@ mod auto_claim_override_tests {
         )
         .expect("auto-claim override should apply");
 
-        assert_eq!(config.pow.auto_claim.targets, settings.targets);
-        assert_eq!(config.pow.auto_claim.tick, settings.tick);
+        let applied: AutoClaimSettings = config.pow.auto_claim.into();
+        assert_eq!(applied.targets, settings.targets);
+        assert_eq!(applied.tick, settings.tick);
     }
 }
