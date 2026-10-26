@@ -34,7 +34,7 @@ pub fn create_epoch_state(
                 created: 0.into(),
                 active: 2.into(),
                 withdraw_at: None,
-                nonce: 0,
+                nonce: lb_core::sdp::Nonce::new(0.into(), 0),
             };
             (DeclarationId([i as u8; 32]), declaration)
         })
