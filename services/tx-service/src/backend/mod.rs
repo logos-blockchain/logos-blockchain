@@ -9,7 +9,9 @@ use futures::Stream;
 use lb_core::mantle::transactions::hash::PrefixedKey;
 use lb_cryptarchia_engine::Slot;
 pub use policy::{EvictableTx, EvictionPolicy, PowClaimEvictionSettings};
-pub use pool::{DEFAULT_TX_TTL, Mempool, MempoolSettings, PoolRecoveryState};
+pub use pool::{
+    DEFAULT_TX_TTL, IncludedItem, Mempool, MempoolSettings, PoolRecoveryState, RemovedItem,
+};
 use serde::{Deserialize, Serialize};
 
 /// Admission time of a transaction, as a Unix timestamp in milliseconds.
