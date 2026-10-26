@@ -37,6 +37,7 @@ use lb_core::{
             states::{Preverified, Unverified},
         },
     },
+    sdp::{DeclarationId, ServiceType},
 };
 use lb_http_api_common::{
     TimeInfo,
@@ -769,7 +770,7 @@ where
     let notes: Vec<_> = balance.notes.into_iter().collect();
     blend::select_service_note(
         &notes,
-        |note_id| locked.is_used_for_service(&note_id, &lb_core::sdp::ServiceType::BlendNetwork),
+        |note_id| locked.is_used_for_service(&note_id, &ServiceType::BlendNetwork),
         threshold,
     )
     .map_err(|error| ApiError::NotFound(format!("blend ZK key {zk_id:?}: {error}")))
@@ -1295,7 +1296,7 @@ pub async fn post_withdrawal<
     RuntimeServiceId,
 >(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(declaration_id): Json<lb_core::sdp::DeclarationId>,
+    Json(declaration_id): Json<DeclarationId>,
 ) -> Response
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
@@ -1331,7 +1332,7 @@ where
     post,
     path = paths::SDP_POST_SET_DECLARATION_ID,
     responses(
-        (status = 200, description = "Post declaration to SDP service to be set as current", body = lb_core::sdp::DeclarationId),
+        (status = 200, description = "Post declaration to SDP service to be set as current", body = DeclarationId),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1343,7 +1344,7 @@ pub async fn post_set_declaration_id<
     RuntimeServiceId,
 >(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(declaration): Json<Option<lb_core::sdp::DeclarationId>>,
+    Json(declaration): Json<Option<DeclarationId>>,
 ) -> Response
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
@@ -1381,7 +1382,7 @@ where
     get,
     path = paths::MANTLE_SDP_DECLARATIONS,
     responses(
-        (status = 200, description = "Get current SDP declarations keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, Object>),
+        (status = 200, description = "Get current SDP declarations keyed by declaration id", body = std::collections::HashMap<DeclarationId, Object>),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1399,7 +1400,7 @@ where
     get,
     path = paths::MANTLE_SDP_SNAPSHOT,
     responses(
-        (status = 200, description = "Get the SDP snapshot for the current epoch keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, Object>),
+        (status = 200, description = "Get the SDP snapshot for the current epoch keyed by declaration id", body = std::collections::HashMap<DeclarationId, Object>),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1411,6 +1412,75 @@ where
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
     make_request_and_return_response!(mantle::get_sdp_snapshot::<RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    get,
+    path = paths::MANTLE_SDP_FINALIZED_DECLARATION,
+    params(
+        ("declaration_id" = String, Path, description = "Declaration ID as 64 hex digits, optionally prefixed with 0x")
+    ),
+    responses(
+        (status = 200, description = "Declaration from finalized SDP state", body = Object),
+        (status = 400, description = "Invalid declaration ID", body = ErrorBody),
+        (status = 404, description = "Declaration not found in finalized state", body = ErrorBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn get_finalized_sdp_declaration<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(declaration_id): Path<String>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    let declaration_id = match declaration_id.parse::<DeclarationId>() {
+        Ok(id) => id,
+        Err(error) => return ApiError::BadRequest(error).into_response(),
+    };
+
+    match mantle::get_finalized_sdp_declaration::<RuntimeServiceId>(&handle, declaration_id).await {
+        Ok(Some(declaration)) => (StatusCode::OK, Json(declaration)).into_response(),
+        Ok(None) => {
+            ApiError::NotFound("Declaration not found in finalized state".into()).into_response()
+        }
+        Err(error) => ApiError::Internal(error).into_response(),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = paths::MANTLE_SDP_FINALIZED_DECLARATIONS,
+    params(
+        ("service_type" = u8, Path, description = "Canonical one-byte ServiceType discriminant")
+    ),
+    responses(
+        (status = 200, description = "Declarations of the service from finalized SDP state", body = std::collections::HashMap<DeclarationId, Object>),
+        (status = 400, description = "Unknown service type", body = ErrorBody),
+        (status = 404, description = "Service is absent from finalized state", body = ErrorBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn get_finalized_sdp_declarations<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(service_discriminant): Path<u8>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    let Ok(service_type) = ServiceType::try_from(service_discriminant) else {
+        return ApiError::BadRequest("Unknown service type".into()).into_response();
+    };
+
+    match mantle::get_finalized_sdp_declarations::<RuntimeServiceId>(&handle, service_type).await {
+        Ok(Some(declarations)) => (StatusCode::OK, Json(declarations)).into_response(),
+        Ok(None) => {
+            ApiError::NotFound("Service absent from finalized state".into()).into_response()
+        }
+        Err(error) => ApiError::Internal(error).into_response(),
+    }
 }
 
 #[utoipa::path(
