@@ -133,7 +133,7 @@ mod mantle_test_vectors {
         assert_eq!(all_ops.hash().0, transaction_hash);
         assert_eq!(
             hex::encode(transaction_hash),
-            "2b6cc712040538e08efef92be1435b38f4f2e2aa7ca5677606b9b2a71238b89f"
+            "bd35e8f71e9005df1ba36ad320b57a8db408cf148c1c80f59e76cff9caae40ca"
         );
     }
 
@@ -189,7 +189,7 @@ mod mantle_test_vectors {
         assert_eq!(hash, tx_hash_from_payload(&encoding));
         assert_eq!(
             hex::encode(hash),
-            "fa9bb4104085f58ecf14fe698f72c1eb1de893c239bfdcf01d308590e56b341c"
+            "35f957f9a2688d0e0d8d4c0762c6921f814a4a7243d05e31532ba7ae7a58c910"
         );
     }
 
