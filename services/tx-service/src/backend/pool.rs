@@ -64,13 +64,33 @@ where
     /// oldest first.
     pub pending_items: IndexMap<Key, AdmissionTime>,
     /// Retired item keys not carried by a canonical block (inapplicable or
-    /// evicted), mapped to their retirement timestamp in milliseconds.
-    pub removed_items: BTreeMap<Key, u64>,
+    /// evicted).
+    pub removed_items: BTreeMap<Key, RemovedItem>,
     /// Retired item keys carried by a canonical block that is not yet
-    /// immutable, mapped to the slot of that block.
+    /// immutable.
     #[serde(default)]
-    pub included_in_canonical: HashMap<Key, Slot>,
+    pub included_in_canonical: HashMap<Key, IncludedItem>,
     pub last_item_timestamp: u64,
+}
+
+/// A retired item not carried by a canonical block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemovedItem {
+    /// Retirement timestamp in milliseconds.
+    pub removed_at: u64,
+    /// Admission timestamp in milliseconds, kept if the item is admitted
+    /// again.
+    pub admitted_at: AdmissionTime,
+}
+
+/// A retired item carried by a canonical block that is not yet immutable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IncludedItem {
+    /// Slot of the block carrying the item.
+    pub slot: Slot,
+    /// Admission timestamp in milliseconds, kept if the item is admitted
+    /// again after a reorg.
+    pub admitted_at: AdmissionTime,
 }
 
 /// Transactions are keyed by their hash.
@@ -96,16 +116,14 @@ where
     /// unique.
     by_prefix: HashMap<<ItemKey<Item> as PrefixedKey>::Prefix, Vec<ItemKey<Item>>>,
     /// Retired items not carried by a canonical block (inapplicable or
-    /// evicted), mapped to their retirement timestamp in milliseconds. They
-    /// keep their prefix index entry and body for a grace period after
-    /// retirement, unlike [`Self::included_in_canonical`], which keeps them
-    /// until the carrying block becomes immutable.
-    removed_items: BTreeMap<ItemKey<Item>, u64>,
-    /// Retired items carried by a canonical block that is not yet immutable,
-    /// mapped to the slot of that block. They keep their prefix index entry
-    /// and body until the block becomes immutable, since until then a
-    /// competing block can carry them too.
-    included_in_canonical: HashMap<ItemKey<Item>, Slot>,
+    /// evicted). They keep their prefix index entry and body for a grace
+    /// period after retirement, unlike [`Self::included_in_canonical`], which
+    /// keeps them until the carrying block becomes immutable.
+    removed_items: BTreeMap<ItemKey<Item>, RemovedItem>,
+    /// Retired items carried by a canonical block that is not yet immutable.
+    /// They keep their prefix index entry and body until the block becomes
+    /// immutable, since until then a competing block can carry them too.
+    included_in_canonical: HashMap<ItemKey<Item>, IncludedItem>,
     last_item_timestamp: u64,
     evictor: Evictor<Item, BlockId>,
     storage_adapter: Storage,
@@ -209,16 +227,22 @@ where
             .await
             .map_err(|e| MempoolError::StorageError(format!("{e:?}")))?;
 
-        self.removed_items.remove(&key);
+        // If `item` is admitted again after being retired, remove it from
+        // `removed_items` and use the original admission time stored there.
+        let removed_item = self.removed_items.remove(&key);
+        let admitted_at = removed_item.map_or(timestamp, |removed| removed.admitted_at);
         self.index_by_prefix(&key);
         self.evictor.on_add(&key, &item, timestamp, &block_slots);
-        self.pending_items.insert(key, timestamp);
+        let index = self.insert_pending(key, admitted_at);
         self.last_item_timestamp = timestamp;
         tracing::debug!(
             target: LOG_TARGET,
-            "Added item to mempool; pending_items={}, last_item_timestamp={}",
-            self.pending_items.len(),
-            self.last_item_timestamp
+            admitted_at,
+            index,
+            readmission = removed_item.is_some(),
+            pending_items = self.pending_items.len(),
+            last_item_timestamp = self.last_item_timestamp,
+            "Added item to mempool",
         );
 
         metrics::mempool_transactions_added();
@@ -289,25 +313,33 @@ where
         let now = current_timestamp_millis();
         for item in &reorged {
             let key = item.hash();
-            if self.included_in_canonical.remove(&key).is_some() {
-                self.removed_items.insert(key, now);
+            if let Some(included) = self.included_in_canonical.remove(&key) {
+                self.removed_items.insert(
+                    key,
+                    RemovedItem {
+                        removed_at: now,
+                        admitted_at: included.admitted_at,
+                    },
+                );
             }
         }
 
         let mut count = 0usize;
         for (key, slot) in entered {
-            let was_pending = self.pending_items.shift_remove(&key).is_some();
-            let was_removed = self.removed_items.remove(&key).is_some();
-            let was_included = self.included_in_canonical.contains_key(&key);
-            if !was_pending && !was_removed && !was_included {
-                // The mempool never held the tx, so there is no body to retain.
-                continue;
-            }
-            if was_pending {
+            let admitted_at = if let Some(admitted_at) = self.pending_items.shift_remove(&key) {
                 self.evictor.on_remove(&key);
                 count += 1;
-            }
-            self.included_in_canonical.insert(key, slot);
+                admitted_at
+            } else if let Some(removed) = self.removed_items.remove(&key) {
+                removed.admitted_at
+            } else if let Some(included) = self.included_in_canonical.get(&key) {
+                included.admitted_at
+            } else {
+                // The mempool never held the tx, so there is no body to retain.
+                continue;
+            };
+            self.included_in_canonical
+                .insert(key, IncludedItem { slot, admitted_at });
         }
 
         log_retired_items(count, "included", self.pending_items.len());
@@ -506,11 +538,17 @@ where
     fn retire(&mut self, keys: impl IntoIterator<Item = ItemKey<Item>>, at: u64, cause: &str) {
         let mut count = 0usize;
         for key in keys {
-            if self.pending_items.shift_remove(&key).is_none() {
+            let Some(admitted_at) = self.pending_items.shift_remove(&key) else {
                 continue;
-            }
+            };
             self.evictor.on_remove(&key);
-            self.removed_items.insert(key, at);
+            self.removed_items.insert(
+                key,
+                RemovedItem {
+                    removed_at: at,
+                    admitted_at,
+                },
+            );
             count += 1;
         }
 
@@ -552,7 +590,7 @@ where
         let expired_keys = self
             .removed_items
             .iter()
-            .filter(|(_, removed_at)| now.saturating_sub(**removed_at) >= grace_period_millis)
+            .filter(|(_, removed)| now.saturating_sub(removed.removed_at) >= grace_period_millis)
             .map(|(key, _)| *key)
             .collect::<Vec<_>>();
 
@@ -580,13 +618,25 @@ where
         true
     }
 
+    /// Insert `key` into [`Self::pending_items`] at the position its
+    /// admission timestamp gives it. A new item normally goes last; an item
+    /// admitted again goes back among the items admitted around the same
+    /// time. Returns the position.
+    fn insert_pending(&mut self, key: ItemKey<Item>, admitted_at: AdmissionTime) -> usize {
+        let index = self
+            .pending_items
+            .partition_point(|_, timestamp| *timestamp <= admitted_at);
+        self.pending_items.shift_insert(index, key, admitted_at);
+        index
+    }
+
     /// Release the items carried by blocks that became immutable, since no
     /// competing block can carry them anymore.
     async fn release_immutable(&mut self, lib_slot: Slot) {
         let immutable_keys = self
             .included_in_canonical
             .iter()
-            .filter(|(_, slot)| **slot <= lib_slot)
+            .filter(|(_, included)| included.slot <= lib_slot)
             .map(|(key, _)| *key)
             .collect::<Vec<_>>();
 
