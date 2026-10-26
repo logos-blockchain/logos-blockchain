@@ -33,6 +33,7 @@ use lb_core::{
         },
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
+    sdp::DeclarationId,
 };
 use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
@@ -100,7 +101,7 @@ pub enum WalletServiceError {
     MissingChannelState(ChannelId),
 
     #[error("Declaration {0:?} is missing in ledger")]
-    MissingDeclaration(lb_core::sdp::DeclarationId),
+    MissingDeclaration(DeclarationId),
 
     #[error("Service note {0:?} is missing in ledger")]
     MissingServiceNote(NoteId),
