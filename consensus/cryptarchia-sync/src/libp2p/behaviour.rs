@@ -1,3 +1,4 @@
+use core::future::ready;
 use std::{
     collections::HashSet,
     mem,
@@ -428,7 +429,11 @@ impl OngoingRequests {
 
     fn handle_blocks_request_available(&self, request_stream: BlocksRequestStream) {
         self.receiving_block_responses.push(
-            Downloader::receive_blocks(request_stream, self.config.peer_response_timeout).boxed(),
+            ready(Downloader::receive_blocks(
+                request_stream,
+                self.config.peer_response_timeout,
+            ))
+            .boxed(),
         );
 
         self.try_notify_waker();
@@ -531,7 +536,6 @@ impl OngoingRequests {
         }
 
         if let Poll::Ready(Some(_)) = self.receiving_block_responses.poll_next_unpin(cx) {
-            self.try_notify_waker();
             return Poll::Pending;
         }
 
@@ -1180,6 +1184,67 @@ mod tests {
 
         assert_eq!(blocks.len(), blocks_count);
         assert_eq!(errors.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_slow_consumer_frees_provider_slot() {
+        // A single download slot, and more block bytes than the transport
+        // buffers, so the provider only finishes early if the downloader reads
+        // ahead of its consumer.
+        let config = Config {
+            peer_response_timeout: Duration::from_secs(1),
+            max_inbound_requests: 1.try_into().unwrap(),
+        };
+        let blocks_count = 400;
+        let (provider_swarm, provider_peer_id, provider_addr) =
+            setup_provider_swarm(config.clone());
+        tokio::spawn(run_provider(
+            provider_swarm,
+            LargeBlocksProvider {
+                blocks_count,
+                block_size: 64 * 1024,
+            },
+        ));
+        let request = |swarm: &mut Swarm<Behaviour>| {
+            request_download(
+                swarm,
+                1,
+                HeaderId::from([0; 32]),
+                HeaderId::from([0; 32]),
+                HeaderId::from([0; 32]),
+                &HashSet::new(),
+                provider_peer_id,
+            )
+        };
+
+        // Consume a download slower than the provider sends it, but faster
+        // than the provider's send timeout.
+        let mut slow_swarm =
+            setup_downloader_and_connect(provider_addr.clone(), config.clone()).await;
+        let slow_streams = request(&mut slow_swarm);
+        tokio::spawn(async move { slow_swarm.loop_on_next().await });
+        let slow_download = tokio::spawn(async move {
+            let mut stream = slow_streams.into_iter().next().unwrap().await.unwrap();
+            let mut blocks = 0;
+            while let Some(block) = stream.next().await {
+                block.unwrap();
+                blocks += 1;
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            blocks
+        });
+
+        // Well before the slow consumer is done, the slot is free again.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let mut downloader_swarm = setup_downloader_and_connect(provider_addr, config).await;
+        let streams = request(&mut downloader_swarm);
+        tokio::spawn(async move { downloader_swarm.loop_on_next().await });
+
+        let (blocks, errors) = wait_block_messages(streams).await;
+
+        assert_eq!(blocks.len(), blocks_count);
+        assert_eq!(errors.len(), 0);
+        assert_eq!(slow_download.await.unwrap(), blocks_count);
     }
 
     /// A provider and a downloader connected to each other, neither of them
