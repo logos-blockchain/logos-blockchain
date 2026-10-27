@@ -57,6 +57,14 @@ required-features = ["test-utils"]
 name              = "gas_bench"
 required-features = ["test-utils"]
 
+[[test]]
+name              = "gas_micro"
+required-features = ["test-utils"]
+
+[[test]]
+name              = "gas_ops"
+required-features = ["test-utils"]
+
 [features]
 test-utils = []
 

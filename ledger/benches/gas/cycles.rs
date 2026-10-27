@@ -68,3 +68,10 @@ impl Counter {
         data.count()
     }
 }
+
+/// One measured configuration: `run` returns the cycles of one execution.
+pub struct Case {
+    pub name: &'static str,
+    pub dims: Vec<(&'static str, u64)>,
+    pub run: Box<dyn FnMut(&mut Counter) -> u64>,
+}

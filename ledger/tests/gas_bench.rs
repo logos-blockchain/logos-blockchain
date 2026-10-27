@@ -6,6 +6,7 @@
 //! taskset -c 8 cargo test -p logos-blockchain-ledger --release --test gas_bench -- --test-threads=1
 //! ```
 
+#[expect(dead_code, reason = "the cases of the bench build the case type")]
 #[path = "../benches/gas/cycles.rs"]
 mod cycles;
 #[expect(
