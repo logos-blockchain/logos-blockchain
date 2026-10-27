@@ -1467,7 +1467,7 @@ mod tests {
             .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&test_config, tx)
             .unwrap();
 
-        assert_eq!(execution_gas, Gas::new(2 * 1_896));
+        assert_eq!(execution_gas, Gas::new(2 * 6_843));
         assert_eq!(events, []);
         assert_eq!(state.mantle_ledger.programs().len(), 1);
         assert_eq!(
@@ -2923,7 +2923,14 @@ mod tests {
                 .unwrap()
                 .frontier_root()
         );
-        assert_eq!(execution_gas, Gas::new(1_896 + 59 + 619 + 619 + 2_451));
+        // The registration, the inscription with its signature, then the program
+        // step (60 + 6305, no opening) with its payment of one input and no output
+        // (211 + 1946 + 207) and its spend of one output (1946 + 25), nothing
+        // buffered in the channel.
+        assert_eq!(
+            execution_gas,
+            Gas::new(6_843 + (13 + 167) + (60 + 6_305) + (211 + 1_946 + 207) + (1_946 + 25))
+        );
     }
 
     #[test]
@@ -3210,7 +3217,7 @@ mod tests {
         deferred_proofs.verify().unwrap();
 
         // The config is priced against the channel the inscription created.
-        assert_eq!(execution_gas.into_inner(), 59 + 56);
+        assert_eq!(execution_gas.into_inner(), (13 + 167) + (18 + 167));
 
         let storage_gas = Gas::new(tx.storage_size() as u64);
         let charged = GasCost::calculate(execution_gas, prices.execution_base_gas_price)

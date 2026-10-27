@@ -9,7 +9,10 @@ use crate::{
     events::TxEvent,
     mantle::{
         batch::DeferredZkTransfer,
-        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
+        gas::{
+            EXECUTION_SIGNATURE_GAS, Gas, GasOverflow, MainnetGasProfile, NoteSetKey,
+            OpGasCalculator, OpGasContext, OperationGas, spend_gas,
+        },
         ledger::{
             DeclarationKeys, Declarations, ExecutableOperation, PreverifiableOperation,
             ProvableOperation, VerifiableOperation,
@@ -161,10 +164,23 @@ impl ProvableOperation for SDPDeclareOp {
 }
 
 impl OperationGas<MainnetGasProfile> for SDPDeclareOp {
-    const GAS_COST: Gas = Gas::new(678);
+    const GAS_COST: Gas = Gas::new(669);
 }
 
-impl OpGasCalculator<MainnetGasProfile> for SDPDeclareOp {}
+impl OpGasCalculator<MainnetGasProfile> for SDPDeclareOp {
+    // The Operation, plus its signature and the spend of its notes into the
+    // service note, over the commitments the transaction buffered in the ledger
+    // note set before it.
+    fn execution_gas(&self, context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
+        Self::GAS_COST
+            .checked_add(EXECUTION_SIGNATURE_GAS)?
+            .checked_add(spend_gas(
+                self.inputs.len(),
+                1,
+                context.buffered(&NoteSetKey::Ledger),
+            )?)
+    }
+}
 
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<SDPDeclareOp, Unverified, StandardMode>
@@ -818,10 +834,12 @@ mod tests {
 
         #[test]
         fn sdp_declare_op_execution_gas_does_not_scale_with_the_threshold() {
+            // 1 input, the service note, nothing buffered:
+            // 669 + 167 + 1946 + 207 + 25
             for threshold in [0, 1, 3] {
                 assert_eq!(
                     SDPDeclareOp::sample().execution_gas(&FixedThresholds(threshold)),
-                    Ok(Gas::new(678))
+                    Ok(Gas::new(3_014))
                 );
             }
         }
