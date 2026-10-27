@@ -2,6 +2,7 @@ use core::fmt::{self, Debug};
 use std::{collections::HashSet, pin::Pin, time::Duration};
 
 use futures::StreamExt as _;
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_core::{
     header::HeaderId,
     mantle::{
@@ -58,6 +59,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin

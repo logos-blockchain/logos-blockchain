@@ -684,7 +684,7 @@ mod tests {
             ready(
                 self.cryptarchia
                     .consensus
-                    .receive_block(block.id, block.parent, block.slot, UncleSlots::default())
+                    .receive_block(block.id, block.parent, block.slot, UncleSlots::empty(4))
                     .map_err(|e| {
                         self.process_block_failures.fetch_add(1, Ordering::SeqCst);
                         Error::BlockProcessing(ChainError::InvalidBlock(format!(
@@ -1003,6 +1003,7 @@ mod tests {
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
             12,
+            4,
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 

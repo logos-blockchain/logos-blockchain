@@ -187,6 +187,7 @@ fn simulation_config() -> Config {
         ),
         1f64.try_into().expect("1 > 0"),
         UNCLE_REFERENCE_WINDOW_IN_BLOCK,
+        4,
     );
     config
 }
@@ -324,14 +325,14 @@ fn select_uncles(
     uncle_enabled: bool,
 ) -> UncleSlots {
     if !uncle_enabled {
-        return UncleSlots::default();
+        return UncleSlots::empty(4);
     }
     let uncle_slots = engine
         .select_uncles(engine.branches().get(&parent).unwrap(), slot)
         .into_iter()
         .map(Branch::slot)
         .collect::<Vec<_>>();
-    UncleSlots::try_from(uncle_slots).unwrap()
+    UncleSlots::try_new(uncle_slots, 4).unwrap()
 }
 
 /// Applies a block to both the ledger and the engine, and drops the ledger

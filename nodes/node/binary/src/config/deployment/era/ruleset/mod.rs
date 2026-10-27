@@ -41,6 +41,14 @@ impl EraRuleset {
         }
     }
 
+    #[must_use]
+    pub fn blend_payload_body_size(&self) -> u16 {
+        match self {
+            Self::V1(parameters) => u16::try_from(parameters.cryptarchia.max_proposal_size())
+                .expect("max proposal size fits in u16"),
+        }
+    }
+
     /// For how many of its slots the network keeps serving the era's protocols
     /// once the next era starts: Blend's epoch transition period, which the
     /// era's messages still in flight need to arrive.

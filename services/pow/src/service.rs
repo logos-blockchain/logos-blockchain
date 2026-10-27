@@ -4,7 +4,7 @@ use std::{
     marker::PhantomData,
     num::{NonZeroU64, NonZeroUsize},
     pin::Pin,
-    sync::{Arc, LazyLock},
+    sync::Arc,
     time::Duration,
 };
 
@@ -12,7 +12,7 @@ use futures::{Stream, StreamExt as _, stream};
 use lb_binary_codec::bincode::{Error as CodecError, SerializeOp};
 use lb_blend_service::{
     api::{ApiError as BlendApiError, BlendServiceApi, BlendServiceData},
-    message::{DataPayload, MAX_PAYLOAD_BODY_SIZE, TransactionNotBlendable},
+    message::{DataPayload, TransactionNotBlendable},
 };
 use lb_chain_service::{
     ProcessedBlockEvent, Slot,
@@ -233,6 +233,9 @@ pub struct PoWEraSettings {
     /// When it is not, no claim can succeed, so auto-claim does not run in the
     /// era.
     pub rewards_enabled: bool,
+    /// The size of the body of a data payload in the era: the largest
+    /// transaction the network can deliver, so the largest claim transaction.
+    pub max_data_payload_body_size: usize,
 }
 
 /// One auto-claim destination: a key and the balance we want it to reach.
@@ -553,6 +556,12 @@ where
             get_slot_clock::<TimeBackendType, _>(&service_resources_handle.overwatch_handle)
                 .await?;
         let mut current_era_settings = settings.era_schedule.at_slot(current_slot_tick.slot);
+        // A claim is published over Blend, which holds it to the payload body
+        // of the era in force, so how many claims a transaction carries follows
+        // the era too. Finding it probes the encoding, so it is found once each time
+        // the service enters an era rather than for every claim.
+        let mut max_claims_in_payload =
+            max_claims_by_payload_size(current_era_settings.parameters.max_data_payload_body_size);
 
         // Dedicated thread pool for the CPU-heavy ticket search, keeping it off
         // Tokio's runtime threads.
@@ -644,6 +653,7 @@ where
                                 &auto_claim_settings.targets,
                                 &mut state,
                                 &settings.era_schedule,
+                                max_claims_in_payload,
                             )
                             .await
                             .inspect_err(|e| {
@@ -735,6 +745,7 @@ where
                     if era > current_era_settings.era {
                         info!(target: LOG_TARGET, "PoW follows era {} from slot {}", era.into_inner(), u64::from(slot));
                         current_era_settings = settings.era_schedule.at_slot(slot);
+                        max_claims_in_payload = max_claims_by_payload_size(current_era_settings.parameters.max_data_payload_body_size);
                     }
                     if let AutoClaimTick::Slots(period) = auto_claim_settings.tick
                         && is_auto_claiming
@@ -762,6 +773,7 @@ where
                     &mut state,
                     &state_updater,
                     &settings.era_schedule,
+                    max_claims_in_payload,
                 )
                 .await;
                 if !is_auto_claiming && is_mining {
@@ -1089,6 +1101,7 @@ fn neediest_target(
 /// The thresholds are checked on every tick, even with no ticket ready: mining
 /// may be paused on the reward pool while earlier claims settle, and the
 /// balances those claims raise are what should stop it.
+#[expect(clippy::too_many_arguments, reason = "Need all args")]
 async fn run_auto_claim<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
@@ -1097,6 +1110,7 @@ async fn run_auto_claim<CryptarchiaService, BlendService, WalletService, Runtime
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     era_schedule: &ServiceEraSchedule,
+    max_claims_in_payload: usize,
 ) -> bool
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -1131,6 +1145,7 @@ where
         state,
         state_updater,
         era_schedule,
+        max_claims_in_payload,
     )
     .await;
     true
@@ -1155,6 +1170,7 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     era_schedule: &ServiceEraSchedule,
+    max_claims_in_payload: usize,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
     BlendService: BlendServiceData,
@@ -1178,6 +1194,7 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
             state,
             era_schedule,
             available_pool,
+            max_claims_in_payload,
         )
         .await
         {
@@ -1213,6 +1230,7 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
 /// Serves a [`PoWServiceMessage::Claim`]: one claim transaction paid to
 /// `claim_address`, or to the target auto-claim would pick when the caller did
 /// not name a key.
+#[expect(clippy::too_many_arguments, reason = "Need all args")]
 async fn manual_claim<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
@@ -1221,6 +1239,7 @@ async fn manual_claim<CryptarchiaService, BlendService, WalletService, RuntimeSe
     targets: &[ClaimTarget],
     state: &mut PoWServiceState,
     era_schedule: &ServiceEraSchedule,
+    max_claims_in_payload: usize,
 ) -> Result<Option<TxHash>, PoWError>
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -1249,6 +1268,7 @@ where
         state,
         era_schedule,
         available_pool,
+        max_claims_in_payload,
     )
     .await?
     .map(|claim| claim.tx_hash))
@@ -1296,6 +1316,7 @@ async fn claim_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
     state: &mut PoWServiceState,
     era_schedule: &ServiceEraSchedule,
     available_pool: Value,
+    max_claims_in_payload: usize,
 ) -> Result<Option<PublishedClaim>, PoWError>
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -1342,8 +1363,14 @@ where
     // caps the batch (op limit / reward pool) and claims a prefix of
     // `tickets` (the canonical ones, in ready order); move exactly those to
     // the pending set.
-    let (signed_tx, claimed_count) =
-        build_reward_claim_tx(claim_address, &ledger_state, available_pool, &tickets).await?;
+    let (signed_tx, claimed_count) = build_reward_claim_tx(
+        claim_address,
+        &ledger_state,
+        available_pool,
+        &tickets,
+        max_claims_in_payload,
+    )
+    .await?;
     // Capture the tx id before publishing consumes the signed tx, so it can be
     // reported back to the caller.
     let tx_hash = signed_tx.hash();
@@ -1628,24 +1655,25 @@ fn claim_tx_size(claims: usize) -> Result<u64, PoWError> {
 }
 
 /// Largest claim count whose transaction still fits the body of a Blend
-/// payload, the transport every claim is published over.
+/// payload of `payload_body_size` bytes, the transport every claim is
+/// published over.
 ///
 /// This binds well before [`max_claims_by_ops`] does: 255 ops' worth of claims
 /// serializes to nearly twice what a payload can carry, and a transaction over
-/// the limit is rejected by [`publish_reward_claim`] *after* its (CPU-heavy)
-/// signatures have been produced. Capping the batch here keeps that failure
-/// from ever being reached.
+/// the limit is refused by Blend *after* its (CPU-heavy) signatures have been
+/// produced. Capping the batch here keeps that failure from ever being reached.
 ///
-/// Resolved once, by shrinking a probe batch from the op cap until it fits, so
-/// the limit follows the encoding rather than restating it.
-static MAX_CLAIMS_BY_PAYLOAD_SIZE: LazyLock<usize> = LazyLock::new(|| {
+/// Resolved by shrinking a probe batch from the op cap until it fits, so the
+/// limit follows the encoding rather than restating it. The service resolves
+/// it once per era, when it enters the era.
+fn max_claims_by_payload_size(payload_body_size: usize) -> usize {
     (1..=max_claims_by_ops())
         .rev()
-        .find(|&claims| {
-            claim_tx_size(claims).is_ok_and(|size| size <= MAX_PAYLOAD_BODY_SIZE as u64)
-        })
-        .expect("a single-claim tx fits a Blend payload")
-});
+        .find(|&claims| claim_tx_size(claims).is_ok_and(|size| size <= payload_body_size as u64))
+        .expect(
+            "A single-claim tx fits a Blend payload body, which holds the largest block proposal.",
+        )
+}
 
 /// Builds and signs a single self-funding reward-claim transaction from a batch
 /// of winning tickets.
@@ -1658,8 +1686,9 @@ static MAX_CLAIMS_BY_PAYLOAD_SIZE: LazyLock<usize> = LazyLock::new(|| {
 /// and is signed by those notes' owning keys.
 ///
 /// Only as many claims are taken as `reward_pool` can fund, the per-tx op
-/// limit allows, and a Blend payload can carry. Returns the signed tx together
-/// with the number of tickets (a prefix of `tickets`) it actually claims.
+/// limit allows, and a Blend payload can carry (`max_claims_in_payload`).
+/// Returns the signed tx together with the number of tickets (a prefix of
+/// `tickets`) it actually claims.
 ///
 /// `reward_pool` is passed in rather than read from `ledger_state` so a caller
 /// publishing several transactions back to back can draw down its own running
@@ -1669,6 +1698,7 @@ async fn build_reward_claim_tx(
     ledger_state: &LedgerState,
     reward_pool: Value,
     tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
+    max_claims_in_payload: usize,
 ) -> Result<(SignedOps<Unverified, StandardMode>, usize), PoWError> {
     // The reward value and gas prices are read at `ledger_state`; they must
     // match the state the tx applies against, or the reconstructed UTXOs / fee
@@ -1679,6 +1709,7 @@ async fn build_reward_claim_tx(
         reward_pool,
         ledger_state.get_gas_prices(),
         tickets,
+        max_claims_in_payload,
     )
     .await
 }
@@ -1691,6 +1722,7 @@ async fn build_reward_claim_tx_inner(
     reward_pool: Value,
     gas_prices: GasPrices,
     tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
+    max_claims_in_payload: usize,
 ) -> Result<(SignedOps<Unverified, StandardMode>, usize), PoWError> {
     if reward_value == 0 {
         return Err(PoWError::RewardsDisabled);
@@ -1706,7 +1738,7 @@ async fn build_reward_claim_tx_inner(
         .len()
         .min((reward_pool / reward_value) as usize)
         .min(max_claims_by_ops())
-        .min(*MAX_CLAIMS_BY_PAYLOAD_SIZE);
+        .min(max_claims_in_payload);
     if claim_count == 0 {
         return Err(PoWError::RewardPoolExhausted);
     }
@@ -1879,7 +1911,7 @@ mod tests {
     use std::{
         collections::HashMap,
         num::{NonZeroU64, NonZeroUsize},
-        sync::Arc,
+        sync::{Arc, LazyLock},
     };
 
     use lb_binary_codec::bincode::SerializeOp as _;
@@ -1901,17 +1933,24 @@ mod tests {
     use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
 
     use super::{
-        AutoClaimSettings, AutoClaimTick, ClaimTarget, MAX_CLAIMS_BY_PAYLOAD_SIZE,
-        MAX_PAYLOAD_BODY_SIZE, MAX_TRANSFER_INPUTS, PoWError, PoWServiceState,
-        build_reward_claim_tx_inner, build_search_pool, change_outputs, claim_tx_size,
-        claimable_rewards_info, estimate_reward_claim_fee, max_claims_by_ops, neediest_target,
-        prune_expired_tickets, push_reward_claim_ops, replace_search_pool_if_resized,
-        slot_period_elapsed, transfer_ops,
+        AutoClaimSettings, AutoClaimTick, ClaimTarget, MAX_TRANSFER_INPUTS, PoWError,
+        PoWServiceState, build_reward_claim_tx_inner, build_search_pool, change_outputs,
+        claim_tx_size, claimable_rewards_info, estimate_reward_claim_fee, max_claims_by_ops,
+        max_claims_by_payload_size, neediest_target, prune_expired_tickets, push_reward_claim_ops,
+        replace_search_pool_if_resized, slot_period_elapsed, transfer_ops,
     };
-    use crate::{test_utils::era_schedule, tickets::WinningTicket};
+    use crate::{
+        test_utils::{PAYLOAD_BODY_SIZE, era_schedule},
+        tickets::WinningTicket,
+    };
 
     const REWARD: u64 = 1_000_000;
     const POOL: u64 = 1_000_000_000;
+
+    /// The most claims a transaction carries in the eras [`era_schedule`]
+    /// builds, resolved once for every test.
+    static MAX_CLAIMS_BY_PAYLOAD_SIZE: LazyLock<usize> =
+        LazyLock::new(|| max_claims_by_payload_size(PAYLOAD_BODY_SIZE));
 
     const SLOT_WINDOW: u64 = 100;
     /// A distinct dummy note id, derived like the ones the builder
@@ -1949,8 +1988,8 @@ mod tests {
     fn assert_within_tx_limits(tx: &SignedOps<Unverified, StandardMode>) {
         let size = tx.to_bytes().expect("built tx should serialize").len();
         assert!(
-            size <= MAX_PAYLOAD_BODY_SIZE,
-            "tx of {size} bytes exceeds the {MAX_PAYLOAD_BODY_SIZE} a Blend payload carries"
+            size <= PAYLOAD_BODY_SIZE,
+            "tx of {size} bytes exceeds the {PAYLOAD_BODY_SIZE} a Blend payload carries"
         );
         let op_refs = tx.op_refs();
         assert!(
@@ -2201,6 +2240,7 @@ mod tests {
             POOL,
             GasPrices::new(1, 1),
             &[(secret_key, claim)],
+            *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
         .await
         .unwrap();
@@ -2231,6 +2271,7 @@ mod tests {
             POOL,
             GasPrices::new(1, 1),
             &[ticket()],
+            *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
         .await;
         assert!(matches!(result, Err(PoWError::RewardsDisabled)));
@@ -2245,6 +2286,7 @@ mod tests {
             REWARD - 1,
             GasPrices::new(1, 1),
             &[ticket()],
+            *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
         .await;
         assert!(matches!(result, Err(PoWError::RewardPoolExhausted)));
@@ -2260,6 +2302,7 @@ mod tests {
             2 * REWARD,
             GasPrices::new(1, 1),
             &tickets,
+            *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
         .await
         .unwrap();
@@ -2293,6 +2336,7 @@ mod tests {
                 available_pool,
                 GasPrices::new(1, 1),
                 &tickets,
+                *MAX_CLAIMS_BY_PAYLOAD_SIZE,
             )
             .await
             {
@@ -2325,6 +2369,7 @@ mod tests {
                 stale_pool,
                 GasPrices::new(1, 1),
                 &tickets,
+                *MAX_CLAIMS_BY_PAYLOAD_SIZE,
             )
             .await
             .expect("a stale pool keeps funding claims");
@@ -2349,6 +2394,7 @@ mod tests {
             POOL, // POOL / REWARD = 1000 > cap, so the pool does not bind
             GasPrices::new(1, 1),
             &tickets,
+            *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
         .await
         .unwrap();
@@ -2389,6 +2435,7 @@ mod tests {
                 POOL,
                 GasPrices::new(1, 1),
                 &tickets,
+                *MAX_CLAIMS_BY_PAYLOAD_SIZE,
             )
             .await
             .unwrap();
@@ -2403,8 +2450,8 @@ mod tests {
     #[test]
     fn the_payload_cap_is_the_largest_batch_a_payload_carries() {
         let claims = *MAX_CLAIMS_BY_PAYLOAD_SIZE;
-        assert!(claim_tx_size(claims).unwrap() <= MAX_PAYLOAD_BODY_SIZE as u64);
-        assert!(claim_tx_size(claims + 1).unwrap() > MAX_PAYLOAD_BODY_SIZE as u64);
+        assert!(claim_tx_size(claims).unwrap() <= PAYLOAD_BODY_SIZE as u64);
+        assert!(claim_tx_size(claims + 1).unwrap() > PAYLOAD_BODY_SIZE as u64);
     }
 
     /// A winning ticket anchored to a block at `block_slot`.

@@ -13,6 +13,10 @@ use crate::{PoWEraSettings, service::ServiceEraSchedule};
 /// The number of slots in an epoch of the schedules [`era_schedule`] builds.
 pub const SLOTS_PER_EPOCH: u64 = 100;
 
+/// The size of a Blend payload body in the eras [`era_schedule`] builds: the
+/// largest block proposal of an era that allows four uncles.
+pub const PAYLOAD_BODY_SIZE: usize = 18_187;
+
 /// A schedule with an era per reward window of `reward_windows`, era `i`
 /// starting at epoch `i` with the reward window `reward_windows[i]`, rewards
 /// enabled.
@@ -33,5 +37,6 @@ pub fn era_schedule(reward_windows: &[u64]) -> ServiceEraSchedule {
             slot_window: NonZeroU64::new(reward_windows[usize::from(era.era.into_inner())])
                 .unwrap(),
             rewards_enabled: true,
+            max_data_payload_body_size: PAYLOAD_BODY_SIZE,
         })
 }

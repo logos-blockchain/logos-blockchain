@@ -192,9 +192,8 @@ mod tests {
         },
         proofs::leader_proof::Groth16LeaderProof,
     };
-    use lb_cryptarchia_engine::Slot;
+    use lb_cryptarchia_engine::{Slot, UncleSlots};
     use lb_key_management_system_keys::keys::Ed25519Key;
-    use lb_utils::bounded::BoundedVec;
     use rand::thread_rng;
 
     use super::*;
@@ -214,7 +213,7 @@ mod tests {
             utxo,
             &zk_key,
             u1.header().slot().strict_add(1.into()),
-            UncleHeaders::new(BoundedVec::from(signed_header(&u1))),
+            UncleHeaders::try_new(vec![signed_header(&u1)], 4).unwrap(),
         )
         .unwrap();
 
@@ -230,7 +229,7 @@ mod tests {
                 .get(&b2_header_id)
                 .unwrap()
                 .uncle_slots(),
-            &[u1.header().slot()].into()
+            &UncleSlots::try_new(vec![u1.header().slot()], 4).unwrap()
         );
     }
 
@@ -296,7 +295,7 @@ mod tests {
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
             u1.header().slot(),
-            UncleHeaders::new(BoundedVec::from(signed_header(&u1))),
+            UncleHeaders::try_new(vec![signed_header(&u1)], 4).unwrap(),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -327,7 +326,7 @@ mod tests {
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
             Slot::new(101),
-            UncleHeaders::new(BoundedVec::from(signed_header(&u1))),
+            UncleHeaders::try_new(vec![signed_header(&u1)], 4).unwrap(),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -363,7 +362,7 @@ mod tests {
             u1.header()
                 .slot()
                 .strict_add((uncle_reference_window + 1).into()),
-            UncleHeaders::new(BoundedVec::from(signed_header(&u1))),
+            UncleHeaders::try_new(vec![signed_header(&u1)], 4).unwrap(),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -389,7 +388,7 @@ mod tests {
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
             b1.header().slot().strict_add(1.into()),
-            UncleHeaders::new(BoundedVec::from(signed_header(&b1))),
+            UncleHeaders::try_new(vec![signed_header(&b1)], 4).unwrap(),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -422,7 +421,7 @@ mod tests {
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
             u1.header().slot().strict_add(1.into()),
-            UncleHeaders::new(BoundedVec::from(SignedHeader::new(header, signature))),
+            UncleHeaders::try_new(vec![SignedHeader::new(header, signature)], 4).unwrap(),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -453,10 +452,8 @@ mod tests {
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
             u1.header().slot().strict_add(1.into()),
-            UncleHeaders::new(BoundedVec::from(SignedHeader::new(
-                u1.header().clone(),
-                signature,
-            ))),
+            UncleHeaders::try_new(vec![SignedHeader::new(u1.header().clone(), signature)], 4)
+                .unwrap(),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -491,7 +488,7 @@ mod tests {
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
             u1.header().slot().strict_add(2.into()),
-            UncleHeaders::new(BoundedVec::from(SignedHeader::new(header, signature))),
+            UncleHeaders::try_new(vec![SignedHeader::new(header, signature)], 4).unwrap(),
             u1.header().leader_proof(),
             &u1_key,
         );

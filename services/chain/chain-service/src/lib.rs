@@ -21,6 +21,7 @@ use std::{
 
 use educe::Educe;
 use futures::{Stream, TryStreamExt as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
     block::{Block, UncleHeaders, genesis::GenesisBlock},
@@ -367,6 +368,11 @@ impl Cryptarchia {
         era_schedule: Arc<EraScheduledConfig>,
         state: State,
     ) -> Self {
+        let max_uncles = era_schedule
+            .genesis()
+            .parameters
+            .consensus_config
+            .max_uncles();
         Self::from_lib(
             genesis_id,
             genesis_id,
@@ -376,7 +382,7 @@ impl Cryptarchia {
             state,
             Slot::genesis(),
             0,
-            UncleSlots::default(),
+            UncleSlots::empty(max_uncles),
         )
     }
 
@@ -694,6 +700,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -868,6 +876,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin

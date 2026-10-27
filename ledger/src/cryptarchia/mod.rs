@@ -1041,7 +1041,7 @@ pub mod tests {
                 parent,
                 slot,
                 &proof,
-                &UncleSlots::default(),
+                &UncleSlots::empty(4),
                 std::iter::empty::<SignedOps<Preverified, StandardMode>>(),
             )?
             .verify_batch_proofs()
@@ -1110,6 +1110,7 @@ pub mod tests {
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
             12,
+            4,
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
@@ -2268,6 +2269,7 @@ pub mod tests {
                 NonNegativeRatio::new(1, 5.try_into().unwrap()),
                 0.5f64.try_into().expect("1/2 > 0"),
                 12,
+                4,
             ),
             ..era_0.clone()
         };
@@ -2283,7 +2285,7 @@ pub mod tests {
         // carries over to epoch 1 unchanged.
         let mut state = genesis_state(&[utxo()]);
         for slot in 1..=6 {
-            state = state.mark_occupied_slots(Slot::new(slot), &UncleSlots::default());
+            state = state.mark_occupied_slots(Slot::new(slot), &UncleSlots::empty(4));
         }
         let mut state = state
             .update_epoch_state::<HeaderId>(Slot::new(100), &sdp, &pow_state(), eras)
@@ -2291,7 +2293,7 @@ pub mod tests {
         assert_eq!(state.epoch_state.epoch, 1);
         assert_eq!(state.epoch_state.total_stake, 10_000);
         for slot in [100, 110, 120] {
-            state = state.mark_occupied_slots(Slot::new(slot), &UncleSlots::default());
+            state = state.mark_occupied_slots(Slot::new(slot), &UncleSlots::empty(4));
         }
         state
     }
@@ -2450,7 +2452,7 @@ pub mod tests {
             .try_apply_header::<DummyProof, HeaderId>(
                 slot,
                 &proof,
-                &UncleSlots::default(),
+                &UncleSlots::empty(4),
                 &SdpLedger::new(0.into()),
                 &pow_state(),
                 &eras,
@@ -2479,7 +2481,7 @@ pub mod tests {
             .try_apply_header::<DummyProof, HeaderId>(
                 slot,
                 &proof,
-                &UncleSlots::default(),
+                &UncleSlots::empty(4),
                 &SdpLedger::new(0.into()),
                 &pow_state(),
                 &eras,

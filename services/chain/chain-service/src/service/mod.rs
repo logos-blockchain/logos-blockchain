@@ -10,6 +10,7 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _, future::join_all, stream};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockInfo};
 use lb_core::{
     block::{Block, SignedHeader, UncleHeaders},
@@ -28,7 +29,6 @@ use lb_ledger::config::{config_for_slot, stake_distribution_snapshot};
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_network_service::message::ChainSyncEvent;
 use lb_storage_service::api::StorageApi;
-use lb_utils::bounded::UpperBoundedVec;
 use overwatch::{
     DynError,
     services::{relay::InboundRelay, state::StateUpdater},
@@ -249,6 +249,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -558,10 +560,19 @@ where
             .record(query_result.source_tip_id, query_source);
     }
 
-    /// Selects uncles for a new block extending `parent` at `slot`.
+    /// Selects uncles for a new block extending `parent` at `slot`, at most as
+    /// many as the era of `slot` allows.
     async fn select_uncles(&self, parent: HeaderId, slot: Slot) -> UncleHeaders {
+        let max_uncles = self
+            .cryptarchia
+            .ledger
+            .era_schedule()
+            .at_slot(slot)
+            .parameters
+            .consensus_config
+            .max_uncles();
         let Some(parent_branch) = self.cryptarchia.consensus.branches().get(&parent) else {
-            return UncleHeaders::empty();
+            return UncleHeaders::empty(max_uncles);
         };
 
         let mut uncles = Vec::new();
@@ -583,10 +594,8 @@ where
             ));
         }
 
-        UncleHeaders::new(
-            UpperBoundedVec::try_from(uncles)
-                .expect("at most MAX_UNCLES unique uncles are selected"),
-        )
+        UncleHeaders::try_new(uncles, max_uncles)
+            .expect("at most as many uncles as the era allows are selected")
     }
 
     /// Record the current service state.
@@ -894,6 +903,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -1022,6 +1033,8 @@ where
         + StorageSize
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Clone
         + Eq
         + Send
@@ -1057,6 +1070,8 @@ where
         + StorageSize
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Clone
         + Eq
         + Send
@@ -1108,6 +1123,8 @@ where
         + StorageSize
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Clone
         + Eq
         + Send
@@ -1134,6 +1151,8 @@ async fn log_newly_canonical_blocks<Tx>(
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -1189,6 +1208,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -1242,6 +1263,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -1291,7 +1314,14 @@ pub async fn delete_stale_blocks_from_storage<Tx>(
     storage: &StorageApi<Tx>,
 ) -> HashSet<HeaderId>
 where
-    Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
+    Tx: Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
+        + Hashable<Hash = TxHash>
+        + StorageSize,
 {
     match delete_blocks_from_storage(
         stale_blocks.chain(additional_blocks.iter().copied()),
@@ -1321,7 +1351,14 @@ async fn delete_blocks_from_storage<Headers, Tx>(
 ) -> Result<(), Vec<(HeaderId, DynError)>>
 where
     Headers: Iterator<Item = HeaderId> + Send,
-    Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
+    Tx: Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
+        + Hashable<Hash = TxHash>
+        + StorageSize,
 {
     let blocks_to_delete = block_headers.collect::<Vec<_>>();
     let block_deletion_outcomes = blocks_to_delete.iter().copied().zip(

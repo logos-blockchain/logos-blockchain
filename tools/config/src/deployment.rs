@@ -49,6 +49,7 @@ const ACTIVITY_THRESHOLD_SENSITIVITY: u64 = 1;
 
 const SECURITY_PARAM: u32 = 20;
 const UNCLE_REFERENCE_WINDOW_IN_BLOCK: u32 = 12;
+const MAX_UNCLES: u8 = 4;
 const SLOT_ACTIVATION_COEFF_NUMERATOR: u32 = 1;
 const SLOT_ACTIVATION_COEFF_DENOMINATOR: u32 = 10;
 const EPOCH_STAKE_DISTRIBUTION_STABILIZATION: u8 = 3;
@@ -142,6 +143,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
             cryptarchia: CryptarchiaDeploymentSettings {
                 security_param: NonZero::new(SECURITY_PARAM).unwrap(),
                 uncle_reference_window_in_block: UNCLE_REFERENCE_WINDOW_IN_BLOCK,
+                max_uncles: MAX_UNCLES,
                 slot_activation_coeff: NonNegativeRatio::new(
                     SLOT_ACTIVATION_COEFF_NUMERATOR,
                     NonZero::new(SLOT_ACTIVATION_COEFF_DENOMINATOR).unwrap(),
