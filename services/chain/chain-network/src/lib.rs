@@ -1446,7 +1446,7 @@ mod tests {
         let genuine = Block::create(
             HeaderId::from([0; 32]),
             Slot::new(1),
-            UncleHeaders::empty(4),
+            UncleHeaders::empty(),
             leader_proof(&leader_key.public_key()),
             BlockTransactions::<Ops>::empty(),
             &leader_key,

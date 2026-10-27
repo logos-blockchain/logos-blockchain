@@ -563,16 +563,8 @@ where
     /// Selects uncles for a new block extending `parent` at `slot`, at most as
     /// many as the era of `slot` allows.
     async fn select_uncles(&self, parent: HeaderId, slot: Slot) -> UncleHeaders {
-        let max_uncles = self
-            .cryptarchia
-            .ledger
-            .era_schedule()
-            .at_slot(slot)
-            .parameters
-            .consensus_config
-            .max_uncles();
         let Some(parent_branch) = self.cryptarchia.consensus.branches().get(&parent) else {
-            return UncleHeaders::empty(max_uncles);
+            return UncleHeaders::empty();
         };
 
         let mut uncles = Vec::new();
@@ -594,6 +586,14 @@ where
             ));
         }
 
+        let max_uncles = self
+            .cryptarchia
+            .ledger
+            .era_schedule()
+            .at_slot(slot)
+            .parameters
+            .consensus_config
+            .max_uncles();
         UncleHeaders::try_new(uncles, max_uncles)
             .expect("at most as many uncles as the era allows are selected")
     }

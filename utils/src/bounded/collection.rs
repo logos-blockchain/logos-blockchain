@@ -18,7 +18,8 @@
 //!   one outside the bounds is rejected before a single item is decoded.
 //!
 //! A [runtime-bounded](RuntimeBounded) collection is built by the same rules,
-//! with the maximum it is given in place of `MAX`.
+//! with the maximum it is given in place of `MAX`, and deserialized under the
+//! largest maximum its type gives.
 
 use core::{fmt, marker::PhantomData};
 
@@ -27,7 +28,9 @@ use serde::{
     de::{Error as _, MapAccess, SeqAccess, Visitor},
 };
 
-use crate::bounded::{Bounded, BoundedError, BoundedLen, RuntimeBounded, allocation_size_for_hint};
+use crate::bounded::{
+    Bounded, BoundedError, BoundedLen, RuntimeBounded, RuntimeMax, allocation_size_for_hint,
+};
 
 /// A collection a bounded type can be built from, one item at a time.
 pub trait BoundedCollection: BoundedLen + Sized {
@@ -66,9 +69,9 @@ pub fn collect_iter_up_to<Collection, Items, Max, const MIN: usize>(
 where
     Collection: BoundedCollection,
     Items: IntoIterator<Item = Collection::Item>,
-    Max: Copy + Into<usize>,
+    Max: RuntimeMax,
 {
-    RuntimeBounded::try_new(collect_distinct(items, max_len.into())?, max_len)
+    RuntimeBounded::try_new(collect_distinct(items, max_len.to_usize())?, max_len)
 }
 
 /// Collects `items`, stopping at the first repeat or at the first item past
@@ -181,18 +184,12 @@ where
 }
 
 /// Deserializes a sequence into a runtime-bounded collection, one element at a
-/// time, under the maximum it is given.
-pub struct RuntimeSeqVisitor<Collection, Max, const MIN: usize> {
-    max_len: Max,
-    collection: PhantomData<Collection>,
-}
+/// time, under the largest maximum `Max` gives.
+pub struct RuntimeSeqVisitor<Collection, Max, const MIN: usize>(PhantomData<(Collection, Max)>);
 
 impl<Collection, Max, const MIN: usize> RuntimeSeqVisitor<Collection, Max, MIN> {
-    pub const fn new(max_len: Max) -> Self {
-        Self {
-            max_len,
-            collection: PhantomData,
-        }
+    pub const fn new() -> Self {
+        Self(PhantomData)
     }
 }
 
@@ -200,12 +197,12 @@ impl<'de, Collection, Max, const MIN: usize> Visitor<'de>
     for RuntimeSeqVisitor<Collection, Max, MIN>
 where
     Collection: BoundedCollection<Item: Deserialize<'de>>,
-    Max: Copy + Into<usize>,
+    Max: RuntimeMax,
 {
     type Value = RuntimeBounded<Collection, Max, MIN>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let max_len: usize = self.max_len.into();
+        let max_len: usize = Max::MAX.to_usize();
         write!(
             formatter,
             "a sequence of at most {max_len} items, making a collection of at least {MIN}"
@@ -216,12 +213,12 @@ where
     where
         A: SeqAccess<'de>,
     {
-        let max_len = self.max_len.into();
+        let max_len = Max::MAX.to_usize();
         check_declared_len::<A::Error>(sequence.size_hint(), |len| {
             RuntimeBounded::<Collection, Max, MIN>::check_len_against_bounds(len, max_len)
         })?;
         let collection = read_sequence(sequence, max_len)?;
-        RuntimeBounded::try_new(collection, self.max_len).map_err(A::Error::custom)
+        RuntimeBounded::try_new(collection, Max::MAX).map_err(A::Error::custom)
     }
 }
 

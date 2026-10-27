@@ -636,7 +636,7 @@ mod tests {
         let valid_block = Block::create(
             parent_block,
             slot,
-            UncleHeaders::empty(TEST_MAX_UNCLES),
+            UncleHeaders::empty(),
             proof_of_leadership,
             transactions.clone(),
             &valid_signing_key,
@@ -648,7 +648,7 @@ mod tests {
 
         let _reconstructed_block = Block::reconstruct(
             header.clone(),
-            UncleHeaders::empty(TEST_MAX_UNCLES),
+            UncleHeaders::empty(),
             transactions.clone(),
             valid_signature,
         )
@@ -661,7 +661,7 @@ mod tests {
 
         let invalid_block_result = Block::reconstruct(
             header,
-            UncleHeaders::empty(TEST_MAX_UNCLES),
+            UncleHeaders::empty(),
             transactions,
             invalid_signature,
         );
@@ -683,7 +683,7 @@ mod tests {
         let _valid_block: Block<Ops> = Block::create(
             parent_block,
             slot,
-            UncleHeaders::empty(TEST_MAX_UNCLES),
+            UncleHeaders::empty(),
             proof_of_leadership.clone(),
             transactions,
             &signing_key,
@@ -694,7 +694,7 @@ mod tests {
         let _valid_block: Block<Ops> = Block::create(
             parent_block,
             slot,
-            UncleHeaders::empty(TEST_MAX_UNCLES),
+            UncleHeaders::empty(),
             proof_of_leadership,
             transactions,
             &signing_key,
@@ -734,7 +734,7 @@ mod tests {
         let proposal = Block::create(
             parent_block,
             Slot::from(42u64),
-            UncleHeaders::empty(TEST_MAX_UNCLES),
+            UncleHeaders::empty(),
             create_proof(),
             transactions,
             &signing_key,
@@ -755,7 +755,7 @@ mod tests {
         let block = Block::create(
             parent_block,
             Slot::from(42u64),
-            UncleHeaders::empty(TEST_MAX_UNCLES),
+            UncleHeaders::empty(),
             create_proof(),
             BlockTransactions::<Ops>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap(),
             &signing_key,
@@ -789,7 +789,7 @@ mod tests {
         let proposal = Block::create(
             [0u8; 32].into(),
             Slot::from(42u64),
-            UncleHeaders::empty(TEST_MAX_UNCLES),
+            UncleHeaders::empty(),
             create_proof(),
             BlockTransactions::<Ops>::empty(),
             &signing_key,
@@ -846,7 +846,7 @@ mod tests {
         let _valid_block: Block<Ops> = Block::create(
             parent_block,
             slot,
-            UncleHeaders::empty(TEST_MAX_UNCLES),
+            UncleHeaders::empty(),
             proof_of_leadership.clone(),
             transactions,
             &signing_key,
@@ -858,7 +858,7 @@ mod tests {
         let _valid_block = Block::create(
             parent_block,
             slot,
-            UncleHeaders::empty(TEST_MAX_UNCLES),
+            UncleHeaders::empty(),
             proof_of_leadership.clone(),
             transactions,
             &signing_key,
@@ -871,7 +871,7 @@ mod tests {
         let invalid_transaction_inputs_result = Block::create(
             parent_block,
             slot,
-            UncleHeaders::empty(TEST_MAX_UNCLES),
+            UncleHeaders::empty(),
             proof_of_leadership,
             oversized,
             &signing_key,
@@ -906,7 +906,7 @@ mod tests {
         let block_result = Block::create(
             parent_block,
             Slot::from(0u64),
-            UncleHeaders::empty(TEST_MAX_UNCLES),
+            UncleHeaders::empty(),
             proof,
             txs,
             &key,
@@ -930,7 +930,7 @@ mod tests {
         let valid = Block::create(
             parent_block,
             Slot::from(1u64),
-            UncleHeaders::empty(TEST_MAX_UNCLES),
+            UncleHeaders::empty(),
             proof.clone(),
             BlockTransactions::<Ops>::empty(),
             &key,
@@ -951,7 +951,7 @@ mod tests {
 
         let err = Block::reconstruct(
             genesis_header,
-            UncleHeaders::empty(TEST_MAX_UNCLES),
+            UncleHeaders::empty(),
             BlockTransactions::<Ops>::empty(),
             genesis_signature,
         )
@@ -1007,7 +1007,7 @@ mod tests {
         let uncles = UncleHeaders::try_new(vec![signed_uncle(1, &proof)], TEST_MAX_UNCLES).unwrap();
         let mut block = block_with_uncles(uncles, proof);
 
-        block.uncle_headers = UncleHeaders::empty(TEST_MAX_UNCLES);
+        block.uncle_headers = UncleHeaders::empty();
 
         assert!(matches!(
             block.into_verified(),

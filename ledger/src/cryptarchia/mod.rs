@@ -1041,7 +1041,7 @@ pub mod tests {
                 parent,
                 slot,
                 &proof,
-                &UncleSlots::empty(4),
+                &UncleSlots::empty(),
                 std::iter::empty::<SignedOps<Preverified, StandardMode>>(),
             )?
             .verify_batch_proofs()
@@ -2285,7 +2285,7 @@ pub mod tests {
         // carries over to epoch 1 unchanged.
         let mut state = genesis_state(&[utxo()]);
         for slot in 1..=6 {
-            state = state.mark_occupied_slots(Slot::new(slot), &UncleSlots::empty(4));
+            state = state.mark_occupied_slots(Slot::new(slot), &UncleSlots::empty());
         }
         let mut state = state
             .update_epoch_state::<HeaderId>(Slot::new(100), &sdp, &pow_state(), eras)
@@ -2293,7 +2293,7 @@ pub mod tests {
         assert_eq!(state.epoch_state.epoch, 1);
         assert_eq!(state.epoch_state.total_stake, 10_000);
         for slot in [100, 110, 120] {
-            state = state.mark_occupied_slots(Slot::new(slot), &UncleSlots::empty(4));
+            state = state.mark_occupied_slots(Slot::new(slot), &UncleSlots::empty());
         }
         state
     }
@@ -2452,7 +2452,7 @@ pub mod tests {
             .try_apply_header::<DummyProof, HeaderId>(
                 slot,
                 &proof,
-                &UncleSlots::empty(4),
+                &UncleSlots::empty(),
                 &SdpLedger::new(0.into()),
                 &pow_state(),
                 &eras,
@@ -2481,7 +2481,7 @@ pub mod tests {
             .try_apply_header::<DummyProof, HeaderId>(
                 slot,
                 &proof,
-                &UncleSlots::empty(4),
+                &UncleSlots::empty(),
                 &SdpLedger::new(0.into()),
                 &pow_state(),
                 &eras,

@@ -1342,7 +1342,7 @@ mod tests {
                 genesis_id,
                 Slot::from(1u64),
                 &proof,
-                &UncleSlots::empty(4),
+                &UncleSlots::empty(),
                 std::iter::once(tx),
             )
             .unwrap()

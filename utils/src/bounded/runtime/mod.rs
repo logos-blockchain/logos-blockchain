@@ -1,63 +1,97 @@
-//! A generic newtype whose *measured length* is constrained to an inclusive
+//! Generic newtypes whose *measured length* is constrained to an inclusive
 //! `[MIN, max_len]` range, where `MIN` is static and `max_len` is given at
 //! runtime.
 //!
 //! [`RuntimeBounded`] is [`Bounded`](super::Bounded) for a maximum that is not
-//! known when the code is compiled, such as an era's limit. The value carries
-//! its maximum, which every checked construction and every growth is held to.
-//! The minimum stays static: it says what a collection is (empty or not), not
-//! a limit that changes.
+//! known when the code is compiled, such as an era's limit. Its length is
+//! checked against the maximum it is built or decoded under, and nothing
+//! changes it afterwards, so it does not keep the maximum.
+//! [`ResizableRuntimeBounded`] keeps it, to hold every later growth to it. The
+//! minimum stays static: it says what a collection is (empty or not), not a
+//! limit that changes.
 //!
-//! The maximum keeps the integer type of the limit it comes from (`u8` for an
-//! era's `max_uncles`): the type bounds every maximum the value can be given,
-//! and the canonical codec writes the length as one, so a value encodes the
-//! same under any maximum.
-//!
-//! The maximum is a constraint, not data: equality, ordering, hashing and
-//! serialization see the wrapped value only. `Deserialize` has nowhere to learn
-//! a maximum from, so a runtime-bounded collection is deserialized through a
-//! seed that carries it ([`RuntimeBoundedVecSeed`]).
+//! A maximum is given in an integer type ([`RuntimeMax`]), `u8` for an era's
+//! `max_uncles`. The type bounds every maximum a value can be given, and so
+//! every length the value holds: the canonical codec writes the length as one,
+//! so a value encodes the same under any maximum, and serde, which has no
+//! maximum to give, reads a value under the type's largest.
 
 use core::{
-    cmp::Ordering,
     fmt::{self, Display, Formatter},
-    hash::{Hash, Hasher},
+    marker::PhantomData,
 };
 
 use serde::{Serialize, Serializer};
 
 use crate::bounded::{BoundedError, BoundedLen};
 
+pub mod resizable;
+pub use resizable::{ResizableRuntimeBounded, ResizableRuntimeBoundedVec};
 pub mod vec;
-pub use vec::{
-    NonEmptyRuntimeBoundedVec, RuntimeBoundedVec, RuntimeBoundedVecSeed, UpperRuntimeBoundedVec,
-};
+pub use vec::{NonEmptyRuntimeBoundedVec, RuntimeBoundedVec, UpperRuntimeBoundedVec};
 
-/// A newtype over `T` whose [measured length](BoundedLen) is enforced to lie
-/// within the inclusive range `[MIN, max_len]`, `max_len` carried by the value
-/// as a `Max`.
+/// An integer type runtime maxima are given in.
+pub trait RuntimeMax: Copy {
+    /// The largest maximum the type gives, which caps the length of every
+    /// value bounded in it.
+    const MAX: Self;
+
+    /// The value as a `usize`, to compare lengths with.
+    fn to_usize(self) -> usize;
+}
+
+impl RuntimeMax for u8 {
+    const MAX: Self = Self::MAX;
+
+    fn to_usize(self) -> usize {
+        usize::from(self)
+    }
+}
+
+impl RuntimeMax for u16 {
+    const MAX: Self = Self::MAX;
+
+    fn to_usize(self) -> usize {
+        usize::from(self)
+    }
+}
+
+impl RuntimeMax for u32 {
+    const MAX: Self = Self::MAX;
+
+    fn to_usize(self) -> usize {
+        self.try_into()
+            .expect("usize should be able to hold u32 on this platform")
+    }
+}
+
+/// A newtype over `T` whose [measured length](BoundedLen) was checked to lie
+/// within the inclusive range `[MIN, max_len]`, `max_len` given as a `Max`.
 ///
-/// The invariant holds at every *checked* construction site
-/// ([`RuntimeBounded::try_new`], deserialization through a seed).
-/// [`RuntimeBounded::new_unchecked`] deliberately bypasses the check and is
-/// reserved for callers that have already validated the length (or measure it
-/// out-of-band).
-#[derive(Clone, Debug)]
+/// The check happens at every *checked* construction site
+/// ([`RuntimeBounded::try_new`], decoding under a maximum, deserialization
+/// under the largest `Max`). [`RuntimeBounded::new_unchecked`] deliberately
+/// bypasses the check and is reserved for callers that have already validated
+/// the length (or measure it out-of-band).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RuntimeBounded<T, Max, const MIN: usize> {
     inner: T,
-    max_len: Max,
+    max: PhantomData<Max>,
 }
 
 impl<T, Max, const MIN: usize> RuntimeBounded<T, Max, MIN> {
     pub const MIN: usize = MIN;
 
-    /// Wrap `inner` under `max_len` without checking the bound.
+    /// Wrap `inner` without checking the bound.
     ///
     /// Reserved for callers that have already validated the length. Prefer
     /// [`Self::try_new`] at trust boundaries.
     #[must_use]
-    pub const fn new_unchecked(inner: T, max_len: Max) -> Self {
-        Self { inner, max_len }
+    pub const fn new_unchecked(inner: T) -> Self {
+        Self {
+            inner,
+            max: PhantomData,
+        }
     }
 
     /// Borrow the wrapped value.
@@ -97,65 +131,13 @@ impl<T, Max, const MIN: usize> RuntimeBounded<T, Max, MIN> {
 
 impl<T, Max, const MIN: usize> RuntimeBounded<T, Max, MIN>
 where
-    Max: Copy,
-{
-    /// The largest length the value may reach.
-    #[must_use]
-    pub const fn max_len(&self) -> Max {
-        self.max_len
-    }
-}
-
-impl<T, Max, const MIN: usize> RuntimeBounded<T, Max, MIN>
-where
     T: BoundedLen,
-    Max: Copy + Into<usize>,
+    Max: RuntimeMax,
 {
     /// Checked constructor for any [measurable](BoundedLen) `T`.
     pub fn try_new(inner: T, max_len: Max) -> Result<Self, BoundedError> {
-        Self::check_len_against_bounds(inner.bounded_len(), max_len.into())?;
-        Ok(Self::new_unchecked(inner, max_len))
-    }
-}
-
-impl<T, Max, const MIN: usize> PartialEq for RuntimeBounded<T, Max, MIN>
-where
-    T: PartialEq,
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.inner == other.inner
-    }
-}
-
-impl<T, Max, const MIN: usize> Eq for RuntimeBounded<T, Max, MIN> where T: Eq {}
-
-impl<T, Max, const MIN: usize> PartialOrd for RuntimeBounded<T, Max, MIN>
-where
-    T: PartialOrd,
-{
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.inner.partial_cmp(&other.inner)
-    }
-}
-
-impl<T, Max, const MIN: usize> Ord for RuntimeBounded<T, Max, MIN>
-where
-    T: Ord,
-{
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.inner.cmp(&other.inner)
-    }
-}
-
-impl<T, Max, const MIN: usize> Hash for RuntimeBounded<T, Max, MIN>
-where
-    T: Hash,
-{
-    fn hash<H>(&self, state: &mut H)
-    where
-        H: Hasher,
-    {
-        self.inner.hash(state);
+        Self::check_len_against_bounds(inner.bounded_len(), max_len.to_usize())?;
+        Ok(Self::new_unchecked(inner))
     }
 }
 
@@ -175,7 +157,7 @@ where
 }
 
 // Transparent serialization: a `RuntimeBounded<T, ..>` is wire-identical to its
-// inner `T`. The maximum is not written: whoever reads the value back gives it.
+// inner `T`.
 impl<T, Max, const MIN: usize> Serialize for RuntimeBounded<T, Max, MIN>
 where
     T: Serialize,

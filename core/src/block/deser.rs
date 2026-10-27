@@ -4,10 +4,7 @@ mod tests {
     use lb_key_management_system_keys::keys::Ed25519Key;
 
     use crate::{
-        block::{
-            Block, BlockTransactions, UncleHeaders,
-            tests::{TEST_MAX_UNCLES, create_proof},
-        },
+        block::{Block, BlockTransactions, UncleHeaders, tests::create_proof},
         mantle::transactions::Ops,
     };
 
@@ -16,7 +13,7 @@ mod tests {
         Block::create(
             [0u8; 32].into(),
             Slot::from(1u64),
-            UncleHeaders::empty(TEST_MAX_UNCLES),
+            UncleHeaders::empty(),
             create_proof(),
             BlockTransactions::empty(),
             &signing_key,

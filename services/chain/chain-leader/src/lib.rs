@@ -667,18 +667,13 @@ where
 
         let tx_stream: Pin<Box<_>> = Box::pin(txs_stream);
 
-        let max_uncles = era_schedule
-            .at_slot(slot)
-            .parameters
-            .consensus_config
-            .max_uncles();
         let uncle_headers = cryptarchia_api
             .select_uncles(parent, slot)
             .await
             .unwrap_or_else(|err| {
                 error!(target: LOG_TARGET, ?slot, %err, "failed to select uncles");
                 // A proposal without uncles is still valid
-                UncleHeaders::empty(max_uncles)
+                UncleHeaders::empty()
             });
 
         (ledger_state, _) = ledger_state

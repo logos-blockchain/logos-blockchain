@@ -23,7 +23,9 @@
 //! instead of merging it, so the items given are always the items held.
 //!
 //! [`RuntimeBounded`] is the same newtype for a maximum known only at runtime,
-//! such as an era's limit: the value carries its maximum instead of its type.
+//! such as an era's limit: its length is checked against the maximum it is
+//! built under. [`ResizableRuntimeBounded`] also keeps that maximum, to grow
+//! within it.
 
 use core::fmt::{self, Display, Formatter};
 
@@ -41,8 +43,8 @@ pub mod ordered_set;
 pub use ordered_set::{BoundedOrderedSet, NonEmptyBoundedOrderedSet, UpperBoundedOrderedSet};
 pub mod runtime;
 pub use runtime::{
-    NonEmptyRuntimeBoundedVec, RuntimeBounded, RuntimeBoundedVec, RuntimeBoundedVecSeed,
-    UpperRuntimeBoundedVec,
+    NonEmptyRuntimeBoundedVec, ResizableRuntimeBounded, ResizableRuntimeBoundedVec, RuntimeBounded,
+    RuntimeBoundedVec, RuntimeMax, UpperRuntimeBoundedVec,
 };
 pub mod string;
 pub use string::BoundedString;

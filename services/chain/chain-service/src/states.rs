@@ -2,9 +2,8 @@ use std::{collections::HashSet, time::SystemTime};
 
 use lb_core::header::HeaderId;
 use lb_ledger::LedgerState;
-use lb_utils::bounded::RuntimeBoundedVecSeed;
 use overwatch::{DynError, services::state::ServiceState};
-use serde::{Deserialize, Deserializer, Serialize, de::DeserializeSeed as _};
+use serde::{Deserialize, Serialize};
 
 use crate::{Cryptarchia, CryptarchiaSettings, Error, StartingState};
 
@@ -20,7 +19,6 @@ pub struct CryptarchiaConsensusState {
     /// given the depth of LIB. But, we save them because any blocks
     /// in cryptarchia-engine must be restored to the same state as before
     /// shutdown.
-    #[serde(deserialize_with = "deserialize_uncle_slots")]
     pub(crate) lib_block_uncle_slots: lb_cryptarchia_engine::UncleSlots,
     pub(crate) genesis_id: HeaderId,
     /// Set of blocks that have been pruned from the engine but have not yet
@@ -83,9 +81,10 @@ impl ServiceState for CryptarchiaConsensusState {
     ) -> Result<Self, <Self as ServiceState>::Error> {
         let StartingState::Genesis { genesis_block } = &settings.starting_state;
         let genesis_id = genesis_block.header().id();
-        let genesis_config = settings.era_schedule.genesis().parameters;
-        let (lib_ledger_state, _events) =
-            LedgerState::from_genesis_tx(genesis_block.genesis_tx().clone(), genesis_config)?;
+        let (lib_ledger_state, _events) = LedgerState::from_genesis_tx(
+            genesis_block.genesis_tx().clone(),
+            settings.era_schedule.genesis().parameters,
+        )?;
 
         Ok(Self {
             tip: genesis_id,
@@ -93,9 +92,7 @@ impl ServiceState for CryptarchiaConsensusState {
             lib_ledger_state,
             lib_block_length: 0,
             lib_block_slot: lb_cryptarchia_engine::Slot::default(),
-            lib_block_uncle_slots: lb_cryptarchia_engine::UncleSlots::empty(
-                genesis_config.consensus_config.max_uncles(),
-            ),
+            lib_block_uncle_slots: lb_cryptarchia_engine::UncleSlots::empty(),
             genesis_id,
             storage_blocks_to_remove: HashSet::new(),
             last_engine_state: None,
@@ -107,17 +104,6 @@ impl ServiceState for CryptarchiaConsensusState {
 pub struct LastEngineState {
     pub timestamp: SystemTime,
     pub state: lb_cryptarchia_engine::State,
-}
-
-/// Reads the LIB's uncle slots without the schedule, so under the largest
-/// maximum their type allows, as blocks read back from storage are.
-fn deserialize_uncle_slots<'de, D>(
-    deserializer: D,
-) -> Result<lb_cryptarchia_engine::UncleSlots, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    RuntimeBoundedVecSeed::new(u8::MAX).deserialize(deserializer)
 }
 
 #[cfg(test)]
@@ -244,7 +230,7 @@ mod tests {
                     [1; 32].into(),
                     genesis_header_id,
                     1.into(),
-                    UncleSlots::empty(4),
+                    UncleSlots::empty(),
                 )
                 .expect("Block 1 to be added successfully on top of block 0.");
             cryptarchia
@@ -252,7 +238,7 @@ mod tests {
                     [2; 32].into(),
                     [1; 32].into(),
                     2.into(),
-                    UncleSlots::empty(4),
+                    UncleSlots::empty(),
                 )
                 .expect("Block 2 to be added successfully on top of block 1.");
             cryptarchia
@@ -260,7 +246,7 @@ mod tests {
                     [3; 32].into(),
                     [2; 32].into(),
                     3.into(),
-                    UncleSlots::empty(4),
+                    UncleSlots::empty(),
                 )
                 .expect("Block 3 to be added successfully on top of block 2.");
             // Add a 2-block fork from genesis
@@ -269,7 +255,7 @@ mod tests {
                     [4; 32].into(),
                     genesis_header_id,
                     1.into(),
-                    UncleSlots::empty(4),
+                    UncleSlots::empty(),
                 )
                 .expect("Block 4 to be added successfully on top of block 0.");
             cryptarchia
@@ -277,7 +263,7 @@ mod tests {
                     [5; 32].into(),
                     [4; 32].into(),
                     2.into(),
-                    UncleSlots::empty(4),
+                    UncleSlots::empty(),
                 )
                 .expect("Block 5 to be added successfully on top of block 4.");
             // Add a second single-block fork from genesis
@@ -286,7 +272,7 @@ mod tests {
                     [6; 32].into(),
                     genesis_header_id,
                     1.into(),
-                    UncleSlots::empty(4),
+                    UncleSlots::empty(),
                 )
                 .expect("Block 6 to be added successfully on top of block 0.");
             // Add a single-block fork from the block after genesis (block `1`)
@@ -295,7 +281,7 @@ mod tests {
                     [7; 32].into(),
                     [1; 32].into(),
                     2.into(),
-                    UncleSlots::empty(4),
+                    UncleSlots::empty(),
                 )
                 .expect("Block 7 to be added successfully on top of block 1.");
             // Add a single-block fork from the second block after genesis (block `2`)
@@ -304,7 +290,7 @@ mod tests {
                     [8; 32].into(),
                     [2; 32].into(),
                     3.into(),
-                    UncleSlots::empty(4),
+                    UncleSlots::empty(),
                 )
                 .expect("Block 8 to be added successfully on top of block 2.");
 

@@ -11,7 +11,7 @@
 
 use std::borrow::Cow;
 
-use lb_utils::bounded::RuntimeBoundedVec;
+use lb_utils::bounded::{RuntimeBoundedVec, RuntimeMax};
 
 use super::{
     BinaryDecode, BinaryEncode, CodecExamples, CodecFixture, CodecFixtures, DecodeError,
@@ -58,7 +58,7 @@ where
 impl<T, Max, const MIN: usize> BinaryDecode for RuntimeBoundedVec<T, Max, MIN>
 where
     T: BinaryDecode,
-    Max: BinaryEncode + BinaryDecode<Context = ()> + TryFrom<usize> + Copy + Into<usize>,
+    Max: RuntimeMax + BinaryEncode + BinaryDecode<Context = ()> + TryFrom<usize>,
 {
     /// The maximum length the vector is held to, then the items' context.
     type Context = (Max, T::Context);
@@ -67,12 +67,12 @@ where
         input: &'input [u8],
         (max_len, context): &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let max = (*max_len).into();
+        let max = max_len.to_usize();
 
         // The length is checked before decoding, so an oversized prefix never
         // causes us to decode a too-large payload.
         let (mut rest, len) = Max::decode(input, &())?;
-        let len = len.into();
+        let len = len.to_usize();
         if len < MIN || len > max {
             return Err(DecodeError::length_out_of_bounds::<Self>(len, MIN, max));
         }
@@ -95,7 +95,7 @@ where
             rest = next;
             items.push(item);
         }
-        Ok((rest, Self::new_unchecked(items, *max_len)))
+        Ok((rest, Self::new_unchecked(items)))
     }
 }
 
@@ -105,9 +105,8 @@ impl<T, Max, const MIN: usize> sealed::Sealed for RuntimeBoundedVec<T, Max, MIN>
 }
 
 // The fixture is derived from the element's fixture, as a `BoundedVec`'s is,
-// with at least one element so that it touches `T`'s codec. Its maximum is its
-// length, the smallest that admits it: it round-trips under a context giving
-// it.
+// with at least one element so that it touches `T`'s codec. It round-trips
+// under any maximum that admits its length.
 impl<T, Max, const MIN: usize> CodecExamples for RuntimeBoundedVec<T, Max, MIN>
 where
     T: CodecExamples,
@@ -115,10 +114,9 @@ where
 {
     fn fixtures() -> CodecFixtures<Self> {
         let count = MIN.max(1);
-        let max_len = cast_length_to::<Max>(count);
 
         let mut values = Vec::with_capacity(count);
-        let mut bytes = max_len.encode_to_vec();
+        let mut bytes = cast_length_to::<Max>(count).encode_to_vec();
         for _ in 0..count {
             let item = T::fixtures()
                 .into_iter()
@@ -129,7 +127,7 @@ where
         }
 
         [CodecFixture {
-            value: Self::new_unchecked(values, max_len),
+            value: Self::new_unchecked(values),
             bytes: Cow::Owned(bytes),
         }]
         .into()
@@ -159,8 +157,10 @@ mod tests {
         }
 
         let under_a_u16 = RuntimeBoundedVec::<u8, u16, 2>::try_new(vec![1, 2, 3], 3).unwrap();
+        let under_a_u32 = RuntimeBoundedVec::<u8, u32, 2>::try_new(vec![1, 2, 3], 3).unwrap();
 
         assert_eq!(under_a_u16.encode_to_vec(), [3, 0, 1, 2, 3]);
+        assert_eq!(under_a_u32.encode_to_vec(), [3, 0, 0, 0, 1, 2, 3]);
     }
 
     #[test]
@@ -180,7 +180,6 @@ mod tests {
 
         assert_eq!(rest, b"");
         assert_eq!(decoded.as_slice(), &[1, 2, 3]);
-        assert_eq!(decoded.max_len(), 3);
         assert!(matches!(
             err,
             DecodeError::LengthOutOfBounds {

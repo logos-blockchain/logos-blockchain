@@ -199,10 +199,7 @@ impl Header {
     pub fn genesis(tx: &GenesisTx) -> Self {
         Self::new(
             HeaderId([0; 32]),
-            crate::block::body_root(
-                &crate::block::UncleHeaders::empty(crate::block::genesis::GENESIS_MAX_UNCLES),
-                &[tx],
-            ),
+            crate::block::body_root(&crate::block::UncleHeaders::empty(), &[tx]),
             Slot::from(0u64),
             Groth16LeaderProof::genesis(),
         )
@@ -491,7 +488,7 @@ mod body_root_test_vectors {
 
         // 3. `body_root` over vector 2's transactions and no uncles. This is the value
         //    vector 5's header carries.
-        let body_root = crate::block::body_root(&UncleHeaders::empty(VECTOR_MAX_UNCLES), &txs);
+        let body_root = crate::block::body_root(&UncleHeaders::empty(), &txs);
         println!("================================================================");
         println!("vector 3  : body_root without uncles, over vector 2's transactions");
         println!("{:20}: 00 (empty list)", "uncle_headers");

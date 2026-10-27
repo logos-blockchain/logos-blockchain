@@ -86,7 +86,7 @@ fn cryptarchia_switch_to_online() {
             utxo,
             &zk_key,
             slot,
-            UncleHeaders::empty(4),
+            UncleHeaders::empty(),
         )
         .expect("should find a winning slot");
 
@@ -162,7 +162,7 @@ async fn get_block_ids_from_memory_and_storage() {
             utxo,
             &zk_key,
             slot,
-            UncleHeaders::empty(4),
+            UncleHeaders::empty(),
         )
         .unwrap();
         process_block(
@@ -216,7 +216,7 @@ async fn get_block_ids_from_memory_and_storage() {
             utxo,
             &zk_key,
             slot,
-            UncleHeaders::empty(4),
+            UncleHeaders::empty(),
         )
         .unwrap();
         process_block(
@@ -347,7 +347,7 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
         lib_ledger_state: stored.ledger.state(&b1_id).unwrap().clone(),
         lib_block_length: 1,
         lib_block_slot: b1.header().slot(),
-        lib_block_uncle_slots: UncleSlots::empty(4),
+        lib_block_uncle_slots: UncleSlots::empty(),
         genesis_id: GENESIS_ID.into(),
         storage_blocks_to_remove: HashSet::new(),
         last_engine_state: None,
@@ -410,7 +410,7 @@ async fn recovery_chain_with_tip_ahead_of_current_slot() {
             utxo,
             &zk_key,
             slot,
-            UncleHeaders::empty(4),
+            UncleHeaders::empty(),
         )
         .unwrap();
         slot = block.header().slot().strict_add(1.into());
@@ -437,7 +437,7 @@ async fn recovery_chain_with_tip_ahead_of_current_slot() {
         lib_ledger_state: stored.ledger.state(&b1_id).unwrap().clone(),
         lib_block_length: 1,
         lib_block_slot: b1.header().slot(),
-        lib_block_uncle_slots: UncleSlots::empty(4),
+        lib_block_uncle_slots: UncleSlots::empty(),
         genesis_id: GENESIS_ID.into(),
         storage_blocks_to_remove: HashSet::new(),
         last_engine_state: None,
@@ -526,7 +526,7 @@ async fn get_block_ids_past_recovered_lib() {
             utxo,
             &zk_key,
             slot,
-            UncleHeaders::empty(4),
+            UncleHeaders::empty(),
         )
         .unwrap();
         slot = block.header().slot().strict_add(1.into());
@@ -552,7 +552,7 @@ async fn get_block_ids_past_recovered_lib() {
         lib_ledger_state: stored.ledger.state(&b1_id).unwrap().clone(),
         lib_block_length: 1,
         lib_block_slot: b1.header().slot(),
-        lib_block_uncle_slots: UncleSlots::empty(4),
+        lib_block_uncle_slots: UncleSlots::empty(),
         genesis_id: GENESIS_ID.into(),
         storage_blocks_to_remove: HashSet::new(),
         last_engine_state: None,
@@ -686,7 +686,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         leader_utxo,
         &zk_key,
         Slot::new(1),
-        UncleHeaders::empty(4),
+        UncleHeaders::empty(),
         BlockTransactions::from([tx1.clone()]),
     )
     .unwrap();
@@ -699,7 +699,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         leader_utxo,
         &zk_key,
         f1.header().slot().strict_add(1.into()),
-        UncleHeaders::empty(4),
+        UncleHeaders::empty(),
         BlockTransactions::from([tx2.clone()]),
     )
     .unwrap();
@@ -711,7 +711,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         leader_utxo,
         &zk_key,
         Slot::new(1),
-        UncleHeaders::empty(4),
+        UncleHeaders::empty(),
         BlockTransactions::from([tx1.clone(), tx3.clone()]),
     )
     .unwrap();
@@ -775,7 +775,7 @@ fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
         utxo,
         &zk_key,
         Slot::new(1),
-        UncleHeaders::empty(4),
+        UncleHeaders::empty(),
         BlockTransactions::from([transfer_tx_with_fake_sig(utxo, &fake_key)]),
     )
     .expect("should find a winning slot");
@@ -853,7 +853,7 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedOps<Preverified, St
         utxo,
         &zk_key,
         Slot::new(1),
-        UncleHeaders::empty(4),
+        UncleHeaders::empty(),
     )
     .unwrap();
 
@@ -1118,7 +1118,7 @@ pub fn chain_with_fork_on(
         utxo,
         &zk_key,
         Slot::new(1),
-        UncleHeaders::empty(4),
+        UncleHeaders::empty(),
     )
     .unwrap();
     let (b1, _) = try_build_block(
@@ -1127,7 +1127,7 @@ pub fn chain_with_fork_on(
         utxo,
         &zk_key,
         Slot::new(1),
-        UncleHeaders::empty(4),
+        UncleHeaders::empty(),
     )
     .unwrap();
     let b1_header_slot = b1.header().slot();

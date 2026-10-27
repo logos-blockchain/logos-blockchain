@@ -368,11 +368,6 @@ impl Cryptarchia {
         era_schedule: Arc<EraScheduledConfig>,
         state: State,
     ) -> Self {
-        let max_uncles = era_schedule
-            .genesis()
-            .parameters
-            .consensus_config
-            .max_uncles();
         Self::from_lib(
             genesis_id,
             genesis_id,
@@ -382,7 +377,7 @@ impl Cryptarchia {
             state,
             Slot::genesis(),
             0,
-            UncleSlots::empty(max_uncles),
+            UncleSlots::empty(),
         )
     }
 
