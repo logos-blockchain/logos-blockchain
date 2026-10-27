@@ -608,9 +608,10 @@ mod tests {
             .execution_gas_consumption::<MainnetGasProfile>(&context)
             .unwrap();
 
-        let expected_config_gas = u64::from(config_threshold) * 56;
-        let expected_deposit_gas = 619;
-        let expected_withdraw_gas = 619;
+        let expected_config_gas = 18 + u64::from(config_threshold) * 167;
+        // 1 input, no output, nothing buffered
+        let expected_deposit_gas = 16 + 1946 + 207;
+        let expected_withdraw_gas = 13 + 1946 + 207;
         let expected_total_gas = expected_config_gas + expected_deposit_gas + expected_withdraw_gas;
 
         assert_eq!(gas.into_inner(), expected_total_gas);
@@ -651,15 +652,15 @@ mod tests {
             .execution_gas::<MainnetGasProfile>(&state)
             .unwrap();
 
-        assert_eq!(config_gas.into_inner(), 3 * 56);
-        assert_eq!(deposit_gas.into_inner(), 619);
-        assert_eq!(withdraw_gas.into_inner(), 619);
+        assert_eq!(config_gas.into_inner(), 18 + 3 * 167);
+        assert_eq!(deposit_gas.into_inner(), 16 + 1946 + 207);
+        assert_eq!(withdraw_gas.into_inner(), 13 + 1946 + 207);
     }
 
     // A config creating a channel is verified against a threshold of 0, so it
-    // verifies no signature and consumes no execution gas.
+    // verifies no signature and consumes only its base execution gas.
     #[test]
-    fn execution_gas_of_a_channel_creating_config_is_zero() {
+    fn execution_gas_of_a_channel_creating_config_is_its_base_cost() {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let config_op = Op::ChannelConfig(create_config_op(ChannelId::from([9; 32]), &signing_key));
 
@@ -668,7 +669,7 @@ mod tests {
             .execution_gas::<MainnetGasProfile>(&TxGasState::new(Channels::new()))
             .unwrap();
 
-        assert_eq!(gas.into_inner(), 0);
+        assert_eq!(gas.into_inner(), 18);
     }
 
     #[test]

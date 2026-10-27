@@ -331,7 +331,8 @@ mod tests {
 
         assert_eq!(
             ops.by_ref().total_gas_cost::<MainnetGasProfile>(&context),
-            Ok(GasCost::new(655))
+            // The inscription costs 13 + 167 execution gas at price 2.
+            Ok(GasCost::new(897))
         );
     }
 
@@ -350,29 +351,34 @@ mod tests {
         assert_eq!(
             ops.by_ref()
                 .execution_gas_consumption::<MainnetGasProfile>(&context),
-            Ok(Gas::from(168 + 619 + 619))
+            // The config: 18 + 3 * 167. The deposit and the withdrawal of the samples
+            // spend 1 input and 1 output with nothing buffered:
+            // 16 + 1946 + 207 + 25 and 13 + 1946 + 207 + 25.
+            Ok(Gas::from(519 + 2_194 + 2_191))
         );
     }
 
     #[test]
-    fn execution_gas_consumption_charges_nothing_for_a_channel_the_context_does_not_hold() {
+    fn execution_gas_consumption_charges_only_the_base_cost_for_a_channel_the_context_does_not_hold()
+     {
         let ops = Ops::from([Op::ChannelConfig(ChannelConfigOp::sample())]);
 
         assert_eq!(
             ops.by_ref()
                 .execution_gas_consumption::<MainnetGasProfile>(&OpsGasContext::default()),
-            Ok(Gas::from(0))
+            Ok(Gas::from(18))
         );
     }
 
     #[test]
-    fn execution_gas_consumption_charges_the_flat_cost_of_an_op_without_a_channel() {
+    fn execution_gas_consumption_charges_the_spend_of_an_op_without_a_channel() {
         let ops = Ops::from([Op::ChannelDeposit(DepositOp::sample())]);
 
         assert_eq!(
             ops.by_ref()
                 .execution_gas_consumption::<MainnetGasProfile>(&OpsGasContext::default()),
-            Ok(Gas::from(619))
+            // 16 + 1946 + 207 + 25
+            Ok(Gas::from(2_194))
         );
     }
 

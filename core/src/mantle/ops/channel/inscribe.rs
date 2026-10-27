@@ -30,7 +30,12 @@ use crate::{
             InscriptionDeferredProofs, ProgramProofInput,
         },
         channel::{ChannelState, Channels, Error},
-        gas::{Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OpGasContext, OperationGas},
+        gas::{
+            EXECUTION_OPENING_GAS, EXECUTION_PAYMENT_GAS, EXECUTION_PROGRAM_PROOF_GAS,
+            EXECUTION_PROGRAM_STEP_GAS, EXECUTION_SIGNATURE_GAS, EXECUTION_USER_STEP_GAS, Gas,
+            GasOverflow, MainnetGasProfile, NoteSetKey, OpGasCalculator, OpGasContext,
+            OperationGas, spend_gas,
+        },
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
@@ -43,7 +48,6 @@ use crate::{
                 NULL_CHANNEL_ID, UnverifiedChannelKeys,
                 program_step::{ProgramStep, payment_msg, payments_hash},
             },
-            transfer::TransferOp,
         },
         programs::Programs,
         transactions::{
@@ -87,9 +91,6 @@ static CHANNEL_STEP_V1: LazyLock<Fr> = LazyLock::new(|| {
 
 pub const MAX_CHANNEL_STEPS: usize = u16::MAX as usize; // StepCount = UINT16
 pub type ChannelSteps = UpperBoundedVec<Step, MAX_CHANNEL_STEPS>;
-
-pub const EXECUTION_PROGRAM_SPEND_GAS: Gas = Gas::new(619);
-pub const EXECUTION_PROGRAM_PROOF_GAS: Gas = Gas::new(2451);
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ChannelStep {
@@ -288,25 +289,58 @@ impl ProvableOperation for InscriptionOp {
 }
 
 impl OperationGas<MainnetGasProfile> for InscriptionOp {
-    const GAS_COST: Gas = Gas::new(59);
+    const GAS_COST: Gas = Gas::new(13);
 }
 
 impl OpGasCalculator<MainnetGasProfile> for InscriptionOp {
-    // EXECUTION_CHANNEL_INSCRIBE_GAS, plus EXECUTION_TRANSFER_GAS for each user
-    // step and each payment, plus EXECUTION_PROGRAM_SPEND_GAS and
-    // EXECUTION_PROGRAM_PROOF_GAS for each program step.
-    fn execution_gas(&self, _context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
-        self.steps.iter().try_fold(Self::GAS_COST, |gas, step| {
-            let transfer = <TransferOp as OperationGas<MainnetGasProfile>>::GAS_COST;
-            let step_gas = match step {
-                Step::User(_) => transfer,
-                Step::Program(step) => transfer
-                    .checked_mul(Value::try_from(step.payments.len()).map_err(|_| GasOverflow)?)?
-                    .checked_add(EXECUTION_PROGRAM_SPEND_GAS)?
-                    .checked_add(EXECUTION_PROGRAM_PROOF_GAS)?,
-            };
-            gas.checked_add(step_gas)
-        })
+    // The Operation and its signature, plus each step: a user step is a spend
+    // over its claimed buffer, a program step is its proof, an opening per
+    // program note and its spend, plus each payment as a spend over its claimed
+    // buffer. The spend of a program step extends its root over the commitments
+    // buffered in the channel note set before the Operation, by the earlier
+    // steps and by its own payments.
+    fn execution_gas(&self, context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
+        let mut buffered = context.buffered(&NoteSetKey::Channel(self.channel_id));
+        let mut gas = Self::GAS_COST.checked_add(EXECUTION_SIGNATURE_GAS)?;
+        for step in self.steps.iter() {
+            match step {
+                Step::User(step) => {
+                    gas = gas
+                        .checked_add(EXECUTION_USER_STEP_GAS)?
+                        .checked_add(spend_gas(
+                            step.inputs.len(),
+                            step.outputs.len(),
+                            usize::from(step.buffered),
+                        )?)?;
+                }
+                Step::Program(step) => {
+                    gas = gas
+                        .checked_add(EXECUTION_PROGRAM_STEP_GAS)?
+                        .checked_add(EXECUTION_PROGRAM_PROOF_GAS)?
+                        .checked_add(EXECUTION_OPENING_GAS.checked_mul(
+                            Value::try_from(step.program_outputs.count())
+                                .map_err(|_| GasOverflow)?,
+                        )?)?;
+                    for payment in step.payments.iter() {
+                        gas = gas
+                            .checked_add(EXECUTION_PAYMENT_GAS)?
+                            .checked_add(spend_gas(
+                                payment.inputs.len(),
+                                payment.outputs.len(),
+                                usize::from(payment.buffered),
+                            )?)?;
+                        buffered = buffered.saturating_add(payment.outputs.len());
+                    }
+                    gas = gas.checked_add(spend_gas(
+                        step.inputs.len(),
+                        step.outputs.len(),
+                        buffered,
+                    )?)?;
+                }
+            }
+            buffered = buffered.saturating_add(step.outputs().len());
+        }
+        Ok(gas)
     }
 }
 
@@ -1159,20 +1193,22 @@ mod tests {
         for threshold in [0, 1, 3] {
             assert_eq!(
                 InscriptionOp::sample().execution_gas(&FixedThresholds(threshold)),
-                Ok(Gas::new(59))
+                // 13 + 167
+                Ok(Gas::new(180))
             );
         }
     }
 
     #[test]
-    fn inscription_op_execution_gas_charges_a_transfer_per_step() {
+    fn inscription_op_execution_gas_charges_a_spend_per_user_step() {
         let step = ChannelStep {
             inputs: [NoteNullifier(Fr::from(1u64))].into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: Fr::ZERO,
             buffered: 0,
         };
-        for (steps, expected) in [(0usize, 59u64), (1, 678), (3, 1_916)] {
+        // 180 + steps * (137 + 1946 + 207), one input, no output, nothing buffered
+        for (steps, expected) in [(0usize, 180u64), (1, 2_470), (3, 7_050)] {
             let operation = InscriptionOp {
                 steps: ChannelSteps::try_from(vec![Step::User(step.clone()); steps]).unwrap(),
                 ..InscriptionOp::sample()
@@ -1195,14 +1231,22 @@ mod tests {
                 ..ProgramStep::sample()
             })
         };
+        // A program step is 60 + 6305 + 157 (one opening), its spend of one input
+        // and one output (1946 + 207 + 25, plus 887 + 23 * b when b commitments are
+        // buffered) and, per payment of one input and one output claiming 71
+        // buffered, 211 + 1946 + 207 + 25 + 887 + 23 * 71 = 4_909.
         for (steps, expected) in [
-            (vec![], 59u64),
-            // 3_129
-            (vec![program(0)], 59 + 619 + 2_451),
-            // 4_367, the spec vector inscription
-            (vec![user, program(1)], 59 + 619 + 619 + 619 + 2_451),
-            // 8_675
-            (vec![program(1), program(3)], 59 + 3_689 + 4_927),
+            (vec![], 180u64),
+            // 180 + 6_522 + 2_178
+            (vec![program(0)], 8_880),
+            // 180 + 6_522 + 4_909 + (2_178 + 887 + 23)
+            (vec![program(1)], 14_699),
+            // 180 + 2_290 + 14_519, the spec vector inscription
+            (vec![user, program(1)], 16_989),
+            // 14_699 + (6_522 + 3 * 4_909 + 2_178 + 887 + 23 * 5): the second program
+            // step finds the two outputs of the first (its payment and itself) and
+            // its own three payments buffered
+            (vec![program(1), program(3)], 39_128),
         ] {
             let operation = InscriptionOp {
                 steps: steps.try_into().unwrap(),
@@ -1213,6 +1257,30 @@ mod tests {
                 Ok(Gas::new(expected))
             );
         }
+    }
+
+    #[test]
+    fn inscription_program_step_counts_its_payment_buffer() {
+        let payment = Payment {
+            buffered: 0,
+            ..Payment::sample()
+        };
+        let operation = InscriptionOp {
+            steps: vec![Step::Program(ProgramStep {
+                payments: vec![payment].try_into().unwrap(),
+                ..ProgramStep::sample()
+            })]
+            .try_into()
+            .unwrap(),
+            ..InscriptionOp::sample()
+        };
+        // 180 + (60 + 6305 + 157) + the payment (211 + 1946 + 207 + 25) + the spend
+        // of the step, its root extended over the one output of the payment
+        // (1946 + 887 + 23 + 207 + 25)
+        assert_eq!(
+            operation.execution_gas(&FixedThresholds(3)),
+            Ok(Gas::new(180 + 6_522 + 2_389 + 3_088))
+        );
     }
 
     fn commitment(n: u64) -> NoteCommitment {
