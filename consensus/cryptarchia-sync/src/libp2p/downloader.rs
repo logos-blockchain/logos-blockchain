@@ -1,14 +1,6 @@
-use std::{
-    collections::VecDeque,
-    pin::Pin,
-    task::{Context, Poll},
-};
-
-use futures::{
-    Stream, StreamExt as _,
-    stream::{self, Fuse, FusedStream as _},
-};
+use futures::stream;
 use lb_log_targets::cryptarchia;
+use lb_utils::tokio::stream::ReadAhead;
 use libp2p::{PeerId, StreamProtocol};
 use libp2p_stream::Control;
 use tokio::{sync::oneshot, time, time::Duration};
@@ -144,7 +136,8 @@ impl Downloader {
             }
         });
 
-        let boxed_stream: BoxedStream<_> = Box::new(ReadAhead::new(Box::pin(stream)));
+        let boxed_stream: BoxedStream<_> =
+            Box::new(ReadAhead::<_, DOWNLOAD_BUFFER_BYTES>::new(Box::pin(stream)));
         reply_channel
             .send(boxed_stream)
             .map_err(|_| ChainSyncError {
@@ -154,61 +147,4 @@ impl Downloader {
                 ),
             })
     }
-}
-
-/// A stream of downloaded blocks that reads ahead of its consumer.
-///
-/// Each poll takes every block the network has already delivered, up to
-/// [`DOWNLOAD_BUFFER_BYTES`], and yields the oldest one. The transport keeps
-/// receiving between polls, so the providing peer sends at network speed and
-/// frees its provider slot while blocks are still being applied by the
-/// consumer.
-struct ReadAhead<S> {
-    inner: Fuse<S>,
-    buffer: VecDeque<Result<SerialisedBlock, ChainSyncError>>,
-    buffered_bytes: usize,
-}
-
-impl<S: Stream> ReadAhead<S> {
-    fn new(inner: S) -> Self {
-        Self {
-            inner: inner.fuse(),
-            buffer: VecDeque::new(),
-            buffered_bytes: 0,
-        }
-    }
-}
-
-impl<S> Stream for ReadAhead<S>
-where
-    S: Stream<Item = Result<SerialisedBlock, ChainSyncError>> + Unpin,
-{
-    type Item = S::Item;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = &mut *self;
-        // Always read at least one block, however large.
-        while this.buffer.is_empty() || this.buffered_bytes < DOWNLOAD_BUFFER_BYTES {
-            match this.inner.poll_next_unpin(cx) {
-                Poll::Ready(Some(item)) => {
-                    this.buffered_bytes += buffered_len(&item);
-                    this.buffer.push_back(item);
-                }
-                Poll::Ready(None) | Poll::Pending => break,
-            }
-        }
-
-        match this.buffer.pop_front() {
-            Some(item) => {
-                this.buffered_bytes -= buffered_len(&item);
-                Poll::Ready(Some(item))
-            }
-            None if this.inner.is_terminated() => Poll::Ready(None),
-            None => Poll::Pending,
-        }
-    }
-}
-
-fn buffered_len(item: &Result<SerialisedBlock, ChainSyncError>) -> usize {
-    item.as_ref().map_or(0, SerialisedBlock::len)
 }
