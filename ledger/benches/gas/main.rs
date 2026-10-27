@@ -14,6 +14,7 @@
 //! order.
 
 mod cycles;
+mod fixture;
 
 use cycles::Counter;
 use rand::seq::SliceRandom as _;
@@ -52,6 +53,13 @@ fn main() {
         .skip(1)
         .find(|arg| !arg.starts_with('-'))
         .unwrap_or_default();
+    if fixture::fill() != fixture::DEFAULT_FILL {
+        eprintln!(
+            "GAS_BENCH_FILL is set: the note sets hold {} notes instead of {}",
+            fixture::fill(),
+            fixture::DEFAULT_FILL
+        );
+    }
     let mut counter = Counter::new().unwrap_or_else(|error| {
         eprintln!("{error}");
         std::process::exit(1);

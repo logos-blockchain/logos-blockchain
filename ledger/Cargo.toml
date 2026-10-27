@@ -48,9 +48,17 @@ harness = false
 name    = "zk_batch"
 
 [[bench]]
-harness = false
-name    = "gas"
-path    = "benches/gas/main.rs"
+harness           = false
+name              = "gas"
+path              = "benches/gas/main.rs"
+required-features = ["test-utils"]
+
+[[test]]
+name              = "gas_bench"
+required-features = ["test-utils"]
+
+[features]
+test-utils = []
 
 [package.metadata.cargo-machete]
 ignored = ["serde_arrays"]

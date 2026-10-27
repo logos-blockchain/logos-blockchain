@@ -805,6 +805,20 @@ impl LedgerState {
         &self.storage_gas_price
     }
 
+    #[cfg(feature = "test-utils")]
+    #[must_use]
+    pub fn with_gas_prices(
+        self,
+        execution_base_fee: GasPrice,
+        storage_gas_price: GasPrice,
+    ) -> Self {
+        Self {
+            execution_base_fee,
+            storage_gas_price,
+            ..self
+        }
+    }
+
     #[cfg(test)]
     #[must_use]
     pub(crate) const fn storage_gas_consumed_in_epoch(&self) -> Gas {
