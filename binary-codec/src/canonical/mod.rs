@@ -23,6 +23,7 @@ mod length_prefix;
 mod math;
 mod numbers;
 mod option;
+mod runtime_bounded_vec;
 
 #[cfg(test)]
 mod tests;

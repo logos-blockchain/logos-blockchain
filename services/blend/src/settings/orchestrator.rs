@@ -17,4 +17,7 @@ pub struct OrchestratorSettings {
 pub struct EraOrchestratorSettings {
     pub minimum_network_size: NonZeroU64,
     pub epoch_transition_period: Duration,
+    /// The size every payload body of the era is padded to, which payloads are
+    /// checked against when they are submitted.
+    pub payload_body_size: u16,
 }

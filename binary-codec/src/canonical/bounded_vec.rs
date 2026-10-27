@@ -15,7 +15,7 @@ use super::{
 /// the only thing bounding it — repeating it is harmless exactly when `MAX` is
 /// small enough that a hostile length prefix buys nothing. Above this, the
 /// combination is refused rather than iterated.
-const ZERO_LENGTH_ELEMENT_MAX: usize = 1024;
+pub(super) const ZERO_LENGTH_ELEMENT_MAX: usize = 1024;
 
 impl<T, const MIN: usize, const MAX: usize> BinaryEncode for BoundedVec<T, MIN, MAX>
 where

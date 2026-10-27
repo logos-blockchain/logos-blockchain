@@ -6,7 +6,9 @@ use core::{
 use either::Either;
 use futures::StreamExt as _;
 use lb_blend_membership::Membership;
-use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
+use lb_blend_message::encap::{
+    MessageLayout, validated::EncapsulatedMessageWithVerifiedPublicHeader,
+};
 use lb_blend_primitives::time::{RoundClock, RoundCount};
 use lb_cryptarchia_engine::Epoch;
 use lb_libp2p::{NetworkBehaviour as _, SwarmEvent};
@@ -17,7 +19,9 @@ use tokio::{select, time::sleep};
 
 use crate::core::{
     CommonConfig,
-    tests::utils::{TestEncapsulatedMessageWithEpoch, TestProofsVerifier, TestSwarm},
+    tests::utils::{
+        PAYLOAD_BODY_SIZE, TestEncapsulatedMessageWithEpoch, TestProofsVerifier, TestSwarm,
+    },
     with_core::{
         behaviour::{
             Config, Event,
@@ -40,7 +44,10 @@ async fn nodes_that_entered_a_new_era_connect_under_its_protocol() {
     let common = CommonConfig {
         round_duration_in_seconds: NonZeroU64::new(2).unwrap(),
         minimum_network_size: NonZeroUsize::new(1).unwrap(),
-        num_blend_layers: NonZeroU64::new(4).unwrap(),
+        message_layout: MessageLayout {
+            num_blend_layers: NonZeroU64::new(4).unwrap(),
+            payload_body_size: PAYLOAD_BODY_SIZE,
+        },
     };
     let core = Config {
         target_peering_degree: PEERING_DEGREE,
@@ -73,7 +80,7 @@ async fn nodes_that_entered_a_new_era_connect_under_its_protocol() {
         );
         let behaviour = swarm.behaviour();
         assert_eq!(behaviour.protocol_name, NEXT_PROTOCOL_NAME);
-        assert_eq!(behaviour.num_blend_layers, common.num_blend_layers);
+        assert_eq!(behaviour.message_layout, common.message_layout);
         assert_eq!(
             behaviour.round_duration_in_seconds(),
             common.round_duration_in_seconds

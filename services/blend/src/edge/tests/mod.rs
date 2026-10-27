@@ -2,7 +2,6 @@ use core::time::Duration;
 
 use futures::stream::repeat;
 use lb_blend::{
-    message::MAX_PAYLOAD_BODY_SIZE,
     proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs,
     scheduling::membership::Membership,
 };
@@ -29,6 +28,7 @@ use crate::{
     message::{DataPayload, ServiceMessage},
     pending::{NextLocalMessage, PendingTransactions, next_local_message},
     test_utils::{
+        PAYLOAD_BODY_SIZE,
         epoch::{GatedPolStreamProvider, PolGate},
         membership::membership,
     },
@@ -695,10 +695,9 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
     // One byte over what a payload can hold, so encapsulating it fails the same
     // way however long it waits.
     msg_sender
-        .send(ServiceMessage::Blend(DataPayload::BlockProposal(vec![
-            0;
-            MAX_PAYLOAD_BODY_SIZE + 1
-        ])))
+        .send(ServiceMessage::Blend(DataPayload::BlockProposal(
+            vec![0; usize::from(PAYLOAD_BODY_SIZE) + 1],
+        )))
         .await
         .unwrap();
     msg_sender

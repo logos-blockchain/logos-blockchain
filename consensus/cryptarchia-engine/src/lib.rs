@@ -10,15 +10,16 @@ use std::{
 
 pub use config::*;
 use lb_log_targets::cryptarchia;
-use lb_utils::bounded::UpperBoundedVec;
+use lb_utils::bounded::UpperRuntimeBoundedVec;
 use rpds::{HashTrieMapSync, HashTrieSetSync};
 use thiserror::Error;
 pub use time::{Epoch, EpochConfig, Era, EraEntryView, EraSchedule, Slot};
 
 pub(crate) const LOG_TARGET: &str = cryptarchia::engine::ROOT;
 
-/// Slots occupied by the uncles a block references.
-pub type UncleSlots = UpperBoundedVec<Slot, MAX_UNCLES>;
+/// Slots occupied by the uncles a block references, at most as many as the
+/// era of the block allows.
+pub type UncleSlots = UpperRuntimeBoundedVec<Slot, u8>;
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -184,7 +185,7 @@ where
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Branch<Id> {
     id: Id,
     parent: Id,
@@ -440,6 +441,10 @@ where
 {
     /// Creates the chain with `genesis` as its only block.
     pub fn from_genesis(genesis: Id, era_schedule: Arc<EraSchedule<Config>>, state: State) -> Self {
+        let max_uncles = era_schedule
+            .at_slot(Slot::genesis())
+            .parameters
+            .max_uncles();
         Self::from_lib(
             genesis,
             genesis,
@@ -447,7 +452,7 @@ where
             state,
             Slot::genesis(),
             0,
-            UncleSlots::default(),
+            UncleSlots::empty(max_uncles),
         )
     }
 
@@ -741,7 +746,8 @@ where
     ///
     /// After that,
     /// - All uncle candidates are ordered by `(parent.slot, slot, id)`.
-    /// - The first [`MAX_UNCLES`] uncles are selected.
+    /// - The first uncles, as many as the era of the new block allows, are
+    ///   selected.
     /// - But, if an uncle's slot is already taken by another uncle selected
     ///   earlier, the uncle is excluded.
     ///
@@ -791,7 +797,7 @@ where
         candidates
             .into_iter()
             .filter(|(_, uncle)| selected_slots.insert(uncle.slot))
-            .take(MAX_UNCLES)
+            .take(usize::from(era.parameters.max_uncles()))
             .map(|(_, uncle)| uncle)
             .collect()
     }
@@ -975,6 +981,15 @@ pub mod tests {
     use super::{Cryptarchia, Error, Slot, UncleSlots, maxvalid_bg};
     use crate::{Config, EraSchedule, ReorgedBlocks, State};
 
+    /// The most uncles a block may reference in the tests' eras.
+    pub const TEST_MAX_UNCLES: u8 = 4;
+
+    /// The uncle slots of a block without uncles.
+    #[must_use]
+    pub fn no_uncle_slots() -> UncleSlots {
+        UncleSlots::empty(TEST_MAX_UNCLES)
+    }
+
     #[must_use]
     pub fn config() -> Config {
         config_with(1)
@@ -1026,6 +1041,7 @@ pub mod tests {
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
             12,
+            TEST_MAX_UNCLES,
         )
     }
 
@@ -1059,7 +1075,7 @@ pub mod tests {
         for i in 1..length.get() {
             let new_block = hash(&i);
             let (_, reorged_blocks) = engine
-                .receive_block(new_block, parent, i.into(), UncleSlots::default())
+                .receive_block(new_block, parent, i.into(), no_uncle_slots())
                 .expect("test block to be applied successfully.");
             assert!(
                 reorged_blocks.is_empty(),
@@ -1076,15 +1092,15 @@ pub mod tests {
         // └── child
 
         let mut branches =
-            super::Branches::from_lib(hash(&0u64), hash(&0u64), 0.into(), 0, UncleSlots::default());
+            super::Branches::from_lib(hash(&0u64), hash(&0u64), 0.into(), 0, no_uncle_slots());
         let parent = hash(&1u64);
         let child = hash(&2u64);
 
         branches
-            .apply_header(parent, hash(&0u64), 2.into(), UncleSlots::default())
+            .apply_header(parent, hash(&0u64), 2.into(), no_uncle_slots())
             .unwrap();
         assert!(matches!(
-            branches.apply_header(child, parent, 1.into(), UncleSlots::default()),
+            branches.apply_header(child, parent, 1.into(), no_uncle_slots()),
             Err(Error::InvalidSlot(_))
         ));
     }
@@ -1094,13 +1110,8 @@ pub mod tests {
         // b0(LIB) - b1 - b2      c0 (a separate tree)
         let cryptarchia = create_canonical_chain(3.try_into().unwrap(), None);
         let branches = cryptarchia.branches();
-        let other = super::Branches::from_lib(
-            hash(&100u64),
-            hash(&100u64),
-            0.into(),
-            0,
-            UncleSlots::default(),
-        );
+        let other =
+            super::Branches::from_lib(hash(&100u64), hash(&100u64), 0.into(), 0, no_uncle_slots());
 
         assert!(
             branches
@@ -1116,9 +1127,9 @@ pub mod tests {
     fn walk_back_before_stops_at_the_oldest_block() {
         // b0(LIB, slot 5) - b1(slot 6)
         let mut branches =
-            super::Branches::from_lib(hash(&0u64), hash(&0u64), 5.into(), 0, UncleSlots::default());
+            super::Branches::from_lib(hash(&0u64), hash(&0u64), 5.into(), 0, no_uncle_slots());
         branches
-            .apply_header(hash(&1u64), hash(&0u64), 6.into(), UncleSlots::default())
+            .apply_header(hash(&1u64), hash(&0u64), 6.into(), no_uncle_slots())
             .unwrap();
 
         // Slot 0 precedes the oldest block, so the walk stops there.
@@ -1166,7 +1177,7 @@ pub mod tests {
         //     \
         //      b3
         assert!(matches!(
-            cryptarchia.receive_block(hash(&3u64), hash(&0u64), 1.into(), UncleSlots::default()),
+            cryptarchia.receive_block(hash(&3u64), hash(&0u64), 1.into(), no_uncle_slots()),
             Err(Error::ParentMissing(_)),
         ));
     }
@@ -1190,7 +1201,7 @@ pub mod tests {
             if slot % 2 == 0 {
                 let new_block = hash(&format!("short-{slot}"));
                 let (_, reorged_blocks) = engine
-                    .receive_block(new_block, short_p, slot.into(), UncleSlots::default())
+                    .receive_block(new_block, short_p, slot.into(), no_uncle_slots())
                     .unwrap();
                 assert!(reorged_blocks.is_empty());
                 short_p = new_block;
@@ -1203,7 +1214,7 @@ pub mod tests {
             if slot % 3 == 0 {
                 let new_block = hash(&format!("long-{slot}"));
                 let (_, reorged_blocks) = engine
-                    .receive_block(new_block, long_p, slot.into(), UncleSlots::default())
+                    .receive_block(new_block, long_p, slot.into(), no_uncle_slots())
                     .unwrap();
                 assert!(reorged_blocks.is_empty());
                 long_p = new_block;
@@ -1215,7 +1226,7 @@ pub mod tests {
         for slot in (initial_height + s_gen)..(initial_height + 2 * s_gen) {
             let new_block = hash(&format!("long-{slot}"));
             let (_, reorged_blocks) = engine
-                .receive_block(new_block, long_p, slot.into(), UncleSlots::default())
+                .receive_block(new_block, long_p, slot.into(), no_uncle_slots())
                 .unwrap();
             assert!(reorged_blocks.is_empty());
             long_p = new_block;
@@ -1241,7 +1252,7 @@ pub mod tests {
             for slot in initial_height..=tip_height {
                 let new_block = hash(&format!("dense-{slot}"));
                 let (_, reorged_blocks) = engine
-                    .receive_block(new_block, parent, slot.into(), UncleSlots::default())
+                    .receive_block(new_block, parent, slot.into(), no_uncle_slots())
                     .unwrap();
 
                 if slot < tip_height {
@@ -1275,17 +1286,17 @@ pub mod tests {
         let f3 = hash(&"fork-3");
 
         let outcome = engine
-            .receive_block_with_canonical_change(f1, fork_parent, 4.into(), UncleSlots::default())
+            .receive_block_with_canonical_change(f1, fork_parent, 4.into(), no_uncle_slots())
             .unwrap();
         assert_eq!(outcome.newly_canonical_blocks, Vec::<[u8; 32]>::new());
 
         let outcome = engine
-            .receive_block_with_canonical_change(f2, f1, 5.into(), UncleSlots::default())
+            .receive_block_with_canonical_change(f2, f1, 5.into(), no_uncle_slots())
             .unwrap();
         assert_eq!(outcome.newly_canonical_blocks, Vec::<[u8; 32]>::new());
 
         let outcome = engine
-            .receive_block_with_canonical_change(f3, f2, 6.into(), UncleSlots::default())
+            .receive_block_with_canonical_change(f3, f2, 6.into(), no_uncle_slots())
             .unwrap();
         assert_eq!(engine.tip(), f3);
         assert_eq!(outcome.newly_canonical_blocks, vec![f1, f2, f3]);
@@ -1359,7 +1370,7 @@ pub mod tests {
         let mut cryptarchia = create_canonical_chain(50.try_into().unwrap(), Some(config_with(50)));
         // Add a fork from genesis block
         let (pruned_blocks, _) = cryptarchia
-            .receive_block(hash(&100u64), hash(&0u64), 1.into(), UncleSlots::default())
+            .receive_block(hash(&100u64), hash(&0u64), 1.into(), no_uncle_slots())
             .expect("test block to be applied successfully.");
         // No block was pruned during Boostrapping.
         assert!(pruned_blocks.all().next().is_none());
@@ -1380,11 +1391,11 @@ pub mod tests {
         // Add two new blocks to the local honest chain,
         // and check if the LIB is updated and blocks are pruned.
         let (pruned_blocks, _) = cryptarchia
-            .receive_block(hash(&50u64), hash(&49u64), 50.into(), UncleSlots::default())
+            .receive_block(hash(&50u64), hash(&49u64), 50.into(), no_uncle_slots())
             .expect("test block to be applied successfully.");
         assert!(pruned_blocks.is_empty());
         let (pruned_blocks, _) = cryptarchia
-            .receive_block(hash(&51u64), hash(&50u64), 51.into(), UncleSlots::default())
+            .receive_block(hash(&51u64), hash(&50u64), 51.into(), no_uncle_slots())
             .expect("test block to be applied successfully.");
         // The LIB was updated to b1.
         assert_eq!(cryptarchia.lib(), hash(&1u64));
@@ -1409,12 +1420,7 @@ pub mod tests {
         //                               b100
         let mut cryptarchia = create_canonical_chain(50.try_into().unwrap(), Some(config_with(10)));
         let (pruned_blocks, _) = cryptarchia
-            .receive_block(
-                hash(&100u64),
-                hash(&40u64),
-                41.into(),
-                UncleSlots::default(),
-            )
+            .receive_block(hash(&100u64), hash(&40u64), 41.into(), no_uncle_slots())
             .expect("test block to be applied successfully.");
         // No block was pruned during Boostrapping.
         assert!(pruned_blocks.all().next().is_none());
@@ -1471,7 +1477,7 @@ pub mod tests {
         // the next era become immutable 5 deep, so b60 moves it up to b55.
         for i in 50..=60u64 {
             cryptarchia
-                .receive_block(hash(&i), hash(&(i - 1)), i.into(), UncleSlots::default())
+                .receive_block(hash(&i), hash(&(i - 1)), i.into(), no_uncle_slots())
                 .expect("test block to be applied successfully.");
             let expected_lib = if i < 60 { i - 10 } else { 55 };
             assert_eq!(cryptarchia.lib(), hash(&expected_lib));
@@ -1494,7 +1500,7 @@ pub mod tests {
         // and moves up with b71.
         for i in 50..=71u64 {
             cryptarchia
-                .receive_block(hash(&i), hash(&(i - 1)), i.into(), UncleSlots::default())
+                .receive_block(hash(&i), hash(&(i - 1)), i.into(), no_uncle_slots())
                 .expect("test block to be applied successfully.");
             let expected_lib = match i {
                 ..=60 => i - 10,
@@ -1521,7 +1527,7 @@ pub mod tests {
         for i in 0..4u64 {
             let block = hash(&format!("a-{i}"));
             cryptarchia
-                .receive_block(block, parent, (25 + i).into(), UncleSlots::default())
+                .receive_block(block, parent, (25 + i).into(), no_uncle_slots())
                 .expect("test block to be applied successfully.");
             parent = block;
         }
@@ -1534,7 +1540,7 @@ pub mod tests {
         for i in 0..10u64 {
             let block = hash(&format!("b-{i}"));
             cryptarchia
-                .receive_block(block, parent, (30 + i).into(), UncleSlots::default())
+                .receive_block(block, parent, (30 + i).into(), no_uncle_slots())
                 .expect("test block to be applied successfully.");
             parent = block;
         }
@@ -1550,28 +1556,13 @@ pub mod tests {
 
         let mut cryptarchia = create_canonical_chain(50.try_into().unwrap(), Some(config_with(10)));
         cryptarchia
-            .receive_block(
-                hash(&100u64),
-                hash(&38u64),
-                39.into(),
-                UncleSlots::default(),
-            )
+            .receive_block(hash(&100u64), hash(&38u64), 39.into(), no_uncle_slots())
             .expect("test block to be applied successfully.");
         cryptarchia
-            .receive_block(
-                hash(&101u64),
-                hash(&39u64),
-                40.into(),
-                UncleSlots::default(),
-            )
+            .receive_block(hash(&101u64), hash(&39u64), 40.into(), no_uncle_slots())
             .expect("test block to be applied successfully.");
         let (pruned_blocks, _) = cryptarchia
-            .receive_block(
-                hash(&102u64),
-                hash(&40u64),
-                41.into(),
-                UncleSlots::default(),
-            )
+            .receive_block(hash(&102u64), hash(&40u64), 41.into(), no_uncle_slots())
             .expect("test block to be applied successfully.");
         // No block was pruned during Boostrapping.
         assert!(pruned_blocks.all().next().is_none());
@@ -1611,28 +1602,13 @@ pub mod tests {
         //                           b100  b101
         let mut cryptarchia = create_canonical_chain(50.try_into().unwrap(), Some(config_with(10)));
         cryptarchia
-            .receive_block(
-                hash(&100u64),
-                hash(&38u64),
-                39.into(),
-                UncleSlots::default(),
-            )
+            .receive_block(hash(&100u64), hash(&38u64), 39.into(), no_uncle_slots())
             .expect("test block to be applied successfully.");
         cryptarchia
-            .receive_block(
-                hash(&200u64),
-                hash(&38u64),
-                39.into(),
-                UncleSlots::default(),
-            )
+            .receive_block(hash(&200u64), hash(&38u64), 39.into(), no_uncle_slots())
             .expect("test block to be applied successfully.");
         let (pruned_blocks, _) = cryptarchia
-            .receive_block(
-                hash(&101u64),
-                hash(&39u64),
-                40.into(),
-                UncleSlots::default(),
-            )
+            .receive_block(hash(&101u64), hash(&39u64), 40.into(), no_uncle_slots())
             .expect("test block to be applied successfully.");
         // No block was pruned during Boostrapping.
         assert!(pruned_blocks.all().next().is_none());
@@ -1677,28 +1653,13 @@ pub mod tests {
         //                                  b200
         let mut cryptarchia = create_canonical_chain(50.try_into().unwrap(), Some(config_with(10)));
         cryptarchia
-            .receive_block(
-                hash(&100u64),
-                hash(&38u64),
-                39.into(),
-                UncleSlots::default(),
-            )
+            .receive_block(hash(&100u64), hash(&38u64), 39.into(), no_uncle_slots())
             .expect("test block to be applied successfully.");
         cryptarchia
-            .receive_block(
-                hash(&101u64),
-                hash(&100u64),
-                40.into(),
-                UncleSlots::default(),
-            )
+            .receive_block(hash(&101u64), hash(&100u64), 40.into(), no_uncle_slots())
             .expect("test block to be applied successfully.");
         let (pruned_blocks, _) = cryptarchia
-            .receive_block(
-                hash(&200u64),
-                hash(&100u64),
-                41.into(),
-                UncleSlots::default(),
-            )
+            .receive_block(hash(&200u64), hash(&100u64), 41.into(), no_uncle_slots())
             .expect("test block to be applied successfully.");
         // No block was pruned during Boostrapping.
         assert!(pruned_blocks.all().next().is_none());
@@ -1754,7 +1715,7 @@ pub mod tests {
                 hash(&100u64),
                 cryptarchia.lib(),
                 cryptarchia.lib_branch().slot.strict_add(1.into()),
-                UncleSlots::default(),
+                no_uncle_slots(),
             )
             .expect("test block to be applied successfully.");
         assert_eq!(cryptarchia.lib(), hash(&7u64));
@@ -1772,7 +1733,7 @@ pub mod tests {
                 hash(&101u64),
                 cryptarchia.tip_branch().parent,
                 cryptarchia.tip_branch().slot,
-                UncleSlots::default(),
+                no_uncle_slots(),
             )
             .expect("test block to be applied successfully.");
         assert_eq!(cryptarchia.lib(), hash(&7u64));
@@ -1792,7 +1753,7 @@ pub mod tests {
                 hash(&102u64),
                 cryptarchia.tip(),
                 cryptarchia.tip_branch().slot.strict_add(1.into()),
-                UncleSlots::default(),
+                no_uncle_slots(),
             )
             .expect("test block to be applied successfully.");
         assert_eq!(cryptarchia.lib(), hash(&8u64));
@@ -1824,7 +1785,7 @@ mod uncle_tests {
 
     use crate::{
         Branch, Config, Cryptarchia, EraSchedule, Slot, State, UncleSlots,
-        tests::{schedule, single_era},
+        tests::{TEST_MAX_UNCLES, no_uncle_slots, schedule, single_era},
     };
 
     #[test]
@@ -1910,7 +1871,7 @@ mod uncle_tests {
         //  |--------------------- u4(4)
         //  |--------------------------- u5(5)
         //
-        // u1~u4 are selected. u5 is excluded because of `MAX_UNCLES=4`.
+        // u1~u4 are selected. u5 is excluded because the era allows 4 uncles.
         let [g, b1, u1, u2, u3, u4, u5] = [0u64, 1, 2, 3, 4, 5, 6];
         let window = 10;
         let engine = build_tree(
@@ -1938,7 +1899,7 @@ mod uncle_tests {
     fn select_uncles_takes_only_uncles_of_the_era_of_the_block() {
         // The tree of `select_uncles_takes_at_most_max_uncles`, with the era of
         // the new block starting at slot 3: u1 and u2 are of the previous era,
-        // and dropped before `MAX_UNCLES` are taken, so u5 makes it.
+        // and dropped before the era's 4 uncles are taken, so u5 makes it.
         let [g, b1, u1, u2, u3, u4, u5] = [0u64, 1, 2, 3, 4, 5, 6];
         let window = config(10.try_into().unwrap());
         let engine = build_tree_over(
@@ -1960,6 +1921,34 @@ mod uncle_tests {
             .map(|uncle| uncle.id())
             .collect();
         assert_eq!(selected, [u3, u4, u5]);
+    }
+
+    #[test]
+    fn select_uncles_takes_at_most_the_maximum_of_the_era_of_the_block() {
+        // The tree of `select_uncles_takes_at_most_max_uncles`, with the era of
+        // the new block starting at slot 3 and allowing 2 uncles: u1 and u2
+        // are of the previous era, and of u3 to u5 the first 2 are taken.
+        let [g, b1, u1, u2, u3, u4, u5] = [0u64, 1, 2, 3, 4, 5, 6];
+        let window = 10;
+        let engine = build_tree_over(
+            schedule(3, config(window), [(1, config_with_max_uncles(window, 2))]),
+            g,
+            [
+                (b1, g, 6.into()),
+                (u1, g, 1.into()),
+                (u2, g, 2.into()),
+                (u3, g, 3.into()),
+                (u4, g, 4.into()),
+                (u5, g, 5.into()),
+            ],
+        );
+
+        let selected: Vec<_> = engine
+            .select_uncles(engine.branches().get(&b1).unwrap(), 7.into())
+            .iter()
+            .map(|uncle| uncle.id())
+            .collect();
+        assert_eq!(selected, [u3, u4]);
     }
 
     #[test]
@@ -2080,13 +2069,18 @@ mod uncle_tests {
             window,
             g,
             [
-                (b1, g, 5.into(), UncleSlots::default()),
-                (b3, b1, 7.into(), [6u64.into()].into()),
-                (b4, b3, 8.into(), UncleSlots::default()),
-                (u1, b1, 6.into(), UncleSlots::default()),
-                (u2, b1, 7.into(), UncleSlots::default()),
-                (u3, b3, 8.into(), UncleSlots::default()),
-                (u4, b4, 9.into(), UncleSlots::default()),
+                (b1, g, 5.into(), no_uncle_slots()),
+                (
+                    b3,
+                    b1,
+                    7.into(),
+                    UncleSlots::try_new(vec![6u64.into()], TEST_MAX_UNCLES).unwrap(),
+                ),
+                (b4, b3, 8.into(), no_uncle_slots()),
+                (u1, b1, 6.into(), no_uncle_slots()),
+                (u2, b1, 7.into(), no_uncle_slots()),
+                (u3, b3, 8.into(), no_uncle_slots()),
+                (u4, b4, 9.into(), no_uncle_slots()),
             ],
         );
 
@@ -2172,6 +2166,10 @@ mod uncle_tests {
     /// `uncle_reference_window_in_slot`, which is handier to specify in tests.
     #[must_use]
     fn config(uncle_reference_window_in_slot: u32) -> Config {
+        config_with_max_uncles(uncle_reference_window_in_slot, TEST_MAX_UNCLES)
+    }
+
+    fn config_with_max_uncles(uncle_reference_window_in_slot: u32, max_uncles: u8) -> Config {
         // Pick `f` just below 1, so that `uncle_reference_window_in_block` equals
         // `uncle_reference_window_in_slot`.
         let f_numerator = uncle_reference_window_in_slot + 1;
@@ -2184,6 +2182,7 @@ mod uncle_tests {
             NonNegativeRatio::new(f_numerator, f_denominator),
             1f64.try_into().expect("1 > 0"),
             uncle_reference_window_in_block,
+            max_uncles,
         )
     }
 
@@ -2212,7 +2211,7 @@ mod uncle_tests {
             genesis,
             blocks
                 .into_iter()
-                .map(|(id, parent, slot)| (id, parent, slot, UncleSlots::default())),
+                .map(|(id, parent, slot)| (id, parent, slot, no_uncle_slots())),
         )
     }
 

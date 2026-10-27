@@ -10,7 +10,9 @@ use futures::{Stream, StreamExt as _, stream::pending};
 use lb_blend::{
     message::{
         crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
-        encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
+        encap::{
+            MessageLayout, ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader,
+        },
     },
     network::core::{
         CommonConfig, Config, NetworkBehaviour, with_core::behaviour::Config as CoreToCoreConfig,
@@ -41,7 +43,7 @@ use crate::{
         BackendEpochInfo,
         libp2p::{BlendSwarm, behaviour::BlendBehaviour, swarm::BlendSwarmMessage},
     },
-    test_utils::PROTOCOL_NAME,
+    test_utils::{PAYLOAD_BODY_SIZE, PROTOCOL_NAME},
 };
 
 /// A `PoQ` verifier for the swarm tests, which accepts every proof it is
@@ -235,7 +237,10 @@ impl BlendBehaviourBuilder {
                 &Config {
                     common: CommonConfig {
                         minimum_network_size: 1.try_into().unwrap(),
-                        num_blend_layers: 3.try_into().unwrap(),
+                        message_layout: MessageLayout {
+                            num_blend_layers: 3.try_into().unwrap(),
+                            payload_body_size: PAYLOAD_BODY_SIZE,
+                        },
                         round_duration_in_seconds: 1.try_into().unwrap(),
                     },
                     with_core: CoreToCoreConfig {

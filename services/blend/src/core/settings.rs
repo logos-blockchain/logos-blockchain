@@ -1,6 +1,7 @@
 use core::time::Duration;
 use std::num::NonZeroU64;
 
+use lb_blend::message::encap::MessageLayout;
 use lb_core::blend::core_quota;
 use lb_cryptarchia_engine::EraSchedule;
 use lb_key_management_system_service::backend::preload::KeyId;
@@ -27,12 +28,24 @@ pub struct CoreServiceEraSettings {
     pub scheduler: EraSchedulerSettings,
     pub time: EraTimingSettings,
     pub num_blend_layers: NonZeroU64,
+    /// The size every payload body of the era is padded to: the largest block
+    /// proposal of the era, the largest thing the Blend network carries.
+    pub payload_body_size: u16,
     pub minimum_network_size: NonZeroU64,
     pub data_replication_factor: u64,
     pub activity_threshold_sensitivity: u64,
 }
 
 impl CoreServiceEraSettings {
+    /// The layout of the era's messages.
+    #[must_use]
+    pub const fn message_layout(&self) -> MessageLayout {
+        MessageLayout {
+            num_blend_layers: self.num_blend_layers,
+            payload_body_size: self.payload_body_size,
+        }
+    }
+
     #[must_use]
     pub fn epoch_core_quota(&self, membership_size: usize) -> Quota {
         self.scheduler

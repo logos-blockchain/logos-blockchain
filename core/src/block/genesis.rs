@@ -4,8 +4,9 @@ use lb_cryptarchia_engine::Slot;
 use lb_groth16::CompressedGroth16Proof;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use lb_utils::bounded::{BoundedError, UpperBoundedVec};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeSeed as _};
 
+use super::uncle::UncleHeadersSeed;
 use crate::{
     block::{Block, BlockTransactions, UncleHeaders},
     header::Header,
@@ -116,6 +117,10 @@ where
 #[derive(Clone, Debug, Serialize)]
 pub struct GenesisBlock(Block<GenesisTx>);
 
+/// The most uncles a genesis block may reference: none, since no block
+/// precedes it.
+pub(crate) const GENESIS_MAX_UNCLES: u8 = 0;
+
 impl<'de> Deserialize<'de> for GenesisBlock {
     fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
     where
@@ -125,6 +130,7 @@ impl<'de> Deserialize<'de> for GenesisBlock {
         struct RawGenesisBlock {
             header: Header,
             signature: Ed25519Signature,
+            #[serde(deserialize_with = "deserialize_genesis_uncle_headers")]
             uncle_headers: UncleHeaders,
             transactions: BlockTransactions<GenesisTx>,
         }
@@ -133,12 +139,6 @@ impl<'de> Deserialize<'de> for GenesisBlock {
 
         if raw.header.slot() != Slot::genesis() {
             return Err(serde::de::Error::custom("expected genesis slot"));
-        }
-
-        if !raw.uncle_headers.is_empty() {
-            return Err(serde::de::Error::custom(
-                "genesis block must not reference uncles",
-            ));
         }
 
         if raw.transactions.len() != 1 {
@@ -161,6 +161,23 @@ impl<'de> Deserialize<'de> for GenesisBlock {
     }
 }
 
+/// Reads a genesis block's uncle headers under a maximum of none: a declared
+/// header is refused before it is read.
+fn deserialize_genesis_uncle_headers<'de, D>(
+    deserializer: D,
+) -> core::result::Result<UncleHeaders, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    UncleHeadersSeed::new(GENESIS_MAX_UNCLES)
+        .deserialize(deserializer)
+        .map_err(|error| {
+            serde::de::Error::custom(format_args!(
+                "genesis block must not reference uncles: {error}"
+            ))
+        })
+}
+
 impl GenesisBlock {
     /// Create a genesis block from the given transaction.
     ///
@@ -175,7 +192,7 @@ impl GenesisBlock {
         Self(Block {
             header,
             signature,
-            uncle_headers: UncleHeaders::empty(),
+            uncle_headers: UncleHeaders::empty(GENESIS_MAX_UNCLES),
             transactions,
         })
     }

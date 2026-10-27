@@ -13,4 +13,4 @@ mod error;
 pub use error::Error;
 mod fixtures;
 mod message;
-pub use message::payload::{MAX_PAYLOAD_BODY_SIZE, PaddedPayloadBody, PayloadType};
+pub use message::payload::{PaddedPayloadBody, PayloadType};

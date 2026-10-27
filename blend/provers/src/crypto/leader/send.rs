@@ -1,10 +1,10 @@
 use core::{hash::Hash, mem};
-use std::{num::NonZeroU64, sync::Arc};
+use std::sync::Arc;
 
 use lb_blend_membership::Membership;
 use lb_blend_message::{
-    Error, MAX_PAYLOAD_BODY_SIZE, PaddedPayloadBody,
-    crypto::proofs::PoQVerificationInputsMinusSigningKey, input::EncapsulationInput,
+    Error, PaddedPayloadBody, crypto::proofs::PoQVerificationInputsMinusSigningKey,
+    encap::MessageLayout, input::EncapsulationInput,
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::blend;
@@ -60,7 +60,7 @@ impl PartialDraws {
 /// This processor is suitable for non-core nodes that do not need to generate
 /// any cover traffic and are hence only interested in blending data messages.
 pub struct EpochCryptographicProcessor<NodeId, ProofsGenerator> {
-    num_blend_layers: NonZeroU64,
+    message_layout: MessageLayout,
     membership: Membership<NodeId>,
     proofs_generator: ProofsGenerator,
     epoch: Epoch,
@@ -79,7 +79,7 @@ where
 {
     #[must_use]
     pub fn new(
-        num_blend_layers: NonZeroU64,
+        message_layout: MessageLayout,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
         winning_pol_info_stream: WinningPolInfoStream,
@@ -90,12 +90,12 @@ where
             local_node_index: membership.local_index(),
             membership_size: membership.size(),
             public_inputs: public_info,
-            encapsulation_layers: num_blend_layers,
+            encapsulation_layers: message_layout.num_blend_layers,
             epoch,
             pow_mining_pool,
         };
         Self {
-            num_blend_layers,
+            message_layout,
             membership,
             proofs_generator: ProofsGenerator::new(generator_settings, winning_pol_info_stream),
             epoch,
@@ -131,10 +131,12 @@ where
         payload: &[u8],
     ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
         // Refuse a payload that could never fit before spending anything on it.
-        // Only the length check has to happen this early; padding it — an 18 KiB
-        // allocation with a random tail — waits until the proofs are in hand, so
-        // an attempt that comes up short or is cancelled costs nothing.
-        if payload.len() > MAX_PAYLOAD_BODY_SIZE {
+        // Only the length check has to happen this early; padding it — an
+        // allocation of the whole body size with a random tail — waits until the
+        // proofs are in hand, so an attempt that comes up short or is cancelled
+        // costs nothing.
+        let body_size = self.message_layout.payload_body_size;
+        if payload.len() > usize::from(body_size) {
             return Err(Error::PayloadTooLarge);
         }
 
@@ -142,7 +144,11 @@ where
             return Err(Error::ProofNotAvailable);
         };
 
-        Ok(self.encapsulate_with(payload_type, PaddedPayloadBody::try_from(payload)?, proofs))
+        Ok(self.encapsulate_with(
+            payload_type,
+            PaddedPayloadBody::try_new(payload, body_size)?,
+            proofs,
+        ))
     }
 
     /// Draws a whole message's layer proofs, resuming any run a previous
@@ -157,7 +163,7 @@ where
     /// can go out under fewer real layers. Returns `None` only when not one
     /// proof is available.
     async fn next_proofs_for(&mut self, payload_type: PayloadType) -> Option<Vec<BlendLayerProof>> {
-        let encapsulations = self.num_blend_layers.get() as usize;
+        let encapsulations = self.message_layout.num_blend_layers.get() as usize;
         while self.partial_draws.for_type(payload_type).len() < encapsulations
             && let Some(layer_proof) = self.next_proof_for(payload_type).await
         {
@@ -230,7 +236,7 @@ where
             &inputs,
             payload_type.into(),
             validated_payload,
-            self.num_blend_layers.get() as usize,
+            self.message_layout.num_blend_layers.get() as usize,
         )
         .expect("Number of encapsulation inputs is in `1..=num_blend_layers`.")
     }

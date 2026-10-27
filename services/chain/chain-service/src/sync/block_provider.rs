@@ -7,6 +7,7 @@ use std::{
 
 use bytes::Bytes;
 use futures::{StreamExt as _, TryStreamExt as _, future, stream, stream::BoxStream};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_core::{
     block::Block,
     header::HeaderId,
@@ -70,7 +71,11 @@ impl<Tx> BlockProvider<Tx> {
 
 impl<Tx> BlockProvider<Tx>
 where
-    Tx: DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
+    Tx: DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
+        + Hashable<Hash = TxHash>
+        + StorageSize,
     Tx: Serialize + Clone + Eq + Send + Sync + 'static,
 {
     /// Creates a block stream that leads from one of the [`known_blocks`]
@@ -872,7 +877,7 @@ mod tests {
 
                 if i > 0 {
                     self.cryptarchia
-                        .receive_block(*header_id, *prev_header, *slot, UncleSlots::default())
+                        .receive_block(*header_id, *prev_header, *slot, UncleSlots::empty(4))
                         .expect("Failed to add block to cryptarchia");
                 }
 
@@ -893,7 +898,7 @@ mod tests {
             Block::create(
                 prev_header,
                 slot,
-                UncleHeaders::empty(),
+                UncleHeaders::empty(4),
                 self.proof.clone(),
                 BlockTransactions::empty(),
                 &dummy_signing_key,
@@ -909,7 +914,7 @@ mod tests {
             slot: Slot,
         ) {
             self.cryptarchia
-                .receive_block(header_id, prev_header, slot, UncleSlots::default())
+                .receive_block(header_id, prev_header, slot, UncleSlots::empty(4))
                 .expect("Failed to add block to cryptarchia");
 
             self.store_block_in_storage(block, header_id, slot).await;
@@ -921,14 +926,13 @@ mod tests {
             header_id: HeaderId,
         ) {
             let parent_id = block.header().parent();
-            let store_result: Result<_, _> = block.clone().try_into();
             let (sender, receiver) = oneshot::channel();
 
             self.storage_relay
                 .send(StorageMsg::StoreBlockData {
                     header_id,
                     parent_id,
-                    block: store_result.unwrap(),
+                    block: Bytes::from(block.encode_to_vec()),
                     events: Events::new().try_into().unwrap(),
                     immutable_ids: BTreeMap::new(),
                     response_tx: sender,
@@ -1027,7 +1031,7 @@ mod tests {
                     }
                     ProviderResponse::Available(mut stream) => match stream.next().await {
                         Some(Ok(bytes)) => {
-                            let block: Block<Ops> = Block::try_from(bytes).unwrap();
+                            let block = Block::<Ops>::decode_all(&bytes, &(u8::MAX, ())).unwrap();
                             (
                                 false,
                                 format!("Available(first_block={:?})", block.header().id()),
@@ -1124,11 +1128,12 @@ mod tests {
                     slot_activation_coeff,
                     1f64.try_into().expect("1 > 0"),
                     12.try_into().unwrap(),
+                    4,
                 )),
                 lb_cryptarchia_engine::State::Bootstrapping,
                 0.into(),
                 0,
-                UncleSlots::default(),
+                UncleSlots::empty(4),
             )
         }
     }

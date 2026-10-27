@@ -2,7 +2,6 @@ use core::fmt::{self, Debug, Formatter};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lb_binary_codec::{bincode::SerializeOp, canonical::BinaryEncode};
-pub use lb_blend::message::MAX_PAYLOAD_BODY_SIZE;
 use lb_blend::message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
 use lb_core::{
     crypto::{Digest as _, Hasher},
@@ -13,6 +12,8 @@ use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_sdp_service::SdpSubmission;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
+
+use crate::api::ApiError;
 
 /// Information about the current Blend network peers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +34,10 @@ pub struct CoreInfo<NodeId> {
 
 pub enum ProxyServiceMessage<InnerMessage> {
     Inner(InnerMessage),
+    Blend {
+        payload: DataPayload,
+        reply: oneshot::Sender<Result<(), ApiError>>,
+    },
     JoinAsCore {
         locator: Locator,
         service_note_id: NoteId,
@@ -109,7 +114,10 @@ impl AsRef<str> for DataPayloadType {
 }
 
 impl DataPayload {
-    /// Encodes a transaction for blending, refusing one that could never fit.
+    /// Encodes a transaction for blending.
+    ///
+    /// Whether it fits is up to the payload body size of the epoch it is sent
+    /// in, which Blend checks when the payload is submitted.
     // TODO: This will go once we move away from `Vec<u8>` and into strong types
     // for each message type Blend supports. Then we can also implement `TryFrom`
     // directly.
@@ -117,32 +125,39 @@ impl DataPayload {
     where
         Tx: SerializeOp,
     {
-        let encoded_tx = transaction.to_bytes()?.to_vec();
-        if encoded_tx.len() > MAX_PAYLOAD_BODY_SIZE {
-            return Err(TransactionNotBlendable::TooLarge {
-                size: encoded_tx.len(),
-                maximum: MAX_PAYLOAD_BODY_SIZE,
-            });
-        }
-        Ok(Self::Transaction(encoded_tx))
+        Ok(Self::Transaction(transaction.to_bytes()?.to_vec()))
     }
 
-    /// Encodes a proposal for blending, refusing one that could never fit.
+    /// Encodes a proposal for blending.
+    ///
+    /// The payload body of an era holds the largest proposal of the era, which
+    /// Blend checks when the payload is submitted.
     // TODO: This will go once we move away from `Vec<u8>` and into strong types
-    // for each message type Blend supports. Then we can also implement `TryFrom`
+    // for each message type Blend supports. Then we can also implement `From`
     // directly.
-    pub fn try_from_proposal<Proposal>(proposal: &Proposal) -> Result<Self, ProposalNotBlendable>
+    pub fn from_proposal<Proposal>(proposal: &Proposal) -> Self
     where
         Proposal: BinaryEncode,
     {
-        if proposal.encoded_length() > MAX_PAYLOAD_BODY_SIZE {
-            return Err(ProposalNotBlendable::TooLarge {
-                size: proposal.encoded_length(),
-                maximum: MAX_PAYLOAD_BODY_SIZE,
+        Self::BlockProposal(proposal.encode_to_vec())
+    }
+
+    /// The payload, if it fits a payload body of `payload_body_size` bytes.
+    ///
+    /// # Errors
+    ///
+    /// [`PayloadTooLarge`] if it does not.
+    pub(super) fn validate_size(
+        self,
+        payload_body_size: u16,
+    ) -> Result<DataPayloadWithValidatedSize, PayloadTooLarge> {
+        if self.len() > usize::from(payload_body_size) {
+            return Err(PayloadTooLarge {
+                size: self.len(),
+                maximum: payload_body_size,
             });
         }
-        let encoded_proposal = proposal.encode_to_vec();
-        Ok(Self::BlockProposal(encoded_proposal))
+        Ok(DataPayloadWithValidatedSize(self))
     }
 
     /// The wire discriminant this payload travels under.
@@ -172,6 +187,18 @@ impl DataPayload {
     }
 }
 
+/// A payload that fits a payload body of the epoch it was submitted in, built
+/// only by [`DataPayload::validate_size`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataPayloadWithValidatedSize(DataPayload);
+
+impl DataPayloadWithValidatedSize {
+    #[must_use]
+    pub fn into_inner(self) -> DataPayload {
+        self.0
+    }
+}
+
 /// Produces a stable digest for the exact canonical proposal bytes carried by
 /// a [`DataPayload::BlockProposal`].
 #[must_use]
@@ -197,23 +224,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn proposal_payload_guard_rejects_one_byte_over_the_bound() {
-        let proposal: UpperBoundedVec<u8, { MAX_PAYLOAD_BODY_SIZE + 1 }> =
-            UpperBoundedVec::new_unchecked(vec![0; MAX_PAYLOAD_BODY_SIZE - 1]);
-        let result = DataPayload::try_from_proposal(&proposal);
-
-        assert!(matches!(
-            result,
-            Err(ProposalNotBlendable::TooLarge { size, maximum })
-                if size == MAX_PAYLOAD_BODY_SIZE + 1 && maximum == MAX_PAYLOAD_BODY_SIZE
-        ));
-    }
-
-    #[test]
     fn proposal_diagnostic_digest_correlates_without_changing_payload_bytes() {
-        let proposal =
-            UpperBoundedVec::<u8, { MAX_PAYLOAD_BODY_SIZE }>::new_unchecked(vec![1, 2, 3, 4]);
-        let payload = DataPayload::try_from_proposal(&proposal).expect("proposal fits");
+        let proposal = UpperBoundedVec::<u8, 4>::new_unchecked(vec![1, 2, 3, 4]);
+        let payload = DataPayload::from_proposal(&proposal);
         let encoded = payload.body().to_vec();
 
         let submitted_digest = proposal_diagnostic_digest_from_encoded(&encoded);
@@ -241,20 +254,22 @@ mod tests {
     }
 }
 
+/// Why Blend refuses a payload: it is larger than a payload body of the
+/// current epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "Payload of {size} bytes exceeds the {maximum} a Blend payload carries in the current epoch."
+)]
+pub struct PayloadTooLarge {
+    pub size: usize,
+    pub maximum: u16,
+}
+
 /// Why a transaction cannot be carried by the Blend network.
 #[derive(Debug, thiserror::Error)]
 pub enum TransactionNotBlendable {
-    #[error("Transaction of {size} bytes exceeds the {maximum} a Blend payload can carry.")]
-    TooLarge { size: usize, maximum: usize },
     #[error("Transaction cannot be encoded: {0}")]
     Encoding(#[from] lb_binary_codec::bincode::Error),
-}
-
-/// Why a proposal cannot be carried by the Blend network.
-#[derive(Debug, thiserror::Error)]
-pub enum ProposalNotBlendable {
-    #[error("Proposal of {size} bytes exceeds the {maximum} a Blend payload can carry.")]
-    TooLarge { size: usize, maximum: usize },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]

@@ -9,7 +9,7 @@ use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use crate::{
     crypto::proofs::PoQVerificationInputsMinusSigningKey,
     message::{
-        blending_header::BLENDING_HEADER_ENCODED_SIZE, payload::PAYLOAD_ENCODED_SIZE,
+        blending_header::BLENDING_HEADER_ENCODED_SIZE, payload::payload_encoded_size,
         public_header::PUBLIC_HEADER_ENCODED_SIZE,
     },
 };
@@ -44,17 +44,35 @@ pub trait ProofsVerifier {
     ) -> Result<VerifiedProofOfSelection, Self::Error>;
 }
 
-/// The number of bytes an encapsulated message can encode to at most on the
-/// wire, given the maximum number of per-message encapsulations.
+/// The shape every message of an epoch has on the wire, set by the epoch's era.
+///
+/// A message carries `num_blend_layers` blending headers (`ß_max`), however
+/// many times it is actually encapsulated, and a payload body padded to
+/// `payload_body_size`. Messages are built and decoded under it, so that all
+/// the messages of an epoch have the same size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MessageLayout {
+    pub num_blend_layers: NonZeroU64,
+    pub payload_body_size: u16,
+}
+
+/// The number of bytes an encapsulated message of `layout` encodes to on the
+/// wire.
 #[must_use]
-pub const fn encapsulated_message_encoded_size(num_blend_layers: NonZeroU64) -> NonZeroUsize {
-    let blending_headers = BLENDING_HEADER_ENCODED_SIZE
-        .checked_mul(num_blend_layers.get() as usize)
+pub fn encapsulated_message_encoded_size(
+    MessageLayout {
+        num_blend_layers,
+        payload_body_size,
+    }: MessageLayout,
+) -> NonZeroUsize {
+    let blending_headers = usize::try_from(num_blend_layers.get())
+        .ok()
+        .and_then(|layers| BLENDING_HEADER_ENCODED_SIZE.checked_mul(layers))
         .expect("The encoded size of the blending headers must not overflow.");
     let total = PUBLIC_HEADER_ENCODED_SIZE
         .checked_add(blending_headers)
         .expect("The encoded size of a message must not overflow.")
-        .checked_add(PAYLOAD_ENCODED_SIZE)
+        .checked_add(payload_encoded_size(payload_body_size))
         .expect("The encoded size of a message must not overflow.");
 
     NonZeroUsize::new(total).expect("The encoded size of a message is greater than `0`.")
@@ -72,14 +90,16 @@ mod encoded_size_tests {
     use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 
     use crate::{
-        PayloadType,
+        PaddedPayloadBody, PayloadType,
         crypto::key_ext::Ed25519SecretKeyExt as _,
         encap::{
-            encapsulated::EncapsulatedMessage, encapsulated_message_encoded_size,
+            MessageLayout, encapsulated::EncapsulatedMessage, encapsulated_message_encoded_size,
             validated::EncapsulatedMessageWithVerifiedPublicHeader,
         },
         input::EncapsulationInput,
     };
+
+    const PAYLOAD_BODY_SIZE: u16 = 64;
 
     fn encapsulated_message(layers: usize, payload_body: &[u8]) -> EncapsulatedMessage {
         let recipient = UnsecuredEd25519Key::from_bytes(&[1u8; 32]);
@@ -93,24 +113,28 @@ mod encoded_size_tests {
         EncapsulatedMessageWithVerifiedPublicHeader::try_new(
             &[input],
             PayloadType::BlockProposal,
-            payload_body.try_into().expect("the payload body fits"),
+            PaddedPayloadBody::try_new(payload_body, PAYLOAD_BODY_SIZE)
+                .expect("the payload body fits"),
             layers,
         )
         .expect("the message is well formed")
         .into()
     }
 
-    fn expected_size(layers: u64) -> usize {
-        encapsulated_message_encoded_size(NonZeroU64::new(layers).unwrap()).get()
+    fn layout(layers: u64) -> MessageLayout {
+        MessageLayout {
+            num_blend_layers: NonZeroU64::new(layers).unwrap(),
+            payload_body_size: PAYLOAD_BODY_SIZE,
+        }
     }
 
     #[test]
-    fn a_message_encodes_to_exactly_the_size_its_layer_count_implies() {
+    fn a_message_encodes_to_exactly_the_size_its_layout_implies() {
         for layers in 1..=3u64 {
             assert_eq!(
                 encapsulated_message(usize::try_from(layers).unwrap(), b"payload").encoded_length(),
-                expected_size(layers),
-                "A {layers}-layer message did not encode to the size that layer count implies"
+                encapsulated_message_encoded_size(layout(layers)).get(),
+                "A {layers}-layer message did not encode to the size its layout implies"
             );
         }
     }

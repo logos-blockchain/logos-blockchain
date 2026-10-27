@@ -29,7 +29,7 @@ use tokio::sync::oneshot;
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 
 use super::PayloadDispatcher;
-use crate::message::{DataPayload, MAX_PAYLOAD_BODY_SIZE};
+use crate::message::DataPayload;
 
 const LOG_TARGET: &str = blend::service::CORE;
 
@@ -85,18 +85,9 @@ fn proposal_topic_for_era(era_schedule: &EraSchedule<Libp2pBroadcastSettings>, e
 }
 
 /// Broadcast an unencrypted block proposal to the network by publishing it
-/// under the configured gossipsub topic.
+/// under the configured gossipsub topic, which refuses one larger than the
+/// largest proposal of its era.
 async fn broadcast_block_proposal(network_relay: &NetworkRelay, topic: String, proposal: Vec<u8>) {
-    if proposal.len() > MAX_PAYLOAD_BODY_SIZE {
-        tracing::error!(
-            target: LOG_TARGET,
-            size = proposal.len(),
-            maximum = MAX_PAYLOAD_BODY_SIZE,
-            "Refusing to broadcast an oversized block proposal"
-        );
-        return;
-    }
-
     if let Err(error) = network_relay
         .send(NetworkMsg::Process(Command::PubSub(
             PubSubCommand::Broadcast {
@@ -170,12 +161,10 @@ where
     };
 
     observe_items_ignoring_lags(BroadcastStream::new(received), StreamType::Proposals)
-        .filter_map(|proposal| {
+        .map(|proposal| {
             // Encoded the way it was handed to Blend, so that the two are the same
-            // bytes and comparing them is all the sender has to do. One that does
-            // not fit a payload is one Blend cannot have carried, so it is not a
-            // delivery this node is waiting on.
-            ready(DataPayload::try_from_proposal(&proposal).ok())
+            // bytes and comparing them is all the sender has to do.
+            DataPayload::from_proposal(&proposal)
         })
         .boxed()
 }
@@ -243,9 +232,8 @@ where
     observe_items_ignoring_lags(BroadcastStream::new(accepted), StreamType::Transactions)
         .filter_map(|transaction| {
             // Encoded the way it was handed to Blend, so that the two are the same
-            // bytes and comparing them is all the sender has to do. If it cannot fit into
-            // the maximum size Blend allows, it means the tx was not sent with Blend in the
-            // first place.
+            // bytes and comparing them is all the sender has to do. One that does not
+            // encode was not sent with Blend in the first place.
             ready(DataPayload::try_from_transaction(&transaction).ok())
         })
         .boxed()

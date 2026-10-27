@@ -657,7 +657,7 @@ mod tests {
         let (json_error, json_attempts) =
             error_and_value_attempts(r#"{"1":1,"1":2,"1":3,"1":4,"1":5}"#, from_json);
         assert!(
-            json_error.contains("Item count 5 exceeds static maximum of 4"),
+            json_error.contains("Item count 5 exceeds maximum of 4"),
             "unexpected error: {json_error}"
         );
         assert_eq!(
@@ -669,7 +669,7 @@ mod tests {
         let encoded = bincode::serialize(&vec![(1u8, 1u16); 5]).unwrap();
         let (binary_error, binary_attempts) = error_and_value_attempts(&encoded[..], from_bincode);
         assert!(
-            binary_error.contains("Item count 5 exceeds static maximum of 4"),
+            binary_error.contains("Item count 5 exceeds maximum of 4"),
             "unexpected error: {binary_error}"
         );
         assert_eq!(binary_attempts, 0, "no entry is decoded");
@@ -702,7 +702,7 @@ mod tests {
             bincode::serialize(&vec![(1u8, 1u16), (2, 2), (3, 3), (4, 4), (5, 5)]).unwrap();
         let too_many = bincode::deserialize::<TestMap>(&encoded).unwrap_err();
         assert!(
-            too_many.to_string().contains("exceeds static maximum"),
+            too_many.to_string().contains("exceeds maximum"),
             "unexpected error: {too_many}"
         );
     }

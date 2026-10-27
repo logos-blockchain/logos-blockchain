@@ -22,23 +22,36 @@ use crate::{
     input::EncapsulationInput,
     message::{
         blending_header::BlendingHeader,
-        payload::{MAX_PAYLOAD_BODY_SIZE, Payload},
+        payload::Payload,
         public_header::{PublicHeader, PublicHeaderWithVerifiedSignature, VerifiedPublicHeader},
     },
 };
 
 // -- Payload ---------------------------------------------------------------
 
-/// Build a fixture body of exactly [`MAX_PAYLOAD_BODY_SIZE`] bytes: `prefix`,
-/// then `0xAA` to the end.
+/// The payload body size of the fixtures: the largest block proposal of an era
+/// that allows four uncles.
+const FIXTURE_PAYLOAD_BODY_SIZE: u16 = 18_187;
+
+/// The layout of the fixture messages: one blending header, and bodies of
+/// [`FIXTURE_PAYLOAD_BODY_SIZE`].
+#[cfg(test)]
+const FIXTURE_LAYOUT: crate::encap::MessageLayout = crate::encap::MessageLayout {
+    num_blend_layers: core::num::NonZeroU64::new(1).unwrap(),
+    payload_body_size: FIXTURE_PAYLOAD_BODY_SIZE,
+};
+
+/// Build a fixture body of exactly [`FIXTURE_PAYLOAD_BODY_SIZE`] bytes:
+/// `prefix`, then `0xAA` to the end.
 ///
 /// A shorter body would be padded out with random bytes, which no golden
 /// fixture can pin. One that already fills the buffer leaves nothing to pad, so
 /// the encoding is deterministic.
 fn full_length_body(prefix: &[u8]) -> PaddedPayloadBody {
     let mut body = prefix.to_vec();
-    body.resize(MAX_PAYLOAD_BODY_SIZE, 0xAA);
-    PaddedPayloadBody::try_from(body).expect("body is exactly the maximum size")
+    body.resize(usize::from(FIXTURE_PAYLOAD_BODY_SIZE), 0xAA);
+    PaddedPayloadBody::try_new(&body, FIXTURE_PAYLOAD_BODY_SIZE)
+        .expect("body is exactly the body size")
 }
 
 codec_fixtures!(
@@ -50,11 +63,13 @@ codec_fixtures!(
 
 codec_fixtures!(
     PaddedPayloadBody,
+    context = FIXTURE_PAYLOAD_BODY_SIZE,
     full_length_body(&[1u8, 2, 3]) => include_str!("padded_payload_body.hex")
 );
 
 codec_fixtures!(
     Payload,
+    context = FIXTURE_PAYLOAD_BODY_SIZE,
     Self::new(
         PayloadType::BlockProposal,
         full_length_body(&[4u8, 5, 6]),
@@ -63,6 +78,7 @@ codec_fixtures!(
 
 codec_fixtures!(
     EncapsulatedPayload,
+    context = FIXTURE_PAYLOAD_BODY_SIZE,
     Self::initialize(&Payload::new(
         PayloadType::BlockProposal,
         full_length_body(&[7u8, 8, 9]),
@@ -198,14 +214,14 @@ fn wire_fixture_message() -> EncapsulatedMessageWithVerifiedPublicHeader {
 codec_fixtures!(
     EncapsulatedMessage,
     decode_only,
-    context = core::num::NonZeroU64::new(1).unwrap(),
+    context = FIXTURE_LAYOUT,
     EncapsulatedMessage::from(wire_fixture_message())
         => include_str!("encapsulated_message.hex")
 );
 
 codec_fixtures!(
     EncapsulatedPart,
-    context = core::num::NonZeroU64::new(1).unwrap(),
+    context = FIXTURE_LAYOUT,
     EncapsulatedMessage::from(wire_fixture_message())
         .into_components()
         .1 => include_str!("encapsulated_part.hex")

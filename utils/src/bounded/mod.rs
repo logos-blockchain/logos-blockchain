@@ -21,6 +21,9 @@
 //! repeated element or key exactly as the wrapped collection does; `MIN`
 //! applies to the items held. Construction is stricter: it rejects a repeat
 //! instead of merging it, so the items given are always the items held.
+//!
+//! [`RuntimeBounded`] is the same newtype for a maximum known only at runtime,
+//! such as an era's limit: the value carries its maximum instead of its type.
 
 use core::fmt::{self, Display, Formatter};
 
@@ -36,6 +39,11 @@ pub mod ordered_map;
 pub use ordered_map::{BoundedOrderedMap, NonEmptyBoundedOrderedMap, UpperBoundedOrderedMap};
 pub mod ordered_set;
 pub use ordered_set::{BoundedOrderedSet, NonEmptyBoundedOrderedSet, UpperBoundedOrderedSet};
+pub mod runtime;
+pub use runtime::{
+    NonEmptyRuntimeBoundedVec, RuntimeBounded, RuntimeBoundedVec, RuntimeBoundedVecSeed,
+    UpperRuntimeBoundedVec,
+};
 pub mod string;
 pub use string::BoundedString;
 pub mod vec;
@@ -52,7 +60,7 @@ pub enum BoundedError {
     EmptyInput,
     #[error("Item count {count} is below minimum of {min}")]
     TooFewItems { count: usize, min: usize },
-    #[error("Item count {count} exceeds static maximum of {max}")]
+    #[error("Item count {count} exceeds maximum of {max}")]
     TooManyItems { count: usize, max: usize },
     #[error("Index {index} is out of bounds for length {len}")]
     IndexOutOfBounds { index: usize, len: usize },
@@ -85,22 +93,22 @@ impl BoundedError {
 /// length it has been told about but has not yet seen.
 const MAX_PREALLOCATION_BYTES: usize = 1024 * 1024;
 
-/// How many items a `MAX`-bounded collection should reserve room for, given a
-/// declared length.
+/// How many items a collection bounded by `max` should reserve room for, given
+/// a declared length.
 ///
 /// A declared length is only a claim. In a binary format it is read off the
-/// wire before a single item has been seen, so trusting it up to `MAX` would
-/// let a few bytes of input reserve `MAX` items' worth of memory, or, for a
-/// large `MAX`, overflow the allocator and panic. The claim is honoured up to
+/// wire before a single item has been seen, so trusting it up to `max` would
+/// let a few bytes of input reserve `max` items' worth of memory, or, for a
+/// large `max`, overflow the allocator and panic. The claim is honoured up to
 /// [`MAX_PREALLOCATION_BYTES`]; past that the collection grows as items
 /// actually arrive. Zero-sized items need no room, so they get none.
-pub(crate) fn allocation_size_for_hint<Item, const MAX: usize>(hint: Option<usize>) -> usize {
+pub(crate) fn allocation_size_for_hint<Item>(hint: Option<usize>, max: usize) -> usize {
     let item_size = size_of::<Item>();
     if item_size == 0 {
         return 0;
     }
     hint.unwrap_or(0)
-        .min(MAX)
+        .min(max)
         .min(MAX_PREALLOCATION_BYTES / item_size)
 }
 
@@ -218,22 +226,22 @@ mod tests {
 
     #[test]
     fn preallocation_honours_a_small_declared_length() {
-        assert_eq!(allocation_size_for_hint::<u64, 16>(Some(3)), 3);
+        assert_eq!(allocation_size_for_hint::<u64>(Some(3), 16), 3);
     }
 
     #[test]
     fn preallocation_is_zero_without_a_declared_length() {
-        assert_eq!(allocation_size_for_hint::<u64, 16>(None), 0);
+        assert_eq!(allocation_size_for_hint::<u64>(None, 16), 0);
     }
 
     #[test]
     fn preallocation_never_exceeds_max() {
-        assert_eq!(allocation_size_for_hint::<u64, 16>(Some(1_000)), 16);
+        assert_eq!(allocation_size_for_hint::<u64>(Some(1_000), 16), 16);
     }
 
     #[test]
     fn preallocation_never_exceeds_the_byte_budget() {
-        let capacity = allocation_size_for_hint::<[u8; 32], { usize::MAX }>(Some(usize::MAX));
+        let capacity = allocation_size_for_hint::<[u8; 32]>(Some(usize::MAX), usize::MAX);
 
         assert_eq!(capacity, MAX_PREALLOCATION_BYTES / 32);
     }
@@ -241,7 +249,7 @@ mod tests {
     #[test]
     fn preallocation_reserves_nothing_for_zero_sized_items() {
         assert_eq!(
-            allocation_size_for_hint::<(), { usize::MAX }>(Some(usize::MAX)),
+            allocation_size_for_hint::<()>(Some(usize::MAX), usize::MAX),
             0
         );
     }

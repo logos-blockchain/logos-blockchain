@@ -2,9 +2,12 @@ use futures::AsyncWriteExt as _;
 use lb_binary_codec::bincode::BoundedSerializeOp;
 use libp2p::{PeerId, Stream, StreamProtocol};
 use libp2p_stream::Control;
-use serde::de::DeserializeOwned;
+use serde::{Serialize, de::DeserializeOwned};
 
-use crate::libp2p::{errors::ChainSyncError, packing::pack_to_writer};
+use crate::libp2p::{
+    errors::ChainSyncError,
+    packing::{pack_to_writer, pack_to_writer_up_to},
+};
 
 pub async fn send_message<M: BoundedSerializeOp + DeserializeOwned + Sync>(
     peer_id: PeerId,
@@ -15,12 +18,28 @@ pub async fn send_message<M: BoundedSerializeOp + DeserializeOwned + Sync>(
         .await
         .map_err(|e| ChainSyncError::from((peer_id, e)))?;
 
-    stream
-        .flush()
+    flush(peer_id, stream).await
+}
+
+/// Sends a message of at most `max` bytes, a maximum known only at runtime.
+pub async fn send_message_up_to<M: Serialize + Sync>(
+    peer_id: PeerId,
+    stream: &mut Stream,
+    message: &M,
+    max_bytes: usize,
+) -> Result<(), ChainSyncError> {
+    pack_to_writer_up_to(message, max_bytes, stream)
         .await
         .map_err(|e| ChainSyncError::from((peer_id, e)))?;
 
-    Ok(())
+    flush(peer_id, stream).await
+}
+
+async fn flush(peer_id: PeerId, stream: &mut Stream) -> Result<(), ChainSyncError> {
+    stream
+        .flush()
+        .await
+        .map_err(|e| ChainSyncError::from((peer_id, e)))
 }
 
 pub async fn open_stream(

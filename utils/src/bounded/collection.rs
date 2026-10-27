@@ -16,6 +16,9 @@
 //! - A declared length is trusted for pre-allocation only up to the budget
 //!   every bounded collection shares (see [`allocation_size_for_hint`]), and
 //!   one outside the bounds is rejected before a single item is decoded.
+//!
+//! A [runtime-bounded](RuntimeBounded) collection is built by the same rules,
+//! with the maximum it is given in place of `MAX`.
 
 use core::{fmt, marker::PhantomData};
 
@@ -24,7 +27,7 @@ use serde::{
     de::{Error as _, MapAccess, SeqAccess, Visitor},
 };
 
-use crate::bounded::{Bounded, BoundedError, BoundedLen, allocation_size_for_hint};
+use crate::bounded::{Bounded, BoundedError, BoundedLen, RuntimeBounded, allocation_size_for_hint};
 
 /// A collection a bounded type can be built from, one item at a time.
 pub trait BoundedCollection: BoundedLen + Sized {
@@ -51,48 +54,94 @@ where
     Collection: BoundedCollection,
     Items: IntoIterator<Item = Collection::Item>,
 {
+    Bounded::try_new(collect_distinct(items, MAX)?)
+}
+
+/// Builds a runtime-bounded collection from an iterator, as [`collect_iter`]
+/// does, with `max_len` in place of `MAX`.
+pub fn collect_iter_up_to<Collection, Items, Max, const MIN: usize>(
+    items: Items,
+    max_len: Max,
+) -> Result<RuntimeBounded<Collection, Max, MIN>, BoundedError>
+where
+    Collection: BoundedCollection,
+    Items: IntoIterator<Item = Collection::Item>,
+    Max: Copy + Into<usize>,
+{
+    RuntimeBounded::try_new(collect_distinct(items, max_len.into())?, max_len)
+}
+
+/// Collects `items`, stopping at the first repeat or at the first item past
+/// `max`.
+fn collect_distinct<Collection, Items>(items: Items, max: usize) -> Result<Collection, BoundedError>
+where
+    Collection: BoundedCollection,
+    Items: IntoIterator<Item = Collection::Item>,
+{
     let items = items.into_iter();
-    let mut collection = Collection::with_capacity(
-        allocation_size_for_hint::<Collection::Item, MAX>(Some(items.size_hint().0)),
-    );
+    let mut collection = Collection::with_capacity(allocation_size_for_hint::<Collection::Item>(
+        Some(items.size_hint().0),
+        max,
+    ));
     for (index, item) in items.enumerate() {
-        check_position::<MAX>(index)?;
+        check_position(index, max)?;
         // A repeat has already been merged by the time it is found, but the
         // collection is dropped with the error.
         if !collection.add(item) {
             return Err(BoundedError::DuplicateItem { index });
         }
     }
-    Bounded::try_new(collection)
+    Ok(collection)
 }
 
-/// Refuses the item at input position `index` when it is past `MAX`.
-const fn check_position<const MAX: usize>(index: usize) -> Result<(), BoundedError> {
-    if index >= MAX {
+/// Refuses the item at input position `index` when it is past `max`.
+const fn check_position(index: usize, max: usize) -> Result<(), BoundedError> {
+    if index >= max {
         return Err(BoundedError::TooManyItems {
             count: index.saturating_add(1),
-            max: MAX,
+            max,
         });
     }
     Ok(())
 }
 
-/// Rejects a declared length outside `[MIN, MAX]` before any item is decoded.
+/// Rejects, before any item is decoded, a declared length that `check_len`
+/// refuses.
 ///
 /// Binary formats declare the length up front, so an input of the wrong size
 /// fails here without a single item being decoded: one declaring more than
-/// `MAX` items would supply them, and one declaring fewer than `MIN` could
-/// never leave the collection holding `MIN`. Formats that declare nothing,
+/// the maximum would supply them, and one declaring fewer than the minimum
+/// could never leave the collection holding it. Formats that declare nothing,
 /// such as JSON, are held to the same bounds as the items arrive.
-fn check_declared_len<Collection, Error, const MIN: usize, const MAX: usize>(
+fn check_declared_len<Error>(
     hint: Option<usize>,
+    check_len: impl FnOnce(usize) -> Result<(), BoundedError>,
 ) -> Result<(), Error>
 where
     Error: serde::de::Error,
 {
-    hint.map_or(Ok(()), |len| {
-        Bounded::<Collection, MIN, MAX>::check_len_against_bounds(len).map_err(Error::custom)
-    })
+    hint.map_or(Ok(()), |len| check_len(len).map_err(Error::custom))
+}
+
+/// Reads a sequence into a collection, refusing the element past `max` where
+/// it arrives.
+fn read_sequence<'de, Collection, A>(mut sequence: A, max: usize) -> Result<Collection, A::Error>
+where
+    Collection: BoundedCollection<Item: Deserialize<'de>>,
+    A: SeqAccess<'de>,
+{
+    let mut collection = Collection::with_capacity(allocation_size_for_hint::<Collection::Item>(
+        sequence.size_hint(),
+        max,
+    ));
+    let mut index = 0;
+    while let Some(item) = sequence.next_element()? {
+        check_position(index, max).map_err(A::Error::custom)?;
+        collection.add(item);
+        // `index` stays below `max`, so it cannot overflow.
+        index += 1;
+    }
+    Ok(collection)
 }
 
 /// Deserializes a sequence into a bounded collection, one element at a time.
@@ -118,22 +167,61 @@ where
         )
     }
 
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    fn visit_seq<A>(self, sequence: A) -> Result<Self::Value, A::Error>
     where
         A: SeqAccess<'de>,
     {
-        let hint = sequence.size_hint();
-        check_declared_len::<Collection, A::Error, MIN, MAX>(hint)?;
-        let mut collection =
-            Collection::with_capacity(allocation_size_for_hint::<Collection::Item, MAX>(hint));
-        let mut index = 0;
-        while let Some(item) = sequence.next_element()? {
-            check_position::<MAX>(index).map_err(A::Error::custom)?;
-            collection.add(item);
-            // `index` stays below `MAX`, so it cannot overflow.
-            index += 1;
-        }
+        check_declared_len::<A::Error>(
+            sequence.size_hint(),
+            Bounded::<Collection, MIN, MAX>::check_len_against_bounds,
+        )?;
+        let collection = read_sequence(sequence, MAX)?;
         Bounded::try_new(collection).map_err(A::Error::custom)
+    }
+}
+
+/// Deserializes a sequence into a runtime-bounded collection, one element at a
+/// time, under the maximum it is given.
+pub struct RuntimeSeqVisitor<Collection, Max, const MIN: usize> {
+    max_len: Max,
+    collection: PhantomData<Collection>,
+}
+
+impl<Collection, Max, const MIN: usize> RuntimeSeqVisitor<Collection, Max, MIN> {
+    pub const fn new(max_len: Max) -> Self {
+        Self {
+            max_len,
+            collection: PhantomData,
+        }
+    }
+}
+
+impl<'de, Collection, Max, const MIN: usize> Visitor<'de>
+    for RuntimeSeqVisitor<Collection, Max, MIN>
+where
+    Collection: BoundedCollection<Item: Deserialize<'de>>,
+    Max: Copy + Into<usize>,
+{
+    type Value = RuntimeBounded<Collection, Max, MIN>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let max_len: usize = self.max_len.into();
+        write!(
+            formatter,
+            "a sequence of at most {max_len} items, making a collection of at least {MIN}"
+        )
+    }
+
+    fn visit_seq<A>(self, sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let max_len = self.max_len.into();
+        check_declared_len::<A::Error>(sequence.size_hint(), |len| {
+            RuntimeBounded::<Collection, Max, MIN>::check_len_against_bounds(len, max_len)
+        })?;
+        let collection = read_sequence(sequence, max_len)?;
+        RuntimeBounded::try_new(collection, self.max_len).map_err(A::Error::custom)
     }
 }
 
@@ -169,11 +257,11 @@ where
         A: MapAccess<'de>,
     {
         let hint = entries.size_hint();
-        check_declared_len::<Map, A::Error, MIN, MAX>(hint)?;
-        let mut map = Map::with_capacity(allocation_size_for_hint::<(K, V), MAX>(hint));
+        check_declared_len::<A::Error>(hint, Bounded::<Map, MIN, MAX>::check_len_against_bounds)?;
+        let mut map = Map::with_capacity(allocation_size_for_hint::<(K, V)>(hint, MAX));
         let mut index = 0;
         while let Some(key) = entries.next_key()? {
-            check_position::<MAX>(index).map_err(A::Error::custom)?;
+            check_position(index, MAX).map_err(A::Error::custom)?;
             let value = entries.next_value()?;
             map.add((key, value));
             // `index` stays below `MAX`, so it cannot overflow.

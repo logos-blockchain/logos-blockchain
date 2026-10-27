@@ -2,6 +2,7 @@ use core::{num::NonZeroU32, pin::Pin, time::Duration};
 use std::num::NonZeroU64;
 
 use futures::{Stream, StreamExt as _, stream::pending};
+use lb_blend::message::encap::MessageLayout;
 use lb_cryptarchia_engine::EraSchedule;
 use lb_libp2p::protocol_name::StreamProtocol;
 use libp2p::Multiaddr;
@@ -33,7 +34,8 @@ pub struct Libp2pBlendBackendEraSettings {
     pub accepted_edge_connections_per_round: NonZeroU64,
     pub protocol_name: StreamProtocol,
     pub minimum_network_size: NonZeroU64,
-    pub num_blend_layers: NonZeroU64,
+    /// The layout of the era's messages.
+    pub message_layout: MessageLayout,
     pub time: EraTimingSettings,
 }
 

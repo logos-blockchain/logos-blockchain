@@ -43,10 +43,12 @@ pub struct Swarm<R: Clone + Send + RngCore + 'static> {
 
 impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
     /// Builds a [`Swarm`] configured for use with Logos blockchain on top of a
-    /// tokio executor.
+    /// tokio executor, whose chain sync carries blocks of up to
+    /// `chain_sync_max_block_size` bytes.
     pub fn build(
         config: SwarmConfig,
         chain_sync_protocol_name: StreamProtocol,
+        chain_sync_max_block_size: usize,
         max_data_size_by_topic: HashMap<libp2p::gossipsub::TopicHash, usize>,
         rng: R,
     ) -> Result<Self, Box<dyn Error>> {
@@ -85,6 +87,7 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
                         chain_sync_protocol_name: chain_sync_protocol_name.into(),
                         public_key: keypair.public(),
                         chain_sync_config,
+                        chain_sync_max_block_size,
                         max_data_size_by_topic,
                     },
                     rng,

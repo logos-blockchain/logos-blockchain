@@ -11,6 +11,7 @@ mod tests;
 use core::num::{NonZeroU64, NonZeroUsize};
 
 use lb_blend_membership::Membership;
+use lb_blend_message::encap::MessageLayout;
 use lb_blend_primitives::time::RoundClock;
 use lb_cryptarchia_engine::Epoch;
 use libp2p::{PeerId, StreamProtocol};
@@ -41,7 +42,8 @@ pub struct Config {
 pub struct CommonConfig {
     pub round_duration_in_seconds: NonZeroU64,
     pub minimum_network_size: NonZeroUsize,
-    pub num_blend_layers: NonZeroU64,
+    /// The layout every well-formed Blend message of the era has.
+    pub message_layout: MessageLayout,
 }
 
 impl<ProofsVerifier> NetworkBehaviour<ProofsVerifier>
