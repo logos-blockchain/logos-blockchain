@@ -10,7 +10,10 @@ use lb_core::{
     events::{HeaderEvent, TxEvent},
     mantle::{
         Value,
-        ledger::verification_mode::{GenesisMode, StandardMode},
+        ledger::{
+            DeclarationKeys,
+            verification_mode::{GenesisMode, StandardMode},
+        },
         note_set::NoteSets,
         notes::{Note, NoteCommitment, OutputCommitments},
         ops::{
@@ -88,19 +91,34 @@ impl Service {
 
     const fn declarations(&self) -> &Declarations {
         match self {
-            Self::BlendNetwork(state) => &state.declarations,
+            Self::BlendNetwork(state) => &state.declarations.declarations,
+        }
+    }
+
+    const fn declaration_keys(&self) -> &DeclarationKeys {
+        match self {
+            Self::BlendNetwork(state) => &state.declarations.keys,
         }
     }
 
     pub fn declarations_clone(&self) -> Declarations {
         match self {
-            Self::BlendNetwork(state) => state.declarations.clone(),
+            Self::BlendNetwork(state) => state.declarations.declarations.clone(),
         }
     }
 
+    // After an Operation that adds and removes no declaration and changes no
+    // `provider_id` or `zk_id`, so the keys stay those of the declarations.
     pub fn update_declarations(&mut self, declarations: Declarations) {
         match self {
-            Self::BlendNetwork(state) => state.declarations = declarations,
+            Self::BlendNetwork(state) => state.declarations.declarations = declarations,
+        }
+    }
+
+    // After the declaration `declaration_id` was added to the declarations.
+    pub fn add_declaration(&mut self, declarations: Declarations, declaration_id: DeclarationId) {
+        match self {
+            Self::BlendNetwork(state) => state.declarations.add(declarations, declaration_id),
         }
     }
 
@@ -191,9 +209,59 @@ pub enum Error {
 struct ServiceState<R: Rewards> {
     service_type: ServiceType,
     /// Declarations accumulated until the current block.
-    declarations: Declarations,
+    declarations: ServiceDeclarations,
     // Rewards calculation and tracking for this service
     pub rewards: R,
+}
+
+/// The declarations of a service with their keys, which a declaration checks
+/// its `provider_id` and `zk_id` against. Only the declarations are encoded and
+/// compared, the keys are rebuilt from them when decoding.
+#[derive(Debug, Clone, Default)]
+struct ServiceDeclarations {
+    declarations: Declarations,
+    keys: DeclarationKeys,
+}
+
+impl ServiceDeclarations {
+    fn add(&mut self, declarations: Declarations, declaration_id: DeclarationId) {
+        let declaration = declarations
+            .get(&declaration_id)
+            .expect("the added declaration is in the declarations");
+        self.keys.insert_mut(declaration_id, declaration);
+        self.declarations = declarations;
+    }
+
+    fn remove_mut(&mut self, declaration_id: &DeclarationId) {
+        if let Some(declaration) = self.declarations.get(declaration_id) {
+            self.keys.remove_mut(declaration);
+            self.declarations.remove_mut(declaration_id);
+        }
+    }
+}
+
+impl PartialEq for ServiceDeclarations {
+    fn eq(&self, other: &Self) -> bool {
+        self.declarations == other.declarations
+    }
+}
+
+impl Eq for ServiceDeclarations {}
+
+impl serde::Serialize for ServiceDeclarations {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.declarations.serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ServiceDeclarations {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let declarations = Declarations::deserialize(deserializer)?;
+        Ok(Self {
+            keys: DeclarationKeys::from_declarations(&declarations),
+            declarations,
+        })
+    }
 }
 
 impl<R: Rewards> ServiceState<R> {
@@ -249,6 +317,7 @@ impl<R: Rewards> ServiceState<R> {
     ) -> (Released, Vec<HeaderEvent>) {
         let released: Released = self
             .declarations
+            .declarations
             .iter()
             .filter(|(_, declaration)| {
                 declaration
@@ -278,7 +347,7 @@ impl<R: Rewards> ServiceState<R> {
     }
 
     fn contains(&self, declaration_id: &DeclarationId) -> bool {
-        self.declarations.contains_key(declaration_id)
+        self.declarations.declarations.contains_key(declaration_id)
     }
 }
 
@@ -339,6 +408,7 @@ impl SdpLedger {
                     note_sets: &note_sets,
                     tx_hash_view,
                     declarations: service_state.declarations(),
+                    declaration_keys: service_state.declaration_keys(),
                     min_stake: &config.min_stake,
                 })
                 .map_err(|(_signed_operation, error)| error)?;
@@ -398,7 +468,7 @@ impl SdpLedger {
     fn new_service_state<R: Rewards>(service_type: ServiceType, rewards: R) -> ServiceState<R> {
         ServiceState {
             service_type,
-            declarations: rpds::RedBlackTreeMapSync::new_sync(),
+            declarations: ServiceDeclarations::default(),
             rewards,
         }
     }
@@ -506,7 +576,7 @@ impl SdpLedger {
             );
         }
 
-        service_state.update_declarations(result.declarations);
+        service_state.add_declaration(result.declarations, operation_id);
         Ok((self, result.note_sets, events))
     }
 
@@ -518,6 +588,7 @@ impl SdpLedger {
     ) -> Result<(Self, NoteSets, Vec<TxEvent>), Error> {
         let operation = signed_operation.operation();
         let operation_service_type = operation.service_type;
+        let operation_id = operation.id();
 
         let Some(service_state) = self.services.get(&operation.service_type) else {
             return Err(Error::ServiceNotFound(operation.service_type));
@@ -534,7 +605,7 @@ impl SdpLedger {
         self.services
             .get_mut(&operation_service_type)
             .expect("service was checked before execution")
-            .update_declarations(result.declarations);
+            .add_declaration(result.declarations, operation_id);
         Ok((self, result.note_sets, events))
     }
 
@@ -676,18 +747,26 @@ impl SdpLedger {
 
     #[must_use]
     pub fn get_declaration(&self, declaration_id: &DeclarationId) -> Option<&Declaration> {
-        self.services.iter().find_map(|(_, service)| {
-            let declarations = match service {
-                Service::BlendNetwork(state) => &state.declarations,
-            };
-            declarations.get(declaration_id)
-        })
+        self.services
+            .iter()
+            .find_map(|(_, service)| service.declarations().get(declaration_id))
     }
 
     /// Get the declarations for a given service type.
     #[must_use]
     pub fn get_declarations_by_service(&self, service_type: ServiceType) -> Option<&Declarations> {
         self.services.get(&service_type).map(Service::declarations)
+    }
+
+    /// Get the keys of the declarations of a given service type.
+    #[must_use]
+    pub fn get_declaration_keys_by_service(
+        &self,
+        service_type: ServiceType,
+    ) -> Option<&DeclarationKeys> {
+        self.services
+            .get(&service_type)
+            .map(Service::declaration_keys)
     }
 
     /// Get the service type and declarations for a given declaration ID.
@@ -1398,6 +1477,140 @@ mod tests {
             .expect(
                 "Declaration reusing A's provider_id and zk_id must be accepted after A is removed",
             );
+    }
+
+    // The verification of `operation` against the declarations of its service,
+    // whose keys must be those of the declarations.
+    fn verify_declaration(
+        ledger: &SdpLedger,
+        operation: SDPDeclareOp,
+        config: &Config,
+    ) -> Result<(), lb_core::mantle::ops::sdp::SdpError> {
+        use lb_core::mantle::{
+            TxHash, ledger::VerifiableOperation as _, ops::sdp::SDPDeclareVerificationContext,
+        };
+
+        let declarations = ledger
+            .get_declarations_by_service(operation.service_type)
+            .unwrap();
+        let declaration_keys = ledger
+            .get_declaration_keys_by_service(operation.service_type)
+            .unwrap();
+        assert_eq!(
+            *declaration_keys,
+            DeclarationKeys::from_declarations(declarations)
+        );
+        let tx_hash_view = TxHashView::from(TxHash::from([0; 32]));
+        SignedOperation::<_, _, StandardMode>::new(operation, ZkAndEd25519Proof::sample())
+            .into_state_trusted::<Preverified>()
+            .verify(&SDPDeclareVerificationContext {
+                note_sets: &NoteSets::new(),
+                block_number: 0,
+                tx_hash_view: &tx_hash_view,
+                declarations,
+                declaration_keys,
+                min_stake: &config.min_stake,
+            })
+            .map(|_| ())
+    }
+
+    /// A withdrawn declaration keeps its `provider_id` and `zk_id` until it is
+    /// removed, the epoch after its `withdraw_at`.
+    #[test]
+    fn declared_ids_stay_taken_until_the_withdrawn_declaration_is_removed() {
+        use lb_core::mantle::ops::sdp::SdpError;
+
+        let config = setup(ServiceParameters {
+            inactivity_period: 20.try_into().unwrap(),
+            epoch: 0.into(),
+        });
+        let signing_key = create_signing_key();
+        let other_signing_key = Ed25519Key::from_bytes(&[1; 32]);
+        let utxo_a = note_with_sk();
+        let utxo_b = note_with_sk();
+        let declare_a = declare_op(&create_zk_key(1), &signing_key, &utxo_a);
+        let declaration_id = declare_a.id();
+        let same_provider_id = declare_op(&create_zk_key(2), &signing_key, &utxo_b);
+        let same_zk_id = declare_op(&create_zk_key(1), &other_signing_key, &utxo_b);
+        let fresh = declare_op(&create_zk_key(2), &other_signing_key, &utxo_b);
+        let duplicate_provider_id = Err(SdpError::DuplicateProviderId {
+            service_type: ServiceType::BlendNetwork,
+            provider_id: Box::new(same_provider_id.provider_id),
+        });
+        let duplicate_zk_id = Err(SdpError::DuplicateZkId {
+            service_type: ServiceType::BlendNetwork,
+            zk_id: same_zk_id.zk_id,
+        });
+
+        let ledger = dummy_sdp_ledger(0.into(), &config);
+        assert_eq!(
+            verify_declaration(&ledger, same_provider_id.clone(), &config),
+            Ok(())
+        );
+        let (ledger, _, _) = ledger
+            .try_apply_sdp_declaration(
+                NoteSets::new(),
+                SignedOperation::new(declare_a, ZkAndEd25519Proof::sample()).into_state_trusted(),
+                &config,
+            )
+            .unwrap();
+        let (mut ledger, _, _) = ledger
+            .apply_withdrawn_msg(
+                NoteSets::new(),
+                SignedOperation::new(
+                    withdraw_op(declaration_id, 1, 100),
+                    ZkAndEd25519Proof::sample(),
+                )
+                .into_state_trusted(),
+                &config,
+            )
+            .unwrap();
+        let withdraw_at = ledger
+            .get_declaration(&declaration_id)
+            .unwrap()
+            .withdraw_at
+            .unwrap();
+
+        let mut last_epoch_state = dummy_epoch_state(0.into());
+        for epoch in 0..=withdraw_at.into_inner() + 1 {
+            if epoch > 0 {
+                let epoch_state = next_epoch_state(epoch.into(), &ledger, &config);
+                (ledger, _) = ledger
+                    .try_apply_header(&config, &last_epoch_state, &epoch_state)
+                    .unwrap();
+                last_epoch_state = epoch_state;
+            }
+            assert_eq!(verify_declaration(&ledger, fresh.clone(), &config), Ok(()));
+            if ledger.get_declaration(&declaration_id).is_some() {
+                assert_eq!(
+                    verify_declaration(&ledger, same_provider_id.clone(), &config),
+                    duplicate_provider_id
+                );
+                assert_eq!(
+                    verify_declaration(&ledger, same_zk_id.clone(), &config),
+                    duplicate_zk_id
+                );
+            } else {
+                assert_eq!(epoch, withdraw_at.into_inner() + 1);
+                assert_eq!(
+                    verify_declaration(&ledger, same_provider_id.clone(), &config),
+                    Ok(())
+                );
+                assert_eq!(
+                    verify_declaration(&ledger, same_zk_id.clone(), &config),
+                    Ok(())
+                );
+            }
+        }
+
+        // The keys are rebuilt when decoding.
+        let decoded: SdpLedger =
+            serde_json::from_str(&serde_json::to_string(&ledger).unwrap()).unwrap();
+        assert_eq!(decoded, ledger);
+        assert_eq!(
+            decoded.get_declaration_keys_by_service(ServiceType::BlendNetwork),
+            ledger.get_declaration_keys_by_service(ServiceType::BlendNetwork)
+        );
     }
 
     #[test]

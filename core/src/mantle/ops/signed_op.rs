@@ -229,16 +229,21 @@ impl SignedOp<Preverified, StandardMode> {
                     .map_err(map_verify_failure)
             }
             Self::SDPDeclare(op) => {
-                let declarations =
-                    match helper.get_declarations_by_service(op.operation().service_type) {
-                        Ok(declarations) => declarations,
-                        Err(error) => return Err(map_verify_failure((op, error))),
-                    };
+                let service_type = op.operation().service_type;
+                let declarations = match helper.get_declarations_by_service(service_type) {
+                    Ok(declarations) => declarations,
+                    Err(error) => return Err(map_verify_failure((op, error))),
+                };
+                let declaration_keys = match helper.get_declaration_keys_by_service(service_type) {
+                    Ok(declaration_keys) => declaration_keys,
+                    Err(error) => return Err(map_verify_failure((op, error))),
+                };
                 let context = SDPDeclareVerificationContext {
                     note_sets: helper.get_note_sets(),
                     block_number: helper.get_block_number(),
                     tx_hash_view,
                     declarations,
+                    declaration_keys,
                     min_stake: helper.get_min_stake(),
                 };
                 op.into_verified_deferred(&context, deferred_proofs)

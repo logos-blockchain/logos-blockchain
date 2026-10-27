@@ -1878,6 +1878,67 @@ mod tests {
     }
 
     #[test]
+    fn genesis_rejects_a_second_declaration_of_a_provider_id_or_zk_id() {
+        use lb_core::sdp::{ProviderId, ServiceType};
+
+        let stake_keys = [ZkKey::new(Fr::from(1u64)), ZkKey::new(Fr::from(2u64))];
+        let allocations: [GenesisAllocation; 2] = core::array::from_fn(|i| GenesisAllocation {
+            value: 1_000,
+            public_key: stake_keys[i].to_public_key(),
+        });
+        let declaration = |index: usize, provider_seed: u8, zk_id: u64| SDPDeclareOp {
+            provider_id: ProviderId(Ed25519Key::from_bytes(&[provider_seed; 32]).public_key()),
+            zk_id: ZkPublicKey::new(Fr::from(zk_id)),
+            inputs: [derive_note_nullifier(
+                &allocations[index].note(index).commitment(),
+                stake_keys[index].as_fr(),
+            )]
+            .into(),
+            commitment_merkle_root: CommitmentMmr::new().frontier_root(),
+            amount: 1_000,
+            ..SDPDeclareOp::sample()
+        };
+        let apply = |second: SDPDeclareOp| {
+            let block = GenesisBlockBuilder::new()
+                .add_notes(allocations)
+                .set_inscription(cryptarchia_inscription())
+                .add_declaration(declaration(0, 1, 7))
+                .add_declaration(second)
+                .unwrap()
+                .build_proven(&stake_keys)
+                .unwrap();
+            LedgerState::from_genesis_tx::<HeaderId>(
+                block.genesis_tx().clone(),
+                &config(),
+                Fr::ZERO,
+            )
+            .map(|_| ())
+        };
+
+        assert_eq!(
+            apply(declaration(1, 1, 8)),
+            Err(LedgerError::Mantle(mantle::Error::Sdp(
+                SdpError::DuplicateProviderId {
+                    service_type: ServiceType::BlendNetwork,
+                    provider_id: Box::new(declaration(1, 1, 8).provider_id),
+                }
+                .into()
+            )))
+        );
+        assert_eq!(
+            apply(declaration(1, 2, 7)),
+            Err(LedgerError::Mantle(mantle::Error::Sdp(
+                SdpError::DuplicateZkId {
+                    service_type: ServiceType::BlendNetwork,
+                    zk_id: ZkPublicKey::new(Fr::from(7u64)),
+                }
+                .into()
+            )))
+        );
+        assert_eq!(apply(declaration(1, 2, 8)), Ok(()));
+    }
+
+    #[test]
     fn genesis_rejects_a_declaration_whose_zk_transfer_does_not_verify() {
         let (proven, _, declaration) = genesis_with_a_declaration();
         let allocations = proven.distribution();
