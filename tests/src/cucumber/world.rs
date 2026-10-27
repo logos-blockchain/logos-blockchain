@@ -27,7 +27,9 @@ use lb_core::{
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, PeerId};
-use lb_node::config::RunConfig;
+use lb_node::config::{
+    RunConfig, deployment::era::ruleset::v1::UnvalidatedCryptarchiaDeploymentSettings,
+};
 use lb_testing_framework::{
     LbcClusterBackend, LbcEnv, LbcK8sManualCluster, LbcScenario, NodeHttpClient, ScenarioBuilder,
     ScenarioBuilderExt as _,
@@ -150,7 +152,13 @@ impl ManualNodeConfigOverrides {
             config
                 .deployment
                 .update_genesis_era_parameters(|parameters| {
-                    parameters.cryptarchia.security_param = security_param;
+                    let mut cryptarchia = UnvalidatedCryptarchiaDeploymentSettings::from(
+                        parameters.cryptarchia.clone(),
+                    );
+                    cryptarchia.security_param = security_param;
+                    parameters.cryptarchia = cryptarchia
+                        .try_into()
+                        .expect("updated cryptarchia settings must be valid");
                 });
         }
 
@@ -158,7 +166,13 @@ impl ManualNodeConfigOverrides {
             config
                 .deployment
                 .update_genesis_era_parameters(|parameters| {
-                    parameters.cryptarchia.uncle_reference_window_in_block = uncle_reference_window;
+                    let mut cryptarchia = UnvalidatedCryptarchiaDeploymentSettings::from(
+                        parameters.cryptarchia.clone(),
+                    );
+                    cryptarchia.uncle_reference_window_in_block = uncle_reference_window;
+                    parameters.cryptarchia = cryptarchia
+                        .try_into()
+                        .expect("updated cryptarchia settings must be valid");
                 });
         }
 

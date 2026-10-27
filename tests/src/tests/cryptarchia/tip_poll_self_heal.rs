@@ -25,7 +25,9 @@
 use std::{num::NonZeroU64, path::PathBuf, time::Duration};
 
 use futures::stream::{self, StreamExt as _};
-use lb_node::config::RunConfig;
+use lb_node::config::{
+    RunConfig, deployment::era::ruleset::v1::UnvalidatedCryptarchiaDeploymentSettings,
+};
 use lb_testing_framework::{DeploymentBuilder, LbcEnv, TopologyConfig as TfTopologyConfig};
 use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_tests::{
@@ -68,12 +70,16 @@ fn config(mut config: RunConfig) -> RunConfig {
     config
         .deployment
         .update_genesis_era_parameters(|parameters| {
+            let mut cryptarchia =
+                UnvalidatedCryptarchiaDeploymentSettings::from(parameters.cryptarchia.clone());
             parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
-            parameters.cryptarchia.security_param = 5.try_into().unwrap();
-            parameters.cryptarchia.uncle_reference_window_in_block = 3.try_into().unwrap();
+            cryptarchia.security_param = 5.try_into().unwrap();
+            cryptarchia.uncle_reference_window_in_block = 3.try_into().unwrap();
             // Fast block production to speed up the test
-            parameters.cryptarchia.slot_activation_coeff =
-                NonNegativeRatio::new(1, 2.try_into().unwrap());
+            cryptarchia.slot_activation_coeff = NonNegativeRatio::new(1, 2.try_into().unwrap());
+            parameters.cryptarchia = cryptarchia
+                .try_into()
+                .expect("updated cryptarchia settings must be valid");
         });
     config
         .user

@@ -732,14 +732,14 @@ mod tests {
             .deployment
             .genesis_era_parameters()
             .cryptarchia
-            .security_param
+            .security_param()
             .get();
         let override_4 = ConfigOverride {
             path: "eras.0.time.slot_duration_in_seconds".to_owned(),
             value: serde_yaml::to_value(1u64).expect("yaml value"),
         };
         let override_5 = ConfigOverride {
-            path: "eras.0.cryptarchia.security_param".to_owned(),
+            path: "eras.0.cryptarchia.security_param()".to_owned(),
             value: serde_yaml::to_value(security_param + 1).expect("yaml value"),
         };
         assert!(apply_deployment_config_overrides(&mut config, &[override_4, override_5]).is_ok());
@@ -756,7 +756,7 @@ mod tests {
                 .deployment
                 .genesis_era_parameters()
                 .cryptarchia
-                .security_param
+                .security_param()
                 .get(),
             security_param + 1
         );
@@ -806,9 +806,9 @@ mod tests {
             .expect("apply diagnostic deployment overrides");
 
         let cryptarchia = &config.deployment.genesis_era_parameters().cryptarchia;
-        assert_eq!(cryptarchia.security_param.get(), 10);
-        assert_eq!(cryptarchia.slot_activation_coeff.numerator, 1);
-        assert_eq!(cryptarchia.slot_activation_coeff.denominator.get(), 30);
+        assert_eq!(cryptarchia.security_param().get(), 10);
+        assert_eq!(cryptarchia.slot_activation_coeff().numerator, 1);
+        assert_eq!(cryptarchia.slot_activation_coeff().denominator.get(), 30);
         assert_eq!(cryptarchia.slots_per_epoch(), 3_000);
 
         let blend = &config.deployment.genesis_era_parameters().blend;

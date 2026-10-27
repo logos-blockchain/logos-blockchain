@@ -25,7 +25,7 @@ impl ServiceConfig {
             auto_claim: self.user.auto_claim.into(),
             era_schedule: eras.map(|era| {
                 let EraRuleset::V1(parameters) = &era.parameters.ruleset;
-                let reward = &parameters.cryptarchia.pow_config.reward;
+                let reward = &parameters.cryptarchia.pow_config().reward;
                 PoWEraSettings {
                     slot_window: reward.slot_window,
                     rewards_enabled: reward.rate_num > 0,

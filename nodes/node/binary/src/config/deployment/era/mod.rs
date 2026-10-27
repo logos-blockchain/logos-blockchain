@@ -190,7 +190,10 @@ mod tests {
     use super::{EraDeclarations, EraScheduleError};
     use crate::config::{
         DeploymentSettings,
-        deployment::era::ruleset::{EraRuleset, v1::cryptarchia::Error},
+        deployment::era::ruleset::{
+            EraRuleset,
+            v1::{UnvalidatedCryptarchiaDeploymentSettings, cryptarchia::Error},
+        },
     };
 
     fn ruleset() -> EraRuleset {
@@ -322,10 +325,15 @@ mod tests {
     fn ruleset_with(security_param: u32, f_denominator: u32, window: u32) -> EraRuleset {
         let mut ruleset = ruleset();
         let EraRuleset::V1(parameters) = &mut ruleset;
-        parameters.cryptarchia.security_param = security_param.try_into().unwrap();
-        parameters.cryptarchia.slot_activation_coeff =
+
+        let mut unvalidated =
+            UnvalidatedCryptarchiaDeploymentSettings::from(parameters.cryptarchia.clone());
+        unvalidated.security_param = security_param.try_into().unwrap();
+        unvalidated.slot_activation_coeff =
             NonNegativeRatio::new(1, f_denominator.try_into().unwrap());
-        parameters.cryptarchia.uncle_reference_window_in_block = window.try_into().unwrap();
+        unvalidated.uncle_reference_window_in_block = window.try_into().unwrap();
+
+        parameters.cryptarchia = unvalidated.try_into().unwrap();
         ruleset
     }
 

@@ -7,6 +7,7 @@ pub mod blend;
 pub mod cryptarchia;
 pub mod time;
 
+pub use self::cryptarchia::UnvalidatedSettings as UnvalidatedCryptarchiaDeploymentSettings;
 use self::{
     blend::Settings as BlendDeploymentSettings,
     cryptarchia::Settings as CryptarchiaDeploymentSettings,

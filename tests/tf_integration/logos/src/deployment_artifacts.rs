@@ -191,7 +191,7 @@ mod tests {
                 .deployment
                 .genesis_era_parameters()
                 .cryptarchia
-                .security_param
+                .security_param()
                 .get(),
             5
         );
@@ -199,7 +199,7 @@ mod tests {
             artifact
                 .genesis_era_parameters()
                 .cryptarchia
-                .security_param
+                .security_param()
                 .get(),
             5
         );
@@ -210,14 +210,14 @@ mod tests {
                 .deployment
                 .genesis_era_parameters()
                 .cryptarchia
-                .slot_activation_coeff,
+                .slot_activation_coeff(),
             expected_coefficient
         );
         assert_eq!(
             artifact
                 .genesis_era_parameters()
                 .cryptarchia
-                .slot_activation_coeff,
+                .slot_activation_coeff(),
             expected_coefficient
         );
     }

@@ -237,7 +237,9 @@ impl Default for DeploymentSettings {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::DeploymentSettings;
+    use crate::config::{
+        DeploymentSettings, deployment::era::ruleset::v1::UnvalidatedCryptarchiaDeploymentSettings,
+    };
 
     #[test]
     fn default_initialization() {
@@ -270,8 +272,11 @@ mod tests {
         let settings = DeploymentSettings::default();
         let mut changed = settings.clone();
         changed.update_genesis_era_parameters(|parameters| {
-            let reward = &mut parameters.cryptarchia.pow_config.reward;
+            let mut unvalidated =
+                UnvalidatedCryptarchiaDeploymentSettings::from(parameters.cryptarchia.clone());
+            let reward = &mut unvalidated.pow_config.reward;
             reward.slot_window = reward.slot_window.checked_add(1).unwrap();
+            parameters.cryptarchia = unvalidated.try_into().unwrap();
         });
         assert_ne!(
             changed.genesis_fork_digest(),

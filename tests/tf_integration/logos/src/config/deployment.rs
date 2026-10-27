@@ -10,7 +10,10 @@ use std::{
 pub use lb_config::consensus::SdpFundingConfig;
 use lb_config::preparation::prepare_network;
 use lb_core::{block::genesis::GenesisBlock, mantle::GenesisTime};
-use lb_node::config::{RunConfig, deployment::DeploymentSettings};
+use lb_node::config::{
+    RunConfig,
+    deployment::{DeploymentSettings, era::ruleset::v1::UnvalidatedCryptarchiaDeploymentSettings},
+};
 use lb_utils::math::NonNegativeRatio;
 use rand::{Rng, SeedableRng as _};
 use testing_framework_core::topology::{DeploymentProvider, DeploymentSeed, DynTopologyError};
@@ -202,10 +205,14 @@ impl TopologyConfig {
 
     pub(crate) fn apply_deployment_overrides(&self, settings: &mut DeploymentSettings) {
         settings.update_genesis_era_parameters(|parameters| {
-            parameters.cryptarchia.security_param = self.security_param;
-            parameters.cryptarchia.uncle_reference_window_in_block =
-                self.uncle_reference_window_in_block;
-            parameters.cryptarchia.slot_activation_coeff = self.active_slot_coeff;
+            let mut cryptarchia =
+                UnvalidatedCryptarchiaDeploymentSettings::from(parameters.cryptarchia.clone());
+            cryptarchia.security_param = self.security_param;
+            cryptarchia.uncle_reference_window_in_block = self.uncle_reference_window_in_block;
+            cryptarchia.slot_activation_coeff = self.active_slot_coeff;
+            parameters.cryptarchia = cryptarchia
+                .try_into()
+                .expect("overridden cryptarchia settings must be valid");
         });
     }
 }
