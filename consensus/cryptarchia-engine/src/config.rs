@@ -177,8 +177,9 @@ pub const fn expected_blocks_per_epoch(
 /// the parent of any uncle a block may reference is still above LIB.
 #[must_use]
 pub fn max_allowed_uncle_reference_window_in_block(security_param: NonZero<u32>) -> u32 {
-    let k = NonZeroU64::from(security_param); // widen to u64 to avoid overflow
-    u32::try_from(k.get() * 6 / 10).expect("0.6k must fit in u32")
+    // Widen `k` to `u64` first, because `6k` can overflow `u32`.
+    let k = NonZeroU64::from(security_param);
+    u32::try_from(k.get() * 6 / 10).expect("floor(0.6k) <= k, so it fits in u32")
 }
 
 #[cfg(test)]
