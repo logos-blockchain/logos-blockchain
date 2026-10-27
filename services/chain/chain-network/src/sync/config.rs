@@ -32,8 +32,9 @@ pub struct OrphanConfig {
 /// On a slot-tick cadence the node compares its local tip slot against the
 /// current slot. If it has fallen behind by more than `lag_threshold_blocks`
 /// expected block-intervals (each `1/f` slots, where `f` is the active slot
-/// coefficient), it samples up to `max_peers_to_sample` peers with `GetTip` and
-/// hands the most-advanced reported tip to the orphan downloader to catch up.
+/// coefficient), it samples up to `max_peers_to_sample` peers with tip requests
+/// and hands the most-advanced reported tip to the orphan downloader to catch
+/// up.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct TipPollConfig {
@@ -42,7 +43,7 @@ pub struct TipPollConfig {
     /// How many expected block-intervals (`1/f` slots each) the local tip may
     /// lag behind the current slot before we proactively poll peers.
     pub lag_threshold_blocks: NonZeroU64,
-    /// Maximum number of peers to sample with `GetTip` on each poll.
+    /// Maximum number of peers to sample with a tip request on each poll.
     pub max_peers_to_sample: NonZeroUsize,
 }
 

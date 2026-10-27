@@ -14,7 +14,7 @@ use lb_core::{
     },
 };
 use lb_cryptarchia_engine::{Era, EraSchedule};
-use lb_cryptarchia_sync::GetTipResponse;
+use lb_cryptarchia_sync::TipResponse;
 use lb_log_targets::chain;
 use lb_network_service::{
     backends::libp2p::{
@@ -379,7 +379,7 @@ where
         })))
     }
 
-    async fn request_tip(&self, peer: Self::PeerId) -> Result<GetTipResponse, DynError> {
+    async fn request_tip(&self, peer: Self::PeerId) -> Result<TipResponse, DynError> {
         let started_at = Instant::now();
         tracing::debug!(target: LOG_TARGET, "Requesting chain tip from peer {peer:?}");
         let (reply_sender, receiver) = oneshot::channel();
@@ -401,20 +401,20 @@ where
         metrics::chainsync_observe_request_tip(started_at.elapsed(), response)
     }
 
-    async fn sample_tips(&self, max_peers: usize) -> BoxedStream<GetTipResponse> {
+    async fn sample_tips(&self, max_peers: usize) -> BoxedStream<TipResponse> {
         use futures::stream::StreamExt as FuturesStreamExt;
         let connected_peers = match Self::get_connected_peers(&self.network_relay).await {
             Ok(peers) => peers,
             Err(e) => {
                 tracing::warn!(target: LOG_TARGET, "tip poll: failed to fetch connected peers: {e}");
-                return Box::new(stream::empty::<GetTipResponse>());
+                return Box::new(stream::empty::<TipResponse>());
             }
         };
         let chainsync_peers = match Self::get_chainsync_eligible_peers(&self.network_relay).await {
             Ok(peers) => peers,
             Err(e) => {
                 tracing::warn!(target: LOG_TARGET, "tip poll: failed to fetch chainsync-eligible peers: {e}");
-                return Box::new(stream::empty::<GetTipResponse>());
+                return Box::new(stream::empty::<TipResponse>());
             }
         };
         let connected_peers = connected_peers
@@ -428,7 +428,7 @@ where
 
         if sampled.is_empty() {
             tracing::debug!(target: LOG_TARGET, "tip poll: no connected peers to sample");
-            return Box::new(stream::empty::<GetTipResponse>());
+            return Box::new(stream::empty::<TipResponse>());
         }
         let result_stream = FuturesStreamExt::filter_map(
             stream::iter(
@@ -444,7 +444,7 @@ where
                     )))
                     .await
                 {
-                    tracing::debug!(target: LOG_TARGET, "tip poll: failed to send GetTip to peer {peer:?}: {error}");
+                    tracing::debug!(target: LOG_TARGET, "tip poll: failed to send a tip request to peer {peer:?}: {error}");
                     None
                 } else {
                     match receiver.await.ok() {
@@ -452,7 +452,7 @@ where
                         Some(Err(e)) => {
                             tracing::debug!(
                                 target: LOG_TARGET,
-                                "tip poll: GetTip request to peer {peer:?} failed: {e}"
+                                "tip poll: tip request to peer {peer:?} failed: {e}"
                             );
                             None
                         }
@@ -522,7 +522,7 @@ where
         let discovered_peers = Self::get_discovered_peers(&self.network_relay).await?;
 
         // Discovery membership and protocol capability are independent.
-        let peers_to_request = choose_eligible_peers_to_request_download(
+        let peers_to_request = choose_eligible_peers_to_request_blocks(
             &connected_peers,
             &discovered_peers,
             &chainsync_peers,
@@ -583,13 +583,13 @@ where
     }
 }
 
-/// Selects peers to attempt downloads from.
+/// Selects peers to request blocks from.
 ///
 /// Returns at most `max_connected_peers + max_discovered_peers` peers in total:
 /// - at most `max_connected_peers` from the `connected_peers` set
 /// - at most `max_discovered_peers` from the `discovered_peers -
 ///   connected_peers` set
-fn choose_peers_to_request_download<PeerId>(
+fn choose_peers_to_request_blocks<PeerId>(
     connected_peers: &HashSet<PeerId>,
     max_connected_peers: usize,
     discovered_peers: &HashSet<PeerId>,
@@ -615,7 +615,7 @@ where
     discovered_selected.into_iter().chain(connected_selected)
 }
 
-fn choose_eligible_peers_to_request_download<PeerId>(
+fn choose_eligible_peers_to_request_blocks<PeerId>(
     connected_peers: &HashSet<PeerId>,
     discovered_peers: &HashSet<PeerId>,
     eligible_peers: &HashSet<PeerId>,
@@ -634,7 +634,7 @@ where
         .copied()
         .collect::<HashSet<_>>();
 
-    choose_peers_to_request_download(
+    choose_peers_to_request_blocks(
         &connected_peers,
         max_connected_peers,
         &discovered_peers,
@@ -693,7 +693,7 @@ mod tests {
         let discovered = HashSet::from_iter(vec![[3; 32], [4; 32], [5; 32]]);
 
         let result =
-            choose_peers_to_request_download(&connected, 2, &discovered, 2).collect::<Vec<_>>();
+            choose_peers_to_request_blocks(&connected, 2, &discovered, 2).collect::<Vec<_>>();
 
         assert_eq!(result.len(), 4);
         // all discovered peers except `3` must be returned
@@ -719,7 +719,7 @@ mod tests {
 
         // set max=0 for connected peers
         let result =
-            choose_peers_to_request_download(&connected, 0, &discovered, 2).collect::<Vec<_>>();
+            choose_peers_to_request_blocks(&connected, 0, &discovered, 2).collect::<Vec<_>>();
 
         assert_eq!(result.len(), 2);
         // all selected peers must be from the discovered-but-not-connected set
@@ -728,7 +728,7 @@ mod tests {
 
         // set max=0 for discovered peers
         let result =
-            choose_peers_to_request_download(&connected, 2, &discovered, 0).collect::<Vec<_>>();
+            choose_peers_to_request_blocks(&connected, 2, &discovered, 0).collect::<Vec<_>>();
 
         assert_eq!(result.len(), 2);
         // all selected peers must be from the connected set
@@ -748,7 +748,7 @@ mod tests {
 
         // set max=4 larger than # of connected peers
         let result =
-            choose_peers_to_request_download(&connected, 4, &discovered, 0).collect::<Vec<_>>();
+            choose_peers_to_request_blocks(&connected, 4, &discovered, 0).collect::<Vec<_>>();
 
         // all connected peers must be returned
         assert_eq!(result.len(), connected.len());
@@ -758,7 +758,7 @@ mod tests {
 
         // set max=3 larger than # of `discovered - connected` peers
         let result =
-            choose_peers_to_request_download(&connected, 0, &discovered, 3).collect::<Vec<_>>();
+            choose_peers_to_request_blocks(&connected, 0, &discovered, 3).collect::<Vec<_>>();
 
         // all discovered peers except `3` must be returned
         assert_eq!(result.len(), 2);
@@ -773,7 +773,7 @@ mod tests {
         let eligible: HashSet<[i32; 32]> = HashSet::from_iter(vec![[2; 32], [4; 32]]);
 
         let result =
-            choose_eligible_peers_to_request_download(&connected, &discovered, &eligible, 1, 1);
+            choose_eligible_peers_to_request_blocks(&connected, &discovered, &eligible, 1, 1);
 
         assert_eq!(result, vec![[4; 32], [2; 32]]);
     }

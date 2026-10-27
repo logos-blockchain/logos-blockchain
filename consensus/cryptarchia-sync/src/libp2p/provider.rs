@@ -9,14 +9,15 @@ use tokio::{sync::mpsc, time};
 use tracing::{debug, error};
 
 use crate::{
-    BlocksResponse, BlocksUnavailableReason, DynError, ProviderResponse, TipResponse,
+    BlocksProviderResponse, BlocksUnavailableReason, DynError, ProviderResponse,
+    TipProviderResponse,
     libp2p::{
         errors::{ChainSyncError, ChainSyncErrorKind},
-        messages::{DownloadBlocksResponse, RequestMessage},
+        messages::{BlocksResponse, RequestMessage},
         packing::unpack_from_reader,
         utils::{close_stream, send_message},
     },
-    messages::{GetTipResponse, GetTipResponseReason, SerialisedBlock},
+    messages::{SerialisedBlock, TipResponse, TipResponseFailureReason},
 };
 
 const LOG_TARGET: &str = cryptarchia::sync::libp2p::PROVIDER;
@@ -25,31 +26,40 @@ pub const MAX_ADDITIONAL_BLOCKS: usize = 5;
 
 pub struct Provider;
 
-pub type ReceivingRequestStream = (PeerId, Libp2pStream, RequestMessage);
+/// A request read from a stream a peer opened, and the stream to answer it on.
+pub struct ReceivedRequest {
+    pub peer_id: PeerId,
+    pub stream: Libp2pStream,
+    pub request: RequestMessage,
+}
 
 impl Provider {
-    pub async fn process_request(
+    pub async fn receive_request(
         peer_id: PeerId,
         mut stream: Libp2pStream,
         timeout: Duration,
-    ) -> Result<ReceivingRequestStream, ChainSyncError> {
+    ) -> Result<ReceivedRequest, ChainSyncError> {
         let request: RequestMessage = time::timeout(timeout, unpack_from_reader(&mut stream))
             .await
             .map_err(|e| ChainSyncError::from((peer_id, e)))?
             .map_err(|e| ChainSyncError::from((peer_id, e)))?;
 
-        Ok((peer_id, stream, request))
+        Ok(ReceivedRequest {
+            peer_id,
+            stream,
+            request,
+        })
     }
 
     pub async fn provide_tip(
-        mut reply_receiver: mpsc::Receiver<TipResponse>,
+        mut reply_receiver: mpsc::Receiver<TipProviderResponse>,
         peer_id: PeerId,
         mut libp2p_stream: Libp2pStream,
     ) -> Result<(), ChainSyncError> {
         let response = reply_receiver.recv().await.unwrap_or_else(|| {
             debug!(target: LOG_TARGET, %peer_id, "no tip provider answered; replying unknown error");
             ProviderResponse::Unavailable {
-                reason: GetTipResponseReason::Unknown,
+                reason: TipResponseFailureReason::Unknown,
             }
         });
 
@@ -58,7 +68,7 @@ impl Provider {
                 send_message(peer_id, &mut libp2p_stream, &tip).await
             }
             ProviderResponse::Unavailable { reason } => {
-                let response = GetTipResponse::Failure(reason);
+                let response = TipResponse::Failure(reason);
                 send_message(peer_id, &mut libp2p_stream, &response).await
             }
         };
@@ -69,7 +79,7 @@ impl Provider {
     }
 
     pub async fn provide_blocks(
-        mut reply_receiver: mpsc::Receiver<BlocksResponse>,
+        mut reply_receiver: mpsc::Receiver<BlocksProviderResponse>,
         peer_id: PeerId,
         mut libp2p_stream: Libp2pStream,
         send_timeout: Duration,
@@ -86,7 +96,7 @@ impl Provider {
                 Self::send_blocks(peer_id, stream, libp2p_stream, send_timeout).await
             }
             ProviderResponse::Unavailable { reason } => {
-                let response = DownloadBlocksResponse::Failure(reason);
+                let response = BlocksResponse::Failure(reason);
                 send_message(peer_id, &mut libp2p_stream, &response).await?;
                 drop(close_stream(peer_id, libp2p_stream).await);
                 Ok(())
@@ -106,12 +116,12 @@ impl Provider {
         let result = stream
             .map_err(|e| ChainSyncError {
                 peer: peer_id,
-                kind: ChainSyncErrorKind::ReceivingBlocksError(format!(
+                kind: ChainSyncErrorKind::BlockProviderError(format!(
                     "Failed to receive block from stream: {e}"
                 )),
             })
             .try_fold(&mut libp2p_stream, async |stream, block| {
-                let message = DownloadBlocksResponse::Block(block);
+                let message = BlocksResponse::Block(block);
                 send_message_with_timeout(peer_id, stream, &message, send_timeout).await?;
                 Ok(stream)
             })
@@ -119,12 +129,12 @@ impl Provider {
 
         let final_result = match result {
             Ok(_) => {
-                let message = DownloadBlocksResponse::NoMoreBlocks;
+                let message = BlocksResponse::NoMoreBlocks;
                 send_message_with_timeout(peer_id, &mut libp2p_stream, &message, send_timeout).await
             }
             Err(e) => {
                 error!(target: LOG_TARGET, "Failed to send blocks to peer {}: {}", peer_id, e);
-                let message = DownloadBlocksResponse::Failure(BlocksUnavailableReason::Unknown);
+                let message = BlocksResponse::Failure(BlocksUnavailableReason::Unknown);
                 drop(
                     send_message_with_timeout(peer_id, &mut libp2p_stream, &message, send_timeout)
                         .await,

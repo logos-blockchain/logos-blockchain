@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, num::NonZero};
 
 use lb_core::{
     crypto::Hash,
@@ -645,16 +645,25 @@ fn extract_finalized_items_surfaces_standalone_withdraw() {
 }
 
 fn channel_config(channel_id: ChannelId, parent: MsgId) -> ChannelConfigOp {
+    channel_config_with_posting_timeframe(channel_id, parent, SlotTimeframe::from(0u32))
+}
+
+fn channel_config_with_posting_timeframe(
+    channel_id: ChannelId,
+    parent: MsgId,
+    posting_timeframe: SlotTimeframe,
+) -> ChannelConfigOp {
     let signer = Ed25519Key::from_bytes(&[0u8; 32]).public_key();
-    ChannelConfigOp {
-        channel: channel_id,
+    ChannelConfigOp::new(
+        channel_id,
         parent,
-        keys: VerifiedChannelKeys::try_from(vec![signer]).unwrap(),
-        posting_timeframe: SlotTimeframe::from(0u32),
-        posting_timeout: SlotTimeout::from(0u32),
-        configuration_threshold: 1,
-        transfer_threshold: 1,
-    }
+        VerifiedChannelKeys::try_from(vec![signer]).unwrap(),
+        posting_timeframe,
+        SlotTimeout::from(0u32),
+        NonZero::<u16>::MIN,
+        NonZero::<u16>::MIN,
+    )
+    .unwrap()
 }
 
 fn dummy_pending_tx(seed: u8) -> SignedOps<Unverified, StandardMode> {
@@ -1603,8 +1612,8 @@ async fn foreign_config_is_adopted_kept_through_un_mine_and_orphaned_by_a_rival(
     // Z <- R(cfg') tip: cfg' takes the config slot cfg chained on.
     let ch = ChannelId::from([0u8; 32]);
     let cfg = unverified_tx_with_ops(vec![Op::ChannelConfig(channel_config(ch, MsgId::root()))]);
-    let mut rival_op = channel_config(ch, MsgId::root());
-    rival_op.posting_timeframe = SlotTimeframe::from(1u32);
+    let rival_op =
+        channel_config_with_posting_timeframe(ch, MsgId::root(), SlotTimeframe::from(1u32));
     let rival = unverified_tx_with_ops(vec![Op::ChannelConfig(rival_op)]);
     let (cfg_hash, rival_hash) = (cfg.hash(), rival.hash());
     let ba = api_block(1, 0, 1, vec![cfg]);

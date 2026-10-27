@@ -18,7 +18,7 @@ use lb_core::{
         transactions::{hash::TxHash, states::Preverified},
     },
 };
-use lb_cryptarchia_sync::GetTipResponse;
+use lb_cryptarchia_sync::TipResponse;
 use lb_log_targets::chain;
 use lb_tx_service::backend::RecoverableMempool;
 use overwatch::DynError;
@@ -299,8 +299,8 @@ where
 {
     let tips: HashSet<HeaderId> = join_all(peers.into_iter().map(async |peer| {
         let result: Result<HeaderId, DynError> = match network.request_tip(peer).await {
-            Ok(GetTipResponse::Tip { tip, .. }) => Ok(tip),
-            Ok(GetTipResponse::Failure(reason)) => Err(DynError::from(reason)),
+            Ok(TipResponse::Tip { tip, .. }) => Ok(tip),
+            Ok(TipResponse::Failure(reason)) => Err(DynError::from(reason)),
             Err(e) => Err(e),
         };
         result
@@ -848,14 +848,14 @@ mod tests {
             unimplemented!()
         }
 
-        async fn request_tip(&self, peer: Self::PeerId) -> Result<GetTipResponse, DynError> {
+        async fn request_tip(&self, peer: Self::PeerId) -> Result<TipResponse, DynError> {
             let tip = self
                 .providers
                 .iter()
                 .find_map(|(id, p)| (*id == peer).then(|| p.next_tip()))
                 .expect("test setup: peer must exist in providers");
             match tip {
-                Ok(tip) => Ok(GetTipResponse::Tip {
+                Ok(tip) => Ok(TipResponse::Tip {
                     tip: tip.id,
                     slot: tip.slot,
                     height: tip.height,
@@ -864,7 +864,7 @@ mod tests {
             }
         }
 
-        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<GetTipResponse> {
+        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<TipResponse> {
             Box::new(stream::empty())
         }
 

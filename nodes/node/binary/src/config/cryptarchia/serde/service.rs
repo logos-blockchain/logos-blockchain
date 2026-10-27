@@ -20,7 +20,7 @@ pub struct SyncConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct BlockProviderConfig {
-    /// Upper bound on blocks returned per `send_blocks` request handled by
+    /// Upper bound on blocks returned per blocks request handled by
     /// the chain-service `BlockProvider`.
     pub batch_size: NonZeroUsize,
 }

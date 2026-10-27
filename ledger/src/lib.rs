@@ -1016,6 +1016,8 @@ impl LedgerState {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZero;
+
     use cryptarchia::tests::{GENESIS_POW_REWARD_POOL, config, generate_proof, utxo};
     use lb_core::{
         events::DepositNote,
@@ -1407,15 +1409,16 @@ mod tests {
         let (_, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([3; 32]);
 
-        let config_op = ChannelConfigOp {
-            channel: channel_id,
-            parent: MsgId::root(),
-            keys: verifying_key.into(),
-            posting_timeframe: 0.into(),
-            posting_timeout: 0.into(),
-            configuration_threshold: 1,
-            transfer_threshold: 1,
-        };
+        let config_op = ChannelConfigOp::new(
+            channel_id,
+            MsgId::root(),
+            verifying_key.into(),
+            0.into(),
+            0.into(),
+            NonZero::<u16>::MIN,
+            NonZero::<u16>::MIN,
+        )
+        .unwrap();
 
         let tx = create_genesis_config_tx(config_op);
         let result = state.try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, tx);
@@ -1457,17 +1460,22 @@ mod tests {
         let (_, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([0u8; 32]);
 
-        // The channel doesn't exist yet, so any parent but ZERO is dangling
-        let dangling_config = ChannelConfigOp {
-            channel: channel_id,
-            parent: MsgId::from([1; 32]),
-            keys: verifying_key.into(),
-            posting_timeframe: 0.into(),
-            posting_timeout: 0.into(),
-            configuration_threshold: 1,
-            transfer_threshold: 1,
+        let config_with_parent = |parent| {
+            ChannelConfigOp::new(
+                channel_id,
+                parent,
+                verifying_key.into(),
+                0.into(),
+                0.into(),
+                NonZero::<u16>::MIN,
+                NonZero::<u16>::MIN,
+            )
+            .unwrap()
         };
-        let dangling_tx = create_genesis_config_tx(dangling_config.clone());
+
+        // The channel doesn't exist yet, so any parent but ZERO is dangling
+        let dangling_config = config_with_parent(MsgId::from([1; 32]));
+        let dangling_tx = create_genesis_config_tx(dangling_config);
         let result = state
             .clone()
             .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, dangling_tx);
@@ -1481,10 +1489,7 @@ mod tests {
         ));
 
         // The same configuration rooted at ZERO creates the channel
-        let rooted_config = ChannelConfigOp {
-            parent: MsgId::root(),
-            ..dangling_config
-        };
+        let rooted_config = config_with_parent(MsgId::root());
         let rooted_tx = create_genesis_config_tx(rooted_config.clone());
         let new_state = state
             .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, rooted_tx)
@@ -1531,15 +1536,16 @@ mod tests {
             .0;
 
         // Sign a configuration against the current config tip
-        let config_op = ChannelConfigOp {
-            channel: channel_id,
-            parent: MsgId::root(),
-            keys: verifying_key.into(),
-            posting_timeframe: 0.into(),
-            posting_timeout: 0.into(),
-            configuration_threshold: 1,
-            transfer_threshold: 1,
-        };
+        let config_op = ChannelConfigOp::new(
+            channel_id,
+            MsgId::root(),
+            verifying_key.into(),
+            0.into(),
+            0.into(),
+            NonZero::<u16>::MIN,
+            NonZero::<u16>::MIN,
+        )
+        .unwrap();
         let config_tx = create_config_tx(config_op.clone(), &signing_key);
 
         // Inscriptions keep extending the channel, none of them moves the config tip
@@ -1589,25 +1595,27 @@ mod tests {
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([0u8; 32]);
 
-        // C1 creates the channel, C2 supersedes it
-        let config1 = ChannelConfigOp {
-            channel: channel_id,
-            parent: MsgId::root(),
-            keys: verifying_key.into(),
-            posting_timeframe: 0.into(),
-            posting_timeout: 0.into(),
-            configuration_threshold: 1,
-            transfer_threshold: 1,
+        let config_with = |parent, posting_timeframe: u32| {
+            ChannelConfigOp::new(
+                channel_id,
+                parent,
+                verifying_key.into(),
+                posting_timeframe.into(),
+                0.into(),
+                NonZero::<u16>::MIN,
+                NonZero::<u16>::MIN,
+            )
+            .unwrap()
         };
+
+        // C1 creates the channel, C2 supersedes it
+        let config1 = config_with(MsgId::root(), 0);
         let config1_tx = create_genesis_config_tx(config1.clone());
         state = state
             .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, config1_tx.clone())
             .unwrap()
             .0;
-        let config2 = ChannelConfigOp {
-            parent: config1.id(),
-            ..config1.clone()
-        };
+        let config2 = config_with(config1.id(), 0);
         let config2_tx = create_config_tx(config2, &signing_key);
         state = state
             .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, config2_tx)
@@ -1629,11 +1637,7 @@ mod tests {
         ));
 
         // Neither can a sibling extending the same superseded parent
-        let sibling = ChannelConfigOp {
-            parent: config1.id(),
-            posting_timeframe: 1.into(),
-            ..config1
-        };
+        let sibling = config_with(config1.id(), 1);
         let sibling_tx = create_config_tx(sibling, &signing_key);
         let result =
             state.try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, sibling_tx);
@@ -1677,15 +1681,16 @@ mod tests {
             .0;
 
         // A configuration keeping the signer accredited executes
-        let config_op = ChannelConfigOp {
-            channel: channel_id,
-            parent: MsgId::root(),
-            keys: verifying_key.into(),
-            posting_timeframe: 0.into(),
-            posting_timeout: 0.into(),
-            configuration_threshold: 1,
-            transfer_threshold: 1,
-        };
+        let config_op = ChannelConfigOp::new(
+            channel_id,
+            MsgId::root(),
+            verifying_key.into(),
+            0.into(),
+            0.into(),
+            NonZero::<u16>::MIN,
+            NonZero::<u16>::MIN,
+        )
+        .unwrap();
         let config_tx = create_config_tx(config_op.clone(), &signing_key);
         state = state
             .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, config_tx)
@@ -1917,15 +1922,16 @@ mod tests {
 
         // The channel doesn't exist yet, so this configuration carries an empty
         // proof and accredits the key the withdraw is signed with.
-        let config_op = ChannelConfigOp {
-            channel: channel_id,
-            parent: MsgId::root(),
-            keys: verifying_key.into(),
-            posting_timeframe: 0.into(),
-            posting_timeout: 0.into(),
-            configuration_threshold: 1,
-            transfer_threshold: 1,
-        };
+        let config_op = ChannelConfigOp::new(
+            channel_id,
+            MsgId::root(),
+            verifying_key.into(),
+            0.into(),
+            0.into(),
+            NonZero::<u16>::MIN,
+            NonZero::<u16>::MIN,
+        )
+        .unwrap();
         let deposit = DepositOp {
             channel_id,
             inputs: BoundedInputs::from(utxo.id()).into(),
@@ -1997,15 +2003,16 @@ mod tests {
             parent: MsgId::root(),
             signer: verifying_key.into_unverified(),
         };
-        let config_op = ChannelConfigOp {
-            channel: channel_id,
-            parent: MsgId::root(),
-            keys: verifying_key.into(),
-            posting_timeframe: 0.into(),
-            posting_timeout: 0.into(),
-            configuration_threshold: 1,
-            transfer_threshold: 1,
-        };
+        let config_op = ChannelConfigOp::new(
+            channel_id,
+            MsgId::root(),
+            verifying_key.into(),
+            0.into(),
+            0.into(),
+            NonZero::<u16>::MIN,
+            NonZero::<u16>::MIN,
+        )
+        .unwrap();
         let ops = vec![
             Op::ChannelInscribe(inscribe_op),
             Op::ChannelConfig(config_op),
@@ -2463,6 +2470,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::too_many_lines, reason = "Test function")]
     fn test_multiple_operations_in_transaction() {
         // Create channel 1 by posting an inscription
         // Create channel 2 by posting an inscription
@@ -2498,15 +2506,16 @@ mod tests {
             signer: vk2.into_unverified(),
         };
 
-        let config_op = ChannelConfigOp {
-            channel: channel1,
-            parent: MsgId::root(),
-            keys: [vk3, vk4].into(),
-            posting_timeframe: 0.into(),
-            posting_timeout: 0.into(),
-            configuration_threshold: 1,
-            transfer_threshold: 1,
-        };
+        let config_op = ChannelConfigOp::new(
+            channel1,
+            MsgId::root(),
+            [vk3, vk4].into(),
+            0.into(),
+            0.into(),
+            NonZero::<u16>::MIN,
+            NonZero::<u16>::MIN,
+        )
+        .unwrap();
 
         let inscribe_op3 = InscriptionOp {
             channel_id: channel1,
@@ -3268,48 +3277,47 @@ mod tests {
         }
 
         #[test]
-        fn a_claim_is_judged_under_the_window_of_the_era_of_the_epoch_it_is_for() {
-            // Era 1, from epoch 2, shrinks the acceptance window from 100
-            // slots to 10.
+        fn a_claim_is_judged_under_the_window_of_the_era_of_its_anchor_block() {
+            // Era 1, from epoch 2 (slot 200), shrinks the acceptance window
+            // from 100 slots to 10.
             let era_0 = config();
             let mut era_1 = era_0.clone();
             era_1.pow_config.reward.slot_window = NonZeroU64::new(10).unwrap();
             let eras = schedule(era_0, [(2, era_1)]);
-            // A block at slot 205, in epoch 2, and the claim's block 45 slots
-            // before it, in epoch 1.
+            // A block at slot 215, in epoch 2.
             let (mut state, _) = claim_accepting_state();
-            state.cryptarchia_ledger.slot = Slot::from(205u64);
+            state.cryptarchia_ledger.slot = Slot::from(215u64);
             state.cryptarchia_ledger.epoch_state.epoch = 2.into();
-            state
-                .mantle_ledger
-                .pow
-                .add_seen_block_slots(claim_op().block_hash, Slot::from(160u64));
-
-            // Carrying the nonce of epoch 1, the claim is judged under the
-            // window of era 0.
-            state.cryptarchia_ledger.epoch_state.nonce = Fr::ONE;
-            state.cryptarchia_ledger.previous_epoch_nonce = claim_op().epoch_nonce;
-            assert!(
+            let apply_claim = |state: &LedgerState, anchor_slot: u64, nonces: (Fr, Fr)| {
+                let mut state = state.clone();
                 state
-                    .clone()
-                    .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, claim_tx())
-                    .is_ok()
-            );
+                    .mantle_ledger
+                    .pow
+                    .add_seen_block_slots(claim_op().block_hash, Slot::from(anchor_slot));
+                (
+                    state.cryptarchia_ledger.previous_epoch_nonce,
+                    state.cryptarchia_ledger.epoch_state.nonce,
+                ) = nonces;
+                state.try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, claim_tx())
+            };
 
-            // Carrying the nonce of epoch 2, it is judged under the window of
-            // era 1.
-            state.cryptarchia_ledger.epoch_state.nonce = claim_op().epoch_nonce;
-            state.cryptarchia_ledger.previous_epoch_nonce = Fr::ONE;
-            let err = state
-                .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, claim_tx())
-                .err()
-                .expect("claim should fail validation");
-            assert!(matches!(
-                err,
-                LedgerError::VerificationError(VerificationError::ClaimPowRewardError(
-                    ClaimPowRewardError::OutOfWindowSlot { .. }
-                ))
-            ));
+            // Whichever accepted nonce the claim carries.
+            for nonces in [
+                (claim_op().epoch_nonce, Fr::ONE),
+                (Fr::ONE, claim_op().epoch_nonce),
+            ] {
+                // Anchored 55 slots back, in era 0: inside its window.
+                assert!(apply_claim(&state, 160, nonces).is_ok());
+                // Anchored 15 slots back, in era 1: outside its window.
+                assert!(matches!(
+                    apply_claim(&state, 200, nonces).err(),
+                    Some(LedgerError::VerificationError(
+                        VerificationError::ClaimPowRewardError(
+                            ClaimPowRewardError::OutOfWindowSlot { .. }
+                        )
+                    ))
+                ));
+            }
         }
 
         #[test]

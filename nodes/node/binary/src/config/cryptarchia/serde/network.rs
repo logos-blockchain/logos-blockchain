@@ -108,7 +108,7 @@ pub struct TipPollConfig {
     /// How many expected block-intervals (`1/f` slots each) the local tip may
     /// lag behind the current slot before we proactively poll peers.
     pub lag_threshold_blocks: NonZeroU64,
-    /// Maximum number of peers to sample with `GetTip` on each poll.
+    /// Maximum number of peers to sample with a tip request on each poll.
     pub max_peers_to_sample: NonZeroUsize,
 }
 

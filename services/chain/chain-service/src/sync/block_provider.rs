@@ -16,7 +16,7 @@ use lb_core::{
     },
 };
 use lb_cryptarchia_engine::{Branch, Slot};
-use lb_cryptarchia_sync::{BlocksResponse, BlocksUnavailableReason, ProviderResponse};
+use lb_cryptarchia_sync::{BlocksProviderResponse, BlocksUnavailableReason, ProviderResponse};
 use lb_log_targets::chain;
 use lb_storage_service::api::StorageApi;
 use overwatch::DynError;
@@ -75,12 +75,12 @@ where
 {
     /// Creates a block stream that leads from one of the [`known_blocks`]
     /// to the [`target_block`], and sends it to the [`reply_sender`].
-    pub async fn send_blocks(
+    pub async fn reply_with_blocks(
         &self,
         cryptarchia: &lb_cryptarchia_engine::Cryptarchia<HeaderId>,
         target_block: HeaderId,
         known_blocks: &HashSet<HeaderId>,
-        reply_sender: Sender<BlocksResponse>,
+        reply_sender: Sender<BlocksProviderResponse>,
     ) {
         debug!(
             target: LOG_TARGET,
@@ -121,7 +121,7 @@ where
                         }
                     },
                 );
-                Self::send_error(reason, reply_sender).await;
+                Self::reply_with_error(reason, reply_sender).await;
             }
         }
     }
@@ -531,7 +531,10 @@ where
             .map_err(|error| GetBlocksError::Storage(error.to_string()))
     }
 
-    async fn send_error(reason: BlocksUnavailableReason, reply_sender: Sender<BlocksResponse>) {
+    async fn reply_with_error(
+        reason: BlocksUnavailableReason,
+        reply_sender: Sender<BlocksProviderResponse>,
+    ) {
         if let BlocksUnavailableReason::BlockNotFound(target) = &reason {
             error!(
                 target: LOG_TARGET,
@@ -972,7 +975,7 @@ mod tests {
             let (tx, mut rx) = mpsc::channel(1);
 
             self.provider
-                .send_blocks(&self.cryptarchia, target_block, known_blocks, tx)
+                .reply_with_blocks(&self.cryptarchia, target_block, known_blocks, tx)
                 .await;
 
             let mut blocks = Vec::new();
@@ -1014,7 +1017,7 @@ mod tests {
         ) {
             let (tx, mut rx) = mpsc::channel(1);
             self.provider
-                .send_blocks(&self.cryptarchia, target_block, known_blocks, tx)
+                .reply_with_blocks(&self.cryptarchia, target_block, known_blocks, tx)
                 .await;
 
             let (error_occurred, actual_outcome) = if let Some(response) = rx.recv().await {

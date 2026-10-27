@@ -548,8 +548,8 @@ where
                         }
 
                         // Spawn a task to not block this event loop.
-                        // The task makes `GetTip` requests handled by this event loop in peers' side.
-                        // All two nodes make `GetTip` requests simultaneously to each other,
+                        // The task makes tip requests handled by this event loop in peers' side.
+                        // All two nodes make tip requests simultaneously to each other,
                         // `poll_peer_tips_if_behind` will cause deadlock unless it's spawned off.
                         let adapter = network_adapter.clone();
                         let cryptarchia = relays.cryptarchia().clone();
@@ -1238,7 +1238,7 @@ mod tests {
         proofs::leader_proof::Groth16LeaderProof,
     };
     use lb_cryptarchia_engine::Era;
-    use lb_cryptarchia_sync::GetTipResponse;
+    use lb_cryptarchia_sync::TipResponse;
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, Ed25519Signature};
     use lb_network_service::{
         backends::mock::Mock,
@@ -1510,11 +1510,11 @@ mod tests {
             unimplemented!()
         }
 
-        async fn request_tip(&self, _peer: Self::PeerId) -> Result<GetTipResponse, DynError> {
+        async fn request_tip(&self, _peer: Self::PeerId) -> Result<TipResponse, DynError> {
             unimplemented!()
         }
 
-        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<GetTipResponse> {
+        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<TipResponse> {
             unimplemented!()
         }
 

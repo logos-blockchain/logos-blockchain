@@ -1,7 +1,7 @@
 use std::num::{NonZero, NonZeroU32, NonZeroU64, NonZeroU128};
 
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
-use lb_core::mantle::Value;
+use lb_core::mantle::{Value, ops::pow::PowSlotWindows};
 use lb_cryptarchia_engine::{Epoch, EraSchedule, Slot};
 pub use lb_groth16::ModulusShift;
 use lb_pol::LotteryConstants;
@@ -118,6 +118,13 @@ pub fn config_for_slot(eras: &EraScheduledConfig, slot: Slot) -> &Config {
 #[must_use]
 pub fn config_for_epoch(eras: &EraScheduledConfig, epoch: Epoch) -> &Config {
     eras.at_epoch(epoch).parameters
+}
+
+/// The acceptance window, in slots, of the `PoW` reward claims anchored to the
+/// blocks of each era.
+#[must_use]
+pub fn pow_slot_windows(eras: &EraScheduledConfig) -> PowSlotWindows {
+    eras.map(|era| era.parameters.pow_config.reward.slot_window)
 }
 
 /// The slot at which the nonce for a given epoch is snapshotted

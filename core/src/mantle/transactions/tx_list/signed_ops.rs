@@ -488,6 +488,8 @@ pub mod test_utils {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZero;
+
     use lb_binary_codec::{
         bincode::{DeserializeOp as _, SerializeOp as _},
         canonical::BinaryEncode as _,
@@ -539,15 +541,16 @@ mod tests {
     }
 
     fn create_config_op(channel: ChannelId, signing_key: &Ed25519Key) -> ChannelConfigOp {
-        ChannelConfigOp {
+        ChannelConfigOp::new(
             channel,
-            parent: MsgId::root(),
-            keys: signing_key.public_key().into(),
-            posting_timeframe: 0.into(),
-            posting_timeout: 0.into(),
-            configuration_threshold: 1,
-            transfer_threshold: 1,
-        }
+            MsgId::root(),
+            signing_key.public_key().into(),
+            0.into(),
+            0.into(),
+            NonZero::<u16>::MIN,
+            NonZero::<u16>::MIN,
+        )
+        .unwrap()
     }
 
     fn create_deposit_op(channel_id: ChannelId) -> DepositOp {

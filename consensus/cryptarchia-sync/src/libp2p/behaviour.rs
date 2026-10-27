@@ -23,33 +23,33 @@ use tokio::sync::{mpsc, mpsc::Sender, oneshot};
 use tracing::{debug, error, warn};
 
 use crate::{
-    BlocksResponse, DownloadBlocksRequest, TipResponse,
+    BlocksProviderResponse, BlocksRequest, TipProviderResponse,
     config::Config,
     libp2p::{
         behaviour::old_era::OldEra,
         downloader::Downloader,
         errors::ChainSyncError,
         messages::RequestMessage,
-        provider::{MAX_ADDITIONAL_BLOCKS, Provider, ReceivingRequestStream},
+        provider::{MAX_ADDITIONAL_BLOCKS, Provider, ReceivedRequest},
     },
-    messages::{GetTipResponse, SerialisedBlock},
+    messages::{SerialisedBlock, TipResponse},
 };
 
 mod old_era;
 
-type SendingBlocksRequestsFuture = BoxFuture<'static, Result<BlocksRequestStream, ChainSyncError>>;
+type SendingBlocksRequestFuture = BoxFuture<'static, Result<BlocksResponseReader, ChainSyncError>>;
 
-type SendingTipRequestFuture = BoxFuture<'static, Result<TipRequestStream, ChainSyncError>>;
+type SendingTipRequestFuture = BoxFuture<'static, Result<TipResponseReader, ChainSyncError>>;
 
-type ReceivingBlocksResponsesFuture = BoxFuture<'static, Result<(), ChainSyncError>>;
+type ReceivingBlocksResponseFuture = BoxFuture<'static, Result<(), ChainSyncError>>;
 
-type ReceivingTipResponsesFuture = BoxFuture<'static, Result<(), ChainSyncError>>;
+type ReceivingTipResponseFuture = BoxFuture<'static, Result<(), ChainSyncError>>;
 
-type SendingBlocksResponsesFuture = BoxFuture<'static, Result<(), ChainSyncError>>;
+type SendingBlocksResponseFuture = BoxFuture<'static, Result<(), ChainSyncError>>;
 
-type SendingTipResponsesFuture = BoxFuture<'static, Result<(), ChainSyncError>>;
+type SendingTipResponseFuture = BoxFuture<'static, Result<(), ChainSyncError>>;
 
-type ReceivingRequestsFuture = BoxFuture<'static, Result<ReceivingRequestStream, ChainSyncError>>;
+type ReceivingRequestFuture = BoxFuture<'static, Result<ReceivedRequest, ChainSyncError>>;
 
 const LOG_TARGET: &str = cryptarchia::sync::libp2p::REQUESTS;
 
@@ -60,13 +60,14 @@ type ToSwarmEvent = ToSwarm<
     <<Behaviour as NetworkBehaviour>::ConnectionHandler as ConnectionHandler>::FromBehaviour,
 >;
 
-pub struct BlocksRequestStream {
+/// Resources to read and deliver the response to a [`BlocksRequest`] just sent.
+pub struct BlocksResponseReader {
     pub peer_id: PeerId,
     pub stream: Libp2pStream,
     pub reply_channel: oneshot::Sender<BoxedStream<Result<SerialisedBlock, ChainSyncError>>>,
 }
 
-impl BlocksRequestStream {
+impl BlocksResponseReader {
     pub const fn new(
         peer_id: PeerId,
         stream: Stream,
@@ -80,17 +81,19 @@ impl BlocksRequestStream {
     }
 }
 
-pub struct TipRequestStream {
+/// Resources to read and deliver the response to a [`RequestMessage::Tip`] just
+/// sent.
+pub struct TipResponseReader {
     pub peer_id: PeerId,
     pub stream: Libp2pStream,
-    pub reply_channel: oneshot::Sender<Result<GetTipResponse, ChainSyncError>>,
+    pub reply_channel: oneshot::Sender<Result<TipResponse, ChainSyncError>>,
 }
 
-impl TipRequestStream {
+impl TipResponseReader {
     pub const fn new(
         peer_id: PeerId,
         stream: Stream,
-        reply_channel: oneshot::Sender<Result<GetTipResponse, ChainSyncError>>,
+        reply_channel: oneshot::Sender<Result<TipResponse, ChainSyncError>>,
     ) -> Self {
         Self {
             peer_id,
@@ -103,23 +106,23 @@ impl TipRequestStream {
 #[derive(Clone, Educe)]
 #[educe(Debug)]
 pub enum Event {
-    ProvideBlocksRequest {
+    BlocksRequest {
         /// Return blocks up to `target_block`.
         target_block: HeaderId,
-        /// The local canonical chain latest block.
-        local_tip: HeaderId,
+        /// The requester's canonical chain tip.
+        requester_tip: HeaderId,
         /// The latest immutable block.
         latest_immutable_block: HeaderId,
         /// The list of additional blocks that the requester has.
         additional_blocks: HashSet<HeaderId>,
         /// Channel to send blocks to the service.
         #[educe(Debug(ignore))]
-        reply_sender: Sender<BlocksResponse>,
+        reply_sender: Sender<BlocksProviderResponse>,
     },
-    ProvideTipsRequest {
+    TipRequest {
         /// Channel to send the latest tip to the service.
         #[educe(Debug(ignore))]
-        reply_sender: Sender<TipResponse>,
+        reply_sender: Sender<TipProviderResponse>,
     },
 }
 
@@ -153,29 +156,30 @@ struct OngoingRequests {
     /// Futures for reading incoming requests. This is common to both tip and
     /// block because initially we don't know which request we receive over
     /// stream. After reading the request, we use dedicated `FuturesUnordered`,
-    /// either `sending_block_responses` or `sending_tip_responses`.
-    receiving_requests: FuturesUnordered<ReceivingRequestsFuture>,
+    /// either `sending_blocks_responses` or `sending_tip_responses`.
+    receiving_requests: FuturesUnordered<ReceivingRequestFuture>,
     /// Futures for sending block download requests. After the request is
-    /// read, reading blocks are handled by `receiving_block_responses`.
-    sending_block_requests: FuturesUnordered<SendingBlocksRequestsFuture>,
-    /// Futures for managing the progress of locally initiated block downloads.
-    receiving_block_responses: FuturesUnordered<ReceivingBlocksResponsesFuture>,
+    /// sent, the response is handled by `receiving_blocks_responses`.
+    sending_blocks_requests: FuturesUnordered<SendingBlocksRequestFuture>,
+    /// Futures for handing the blocks response of locally initiated block
+    /// downloads to the requester, as a stream read lazily from the peer.
+    receiving_blocks_responses: FuturesUnordered<ReceivingBlocksResponseFuture>,
     /// Futures for managing the progress of externally initiated block
     /// downloads.
-    sending_block_responses: FuturesUnordered<SendingBlocksResponsesFuture>,
+    sending_blocks_responses: FuturesUnordered<SendingBlocksResponseFuture>,
     /// Futures for sending tip requests. After the request is
-    /// read, the reading tip is handled by `receiving_tip_responses`.
+    /// sent, the response is handled by `receiving_tip_responses`.
     sending_tip_requests: FuturesUnordered<SendingTipRequestFuture>,
     /// Futures for managing the progress of locally initiated tip requests.
-    receiving_tip_responses: FuturesUnordered<ReceivingTipResponsesFuture>,
+    receiving_tip_responses: FuturesUnordered<ReceivingTipResponseFuture>,
     /// Futures for managing the progress of externally initiated tip
     /// requests.
-    sending_tip_responses: FuturesUnordered<SendingTipResponsesFuture>,
+    sending_tip_responses: FuturesUnordered<SendingTipResponseFuture>,
     /// Futures for closing rejected incoming streams. Only pushed to by
     /// `reject_incoming_stream`.
     incoming_streams_to_close: FuturesUnordered<BoxFuture<'static, ()>>,
     /// Waker to notify the behaviour when `request_tip` or
-    /// `start_blocks_download` is called.
+    /// `request_blocks` is called.
     waker: Option<std::task::Waker>,
     /// Configuration for the behaviour.
     config: Config,
@@ -242,13 +246,13 @@ impl Behaviour {
     pub fn request_tip(
         &self,
         peer_id: PeerId,
-        reply_sender: oneshot::Sender<Result<GetTipResponse, ChainSyncError>>,
+        reply_sender: oneshot::Sender<Result<TipResponse, ChainSyncError>>,
     ) -> Result<(), ChainSyncError> {
         self.sync_protocol_state.request_tip(peer_id, reply_sender);
         Ok(())
     }
 
-    pub fn start_blocks_download(
+    pub fn request_blocks(
         &self,
         peer_id: PeerId,
         target_block: HeaderId,
@@ -257,7 +261,7 @@ impl Behaviour {
         additional_blocks: HashSet<HeaderId>,
         reply_sender: oneshot::Sender<BoxedStream<Result<SerialisedBlock, ChainSyncError>>>,
     ) -> Result<(), ChainSyncError> {
-        self.sync_protocol_state.start_blocks_download(
+        self.sync_protocol_state.request_blocks(
             peer_id,
             target_block,
             local_tip,
@@ -285,7 +289,7 @@ impl SyncProtocolState {
     fn request_tip(
         &self,
         peer_id: PeerId,
-        reply_sender: oneshot::Sender<Result<GetTipResponse, ChainSyncError>>,
+        reply_sender: oneshot::Sender<Result<TipResponse, ChainSyncError>>,
     ) {
         let mut control = self.control.clone();
         let protocol_name = self.protocol_name.clone();
@@ -301,7 +305,7 @@ impl SyncProtocolState {
         self.ongoing_requests.try_notify_waker();
     }
 
-    fn start_blocks_download(
+    fn request_blocks(
         &self,
         peer_id: PeerId,
         target_block: HeaderId,
@@ -311,7 +315,7 @@ impl SyncProtocolState {
         reply_sender: oneshot::Sender<BoxedStream<Result<SerialisedBlock, ChainSyncError>>>,
     ) {
         let control = self.control.clone();
-        let request = DownloadBlocksRequest::new(
+        let request = BlocksRequest::new(
             target_block,
             local_tip,
             latest_immutable_block,
@@ -319,15 +323,9 @@ impl SyncProtocolState {
         );
         let protocol_name = self.protocol_name.clone();
 
-        self.ongoing_requests.sending_block_requests.push(
-            Downloader::send_download_request(
-                peer_id,
-                control,
-                request,
-                protocol_name,
-                reply_sender,
-            )
-            .boxed(),
+        self.ongoing_requests.sending_blocks_requests.push(
+            Downloader::send_blocks_request(peer_id, control, request, protocol_name, reply_sender)
+                .boxed(),
         );
 
         self.ongoing_requests.try_notify_waker();
@@ -352,11 +350,11 @@ impl SyncProtocolState {
 impl OngoingRequests {
     fn new(config: Config) -> Self {
         Self {
-            receiving_block_responses: FuturesUnordered::new(),
-            sending_block_responses: FuturesUnordered::new(),
+            receiving_blocks_responses: FuturesUnordered::new(),
+            sending_blocks_responses: FuturesUnordered::new(),
             receiving_requests: FuturesUnordered::new(),
             incoming_streams_to_close: FuturesUnordered::new(),
-            sending_block_requests: FuturesUnordered::new(),
+            sending_blocks_requests: FuturesUnordered::new(),
             sending_tip_requests: FuturesUnordered::new(),
             receiving_tip_responses: FuturesUnordered::new(),
             sending_tip_responses: FuturesUnordered::new(),
@@ -372,20 +370,18 @@ impl OngoingRequests {
             async move { Provider::provide_tip(reply_receiver, peer_id, stream).await }.boxed(),
         );
 
-        Poll::Ready(ToSwarm::GenerateEvent(Event::ProvideTipsRequest {
-            reply_sender,
-        }))
+        Poll::Ready(ToSwarm::GenerateEvent(Event::TipRequest { reply_sender }))
     }
 
-    fn handle_download_request(
+    fn handle_blocks_request(
         &self,
         peer_id: PeerId,
-        request: DownloadBlocksRequest,
+        request: BlocksRequest,
         stream: Libp2pStream,
     ) -> Poll<ToSwarmEvent> {
         let (reply_sender, reply_receiver) = mpsc::channel(1);
 
-        self.sending_block_responses.push(
+        self.sending_blocks_responses.push(
             Provider::provide_blocks(
                 reply_receiver,
                 peer_id,
@@ -395,9 +391,9 @@ impl OngoingRequests {
             .boxed(),
         );
 
-        Poll::Ready(ToSwarm::GenerateEvent(Event::ProvideBlocksRequest {
+        Poll::Ready(ToSwarm::GenerateEvent(Event::BlocksRequest {
             target_block: request.target_block,
-            local_tip: request.known_blocks.local_tip,
+            requester_tip: request.known_blocks.local_tip,
             latest_immutable_block: request.known_blocks.latest_immutable_block,
             additional_blocks: request.known_blocks.additional_blocks,
             reply_sender,
@@ -411,7 +407,7 @@ impl OngoingRequests {
             self.reject_incoming_stream(stream, "too many pending incoming requests");
         } else {
             self.receiving_requests.push(
-                Provider::process_request(peer_id, stream, self.config.peer_response_timeout)
+                Provider::receive_request(peer_id, stream, self.config.peer_response_timeout)
                     .boxed(),
             );
         }
@@ -419,18 +415,27 @@ impl OngoingRequests {
         self.try_notify_waker();
     }
 
-    fn handle_tip_request_available(&self, request_stream: TipRequestStream) {
+    /// Called once our tip request has been written to the peer. Starts
+    /// receiving the tip response, which is delivered to the caller of
+    /// `request_tip`.
+    fn on_tip_request_sent(&self, tip_response_reader: TipResponseReader) {
         self.receiving_tip_responses.push(
-            Downloader::receive_tip(request_stream, self.config.peer_response_timeout).boxed(),
+            Downloader::receive_tip_response(
+                tip_response_reader,
+                self.config.peer_response_timeout,
+            )
+            .boxed(),
         );
 
         self.try_notify_waker();
     }
 
-    fn handle_blocks_request_available(&self, request_stream: BlocksRequestStream) {
-        self.receiving_block_responses.push(
-            ready(Downloader::receive_blocks(
-                request_stream,
+    /// Called once our blocks request has been written to the peer. Hands the
+    /// caller of `request_blocks` a stream that receives the blocks response.
+    fn on_blocks_request_sent(&self, blocks_response_reader: BlocksResponseReader) {
+        self.receiving_blocks_responses.push(
+            ready(Downloader::receive_blocks_response(
+                blocks_response_reader,
                 self.config.peer_response_timeout,
             ))
             .boxed(),
@@ -439,11 +444,15 @@ impl OngoingRequests {
         self.try_notify_waker();
     }
 
-    fn handle_request_ready(
-        &self,
-        receive_request_stream: ReceivingRequestStream,
-    ) -> Poll<ToSwarmEvent> {
-        let (peer_id, stream, request) = receive_request_stream;
+    /// Called once a peer's request has been received from its stream. Starts
+    /// serving it and returns the event that asks the service for the
+    /// response.
+    fn on_request_received(&self, received_request: ReceivedRequest) -> Poll<ToSwarmEvent> {
+        let ReceivedRequest {
+            peer_id,
+            stream,
+            request,
+        } = received_request;
 
         if let Err(reason) = self.admit_request(&request) {
             self.reject_incoming_stream(stream, reason);
@@ -451,10 +460,8 @@ impl OngoingRequests {
         }
 
         let event = match request {
-            RequestMessage::DownloadBlocksRequest(request) => {
-                self.handle_download_request(peer_id, request, stream)
-            }
-            RequestMessage::GetTip => self.handle_tip_request(peer_id, stream),
+            RequestMessage::Blocks(request) => self.handle_blocks_request(peer_id, request, stream),
+            RequestMessage::Tip => self.handle_tip_request(peer_id, stream),
         };
 
         self.try_notify_waker();
@@ -465,8 +472,8 @@ impl OngoingRequests {
     /// Decides whether a fully read inbound request should be served.
     fn admit_request(&self, request: &RequestMessage) -> Result<(), &'static str> {
         match request {
-            RequestMessage::DownloadBlocksRequest(request) => {
-                if self.sending_block_responses.len() >= self.config.max_inbound_requests.get() {
+            RequestMessage::Blocks(request) => {
+                if self.sending_blocks_responses.len() >= self.config.max_inbound_requests.get() {
                     return Err("too many concurrent download requests");
                 }
                 if request.known_blocks.additional_blocks.len() > MAX_ADDITIONAL_BLOCKS {
@@ -475,7 +482,7 @@ impl OngoingRequests {
                 Ok(())
             }
             // Tip requests are cheap to serve, so they are never rejected.
-            RequestMessage::GetTip => Ok(()),
+            RequestMessage::Tip => Ok(()),
         }
     }
 
@@ -509,10 +516,10 @@ impl OngoingRequests {
             debug!(target: LOG_TARGET, "Incoming stream closed");
         }
 
-        if let Poll::Ready(Some(result)) = self.sending_block_requests.poll_next_unpin(cx) {
+        if let Poll::Ready(Some(result)) = self.sending_blocks_requests.poll_next_unpin(cx) {
             match result {
-                Ok(request_stream) => {
-                    self.handle_blocks_request_available(request_stream);
+                Ok(blocks_response_reader) => {
+                    self.on_blocks_request_sent(blocks_response_reader);
                 }
                 Err(err) => {
                     error!(target: LOG_TARGET, %err, "failed to send a block download request");
@@ -524,8 +531,8 @@ impl OngoingRequests {
 
         if let Poll::Ready(Some(result)) = self.sending_tip_requests.poll_next_unpin(cx) {
             match result {
-                Ok(request_stream) => {
-                    self.handle_tip_request_available(request_stream);
+                Ok(tip_response_reader) => {
+                    self.on_tip_request_sent(tip_response_reader);
                 }
                 Err(err) => {
                     error!(target: LOG_TARGET, %err, "failed to send a tip request");
@@ -535,7 +542,7 @@ impl OngoingRequests {
             return Poll::Pending;
         }
 
-        if let Poll::Ready(Some(_)) = self.receiving_block_responses.poll_next_unpin(cx) {
+        if let Poll::Ready(Some(_)) = self.receiving_blocks_responses.poll_next_unpin(cx) {
             return Poll::Pending;
         }
 
@@ -543,7 +550,7 @@ impl OngoingRequests {
             return Poll::Pending;
         }
 
-        if let Poll::Ready(Some(result)) = self.sending_block_responses.poll_next_unpin(cx) {
+        if let Poll::Ready(Some(result)) = self.sending_blocks_responses.poll_next_unpin(cx) {
             if let Err(e) = result {
                 error!(target: LOG_TARGET, "Sending response failed: {}", e);
             }
@@ -564,7 +571,7 @@ impl OngoingRequests {
 
         if let Poll::Ready(Some(result)) = self.receiving_requests.poll_next_unpin(cx) {
             match result {
-                Ok(request_stream) => return self.handle_request_ready(request_stream),
+                Ok(received_request) => return self.on_request_received(received_request),
                 Err(e) => {
                     error!(target: LOG_TARGET, "Error while processing incoming request: {}", e);
                 }
@@ -691,16 +698,17 @@ mod tests {
     use tokio::sync::{mpsc, oneshot};
 
     use crate::{
-        BlocksResponse, BlocksUnavailableReason, DynError,
-        GetTipResponse::Tip,
-        GetTipResponseReason, ProviderResponse, TipResponse,
+        BlocksProviderResponse, BlocksUnavailableReason, DynError, ProviderResponse,
+        TipProviderResponse,
+        TipResponse::Tip,
+        TipResponseFailureReason,
         config::Config,
         libp2p::{
             behaviour::{Behaviour, BoxedStream, Event},
             errors::{ChainSyncError, ChainSyncErrorKind},
             provider::MAX_ADDITIONAL_BLOCKS,
         },
-        messages::{GetTipResponse, SerialisedBlock},
+        messages::{SerialisedBlock, TipResponse},
     };
 
     #[tokio::test]
@@ -712,7 +720,7 @@ mod tests {
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_and_downloader(200, config).await;
 
-        let streams = request_download(
+        let reply_receivers = request_blocks(
             &mut downloader_swarm,
             1,
             HeaderId::from([0; 32]),
@@ -724,14 +732,14 @@ mod tests {
 
         tokio::spawn(async move { downloader_swarm.loop_on_next().await });
 
-        let (blocks, errors) = wait_block_messages(streams).await;
+        let (blocks, errors) = wait_block_messages(reply_receivers).await;
 
         assert_eq!(blocks.len(), 200);
         assert_eq!(errors.len(), 0);
     }
 
     #[tokio::test]
-    async fn test_reject_excess_download_requests() {
+    async fn test_reject_excess_blocks_requests() {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
@@ -739,7 +747,7 @@ mod tests {
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_and_downloader(1, config.clone()).await;
 
-        let streams = request_download(
+        let reply_receivers = request_blocks(
             &mut downloader_swarm,
             config.max_inbound_requests.get() + 1,
             HeaderId::from([0; 32]),
@@ -751,7 +759,7 @@ mod tests {
 
         tokio::spawn(async move { downloader_swarm.loop_on_next().await });
 
-        let (blocks, errors) = wait_block_messages(streams).await;
+        let (blocks, errors) = wait_block_messages(reply_receivers).await;
 
         assert_eq!(blocks.len(), config.max_inbound_requests.get());
         assert_eq!(errors.len(), 1);
@@ -766,7 +774,7 @@ mod tests {
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_and_downloader(1, config).await;
 
-        let streams = request_download(
+        let reply_receivers = request_blocks(
             &mut downloader_swarm,
             1,
             HeaderId::from([0; 32]),
@@ -780,12 +788,12 @@ mod tests {
 
         tokio::spawn(async move { downloader_swarm.loop_on_next().await });
 
-        let (_blocks, errors) = wait_block_messages(streams).await;
+        let (_blocks, errors) = wait_block_messages(reply_receivers).await;
         assert_eq!(errors.len(), 1);
     }
 
     #[tokio::test]
-    async fn test_get_tip() {
+    async fn test_tip_request() {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
@@ -793,11 +801,11 @@ mod tests {
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_and_downloader(0, config).await;
 
-        let receiver = request_tip(&mut downloader_swarm, provider_peer_id);
+        let reply_receiver = request_tip(&mut downloader_swarm, provider_peer_id);
 
         tokio::spawn(async move { downloader_swarm.loop_on_next().await });
 
-        let Tip { tip, slot, height } = receiver.await.unwrap().unwrap() else {
+        let Tip { tip, slot, height } = reply_receiver.await.unwrap().unwrap() else {
             panic!("Expected a tip response");
         };
 
@@ -827,13 +835,13 @@ mod tests {
             let mut pending_downloads = Vec::new();
             while let Some(event) = provider_swarm.next().await {
                 match event {
-                    SwarmEvent::Behaviour(Event::ProvideTipsRequest { reply_sender }) => {
+                    SwarmEvent::Behaviour(Event::TipRequest { reply_sender }) => {
                         reply_sender
                             .send(StandardProvider { blocks_count: 0 }.handle_tip_request())
                             .await
                             .unwrap();
                     }
-                    SwarmEvent::Behaviour(Event::ProvideBlocksRequest { reply_sender, .. }) => {
+                    SwarmEvent::Behaviour(Event::BlocksRequest { reply_sender, .. }) => {
                         pending_downloads.push(reply_sender);
                         download_tx.send(()).unwrap();
                     }
@@ -844,7 +852,7 @@ mod tests {
 
         let mut downloader_swarm =
             setup_downloader_and_connect(provider_addr, config.clone()).await;
-        let streams = request_download(
+        let streams = request_blocks(
             &mut downloader_swarm,
             config.max_inbound_requests.get(),
             HeaderId::from([0; 32]),
@@ -854,7 +862,7 @@ mod tests {
             provider_peer_id,
         );
         let tip_receiver = request_tip(&mut downloader_swarm, provider_peer_id);
-        let excess_streams = request_download(
+        let excess_streams = request_blocks(
             &mut downloader_swarm,
             1,
             HeaderId::from([0; 32]),
@@ -908,7 +916,7 @@ mod tests {
 
         tokio::spawn(async move {
             while let Some(event) = provider_swarm.next().await {
-                if let SwarmEvent::Behaviour(Event::ProvideBlocksRequest { .. }) = event {
+                if let SwarmEvent::Behaviour(Event::BlocksRequest { .. }) = event {
                     tokio::time::sleep(Duration::from_secs(100)).await;
                 }
             }
@@ -917,7 +925,7 @@ mod tests {
         let mut downloader_swarm = new_swarm_with_quic(config);
         downloader_swarm.dial_and_wait(provider_addr).await;
 
-        let streams = request_download(
+        let reply_receivers = request_blocks(
             &mut downloader_swarm,
             1,
             HeaderId::from([0; 32]),
@@ -929,7 +937,7 @@ mod tests {
 
         tokio::spawn(async move { downloader_swarm.loop_on_next().await });
 
-        let (_blocks, errors) = wait_block_messages(streams).await;
+        let (_blocks, errors) = wait_block_messages(reply_receivers).await;
 
         assert!(matches!(errors[0].kind, ChainSyncErrorKind::Timeout(_)));
     }
@@ -942,11 +950,11 @@ mod tests {
         };
         let (mut downloader_swarm, provider_peer_id) = start_rejecting_provider(config).await;
 
-        let receiver = request_tip(&mut downloader_swarm, provider_peer_id);
+        let reply_receiver = request_tip(&mut downloader_swarm, provider_peer_id);
 
         tokio::spawn(async move { downloader_swarm.loop_on_next().await });
 
-        let result = receiver.await.unwrap();
+        let result = reply_receiver.await.unwrap();
         let err = result.unwrap_err();
         assert!(matches!(err.kind, ChainSyncErrorKind::RequestTipError(_)));
     }
@@ -959,7 +967,7 @@ mod tests {
         };
         let (mut downloader_swarm, provider_peer_id) = start_rejecting_provider(config).await;
 
-        let streams = request_download(
+        let reply_receivers = request_blocks(
             &mut downloader_swarm,
             1,
             HeaderId::from([0; 32]),
@@ -971,7 +979,7 @@ mod tests {
 
         tokio::spawn(async move { downloader_swarm.loop_on_next().await });
 
-        let (blocks, errors) = wait_block_messages(streams).await;
+        let (blocks, errors) = wait_block_messages(reply_receivers).await;
 
         assert_eq!(blocks.len(), 0);
         assert_eq!(errors.len(), 1);
@@ -986,7 +994,7 @@ mod tests {
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_with_stream_error(config).await;
 
-        let streams = request_download(
+        let reply_receivers = request_blocks(
             &mut downloader_swarm,
             1,
             HeaderId::from([0; 32]),
@@ -998,7 +1006,7 @@ mod tests {
 
         tokio::spawn(async move { downloader_swarm.loop_on_next().await });
 
-        let (blocks, errors) = wait_block_messages(streams).await;
+        let (blocks, errors) = wait_block_messages(reply_receivers).await;
 
         assert_eq!(blocks.len(), 1);
         assert_eq!(errors.len(), 1);
@@ -1028,7 +1036,7 @@ mod tests {
             StandardProvider { blocks_count: 10 },
         ));
 
-        let streams = request_download(
+        let reply_receivers = request_blocks(
             &mut downloader_swarm,
             1,
             HeaderId::from([0; 32]),
@@ -1040,10 +1048,12 @@ mod tests {
 
         tokio::spawn(async move { downloader_swarm.loop_on_next().await });
 
-        let (blocks, errors) =
-            tokio::time::timeout(Duration::from_secs(10), wait_block_messages(streams))
-                .await
-                .expect("The download should go over the open connection");
+        let (blocks, errors) = tokio::time::timeout(
+            Duration::from_secs(10),
+            wait_block_messages(reply_receivers),
+        )
+        .await
+        .expect("The download should go over the open connection");
 
         assert_eq!(blocks.len(), 10);
         assert_eq!(errors.len(), 0);
@@ -1062,9 +1072,7 @@ mod tests {
         // only then answers it.
         tokio::spawn(async move {
             while let Some(event) = provider_swarm.next().await {
-                if let SwarmEvent::Behaviour(Event::ProvideBlocksRequest { reply_sender, .. }) =
-                    event
-                {
+                if let SwarmEvent::Behaviour(Event::BlocksRequest { reply_sender, .. }) = event {
                     provider_swarm
                         .behaviour_mut()
                         .start_new_era(StreamProtocol::new("/tests/chain-sync/next"));
@@ -1076,7 +1084,7 @@ mod tests {
             }
         });
 
-        let streams = request_download(
+        let reply_receivers = request_blocks(
             &mut downloader_swarm,
             1,
             HeaderId::from([0; 32]),
@@ -1088,10 +1096,12 @@ mod tests {
 
         tokio::spawn(async move { downloader_swarm.loop_on_next().await });
 
-        let (blocks, errors) =
-            tokio::time::timeout(Duration::from_secs(10), wait_block_messages(streams))
-                .await
-                .expect("The request under way should be served");
+        let (blocks, errors) = tokio::time::timeout(
+            Duration::from_secs(10),
+            wait_block_messages(reply_receivers),
+        )
+        .await
+        .expect("The request under way should be served");
 
         assert_eq!(blocks.len(), 10);
         assert_eq!(errors.len(), 0);
@@ -1117,7 +1127,7 @@ mod tests {
             StandardProvider { blocks_count: 10 },
         ));
 
-        let streams = request_download(
+        let reply_receivers = request_blocks(
             &mut downloader_swarm,
             1,
             HeaderId::from([0; 32]),
@@ -1129,7 +1139,7 @@ mod tests {
 
         tokio::spawn(async move { downloader_swarm.loop_on_next().await });
 
-        let (blocks, errors) = wait_block_messages(streams).await;
+        let (blocks, errors) = wait_block_messages(reply_receivers).await;
 
         assert_eq!(blocks.len(), 0);
         assert_eq!(errors.len(), 1);
@@ -1155,7 +1165,7 @@ mod tests {
         ));
         let mut downloader_swarm = setup_downloader_and_connect(provider_addr, config).await;
         let request = |swarm: &mut Swarm<Behaviour>| {
-            request_download(
+            request_blocks(
                 swarm,
                 1,
                 HeaderId::from([0; 32]),
@@ -1206,7 +1216,7 @@ mod tests {
             },
         ));
         let request = |swarm: &mut Swarm<Behaviour>| {
-            request_download(
+            request_blocks(
                 swarm,
                 1,
                 HeaderId::from([0; 32]),
@@ -1272,8 +1282,8 @@ mod tests {
     }
 
     trait ProviderBehavior: Send + 'static {
-        fn handle_tip_request(&self) -> TipResponse;
-        fn handle_blocks_request(&self, blocks_count: usize) -> BlocksResponse;
+        fn handle_tip_request(&self) -> TipProviderResponse;
+        fn handle_blocks_request(&self, blocks_count: usize) -> BlocksProviderResponse;
     }
 
     struct StandardProvider {
@@ -1281,7 +1291,7 @@ mod tests {
     }
 
     impl ProviderBehavior for StandardProvider {
-        fn handle_tip_request(&self) -> TipResponse {
+        fn handle_tip_request(&self) -> TipProviderResponse {
             ProviderResponse::Available(Tip {
                 tip: HeaderId::from([0; 32]),
                 slot: Slot::from(0),
@@ -1289,7 +1299,7 @@ mod tests {
             })
         }
 
-        fn handle_blocks_request(&self, _requested: usize) -> BlocksResponse {
+        fn handle_blocks_request(&self, _requested: usize) -> BlocksProviderResponse {
             ProviderResponse::Available(
                 futures::stream::iter(
                     iter::repeat_with(|| Bytes::from_static(&[0; 32]))
@@ -1307,13 +1317,13 @@ mod tests {
     }
 
     impl ProviderBehavior for LargeBlocksProvider {
-        fn handle_tip_request(&self) -> TipResponse {
+        fn handle_tip_request(&self) -> TipProviderResponse {
             ProviderResponse::Unavailable {
-                reason: GetTipResponseReason::NodeNotOnline,
+                reason: TipResponseFailureReason::NodeNotOnline,
             }
         }
 
-        fn handle_blocks_request(&self, _requested: usize) -> BlocksResponse {
+        fn handle_blocks_request(&self, _requested: usize) -> BlocksProviderResponse {
             let block = Bytes::from(vec![0; self.block_size]);
             ProviderResponse::Available(
                 futures::stream::iter(iter::repeat_n(block, self.blocks_count).map(Ok)).boxed(),
@@ -1324,13 +1334,13 @@ mod tests {
     struct RejectingProvider;
 
     impl ProviderBehavior for RejectingProvider {
-        fn handle_tip_request(&self) -> TipResponse {
+        fn handle_tip_request(&self) -> TipProviderResponse {
             ProviderResponse::Unavailable {
-                reason: GetTipResponseReason::NodeNotOnline,
+                reason: TipResponseFailureReason::NodeNotOnline,
             }
         }
 
-        fn handle_blocks_request(&self, _requested: usize) -> BlocksResponse {
+        fn handle_blocks_request(&self, _requested: usize) -> BlocksProviderResponse {
             ProviderResponse::Unavailable {
                 reason: BlocksUnavailableReason::Unknown,
             }
@@ -1342,7 +1352,7 @@ mod tests {
     }
 
     impl ProviderBehavior for ErrorStreamProvider {
-        fn handle_tip_request(&self) -> TipResponse {
+        fn handle_tip_request(&self) -> TipProviderResponse {
             ProviderResponse::Available(Tip {
                 tip: HeaderId::from([0; 32]),
                 slot: Slot::from(0),
@@ -1350,7 +1360,7 @@ mod tests {
             })
         }
 
-        fn handle_blocks_request(&self, _requested: usize) -> BlocksResponse {
+        fn handle_blocks_request(&self, _requested: usize) -> BlocksProviderResponse {
             let success_count = self.success_count;
             ProviderResponse::Available(
                 futures::stream::iter((0..50).map(move |i| {
@@ -1369,13 +1379,13 @@ mod tests {
     async fn run_provider<B: ProviderBehavior>(mut provider_swarm: Swarm<Behaviour>, behavior: B) {
         while let Some(event) = provider_swarm.next().await {
             match event {
-                SwarmEvent::Behaviour(Event::ProvideTipsRequest { reply_sender }) => {
+                SwarmEvent::Behaviour(Event::TipRequest { reply_sender }) => {
                     reply_sender
                         .send(behavior.handle_tip_request())
                         .await
                         .unwrap();
                 }
-                SwarmEvent::Behaviour(Event::ProvideBlocksRequest { reply_sender, .. }) => {
+                SwarmEvent::Behaviour(Event::BlocksRequest { reply_sender, .. }) => {
                     let response = behavior.handle_blocks_request(0);
                     tokio::spawn(async move {
                         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1443,7 +1453,7 @@ mod tests {
         (provider_swarm, provider_peer_id, provider_addr)
     }
 
-    fn request_download(
+    fn request_blocks(
         downloader_swarm: &mut Swarm<Behaviour>,
         syncs_count: usize,
         target_block: HeaderId,
@@ -1452,46 +1462,48 @@ mod tests {
         additional_blocks: &HashSet<HeaderId>,
         peer_id: PeerId,
     ) -> Vec<oneshot::Receiver<BoxedStream<Result<SerialisedBlock, ChainSyncError>>>> {
-        let mut channels = Vec::new();
+        let mut reply_receivers = Vec::new();
         for _ in 0..syncs_count {
-            let (tx, rx) = oneshot::channel();
-            channels.push(rx);
+            let (reply_sender, reply_receiver) = oneshot::channel();
+            reply_receivers.push(reply_receiver);
             downloader_swarm
                 .behaviour_mut()
-                .start_blocks_download(
+                .request_blocks(
                     peer_id,
                     target_block,
                     local_tip,
                     latest_immutable_block,
                     additional_blocks.clone(),
-                    tx,
+                    reply_sender,
                 )
                 .unwrap();
         }
 
-        channels
+        reply_receivers
     }
 
     fn request_tip(
         downloader_swarm: &mut Swarm<Behaviour>,
         peer_id: PeerId,
-    ) -> oneshot::Receiver<Result<GetTipResponse, ChainSyncError>> {
-        let (tx, rx) = oneshot::channel();
+    ) -> oneshot::Receiver<Result<TipResponse, ChainSyncError>> {
+        let (reply_sender, reply_receiver) = oneshot::channel();
         downloader_swarm
             .behaviour_mut()
-            .request_tip(peer_id, tx)
+            .request_tip(peer_id, reply_sender)
             .unwrap();
-        rx
+        reply_receiver
     }
 
     async fn wait_block_messages(
-        streams: Vec<oneshot::Receiver<BoxedStream<Result<SerialisedBlock, ChainSyncError>>>>,
+        reply_receivers: Vec<
+            oneshot::Receiver<BoxedStream<Result<SerialisedBlock, ChainSyncError>>>,
+        >,
     ) -> (Vec<SerialisedBlock>, Vec<ChainSyncError>) {
         let mut blocks = Vec::new();
         let mut errors = Vec::new();
 
-        for receiver in streams {
-            let mut stream = match receiver.await {
+        for reply_receiver in reply_receivers {
+            let mut stream = match reply_receiver.await {
                 Ok(stream) => stream,
                 Err(e) => {
                     errors.push(ChainSyncError {

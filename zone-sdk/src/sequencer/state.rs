@@ -115,9 +115,9 @@ fn opaque_lineage(
                 }
                 last_msg = Some(inscribe.id());
             }
-            OpRef::ChannelConfig(config) if config.channel == channel_id => {
+            OpRef::ChannelConfig(config) if config.channel() == channel_id => {
                 if last_config.is_none() {
-                    config_parent = Some(config.parent);
+                    config_parent = Some(config.parent());
                 }
                 last_config = Some(config.id());
             }
@@ -1968,6 +1968,8 @@ mod tests {
         config_parent: MsgId,
         data: u8,
     ) -> (SignedOps<Unverified, StandardMode>, MsgId, MsgId) {
+        use std::num::NonZero;
+
         use lb_core::mantle::{
             channel::{SlotTimeframe, SlotTimeout},
             ops::channel::{VerifiedChannelKeys, config::ChannelConfigOp},
@@ -1978,18 +1980,17 @@ mod tests {
             parent,
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
         };
-        let config = ChannelConfigOp {
-            channel: [0u8; 32].into(),
-            parent: config_parent,
-            keys: VerifiedChannelKeys::try_from(vec![
-                Ed25519PublicKey::from_bytes(&[1u8; 32]).unwrap(),
-            ])
-            .unwrap(),
-            posting_timeframe: SlotTimeframe::from(0u32),
-            posting_timeout: SlotTimeout::from(0u32),
-            configuration_threshold: 1,
-            transfer_threshold: 1,
-        };
+        let config = ChannelConfigOp::new(
+            [0u8; 32].into(),
+            config_parent,
+            VerifiedChannelKeys::try_from(vec![Ed25519PublicKey::from_bytes(&[1u8; 32]).unwrap()])
+                .unwrap(),
+            SlotTimeframe::from(0u32),
+            SlotTimeout::from(0u32),
+            NonZero::<u16>::MIN,
+            NonZero::<u16>::MIN,
+        )
+        .unwrap();
         let inscribe_msg = inscribe.id();
         let config_msg = config.id();
         let ops = Ops::from([Op::ChannelInscribe(inscribe), Op::ChannelConfig(config)]);
@@ -2160,6 +2161,8 @@ mod tests {
     /// chaining on the existing pending chain meanwhile.
     #[test]
     fn publish_parent_ignores_pending_pure_config_cut() {
+        use std::num::NonZero;
+
         use lb_core::mantle::{
             channel::{SlotTimeframe, SlotTimeout},
             ops::channel::{VerifiedChannelKeys, config::ChannelConfigOp},
@@ -2174,18 +2177,17 @@ mod tests {
             .submit_inscription(make_dummy_tx(1), MsgId::root(), msg_id(10), [1].into())
             .unwrap();
 
-        let config = ChannelConfigOp {
-            channel: [0u8; 32].into(),
-            parent: MsgId::root(),
-            keys: VerifiedChannelKeys::try_from(vec![
-                Ed25519PublicKey::from_bytes(&[1u8; 32]).unwrap(),
-            ])
-            .unwrap(),
-            posting_timeframe: SlotTimeframe::from(0u32),
-            posting_timeout: SlotTimeout::from(0u32),
-            configuration_threshold: 1,
-            transfer_threshold: 1,
-        };
+        let config = ChannelConfigOp::new(
+            [0u8; 32].into(),
+            MsgId::root(),
+            VerifiedChannelKeys::try_from(vec![Ed25519PublicKey::from_bytes(&[1u8; 32]).unwrap()])
+                .unwrap(),
+            SlotTimeframe::from(0u32),
+            SlotTimeout::from(0u32),
+            NonZero::<u16>::MIN,
+            NonZero::<u16>::MIN,
+        )
+        .unwrap();
         let ops = Ops::from([Op::ChannelConfig(config)]);
         let config_tx = SignedOps::from_ops_with_sample_proofs(ops);
         state.submit_other(config_tx, channel_id).unwrap();
@@ -2599,23 +2601,26 @@ mod tests {
         config_parent: MsgId,
         seed: u8,
     ) -> lb_core::mantle::ops::channel::config::ChannelConfigOp {
+        use std::num::NonZero;
+
         use lb_core::mantle::{
             channel::{SlotTimeframe, SlotTimeout},
             ops::channel::{VerifiedChannelKeys, config::ChannelConfigOp},
         };
-        ChannelConfigOp {
-            channel: [0u8; 32].into(),
-            parent: config_parent,
-            keys: VerifiedChannelKeys::try_from(vec![
+        ChannelConfigOp::new(
+            [0u8; 32].into(),
+            config_parent,
+            VerifiedChannelKeys::try_from(vec![
                 lb_key_management_system_service::keys::Ed25519Key::from_bytes(&[seed; 32])
                     .public_key(),
             ])
             .unwrap(),
-            posting_timeframe: SlotTimeframe::from(0u32),
-            posting_timeout: SlotTimeout::from(0u32),
-            configuration_threshold: 1,
-            transfer_threshold: 1,
-        }
+            SlotTimeframe::from(0u32),
+            SlotTimeout::from(0u32),
+            NonZero::<u16>::MIN,
+            NonZero::<u16>::MIN,
+        )
+        .unwrap()
     }
 
     /// A whole expired chain is reported parent first whatever the hash
@@ -2811,22 +2816,23 @@ mod tests {
     /// Build a pure `[config]` tx for the zero channel; `data` varies the
     /// payload so ids differ.
     fn config_tx(parent: MsgId, data: u32) -> (SignedOps<Unverified, StandardMode>, MsgId) {
+        use std::num::NonZero;
+
         use lb_core::mantle::{
             channel::{SlotTimeframe, SlotTimeout},
             ops::channel::{VerifiedChannelKeys, config::ChannelConfigOp},
         };
-        let config = ChannelConfigOp {
-            channel: [0u8; 32].into(),
+        let config = ChannelConfigOp::new(
+            [0u8; 32].into(),
             parent,
-            keys: VerifiedChannelKeys::try_from(vec![
-                Ed25519PublicKey::from_bytes(&[1u8; 32]).unwrap(),
-            ])
-            .unwrap(),
-            posting_timeframe: SlotTimeframe::from(data),
-            posting_timeout: SlotTimeout::from(0u32),
-            configuration_threshold: 1,
-            transfer_threshold: 1,
-        };
+            VerifiedChannelKeys::try_from(vec![Ed25519PublicKey::from_bytes(&[1u8; 32]).unwrap()])
+                .unwrap(),
+            SlotTimeframe::from(data),
+            SlotTimeout::from(0u32),
+            NonZero::<u16>::MIN,
+            NonZero::<u16>::MIN,
+        )
+        .unwrap();
         let config_msg = config.id();
         let tx = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::ChannelConfig(config)]));
         (tx, config_msg)

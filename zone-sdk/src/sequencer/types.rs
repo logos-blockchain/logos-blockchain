@@ -888,6 +888,8 @@ pub enum FinalizedOp {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZero;
+
     use lb_core::mantle::{
         Op,
         channel::{SlotTimeframe, SlotTimeout},
@@ -910,15 +912,16 @@ mod tests {
     }
 
     fn config_op(keys: Vec<Ed25519PublicKey>) -> ChannelConfigOp {
-        ChannelConfigOp {
-            channel: ChannelId::from([7; 32]),
-            parent: MsgId::root(),
-            keys: VerifiedChannelKeys::new_unchecked(keys),
-            posting_timeframe: SlotTimeframe::from(15),
-            posting_timeout: SlotTimeout::from(3),
-            configuration_threshold: 2,
-            transfer_threshold: 2,
-        }
+        ChannelConfigOp::new(
+            ChannelId::from([7; 32]),
+            MsgId::root(),
+            VerifiedChannelKeys::new_unchecked(keys),
+            SlotTimeframe::from(15),
+            SlotTimeout::from(3),
+            NonZero::<u16>::MIN,
+            NonZero::new(2).unwrap(),
+        )
+        .unwrap()
     }
 
     #[test]

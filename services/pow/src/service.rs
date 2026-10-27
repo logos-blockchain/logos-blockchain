@@ -1382,11 +1382,10 @@ where
 }
 
 /// The reward window of a ticket anchored to a block at `block_slot`: the
-/// window of the era of the block's epoch.
+/// window of the era of the block.
 ///
-/// A ticket is mined against the nonce of that epoch, and a claim is verified
-/// under the era of the epoch whose nonce it carries, whatever the era of the
-/// block that includes it.
+/// A claim is verified under the era of the block it anchors to, whatever the
+/// era of the block that includes it.
 pub fn reward_window(era_schedule: &ServiceEraSchedule, block_slot: Slot) -> NonZeroU64 {
     era_schedule.at_slot(block_slot).parameters.slot_window
 }

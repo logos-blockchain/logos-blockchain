@@ -137,6 +137,11 @@ pub const fn average_slots_for_blocks(
 /// ten base periods and a base period is `k / f` slots. It is therefore never a
 /// free parameter — anything that needs a per-epoch block count derives it from
 /// the schedule rather than carrying its own copy.
+///
+/// # Panics
+///
+/// If the configuration yields zero expected blocks per epoch (e.g. an `f` of
+/// zero), since such a chain produces no blocks at all.
 #[must_use]
 #[expect(
     clippy::cast_possible_truncation,
@@ -155,12 +160,8 @@ pub const fn expected_blocks_per_epoch(
     } else {
         blocks as u64
     };
-    match NonZero::new(blocks) {
-        Some(blocks) => blocks,
-        // Only an `f` of zero gets here, a chain that produces no blocks at
-        // all. One keeps arithmetic that divides by this value well-defined.
-        None => NonZero::<u64>::MIN,
-    }
+    NonZero::new(blocks)
+        .expect("expected_blocks_per_epoch with proper configuration should never be zero")
 }
 
 #[cfg(test)]
@@ -201,5 +202,12 @@ mod tests {
             expected_blocks_per_epoch(epoch_length, slot_activation_coeff),
             NonZero::new(100).unwrap(),
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "expected_blocks_per_epoch")]
+    fn test_expected_blocks_per_epoch_panics_on_zero_slot_activation_coeff() {
+        let slot_activation_coeff = NonNegativeRatio::new(0, 1.try_into().unwrap());
+        let _ = expected_blocks_per_epoch(1_000, slot_activation_coeff);
     }
 }
