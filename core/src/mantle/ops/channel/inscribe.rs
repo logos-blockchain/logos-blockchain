@@ -31,8 +31,7 @@ use crate::{
         },
         channel::{ChannelState, Channels, Error},
         gas::{
-            EXECUTION_PROGRAM_PROOF_GAS, EXECUTION_PROOF_GAS, Gas, GasOverflow, MainnetGasProfile,
-            OpGasCalculator, OperationGas, ThresholdSource,
+            Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
         },
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
@@ -90,6 +89,9 @@ static CHANNEL_STEP_V1: LazyLock<Fr> = LazyLock::new(|| {
 
 pub const MAX_CHANNEL_STEPS: usize = u16::MAX as usize; // StepCount = UINT16
 pub type ChannelSteps = UpperBoundedVec<Step, MAX_CHANNEL_STEPS>;
+
+pub const EXECUTION_PROGRAM_SPEND_GAS: Gas = Gas::new(619);
+pub const EXECUTION_PROGRAM_PROOF_GAS: Gas = Gas::new(2451);
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ChannelStep {
@@ -293,7 +295,7 @@ impl OperationGas<MainnetGasProfile> for InscriptionOp {
 
 impl OpGasCalculator<MainnetGasProfile> for InscriptionOp {
     // EXECUTION_CHANNEL_INSCRIBE_GAS, plus EXECUTION_TRANSFER_GAS for each user
-    // step and each payment, plus EXECUTION_PROOF_GAS and
+    // step and each payment, plus EXECUTION_PROGRAM_SPEND_GAS and
     // EXECUTION_PROGRAM_PROOF_GAS for each program step.
     fn execution_gas(&self, _thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
         self.steps.iter().try_fold(Self::GAS_COST, |gas, step| {
@@ -302,7 +304,7 @@ impl OpGasCalculator<MainnetGasProfile> for InscriptionOp {
                 Step::User(_) => transfer,
                 Step::Program(step) => transfer
                     .checked_mul(Value::try_from(step.payments.len()).map_err(|_| GasOverflow)?)?
-                    .checked_add(EXECUTION_PROOF_GAS)?
+                    .checked_add(EXECUTION_PROGRAM_SPEND_GAS)?
                     .checked_add(EXECUTION_PROGRAM_PROOF_GAS)?,
             };
             gas.checked_add(step_gas)
