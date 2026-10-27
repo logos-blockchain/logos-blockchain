@@ -77,7 +77,7 @@ mod tests {
         services::{
             AsServiceId, ServiceCore, ServiceData,
             state::{NoOperator, NoState},
-            status::{ServiceStatus, StatusWatcher, WaitForError},
+            status::{ServiceStatus, StatusWatcher, WaitForError, WaitPolicy},
         },
     };
     use overwatch_derive::derive_services;
@@ -446,7 +446,11 @@ mod tests {
 
         let dependent_service_status = overwatch_handle.runtime().block_on(async {
             status_watcher
-                .wait_for(ServiceStatus::Ready, Some(Duration::from_secs(5)))
+                .wait_with_policy(
+                    ServiceStatus::Ready,
+                    Some(Duration::from_secs(5)),
+                    WaitPolicy::RestartFriendly,
+                )
                 .await
         });
 
@@ -632,7 +636,11 @@ mod tests {
             .expect("slow dependency should become ready");
         assert_eq!(
             dependent_status
-                .wait_for(ServiceStatus::Ready, Some(Duration::from_secs(5)))
+                .wait_with_policy(
+                    ServiceStatus::Ready,
+                    Some(Duration::from_secs(5)),
+                    WaitPolicy::RestartFriendly,
+                )
                 .await,
             Ok(ServiceStatus::Ready),
             "dependent should become Ready after its dependency"
@@ -663,7 +671,11 @@ mod tests {
             .expect("status watcher should be available");
         assert_eq!(
             watcher
-                .wait_for(ServiceStatus::Stopped, Some(Duration::from_secs(5)))
+                .wait_with_policy(
+                    ServiceStatus::Stopped,
+                    Some(Duration::from_secs(5)),
+                    WaitPolicy::RestartFriendly,
+                )
                 .await,
             Ok(ServiceStatus::Stopped),
             "mock dependency should stop before the lifecycle wait attaches"
@@ -694,7 +706,11 @@ mod tests {
             .expect("light service status watcher should be available");
         assert_eq!(
             light_watcher
-                .wait_for(ServiceStatus::Ready, Some(Duration::from_secs(5)))
+                .wait_with_policy(
+                    ServiceStatus::Ready,
+                    Some(Duration::from_secs(5)),
+                    WaitPolicy::RestartFriendly,
+                )
                 .await,
             Ok(ServiceStatus::Ready),
             "Overwatch should remain running after a service returns Err"
@@ -724,7 +740,11 @@ mod tests {
             .expect("dependency status watcher should be available");
         assert_eq!(
             watcher
-                .wait_for(ServiceStatus::Failed, Some(Duration::from_secs(5)))
+                .wait_with_policy(
+                    ServiceStatus::Failed,
+                    Some(Duration::from_secs(5)),
+                    WaitPolicy::RestartFriendly,
+                )
                 .await,
             Ok(ServiceStatus::Failed),
             "mock dependency should fail before the lifecycle wait attaches"

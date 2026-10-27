@@ -1,7 +1,7 @@
 use std::{fmt::Display, time::Duration};
 
 use lb_log_targets::utils;
-use overwatch::services::status::{ServiceStatus, StatusWatcher};
+use overwatch::services::status::{ServiceStatus, StatusWatcher, WaitPolicy};
 use tokio::time::{Instant, MissedTickBehavior, interval_at};
 use tracing::{error, info};
 
@@ -37,7 +37,11 @@ where
         "Waiting for dependency readiness"
     );
 
-    let readiness = status_watcher.wait_for_fail_fast(ServiceStatus::Ready, timeout_duration);
+    let readiness = status_watcher.wait_with_policy(
+        ServiceStatus::Ready,
+        timeout_duration,
+        WaitPolicy::FailFast,
+    );
     tokio::pin!(readiness);
 
     let mut progress = interval_at(started_at + PROGRESS_INTERVAL, PROGRESS_INTERVAL);

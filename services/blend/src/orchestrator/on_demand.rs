@@ -6,7 +6,11 @@ use std::{
 use lb_services_utils::wait_until_services_are_ready;
 use overwatch::{
     overwatch::OverwatchHandle,
-    services::{AsServiceId, ServiceData, relay::OutboundRelay, status::ServiceStatus},
+    services::{
+        AsServiceId, ServiceData,
+        relay::OutboundRelay,
+        status::{ServiceStatus, WaitPolicy},
+    },
 };
 use tracing::{debug, error, info};
 
@@ -94,7 +98,11 @@ where
     ) -> Result<(), overwatch::overwatch::Error> {
         let mut status_watcher = self.overwatch_handle.status_watcher().await?;
         status_watcher
-            .wait_for(ServiceStatus::Stopped, Some(timeout))
+            .wait_with_policy(
+                ServiceStatus::Stopped,
+                Some(timeout),
+                WaitPolicy::RestartFriendly,
+            )
             .await
             .map(|_| ())
             .map_err(|wait_error| {
