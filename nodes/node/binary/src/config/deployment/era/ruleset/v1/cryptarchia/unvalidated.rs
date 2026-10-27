@@ -77,9 +77,8 @@ pub struct UncleReferenceWindowTooWide {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::DeploymentSettings;
-
     use super::*;
+    use crate::config::DeploymentSettings;
 
     #[test]
     fn uncle_reference_window_accepted() {

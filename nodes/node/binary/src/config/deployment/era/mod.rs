@@ -7,7 +7,7 @@ use ::serde::{
 };
 use lb_cryptarchia_engine::Epoch;
 
-use crate::config::deployment::era::ruleset::{EraRuleset, EraRulesetTransitionError};
+use crate::config::deployment::era::ruleset::EraRuleset;
 
 pub mod ruleset;
 
@@ -83,14 +83,6 @@ pub enum EraScheduleError {
     OutOfOrder { previous: Epoch, next: Epoch },
     #[error("schedules of more than one era are not supported yet, got {0} eras")]
     MultipleEras(usize),
-    #[error(
-        "the era starting at epoch {} cannot follow the era before it: {reason}",
-        .first_epoch.into_inner()
-    )]
-    InvalidEraTransition {
-        first_epoch: Epoch,
-        reason: EraRulesetTransitionError,
-    },
 }
 
 impl TryFrom<BTreeMap<Epoch, EraRuleset>> for EraDeclarations {
@@ -100,6 +92,10 @@ impl TryFrom<BTreeMap<Epoch, EraRuleset>> for EraDeclarations {
     /// them unique and ordered, so only the first one needs checking: it must
     /// start at genesis, and run a listed combination of versions. Every
     /// transition between consecutive eras is also checked.
+    ///
+    /// # Panics
+    ///
+    /// If an era cannot follow the era before it.
     fn try_from(mut era_declarations: BTreeMap<Epoch, EraRuleset>) -> Result<Self, Self::Error> {
         let Some((&first_epoch, _)) = era_declarations.first_key_value() else {
             return Err(EraScheduleError::Empty);
@@ -109,15 +105,11 @@ impl TryFrom<BTreeMap<Epoch, EraRuleset>> for EraDeclarations {
         }
 
         // Check era transitions.
-        for ((_, previous), (&first_epoch, next)) in
-            era_declarations.iter().zip(era_declarations.iter().skip(1))
+        for (previous, next) in era_declarations
+            .values()
+            .zip(era_declarations.values().skip(1))
         {
-            previous.validate_successor(next).map_err(|reason| {
-                EraScheduleError::InvalidEraTransition {
-                    first_epoch,
-                    reason,
-                }
-            })?;
+            previous.validate_successor(next);
         }
 
         let (_, genesis_era) = era_declarations
@@ -190,10 +182,7 @@ mod tests {
     use super::{EraDeclarations, EraScheduleError};
     use crate::config::{
         DeploymentSettings,
-        deployment::era::ruleset::{
-            EraRuleset,
-            v1::{UnvalidatedCryptarchiaDeploymentSettings, cryptarchia::Error},
-        },
+        deployment::era::ruleset::{EraRuleset, v1::UnvalidatedCryptarchiaDeploymentSettings},
     };
 
     fn ruleset() -> EraRuleset {
@@ -289,36 +278,31 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(
+        expected = "uncle reference window (140 slots) must not exceed a fifth of the \
+                    slot security parameter s = 600 of the era before"
+    )]
     fn invalid_uncle_ref_window_in_era_transition() {
         // `s_0 = 3*⌊10*20⌋ = 600`
         // `W_1/f_1 = 7*20 = 140` > s_0 / 5: NOT ALLOWED
-        assert_eq!(
-            construct_eras([(0, ruleset_with(10, 20, 6)), (10, ruleset_with(30, 20, 7))])
-                .unwrap_err(),
-            EraScheduleError::InvalidEraTransition {
-                first_epoch: Epoch::new(10),
-                reason: Error::UncleReferenceWindowBeyondPreviousSlotSecurityParam {
-                    window: 140,
-                    previous_slot_security_param: 600,
-                }
-                .into(),
-            }
-        );
+        drop(construct_eras([
+            (0, ruleset_with(10, 20, 6)),
+            (10, ruleset_with(30, 20, 7)),
+        ]));
+    }
 
+    #[test]
+    #[should_panic(
+        expected = "uncle reference window (240 slots) must not exceed a fifth of the \
+                    slot security parameter s = 600 of the era before"
+    )]
+    fn invalid_uncle_ref_window_in_era_transition_at_lower_f() {
         // `s_0 = 3*⌊10*20⌋ = 600`
         // `W_1/f_1 = 6*40 = 240` > s_0 / 5: NOT ALLOWED
-        assert_eq!(
-            construct_eras([(0, ruleset_with(10, 20, 6)), (10, ruleset_with(30, 40, 6))])
-                .unwrap_err(),
-            EraScheduleError::InvalidEraTransition {
-                first_epoch: Epoch::new(10),
-                reason: Error::UncleReferenceWindowBeyondPreviousSlotSecurityParam {
-                    window: 240,
-                    previous_slot_security_param: 600,
-                }
-                .into(),
-            }
-        );
+        drop(construct_eras([
+            (0, ruleset_with(10, 20, 6)),
+            (10, ruleset_with(30, 40, 6)),
+        ]));
     }
 
     /// The default ruleset with `k`, `f = 1/f_denominator` and `W` replaced.

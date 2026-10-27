@@ -33,34 +33,24 @@ pub struct Settings {
     pow_config: PoWConfig,
 }
 
-#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
-pub enum Error {
-    #[error(
-        "uncle reference window ({window} slots) must not exceed a fifth of the slot \
-         security parameter s = {previous_slot_security_param} of the era before"
-    )]
-    UncleReferenceWindowBeyondPreviousSlotSecurityParam {
-        window: u64,
-        previous_slot_security_param: u64,
-    },
-}
-
 impl Settings {
     /// Check the invariants between these settings and those of the next era.
-    pub fn validate_successor(&self, next: &Self) -> Result<(), Error> {
-        // Check `5⌊W_n/f_n⌋ ≤ s_{n−1}`
+    ///
+    /// # Panics
+    ///
+    /// If the uncle reference window of `next` exceeds a fifth of the slot
+    /// security parameter of these settings: `5⌊W_n/f_n⌋ ≤ s_{n−1}`.
+    pub fn validate_successor(&self, next: &Self) {
         let window = next
             .consensus_config()
             .uncle_reference_window_in_slot()
             .get();
         let previous_slot_security_param = self.consensus_config().slot_security_param().get();
-        if u128::from(window) * 5 > u128::from(previous_slot_security_param) {
-            return Err(Error::UncleReferenceWindowBeyondPreviousSlotSecurityParam {
-                window,
-                previous_slot_security_param,
-            });
-        }
-        Ok(())
+        assert!(
+            u128::from(window) * 5 <= u128::from(previous_slot_security_param),
+            "uncle reference window ({window} slots) must not exceed a fifth of the slot \
+             security parameter s = {previous_slot_security_param} of the era before"
+        );
     }
 
     #[must_use]
@@ -189,7 +179,7 @@ pub use lb_ledger::config::RewardPoWConfig;
 mod tests {
     use lb_utils::math::NonNegativeRatio;
 
-    use super::{Error, Settings, UncleReferenceWindowTooWide, UnvalidatedSettings};
+    use super::{Settings, UncleReferenceWindowTooWide, UnvalidatedSettings};
     use crate::config::DeploymentSettings;
 
     #[test]
@@ -224,23 +214,21 @@ mod tests {
         let previous = settings(10, 20, 6);
         let next = settings(30, 20, 6);
         // `W` is accepted because <= s/5.
-        assert_eq!(previous.validate_successor(&next), Ok(()));
+        previous.validate_successor(&next);
     }
 
     #[test]
+    #[should_panic(
+        expected = "uncle reference window (140 slots) must not exceed a fifth of the \
+                    slot security parameter s = 600 of the era before"
+    )]
     fn next_era_uncle_reference_window_rejected() {
         // prev_slot_security_param: `s = 3*⌊10*20⌋ = 600` slots
         let previous = settings(10, 20, 6);
         // new_uncle_ref_window: `W = 7` (= 140 slot)
         let next = settings(30, 20, 7);
         // `W` is rejected because > s/5.
-        assert_eq!(
-            previous.validate_successor(&next),
-            Err(Error::UncleReferenceWindowBeyondPreviousSlotSecurityParam {
-                window: 140,
-                previous_slot_security_param: 600,
-            })
-        );
+        previous.validate_successor(&next);
     }
 
     /// The default settings with `k`, `f = 1/f_denominator` and `W` replaced.

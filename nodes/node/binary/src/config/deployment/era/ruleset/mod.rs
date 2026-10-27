@@ -14,22 +14,18 @@ pub enum EraRuleset {
     V1(v1::Parameters),
 }
 
-/// Why an era's ruleset cannot follow the ruleset of the era before it.
-#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
-pub enum EraRulesetTransitionError {
-    #[error(transparent)]
-    Cryptarchia(#[from] v1::cryptarchia::Error),
-}
-
 impl EraRuleset {
     /// Check the invariants between this ruleset and the next era's ruleset.
-    pub fn validate_successor(&self, next: &Self) -> Result<(), EraRulesetTransitionError> {
+    ///
+    /// # Panics
+    ///
+    /// If `next` cannot follow this ruleset.
+    pub fn validate_successor(&self, next: &Self) {
         match (self, next) {
             (Self::V1(previous), Self::V1(next)) => {
-                previous.cryptarchia.validate_successor(&next.cryptarchia)?;
+                previous.cryptarchia.validate_successor(&next.cryptarchia);
             }
         }
-        Ok(())
     }
 
     /// The ruleset's number, written ahead of its parameters in the era's
