@@ -170,6 +170,47 @@ pub trait OpGasCalculator<Profile: GasProfile>: OperationGas<Profile> {
     }
 }
 
+// The measured components of the Execution Gas of RFC-506.
+pub const EXECUTION_KB_GAS: Gas = Gas::new(26);
+pub const EXECUTION_NOTE_SET_GAS: Gas = Gas::new(4285);
+pub const EXECUTION_PROOF_GAS: Gas = Gas::new(1946);
+pub const EXECUTION_ROOT_GAS: Gas = Gas::new(887);
+pub const EXECUTION_BUFFERED_GAS: Gas = Gas::new(23);
+pub const EXECUTION_NULLIFIER_GAS: Gas = Gas::new(207);
+pub const EXECUTION_COMMITMENT_GAS: Gas = Gas::new(25);
+pub const EXECUTION_SIGNATURE_GAS: Gas = Gas::new(167);
+pub const EXECUTION_USER_STEP_GAS: Gas = Gas::new(137);
+pub const EXECUTION_PAYMENT_GAS: Gas = Gas::new(211);
+pub const EXECUTION_PROGRAM_STEP_GAS: Gas = Gas::new(60);
+pub const EXECUTION_OPENING_GAS: Gas = Gas::new(157);
+pub const EXECUTION_PROGRAM_PROOF_GAS: Gas = Gas::new(6305);
+
+/// The Execution Gas of extending the root of a spend over `buffered`
+/// commitments of the buffer, nothing when the buffer is empty.
+pub fn root_gas(buffered: usize) -> Result<Gas, GasOverflow> {
+    if buffered == 0 {
+        return Ok(Gas::new(0));
+    }
+    EXECUTION_BUFFERED_GAS
+        .checked_mul(Value::try_from(buffered).map_err(|_| GasOverflow)?)?
+        .checked_add(EXECUTION_ROOT_GAS)
+}
+
+/// The Execution Gas of a spend of `inputs` nullifiers and `outputs`
+/// commitments, its root extended over `buffered` commitments.
+pub fn spend_gas(inputs: usize, outputs: usize, buffered: usize) -> Result<Gas, GasOverflow> {
+    EXECUTION_PROOF_GAS
+        .checked_add(root_gas(buffered)?)?
+        .checked_add(
+            EXECUTION_NULLIFIER_GAS
+                .checked_mul(Value::try_from(inputs).map_err(|_| GasOverflow)?)?,
+        )?
+        .checked_add(
+            EXECUTION_COMMITMENT_GAS
+                .checked_mul(Value::try_from(outputs).map_err(|_| GasOverflow)?)?,
+        )
+}
+
 #[cfg(test)]
 pub mod test_utils {
     use crate::mantle::{
@@ -190,6 +231,7 @@ pub mod test_utils {
 mod tests {
     use super::{
         Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
+        spend_gas,
     };
     use crate::mantle::{Value, gas::test_utils::FixedThresholds, ops::channel::ChannelId};
 
@@ -227,6 +269,24 @@ mod tests {
                 thresholds.configuration_threshold(&ChannelId::from([0; 32])),
             ))
         }
+    }
+
+    #[test]
+    fn spend_gas_without_buffer_has_no_root() {
+        assert_eq!(spend_gas(1, 2, 0), Ok(Gas::new(1946 + 207 + 2 * 25)));
+    }
+
+    #[test]
+    fn spend_gas_with_buffer_extends_the_root() {
+        assert_eq!(
+            spend_gas(1, 1, 3),
+            Ok(Gas::new(1946 + 887 + 3 * 23 + 207 + 25))
+        );
+    }
+
+    #[test]
+    fn spend_gas_overflow_is_an_error() {
+        assert_eq!(spend_gas(usize::MAX, 0, 0), Err(GasOverflow));
     }
 
     #[test]
