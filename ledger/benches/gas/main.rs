@@ -4,7 +4,7 @@
 //! Run, pinned to one performance core with its sibling idle, with
 //!
 //! ```text
-//! taskset -c 8 cargo bench -p logos-blockchain-ledger --bench gas [-- <prefix>]
+//! taskset -c 8 cargo bench -p logos-blockchain-ledger --features test-utils --bench gas [-- <prefix>]
 //! ```
 //!
 //! Counting the cycles needs `kernel.perf_event_paranoid` at 1 or below.

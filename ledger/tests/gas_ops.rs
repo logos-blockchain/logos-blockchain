@@ -1,5 +1,11 @@
 //! Tests of the `ops` and `block` cases of the gas benchmark, which live in
 //! `benches/gas`.
+//!
+//! Run with
+//!
+//! ```text
+//! GAS_BENCH_FILL=1000 taskset -c 8 cargo test -p logos-blockchain-ledger --release --features test-utils --test gas_ops -- --test-threads=1
+//! ```
 
 #[path = "../benches/gas/block.rs"]
 mod block;
