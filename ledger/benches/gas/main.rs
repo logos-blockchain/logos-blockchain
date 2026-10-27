@@ -13,20 +13,16 @@
 //! [`ROUNDS`] rounds, each round running every case once in a new random
 //! order.
 
+mod block;
 mod cycles;
 mod fixture;
+mod micro;
+mod ops;
 
-use cycles::Counter;
+use cycles::{Case, Counter};
 use rand::seq::SliceRandom as _;
 
 const ROUNDS: usize = 15;
-
-/// One measured configuration: `run` returns the cycles of one execution.
-pub struct Case {
-    pub name: &'static str,
-    pub dims: Vec<(&'static str, u64)>,
-    pub run: Box<dyn FnMut(&mut Counter) -> u64>,
-}
 
 fn run_cases(mut cases: Vec<Case>, counter: &mut Counter, rounds: usize) {
     let mut best = vec![u64::MAX; cases.len()];
@@ -64,8 +60,10 @@ fn main() {
         eprintln!("{error}");
         std::process::exit(1);
     });
-    let cases: Vec<Case> = Vec::new()
+    let cases: Vec<Case> = micro::micro_cases()
         .into_iter()
+        .chain(ops::op_cases())
+        .chain(block::block_cases())
         .filter(|case: &Case| case.name.starts_with(&prefix))
         .collect();
     run_cases(cases, &mut counter, ROUNDS);
