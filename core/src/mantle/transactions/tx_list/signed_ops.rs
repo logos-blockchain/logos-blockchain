@@ -465,7 +465,7 @@ mod tests {
     use crate::mantle::{
         Op, OpProof, SignedOps, VerificationError,
         channel::{Channels, Error as ChannelError},
-        gas::{MainnetGasProfile, TxGasCalculator as _},
+        gas::{MainnetGasProfile, TxGasCalculator as _, tx_terms_gas},
         ledger::verification_mode::StandardMode,
         notes::{InputNullifiers, Note, NoteNullifier, OutputCommitments},
         ops::{
@@ -484,6 +484,7 @@ mod tests {
         traits::Hashable as _,
         transactions::{
             GasPrices, OpProofs, Ops,
+            codec::minimum_signed_transaction_size,
             states::{Preverified, Unverified},
             thresholds::TxGasState,
             tx_list::{
@@ -612,7 +613,16 @@ mod tests {
         // 1 input, no output, nothing buffered
         let expected_deposit_gas = 16 + 1946 + 207;
         let expected_withdraw_gas = 13 + 1946 + 207;
-        let expected_total_gas = expected_config_gas + expected_deposit_gas + expected_withdraw_gas;
+        // The bytes of the transaction and the note sets of the deposit and the
+        // withdrawal channels.
+        let expected_terms = tx_terms_gas(
+            minimum_signed_transaction_size(&mantle_tx.by_ref(), &context),
+            2,
+        )
+        .unwrap()
+        .into_inner();
+        let expected_total_gas =
+            expected_config_gas + expected_deposit_gas + expected_withdraw_gas + expected_terms;
 
         assert_eq!(gas.into_inner(), expected_total_gas);
     }

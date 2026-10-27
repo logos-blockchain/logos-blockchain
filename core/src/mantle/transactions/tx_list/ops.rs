@@ -20,7 +20,7 @@ use crate::{
     mantle::{
         GasProfile, Op, OpRef, TxHash,
         channel::Channels,
-        gas::{Gas, GasCost, GasOverflow, TxGasCalculator},
+        gas::{Gas, GasCost, GasOverflow, TxGasCalculator, tx_terms_gas},
         ops::channel::{ChannelId, ChannelKeyIndex},
         traits::{Hashable, MantleTx, StorageSize, hashable},
         transactions::{
@@ -134,16 +134,19 @@ impl TxGasCalculator for OpRefs<'_> {
     ) -> Result<Gas, GasOverflow> {
         // The thresholds carry across the fold: an Operation is priced against
         // the ones in force before it, then moves them for the ones after.
-        self.iter()
-            .try_fold(
-                (TxGasState::new(context), Gas::new(0)),
-                |(mut state, total), op| {
-                    let total = total.checked_add(op.execution_gas::<Profile>(&state)?)?;
-                    state.apply(*op);
-                    Ok((state, total))
-                },
-            )
-            .map(|(_, total)| total)
+        let (state, operations_gas) = self.iter().try_fold(
+            (TxGasState::new(context), Gas::new(0)),
+            |(mut state, total), op| {
+                let total = total.checked_add(op.execution_gas::<Profile>(&state)?)?;
+                state.apply(*op);
+                Ok((state, total))
+            },
+        )?;
+        // The transaction itself, once: its bytes and the note sets it changed.
+        operations_gas.checked_add(tx_terms_gas(
+            minimum_signed_transaction_size(self, context),
+            state.changed_note_sets(),
+        )?)
     }
 
     fn storage_gas_consumption(&self, context: &Self::Context) -> Result<Gas, GasOverflow> {
@@ -328,11 +331,16 @@ mod tests {
     fn total_gas_cost_sums_execution_and_storage() {
         let ops = Ops::from([Op::ChannelInscribe(InscriptionOp::sample())]);
         let context = OpsGasContext::new(HashMap::new(), GasPrices::new(2, 3));
+        let size = minimum_signed_transaction_size(&ops.by_ref(), &context);
+        let terms = tx_terms_gas(size, 1).unwrap();
 
         assert_eq!(
             ops.by_ref().total_gas_cost::<MainnetGasProfile>(&context),
-            // The inscription costs 13 + 167 execution gas at price 2.
-            Ok(GasCost::new(897))
+            // The inscription costs 13 + 167 execution gas at price 2, plus the bytes
+            // of the transaction and the note set of the channel it creates.
+            Ok(GasCost::new(
+                2 * (180 + terms.into_inner()) + 3 * size as u64
+            ))
         );
     }
 
@@ -347,14 +355,17 @@ mod tests {
             [(ChannelConfigOp::sample().channel, CONFIGURATION_THRESHOLD)].into(),
             GasPrices::new(1, 0),
         );
+        let terms =
+            tx_terms_gas(minimum_signed_transaction_size(&ops.by_ref(), &context), 2).unwrap();
 
         assert_eq!(
             ops.by_ref()
                 .execution_gas_consumption::<MainnetGasProfile>(&context),
             // The config: 18 + 3 * 167. The deposit and the withdrawal of the samples
             // spend 1 input and 1 output with nothing buffered:
-            // 16 + 1946 + 207 + 25 and 13 + 1946 + 207 + 25.
-            Ok(Gas::from(519 + 2_194 + 2_191))
+            // 16 + 1946 + 207 + 25 and 13 + 1946 + 207 + 25. The transaction adds
+            // its bytes and the note sets of the two channels it changed.
+            Ok(Gas::from(519 + 2_194 + 2_191).checked_add(terms).unwrap())
         );
     }
 
@@ -362,23 +373,30 @@ mod tests {
     fn execution_gas_consumption_charges_only_the_base_cost_for_a_channel_the_context_does_not_hold()
      {
         let ops = Ops::from([Op::ChannelConfig(ChannelConfigOp::sample())]);
+        let context = OpsGasContext::default();
+        // The config creates the channel, so the transaction changes its note set.
+        let terms =
+            tx_terms_gas(minimum_signed_transaction_size(&ops.by_ref(), &context), 1).unwrap();
 
         assert_eq!(
             ops.by_ref()
-                .execution_gas_consumption::<MainnetGasProfile>(&OpsGasContext::default()),
-            Ok(Gas::from(18))
+                .execution_gas_consumption::<MainnetGasProfile>(&context),
+            Ok(Gas::from(18).checked_add(terms).unwrap())
         );
     }
 
     #[test]
     fn execution_gas_consumption_charges_the_spend_of_an_op_without_a_channel() {
         let ops = Ops::from([Op::ChannelDeposit(DepositOp::sample())]);
+        let context = OpsGasContext::default();
+        let terms =
+            tx_terms_gas(minimum_signed_transaction_size(&ops.by_ref(), &context), 1).unwrap();
 
         assert_eq!(
             ops.by_ref()
-                .execution_gas_consumption::<MainnetGasProfile>(&OpsGasContext::default()),
-            // 16 + 1946 + 207 + 25
-            Ok(Gas::from(2_194))
+                .execution_gas_consumption::<MainnetGasProfile>(&context),
+            // 16 + 1946 + 207 + 25, and the note set of the channel it changes
+            Ok(Gas::from(2_194).checked_add(terms).unwrap())
         );
     }
 
