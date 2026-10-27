@@ -123,6 +123,15 @@ fn end_block_of_one_set_costs_more_than_its_eligible_leaf() {
 }
 
 #[test]
+fn end_block_costs_more_with_more_deferred_nullifiers() {
+    assert_costlier(
+        &mut micro::micro_cases(),
+        ("micro/end_block_nullifiers", &[("nullifiers", 256)]),
+        ("micro/end_block_nullifiers", &[("nullifiers", 1)]),
+    );
+}
+
+#[test]
 fn the_ledger_set_holds_its_recent_roots() {
     let fresh = fixture::nullifiers(1, 0x7e57);
     let expired = NoteSet::empty().commitment_root();

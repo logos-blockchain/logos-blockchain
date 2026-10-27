@@ -103,6 +103,7 @@ pub fn micro_cases() -> Vec<Case> {
     let mut cases = Vec::new();
     cases.extend(hash_cases(&mut rng));
     cases.extend(tree_cases());
+    cases.extend(end_block_nullifier_cases());
     cases.extend(decode_cases());
     cases.extend(point_cases());
     cases.push(ed25519_case());
@@ -624,4 +625,28 @@ fn pol_case(rng: &mut StdRng) -> Case {
         || (),
         move |()| lb_pol::verify(&proof, &inputs),
     )
+}
+
+/// The nullifiers a block spends are hashed into the IMT once, at its end,
+/// each dirty node of the tree once: the cost per nullifier falls as the
+/// nullifiers of a block share their paths.
+fn end_block_nullifier_cases() -> Vec<Case> {
+    let mut cases = Vec::new();
+    for spent in [0, 1, 2, 4, 16, 64, 256] {
+        let (sets, _, last_block) = recent_roots_sets(RECENT_ROOTS_WINDOW);
+        let changed_set = sets
+            .get(LEDGER_SET)
+            .expect("the ledger set exists")
+            .clone()
+            .execute_spending(&nullifiers(spent, 0xf1))
+            .expect("fresh nullifiers are absent");
+        let changed = sets.update(LEDGER_SET, changed_set);
+        cases.push(case(
+            "micro/end_block_nullifiers",
+            vec![("nullifiers", spent as u64)],
+            move || changed.clone(),
+            move |note_sets: NoteSets| note_sets.end_block(last_block + 1),
+        ));
+    }
+    cases
 }
