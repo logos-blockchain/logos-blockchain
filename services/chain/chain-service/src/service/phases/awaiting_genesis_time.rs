@@ -166,8 +166,8 @@ fn create_genesis_timer(starting_state: StartingState) -> Option<Pin<Box<Sleep>>
     let StartingState::Genesis { genesis_block } = starting_state;
     let genesis_time: OffsetDateTime = genesis_block
         .genesis_tx()
-        .cryptarchia_parameter()
-        .genesis_time
+        .genesis_parameters()
+        .start_time
         .into();
     let now = OffsetDateTime::now_utc();
 

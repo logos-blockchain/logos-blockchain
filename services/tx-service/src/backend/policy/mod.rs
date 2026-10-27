@@ -13,6 +13,8 @@ use lb_cryptarchia_engine::Slot;
 pub use powclaim::{PowClaimEvictionSettings, PowClaimPolicy};
 pub use ttl::TtlPolicy;
 
+use crate::backend::AdmissionTime;
+
 /// The clock eviction policies see.
 ///
 /// The pool has no clock of its own: wall-clock time is sampled on every
@@ -30,22 +32,12 @@ pub struct PolicyClock {
 /// resolve them against storage before admitting the transaction.
 pub type BlockSlots<BlockId> = HashMap<BlockId, Slot>;
 
-/// State a policy persists across restarts.
-///
-/// Policies that rebuild their state from the live pool report
-/// [`Self::Stateless`].
-#[derive(Clone, Debug)]
-pub enum PolicySnapshot<Key> {
-    Stateless,
-    /// Insertion timestamp of every pending transaction, in milliseconds.
-    Ttl(IndexMap<Key, u64>),
-}
-
 /// One reason the pool stops carrying a valid transaction.
 ///
 /// Policies own their state and see every transaction the pool admits or
 /// retires; the evictor composes them and the pool executes what they
-/// select.
+/// select. The admission time of each pending transaction is the pool's
+/// state, which policies read in [`Self::select`].
 pub trait EvictionPolicy<Tx, BlockId>: Send + Sync
 where
     Tx: Hashable,
@@ -77,10 +69,13 @@ where
     /// The chain processed `block_id` at `slot`.
     fn on_processed_block(&mut self, _block_id: &BlockId, _slot: Slot) {}
 
-    /// Keys this policy wants gone at `clock`.
-    fn select(&self, clock: &PolicyClock) -> Vec<Tx::Hash>;
-
-    fn save(&self) -> PolicySnapshot<Tx::Hash>;
+    /// Keys this policy wants gone at `clock`, given the `pending_txs` keys
+    /// mapped to their admission timestamp, oldest first.
+    fn select(
+        &self,
+        clock: &PolicyClock,
+        pending_txs: &IndexMap<Tx::Hash, AdmissionTime>,
+    ) -> Vec<Tx::Hash>;
 }
 
 /// What eviction policies may inspect about a pool item.

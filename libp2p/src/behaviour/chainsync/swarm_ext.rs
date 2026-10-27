@@ -5,11 +5,31 @@ use libp2p::PeerId;
 use rand::RngCore;
 use tokio::sync::oneshot;
 
-use crate::{Swarm, behaviour::BehaviourError};
+use crate::{Swarm, behaviour::BehaviourError, protocol_name::StreamProtocol};
 
 type SerialisedBlockStream = BoxedStream<Result<SerialisedBlock, ChainSyncError>>;
 
 impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
+    /// Starts a new era of chain sync, over the connections already open: every
+    /// request goes over `protocol_name` from now on, and the protocol of the
+    /// era before is refused, while the requests already under way on it run
+    /// until [`Self::finish_chain_sync_era_transition`].
+    pub fn start_new_chain_sync_era(&mut self, protocol_name: StreamProtocol) {
+        self.swarm
+            .behaviour_mut()
+            .chain_sync
+            .start_new_era(protocol_name.into());
+    }
+
+    /// Drops the chain sync requests still under way over the protocol of the
+    /// era before.
+    pub fn finish_chain_sync_era_transition(&mut self) {
+        self.swarm
+            .behaviour_mut()
+            .chain_sync
+            .finish_era_transition();
+    }
+
     pub fn request_tip(
         &self,
         peer_id: PeerId,

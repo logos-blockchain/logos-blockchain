@@ -1,5 +1,5 @@
 eras:
-  0:
+  0: !V1
     blend:
       common:
         num_blend_layers: 1
@@ -47,17 +47,6 @@ eras:
         reward:
           # Token-reward PoW parameters, sized for the target network of ~200
           # mining nodes over the two-week epoch schedule.
-          #
-          # Pool sized to put 200 nodes over the minimum stake, with margin for
-          # mining being spread unevenly across them.
-          reward_pool_genesis: 300000000000
-          # Forced by the pool and the payout rate:
-          # W0 * rate_num / (rate_den * target_claim_per_block *
-          # expected_blocks_per_epoch) = 3e11 / (10 * 1 * 300).
-          # `expected_blocks_per_epoch` is not a config value: the ledger derives
-          # it from the consensus schedule as `10k`, which is 300 at
-          # `security_param: 30`.
-          epoch_reward_genesis: 100000000
           # Genesis `d_reward`, as the exponent n in p / 2^n — the same form as
           # the Blend `base_difficulty` above. Fixed by the specification.
           # Also the minimum difficulty: the retarget never eases past it.
@@ -87,15 +76,13 @@ eras:
         min_stake:
           threshold: 1
           timestamp: 0
-      consensus_excluded_keys:
-        - '0000000000000000000000000000000000000000000000000000000000000000'
     time:
-      slot_duration: 1s
+      slot_duration_in_seconds: 1
 genesis_block:
   header:
     slot: 0
     parent_block: '0000000000000000000000000000000000000000000000000000000000000000'
-    body_root: '7c1ff6ffdb0a1baffdf50aab3f15043cfd4d9f522ba909d1dfde0105789358d9'
+    body_root: 'c013cbefe66168290be57ace1350b2e5f0aad58010435e0f17d21fa08a3eebd1'
     proof_of_leadership:
       proof: '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
       entropy_contribution: '0000000000000000000000000000000000000000000000000000000000000000'
@@ -113,7 +100,7 @@ genesis_block:
         - opcode: 17
           payload:
             channel_id: '0000000000000000000000000000000000000000000000000000000000000000'
-            inscription: '107374616e64616c6f6e652d6c6f63616c9169fe692d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a'
+            inscription: '107374616e64616c6f6e652d6c6f63616c9169fe692d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a00b864d945000000010000000000000000000000000000000000000000000000000000000000000000000000'
             parent: '0000000000000000000000000000000000000000000000000000000000000000'
             signer: '0000000000000000000000000000000000000000000000000000000000000000'
     ops_proofs:

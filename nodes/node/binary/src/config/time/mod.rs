@@ -1,49 +1,28 @@
-use lb_core::mantle::GenesisTime;
-use lb_cryptarchia_engine::{EpochConfig, time::SlotConfig};
+use lb_time::era::{EpochLength as _, EraSchedule, EraTiming, SlotDuration as _};
 use lb_time_service::{
-    TimeServiceSettings,
+    TimeServiceEraSettings, TimeServiceSettings,
     backends::{NtpTimeBackendSettings, ntp::async_client::NTPClientSettings},
 };
 
-use crate::config::{
-    cryptarchia::deployment::Settings as CryptarchiaDeploymentSettings,
-    time::{deployment::Settings as DeploymentSettings, serde::Config},
-};
+use crate::config::{deployment::EraDefinition, time::serde::Config};
 
-pub mod deployment;
 pub mod serde;
 
 pub struct ServiceConfig {
     pub user: Config,
-    pub deployment: DeploymentSettings,
 }
 
 impl ServiceConfig {
+    /// The settings of the time service: the user's NTP settings, and the eras
+    /// of `eras`, which tell the service when each era starts, how long its
+    /// slots and epochs last, and for how many of its slots the network keeps
+    /// serving its protocols once the next era starts.
     #[must_use]
     pub fn into_time_service_settings(
         self,
-        cryptarchia_deployment: &CryptarchiaDeploymentSettings,
-        genesis_time: GenesisTime,
+        eras: &EraSchedule<EraDefinition>,
     ) -> TimeServiceSettings<NtpTimeBackendSettings> {
         TimeServiceSettings {
-            slot_config: SlotConfig {
-                slot_duration: self.deployment.slot_duration,
-                genesis_time: genesis_time.into(),
-            },
-            epoch_config: EpochConfig {
-                epoch_period_nonce_buffer: cryptarchia_deployment
-                    .epoch_config
-                    .epoch_period_nonce_buffer,
-                epoch_stake_distribution_stabilization: cryptarchia_deployment
-                    .epoch_config
-                    .epoch_stake_distribution_stabilization,
-                epoch_period_nonce_stabilization: cryptarchia_deployment
-                    .epoch_config
-                    .epoch_period_nonce_stabilization,
-            },
-            base_period_length: cryptarchia_deployment
-                .consensus_config()
-                .base_period_length(),
             backend: NtpTimeBackendSettings {
                 ntp_client_settings: NTPClientSettings {
                     timeout: self.user.backend.client.timeout,
@@ -52,6 +31,13 @@ impl ServiceConfig {
                 ntp_server: self.user.backend.server,
                 update_interval: self.user.backend.update_interval,
             },
+            era_schedule: eras.map(|era| TimeServiceEraSettings {
+                timing: EraTiming {
+                    slot_duration: era.parameters.slot_duration(),
+                    epoch_length: era.parameters.epoch_length(),
+                },
+                transition_slots: era.parameters.ruleset.era_transition_slots(),
+            }),
         }
     }
 }

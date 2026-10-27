@@ -77,7 +77,7 @@ optional `shared/` dir, so files common to every environment have a natural home
 deployment/ceremony/genesis/
   shared/                         # (optional) inputs common to ALL environments
   <env>/
-    inscribe.yaml                 # TEMPLATE entropy + PER-RELEASE chain_id/genesis_time
+    inscribe.yaml                 # TEMPLATE entropy/PoW reward pool + PER-RELEASE chain_id/genesis_time
     deployment-template.yaml      # PER-TYPE era-zero params (consensus / blend / time)
     stakeholders.yaml             # PER-TYPE genesis stake distribution
     providers.yaml                # PER-TYPE bootstrap providers (id, locators)
@@ -102,8 +102,7 @@ Protocol and gossipsub topic names are not configured: every node derives them
 from its deployment. Blend, chain sync and the cryptarchia and mempool topics are
 named `/logos-blockchain/<fork digest>/<protocol>`, so nodes on different forks
 never talk to each other. Kademlia and identify are named
-`/logos-blockchain/<percent-encoded chain ID>/<protocol>`, so peers of a chain
-still find each other across its forks.
+`/logos-blockchain/<genesis block ID>/<protocol>`, so peers of a chain still find each other across its forks.
 
 ### 1. Template for all deployments (any type)
 Shared blueprints reused by every deployment type; not edited per release.
@@ -112,7 +111,7 @@ Shared blueprints reused by every deployment type; not edited per release.
 - `Dockerfile`, `deployment/Dockerfile`
 - `deployment/cfgsync.yaml`, `deployment/cfgsync/deployment-settings.yaml`
 - `deployment/nginx/*`, `deployment/scripts/*`, `deployment/systemd/*`
-- the `# TEMPLATE` section (`entropy_sources`) of each `deployment/ceremony/genesis/<env>/inscribe.yaml`
+- the `# TEMPLATE` section (`entropy_sources`, `pow_reward_pool`) of each `deployment/ceremony/genesis/<env>/inscribe.yaml`
 
 ### 2. Template for a certain deployment type
 Per-type blueprints; change only when a network type is re-defined.

@@ -47,16 +47,23 @@ Feature: Blend diagnostics
       | fast_repro             |
 
   @blend_debug @blend_tsi_diagnostic
-  Scenario Outline: Find stable accelerated Blend epoch configuration for k=<k>, phases=<p1>_<p2>_<p3>
+  Scenario Outline: Find stable accelerated Blend epoch configuration for k=<k>, phases=<p1>_<p2>_<p3>, f=1_div_<f_denominator>
     Given I have a cluster with capacity of 10 nodes
     And the first 10 nodes are declared as blend providers
     And the cluster uses SDP funding of 10000000 per provider split across 5 notes
 
     And the cluster uses cryptarchia security parameter <k>
-    And I have deployment config override "eras.0.time.slot_duration" as "seconds(1)"
+    # Cap W at k-1 (floor 1) to reduce pruning-related instability while retaining uncle activity.
+    And I have deployment config override "eras.0.cryptarchia.uncle_reference_window_in_block" as "<uncle_window>"
+    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "1"
     And I have deployment config override "eras.0.cryptarchia.epoch_config.epoch_stake_distribution_stabilization" as "<p1>"
     And I have deployment config override "eras.0.cryptarchia.epoch_config.epoch_period_nonce_buffer" as "<p2>"
     And I have deployment config override "eras.0.cryptarchia.epoch_config.epoch_period_nonce_stabilization" as "<p3>"
+    And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
+    And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "<f_denominator>"
+    And I have deployment config override "eras.0.blend.common.num_blend_layers" as "1"
+    And I have deployment config override "eras.0.blend.common.data_replication_factor" as "1"
+    And I have deployment config override "eras.0.blend.core.scheduler.delayer.maximum_release_delay_in_rounds" as "1"
 
     And I start node "NODE_2"
     And I start peer node "NODE_3" connected to node "NODE_2"
@@ -71,17 +78,20 @@ Feature: Blend diagnostics
     And I start peer node "NODE_10" connected to node "NODE_2" and node "NODE_3"
     And I log diagnostic identities
 
-    When I observe 10 epoch transitions on node "NODE_2"
+    When I observe <transitions> epoch transitions on node "NODE_2"
 
     Then I stop all nodes
 
     Examples:
-      | k  | p1 | p2 | p3 |
-      | 3  | 1  | 1  | 1  |
-      | 5  | 1  | 1  | 1  |
-      | 5  | 2  | 2  | 2  |
-      | 10 | 1  | 1  | 1  |
-      | 5  | 3  | 3  | 4  |
+      | k  | uncle_window | p1 | p2 | p3 | f_denominator | transitions |
+      | 3  | 2            | 1  | 1  | 1  | 10            | 10          |
+      | 5  | 4            | 3  | 3  | 4  | 10            | 10          |
+      | 10 | 9            | 3  | 3  | 4  | 30            | 10          |
+      | 15 | 12           | 3  | 3  | 4  | 30            | 10          |
+      | 20 | 12           | 3  | 3  | 4  | 30            | 10          |
+      | 25 | 12           | 3  | 3  | 4  | 30            | 10          |
+      | 30 | 12           | 3  | 3  | 4  | 30            | 10          |
+      | 35 | 12           | 3  | 3  | 4  | 30            | 10          |
 
   @blend_debug @blend_tsi_diagnostic @blend_fork_diagnostic
   Scenario Outline: Observe EDGE fork churn after Blend provider reachability outage and partial recovery parameter_set=<parameter_set>
@@ -143,6 +153,9 @@ Feature: Blend diagnostics
     And the first 8 nodes are declared as blend providers
     And the cluster uses diagnostic parameter set "<parameter_set>"
     And the cluster uses SDP funding of 10000000 per provider split across 5 notes
+    And I have deployment config override "eras.0.blend.common.num_blend_layers" as "1"
+    And I have deployment config override "eras.0.blend.common.data_replication_factor" as "1"
+    And I have deployment config override "eras.0.blend.core.scheduler.delayer.maximum_release_delay_in_rounds" as "1"
     And Blend provider endpoints use controllable test relays
 
     # Start all Blend providers before the non-provider EDGE population.
@@ -182,14 +195,18 @@ Feature: Blend diagnostics
 
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 9             | 2           | 110000000    |
-      | 10            | 2           | 110000000    |
-      | 11            | 2           | 110000000    |
-      | 12            | 2           | 110000000    |
+      | 9             | 5           | 110000000    |
+      | 10            | 5           | 110000000    |
+      | 11            | 5           | 110000000    |
+      | 12            | 5           | 110000000    |
     And I have a cluster with capacity of 12 nodes
     And the first 8 nodes are declared as blend providers
     And the cluster uses diagnostic parameter set "<parameter_set>"
     And the cluster uses SDP funding of 10000000 per provider split across 5 notes
+    And I have deployment config override "eras.0.blend.common.num_blend_layers" as "1"
+    And I have deployment config override "eras.0.blend.common.data_replication_factor" as "1"
+    And I have deployment config override "eras.0.blend.core.scheduler.delayer.maximum_release_delay_in_rounds" as "1"
+    And Blend provider endpoints use controllable test relays
 
     # Start all Blend providers before the non-provider EDGE/load population.
     And I start node "NODE_2"
@@ -214,7 +231,7 @@ Feature: Blend diagnostics
     When I perform 1 coin split transactions for each user wallet with 100 outputs of 1000000 LGO each
     And I verify each wallet has minimum 100 outputs "available" in 300 seconds
 
-    And I start continuous next-wallet transaction load with 50 transactions of 1 LGO and 4 epochs headroom
+    And I start continuous next-wallet transaction load with 50 transactions of 1 LGO and 1 epochs headroom
 
     # Match the observation cadence of the unstable-provider scenario while
     # keeping every Blend provider reachable.
@@ -246,14 +263,17 @@ Feature: Blend diagnostics
 
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 9             | 2           | 110000000     |
-      | 10            | 2           | 110000000     |
-      | 11            | 2           | 110000000     |
-      | 12            | 2           | 110000000     |
+      | 9             | 5           | 110000000     |
+      | 10            | 5           | 110000000     |
+      | 11            | 5           | 110000000     |
+      | 12            | 5           | 110000000     |
     And I have a cluster with capacity of 12 nodes
     And the first 8 nodes are declared as blend providers
     And the cluster uses diagnostic parameter set "<parameter_set>"
     And the cluster uses SDP funding of 10000000 per provider split across 5 notes
+    And I have deployment config override "eras.0.blend.common.num_blend_layers" as "1"
+    And I have deployment config override "eras.0.blend.common.data_replication_factor" as "1"
+    And I have deployment config override "eras.0.blend.core.scheduler.delayer.maximum_release_delay_in_rounds" as "1"
     And Blend provider endpoints use controllable test relays
 
     # Start the fault-injection population first.
@@ -280,7 +300,7 @@ Feature: Blend diagnostics
     When I perform 1 coin split transactions for each user wallet with 100 outputs of 1000000 LGO each
     And I verify each wallet has minimum 100 outputs "available" in 300 seconds
 
-    And I start continuous next-wallet transaction load with 50 transactions of 1 LGO and 4 epochs headroom
+    And I start continuous next-wallet transaction load with 50 transactions of 1 LGO and 1 epochs headroom
     When I observe 1 epoch transitions on node "NODE_9"
 
     And I start epoch-driven Blend provider churn:

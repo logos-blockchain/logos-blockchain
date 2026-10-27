@@ -1,11 +1,10 @@
 use core::{num::NonZeroU64, time::Duration};
-use std::collections::HashSet;
 
 use lb_blend::{
     message::encap::encapsulated_message_encoded_size, scheduling::membership::Membership,
 };
-use lb_libp2p::{Protocol, SwarmEvent};
-use libp2p::{Multiaddr, PeerId};
+use lb_libp2p::{DialOpts, Protocol, SwarmEvent};
+use libp2p::{Multiaddr, PeerId, swarm::dial_opts::PeerCondition};
 use test_log::test;
 use tokio::{
     select,
@@ -16,7 +15,7 @@ use crate::core::backends::{
     BackendEpochInfo,
     libp2p::{
         core_swarm_test_utils::{SwarmExt as _, new_nodes_with_empty_address, update_nodes},
-        swarm::BlendSwarmMessage,
+        swarm::{BlendSwarmMessage, PeerDialState},
         tests::utils::{
             BlendBehaviourBuilder, SwarmBuilder, TestProofsVerifier, TestSwarm, build_membership,
             test_peering_degree,
@@ -37,16 +36,19 @@ async fn core_redial_same_peer() {
     let empty_multiaddr: Multiaddr = Protocol::Memory(0).into();
     dialing_swarm.dial_peer_at_addr(random_peer_id, empty_multiaddr.clone());
 
-    // After dial, the first attempt should be in ongoing_dials.
-    let dial_attempt_1 = dialing_swarm.ongoing_dials().get(&random_peer_id).unwrap();
+    // After dial, the first attempt should be in flight.
+    let Some(PeerDialState::InFlight {
+        attempt: dial_attempt_1,
+        ..
+    }) = dialing_swarm.peer_dials().get(&random_peer_id)
+    else {
+        panic!("the first attempt should be in flight");
+    };
     assert_eq!(*dial_attempt_1.address(), empty_multiaddr);
     assert_eq!(dial_attempt_1.attempt_number(), 1.try_into().unwrap());
 
     // Poll through all 3 dial attempts (each fails with OutgoingConnectionError).
-    // Between errors, schedule_retry removes the entry from ongoing_dials and
-    // schedules a delayed retry, so we cannot check intermediate ongoing_dials
-    // state.
-    for _ in 0..3 {
+    for failed_attempt in 1..=3 {
         dialing_swarm
             .poll_next_until(|event| {
                 let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
@@ -55,13 +57,32 @@ async fn core_redial_same_peer() {
                 *peer_id == Some(random_peer_id)
             })
             .await;
-        // Before retrying, the failed peer should have been removed from ongoing_dials.
-        assert!(!dialing_swarm.ongoing_dials().contains_key(&random_peer_id));
+        // Between errors, the failed peer backs off, with the number of its next
+        // attempt.
+        let next_attempt = match dialing_swarm.peer_dials().get(&random_peer_id) {
+            Some(PeerDialState::BackingOff(dial_attempt)) => {
+                Some(dial_attempt.attempt_number().get())
+            }
+            _ => None,
+        };
+        assert_eq!(
+            next_attempt,
+            (failed_attempt < 3).then_some(failed_attempt + 1)
+        );
     }
 
-    // All attempts exhausted. Storage map should be cleared up, and since there
-    // is no other peer, no new peer is dialed.
-    assert!(dialing_swarm.ongoing_dials().is_empty());
+    // All attempts exhausted, and since there is no other peer, no new peer is
+    // dialed.
+    assert!(matches!(
+        dialing_swarm.peer_dials().get(&random_peer_id),
+        Some(PeerDialState::Exhausted)
+    ));
+    assert!(
+        !dialing_swarm
+            .peer_dials()
+            .values()
+            .any(PeerDialState::is_under_active_dialing)
+    );
 }
 
 #[test(tokio::test)]
@@ -101,7 +122,12 @@ async fn core_redial_different_peer_after_redial_limit() {
         }
     }
 
-    assert!(dialing_swarm.ongoing_dials().is_empty());
+    assert!(
+        !dialing_swarm
+            .peer_dials()
+            .values()
+            .any(PeerDialState::is_under_active_dialing)
+    );
     assert!(
         dialing_swarm
             .behaviour()
@@ -148,9 +174,11 @@ async fn core_redial_uses_exponential_backoff() {
         })
         .await;
 
-    // After the error, the entry should be removed from ongoing_dials and a
-    // retry should be pending.
-    assert!(dialing_swarm.ongoing_dials().get(&random_peer_id).is_none());
+    // After the error, the peer should back off while a retry is pending.
+    assert!(matches!(
+        dialing_swarm.peer_dials().get(&random_peer_id),
+        Some(PeerDialState::BackingOff(_))
+    ));
     assert_eq!(dialing_swarm.pending_retries_count(), 1);
 
     // Measure the delay until the second error. With exponential backoff, the
@@ -182,33 +210,88 @@ async fn core_redial_uses_exponential_backoff() {
     assert!(second_backoff >= Duration::from_secs(4),);
 }
 
-/// Verifies that when a peer fails all dial attempts, it is added to the failed
-/// peers set, preventing it from being chosen again on the next attempt.
+/// Verifies that a peer that ran out of dial attempts is not dialed again, even
+/// when the next dial is triggered by something other than its own failure,
+/// such as the periodic peering-degree check.
 #[test(tokio::test)]
-async fn core_remembers_failed_peers_across_retries() {
-    // Create 3 membership nodes: 1 local (the dialing swarm) + 2 remote
-    // unreachable.
-    let (mut identities, nodes) = new_nodes_with_empty_address(3);
+async fn core_remembers_exhausted_peers_across_dial_triggers() {
+    // Create 2 membership nodes: 1 local (the dialing swarm) + 1 remote
+    // unreachable, at a dialable memory address with no listener behind it.
+    let (mut identities, mut nodes) = new_nodes_with_empty_address(2);
+    let unreachable_peer = nodes[1].id;
+    update_nodes(&mut nodes, &unreachable_peer, Protocol::Memory(0).into());
     let TestSwarm {
         swarm: mut dialing_swarm,
         ..
     } = SwarmBuilder::new(identities.next().unwrap(), &nodes)
         // Use max_dial_attempts=1 to avoid backoff delays.
         .with_max_dial_attempts(1.try_into().unwrap())
+        // Periodic checks, starting once the dial below has failed.
+        .with_peering_degree_check_interval(time::interval_at(
+            time::Instant::now() + Duration::from_millis(500),
+            Duration::from_millis(500),
+        ))
         .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
 
-    // Manually dial one of the unreachable peers.
-    let unreachable_peer_1 = nodes[1].id;
-    let unreachable_peer_2 = nodes[2].id;
-    dialing_swarm.dial_peer_at_addr(unreachable_peer_1, Protocol::Memory(0).into());
+    dialing_swarm.dial_peer_at_addr(unreachable_peer, Protocol::Memory(0).into());
 
-    // The first dial has no failed peers memory.
-    assert_eq!(
-        dialing_swarm.failed_peers_for(&unreachable_peer_1),
-        Some(&HashSet::new()),
+    // Let the peer fail its single dial attempt.
+    dialing_swarm
+        .poll_next_until(|event| {
+            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == Some(unreachable_peer)
+        })
+        .await;
+
+    // Several periodic checks fire in the meantime, and none may dial the peer
+    // again.
+    let another_attempt = time::timeout(
+        Duration::from_secs(2),
+        dialing_swarm.poll_next_until(|event| {
+            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == Some(unreachable_peer)
+        }),
+    )
+    .await;
+    assert!(
+        another_attempt.is_err(),
+        "a peer that ran out of dial attempts must not be dialed again before the full-membership retry"
     );
+}
 
-    // Let the first peer fail its single dial attempt.
+/// While a peer backs off between dial attempts, it is still the dial that
+/// makes up the shortfall: the periodic peering-degree check must neither dial
+/// it afresh nor open a dial to another peer on top of it.
+#[test(tokio::test)]
+async fn core_periodic_check_leaves_backing_off_dial_alone() {
+    // Create 3 membership nodes: 1 local + 2 remote unreachable, at dialable
+    // memory addresses with no listener behind them.
+    let (mut identities, mut nodes) = new_nodes_with_empty_address(3);
+    let (unreachable_peer_1, unreachable_peer_2) = (nodes[1].id, nodes[2].id);
+    update_nodes(&mut nodes, &unreachable_peer_1, Protocol::Memory(0).into());
+    update_nodes(&mut nodes, &unreachable_peer_2, Protocol::Memory(0).into());
+    let TestSwarm {
+        swarm: mut dialing_swarm,
+        ..
+    } = SwarmBuilder::new(identities.next().unwrap(), &nodes)
+        // Periodic checks, starting once the dial below has failed and well before
+        // its retry, which waits 2 seconds.
+        .with_peering_degree_check_interval(time::interval_at(
+            time::Instant::now() + Duration::from_millis(300),
+            Duration::from_millis(300),
+        ))
+        // `Φ_CC = 2`, so the node has a single connection to open.
+        .build(|id, membership| {
+            BlendBehaviourBuilder::new(id, membership)
+                .with_peering_degree(2.try_into().unwrap())
+                .build()
+        });
+
+    dialing_swarm.dial_peer_at_addr(unreachable_peer_1, Protocol::Memory(0).into());
     dialing_swarm
         .poll_next_until(|event| {
             let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
@@ -218,27 +301,201 @@ async fn core_remembers_failed_peers_across_retries() {
         })
         .await;
 
-    // After failure, check_and_dial_new_peers should have picked the second peer,
-    // and the second peer's dial attempt should carry the first peer in its
-    // failed_peers set.
+    // Let a few periodic checks fire while the first peer backs off.
+    let deadline = time::Instant::now() + Duration::from_secs(1);
+    loop {
+        select! {
+            () = sleep_until(deadline) => break,
+            () = dialing_swarm.poll_next() => {}
+        }
+    }
+
+    assert_eq!(
+        dialing_swarm.peer_dials().keys().collect::<Vec<_>>(),
+        [&unreachable_peer_1],
+        "a periodic check dialed another peer on top of the one backing off"
+    );
+    assert!(
+        matches!(
+            dialing_swarm.peer_dials().get(&unreachable_peer_1),
+            Some(PeerDialState::BackingOff(dial_attempt)) if dial_attempt.attempt_number().get() == 2
+        ),
+        "a periodic check dialed the backing-off peer afresh"
+    );
+    assert_eq!(dialing_swarm.pending_retries_count(), 1);
+}
+
+/// A dial error is held against the dial it belongs to only. One about another
+/// connection with the same peer, like that of a dial of the previous epoch
+/// failing after this one dialed the peer again, must not count as a failed
+/// attempt of the dial in flight.
+#[test(tokio::test)]
+async fn core_ignores_dial_errors_about_other_connections() {
+    let (mut identities, peer_ids) = new_nodes_with_empty_address(1);
+    let TestSwarm {
+        swarm: mut dialing_swarm,
+        ..
+    } = SwarmBuilder::new(identities.next().unwrap(), &peer_ids)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
+
+    let random_peer_id = PeerId::random();
+    let unreachable_address: Multiaddr = Protocol::Memory(0).into();
+    // A dial the swarm does not track, as it no longer tracks those of the
+    // previous epoch, and one that it does.
+    (*dialing_swarm)
+        .dial(
+            DialOpts::peer_id(random_peer_id)
+                .addresses(vec![unreachable_address.clone()])
+                .condition(PeerCondition::Always)
+                .build(),
+        )
+        .unwrap();
+    dialing_swarm.dial_peer_at_addr(random_peer_id, unreachable_address);
+
+    // Both dials fail.
+    for _ in 0..2 {
+        dialing_swarm
+            .poll_next_until(|event| {
+                let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                    return false;
+                };
+                *peer_id == Some(random_peer_id)
+            })
+            .await;
+    }
+
+    assert!(
+        matches!(
+            dialing_swarm.peer_dials().get(&random_peer_id),
+            Some(PeerDialState::BackingOff(dial_attempt)) if dial_attempt.attempt_number().get() == 2
+        ),
+        "the error of the untracked dial counted as a failed attempt of the tracked one"
+    );
+    assert_eq!(dialing_swarm.pending_retries_count(), 1);
+}
+
+/// An unrecoverable dial error about a connection other than the dial in
+/// flight, like that of a dial of the previous epoch, must not cost the peer
+/// the rest of this epoch.
+#[test(tokio::test)]
+async fn core_ignores_unrecoverable_dial_errors_about_other_connections() {
+    let (mut identities, peer_ids) = new_nodes_with_empty_address(2);
+
+    // A real listening swarm whose address we pair with the wrong identity.
+    let TestSwarm {
+        swarm: mut listening_swarm,
+        ..
+    } = SwarmBuilder::new(identities.next().unwrap(), &peer_ids)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
+    let (listening_node, _) = listening_swarm
+        .listen_and_return_membership_entry(None)
+        .await;
+    tokio::spawn(async move { listening_swarm.run().await });
+
+    let TestSwarm {
+        swarm: mut dialing_swarm,
+        ..
+    } = SwarmBuilder::new(identities.next().unwrap(), &peer_ids)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
+
+    // A dial the swarm does not track, as it no longer tracks those of the
+    // previous epoch.
+    let wrong_peer_id = PeerId::random();
+    (*dialing_swarm)
+        .dial(
+            DialOpts::peer_id(wrong_peer_id)
+                .addresses(vec![listening_node.address])
+                .condition(PeerCondition::Always)
+                .build(),
+        )
+        .unwrap();
+
+    dialing_swarm
+        .poll_next_until(|event| {
+            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == Some(wrong_peer_id)
+        })
+        .await;
+
+    assert!(
+        dialing_swarm.peer_dials().get(&wrong_peer_id).is_none(),
+        "an error about a dial the swarm does not track gave up on the peer"
+    );
+}
+
+/// A retry is there to reach a peer this node could not reach. If the peer has
+/// connected to this node in the meantime, the retry is dropped instead of
+/// dialing it a second time.
+#[test(tokio::test)]
+async fn core_drops_retry_to_a_peer_that_connected_in_the_meantime() {
+    let (mut identities, nodes) = new_nodes_with_empty_address(2);
+
+    let TestSwarm {
+        swarm: mut remote_swarm,
+        ..
+    } = SwarmBuilder::new(identities.next().unwrap(), &nodes)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
+    let remote_peer_id = *remote_swarm.local_peer_id();
+
+    let TestSwarm {
+        swarm: mut dialing_swarm,
+        ..
+    } = SwarmBuilder::new(identities.next().unwrap(), &nodes)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
+    let (dialing_node, _) = dialing_swarm.listen_and_return_membership_entry(None).await;
+
+    // The node fails to reach the remote at the address it has for it...
+    dialing_swarm.dial_peer_at_addr(remote_peer_id, Protocol::Memory(0).into());
+    dialing_swarm
+        .poll_next_until(|event| {
+            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == Some(remote_peer_id)
+        })
+        .await;
+    assert!(matches!(
+        dialing_swarm.peer_dials().get(&remote_peer_id),
+        Some(PeerDialState::BackingOff(_))
+    ));
+
+    // ...and the remote connects to the node while the node backs off from it.
+    remote_swarm.dial_peer_at_addr(dialing_node.id, dialing_node.address);
+
+    // Drive both swarms past the retry, which is due 2 seconds after the failure.
+    let deadline = time::Instant::now() + Duration::from_secs(3);
+    loop {
+        select! {
+            () = sleep_until(deadline) => break,
+            () = dialing_swarm.poll_next() => {}
+            () = remote_swarm.poll_next() => {}
+        }
+    }
+
     assert!(
         dialing_swarm
-            .ongoing_dials()
-            .contains_key(&unreachable_peer_2),
-        "Second peer should be dialed after first peer failed"
+            .behaviour()
+            .blend
+            .with_core()
+            .negotiated_peers()
+            .contains_key(&remote_peer_id),
+        "setup precondition: the remote should have connected to the node"
     );
-    assert_eq!(
-        dialing_swarm.failed_peers_for(&unreachable_peer_2),
-        Some(&HashSet::from([unreachable_peer_1])),
+    assert!(
+        dialing_swarm.peer_dials().get(&remote_peer_id).is_none(),
+        "the retry dialed a peer that had connected to the node in the meantime"
     );
+    assert_eq!(dialing_swarm.pending_retries_count(), 0);
 }
 
 /// Verifies that when all peers have been tried and failed in a cycle, the node
 /// does not immediately re-dial the whole membership (which would spin at
 /// event-loop speed against peers that keep rejecting us). Instead it schedules
 /// a single delayed retry from scratch; when the cooldown elapses,
-/// `check_and_dial_new_peers` re-dials the membership with a cleared
-/// failed-peers set.
+/// `check_and_dial_new_peers` re-dials the membership with the exhausted peers
+/// eligible again.
 #[test(tokio::test)]
 async fn core_schedules_delayed_retry_when_all_peers_exhausted() {
     // Create 3 membership nodes: 1 local + 2 remote unreachable.
@@ -265,9 +522,10 @@ async fn core_schedules_delayed_retry_when_all_peers_exhausted() {
 
     // The second peer should now be being dialed.
     let second_peer = *dialing_swarm
-        .ongoing_dials()
-        .keys()
-        .next()
+        .peer_dials()
+        .iter()
+        .find(|(_, dial)| dial.is_under_active_dialing())
+        .map(|(peer_id, _)| peer_id)
         .expect("should have an ongoing dial");
     assert_ne!(unreachable_peer_1, second_peer);
 
@@ -285,7 +543,10 @@ async fn core_schedules_delayed_retry_when_all_peers_exhausted() {
     // single delayed retry-from-scratch should be scheduled, with no dial in
     // flight in the meantime.
     assert!(
-        dialing_swarm.ongoing_dials().is_empty(),
+        !dialing_swarm
+            .peer_dials()
+            .values()
+            .any(PeerDialState::is_under_active_dialing),
         "No immediate re-dial should happen; the retry from scratch is delayed"
     );
     assert!(
@@ -327,13 +588,16 @@ async fn core_epoch_rotation_clears_pending_retries() {
         proofs_verifier: TestProofsVerifier,
     };
     swarm_message_sender
-        .send(BlendSwarmMessage::StartNewEpoch(new_epoch_info))
+        .send(BlendSwarmMessage::StartNewEpoch {
+            new_epoch_info,
+            new_era_settings: None,
+        })
         .await
         .unwrap();
     dialing_swarm.poll_next().await;
 
-    // Epoch rotation should have cleared both ongoing dials and pending retries.
-    assert!(dialing_swarm.ongoing_dials().is_empty());
+    // Epoch rotation should have cleared both the dials and pending retries.
+    assert!(dialing_swarm.peer_dials().is_empty());
     assert_eq!(dialing_swarm.pending_retries_count(), 0);
 }
 
@@ -401,11 +665,14 @@ async fn core_does_not_give_up_below_minimum_peering_degree() {
     // peers to reach the minimum degree.
     let new_membership = build_membership(&nodes, Some(*dialing_swarm.local_peer_id()));
     swarm_message_sender
-        .send(BlendSwarmMessage::StartNewEpoch(BackendEpochInfo {
-            membership: new_membership,
-            epoch: 2.into(),
-            proofs_verifier: TestProofsVerifier,
-        }))
+        .send(BlendSwarmMessage::StartNewEpoch {
+            new_epoch_info: BackendEpochInfo {
+                membership: new_membership,
+                epoch: 2.into(),
+                proofs_verifier: TestProofsVerifier,
+            },
+            new_era_settings: None,
+        })
         .await
         .unwrap();
 
@@ -425,7 +692,11 @@ async fn core_does_not_give_up_below_minimum_peering_degree() {
     }
 
     let healthy = dialing_swarm.behaviour().blend.with_core().num_live_peers();
-    let ongoing = dialing_swarm.ongoing_dials().len();
+    let ongoing = dialing_swarm
+        .peer_dials()
+        .values()
+        .filter(|dial| dial.is_under_active_dialing())
+        .count();
     let pending = dialing_swarm.pending_retries_count();
     let full_retry = dialing_swarm.has_pending_full_membership_retry();
 
@@ -480,7 +751,7 @@ async fn core_maintenance_task_dials_to_maintain_peering_degree() {
         .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
 
     // Precondition: the node is idle and below the (default) minimum degree of 1.
-    assert!(dialing_swarm.ongoing_dials().is_empty());
+    assert!(dialing_swarm.peer_dials().is_empty());
     assert_eq!(
         dialing_swarm.behaviour().blend.with_core().num_live_peers(),
         0
@@ -568,12 +839,12 @@ async fn core_retry_skipped_when_peering_degree_satisfied() {
     }
 
     // The unreachable peer's retry was skipped (peering degree was satisfied),
-    // so it should not be re-inserted into ongoing_dials.
+    // so it should not be dialed again.
     assert!(
-        dialing_swarm
-            .ongoing_dials()
+        !dialing_swarm
+            .peer_dials()
             .get(&unreachable_peer)
-            .is_none()
+            .is_some_and(PeerDialState::is_under_active_dialing)
     );
     // The pending retries queue should have been drained.
     assert_eq!(dialing_swarm.pending_retries_count(), 0);
@@ -615,12 +886,11 @@ async fn core_does_not_retry_unrecoverable_dial_failure() {
         .await;
 
     assert!(
-        dialing_swarm.unrecoverable_peers().contains(&wrong_peer_id),
+        matches!(
+            dialing_swarm.peer_dials().get(&wrong_peer_id),
+            Some(PeerDialState::Unrecoverable)
+        ),
         "a wrong-peer-id failure must mark the peer unusable for this epoch"
-    );
-    assert!(
-        !dialing_swarm.ongoing_dials().contains_key(&wrong_peer_id),
-        "the abandoned peer must not be left in ongoing dials"
     );
 
     // The first backoff would be 2^1 = 2s; no further attempt may occur.
@@ -730,7 +1000,7 @@ async fn core_does_not_retry_a_blacklisted_peer() {
         "the swarm queued a retry at a peer it refuses to speak to, instead of dialing a replacement"
     );
     assert!(
-        !victim.ongoing_dials().contains_key(&offender_id),
-        "the refused dial must not be left in ongoing dials either"
+        victim.peer_dials().get(&offender_id).is_none(),
+        "the refused dial must not be left among the dials either"
     );
 }

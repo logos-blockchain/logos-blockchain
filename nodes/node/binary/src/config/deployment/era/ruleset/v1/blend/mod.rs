@@ -3,16 +3,18 @@ use core::{
     time::Duration,
 };
 
-use lb_blend_service::settings::TimingSettings;
+use lb_blend_service::settings::EraTimingSettings;
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_utils::math::PositiveF64;
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{
-    cryptarchia::deployment::Settings as CryptarchiaDeploymentSettings,
-    time::deployment::Settings as TimeDeploymentSettings,
+use super::{
+    cryptarchia::Settings as CryptarchiaDeploymentSettings,
+    time::Settings as TimeDeploymentSettings,
 };
+
+pub(crate) mod codec;
 
 /// Deployment-specific Blend settings.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -109,8 +111,8 @@ impl Settings {
         slots_per_epoch: u64,
         slots_per_block: u64,
         slot_duration: &Duration,
-    ) -> TimingSettings {
-        TimingSettings {
+    ) -> EraTimingSettings {
+        EraTimingSettings {
             epoch_transition_period: self.epoch_transition(slots_per_block, slot_duration),
             round_duration_in_seconds: self
                 .round_duration(slot_duration)
@@ -125,16 +127,22 @@ impl Settings {
     }
 
     /// Duration of the epoch transition period.
-    ///
-    /// The Blend spec defines this as roughly the same time it takes to propose
-    /// a new block.
     #[must_use]
     pub const fn epoch_transition(
         &self,
         slots_per_block: u64,
         slot_duration: &Duration,
     ) -> Duration {
-        Duration::from_secs(slot_duration.as_secs() * slots_per_block)
+        Duration::from_secs(slot_duration.as_secs() * self.epoch_transition_slots(slots_per_block))
+    }
+
+    /// Length of the epoch transition period, in slots.
+    ///
+    /// The Blend spec defines this as roughly the same time it takes to propose
+    /// a new block.
+    #[must_use]
+    pub const fn epoch_transition_slots(&self, slots_per_block: u64) -> u64 {
+        slots_per_block
     }
 
     #[must_use]
@@ -151,7 +159,7 @@ impl Settings {
             num_blend_layers: self.common.num_blend_layers,
             rounds_per_epoch: self.rounds_per_epoch(
                 cryptarchia_deployment.slots_per_epoch(),
-                &time_deployment.slot_duration,
+                &time_deployment.slot_duration(),
             ),
         }
     }

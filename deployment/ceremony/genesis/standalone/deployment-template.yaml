@@ -1,3 +1,4 @@
+!V1
 blend:
   common:
     num_blend_layers: 1
@@ -45,17 +46,6 @@ cryptarchia:
     reward:
       # Token-reward PoW parameters, sized for the target network of ~200
       # mining nodes over the two-week epoch schedule.
-      #
-      # Pool sized to put 200 nodes over the minimum stake, with margin for
-      # mining being spread unevenly across them.
-      reward_pool_genesis: 300000000000
-      # Forced by the pool and the payout rate:
-      # W0 * rate_num / (rate_den * target_claim_per_block *
-      # expected_blocks_per_epoch) = 3e11 / (10 * 1 * 300).
-      # `expected_blocks_per_epoch` is not a config value: the ledger derives
-      # it from the consensus schedule as `10k`, which is 300 at
-      # `security_param: 30`.
-      epoch_reward_genesis: 100000000
       # Genesis `d_reward`, as the exponent n in p / 2^n — the same form as
       # the Blend `base_difficulty` above. Fixed by the specification.
       # Also the minimum difficulty: the retarget never eases past it.
@@ -86,4 +76,4 @@ cryptarchia:
       threshold: 1000000000
       timestamp: 0
 time:
-  slot_duration: 1s
+  slot_duration_in_seconds: 1

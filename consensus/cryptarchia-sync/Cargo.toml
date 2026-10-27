@@ -26,7 +26,7 @@ libp2p                        = { workspace = true }
 libp2p-stream                 = { workspace = true }
 rand                          = { workspace = true }
 serde                         = { workspace = true }
-serde_with                    = { workspace = true }
+serde_with                    = { features = ["macros"], workspace = true }
 thiserror                     = { workspace = true }
 tokio                         = { workspace = true }
 tracing                       = { workspace = true }

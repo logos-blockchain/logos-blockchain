@@ -704,7 +704,7 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
         },
         storage: storage::serde::Config::default(),
         sdp: sdp::serde::Config {
-            declaration: config.sdp_config.declaration,
+            declaration: config.sdp_config.declaration.map(Into::into),
             wallet: sdp::serde::WalletConfig {
                 max_tx_fee: mantle::Value::MAX.into(),
                 funding_pk: config.consensus_config.funding_sk.as_public_key(),
@@ -763,6 +763,7 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
             backend: config::kms::serde::PreloadKmsBackendSettings {
                 keys: config.kms_config.backend.keys,
             },
+            ..config::kms::serde::Config::default()
         },
         // Mining defaults, auto-claim off: provisioned nodes claim on demand,
         // naming the destination key on each claim request.

@@ -1,150 +1,208 @@
 use lb_blend_service::{
+    broadcast::settings::{BroadcastServiceEraSettings, BroadcastServiceSettings},
     core::{
-        backends::libp2p::Libp2pBlendBackendSettings as Libp2pCoreBlendBackendSettings,
+        backends::libp2p::{
+            Libp2pBlendBackendEraSettings as Libp2pCoreBlendBackendEraSettings,
+            Libp2pBlendBackendSettings as Libp2pCoreBlendBackendSettings,
+        },
         dispatcher::libp2p::Libp2pBroadcastSettings,
         settings::{
-            CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings,
-            StartingBlendConfig as BlendCoreSettings, ZkSettings,
+            CoreServiceEraSettings, CoreServiceSettings, EraCoverTrafficSettings,
+            EraMessageDelayerSettings, EraSchedulerSettings, ZkSettings,
         },
     },
     edge::{
-        backends::libp2p::Libp2pBlendBackendSettings as Libp2pEdgeBlendBackendSettings,
-        settings::StartingBlendConfig as BlendEdgeSettings,
+        backends::libp2p::{
+            Libp2pBlendBackendEraSettings as Libp2pEdgeBlendBackendEraSettings,
+            Libp2pBlendBackendSettings as Libp2pEdgeBlendBackendSettings,
+        },
+        settings::{EdgeServiceEraSettings, EdgeServiceSettings},
     },
-    settings::{CommonSettings, CoreSettings, EdgeSettings, Settings as BlendSettings},
+    settings::{EraOrchestratorSettings, OrchestratorSettings},
 };
-use lb_libp2p::protocol_name::StreamProtocol;
+use lb_libp2p::protocol_name::ProtocolScope;
 use lb_services_utils::overwatch::RecoveryData;
+use lb_time::era::EraSchedule;
 
 use crate::config::{
-    blend::{deployment::Settings as DeploymentSettings, serde::Config},
-    cryptarchia::deployment::Settings as CryptarchiaDeploymentSettings,
-    time::deployment::Settings as TimeDeploymentSettings,
+    blend::serde::Config,
+    deployment::{EraDefinition, era::ruleset::EraRuleset},
 };
 
-pub mod deployment;
 pub mod serde;
 
-/// The three settings a Blend deployment produces: the proxy's, which picks
-/// between the two, and one for each of the services it can start.
+/// The libp2p dispatcher's settings: the topic of every era.
+type DispatcherSettings = EraSchedule<Libp2pBroadcastSettings>;
+
+/// The settings of the four Blend services: the orchestrator's, which picks the
+/// mode each epoch runs in, and one for each of the services it can start.
 type BlendServicesSettings = (
-    BlendSettings<
-        Libp2pCoreBlendBackendSettings,
+    OrchestratorSettings,
+    CoreServiceSettings<Libp2pCoreBlendBackendSettings, DispatcherSettings>,
+    EdgeServiceSettings<
         Libp2pEdgeBlendBackendSettings,
-        Libp2pBroadcastSettings,
+        Libp2pEdgeBlendBackendEraSettings,
+        DispatcherSettings,
     >,
-    BlendCoreSettings<Libp2pCoreBlendBackendSettings, Libp2pBroadcastSettings>,
-    BlendEdgeSettings<Libp2pEdgeBlendBackendSettings, Libp2pBroadcastSettings>,
+    BroadcastServiceSettings<DispatcherSettings>,
 );
 
-/// Blend service config which combines user-provided configuration with
-/// deployment-specific settings.
-///
-/// Deployment-specific settings can refer to either a well-known deployment
-/// (e.g., Logos blockchain Mainnet), or to custom values.
+/// What an era holds for the Blend services, and for the libp2p backends and
+/// dispatcher they run with, each in a type of its own.
+struct BlendEraSettings {
+    orchestrator: EraOrchestratorSettings,
+    core: CoreServiceEraSettings,
+    edge: EdgeServiceEraSettings<Libp2pEdgeBlendBackendEraSettings>,
+    broadcast: BroadcastServiceEraSettings,
+    core_backend: Libp2pCoreBlendBackendEraSettings,
+    dispatcher: Libp2pBroadcastSettings,
+}
+
+/// Blend service config: the user-provided configuration, completed with the
+/// parameters of each era when the services' settings are built.
 pub struct ServiceConfig {
     pub user: Config,
-    pub deployment: DeploymentSettings,
 }
 
 impl ServiceConfig {
+    /// The settings of the Blend services in every era of `eras`.
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Era -> service config conversion function. Better to have all the logic in a single place."
+    )]
     pub fn into_blend_services_settings(
         self,
         recovery_data: RecoveryData,
-        time_deployment: &TimeDeploymentSettings,
-        cryptarchia_deployment: &CryptarchiaDeploymentSettings,
-        protocol_name: StreamProtocol,
-        broadcast_topic: String,
+        eras: &EraSchedule<EraDefinition>,
     ) -> BlendServicesSettings {
-        let slots_per_epoch = cryptarchia_deployment.slots_per_epoch();
-        let slots_per_block = cryptarchia_deployment.average_slots_per_block();
-        let slot_duration = time_deployment.slot_duration;
+        let blend_eras = eras.map(|era| {
+            let definition = &era.parameters;
+            let EraRuleset::V1(parameters) = &definition.ruleset;
+            let fork = ProtocolScope::Fork(definition.fork_digest);
+            let protocol_name = fork.to_stream_protocol_with_name("blend");
+            let (deployment, cryptarchia_deployment, time_deployment) =
+                (&parameters.blend, &parameters.cryptarchia, &parameters.time);
+            let slots_per_epoch = cryptarchia_deployment.slots_per_epoch();
+            let slots_per_block = cryptarchia_deployment.average_slots_per_block();
+            let slot_duration = time_deployment.slot_duration();
+            let num_blend_layers = deployment.common.num_blend_layers;
+            let minimum_network_size = deployment.common.minimum_network_size.into();
+            let time = deployment.timing_settings(slots_per_epoch, slots_per_block, &slot_duration);
+            let data_replication_factor = deployment.common.data_replication_factor;
+            let epoch_transition_period = time.epoch_transition_period;
 
-        let blend_service_settings = BlendSettings::<
-            Libp2pCoreBlendBackendSettings,
-            Libp2pEdgeBlendBackendSettings,
-            Libp2pBroadcastSettings,
-        > {
-            common: CommonSettings {
-                non_ephemeral_signing_key_id: self.user.non_ephemeral_signing_key_id,
-                num_blend_layers: self.deployment.common.num_blend_layers,
-                minimum_network_size: self.deployment.common.minimum_network_size.into(),
-                broadcast: Libp2pBroadcastSettings {
-                    topic: broadcast_topic,
-                },
-                abstain_on_failure: self.user.abstain_on_failure,
-                recovery_data,
-                time: self.deployment.timing_settings(
-                    slots_per_epoch,
-                    slots_per_block,
-                    &slot_duration,
-                ),
-                data_replication_factor: self.deployment.common.data_replication_factor,
-            },
-            core: CoreSettings {
-                backend: Libp2pCoreBlendBackendSettings {
-                    target_peering_degree: self.deployment.core.target_peering_degree,
-                    connection_share_per_round: self.deployment.connection_share_per_round(),
-                    listening_address: self.user.core.backend.listening_address,
-                    edge_node_connection_timeout: self
-                        .deployment
-                        .edge_node_connection_timeout(&slot_duration),
-                    max_dial_attempts_per_peer: self.user.core.backend.max_dial_attempts_per_peer,
-                    max_edge_node_incoming_connections: self
-                        .deployment
-                        .maximum_concurrent_edge_connections(),
-                    accepted_edge_connections_per_round: self
-                        .deployment
-                        .accepted_edge_connections_per_round(),
-                    protocol_name: protocol_name.clone(),
-                    peering_degree_check_interval: self
-                        .user
-                        .core
-                        .backend
-                        .peering_degree_check_interval,
-                },
-                scheduler: SchedulerSettings {
-                    cover: CoverTrafficSettings {
-                        message_frequency_per_round: self
-                            .deployment
+            let core = CoreServiceEraSettings {
+                scheduler: EraSchedulerSettings {
+                    cover: EraCoverTrafficSettings {
+                        message_frequency_per_round: deployment
                             .core
                             .scheduler
                             .cover
                             .message_frequency_per_round,
                     },
-                    delayer: MessageDelayerSettings {
-                        maximum_release_delay_in_rounds: self
-                            .deployment
+                    delayer: EraMessageDelayerSettings {
+                        maximum_release_delay_in_rounds: deployment
                             .core
                             .scheduler
                             .delayer
                             .maximum_release_delay_in_rounds,
                     },
                 },
-                zk: ZkSettings {
-                    secret_key_kms_id: self.user.core.zk.secret_key_kms_id,
+                time: time.clone(),
+                num_blend_layers,
+                minimum_network_size,
+                data_replication_factor,
+                activity_threshold_sensitivity: deployment.core.activity_threshold_sensitivity,
+            };
+            let edge = EdgeServiceEraSettings {
+                time: time.clone(),
+                num_blend_layers,
+                minimum_network_size,
+                cover: core.scheduler.cover.clone(),
+                data_replication_factor,
+                max_blend_delay_in_rounds: core.scheduler.delayer.maximum_release_delay_in_rounds,
+                backend: Libp2pEdgeBlendBackendEraSettings {
+                    protocol_name: protocol_name.clone(),
                 },
-                activity_threshold_sensitivity: self.deployment.core.activity_threshold_sensitivity,
-            },
-            edge: EdgeSettings::<Libp2pEdgeBlendBackendSettings> {
-                backend: Libp2pEdgeBlendBackendSettings {
-                    max_dial_attempts_per_peer_per_message: self
-                        .user
-                        .edge
-                        .backend
-                        .max_dial_attempts_per_peer_per_message,
+            };
+
+            BlendEraSettings {
+                orchestrator: EraOrchestratorSettings {
+                    minimum_network_size,
+                    epoch_transition_period,
+                },
+                core,
+                edge,
+                broadcast: BroadcastServiceEraSettings {
+                    minimum_network_size,
+                    epoch_transition_period,
+                },
+                core_backend: Libp2pCoreBlendBackendEraSettings {
+                    target_peering_degree: deployment.core.target_peering_degree,
+                    connection_share_per_round: deployment.connection_share_per_round(),
+                    edge_node_connection_timeout: deployment
+                        .edge_node_connection_timeout(&slot_duration),
+                    max_edge_node_incoming_connections: deployment
+                        .maximum_concurrent_edge_connections(),
+                    accepted_edge_connections_per_round: deployment
+                        .accepted_edge_connections_per_round(),
                     protocol_name,
-                    replication_factor: self.user.edge.backend.replication_factor,
+                    minimum_network_size,
+                    num_blend_layers,
+                    time,
                 },
-            },
+                dispatcher: Libp2pBroadcastSettings {
+                    topic: fork.to_string_with_name("cryptarchia"),
+                },
+            }
+        });
+        let user = self.user;
+        let dispatcher_settings = blend_eras.map(|era| era.parameters.dispatcher.clone());
+        let blend_orchestrator_settings = OrchestratorSettings {
+            non_ephemeral_signing_key_id: user.non_ephemeral_signing_key_id.clone(),
+            zk_secret_key_kms_id: user.core.zk.secret_key_kms_id.clone(),
+            era_schedule: blend_eras.map(|era| era.parameters.orchestrator.clone()),
         };
-        let blend_core_settings: BlendCoreSettings<_, _> = blend_service_settings.clone().into();
-        let blend_edge_settings: BlendEdgeSettings<_, _> = blend_service_settings.clone().into();
+        let blend_core_settings = CoreServiceSettings {
+            non_ephemeral_signing_key_id: user.non_ephemeral_signing_key_id.clone(),
+            zk: ZkSettings {
+                secret_key_kms_id: user.core.zk.secret_key_kms_id,
+            },
+            abstain_on_failure: user.abstain_on_failure,
+            backend: Libp2pCoreBlendBackendSettings {
+                listening_address: user.core.backend.listening_address,
+                max_dial_attempts_per_peer: user.core.backend.max_dial_attempts_per_peer,
+                peering_degree_check_interval: user.core.backend.peering_degree_check_interval,
+                era_schedule: blend_eras.map(|era| era.parameters.core_backend.clone()),
+            },
+            dispatcher: dispatcher_settings.clone(),
+            era_schedule: blend_eras.map(|era| era.parameters.core.clone()),
+            recovery_data,
+        };
+        let blend_edge_settings = EdgeServiceSettings {
+            non_ephemeral_signing_key_id: user.non_ephemeral_signing_key_id.clone(),
+            abstain_on_failure: user.abstain_on_failure,
+            backend: Libp2pEdgeBlendBackendSettings {
+                max_dial_attempts_per_peer_per_message: user
+                    .edge
+                    .backend
+                    .max_dial_attempts_per_peer_per_message,
+                replication_factor: user.edge.backend.replication_factor,
+            },
+            dispatcher: dispatcher_settings.clone(),
+            era_schedule: blend_eras.map(|era| era.parameters.edge.clone()),
+        };
+        let blend_broadcast_settings = BroadcastServiceSettings {
+            non_ephemeral_signing_key_id: user.non_ephemeral_signing_key_id,
+            dispatcher: dispatcher_settings,
+            era_schedule: blend_eras.map(|era| era.parameters.broadcast.clone()),
+        };
         (
-            blend_service_settings,
+            blend_orchestrator_settings,
             blend_core_settings,
             blend_edge_settings,
+            blend_broadcast_settings,
         )
     }
 }

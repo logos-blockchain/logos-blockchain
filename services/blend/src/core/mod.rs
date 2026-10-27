@@ -12,7 +12,6 @@ use async_trait::async_trait;
 use backends::BlendBackend;
 use diagnostics::log_pol_state_handoff;
 use dispatcher::PayloadDispatcher;
-use fork_stream::StreamExt as _;
 use futures::{
     FutureExt as _, Stream, StreamExt as _,
     future::{BoxFuture, join_all},
@@ -34,7 +33,7 @@ use lb_blend::{
     proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs, PowInputs},
     scheduling::{
         EpochMessageScheduler,
-        epoch::{EpochEvent, UninitializedEpochEventStream},
+        epoch::{EpochEvent, EpochEventStream},
         message_blend::{
             crypto::{
                 EpochCryptographicProcessorSettings,
@@ -49,10 +48,12 @@ use lb_blend::{
             epoch_info::EpochInfo as SchedulerEpochInfo,
             round_info::{RoundInfo, RoundReleaseType},
         },
+        stream::UninitializedFirstReadyStream,
     },
 };
 use lb_chain_service::{Epoch, api::CryptarchiaServiceData};
 use lb_core::sdp::ActivityMetadata;
+use lb_cryptarchia_engine::{Era, EraSchedule};
 use lb_key_management_system_service::{
     api::KmsServiceApi,
     keys::{KeyOperators, PublicKeyEncoding},
@@ -66,7 +67,7 @@ use lb_services_utils::{
     overwatch::{RecoveryOperator, recovery::operators::RecoveryBackend as RecoveryBackendTrait},
     wait_until_services_are_ready,
 };
-use lb_time_service::TimeService;
+use lb_time_service::{EraTransitionEnd, TimeService, api::TimeServiceApi};
 use overwatch::{
     OpaqueServiceResourcesHandle,
     overwatch::OverwatchHandle,
@@ -99,7 +100,7 @@ use crate::{
             ReceiverCryptographicProcessor,
         },
         scheduler::SchedulerWrapper,
-        settings::{RunningBlendConfig, StartingBlendConfig},
+        settings::{CoreServiceEraSettings, CoreServiceSettings},
         state::{RecoveryServiceState, ServiceState, StateUpdater as ServiceStateUpdater},
     },
     delivery::{broadcast_undelivered_messages, next_undelivered_messages},
@@ -116,6 +117,7 @@ use crate::{
         EncapsulationResult, LocalEncapsulation, MessageKind, NextLocalMessage, PendingProposals,
         PendingTransactions, next_local_message, resolve_encapsulation,
     },
+    settings::RuntimeComponents,
 };
 
 pub mod backends;
@@ -134,6 +136,10 @@ mod state;
 #[cfg(test)]
 mod tests;
 pub use state::RecoveryServiceState as CoreServiceState;
+
+use crate::message::{
+    proposal_diagnostic_digest_from_encoded, proposal_diagnostic_timestamp_unix_ms,
+};
 
 const LOG_TARGET: &str = blend::service::CORE;
 
@@ -216,7 +222,7 @@ where
         > + Send
         + Sync,
 {
-    type Settings = StartingBlendConfig<Backend::Settings, Dispatcher::Settings>;
+    type Settings = CoreServiceSettings<Backend::Settings, Dispatcher::Settings>;
     type State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>;
     type StateOperator = RecoveryOperator<StateStorage>;
     type Message = ServiceMessage<NodeId>;
@@ -265,7 +271,7 @@ where
             State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>,
         > + Send
         + Sync,
-    RuntimeServiceId: AsServiceId<NetworkService<Dispatcher::Backend, RuntimeServiceId>>
+    RuntimeServiceId: AsServiceId<NetworkService<Dispatcher::Backend, TimeBackend, RuntimeServiceId>>
         + AsServiceId<Dispatcher::MempoolService>
         + AsServiceId<Dispatcher::ChainNetworkService>
         + AsServiceId<SdpService>
@@ -324,39 +330,25 @@ where
             ..
         } = self;
 
-        let blend_config = settings_handle.notifier().get_updated_settings();
+        let CoreServiceSettings {
+            non_ephemeral_signing_key_id,
+            zk,
+            abstain_on_failure,
+            backend: backend_settings,
+            dispatcher: dispatcher_settings,
+            era_schedule: blend_configs,
+            ..
+        } = settings_handle.notifier().get_updated_settings();
 
         wait_until_services_are_ready!(
             &overwatch_handle,
             Some(Duration::from_mins(1)),
-            NetworkService<_, _>,
+            NetworkService<_, _, _>,
             TimeService<_, _>,
             SdpService,
             PreloadKmsService<_>
         )
         .await?;
-
-        let payload_dispatcher = async {
-            let network_relay = overwatch_handle
-                .relay::<NetworkService<_, _>>()
-                .await
-                .expect("Relay with network service should be available.");
-            let mempool_relay = overwatch_handle
-                .relay::<Dispatcher::MempoolService>()
-                .await
-                .expect("Relay with mempool service should be available.");
-            let chain_network_relay = overwatch_handle
-                .relay::<Dispatcher::ChainNetworkService>()
-                .await
-                .expect("Relay with chain network service should be available.");
-            Dispatcher::new(
-                network_relay,
-                mempool_relay,
-                chain_network_relay,
-                blend_config.network.clone(),
-            )
-        }
-        .await;
 
         let kms_api = async {
             let kms_outbound_relay = overwatch_handle
@@ -369,7 +361,7 @@ where
         .await;
 
         let PublicKeyEncoding::Zk(zk_public_key) = kms_api
-            .public_key(blend_config.zk.secret_key_kms_id.clone())
+            .public_key(zk.secret_key_kms_id.clone())
             .await
             .expect("ZK public key for provided ID should be stored in KMS.")
         else {
@@ -382,7 +374,7 @@ where
             let (sender, receiver) = oneshot::channel();
             kms_api
                 .execute(
-                    blend_config.non_ephemeral_signing_key_id.clone(),
+                    non_ephemeral_signing_key_id,
                     KeyOperators::Ed25519(Box::new(LeakSecretKeyOperator::new(sender))),
                 )
                 .await
@@ -407,18 +399,9 @@ where
             .expect("Relay with SDP service should be available.");
 
         // Initialize components for the service.
-        let running_blend_config = RunningBlendConfig {
-            backend: blend_config.backend,
+        let runtime_components = RuntimeComponents {
             non_ephemeral_signing_key,
-            num_blend_layers: blend_config.num_blend_layers,
-            minimum_network_size: blend_config.minimum_network_size,
-            scheduler: blend_config.scheduler,
-            time: blend_config.time,
-            zk: blend_config.zk,
-            data_replication_factor: blend_config.data_replication_factor,
-            activity_threshold_sensitivity: blend_config.activity_threshold_sensitivity,
             pow_mining_pool: new_mining_pool(),
-            abstain_on_failure: blend_config.abstain_on_failure,
         };
         let (
             mut remaining_epoch_stream,
@@ -438,7 +421,10 @@ where
             KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
             RuntimeServiceId,
         >(
-            running_blend_config.clone(),
+            blend_configs.clone(),
+            &runtime_components,
+            zk.secret_key_kms_id,
+            backend_settings,
             public_epoch_stream,
             overwatch_handle.clone(),
             kms_api,
@@ -447,6 +433,35 @@ where
             state_updater,
             ChaCha20Rng::from_entropy(),
         )
+        .await;
+
+        let mut era_transition_ends =
+            TimeServiceApi::<TimeService<TimeBackend, RuntimeServiceId>>::new(overwatch_handle)
+                .await?
+                .subscribe_to_era_transition_ends()
+                .await?;
+
+        let mut payload_dispatcher = async {
+            let network_relay = overwatch_handle
+                .relay::<NetworkService<_, _, _>>()
+                .await
+                .expect("Relay with network service should be available.");
+            let mempool_relay = overwatch_handle
+                .relay::<Dispatcher::MempoolService>()
+                .await
+                .expect("Relay with mempool service should be available.");
+            let chain_network_relay = overwatch_handle
+                .relay::<Dispatcher::ChainNetworkService>()
+                .await
+                .expect("Relay with chain network service should be available.");
+            Dispatcher::new(
+                network_relay,
+                mempool_relay,
+                chain_network_relay,
+                dispatcher_settings,
+                blend_configs.at_epoch(current_public_info.epoch).era,
+            )
+        }
         .await;
 
         status_updater.notify_ready();
@@ -462,12 +477,10 @@ where
 
         let mut blend_messages = backend.listen_to_incoming_messages();
 
-        let mut failure_detector = if running_blend_config.abstain_on_failure {
+        let mut failure_detector = if abstain_on_failure {
             None
         } else {
             Some(FailureDetector::new(
-                running_blend_config.max_data_message_delay_in_rounds(),
-                running_blend_config.time.round_duration_in_seconds,
                 payload_dispatcher.observe_broadcasts().await,
             ))
         };
@@ -480,9 +493,11 @@ where
             &mut blend_messages,
             secret_pol_info_stream,
             &mut remaining_epoch_stream,
-            &running_blend_config,
+            &mut era_transition_ends,
+            &blend_configs,
+            &runtime_components,
             &mut backend,
-            &payload_dispatcher,
+            &mut payload_dispatcher,
             &sdp_relay,
             &mut rng,
             CurrentEpoch::new(
@@ -505,11 +520,13 @@ where
             // past epoch.
             blend_messages.map(|(message, _)| message),
             remaining_epoch_stream,
+            era_transition_ends,
             backend,
             payload_dispatcher,
             sdp_relay,
             rng,
             retiring_epoch,
+            &blend_configs,
             failure_detector.take(),
         )
         .await;
@@ -534,7 +551,10 @@ async fn initialize<
     KmsAdapter,
     RuntimeServiceId,
 >(
-    blend_config: RunningBlendConfig<Backend::Settings>,
+    blend_configs: EraSchedule<CoreServiceEraSettings>,
+    runtime_components: &RuntimeComponents,
+    zk_secret_key_kms_id: KmsAdapter::KeyId,
+    backend_settings: Backend::Settings,
     public_epoch_stream: impl Stream<Item = BlendEpoch<NodeId>> + Send + Unpin + 'static,
     overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     kms_adapter: KmsAdapter,
@@ -545,10 +565,12 @@ async fn initialize<
     >,
     release_delay_rng: ChaCha20Rng,
 ) -> (
-    impl Stream<Item = EpochEvent<CoreEpochStateInfo<NodeId, KmsAdapter::CorePoQGenerator>>>
-    + Unpin
-    + Send
-    + 'static,
+    EpochEventStream<
+        impl Stream<Item = CoreEpochStateInfo<NodeId, KmsAdapter::CorePoQGenerator>>
+        + Unpin
+        + Send
+        + 'static,
+    >,
     CoreEpochPublicInfo<NodeId>,
     CurrentEpochCryptographicProcessor<
         NodeId,
@@ -575,10 +597,11 @@ where
         + 'static,
     RuntimeServiceId: Clone + Send + Sync + 'static,
 {
-    // Initialize epoch stream for all public PoQ inputs.
+    // Initialize epoch stream for all public PoQ inputs, each epoch under the
+    // settings of its era.
     let epoch_stream = async {
-        let config = blend_config.clone();
-        let zk_sk_id = config.zk.secret_key_kms_id.clone();
+        let configs = blend_configs.clone();
+        let zk_sk_id = zk_secret_key_kms_id;
         public_epoch_stream.map(
             move |(
                 BlendEpochState {
@@ -591,6 +614,7 @@ where
                 },
                 membership_info,
             )| {
+                let config = configs.at_epoch(epoch).parameters;
                 let membership_size = membership_info.membership.size();
                 let zk_path = membership_info
                     .zk
@@ -602,17 +626,17 @@ where
                     zk_root,
                 }) = ModeMembership::resolve(membership_info, config.minimum_network_size)
                 else {
-                    return Ok(CoreEpochStateInfo::NotCore {
+                    return CoreEpochStateInfo::NotCore {
                         epoch,
                         epoch_nonce: nonce,
-                    });
+                    };
                 };
                 let Some(core_and_path_selectors) = zk_path else {
-                    return Err(MismatchedZkId);
+                    panic!("{MismatchedZkId}");
                 };
                 let core_poq_generator = kms_adapter
                     .core_poq_generator(zk_sk_id.clone(), Box::new(core_and_path_selectors));
-                Ok(CoreEpochInfo {
+                CoreEpochInfo {
                     public: CoreEpochPublicInfo {
                         poq_core_public_inputs: CoreInputs {
                             quota: config.epoch_core_quota(membership_size),
@@ -634,43 +658,30 @@ where
                     },
                     core_poq_generator,
                 }
-                .into())
+                .into()
             },
         )
     }
     .await;
-    let (current_epoch_info, remaining_epoch_stream) = Box::pin(
-        UninitializedEpochEventStream::new(epoch_stream, blend_config.time.epoch_transition_period)
-            .await_first_ready(),
-    )
-    .await
-    .map(|(epoch_info, remaining_epoch_stream)| {
-        let CoreEpochStateInfo::Core(core_epoch_info) =
-            epoch_info.unwrap_or_else(|error| panic!("{error}"))
-        else {
-            panic!("First retrieved epoch for Blend core startup must be available.");
-        };
-        (
-            core_epoch_info,
-            // Refused out here, not in the stream's own `map`: that runs
-            // while `fork_stream` holds its lock, so a panic under it
-            // poisons the lock and the unwind panics again in
-            // `Forked::drop`, aborting instead of unwinding. `Forked`
-            // has released the lock by the time this runs.
-            remaining_epoch_stream.fork().map(|event| match event {
-                EpochEvent::NewEpoch(epoch) => {
-                    EpochEvent::NewEpoch(epoch.unwrap_or_else(|error| panic!("{error}")))
-                }
-                EpochEvent::TransitionPeriodExpired => EpochEvent::TransitionPeriodExpired,
-            }),
-        )
-    })
-    .expect("The current epoch info must be available.");
+    let (current_epoch_info, remaining_epoch_stream) =
+        Box::pin(UninitializedFirstReadyStream::new(epoch_stream).first())
+            .await
+            .expect("The current epoch info must be available.");
+    let CoreEpochStateInfo::Core(current_epoch_info) = current_epoch_info else {
+        panic!("First retrieved epoch for Blend core startup must be available.");
+    };
 
     let CoreEpochInfo {
         public: current_epoch_public_info,
         core_poq_generator: current_epoch_core_poq_generator,
     } = *current_epoch_info;
+    let current_era = blend_configs.at_epoch(current_epoch_public_info.epoch);
+    let blend_config = current_era.parameters;
+
+    let remaining_epoch_stream = EpochEventStream::new(
+        remaining_epoch_stream,
+        blend_config.time.epoch_transition_period,
+    );
 
     info!(
         target: LOG_TARGET,
@@ -773,9 +784,11 @@ where
     >::new(
         current_epoch_public_info.membership.clone(),
         EpochCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: blend_config.non_ephemeral_signing_key.derive_x25519(),
+            non_ephemeral_encryption_key: runtime_components
+                .non_ephemeral_signing_key
+                .derive_x25519(),
             num_blend_layers: blend_config.num_blend_layers,
-            pow_mining_pool: Arc::clone(&blend_config.pow_mining_pool),
+            pow_mining_pool: Arc::clone(&runtime_components.pow_mining_pool),
             spent_core_quota,
         },
         current_epoch_poq_verification_inputs,
@@ -803,7 +816,8 @@ where
     );
 
     let backend = Backend::new(
-        blend_config.clone(),
+        backend_settings,
+        current_era.era,
         overwatch_handle,
         BackendEpochInfo {
             membership: current_epoch_public_info.membership.clone(),
@@ -813,6 +827,7 @@ where
             proofs_verifier: ProofsVerifier::new(current_epoch_poq_verification_inputs),
         },
         ChaCha20Rng::from_entropy(),
+        runtime_components.non_ephemeral_signing_key.clone(),
     );
 
     // Rng for releasing messages.
@@ -883,12 +898,14 @@ async fn run_event_loop<
              + 'static
          ),
     mut secret_pol_info_stream: impl Stream<Item = PolEpochInfo> + Send + Unpin,
-    remaining_epoch_stream: &mut (
-             impl Stream<Item = EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>> + Unpin + Send
-         ),
-    blend_config: &RunningBlendConfig<Backend::Settings>,
+    remaining_epoch_stream: &mut EpochEventStream<
+        impl Stream<Item = CoreEpochStateInfo<NodeId, CorePoQGenerator>> + Unpin + Send,
+    >,
+    era_transition_ends: &mut (impl Stream<Item = EraTransitionEnd> + Send + Unpin),
+    blend_configs: &EraSchedule<CoreServiceEraSettings>,
+    runtime_components: &RuntimeComponents,
     backend: &mut Backend,
-    payload_dispatcher: &Dispatcher,
+    payload_dispatcher: &mut Dispatcher,
     sdp_relay: &OutboundRelay<SdpMessage>,
     rng: &mut Rng,
     current_epoch: CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
@@ -916,7 +933,9 @@ where
                     blend_messages,
                     &mut secret_pol_info_stream,
                     remaining_epoch_stream,
-                    blend_config,
+                    era_transition_ends,
+                    blend_configs,
+                    runtime_components,
                     backend,
                     payload_dispatcher,
                     sdp_relay,
@@ -935,7 +954,9 @@ where
                     blend_messages,
                     &mut secret_pol_info_stream,
                     remaining_epoch_stream,
-                    blend_config,
+                    era_transition_ends,
+                    blend_configs,
+                    runtime_components,
                     backend,
                     payload_dispatcher,
                     sdp_relay,
@@ -1055,12 +1076,14 @@ async fn run_current_epoch<
              + 'static
          ),
     secret_pol_info_stream: &mut (impl Stream<Item = PolEpochInfo> + Send + Unpin),
-    remaining_epoch_stream: &mut (
-             impl Stream<Item = EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>> + Unpin + Send
-         ),
-    blend_config: &RunningBlendConfig<Backend::Settings>,
+    remaining_epoch_stream: &mut EpochEventStream<
+        impl Stream<Item = CoreEpochStateInfo<NodeId, CorePoQGenerator>> + Unpin + Send,
+    >,
+    era_transition_ends: &mut (impl Stream<Item = EraTransitionEnd> + Send + Unpin),
+    blend_configs: &EraSchedule<CoreServiceEraSettings>,
+    runtime_components: &RuntimeComponents,
     backend: &mut Backend,
-    payload_dispatcher: &Dispatcher,
+    payload_dispatcher: &mut Dispatcher,
     sdp_relay: &OutboundRelay<SdpMessage>,
     rng: &mut Rng,
     mut current_epoch: CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
@@ -1087,20 +1110,22 @@ where
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     RuntimeServiceId: Sync + Send,
 {
+    let epoch_era = blend_configs.at_epoch(current_epoch.epoch_info().epoch);
+    let blend_config = epoch_era.parameters;
     loop {
         tokio::select! {
             Some(msg) = inbound_relay.next() => {
                 recovery_checkpoint = handle_service_message(msg, current_epoch.proposals_mut(), pending_transactions, blend_config, backend, recovery_checkpoint).await;
             }
             Some(undelivered) = next_undelivered_messages(failure_detector.as_deref_mut()) => {
-                broadcast_undelivered_messages(undelivered.into_iter(), payload_dispatcher).await;
+                broadcast_undelivered_messages(undelivered.into_iter(), payload_dispatcher, epoch_era.era).await;
             }
             Some(incoming_message) = blend_messages.next() => {
                 let (scheduler, crypto) = current_epoch.decapsulation_borrows();
                 recovery_checkpoint = handle_incoming_blend_message(incoming_message, scheduler, None, crypto.receiver(), None, recovery_checkpoint);
             }
             event = current_epoch.next_event(pending_transactions) => {
-                recovery_checkpoint = handle_current_epoch_event(event, &mut current_epoch, pending_transactions, rng, backend, payload_dispatcher, failure_detector.as_deref_mut(), recovery_checkpoint).await;
+                recovery_checkpoint = handle_current_epoch_event(event, &mut current_epoch, pending_transactions, blend_configs, rng, backend, payload_dispatcher, failure_detector.as_deref_mut(), recovery_checkpoint).await;
             }
             Some(pol_secret_info) = secret_pol_info_stream.next() => {
                 apply_or_hold_secret_pol_info(pol_secret_info, &mut current_epoch, latest_secret_pol_info);
@@ -1114,9 +1139,15 @@ where
                         recovery_checkpoint = complete_transition_period(backend, sdp_relay, recovery_checkpoint).await;
                     }
                     EpochEvent::NewEpoch(new_epoch_info) => {
-                        return rotate::<_, _, _, Dispatcher, _, _, _, RuntimeServiceId>(new_epoch_info, current_epoch.into_components(), latest_secret_pol_info, blend_config, backend, recovery_checkpoint).await;
+                        // The transition out of this epoch lasts its era's period. For same-era epoch events, this is a no-op.
+                        remaining_epoch_stream.set_transition_period(blend_configs.at_epoch(new_epoch_info.epoch()).parameters.time.epoch_transition_period);
+                        return rotate::<_, _, _, _, _, _, _, RuntimeServiceId>(new_epoch_info, current_epoch.into_components(), latest_secret_pol_info, blend_configs, runtime_components, backend, payload_dispatcher, recovery_checkpoint).await;
                     }
                 }
+            }
+            Some(transition_end) = era_transition_ends.next() => {
+                assert!(transition_end.era() < epoch_era.era, "Blend core has not rotated before the old era's transition expired");
+                payload_dispatcher.complete_era_transition(transition_end.era()).await;
             }
         }
     }
@@ -1143,12 +1174,14 @@ async fn run_during_transition<
              + 'static
          ),
     secret_pol_info_stream: &mut (impl Stream<Item = PolEpochInfo> + Send + Unpin),
-    remaining_epoch_stream: &mut (
-             impl Stream<Item = EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>> + Unpin + Send
-         ),
-    blend_config: &RunningBlendConfig<Backend::Settings>,
+    remaining_epoch_stream: &mut EpochEventStream<
+        impl Stream<Item = CoreEpochStateInfo<NodeId, CorePoQGenerator>> + Unpin + Send,
+    >,
+    era_transition_ends: &mut (impl Stream<Item = EraTransitionEnd> + Send + Unpin),
+    blend_configs: &EraSchedule<CoreServiceEraSettings>,
+    runtime_components: &RuntimeComponents,
     backend: &mut Backend,
-    payload_dispatcher: &Dispatcher,
+    payload_dispatcher: &mut Dispatcher,
     sdp_relay: &OutboundRelay<SdpMessage>,
     rng: &mut Rng,
     mut during_transition: CurrentEpochDuringTransition<
@@ -1181,13 +1214,15 @@ where
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     RuntimeServiceId: Sync + Send,
 {
+    let epoch_era = blend_configs.at_epoch(during_transition.current().epoch_info().epoch);
+    let blend_config = epoch_era.parameters;
     loop {
         tokio::select! {
             Some(msg) = inbound_relay.next() => {
                 recovery_checkpoint = handle_service_message(msg, during_transition.current_mut().proposals_mut(), pending_transactions, blend_config, backend, recovery_checkpoint).await;
             }
             Some(undelivered) = next_undelivered_messages(failure_detector.as_deref_mut()) => {
-                broadcast_undelivered_messages(undelivered.into_iter(), payload_dispatcher).await;
+                broadcast_undelivered_messages(undelivered.into_iter(), payload_dispatcher, epoch_era.era).await;
             }
             Some(incoming_message) = blend_messages.next() => {
                 let (scheduler, previous_scheduler, crypto, previous_crypto) = during_transition.decapsulation_borrows();
@@ -1196,10 +1231,10 @@ where
             event = during_transition.next_event(pending_transactions) => {
                 match event {
                     DuringTransitionEvent::Current(event) => {
-                        recovery_checkpoint = handle_current_epoch_event(event, during_transition.current_mut(), pending_transactions, rng, backend, payload_dispatcher, failure_detector.as_deref_mut(), recovery_checkpoint).await;
+                        recovery_checkpoint = handle_current_epoch_event(event, during_transition.current_mut(), pending_transactions, blend_configs, rng, backend, payload_dispatcher, failure_detector.as_deref_mut(), recovery_checkpoint).await;
                     }
                     DuringTransitionEvent::PreviousEpochReleaseRound(round_info, previous_epoch) => {
-                        handle_release_round_for_old_epoch(round_info, rng, backend, payload_dispatcher, failure_detector.as_deref_mut(), previous_epoch).await;
+                        handle_release_round_for_old_epoch(round_info, rng, backend, payload_dispatcher, failure_detector.as_deref_mut(), previous_epoch, blend_configs).await;
                     }
                 }
             }
@@ -1223,9 +1258,17 @@ where
                         };
                     }
                     EpochEvent::NewEpoch(new_epoch_info) => {
-                        return rotate::<_, _, _, Dispatcher, _, _, _, RuntimeServiceId>(new_epoch_info, during_transition.into_components(), latest_secret_pol_info, blend_config, backend, recovery_checkpoint).await;
+                        // The transition out of this epoch lasts its era's period. For same-era epoch events, this is a no-op.
+                        remaining_epoch_stream.set_transition_period(blend_configs.at_epoch(new_epoch_info.epoch()).parameters.time.epoch_transition_period);
+                        return rotate::<_, _, _, _, _, _, _, RuntimeServiceId>(new_epoch_info, during_transition.into_components(), latest_secret_pol_info, blend_configs, runtime_components, backend, payload_dispatcher, recovery_checkpoint).await;
                     }
                 }
+            }
+            // Only the payload dispatcher follows the era: the epoch being drained
+            // still goes when its own transition period ends.
+            Some(transition_end) = era_transition_ends.next() => {
+                assert!(transition_end.era() < epoch_era.era, "Blend core has not rotated before the old era's transition expired");
+                payload_dispatcher.complete_era_transition(transition_end.era()).await;
             }
         }
     }
@@ -1242,7 +1285,7 @@ async fn handle_service_message<
     message: ServiceMessage<NodeId>,
     pending_proposals: &mut PendingProposals,
     pending_transactions: &mut PendingTransactions,
-    blend_config: &RunningBlendConfig<Backend::Settings>,
+    blend_config: &CoreServiceEraSettings,
     backend: &Backend,
     recovery_checkpoint: ServiceState<Backend::Settings, NetworkSettings>,
 ) -> ServiceState<Backend::Settings, NetworkSettings>
@@ -1298,6 +1341,7 @@ async fn handle_current_epoch_event<
         Rng,
     >,
     pending_transactions: &mut PendingTransactions,
+    blend_configs: &EraSchedule<CoreServiceEraSettings>,
     rng: &mut Rng,
     backend: &Backend,
     payload_dispatcher: &Dispatcher,
@@ -1316,6 +1360,12 @@ where
         CurrentEpochEvent::Encapsulated(encapsulation_result) => match encapsulation_result {
             EncapsulationResult::Complete(encapsulation) => {
                 let LocalEncapsulation { message, kind } = *encapsulation;
+                // What the epoch releases is owed the delivery deadline of its
+                // era, wherever the transition into the next one stands.
+                let delivery_deadline = blend_configs
+                    .at_epoch(current_epoch.epoch_info().epoch)
+                    .parameters
+                    .max_data_message_delay();
                 let (proposals, crypto_processor, scheduler) = current_epoch.scheduling_borrows();
                 match kind {
                     MessageKind::Proposal => {
@@ -1329,6 +1379,7 @@ where
                             &message,
                             payload,
                             failure_detector.as_deref_mut(),
+                            delivery_deadline,
                             crypto_processor,
                             scheduler,
                             recovery_checkpoint,
@@ -1340,6 +1391,7 @@ where
                         &message,
                         pending_transactions,
                         failure_detector.as_deref_mut(),
+                        delivery_deadline,
                         crypto_processor,
                         scheduler,
                         recovery_checkpoint,
@@ -1364,6 +1416,7 @@ where
             handle_release_round(
                 round_info,
                 current_epoch.crypto_processor_mut(),
+                blend_configs,
                 rng,
                 backend,
                 payload_dispatcher,
@@ -1411,6 +1464,10 @@ fn apply_or_hold_secret_pol_info<NodeId, CorePoQGenerator, ProofsGenerator, Proo
 
 /// Turns an epoch event into the stage that follows, which is the only thing
 /// either stage ends on.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The rotate function inherently requires many arguments due to the complexity of epoch rotation."
+)]
 async fn rotate<
     NodeId,
     Backend,
@@ -1424,8 +1481,10 @@ async fn rotate<
     new_epoch_info: CoreEpochStateInfo<NodeId, CorePoQGenerator>,
     components: Components<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
     latest_secret_pol_info: &mut Option<PolEpochInfo>,
-    blend_config: &RunningBlendConfig<Backend::Settings>,
+    blend_configs: &EraSchedule<CoreServiceEraSettings>,
+    runtime_components: &RuntimeComponents,
     backend: &mut Backend,
+    payload_dispatcher: &mut Dispatcher,
     recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
 ) -> StageOutcome<
     NodeId,
@@ -1446,10 +1505,22 @@ where
 {
     // The epoch's own components go in; whatever it also held — its queued
     // proposals — is dropped here, which is the whole reason they live on it.
-    let (crypto_processor, message_scheduler, _) = components;
+    let (crypto_processor, message_scheduler, public_info) = components;
+    // The new epoch runs under the settings of its era, which the backend and
+    // the payload dispatcher enter if the epoch opens it. The dispatcher enters
+    // it even if the node retires, since it still dispatches what the retiring
+    // epoch releases.
+    let new_epoch_era = blend_configs.at_epoch(new_epoch_info.epoch());
+    let current_epoch_era = blend_configs.at_epoch(public_info.epoch);
+    let is_new_era = new_epoch_era.era > current_epoch_era.era;
+    if is_new_era {
+        payload_dispatcher.rotate_era(new_epoch_era.era).await;
+    }
     match handle_epoch_event(
         new_epoch_info,
-        blend_config,
+        new_epoch_era.parameters,
+        is_new_era.then_some(new_epoch_era.era),
+        runtime_components,
         crypto_processor,
         message_scheduler,
         recovery_checkpoint,
@@ -1572,6 +1643,7 @@ fn handle_local_transaction<
     encapsulation: &EncapsulatedMessageWithVerifiedPublicHeader,
     pending_transactions: &mut PendingTransactions,
     failure_detector: Option<&mut FailureDetector>,
+    delivery_deadline: Duration,
     cryptographic_processor: &CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1601,6 +1673,7 @@ where
         encapsulation,
         payload,
         failure_detector,
+        delivery_deadline,
         cryptographic_processor,
         scheduler,
         current_recovery_checkpoint,
@@ -1632,11 +1705,13 @@ async fn retire<
         Item = EpochEvent<CoreEpochStateInfo<NodeId, CorePoQGenerator>>,
     > + Send
     + Unpin,
+    mut era_transition_ends: impl Stream<Item = EraTransitionEnd> + Send + Unpin,
     mut backend: Backend,
-    payload_dispatcher: Dispatcher,
+    mut payload_dispatcher: Dispatcher,
     sdp_relay: OutboundRelay<SdpMessage>,
     mut rng: Rng,
     mut retiring_epoch: RetiringEpoch<Rng, ProofsVerifier>,
+    blend_configs: &EraSchedule<CoreServiceEraSettings>,
     mut failure_detector: Option<FailureDetector>,
 ) where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
@@ -1648,6 +1723,7 @@ async fn retire<
     RuntimeServiceId: Send + Sync,
 {
     let epoch = retiring_epoch.epoch();
+    let era = blend_configs.at_epoch(epoch).era;
     loop {
         tokio::select! {
             Some(incoming_message) = blend_messages.next() => {
@@ -1655,10 +1731,10 @@ async fn retire<
                 handle_incoming_blend_message_from_old_epoch(incoming_message, message_scheduler, crypto_processor, blending_token_collector);
             }
             Some(round_info) = retiring_epoch.scheduler_mut().next() => {
-                handle_release_round_for_old_epoch(round_info, &mut rng, &backend, &payload_dispatcher, failure_detector.as_mut(), epoch).await;
+                handle_release_round_for_old_epoch(round_info, &mut rng, &backend, &payload_dispatcher, failure_detector.as_mut(), epoch, blend_configs).await;
             }
             Some(undelivered) = next_undelivered_messages(failure_detector.as_mut()) => {
-                broadcast_undelivered_messages(undelivered.into_iter(), &payload_dispatcher).await;
+                broadcast_undelivered_messages(undelivered.into_iter(), &payload_dispatcher, era).await;
             }
             // Matched in full on purpose: a `select!` pattern that only named
             // the expiry would consume and drop anything else the stream
@@ -1672,6 +1748,11 @@ async fn retire<
                         panic!("New epoch started before the retiring epoch's transition period expired");
                     }
                 }
+            }
+            // Only the payload dispatcher follows the era: the retiring epoch
+            // still goes when its own transition period ends.
+            Some(transition_end) = era_transition_ends.next() => {
+                payload_dispatcher.complete_era_transition(transition_end.era()).await;
             }
         }
     }
@@ -1690,7 +1771,7 @@ async fn retire<
     // still owed.
     if let Some(failure_detector) = failure_detector {
         failure_detector
-            .drain_pending_message_queue(&payload_dispatcher)
+            .drain_pending_message_queue(&payload_dispatcher, era)
             .await;
     }
 }
@@ -1703,7 +1784,11 @@ async fn retire<
 /// available, leadership-proof generation is enabled on the new processor right
 /// away. It ignores the transition period expiration event and returns the
 /// previous cryptographic processor as is.
-#[expect(clippy::too_many_lines, reason = "necessary for epoch handling")]
+#[expect(
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    reason = "necessary for epoch handling"
+)]
 async fn handle_epoch_event<
     NodeId,
     ProofsGenerator,
@@ -1715,7 +1800,9 @@ async fn handle_epoch_event<
     RuntimeServiceId,
 >(
     new_epoch_info: CoreEpochStateInfo<NodeId, CorePoQGenerator>,
-    settings: &RunningBlendConfig<Backend::Settings>,
+    settings: &CoreServiceEraSettings,
+    new_era: Option<Era>,
+    runtime_components: &RuntimeComponents,
     current_cryptographic_processor: CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1789,11 +1876,14 @@ where
                 pow: new_epoch_info.poq_pow_public_inputs,
             };
             backend
-                .rotate_epoch(BackendEpochInfo {
-                    membership: new_epoch_info.membership.clone(),
-                    epoch: new_epoch_info.epoch,
-                    proofs_verifier: ProofsVerifier::new(new_poq_verification_inputs),
-                })
+                .rotate_epoch(
+                    BackendEpochInfo {
+                        membership: new_epoch_info.membership.clone(),
+                        epoch: new_epoch_info.epoch,
+                        proofs_verifier: ProofsVerifier::new(new_poq_verification_inputs),
+                    },
+                    new_era,
+                )
                 .await;
 
             let new_scheduler_epoch_info = SchedulerEpochInfo {
@@ -1805,11 +1895,11 @@ where
                 CurrentEpochCryptographicProcessor::new(
                     new_epoch_info.membership.clone(),
                     EpochCryptographicProcessorSettings {
-                        non_ephemeral_encryption_key: settings
+                        non_ephemeral_encryption_key: runtime_components
                             .non_ephemeral_signing_key
                             .derive_x25519(),
                         num_blend_layers: settings.num_blend_layers,
-                        pow_mining_pool: Arc::clone(&settings.pow_mining_pool),
+                        pow_mining_pool: Arc::clone(&runtime_components.pow_mining_pool),
                         spent_core_quota: Quota::ZERO,
                     },
                     new_poq_verification_inputs,
@@ -1986,6 +2076,7 @@ fn schedule_local_encapsulated_message<
     wrapped_message: &EncapsulatedMessageWithVerifiedPublicHeader,
     payload: DataPayload,
     failure_detector: Option<&mut FailureDetector>,
+    delivery_deadline: Duration,
     cryptographic_processor: &CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -2025,7 +2116,12 @@ where
         // next round.
         tracing::debug!(target: LOG_TARGET, "Locally generated data message does not have its outermost layer addressed to us. Sending it out as a data message...");
         if let Some(failure_detector) = failure_detector {
-            failure_detector.mark_payload_as_encapsulated(wrapped_message.id(), payload, epoch);
+            failure_detector.mark_payload_as_encapsulated(
+                wrapped_message.id(),
+                payload,
+                epoch,
+                delivery_deadline,
+            );
         }
         match payload_type {
             DataPayloadType::BlockProposal => {
@@ -2077,7 +2173,12 @@ where
             // What goes out is the remaining layers, so that is the form whose
             // release starts the deadline.
             if let Some(failure_detector) = failure_detector {
-                failure_detector.mark_payload_as_encapsulated(remaining.id(), payload, epoch);
+                failure_detector.mark_payload_as_encapsulated(
+                    remaining.id(),
+                    payload,
+                    epoch,
+                    delivery_deadline,
+                );
             }
             ProcessedMessage::from(remaining)
         }
@@ -2379,6 +2480,7 @@ where
 /// using the configured network adapter. For encapsulated messages as well as
 /// the optional cover message, they are forwarded to the rest of the connected
 /// Blend peers.
+#[expect(clippy::too_many_arguments, reason = "categorize args")]
 async fn handle_release_round<
     NodeId,
     Rng,
@@ -2399,6 +2501,7 @@ async fn handle_release_round<
         ProofsGenerator,
         ProofsVerifier,
     >,
+    blend_configs: &EraSchedule<CoreServiceEraSettings>,
     rng: &mut Rng,
     backend: &Backend,
     payload_dispatcher: &Dispatcher,
@@ -2447,6 +2550,7 @@ where
         Some(&mut state_updater),
         failure_detector,
         current_epoch,
+        blend_configs,
     );
 
     let mut message_futures = data_messages_relay_futures
@@ -2501,6 +2605,7 @@ async fn handle_release_round_for_old_epoch<
     payload_dispatcher: &Dispatcher,
     mut failure_detector: Option<&mut FailureDetector>,
     epoch: Epoch,
+    blend_configs: &EraSchedule<CoreServiceEraSettings>,
 ) where
     NodeId: Eq + Hash + 'static,
     Rng: RngCore + Send,
@@ -2542,6 +2647,7 @@ async fn handle_release_round_for_old_epoch<
             None,
             failure_detector,
             epoch,
+            blend_configs,
         ))
         .collect::<Vec<_>>();
     futures.shuffle(rng);
@@ -2593,12 +2699,16 @@ fn build_futures_to_release_processed_messages<
     mut state_updater: Option<&mut ServiceStateUpdater<Backend::Settings, Dispatcher::Settings>>,
     mut failure_detector: Option<&mut FailureDetector>,
     epoch: Epoch,
+    blend_configs: &EraSchedule<CoreServiceEraSettings>,
 ) -> Vec<BoxFuture<'fut, ()>>
 where
     NodeId: Eq + Hash + 'static,
     Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Sync,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
 {
+    // A released payload goes out in the era of the connection its message
+    // arrived on, the era of the epoch it is released for.
+    let era = blend_configs.at_epoch(epoch).era;
     processed_messages_to_release
         .into_iter()
         .inspect(|processed_message_to_release| {
@@ -2623,7 +2733,16 @@ where
             |processed_message_to_release| -> BoxFuture<'fut, ()> {
                 match processed_message_to_release {
                     ProcessedMessage::Decapsulated(payload) => {
-                        payload_dispatcher.dispatch(payload).boxed()
+                        if let DataPayload::BlockProposal(encoded_proposal) = &payload {
+                            debug!(
+                                target: LOG_TARGET,
+                                event = "blend_proposal_normal_exit",
+                                timestamp_unix_ms = proposal_diagnostic_timestamp_unix_ms(),
+                                proposal_digest = %proposal_diagnostic_digest_from_encoded(encoded_proposal),
+                                "Blend scheduler released fully decapsulated block proposal for ordinary broadcast"
+                            );
+                        }
+                        payload_dispatcher.dispatch(payload, era).boxed()
                     }
                     ProcessedMessage::Encapsulated(encapsulated_message) => {
                         backend.publish(*encapsulated_message, epoch).boxed()

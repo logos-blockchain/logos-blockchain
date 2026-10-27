@@ -47,10 +47,10 @@ use crate::{
     cryptarchia::{
         EpochState, LedgerState, UtxoTree,
         block_density::BlockDensity,
-        stake::StakeInference,
-        tests::{config, generate_proof},
+        tests::{GENESIS_POW_REWARD_POOL, config, generate_proof},
     },
     mantle::sdp::SdpLedger,
+    test_utils::single_era,
 };
 
 type HeaderId = [u8; 32];
@@ -142,8 +142,11 @@ fn simulate(scenario: Scenario) -> Outcome {
     let config = simulation_config();
     let utxo = leader_utxo();
     let mut ledger = genesis_ledger(&config, utxo);
-    let mut engine =
-        Cryptarchia::from_genesis(GENESIS, config.consensus_config.clone(), State::Online);
+    let mut engine = Cryptarchia::from_genesis(
+        GENESIS,
+        Arc::new(single_era(config.clone()).map(|era| era.parameters.consensus_config.clone())),
+        State::Online,
+    );
     let mut rng = StdRng::seed_from_u64(scenario.seed);
     let mut total_blocks = 0;
     let mut blocks_on_forks = 0;
@@ -226,12 +229,7 @@ fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
             epoch: 1.into(),
             ..epoch_state.clone()
         },
-        stake_inference: Arc::new(StakeInference::new(
-            config.consensus_config.stake_inference_learning_rate(),
-            config.consensus_config.slot_activation_coeff().as_f64(),
-            config.total_stake_inference_period(),
-        )),
-        block_density: BlockDensity::new(config.epoch(0.into()), config),
+        block_density: BlockDensity::from_genesis_config(config),
         epoch_state,
         fee_window: [0.into(); WINDOW_SIZE],
         average_execution_gas: 0.into(),
@@ -242,10 +240,14 @@ fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
     };
     let state = crate::LedgerState {
         block_number: 0,
-        mantle_ledger: crate::mantle::LedgerState::new(config, cryptarchia_ledger.epoch_state()),
+        mantle_ledger: crate::mantle::LedgerState::new(
+            config,
+            GENESIS_POW_REWARD_POOL,
+            cryptarchia_ledger.epoch_state(),
+        ),
         cryptarchia_ledger,
     };
-    Ledger::new(GENESIS, state, config.clone())
+    Ledger::new(GENESIS, state, Arc::new(single_era(config.clone())))
 }
 
 fn block_id(parent: HeaderId, slot: Slot) -> HeaderId {
@@ -368,7 +370,7 @@ fn apply_block_to_ledger(
             slot,
             &SdpLedger::new(0.into()),
             &crate::cryptarchia::tests::pow_state(),
-            ledger.config(),
+            ledger.era_schedule(),
         )
         .expect("epoch state update");
     let id = block_id(parent, slot);

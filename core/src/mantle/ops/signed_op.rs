@@ -258,12 +258,18 @@ impl SignedOp<Preverified, StandardMode> {
                         Ok(declarations) => declarations,
                         Err(error) => return Err(map_verify_failure((op, error))),
                     };
+                let provider_index =
+                    match helper.get_provider_index_by_service(op.operation().service_type) {
+                        Ok(provider_index) => provider_index,
+                        Err(error) => return Err(map_verify_failure((op, error))),
+                    };
                 let context = SDPDeclareVerificationContext {
                     utxo_tree: helper.get_utxos(),
                     channels: helper.get_channels(),
                     service_notes: helper.get_service_notes(),
                     tx_hash_view,
                     declarations,
+                    provider_index,
                     min_stake: helper.get_min_stake(),
                 };
                 op.into_verified_deferred(&context, deferred_proofs)
@@ -271,13 +277,13 @@ impl SignedOp<Preverified, StandardMode> {
                     .map_err(map_verify_failure)
             }
             Self::SDPWithdraw(op) => {
-                let declarations =
-                    match helper.get_declarations_by_id(&op.operation().declaration_id) {
-                        Ok(declarations) => declarations,
-                        Err(error) => return Err(map_verify_failure((op, error))),
-                    };
+                let declaration = match helper.get_declaration_by_id(&op.operation().declaration_id)
+                {
+                    Ok(declaration) => declaration,
+                    Err(error) => return Err(map_verify_failure((op, error))),
+                };
                 let context = SDPWithdrawValidationContext {
-                    declarations,
+                    declaration,
                     epoch: helper.get_epoch(),
                     service_notes: helper.get_service_notes(),
                     tx_hash_view,
@@ -287,13 +293,13 @@ impl SignedOp<Preverified, StandardMode> {
                     .map_err(map_verify_failure)
             }
             Self::SDPActive(op) => {
-                let declarations =
-                    match helper.get_declarations_by_id(&op.operation().declaration_id) {
-                        Ok(declarations) => declarations,
-                        Err(error) => return Err(map_verify_failure((op, error))),
-                    };
+                let declaration = match helper.get_declaration_by_id(&op.operation().declaration_id)
+                {
+                    Ok(declaration) => declaration,
+                    Err(error) => return Err(map_verify_failure((op, error))),
+                };
                 let context = SDPActiveValidationContext {
-                    declarations,
+                    declaration,
                     tx_hash_view,
                     epoch: helper.get_epoch(),
                 };
@@ -332,7 +338,8 @@ impl SignedOp<Preverified, StandardMode> {
                     current_epoch_nonce: helper.get_current_epoch_nonce(),
                     previous_epoch_nonce: helper.get_previous_epoch_nonce(),
                     blocks_slot: helper.get_blocks_slot(),
-                    slot_window: helper.get_pow_slot_window(),
+                    current_epoch_slot_window: helper.get_current_epoch_pow_slot_window(),
+                    previous_epoch_slot_window: helper.get_previous_epoch_pow_slot_window(),
                 };
                 op.into_verified(&context)
                     .map(Into::into)
@@ -410,10 +417,42 @@ impl_try_from_op_and_proof! {
 
 #[cfg(test)]
 mod tests {
-    use super::{SignedOp, TransferOp, Unverified};
-    use crate::mantle::{Op, OpProof, ledger::verification_mode::StandardMode, ops::NoOpProof};
+    use lb_cryptarchia_engine::Epoch;
+    use lb_groth16::CompressedGroth16Proof;
+    use lb_key_management_system_keys::keys::ZkSignature;
+
+    use super::{DeferredProofs, SignedOp, TransferOp, Unverified};
+    use crate::{
+        mantle::{
+            Op, OpProof, TxHash, VerificationError,
+            channel::Channels,
+            ledger::verification_mode::StandardMode,
+            ops::{
+                NoOpProof, SignedOperation,
+                sdp::{SDPActiveOp, SDPWithdrawOp, SdpError},
+            },
+            transactions::{
+                hash::TxHashView, verification_helper::test_utils::TestOperationVerificationHelper,
+            },
+        },
+        sdp::{DeclarationId, Nonce},
+    };
 
     type UnverifiedOp = SignedOp<Unverified, StandardMode>;
+
+    fn verify_without_declaration(operation: UnverifiedOp) -> VerificationError {
+        let tx_hash_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let preverified = operation
+            .into_preverified(&tx_hash_view)
+            .expect("SDP preverification accepts these operations");
+        let helper = TestOperationVerificationHelper::new(Channels::new(), []);
+        let mut deferred_proofs = DeferredProofs::new();
+
+        preverified
+            .into_verified(0, &tx_hash_view, &helper, &mut deferred_proofs)
+            .unwrap_err()
+            .1
+    }
 
     #[test]
     fn try_from_mismatched_proof_returns_the_parts() {
@@ -426,5 +465,40 @@ mod tests {
 
         assert_eq!(error.operation(), &op);
         assert_eq!(error.actual_proof(), &proof);
+    }
+
+    #[test]
+    fn sdp_active_with_unknown_declaration_fails_during_signed_op_verification() {
+        let declaration_id = DeclarationId([0xA5; 32]);
+        let operation = SDPActiveOp {
+            declaration_id,
+            nonce: Nonce::new(Epoch::from(0), 1),
+            ..SDPActiveOp::sample()
+        };
+        let proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
+        let signed_operation =
+            SignedOperation::<_, Unverified, StandardMode>::new(operation, proof).into();
+
+        assert_eq!(
+            verify_without_declaration(signed_operation),
+            VerificationError::SDPVerificationError(SdpError::DeclarationNotFound(declaration_id))
+        );
+    }
+
+    #[test]
+    fn sdp_withdraw_with_unknown_declaration_fails_during_signed_op_verification() {
+        let declaration_id = DeclarationId([0xA5; 32]);
+        let operation = SDPWithdrawOp {
+            declaration_id,
+            nonce: Nonce::new(Epoch::from(0), 1),
+        };
+        let proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
+        let signed_operation =
+            SignedOperation::<_, Unverified, StandardMode>::new(operation, proof).into();
+
+        assert_eq!(
+            verify_without_declaration(signed_operation),
+            VerificationError::SDPVerificationError(SdpError::DeclarationNotFound(declaration_id))
+        );
     }
 }

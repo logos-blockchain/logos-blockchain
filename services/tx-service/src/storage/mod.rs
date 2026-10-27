@@ -3,6 +3,7 @@ use std::{collections::HashMap, hash::Hash, pin::Pin};
 use async_trait::async_trait;
 use futures::Stream;
 use lb_cryptarchia_engine::Slot;
+use lb_time::Era;
 
 pub mod adapters;
 
@@ -17,10 +18,14 @@ pub trait MempoolStorageAdapter<RuntimeServiceId>: Send + Sync {
     type Error: Send;
 
     fn new(
+        current_era: Era,
         storage_relay: overwatch::services::relay::OutboundRelay<
             <lb_storage_service::StorageService<RuntimeServiceId> as overwatch::services::ServiceData>::Message,
         >,
     ) -> Self;
+
+    async fn rotate_era(&mut self, era: Era);
+    async fn complete_era_transition(&mut self, ended_era: Era);
 
     async fn store_item(&mut self, key: Self::Key, item: Self::Item) -> Result<(), Self::Error>;
 

@@ -89,6 +89,11 @@ pub trait BinaryDecode: CodecExamples + Sized {
         context: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError>;
 
+    fn peek_decode(input: &[u8], context: &Self::Context) -> Result<Self, DecodeError> {
+        let (_, value) = Self::decode(input, context)?;
+        Ok(value)
+    }
+
     fn decode_all(input: &[u8], context: &Self::Context) -> Result<Self, DecodeError> {
         let (rest, value) = Self::decode(input, context)?;
         if !rest.is_empty() {
@@ -103,6 +108,10 @@ pub trait BinaryDecode: CodecExamples + Sized {
 pub trait BinaryDecodeExt: BinaryDecode<Context = ()> {
     fn decode(input: &[u8]) -> Result<(&[u8], Self), DecodeError> {
         <Self as BinaryDecode>::decode(input, &())
+    }
+
+    fn peek_decode(input: &[u8]) -> Result<Self, DecodeError> {
+        <Self as BinaryDecode>::peek_decode(input, &())
     }
 
     fn decode_all(input: &[u8]) -> Result<Self, DecodeError> {

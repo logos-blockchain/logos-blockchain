@@ -9,7 +9,7 @@ use lb_core::{
         transactions::{hash::TxHash, states::Preverified},
     },
 };
-use lb_ledger::{GasAndFees, LedgerState};
+use lb_ledger::{GasAndFees, LedgerState, config::EraScheduledConfig};
 
 use crate::LOG_TARGET;
 
@@ -39,7 +39,7 @@ impl BlockBuilder {
     fn try_add_transaction(
         self,
         tx: &SignedOps<Preverified, StandardMode>,
-        ledger_config: &lb_ledger::Config,
+        era_schedule: &EraScheduledConfig,
     ) -> Result<(Self, DeferredProofs), lb_ledger::LedgerError<HeaderId>> {
         let Self {
             ledger_state,
@@ -47,7 +47,7 @@ impl BlockBuilder {
         } = self;
         let (ledger_state, tx_gas_and_fees, _events, deferred_proofs) =
             ledger_state
-                .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(ledger_config, tx)?;
+                .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(era_schedule, tx)?;
         let gas_and_fees = gas_and_fees.checked_add::<HeaderId>(tx_gas_and_fees)?;
 
         Ok((
@@ -79,7 +79,7 @@ pub struct TransactionSelection {
 pub fn select_transactions(
     ledger_state: LedgerState,
     mut pending: Vec<SignedOps<Preverified, StandardMode>>,
-    ledger_config: &lb_ledger::Config,
+    era_schedule: &EraScheduledConfig,
 ) -> TransactionSelection {
     let mut block_builder = BlockBuilder::new(ledger_state);
     let mut selected_txs = Vec::new();
@@ -95,10 +95,7 @@ pub fn select_transactions(
         let mut still_pending = Vec::with_capacity(pending.len());
 
         for tx in std::mem::take(&mut pending) {
-            match block_builder
-                .clone()
-                .try_add_transaction(&tx, ledger_config)
-            {
+            match block_builder.clone().try_add_transaction(&tx, era_schedule) {
                 Ok((next_block_builder, deferred_proofs)) => match deferred_proofs.verify() {
                     Ok(()) => {
                         block_builder = next_block_builder;
@@ -179,6 +176,7 @@ mod tests {
         },
     };
     use lb_key_management_system_service::keys::ZkKey;
+    use lb_ledger::ConsensusExcludedKeys;
 
     use super::*;
     use crate::{leadership, txs_for_block};
@@ -224,6 +222,7 @@ mod tests {
         const TRANSFERS_PER_TRANSACTION: usize = 255;
 
         let config = leadership::test_config();
+        let eras = leadership::single_era(config.clone());
         let funding_key = ZkKey::zero();
         let (funding_utxos, candidates): (Vec<_>, Vec<_>) = (0..CANDIDATE_COUNT)
             .map(|transaction_index| {
@@ -235,7 +234,12 @@ mod tests {
             })
             .unzip();
 
-        let ledger_state = LedgerState::from_utxos(funding_utxos.into_iter().flatten(), &config);
+        let ledger_state = LedgerState::from_utxos(
+            funding_utxos.into_iter().flatten(),
+            &config,
+            0,
+            &ConsensusExcludedKeys::empty(),
+        );
         let gas_context = ledger_state.tx_context().gas_context;
         let individual_gas = candidates[0]
             .op_refs()
@@ -258,7 +262,7 @@ mod tests {
         let all_candidates_result = ledger_state
             .clone()
             .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
-                &config,
+                &eras,
                 candidates.iter().cloned(),
             );
         let all_candidates_error = all_candidates_result.err();
@@ -270,7 +274,7 @@ mod tests {
             "individual gas: {individual_gas:?}, error: {all_candidates_error:?}"
         );
 
-        let selection = select_transactions(ledger_state.clone(), candidates, &config);
+        let selection = select_transactions(ledger_state.clone(), candidates, &eras);
         assert_eq!(selection.selected_txs.len(), CANDIDATE_COUNT - 1);
         assert_eq!(selection.invalid_tx_hashes, []);
 
@@ -278,7 +282,7 @@ mod tests {
         assert_eq!(block_txs.len(), CANDIDATE_COUNT - 1);
         let _apply_result = ledger_state
             .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
-                &config,
+                &eras,
                 block_txs.into_iter(),
             )
             .expect("the selected prefix must pass canonical application");

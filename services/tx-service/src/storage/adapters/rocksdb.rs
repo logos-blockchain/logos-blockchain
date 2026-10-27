@@ -10,6 +10,7 @@ use lb_core::{
     },
 };
 use lb_storage_service::{StorageService, api::StorageApi};
+use lb_time::Era;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +51,7 @@ where
     type Error = MempoolError;
 
     fn new(
+        _: Era,
         storage_relay: OutboundRelay<<StorageService<RuntimeServiceId> as ServiceData>::Message>,
     ) -> Self {
         Self {
@@ -57,6 +59,10 @@ where
             key: PhantomData,
         }
     }
+
+    async fn rotate_era(&mut self, _: Era) {}
+
+    async fn complete_era_transition(&mut self, _ended_era: Era) {}
 
     async fn store_item(&mut self, key: Self::Key, item: Self::Item) -> Result<(), Self::Error> {
         self.storage

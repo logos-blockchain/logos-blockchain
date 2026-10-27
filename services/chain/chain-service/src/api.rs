@@ -214,11 +214,18 @@ where
         })
     }
 
-    pub async fn get_ledger_config(&self) -> Result<lb_ledger::Config, ApiError> {
+    /// The ledger config of the era of `slot`.
+    pub async fn get_ledger_config(&self, slot: Slot) -> Result<lb_ledger::Config, ApiError> {
         let (reply_channel, rx) = oneshot::channel();
 
         self.relay
-            .send(Query::GetLedgerConfig { reply_channel }.into())
+            .send(
+                Query::GetLedgerConfigAtSlot {
+                    slot,
+                    reply_channel,
+                }
+                .into(),
+            )
             .await
             .map_err(|error| {
                 ApiError::CommsFailure(format!("{error} while sending GetLedgerConfig"))
@@ -245,6 +252,61 @@ where
 
         rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetSdpDeclarations"))
+        })
+    }
+
+    /// One declaration from the last irreversible block's SDP registry.
+    pub async fn get_finalized_sdp_declaration(
+        &self,
+        declaration_id: DeclarationId,
+    ) -> Result<Option<Declaration>, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(
+                Query::GetFinalizedSdpDeclaration {
+                    declaration_id,
+                    reply_channel,
+                }
+                .into(),
+            )
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending GetFinalizedSdpDeclaration"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!(
+                "{relay_error} while receiving GetFinalizedSdpDeclaration"
+            ))
+        })
+    }
+
+    /// All declarations for a service from the last irreversible block's SDP
+    /// registry.
+    pub async fn get_finalized_sdp_declarations(
+        &self,
+        service_type: lb_core::sdp::ServiceType,
+    ) -> Result<Option<HashMap<DeclarationId, Declaration>>, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(
+                Query::GetFinalizedSdpDeclarations {
+                    service_type,
+                    reply_channel,
+                }
+                .into(),
+            )
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending GetFinalizedSdpDeclarations"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!(
+                "{relay_error} while receiving GetFinalizedSdpDeclarations"
+            ))
         })
     }
 
@@ -314,30 +376,6 @@ where
 
         rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetEpochState resp"))
-        })
-    }
-
-    /// Get the epoch and consensus configs
-    pub async fn get_epoch_config(
-        &self,
-    ) -> Result<
-        (
-            lb_cryptarchia_engine::EpochConfig,
-            lb_cryptarchia_engine::Config,
-        ),
-        ApiError,
-    > {
-        let (reply_channel, rx) = oneshot::channel();
-
-        self.relay
-            .send(Query::GetEpochConfig { reply_channel }.into())
-            .await
-            .map_err(|error| {
-                ApiError::CommsFailure(format!("{error} while sending GetEpochConfig"))
-            })?;
-
-        rx.await.map_err(|relay_error| {
-            ApiError::CommsFailure(format!("{relay_error} while receiving GetEpochConfig"))
         })
     }
 

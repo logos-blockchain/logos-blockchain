@@ -14,6 +14,7 @@ use lb_core::{
 };
 use lb_sdp_service::mempool::{MempoolAdapterError, SdpMempoolAdapter as SdpMempoolAdapterTrait};
 use lb_storage_service::StorageService;
+use lb_time_service::backends::NtpTimeBackend;
 use lb_tx_service::{
     MempoolMsg, TxMempoolService,
     backend::{MemPool, RecoverableMempool},
@@ -62,8 +63,13 @@ where
         + 'static
         + AsServiceId<StorageService<RuntimeServiceId>>,
 {
-    type MempoolService =
-        TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>;
+    type MempoolService = TxMempoolService<
+        MempoolNetAdapter,
+        Mempool,
+        Mempool::Storage,
+        NtpTimeBackend,
+        RuntimeServiceId,
+    >;
     type Tx = SignedOps<Preverified, StandardMode>;
 
     fn new(mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>) -> Self {

@@ -8,6 +8,8 @@ use crate::message::DataPayload;
 pub const ROUND_IN_SECONDS: NonZeroU64 = NonZeroU64::new(1).unwrap();
 pub const ROUND: Duration = Duration::from_secs(ROUND_IN_SECONDS.get());
 pub const DEADLINE: NonZeroU64 = NonZeroU64::new(6).unwrap();
+pub const DELIVERY_DEADLINE: Duration =
+    Duration::from_secs(ROUND_IN_SECONDS.get().checked_mul(DEADLINE.get()).unwrap());
 
 #[must_use]
 pub fn proposal() -> DataPayload {

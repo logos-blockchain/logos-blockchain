@@ -175,14 +175,12 @@ unsafe fn get_user_config(config_path: *const c_char) -> StatusResult<UserConfig
                 format!("Could not convert the config path to string: {e}"),
             )
         })?;
-    deserialize_value_at_path::<UserConfig>(user_config_path.as_ref(), OnUnknownKeys::Fail).map_err(
-        |e| {
-            OperationStatus::error(
-                OperationStatusCode::InitializationError,
-                format!("Could not parse config file: {e}"),
-            )
-        },
-    )
+    UserConfig::load(user_config_path.as_ref()).map_err(|e| {
+        OperationStatus::error(
+            OperationStatusCode::InitializationError,
+            format!("Could not parse config file: {e}"),
+        )
+    })
 }
 
 /// # Safety

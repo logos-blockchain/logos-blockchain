@@ -4,7 +4,7 @@ use lb_core::{
     crypto::{Hash, ZkHash},
     mantle::{
         channel::Channels,
-        ledger::{Declarations, Utxos},
+        ledger::{Declarations, ProviderIndex, Utxos},
         ops::{
             channel::{ChannelId, ChannelKeyIndex},
             leader_claim::{RewardsRoot, VoucherNullifier},
@@ -13,18 +13,21 @@ use lb_core::{
         },
         transactions::{OperationVerificationHelper, VerificationError},
     },
-    sdp::{DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
+    sdp::{Declaration, DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::UnverifiedEd25519PublicKey;
 use rpds::{HashTrieMapSync, HashTrieSetSync};
 
-use crate::mantle::LedgerState;
+use crate::{
+    config::{EraScheduledConfig, config_for_epoch, config_for_slot},
+    mantle::LedgerState,
+};
 
 pub struct MantleOperationVerificationHelper<'a> {
     ledger_state: &'a LedgerState,
     cryptarchia_ledger: &'a crate::CryptarchiaLedger,
-    config: &'a crate::Config,
+    eras: &'a EraScheduledConfig,
 }
 
 impl<'a> MantleOperationVerificationHelper<'a> {
@@ -32,12 +35,12 @@ impl<'a> MantleOperationVerificationHelper<'a> {
     pub const fn new(
         ledger_state: &'a LedgerState,
         cryptarchia_ledger: &'a crate::CryptarchiaLedger,
-        config: &'a crate::Config,
+        eras: &'a EraScheduledConfig,
     ) -> Self {
         Self {
             ledger_state,
             cryptarchia_ledger,
-            config,
+            eras,
         }
     }
 }
@@ -71,16 +74,39 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
         &self,
         id: &DeclarationId,
     ) -> Result<&Declarations, VerificationError> {
-        self.ledger_state
+        let service = self
+            .ledger_state
             .sdp_ledger()
-            .get_declarations_by_id(id)
+            .get_declaration(id)
+            .map(|declaration| declaration.service_type)
             .ok_or(VerificationError::SDPVerificationError(
                 SdpError::DeclarationNotFound(*id),
+            ))?;
+        self.get_declarations_by_service(service)
+    }
+
+    fn get_provider_index_by_service(
+        &self,
+        service: ServiceType,
+    ) -> Result<&ProviderIndex, VerificationError> {
+        self.ledger_state
+            .sdp_ledger()
+            .get_provider_index_by_service(service)
+            .ok_or(VerificationError::SDPVerificationError(
+                SdpError::ServiceNotFound(service),
             ))
     }
 
+    fn get_declaration_by_id(&self, id: &DeclarationId) -> Result<&Declaration, VerificationError> {
+        self.ledger_state.sdp_ledger().get_declaration(id).ok_or(
+            VerificationError::SDPVerificationError(SdpError::DeclarationNotFound(*id)),
+        )
+    }
+
     fn get_min_stake(&self) -> &MinStake {
-        &self.config.sdp_config.min_stake
+        &config_for_slot(self.eras, self.cryptarchia_ledger.slot)
+            .sdp_config
+            .min_stake
     }
 
     fn get_epoch(&self) -> Epoch {
@@ -160,7 +186,25 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
         self.ledger_state.pow.block_slots().clone()
     }
 
-    fn get_pow_slot_window(&self) -> NonZeroU64 {
-        self.config.pow_config.reward.slot_window
+    fn get_current_epoch_pow_slot_window(&self) -> NonZeroU64 {
+        config_for_epoch(self.eras, self.cryptarchia_ledger.epoch_state.epoch)
+            .pow_config
+            .reward
+            .slot_window
+    }
+
+    fn get_previous_epoch_pow_slot_window(&self) -> NonZeroU64 {
+        // The genesis epoch has none before it: until the first epoch
+        // boundary, the previous epoch's nonce is the genesis epoch's.
+        let previous_epoch = self
+            .cryptarchia_ledger
+            .epoch_state
+            .epoch
+            .into_inner()
+            .saturating_sub(1);
+        config_for_epoch(self.eras, Epoch::new(previous_epoch))
+            .pow_config
+            .reward
+            .slot_window
     }
 }

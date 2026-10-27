@@ -6,7 +6,7 @@ pub mod network;
 mod relays;
 mod sync;
 
-use core::{fmt::Debug, num::NonZeroUsize};
+use core::{fmt::Debug, num::NonZeroUsize, pin::pin};
 use std::{
     fmt::Display,
     hash::Hash,
@@ -14,7 +14,7 @@ use std::{
 };
 
 use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
-use futures::{StreamExt as _, future::join_all};
+use futures::StreamExt as _;
 use lb_chain_service::{
     AppliedBlock,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
@@ -31,18 +31,19 @@ use lb_core::{
         },
     },
 };
+use lb_cryptarchia_engine::EraSchedule;
 pub use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_ledger::EpochState;
 use lb_log_targets::chain;
 use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
-use lb_time_service::{TimeService, TimeServiceMessage};
+use lb_time_service::{TimeService, api::TimeServiceApi};
 use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
 };
-use lb_utils::{bounded::BoundedError, tokio::task::spawn};
+use lb_utils::{bounded::BoundedError, math::NonNegativeRatio, tokio::task::spawn};
 use network::NetworkAdapter;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -136,7 +137,7 @@ pub enum Message<Tx> {
     },
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct ChainNetworkSettings<NodeId, NetworkAdapterSettings>
 where
     NodeId: Clone + Eq + Hash,
@@ -145,6 +146,17 @@ where
     pub bootstrap: BootstrapConfig<NodeId>,
     pub sync: SyncConfig,
     pub seen_items_subscription_channel_size: NonZeroUsize,
+    /// What the chain network runs with in each era.
+    pub era_schedule: EraSchedule<ChainNetworkEraSettings>,
+}
+
+/// What the chain network runs with in an era.
+#[derive(Debug, Clone)]
+pub struct ChainNetworkEraSettings {
+    /// The era's active slot coefficient `f`: blocks are expected `1/f` slots
+    /// apart, which sets how often the tip poll runs and how far the local tip
+    /// may lag before it polls.
+    pub slot_activation_coeff: NonNegativeRatio,
 }
 
 #[expect(clippy::allow_attributes_without_reason)]
@@ -259,10 +271,16 @@ where
         + 'static
         + AsServiceId<Self>
         + AsServiceId<Cryptarchia>
-        + AsServiceId<NetworkService<NetAdapter::Backend, RuntimeServiceId>>
+        + AsServiceId<NetworkService<NetAdapter::Backend, TimeBackend, RuntimeServiceId>>
         + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<
-            TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
+            TxMempoolService<
+                MempoolNetAdapter,
+                Mempool,
+                Mempool::Storage,
+                TimeBackend,
+                RuntimeServiceId,
+            >,
         >
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
 {
@@ -284,7 +302,7 @@ where
 
     #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     async fn run(mut self) -> Result<(), DynError> {
-        let relays: ChainNetworkRelays<
+        let mut relays: ChainNetworkRelays<
             Cryptarchia,
             Mempool,
             MempoolNetAdapter,
@@ -299,6 +317,7 @@ where
             network: network_config,
             bootstrap: bootstrap_config,
             sync: sync_config,
+            era_schedule,
             ..
         } = self
             .service_resources_handle
@@ -310,8 +329,8 @@ where
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
             Some(Duration::from_mins(1)),
-            NetworkService<_, _>,
-            TxMempoolService<_, _, _, _>,
+            NetworkService<_, _, _>,
+            TxMempoolService<_, _, _, _, _>,
             TimeService<_, _>
         )
         .await?;
@@ -323,7 +342,20 @@ where
         )
         .await?;
 
-        let network_adapter = NetAdapter::new(network_config, relays.network_relay().clone()).await;
+        // The adapters start in the era of the slot the clock is in, follow
+        // the eras its slot ticks enter after it, and drop what they keep of
+        // the era before when its transition period ends.
+        let time_service_api = TimeServiceApi::<TimeService<TimeBackend, RuntimeServiceId>>::new(
+            &self.service_resources_handle.overwatch_handle,
+        )
+        .await?;
+        let (current_slot_tick, mut slot_ticks) =
+            time_service_api.subscribe_to_epoch_slots().await?;
+        let mut era_transition_ends = time_service_api.subscribe_to_era_transition_ends().await?;
+        let mut current_era = current_slot_tick.era;
+
+        let mut network_adapter =
+            NetAdapter::new(network_config, current_era, relays.network_relay().clone()).await;
 
         let initial_block_download = InitialBlockDownload::new(
             ChainNetworkIbdBlockProcessor::<_, Mempool> {
@@ -333,10 +365,29 @@ where
             network_adapter.clone(),
         );
 
-        match initial_block_download
-            .run(bootstrap_config.ibd, &sync_config.orphan)
-            .await
-        {
+        // The adapters keep following the clock while the initial block
+        // download runs, so they never fall behind its eras. The download
+        // works on its own copies of them, through chain sync only.
+        let mut initial_block_download_task =
+            pin!(initial_block_download.run(bootstrap_config.ibd, &sync_config.orphan));
+        let initial_block_download_result = loop {
+            tokio::select! {
+                result = &mut initial_block_download_task => break result,
+                Some(tick) = slot_ticks.next() => {
+                    if tick.era > current_era {
+                        current_era = tick.era;
+                        network_adapter.rotate_era(current_era).await;
+                        relays.mempool_adapter_mut().rotate_era(current_era).await;
+                    }
+                }
+                Some(transition_end) = era_transition_ends.next() => {
+                    network_adapter.complete_era_transition(transition_end.era()).await;
+                    relays.mempool_adapter_mut().complete_era_transition(transition_end.era()).await;
+                }
+            }
+        };
+
+        match initial_block_download_result {
             Ok(_) => {
                 info!(target: LOG_TARGET, "Initial Block Download completed successfully");
                 // Notify chain-service that IBD is complete so it can start the prolonged
@@ -368,53 +419,38 @@ where
         let mut incoming_proposals = network_adapter.proposals_stream().await?;
         let mut chainsync_events = network_adapter.chainsync_events_stream().await?;
 
-        // Keep a handle to the adapter for the proactive tip-poll watchdog before
-        // the downloader takes ownership of it.
-        let tip_poll_adapter = network_adapter.clone();
-
         let mut orphan_downloader = Box::pin(OrphanBlocksDownloader::new(
-            network_adapter,
+            network_adapter.clone(),
             sync_config.orphan.max_orphan_cache_size,
             sync_config.orphan.max_rejected_cache_size,
         ));
 
-        // Set up the proactive tip-poll lag watchdog: subscribe to slot ticks and
-        // derive the polling cadence / lag threshold from the active slot
-        // coefficient `f`. If it can't be derived (or polling is disabled), the
-        // watchdog stays inert and the slot-tick arm is gated off.
-        let mut slot_ticks = {
-            let (sender, receiver) = oneshot::channel();
-            relays
-                .time_relay()
-                .send(TimeServiceMessage::Subscribe { sender })
-                .await
-                .map_err(|error| {
-                    DynError::from(format!("failed to subscribe to slot ticks: {error}"))
-                })?;
-            receiver
-                .await
-                .map_err(|e| DynError::from(format!("failed to receive slot tick stream: {e}")))?
-        };
-        let tip_poll_params = if sync_config.tip_poll.enabled {
-            match TipPollParams::derive(&sync_config.tip_poll, relays.cryptarchia()).await {
-                Ok(params) => {
-                    info!(
-                        target: LOG_TARGET,
-                        cadence_slots = params.cadence_slots,
-                        lag_threshold_slots = params.lag_threshold_slots,
-                        max_peers = params.max_peers,
-                        "Tip-poll lag watchdog enabled"
-                    );
-                    Some(params)
+        // Set up the proactive tip-poll lag watchdog: in each era, derive the
+        // polling cadence / lag threshold from the era's active slot
+        // coefficient `f`, every era's now so that one they can't be derived
+        // for is reported at startup. In such an era, or when polling is
+        // disabled, the watchdog stays inert and slot ticks only drive the eras.
+        let tip_poll_params = sync_config.tip_poll.enabled.then(|| {
+            era_schedule.map(|era| {
+                match TipPollParams::derive(&sync_config.tip_poll, era.parameters.slot_activation_coeff) {
+                    Ok(params) => {
+                        info!(
+                            target: LOG_TARGET,
+                            era = era.era.into_inner(),
+                            cadence_slots = params.cadence_slots,
+                            lag_threshold_slots = params.lag_threshold_slots,
+                            max_peers = params.max_peers,
+                            "Tip-poll lag watchdog enabled"
+                        );
+                        Some(params)
+                    }
+                    Err(e) => {
+                        error!(target: LOG_TARGET, era = era.era.into_inner(), %e, "Failed to derive tip-poll params; watchdog disabled in this era");
+                        None
+                    }
                 }
-                Err(e) => {
-                    error!(target: LOG_TARGET, %e, "Failed to derive tip-poll params; watchdog disabled");
-                    None
-                }
-            }
-        } else {
-            None
-        };
+            })
+        });
 
         let (polled_tip_tx, mut polled_tip_rx) = mpsc::channel::<PolledTip>(32);
         let mut tip_poll_task: Option<JoinHandle<()>> = None;
@@ -492,21 +528,30 @@ where
                         }
                     }
 
-                    Some(tick) = slot_ticks.next(), if tip_poll_params.is_some() => {
+                    Some(tick) = slot_ticks.next() => {
+                        if tick.era > current_era {
+                            current_era = tick.era;
+                            network_adapter.rotate_era(current_era).await;
+                            orphan_downloader.as_mut().get_mut().rotate_era(current_era).await;
+                            relays.mempool_adapter_mut().rotate_era(current_era).await;
+                        }
+
+                        let Some(params) = tip_poll_params
+                            .as_ref()
+                            .and_then(|params| *params.at_slot(tick.slot).parameters)
+                        else {
+                            continue;
+                        };
                         // Don't start a new poll if the previous one is still running.
                         if tip_poll_task.as_ref().is_some_and(|handle| !handle.is_finished()) {
                             continue;
                         }
 
-                        let params = *tip_poll_params
-                            .as_ref()
-                            .expect("tip_poll_params is Some, guaranteed by the select arm condition");
-
                         // Spawn a task to not block this event loop.
                         // The task makes tip requests handled by this event loop in peers' side.
                         // All two nodes make tip requests simultaneously to each other,
                         // `poll_peer_tips_if_behind` will cause deadlock unless it's spawned off.
-                        let adapter = tip_poll_adapter.clone();
+                        let adapter = network_adapter.clone();
                         let cryptarchia = relays.cryptarchia().clone();
                         let tx = polled_tip_tx.clone();
                         tip_poll_task = Some(spawn("logos/chain/tip-poll", async move {
@@ -520,6 +565,12 @@ where
                                 error!(target: LOG_TARGET, %e, "the polled-tip receiver has been dropped");
                             }
                         }));
+                    }
+
+                    Some(transition_end) = era_transition_ends.next() => {
+                        network_adapter.complete_era_transition(transition_end.era()).await;
+                        orphan_downloader.as_mut().get_mut().complete_era_transition(transition_end.era()).await;
+                        relays.mempool_adapter_mut().complete_era_transition(transition_end.era()).await;
                     }
 
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
@@ -1066,6 +1117,7 @@ where
         tip,
         newly_canonical_txs,
         reorged_txs,
+        lib_slot,
     } = cryptarchia.apply_block(block).await?;
     debug!(
         target: LOG_TARGET, ?block_id, ?tip,
@@ -1073,29 +1125,24 @@ where
         "block applied; reconciling mempool"
     );
 
-    // Remove txs of every block that entered the canonical chain.
-    // Do this even when there is no tx to remove because this also triggers mempool
-    // TTL eviction.
-    if let Err(err) = mempool.remove_transactions(&newly_canonical_txs).await {
-        error!(target: LOG_TARGET, err, "could not remove transactions from mempool");
+    // Retire txs of every block that entered the canonical chain, and let the
+    // mempool admit the reorged txs again.
+    if !(newly_canonical_txs.is_empty() && reorged_txs.is_empty())
+        && let Err(err) = mempool
+            .notify_canonical_chain_updated(newly_canonical_txs, reorged_txs)
+            .await
+    {
+        error!(target: LOG_TARGET, err, "could not notify mempool of canonical chain update");
     }
 
-    // Every applied block advances the mempool's clock, canonical or not: a
-    // block's slot does not depend on the chain it ends up on.
-    if let Err(err) = mempool.notify_processed_block(block_id, block_slot).await {
+    // Notify the mempool to trigger evictions and release txs whose block became
+    // immutable.
+    if let Err(err) = mempool
+        .notify_processed_block(block_id, block_slot, lib_slot)
+        .await
+    {
         error!(target: LOG_TARGET, err, "could not notify mempool of processed block");
     }
-
-    // Re-insert reorged txs back into the mempool.
-    join_all(reorged_txs.into_iter().map(|tx| {
-        let mempool_adapter = mempool.clone();
-        async move {
-            if let Err(e) = mempool_adapter.add_transaction(tx).await {
-                error!(target: LOG_TARGET, "Could not reinsert a reorged tx into mempool: {e:?}");
-            }
-        }
-    }))
-    .await;
 
     Ok(())
 }
@@ -1176,7 +1223,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::HashSet,
+        collections::{HashMap, HashSet},
         sync::atomic::{AtomicUsize, Ordering},
     };
 
@@ -1190,9 +1237,13 @@ mod tests {
         },
         proofs::leader_proof::Groth16LeaderProof,
     };
+    use lb_cryptarchia_engine::Era;
     use lb_cryptarchia_sync::TipResponse;
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, Ed25519Signature};
-    use lb_network_service::{backends::mock::Mock, message::ChainSyncEvent};
+    use lb_network_service::{
+        backends::mock::Mock,
+        message::{BackendNetworkMsg, ChainSyncEvent},
+    };
     use lb_tx_service::TxsWithCommonPrefix;
     use overwatch::services::relay::OutboundRelay;
 
@@ -1219,18 +1270,23 @@ mod tests {
 
     #[async_trait::async_trait]
     impl MempoolAdapterTrait<HashOnlyTx> for FixedCandidates {
-        async fn add_transaction(&self, _tx: HashOnlyTx) -> Result<(), DynError> {
-            unimplemented!("resolution never adds")
-        }
+        async fn rotate_era(&mut self, _era: Era) {}
 
-        async fn remove_transactions(&self, _ids: &[TxHash]) -> Result<(), DynError> {
-            unimplemented!("resolution never removes")
+        async fn complete_era_transition(&mut self, _ended_era: Era) {}
+
+        async fn notify_canonical_chain_updated(
+            &self,
+            _entered: HashMap<TxHash, Slot>,
+            _reorged: Vec<HashOnlyTx>,
+        ) -> Result<(), DynError> {
+            unimplemented!("resolution never changes the canonical chain")
         }
 
         async fn notify_processed_block(
             &self,
             _block_id: HeaderId,
             _slot: Slot,
+            _lib_slot: Slot,
         ) -> Result<(), DynError> {
             unimplemented!("resolution never processes blocks")
         }
@@ -1436,12 +1492,15 @@ mod tests {
 
         async fn new(
             _settings: Self::Settings,
-            _network_relay: OutboundRelay<
-                <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-            >,
+            _current_era: Era,
+            _network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
         ) -> Self {
             unimplemented!()
         }
+
+        async fn rotate_era(&mut self, _era: Era) {}
+
+        async fn complete_era_transition(&mut self, _ended_era: Era) {}
 
         async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
             unimplemented!()

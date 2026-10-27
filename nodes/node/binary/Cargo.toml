@@ -43,6 +43,7 @@ lb-sdp-service                   = { features = ["openapi"], workspace = true }
 lb-services-utils                = { workspace = true }
 lb-storage-service               = { workspace = true }
 lb-system-sig-service            = { workspace = true }
+lb-time                          = { workspace = true }
 lb-time-service                  = { features = ["ntp"], workspace = true }
 lb-tracing                       = { workspace = true }
 lb-tracing-service               = { workspace = true }
@@ -54,7 +55,6 @@ libp2p                           = { features = ["autonat", "gossipsub", "identi
 num-bigint                       = { workspace = true }
 nutype                           = { features = ["serde"], workspace = true }
 overwatch                        = { workspace = true }
-percent-encoding                 = { workspace = true }
 rand                             = { workspace = true }
 serde                            = { workspace = true }
 serde_json                       = { workspace = true }
