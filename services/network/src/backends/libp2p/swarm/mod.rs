@@ -103,6 +103,10 @@ pub struct SwarmHandler<R: Clone + Send + RngCore + 'static> {
     current_era: Era,
     protocol_contract: ProtocolContract,
     peer_advertised_protocols: HashMap<PeerId, AdvertisedProtocols>,
+    /// Consecutive failed dials to each address of peers we are not connected
+    /// to, ours and those of other behaviours (chain sync, Kademlia, ...).
+    /// Reset once a connection to the peer is established.
+    consecutive_dial_failures: HashMap<PeerId, HashMap<Multiaddr, usize>>,
 }
 
 /// The data limit of every era's topics: the largest any era sets, for a topic
@@ -124,6 +128,9 @@ fn max_data_size_by_topic_of_eras(era_schedule: &Libp2pEraSchedule) -> HashMap<T
 const BACKOFF: u64 = 5;
 // TODO: make this configurable
 const MAX_RETRY: usize = 3;
+/// Consecutive failed dials to an address of a peer we are not connected to,
+/// after which the address is removed from Kademlia.
+const MAX_CONSECUTIVE_DIAL_FAILURES: usize = MAX_RETRY + 1;
 
 impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
     pub fn new(
@@ -177,6 +184,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             current_era,
             protocol_contract,
             peer_advertised_protocols: HashMap::new(),
+            consecutive_dial_failures: HashMap::new(),
         }
     }
 
@@ -253,6 +261,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 if endpoint.is_dialer() {
                     self.complete_connect(connection_id, peer_id);
                 }
+                self.consecutive_dial_failures.remove(&peer_id);
 
                 let swarm = self.swarm.swarm();
                 crate::metrics::consensus_report_connectivity(swarm);
@@ -303,7 +312,13 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                             target: LOG_TARGET,
                             "Failed to connect to peer: {peer_id:?} {connection_id:?} due to: {error}"
                         );
-                        self.retry_connect(connection_id, peer_id);
+                        if let DialError::Transport(errors) = &error
+                            && let Some(peer_id) = peer_id
+                        {
+                            let tried_addrs = errors.iter().map(|(addr, _)| addr.clone()).collect();
+                            self.record_failed_dial(peer_id, tried_addrs);
+                        }
+                        self.retry_connect(connection_id);
                     }
                 }
             }
@@ -338,6 +353,58 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
 
         self.swarm.kademlia_remove_address(peer_id, dial_addr);
         self.prune_peer_advertised_protocols(peer_id);
+    }
+
+    /// Counts a failed dial to each address it tried of a peer we are not
+    /// connected to, and removes an address from Kademlia after
+    /// [`MAX_CONSECUTIVE_DIAL_FAILURES`] failures in a row.
+    ///
+    /// This covers dials triggered by this network service and the dials
+    /// other behaviours (chain sync, Kademlia, ...) make.
+    ///
+    /// Failures are not counted while this node is not connected to any peer,
+    /// because then the node's own network is most likely down, and the
+    /// addresses are kept so that it has peers to reconnect to once it comes
+    /// back online.
+    fn record_failed_dial(&mut self, peer_id: PeerId, tried_addrs: Vec<Multiaddr>) {
+        // Do not count failures if the node doesn't have any connected peers.
+        if self.swarm.swarm().network_info().num_peers() == 0 {
+            return;
+        }
+
+        if self.swarm.swarm().is_connected(&peer_id) {
+            return;
+        }
+
+        for addr in tried_addrs {
+            if self.count_failed_dial(peer_id, &addr) {
+                tracing::debug!(
+                    target: LOG_TARGET,
+                    "Removing address {addr} of peer {peer_id} from Kademlia after {MAX_CONSECUTIVE_DIAL_FAILURES} consecutive failed dials"
+                );
+                self.remove_kademlia_address_for_dial(Some(peer_id), &addr);
+            }
+        }
+    }
+
+    /// Counts a failed dial to `addr` of `peer_id`. Returns whether the address
+    /// has now failed [`MAX_CONSECUTIVE_DIAL_FAILURES`] times in a row, and
+    /// then forgets its count.
+    fn count_failed_dial(&mut self, peer_id: PeerId, addr: &Multiaddr) -> bool {
+        // Append `peer_id` to `addr` if it doesn't have it, so that the same
+        // address is counted once with or without its `/p2p` part.
+        let addr = addr.clone().with_p2p(peer_id).unwrap_or_else(|addr| addr);
+        let failures = self.consecutive_dial_failures.entry(peer_id).or_default();
+        let count = failures.entry(addr.clone()).or_default();
+        *count += 1;
+        if *count < MAX_CONSECUTIVE_DIAL_FAILURES {
+            return false;
+        }
+        failures.remove(&addr);
+        if failures.is_empty() {
+            self.consecutive_dial_failures.remove(&peer_id);
+        }
+        true
     }
 
     fn handle_command(&mut self, command: Command) {
@@ -559,7 +626,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
     }
 
     // TODO: Consider a common retry module for all use cases
-    fn retry_connect(&mut self, connection_id: ConnectionId, peer_id: Option<PeerId>) -> bool {
+    fn retry_connect(&mut self, connection_id: ConnectionId) -> bool {
         let Some(mut dial) = self.pending_dials.remove(&connection_id) else {
             return false;
         };
@@ -572,7 +639,6 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 target: LOG_TARGET,
                 "Max retry({MAX_RETRY}) has been reached: {dial:?}"
             );
-            self.remove_kademlia_address_for_dial(peer_id, &dial.addr);
             return false;
         }
         dial.retry_count = new_retry_count;
@@ -598,6 +664,7 @@ mod tests {
     use std::{net::Ipv4Addr, num::NonZero, sync::Once, time::Instant};
 
     use lb_core::header::HeaderId;
+    use lb_libp2p::libp2p::TransportError;
     use lb_time::era::{EraEntriesAfterGenesis, EraSchedule, EraTiming};
     use rand::rngs::OsRng;
     use testing_framework_tools::net::get_available_udp_port;
@@ -1438,6 +1505,9 @@ mod tests {
         .with(Protocol::P2p(remote_peer));
 
         handler.bootstrap_kad_from_peers(&vec![remote_addr.clone()]);
+        // Make sure that a node has at least one connection with a peer
+        // different from `remote_peer` we are testing.
+        let _node_task = spawn_and_connect_node(&mut handler).await;
 
         let before = handler.swarm.kademlia_discovered_peers();
         assert!(
@@ -1447,32 +1517,16 @@ mod tests {
             "Expected Kademlia to contain the remote address before failure handling",
         );
 
-        let (result_sender, _result_rx) = oneshot::channel();
-        handler.connect(Dial {
-            addr: remote_addr.clone(),
-            retry_count: 0,
-            result_sender,
-        });
-
-        let connection_id = *handler
-            .pending_dials
-            .keys()
-            .next()
-            .expect("Expected a pending dial entry");
-
-        handler
-            .pending_dials
-            .get_mut(&connection_id)
-            .expect("pending dial entry should exist")
-            .retry_count = MAX_RETRY;
-
-        let event = SwarmEvent::OutgoingConnectionError {
-            peer_id: Some(remote_peer),
-            connection_id,
-            error: DialError::NoAddresses,
-        };
-
-        handler.handle_swarm_event(event);
+        for attempt in 1..=MAX_CONSECUTIVE_DIAL_FAILURES {
+            handler.handle_swarm_event(SwarmEvent::OutgoingConnectionError {
+                peer_id: Some(remote_peer),
+                connection_id: ConnectionId::new_unchecked(attempt),
+                error: DialError::Transport(vec![(
+                    remote_addr.clone(),
+                    TransportError::Other(std::io::Error::other("unreachable")),
+                )]),
+            });
+        }
 
         let after = handler.swarm.kademlia_discovered_peers();
         assert!(
@@ -1558,6 +1612,123 @@ mod tests {
         );
     }
 
+    // Only the address whose dials keep failing is removed. The peer stays in
+    // Kademlia with its other addresses.
+    #[tokio::test]
+    async fn removes_only_the_unreachable_address_of_a_peer() {
+        init_tracing();
+
+        let (tx, rx) = mpsc::channel(10);
+        let (pubsub_events_tx, _) = broadcast::channel(10);
+        let (chainsync_events_tx, _) = broadcast::channel(10);
+
+        let config =
+            create_libp2p_config(vec![], get_available_udp_port().unwrap(), HashMap::new());
+
+        let mut handler = SwarmHandler::new(
+            config,
+            Era::genesis(),
+            tx,
+            rx,
+            pubsub_events_tx,
+            chainsync_events_tx,
+            OsRng,
+        );
+
+        let remote_peer = PeerId::random();
+        let [unreachable_addr, other_addr] = [(); 2].map(|()| {
+            format!(
+                "/ip4/127.0.0.1/udp/{}/quic-v1",
+                get_available_udp_port().unwrap()
+            )
+            .parse::<Multiaddr>()
+            .unwrap()
+            .with(Protocol::P2p(remote_peer))
+        });
+
+        handler.bootstrap_kad_from_peers(&vec![unreachable_addr.clone(), other_addr.clone()]);
+        // Make sure that a node has at least one connection with a peer
+        // different from `remote_peer` we are testing.
+        let _node_task = spawn_and_connect_node(&mut handler).await;
+
+        for attempt in 1..=MAX_CONSECUTIVE_DIAL_FAILURES {
+            handler.handle_swarm_event(SwarmEvent::OutgoingConnectionError {
+                peer_id: Some(remote_peer),
+                connection_id: ConnectionId::new_unchecked(attempt),
+                error: DialError::Transport(vec![(
+                    unreachable_addr.clone(),
+                    TransportError::Other(std::io::Error::other("unreachable")),
+                )]),
+            });
+        }
+
+        let remote_addrs = handler
+            .swarm
+            .kademlia_discovered_peers()
+            .into_iter()
+            .find(|p| p.peer_id == remote_peer)
+            .expect("Expected the peer to stay in Kademlia")
+            .addrs;
+        assert!(!remote_addrs.contains(&unreachable_addr));
+        assert!(remote_addrs.contains(&other_addr));
+    }
+
+    // When this node has no connection at all, it is more likely that the node's
+    // network is offline than all of its peers, so failed dials must not empty
+    // the routing table.
+    #[tokio::test]
+    async fn keeps_failed_peers_while_not_connected_to_any_peer() {
+        init_tracing();
+
+        let (tx, rx) = mpsc::channel(10);
+        let (pubsub_events_tx, _) = broadcast::channel(10);
+        let (chainsync_events_tx, _) = broadcast::channel(10);
+
+        let config =
+            create_libp2p_config(vec![], get_available_udp_port().unwrap(), HashMap::new());
+
+        let mut handler = SwarmHandler::new(
+            config,
+            Era::genesis(),
+            tx,
+            rx,
+            pubsub_events_tx,
+            chainsync_events_tx,
+            OsRng,
+        );
+
+        let remote_peer = PeerId::random();
+        let remote_addr = format!(
+            "/ip4/127.0.0.1/udp/{}/quic-v1",
+            get_available_udp_port().unwrap()
+        )
+        .parse::<Multiaddr>()
+        .unwrap()
+        .with(Protocol::P2p(remote_peer));
+
+        handler.bootstrap_kad_from_peers(&vec![remote_addr.clone()]);
+
+        for attempt in 1..=MAX_CONSECUTIVE_DIAL_FAILURES {
+            handler.handle_swarm_event(SwarmEvent::OutgoingConnectionError {
+                peer_id: Some(remote_peer),
+                connection_id: ConnectionId::new_unchecked(attempt),
+                error: DialError::Transport(vec![(
+                    remote_addr.clone(),
+                    TransportError::Other(std::io::Error::other("unreachable")),
+                )]),
+            });
+        }
+
+        assert!(
+            handler
+                .swarm
+                .kademlia_discovered_peers()
+                .iter()
+                .any(|p| p.peer_id == remote_peer),
+            "Expected the peer to stay in Kademlia while not connected to any peer",
+        );
+    }
+
     #[tokio::test]
     async fn info_reports_discovered_peers() {
         init_tracing();
@@ -1637,5 +1808,51 @@ mod tests {
 
         assert_eq!(info.discovered_peers, []);
         assert_eq!(info.n_discovered_peers, 0);
+    }
+
+    /// Spawns a node in the background and connects `handler` to it, so that
+    /// `handler` has a connection. Returns the node's task.
+    ///
+    /// This can be used to have one decidated connection before testing
+    /// Kademlia routing table which depends on the number of connected nodes.
+    async fn spawn_and_connect_node(
+        handler: &mut SwarmHandler<OsRng>,
+    ) -> tokio::task::JoinHandle<()> {
+        let (commands_tx, commands_rx) = mpsc::channel(10);
+        let (pubsub_events_tx, _) = broadcast::channel(10);
+        let (chainsync_events_tx, _) = broadcast::channel(10);
+        let config =
+            create_libp2p_config(vec![], get_available_udp_port().unwrap(), HashMap::new());
+        let mut node = SwarmHandler::new(
+            config,
+            Era::genesis(),
+            commands_tx.clone(),
+            commands_rx,
+            pubsub_events_tx,
+            chainsync_events_tx,
+            OsRng,
+        );
+        let node_peer_id = *node.swarm.swarm().local_peer_id();
+        let node_task = tokio::spawn(async move {
+            node.run(vec![]).await;
+        });
+
+        let node_info =
+            wait_for_network_info(&commands_tx, |info| !info.listen_addresses.is_empty()).await;
+        let node_address = node_info.listen_addresses[0]
+            .clone()
+            .with(Protocol::P2p(node_peer_id));
+        handler.swarm.connect(&node_address).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !handler.swarm.swarm().is_connected(&node_peer_id) {
+                if let Some(event) = handler.swarm.next().await {
+                    handler.handle_event(event);
+                }
+            }
+        })
+        .await
+        .expect("timed out connecting to the running node");
+
+        node_task
     }
 }
