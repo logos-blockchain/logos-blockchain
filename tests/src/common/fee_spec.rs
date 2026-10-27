@@ -49,10 +49,10 @@ pub const SPEC_GENESIS_EXECUTION_PRICE: u128 = 1_000_000_000;
 pub const SPEC_EMA_PREV_WEIGHT: u128 = 9;
 /// Execution Market v1.3.0: EMA denominator.
 pub const SPEC_EMA_DENOMINATOR: u128 = 10;
-/// Execution Market v1.3.0: `7 * G_target`, with `G_target = 1_596_241`.
-pub const SPEC_BASE_FEE_NUMERATOR: u128 = 11_173_687;
+/// Execution Market v1.3.0: `7 * G_target`, with `G_target = 1_586_120`.
+pub const SPEC_BASE_FEE_NUMERATOR: u128 = 11_102_840;
 /// Execution Market v1.3.0: `8 * G_target`.
-pub const SPEC_BASE_FEE_DENOMINATOR: u128 = 12_769_928;
+pub const SPEC_BASE_FEE_DENOMINATOR: u128 = 12_688_960;
 /// Gas Cost Determination v1.8.0: a transfer costs 619 gas.
 pub const SPEC_TRANSFER_GAS: u64 = 619;
 
