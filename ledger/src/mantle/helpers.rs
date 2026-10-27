@@ -5,7 +5,7 @@ use lb_core::{
     crypto::{Hash, ZkHash},
     mantle::{
         channel::Channels,
-        ledger::Declarations,
+        ledger::{DeclarationKeys, Declarations},
         note_set::NoteSets,
         ops::{
             channel::{ChannelId, ChannelKeyIndex},
@@ -71,6 +71,18 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
         self.ledger_state
             .sdp_ledger()
             .get_declarations_by_service(service)
+            .ok_or(VerificationError::SDPVerificationError(
+                SdpError::ServiceNotFound(service),
+            ))
+    }
+
+    fn get_declaration_keys_by_service(
+        &self,
+        service: ServiceType,
+    ) -> Result<&DeclarationKeys, VerificationError> {
+        self.ledger_state
+            .sdp_ledger()
+            .get_declaration_keys_by_service(service)
             .ok_or(VerificationError::SDPVerificationError(
                 SdpError::ServiceNotFound(service),
             ))

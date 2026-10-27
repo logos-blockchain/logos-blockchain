@@ -10,7 +10,7 @@ use lb_imt::{ImtError, IndexedMerkleTree};
 use lb_mmr::MerkleMountainRange;
 use lb_poseidon2::Digest as _;
 use lb_utxotree::UtxoMerkleHasher;
-use rpds::{HashTrieMapSync, HashTrieSetSync, VectorSync};
+use rpds::{HashTrieMapSync, HashTrieSetSync, RedBlackTreeSetSync, VectorSync};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use thiserror::Error;
 
@@ -106,7 +106,7 @@ pub struct NoteSet {
     committed_root: Fr,
     // snapshot of each recent root, with the block at whose end it was superseded
     #[serde(with = "serde_recent_commitment_roots")]
-    recent_commitment_roots: HashTrieMapSync<Fr, (CommitmentMmr, BlockNumber)>,
+    recent_commitment_roots: RecentRoots,
     // commitments added by the previous Operations of the Mantle Transaction
     #[serde(skip)]
     tx_commitment_buffer: VectorSync<NoteCommitment>,
@@ -126,8 +126,11 @@ impl NoteSet {
         let commitments = CommitmentMmr::new();
         let committed_root = commitments.frontier_root();
         Self {
-            recent_commitment_roots: HashTrieMapSync::new_sync()
-                .insert(committed_root, (commitments.clone(), 0)),
+            recent_commitment_roots: {
+                let mut roots = RecentRoots::default();
+                roots.insert_mut(committed_root, commitments.clone(), 0);
+                roots
+            },
             commitments,
             nullifiers: NullifierImt::new(),
             committed_root,
@@ -211,7 +214,11 @@ impl NoteSet {
                 len: self.tx_commitment_buffer.len(),
             });
         }
-        let mut mmr = self.recent_mmr(commitment_merkle_root, block)?.clone();
+        let base = self.recent_mmr(commitment_merkle_root, block)?;
+        if buffered == 0 {
+            return Ok(unextended_root(commitment_merkle_root, base));
+        }
+        let mut mmr = base.clone();
         for note_commitment in self.tx_commitment_buffer.iter().take(buffered) {
             mmr = mmr
                 .push(*note_commitment)
@@ -251,6 +258,9 @@ impl NoteSet {
             });
         }
         let base = self.recent_mmr(commitment_merkle_root, block)?;
+        if buffered == 0 {
+            return Ok(unextended_root(commitment_merkle_root, base));
+        }
         let key = |len: usize| {
             let prefix_id = len
                 .checked_sub(1)
@@ -326,7 +336,11 @@ impl NoteSet {
         commitment_merkle_root: &Fr,
         block: BlockNumber,
     ) -> Result<&CommitmentMmr, NoteSetError> {
-        match self.recent_commitment_roots.get(commitment_merkle_root) {
+        match self
+            .recent_commitment_roots
+            .by_root
+            .get(commitment_merkle_root)
+        {
             Some((mmr, superseded_at))
                 if *commitment_merkle_root == self.committed_root
                     || is_recent(*superseded_at, block) =>
@@ -337,29 +351,25 @@ impl NoteSet {
         }
     }
 
-    // Called at the end of `block` on a set the block changed.
+    // Called at the end of `block` on a set the block changed. The nullifiers the
+    // block inserted are hashed into the tree here, once each.
     fn record_commitment_root(mut self, block: BlockNumber) -> Self {
+        self.nullifiers = self.nullifiers.flush();
         let previous = self.committed_root;
-        if let Some((mmr, _)) = self.recent_commitment_roots.get(&previous).cloned() {
+        if let Some((mmr, _)) = self.recent_commitment_roots.by_root.get(&previous).cloned() {
             // The empty seed root is current before block 0, so a root is
             // stored with the block that superseded it.
             self.recent_commitment_roots
-                .insert_mut(previous, (mmr, block));
+                .insert_mut(previous, mmr, block);
         }
         self.committed_root = self.commitment_root();
+        self.recent_commitment_roots.insert_mut(
+            self.committed_root,
+            self.commitments.clone(),
+            block,
+        );
         self.recent_commitment_roots
-            .insert_mut(self.committed_root, (self.commitments.clone(), block));
-        let expired: Vec<Fr> = self
-            .recent_commitment_roots
-            .iter()
-            .filter(|(root, (_, superseded_at))| {
-                **root != self.committed_root && !is_recent(*superseded_at, block)
-            })
-            .map(|(root, _)| *root)
-            .collect();
-        for root in &expired {
-            self.recent_commitment_roots.remove_mut(root);
-        }
+            .expire_mut(&self.committed_root, block);
         self.tx_commitment_buffer = VectorSync::new_sync();
         self.tx_commitment_prefix_ids = VectorSync::new_sync();
         self.block_nullifiers = VectorSync::new_sync();
@@ -368,9 +378,61 @@ impl NoteSet {
     }
 }
 
+// A recent root is stored with the snapshot whose frontier root it is, so an
+// extension by no buffered commitment is the referenced root itself.
+fn unextended_root(commitment_merkle_root: &Fr, snapshot: &CommitmentMmr) -> Fr {
+    debug_assert_eq!(snapshot.frontier_root(), *commitment_merkle_root);
+    *commitment_merkle_root
+}
+
 const fn is_recent(superseded_at: BlockNumber, block: BlockNumber) -> bool {
     superseded_at.saturating_add(RECENT_ROOTS_WINDOW) > block
 }
+
+// The recent roots of a set, each with its snapshot and the block at whose end
+// it was superseded, also ordered by that block so a block end removes the
+// expired roots without visiting the others.
+#[derive(Clone, Debug, Default)]
+struct RecentRoots {
+    by_root: HashTrieMapSync<Fr, (CommitmentMmr, BlockNumber)>,
+    by_superseded_at: RedBlackTreeSetSync<(BlockNumber, Fr)>,
+}
+
+impl RecentRoots {
+    fn insert_mut(&mut self, root: Fr, mmr: CommitmentMmr, superseded_at: BlockNumber) {
+        if let Some((_, previous)) = self.by_root.get(&root) {
+            self.by_superseded_at.remove_mut(&(*previous, root));
+        }
+        self.by_root.insert_mut(root, (mmr, superseded_at));
+        self.by_superseded_at.insert_mut((superseded_at, root));
+    }
+
+    // Removes the roots other than `current` that cannot be referenced after
+    // `block`. Once a root of the order by block is recent the later ones are
+    // too, so the scan stops at the first one.
+    fn expire_mut(&mut self, current: &Fr, block: BlockNumber) {
+        let expired: Vec<(BlockNumber, Fr)> = self
+            .by_superseded_at
+            .iter()
+            .take_while(|(superseded_at, _)| !is_recent(*superseded_at, block))
+            .filter(|(_, root)| root != current)
+            .copied()
+            .collect();
+        for entry in &expired {
+            self.by_root.remove_mut(&entry.1);
+            self.by_superseded_at.remove_mut(entry);
+        }
+    }
+}
+
+// The order by block is derived from the roots.
+impl PartialEq for RecentRoots {
+    fn eq(&self, other: &Self) -> bool {
+        self.by_root == other.by_root
+    }
+}
+
+impl Eq for RecentRoots {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NoteSets {
@@ -536,10 +598,9 @@ pub fn eligible_leaf(commitment_root: &Fr, nullifier_root: &Fr) -> Fr {
 
 mod serde_recent_commitment_roots {
     use lb_groth16::{Fr, serde::serde_fr};
-    use rpds::HashTrieMapSync;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    use super::{BlockNumber, CommitmentMmr};
+    use super::{BlockNumber, CommitmentMmr, RecentRoots};
 
     #[derive(Serialize, Deserialize)]
     struct Entry {
@@ -549,12 +610,10 @@ mod serde_recent_commitment_roots {
         superseded_at: BlockNumber,
     }
 
-    pub fn serialize<S: Serializer>(
-        roots: &HashTrieMapSync<Fr, (CommitmentMmr, BlockNumber)>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: Serializer>(roots: &RecentRoots, serializer: S) -> Result<S::Ok, S::Error> {
         // sorted by root so the encoding does not depend on the hash map order
         let mut entries: Vec<Entry> = roots
+            .by_root
             .iter()
             .map(|(root, (mmr, superseded_at))| Entry {
                 root: *root,
@@ -568,10 +627,11 @@ mod serde_recent_commitment_roots {
 
     pub fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
-    ) -> Result<HashTrieMapSync<Fr, (CommitmentMmr, BlockNumber)>, D::Error> {
-        let mut roots = HashTrieMapSync::new_sync();
+    ) -> Result<RecentRoots, D::Error> {
+        // the order by block is rebuilt from the entries
+        let mut roots = RecentRoots::default();
         for entry in Vec::<Entry>::deserialize(deserializer)? {
-            roots.insert_mut(entry.root, (entry.mmr, entry.superseded_at));
+            roots.insert_mut(entry.root, entry.mmr, entry.superseded_at);
         }
         Ok(roots)
     }
@@ -604,6 +664,100 @@ mod test {
             .execute_adding(&[note_commitment])
             .unwrap();
         sets.update(LEDGER_SET, set).end_block(block)
+    }
+
+    // The recent roots of `set` with the block at whose end each was superseded,
+    // after checking the order by block holds the same entries.
+    fn recent_entries(set: &NoteSet) -> HashMap<Fr, BlockNumber> {
+        let roots = &set.recent_commitment_roots;
+        let entries: HashMap<Fr, BlockNumber> = roots
+            .by_root
+            .iter()
+            .map(|(root, (_, superseded_at))| (*root, *superseded_at))
+            .collect();
+        let ordered: HashMap<Fr, BlockNumber> = roots
+            .by_superseded_at
+            .iter()
+            .map(|(superseded_at, root)| (*root, *superseded_at))
+            .collect();
+        assert_eq!(roots.by_superseded_at.size(), entries.len());
+        assert_eq!(ordered, entries);
+        entries
+    }
+
+    // The recent roots kept by scanning every one of them at the end of a block
+    // that changed the set.
+    struct ScannedRoots {
+        committed: Fr,
+        roots: HashMap<Fr, BlockNumber>,
+    }
+
+    impl ScannedRoots {
+        fn record(&mut self, committed: Fr, block: BlockNumber) {
+            if self.roots.contains_key(&self.committed) {
+                self.roots.insert(self.committed, block);
+            }
+            self.committed = committed;
+            self.roots.insert(committed, block);
+            self.roots.retain(|root, superseded_at| {
+                *root == committed || is_recent(*superseded_at, block)
+            });
+        }
+
+        fn accepts(&self, root: &Fr, block: BlockNumber) -> bool {
+            self.roots.get(root).is_some_and(|superseded_at| {
+                *root == self.committed || is_recent(*superseded_at, block)
+            })
+        }
+    }
+
+    #[test]
+    fn test_recent_roots_match_scanning_every_root() {
+        let mut sets = NoteSets::new();
+        let seed = sets.get(LEDGER_SET).unwrap().commitment_root();
+        let mut scanned = ScannedRoots {
+            committed: seed,
+            roots: HashMap::from([(seed, 0)]),
+        };
+        let mut seen = vec![seed];
+        for block in 0..3500 {
+            // blocks that leave the set unchanged, among them a gap longer than the
+            // window
+            if block % 7 == 3 || (1500..2700).contains(&block) {
+                continue;
+            }
+            let set = sets.get(LEDGER_SET).unwrap().clone();
+            let set = if block % 5 == 1 {
+                // a root current at the end of two blocks
+                set.execute_spending(&[nullifier(block + 1)]).unwrap()
+            } else if block % 11 == 4 {
+                set.execute_adding(&[commitment(0)]).unwrap()
+            } else {
+                set.execute_adding(&[commitment(block + 1)]).unwrap()
+            };
+            sets = sets.update(LEDGER_SET, set).end_block(block);
+            let set = sets.get(LEDGER_SET).unwrap();
+            scanned.record(set.commitment_root(), block);
+            if !seen.contains(&set.commitment_root()) {
+                seen.push(set.commitment_root());
+            }
+
+            assert_eq!(recent_entries(set), scanned.roots, "block {block}");
+            if block % 500 == 0 {
+                let decoded: NoteSet =
+                    bincode::deserialize(&bincode::serialize(set).unwrap()).unwrap();
+                assert_eq!(recent_entries(&decoded), scanned.roots);
+            }
+            for next in [block + 1, block + 1024, block + 1025] {
+                for root in &seen {
+                    assert_eq!(
+                        set.recent_mmr(root, next).is_ok(),
+                        scanned.accepts(root, next),
+                        "root {root} at block {next}"
+                    );
+                }
+            }
+        }
     }
 
     // Depth 40 root of the given leaves, every later position holding 0.
@@ -676,6 +830,53 @@ mod test {
             set.cached_step_commitment_root(&tx_roots, &Fr::from(7u64), 0, 1),
             Err(NoteSetError::UnknownRoot(Fr::from(7u64)))
         );
+    }
+
+    #[test]
+    fn test_nothing_buffered_gives_the_referenced_root() {
+        let seed = NoteSet::empty().commitment_root();
+        let sets = add_and_end_block(NoteSets::new(), commitment(1), 1);
+        let set = sets.get(LEDGER_SET).unwrap().clone();
+        let current = set.commitment_root();
+        let unbuffered = set.clone();
+        let set = set.buffer_outputs(&[commitment(2), commitment(3)]);
+        let tx_roots = TxRoots::default();
+        for referenced in [seed, current] {
+            let snapshot = set.recent_mmr(&referenced, 1024).unwrap().frontier_root();
+            assert_eq!(snapshot, referenced);
+            assert_eq!(
+                set.step_commitment_root(&referenced, 0, 1024),
+                Ok(referenced)
+            );
+            assert_eq!(
+                set.cached_step_commitment_root(&tx_roots, &referenced, 0, 1024),
+                Ok(referenced)
+            );
+            assert_eq!(
+                unbuffered.tx_commitment_root(&referenced, 1024),
+                Ok(referenced)
+            );
+            assert_eq!(
+                unbuffered.cached_tx_commitment_root(&tx_roots, &referenced, 1024),
+                Ok(referenced)
+            );
+        }
+        // the seed root was superseded at block 1
+        let unknown = Fr::from(7u64);
+        for (referenced, block) in [(seed, 1025), (unknown, 1)] {
+            let rejected = Err(NoteSetError::UnknownRoot(referenced));
+            assert_eq!(set.step_commitment_root(&referenced, 0, block), rejected);
+            assert_eq!(
+                set.cached_step_commitment_root(&tx_roots, &referenced, 0, block),
+                rejected
+            );
+            assert_eq!(unbuffered.tx_commitment_root(&referenced, block), rejected);
+            assert_eq!(
+                unbuffered.cached_tx_commitment_root(&tx_roots, &referenced, block),
+                rejected
+            );
+        }
+        assert_eq!(set.step_commitment_root(&current, 0, 5000), Ok(current));
     }
 
     #[test]

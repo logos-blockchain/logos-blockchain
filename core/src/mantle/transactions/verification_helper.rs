@@ -10,7 +10,7 @@ use crate::{
     mantle::{
         VerificationError,
         channel::Channels,
-        ledger::Declarations,
+        ledger::{DeclarationKeys, Declarations},
         note_set::NoteSets,
         ops::{
             channel::{ChannelId, ChannelKeyIndex},
@@ -34,6 +34,13 @@ pub trait OperationVerificationHelper {
         &self,
         service: ServiceType,
     ) -> Result<&Declarations, VerificationError>;
+
+    /// The keys of the declarations [`Self::get_declarations_by_service`]
+    /// returns.
+    fn get_declaration_keys_by_service(
+        &self,
+        service: ServiceType,
+    ) -> Result<&DeclarationKeys, VerificationError>;
 
     fn get_declarations_by_id(
         &self,
@@ -102,7 +109,7 @@ pub mod test_utils {
         mantle::{
             VerificationError,
             channel::Channels,
-            ledger::Declarations,
+            ledger::{DeclarationKeys, Declarations},
             note_set::NoteSets,
             ops::{
                 channel::{ChannelId, ChannelKeyIndex},
@@ -121,6 +128,7 @@ pub mod test_utils {
         programs: Programs,
         block_number: BlockNumber,
         declarations: Declarations,
+        declaration_keys: DeclarationKeys,
         min_stake: MinStake,
         epoch: Epoch,
         block_slot: Slot,
@@ -147,6 +155,7 @@ pub mod test_utils {
                 programs: Programs::new(),
                 block_number: 0,
                 declarations: Declarations::new_sync(),
+                declaration_keys: DeclarationKeys::default(),
                 min_stake: MinStake {
                     threshold: 0,
                     timestamp: 0,
@@ -259,6 +268,13 @@ pub mod test_utils {
             _service: ServiceType,
         ) -> Result<&Declarations, VerificationError> {
             Ok(&self.declarations)
+        }
+
+        fn get_declaration_keys_by_service(
+            &self,
+            _service: ServiceType,
+        ) -> Result<&DeclarationKeys, VerificationError> {
+            Ok(&self.declaration_keys)
         }
 
         fn get_declarations_by_id(
