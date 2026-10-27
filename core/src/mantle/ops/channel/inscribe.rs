@@ -317,10 +317,12 @@ impl OpGasCalculator<MainnetGasProfile> for InscriptionOp {
                     gas = gas
                         .checked_add(EXECUTION_PROGRAM_STEP_GAS)?
                         .checked_add(EXECUTION_PROGRAM_PROOF_GAS)?
-                        .checked_add(EXECUTION_OPENING_GAS.checked_mul(
-                            Value::try_from(step.program_outputs.count())
-                                .map_err(|_| GasOverflow)?,
-                        )?)?;
+                        .checked_add(
+                            EXECUTION_OPENING_GAS.checked_mul(
+                                Value::try_from(step.program_outputs.count())
+                                    .map_err(|_| GasOverflow)?,
+                            )?,
+                        )?;
                     for payment in step.payments.iter() {
                         gas = gas
                             .checked_add(EXECUTION_PAYMENT_GAS)?
