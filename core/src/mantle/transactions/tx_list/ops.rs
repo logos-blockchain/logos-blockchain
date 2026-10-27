@@ -26,7 +26,7 @@ use crate::{
         transactions::{
             GasPrices,
             codec::minimum_signed_transaction_size,
-            thresholds::RunningThresholds,
+            thresholds::TxGasState,
             tx_list::{
                 OpRefs,
                 common::{TxBoundedVec, TxList},
@@ -136,11 +136,11 @@ impl TxGasCalculator for OpRefs<'_> {
         // the ones in force before it, then moves them for the ones after.
         self.iter()
             .try_fold(
-                (RunningThresholds::new(context), Gas::new(0)),
-                |(mut thresholds, total), op| {
-                    let total = total.checked_add(op.execution_gas::<Profile>(&thresholds)?)?;
-                    thresholds.apply(*op);
-                    Ok((thresholds, total))
+                (TxGasState::new(context), Gas::new(0)),
+                |(mut state, total), op| {
+                    let total = total.checked_add(op.execution_gas::<Profile>(&state)?)?;
+                    state.apply(*op);
+                    Ok((state, total))
                 },
             )
             .map(|(_, total)| total)
