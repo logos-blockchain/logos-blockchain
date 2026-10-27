@@ -267,8 +267,8 @@ pub mod test_utils {
 #[cfg(test)]
 mod tests {
     use super::{
-        Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OpGasContext, OperationGas, spend_gas,
-        tx_terms_gas,
+        Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OpGasContext, OperationGas,
+        spend_gas, tx_terms_gas,
     };
     use crate::mantle::{Value, gas::test_utils::FixedThresholds, ops::channel::ChannelId};
 

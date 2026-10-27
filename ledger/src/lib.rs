@@ -3096,6 +3096,10 @@ mod tests {
     // the Transfer after it, a Deposit, an inscription creating its channel
     // with a user step of `buffered = 1` and a program step with a payment.
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "One transaction mixing every priced shape"
+    )]
     fn wallet_estimate_matches_the_ledger_charge() {
         let test_config = config();
         let mut state = LedgerState::from_notes([note()], &test_config);
@@ -3107,19 +3111,18 @@ mod tests {
         let channel_root = CommitmentMmr::new().frontier_root();
 
         let funding = TransferOp::new(
-            [NoteNullifier(Fr::from(31u64))].try_into().unwrap(),
+            [NoteNullifier(Fr::from(31u64))].into(),
             [
                 NoteCommitment(Fr::from(32u64)),
                 NoteCommitment(Fr::from(33u64)),
             ]
-            .try_into()
-            .unwrap(),
+            .into(),
             root,
             1_000_000,
         );
         let second_transfer = TransferOp::new(
-            [NoteNullifier(Fr::from(34u64))].try_into().unwrap(),
-            [NoteCommitment(Fr::from(35u64))].try_into().unwrap(),
+            [NoteNullifier(Fr::from(34u64))].into(),
+            [NoteCommitment(Fr::from(35u64))].into(),
             root,
             0,
         );
@@ -3131,7 +3134,10 @@ mod tests {
             excess_value: 0,
             metadata: Metadata::empty(),
         };
-        let mut steps = one_step(11, 12, channel_root, 1).iter().cloned().collect::<Vec<_>>();
+        let mut steps = one_step(11, 12, channel_root, 1)
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
         steps.extend(
             program_steps(derive_program_id(&key), 21, 22, channel_root, 0)
                 .iter()
@@ -3165,10 +3171,8 @@ mod tests {
             &signing_key,
         );
 
-        let gas_context = OpsGasContext::from_channels(
-            state.mantle_ledger().channels(),
-            state.get_gas_prices(),
-        );
+        let gas_context =
+            OpsGasContext::from_channels(state.mantle_ledger().channels(), state.get_gas_prices());
         let estimated = tx
             .op_refs()
             .execution_gas_consumption::<MainnetGasProfile>(&gas_context)
