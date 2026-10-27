@@ -381,6 +381,26 @@ impl LedgerState {
         }
     }
 
+    /// Sets both gas prices, for benchmarks measuring transactions that fund
+    /// no fee.
+    #[cfg(feature = "test-utils")]
+    #[must_use]
+    pub fn with_gas_prices(mut self, prices: &GasPrices) -> Self {
+        self.cryptarchia_ledger = self
+            .cryptarchia_ledger
+            .with_gas_prices(prices.execution_base_gas_price, prices.storage_gas_price);
+        self
+    }
+
+    /// Replaces the latest note sets, for benchmarks filling them without
+    /// transactions.
+    #[cfg(feature = "test-utils")]
+    #[must_use]
+    pub fn with_latest_note_sets(mut self, note_sets: NoteSets) -> Self {
+        self.cryptarchia_ledger = self.cryptarchia_ledger.update_note_sets(note_sets);
+        self
+    }
+
     /// total estimated stake and on the average of fees consumed per block over
     /// the last `POOLED_FEES_WINDOW` blocks. See the block rewards
     /// specification: <https://lip.logos.co/blockchain/raw/block-rewards.html>

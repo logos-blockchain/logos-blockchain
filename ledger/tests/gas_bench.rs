@@ -8,6 +8,12 @@
 
 #[path = "../benches/gas/cycles.rs"]
 mod cycles;
+#[expect(
+    dead_code,
+    reason = "the cases of the bench use the rest of the fixture"
+)]
+#[path = "../benches/gas/fixture.rs"]
+mod fixture;
 
 use std::hint::black_box;
 
@@ -56,4 +62,49 @@ fn rejects_unpinned_process() {
         Counter::with_allowed_cpus("0-31"),
         Err(CounterError::NotPinned(_))
     ));
+}
+
+mod filled_ledger {
+    use lb_core::mantle::note_set::LEDGER_SET;
+
+    use crate::fixture::{fill, filled_state, nullifiers};
+
+    #[test]
+    fn note_sets_are_filled() {
+        let fixture = filled_state();
+        for index in [LEDGER_SET, fixture.channel_set] {
+            let set = fixture.state.latest_note_sets().get(index).unwrap();
+            assert_eq!(set.nullifiers().len(), fill() + 1, "set {index}");
+            assert!(set.commitments().len() >= fill(), "set {index}");
+        }
+    }
+
+    #[test]
+    fn fresh_nullifiers_are_spendable_against_the_current_root() {
+        let fixture = filled_state();
+        let set = fixture.state.latest_note_sets().get(LEDGER_SET).unwrap();
+        assert!(
+            set.assert_spendable(&nullifiers(4, 0), &set.commitment_root(), 1)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn the_channel_and_the_program_exist() {
+        let fixture = filled_state();
+        let mantle = fixture.state.mantle_ledger();
+        assert!(mantle.channels().channel_state(&fixture.channel).is_some());
+        assert!(mantle.programs().get(&fixture.program).is_some());
+    }
+}
+
+#[test]
+fn the_fill_defaults_to_a_million_notes() {
+    assert_eq!(fixture::DEFAULT_FILL, 1_000_000);
+    assert_eq!(fixture::fill_from(None), 1_000_000);
+}
+
+#[test]
+fn the_fill_follows_the_environment() {
+    assert_eq!(fixture::fill_from(Some("1000")), 1000);
 }
