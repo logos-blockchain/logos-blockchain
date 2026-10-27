@@ -680,24 +680,31 @@ pub fn signed_by(op: Op, key: &Ed25519Key) -> Vec<u8> {
 // The declarations of the service a declaration is checked to differ from.
 const DECLARATIONS: [usize; 4] = [0, 16, 256, 1024];
 
-// The fixture, then after each block declaring the providers between two
-// counts of `DECLARATIONS`: one state for each count, built once.
+// The declarations a setup block holds, within the Execution Gas limit of a
+// block.
+const DECLARATIONS_PER_BLOCK: usize = 256;
+
+// The fixture, then after the blocks declaring the providers between two
+// counts of `DECLARATIONS`, each built on the state the one before left: one
+// state for each count, built once.
 static DECLARED: LazyLock<Vec<LedgerState>> = LazyLock::new(|| {
     let fixture = filled_state();
     let mut states = vec![fixture.state.clone()];
     for counts in DECLARATIONS.windows(2) {
-        let state = states.last().expect("the fixture").clone();
-        let root = root_of(&state, LEDGER_SET);
-        let txs: Vec<Vec<u8>> = (counts[0]..counts[1])
-            .map(|index| {
-                signed_by(
-                    Op::SDPDeclare(setup_declaration(index, root)),
-                    &setup_provider_key(index),
-                )
-            })
-            .collect();
-        let (state, ..) =
-            crate::block::execute(state, &fixture.config, &txs).expect("the declarations apply");
+        let mut state = states.last().expect("the fixture").clone();
+        for start in (counts[0]..counts[1]).step_by(DECLARATIONS_PER_BLOCK) {
+            let root = root_of(&state, LEDGER_SET);
+            let txs: Vec<Vec<u8>> = (start..counts[1].min(start + DECLARATIONS_PER_BLOCK))
+                .map(|index| {
+                    signed_by(
+                        Op::SDPDeclare(setup_declaration(index, root)),
+                        &setup_provider_key(index),
+                    )
+                })
+                .collect();
+            (state, ..) = crate::block::execute(state, &fixture.config, &txs)
+                .expect("the declarations apply");
+        }
         states.push(state);
     }
     states
