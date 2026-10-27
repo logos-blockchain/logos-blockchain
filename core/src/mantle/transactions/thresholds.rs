@@ -93,17 +93,22 @@ impl<C: ChannelSource> TxGasState<C> {
                 self.configuration_thresholds
                     .insert(operation.channel, operation.configuration_threshold);
             }
+            // A deposit spends from the ledger set and adds its outputs to its
+            // channel set, which it leaves unchanged when it has none.
             OpRef::ChannelDeposit(operation) => {
                 let set = NoteSetKey::Channel(operation.channel_id);
                 self.buffer(set, operation.outputs.as_slice().len());
-                self.change(set);
+                if !operation.outputs.is_empty() {
+                    self.change(set);
+                }
             }
             OpRef::ChannelWithdraw(operation) => {
                 self.change(NoteSetKey::Channel(operation.channel_id));
             }
-            // An inscription creates the channel when it does not exist yet. Its
-            // steps buffer the outputs of each payment of a program step, then
-            // the outputs of the step, in order.
+            // An inscription creates the channel when it does not exist yet, and
+            // changes its set when a step or a payment spends from it or adds to
+            // it. Its steps buffer the outputs of each payment of a program step,
+            // then the outputs of the step, in order.
             OpRef::ChannelInscribe(operation) => {
                 let set = NoteSetKey::Channel(operation.channel_id);
                 if !self.channel_exists(&operation.channel_id) {
@@ -111,7 +116,7 @@ impl<C: ChannelSource> TxGasState<C> {
                         .insert(operation.channel_id, 1);
                     self.change(set);
                 }
-                if !operation.steps.is_empty() {
+                if operation.steps.iter().any(moves_notes) {
                     self.change(set);
                 }
                 for step in operation.steps.iter() {
@@ -125,6 +130,22 @@ impl<C: ChannelSource> TxGasState<C> {
             }
             OpRef::SDPDeclare(_) | OpRef::SDPWithdraw(_) => self.change(NoteSetKey::Sdp),
             OpRef::SDPActive(_) | OpRef::ProgramRegister(_) => {}
+        }
+    }
+}
+
+// Whether the step, or one of the payments of a program step, spends from or
+// adds to the channel set.
+fn moves_notes(step: &Step) -> bool {
+    match step {
+        Step::User(step) => !step.inputs.is_empty() || !step.outputs.is_empty(),
+        Step::Program(step) => {
+            !step.inputs.is_empty()
+                || !step.outputs.is_empty()
+                || step
+                    .payments
+                    .iter()
+                    .any(|payment| !payment.inputs.is_empty() || !payment.outputs.is_empty())
         }
     }
 }
@@ -147,12 +168,18 @@ impl<C: ChannelSource> OpGasContext for TxGasState<C> {
 
 #[cfg(test)]
 mod tests {
+    use lb_groth16::Fr;
+
     use super::*;
     use crate::mantle::{
         Op,
+        notes::{InputNullifiers, NoteNullifier, OutputCommitments},
         ops::{
             channel::{
-                config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
+                config::ChannelConfigOp,
+                deposit::DepositOp,
+                inscribe::{ChannelStep, InscriptionOp},
+                program_step::{Payment, Payments, ProgramOutputs, ProgramStep},
                 withdraw::ChannelWithdrawOp,
             },
             pow::ClaimPowRewardOp,
@@ -260,6 +287,89 @@ mod tests {
         let context = empty();
         let mut state = TxGasState::new(&context);
         state.apply(Op::ChannelInscribe(InscriptionOp::sample()).by_ref());
+        assert_eq!(state.changed_note_sets(), 1);
+    }
+
+    #[test]
+    fn deposit_without_outputs_changes_no_set() {
+        let deposit = DepositOp {
+            outputs: OutputCommitments::default(),
+            ..DepositOp::sample()
+        };
+        let set = NoteSetKey::Channel(deposit.channel_id);
+        let context = existing(deposit.channel_id, 1);
+        let mut state = TxGasState::new(&context);
+        state.apply(Op::ChannelDeposit(deposit).by_ref());
+        assert_eq!(state.buffered(&set), 0);
+        assert_eq!(state.changed_note_sets(), 0);
+    }
+
+    // A program step that spends, creates and pays nothing, proven against a
+    // recent root.
+    fn empty_program_step() -> ProgramStep {
+        ProgramStep {
+            payments: Payments::default(),
+            inputs: InputNullifiers::default(),
+            outputs: OutputCommitments::default(),
+            program_outputs: ProgramOutputs::from(0),
+            ..ProgramStep::sample()
+        }
+    }
+
+    fn inscription_with(steps: Vec<Step>) -> InscriptionOp {
+        InscriptionOp {
+            steps: steps.try_into().expect("the steps fit"),
+            ..InscriptionOp::sample()
+        }
+    }
+
+    #[test]
+    fn inscription_with_an_empty_step_on_an_existing_channel_changes_no_set() {
+        let inscription = inscription_with(vec![Step::Program(empty_program_step())]);
+        let context = existing(inscription.channel_id, 1);
+        let mut state = TxGasState::new(&context);
+        state.apply(Op::ChannelInscribe(inscription).by_ref());
+        assert_eq!(state.changed_note_sets(), 0);
+    }
+
+    #[test]
+    fn inscription_with_an_empty_step_creating_a_channel_changes_its_set() {
+        let context = empty();
+        let mut state = TxGasState::new(&context);
+        let inscription = inscription_with(vec![Step::Program(empty_program_step())]);
+        state.apply(Op::ChannelInscribe(inscription).by_ref());
+        assert_eq!(state.changed_note_sets(), 1);
+    }
+
+    #[test]
+    fn inscription_with_a_step_spending_only_changes_its_set() {
+        let step = ChannelStep {
+            inputs: [NoteNullifier(Fr::from(0x23u64))].into(),
+            outputs: OutputCommitments::default(),
+            commitment_merkle_root: Fr::from(0x25u64),
+            buffered: 0,
+        };
+        let inscription = inscription_with(vec![Step::User(step)]);
+        let context = existing(inscription.channel_id, 1);
+        let mut state = TxGasState::new(&context);
+        state.apply(Op::ChannelInscribe(inscription).by_ref());
+        assert_eq!(state.changed_note_sets(), 1);
+    }
+
+    #[test]
+    fn inscription_with_a_payment_spending_only_changes_its_set() {
+        let payment = Payment {
+            outputs: OutputCommitments::default(),
+            ..Payment::sample()
+        };
+        let step = ProgramStep {
+            payments: [payment].into(),
+            ..empty_program_step()
+        };
+        let inscription = inscription_with(vec![Step::Program(step)]);
+        let context = existing(inscription.channel_id, 1);
+        let mut state = TxGasState::new(&context);
+        state.apply(Op::ChannelInscribe(inscription).by_ref());
         assert_eq!(state.changed_note_sets(), 1);
     }
 
