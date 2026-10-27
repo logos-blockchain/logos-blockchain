@@ -30,9 +30,7 @@ use crate::{
             InscriptionDeferredProofs, ProgramProofInput,
         },
         channel::{ChannelState, Channels, Error},
-        gas::{
-            Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
-        },
+        gas::{Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OpGasContext, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
@@ -297,7 +295,7 @@ impl OpGasCalculator<MainnetGasProfile> for InscriptionOp {
     // EXECUTION_CHANNEL_INSCRIBE_GAS, plus EXECUTION_TRANSFER_GAS for each user
     // step and each payment, plus EXECUTION_PROGRAM_SPEND_GAS and
     // EXECUTION_PROGRAM_PROOF_GAS for each program step.
-    fn execution_gas(&self, _thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
+    fn execution_gas(&self, _context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
         self.steps.iter().try_fold(Self::GAS_COST, |gas, step| {
             let transfer = <TransferOp as OperationGas<MainnetGasProfile>>::GAS_COST;
             let step_gas = match step {

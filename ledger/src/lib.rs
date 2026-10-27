@@ -42,6 +42,7 @@ use lb_core::{
             GasPrices,
             hash::{TxHash, TxHashView},
             states::Verified,
+            thresholds::TxGasState,
             tx_list::ops::{OpsContext, OpsGasContext},
         },
     },
@@ -924,6 +925,9 @@ impl LedgerState {
 
         let mut balance: Balance = 0;
         let mut execution_gas = Gas::new(0);
+        // The Operations are priced against the channels as the transaction
+        // found them, moved by the Operations before.
+        let mut gas_state = TxGasState::new(self.mantle_ledger.channels().clone());
         let mut tx_events = Vec::new();
         let mut deferred_proofs = DeferredProofs::new();
 
@@ -946,11 +950,10 @@ impl LedgerState {
 
             // Price the operation against the state it was just verified
             // against, before executing it.
-            execution_gas = execution_gas.checked_add(
-                signed_op
-                    .operation()
-                    .execution_gas::<Profile>(self.mantle_ledger.channels())?,
-            )?;
+            let operation = signed_op.operation();
+            execution_gas =
+                execution_gas.checked_add(operation.execution_gas::<Profile>(&gas_state)?)?;
+            gas_state.apply(operation);
 
             (self, balance, tx_events) = self.try_apply_op::<_, Profile>(
                 signed_op,

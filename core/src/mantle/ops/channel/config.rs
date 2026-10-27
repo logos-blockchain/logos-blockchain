@@ -13,9 +13,7 @@ use crate::{
     mantle::{
         Value,
         channel::{Channels, Error, SlotTimeframe, SlotTimeout},
-        gas::{
-            Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
-        },
+        gas::{Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OpGasContext, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
@@ -92,7 +90,7 @@ impl OperationGas<MainnetGasProfile> for ChannelConfigOp {
 }
 
 impl OpGasCalculator<MainnetGasProfile> for ChannelConfigOp {
-    fn execution_gas(&self, thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
+    fn execution_gas(&self, thresholds: &impl OpGasContext) -> Result<Gas, GasOverflow> {
         Self::GAS_COST.checked_mul(Value::from(
             thresholds.configuration_threshold(&self.channel),
         ))

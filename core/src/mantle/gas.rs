@@ -162,10 +162,24 @@ pub trait ThresholdSource {
     fn configuration_threshold(&self, channel: &ChannelId) -> ChannelKeyIndex;
 }
 
+// A note set a transaction can buffer commitments in or change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NoteSetKey {
+    Ledger,
+    Sdp,
+    Channel(ChannelId),
+}
+
+// The state an Operation is priced against: the thresholds in force and the
+// commitments the transaction has buffered in each note set before it.
+pub trait OpGasContext: ThresholdSource {
+    fn buffered(&self, set: &NoteSetKey) -> usize;
+}
+
 // The Execution Gas of an Operation, derived from the Operation and the state
 // it is validated against EXCLUSIVELY.
 pub trait OpGasCalculator<Profile: GasProfile>: OperationGas<Profile> {
-    fn execution_gas(&self, _thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
+    fn execution_gas(&self, _context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
         Ok(Self::GAS_COST)
     }
 }
@@ -214,7 +228,7 @@ pub fn spend_gas(inputs: usize, outputs: usize, buffered: usize) -> Result<Gas, 
 #[cfg(test)]
 pub mod test_utils {
     use crate::mantle::{
-        gas::ThresholdSource,
+        gas::{NoteSetKey, OpGasContext, ThresholdSource},
         ops::channel::{ChannelId, ChannelKeyIndex},
     };
 
@@ -225,13 +239,18 @@ pub mod test_utils {
             self.0
         }
     }
+
+    impl OpGasContext for FixedThresholds {
+        fn buffered(&self, _set: &NoteSetKey) -> usize {
+            0
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
-        spend_gas,
+        Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OpGasContext, OperationGas, spend_gas,
     };
     use crate::mantle::{Value, gas::test_utils::FixedThresholds, ops::channel::ChannelId};
 
@@ -242,7 +261,7 @@ mod tests {
     }
 
     impl OpGasCalculator<MainnetGasProfile> for ScalingOp {
-        fn execution_gas(&self, thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
+        fn execution_gas(&self, thresholds: &impl OpGasContext) -> Result<Gas, GasOverflow> {
             Self::GAS_COST.checked_mul(Value::from(
                 thresholds.configuration_threshold(&ChannelId::from([0; 32])),
             ))
@@ -264,7 +283,7 @@ mod tests {
     }
 
     impl OpGasCalculator<MainnetGasProfile> for MaxCostOp {
-        fn execution_gas(&self, thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
+        fn execution_gas(&self, thresholds: &impl OpGasContext) -> Result<Gas, GasOverflow> {
             Self::GAS_COST.checked_mul(Value::from(
                 thresholds.configuration_threshold(&ChannelId::from([0; 32])),
             ))

@@ -485,6 +485,7 @@ mod tests {
         transactions::{
             GasPrices, OpProofs, Ops,
             states::{Preverified, Unverified},
+            thresholds::TxGasState,
             tx_list::{
                 ops::OpsGasContext,
                 signed_ops::{
@@ -636,17 +637,18 @@ mod tests {
         let deposit_op = Op::ChannelDeposit(create_deposit_op(deposit_channel));
         let withdraw_op = Op::ChannelWithdraw(create_withdraw_op(withdraw_channel));
 
+        let state = TxGasState::new(&channels);
         let config_gas = config_op
             .by_ref()
-            .execution_gas::<MainnetGasProfile>(&channels)
+            .execution_gas::<MainnetGasProfile>(&state)
             .unwrap();
         let deposit_gas = deposit_op
             .by_ref()
-            .execution_gas::<MainnetGasProfile>(&channels)
+            .execution_gas::<MainnetGasProfile>(&state)
             .unwrap();
         let withdraw_gas = withdraw_op
             .by_ref()
-            .execution_gas::<MainnetGasProfile>(&channels)
+            .execution_gas::<MainnetGasProfile>(&state)
             .unwrap();
 
         assert_eq!(config_gas.into_inner(), 3 * 56);
@@ -663,7 +665,7 @@ mod tests {
 
         let gas = config_op
             .by_ref()
-            .execution_gas::<MainnetGasProfile>(&Channels::new())
+            .execution_gas::<MainnetGasProfile>(&TxGasState::new(Channels::new()))
             .unwrap();
 
         assert_eq!(gas.into_inner(), 0);
