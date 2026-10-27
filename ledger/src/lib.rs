@@ -1349,6 +1349,65 @@ mod tests {
     }
 
     #[test]
+    fn a_nullifier_spent_by_an_earlier_transaction_of_the_block_is_rejected() {
+        let test_config = config();
+        let mut state = LedgerState::from_notes([note()], &test_config);
+        update_ledger_prices(&mut state, 1, 1);
+        let root = ledger_root(&state);
+        let gas_context = OpsGasContext::from_channels(&Channels::new(), state.get_gas_prices());
+        let fees = transfer_tx(vec![spend(1, 10, root, 0)])
+            .op_refs()
+            .total_gas_cost::<MainnetGasProfile>(&gas_context)
+            .unwrap()
+            .into_inner();
+        let first = transfer_tx(vec![spend(1, 10, root, fees)]);
+        let second = transfer_tx(vec![spend(1, 11, root, fees)]);
+        let other = transfer_tx(vec![spend(2, 12, root, fees)]);
+
+        assert_eq!(
+            state
+                .clone()
+                .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
+                    &test_config,
+                    ZkPublicKey::zero(),
+                    [first.clone(), other.clone(), second.clone()].into_iter(),
+                )
+                .err(),
+            Some(LedgerError::VerificationError(
+                VerificationError::TransferVerificationError(TransferError::NoteSet(
+                    NoteSetError::AlreadySpent(NoteNullifier(Fr::ONE))
+                ))
+            ))
+        );
+
+        // In the next block the nullifier is still spent, the other one too.
+        let (state, _, _, _) = state
+            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
+                &test_config,
+                ZkPublicKey::zero(),
+                [first, other].into_iter(),
+            )
+            .unwrap();
+        let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
+        assert!(ledger_set.contains_nullifier(&NoteNullifier(Fr::ONE)));
+        assert!(ledger_set.contains_nullifier(&NoteNullifier(Fr::from(2u64))));
+        assert_eq!(
+            state
+                .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
+                    &test_config,
+                    ZkPublicKey::zero(),
+                    std::iter::once(second),
+                )
+                .err(),
+            Some(LedgerError::VerificationError(
+                VerificationError::TransferVerificationError(TransferError::NoteSet(
+                    NoteSetError::AlreadySpent(NoteNullifier(Fr::ONE))
+                ))
+            ))
+        );
+    }
+
+    #[test]
     fn transaction_balance_sums_the_excess_values() {
         let test_config = config();
         let state = LedgerState::from_notes([note()], &test_config);

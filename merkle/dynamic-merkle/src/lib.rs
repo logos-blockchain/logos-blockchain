@@ -319,6 +319,37 @@ impl<Hash: Copy> Node<Hash> {
         })
     }
 
+    // Writes the leaf hashes of `items`, sorted by index and within the subtree
+    // starting at `subtree_start`, rebuilding each node above them once.
+    fn set_batch<H>(self: &Arc<Self>, items: &[(usize, Hash)], subtree_start: usize) -> Arc<Self>
+    where
+        H: MerkleHasher<Hash = Hash>,
+    {
+        if items.is_empty() {
+            return Arc::clone(self);
+        }
+        let (left, right) = match self.as_ref() {
+            Self::Inner { left, right, .. } => (Arc::clone(left), Arc::clone(right)),
+            Self::Empty { height } if *height > 0 => {
+                let half = Arc::new(Self::Empty { height: height - 1 });
+                (Arc::clone(&half), half)
+            }
+            Self::Leaf { .. } | Self::Empty { .. } => {
+                assert!(
+                    items.len() == 1 && items[0].0 == subtree_start,
+                    "indices must be strictly increasing"
+                );
+                return Arc::new(Self::new(items[0].1));
+            }
+        };
+        let midpoint = subtree_start + left.capacity();
+        let split = items.partition_point(|(index, _)| *index < midpoint);
+        Arc::new(Self::new_inner::<H>(
+            left.set_batch::<H>(&items[..split], subtree_start),
+            right.set_batch::<H>(&items[split..], midpoint),
+        ))
+    }
+
     /// Computes the Merkle path for the item at the given index.
     /// The path is ordered from leaf to root (excluded).
     /// Returns `None` if the index does not exist or has been removed.
@@ -495,6 +526,39 @@ impl<H: MerkleHasher, const HEIGHT: usize> DynamicMerkleTree<H, HEIGHT> {
         assert!(index < self.root.capacity(), "Index out of bounds");
 
         let root = self.root.update_at::<H>(index, value);
+        Self {
+            root,
+            _hasher: PhantomData,
+        }
+    }
+
+    /// Writes each leaf hash of `items` at its index, replacing the leaf there
+    /// or filling the free position, and returns the updated tree.
+    ///
+    /// The result is the tree that writing the leaves one by one with
+    /// [`update`](Self::update) and [`insert`](Self::insert) would give when
+    /// each insertion lands on the index written, but each node above the
+    /// written leaves is hashed once instead of once per leaf below it. The
+    /// original tree is left unchanged.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the indices are not strictly increasing or an index is out of
+    /// bounds.
+    #[must_use]
+    pub fn set_batch(&self, items: &[(usize, H::Hash)]) -> Self {
+        assert!(
+            items.windows(2).all(|pair| pair[0].0 < pair[1].0),
+            "indices must be strictly increasing"
+        );
+        assert!(
+            items
+                .last()
+                .is_none_or(|(index, _)| *index < self.root.capacity()),
+            "Index out of bounds"
+        );
+
+        let root = self.root.set_batch::<H>(items, 0);
         Self {
             root,
             _hasher: PhantomData,
@@ -1172,6 +1236,104 @@ mod tests {
             };
         }
         assert_eq!(node, tree.root());
+    }
+
+    #[test]
+    fn test_set_batch_matches_leaf_by_leaf_writes() {
+        use std::collections::BTreeMap;
+
+        use rand::Rng as _;
+
+        let mut rng = rand::thread_rng();
+        for _ in 0..200 {
+            let mut eager = DynamicMerkleTree::<TestHasher, 8>::new();
+            let mut leaves = BTreeMap::new();
+            for _ in 0..rng.gen_range(0..40) {
+                let value = fr_from_rng(&mut rng);
+                let (tree, index) = eager.insert(value);
+                eager = tree;
+                leaves.insert(index, value);
+            }
+            // a batch of updates of occupied positions and appends after the last one
+            let mut writes = BTreeMap::new();
+            let mut len = leaves.len();
+            for _ in 0..rng.gen_range(0..40) {
+                if len > 0 && rng.gen_bool(0.5) {
+                    writes.insert(rng.gen_range(0..len), fr_from_rng(&mut rng));
+                } else if len < 1 << 8 {
+                    writes.insert(len, fr_from_rng(&mut rng));
+                    len += 1;
+                }
+            }
+            let items: Vec<(usize, Fr)> = writes.into_iter().collect();
+            let batched = eager.set_batch(&items);
+            for (index, value) in &items {
+                if leaves.contains_key(index) {
+                    eager = eager.update(*index, *value);
+                } else {
+                    let (tree, inserted) = eager.insert(*value);
+                    assert_eq!(inserted, *index);
+                    eager = tree;
+                }
+                leaves.insert(*index, *value);
+            }
+
+            assert_eq!(batched.root, eager.root);
+            assert_eq!(batched.root(), eager.root());
+            assert_canonical(&batched.root);
+            for (index, value) in &leaves {
+                let path = batched.path(*index).unwrap();
+                verify_path_8(*value, &path, eager.root());
+            }
+        }
+    }
+
+    #[test]
+    fn test_set_batch_fills_free_positions_anywhere() {
+        let tree = DynamicMerkleTree::<TestHasher>::from_sorted_items([
+            (3, fr_from_usize(3)),
+            (1usize << 20, fr_from_usize(20)),
+        ]);
+        let items = [
+            (0, fr_from_usize(100)),
+            (3, fr_from_usize(103)),
+            (9, fr_from_usize(109)),
+            ((1usize << 32) - 1, fr_from_usize(132)),
+        ];
+        let batched = tree.set_batch(&items);
+        let expected = DynamicMerkleTree::<TestHasher>::from_sorted_items([
+            (0, fr_from_usize(100)),
+            (3, fr_from_usize(103)),
+            (9, fr_from_usize(109)),
+            (1usize << 20, fr_from_usize(20)),
+            ((1usize << 32) - 1, fr_from_usize(132)),
+        ]);
+        assert_eq!(batched.root, expected.root);
+        assert_eq!(batched.size(), 5);
+        assert_eq!(tree.set_batch(&[]).root, tree.root);
+        assert_canonical(&batched.root);
+    }
+
+    #[test]
+    #[should_panic(expected = "strictly increasing")]
+    fn test_set_batch_rejects_unsorted_indices() {
+        let tree = DynamicMerkleTree::<TestHasher>::new();
+        let _tree = tree.set_batch(&[(1, fr_from_usize(1)), (1, fr_from_usize(2))]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Index out of bounds")]
+    fn test_set_batch_rejects_out_of_bounds() {
+        let tree = DynamicMerkleTree::<TestHasher, 8>::new();
+        let _tree = tree.set_batch(&[(1 << 8, fr_from_usize(1))]);
+    }
+
+    fn verify_path_8(item: Fr, path: &MerklePath<Fr, 8>, expected_root: Fr) {
+        let root = path.iter().fold(item, |node, sibling| match sibling {
+            MerkleNode::Left(left) => TestHasher::compress(left, &node),
+            MerkleNode::Right(right) => TestHasher::compress(&node, right),
+        });
+        assert_eq!(root, expected_root);
     }
 
     /// Verifies a Merkle path by recomputing the root hash from the leaf value

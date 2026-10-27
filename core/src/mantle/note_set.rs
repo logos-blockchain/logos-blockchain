@@ -337,8 +337,10 @@ impl NoteSet {
         }
     }
 
-    // Called at the end of `block` on a set the block changed.
+    // Called at the end of `block` on a set the block changed. The nullifiers the
+    // block inserted are hashed into the tree here, once each.
     fn record_commitment_root(mut self, block: BlockNumber) -> Self {
+        self.nullifiers = self.nullifiers.flush();
         let previous = self.committed_root;
         if let Some((mmr, _)) = self.recent_commitment_roots.get(&previous).cloned() {
             // The empty seed root is current before block 0, so a root is
