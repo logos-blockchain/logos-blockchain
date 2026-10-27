@@ -3,7 +3,7 @@
 //! Run with
 //!
 //! ```text
-//! taskset -c 8 cargo test -p logos-blockchain-ledger --release --test gas_bench -- --test-threads=1
+//! GAS_BENCH_FILL=1000 taskset -c 8 cargo test -p logos-blockchain-ledger --release --features test-utils --test gas_bench -- --test-threads=1
 //! ```
 
 #[expect(dead_code, reason = "the cases of the bench build the case type")]
