@@ -186,7 +186,7 @@ pub fn op_shapes() -> Vec<OpShape> {
     shapes.extend(configs());
     shapes.extend(deposits());
     shapes.extend(withdrawals());
-    shapes.push(sdp_declare());
+    shapes.extend(sdp_declares());
     shapes.push(sdp_withdraw());
     shapes.push(sdp_active());
     shapes.push(claim_pow());
@@ -244,7 +244,8 @@ pub fn encode_inscription(op: InscriptionOp, step_proofs: &[StepProof]) -> Vec<u
     })
 }
 
-fn root_of(state: &LedgerState, set: NoteSetIndex) -> Fr {
+/// The current commitment root of the note set `set` of `state`.
+pub fn root_of(state: &LedgerState, set: NoteSetIndex) -> Fr {
     state
         .latest_note_sets()
         .get(set)
@@ -263,13 +264,15 @@ pub fn channel_root() -> Fr {
     root_of(&fixture.state, fixture.channel_set)
 }
 
-fn fresh_nullifiers(count: usize, salt: u64) -> InputNullifiers {
+/// The inputs of the `count` nullifiers [`nullifiers`] gives for `salt`.
+pub fn fresh_nullifiers(count: usize, salt: u64) -> InputNullifiers {
     nullifiers(count, salt)
         .try_into()
         .expect("the inputs fit a list")
 }
 
-fn fresh_commitments(count: usize, salt: u64) -> OutputCommitments {
+/// The outputs of the `count` commitments [`commitments`] gives for `salt`.
+pub fn fresh_commitments(count: usize, salt: u64) -> OutputCommitments {
     commitments(count, salt)
         .try_into()
         .expect("the outputs fit a list")
@@ -292,15 +295,16 @@ pub fn transfer_tx(inputs: usize, outputs: usize, salt: u64) -> Vec<u8> {
     )
 }
 
-// The two series of a ZkTransfer shape: the inputs vary at one output, then
-// the outputs at one input.
-fn zk_transfer_series() -> impl Iterator<Item = (usize, usize)> {
+/// The two series of a `ZkTransfer` shape: the inputs vary at one output, then
+/// the outputs at one input.
+pub fn zk_transfer_series() -> impl Iterator<Item = (usize, usize)> {
     (1..=4)
         .map(|inputs| (inputs, 1))
         .chain((2..=8).map(|outputs| (1, outputs)))
 }
 
-fn io_dims(inputs: usize, outputs: usize) -> Vec<(&'static str, u64)> {
+/// The dimensions of a `ZkTransfer` shape.
+pub fn io_dims(inputs: usize, outputs: usize) -> Vec<(&'static str, u64)> {
     vec![("inputs", inputs as u64), ("outputs", outputs as u64)]
 }
 
@@ -612,41 +616,115 @@ pub fn provider_key() -> Ed25519Key {
 /// A Blend declaration staking one fresh note of the ledger set of root
 /// `commitment_merkle_root`, owned by `zk_id`.
 pub fn declaration(zk_id: ZkPublicKey, commitment_merkle_root: Fr) -> SDPDeclareOp {
+    declaration_of(&provider_key(), zk_id, commitment_merkle_root, 400)
+}
+
+/// A Blend declaration of the provider of `key`, staking the fresh note of
+/// salt `salt` of the ledger set of root `commitment_merkle_root`, owned by
+/// `zk_id`.
+pub fn declaration_of(
+    key: &Ed25519Key,
+    zk_id: ZkPublicKey,
+    commitment_merkle_root: Fr,
+    salt: u64,
+) -> SDPDeclareOp {
     SDPDeclareOp {
         service_type: ServiceType::BlendNetwork,
         locators: "/ip4/1.1.1.1/udp/3000"
             .parse::<Locator>()
             .expect("the locator is valid")
             .into(),
-        provider_id: ProviderId(provider_key().public_key()),
+        provider_id: ProviderId(key.public_key()),
         zk_id,
-        inputs: fresh_nullifiers(1, 400),
+        inputs: fresh_nullifiers(1, salt),
         commitment_merkle_root,
         amount: 1,
     }
 }
 
+/// The key of the provider `index` a setup declares, none of them that of
+/// [`provider_key`].
+pub fn setup_provider_key(index: usize) -> Ed25519Key {
+    let mut bytes = [0x71; 32];
+    bytes[..2].copy_from_slice(&u16::try_from(index).expect("the index fits").to_le_bytes());
+    Ed25519Key::from_bytes(&bytes)
+}
+
+/// The declaration of the provider `index` a setup declares, staking a note of
+/// the ledger set of root `commitment_merkle_root`: its key, its zk id and its
+/// note are its own.
+pub fn setup_declaration(index: usize, commitment_merkle_root: Fr) -> SDPDeclareOp {
+    declaration_of(
+        &setup_provider_key(index),
+        ZkPublicKey::new(Fr::from(0x1_0000 + index as u64)),
+        commitment_merkle_root,
+        0x2_0000 + index as u64,
+    )
+}
+
 /// The encoding of `op`, with its `ZkTransfer` and signed by the provider.
 pub fn provider_signed(op: Op) -> Vec<u8> {
+    signed_by(op, &provider_key())
+}
+
+/// The encoding of `op`, with its `ZkTransfer` and signed by `key`.
+pub fn signed_by(op: Op, key: &Ed25519Key) -> Vec<u8> {
     encode(vec![op], |index, _, hash| {
         OpProof::ZkAndEd25519Sigs(ZkAndEd25519Proof::new(
             zk_transfer(index),
-            provider_key().sign_payload(hash),
+            key.sign_payload(hash),
         ))
     })
 }
 
-fn sdp_declare() -> OpShape {
-    let op = Op::SDPDeclare(declaration(
-        ZkPublicKey::new(Fr::from(0x62u64)),
-        ledger_root(),
-    ));
-    OpShape::on_fixture(
-        "op/sdp_declare",
-        Vec::new(),
-        provider_signed(op),
-        Deferred::transfers(1),
-    )
+// The declarations of the service a declaration is checked to differ from.
+const DECLARATIONS: [usize; 4] = [0, 16, 256, 1024];
+
+// The fixture, then after each block declaring the providers between two
+// counts of `DECLARATIONS`: one state for each count, built once.
+static DECLARED: LazyLock<Vec<LedgerState>> = LazyLock::new(|| {
+    let fixture = filled_state();
+    let mut states = vec![fixture.state.clone()];
+    for counts in DECLARATIONS.windows(2) {
+        let state = states.last().expect("the fixture").clone();
+        let root = root_of(&state, LEDGER_SET);
+        let txs: Vec<Vec<u8>> = (counts[0]..counts[1])
+            .map(|index| {
+                signed_by(
+                    Op::SDPDeclare(setup_declaration(index, root)),
+                    &setup_provider_key(index),
+                )
+            })
+            .collect();
+        let (state, ..) =
+            crate::block::execute(state, &fixture.config, &txs).expect("the declarations apply");
+        states.push(state);
+    }
+    states
+});
+
+// A declaration among those of `DECLARATIONS` other providers of the service,
+// every one of which it is checked to differ from.
+fn sdp_declares() -> Vec<OpShape> {
+    let fixture = filled_state();
+    DECLARATIONS
+        .iter()
+        .zip(DECLARED.iter())
+        .map(|(declarations, state)| {
+            let op = Op::SDPDeclare(declaration(
+                ZkPublicKey::new(Fr::from(0x62u64)),
+                root_of(state, LEDGER_SET),
+            ));
+            OpShape {
+                name: "op/sdp_declare",
+                dims: vec![("declarations", *declarations as u64)],
+                state: state.clone(),
+                config: fixture.config.clone(),
+                bytes: provider_signed(op),
+                deferred: Deferred::transfers(1),
+            }
+        })
+        .collect()
 }
 
 // The withdrawal of a declaration the setup makes.
@@ -731,9 +809,10 @@ fn program_register() -> OpShape {
     )
 }
 
-// A leadership proof every check accepts, for the headers the setup of the
-// activity case applies: the leadership is not what it measures.
-struct AcceptedLeadership(ZkPublicKey);
+/// A leadership proof every check accepts, for the headers the setups apply and
+/// the measured headers: the verification of a proof of leadership is measured
+/// by `micro/pol_verify`.
+pub struct AcceptedLeadership(pub ZkPublicKey);
 
 impl LeaderProof for AcceptedLeadership {
     fn verify(&self, _public_inputs: &LeaderPublic) -> bool {
@@ -753,9 +832,9 @@ impl LeaderProof for AcceptedLeadership {
     }
 }
 
-// `state` after a header at the first slot of `epoch` and, when `txs` holds
-// any, a block of them.
-fn next_epoch(state: LedgerState, config: &Config, epoch: u64, txs: &[Vec<u8>]) -> LedgerState {
+/// `state` after a header at the first slot of `epoch` and, when `txs` holds
+/// any, a block of them.
+pub fn next_epoch(state: LedgerState, config: &Config, epoch: u64, txs: &[Vec<u8>]) -> LedgerState {
     let leader = AcceptedLeadership(ZkPublicKey::new(Fr::from(3u64)));
     let (state, _) = state
         .try_apply_header::<_, HeaderId>(

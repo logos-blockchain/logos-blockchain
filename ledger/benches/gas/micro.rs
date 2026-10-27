@@ -5,13 +5,14 @@ use std::{array, sync::LazyLock};
 
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode as _};
 use lb_core::{
+    block::BlockNumber,
     crypto::{Digest as _, Hasher, ZkDigest as _, ZkHasher},
     mantle::{
         Op, OpProof, SignedOps,
         batch::{DeferredProofs, DeferredZkProgramSpend},
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
-        note_set::{LEDGER_SET, NoteSet, TxRoots, eligible_leaf},
+        note_set::{LEDGER_SET, NoteSet, NoteSets, RECENT_ROOTS_WINDOW, TxRoots, eligible_leaf},
         notes::{InputNullifiers, OutputCommitments},
         ops::{
             ChannelInscribeProof, StepProof,
@@ -50,6 +51,52 @@ const DIFFERENCE_RUNS: usize = 5;
 // The block the ledger set is read and closed at, after the block the fixture
 // closed.
 const BLOCK: u64 = 1;
+/// The recent roots of the ledger set when a block changing it closes: one, a
+/// few hundred and the whole window a live chain holds.
+pub const RECENT_ROOTS: [u64; 3] = [1, 256, RECENT_ROOTS_WINDOW];
+
+static RECENT_ROOT_SETS: LazyLock<Vec<(NoteSets, Vec<Fr>)>> =
+    LazyLock::new(|| RECENT_ROOTS.map(with_recent_roots).into());
+
+// The note sets of the fixture after `recent_roots` blocks changing the ledger
+// set, and the roots of the ledger set they superseded, oldest first. Each
+// block adds one commitment, the first `RECENT_ROOTS_WINDOW - recent_roots`
+// more, so that the ledger set ends at one length for every count and its root
+// hashes as many peaks. The blocks are numbered from the one after the window,
+// at which the roots superseded by the block the fixture closed have expired.
+fn with_recent_roots(recent_roots: u64) -> (NoteSets, Vec<Fr>) {
+    let mut sets = filled_state().state.latest_note_sets().clone();
+    let mut roots = Vec::new();
+    for block in 1..=recent_roots {
+        let added = if block == 1 {
+            1 + RECENT_ROOTS_WINDOW - recent_roots
+        } else {
+            1
+        };
+        let ledger = sets.get(LEDGER_SET).expect("the ledger set exists");
+        roots.push(ledger.commitment_root());
+        let ledger = ledger
+            .clone()
+            .execute_adding(&commitments(added as usize, 0x4e00 + block))
+            .expect("the commitment MMR has room");
+        sets = sets
+            .update(LEDGER_SET, ledger)
+            .end_block(RECENT_ROOTS_WINDOW + block);
+    }
+    (sets, roots)
+}
+
+/// The note sets after `recent_roots` blocks changing the ledger set, one of
+/// [`RECENT_ROOTS`], the `recent_roots` roots of the ledger set they
+/// superseded, oldest first, and the number of the last of them.
+pub fn recent_roots_sets(recent_roots: u64) -> (NoteSets, Vec<Fr>, BlockNumber) {
+    let position = RECENT_ROOTS
+        .iter()
+        .position(|count| *count == recent_roots)
+        .expect("a measured count of recent roots");
+    let (sets, roots) = RECENT_ROOT_SETS[position].clone();
+    (sets, roots, RECENT_ROOTS_WINDOW + recent_roots)
+}
 
 pub fn micro_cases() -> Vec<Case> {
     let mut rng = StdRng::seed_from_u64(0x6d1c);
@@ -239,26 +286,28 @@ fn tree_cases() -> Vec<Case> {
         ));
     }
 
-    // The record of the commitment root and the update of the eligible leaf are
-    // private to `end_block`, measured whole on one changed set.
-    let changed_set = set
-        .clone()
-        .execute_spending(&nullifiers(1, 0xeb))
-        .expect("a fresh nullifier is absent")
-        .execute_adding(&commitments(1, 0xeb))
-        .expect("the commitment MMR has room");
-    let changed = filled_state()
-        .state
-        .latest_note_sets()
-        .clone()
-        .update(LEDGER_SET, changed_set);
+    // The record of the commitment root, which scans the recent roots to expire
+    // the old ones, and the update of the eligible leaf are private to
+    // `end_block`, measured whole on one changed set.
+    for recent_roots in RECENT_ROOTS {
+        let (sets, _, last_block) = recent_roots_sets(recent_roots);
+        let changed_set = sets
+            .get(LEDGER_SET)
+            .expect("the ledger set exists")
+            .clone()
+            .execute_spending(&nullifiers(1, 0xeb))
+            .expect("a fresh nullifier is absent")
+            .execute_adding(&commitments(1, 0xeb))
+            .expect("the commitment MMR has room");
+        let changed = sets.update(LEDGER_SET, changed_set);
+        cases.push(case(
+            "micro/end_block_one_set",
+            vec![("recent_roots", recent_roots)],
+            move || changed.clone(),
+            move |note_sets: NoteSets| note_sets.end_block(last_block + 1),
+        ));
+    }
     let (commitment_root, nullifier_root) = (set.commitment_root(), set.nullifier_root());
-    cases.push(case(
-        "micro/end_block_one_set",
-        vec![],
-        move || changed.clone(),
-        |note_sets| note_sets.end_block(BLOCK),
-    ));
     cases.push(case(
         "micro/eligible_leaf",
         vec![],
