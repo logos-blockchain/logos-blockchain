@@ -78,7 +78,25 @@ impl Provider {
         send_result
     }
 
+    /// Serves one block download request. The whole response, from waiting
+    /// for the block provider until the stream is closed, is bounded by
+    /// `stream_timeout`, and each write by `send_timeout`.
     pub async fn provide_blocks(
+        reply_receiver: mpsc::Receiver<BlocksProviderResponse>,
+        peer_id: PeerId,
+        libp2p_stream: Libp2pStream,
+        send_timeout: Duration,
+        stream_timeout: Duration,
+    ) -> Result<(), ChainSyncError> {
+        time::timeout(
+            stream_timeout,
+            Self::respond_to_blocks_request(reply_receiver, peer_id, libp2p_stream, send_timeout),
+        )
+        .await
+        .map_err(|e| ChainSyncError::from((peer_id, e)))?
+    }
+
+    async fn respond_to_blocks_request(
         mut reply_receiver: mpsc::Receiver<BlocksProviderResponse>,
         peer_id: PeerId,
         mut libp2p_stream: Libp2pStream,

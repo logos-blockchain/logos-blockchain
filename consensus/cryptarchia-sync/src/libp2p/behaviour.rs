@@ -387,6 +387,7 @@ impl OngoingRequests {
                 peer_id,
                 stream,
                 self.config.peer_response_timeout,
+                self.config.inbound_download_stream_timeout,
             )
             .boxed(),
         );
@@ -690,7 +691,7 @@ mod tests {
     use std::{collections::HashSet, iter, time::Duration};
 
     use futures::StreamExt as _;
-    use lb_core::header::HeaderId;
+    use lb_core::{block::MAX_BLOCK_TRANSACTIONS_SIZE, header::HeaderId};
     use lb_cryptarchia_engine::Slot;
     use libp2p::{Multiaddr, PeerId, StreamProtocol, Swarm, bytes::Bytes, swarm::SwarmEvent};
     use libp2p_swarm_test::SwarmExt as _;
@@ -716,6 +717,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_and_downloader(200, config).await;
@@ -743,6 +745,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_and_downloader(1, config.clone()).await;
@@ -770,6 +773,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_and_downloader(1, config).await;
@@ -797,6 +801,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_and_downloader(0, config).await;
@@ -819,6 +824,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(5),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let (provider_swarm, provider_peer_id, provider_addr) =
             setup_provider_swarm(config.clone());
@@ -901,6 +907,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let mut provider_swarm = new_swarm_with_quic(config.clone());
         let provider_swarm_peer_id = *provider_swarm.local_peer_id();
@@ -947,6 +954,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let (mut downloader_swarm, provider_peer_id) = start_rejecting_provider(config).await;
 
@@ -964,6 +972,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let (mut downloader_swarm, provider_peer_id) = start_rejecting_provider(config).await;
 
@@ -990,6 +999,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_with_stream_error(config).await;
@@ -1017,6 +1027,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let (mut provider_swarm, provider_peer_id, mut downloader_swarm) =
             connect_provider_and_downloader(config).await;
@@ -1064,6 +1075,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let (mut provider_swarm, provider_peer_id, mut downloader_swarm) =
             connect_provider_and_downloader(config).await;
@@ -1112,6 +1124,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let (mut provider_swarm, provider_peer_id, mut downloader_swarm) =
             connect_provider_and_downloader(config).await;
@@ -1152,6 +1165,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 1.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let blocks_count = 400;
         let (provider_swarm, provider_peer_id, provider_addr) =
@@ -1204,6 +1218,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 1.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let blocks_count = 400;
         let (provider_swarm, provider_peer_id, provider_addr) =
@@ -1255,6 +1270,65 @@ mod tests {
         assert_eq!(blocks.len(), blocks_count);
         assert_eq!(errors.len(), 0);
         assert_eq!(slow_download.await.unwrap(), blocks_count);
+    }
+
+    /// If a download request reads each block within `peer_response_timeout`,
+    /// but slowly enough to hold the stream, it is cut aff after
+    /// `inbound_download_stream_timeout`, so the provider's slot can be
+    /// freed to serve a next request.
+    #[tokio::test]
+    async fn test_inbound_download_stream_timeout_frees_provider_slot() {
+        // The provider sends more block bytes than the downloader's read-ahead
+        // and the transport buffers, so it can only send as fast as the
+        // requester consumes.
+        let config = Config {
+            peer_response_timeout: Duration::from_secs(1),
+            max_inbound_requests: 1.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(2),
+        };
+        let (provider_swarm, provider_peer_id, provider_addr) =
+            setup_provider_swarm(config.clone());
+        tokio::spawn(run_provider(
+            provider_swarm,
+            LargeBlocksProvider {
+                blocks_count: 60,
+                block_size: MAX_BLOCK_TRANSACTIONS_SIZE,
+            },
+        ));
+        let request = |swarm: &mut Swarm<Behaviour>| {
+            request_blocks(
+                swarm,
+                1,
+                HeaderId::from([0; 32]),
+                HeaderId::from([0; 32]),
+                HeaderId::from([0; 32]),
+                &HashSet::new(),
+                provider_peer_id,
+            )
+        };
+
+        // Consume a download one block per 500ms (< `peer_response_timeout`).
+        // The whole download would take ~30s (> `inbound_download_stream_timeout`).
+        let mut slow_swarm =
+            setup_downloader_and_connect(provider_addr.clone(), config.clone()).await;
+        let slow_streams = request(&mut slow_swarm);
+        tokio::spawn(async move { slow_swarm.loop_on_next().await });
+        tokio::spawn(async move {
+            let mut stream = slow_streams.into_iter().next().unwrap().await.unwrap();
+            while stream.next().await.is_some() {
+                tokio::time::sleep(config.peer_response_timeout / 2).await;
+            }
+        });
+
+        // After `inbound_download_stream_timeout`, the slot is free again.
+        // So, a new download should succeed.
+        tokio::time::sleep(config.inbound_download_stream_timeout + Duration::from_secs(1)).await;
+        let mut downloader_swarm = setup_downloader_and_connect(provider_addr, config).await;
+        let streams = request(&mut downloader_swarm);
+        tokio::spawn(async move { downloader_swarm.loop_on_next().await });
+
+        let mut stream = streams.into_iter().next().unwrap().await.unwrap();
+        assert!(matches!(stream.next().await, Some(Ok(_))));
     }
 
     /// A provider and a downloader connected to each other, neither of them
