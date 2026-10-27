@@ -225,6 +225,23 @@ pub fn spend_gas(inputs: usize, outputs: usize, buffered: usize) -> Result<Gas, 
         )
 }
 
+/// The Execution Gas of the transaction itself, on top of its Operations: the
+/// kilobytes it carries, floored, and one note set update per channel or SDP
+/// note set it changed.
+pub fn tx_terms_gas(bytes: usize, changed_note_sets: usize) -> Result<Gas, GasOverflow> {
+    let bytes = Value::try_from(bytes).map_err(|_| GasOverflow)?;
+    let kilobytes_gas = Gas::new(
+        EXECUTION_KB_GAS
+            .checked_mul(bytes)?
+            .into_inner()
+            .div_euclid(1000),
+    );
+    kilobytes_gas.checked_add(
+        EXECUTION_NOTE_SET_GAS
+            .checked_mul(Value::try_from(changed_note_sets).map_err(|_| GasOverflow)?)?,
+    )
+}
+
 #[cfg(test)]
 pub mod test_utils {
     use crate::mantle::{
@@ -251,6 +268,7 @@ pub mod test_utils {
 mod tests {
     use super::{
         Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OpGasContext, OperationGas, spend_gas,
+        tx_terms_gas,
     };
     use crate::mantle::{Value, gas::test_utils::FixedThresholds, ops::channel::ChannelId};
 
@@ -301,6 +319,17 @@ mod tests {
             spend_gas(1, 1, 3),
             Ok(Gas::new(1946 + 887 + 3 * 23 + 207 + 25))
         );
+    }
+
+    #[test]
+    fn tx_terms_gas_floors_the_bytes() {
+        assert_eq!(tx_terms_gas(999, 0), Ok(Gas::new(25)));
+        assert_eq!(tx_terms_gas(1000, 1), Ok(Gas::new(26 + 4285)));
+    }
+
+    #[test]
+    fn tx_terms_gas_overflow_is_an_error() {
+        assert_eq!(tx_terms_gas(0, usize::MAX), Err(GasOverflow));
     }
 
     #[test]

@@ -26,7 +26,7 @@ use lb_core::{
     mantle::{
         Value, VerificationError,
         batch::DeferredProofs,
-        gas::{Gas, GasCost, GasOverflow, GasProfile},
+        gas::{Gas, GasCost, GasOverflow, GasProfile, tx_terms_gas},
         ledger::verification_mode::StandardMode,
         note_set::{LEDGER_SET, NoteSetError, NoteSets},
         notes,
@@ -73,7 +73,16 @@ pub type Balance = i128;
 // What applying one transaction yields: the new state, the transaction balance,
 // the execution gas its operations consumed, the events and the deferred
 // proofs.
+#[cfg(test)]
 type AppliedTxOutcome = (LedgerState, Balance, Gas, Vec<TxEvent>, DeferredProofs);
+type CountedTxOutcome = (
+    LedgerState,
+    Balance,
+    Gas,
+    usize,
+    Vec<TxEvent>,
+    DeferredProofs,
+);
 
 // Mantle Validation step 2: the excess of TRANSFER, CHANNEL_DEPOSIT and
 // SDP_WITHDRAW adds to a checked uint64 balance.
@@ -476,9 +485,12 @@ impl LedgerState {
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
     {
-        let (ledger_state, balance, execution_gas, events, deferred_proofs) =
-            self.try_apply_tx_operations::<_, _, Profile>(config, tx.clone())?;
+        let (ledger_state, balance, operations_gas, changed_note_sets, events, deferred_proofs) =
+            self.try_apply_tx_operations_counting_note_sets::<_, _, Profile>(config, tx.clone())?;
 
+        // The transaction itself, once: its bytes and the note sets it changed.
+        let execution_gas =
+            operations_gas.checked_add(tx_terms_gas(tx.storage_size(), changed_note_sets)?)?;
         let gas_prices = ledger_state.get_gas_prices();
         let storage_gas = Gas::new(tx.storage_size() as u64);
         let execution_base_fees =
@@ -911,11 +923,28 @@ impl LedgerState {
     ///
     /// If any operation fails verification or execution, returns a
     /// [`LedgerError`] describing the failure.
+    #[cfg(test)]
     fn try_apply_tx_operations<Tx, Id, Profile: GasProfile>(
-        mut self,
+        self,
         config: &Config,
         tx: Tx,
     ) -> Result<AppliedTxOutcome, LedgerError<Id>>
+    where
+        Tx: PreverifiedMantleTransaction,
+    {
+        let (state, balance, execution_gas, _, events, deferred_proofs) =
+            self.try_apply_tx_operations_counting_note_sets::<_, _, Profile>(config, tx)?;
+        Ok((state, balance, execution_gas, events, deferred_proofs))
+    }
+
+    /// As [`Self::try_apply_tx_operations`], also returning the number of
+    /// channel and SDP note sets the transaction changed, which the gas of the
+    /// transaction itself is charged over.
+    fn try_apply_tx_operations_counting_note_sets<Tx, Id, Profile: GasProfile>(
+        mut self,
+        config: &Config,
+        tx: Tx,
+    ) -> Result<CountedTxOutcome, LedgerError<Id>>
     where
         Tx: PreverifiedMantleTransaction,
     {
@@ -964,7 +993,14 @@ impl LedgerState {
             )?;
         }
 
-        Ok((self, balance, execution_gas, tx_events, deferred_proofs))
+        Ok((
+            self,
+            balance,
+            execution_gas,
+            gas_state.changed_note_sets(),
+            tx_events,
+            deferred_proofs,
+        ))
     }
 
     fn update_pow_reward_difficulty(&mut self, claims_in_block: u64, config: &Config) {
@@ -3055,6 +3091,128 @@ mod tests {
         );
     }
 
+    // The wallet estimate and the ledger charge the same Execution Gas for a
+    // transaction mixing every priced shape: a Transfer buffering outputs for
+    // the Transfer after it, a Deposit, an inscription creating its channel
+    // with a user step of `buffered = 1` and a program step with a payment.
+    #[test]
+    fn wallet_estimate_matches_the_ledger_charge() {
+        let test_config = config();
+        let mut state = LedgerState::from_notes([note()], &test_config);
+        update_ledger_prices(&mut state, 1, 1);
+        let (signing_key, verifying_key) = create_test_keys();
+        let channel_id = ChannelId::from([1u8; 32]);
+        let key = test_program_key();
+        let root = ledger_root(&state);
+        let channel_root = CommitmentMmr::new().frontier_root();
+
+        let funding = TransferOp::new(
+            [NoteNullifier(Fr::from(31u64))].try_into().unwrap(),
+            [
+                NoteCommitment(Fr::from(32u64)),
+                NoteCommitment(Fr::from(33u64)),
+            ]
+            .try_into()
+            .unwrap(),
+            root,
+            1_000_000,
+        );
+        let second_transfer = TransferOp::new(
+            [NoteNullifier(Fr::from(34u64))].try_into().unwrap(),
+            [NoteCommitment(Fr::from(35u64))].try_into().unwrap(),
+            root,
+            0,
+        );
+        let deposit = DepositOp {
+            channel_id,
+            inputs: [NoteNullifier(Fr::ONE)].into(),
+            commitment_merkle_root: root,
+            outputs: [NoteCommitment(Fr::from(10u64))].into(),
+            excess_value: 0,
+            metadata: Metadata::empty(),
+        };
+        let mut steps = one_step(11, 12, channel_root, 1).iter().cloned().collect::<Vec<_>>();
+        steps.extend(
+            program_steps(derive_program_id(&key), 21, 22, channel_root, 0)
+                .iter()
+                .cloned(),
+        );
+        let creation = InscriptionOp {
+            channel_id,
+            inscription: [1].into(),
+            parent: MsgId::root(),
+            signer: verifying_key.into_unverified(),
+            steps: ChannelSteps::default(),
+        };
+        let inscribe = InscriptionOp {
+            channel_id,
+            inscription: [2].into(),
+            parent: creation.id(),
+            signer: verifying_key.into_unverified(),
+            steps: ChannelSteps::try_from(steps).unwrap(),
+        };
+        let tx = program_step_tx(
+            vec![
+                Op::Transfer(funding),
+                Op::Transfer(second_transfer),
+                Op::ProgramRegister(ProgramRegisterOp {
+                    verification_key: key,
+                }),
+                Op::ChannelInscribe(creation),
+                Op::ChannelDeposit(deposit),
+                Op::ChannelInscribe(inscribe),
+            ],
+            &signing_key,
+        );
+
+        let gas_context = OpsGasContext::from_channels(
+            state.mantle_ledger().channels(),
+            state.get_gas_prices(),
+        );
+        let estimated = tx
+            .op_refs()
+            .execution_gas_consumption::<MainnetGasProfile>(&gas_context)
+            .unwrap();
+
+        let (_, _, operations_gas, _, _) = state
+            .clone()
+            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&test_config, tx.clone())
+            .unwrap();
+        let (_, gas_and_fees, _, _) = state
+            .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(&test_config, &tx)
+            .unwrap();
+
+        // The first Transfer (30 + 1946 + 207 + 2 * 25), the second one with its
+        // root extended over the 2 commitments buffered (30 + 1946 + 887 +
+        // 2 * 23 + 207 + 25), the registration, the creating inscription, the
+        // Deposit with its root extended over the 3 buffered (16 + 1946 + 887 +
+        // 3 * 23 + 207 + 25) and the inscription of the user step buffering 1
+        // (137 + 1946 + 887 + 23 + 207 + 25) and the program step with its
+        // payment, its spend extended over the 2 buffered of the channel.
+        assert_eq!(
+            operations_gas,
+            Gas::new(
+                (30 + 1_946 + 207 + 50)
+                    + (30 + 1_946 + 887 + 46 + 207 + 25)
+                    + 6_843
+                    + (13 + 167)
+                    + (16 + 1_946 + 887 + 69 + 207 + 25)
+                    + (13 + 167)
+                    + (137 + 1_946 + 887 + 23 + 207 + 25)
+                    + (60 + 6_305)
+                    + (211 + 1_946 + 207)
+                    + (1_946 + 887 + 46 + 25)
+            )
+        );
+        // The bytes of the transaction and the one channel note set it changed.
+        let terms = tx_terms_gas(tx.storage_size(), 1).unwrap();
+        assert_eq!(
+            gas_and_fees.execution_gas,
+            operations_gas.checked_add(terms).unwrap()
+        );
+        assert_eq!(estimated, gas_and_fees.execution_gas);
+    }
+
     #[test]
     fn withdrawal_waits_for_its_due_slot_and_adds_nothing_to_the_balance() {
         let test_config = config();
@@ -3211,13 +3369,18 @@ mod tests {
             .total_gas_cost::<MainnetGasProfile>(&gas_context)
             .unwrap();
 
-        let (_, _, execution_gas, _, deferred_proofs) = state
+        let (_, _, operations_gas, _, deferred_proofs) = state
             .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&test_config, tx.clone())
             .unwrap();
         deferred_proofs.verify().unwrap();
 
         // The config is priced against the channel the inscription created.
-        assert_eq!(execution_gas.into_inner(), (13 + 167) + (18 + 167));
+        assert_eq!(operations_gas.into_inner(), (13 + 167) + (18 + 167));
+
+        // The transaction adds its bytes and the one channel note set it changed.
+        let execution_gas = operations_gas
+            .checked_add(tx_terms_gas(tx.storage_size(), 1).unwrap())
+            .unwrap();
 
         let storage_gas = Gas::new(tx.storage_size() as u64);
         let charged = GasCost::calculate(execution_gas, prices.execution_base_gas_price)
