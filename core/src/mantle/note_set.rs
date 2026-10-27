@@ -211,7 +211,11 @@ impl NoteSet {
                 len: self.tx_commitment_buffer.len(),
             });
         }
-        let mut mmr = self.recent_mmr(commitment_merkle_root, block)?.clone();
+        let base = self.recent_mmr(commitment_merkle_root, block)?;
+        if buffered == 0 {
+            return Ok(unextended_root(commitment_merkle_root, base));
+        }
+        let mut mmr = base.clone();
         for note_commitment in self.tx_commitment_buffer.iter().take(buffered) {
             mmr = mmr
                 .push(*note_commitment)
@@ -251,6 +255,9 @@ impl NoteSet {
             });
         }
         let base = self.recent_mmr(commitment_merkle_root, block)?;
+        if buffered == 0 {
+            return Ok(unextended_root(commitment_merkle_root, base));
+        }
         let key = |len: usize| {
             let prefix_id = len
                 .checked_sub(1)
@@ -368,6 +375,13 @@ impl NoteSet {
         self.block_commitments = VectorSync::new_sync();
         self
     }
+}
+
+// A recent root is stored with the snapshot whose frontier root it is, so an
+// extension by no buffered commitment is the referenced root itself.
+fn unextended_root(commitment_merkle_root: &Fr, snapshot: &CommitmentMmr) -> Fr {
+    debug_assert_eq!(snapshot.frontier_root(), *commitment_merkle_root);
+    *commitment_merkle_root
 }
 
 const fn is_recent(superseded_at: BlockNumber, block: BlockNumber) -> bool {
@@ -678,6 +692,53 @@ mod test {
             set.cached_step_commitment_root(&tx_roots, &Fr::from(7u64), 0, 1),
             Err(NoteSetError::UnknownRoot(Fr::from(7u64)))
         );
+    }
+
+    #[test]
+    fn test_nothing_buffered_gives_the_referenced_root() {
+        let seed = NoteSet::empty().commitment_root();
+        let sets = add_and_end_block(NoteSets::new(), commitment(1), 1);
+        let set = sets.get(LEDGER_SET).unwrap().clone();
+        let current = set.commitment_root();
+        let unbuffered = set.clone();
+        let set = set.buffer_outputs(&[commitment(2), commitment(3)]);
+        let tx_roots = TxRoots::default();
+        for referenced in [seed, current] {
+            let snapshot = set.recent_mmr(&referenced, 1024).unwrap().frontier_root();
+            assert_eq!(snapshot, referenced);
+            assert_eq!(
+                set.step_commitment_root(&referenced, 0, 1024),
+                Ok(referenced)
+            );
+            assert_eq!(
+                set.cached_step_commitment_root(&tx_roots, &referenced, 0, 1024),
+                Ok(referenced)
+            );
+            assert_eq!(
+                unbuffered.tx_commitment_root(&referenced, 1024),
+                Ok(referenced)
+            );
+            assert_eq!(
+                unbuffered.cached_tx_commitment_root(&tx_roots, &referenced, 1024),
+                Ok(referenced)
+            );
+        }
+        // the seed root was superseded at block 1
+        let unknown = Fr::from(7u64);
+        for (referenced, block) in [(seed, 1025), (unknown, 1)] {
+            let rejected = Err(NoteSetError::UnknownRoot(referenced));
+            assert_eq!(set.step_commitment_root(&referenced, 0, block), rejected);
+            assert_eq!(
+                set.cached_step_commitment_root(&tx_roots, &referenced, 0, block),
+                rejected
+            );
+            assert_eq!(unbuffered.tx_commitment_root(&referenced, block), rejected);
+            assert_eq!(
+                unbuffered.cached_tx_commitment_root(&tx_roots, &referenced, block),
+                rejected
+            );
+        }
+        assert_eq!(set.step_commitment_root(&current, 0, 5000), Ok(current));
     }
 
     #[test]
