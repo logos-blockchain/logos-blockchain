@@ -2110,7 +2110,7 @@ mod cache_removal_tests {
     #[test]
     fn workload_selection_uses_only_the_primary_when_no_dust_qualifies() {
         let pool = WorkloadUtxoPool::new(&[
-            workload_utxo(10_000, 0),
+            workload_utxo(12_000, 0),
             workload_utxo(9_000, 1),
             workload_utxo(8_000, 2),
         ]);
@@ -2122,11 +2122,11 @@ mod cache_removal_tests {
                 .iter()
                 .map(|utxo| utxo.note.value)
                 .collect::<Vec<_>>(),
-            vec![10_000]
+            vec![12_000]
         );
         let work_item = prepare_all_provided(&inputs, 8_000, unit_gas_prices(), 0)
             .expect("primary should fund the transfer");
-        assert_eq!(input_values(&work_item), vec![10_000]);
+        assert_eq!(input_values(&work_item), vec![12_000]);
     }
 
     #[test]
@@ -2276,7 +2276,7 @@ mod cache_removal_tests {
     #[test]
     fn workload_selection_adds_smallest_dust_and_excludes_medium_inputs() {
         let pool = WorkloadUtxoPool::new(&[
-            workload_utxo(10_000, 0),
+            workload_utxo(12_000, 0),
             workload_utxo(9_000, 1),
             workload_utxo(500, 2),
             workload_utxo(100, 3),
@@ -2292,11 +2292,11 @@ mod cache_removal_tests {
                 .map(|utxo| utxo.note.value)
                 .collect::<Vec<_>>(),
             // 500 is dust too, but the input limit leaves room for three dust inputs
-            vec![10_000, 1, 10, 100]
+            vec![12_000, 1, 10, 100]
         );
         let work_item = prepare_all_provided(&inputs, 8_000, unit_gas_prices(), 0)
             .expect("bounded primary and dust set should fund the transfer");
-        assert_eq!(input_values(&work_item), vec![10_000, 1, 10, 100]);
+        assert_eq!(input_values(&work_item), vec![12_000, 1, 10, 100]);
     }
 
     #[test]
