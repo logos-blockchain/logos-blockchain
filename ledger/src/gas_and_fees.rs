@@ -2,10 +2,12 @@ use lb_core::mantle::gas::{Gas, GasCost};
 
 use crate::LedgerError;
 
-// 3,200,000 minus 7,517, the fixed parts of the ZkTransfer and ZkProgramSpend
-// batch verifications (3,540,612 and 3,975,765 cycles), paid by the block
-// rather than by the Operations.
-pub const EXECUTION_GAS_LIMIT: Gas = Gas::new(3_192_483);
+// 3,200,000 minus 27,759, the fixed costs of a block measured in the Gas Cost
+// Determination: the header, its Proof of Leadership, the leader note and the
+// end of block of the ledger set with its first nullifier, and the fixed parts
+// of the ZkTransfer and ZkProgramSpend batches, paid by the block rather than
+// by the Operations.
+pub const EXECUTION_GAS_LIMIT: Gas = Gas::new(3_172_241);
 
 /// Gas consumed and fees paid by applied transactions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
