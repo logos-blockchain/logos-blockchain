@@ -281,7 +281,7 @@ impl TargetEpochTracker {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Network {
     /// Number of core nodes in the activity epoch
     pub size: u64,
@@ -291,7 +291,7 @@ pub struct Network {
 
 /// A provider's estimated Blend reward for the activity epoch, based on the
 /// proofs submitted so far
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct RewardEstimate {
     /// The epoch the reward is for, when the blending was done
     pub activity_epoch: Epoch,
