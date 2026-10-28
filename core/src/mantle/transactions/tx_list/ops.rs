@@ -363,9 +363,9 @@ mod tests {
                 .execution_gas_consumption::<MainnetGasProfile>(&context),
             // The config: 18 + 3 * 167. The deposit and the withdrawal of the samples
             // spend 1 input and 1 output with nothing buffered:
-            // 16 + 1946 + 207 + 25 and 13 + 1946 + 207 + 25. The transaction adds
+            // 16 + 1946 + 838 + 25 and 13 + 1946 + 838 + 25. The transaction adds
             // its bytes and the note sets of the two channels it changed.
-            Ok(Gas::from(519 + 2_194 + 2_191).checked_add(terms).unwrap())
+            Ok(Gas::from(519 + 2_825 + 2_822).checked_add(terms).unwrap())
         );
     }
 
@@ -395,8 +395,8 @@ mod tests {
         assert_eq!(
             ops.by_ref()
                 .execution_gas_consumption::<MainnetGasProfile>(&context),
-            // 16 + 1946 + 207 + 25, and the note set of the channel it changes
-            Ok(Gas::from(2_194).checked_add(terms).unwrap())
+            // 16 + 1946 + 838 + 25, and the note set of the channel it changes
+            Ok(Gas::from(2_825).checked_add(terms).unwrap())
         );
     }
 

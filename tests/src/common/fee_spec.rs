@@ -13,7 +13,7 @@
 //!
 //! [Execution Market]: https://github.com/logos-co/logos-lips/blob/035c01f78728d8bba23d89c798fb9fa640870126/docs/blockchain/raw/execution-market.md
 //! [Storage Markets]: https://github.com/logos-co/logos-lips/blob/38916aa474164ac4acd81e62d19715e17626be17/docs/blockchain/raw/storage-markets.md
-//! [Gas Cost Determination]: https://github.com/logos-co/logos-lips/blob/808b8d3a59a340d74903c73da28b45324d7764de/docs/blockchain/raw/analysis-gas-cost-determination.md
+//! [Gas Cost Determination]: https://github.com/logos-co/logos-lips/blob/b6cc70859f23f4501b60c333c93b71470e47fadf/docs/blockchain/raw/analysis-gas-cost-determination.md
 
 use std::collections::{HashMap, HashSet};
 
@@ -64,7 +64,7 @@ pub const SPEC_ROOT_GAS: u64 = 887;
 /// extended over.
 pub const SPEC_BUFFERED_GAS: u64 = 23;
 /// Gas Cost Determination 2.0.0: each nullifier of a spend.
-pub const SPEC_NULLIFIER_GAS: u64 = 207;
+pub const SPEC_NULLIFIER_GAS: u64 = 838;
 /// Gas Cost Determination 2.0.0: each commitment of a spend.
 pub const SPEC_COMMITMENT_GAS: u64 = 25;
 /// Gas Cost Determination 2.0.0: each 1000 bytes of a transaction, floored.

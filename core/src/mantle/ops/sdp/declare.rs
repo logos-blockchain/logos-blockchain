@@ -835,11 +835,11 @@ mod tests {
         #[test]
         fn sdp_declare_op_execution_gas_does_not_scale_with_the_threshold() {
             // 1 input, the service note, nothing buffered:
-            // 669 + 167 + 1946 + 207 + 25
+            // 669 + 167 + 1946 + 838 + 25
             for threshold in [0, 1, 3] {
                 assert_eq!(
                     SDPDeclareOp::sample().execution_gas(&FixedThresholds(threshold)),
-                    Ok(Gas::new(3_014))
+                    Ok(Gas::new(3_645))
                 );
             }
         }

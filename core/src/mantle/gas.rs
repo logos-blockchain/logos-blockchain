@@ -190,7 +190,7 @@ pub const EXECUTION_NOTE_SET_GAS: Gas = Gas::new(4285);
 pub const EXECUTION_PROOF_GAS: Gas = Gas::new(1946);
 pub const EXECUTION_ROOT_GAS: Gas = Gas::new(887);
 pub const EXECUTION_BUFFERED_GAS: Gas = Gas::new(23);
-pub const EXECUTION_NULLIFIER_GAS: Gas = Gas::new(207);
+pub const EXECUTION_NULLIFIER_GAS: Gas = Gas::new(838);
 pub const EXECUTION_COMMITMENT_GAS: Gas = Gas::new(25);
 pub const EXECUTION_SIGNATURE_GAS: Gas = Gas::new(167);
 pub const EXECUTION_USER_STEP_GAS: Gas = Gas::new(137);
@@ -310,14 +310,14 @@ mod tests {
 
     #[test]
     fn spend_gas_without_buffer_has_no_root() {
-        assert_eq!(spend_gas(1, 2, 0), Ok(Gas::new(1946 + 207 + 2 * 25)));
+        assert_eq!(spend_gas(1, 2, 0), Ok(Gas::new(1946 + 838 + 2 * 25)));
     }
 
     #[test]
     fn spend_gas_with_buffer_extends_the_root() {
         assert_eq!(
             spend_gas(1, 1, 3),
-            Ok(Gas::new(1946 + 887 + 3 * 23 + 207 + 25))
+            Ok(Gas::new(1946 + 887 + 3 * 23 + 838 + 25))
         );
     }
 
