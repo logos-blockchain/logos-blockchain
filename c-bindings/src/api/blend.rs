@@ -1,11 +1,14 @@
-use std::ffi::{CString, c_char};
+use std::{
+    ffi::{CString, c_char},
+    ptr,
+};
 
 use lb_api_service::http::blend;
 use lb_blend_service::message::NetworkInfo;
 use lb_c_macros::panic_to_error;
 use lb_chain_service::Epoch;
 use lb_core::{
-    mantle::NoteId,
+    mantle::{NoteId, gas::GasCost},
     sdp::{self, Locator, SNAPSHOT_FINALIZATION_DELAY, ServiceType, WITHDRAWAL_UNLOCK_DELAY},
 };
 use lb_groth16::{fr_from_bytes, fr_to_bytes};
@@ -607,6 +610,8 @@ pub enum ProofReason {
     /// `Failed`: the node's declaration wasn't found when submitting the
     /// proof.
     DeclarationNotFound,
+    /// `Failed`: the funding key couldn't pay the proof transaction's fee.
+    FundingFailed,
     /// `Failed`: the proof transaction couldn't be built.
     TransactionBuildFailed,
     /// `Failed`: the mempool rejected the proof transaction.
@@ -627,6 +632,7 @@ impl From<status::ProofFailureReason> for ProofReason {
         match reason {
             status::ProofFailureReason::NoProof => Self::NoProof,
             status::ProofFailureReason::DeclarationNotFound => Self::DeclarationNotFound,
+            status::ProofFailureReason::FundingFailed => Self::FundingFailed,
             status::ProofFailureReason::TransactionBuildFailed => Self::TransactionBuildFailed,
             status::ProofFailureReason::MempoolRejected => Self::MempoolRejected,
         }
@@ -669,6 +675,54 @@ impl From<status::ProofState> for ProofState {
     }
 }
 
+/// The declaration's locators, as C strings.
+#[repr(C)]
+pub struct Locators {
+    pub locators: *mut *mut c_char,
+    pub len: usize,
+}
+
+impl Default for Locators {
+    fn default() -> Self {
+        Self {
+            locators: ptr::null_mut(),
+            len: 0,
+        }
+    }
+}
+
+impl From<&sdp::Locators> for Locators {
+    fn from(locators: &sdp::Locators) -> Self {
+        let pointers: Vec<*mut c_char> = locators
+            .iter()
+            .map(|locator| {
+                CString::new(locator.to_string())
+                    .expect("A multiaddr has no NUL byte.")
+                    .into_raw()
+            })
+            .collect();
+        let len = pointers.len();
+        let locators = Box::leak(pointers.into_boxed_slice()).as_mut_ptr();
+        Self { locators, len }
+    }
+}
+
+impl Locators {
+    /// # Safety
+    ///
+    /// `self` must come from [`Locators::from`], and be freed only once.
+    unsafe fn free(self) {
+        if self.locators.is_null() {
+            return;
+        }
+        let pointers =
+            unsafe { Box::from_raw(ptr::slice_from_raw_parts_mut(self.locators, self.len)) };
+        for &pointer in &*pointers {
+            drop(unsafe { CString::from_raw(pointer) });
+        }
+    }
+}
+
 /// What [`DeclarationStatus`] exposes of a [`sdp::Declaration`].
 #[repr(C)]
 #[derive(Default)]
@@ -677,6 +731,7 @@ pub struct Declaration {
     pub provider_id: [u8; KEY_SIZE],
     /// The note locked by the declaration, as 32 little-endian bytes.
     pub locked_note_id: [u8; KEY_SIZE],
+    pub locators: Locators,
     /// As 32 little-endian bytes.
     pub zk_id: [u8; KEY_SIZE],
     /// The epoch of the block that contained the declaration.
@@ -691,6 +746,7 @@ impl From<sdp::Declaration> for Declaration {
         Self {
             provider_id: *declaration.provider_id.as_ref(),
             locked_note_id: fr_to_bytes(declaration.service_note_id.as_fr()),
+            locators: (&declaration.locators).into(),
             zk_id: fr_to_bytes(declaration.zk_id.as_fr()),
             created_epoch: declaration.created.into(),
             withdraw_at: declaration.withdraw_at.map(Into::into).into(),
@@ -729,6 +785,9 @@ pub struct ActivityStatus {
     /// The epoch in which the node's latest activity proof landed. Starts at
     /// the declaration's `first_epoch_in_snapshot`.
     pub last_active_epoch: u32,
+    /// The fee of the node's last activity proof submitted. The proof may
+    /// not have landed. `None` if none was submitted.
+    pub last_fee: FfiOption<Value>,
 }
 
 impl From<status::ActivityStatus> for ActivityStatus {
@@ -737,6 +796,7 @@ impl From<status::ActivityStatus> for ActivityStatus {
             activity_epoch: status.activity_epoch.map(Into::into).into(),
             proof_state: status.proof_state.into(),
             last_active_epoch: status.last_active_epoch.into(),
+            last_fee: status.last_fee.map(GasCost::into_inner).into(),
         }
     }
 }
@@ -877,6 +937,11 @@ pub type FfiBlendStatusResult = FfiStatusResult<BlendStatus>;
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers.
+///
+/// # Memory Management
+///
+/// The declaration's locators are allocated. The caller must free them with
+/// [`free_blend_status`].
 #[must_use]
 #[panic_to_error]
 #[unsafe(no_mangle)]
@@ -885,4 +950,24 @@ pub unsafe extern "C" fn blend_status(node: *const LogosBlockchainNode) -> FfiBl
 
     let node = unsafe { &*node };
     blend_status_sync(node).into()
+}
+
+/// Frees the memory allocated for a [`BlendStatus`].
+///
+/// # Arguments
+///
+/// - `status`: A [`BlendStatus`] previously returned by [`blend_status`].
+///
+/// # Safety
+///
+/// The caller must only pass values returned by [`blend_status`], exactly as
+/// returned, and must call this exactly once per result.
+#[panic_to_error]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_blend_status(status: BlendStatus) -> OperationStatus {
+    let declaration = status.sdp.declaration;
+    if declaration.is_some {
+        unsafe { declaration.value.declaration.locators.free() };
+    }
+    OperationStatus::OK
 }
