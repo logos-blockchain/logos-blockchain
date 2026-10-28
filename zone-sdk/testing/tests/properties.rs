@@ -36,7 +36,11 @@ use logos_blockchain_zone_sdk_testing::{
     world as common,
     writers::{OP_CYCLE, OTHER_ZONE_OPS, WriterOp},
 };
-use proptest::{prelude::*, strategy::Union, test_runner::FileFailurePersistence};
+use proptest::{
+    prelude::*,
+    strategy::Union,
+    test_runner::{FailurePersistence, FileFailurePersistence},
+};
 
 /// Gas prices every run starts at; large enough that a percent rise is a
 /// different integer price.
@@ -581,6 +585,19 @@ fn record_known_issue(issue: KnownIssue, scenario: &Scenario) {
     tracing::warn!(?issue, schedule = ?scenario.schedule, "known issue hit");
 }
 
+/// A failing seed is kept in `tests/properties.proptest-regressions` and
+/// replayed first by the next run; `PROPTEST_DISABLE_FAILURE_PERSISTENCE`
+/// turns that off, as it does for proptest's default, which is what a
+/// mutation run needs: its tree copies are reused from mutant to mutant.
+fn failure_persistence() -> Option<Box<dyn FailurePersistence>> {
+    if std::env::var_os("PROPTEST_DISABLE_FAILURE_PERSISTENCE").is_some() {
+        return None;
+    }
+    Some(Box::new(FileFailurePersistence::Direct(
+        "tests/properties.proptest-regressions",
+    )))
+}
+
 fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -598,9 +615,7 @@ fn block_on(scenario: Scenario) {
 proptest! {
     #![proptest_config(ProptestConfig {
         cases: 24,
-        failure_persistence: Some(Box::new(FileFailurePersistence::Direct(
-            "tests/properties.proptest-regressions",
-        ))),
+        failure_persistence: failure_persistence(),
         max_shrink_iters: 200,
         max_shrink_time: 120_000,
         ..ProptestConfig::default()
@@ -630,9 +645,7 @@ proptest! {
 proptest! {
     #![proptest_config(ProptestConfig {
         cases: 48,
-        failure_persistence: Some(Box::new(FileFailurePersistence::Direct(
-            "tests/properties.proptest-regressions",
-        ))),
+        failure_persistence: failure_persistence(),
         max_shrink_time: 120_000,
         max_shrink_iters: 200,
         ..ProptestConfig::default()

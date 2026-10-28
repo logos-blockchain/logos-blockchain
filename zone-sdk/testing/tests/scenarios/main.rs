@@ -148,9 +148,9 @@ async fn escalate_config(
         .await
         .expect("prepared config");
     let proposed = prepared.proposed_config();
-    assert_eq!(proposed.configuration_threshold, threshold);
-    assert_eq!(proposed.transfer_threshold, threshold);
-    assert_eq!(proposed.keys.len(), names.len());
+    assert_eq!(proposed.configuration_threshold().get(), threshold);
+    assert_eq!(proposed.transfer_threshold().get(), threshold);
+    assert_eq!(proposed.keys().len(), names.len());
     let signatures = sign_config(&prepared, signers);
     let (result, _) = world
         .harness

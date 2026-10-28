@@ -42,7 +42,7 @@ fn lineage(tx: &SignedOps<Unverified, StandardMode>, channel: ChannelId) -> Opti
     for op in tx.op_refs_iter() {
         match op {
             OpRef::ChannelInscribe(op) if op.channel_id == channel => return Some(true),
-            OpRef::ChannelConfig(op) if op.channel == channel => config = true,
+            OpRef::ChannelConfig(op) if op.channel() == channel => config = true,
             _ => {}
         }
     }
@@ -63,7 +63,7 @@ fn shape(tx: &SignedOps<Unverified, StandardMode>, channel: ChannelId) -> &'stat
     for op in tx.op_refs_iter() {
         match op {
             OpRef::ChannelInscribe(i) if i.channel_id == channel => inscribes += 1,
-            OpRef::ChannelConfig(c) if c.channel == channel => configs += 1,
+            OpRef::ChannelConfig(c) if c.channel() == channel => configs += 1,
             OpRef::ChannelWithdraw(w) if w.channel_id == channel => withdraws += 1,
             OpRef::ChannelTransfer(t) if t.channel_id == channel => channel_transfers += 1,
             OpRef::Transfer(_) => transfers += 1,

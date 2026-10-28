@@ -111,7 +111,7 @@ const IDLE_TICKS: usize = 2;
 fn touches_channel(tx: &SignedOps<Unverified, StandardMode>, channel: ChannelId) -> bool {
     tx.op_refs_iter().any(|op| match op {
         OpRef::ChannelInscribe(i) => i.channel_id == channel,
-        OpRef::ChannelConfig(c) => c.channel == channel,
+        OpRef::ChannelConfig(c) => c.channel() == channel,
         OpRef::ChannelDeposit(d) => d.channel_id == channel,
         OpRef::ChannelWithdraw(w) => w.channel_id == channel,
         OpRef::ChannelTransfer(t) => t.channel_id == channel,

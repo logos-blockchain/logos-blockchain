@@ -44,7 +44,7 @@ fn key(entry: &ChannelUpdateTx, channel_id: ChannelId) -> Key {
     signed
         .op_refs_iter()
         .find_map(|op| match op {
-            OpRef::ChannelConfig(config) if config.channel == channel_id => Some(config.id()),
+            OpRef::ChannelConfig(config) if config.channel() == channel_id => Some(config.id()),
             _ => None,
         })
         .map_or_else(|| Key::Tx(entry.tx_hash()), Key::Msg)

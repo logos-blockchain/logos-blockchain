@@ -266,14 +266,12 @@ impl SimLedger {
         signing: &[u8],
         slot: Slot,
     ) -> Result<(), String> {
-        if op.configuration_threshold == 0 || op.transfer_threshold == 0 {
-            return Err("config thresholds must be positive".to_owned());
-        }
-        if let Some(channel) = self.channels.get(&op.channel) {
-            if op.parent != channel.config_tip_hash {
+        if let Some(channel) = self.channels.get(&op.channel()) {
+            if op.parent() != channel.config_tip_hash {
                 return Err(format!(
                     "invalid config parent {} for config tip {}",
-                    op.parent, channel.config_tip_hash
+                    op.parent(),
+                    channel.config_tip_hash
                 ));
             }
             verify_multi_sig(
@@ -283,27 +281,30 @@ impl SimLedger {
                 signing,
             )?;
         } else {
-            if op.parent != MsgId::root() {
+            if op.parent() != MsgId::root() {
                 return Err("new channel config needs a root parent".to_owned());
             }
             if !proof.signatures().is_empty() {
                 return Err("new channel config takes no signatures".to_owned());
             }
         }
-        let keys: Vec<UnverifiedEd25519PublicKey> =
-            op.keys.iter().map(|key| (*key).into_unverified()).collect();
+        let keys: Vec<UnverifiedEd25519PublicKey> = op
+            .keys()
+            .iter()
+            .map(|key| (*key).into_unverified())
+            .collect();
         let first = keys.first().copied().ok_or("config without keys")?;
         let channel = self
             .channels
-            .entry(op.channel)
+            .entry(op.channel())
             .or_insert_with(|| default_channel(first, slot));
         channel.accredited_keys = UnverifiedChannelKeys::try_from(keys)
             .map_err(|e| format!("keys: {e:?}"))?
             .into();
-        channel.configuration_threshold = op.configuration_threshold;
-        channel.transfer_threshold = op.transfer_threshold;
-        channel.posting_timeframe = op.posting_timeframe.clone();
-        channel.posting_timeout = op.posting_timeout.clone();
+        channel.configuration_threshold = op.configuration_threshold().get();
+        channel.transfer_threshold = op.transfer_threshold().get();
+        channel.posting_timeframe = op.posting_timeframe().clone();
+        channel.posting_timeout = op.posting_timeout().clone();
         channel.tip_sequencer = 0;
         channel.tip_sequencer_starting_slot = slot;
         channel.tip_slot = slot;

@@ -305,14 +305,19 @@ pub async fn build_channel_config_tx(
     parent: MsgId,
     rules: ConfigRules,
 ) -> Result<SignedOps<Unverified, StandardMode>, TxError> {
-    let config = ChannelConfigOp {
-        channel: channel_id,
-        parent,
-        keys: rules.keys,
-        posting_timeframe: SlotTimeframe::from(rules.posting_timeframe),
-        posting_timeout: SlotTimeout::from(rules.posting_timeout),
-        configuration_threshold: rules.configuration_threshold,
-        transfer_threshold: rules.transfer_threshold,
+    let threshold = |value: u16| {
+        std::num::NonZero::new(value)
+            .ok_or_else(|| TxError::Assembly("config threshold must be positive".to_owned()))
     };
+    let config = ChannelConfigOp::new(
+        channel_id,
+        parent,
+        rules.keys,
+        SlotTimeframe::from(rules.posting_timeframe),
+        SlotTimeout::from(rules.posting_timeout),
+        threshold(rules.configuration_threshold)?,
+        threshold(rules.transfer_threshold)?,
+    )
+    .map_err(|e| TxError::Assembly(format!("config: {e:?}")))?;
     build_multisig_tx(node, signer, funding_pk, vec![Op::ChannelConfig(config)]).await
 }

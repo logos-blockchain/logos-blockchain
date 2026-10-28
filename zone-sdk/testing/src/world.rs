@@ -1259,7 +1259,7 @@ impl World {
                 .iter()
                 .filter(|tx| {
                     tx.op_refs_iter()
-                        .any(|op| matches!(op, OpRef::ChannelConfig(config) if config.channel == channel))
+                        .any(|op| matches!(op, OpRef::ChannelConfig(config) if config.channel() == channel))
                 })
                 .count();
             let stranded_custom_tx = |violation: &String| {
@@ -1284,7 +1284,7 @@ impl World {
                 .chain(self.writers.iter().flat_map(|writer| writer.rebuilt.iter()))
                 .filter(|tx| {
                     tx.op_refs_iter()
-                        .any(|op| matches!(op, OpRef::ChannelConfig(config) if config.channel == channel))
+                        .any(|op| matches!(op, OpRef::ChannelConfig(config) if config.channel() == channel))
                 })
                 .map(Hashable::hash)
                 .filter(|hash| !self.node().is_included(hash))
