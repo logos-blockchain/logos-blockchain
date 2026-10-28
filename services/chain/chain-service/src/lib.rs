@@ -120,6 +120,8 @@ pub enum Error {
     AwaitingGenesisTime,
     #[error("Invalid uncle {uncle}: {reason}")]
     InvalidUncle { uncle: HeaderId, reason: UncleError },
+    #[error("Block carries {count} uncles, more than the {max} its era allows")]
+    TooManyUncles { count: usize, max: u8 },
     #[error("Batch deferred proof verification error: {0}")]
     BatchDeferredProofVerification(#[from] lb_core::mantle::batch::Error),
 }
