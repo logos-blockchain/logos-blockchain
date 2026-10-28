@@ -36,6 +36,15 @@ pub use fixtures::{
 };
 pub use lb_binary_codec_macros::{BinaryCodec, codec_fixtures};
 
+/// Largest `MAX` for which an element type that decodes without consuming input
+/// is still supported.
+///
+/// Such an element makes the decode loop independent of the input, so `MAX` is
+/// the only thing bounding it — repeating it is harmless exactly when `MAX` is
+/// small enough that a hostile length prefix buys nothing. Above this, the
+/// combination is refused rather than iterated.
+const ZERO_LENGTH_ELEMENT_MAX: usize = 1024;
+
 /// Sealed marker that gates [`CodecExamples`] to the blessed macro path.
 ///
 /// `#[doc(hidden)] pub` (rather than `pub(crate)`) so the `codec_fixtures!`

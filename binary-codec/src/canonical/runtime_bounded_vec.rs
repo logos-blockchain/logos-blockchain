@@ -14,9 +14,9 @@ use std::borrow::Cow;
 use lb_utils::bounded::{RuntimeBoundedVec, RuntimeMax};
 
 use super::{
-    BinaryDecode, BinaryEncode, CodecExamples, CodecFixture, CodecFixtures, DecodeError,
-    bounded_vec::ZERO_LENGTH_ELEMENT_MAX, sealed,
+    BinaryDecode, BinaryEncode, CodecExamples, CodecFixture, CodecFixtures, DecodeError, sealed,
 };
+use crate::canonical::ZERO_LENGTH_ELEMENT_MAX;
 
 /// The length of a vector of `len` items, as its maximum's type.
 ///
@@ -139,8 +139,8 @@ mod tests {
     use lb_utils::bounded::{BoundedVec, RuntimeBoundedVec, UpperRuntimeBoundedVec};
 
     use crate::canonical::{
-        BinaryDecode as _, BinaryEncode as _, DecodeError, assert_codec_fixtures_with,
-        bounded_vec::ZERO_LENGTH_ELEMENT_MAX,
+        BinaryDecode as _, BinaryEncode as _, DecodeError, ZERO_LENGTH_ELEMENT_MAX,
+        assert_codec_fixtures_with,
     };
 
     /// Between 2 elements and a `u8` maximum given at runtime.

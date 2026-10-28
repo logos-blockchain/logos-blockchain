@@ -7,15 +7,7 @@ use super::{
     length_prefix::{decode_bounded_length, encode_length_prefix_into, length_prefix_len},
     sealed,
 };
-
-/// Largest `MAX` for which an element type that decodes without consuming input
-/// is still supported.
-///
-/// Such an element makes the decode loop independent of the input, so `MAX` is
-/// the only thing bounding it — repeating it is harmless exactly when `MAX` is
-/// small enough that a hostile length prefix buys nothing. Above this, the
-/// combination is refused rather than iterated.
-pub(super) const ZERO_LENGTH_ELEMENT_MAX: usize = 1024;
+use crate::canonical::ZERO_LENGTH_ELEMENT_MAX;
 
 impl<T, const MIN: usize, const MAX: usize> BinaryEncode for BoundedVec<T, MIN, MAX>
 where
