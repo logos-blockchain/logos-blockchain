@@ -1,4 +1,5 @@
 use core::{num::NonZero, time::Duration};
+use std::collections::BTreeMap;
 
 use lb_core::{
     block::genesis::GenesisBlock,
@@ -13,7 +14,7 @@ use lb_time::{
     Epoch, Slot,
     era::{EpochLength, EraEntriesAfterGenesis, SlotDuration},
 };
-use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
+use lb_utils::yaml::{OnUnknownKeys, deserialize_embedded_value};
 use serde::{Deserialize, Serialize};
 
 pub mod era;
@@ -22,7 +23,13 @@ pub use era::{EraDeclarations, EraScheduleError};
 
 use crate::config::deployment::era::ruleset::{EraRuleset, v1};
 
-pub const SERIALIZED_DEPLOYMENT: &[u8] = include_bytes!("settings.yaml");
+/// The main file of the default deployment, which includes each of its eras
+/// from its own file.
+const SERIALIZED_DEPLOYMENT: &str = include_str!("settings.yaml");
+/// The era files the default deployment includes, each keyed by the path its
+/// main file includes it by: every `.yaml` file in `era/schedule/`, as the
+/// build script lists them.
+const SERIALIZED_ERAS: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/serialized_eras.rs"));
 
 type EraSchedule = lb_time::era::EraSchedule<EraDefinition>;
 
@@ -51,7 +58,7 @@ impl DeploymentSettings {
     /// `eras` declares, resolved: where each era starts, and its digest and
     /// fork digest.
     ///
-    /// # Errors
+    /// # Panics
     ///
     /// If an era starts beyond the slots or the time this node can represent.
     #[must_use]
@@ -60,7 +67,8 @@ impl DeploymentSettings {
             genesis_block.header().id(),
             genesis_block.genesis_tx().genesis_parameters().start_time,
         );
-        let mut era_digests = Vec::with_capacity(1);
+        let eras_after_genesis = eras.eras_after_genesis();
+        let mut era_digests = Vec::with_capacity(eras_after_genesis.len() + 1);
         // Called in activation order: the fork digest of an era is over the
         // digests of the eras up to it.
         let mut definition = |first_epoch: Epoch, ruleset: &EraRuleset| {
@@ -73,14 +81,17 @@ impl DeploymentSettings {
                 fork_digest,
             }
         };
-        // Only single-era schedules are supported for now.
         let genesis = definition(GENESIS_EPOCH, eras.genesis_era());
-        let eras = EraSchedule::new(
-            genesis_time.into(),
-            genesis,
-            EraEntriesAfterGenesis::empty(),
-        )
-        .unwrap();
+        let after_genesis = EraEntriesAfterGenesis::try_from_iter(eras_after_genesis.iter().map(
+            |(&first_epoch, ruleset)| {
+                (
+                    first_epoch,
+                    definition(Epoch::new(first_epoch.get()), ruleset),
+                )
+            },
+        ))
+        .expect("The resolved eras are as many as the declared ones.");
+        let eras = EraSchedule::new(genesis_time.into(), genesis, after_genesis).unwrap();
         Self {
             eras,
             genesis_block,
@@ -123,11 +134,6 @@ impl DeploymentSettings {
         self.genesis_block.header().id()
     }
 
-    #[must_use]
-    pub const fn genesis_fork_digest(&self) -> ForkDigest {
-        self.eras.genesis().parameters.fork_digest
-    }
-
     /// The fork digest of the era in force by the wall clock, which names the
     /// fork-bound protocols of this deployment's chain now: the genesis era's
     /// before genesis.
@@ -157,7 +163,8 @@ impl DeploymentSettings {
     ///
     /// # Panics
     ///
-    /// Never: a schedule of the genesis era alone always resolves.
+    /// If the change makes a later era start beyond the slots or the time this
+    /// node can represent.
     pub fn update_genesis_era_parameters<Update>(&mut self, update: Update)
     where
         Update: FnOnce(&mut v1::Parameters),
@@ -188,8 +195,8 @@ impl From<EraDefinitions> for DeploymentSettings {
     }
 }
 
-/// The eras as the file declares them: each era's block version and
-/// parameters, keyed by the epoch it starts at.
+/// The eras as the file declares them: each era's ruleset, keyed by the epoch
+/// it starts at.
 impl From<DeploymentSettings> for EraDefinitions {
     fn from(
         DeploymentSettings {
@@ -197,10 +204,13 @@ impl From<DeploymentSettings> for EraDefinitions {
             genesis_block,
         }: DeploymentSettings,
     ) -> Self {
-        // Only single-era schedules are supported for now.
-        let genesis = eras.genesis();
+        let declarations = eras
+            .iter()
+            .map(|era| (era.first_epoch, era.parameters.ruleset.clone()))
+            .collect::<BTreeMap<_, _>>();
         Self {
-            eras: EraDeclarations::new_genesis(genesis.parameters.ruleset.clone()),
+            eras: EraDeclarations::try_from(declarations)
+                .expect("A resolved schedule declares its eras from genesis on."),
             genesis_block,
         }
     }
@@ -230,18 +240,73 @@ impl EpochLength for EraDefinition {
 
 impl Default for DeploymentSettings {
     fn default() -> Self {
-        deserialize_value_from_reader(SERIALIZED_DEPLOYMENT, OnUnknownKeys::Fail)
+        deserialize_embedded_value(SERIALIZED_DEPLOYMENT, SERIALIZED_ERAS, OnUnknownKeys::Fail)
             .expect("Default deployment settings must be valid.")
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use lb_core::era::ForkDigest;
+    use lb_time::{Epoch, Era};
+    use lb_utils::yaml::INCLUDE_TAG;
+    use serde_yaml::Value;
+
+    use super::{EraDeclarations, EraDefinitions, SERIALIZED_DEPLOYMENT, SERIALIZED_ERAS};
     use crate::config::DeploymentSettings;
+
+    /// The default deployment, with a second era from epoch 10 that runs the
+    /// genesis era's ruleset.
+    fn two_eras() -> DeploymentSettings {
+        let EraDefinitions {
+            eras,
+            genesis_block,
+        } = DeploymentSettings::default().into();
+        let ruleset = eras.genesis_era().clone();
+        let eras = EraDeclarations::try_from(BTreeMap::from([
+            (Epoch::new(0), ruleset.clone()),
+            (Epoch::new(10), ruleset),
+        ]))
+        .unwrap();
+        DeploymentSettings::new(&eras, genesis_block)
+    }
 
     #[test]
     fn default_initialization() {
         drop(DeploymentSettings::default());
+    }
+
+    #[test]
+    fn the_default_deployment_includes_each_era_file_by_its_era_number() {
+        let main: Value = serde_yaml::from_str(SERIALIZED_DEPLOYMENT).unwrap();
+        let mut includes_by_first_epoch: Vec<(u64, &str)> = main["eras"]
+            .as_mapping()
+            .unwrap()
+            .iter()
+            .map(|(first_epoch, era)| match era {
+                Value::Tagged(include) if include.tag == INCLUDE_TAG => (
+                    first_epoch.as_u64().unwrap(),
+                    include.value.as_str().unwrap(),
+                ),
+                other => panic!("each era is included from its own file, not {other:?}"),
+            })
+            .collect();
+        includes_by_first_epoch.sort_unstable();
+        let included: Vec<&str> = includes_by_first_epoch
+            .into_iter()
+            .map(|(_, path)| path)
+            .collect();
+
+        // Eras are numbered in the order they start.
+        let era_files: Vec<String> = (0..included.len())
+            .map(|era_number| format!("era/schedule/{era_number}.yaml"))
+            .collect();
+        assert_eq!(included, era_files);
+        // The build script embeds every era file in the directory.
+        let embedded: BTreeSet<&str> = SERIALIZED_ERAS.iter().map(|(path, _)| *path).collect();
+        assert_eq!(embedded, included.into_iter().collect());
     }
 
     #[test]
@@ -252,16 +317,46 @@ mod tests {
     }
 
     #[test]
-    fn the_fork_digest_survives_a_round_trip_through_yaml() {
-        // Not pinned to a value: the default deployment changes at every
+    fn every_era_survives_a_round_trip_through_yaml() {
+        // Not pinned to values: the default deployment changes at every
         // genesis ceremony. What must hold is that the digests depend only on
         // the settings, not on how they were loaded.
-        let settings = DeploymentSettings::default();
+        let settings = two_eras();
         let recovered: DeploymentSettings =
             serde_yaml::from_str(&serde_yaml::to_string(&settings).unwrap()).unwrap();
+        let fork_digests = |settings: &DeploymentSettings| {
+            settings
+                .era_schedule()
+                .iter()
+                .map(|era| era.parameters.fork_digest)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(fork_digests(&settings).len(), 2);
+        assert_eq!(fork_digests(&recovered), fork_digests(&settings));
+    }
+
+    #[test]
+    fn each_era_has_the_fork_digest_of_the_eras_up_to_it() {
+        let settings = two_eras();
+        let schedule = settings.era_schedule();
+        let (genesis, second) = (schedule.genesis(), schedule.get(Era::new(1)).unwrap());
+
+        assert_eq!(second.first_epoch, Epoch::new(10));
+        // A later era leaves the fork digests of the eras before it unchanged.
         assert_eq!(
-            recovered.genesis_fork_digest(),
-            settings.genesis_fork_digest()
+            genesis.parameters.fork_digest,
+            DeploymentSettings::default()
+                .era_schedule()
+                .genesis()
+                .parameters
+                .fork_digest
+        );
+        assert_eq!(
+            second.parameters.fork_digest,
+            ForkDigest::compute(
+                settings.genesis_id(),
+                [genesis.parameters.digest, second.parameters.digest].into_iter()
+            )
         );
     }
 
@@ -273,9 +368,12 @@ mod tests {
             let reward = &mut parameters.cryptarchia.pow_config.reward;
             reward.slot_window = reward.slot_window.checked_add(1).unwrap();
         });
+        let genesis_fork_digest = |settings: &DeploymentSettings| {
+            settings.era_schedule().genesis().parameters.fork_digest
+        };
         assert_ne!(
-            changed.genesis_fork_digest(),
-            settings.genesis_fork_digest()
+            genesis_fork_digest(&changed),
+            genesis_fork_digest(&settings)
         );
     }
 }

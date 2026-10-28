@@ -66,10 +66,16 @@
             ".hex"
             "nodes/node/binary/src/config/deployment/settings.yaml"
           ];
+          # Directories whose files are embedded too: the era files the
+          # default deployment includes.
+          assetDirs = [
+            "nodes/node/binary/src/config/deployment/era/schedule/"
+          ];
           src = pkgs.lib.cleanSourceWith {
             src = craneLib.path ./.;
             filter = path: type:
               (pkgs.lib.any (suffix: pkgs.lib.hasSuffix suffix path) assetSuffixes) ||
+              (pkgs.lib.any (dir: pkgs.lib.hasInfix dir path) assetDirs) ||
               (craneLib.filterCargoSources path type);
           };
           crateName = craneLib.crateNameFromCargoToml { inherit src; };

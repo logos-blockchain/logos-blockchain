@@ -1,4 +1,4 @@
-use core::fmt;
+use core::{fmt, iter, num::NonZero};
 use std::collections::BTreeMap;
 
 use ::serde::{
@@ -6,6 +6,7 @@ use ::serde::{
     de::{Error as _, MapAccess, Visitor},
 };
 use lb_cryptarchia_engine::Epoch;
+use lb_time::era::EraEntriesAfterGenesis;
 
 use crate::config::deployment::era::ruleset::EraRuleset;
 
@@ -23,15 +24,11 @@ pub const GENESIS_EPOCH: Epoch = Epoch::genesis();
 /// and ordered. The first era must start at genesis. Deserialization also
 /// requires the eras to be listed by strictly increasing first epoch, which
 /// rules out a repeated epoch too.
-///
-/// Only a single era is supported for now, so a schedule of more than one era
-/// is rejected, and the schedule holds that one era directly.
 #[derive(Serialize, Debug, Clone)]
 #[serde(into = "BTreeMap<Epoch, EraRuleset>")]
 pub struct EraDeclarations {
-    // Right now we support a single era starting at genesis, so from the input map we only store
-    // the genesis era.
     genesis_era_ruleset: EraRuleset,
+    eras_after_genesis: EraEntriesAfterGenesis<EraRuleset>,
 }
 
 impl EraDeclarations {
@@ -40,10 +37,11 @@ impl EraDeclarations {
     pub const fn new_genesis(ruleset: EraRuleset) -> Self {
         Self {
             genesis_era_ruleset: ruleset,
+            eras_after_genesis: EraEntriesAfterGenesis::empty(),
         }
     }
 
-    /// The era in force: the only era of the schedule, for now.
+    /// The era that starts at genesis.
     #[must_use]
     pub const fn genesis_era(&self) -> &EraRuleset {
         &self.genesis_era_ruleset
@@ -53,15 +51,27 @@ impl EraDeclarations {
         &mut self.genesis_era_ruleset
     }
 
+    /// The eras after genesis, keyed by the epoch each starts at.
     #[must_use]
-    pub fn into_genesis_era(self) -> EraRuleset {
-        self.genesis_era_ruleset
+    pub const fn eras_after_genesis(&self) -> &EraEntriesAfterGenesis<EraRuleset> {
+        &self.eras_after_genesis
     }
 }
 
 impl From<EraDeclarations> for BTreeMap<Epoch, EraRuleset> {
-    fn from(schedule: EraDeclarations) -> Self {
-        Self::from([(GENESIS_EPOCH, schedule.genesis_era_ruleset)])
+    fn from(
+        EraDeclarations {
+            genesis_era_ruleset,
+            eras_after_genesis,
+        }: EraDeclarations,
+    ) -> Self {
+        iter::once((GENESIS_EPOCH, genesis_era_ruleset))
+            .chain(
+                eras_after_genesis
+                    .into_iter()
+                    .map(|(first_epoch, ruleset)| (Epoch::new(first_epoch.get()), ruleset)),
+            )
+            .collect()
     }
 }
 
@@ -81,8 +91,12 @@ pub enum EraScheduleError {
         .previous.into_inner()
     )]
     OutOfOrder { previous: Epoch, next: Epoch },
-    #[error("schedules of more than one era are not supported yet, got {0} eras")]
-    MultipleEras(usize),
+    #[error(
+        "a schedule holds at most {} eras after the genesis era, not {}",
+        EraEntriesAfterGenesis::<EraRuleset>::MAX,
+        .0
+    )]
+    TooManyEras(usize),
 }
 
 impl TryFrom<BTreeMap<Epoch, EraRuleset>> for EraDeclarations {
@@ -90,21 +104,27 @@ impl TryFrom<BTreeMap<Epoch, EraRuleset>> for EraDeclarations {
 
     /// Builds a schedule from eras keyed by their first epoch. The map keeps
     /// them unique and ordered, so only the first one needs checking: it must
-    /// start at genesis, and run a listed combination of versions.
+    /// start at genesis.
     fn try_from(mut era_declarations: BTreeMap<Epoch, EraRuleset>) -> Result<Self, Self::Error> {
-        let Some((first_epoch, genesis_era)) = era_declarations.pop_first() else {
+        let Some((first_epoch, genesis_era_ruleset)) = era_declarations.pop_first() else {
             return Err(EraScheduleError::Empty);
         };
         if first_epoch != GENESIS_EPOCH {
             return Err(EraScheduleError::FirstEraAfterGenesis(first_epoch));
         }
-        // Check remaining entries in the map. We still don't accept more than a single
-        // era definition, so we bail out if anything else than the genesis era
-        // definition is provided, at the moment.
-        if !era_declarations.is_empty() {
-            return Err(EraScheduleError::MultipleEras(era_declarations.len() + 1));
-        }
-        Ok(Self::new_genesis(genesis_era))
+        let eras_after_genesis_count = era_declarations.len();
+        let eras_after_genesis = EraEntriesAfterGenesis::try_from_iter(
+            era_declarations.into_iter().map(|(first_epoch, ruleset)| {
+                let first_epoch = NonZero::new(first_epoch.into_inner())
+                    .expect("Only the genesis era starts at epoch 0.");
+                (first_epoch, ruleset)
+            }),
+        )
+        .map_err(|_| EraScheduleError::TooManyEras(eras_after_genesis_count))?;
+        Ok(Self {
+            genesis_era_ruleset,
+            eras_after_genesis,
+        })
     }
 }
 
@@ -250,25 +270,28 @@ mod tests {
     }
 
     #[test]
-    fn more_than_one_era_is_rejected() {
-        let expected = EraScheduleError::MultipleEras(2);
-        assert!(rejection(&[0, 10]).contains(&expected.to_string()));
-        assert_eq!(construct(&[0, 10]).unwrap_err(), expected);
+    fn every_era_of_the_schedule_is_kept() {
+        let expected = [Epoch::new(0), Epoch::new(10), Epoch::new(25)];
+        let schedule: EraDeclarations = serde_yaml::from_str(&yaml(&[0, 10, 25])).unwrap();
+        assert_eq!(first_epochs(&schedule), expected);
+        assert_eq!(first_epochs(&construct(&[0, 10, 25]).unwrap()), expected);
     }
 
     #[test]
     fn the_schedule_round_trips_as_a_map_keyed_by_first_epoch() {
-        let schedule = EraDeclarations::new_genesis(ruleset());
+        let schedule = construct(&[0, 10]).unwrap();
+        let expected = [Epoch::new(0), Epoch::new(10)];
 
         let yaml = serde_yaml::to_string(&schedule).unwrap();
         assert!(yaml.starts_with("0: !V1\n"), "{yaml}");
+        assert!(yaml.contains("\n10: !V1\n"), "{yaml}");
         let decoded: EraDeclarations = serde_yaml::from_str(&yaml).unwrap();
-        assert_eq!(first_epochs(&decoded), [Epoch::new(0)]);
+        assert_eq!(first_epochs(&decoded), expected);
 
         let json = serde_json::to_string(&schedule).unwrap();
         assert!(json.starts_with(r#"{"0":"#), "{json}");
         let decoded: EraDeclarations = serde_json::from_str(&json).unwrap();
-        assert_eq!(first_epochs(&decoded), [Epoch::new(0)]);
+        assert_eq!(first_epochs(&decoded), expected);
     }
 
     #[test]
