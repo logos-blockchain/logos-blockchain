@@ -14,7 +14,8 @@ use crate::{
 ///
 /// The count is checked against the era's maximum, a `u8` like every era's
 /// maximum, when the headers are built or decoded. Serde reads them without
-/// an era, under the largest maximum.
+/// an era, under the largest maximum allowed by the type used for length
+/// prefix.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct UncleHeaders(UpperRuntimeBoundedVec<SignedHeader, u8>);
 

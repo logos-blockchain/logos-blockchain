@@ -28,8 +28,6 @@ pub struct CoreServiceEraSettings {
     pub scheduler: EraSchedulerSettings,
     pub time: EraTimingSettings,
     pub num_blend_layers: NonZeroU64,
-    /// The size every payload body of the era is padded to: the largest block
-    /// proposal of the era, the largest thing the Blend network carries.
     pub payload_body_size: u16,
     pub minimum_network_size: NonZeroU64,
     pub data_replication_factor: u64,

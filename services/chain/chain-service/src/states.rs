@@ -92,7 +92,7 @@ impl ServiceState for CryptarchiaConsensusState {
             lib_ledger_state,
             lib_block_length: 0,
             lib_block_slot: lb_cryptarchia_engine::Slot::default(),
-            lib_block_uncle_slots: lb_cryptarchia_engine::UncleSlots::empty(),
+            lib_block_uncle_slots: lb_cryptarchia_engine::UncleSlots::default(),
             genesis_id,
             storage_blocks_to_remove: HashSet::new(),
             last_engine_state: None,
@@ -230,7 +230,7 @@ mod tests {
                     [1; 32].into(),
                     genesis_header_id,
                     1.into(),
-                    UncleSlots::empty(),
+                    UncleSlots::default(),
                 )
                 .expect("Block 1 to be added successfully on top of block 0.");
             cryptarchia
@@ -238,7 +238,7 @@ mod tests {
                     [2; 32].into(),
                     [1; 32].into(),
                     2.into(),
-                    UncleSlots::empty(),
+                    UncleSlots::default(),
                 )
                 .expect("Block 2 to be added successfully on top of block 1.");
             cryptarchia
@@ -246,7 +246,7 @@ mod tests {
                     [3; 32].into(),
                     [2; 32].into(),
                     3.into(),
-                    UncleSlots::empty(),
+                    UncleSlots::default(),
                 )
                 .expect("Block 3 to be added successfully on top of block 2.");
             // Add a 2-block fork from genesis
@@ -255,7 +255,7 @@ mod tests {
                     [4; 32].into(),
                     genesis_header_id,
                     1.into(),
-                    UncleSlots::empty(),
+                    UncleSlots::default(),
                 )
                 .expect("Block 4 to be added successfully on top of block 0.");
             cryptarchia
@@ -263,7 +263,7 @@ mod tests {
                     [5; 32].into(),
                     [4; 32].into(),
                     2.into(),
-                    UncleSlots::empty(),
+                    UncleSlots::default(),
                 )
                 .expect("Block 5 to be added successfully on top of block 4.");
             // Add a second single-block fork from genesis
@@ -272,7 +272,7 @@ mod tests {
                     [6; 32].into(),
                     genesis_header_id,
                     1.into(),
-                    UncleSlots::empty(),
+                    UncleSlots::default(),
                 )
                 .expect("Block 6 to be added successfully on top of block 0.");
             // Add a single-block fork from the block after genesis (block `1`)
@@ -281,7 +281,7 @@ mod tests {
                     [7; 32].into(),
                     [1; 32].into(),
                     2.into(),
-                    UncleSlots::empty(),
+                    UncleSlots::default(),
                 )
                 .expect("Block 7 to be added successfully on top of block 1.");
             // Add a single-block fork from the second block after genesis (block `2`)
@@ -290,7 +290,7 @@ mod tests {
                     [8; 32].into(),
                     [2; 32].into(),
                     3.into(),
-                    UncleSlots::empty(),
+                    UncleSlots::default(),
                 )
                 .expect("Block 8 to be added successfully on top of block 2.");
 

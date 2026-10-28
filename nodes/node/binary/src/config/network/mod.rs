@@ -1,12 +1,6 @@
 use std::collections::HashMap;
 
-use lb_core::{
-    block::Block,
-    header::HeaderId,
-    mantle::{
-        SignedOps, ledger::verification_mode::StandardMode, transactions::states::Preverified,
-    },
-};
+use lb_core::{self, block::Block, header::HeaderId};
 use lb_cryptarchia_engine::time::EraSchedule;
 use lb_libp2p::{
     ChainSyncSettings, IdentifySettings, KademliaSettings, SwarmConfig, config::CachingSettings,
@@ -19,9 +13,12 @@ use lb_network_service::{
 use lb_tx_service::network::adapters::libp2p::MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE;
 use libp2p::gossipsub::{IdentTopic, TopicHash};
 
-use crate::config::{
-    deployment::{EraDefinition, era::ruleset::EraRuleset},
-    network::serde::Config,
+use crate::{
+    ValidatedTx,
+    config::{
+        deployment::{EraDefinition, era::ruleset::EraRuleset},
+        network::serde::Config,
+    },
 };
 
 pub mod serde;
@@ -109,10 +106,9 @@ impl ServiceConfig {
                     Libp2pEraConfig {
                         fork_digest: era.parameters.fork_digest,
                         chain_sync_protocol_name: fork.to_stream_protocol_with_name("chainsync"),
-                        chain_sync_max_block_size:
-                            Block::<SignedOps<Preverified, StandardMode>>::max_encoded_size(
-                                parameters.cryptarchia.max_uncles,
-                            ),
+                        chain_sync_max_block_size: Block::<ValidatedTx>::max_encoded_size(
+                            parameters.cryptarchia.max_uncles,
+                        ),
                         max_data_size_by_topic: max_data_size_by_topic(
                             &fork.to_string_with_name("mempool"),
                             &fork.to_string_with_name("cryptarchia"),

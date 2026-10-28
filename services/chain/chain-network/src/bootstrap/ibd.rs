@@ -684,7 +684,7 @@ mod tests {
             ready(
                 self.cryptarchia
                     .consensus
-                    .receive_block(block.id, block.parent, block.slot, UncleSlots::empty())
+                    .receive_block(block.id, block.parent, block.slot, UncleSlots::default())
                     .map_err(|e| {
                         self.process_block_failures.fetch_add(1, Ordering::SeqCst);
                         Error::BlockProcessing(ChainError::InvalidBlock(format!(

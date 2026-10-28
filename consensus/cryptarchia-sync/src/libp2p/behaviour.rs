@@ -137,7 +137,8 @@ pub struct Behaviour {
     /// Configuration for the behaviour.
     config: Config,
     /// The largest response that carries a block: one that carries the largest
-    /// block of any era.
+    /// block of any era. Chain-sync is fork digest-bound, but it serves blocks
+    /// of all eras, so the maximum needs to take that into account.
     max_blocks_response_size: usize,
 }
 

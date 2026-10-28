@@ -21,7 +21,7 @@ pub async fn send_message<M: BoundedSerializeOp + DeserializeOwned + Sync>(
     flush(peer_id, stream).await
 }
 
-/// Sends a message of at most `max` bytes, a maximum known only at runtime.
+/// Sends a message of at most `max` bytes.
 pub async fn send_message_up_to<M: Serialize + Sync>(
     peer_id: PeerId,
     stream: &mut Stream,

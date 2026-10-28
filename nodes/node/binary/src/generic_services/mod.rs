@@ -3,12 +3,7 @@ use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapter;
 use lb_chain_service::CryptarchiaConsensus;
 use lb_core::{
     header::HeaderId,
-    mantle::{
-        SignedOps,
-        ledger::verification_mode::StandardMode,
-        traits::Hashable,
-        transactions::{hash::TxHash, states::Preverified},
-    },
+    mantle::{traits::Hashable, transactions::hash::TxHash},
 };
 use lb_key_management_system_service::backend::preload::PreloadKMSBackend;
 use lb_sdp_service::{SdpSettings, state::SdpState};
@@ -16,29 +11,23 @@ use lb_storage_service::recovery::StorageRecoveryBackend;
 use lb_time_service::backends::NtpTimeBackend;
 use lb_tx_service::{backend::pool::Mempool, storage::adapters::rocksdb::RocksStorageAdapter};
 
-use crate::generic_services::blend::BlendService;
+use crate::{ValidatedTx, generic_services::blend::BlendService};
 
 pub mod blend;
 pub mod sdp;
 
 pub type MempoolNetworkAdapter<RuntimeServiceId> =
     lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
-        SignedOps<Preverified, StandardMode>,
-        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+        ValidatedTx,
+        <ValidatedTx as Hashable>::Hash,
         RuntimeServiceId,
     >;
 
-pub type MempoolRocksStorageAdapter = RocksStorageAdapter<
-    SignedOps<Preverified, StandardMode>,
-    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
->;
+pub type MempoolRocksStorageAdapter =
+    RocksStorageAdapter<ValidatedTx, <ValidatedTx as Hashable>::Hash>;
 
-pub type MempoolPool<RuntimeServiceId> = Mempool<
-    HeaderId,
-    SignedOps<Preverified, StandardMode>,
-    MempoolRocksStorageAdapter,
-    RuntimeServiceId,
->;
+pub type MempoolPool<RuntimeServiceId> =
+    Mempool<HeaderId, ValidatedTx, MempoolRocksStorageAdapter, RuntimeServiceId>;
 
 pub type TxMempoolService<RuntimeServiceId> = lb_tx_service::TxMempoolService<
     MempoolNetworkAdapter<RuntimeServiceId>,
@@ -52,27 +41,24 @@ pub type TimeService<RuntimeServiceId> =
     lb_time_service::TimeService<NtpTimeBackend, RuntimeServiceId>;
 
 pub type MempoolAdapter<RuntimeServiceId> = lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
-    SignedOps<Preverified, StandardMode>,
-    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+    ValidatedTx,
+    <ValidatedTx as Hashable>::Hash,
     RuntimeServiceId,
 >;
 
 pub type MempoolBackend<RuntimeServiceId> = Mempool<
     HeaderId,
-    SignedOps<Preverified, StandardMode>,
-    RocksStorageAdapter<
-        SignedOps<Preverified, StandardMode>,
-        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-    >,
+    ValidatedTx,
+    RocksStorageAdapter<ValidatedTx, <ValidatedTx as Hashable>::Hash>,
     RuntimeServiceId,
 >;
 
 pub type CryptarchiaService<RuntimeServiceId> =
-    CryptarchiaConsensus<SignedOps<Preverified, StandardMode>, NtpTimeBackend, RuntimeServiceId>;
+    CryptarchiaConsensus<ValidatedTx, NtpTimeBackend, RuntimeServiceId>;
 
 pub type ChainNetworkService<RuntimeServiceId> = lb_chain_network_service::ChainNetwork<
     CryptarchiaService<RuntimeServiceId>,
-    LibP2pAdapter<SignedOps<Preverified, StandardMode>, RuntimeServiceId>,
+    LibP2pAdapter<ValidatedTx, RuntimeServiceId>,
     MempoolBackend<RuntimeServiceId>,
     MempoolAdapter<RuntimeServiceId>,
     NtpTimeBackend,
@@ -85,7 +71,7 @@ pub type KeyManagementService<RuntimeServiceId> =
 pub type WalletService<Cryptarchia, RuntimeServiceId> = lb_wallet_service::WalletService<
     KeyManagementService<RuntimeServiceId>,
     Cryptarchia,
-    SignedOps<Preverified, StandardMode>,
+    ValidatedTx,
     RuntimeServiceId,
 >;
 
@@ -102,18 +88,11 @@ pub type CryptarchiaLeaderService<Cryptarchia, ChainNetwork, Wallet, RuntimeServ
     >;
 
 pub type SdpMempoolAdapter<RuntimeServiceId> = sdp::mempool::SdpMempoolAdapter<
-    lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
-        SignedOps<Preverified, StandardMode>,
-        TxHash,
-        RuntimeServiceId,
-    >,
+    lb_tx_service::network::adapters::libp2p::Libp2pAdapter<ValidatedTx, TxHash, RuntimeServiceId>,
     Mempool<
         HeaderId,
-        SignedOps<Preverified, StandardMode>,
-        RocksStorageAdapter<
-            SignedOps<Preverified, StandardMode>,
-            <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-        >,
+        ValidatedTx,
+        RocksStorageAdapter<ValidatedTx, <ValidatedTx as Hashable>::Hash>,
         RuntimeServiceId,
     >,
     RuntimeServiceId,

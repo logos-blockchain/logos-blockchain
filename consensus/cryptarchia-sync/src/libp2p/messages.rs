@@ -150,9 +150,7 @@ pub enum BlocksResponse {
 }
 
 // These compile-time guards justify removing the former shared Chain Sync
-// admission ceiling without making it runtime policy again. A `BlocksResponse`
-// is bounded by the largest block of the eras, known only at runtime: the
-// behaviour checks it when it is built.
+// admission ceiling without making it runtime policy again.
 const _: () = {
     assert!(
         <RequestMessage as BoundedSerializeOp>::MAX_ENCODED_SIZE

@@ -56,7 +56,7 @@ where
     writer.write_all(packed_message).await.map_err(Into::into)
 }
 
-/// Packs a message of at most `max` bytes, a maximum known only at runtime.
+/// Packs a message of at most `max` bytes.
 pub async fn pack_to_writer_up_to<Message, Writer>(
     message: &Message,
     max_bytes: usize,
@@ -93,7 +93,7 @@ where
     unpack_from_reader_up_to(reader, <Message::Bytes as BoundedBytes>::MAX).await
 }
 
-/// Unpacks a message of at most `max` bytes, a maximum known only at runtime.
+/// Unpacks a message of at most `max` bytes.
 pub async fn unpack_from_reader_up_to<Message, R>(
     reader: &mut R,
     max_bytes: usize,

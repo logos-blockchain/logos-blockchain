@@ -42,7 +42,6 @@ pub struct Config {
 pub struct CommonConfig {
     pub round_duration_in_seconds: NonZeroU64,
     pub minimum_network_size: NonZeroUsize,
-    /// The layout every well-formed Blend message of the era has.
     pub message_layout: MessageLayout,
 }
 

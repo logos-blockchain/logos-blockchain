@@ -190,8 +190,6 @@ where
     }
 }
 
-// `header || uncle_headers || transactions || signature`: the header first, so
-// that the slot, which picks the era a block is decoded under, comes first.
 impl<Tx> BinaryEncode for Block<Tx>
 where
     Tx: BinaryEncode + Hashable<Hash = TxHash> + StorageSize,
@@ -297,8 +295,6 @@ impl Proposal {
 pub type BlockTransactions<Tx> = BoundedVec<Tx, 0, MAX_BLOCK_TRANSACTIONS>;
 
 impl<Tx> Block<Tx> {
-    /// Creates a block whose `uncle_headers` were built under the maximum of
-    /// its era.
     pub fn create(
         parent_block: HeaderId,
         slot: Slot,
@@ -346,8 +342,6 @@ impl<Tx> Block<Tx> {
         Ok(block)
     }
 
-    /// Rebuilds a block from its parts, checking them: its `uncle_headers`
-    /// were built or decoded under the maximum of its era.
     pub fn reconstruct(
         header: Header,
         uncle_headers: UncleHeaders,

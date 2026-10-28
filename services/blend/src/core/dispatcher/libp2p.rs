@@ -73,25 +73,42 @@ pub struct Libp2pPayloadDispatcher<
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct Libp2pBroadcastSettings {
     pub topic: String,
+    /// The size of the largest block proposal of the era: a larger one is not
+    /// broadcast.
+    pub max_proposal_size: usize,
 }
 
-fn proposal_topic_for_era(era_schedule: &EraSchedule<Libp2pBroadcastSettings>, era: Era) -> String {
+fn broadcast_settings_for_era(
+    era_schedule: &EraSchedule<Libp2pBroadcastSettings>,
+    era: Era,
+) -> &Libp2pBroadcastSettings {
     era_schedule
         .get(era)
         .expect("The eras of the dispatcher are scheduled.")
         .parameters
-        .topic
-        .clone()
 }
 
 /// Broadcast an unencrypted block proposal to the network by publishing it
-/// under the configured gossipsub topic, which refuses one larger than the
-/// largest proposal of its era.
-async fn broadcast_block_proposal(network_relay: &NetworkRelay, topic: String, proposal: Vec<u8>) {
+/// under the gossipsub topic of its era.
+async fn broadcast_block_proposal(
+    network_relay: &NetworkRelay,
+    era_settings: &Libp2pBroadcastSettings,
+    proposal: Vec<u8>,
+) {
+    if proposal.len() > era_settings.max_proposal_size {
+        tracing::error!(
+            target: LOG_TARGET,
+            size = proposal.len(),
+            maximum = era_settings.max_proposal_size,
+            "Refusing to broadcast an oversized block proposal"
+        );
+        return;
+    }
+
     if let Err(error) = network_relay
         .send(NetworkMsg::Process(Command::PubSub(
             PubSubCommand::Broadcast {
-                topic,
+                topic: era_settings.topic.clone(),
                 message: proposal.into_boxed_slice(),
             },
         )))
@@ -356,8 +373,8 @@ where
                     );
                     return;
                 }
-                let topic = proposal_topic_for_era(&self.era_schedule, era);
-                broadcast_block_proposal(&self.network_relay, topic, proposal).await;
+                let era_settings = broadcast_settings_for_era(&self.era_schedule, era);
+                broadcast_block_proposal(&self.network_relay, era_settings, proposal).await;
             }
             DataPayload::Transaction(transaction) => {
                 submit_transaction(&self.mempool_relay, transaction).await;

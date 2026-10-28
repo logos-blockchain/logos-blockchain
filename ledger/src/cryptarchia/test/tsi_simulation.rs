@@ -325,7 +325,7 @@ fn select_uncles(
     uncle_enabled: bool,
 ) -> UncleSlots {
     if !uncle_enabled {
-        return UncleSlots::empty();
+        return UncleSlots::default();
     }
     let uncle_slots = engine
         .select_uncles(engine.branches().get(&parent).unwrap(), slot)

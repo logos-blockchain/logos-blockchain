@@ -339,8 +339,8 @@ where
                         },
                         ProxyServiceMessage::Blend { payload, reply } => {
                             let processing_result = match payload.validate_size(era_payload_body_size) {
-                                Ok(payload_with_validated_size) => instance
-                                    .handle_inbound_message(ServiceMessage::Blend(payload_with_validated_size.into_inner()))
+                                Ok(()) => instance
+                                    .handle_inbound_message(ServiceMessage::Blend(payload))
                                     .await
                                     .map_err(|e| {
                                         error!(target: LOG_TARGET, "Failed to handle inbound message: {e:?}");

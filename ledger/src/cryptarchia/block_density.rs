@@ -104,17 +104,17 @@ mod tests {
     fn test_mark_occupied_slots() {
         let mut density = BlockDensity::new(1.into(), &single_era(config()));
         assert_eq!(density.period_range(), &(100.into()..=159.into()));
-        density.mark_occupied_slots(Slot::from(100), &UncleSlots::empty());
+        density.mark_occupied_slots(Slot::from(100), &UncleSlots::default());
         assert_eq!(density.current_block_density(), 1);
-        density.mark_occupied_slots(Slot::from(159), &UncleSlots::empty());
+        density.mark_occupied_slots(Slot::from(159), &UncleSlots::default());
         assert_eq!(density.current_block_density(), 2);
         // slot order doesn't matter
-        density.mark_occupied_slots(Slot::from(140), &UncleSlots::empty());
+        density.mark_occupied_slots(Slot::from(140), &UncleSlots::default());
         assert_eq!(density.current_block_density(), 3);
         // blocks outside the period are ignored
-        density.mark_occupied_slots(Slot::from(95), &UncleSlots::empty());
+        density.mark_occupied_slots(Slot::from(95), &UncleSlots::default());
         assert_eq!(density.current_block_density(), 3);
-        density.mark_occupied_slots(Slot::from(160), &UncleSlots::empty());
+        density.mark_occupied_slots(Slot::from(160), &UncleSlots::default());
         assert_eq!(density.current_block_density(), 3);
     }
 

@@ -147,17 +147,14 @@ impl DataPayload {
     /// # Errors
     ///
     /// [`PayloadTooLarge`] if it does not.
-    pub(super) fn validate_size(
-        self,
-        payload_body_size: u16,
-    ) -> Result<DataPayloadWithValidatedSize, PayloadTooLarge> {
+    pub(super) fn validate_size(&self, payload_body_size: u16) -> Result<(), PayloadTooLarge> {
         if self.len() > usize::from(payload_body_size) {
             return Err(PayloadTooLarge {
                 size: self.len(),
                 maximum: payload_body_size,
             });
         }
-        Ok(DataPayloadWithValidatedSize(self))
+        Ok(())
     }
 
     /// The wire discriminant this payload travels under.
@@ -184,18 +181,6 @@ impl DataPayload {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.body().is_empty()
-    }
-}
-
-/// A payload that fits a payload body of the epoch it was submitted in, built
-/// only by [`DataPayload::validate_size`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DataPayloadWithValidatedSize(DataPayload);
-
-impl DataPayloadWithValidatedSize {
-    #[must_use]
-    pub fn into_inner(self) -> DataPayload {
-        self.0
     }
 }
 

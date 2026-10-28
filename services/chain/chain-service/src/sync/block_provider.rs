@@ -877,7 +877,7 @@ mod tests {
 
                 if i > 0 {
                     self.cryptarchia
-                        .receive_block(*header_id, *prev_header, *slot, UncleSlots::empty())
+                        .receive_block(*header_id, *prev_header, *slot, UncleSlots::default())
                         .expect("Failed to add block to cryptarchia");
                 }
 
@@ -914,7 +914,7 @@ mod tests {
             slot: Slot,
         ) {
             self.cryptarchia
-                .receive_block(header_id, prev_header, slot, UncleSlots::empty())
+                .receive_block(header_id, prev_header, slot, UncleSlots::default())
                 .expect("Failed to add block to cryptarchia");
 
             self.store_block_in_storage(block, header_id, slot).await;
@@ -1133,7 +1133,7 @@ mod tests {
                 lb_cryptarchia_engine::State::Bootstrapping,
                 0.into(),
                 0,
-                UncleSlots::empty(),
+                UncleSlots::default(),
             )
         }
     }

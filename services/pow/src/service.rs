@@ -1666,13 +1666,13 @@ fn claim_tx_size(claims: usize) -> Result<u64, PoWError> {
 /// Resolved by shrinking a probe batch from the op cap until it fits, so the
 /// limit follows the encoding rather than restating it. The service resolves
 /// it once per era, when it enters the era.
-fn max_claims_by_payload_size(payload_body_size: usize) -> usize {
+fn max_claims_by_payload_size(max_payload_body_size: usize) -> usize {
     (1..=max_claims_by_ops())
         .rev()
-        .find(|&claims| claim_tx_size(claims).is_ok_and(|size| size <= payload_body_size as u64))
-        .expect(
-            "A single-claim tx fits a Blend payload body, which holds the largest block proposal.",
-        )
+        .find(|&claims| {
+            claim_tx_size(claims).is_ok_and(|size| size <= max_payload_body_size as u64)
+        })
+        .expect("a single-claim tx fits a Blend payload")
 }
 
 /// Builds and signs a single self-funding reward-claim transaction from a batch
@@ -1722,7 +1722,7 @@ async fn build_reward_claim_tx_inner(
     reward_pool: Value,
     gas_prices: GasPrices,
     tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
-    max_claims_in_payload: usize,
+    max_claims_by_payload_size: usize,
 ) -> Result<(SignedOps<Unverified, StandardMode>, usize), PoWError> {
     if reward_value == 0 {
         return Err(PoWError::RewardsDisabled);
@@ -1738,7 +1738,7 @@ async fn build_reward_claim_tx_inner(
         .len()
         .min((reward_pool / reward_value) as usize)
         .min(max_claims_by_ops())
-        .min(max_claims_in_payload);
+        .min(max_claims_by_payload_size);
     if claim_count == 0 {
         return Err(PoWError::RewardPoolExhausted);
     }

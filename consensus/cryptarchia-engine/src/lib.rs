@@ -448,7 +448,7 @@ where
             state,
             Slot::genesis(),
             0,
-            UncleSlots::empty(),
+            UncleSlots::default(),
         )
     }
 

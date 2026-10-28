@@ -18,13 +18,7 @@ use lb_api_service::{Backend, http::consensus::Cryptarchia};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_chain_leader_service::api::ChainLeaderServiceData;
 use lb_chain_service::CryptarchiaConsensus;
-use lb_core::{
-    header::HeaderId,
-    mantle::{
-        SignedOps, ledger::verification_mode::StandardMode, traits::Hashable,
-        transactions::states::Preverified,
-    },
-};
+use lb_core::{header::HeaderId, mantle::traits::Hashable};
 use lb_http_api_common::metrics::http_metrics_middleware;
 pub use lb_http_api_common::settings::AxumBackendSettings;
 use lb_sdp_service::{
@@ -56,7 +50,7 @@ use super::handlers::{
     transaction, version, wallet,
 };
 use crate::{
-    BlendService, PoWService, TracingService, WalletService,
+    BlendService, PoWService, TracingService, ValidatedTx, WalletService,
     api::{
         handlers::{
             blend_join_network, channel, channel_deposit, leader_claim, post_activity,
@@ -125,8 +119,8 @@ where
     TimeBackend::Settings: Clone + Send + Sync,
     MempoolStorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedOps<Preverified, StandardMode>,
-            Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            Item = ValidatedTx,
+            Key = <ValidatedTx as Hashable>::Hash,
             BlockId = HeaderId,
         > + Send
         + Sync
@@ -158,16 +152,11 @@ where
         + AsServiceId<
             TxMempoolService<
                 lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
-                    SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                    ValidatedTx,
+                    <ValidatedTx as Hashable>::Hash,
                     RuntimeServiceId,
                 >,
-                Mempool<
-                    HeaderId,
-                    SignedOps<Preverified, StandardMode>,
-                    MempoolStorageAdapter,
-                    RuntimeServiceId,
-                >,
+                Mempool<HeaderId, ValidatedTx, MempoolStorageAdapter, RuntimeServiceId>,
                 MempoolStorageAdapter,
                 NtpTimeBackend,
                 RuntimeServiceId,
