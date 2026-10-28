@@ -544,3 +544,36 @@ scenario!(
     s28_losing_withdraw_race_is_dropped,
     losing_withdraw_race_is_dropped
 );
+
+/// S33: a withdraw that spends a channel note exactly leaves no change: the
+/// bundle carries the recipient note alone and lands.
+pub async fn withdraw_spending_a_note_exactly_lands(chain: Chain) {
+    let mut world = World::new(chain);
+    world.coin_split(&[2]).await;
+    let a = world.start("SEQ_A", passive()).await;
+    let first = world.publish_included(a, "opens").await;
+    world.finalize_tx(first).await;
+    let notes = world.take_user_notes(&[2]);
+    let (hash, _, channel_notes) = world.deposit(&notes, "Mint 2").await;
+    world.include(hash).await;
+    world.finalize_tx(hash).await;
+    let ids: Vec<NoteId> = channel_notes.iter().map(Utxo::id).collect();
+    wait_wallet_holds(&mut world, &ids, Some(a)).await;
+    let withdraw = world
+        .withdraw(a, 2, false, "exact withdraw")
+        .await
+        .expect("withdraw accepted");
+    world.include(withdraw).await;
+    world.finalize_tx(withdraw).await;
+    assert!(
+        world.is_payload_finalized("exact withdraw"),
+        "the exact withdraw did not finalize:\n{}",
+        world.diagnostics()
+    );
+    world.settle_chain(100).await;
+    world.finish();
+}
+scenario!(
+    s33_withdraw_spending_a_note_exactly_lands,
+    withdraw_spending_a_note_exactly_lands
+);

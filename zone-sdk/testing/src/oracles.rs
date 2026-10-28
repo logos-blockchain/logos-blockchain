@@ -81,6 +81,9 @@ pub struct Oracles {
     unrefunded: HashMap<TxHash, (usize, Slot)>,
     /// How many of the node's posts by this sequencer have been judged.
     judged_posts: usize,
+    /// The stream position at the previous check: the posts judged now were
+    /// decided since then, inside one settle, where no time passes.
+    settle_start: usize,
     /// Hand-built txs the test submitted whole: the SDK posts those without
     /// a turn, as the caller asked, so they are not judged.
     exempt: HashSet<TxHash>,
@@ -219,13 +222,16 @@ impl Oracles {
 
     /// Every post of an own plain inscription was made while the sequencer's
     /// own view claimed the turn: the view published at the stream position
-    /// of the call, or at the one before, since a post decided before a
-    /// delivery reaches the node after it. Whether the view was right is
-    /// [`Self::check_turn`]'s question; whether the node then took the post
-    /// is the chain's.
+    /// of the call, at the one before, since a post decided before a
+    /// delivery reaches the node after it, or at any position since the
+    /// previous check, since inside one settle a backlog is delivered with
+    /// no time for the post to get ahead of it. Whether the view was right
+    /// is [`Self::check_turn`]'s question; whether the node then took the
+    /// post is the chain's.
     fn check_posts(&mut self, node: &SimNode, channel: ChannelId, name: &str) {
         let (posts, count) = node.posts_since(self.judged_posts);
         self.judged_posts = count;
+        let settle_start = std::mem::replace(&mut self.settle_start, node.delivered_count());
         for post in posts {
             if post.delivered == 0
                 || self.exempt.contains(&post.hash)
@@ -235,7 +241,11 @@ impl Oracles {
             }
             let claimed = [post.delivered - 1, post.delivered]
                 .iter()
-                .any(|delivered| self.claimed_turn_at(*delivered).is_none_or(|claim| claim));
+                .any(|delivered| self.claimed_turn_at(*delivered).is_none_or(|claim| claim))
+                || self
+                    .claims
+                    .iter()
+                    .any(|(by, claim)| *claim && (settle_start..=post.delivered).contains(by));
             if claimed {
                 continue;
             }

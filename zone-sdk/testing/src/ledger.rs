@@ -423,6 +423,9 @@ impl SimLedger {
 
     /// Returns the value the transfer leaves unspent, which pays the fee.
     fn transfer(&mut self, op: &TransferOp) -> Result<i128, String> {
+        op.outputs
+            .validate()
+            .map_err(|e| format!("transfer outputs: {e:?}"))?;
         let inputs = self.take_inputs(&op.inputs, None)?;
         let in_amount: u64 = inputs.iter().map(|n| n.value).sum();
         let out_amount = op

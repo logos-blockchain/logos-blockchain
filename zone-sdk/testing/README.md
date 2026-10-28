@@ -67,7 +67,8 @@ cargo test -p logos-blockchain-zone-sdk-testing
 - `src/events.rs`: one `Event` per operation the world exposes, chain
   moves, client conditions and the zone's own actions (publish, deposit,
   withdraw, pin, config, hand-built tx, affordable or priced out by a
-  rise right after it, abandon, burst, adopt, stop and
+  rise right after it or chained on a parent the chain already passed,
+  abandon, burst, adopt, stop and
   start a sequencer), applied by `World::apply_event`, which resolves what
   the state cannot do the way the network would: an impossible fork
   becomes a plain block, an action on an absent sequencer is skipped, a
@@ -111,7 +112,10 @@ cargo test -p logos-blockchain-zone-sdk-testing
   every post of an own inscription was made after the sequencer's last
   turn announcement, at the stream position of the post or the one before,
   claimed the turn (the node records how many events each subscriber's
-  stream had delivered by the post), and the view itself names the
+  stream had delivered by the post); inside one settle, where a backlog
+  is delivered with no time passing, any announcement since the previous
+  check counts, as a post decided on a block deep in the backlog reaches
+  the node after the rest of it; and the view itself names the
   rotation's sequencer and claims the turn only with the configured margin
   left; an
   own pending inscription chaining on the channel tip is posted as its
@@ -159,7 +163,8 @@ cargo test -p logos-blockchain-zone-sdk-testing
   chain's shape: a block with a slot gap, a fork of random depth and length,
   a revival of the dormant branch, silent blocks before an announced one, a
   tip moved silently behind an announced sibling, a duplicate delivery, LIB
-  frozen or thawed, forks pruned. The block's content: all, none, half or
+  frozen or thawed, forks pruned, a stretch of up to forty blocks that take
+  nothing so a stale window passes in one draw. The block's content: all, none, half or
   the reversed order of what the sequencers posted, beside whatever the
   writers in turn put in. The client's condition: a dropped stream, a node
   outage, a restart from checkpoint or from scratch, failing fetches, a gas

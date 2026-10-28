@@ -52,13 +52,15 @@ pub const OP_CYCLE: [WriterOp; 8] = [
 ];
 
 /// The op cycle of another zone's writer: it opens its channel, deposits
-/// into it and spends there, never configures.
-pub const OTHER_ZONE_OPS: [WriterOp; 7] = [
+/// into it, spends there and rotates its rules; every kind of channel op a
+/// sequencer must leave out of its view.
+pub const OTHER_ZONE_OPS: [WriterOp; 8] = [
     WriterOp::Inscribe,
     WriterOp::Deposit,
     WriterOp::Inscribe,
     WriterOp::Transfer,
     WriterOp::InscribeTwo,
+    WriterOp::Config,
     WriterOp::Withdraw,
     WriterOp::Inscribe,
 ];

@@ -50,6 +50,46 @@ fn lineage(tx: &SignedOps<Unverified, StandardMode>, channel: ChannelId) -> Opti
 }
 
 /// The lineage a view entry belongs to, as [`lineage`] classifies it.
+/// The entry kind a mined tx must be reported as, from the shapes the SDK's
+/// own API produces: `publish` is one inscription, paid for by at most one
+/// plain transfer; `publish_atomic_withdraw` adds a channel transfer and
+/// withdraws; `publish_pin_deposit` adds one channel transfer and no
+/// withdraw; `channel_config` is one config; anything else, and anything
+/// carrying another channel's or a foreign op, is custom.
+fn shape(tx: &SignedOps<Unverified, StandardMode>, channel: ChannelId) -> &'static str {
+    let (mut inscribes, mut configs, mut withdraws, mut channel_transfers, mut transfers) =
+        (0, 0, 0, 0, 0);
+    let mut foreign = false;
+    for op in tx.op_refs_iter() {
+        match op {
+            OpRef::ChannelInscribe(i) if i.channel_id == channel => inscribes += 1,
+            OpRef::ChannelConfig(c) if c.channel == channel => configs += 1,
+            OpRef::ChannelWithdraw(w) if w.channel_id == channel => withdraws += 1,
+            OpRef::ChannelTransfer(t) if t.channel_id == channel => channel_transfers += 1,
+            OpRef::Transfer(_) => transfers += 1,
+            _ => foreign = true,
+        }
+    }
+    let clean = !foreign && transfers <= 1;
+    match (clean, inscribes, configs, withdraws, channel_transfers) {
+        (true, 1, 0, 1.., 0 | 1) => "atomic withdraw",
+        (true, 1, 0, 0, 1) => "pin deposit",
+        (true, 1, 0, 0, 0) => "inscription",
+        (true, 0, 1, 0, 0) => "config",
+        _ => "custom",
+    }
+}
+
+const fn entry_shape(entry: &ChannelUpdateTx) -> &'static str {
+    match entry {
+        ChannelUpdateTx::Inscription(_) => "inscription",
+        ChannelUpdateTx::AtomicWithdraw(_) => "atomic withdraw",
+        ChannelUpdateTx::PinDeposit(_) => "pin deposit",
+        ChannelUpdateTx::Config(_) => "config",
+        ChannelUpdateTx::Custom(_) => "custom",
+    }
+}
+
 fn entry_lineage(entry: &ChannelUpdateTx, channel: ChannelId) -> Option<bool> {
     match entry {
         ChannelUpdateTx::Config(tx) | ChannelUpdateTx::Custom(tx) => lineage(tx, channel),
@@ -161,6 +201,21 @@ impl Mirror {
             if mined_in_view != truth_in_view {
                 self.record(format!(
                     "{name}: mirrored order {mined_in_view:?} differs from the chain order {truth_in_view:?}"
+                ));
+            }
+        }
+
+        // The kind each mined entry is reported as.
+        for tx in &unfinalized {
+            let hash = tx.hash();
+            let Some(entry) = self.chain.iter().find(|entry| entry.tx_hash() == hash) else {
+                continue;
+            };
+            let (reported, mined) = (entry_shape(entry), shape(tx, channel));
+            if reported != mined {
+                self.record(format!(
+                    "{name}: mirrored view reports {hash:?} as {reported}, but the mined tx is \
+                     {mined} by shape"
                 ));
             }
         }

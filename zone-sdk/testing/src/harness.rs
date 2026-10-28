@@ -362,16 +362,7 @@ impl Harness {
                 };
                 while let Some(event) = poll_event(sequencer).await {
                     progressed = true;
-                    // The SDK's own log lines are its actor's; this names
-                    // the sequencer the lines just above belong to.
-                    tracing::debug!(
-                        seq = %seq.name,
-                        event = match &event {
-                            Event::BlocksProcessed { .. } => "blocks processed",
-                            Event::Ready => "ready",
-                            Event::TurnNotification { .. } => "turn notification",
-                        }
-                    );
+                    log_event(&seq.name, &seq.node, &event);
                     seq.checker.observe(&event);
                     seq.mirror.observe(&event);
                     seq.oracles.observe(&event, &seq.node, &seq.name);
@@ -553,4 +544,29 @@ pub async fn replay_finalized(node: SimNode, channel_id: ChannelId) -> Vec<Final
 #[must_use]
 pub fn passive() -> Box<dyn Policy> {
     Box::new(PassivePolicy)
+}
+
+/// The SDK's own log lines are its actor's; this names the sequencer the
+/// lines just above belong to, and spells out a turn claim.
+fn log_event(name: &str, node: &SimNode, event: &Event) {
+    tracing::debug!(
+        seq = %name,
+        event = match event {
+            Event::BlocksProcessed { .. } => "blocks processed",
+            Event::Ready => "ready",
+            Event::TurnNotification { .. } => "turn notification",
+        }
+    );
+    if let Event::TurnNotification { notification } = event {
+        tracing::debug!(
+            seq = %name,
+            our_turn = notification.our_turn_to_write,
+            at_slot = ?notification.current_slot,
+            starts = ?notification.starting_slot,
+            ends = ?notification.ends_at_slot,
+            delivered = node.delivered_count(),
+            node_slot = ?node.tip_slot(),
+            "turn claim"
+        );
+    }
 }

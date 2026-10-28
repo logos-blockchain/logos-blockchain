@@ -27,7 +27,7 @@ use tracing::warn;
 
 use crate::{
     node::SimNode,
-    policy::{Inscriptions as _, Policy, finalized_inscriptions},
+    policy::{Inscriptions as _, Policy, contributed, finalized_inscriptions},
 };
 
 /// Which of our intents each message serves, and which members of an intent
@@ -51,13 +51,14 @@ impl LineageTracker {
         self.pending.entry(root).or_default().insert(republished);
     }
 
-    /// Rebuild the live members from the canonical view.
+    /// Rebuild the live members from a conflict's canonical view, or add an
+    /// extension's adopted entries to them: an own message the chain took
+    /// back is live again.
     fn observe(&mut self, channel_update: &ChannelUpdate) {
-        let Some(chain) = channel_update.canonical_chain() else {
-            return;
-        };
-        self.pending.clear();
-        for info in chain.inscriptions() {
+        if channel_update.canonical_chain().is_some() {
+            self.pending.clear();
+        }
+        for info in contributed(channel_update).inscriptions() {
             if let Some(&root) = self.intent_root.get(&info.this_msg) {
                 self.pending.entry(root).or_default().insert(info.this_msg);
             }
@@ -262,21 +263,30 @@ impl Policy for ReferenceConsumer {
                 self.lineage
                     .observe_finalized(finalized_inscriptions(finalized).map(|i| i.this_msg));
                 self.lineage.observe(channel_update);
-                for info in std::mem::take(&mut self.retry) {
-                    if !self.lineage.intent_live(&info.this_msg) {
-                        self.republish(sequencer, &info).await;
-                    }
-                }
                 let finalized: HashSet<&Inscription> = finalized_inscriptions(finalized)
                     .map(|i| &i.payload)
                     .collect();
-                let on_chain: HashSet<&Inscription> = channel_update
-                    .canonical_chain()
-                    .into_iter()
-                    .flatten()
+                // What this update puts on the view, an extension's adopted
+                // entries included: an orphan the chain took back is not
+                // for adopting.
+                let on_chain: HashSet<&Inscription> = contributed(channel_update)
                     .inscriptions()
                     .map(|i| &i.payload)
                     .collect();
+                // A republish that failed earlier is tried again only while
+                // its payload is still off the chain: the chain may have
+                // taken the orphan back since, this update included.
+                for info in std::mem::take(&mut self.retry) {
+                    if self.lineage.intent_live(&info.this_msg)
+                        || finalized.contains(&info.payload)
+                        || on_chain.contains(&info.payload)
+                    {
+                        tracing::debug!(payload = ?info.payload, "retry dropped: payload is on chain");
+                        self.release(&info.payload);
+                        continue;
+                    }
+                    self.republish(sequencer, &info).await;
+                }
                 for entry in channel_update.orphaned() {
                     let ChannelUpdateTx::Inscription(info) = entry else {
                         continue;

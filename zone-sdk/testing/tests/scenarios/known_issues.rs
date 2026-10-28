@@ -341,3 +341,48 @@ async fn withdraw_on_orphaned_deposit_is_dropped() {
     world.settle_chain(120).await;
     world.finish();
 }
+
+/// Known SDK issue: a hand-built tx chained on a message whose next slot is
+/// finalized is accepted at submit. The only parent check is against the
+/// pending children, own or mirrored, and a finalized child has left them;
+/// the bundle path also compares the parent with the view tip. The entry
+/// pends on a passed parent, is re-posted and refused by the node, and is
+/// not reported orphaned until the expiry shed.
+#[tokio::test(start_paused = true)]
+#[ignore = "known issue: submit_signed_tx accepts a parent whose taking child is finalized; only pending children are checked"]
+async fn hand_built_tx_on_a_parent_with_a_finalized_child_is_refused() {
+    let mut world = World::new(chains::linear());
+    let a = world.start("SEQ_A", passive()).await;
+    let first = world.publish_included(a, "first").await;
+    let second = world.publish_included(a, "second").await;
+    world.finalize_tx(second).await;
+    let channel_id = world.channel_id();
+    let (signed_tx, msg_id) = txs::build_funded_custom_tx(
+        world.node(),
+        channel_id,
+        &seq_key("SEQ_A"),
+        world.funding_pk(),
+        &[inscription("behind the tip")],
+        message_of(&world, &first),
+    )
+    .await
+    .expect("custom tx built");
+    let result = world
+        .harness
+        .seq(a)
+        .handle()
+        .submit_signed_tx(signed_tx, msg_id);
+    assert!(
+        matches!(result, Err(SdkError::ChannelStateChanged(_))),
+        "a tx on a parent with a finalized child was not refused: {result:?}"
+    );
+    assert!(
+        !world
+            .pending_payloads(a)
+            .contains(&"behind the tip".to_owned()),
+        "the accepted tx stayed pending:\n{}",
+        world.diagnostics()
+    );
+    world.settle_chain(100).await;
+    world.finish();
+}

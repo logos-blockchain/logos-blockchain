@@ -603,3 +603,134 @@ async fn rebuilt_inscription_lands_as_the_same_message_after_a_deep_reorg() {
     }
     world.harness.assert_layers_through(Layer::Chain);
 }
+
+/// Every posted entry whose funding stamp is older than the stale window is
+/// re-funded by the next resubmit tick in turn, the whole posted chain at
+/// once; a window that passes while the chain waits unmined re-funds it
+/// again.
+#[tokio::test(start_paused = true)]
+async fn stale_posted_entries_are_refunded_after_the_window() {
+    let mut world = World::with_funding(chains::linear(), 400, 3000);
+    let window = 3u64;
+    let config = SequencerConfig {
+        stale_refund_slots: window,
+        ..world.default_config()
+    };
+    let a = world.start_with("SEQ_A", config, passive()).await;
+    let payloads = ["head", "second", "third"];
+    for payload in payloads {
+        world.publish(a, payload).await.expect("queued");
+    }
+    world.extend(1, Posted::None).await;
+    world.harness.advance(World::STEP_DURATION).await;
+    let before = fundings_by_payload(&world, a);
+    assert_eq!(before.len(), 3, "{before:?}");
+    for payload in payloads {
+        assert!(
+            world.harness.seqs[a].node.post_count(&before[payload].0) > 0,
+            "{payload} was not posted:\n{}",
+            world.diagnostics()
+        );
+    }
+
+    let mut steps = 0;
+    while lib_slot(&world) <= before["head"].1 + window {
+        world.extend(1, Posted::None).await;
+        world.harness.advance(World::STEP_DURATION).await;
+        steps += 1;
+        assert!(steps < 100, "LIB never passed the window");
+    }
+    world
+        .harness
+        .advance(3 * logos_blockchain_zone_sdk_testing::harness::RESUBMIT_INTERVAL)
+        .await;
+    let after = fundings_by_payload(&world, a);
+    for payload in payloads {
+        assert_ne!(
+            after[payload],
+            before[payload],
+            "{payload} was not re-funded past the window:\n{}",
+            world.diagnostics()
+        );
+    }
+    world.settle_chain(200).await;
+    assert_exactly_once_any_order(&world.indexer_payloads().await, &payloads);
+    world.finish();
+}
+
+/// A mined entry waiting for finality is never re-funded, however far LIB
+/// moves past its funding stamp: it is safe on the branch, not stale.
+#[tokio::test(start_paused = true)]
+async fn mined_entry_is_not_refunded_while_it_waits_for_finality() {
+    let mut world = World::with_funding(chains::linear(), 400, 3000);
+    let config = SequencerConfig {
+        stale_refund_slots: 1,
+        ..world.default_config()
+    };
+    let a = world.start_with("SEQ_A", config, passive()).await;
+    let hash = world
+        .publish(a, "mined")
+        .await
+        .expect("queued")
+        .inscription_id();
+    world.include(hash).await;
+    let stamp = fundings_by_payload(&world, a)["mined"];
+    assert_eq!(stamp.0, hash);
+    let mut steps = 0;
+    while !world.node().is_tx_finalized(&hash) {
+        world.extend(1, Posted::None).await;
+        world
+            .harness
+            .advance(3 * logos_blockchain_zone_sdk_testing::harness::RESUBMIT_INTERVAL)
+            .await;
+        if let Some(now) = fundings_by_payload(&world, a).get("mined") {
+            assert_eq!(
+                *now,
+                stamp,
+                "re-funded while mined and waiting for finality:\n{}",
+                world.diagnostics()
+            );
+        }
+        steps += 1;
+        assert!(steps < 50, "the mined entry never finalized");
+    }
+    world.finish();
+}
+
+/// A publish while the node is down is refused, leaves nothing pending, and
+/// the sequencer publishes again once reconnected.
+#[tokio::test(start_paused = true)]
+async fn publish_while_the_node_is_down_is_refused() {
+    let mut world = World::new(chains::linear());
+    let a = world.start("SEQ_A", passive()).await;
+    world.publish_included(a, "before").await;
+    world.node().node_down();
+    for _ in 0..10 {
+        world.harness.advance(RECONNECT_DELAY).await;
+        if !world.harness.seqs[a].sequencer().is_connected() {
+            break;
+        }
+    }
+    let result = world.publish(a, "while down").await;
+    assert!(
+        matches!(result, Err(SdkError::Unavailable { .. })),
+        "a publish on a disconnected sequencer was not refused as unavailable: {result:?}"
+    );
+    assert!(
+        !world.pending_payloads(a).contains(&"while down".to_owned()),
+        "the refused publish stayed pending:\n{}",
+        world.diagnostics()
+    );
+    world.node().node_up();
+    for _ in 0..10 {
+        world.harness.advance(RECONNECT_DELAY).await;
+        if world.node().open_streams() > 0 {
+            break;
+        }
+    }
+    let after = world.publish_retry(a, "after").await;
+    world.include(after).await;
+    world.settle_chain(100).await;
+    assert_exactly_once_any_order(&world.indexer_payloads().await, &["before", "after"]);
+    world.finish();
+}

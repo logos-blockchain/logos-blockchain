@@ -55,11 +55,14 @@ pub enum Event {
     /// `priced_out` one is followed by a gas price rise, so the fee it
     /// carries never covers a block again and the chain never takes it:
     /// the SDK cannot re-fund what it did not build and has to shed it once
-    /// it expires.
+    /// it expires. A `stale_parent` one chains on the message before the
+    /// channel tip, whose next slot the chain already took: the SDK must
+    /// refuse it at submit and leave nothing pending.
     Custom {
         index: usize,
         payloads: Vec<String>,
         priced_out: bool,
+        stale_parent: bool,
     },
     /// Sequencer `index` lets its next orphan die.
     Abandon { index: usize },

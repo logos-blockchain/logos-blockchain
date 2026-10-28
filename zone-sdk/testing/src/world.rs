@@ -106,6 +106,9 @@ pub struct World {
     /// Payloads published through [`Event::Publish`], [`Event::Burst`]
     /// bursts set and [`Event::Custom`] txs, for a run's final accounting.
     pub event_payloads: EventPayloads,
+    /// Hand-built txs the SDK accepted on a taken parent
+    /// ([`KnownIssue::HandBuiltTxOnTakenParentAccepted`]).
+    pub stale_accepted: Vec<TxHash>,
 }
 
 /// What the events of a run put into the channel, for its final check.
@@ -183,6 +186,12 @@ pub enum KnownIssue {
     /// the node rejects each for its parent, the view never reports them
     /// orphaned, the chain never settles.
     PendingOnAbandonedParent,
+    /// A hand-built tx chained on a message whose next slot is finalized is
+    /// accepted at submit: only pending children are checked, and a
+    /// finalized one has left them, where the bundle path also compares
+    /// with the view tip. The entry pends on a passed parent, re-posted and
+    /// refused, until the expiry shed.
+    HandBuiltTxOnTakenParentAccepted,
 }
 
 /// The first writer's name; a second one is [`FOREIGN_2`].
@@ -278,6 +287,7 @@ impl World {
             bundle_refusals: 0,
             stopped: Vec::new(),
             event_payloads: EventPayloads::default(),
+            stale_accepted: Vec::new(),
         }
     }
 
@@ -630,6 +640,7 @@ impl World {
         let Some(funding_pk) = node.funding_pk() else {
             return Vec::new();
         };
+        let world_channel = self.channel_id();
         let Some(keys) = self.channel_keys.clone() else {
             return Vec::new();
         };
@@ -675,7 +686,14 @@ impl World {
             if *budget == 0 {
                 continue;
             }
-            match writer.build(node, &ledger, funding_pk, &keys).await {
+            // A writer on another zone's channel rotates nothing: its configs
+            // keep it as that channel's only key and change the rules alone.
+            let writer_keys = if writer.channel == world_channel {
+                keys.clone()
+            } else {
+                VerifiedChannelKeys::try_from(vec![writer.key.public_key()]).expect("one key")
+            };
+            match writer.build(node, &ledger, funding_pk, &writer_keys).await {
                 Ok(tx) => {
                     *budget -= 1;
                     txs.push(tx);
@@ -1215,6 +1233,9 @@ impl World {
             .filter(|(layer, _)| *layer == Layer::Chain)
             .map(|(_, violation)| violation)
             .collect();
+        if self.explained_by_stale_accepted(&pending, &chain_violations, settled) {
+            return Some(KnownIssue::HandBuiltTxOnTakenParentAccepted);
+        }
         if !chain_violations.is_empty() {
             // A hand-built tx is reported whole, keyed by its hash and not by
             // a message, whatever it carries. The stranded one may have
@@ -1304,6 +1325,30 @@ impl World {
         }
         self.pending_on_abandoned_parent(channel)
             .then_some(KnownIssue::PendingOnAbandonedParent)
+    }
+
+    /// Whether a hand-built tx accepted on a taken parent, recorded at
+    /// submit, explains a run that did not settle while it still pends, or
+    /// chain violations that all name it.
+    fn explained_by_stale_accepted(
+        &self,
+        pending: &[(TxHash, SignedOps<Unverified, StandardMode>)],
+        chain_violations: &[String],
+        settled: bool,
+    ) -> bool {
+        if self.stale_accepted.is_empty() {
+            return false;
+        }
+        let names_one = |violation: &String| {
+            self.stale_accepted
+                .iter()
+                .any(|hash| violation.contains(&format!("{hash:?}")))
+        };
+        let still_pending = pending
+            .iter()
+            .any(|(hash, _)| self.stale_accepted.contains(hash));
+        (chain_violations.is_empty() && !settled && still_pending)
+            || (!chain_violations.is_empty() && chain_violations.iter().all(names_one))
     }
 
     /// Whether a sequencer still holds an entry, its own or mirrored, whose
@@ -1709,7 +1754,11 @@ impl World {
                 index,
                 payloads,
                 priced_out,
-            } => self.custom_from(index, payloads, priced_out).await,
+                stale_parent,
+            } => {
+                self.custom_from(index, payloads, priced_out, stale_parent)
+                    .await;
+            }
             Event::Abandon { index } => {
                 if let Some(Some(choices)) = self.choices.get(index) {
                     choices.lock().expect("choices").abandon_next();
@@ -1999,19 +2048,9 @@ impl World {
         self.submit_due_bundles().await;
     }
 
-    /// Sign `prepared` with its preparer and the other sequencers up to the
-    /// threshold and submit it. Refused for a moved channel, nothing of it
-    /// may stay pending; `true` then asks for the retry it was marked for.
-    /// Refused signatures are a defect of this bed.
-    async fn submit_prepared(&mut self, prepared: PreparedBundle) -> bool {
-        let PreparedBundle {
-            index,
-            bundle,
-            payload,
-            kind,
-            retry,
-            ..
-        } = prepared;
+    /// Signatures of the preparer `index` and the other sequencers up to
+    /// the bundle's threshold, stopping at the first key the bundle refuses.
+    fn sign_bundle(&self, index: usize, bundle: &PreparedAtomicBundle) -> IndexedSignatures {
         let mut signatures = IndexedSignatures::empty();
         let own = self.harness.seqs[index].key.clone();
         let others = self
@@ -2028,49 +2067,114 @@ impl World {
             };
             let _ = signatures.try_insert(signature.channel_key_index, signature.signature);
         }
+        signatures
+    }
+
+    /// Sign `prepared` with its preparer and the other sequencers up to the
+    /// threshold and submit it. Refused for a moved channel, nothing of it
+    /// may stay pending; `true` then asks for the retry it was marked for.
+    /// Refused signatures are a defect of this bed.
+    async fn submit_prepared(&mut self, prepared: PreparedBundle) -> bool {
+        let PreparedBundle {
+            index,
+            bundle,
+            payload,
+            kind,
+            retry,
+            ..
+        } = prepared;
+        let signatures = self.sign_bundle(index, &bundle);
+        if signatures.is_empty() {
+            // The channel no longer accredits the preparer: a config landed
+            // between prepare and submit. Nothing to sign with; the bundle
+            // is dropped as a zone would drop it.
+            tracing::debug!(
+                payload,
+                "bundle dropped: the preparer is no longer accredited"
+            );
+            self.release_bundle(kind);
+            return false;
+        }
         let result = self
             .harness
             .seq(index)
             .handle()
             .submit_atomic_bundle(bundle, signatures);
         self.harness.settle().await;
-        match result {
-            Ok(_) => self.event_payloads.at_most_once.push(payload),
-            Err(lb_zone_sdk::sequencer::Error::ChannelStateChanged(reason)) => {
+        let Err(error) = result else {
+            self.event_payloads.at_most_once.push(payload);
+            return false;
+        };
+        if self.bundle_refused(index, error, &payload) && retry {
+            return true;
+        }
+        self.release_bundle(kind);
+        false
+    }
+
+    /// Account for a bundle the SDK refused; `true` when the channel had
+    /// moved, the one refusal a retry answers.
+    fn bundle_refused(
+        &mut self,
+        index: usize,
+        error: lb_zone_sdk::sequencer::Error,
+        payload: &str,
+    ) -> bool {
+        match error {
+            lb_zone_sdk::sequencer::Error::ChannelStateChanged(reason) => {
                 self.bundle_refusals += 1;
-                tracing::debug!(payload, %reason, retry, "bundle refused: channel moved");
+                tracing::debug!(payload, %reason, "bundle refused: channel moved");
                 assert!(
-                    !self.pending_payloads(index).contains(&payload),
+                    !self.pending_payloads(index).iter().any(|p| p == payload),
                     "a refused bundle stayed pending: {payload}\n{}",
                     self.diagnostics()
                 );
-                if retry {
-                    return true;
-                }
-                self.release_bundle(kind);
+                true
             }
-            Err(lb_zone_sdk::sequencer::Error::InvalidMultiSig(reason)) => {
+            lb_zone_sdk::sequencer::Error::InvalidMultiSig(reason) => {
                 panic!(
                     "the bed signed a bundle wrongly: {reason}\n{}",
                     self.diagnostics()
                 );
             }
-            Err(error) => {
+            error => {
                 tracing::debug!(payload, %error, "bundle not submitted");
-                self.release_bundle(kind);
+                false
             }
         }
-        false
     }
 
     /// Sequencer `index` builds and submits one tx chaining `payloads` on
     /// its view's tip; nothing when the SDK refuses the parent.
-    async fn custom_from(&mut self, index: usize, payloads: Vec<String>, priced_out: bool) {
+    async fn custom_from(
+        &mut self,
+        index: usize,
+        payloads: Vec<String>,
+        priced_out: bool,
+        stale_parent: bool,
+    ) {
         if index >= self.harness.seqs.len() || !self.harness.seqs[index].is_running() {
             return;
         }
         let channel_id = self.channel_id();
-        let parent = self.view(index).tip_message;
+        let view_tip = self.view(index).tip_message;
+        let parent = if stale_parent {
+            // Only where the sequencer's view agrees with the node on the
+            // tip: behind it, the parent is not yet taken in its view.
+            let node_tip = self
+                .node()
+                .channel_state_at_tip(channel_id)
+                .map(|state| state.tip_message);
+            if Some(view_tip) != node_tip {
+                return;
+            }
+            let Some(parent) = self.node().channel_tip_parent(channel_id) else {
+                return;
+            };
+            parent
+        } else {
+            view_tip
+        };
         let key = self.harness.seqs[index].key.clone();
         let inscriptions: Vec<Inscription> = payloads.iter().map(|p| make_inscription(p)).collect();
         let Ok((signed_tx, msg_id)) = txs::build_funded_custom_tx(
@@ -2087,12 +2191,27 @@ impl World {
         };
         self.harness.seqs[index].oracles.exempt(signed_tx.hash());
         let hash = signed_tx.hash();
-        if let Err(error) = self
+        let result = self
             .harness
             .seq(index)
             .handle()
-            .submit_signed_tx(signed_tx, msg_id)
-        {
+            .submit_signed_tx(signed_tx, msg_id);
+        if stale_parent {
+            if result.is_err() {
+                let pending = self.pending_payloads(index);
+                assert!(
+                    payloads.iter().all(|payload| !pending.contains(payload)),
+                    "a refused hand-built tx stayed pending:\n{}",
+                    self.diagnostics()
+                );
+                return;
+            }
+            // Known issue: only pending children are checked, so a parent
+            // whose taking child is finalized passes.
+            tracing::warn!(?hash, "hand-built tx on a taken parent accepted");
+            self.stale_accepted.push(hash);
+        }
+        if let Err(error) = result {
             tracing::debug!(%error, ?hash, "hand-built tx refused at submit");
             return;
         }
@@ -2219,6 +2338,12 @@ impl World {
             }
             Shape::Prune => {
                 let _ = node.prune_forks();
+            }
+            Shape::Starve { blocks } => {
+                for _ in 0..blocks {
+                    let _ = self.extend(1, Posted::None).await;
+                    self.harness.advance(Self::STEP_DURATION).await;
+                }
             }
         }
     }

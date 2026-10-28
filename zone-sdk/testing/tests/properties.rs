@@ -36,7 +36,7 @@ use logos_blockchain_zone_sdk_testing::{
     world as common,
     writers::{OP_CYCLE, OTHER_ZONE_OPS, WriterOp},
 };
-use proptest::{prelude::*, strategy::Union};
+use proptest::{prelude::*, strategy::Union, test_runner::FileFailurePersistence};
 
 /// Gas prices every run starts at; large enough that a percent rise is a
 /// different integer price.
@@ -65,6 +65,7 @@ fn shape() -> impl Strategy<Value = Shape> {
         1 => Just(Shape::FreezeLib),
         1 => Just(Shape::ThawLib),
         1 => Just(Shape::Prune),
+        1 => (1..=40usize).prop_map(|blocks| Shape::Starve { blocks }),
     ]
 }
 
@@ -119,12 +120,20 @@ fn zone_arms(top: Layer, sequencers: usize) -> Vec<Arm> {
         ),
         (
             lineage,
-            (index(), payloads(1..=3usize), prop::bool::ANY)
-                .prop_map(|(index, payloads, priced_out)| Event::Custom {
-                    index,
-                    payloads,
-                    priced_out,
-                })
+            (
+                index(),
+                payloads(1..=3usize),
+                prop::bool::ANY,
+                prop::bool::weighted(0.2),
+            )
+                .prop_map(
+                    |(index, payloads, priced_out, stale_parent)| Event::Custom {
+                        index,
+                        payloads,
+                        priced_out,
+                        stale_parent,
+                    },
+                )
                 .boxed(),
         ),
     ]
@@ -554,7 +563,8 @@ fn assert_one_lineage(finalized: &[FinalizedTx]) {
 /// shows how often it got there (`--no-capture` or `--success-output
 /// immediate`), and reaches zero once the fix lands.
 fn record_known_issue(issue: KnownIssue, scenario: &Scenario) {
-    static HITS: [AtomicUsize; 5] = [
+    static HITS: [AtomicUsize; 6] = [
+        AtomicUsize::new(0),
         AtomicUsize::new(0),
         AtomicUsize::new(0),
         AtomicUsize::new(0),
@@ -588,6 +598,9 @@ fn block_on(scenario: Scenario) {
 proptest! {
     #![proptest_config(ProptestConfig {
         cases: 24,
+        failure_persistence: Some(Box::new(FileFailurePersistence::Direct(
+            "tests/properties.proptest-regressions",
+        ))),
         max_shrink_iters: 200,
         max_shrink_time: 120_000,
         ..ProptestConfig::default()
@@ -617,6 +630,9 @@ proptest! {
 proptest! {
     #![proptest_config(ProptestConfig {
         cases: 48,
+        failure_persistence: Some(Box::new(FileFailurePersistence::Direct(
+            "tests/properties.proptest-regressions",
+        ))),
         max_shrink_time: 120_000,
         max_shrink_iters: 200,
         ..ProptestConfig::default()
@@ -746,6 +762,7 @@ fn pending_on_an_abandoned_branch_is_reported_orphaned() {
                     "event-6e743271".into(),
                 ],
                 priced_out: true,
+                stale_parent: false,
             },
             Event::Chain {
                 shape: Shape::Extend { gap: 1 },
@@ -790,6 +807,7 @@ fn pending_on_an_abandoned_branch_is_reported_orphaned() {
                 index: 0,
                 payloads: vec!["event-1934f06e".into()],
                 priced_out: false,
+                stale_parent: false,
             },
             Event::Chain {
                 shape: Shape::Lagging { silent: 3 },
@@ -842,6 +860,7 @@ fn pending_on_an_abandoned_branch_is_reported_orphaned() {
                 index: 0,
                 payloads: vec!["event-08689d33".into()],
                 priced_out: true,
+                stale_parent: false,
             },
             Event::Chain {
                 shape: Shape::Prune,
@@ -898,6 +917,7 @@ fn pending_on_an_abandoned_branch_is_reported_orphaned() {
                     "event-cdfe1bcb".into(),
                 ],
                 priced_out: true,
+                stale_parent: false,
             },
             Event::Chain {
                 shape: Shape::Revive { blocks: 3 },
@@ -927,6 +947,7 @@ fn pending_on_an_abandoned_branch_is_reported_orphaned() {
                 index: 0,
                 payloads: vec!["event-2204c170".into()],
                 priced_out: false,
+                stale_parent: false,
             },
             Event::Chain {
                 shape: Shape::Lagging { silent: 1 },
@@ -1024,6 +1045,7 @@ fn pending_on_an_abandoned_branch_is_reported_orphaned() {
                 index: 0,
                 payloads: vec!["event-7a1c8c23".into(), "event-e06a160a".into()],
                 priced_out: true,
+                stale_parent: false,
             },
             Event::Chain {
                 shape: Shape::Fork {
@@ -1048,6 +1070,7 @@ fn pending_on_an_abandoned_branch_is_reported_orphaned() {
                 index: 0,
                 payloads: vec!["event-2e1842e8".into(), "event-60f91bce".into()],
                 priced_out: false,
+                stale_parent: false,
             },
             Event::Burst {
                 index: 0,
@@ -1093,6 +1116,7 @@ fn pending_on_an_abandoned_branch_is_reported_orphaned() {
                     "event-1b38eef7".into(),
                 ],
                 priced_out: true,
+                stale_parent: false,
             },
             Event::Chain {
                 shape: Shape::Fork {

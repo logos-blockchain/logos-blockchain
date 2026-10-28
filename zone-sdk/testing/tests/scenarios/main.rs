@@ -383,3 +383,108 @@ fn included_slot(world: &World, hash: &lb_zone_sdk::node_types::TxHash) -> u64 {
         .slot
         .into_inner()
 }
+
+/// The slot of the node's LIB block.
+fn lib_slot(world: &World) -> u64 {
+    let node = world.node();
+    u64::from(node.block_slot(node.lib()).expect("lib block"))
+}
+
+/// Sequencer `index`'s pending txs by their first payload: the tx hash and
+/// the LIB slot the SDK funded it at.
+fn fundings_by_payload(
+    world: &World,
+    index: usize,
+) -> HashMap<String, (lb_zone_sdk::node_types::TxHash, u64)> {
+    let checkpoint = world.checkpoint(index);
+    let channel = world.channel_id();
+    let stamps: HashMap<_, u64> = checkpoint
+        .funding
+        .iter()
+        .map(|record| (record.tx_hash, u64::from(record.funded_at)))
+        .collect();
+    checkpoint
+        .pending_txs
+        .iter()
+        .filter_map(|(hash, tx)| {
+            let info = lb_zone_sdk::sequencer::channel_inscriptions(tx, channel)
+                .into_iter()
+                .next()?;
+            Some((payload_str(&info.payload), (*hash, *stamps.get(hash)?)))
+        })
+        .collect()
+}
+
+/// The LIB slot sequencer `index` funded the pending tx `hash` at.
+fn funding_stamp(
+    world: &World,
+    index: usize,
+    hash: &lb_zone_sdk::node_types::TxHash,
+) -> Option<u64> {
+    world
+        .checkpoint(index)
+        .funding
+        .iter()
+        .find(|record| record.tx_hash == *hash)
+        .map(|record| u64::from(record.funded_at))
+}
+
+/// Every tx sequencer `index` has reported orphaned so far.
+fn orphaned_hashes(world: &World, index: usize) -> HashSet<lb_zone_sdk::node_types::TxHash> {
+    world.harness.seqs[index]
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            lb_zone_sdk::sequencer::Event::BlocksProcessed { channel_update, .. } => {
+                Some(channel_update)
+            }
+            _ => None,
+        })
+        .flat_map(|update| update.orphaned().iter())
+        .map(lb_zone_sdk::sequencer::ChannelUpdateTx::tx_hash)
+        .collect()
+}
+
+/// The channel notes the pending tx `hash` of sequencer `index` spends.
+fn channel_inputs(
+    world: &World,
+    index: usize,
+    hash: &lb_zone_sdk::node_types::TxHash,
+) -> Vec<NoteId> {
+    world
+        .checkpoint(index)
+        .pending_txs
+        .iter()
+        .filter(|(h, _)| h == hash)
+        .flat_map(|(_, tx)| {
+            tx.op_refs_iter()
+                .flat_map(|op| match op {
+                    lb_core::mantle::ops::OpRef::ChannelTransfer(transfer) => {
+                        transfer.inputs.iter().copied().collect::<Vec<_>>()
+                    }
+                    lb_core::mantle::ops::OpRef::ChannelWithdraw(withdraw) => {
+                        withdraw.inputs.iter().copied().collect()
+                    }
+                    _ => Vec::new(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// The message id of the mined inscription in tx `hash`.
+fn message_of(world: &World, hash: &lb_zone_sdk::node_types::TxHash) -> MsgId {
+    let channel = world.channel_id();
+    world
+        .node()
+        .mined_txs()
+        .iter()
+        .find(|tx| tx.hash() == *hash)
+        .and_then(|tx| {
+            lb_zone_sdk::sequencer::channel_inscriptions(tx, channel)
+                .into_iter()
+                .next()
+        })
+        .map(|info| info.this_msg)
+        .expect("a mined inscription")
+}

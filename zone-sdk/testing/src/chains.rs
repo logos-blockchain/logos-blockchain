@@ -40,6 +40,9 @@ pub enum Shape {
     ThawLib,
     /// Forks below LIB are forgotten; their blocks can no longer be fetched.
     Prune,
+    /// `blocks` consecutive blocks that take nothing: LIB keeps moving while
+    /// everything posted waits, the way a stale window passes.
+    Starve { blocks: usize },
 }
 
 /// What happens on the client's side of the step.
