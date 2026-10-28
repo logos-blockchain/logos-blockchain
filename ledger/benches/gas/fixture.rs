@@ -74,9 +74,14 @@ pub fn filled_state() -> &'static Fixture {
 }
 
 /// `count` nullifiers absent from every filled set, the same for the same
-/// `salt`.
+/// `salt`. They are drawn like the filled ones, so each has its low leaf
+/// anywhere among the filled leaves, as the nullifier of a real note does.
 pub fn nullifiers(count: usize, salt: u64) -> Vec<NoteNullifier> {
-    fresh(count, salt, 1).map(NoteNullifier).collect()
+    // The top bit keeps the seed apart from the seed of the fill.
+    let mut rng = StdRng::seed_from_u64((1 << 63) | salt);
+    std::iter::repeat_with(|| NoteNullifier(Fr::from(rng.gen_range(1..u128::MAX))))
+        .take(count)
+        .collect()
 }
 
 /// `count` commitments absent from every filled set, the same for the same
@@ -85,7 +90,7 @@ pub fn commitments(count: usize, salt: u64) -> Vec<NoteCommitment> {
     fresh(count, salt, 2).map(NoteCommitment).collect()
 }
 
-// The filled values are below 2^128, the fresh ones above 2^192.
+// The filled commitments are below 2^128, the fresh ones above 2^192.
 fn fresh(count: usize, salt: u64, kind: u128) -> impl Iterator<Item = Fr> {
     (0..count as u128).map(move |index| {
         Fr::from(kind) * Fr::from(1u128 << 96) * Fr::from(1u128 << 96)

@@ -90,6 +90,19 @@ mod filled_ledger {
         );
     }
 
+    // The low leaf of a nullifier of a real note is anywhere in the tree: the
+    // fresh nullifiers of a case each have their own among the filled leaves.
+    #[test]
+    fn fresh_nullifiers_are_scattered_among_the_filled_ones() {
+        let fixture = filled_state();
+        let set = fixture.state.latest_note_sets().get(LEDGER_SET).unwrap();
+        let low_leaves: std::collections::HashSet<u64> = nullifiers(16, 0)
+            .iter()
+            .map(|nullifier| set.nullifiers().low_leaf(&nullifier.0).unwrap().0)
+            .collect();
+        assert_eq!(low_leaves.len(), 16);
+    }
+
     #[test]
     fn the_channel_and_the_program_exist() {
         let fixture = filled_state();
