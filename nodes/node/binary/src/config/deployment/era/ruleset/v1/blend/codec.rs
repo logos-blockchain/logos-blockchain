@@ -71,6 +71,7 @@ impl BinaryEncode for CoreSettings {
             verification_rate_per_second,
             edge_node_send_deadline_in_rounds,
             core_handshake_deadline_in_rounds,
+            cover_messages_per_observation_window,
             activity_threshold_sensitivity,
         } = self;
 
@@ -79,6 +80,7 @@ impl BinaryEncode for CoreSettings {
             + verification_rate_per_second.encoded_length()
             + edge_node_send_deadline_in_rounds.encoded_length()
             + core_handshake_deadline_in_rounds.encoded_length()
+            + cover_messages_per_observation_window.encoded_length()
             + activity_threshold_sensitivity.encoded_length()
     }
 
@@ -89,6 +91,7 @@ impl BinaryEncode for CoreSettings {
             verification_rate_per_second,
             edge_node_send_deadline_in_rounds,
             core_handshake_deadline_in_rounds,
+            cover_messages_per_observation_window,
             activity_threshold_sensitivity,
         } = self;
         scheduler.encode_into(out);
@@ -96,6 +99,7 @@ impl BinaryEncode for CoreSettings {
         verification_rate_per_second.encode_into(out);
         edge_node_send_deadline_in_rounds.encode_into(out);
         core_handshake_deadline_in_rounds.encode_into(out);
+        cover_messages_per_observation_window.encode_into(out);
         activity_threshold_sensitivity.encode_into(out);
     }
 }
@@ -175,7 +179,8 @@ fn fixture_core_settings() -> CoreSettings {
         verification_rate_per_second: NonZeroU32::new(8).unwrap(),
         edge_node_send_deadline_in_rounds: NonZeroU64::new(9).unwrap(),
         core_handshake_deadline_in_rounds: NonZeroU128::new(10).unwrap(),
-        activity_threshold_sensitivity: 11,
+        cover_messages_per_observation_window: NonZeroU64::new(11).unwrap(),
+        activity_threshold_sensitivity: 12,
     }
 }
 
@@ -201,14 +206,14 @@ const fn message_delayer_settings() -> MessageDelayerSettings {
 pub const SETTINGS_HEX: &str = "
     0100000000000000 0200000000000000 0300000000000000 0400000000000000 0000000000001440
     0600000000000000 07000000 08000000 0900000000000000 0a000000000000000000000000000000
-    0b00000000000000
+    0b00000000000000 0c00000000000000
 ";
 const COMMON_SETTINGS_HEX: &str = "
     0100000000000000 0200000000000000 0300000000000000 0400000000000000
 ";
 const CORE_SETTINGS_HEX: &str = "
     0000000000001440 0600000000000000 07000000 08000000 0900000000000000
-    0a000000000000000000000000000000 0b00000000000000
+    0a000000000000000000000000000000 0b00000000000000 0c00000000000000
 ";
 const SCHEDULER_SETTINGS_HEX: &str = "0000000000001440 0600000000000000";
 

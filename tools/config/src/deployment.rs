@@ -31,6 +31,9 @@ use crate::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 const BLEND_EDGE_NODE_SEND_DEADLINE_IN_ROUNDS: u64 = 1;
 /// `T_H`: the rounds a core handshake is given to complete.
 const BLEND_CORE_HANDSHAKE_DEADLINE_IN_ROUNDS: u128 = 2;
+/// The cover messages a core connection carries in one observation window,
+/// which sizes the window.
+const BLEND_COVER_MESSAGES_PER_OBSERVATION_WINDOW: u64 = 90;
 /// `V`: the messages per second the slowest targeted node can verify.
 const BLEND_VERIFICATION_RATE_PER_SECOND: u32 = 156;
 /// `η`: the rounds a message spends crossing the network at one hop.
@@ -115,6 +118,10 @@ pub fn e2e_deployment_settings_with_genesis_block(
                         BLEND_CORE_HANDSHAKE_DEADLINE_IN_ROUNDS,
                     )
                     .expect("`T_H` cannot be zero."),
+                    cover_messages_per_observation_window: NonZeroU64::try_from(
+                        BLEND_COVER_MESSAGES_PER_OBSERVATION_WINDOW,
+                    )
+                    .expect("The cover messages per observation window cannot be zero."),
                     scheduler: SchedulerSettings {
                         cover: CoverTrafficSettings {
                             message_frequency_per_round: PositiveF64::try_from(

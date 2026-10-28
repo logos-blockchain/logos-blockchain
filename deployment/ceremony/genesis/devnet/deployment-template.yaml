@@ -15,6 +15,7 @@ blend:
     verification_rate_per_second: 156
     edge_node_send_deadline_in_rounds: 1
     core_handshake_deadline_in_rounds: 2
+    cover_messages_per_observation_window: 90
     activity_threshold_sensitivity: 1
 cryptarchia:
   epoch_config:
