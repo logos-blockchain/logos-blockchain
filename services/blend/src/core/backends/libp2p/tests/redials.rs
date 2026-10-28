@@ -1,4 +1,7 @@
-use core::{num::NonZeroU64, time::Duration};
+use core::{
+    num::{NonZeroU64, NonZeroU128},
+    time::Duration,
+};
 
 use lb_blend::{
     message::encap::encapsulated_message_encoded_size, scheduling::membership::Membership,
@@ -949,7 +952,8 @@ async fn core_does_not_retry_a_blacklisted_peer() {
             .behaviour()
             .blend
             .with_core()
-            .is_peer_blacklisted(&offender_id)
+            .blacklisted_peers()
+            .any(|peer| *peer == offender_id)
         {
             // Lands once the connection is up; until then there is no peer to
             // send it to.
@@ -1003,4 +1007,86 @@ async fn core_does_not_retry_a_blacklisted_peer() {
         victim.peer_dials().get(&offender_id).is_none(),
         "the refused dial must not be left among the dials either"
     );
+}
+
+/// A peer closed for not being live is refused for `W` rounds, so the draw of
+/// the peers to dial skips it until then: dialing it would only have the
+/// connection refused, at that draw and at every one after it. Once the
+/// refusal is over, it is dialed like any other peer.
+#[test(tokio::test)]
+async fn core_does_not_dial_a_peer_refused_for_not_being_live() {
+    let (mut identities, mut nodes) = new_nodes_with_empty_address(2);
+
+    // A peer that accepts the connection and then delivers nothing over it.
+    let TestSwarm {
+        swarm: mut silent_swarm,
+        ..
+    } = SwarmBuilder::new(identities.next().unwrap(), &nodes)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
+    let (silent_node, _) = silent_swarm.listen_and_return_membership_entry(None).await;
+    let silent_peer = silent_node.id;
+    update_nodes(&mut nodes, &silent_peer, silent_node.address);
+    tokio::spawn(async move { silent_swarm.run().await });
+
+    // The node under test checks its peering degree often, so its first check
+    // dials the silent peer, the only one there is, and every later check
+    // would dial it again.
+    let TestSwarm {
+        swarm: mut dialing_swarm,
+        ..
+    } = SwarmBuilder::new(identities.next().unwrap(), &nodes)
+        .with_peering_degree_check_interval(time::interval(Duration::from_millis(200)))
+        .build(|id, membership| {
+            BlendBehaviourBuilder::new(id, membership)
+                .with_liveness_window_in_rounds(NonZeroU128::new(3).unwrap())
+                .build()
+        });
+
+    time::timeout(
+        Duration::from_secs(10),
+        dialing_swarm.poll_next_until(|event| {
+            let SwarmEvent::ConnectionClosed { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == silent_peer
+        }),
+    )
+    .await
+    .expect("the silent peer should have been closed once its window ran out");
+    assert!(
+        dialing_swarm
+            .behaviour()
+            .blend
+            .with_core()
+            .is_peer_refused(&silent_peer)
+    );
+
+    // Its connection would be refused on establishment, which reaches the
+    // swarm as a dial error.
+    let dial_while_refused = time::timeout(
+        Duration::from_secs(1),
+        dialing_swarm.poll_next_until(|event| {
+            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == Some(silent_peer)
+        }),
+    )
+    .await;
+    assert!(
+        dial_while_refused.is_err(),
+        "a refused peer was dialed, only to have its connection refused"
+    );
+
+    time::timeout(
+        Duration::from_secs(5),
+        dialing_swarm.poll_next_until(|event| {
+            let SwarmEvent::ConnectionEstablished { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == silent_peer
+        }),
+    )
+    .await
+    .expect("the peer should have been dialed again once its refusal was over");
 }
