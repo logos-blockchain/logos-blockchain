@@ -564,7 +564,6 @@ where
 mod tests {
     use std::{collections::BTreeMap, num::NonZero};
 
-    use lb_binary_codec::bincode::DeserializeOp as _;
     use lb_core::{
         block::{BlockTransactions, UncleHeaders},
         crypto::ZkHasher,
@@ -987,7 +986,7 @@ mod tests {
                 while let Some(res) = &stream.next().await {
                     if let Ok(bytes) = &res {
                         let block: Block<SignedOps<Unverified, StandardMode>> =
-                            Block::from_bytes(bytes).unwrap();
+                            Block::decode_all(bytes, &(u8::MAX, ())).unwrap();
                         blocks.push(block.header().id());
                     } else {
                         break;
