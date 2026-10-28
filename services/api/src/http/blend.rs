@@ -2,7 +2,7 @@ use std::fmt::{Debug, Display};
 
 use lb_binary_codec::bincode::{DeserializeOp, SerializeOp};
 use lb_blend_service::message::{
-    CoreStatus, DataPayload, NetworkInfo, ProxyServiceMessage, ServiceMessage,
+    CoreStatus, DataPayload, NetworkInfo, ProxyServiceMessage, ServiceMessage, SessionPeers,
 };
 use lb_chain_service::{
     BlendRewards, Epoch, State,
@@ -277,38 +277,6 @@ where
     Ok(rewards)
 }
 
-/// Where the node's Blend declaration is in its lifecycle.
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DeclarationState {
-    /// No declaration posted.
-    NotDeclared,
-    /// Posted, but not in the ledger yet.
-    Pending,
-    /// In the ledger, but not in an epoch snapshot yet.
-    Activating,
-    /// In the current epoch's snapshot.
-    Active,
-    /// Past `first_epoch_in_snapshot`, but not in the current epoch's snapshot.
-    Inactive,
-    /// Withdrawal posted. Once it lands, the declaration is withdrawn at
-    /// `withdraw_at`, and the locked note unlocks the epoch after.
-    Withdrawn,
-}
-
-impl From<status::DeclarationState> for DeclarationState {
-    fn from(state: status::DeclarationState) -> Self {
-        match state {
-            status::DeclarationState::NotDeclared => Self::NotDeclared,
-            status::DeclarationState::Pending => Self::Pending,
-            status::DeclarationState::Activating => Self::Activating,
-            status::DeclarationState::Active => Self::Active,
-            status::DeclarationState::Inactive => Self::Inactive,
-            status::DeclarationState::Withdrawn => Self::Withdrawn,
-        }
-    }
-}
-
 /// The state of the node's activity proof for the activity epoch.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -434,28 +402,13 @@ impl From<status::ActivityStatus> for ActivityStatus {
     }
 }
 
-/// The negotiated peers for the current epoch.
-#[derive(Debug, Clone, Copy, Serialize)]
-pub struct SessionPeers {
-    pub total: usize,
-    pub healthy: usize,
-}
-
-impl From<lb_blend_service::message::SessionPeers> for SessionPeers {
-    fn from(peers: lb_blend_service::message::SessionPeers) -> Self {
-        Self {
-            total: peers.total,
-            healthy: peers.healthy,
-        }
-    }
-}
-
 /// The node's Blend status.
 #[derive(Debug, Clone, Serialize)]
 pub struct BlendStatus {
     /// Whether the node is a core node, as opposed to an edge node.
     pub is_core: bool,
-    pub declaration_state: DeclarationState,
+    /// Where the declaration is in its lifecycle.
+    pub declaration_state: status::DeclarationState,
     /// The epoch of the chain tip.
     pub current_epoch: Epoch,
     /// `None` while the declaration isn't in the ledger.
@@ -474,13 +427,13 @@ impl BlendStatus {
     fn new(status: status::BlendStatus, core_status: Option<CoreStatus>) -> Self {
         Self {
             is_core: core_status.is_some(),
-            declaration_state: status.declaration_state.into(),
+            declaration_state: status.declaration_state,
             current_epoch: status.current_epoch,
             declaration: status.declaration.map(Into::into),
             activity: status.activity.map(Into::into),
             tokens_collected_in_current_epoch: core_status
                 .map(|core_status| core_status.tokens_collected_in_current_epoch),
-            session_peers: core_status.map(|core_status| core_status.session_peers.into()),
+            session_peers: core_status.map(|core_status| core_status.session_peers),
         }
     }
 }

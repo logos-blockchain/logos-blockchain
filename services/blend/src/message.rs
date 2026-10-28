@@ -40,7 +40,7 @@ pub struct CoreStatus {
 }
 
 /// The negotiated peers for the current epoch.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize)]
 pub struct SessionPeers {
     pub total: usize,
     pub healthy: usize,
