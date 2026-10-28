@@ -1,5 +1,6 @@
 use std::convert::Infallible;
 
+use lb_core::mantle::gas::GasCost;
 pub use lb_services_utils::overwatch::recovery::operators::RecoveryBackend as SdpStateStorage;
 use overwatch::services::state::ServiceState;
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,8 @@ pub struct SdpState {
     pub pending_activity: Option<Activity>,
     /// The outcome of the last activity proof submitted.
     pub last_activity_proof_report: Option<ActivityProofReport>,
+    /// The fee of the last activity proof submitted.
+    pub last_activity_fee: Option<GasCost>,
 }
 
 impl SdpState {
@@ -23,12 +26,14 @@ impl SdpState {
         participation: Option<Participation>,
         pending_activity: Option<Activity>,
         last_activity_proof_report: Option<ActivityProofReport>,
+        last_activity_fee: Option<GasCost>,
     ) -> Self {
         Self {
             updated: participation.map(|_| OffsetDateTime::now_utc()),
             participation,
             pending_activity,
             last_activity_proof_report,
+            last_activity_fee,
         }
     }
 }
@@ -43,6 +48,7 @@ impl ServiceState for SdpState {
             updated: None,
             pending_activity: None,
             last_activity_proof_report: None,
+            last_activity_fee: None,
         })
     }
 }

@@ -18,6 +18,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         NoteId, SignedOps,
+        gas::GasCost,
         ledger::verification_mode::StandardMode,
         traits::Hashable as _,
         transactions::{MantleTxBuilder, TxHash, states::Preverified},
@@ -50,7 +51,7 @@ use crate::{
     mempool::SdpMempoolAdapter,
     state::{SdpState, SdpStateStorage},
     status::SdpBlendStatus,
-    wallet::{SdpWalletAdapter, SdpWalletConfig},
+    wallet::{SdpWalletAdapter, SdpWalletConfig, SdpWalletError},
 };
 pub use crate::{api::SdpServiceApi, intent::Config as ActiveMessageTrackerConfig};
 
@@ -225,6 +226,8 @@ where
     /// Activity message restored from the previous run, to be tracked again.
     restored_activity: Option<Activity>,
     last_activity_proof_report: Option<ActivityProofReport>,
+    /// The fee of the last activity proof submitted.
+    last_activity_fee: Option<GasCost>,
     _phantom: std::marker::PhantomData<(ChainService, StateStorage)>,
 }
 
@@ -284,6 +287,7 @@ where
             active_message_tracker: None,
             restored_activity: initial_state.pending_activity,
             last_activity_proof_report: initial_state.last_activity_proof_report,
+            last_activity_fee: initial_state.last_activity_fee,
             _phantom: std::marker::PhantomData,
         })
     }
@@ -447,6 +451,7 @@ where
         Ok(SdpBlendStatus::new(
             self.participation,
             self.last_activity_proof_report,
+            self.last_activity_fee,
             chain_status,
         ))
     }
@@ -810,6 +815,9 @@ where
             .await;
 
         self.last_activity_proof_report = Some(ActivityProofReport { epoch, submission });
+        if let Ok(ActivitySubmission { fee, .. }) = submission {
+            self.last_activity_fee = Some(fee);
+        }
         self.update_state();
 
         submission.ok()
@@ -874,7 +882,7 @@ where
 
         let tx_builder = MantleTxBuilder::new();
 
-        let signed_tx = match wallet_adapter
+        let (signed_tx, fee) = match wallet_adapter
             .active_tx(tx_builder, active_message, &self.wallet_config)
             .await
         {
@@ -895,6 +903,9 @@ where
                     "Failed to create SDP activity transaction"
                 );
                 metrics::activity_tx_failures_total();
+                if matches!(e, SdpWalletError::Funding(_)) {
+                    return Err(ActivityProofSubmissionError::FundingFailed);
+                }
                 return Err(ActivityProofSubmissionError::TransactionBuildFailed);
             }
         };
@@ -951,6 +962,7 @@ where
         Ok(ActivitySubmission {
             tip: declaration.tip,
             tx_id,
+            fee,
         })
     }
 
@@ -1135,6 +1147,7 @@ where
                 self.participation,
                 pending_activity,
                 self.last_activity_proof_report,
+                self.last_activity_fee,
             )));
     }
 }

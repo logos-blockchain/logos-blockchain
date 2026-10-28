@@ -1,5 +1,8 @@
 use lb_chain_service::{BlendDeclarationStatus, Epoch};
-use lb_core::sdp::{Declaration, DeclarationId};
+use lb_core::{
+    mantle::gas::GasCost,
+    sdp::{Declaration, DeclarationId},
+};
 use lb_ledger::mantle::sdp::rewards::blend::RewardEstimate;
 
 use crate::{
@@ -85,6 +88,8 @@ pub enum ProofFailureReason {
     NoProof,
     /// The node's declaration wasn't found when submitting the proof.
     DeclarationNotFound,
+    /// The funding key couldn't pay the proof transaction's fee.
+    FundingFailed,
     /// The proof transaction couldn't be built.
     TransactionBuildFailed,
     /// The mempool rejected the proof transaction.
@@ -140,6 +145,9 @@ impl ProofState {
             Ok(_) => Self::Pending,
             Err(ActivityProofSubmissionError::DeclarationNotFound) => {
                 Self::Failed(ProofFailureReason::DeclarationNotFound)
+            }
+            Err(ActivityProofSubmissionError::FundingFailed) => {
+                Self::Failed(ProofFailureReason::FundingFailed)
             }
             Err(ActivityProofSubmissionError::TransactionBuildFailed) => {
                 Self::Failed(ProofFailureReason::TransactionBuildFailed)
@@ -202,6 +210,9 @@ pub struct ActivityStatus {
     /// The epoch in which the node's latest activity proof landed. Starts at
     /// the declaration's `first_epoch_in_snapshot`.
     pub last_active_epoch: Epoch,
+    /// The fee of the node's last activity proof submitted. The proof may
+    /// not have landed. `None` if none was submitted.
+    pub last_fee: Option<GasCost>,
 }
 
 impl ActivityStatus {
@@ -210,11 +221,13 @@ impl ActivityStatus {
     /// - `current_epoch`: The epoch of the chain tip.
     /// - `status`: The declaration's status in the ledger.
     /// - `last_activity_proof_report`: The node's last proof submission.
+    /// - `last_activity_fee`: The fee of the node's last proof submitted.
     #[must_use]
     fn new(
         current_epoch: Epoch,
         status: &BlendDeclarationStatus,
         last_activity_proof_report: Option<ActivityProofReport>,
+        last_activity_fee: Option<GasCost>,
     ) -> Self {
         let ledger_proof_status = status.estimate.as_ref().map(LedgerProofStatus::from);
         Self {
@@ -226,6 +239,7 @@ impl ActivityStatus {
                 last_activity_proof_report,
             ),
             last_active_epoch: status.declaration.active,
+            last_fee: last_activity_fee,
         }
     }
 }
@@ -249,11 +263,13 @@ impl SdpBlendStatus {
     ///
     /// - `participation`: The node's participation, if any.
     /// - `last_activity_proof_report`: The node's last proof submission.
+    /// - `last_activity_fee`: The fee of the node's last proof submitted.
     /// - `chain_status`: The ledger's Blend view at the chain tip.
     #[must_use]
     pub fn new(
         participation: Option<Participation>,
         last_activity_proof_report: Option<ActivityProofReport>,
+        last_activity_fee: Option<GasCost>,
         chain_status: lb_chain_service::BlendStatus,
     ) -> Self {
         let lb_chain_service::BlendStatus {
@@ -279,6 +295,7 @@ impl SdpBlendStatus {
                     current_epoch,
                     status,
                     last_activity_proof_report,
+                    last_activity_fee,
                 ))
             }
         });
@@ -414,6 +431,7 @@ mod tests {
         let submitted = Ok(ActivitySubmission {
             tip: HeaderId::from([0; 32]),
             tx_id: TxHash::default(),
+            fee: GasCost::new(0),
         });
 
         assert_eq!(
