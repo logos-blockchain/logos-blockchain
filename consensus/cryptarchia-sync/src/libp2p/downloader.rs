@@ -25,6 +25,12 @@ const LOG_TARGET: &str = cryptarchia::sync::libp2p::DOWNLOADER;
 /// its download slot, while blocks are still being applied.
 const DOWNLOAD_BUFFER_BYTES: usize = 64 * 1024 * 1024;
 
+/// The maximum number of blocks read ahead of the consumer of a download.
+/// Bounds blocks with little or no payload, which barely count towards
+/// [`DOWNLOAD_BUFFER_BYTES`]. Fits a whole batch at the default provider
+/// batch size (1000 blocks).
+const DOWNLOAD_BUFFER_ITEMS: usize = 1024;
+
 pub struct Downloader;
 
 impl Downloader {
@@ -137,7 +143,9 @@ impl Downloader {
         });
 
         let boxed_stream: BoxedStream<_> =
-            Box::new(ReadAhead::<_, DOWNLOAD_BUFFER_BYTES>::new(Box::pin(stream)));
+            Box::new(
+                ReadAhead::<_, DOWNLOAD_BUFFER_BYTES, DOWNLOAD_BUFFER_ITEMS>::new(Box::pin(stream)),
+            );
         reply_channel
             .send(boxed_stream)
             .map_err(|_| ChainSyncError {

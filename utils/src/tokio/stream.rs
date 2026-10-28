@@ -139,12 +139,14 @@ impl<T: AsRef<[u8]>, E> BufferedBytes for Result<T, E> {
 /// A stream wrapper that reads ahead of its consumer.
 ///
 /// Each poll takes every item the wrapped stream has ready, up to
-/// `BUFFER_BYTES` (and always at least one item, however large), and yields
-/// the oldest one. The wrapped stream is only polled from the consumer's
-/// polls, so no work happens elsewhere. For a stream over a transport that
-/// keeps receiving between polls, this lets the sender go at network speed
-/// while the consumer is still busy with earlier items.
-pub struct ReadAhead<WrappedStream, const BUFFER_BYTES: usize>
+/// `BUFFER_BYTES` of payload and `MAX_ITEMS` items (and always at least one
+/// item, however large), and yields the oldest one. The item bound keeps
+/// items with little or no payload from piling up under the byte bound. The
+/// wrapped stream is only polled from the consumer's polls, so no work happens
+/// elsewhere. For a stream over a transport that keeps receiving between polls,
+/// this lets the sender go at network speed while the consumer is still busy
+/// with earlier items.
+pub struct ReadAhead<WrappedStream, const BUFFER_BYTES: usize, const MAX_ITEMS: usize>
 where
     WrappedStream: Stream,
 {
@@ -153,7 +155,8 @@ where
     buffered_bytes: usize,
 }
 
-impl<WrappedStream, const BUFFER_BYTES: usize> ReadAhead<WrappedStream, BUFFER_BYTES>
+impl<WrappedStream, const BUFFER_BYTES: usize, const MAX_ITEMS: usize>
+    ReadAhead<WrappedStream, BUFFER_BYTES, MAX_ITEMS>
 where
     WrappedStream: Stream,
 {
@@ -168,12 +171,15 @@ where
 
 // Buffered items are only ever moved, never pinned, so they don't need to be
 // `Unpin` themselves.
-impl<WrappedStream, const BUFFER_BYTES: usize> Unpin for ReadAhead<WrappedStream, BUFFER_BYTES> where
-    WrappedStream: Stream + Unpin
+impl<WrappedStream, const BUFFER_BYTES: usize, const MAX_ITEMS: usize> Unpin
+    for ReadAhead<WrappedStream, BUFFER_BYTES, MAX_ITEMS>
+where
+    WrappedStream: Stream + Unpin,
 {
 }
 
-impl<WrappedStream, const BUFFER_BYTES: usize> Stream for ReadAhead<WrappedStream, BUFFER_BYTES>
+impl<WrappedStream, const BUFFER_BYTES: usize, const MAX_ITEMS: usize> Stream
+    for ReadAhead<WrappedStream, BUFFER_BYTES, MAX_ITEMS>
 where
     WrappedStream: Stream<Item: BufferedBytes> + Unpin,
 {
@@ -181,7 +187,9 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
-        while this.buffer.is_empty() || this.buffered_bytes < BUFFER_BYTES {
+        while this.buffer.is_empty()
+            || (this.buffered_bytes < BUFFER_BYTES && this.buffer.len() < MAX_ITEMS)
+        {
             match this.stream.poll_next_unpin(cx) {
                 Poll::Ready(Some(item)) => {
                     this.buffered_bytes += item.buffered_bytes();
@@ -403,7 +411,8 @@ mod tests {
     #[tokio::test]
     async fn read_ahead_drains_ready_items_up_to_buffer_bytes() {
         let pulled = Arc::new(AtomicUsize::new(0));
-        let mut read_ahead = ReadAhead::<_, 25>::new(counting_chunks(10, 10, Arc::clone(&pulled)));
+        let mut read_ahead =
+            ReadAhead::<_, 25, 1024>::new(counting_chunks(10, 10, Arc::clone(&pulled)));
 
         assert_eq!(next_or_fail(&mut read_ahead).await, Some(Ok(vec![0; 10])));
         // 10 + 10 bytes is under the bound, so a third chunk was read too.
@@ -418,7 +427,8 @@ mod tests {
     #[tokio::test]
     async fn read_ahead_yields_items_larger_than_buffer_bytes() {
         let pulled = Arc::new(AtomicUsize::new(0));
-        let mut read_ahead = ReadAhead::<_, 5>::new(counting_chunks(2, 10, Arc::clone(&pulled)));
+        let mut read_ahead =
+            ReadAhead::<_, 5, 1024>::new(counting_chunks(2, 10, Arc::clone(&pulled)));
 
         assert_eq!(next_or_fail(&mut read_ahead).await, Some(Ok(vec![0; 10])));
         assert_eq!(pulled.load(Ordering::SeqCst), 1);
@@ -426,12 +436,28 @@ mod tests {
         assert_eq!(next_or_fail(&mut read_ahead).await, None);
     }
 
+    /// Items with no payload don't count towards the byte bound, so the item
+    /// bound is what stops them from piling up.
+    #[tokio::test]
+    async fn read_ahead_bounds_items_without_payload() {
+        let pulled = Arc::new(AtomicUsize::new(0));
+        let mut read_ahead =
+            ReadAhead::<_, 1024, 4>::new(counting_chunks(100, 0, Arc::clone(&pulled)));
+
+        assert_eq!(next_or_fail(&mut read_ahead).await, Some(Ok(vec![])));
+        assert_eq!(pulled.load(Ordering::SeqCst), 4);
+
+        // 3 left buffered, so one more is read to get back to the bound.
+        assert_eq!(next_or_fail(&mut read_ahead).await, Some(Ok(vec![])));
+        assert_eq!(pulled.load(Ordering::SeqCst), 5);
+    }
+
     /// Items, errors included, come out in source order, and the stream ends
     /// once both the source and the buffer are empty.
     #[tokio::test]
     async fn read_ahead_keeps_source_order_and_ends() {
         let source: Vec<Chunk> = vec![Ok(vec![1]), Err(()), Ok(vec![2, 2])];
-        let read_ahead = ReadAhead::<_, 1024>::new(stream::iter(source.clone()));
+        let read_ahead = ReadAhead::<_, 1024, 1024>::new(stream::iter(source.clone()));
 
         let items = timeout(Duration::from_secs(5), read_ahead.collect::<Vec<_>>())
             .await
