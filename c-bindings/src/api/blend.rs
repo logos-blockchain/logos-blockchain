@@ -1,7 +1,7 @@
 use std::ffi::{CString, c_char};
 
 use lb_api_service::http::blend;
-use lb_blend_service::message::{CoreStatus, NetworkInfo};
+use lb_blend_service::message::NetworkInfo;
 use lb_c_macros::panic_to_error;
 use lb_chain_service::Epoch;
 use lb_core::{
@@ -579,12 +579,12 @@ impl From<status::DeclarationState> for DeclarationState {
     }
 }
 
-/// The state of the node's activity proof for the activity epoch.
+/// The kind of [`ProofState`].
 ///
 /// cbindgen:prefix-with-name
 #[repr(C)]
 #[derive(Default)]
-pub enum ProofState {
+pub enum ProofStateKind {
     /// Submitted, but not in the ledger yet.
     #[default]
     Pending,
@@ -596,7 +596,7 @@ pub enum ProofState {
     NotRequired,
 }
 
-/// Why a [`ProofState`] is `Failed` or `NotRequired`.
+/// Why a [`ProofStateKind`] is `Failed` or `NotRequired`.
 #[repr(C)]
 #[derive(Default)]
 pub enum ProofReason {
@@ -643,37 +643,77 @@ impl From<status::ProofNotRequiredReason> for ProofReason {
     }
 }
 
-/// The node's Blend declaration in the ledger.
+/// The state of the node's activity proof for the activity epoch.
 #[repr(C)]
 #[derive(Default)]
-pub struct DeclarationStatus {
-    pub id: DeclarationId,
+pub struct ProofState {
+    pub kind: ProofStateKind,
+    /// Set when `kind` is `Failed` or `NotRequired`.
+    pub reason: FfiOption<ProofReason>,
+}
+
+impl From<status::ProofState> for ProofState {
+    fn from(state: status::ProofState) -> Self {
+        let (kind, reason) = match state {
+            status::ProofState::Pending => (ProofStateKind::Pending, None),
+            status::ProofState::Accepted => (ProofStateKind::Accepted, None),
+            status::ProofState::Failed(reason) => (ProofStateKind::Failed, Some(reason.into())),
+            status::ProofState::NotRequired(reason) => {
+                (ProofStateKind::NotRequired, Some(reason.into()))
+            }
+        };
+        Self {
+            kind,
+            reason: reason.into(),
+        }
+    }
+}
+
+/// What [`DeclarationStatus`] exposes of a [`sdp::Declaration`].
+#[repr(C)]
+#[derive(Default)]
+pub struct Declaration {
     /// As 32 bytes.
     pub provider_id: [u8; KEY_SIZE],
-    /// As 32 little-endian bytes.
-    pub zk_id: [u8; KEY_SIZE],
     /// The note locked by the declaration, as 32 little-endian bytes.
     pub locked_note_id: [u8; KEY_SIZE],
+    /// As 32 little-endian bytes.
+    pub zk_id: [u8; KEY_SIZE],
     /// The epoch of the block that contained the declaration.
     pub created_epoch: u32,
-    /// The first epoch whose snapshot includes the declaration.
-    pub first_epoch_in_snapshot: u32,
     /// The epoch at which the declaration is scheduled to be withdrawn. `None`
     /// until the withdrawal lands.
     pub withdraw_at: FfiOption<u32>,
 }
 
+impl From<sdp::Declaration> for Declaration {
+    fn from(declaration: sdp::Declaration) -> Self {
+        Self {
+            provider_id: *declaration.provider_id.as_ref(),
+            locked_note_id: fr_to_bytes(declaration.service_note_id.as_fr()),
+            zk_id: fr_to_bytes(declaration.zk_id.as_fr()),
+            created_epoch: declaration.created.into(),
+            withdraw_at: declaration.withdraw_at.map(Into::into).into(),
+        }
+    }
+}
+
+/// The node's Blend declaration in the ledger.
+#[repr(C)]
+#[derive(Default)]
+pub struct DeclarationStatus {
+    pub id: DeclarationId,
+    pub declaration: Declaration,
+    /// The first epoch whose snapshot includes the declaration.
+    pub first_epoch_in_snapshot: u32,
+}
+
 impl From<status::DeclarationStatus> for DeclarationStatus {
     fn from(status: status::DeclarationStatus) -> Self {
-        let declaration = status.declaration;
         Self {
             id: status.id.into(),
-            provider_id: *declaration.provider_id.as_ref(),
-            zk_id: fr_to_bytes(declaration.zk_id.as_fr()),
-            locked_note_id: fr_to_bytes(declaration.service_note_id.as_fr()),
-            created_epoch: declaration.created.into(),
+            declaration: status.declaration.into(),
             first_epoch_in_snapshot: status.first_epoch_in_snapshot.into(),
-            withdraw_at: declaration.withdraw_at.map(Into::into).into(),
         }
     }
 }
@@ -686,8 +726,6 @@ pub struct ActivityStatus {
     pub activity_epoch: FfiOption<u32>,
     /// The state of the activity proof for `activity_epoch`.
     pub proof_state: ProofState,
-    /// Set when `proof_state` is `Failed` or `NotRequired`.
-    pub proof_reason: FfiOption<ProofReason>,
     /// The epoch in which the node's latest activity proof landed. Starts at
     /// the declaration's `first_epoch_in_snapshot`.
     pub last_active_epoch: u32,
@@ -695,18 +733,9 @@ pub struct ActivityStatus {
 
 impl From<status::ActivityStatus> for ActivityStatus {
     fn from(status: status::ActivityStatus) -> Self {
-        let (proof_state, proof_reason) = match status.proof_state {
-            status::ProofState::Pending => (ProofState::Pending, None),
-            status::ProofState::Accepted => (ProofState::Accepted, None),
-            status::ProofState::Failed(reason) => (ProofState::Failed, Some(reason.into())),
-            status::ProofState::NotRequired(reason) => {
-                (ProofState::NotRequired, Some(reason.into()))
-            }
-        };
         Self {
             activity_epoch: status.activity_epoch.map(Into::into).into(),
-            proof_state,
-            proof_reason: proof_reason.into(),
+            proof_state: status.proof_state.into(),
             last_active_epoch: status.last_active_epoch.into(),
         }
     }
@@ -729,12 +758,28 @@ impl From<lb_blend_service::message::SessionPeers> for SessionPeers {
     }
 }
 
-/// The node's Blend status.
+/// A core node's Blend status.
 #[repr(C)]
 #[derive(Default)]
-pub struct BlendStatus {
-    /// Whether the node is a core node, as opposed to an edge node.
-    pub is_core: bool,
+pub struct CoreStatus {
+    pub session_peers: SessionPeers,
+    /// Blending tokens collected in the current epoch.
+    pub tokens_collected_in_current_epoch: usize,
+}
+
+impl From<lb_blend_service::message::CoreStatus> for CoreStatus {
+    fn from(status: lb_blend_service::message::CoreStatus) -> Self {
+        Self {
+            session_peers: status.session_peers.into(),
+            tokens_collected_in_current_epoch: status.tokens_collected_in_current_epoch,
+        }
+    }
+}
+
+/// The node's Blend declaration and activity, as seen by SDP.
+#[repr(C)]
+#[derive(Default)]
+pub struct SdpBlendStatus {
     pub declaration_state: DeclarationState,
     /// The epoch of the chain tip.
     pub current_epoch: u32,
@@ -743,29 +788,26 @@ pub struct BlendStatus {
     /// `None` while the declaration isn't in the ledger, or while it's
     /// activating.
     pub activity: FfiOption<ActivityStatus>,
-    /// Blending tokens collected in the current epoch. `None` when not a core
-    /// node.
-    pub tokens_collected_in_current_epoch: FfiOption<usize>,
-    /// `None` when not a core node.
-    pub session_peers: FfiOption<SessionPeers>,
 }
 
-impl BlendStatus {
-    fn new(status: status::BlendStatus, core_status: Option<CoreStatus>) -> Self {
+impl From<status::SdpBlendStatus> for SdpBlendStatus {
+    fn from(status: status::SdpBlendStatus) -> Self {
         Self {
-            is_core: core_status.is_some(),
             declaration_state: status.declaration_state.into(),
             current_epoch: status.current_epoch.into(),
             declaration: status.declaration.map(Into::into).into(),
             activity: status.activity.map(Into::into).into(),
-            tokens_collected_in_current_epoch: core_status
-                .map(|core_status| core_status.tokens_collected_in_current_epoch)
-                .into(),
-            session_peers: core_status
-                .map(|core_status| core_status.session_peers.into())
-                .into(),
         }
     }
+}
+
+/// The node's Blend status.
+#[repr(C)]
+#[derive(Default)]
+pub struct BlendStatus {
+    pub sdp: SdpBlendStatus,
+    /// `None` when not a core node.
+    pub core: FfiOption<CoreStatus>,
 }
 
 /// Gets this node's Blend status: core or edge, its declaration and its
@@ -810,7 +852,10 @@ fn blend_status_sync(node: &LogosBlockchainNode) -> StatusResult<BlendStatus> {
             )
         })?;
 
-        Ok(BlendStatus::new(status, core_status))
+        Ok(BlendStatus {
+            sdp: status.into(),
+            core: core_status.map(Into::into).into(),
+        })
     })
 }
 

@@ -49,7 +49,7 @@ use crate::{
     intent::IntentTracker,
     mempool::SdpMempoolAdapter,
     state::{SdpState, SdpStateStorage},
-    status::BlendStatus,
+    status::SdpBlendStatus,
     wallet::{SdpWalletAdapter, SdpWalletConfig},
 };
 pub use crate::{api::SdpServiceApi, intent::Config as ActiveMessageTrackerConfig};
@@ -181,7 +181,7 @@ pub enum SdpMessage {
         reply_channel: oneshot::Sender<SdpStatus>,
     },
     GetBlendStatus {
-        reply_channel: oneshot::Sender<Result<BlendStatus, DynError>>,
+        reply_channel: oneshot::Sender<Result<SdpBlendStatus, DynError>>,
     },
     SetCurrentDeclarationId {
         declaration_id: Option<DeclarationId>,
@@ -437,14 +437,14 @@ where
     async fn blend_status(
         &self,
         chain_api: &CryptarchiaServiceApi<ChainService>,
-    ) -> Result<BlendStatus, DynError> {
+    ) -> Result<SdpBlendStatus, DynError> {
         let declaration_id = self
             .participation
             .map(|participation| participation.declaration_id());
         let Some(chain_status) = chain_api.get_blend_status(declaration_id).await? else {
             return Err("Ledger state not found for the tip".into());
         };
-        Ok(BlendStatus::new(
+        Ok(SdpBlendStatus::new(
             self.participation,
             self.last_activity_proof_report,
             chain_status,

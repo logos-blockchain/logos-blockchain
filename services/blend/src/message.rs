@@ -32,7 +32,7 @@ pub struct CoreInfo<NodeId> {
 }
 
 /// A core node's Blend status.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize)]
 pub struct CoreStatus {
     pub session_peers: SessionPeers,
     /// Blending tokens collected in the current epoch.
