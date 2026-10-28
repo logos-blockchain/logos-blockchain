@@ -511,10 +511,11 @@ impl NoteSets {
     pub fn end_block(mut self, block: BlockNumber) -> Self {
         for index in &self.changed {
             let position = usize::try_from(*index).expect("note set index fits in usize");
+            // `record_commitment_root` computes the commitment root of the set once.
             let set = self.sets[position].clone().record_commitment_root(block);
             self.eligible = self.eligible.update(
                 position,
-                eligible_leaf(&set.commitment_root(), &set.nullifier_root()),
+                eligible_leaf(&set.committed_root, &set.nullifier_root()),
             );
             self.sets.set_mut(position, set);
         }
