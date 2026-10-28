@@ -13,7 +13,7 @@
 //!
 //! [Execution Market]: https://github.com/logos-co/logos-lips/blob/035c01f78728d8bba23d89c798fb9fa640870126/docs/blockchain/raw/execution-market.md
 //! [Storage Markets]: https://github.com/logos-co/logos-lips/blob/38916aa474164ac4acd81e62d19715e17626be17/docs/blockchain/raw/storage-markets.md
-//! [Gas Cost Determination]: https://github.com/logos-co/logos-lips/blob/035c01f78728d8bba23d89c798fb9fa640870126/docs/blockchain/raw/analysis-gas-cost-determination.md
+//! [Gas Cost Determination]: https://github.com/logos-co/logos-lips/blob/b6cc70859f23f4501b60c333c93b71470e47fadf/docs/blockchain/raw/analysis-gas-cost-determination.md
 
 use std::collections::{HashMap, HashSet};
 
@@ -49,12 +49,26 @@ pub const SPEC_GENESIS_EXECUTION_PRICE: u128 = 1_000_000_000;
 pub const SPEC_EMA_PREV_WEIGHT: u128 = 9;
 /// Execution Market v1.3.0: EMA denominator.
 pub const SPEC_EMA_DENOMINATOR: u128 = 10;
-/// Execution Market v1.3.0: `7 * G_target`, with `G_target = 1_596_241`.
-pub const SPEC_BASE_FEE_NUMERATOR: u128 = 11_173_687;
+/// Execution Market v1.3.0: `7 * G_target`, with `G_target = 1_586_120`.
+pub const SPEC_BASE_FEE_NUMERATOR: u128 = 11_102_840;
 /// Execution Market v1.3.0: `8 * G_target`.
-pub const SPEC_BASE_FEE_DENOMINATOR: u128 = 12_769_928;
-/// Gas Cost Determination v1.8.0: a transfer costs 619 gas.
-pub const SPEC_TRANSFER_GAS: u64 = 619;
+pub const SPEC_BASE_FEE_DENOMINATOR: u128 = 12_688_960;
+/// Gas Cost Determination 2.0.0: the Transfer Operation costs 30 gas.
+pub const SPEC_TRANSFER_GAS: u64 = 30;
+/// Gas Cost Determination 2.0.0: verifying the proof of a spend.
+pub const SPEC_PROOF_GAS: u64 = 1_946;
+/// Gas Cost Determination 2.0.0: extending the root of a spend over a
+/// non-empty buffer.
+pub const SPEC_ROOT_GAS: u64 = 887;
+/// Gas Cost Determination 2.0.0: each commitment of the buffer the root is
+/// extended over.
+pub const SPEC_BUFFERED_GAS: u64 = 23;
+/// Gas Cost Determination 2.0.0: each nullifier of a spend.
+pub const SPEC_NULLIFIER_GAS: u64 = 838;
+/// Gas Cost Determination 2.0.0: each commitment of a spend.
+pub const SPEC_COMMITMENT_GAS: u64 = 25;
+/// Gas Cost Determination 2.0.0: each 1000 bytes of a transaction, floored.
+pub const SPEC_KB_GAS: u64 = 26;
 
 /// Computes a percentage reserve with checked widened arithmetic and integer
 /// ceiling, matching the transaction funding rule.
@@ -110,7 +124,9 @@ pub struct GasPriceRecord {
 
 /// Execution gas of one block, from the spec's per-op table.
 ///
-/// Only ops the fee scenarios create are mapped.
+/// Each Transfer costs its Operation gas plus the spend of its notes over the
+/// commitments the transaction buffered before it, and each transaction adds
+/// its bytes. Only ops the fee scenarios create are mapped.
 ///
 /// # Errors
 ///
@@ -120,9 +136,24 @@ pub fn spec_block_execution_gas(block: &ApiBlock) -> Result<u64, String> {
     let mut total = 0;
 
     for tx in &block.transactions {
+        let mut buffered = 0u64;
         for op in tx.op_refs() {
             match op {
-                OpRef::Transfer(_) => total += SPEC_TRANSFER_GAS,
+                OpRef::Transfer(transfer) => {
+                    let inputs = transfer.inputs.len() as u64;
+                    let outputs = transfer.outputs.len() as u64;
+                    let root = if buffered == 0 {
+                        0
+                    } else {
+                        SPEC_ROOT_GAS + SPEC_BUFFERED_GAS * buffered
+                    };
+                    total += SPEC_TRANSFER_GAS
+                        + SPEC_PROOF_GAS
+                        + root
+                        + SPEC_NULLIFIER_GAS * inputs
+                        + SPEC_COMMITMENT_GAS * outputs;
+                    buffered += outputs;
+                }
                 other => {
                     return Err(format!(
                         "unexpected operation {} in a fee-scenario block; extend the spec \
@@ -132,6 +163,9 @@ pub fn spec_block_execution_gas(block: &ApiBlock) -> Result<u64, String> {
                 }
             }
         }
+        // Transfers change no channel or SDP note set, so the transaction
+        // adds only its bytes.
+        total += SPEC_KB_GAS * tx.encode().len() as u64 / 1000;
     }
 
     Ok(total)

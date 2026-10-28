@@ -12,7 +12,10 @@ use crate::{
     mantle::{
         batch::DeferredZkTransfer,
         channel::{Channels, Error},
-        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
+        gas::{
+            Gas, GasOverflow, MainnetGasProfile, NoteSetKey, OpGasCalculator, OpGasContext,
+            OperationGas, spend_gas,
+        },
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Value,
             VerifiableOperation,
@@ -95,10 +98,20 @@ impl ProvableOperation for DepositOp {
 }
 
 impl OperationGas<MainnetGasProfile> for DepositOp {
-    const GAS_COST: Gas = Gas::new(619);
+    const GAS_COST: Gas = Gas::new(16);
 }
 
-impl OpGasCalculator<MainnetGasProfile> for DepositOp {}
+impl OpGasCalculator<MainnetGasProfile> for DepositOp {
+    // The Operation, plus the spend of its notes over the commitments the
+    // transaction buffered in the ledger note set before it.
+    fn execution_gas(&self, context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
+        Self::GAS_COST.checked_add(spend_gas(
+            self.inputs.len(),
+            self.outputs.len(),
+            context.buffered(&NoteSetKey::Ledger),
+        )?)
+    }
+}
 
 impl PreverifiableOperation<StandardMode> for SignedOperation<DepositOp, Unverified, StandardMode> {
     type Context<'a> = ();
@@ -242,9 +255,10 @@ mod test {
     #[test]
     fn deposit_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
+            // 1 input, 1 output, nothing buffered: 16 + 1946 + 838 + 25
             assert_eq!(
                 DepositOp::sample().execution_gas(&FixedThresholds(threshold)),
-                Ok(Gas::new(619))
+                Ok(Gas::new(2_825))
             );
         }
     }

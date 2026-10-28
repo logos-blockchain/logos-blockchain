@@ -12,7 +12,10 @@ use crate::{
     mantle::{
         batch::DeferredZkTransfer,
         channel::{Channels, Error},
-        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
+        gas::{
+            Gas, GasOverflow, MainnetGasProfile, NoteSetKey, OpGasCalculator, OpGasContext,
+            OperationGas, spend_gas,
+        },
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
@@ -135,10 +138,20 @@ impl ProvableOperation for ChannelWithdrawOp {
 }
 
 impl OperationGas<MainnetGasProfile> for ChannelWithdrawOp {
-    const GAS_COST: Gas = Gas::new(619);
+    const GAS_COST: Gas = Gas::new(13);
 }
 
-impl OpGasCalculator<MainnetGasProfile> for ChannelWithdrawOp {}
+impl OpGasCalculator<MainnetGasProfile> for ChannelWithdrawOp {
+    // The Operation, plus the spend of its notes over the commitments the
+    // transaction buffered in the note set of its channel before it.
+    fn execution_gas(&self, context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
+        Self::GAS_COST.checked_add(spend_gas(
+            self.inputs.len(),
+            self.outputs.len(),
+            context.buffered(&NoteSetKey::Channel(self.channel_id)),
+        )?)
+    }
+}
 
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<ChannelWithdrawOp, Unverified, StandardMode>
@@ -431,9 +444,10 @@ mod test {
     #[test]
     fn channel_withdraw_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
+            // 1 input, 1 output, nothing buffered: 13 + 1946 + 838 + 25
             assert_eq!(
                 ChannelWithdrawOp::sample().execution_gas(&FixedThresholds(threshold)),
-                Ok(Gas::new(619))
+                Ok(Gas::new(2_822))
             );
         }
     }

@@ -181,7 +181,7 @@ mod tests {
             },
             programs::ProgramVerificationKey,
             traits::StorageSize,
-            transactions::{MAX_OPS_PER_TX, OpProofs, Ops, states::Unverified},
+            transactions::{OpProofs, Ops, states::Unverified},
         },
     };
     use lb_groth16::{Fr, test_utils::three_input_setup};
@@ -201,6 +201,11 @@ mod tests {
             })
             .collect()
     }
+
+    // Program registrations per transaction: each one costs 6843 gas plus its
+    // bytes, so that six transactions fit in the block Execution Gas limit of
+    // 3_172_241 and a seventh does not.
+    const PROGRAM_REGISTRATIONS_PER_TX: usize = 70;
 
     // Each transaction pays its fees with one Transfer and fills its execution
     // gas with Program registrations, which carry no proof, so only one
@@ -239,7 +244,7 @@ mod tests {
                         Op::ProgramRegister(ProgramRegisterOp {
                             verification_key: verification_key.clone(),
                         }),
-                        MAX_OPS_PER_TX - 1,
+                        PROGRAM_REGISTRATIONS_PER_TX,
                     )),
                 )
                 .unwrap();
@@ -253,7 +258,7 @@ mod tests {
                     std::iter::once(OpProof::ZkTransfer(ZkTransferProof::new(transfer_proof)))
                         .chain(std::iter::repeat_n(
                             OpProof::None(NoOpProof),
-                            MAX_OPS_PER_TX - 1,
+                            PROGRAM_REGISTRATIONS_PER_TX,
                         )),
                 )
                 .unwrap();

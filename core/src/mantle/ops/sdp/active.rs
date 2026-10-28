@@ -7,7 +7,10 @@ use super::{SDPActiveOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
+        gas::{
+            EXECUTION_SIGNATURE_GAS, Gas, GasOverflow, MainnetGasProfile, OpGasCalculator,
+            OpGasContext, OperationGas,
+        },
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
             VerifiableOperation,
@@ -40,10 +43,15 @@ impl ProvableOperation for SDPActiveOp {
 }
 
 impl OperationGas<MainnetGasProfile> for SDPActiveOp {
-    const GAS_COST: Gas = Gas::new(59);
+    const GAS_COST: Gas = Gas::new(6975);
 }
 
-impl OpGasCalculator<MainnetGasProfile> for SDPActiveOp {}
+impl OpGasCalculator<MainnetGasProfile> for SDPActiveOp {
+    // The Operation, plus its signature.
+    fn execution_gas(&self, _context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
+        Self::GAS_COST.checked_add(EXECUTION_SIGNATURE_GAS)
+    }
+}
 
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<SDPActiveOp, Unverified, StandardMode>
@@ -490,7 +498,8 @@ mod tests {
         for threshold in [0, 1, 3] {
             assert_eq!(
                 SDPActiveOp::sample().execution_gas(&FixedThresholds(threshold)),
-                Ok(Gas::new(59))
+                // 6975 + 167
+                Ok(Gas::new(7_142))
             );
         }
     }

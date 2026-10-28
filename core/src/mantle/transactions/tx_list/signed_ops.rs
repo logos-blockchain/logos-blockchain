@@ -465,7 +465,7 @@ mod tests {
     use crate::mantle::{
         Op, OpProof, SignedOps, VerificationError,
         channel::{Channels, Error as ChannelError},
-        gas::{MainnetGasProfile, TxGasCalculator as _},
+        gas::{MainnetGasProfile, TxGasCalculator as _, tx_terms_gas},
         ledger::verification_mode::StandardMode,
         notes::{InputNullifiers, Note, NoteNullifier, OutputCommitments},
         ops::{
@@ -484,7 +484,9 @@ mod tests {
         traits::Hashable as _,
         transactions::{
             GasPrices, OpProofs, Ops,
+            codec::minimum_signed_transaction_size,
             states::{Preverified, Unverified},
+            thresholds::TxGasState,
             tx_list::{
                 ops::OpsGasContext,
                 signed_ops::{
@@ -607,10 +609,20 @@ mod tests {
             .execution_gas_consumption::<MainnetGasProfile>(&context)
             .unwrap();
 
-        let expected_config_gas = u64::from(config_threshold) * 56;
-        let expected_deposit_gas = 619;
-        let expected_withdraw_gas = 619;
-        let expected_total_gas = expected_config_gas + expected_deposit_gas + expected_withdraw_gas;
+        let expected_config_gas = 18 + u64::from(config_threshold) * 167;
+        // 1 input, no output, nothing buffered
+        let expected_deposit_gas = 16 + 1946 + 838;
+        let expected_withdraw_gas = 13 + 1946 + 838;
+        // The bytes of the transaction and the note set of the withdrawal
+        // channel: the deposit, with no output, adds nothing to its channel set.
+        let expected_terms = tx_terms_gas(
+            minimum_signed_transaction_size(&mantle_tx.by_ref(), &context),
+            1,
+        )
+        .unwrap()
+        .into_inner();
+        let expected_total_gas =
+            expected_config_gas + expected_deposit_gas + expected_withdraw_gas + expected_terms;
 
         assert_eq!(gas.into_inner(), expected_total_gas);
     }
@@ -636,37 +648,38 @@ mod tests {
         let deposit_op = Op::ChannelDeposit(create_deposit_op(deposit_channel));
         let withdraw_op = Op::ChannelWithdraw(create_withdraw_op(withdraw_channel));
 
+        let state = TxGasState::new(&channels);
         let config_gas = config_op
             .by_ref()
-            .execution_gas::<MainnetGasProfile>(&channels)
+            .execution_gas::<MainnetGasProfile>(&state)
             .unwrap();
         let deposit_gas = deposit_op
             .by_ref()
-            .execution_gas::<MainnetGasProfile>(&channels)
+            .execution_gas::<MainnetGasProfile>(&state)
             .unwrap();
         let withdraw_gas = withdraw_op
             .by_ref()
-            .execution_gas::<MainnetGasProfile>(&channels)
+            .execution_gas::<MainnetGasProfile>(&state)
             .unwrap();
 
-        assert_eq!(config_gas.into_inner(), 3 * 56);
-        assert_eq!(deposit_gas.into_inner(), 619);
-        assert_eq!(withdraw_gas.into_inner(), 619);
+        assert_eq!(config_gas.into_inner(), 18 + 3 * 167);
+        assert_eq!(deposit_gas.into_inner(), 16 + 1946 + 838);
+        assert_eq!(withdraw_gas.into_inner(), 13 + 1946 + 838);
     }
 
     // A config creating a channel is verified against a threshold of 0, so it
-    // verifies no signature and consumes no execution gas.
+    // verifies no signature and consumes only its base execution gas.
     #[test]
-    fn execution_gas_of_a_channel_creating_config_is_zero() {
+    fn execution_gas_of_a_channel_creating_config_is_its_base_cost() {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let config_op = Op::ChannelConfig(create_config_op(ChannelId::from([9; 32]), &signing_key));
 
         let gas = config_op
             .by_ref()
-            .execution_gas::<MainnetGasProfile>(&Channels::new())
+            .execution_gas::<MainnetGasProfile>(&TxGasState::new(Channels::new()))
             .unwrap();
 
-        assert_eq!(gas.into_inner(), 0);
+        assert_eq!(gas.into_inner(), 18);
     }
 
     #[test]

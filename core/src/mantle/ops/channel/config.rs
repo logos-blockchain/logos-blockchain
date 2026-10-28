@@ -14,7 +14,8 @@ use crate::{
         Value,
         channel::{Channels, Error, SlotTimeframe, SlotTimeout},
         gas::{
-            Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
+            EXECUTION_SIGNATURE_GAS, Gas, GasOverflow, MainnetGasProfile, OpGasCalculator,
+            OpGasContext, OperationGas,
         },
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
@@ -88,14 +89,18 @@ impl ProvableOperation for ChannelConfigOp {
 }
 
 impl OperationGas<MainnetGasProfile> for ChannelConfigOp {
-    const GAS_COST: Gas = Gas::new(56);
+    const GAS_COST: Gas = Gas::new(18);
 }
 
 impl OpGasCalculator<MainnetGasProfile> for ChannelConfigOp {
-    fn execution_gas(&self, thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
-        Self::GAS_COST.checked_mul(Value::from(
-            thresholds.configuration_threshold(&self.channel),
-        ))
+    // The Operation, plus one signature check per key the threshold in force
+    // requires.
+    fn execution_gas(&self, thresholds: &impl OpGasContext) -> Result<Gas, GasOverflow> {
+        EXECUTION_SIGNATURE_GAS
+            .checked_mul(Value::from(
+                thresholds.configuration_threshold(&self.channel),
+            ))?
+            .checked_add(Self::GAS_COST)
     }
 }
 
@@ -588,7 +593,8 @@ mod tests {
 
     #[test]
     fn channel_config_op_execution_gas_scales_with_the_threshold() {
-        for (threshold, expected) in [(1, 56), (2, 112), (3, 168)] {
+        // 18 + 167 * threshold
+        for (threshold, expected) in [(1, 185), (2, 352), (3, 519)] {
             assert_eq!(
                 ChannelConfigOp::sample().execution_gas(&FixedThresholds(threshold)),
                 Ok(Gas::new(expected))
@@ -597,10 +603,10 @@ mod tests {
     }
 
     #[test]
-    fn channel_config_op_execution_gas_is_zero_against_an_unknown_channel() {
+    fn channel_config_op_execution_gas_is_its_base_cost_against_an_unknown_channel() {
         assert_eq!(
             ChannelConfigOp::sample().execution_gas(&FixedThresholds(0)),
-            Ok(Gas::new(0))
+            Ok(Gas::new(18))
         );
     }
 }

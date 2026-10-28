@@ -7,7 +7,7 @@ use crate::{
         OpRef,
         gas::ThresholdSource as _,
         transactions::{
-            thresholds::RunningThresholds,
+            thresholds::TxGasState,
             tx_list::{OpRefs, ops::OpsGasContext},
         },
     },
@@ -24,7 +24,7 @@ pub fn minimum_signed_transaction_size(op_refs: &OpRefs<'_>, context: &OpsGasCon
     let encoded_ops_size = op_refs.encoded_length();
 
     let (_, ops_proofs_size) = op_refs.iter().fold(
-        (RunningThresholds::new(context), 0),
+        (TxGasState::new(context), 0),
         |(mut thresholds, total), op| {
             let proof_size = match op {
                 // ChannelInscribeOpProof = Ed25519Signature *StepProof
