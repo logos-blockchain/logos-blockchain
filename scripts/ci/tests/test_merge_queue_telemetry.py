@@ -18,6 +18,7 @@ import unittest
 from scripts.ci.merge_queue_telemetry import (
     GIT_FETCH_DEPTH, MAX_QUEUE_ENTRIES, TARGET_WORKFLOWS, ancestry_from_exit_code,
     bounded_git_fetch_args, classify_stack, classify_runner,
+    candidate_queue_binding, candidate_stack_composition, candidate_stack_observation,
     derive_candidate_identity, derive_queue_timing, derive_timing_metrics,
     duration_seconds, expected_stack_members, normalize_api_error,
     normalize_merge_queue_response, normalize_branch_ref, parse_queue_pr_number,
@@ -61,12 +62,12 @@ def merge_queue_response(
                 "enqueuedAt": "2026-01-01T00:00:00Z",
                 "position": 2,
                 "state": "AWAITING_CHECKS",
-                "baseCommit": {"oid": "base-sha"},
-                "headCommit": {"oid": "candidate-sha"},
+                "baseCommit": {"oid": "b" * 40},
+                "headCommit": {"oid": "c" * 40},
                 "pullRequest": {
                     "number": 101,
                     "baseRefName": "master",
-                    "baseRefOid": "base-sha",
+                    "baseRefOid": "b" * 40,
                     "headRefName": "feature-101",
                     "headRefOid": "pr-head-sha",
                     "stack": None,
@@ -115,6 +116,104 @@ class FakeQueueAPI:
     def repository_merge_queue_graphql(self, branch):
         self.calls.append(("repository", branch))
         return self.repository
+
+
+_MISSING = object()
+
+
+def candidate_queue_node(
+    number,
+    head_sha,
+    base_sha,
+    *,
+    entry_id=None,
+    stack_id=None,
+    stack_number=7,
+    stack_size=3,
+    stack_position=None,
+    stack_value=_MISSING,
+    stack_entry_value=_MISSING,
+):
+    if stack_value is _MISSING:
+        stack_value = (
+            {"id": stack_id, "number": stack_number, "size": stack_size}
+            if stack_id is not None else None
+        )
+    if stack_entry_value is _MISSING:
+        stack_entry_value = (
+            {"position": stack_position, "stack": {"id": stack_id}}
+            if stack_id is not None else None
+        )
+    return {
+        "id": entry_id or f"entry-{number}-{head_sha[:6]}",
+        "enqueuedAt": "2026-10-01T00:00:00Z",
+        "position": number,
+        "state": "AWAITING_CHECKS",
+        "baseCommit": {"oid": base_sha},
+        "headCommit": {"oid": head_sha},
+        "pullRequest": {
+            "number": number,
+            "stack": stack_value,
+            "stackEntry": stack_entry_value,
+        },
+    }
+
+
+def candidate_time_fixture(
+    entries,
+    *,
+    candidate_sha=None,
+    base_sha=None,
+    base_ref="refs/heads/master",
+    queue_target="master",
+    queue_suffix=None,
+    queue_pr=101,
+    rest_pr=None,
+    expected_repository="owner/repo",
+    total_count=None,
+    has_next_page=False,
+    errors=None,
+):
+    candidate_sha = candidate_sha or "a" * 40
+    base_sha = base_sha or "b" * 40
+    queue_suffix = queue_suffix or base_sha[:7]
+    response = merge_queue_response(
+        total_count=len(entries) if total_count is None else total_count,
+        has_next_page=has_next_page,
+        nodes=entries,
+    )
+    if errors is not None:
+        response["errors"] = errors
+    normalized = normalize_merge_queue_response(response)
+    group = {
+        "head_sha": candidate_sha,
+        "base_sha": base_sha,
+        "base_ref": base_ref,
+    }
+    queue_ref = f"gh-readonly-queue/{queue_target}/pr-{queue_pr}-{queue_suffix}"
+    if rest_pr is None:
+        rest_pr = {
+            "number": queue_pr,
+            "base": {"repo": {"full_name": expected_repository}},
+        }
+    observed_at = "2026-10-01T00:00:01+00:00"
+    binding = candidate_queue_binding(
+        group, queue_ref, normalized, observed_at, rest_pr, expected_repository
+    )
+    observation = candidate_stack_observation(binding, observed_at)
+    composition = candidate_stack_composition(
+        binding, observation, normalized, observed_at
+    )
+    return {
+        "response": response,
+        "repository_queue": normalized,
+        "group": group,
+        "queue_ref": queue_ref,
+        "binding": binding,
+        "observation": observation,
+        "composition": composition,
+        "observed_at": observed_at,
+    }
 
 
 class FakeAttemptAPI:
@@ -804,11 +903,461 @@ class QueueObservationTests(unittest.TestCase):
         self.assertIn("stackEntry", stack_query)
         self.assertIn("entries(first: 100)", stack_query)
         self.assertEqual(api.queries[2][1]["branch"], "master")
+        self.assertIn("stackEntry { position stack { id } }", api.queries[2][0])
         for query, _, _ in api.queries:
             self.assertNotIn("configuration", query)
             self.assertNotIn("timelineItems", query)
         with self.assertRaises(AssertionError):
             assert_graphql_document(stack_query + "}")
+
+
+class CandidateTimeQueueProofTests(unittest.TestCase):
+    candidate_sha = "a" * 40
+    base_sha = "b" * 40
+    other_sha = "c" * 40
+    stack_id = "stack-S"
+
+    def ordinary_candidate(self, **kwargs):
+        return candidate_time_fixture(
+            [candidate_queue_node(101, self.candidate_sha, self.base_sha)],
+            **kwargs,
+        )
+
+    def stack_prefix(self, *, candidate_position=2, stack_size=4, stack_id=None):
+        stack_id = stack_id or self.stack_id
+        nodes = [
+            candidate_queue_node(
+                100, self.base_sha, "d" * 40, stack_id=stack_id,
+                stack_number=7, stack_size=stack_size, stack_position=1,
+            ),
+            candidate_queue_node(
+                101, self.candidate_sha, self.base_sha, stack_id=stack_id,
+                stack_number=7, stack_size=stack_size,
+                stack_position=candidate_position,
+            ),
+        ]
+        if candidate_position != 2:
+            nodes[1]["pullRequest"]["stackEntry"]["position"] = candidate_position
+        return nodes
+
+    def test_ordinary_candidate_and_explicit_null_stack_are_proven(self):
+        proof = self.ordinary_candidate()
+        self.assertEqual(proof["binding"]["status"], "proven")
+        self.assertEqual(proof["binding"]["exact_candidate_head_match_count"], 1)
+        self.assertEqual(proof["observation"]["status"], "proven")
+        self.assertEqual(proof["observation"]["stack_status"], "not_a_stack")
+        self.assertEqual(proof["composition"]["status"], "proven")
+
+    def test_intermediate_stack_candidate_prefix_and_continuity_are_proven(self):
+        proof = candidate_time_fixture(self.stack_prefix())
+        self.assertEqual(proof["observation"]["stack_status"], "stack_member")
+        self.assertEqual(proof["composition"]["status"], "proven")
+        self.assertEqual([item["position"] for item in proof["composition"]["members"]], [1, 2])
+        self.assertEqual(proof["composition"]["continuity_status"], "proven")
+        self.assertTrue(proof["composition"]["adjacent_base_head_continuity"][0]["matches"])
+
+    def test_final_candidate_remains_explicitly_stack_head(self):
+        nodes = self.stack_prefix(candidate_position=2, stack_size=2)
+        proof = candidate_time_fixture(nodes)
+        self.assertTrue(proof["observation"]["is_stack_head"])
+        self.assertEqual(proof["composition"]["status"], "proven")
+
+    def test_final_role_survives_incomplete_prefix(self):
+        node = candidate_queue_node(
+            101, self.candidate_sha, self.base_sha, stack_id=self.stack_id,
+            stack_number=7, stack_size=2, stack_position=2,
+        )
+        proof = candidate_time_fixture([node])
+        self.assertEqual(proof["observation"]["stack_status"], "stack_member")
+        self.assertTrue(proof["observation"]["is_stack_head"])
+        self.assertEqual(proof["composition"]["status"], "unresolved")
+        self.assertEqual(proof["composition"]["missing_positions"], [1])
+
+    def test_overlapping_concurrent_stacks_are_isolated_by_candidate_stack_id(self):
+        nodes = [
+            candidate_queue_node(201, "e" * 40, "f" * 40, stack_id="stack-T",
+                                stack_number=8, stack_size=2, stack_position=1),
+            *self.stack_prefix(),
+            candidate_queue_node(202, self.other_sha, "e" * 40, stack_id="stack-T",
+                                stack_number=8, stack_size=2, stack_position=2),
+        ]
+        proof = candidate_time_fixture(nodes)
+        self.assertEqual(proof["observation"]["stack_id"], self.stack_id)
+        self.assertEqual(proof["composition"]["status"], "proven")
+        self.assertEqual(
+            [member["stack_id"] for member in proof["composition"]["members"]],
+            [self.stack_id, self.stack_id],
+        )
+
+    def test_ordinary_and_sister_entries_never_fill_candidate_prefix(self):
+        nodes = [
+            candidate_queue_node(301, "d" * 40, "e" * 40),
+            candidate_queue_node(401, "f" * 40, "e" * 40, stack_id="stack-T",
+                                 stack_number=9, stack_size=2, stack_position=1),
+            self.stack_prefix()[1],
+            candidate_queue_node(302, "e" * 40, "d" * 40),
+        ]
+        proof = candidate_time_fixture(nodes)
+        self.assertEqual(proof["composition"]["status"], "unresolved")
+        self.assertEqual(proof["composition"]["missing_positions"], [1])
+        self.assertEqual(
+            [member["pr_number"] for member in proof["composition"]["members"]],
+            [101],
+        )
+
+    def test_missing_earlier_same_stack_position_stays_unresolved(self):
+        nodes = [
+            candidate_queue_node(401, "d" * 40, "e" * 40, stack_id="stack-T",
+                                 stack_number=9, stack_size=2, stack_position=1),
+            self.stack_prefix()[1],
+        ]
+        proof = candidate_time_fixture(nodes)
+        self.assertEqual(proof["binding"]["status"], "proven")
+        self.assertEqual(proof["observation"]["status"], "proven")
+        self.assertEqual(proof["composition"]["missing_positions"], [1])
+        self.assertEqual(proof["composition"]["status"], "unresolved")
+
+    def test_duplicate_same_stack_position_is_unresolved(self):
+        nodes = self.stack_prefix() + [
+            candidate_queue_node(99, "d" * 40, "e" * 40, entry_id="duplicate-pos-1",
+                                 stack_id=self.stack_id, stack_number=7,
+                                 stack_size=4, stack_position=1)
+        ]
+        proof = candidate_time_fixture(nodes)
+        self.assertEqual(proof["composition"]["duplicate_positions"], [1])
+        self.assertEqual(proof["composition"]["status"], "unresolved")
+
+    def test_duplicate_pr_identity_in_required_prefix_is_unresolved(self):
+        nodes = [
+            candidate_queue_node(101, self.other_sha, "d" * 40, entry_id="same-pr-first",
+                                 stack_id=self.stack_id, stack_number=7,
+                                 stack_size=4, stack_position=1),
+            self.stack_prefix()[1],
+        ]
+        proof = candidate_time_fixture(nodes)
+        self.assertEqual(proof["composition"]["duplicate_pr_numbers"], [101])
+        self.assertEqual(proof["composition"]["status"], "unresolved")
+
+    def test_zero_and_duplicate_candidate_head_matches_are_unresolved(self):
+        absent = candidate_time_fixture([
+            candidate_queue_node(101, self.other_sha, self.base_sha)
+        ])
+        duplicate = candidate_time_fixture([
+            candidate_queue_node(101, self.candidate_sha, self.base_sha, entry_id="candidate-1"),
+            candidate_queue_node(101, self.candidate_sha, self.base_sha, entry_id="candidate-2"),
+        ])
+        self.assertEqual(absent["binding"]["status"], "unresolved")
+        self.assertEqual(absent["binding"]["exact_candidate_head_match_count"], 0)
+        self.assertEqual(duplicate["binding"]["status"], "unresolved")
+        self.assertEqual(duplicate["binding"]["exact_candidate_head_match_count"], 2)
+
+    def test_candidate_head_match_with_pr_mismatch_is_unresolved(self):
+        proof = candidate_time_fixture([
+            candidate_queue_node(999, self.candidate_sha, self.base_sha)
+        ])
+        self.assertEqual(proof["binding"]["status"], "unresolved")
+        self.assertFalse(proof["binding"]["predicates"]["matched_pr_matches_queue_ref"])
+
+    def test_candidate_base_sha_mismatch_is_unresolved(self):
+        proof = candidate_time_fixture([
+            candidate_queue_node(101, self.candidate_sha, self.other_sha)
+        ])
+        self.assertEqual(proof["binding"]["status"], "unresolved")
+        self.assertFalse(proof["binding"]["predicates"]["matched_base_matches_merge_group"])
+
+    def test_queue_ref_target_and_base_suffix_mismatches_are_unresolved(self):
+        wrong_target = self.ordinary_candidate(queue_target="release/next")
+        wrong_suffix = self.ordinary_candidate(queue_suffix="c" * 7)
+        self.assertEqual(wrong_target["binding"]["status"], "unresolved")
+        self.assertFalse(
+            wrong_target["binding"]["predicates"]["queue_ref_target_matches_merge_group_base_ref"]
+        )
+        self.assertEqual(wrong_suffix["binding"]["status"], "unresolved")
+        self.assertFalse(
+            wrong_suffix["binding"]["predicates"]["queue_ref_suffix_matches_merge_group_base"]
+        )
+
+    def test_unavailable_or_inconsistent_rest_pr_identity_is_unresolved(self):
+        inconsistent_number = candidate_time_fixture(
+            [candidate_queue_node(101, self.candidate_sha, self.base_sha)],
+            rest_pr={"number": 102, "base": {"repo": {"full_name": "owner/repo"}}},
+        )
+        inconsistent_repo = candidate_time_fixture(
+            [candidate_queue_node(101, self.candidate_sha, self.base_sha)],
+            rest_pr={"number": 101, "base": {"repo": {"full_name": "fork/repo"}}},
+        )
+        missing = candidate_time_fixture(
+            [candidate_queue_node(101, self.candidate_sha, self.base_sha)],
+            rest_pr=False,
+        )
+        self.assertEqual(inconsistent_number["binding"]["status"], "unresolved")
+        self.assertEqual(inconsistent_repo["binding"]["status"], "unresolved")
+        self.assertEqual(missing["binding"]["status"], "unresolved")
+
+    def test_truncated_snapshot_and_relevant_graphql_errors_fail_closed(self):
+        truncated = candidate_time_fixture(
+            [candidate_queue_node(101, self.candidate_sha, self.base_sha)],
+            total_count=2,
+        )
+        self.assertEqual(truncated["binding"]["status"], "unresolved")
+        for field in ("headCommit", "baseCommit", "number", "stackEntry"):
+            with self.subTest(field=field):
+                proof = candidate_time_fixture(
+                    [candidate_queue_node(101, self.candidate_sha, self.base_sha)],
+                    errors=[{
+                        "message": "field unavailable",
+                        "path": ["repository", "mergeQueue", "entries", "nodes", 0, field],
+                    }],
+                )
+                self.assertEqual(proof["binding"]["status"], "unresolved")
+
+    def test_explicit_null_stack_fields_are_authoritative_not_a_stack(self):
+        proof = self.ordinary_candidate()
+        self.assertTrue(proof["binding"]["predicates"]["repository_snapshot_complete"])
+        self.assertEqual(proof["observation"]["stack_status"], "not_a_stack")
+        self.assertEqual(proof["observation"]["status"], "proven")
+
+    def test_mixed_stack_and_stack_entry_nulls_are_unresolved(self):
+        stack_only = candidate_queue_node(
+            101, self.candidate_sha, self.base_sha,
+            stack_value={"id": self.stack_id, "number": 7, "size": 3},
+            stack_entry_value=None,
+        )
+        entry_only = candidate_queue_node(
+            101, self.candidate_sha, self.base_sha,
+            stack_value=None,
+            stack_entry_value={"position": 1, "stack": {"id": self.stack_id}},
+        )
+        for node in (stack_only, entry_only):
+            proof = candidate_time_fixture([node])
+            self.assertEqual(proof["binding"]["status"], "proven")
+            self.assertEqual(proof["observation"]["status"], "unresolved")
+
+    def test_stack_identity_mismatch_is_unresolved(self):
+        node = candidate_queue_node(
+            101, self.candidate_sha, self.base_sha, stack_id=self.stack_id,
+            stack_number=7, stack_size=3, stack_position=2,
+        )
+        node["pullRequest"]["stackEntry"]["stack"]["id"] = "stack-other"
+        proof = candidate_time_fixture([node])
+        self.assertEqual(proof["observation"]["status"], "unresolved")
+
+    def test_missing_stack_fields_remain_distinct_from_explicit_null(self):
+        explicit = self.ordinary_candidate()
+        omitted_node = candidate_queue_node(101, self.candidate_sha, self.base_sha)
+        omitted_node["pullRequest"].pop("stack")
+        omitted = candidate_time_fixture([omitted_node])
+        self.assertTrue(explicit["binding"]["matched_queue_entry"]["stack_field_present"])
+        self.assertFalse(omitted["binding"]["matched_queue_entry"]["stack_field_present"])
+        self.assertEqual(explicit["observation"]["stack_status"], "not_a_stack")
+        self.assertEqual(omitted["observation"]["stack_status"], "unresolved")
+
+    def test_sister_stack_with_required_position_cannot_fill_candidate_prefix(self):
+        nodes = [
+            candidate_queue_node(201, "d" * 40, "e" * 40, stack_id="stack-T",
+                                 stack_number=8, stack_size=3, stack_position=1),
+            self.stack_prefix()[1],
+        ]
+        proof = candidate_time_fixture(nodes)
+        self.assertEqual(proof["composition"]["missing_positions"], [1])
+        self.assertEqual(proof["composition"]["status"], "unresolved")
+
+    def test_adjacent_base_head_mismatch_is_retained_and_fails_composition(self):
+        nodes = self.stack_prefix()
+        nodes[0]["headCommit"]["oid"] = "d" * 40
+        proof = candidate_time_fixture(nodes)
+        self.assertEqual(proof["composition"]["continuity_status"], "mismatch")
+        self.assertFalse(
+            proof["composition"]["adjacent_base_head_continuity"][0]["matches"]
+        )
+        self.assertEqual(proof["composition"]["status"], "unresolved")
+
+    def test_snapshot_queue_proof_succeeds_with_empty_associated_pulls(self):
+        class SnapshotAPI:
+            repo_name = "owner/repo"
+            api_errors = []
+
+            def __init__(self):
+                self.repository = merge_queue_response(nodes=[
+                    candidate_queue_node(101, "a" * 40, "b" * 40)
+                ])
+                self.associated = []
+                self.calls = []
+
+            def repository_merge_queue_graphql(self, branch):
+                self.calls.append(("repository", branch))
+                return self.repository
+
+            def pull_request(self, number):
+                return {
+                    "number": number,
+                    "base": {"repo": {"full_name": self.repo_name}},
+                }
+
+            def associated_pulls(self, sha):
+                return self.associated
+
+            def candidate_queue_entry_graphql(self, number):
+                return None
+
+            def rest(self, path, **kwargs):
+                return {"workflow_runs": []}
+
+        api = SnapshotAPI()
+        event = {"action": "checks_requested", "merge_group": {
+            "head_sha": "a" * 40, "base_sha": "b" * 40,
+            "base_ref": "refs/heads/master",
+            "head_ref": "refs/heads/gh-readonly-queue/master/pr-101-bbbbbbb",
+        }}
+        import json
+        with tempfile.TemporaryDirectory() as temporary, patch(
+            "scripts.ci.merge_queue_telemetry.GitHubAPI", return_value=api
+        ), patch("scripts.ci.merge_queue_telemetry.safe_environment", return_value={}):
+            root = Path(temporary)
+            event_file = root / "event.json"
+            event_file.write_text(json.dumps(event), encoding="utf-8")
+            result = _snapshot(event_file, root, root / "telemetry", None)
+            raw_associated = json.loads(
+                (root / "telemetry" / "api" / "associated-pulls.json").read_text()
+            )
+        self.assertEqual(raw_associated, [])
+        self.assertEqual(result["candidate_proof_schema_version"], 2)
+        self.assertEqual(result["candidate_queue_binding"]["status"], "proven")
+        self.assertEqual(result["candidate_stack_observation"]["stack_status"], "not_a_stack")
+        self.assertEqual(result["candidate_stack_composition"]["status"], "proven")
+        self.assertIsNone(result["identity"]["candidate_pr"])
+        self.assertEqual(api.calls[0], ("repository", "master"))
+
+
+class SnapshotAttributionTests(unittest.TestCase):
+    class API:
+        repo_name = "owner/repo"
+
+        def __init__(self, node, associated, later_response):
+            self.api_errors = []
+            self.repository = merge_queue_response(nodes=[node])
+            self.associated = associated
+            self.later_response = later_response
+            self.candidate_calls = []
+
+        def repository_merge_queue_graphql(self, branch):
+            return self.repository
+
+        def pull_request(self, number):
+            return {"number": number, "base": {"repo": {"full_name": self.repo_name}}}
+
+        def associated_pulls(self, sha):
+            return self.associated
+
+        def stack_graphql(self, number):
+            return graphql_pr()
+
+        def candidate_queue_entry_graphql(self, number):
+            self.candidate_calls.append(number)
+            return self.later_response
+
+    def snapshot(self, *, node=None, associated=None, later_response=None):
+        import json
+
+        node = node or candidate_queue_node(101, "a" * 40, "b" * 40)
+        api = self.API(node, associated or [], later_response)
+        event = {"action": "checks_requested", "merge_group": {
+            "head_sha": "a" * 40, "base_sha": "b" * 40,
+            "base_ref": "refs/heads/master",
+            "head_ref": "refs/heads/gh-readonly-queue/master/pr-101-bbbbbbb",
+        }}
+        runs = [{
+            "name": TARGET_WORKFLOWS[0], "event": "merge_group",
+            "head_sha": "a" * 40, "created_at": "2026-10-01T00:01:00Z",
+            "run_started_at": "2026-10-01T00:01:30Z",
+        }]
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch("scripts.ci.merge_queue_telemetry.GitHubAPI", return_value=api),
+            patch("scripts.ci.merge_queue_telemetry.safe_environment", return_value={}),
+            patch("scripts.ci.merge_queue_telemetry._target_runs", return_value=runs),
+            patch("scripts.ci.merge_queue_telemetry.utc_now", side_effect=[
+                "2026-10-01T00:02:00Z", *(["2026-10-01T00:05:00Z"] * 20),
+            ]),
+        ):
+            root = Path(temporary)
+            source = root / "event.json"
+            source.write_text(json.dumps(event), encoding="utf-8")
+            summary_path = root / "summary.md"
+            result = _snapshot(source, root, root / "telemetry", summary_path)
+            summary_text = summary_path.read_text(encoding="utf-8")
+        return result, summary_text, api
+
+    def assert_unresolved_attribution(self, result, api):
+        self.assertEqual(result["candidate_queue_binding"]["status"], "unresolved")
+        self.assertIsNone(result["queue"]["entry"])
+        self.assertIsNone(result["queue"]["effective_candidate_queue_entry"])
+        self.assertEqual(result["queue"]["merge_queue"]["entries"][0]["pull_request_number"], 101)
+        self.assertTrue(all(value is None for value in result["queue_timing"].values()))
+        self.assertEqual(api.candidate_calls, [])
+
+    def test_unresolved_binding_does_not_attribute_matching_queue_ref_pr(self):
+        node = candidate_queue_node(101, "c" * 40, "b" * 40)
+        result, _, api = self.snapshot(node=node)
+        self.assert_unresolved_attribution(result, api)
+
+    def test_unresolved_binding_does_not_fall_back_to_legacy_identity(self):
+        node = candidate_queue_node(101, "c" * 40, "b" * 40)
+        result, _, api = self.snapshot(node=node, associated=[{"number": 101}])
+        self.assertEqual(result["identity"]["candidate_pr"], 101)
+        self.assert_unresolved_attribution(result, api)
+
+    def test_proven_binding_with_empty_associated_pulls_attributes_and_times_entry(self):
+        result, _, api = self.snapshot()
+        self.assertIsNone(result["identity"]["candidate_pr"])
+        self.assertEqual(result["candidate_queue_binding"]["status"], "proven")
+        self.assertEqual(result["queue"]["entry"]["id"], result["candidate_queue_binding"]["matched_queue_entry_id"])
+        self.assertEqual(result["queue_timing"]["queue_to_first_target_workflow_created_seconds"], 60)
+        self.assertEqual(api.candidate_calls, [101])
+
+    def test_queue_age_uses_repository_observation_time(self):
+        result, _, _ = self.snapshot()
+        self.assertEqual(result["candidate_queue_binding"]["observed_at"], "2026-10-01T00:02:00Z")
+        self.assertEqual(result["collected_at"], "2026-10-01T00:05:00Z")
+        self.assertEqual(result["queue_timing"]["queue_age_at_snapshot_seconds"], 120)
+
+    def test_later_conflicting_pr_entry_does_not_rewrite_candidate_time_evidence(self):
+        later = candidate_queue_node(101, "c" * 40, "b" * 40, entry_id="later-entry")
+        later["enqueuedAt"] = "2026-10-01T00:04:00Z"
+        result, _, _ = self.snapshot(later_response=merge_queue_response(nodes=[later]))
+        queue = result["queue"]
+        self.assertTrue(queue["candidate_entry_identity_conflict"])
+        self.assertIsNone(queue["entry"])
+        self.assertEqual(queue["candidate_entry_from_pull_request"]["id"], "later-entry")
+        self.assertEqual(queue["candidate_entry_from_repository_queue"]["id"], result["candidate_queue_binding"]["matched_queue_entry_id"])
+        self.assertEqual(result["candidate_queue_binding"]["matched_queue_entry"]["enqueued_at"], "2026-10-01T00:00:00Z")
+        self.assertEqual(result["queue_timing"]["queue_age_at_snapshot_seconds"], 120)
+        self.assertEqual(result["queue_timing"]["queue_to_first_target_workflow_created_seconds"], 60)
+
+    def test_later_queue_disappearance_does_not_rewrite_candidate_time_evidence(self):
+        later = merge_queue_response(entry=False, nodes=[], total_count=0)
+        result, _, _ = self.snapshot(later_response=later)
+        self.assertFalse(result["queue"]["is_in_merge_queue"])
+        self.assertIsNone(result["queue"]["candidate_entry_from_pull_request"])
+        self.assertEqual(result["candidate_queue_binding"]["status"], "proven")
+        self.assertEqual(result["queue_timing"]["queue_age_at_snapshot_seconds"], 120)
+        self.assertEqual(result["queue_timing"]["queue_to_first_target_workflow_created_seconds"], 60)
+
+    def test_step_summary_prioritizes_v2_and_labels_legacy_diagnostics(self):
+        node = candidate_queue_node(
+            101, "a" * 40, "b" * 40, stack_id="stack-S",
+            stack_number=7, stack_size=3, stack_position=2,
+        )
+        result, summary, _ = self.snapshot(node=node)
+        self.assertEqual(result["identity"]["candidate_pr_confidence"], "unresolved")
+        self.assertIn("**Candidate queue binding:** proven; candidate PR 101", summary)
+        self.assertIn("**Candidate stack observation:** proven; stack_member; ID stack-S; position 2 / 3", summary)
+        self.assertIn("observed at 2026-10-01T00:02:00Z", summary)
+        self.assertIn("**Candidate stack composition:** unresolved; missing positions [1]", summary)
+        self.assertIn("**Candidate-time queue age:** 120.0s", summary)
+        self.assertIn("### Legacy diagnostics", summary)
+        self.assertIn("Head-SHA association did not corroborate", summary)
+        self.assertLess(summary.index("**Candidate queue binding:**"), summary.index("### Legacy diagnostics"))
 
 
 class GitHistoryTests(unittest.TestCase):
@@ -1920,7 +2469,15 @@ class ObjectiveIsolationTests(unittest.TestCase):
 
             def __init__(self):
                 FakeIdentityAPI.__init__(self, 101, graphql_pr())
-                FakeQueueAPI.__init__(self, repository=merge_queue_response())
+                FakeQueueAPI.__init__(self, repository=merge_queue_response(nodes=[
+                    candidate_queue_node(101, "a" * 40, "b" * 40)
+                ]))
+
+            def pull_request(self, number):
+                return {
+                    "number": number,
+                    "base": {"ref": "master", "repo": {"full_name": self.repo_name}},
+                }
 
             def rest(self, path, **kwargs):
                 return {"workflow_runs": []}
