@@ -63,7 +63,8 @@ impl DeclarationState {
 }
 
 /// Why the node owes no activity proof for the activity epoch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProofNotRequiredReason {
     /// The chain is in its first epoch, so there's no activity epoch.
     FirstEpoch,
@@ -76,7 +77,8 @@ pub enum ProofNotRequiredReason {
 }
 
 /// Why the node's activity proof for the activity epoch isn't in the ledger.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProofFailureReason {
     /// No proof submitted. Also seen briefly at the start of an epoch, before
     /// the proof is submitted.
@@ -90,7 +92,8 @@ pub enum ProofFailureReason {
 }
 
 /// The state of the node's activity proof for the activity epoch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", content = "reason", rename_all = "snake_case")]
 pub enum ProofState {
     /// Submitted, but not in the ledger yet.
     Pending,
@@ -170,7 +173,7 @@ impl From<&RewardEstimate> for LedgerProofStatus {
 }
 
 /// The node's Blend declaration in the ledger.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DeclarationStatus {
     pub id: DeclarationId,
     pub declaration: Declaration,
@@ -190,7 +193,7 @@ impl DeclarationStatus {
 }
 
 /// The node's Blend activity.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct ActivityStatus {
     /// The epoch being paid out. `None` when there's no activity epoch.
     pub activity_epoch: Option<Epoch>,
@@ -228,10 +231,11 @@ impl ActivityStatus {
 }
 
 /// The node's Blend declaration and activity.
-#[derive(Debug, Clone)]
-pub struct BlendStatus {
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SdpBlendStatus {
     /// The epoch of the chain tip.
     pub current_epoch: Epoch,
+    /// Where the declaration is in its lifecycle.
     pub declaration_state: DeclarationState,
     /// `None` while the declaration isn't in the ledger.
     pub declaration: Option<DeclarationStatus>,
@@ -240,7 +244,7 @@ pub struct BlendStatus {
     pub activity: Option<ActivityStatus>,
 }
 
-impl BlendStatus {
+impl SdpBlendStatus {
     /// # Arguments
     ///
     /// - `participation`: The node's participation, if any.
