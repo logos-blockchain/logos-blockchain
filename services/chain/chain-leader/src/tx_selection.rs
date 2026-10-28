@@ -204,7 +204,7 @@ mod tests {
 
     // Program registrations per transaction: each one costs 6843 gas plus its
     // bytes, so that six transactions fit in the block Execution Gas limit of
-    // 3_172_241 and a seventh does not.
+    // 3_173_548 and a seventh does not.
     const PROGRAM_REGISTRATIONS_PER_TX: usize = 70;
 
     // Each transaction pays its fees with one Transfer and fills its execution

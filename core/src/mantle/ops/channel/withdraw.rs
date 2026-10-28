@@ -444,10 +444,10 @@ mod test {
     #[test]
     fn channel_withdraw_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
-            // 1 input, 1 output, nothing buffered: 13 + 1946 + 838 + 25
+            // 1 input, 1 output, nothing buffered: 13 + 1773 + 838 + 25
             assert_eq!(
                 ChannelWithdrawOp::sample().execution_gas(&FixedThresholds(threshold)),
-                Ok(Gas::new(2_822))
+                Ok(Gas::new(2_649))
             );
         }
     }

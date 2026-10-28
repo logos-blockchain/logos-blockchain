@@ -11,9 +11,9 @@
 //! - [Storage Markets]
 //! - [Gas Cost Determination]
 //!
-//! [Execution Market]: https://github.com/logos-co/logos-lips/blob/035c01f78728d8bba23d89c798fb9fa640870126/docs/blockchain/raw/execution-market.md
+//! [Execution Market]: https://github.com/logos-co/logos-lips/blob/d311139c9615ab719a8eedcdfa383032744c005c/docs/blockchain/raw/execution-market.md
 //! [Storage Markets]: https://github.com/logos-co/logos-lips/blob/38916aa474164ac4acd81e62d19715e17626be17/docs/blockchain/raw/storage-markets.md
-//! [Gas Cost Determination]: https://github.com/logos-co/logos-lips/blob/b6cc70859f23f4501b60c333c93b71470e47fadf/docs/blockchain/raw/analysis-gas-cost-determination.md
+//! [Gas Cost Determination]: https://github.com/logos-co/logos-lips/blob/d311139c9615ab719a8eedcdfa383032744c005c/docs/blockchain/raw/analysis-gas-cost-determination.md
 
 use std::collections::{HashMap, HashSet};
 
@@ -49,14 +49,14 @@ pub const SPEC_GENESIS_EXECUTION_PRICE: u128 = 1_000_000_000;
 pub const SPEC_EMA_PREV_WEIGHT: u128 = 9;
 /// Execution Market v1.3.0: EMA denominator.
 pub const SPEC_EMA_DENOMINATOR: u128 = 10;
-/// Execution Market v1.3.0: `7 * G_target`, with `G_target = 1_586_120`.
-pub const SPEC_BASE_FEE_NUMERATOR: u128 = 11_102_840;
-/// Execution Market v1.3.0: `8 * G_target`.
-pub const SPEC_BASE_FEE_DENOMINATOR: u128 = 12_688_960;
+/// Execution Market v1.3.2: `7 * G_target`, with `G_target = 1_586_774`.
+pub const SPEC_BASE_FEE_NUMERATOR: u128 = 11_107_418;
+/// Execution Market v1.3.2: `8 * G_target`.
+pub const SPEC_BASE_FEE_DENOMINATOR: u128 = 12_694_192;
 /// Gas Cost Determination 2.0.0: the Transfer Operation costs 30 gas.
 pub const SPEC_TRANSFER_GAS: u64 = 30;
 /// Gas Cost Determination 2.0.0: verifying the proof of a spend.
-pub const SPEC_PROOF_GAS: u64 = 1_946;
+pub const SPEC_PROOF_GAS: u64 = 1_773;
 /// Gas Cost Determination 2.0.0: extending the root of a spend over a
 /// non-empty buffer.
 pub const SPEC_ROOT_GAS: u64 = 887;

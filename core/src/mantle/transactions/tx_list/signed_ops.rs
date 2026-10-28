@@ -611,8 +611,8 @@ mod tests {
 
         let expected_config_gas = 18 + u64::from(config_threshold) * 167;
         // 1 input, no output, nothing buffered
-        let expected_deposit_gas = 16 + 1946 + 838;
-        let expected_withdraw_gas = 13 + 1946 + 838;
+        let expected_deposit_gas = 16 + 1773 + 838;
+        let expected_withdraw_gas = 13 + 1773 + 838;
         // The bytes of the transaction and the note set of the withdrawal
         // channel: the deposit, with no output, adds nothing to its channel set.
         let expected_terms = tx_terms_gas(
@@ -663,8 +663,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(config_gas.into_inner(), 18 + 3 * 167);
-        assert_eq!(deposit_gas.into_inner(), 16 + 1946 + 838);
-        assert_eq!(withdraw_gas.into_inner(), 13 + 1946 + 838);
+        assert_eq!(deposit_gas.into_inner(), 16 + 1773 + 838);
+        assert_eq!(withdraw_gas.into_inner(), 13 + 1773 + 838);
     }
 
     // A config creating a channel is verified against a threshold of 0, so it

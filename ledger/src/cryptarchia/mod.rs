@@ -52,12 +52,12 @@ const LOG_TARGET: &str = ledger::cryptarchia::ROOT;
 const EXECUTION_MARKET_EMA_DENOMINATOR: u128 = 10;
 // Corresponds to the numerator of q
 const EXECUTION_MARKET_EMA_PREV_WEIGHT: u128 = 9;
-// Corresponds to 7 * G_target with G_target = 1_586_120, half the limit rounded
+// Corresponds to 7 * G_target with G_target = 1_586_774, half the limit rounded
 // down, because the numerator is 1 + phi (G_avg - G_target)
-const EXECUTION_MARKET_BASE_FEE_NUMERATOR: u128 = 11_102_840;
-// Corresponds to 8 * G_target with G_target = 1_586_120, half the limit rounded
+const EXECUTION_MARKET_BASE_FEE_NUMERATOR: u128 = 11_107_418;
+// Corresponds to 8 * G_target with G_target = 1_586_774, half the limit rounded
 // down, because the denominator is 1 + phi (G_avg - G_target)
-const EXECUTION_MARKET_BASE_FEE_DENOMINATOR: u128 = 12_688_960;
+const EXECUTION_MARKET_BASE_FEE_DENOMINATOR: u128 = 12_694_192;
 
 // Corresponds to the denominator of 1/beta
 const STORAGE_MARKET_EMA_DENOMINATOR: u128 = 2;
@@ -2610,38 +2610,38 @@ pub mod tests {
         // Create a base ledger first
         let mut ledger = LedgerState::from_notes([], &config(), Fr::ZERO);
 
-        // 1) G_avg = (1_700_000 + 9*1_586_120)/10 = 1_597_508
-        // price = ceil(10_000 * (11_102_840 + 1_597_508) / 12_688_960) = 10_009
+        // 1) G_avg = (1_700_000 + 9*1_586_774)/10 = 1_598_096
+        // price = ceil(10_000 * (11_107_418 + 1_598_096) / 12_694_192) = 10_009
         ledger.execution_base_fee = 10_000.into();
-        ledger.average_execution_gas = 1_586_120.into();
+        ledger.average_execution_gas = 1_586_774.into();
         ledger = ledger.update_execution_market(1_700_000.into());
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (10_009.into(), 1_597_508.into())
+            (10_009.into(), 1_598_096.into())
         );
 
-        // 2) G_avg = (1_400_000 + 9*1_586_120)/10 = 1_567_508
-        // price = ceil(10_000 * (11_102_840 + 1_567_508) / 12_688_960) = 9_986
+        // 2) G_avg = (1_400_000 + 9*1_586_774)/10 = 1_568_096
+        // price = ceil(10_000 * (11_107_418 + 1_568_096) / 12_694_192) = 9_986
         ledger.execution_base_fee = 10_000.into();
-        ledger.average_execution_gas = 1_586_120.into();
+        ledger.average_execution_gas = 1_586_774.into();
         ledger = ledger.update_execution_market(1_400_000.into());
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (9_986.into(), 1_567_508.into())
+            (9_986.into(), 1_568_096.into())
         );
 
         // 3) G_avg = (2_500_000 + 9*1_000_000)/10 = 1_150_000
-        // price = ceil(20_000 * (11_102_840 + 1_150_000) / 12_688_960) = 19_313
+        // price = ceil(20_000 * (11_107_418 + 1_150_000) / 12_694_192) = 19_312
         ledger.execution_base_fee = 20_000.into();
         ledger.average_execution_gas = 1_000_000.into();
         ledger = ledger.update_execution_market(2_500_000.into());
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (19_313.into(), 1_150_000.into())
+            (19_312.into(), 1_150_000.into())
         );
 
         // 4) G_avg = (500_000 + 9*2_000_000)/10 = 1_850_000
-        // price = ceil(15_000 * (11_102_840 + 1_850_000) / 12_688_960) = 15_312
+        // price = ceil(15_000 * (11_107_418 + 1_850_000) / 12_694_192) = 15_312
         ledger.execution_base_fee = 15_000.into();
         ledger.average_execution_gas = 2_000_000.into();
         ledger = ledger.update_execution_market(500_000.into());
@@ -2651,23 +2651,23 @@ pub mod tests {
         );
 
         // 5) G_avg = (1_000_000 + 9*1_800_000)/10 = 1_720_000
-        // price = ceil(30_000 * (11_102_840 + 1_720_000) / 12_688_960) = 30_317
+        // price = ceil(30_000 * (11_107_418 + 1_720_000) / 12_694_192) = 30_315
         ledger.execution_base_fee = 30_000.into();
         ledger.average_execution_gas = 1_800_000.into();
         ledger = ledger.update_execution_market(1_000_000.into());
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (30_317.into(), 1_720_000.into())
+            (30_315.into(), 1_720_000.into())
         );
     }
 
     #[test]
     fn execution_market_constants_follow_the_gas_limit() {
-        assert_eq!(crate::EXECUTION_GAS_LIMIT, Gas::new(3_172_241));
+        assert_eq!(crate::EXECUTION_GAS_LIMIT, Gas::new(3_173_548));
         let target = u128::from(crate::EXECUTION_GAS_LIMIT.into_inner() / 2);
-        assert_eq!(target, 1_586_120);
-        assert_eq!(EXECUTION_MARKET_BASE_FEE_NUMERATOR, 11_102_840);
-        assert_eq!(EXECUTION_MARKET_BASE_FEE_DENOMINATOR, 12_688_960);
+        assert_eq!(target, 1_586_774);
+        assert_eq!(EXECUTION_MARKET_BASE_FEE_NUMERATOR, 11_107_418);
+        assert_eq!(EXECUTION_MARKET_BASE_FEE_DENOMINATOR, 12_694_192);
         assert_eq!(EXECUTION_MARKET_BASE_FEE_NUMERATOR, 7 * target);
         assert_eq!(EXECUTION_MARKET_BASE_FEE_DENOMINATOR, 8 * target);
     }

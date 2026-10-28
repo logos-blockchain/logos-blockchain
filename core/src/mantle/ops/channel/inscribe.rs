@@ -1209,8 +1209,8 @@ mod tests {
             commitment_merkle_root: Fr::ZERO,
             buffered: 0,
         };
-        // 180 + steps * (137 + 1946 + 838), one input, no output, nothing buffered
-        for (steps, expected) in [(0usize, 180u64), (1, 3_101), (3, 8_943)] {
+        // 180 + steps * (137 + 1773 + 838), one input, no output, nothing buffered
+        for (steps, expected) in [(0usize, 180u64), (1, 2_928), (3, 8_424)] {
             let operation = InscriptionOp {
                 steps: ChannelSteps::try_from(vec![Step::User(step.clone()); steps]).unwrap(),
                 ..InscriptionOp::sample()
@@ -1234,21 +1234,21 @@ mod tests {
             })
         };
         // A program step is 60 + 6305 + 157 (one opening), its spend of one input
-        // and one output (1946 + 838 + 25, plus 887 + 23 * b when b commitments are
+        // and one output (1773 + 838 + 25, plus 887 + 23 * b when b commitments are
         // buffered) and, per payment of one input and one output claiming 71
-        // buffered, 211 + 1946 + 838 + 25 + 887 + 23 * 71 = 5_540.
+        // buffered, 211 + 1773 + 838 + 25 + 887 + 23 * 71 = 5_367.
         for (steps, expected) in [
             (vec![], 180u64),
-            // 180 + 6_522 + 2_809
-            (vec![program(0)], 9_511),
-            // 180 + 6_522 + 5_540 + (2_809 + 887 + 23)
-            (vec![program(1)], 15_961),
-            // 180 + 2_921 + 15_781, the spec vector inscription
-            (vec![user, program(1)], 18_882),
-            // 15_961 + (6_522 + 3 * 5_540 + 2_809 + 887 + 23 * 5): the second program
+            // 180 + 6_522 + 2_636
+            (vec![program(0)], 9_338),
+            // 180 + 6_522 + 5_367 + (2_636 + 887 + 23)
+            (vec![program(1)], 15_615),
+            // 180 + 2_748 + 15_435, the spec vector inscription
+            (vec![user, program(1)], 18_363),
+            // 15_615 + (6_522 + 3 * 5_367 + 2_636 + 887 + 23 * 5): the second program
             // step finds the two outputs of the first (its payment and itself) and
             // its own three payments buffered
-            (vec![program(1), program(3)], 42_914),
+            (vec![program(1), program(3)], 41_876),
         ] {
             let operation = InscriptionOp {
                 steps: steps.try_into().unwrap(),
@@ -1276,12 +1276,12 @@ mod tests {
             .unwrap(),
             ..InscriptionOp::sample()
         };
-        // 180 + (60 + 6305 + 157) + the payment (211 + 1946 + 838 + 25) + the spend
+        // 180 + (60 + 6305 + 157) + the payment (211 + 1773 + 838 + 25) + the spend
         // of the step, its root extended over the one output of the payment
-        // (1946 + 887 + 23 + 838 + 25)
+        // (1773 + 887 + 23 + 838 + 25)
         assert_eq!(
             operation.execution_gas(&FixedThresholds(3)),
-            Ok(Gas::new(180 + 6_522 + 3_020 + 3_719))
+            Ok(Gas::new(180 + 6_522 + 2_847 + 3_546))
         );
     }
 

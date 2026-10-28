@@ -2961,11 +2961,11 @@ mod tests {
         );
         // The registration, the inscription with its signature, then the program
         // step (60 + 6305, no opening) with its payment of one input and no output
-        // (211 + 1946 + 838) and its spend of one output (1946 + 25), nothing
+        // (211 + 1773 + 838) and its spend of one output (1773 + 25), nothing
         // buffered in the channel.
         assert_eq!(
             execution_gas,
-            Gas::new(6_843 + (13 + 167) + (60 + 6_305) + (211 + 1_946 + 838) + (1_946 + 25))
+            Gas::new(6_843 + (13 + 167) + (60 + 6_305) + (211 + 1_773 + 838) + (1_773 + 25))
         );
     }
 
@@ -3186,26 +3186,26 @@ mod tests {
             .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(&test_config, &tx)
             .unwrap();
 
-        // The first Transfer (30 + 1946 + 838 + 2 * 25), the second one with its
-        // root extended over the 2 commitments buffered (30 + 1946 + 887 +
+        // The first Transfer (30 + 1773 + 838 + 2 * 25), the second one with its
+        // root extended over the 2 commitments buffered (30 + 1773 + 887 +
         // 2 * 23 + 838 + 25), the registration, the creating inscription, the
-        // Deposit with its root extended over the 3 buffered (16 + 1946 + 887 +
+        // Deposit with its root extended over the 3 buffered (16 + 1773 + 887 +
         // 3 * 23 + 838 + 25) and the inscription of the user step buffering 1
-        // (137 + 1946 + 887 + 23 + 838 + 25) and the program step with its
+        // (137 + 1773 + 887 + 23 + 838 + 25) and the program step with its
         // payment, its spend extended over the 2 buffered of the channel.
         assert_eq!(
             operations_gas,
             Gas::new(
-                (30 + 1_946 + 838 + 50)
-                    + (30 + 1_946 + 887 + 46 + 838 + 25)
+                (30 + 1_773 + 838 + 50)
+                    + (30 + 1_773 + 887 + 46 + 838 + 25)
                     + 6_843
                     + (13 + 167)
-                    + (16 + 1_946 + 887 + 69 + 838 + 25)
+                    + (16 + 1_773 + 887 + 69 + 838 + 25)
                     + (13 + 167)
-                    + (137 + 1_946 + 887 + 23 + 838 + 25)
+                    + (137 + 1_773 + 887 + 23 + 838 + 25)
                     + (60 + 6_305)
-                    + (211 + 1_946 + 838)
-                    + (1_946 + 887 + 46 + 25)
+                    + (211 + 1_773 + 838)
+                    + (1_773 + 887 + 46 + 25)
             )
         );
         // The bytes of the transaction and the one channel note set it changed.

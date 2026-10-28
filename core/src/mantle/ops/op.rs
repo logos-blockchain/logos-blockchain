@@ -395,21 +395,21 @@ mod tests {
 
         // Every channel the thresholds are asked about requires 2 signatures.
         for (op, gas) in [
-            // 2 inputs, 2 outputs: 30 + 1946 + 2 * 838 + 2 * 25
-            (Op::Transfer(TransferOp::sample()), 3_702),
+            // 2 inputs, 2 outputs: 30 + 1773 + 2 * 838 + 2 * 25
+            (Op::Transfer(TransferOp::sample()), 3_529),
             (Op::ProgramRegister(ProgramRegisterOp::sample()), 6_843),
             // 18 + 2 * 167
             (Op::ChannelConfig(ChannelConfigOp::sample()), 352),
             // 13 + 167
             (Op::ChannelInscribe(InscriptionOp::sample()), 180),
-            // 1 input, 1 output: 16 + 1946 + 838 + 25
-            (Op::ChannelDeposit(DepositOp::sample()), 2_825),
-            // 1 input, 1 output: 13 + 1946 + 838 + 25
-            (Op::ChannelWithdraw(ChannelWithdrawOp::sample()), 2_822),
-            // 669 + 167 + 1946 + 838 + 25
-            (Op::SDPDeclare(SDPDeclareOp::sample()), 3_645),
-            // 889 + 167 + 1946 + 838 + 25
-            (Op::SDPWithdraw(SDPWithdrawOp::sample()), 3_865),
+            // 1 input, 1 output: 16 + 1773 + 838 + 25
+            (Op::ChannelDeposit(DepositOp::sample()), 2_652),
+            // 1 input, 1 output: 13 + 1773 + 838 + 25
+            (Op::ChannelWithdraw(ChannelWithdrawOp::sample()), 2_649),
+            // 669 + 167 + 1773 + 838 + 25
+            (Op::SDPDeclare(SDPDeclareOp::sample()), 3_472),
+            // 889 + 167 + 1773 + 838 + 25
+            (Op::SDPWithdraw(SDPWithdrawOp::sample()), 3_692),
             // 6975 + 167
             (Op::SDPActive(SDPActiveOp::sample()), 7_142),
             (Op::ClaimPowReward(ClaimPowRewardOp::sample()), 569),

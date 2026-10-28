@@ -2,12 +2,12 @@ use lb_core::mantle::gas::{Gas, GasCost};
 
 use crate::LedgerError;
 
-// 3,200,000 minus 27,759, the fixed costs of a block measured in the Gas Cost
+// 3,200,000 minus 26,452, the fixed costs of a block measured in the Gas Cost
 // Determination: the header, its Proof of Leadership, the leader note and the
 // end of block of the ledger set with its first nullifier, and the fixed parts
 // of the ZkTransfer and ZkProgramSpend batches, paid by the block rather than
 // by the Operations.
-pub const EXECUTION_GAS_LIMIT: Gas = Gas::new(3_172_241);
+pub const EXECUTION_GAS_LIMIT: Gas = Gas::new(3_173_548);
 
 /// Gas consumed and fees paid by applied transactions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
