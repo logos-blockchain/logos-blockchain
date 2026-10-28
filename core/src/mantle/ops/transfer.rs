@@ -311,10 +311,10 @@ mod test {
     #[test]
     fn transfer_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
-            // 2 inputs, 2 outputs, nothing buffered: 30 + 1946 + 2 * 207 + 2 * 25
+            // 2 inputs, 2 outputs, nothing buffered: 30 + 1946 + 2 * 838 + 2 * 25
             assert_eq!(
                 TransferOp::sample().execution_gas(&FixedThresholds(threshold)),
-                Ok(Gas::new(2_440))
+                Ok(Gas::new(3_702))
             );
         }
     }

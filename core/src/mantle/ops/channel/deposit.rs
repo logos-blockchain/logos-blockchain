@@ -255,10 +255,10 @@ mod test {
     #[test]
     fn deposit_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
-            // 1 input, 1 output, nothing buffered: 16 + 1946 + 207 + 25
+            // 1 input, 1 output, nothing buffered: 16 + 1946 + 838 + 25
             assert_eq!(
                 DepositOp::sample().execution_gas(&FixedThresholds(threshold)),
-                Ok(Gas::new(2_194))
+                Ok(Gas::new(2_825))
             );
         }
     }
