@@ -26,6 +26,7 @@ use crate::core::{
         handler::ToBehaviour,
         tests::utils::{
             BehaviourBuilder, SwarmExt as _, TestBehaviour, new_nodes_with_empty_address,
+            wait_for_upgrade,
         },
     },
 };
@@ -62,31 +63,6 @@ async fn provoke_blacklisting(
             }
         }
     }
-}
-
-/// Drives both swarms until the listener upgrades an inbound connection with
-/// the dialer, giving up after `patience`.
-async fn wait_for_upgrade(
-    dialer: &mut TestSwarm<TestBehaviour>,
-    listener: &mut TestSwarm<TestBehaviour>,
-    patience: Duration,
-) -> bool {
-    timeout(patience, async {
-        loop {
-            select! {
-                _ = dialer.select_next_some() => {}
-                event = listener.select_next_some() => {
-                    if let SwarmEvent::Behaviour(Event::InboundConnectionUpgradeSucceeded(peer)) = event
-                        && peer == *dialer.local_peer_id()
-                    {
-                        return;
-                    }
-                }
-            }
-        }
-    })
-    .await
-    .is_ok()
 }
 
 fn pair(window_in_rounds: NonZeroU128) -> (TestSwarm<TestBehaviour>, TestSwarm<TestBehaviour>) {
