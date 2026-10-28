@@ -7,23 +7,33 @@
 //! taskset -c 8 cargo bench -p logos-blockchain-ledger --features test-utils --bench gas [-- <prefix>]
 //! ```
 //!
-//! Counting the cycles needs `kernel.perf_event_paranoid` at 1 or below.
+//! Counting the cycles needs `kernel.perf_event_paranoid` at 1 or below, and
+//! Linux, whose `perf_event` interface reads the counters.
 //!
 //! Each line of the output is `case,dimensions,cycles`, the minimum over
 //! [`ROUNDS`] rounds, each round running every case once in a new random
 //! order.
 
+#[cfg(target_os = "linux")]
 mod block;
+#[cfg(target_os = "linux")]
 mod cycles;
+#[cfg(target_os = "linux")]
 mod fixture;
+#[cfg(target_os = "linux")]
 mod micro;
+#[cfg(target_os = "linux")]
 mod ops;
 
+#[cfg(target_os = "linux")]
 use cycles::{Case, Counter};
+#[cfg(target_os = "linux")]
 use rand::seq::SliceRandom as _;
 
+#[cfg(target_os = "linux")]
 const ROUNDS: usize = 15;
 
+#[cfg(target_os = "linux")]
 fn run_cases(mut cases: Vec<Case>, counter: &mut Counter, rounds: usize) {
     let mut best = vec![u64::MAX; cases.len()];
     let mut order: Vec<usize> = (0..cases.len()).collect();
@@ -44,6 +54,7 @@ fn run_cases(mut cases: Vec<Case>, counter: &mut Counter, rounds: usize) {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn main() {
     let prefix = std::env::args()
         .skip(1)
@@ -67,4 +78,9 @@ fn main() {
         .filter(|case: &Case| case.name.starts_with(&prefix))
         .collect();
     run_cases(cases, &mut counter, ROUNDS);
+}
+
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    eprintln!("the gas benchmark reads the cycle counters through perf_event, on Linux only");
 }

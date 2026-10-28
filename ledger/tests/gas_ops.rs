@@ -6,6 +6,10 @@
 //! ```text
 //! GAS_BENCH_FILL=1000 taskset -c 8 cargo test -p logos-blockchain-ledger --release --features test-utils --test gas_ops -- --test-threads=1
 //! ```
+//!
+//! The cycle counters are read through `perf_event`, on Linux only.
+
+#![cfg(target_os = "linux")]
 
 #[path = "../benches/gas/block.rs"]
 mod block;

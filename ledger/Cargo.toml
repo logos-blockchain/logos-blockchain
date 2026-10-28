@@ -39,9 +39,11 @@ divan         = { workspace = true }
 lb-core       = { features = ["test-utils", "unsafe-test-functions"], workspace = true }
 lb-groth16    = { features = ["test-utils"], workspace = true }
 lb-zktransfer = { features = ["test-utils"], workspace = true }
-perf-event2   = { workspace = true }
 rand          = { features = ["std", "std_rng"], workspace = true }
 serde_json    = { features = ["alloc"], workspace = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+perf-event2 = { workspace = true }
 
 [[bench]]
 harness = false
