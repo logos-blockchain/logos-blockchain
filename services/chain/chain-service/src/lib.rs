@@ -268,7 +268,7 @@ pub struct CryptarchiaInfo {
 }
 
 /// The Blend rewards of a declaration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BlendRewards {
     /// The declaration's `zk_id`. Rewards are minted to it.
     pub zk_id: ZkPublicKey,

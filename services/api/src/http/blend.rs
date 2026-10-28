@@ -3,12 +3,11 @@ use std::fmt::{Debug, Display};
 use lb_binary_codec::bincode::{DeserializeOp, SerializeOp};
 use lb_blend_service::message::{DataPayload, NetworkInfo, ProxyServiceMessage, ServiceMessage};
 use lb_chain_service::{
-    Epoch, State,
+    BlendRewards, State,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::mantle::Value;
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_ledger::mantle::sdp::rewards::blend as ledger_blend;
 use lb_network_service::backends::libp2p::PeerId;
 use lb_sdp_service::{
     SdpService, api::SdpServiceApi, mempool::SdpMempoolAdapter, state::SdpStateStorage,
@@ -18,7 +17,6 @@ use overwatch::{
     overwatch::OverwatchHandle,
     services::{AsServiceId, ServiceData},
 };
-use serde::Serialize;
 use tokio::sync::oneshot;
 
 pub async fn blend_info<BlendService, RuntimeServiceId>(
@@ -204,73 +202,6 @@ where
         .collect()
 }
 
-/// A node's Blend rewards.
-#[derive(Debug, Clone, Serialize)]
-pub struct BlendRewards {
-    /// The declaration's `zk_id`. Rewards are minted to it.
-    pub zk_id: ZkPublicKey,
-    /// `None` while no epoch is being paid out.
-    pub estimate: Option<BlendRewardEstimate>,
-}
-
-impl From<lb_chain_service::BlendRewards> for BlendRewards {
-    fn from(rewards: lb_chain_service::BlendRewards) -> Self {
-        Self {
-            zk_id: rewards.zk_id,
-            estimate: rewards.estimate.map(Into::into),
-        }
-    }
-}
-
-/// A node's estimated Blend reward for the activity epoch, based on the proofs
-/// submitted so far.
-#[derive(Debug, Clone, Serialize)]
-pub struct BlendRewardEstimate {
-    /// The epoch the reward is for, when the blending was done.
-    pub activity_epoch: Epoch,
-    /// Blend income to be split.
-    pub pool: Value,
-    /// The activity epoch's network.
-    pub network: BlendNetwork,
-    /// Whether the node submitted its activity proof.
-    pub did_submit_proof: bool,
-    /// Whether the node earns the double reward.
-    pub is_premium: bool,
-    /// What the node would be paid.
-    pub estimated_reward: Value,
-}
-
-impl From<ledger_blend::RewardEstimate> for BlendRewardEstimate {
-    fn from(reward_estimate: ledger_blend::RewardEstimate) -> Self {
-        Self {
-            activity_epoch: reward_estimate.activity_epoch,
-            pool: reward_estimate.pool,
-            network: reward_estimate.network.into(),
-            did_submit_proof: reward_estimate.did_submit_proof,
-            is_premium: reward_estimate.is_premium,
-            estimated_reward: reward_estimate.estimated_reward,
-        }
-    }
-}
-
-/// The activity epoch's network.
-#[derive(Debug, Clone, Serialize)]
-pub struct BlendNetwork {
-    /// Number of core nodes in the activity epoch.
-    pub size: u64,
-    /// Number of activity proofs submitted.
-    pub proofs: u64,
-}
-
-impl From<ledger_blend::Network> for BlendNetwork {
-    fn from(network: ledger_blend::Network) -> Self {
-        Self {
-            size: network.size,
-            proofs: network.proofs,
-        }
-    }
-}
-
 /// Gets this node's Blend rewards at the tip.
 ///
 /// # Errors
@@ -317,7 +248,7 @@ where
         .get_blend_rewards(participation.declaration_id())
         .await?
         .ok_or_else(|| DynError::from("The node has no Blend declaration in the ledger."))?;
-    Ok(rewards.into())
+    Ok(rewards)
 }
 
 #[cfg(test)]
