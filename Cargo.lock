@@ -5056,6 +5056,7 @@ dependencies = [
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
  "logos-blockchain-version",
+ "logos-blockchain-wallet",
  "logos-blockchain-wallet-service",
  "num-bigint",
  "nutype",
