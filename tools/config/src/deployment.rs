@@ -17,7 +17,8 @@ use lb_node::config::deployment::{
                 SchedulerSettings, Settings as BlendDeploymentSettings,
             },
             cryptarchia::{
-                EpochConfig, ServiceParameters, Settings as CryptarchiaDeploymentSettings,
+                EpochConfig, ServiceParameters,
+                UnvalidatedSettings as UnvalidatedCryptarchiaDeploymentSettings,
             },
             time::Settings as TimeDeploymentSettings,
         },
@@ -139,7 +140,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     activity_threshold_sensitivity: ACTIVITY_THRESHOLD_SENSITIVITY,
                 },
             },
-            cryptarchia: CryptarchiaDeploymentSettings {
+            cryptarchia: UnvalidatedCryptarchiaDeploymentSettings {
                 security_param: NonZero::new(SECURITY_PARAM).unwrap(),
                 uncle_reference_window_in_block: NonZero::new(UNCLE_REFERENCE_WINDOW_IN_BLOCK)
                     .unwrap(),
@@ -199,7 +200,9 @@ pub fn e2e_deployment_settings_with_genesis_block(
                         slot_window: NonZero::new(REWARD_POW_SLOT_WINDOW).unwrap(),
                     },
                 },
-            },
+            }
+            .try_into()
+            .expect("The default cryptarchia settings must be valid."),
             time: TimeDeploymentSettings {
                 slot_duration_in_seconds: NonZero::new(slot_duration_in_secs)
                     .expect("The slot duration cannot be zero seconds."),

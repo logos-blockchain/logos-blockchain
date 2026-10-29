@@ -30,7 +30,7 @@ impl ServiceConfig {
                 let EraRuleset::V1(parameters) = &era.parameters.ruleset;
                 WalletEraSettings {
                     epoch_length: era.parameters.epoch_length(),
-                    security_param: parameters.cryptarchia.security_param,
+                    security_param: parameters.cryptarchia.security_param(),
                 }
             }),
         }

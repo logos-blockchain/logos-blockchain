@@ -71,7 +71,7 @@ impl ServiceConfig {
             era_schedule: eras.map(|era| {
                 let EraRuleset::V1(parameters) = &era.parameters.ruleset;
                 lb_chain_network_service::ChainNetworkEraSettings {
-                    slot_activation_coeff: parameters.cryptarchia.slot_activation_coeff,
+                    slot_activation_coeff: parameters.cryptarchia.slot_activation_coeff(),
                 }
             }),
         }
@@ -137,19 +137,19 @@ fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
     lb_ledger::Config {
         consensus_config: deployment.consensus_config(),
         epoch_config: EpochConfig {
-            epoch_period_nonce_buffer: deployment.epoch_config.epoch_period_nonce_buffer,
+            epoch_period_nonce_buffer: deployment.epoch_config().epoch_period_nonce_buffer,
             epoch_period_nonce_stabilization: deployment
-                .epoch_config
+                .epoch_config()
                 .epoch_period_nonce_stabilization,
             epoch_stake_distribution_stabilization: deployment
-                .epoch_config
+                .epoch_config()
                 .epoch_stake_distribution_stabilization,
         },
         sdp_config: lb_ledger::mantle::sdp::Config {
-            min_stake: deployment.sdp_config.min_stake,
+            min_stake: deployment.sdp_config().min_stake,
             service_params: Arc::new(
                 deployment
-                    .sdp_config
+                    .sdp_config()
                     .service_params
                     .iter()
                     .map(|(service_type, service_params)| {
@@ -169,18 +169,18 @@ fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
         },
         pow_config: lb_ledger::config::PoWConfig {
             blend: lb_ledger::config::BlendPoWConfig {
-                base_difficulty: deployment.pow_config.blend.base_difficulty,
-                damping_den_offset: deployment.pow_config.blend.damping_den_offset,
-                damping_num: deployment.pow_config.blend.damping_num,
-                max_step: deployment.pow_config.blend.max_step,
+                base_difficulty: deployment.pow_config().blend.base_difficulty,
+                damping_den_offset: deployment.pow_config().blend.damping_den_offset,
+                damping_num: deployment.pow_config().blend.damping_num,
+                max_step: deployment.pow_config().blend.max_step,
                 target_transactions_per_block: deployment
-                    .pow_config
+                    .pow_config()
                     .blend
                     .target_transactions_per_block,
             },
             // Reused verbatim: the deployment mirror already holds the
             // validated ledger type.
-            reward: deployment.pow_config.reward.clone(),
+            reward: deployment.pow_config().reward.clone(),
         },
     }
 }

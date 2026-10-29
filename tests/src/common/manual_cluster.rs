@@ -8,7 +8,9 @@ use std::{
 use lb_common_http_client::Slot;
 use lb_core::mantle::Utxo;
 use lb_key_management_system_service::keys::ZkPublicKey;
-use lb_node::config::RunConfig;
+use lb_node::config::{
+    RunConfig, deployment::era::ruleset::v1::UnvalidatedCryptarchiaDeploymentSettings,
+};
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, LbcManualCluster, NodeHttpClient, TopologyConfig,
     configs::wallet::WalletConfig, internal::DeploymentPlan, is_truthy_env,
@@ -190,10 +192,16 @@ fn fast_chain_config(mut config: RunConfig) -> RunConfig {
     config
         .deployment
         .update_genesis_era_parameters(|parameters| {
+            let mut cryptarchia =
+                UnvalidatedCryptarchiaDeploymentSettings::from(parameters.cryptarchia.clone());
             parameters.time.slot_duration_in_seconds = NonZero::new(2).expect("nonzero");
-            parameters.cryptarchia.security_param = NonZero::new(3).expect("nonzero");
-            parameters.cryptarchia.slot_activation_coeff =
+            cryptarchia.security_param = NonZero::new(3).expect("nonzero");
+            cryptarchia.uncle_reference_window_in_block = NonZero::new(1).expect("nonzero");
+            cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().expect("nonzero"));
+            parameters.cryptarchia = cryptarchia
+                .try_into()
+                .expect("updated cryptarchia settings must be valid");
         });
     config
 }

@@ -22,6 +22,22 @@ fn step_set_cryptarchia_security_param(
     Ok(())
 }
 
+#[given(expr = "the cluster uses cryptarchia uncle reference window of {int} block(s)")]
+#[when(expr = "the cluster uses cryptarchia uncle reference window of {int} block(s)")]
+fn step_set_cryptarchia_uncle_reference_window(
+    world: &mut CucumberWorld,
+    uncle_reference_window: u32,
+) -> StepResult {
+    let uncle_reference_window =
+        NonZero::new(uncle_reference_window).ok_or(StepError::InvalidArgument {
+            message: "cryptarchia uncle reference window must be greater than 0".to_owned(),
+        })?;
+
+    world.set_cryptarchia_uncle_reference_window(uncle_reference_window);
+
+    Ok(())
+}
+
 #[given(expr = "the cluster uses prolonged bootstrap period of {int} seconds")]
 #[when(expr = "the cluster uses prolonged bootstrap period of {int} seconds")]
 const fn step_set_prolonged_bootstrap_period(

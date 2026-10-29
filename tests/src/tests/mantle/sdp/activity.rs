@@ -16,7 +16,12 @@ use lb_core::{
     sdp::{Declaration, NumberOfEpochs, ProviderId, ServiceType},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
-use lb_node::config::{RunConfig, deployment::era::ruleset::v1::cryptarchia::EpochConfig};
+use lb_node::config::{
+    RunConfig,
+    deployment::era::ruleset::v1::{
+        UnvalidatedCryptarchiaDeploymentSettings, cryptarchia::EpochConfig,
+    },
+};
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig as TfTopologyConfig,
 };
@@ -131,24 +136,25 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
     config
         .deployment
         .update_genesis_era_parameters(|parameters| {
+            let mut cryptarchia =
+                UnvalidatedCryptarchiaDeploymentSettings::from(parameters.cryptarchia.clone());
             parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
 
             // Set the epoch length not too long to speed up the test,
             // but also not too short because we want blend nodes to collect blend
             // tokens every epoch to keep their declarations alive.
-            parameters.cryptarchia.epoch_config = EpochConfig {
+            cryptarchia.epoch_config = EpochConfig {
                 epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
                 epoch_period_nonce_buffer: 1.try_into().unwrap(),
                 epoch_period_nonce_stabilization: 1.try_into().unwrap(),
             };
-            parameters.cryptarchia.security_param = NonZero::new(4).unwrap();
-            parameters.cryptarchia.slot_activation_coeff =
-                NonNegativeRatio::new(1, 2.try_into().unwrap());
+            cryptarchia.security_param = NonZero::new(4).unwrap();
+            cryptarchia.uncle_reference_window_in_block = NonZero::new(2).unwrap();
+            cryptarchia.slot_activation_coeff = NonNegativeRatio::new(1, 2.try_into().unwrap());
 
             // Set a small inactivity period so the inactivity window is short
             // enough for the test to observe `active` being refreshed quickly.
-            let blend_params = parameters
-                .cryptarchia
+            let blend_params = cryptarchia
                 .sdp_config
                 .service_params
                 .get_mut(&ServiceType::BlendNetwork)
@@ -166,6 +172,9 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
             // the probability that all nodes can collect a blend token from
             // a single blend message.
             parameters.blend.common.num_blend_layers = (NODE_COUNT as u64).try_into().unwrap();
+            parameters.cryptarchia = cryptarchia
+                .try_into()
+                .expect("updated cryptarchia settings must be valid");
         });
 
     slots_per_epoch.store(

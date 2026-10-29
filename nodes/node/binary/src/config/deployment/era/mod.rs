@@ -90,14 +90,31 @@ impl TryFrom<BTreeMap<Epoch, EraRuleset>> for EraDeclarations {
 
     /// Builds a schedule from eras keyed by their first epoch. The map keeps
     /// them unique and ordered, so only the first one needs checking: it must
-    /// start at genesis, and run a listed combination of versions.
+    /// start at genesis, and run a listed combination of versions. Every
+    /// transition between consecutive eras is also checked.
+    ///
+    /// # Panics
+    ///
+    /// If an era cannot follow the era before it.
     fn try_from(mut era_declarations: BTreeMap<Epoch, EraRuleset>) -> Result<Self, Self::Error> {
-        let Some((first_epoch, genesis_era)) = era_declarations.pop_first() else {
+        let Some((&first_epoch, _)) = era_declarations.first_key_value() else {
             return Err(EraScheduleError::Empty);
         };
         if first_epoch != GENESIS_EPOCH {
             return Err(EraScheduleError::FirstEraAfterGenesis(first_epoch));
         }
+
+        // Check era transitions.
+        for (previous, next) in era_declarations
+            .values()
+            .zip(era_declarations.values().skip(1))
+        {
+            previous.validate_successor(next);
+        }
+
+        let (_, genesis_era) = era_declarations
+            .pop_first()
+            .expect("the schedule has a genesis era");
         // Check remaining entries in the map. We still don't accept more than a single
         // era definition, so we bail out if anything else than the genesis era
         // definition is provided, at the moment.
@@ -160,9 +177,13 @@ mod tests {
     use std::collections::BTreeMap;
 
     use lb_cryptarchia_engine::Epoch;
+    use lb_utils::math::NonNegativeRatio;
 
     use super::{EraDeclarations, EraScheduleError};
-    use crate::config::{DeploymentSettings, deployment::era::ruleset::EraRuleset};
+    use crate::config::{
+        DeploymentSettings,
+        deployment::era::ruleset::{EraRuleset, v1::UnvalidatedCryptarchiaDeploymentSettings},
+    };
 
     fn ruleset() -> EraRuleset {
         DeploymentSettings::default()
@@ -254,6 +275,60 @@ mod tests {
         let expected = EraScheduleError::MultipleEras(2);
         assert!(rejection(&[0, 10]).contains(&expected.to_string()));
         assert_eq!(construct(&[0, 10]).unwrap_err(), expected);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "uncle reference window (140 slots) must not exceed a fifth of the \
+                    slot security parameter s = 600 of the era before"
+    )]
+    fn invalid_uncle_ref_window_in_era_transition() {
+        // `s_0 = 3*⌊10*20⌋ = 600`
+        // `W_1/f_1 = 7*20 = 140` > s_0 / 5: NOT ALLOWED
+        drop(construct_eras([
+            (0, ruleset_with(10, 20, 6)),
+            (10, ruleset_with(30, 20, 7)),
+        ]));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "uncle reference window (240 slots) must not exceed a fifth of the \
+                    slot security parameter s = 600 of the era before"
+    )]
+    fn invalid_uncle_ref_window_in_era_transition_at_lower_f() {
+        // `s_0 = 3*⌊10*20⌋ = 600`
+        // `W_1/f_1 = 6*40 = 240` > s_0 / 5: NOT ALLOWED
+        drop(construct_eras([
+            (0, ruleset_with(10, 20, 6)),
+            (10, ruleset_with(30, 40, 6)),
+        ]));
+    }
+
+    /// The default ruleset with `k`, `f = 1/f_denominator` and `W` replaced.
+    fn ruleset_with(security_param: u32, f_denominator: u32, window: u32) -> EraRuleset {
+        let mut ruleset = ruleset();
+        let EraRuleset::V1(parameters) = &mut ruleset;
+
+        let mut unvalidated =
+            UnvalidatedCryptarchiaDeploymentSettings::from(parameters.cryptarchia.clone());
+        unvalidated.security_param = security_param.try_into().unwrap();
+        unvalidated.slot_activation_coeff =
+            NonNegativeRatio::new(1, f_denominator.try_into().unwrap());
+        unvalidated.uncle_reference_window_in_block = window.try_into().unwrap();
+
+        parameters.cryptarchia = unvalidated.try_into().unwrap();
+        ruleset
+    }
+
+    fn construct_eras(
+        eras: impl IntoIterator<Item = (u32, EraRuleset)>,
+    ) -> Result<EraDeclarations, EraScheduleError> {
+        EraDeclarations::try_from(
+            eras.into_iter()
+                .map(|(first_epoch, ruleset)| (Epoch::new(first_epoch), ruleset))
+                .collect::<BTreeMap<_, _>>(),
+        )
     }
 
     #[test]

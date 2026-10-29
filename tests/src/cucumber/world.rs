@@ -27,7 +27,9 @@ use lb_core::{
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, PeerId};
-use lb_node::config::RunConfig;
+use lb_node::config::{
+    RunConfig, deployment::era::ruleset::v1::UnvalidatedCryptarchiaDeploymentSettings,
+};
 use lb_testing_framework::{
     LbcClusterBackend, LbcEnv, LbcK8sManualCluster, LbcScenario, NodeHttpClient, ScenarioBuilder,
     ScenarioBuilderExt as _,
@@ -110,6 +112,7 @@ pub struct RunState {
 #[derive(Debug, Default, Clone)]
 pub struct ManualNodeConfigOverrides {
     pub cryptarchia_security_param: Option<NonZero<u32>>,
+    pub cryptarchia_uncle_reference_window: Option<NonZero<u32>>,
     pub prolonged_bootstrap_period: Option<Duration>,
 }
 
@@ -149,7 +152,27 @@ impl ManualNodeConfigOverrides {
             config
                 .deployment
                 .update_genesis_era_parameters(|parameters| {
-                    parameters.cryptarchia.security_param = security_param;
+                    let mut cryptarchia = UnvalidatedCryptarchiaDeploymentSettings::from(
+                        parameters.cryptarchia.clone(),
+                    );
+                    cryptarchia.security_param = security_param;
+                    parameters.cryptarchia = cryptarchia
+                        .try_into()
+                        .expect("updated cryptarchia settings must be valid");
+                });
+        }
+
+        if let Some(uncle_reference_window) = self.cryptarchia_uncle_reference_window {
+            config
+                .deployment
+                .update_genesis_era_parameters(|parameters| {
+                    let mut cryptarchia = UnvalidatedCryptarchiaDeploymentSettings::from(
+                        parameters.cryptarchia.clone(),
+                    );
+                    cryptarchia.uncle_reference_window_in_block = uncle_reference_window;
+                    parameters.cryptarchia = cryptarchia
+                        .try_into()
+                        .expect("updated cryptarchia settings must be valid");
                 });
         }
 
@@ -165,6 +188,13 @@ impl ManualNodeConfigOverrides {
 
     pub const fn set_cryptarchia_security_param(&mut self, security_param: NonZero<u32>) {
         self.cryptarchia_security_param = Some(security_param);
+    }
+
+    pub const fn set_cryptarchia_uncle_reference_window(
+        &mut self,
+        uncle_reference_window: NonZero<u32>,
+    ) {
+        self.cryptarchia_uncle_reference_window = Some(uncle_reference_window);
     }
 
     pub const fn set_prolonged_bootstrap_period(&mut self, period: Duration) {
@@ -1173,6 +1203,17 @@ impl CucumberWorld {
         self.startup
             .manual_node_config_overrides
             .set_cryptarchia_security_param(security_param);
+    }
+
+    /// Set a scenario-wide cryptarchia uncle reference window override, in
+    /// blocks, for manual-cluster nodes.
+    pub const fn set_cryptarchia_uncle_reference_window(
+        &mut self,
+        uncle_reference_window: NonZero<u32>,
+    ) {
+        self.startup
+            .manual_node_config_overrides
+            .set_cryptarchia_uncle_reference_window(uncle_reference_window);
     }
 
     /// Set a scenario-wide prolonged bootstrap period override for

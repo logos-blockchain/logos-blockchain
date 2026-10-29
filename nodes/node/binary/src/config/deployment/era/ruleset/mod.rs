@@ -15,6 +15,19 @@ pub enum EraRuleset {
 }
 
 impl EraRuleset {
+    /// Check the invariants between this ruleset and the next era's ruleset.
+    ///
+    /// # Panics
+    ///
+    /// If `next` cannot follow this ruleset.
+    pub fn validate_successor(&self, next: &Self) {
+        match (self, next) {
+            (Self::V1(previous), Self::V1(next)) => {
+                previous.cryptarchia.validate_successor(&next.cryptarchia);
+            }
+        }
+    }
+
     /// The ruleset's number, written ahead of its parameters in the era's
     /// digest. Only used for encoding the ruleset.
     #[must_use]

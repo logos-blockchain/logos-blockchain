@@ -25,7 +25,10 @@ use lb_core::{
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
 use lb_node::config::{
     RunConfig,
-    deployment::era::ruleset::v1::{blend::MinimumNetworkSize, cryptarchia::EpochConfig},
+    deployment::era::ruleset::v1::{
+        UnvalidatedCryptarchiaDeploymentSettings, blend::MinimumNetworkSize,
+        cryptarchia::EpochConfig,
+    },
 };
 use lb_testing_framework::{
     DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig,
@@ -418,19 +421,20 @@ fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
     config
         .deployment
         .update_genesis_era_parameters(|parameters| {
+            let mut cryptarchia =
+                UnvalidatedCryptarchiaDeploymentSettings::from(parameters.cryptarchia.clone());
             parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
-            parameters.cryptarchia.security_param = NonZero::new(2).unwrap();
-            parameters.cryptarchia.slot_activation_coeff =
-                NonNegativeRatio::new(1, 2.try_into().unwrap());
-            parameters.cryptarchia.epoch_config = EpochConfig {
+            cryptarchia.security_param = NonZero::new(2).unwrap();
+            cryptarchia.uncle_reference_window_in_block = NonZero::new(1).unwrap();
+            cryptarchia.slot_activation_coeff = NonNegativeRatio::new(1, 2.try_into().unwrap());
+            cryptarchia.epoch_config = EpochConfig {
                 epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
                 epoch_period_nonce_buffer: 1.try_into().unwrap(),
                 epoch_period_nonce_stabilization: 1.try_into().unwrap(),
             };
-            parameters.cryptarchia.learning_rate = 0.5.try_into().unwrap();
+            cryptarchia.learning_rate = 0.5.try_into().unwrap();
 
-            let service_params = parameters
-                .cryptarchia
+            let service_params = cryptarchia
                 .sdp_config
                 .service_params
                 .get_mut(&ServiceType::BlendNetwork)
@@ -445,6 +449,9 @@ fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
                 .scheduler
                 .delayer
                 .maximum_release_delay_in_rounds = 1.try_into().unwrap();
+            parameters.cryptarchia = cryptarchia
+                .try_into()
+                .expect("updated cryptarchia settings must be valid");
         });
 
     config

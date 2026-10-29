@@ -1,7 +1,12 @@
 use std::{num::NonZero, path::PathBuf, time::Duration};
 
 use lb_chain_service::PhaseTag;
-use lb_node::config::{RunConfig, deployment::era::ruleset::v1::cryptarchia::EpochConfig};
+use lb_node::config::{
+    RunConfig,
+    deployment::era::ruleset::v1::{
+        UnvalidatedCryptarchiaDeploymentSettings, cryptarchia::EpochConfig,
+    },
+};
 use lb_testing_framework::{
     DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig,
     configs::deployment::NodeBinaryProfile, ensure_node_binary_built,
@@ -99,15 +104,20 @@ fn test_config(mut config: RunConfig) -> RunConfig {
     config
         .deployment
         .update_genesis_era_parameters(|parameters| {
+            let mut cryptarchia =
+                UnvalidatedCryptarchiaDeploymentSettings::from(parameters.cryptarchia.clone());
             parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
-            parameters.cryptarchia.epoch_config = EpochConfig {
+            cryptarchia.epoch_config = EpochConfig {
                 epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
                 epoch_period_nonce_buffer: 1.try_into().unwrap(),
                 epoch_period_nonce_stabilization: 1.try_into().unwrap(),
             };
-            parameters.cryptarchia.security_param = NonZero::new(2).unwrap();
-            parameters.cryptarchia.slot_activation_coeff =
-                NonNegativeRatio::new(1, 10.try_into().unwrap());
+            cryptarchia.security_param = NonZero::new(2).unwrap();
+            cryptarchia.uncle_reference_window_in_block = NonZero::new(1).unwrap();
+            cryptarchia.slot_activation_coeff = NonNegativeRatio::new(1, 10.try_into().unwrap());
+            parameters.cryptarchia = cryptarchia
+                .try_into()
+                .expect("updated cryptarchia settings must be valid");
         });
 
     config

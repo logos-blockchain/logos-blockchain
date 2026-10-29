@@ -64,6 +64,7 @@ Feature: Cryptarchia
   Scenario: Two nodes immutable blocks
     Given I have a cluster with capacity of 2 nodes
     And the cluster uses cryptarchia security parameter 5
+    And the cluster uses cryptarchia uncle reference window of 3 blocks
     And the cluster uses prolonged bootstrap period of 0 seconds
     And I start node "NODE_1"
     And I start peer node "NODE_2" connected to node "NODE_1"

@@ -44,6 +44,7 @@ Feature: Fees
   @fees_ci
   Scenario: Execution and storage gas prices respond according to the fee market rules
     Given the cluster uses cryptarchia security parameter 3
+    And the cluster uses cryptarchia uncle reference window of 1 block
     And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "2"

@@ -19,7 +19,9 @@ use lb_http_api_common::bodies::{
     wallet::balance::WalletBalanceResponseBody,
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
-use lb_node::config::RunConfig;
+use lb_node::config::{
+    RunConfig, deployment::era::ruleset::v1::UnvalidatedCryptarchiaDeploymentSettings,
+};
 use lb_testing_framework::{
     DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig,
     configs::wallet::{WalletAccount, WalletConfig},
@@ -413,10 +415,15 @@ fn channel_test_config(mut config: RunConfig) -> RunConfig {
     config
         .deployment
         .update_genesis_era_parameters(|parameters| {
+            let mut cryptarchia =
+                UnvalidatedCryptarchiaDeploymentSettings::from(parameters.cryptarchia.clone());
             parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
-            parameters.cryptarchia.security_param = NonZero::new(3).unwrap();
-            parameters.cryptarchia.slot_activation_coeff =
-                NonNegativeRatio::new(1, 2.try_into().unwrap());
+            cryptarchia.security_param = NonZero::new(3).unwrap();
+            cryptarchia.uncle_reference_window_in_block = NonZero::new(1).unwrap();
+            cryptarchia.slot_activation_coeff = NonNegativeRatio::new(1, 2.try_into().unwrap());
+            parameters.cryptarchia = cryptarchia
+                .try_into()
+                .expect("updated cryptarchia settings must be valid");
         });
     config
 }

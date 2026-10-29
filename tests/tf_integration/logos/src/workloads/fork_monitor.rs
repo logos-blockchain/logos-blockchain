@@ -291,7 +291,7 @@ fn derive_thresholds(ctx: &RunContext<AppHostEnv>) -> (Duration, Duration, Durat
             deployment
                 .genesis_era_parameters()
                 .cryptarchia
-                .security_param
+                .security_param()
                 .get(),
             node_count,
             &deployment,
@@ -312,7 +312,7 @@ fn propagation_budget(
     let proposal_interval = parameters
         .time
         .slot_duration()
-        .div_f64(parameters.cryptarchia.slot_activation_coeff.as_f64());
+        .div_f64(parameters.cryptarchia.slot_activation_coeff().as_f64());
 
     let blend_latency =
         if blend_network_size < parameters.blend.common.minimum_network_size.into_inner() {

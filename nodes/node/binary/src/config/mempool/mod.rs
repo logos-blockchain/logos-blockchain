@@ -52,7 +52,7 @@ impl ServiceConfig {
                 pow_claim: Some(eras.map(|era| {
                     let EraRuleset::V1(parameters) = &era.parameters.ruleset;
                     PowClaimEvictionSettings {
-                        slot_window: parameters.cryptarchia.pow_config.reward.slot_window,
+                        slot_window: parameters.cryptarchia.pow_config().reward.slot_window,
                     }
                 })),
             },

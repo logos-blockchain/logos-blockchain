@@ -12,20 +12,47 @@ use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 use serde::{Deserialize, Serialize};
 
 pub(crate) mod codec;
+mod unvalidated;
 
+pub use self::unvalidated::{UncleReferenceWindowTooWide, UnvalidatedSettings};
+
+/// Cryptarchia settings.
+///
+/// Use [`UnvalidatedSettings::try_into`] to build this with
+/// invariant checks.
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(try_from = "UnvalidatedSettings")]
 pub struct Settings {
-    pub epoch_config: EpochConfig,
-    pub security_param: NonZeroU32,
-    pub slot_activation_coeff: NonNegativeRatio,
-    pub learning_rate: NonNegativeF64,
+    epoch_config: EpochConfig,
+    security_param: NonZeroU32,
+    slot_activation_coeff: NonNegativeRatio,
+    learning_rate: NonNegativeF64,
     /// `W`, the uncle reference window in expected block-intervals.
-    pub uncle_reference_window_in_block: NonZeroU32,
-    pub sdp_config: SdpConfig,
-    pub pow_config: PoWConfig,
+    uncle_reference_window_in_block: NonZeroU32,
+    sdp_config: SdpConfig,
+    pow_config: PoWConfig,
 }
 
 impl Settings {
+    /// Check the invariants between these settings and those of the next era.
+    ///
+    /// # Panics
+    ///
+    /// If the uncle reference window of `next` exceeds a fifth of the slot
+    /// security parameter of these settings: `5⌊W_n/f_n⌋ ≤ s_{n−1}`.
+    pub fn validate_successor(&self, next: &Self) {
+        let window = next
+            .consensus_config()
+            .uncle_reference_window_in_slot()
+            .get();
+        let previous_slot_security_param = self.consensus_config().slot_security_param().get();
+        assert!(
+            u128::from(window) * 5 <= u128::from(previous_slot_security_param),
+            "uncle reference window ({window} slots) must not exceed a fifth of the slot \
+             security parameter s = {previous_slot_security_param} of the era before"
+        );
+    }
+
     #[must_use]
     pub const fn slots_per_epoch(&self) -> u64 {
         epoch_length(
@@ -61,6 +88,37 @@ impl Settings {
             self.learning_rate,
             self.uncle_reference_window_in_block,
         )
+    }
+
+    #[must_use]
+    pub const fn security_param(&self) -> NonZeroU32 {
+        self.security_param
+    }
+
+    #[must_use]
+    pub const fn slot_activation_coeff(&self) -> NonNegativeRatio {
+        self.slot_activation_coeff
+    }
+
+    /// `W`, the uncle reference window in expected block-intervals.
+    #[must_use]
+    pub const fn uncle_reference_window_in_block(&self) -> NonZeroU32 {
+        self.uncle_reference_window_in_block
+    }
+
+    #[must_use]
+    pub const fn epoch_config(&self) -> &EpochConfig {
+        &self.epoch_config
+    }
+
+    #[must_use]
+    pub const fn sdp_config(&self) -> &SdpConfig {
+        &self.sdp_config
+    }
+
+    #[must_use]
+    pub const fn pow_config(&self) -> &PoWConfig {
+        &self.pow_config
     }
 }
 
@@ -116,3 +174,76 @@ pub struct BlendPoWConfig {
 // directly: deserializing the deployment config runs its invariant checks
 // (`RewardPoWConfig::validate`), rejecting an invalid config at load time.
 pub use lb_ledger::config::RewardPoWConfig;
+
+#[cfg(test)]
+mod tests {
+    use lb_utils::math::NonNegativeRatio;
+
+    use super::{Settings, UncleReferenceWindowTooWide, UnvalidatedSettings};
+    use crate::config::DeploymentSettings;
+
+    #[test]
+    fn uncle_reference_window_accepted() {
+        let settings = settings(10, 20, 6);
+
+        let yaml = serde_yaml::to_string(&settings).unwrap();
+        assert!(serde_yaml::from_str::<Settings>(&yaml).is_ok());
+    }
+
+    #[test]
+    fn uncle_reference_window_rejected() {
+        // Raise `W` past the bound in the YAML of valid settings.
+        let mut yaml = serde_yaml::to_value(settings(10, 20, 6)).unwrap();
+        yaml["uncle_reference_window_in_block"] = 7.into();
+        let error = serde_yaml::from_value::<Settings>(yaml).unwrap_err();
+        assert!(
+            error.to_string().contains(
+                &UncleReferenceWindowTooWide {
+                    security_param: 10.try_into().unwrap(),
+                    window: 7.try_into().unwrap(),
+                    max: 6,
+                }
+                .to_string()
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn next_era_uncle_reference_window_accepted() {
+        let previous = settings(10, 20, 6);
+        let next = settings(30, 20, 6);
+        // `W` is accepted because <= s/5.
+        previous.validate_successor(&next);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "uncle reference window (140 slots) must not exceed a fifth of the \
+                    slot security parameter s = 600 of the era before"
+    )]
+    fn next_era_uncle_reference_window_rejected() {
+        // prev_slot_security_param: `s = 3*⌊10*20⌋ = 600` slots
+        let previous = settings(10, 20, 6);
+        // new_uncle_ref_window: `W = 7` (= 140 slot)
+        let next = settings(30, 20, 7);
+        // `W` is rejected because > s/5.
+        previous.validate_successor(&next);
+    }
+
+    /// The default settings with `k`, `f = 1/f_denominator` and `W` replaced.
+    fn settings(security_param: u32, f_denominator: u32, window: u32) -> Settings {
+        let mut unvalidated = UnvalidatedSettings::from(
+            DeploymentSettings::default()
+                .genesis_era_parameters()
+                .cryptarchia
+                .clone(),
+        );
+        unvalidated.security_param = security_param.try_into().unwrap();
+        unvalidated.slot_activation_coeff =
+            NonNegativeRatio::new(1, f_denominator.try_into().unwrap());
+        unvalidated.uncle_reference_window_in_block = window.try_into().unwrap();
+
+        unvalidated.try_into().unwrap()
+    }
+}
