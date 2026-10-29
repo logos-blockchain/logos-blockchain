@@ -15,12 +15,32 @@ use crate::{Cryptarchia, Error};
     reason = "grouping the uncle validity rules separately from the main impl"
 )]
 impl Cryptarchia {
+    /// Verifies that the block carries at most as many uncles as the era of its
+    /// slot allows. Unlike the rules of [`Self::verify_uncles`], this one needs
+    /// no ledger state, so it is checked for every block, however it was built,
+    /// decoded or stored.
+    pub(crate) fn verify_uncle_count<Tx>(&self, block: &Block<Tx>) -> Result<(), Error> {
+        let max_uncles = self
+            .ledger
+            .era_schedule()
+            .at_slot(block.header().slot())
+            .parameters
+            .consensus_config
+            .max_uncles();
+        let uncle_count = block.uncle_headers().len();
+        if uncle_count > usize::from(max_uncles) {
+            return Err(Error::TooManyUncles {
+                count: uncle_count,
+                max: max_uncles,
+            });
+        }
+        Ok(())
+    }
+
     /// Verifies every uncle carried by the block against the chain the block
     /// extends.
     ///
     /// # Rules
-    /// - The block carries at most as many uncles as the era of its slot
-    ///   allows.
     /// - Each uncle's slot must be older than the block's slot.
     /// - Each uncle must be of the era of the block.
     /// - Each uncle must not be on the chain that the block extends.
@@ -34,19 +54,6 @@ impl Cryptarchia {
 
         let header = block.header();
         let slot = header.slot();
-
-        // The block carries at most as many uncles as its era allows, however
-        // it was built or decoded.
-        let era = self.ledger.era_schedule().at_slot(slot);
-        let max_uncles = era.parameters.consensus_config.max_uncles();
-        let uncle_count = block.uncle_headers().len();
-        if uncle_count > usize::from(max_uncles) {
-            return Err(Error::TooManyUncles {
-                count: uncle_count,
-                max: max_uncles,
-            });
-        }
-
         let parent = self
             .consensus
             .branches()
@@ -58,6 +65,7 @@ impl Cryptarchia {
 
         // Each uncle's slot must be older than the block's slot, and of the
         // block's era, which starts at its first slot.
+        let era = self.ledger.era_schedule().at_slot(slot);
         for uncle in block.uncle_headers().iter() {
             let uncle_slot = uncle.header().slot();
             if uncle_slot >= slot {
@@ -212,10 +220,13 @@ mod tests {
     use rand::thread_rng;
 
     use super::*;
-    use crate::tests::{
-        GENESIS_ID, chain_with_fork, chain_with_fork_on, genesis_cryptarchia_on, ledger_config,
-        ledger_config_with_max_uncles, ledger_config_with_uncle_reference_window, schedule,
-        signed_header, single_era, try_build_block, utxo,
+    use crate::{
+        BlockOrigin,
+        tests::{
+            GENESIS_ID, chain_with_fork, chain_with_fork_on, genesis_cryptarchia_on, ledger_config,
+            ledger_config_with_max_uncles, ledger_config_with_uncle_reference_window, schedule,
+            signed_header, single_era, try_build_block, utxo,
+        },
     };
 
     #[test]
@@ -537,11 +548,19 @@ mod tests {
         )
         .unwrap();
 
+        // Received from the network, and replayed from storage, where the
+        // other uncle rules are not checked again.
         let block_header_slot = block.header().slot();
-        let Err(err) = cryptarchia.try_apply_block(block, block_header_slot) else {
-            panic!("expected the block to be rejected");
-        };
-        assert!(matches!(err, Error::TooManyUncles { count: 2, max: 1 }));
+        for origin in [BlockOrigin::Network, BlockOrigin::Storage] {
+            let Err(err) = cryptarchia.try_apply_block_with_state_retention(
+                block.clone(),
+                block_header_slot,
+                origin,
+            ) else {
+                panic!("expected the block to be rejected from {origin:?}");
+            };
+            assert!(matches!(err, Error::TooManyUncles { count: 2, max: 1 }));
+        }
     }
 
     #[test]

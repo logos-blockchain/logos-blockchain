@@ -490,6 +490,10 @@ impl Cryptarchia {
             return Err(Error::AlreadyApplied(id));
         }
 
+        // Whatever the block's origin: a stored block was checked when it was
+        // first applied, but under the eras this node ran with then.
+        self.verify_uncle_count(&block)?;
+
         if origin == BlockOrigin::Network {
             // Reject blocks from future slots
             if slot > current_slot {
