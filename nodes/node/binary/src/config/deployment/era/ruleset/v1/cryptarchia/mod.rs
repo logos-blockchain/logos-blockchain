@@ -20,7 +20,7 @@ pub struct Settings {
     pub slot_activation_coeff: NonNegativeRatio,
     pub learning_rate: NonNegativeF64,
     /// `W`, the uncle reference window in expected block-intervals.
-    pub uncle_reference_window_in_block: NonZeroU32,
+    pub uncle_reference_window_in_block: u32,
     pub sdp_config: SdpConfig,
     pub pow_config: PoWConfig,
 }

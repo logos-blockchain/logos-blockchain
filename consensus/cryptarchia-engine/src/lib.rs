@@ -772,7 +772,7 @@ where
     {
         let era = self.era_schedule.at_slot(slot);
         let window_start =
-            u64::from(slot).saturating_sub(era.parameters.uncle_reference_window_in_slot().get());
+            u64::from(slot).saturating_sub(era.parameters.uncle_reference_window_in_slot());
 
         let (ancestors, occupied_slots) = self.collect_chain_within_window(parent, window_start);
         let candidates = {
@@ -1025,7 +1025,7 @@ pub mod tests {
             NonZero::new(security_param).unwrap(),
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
-            NonZero::new(12).unwrap(),
+            12,
         )
     }
 
@@ -1963,6 +1963,40 @@ mod uncle_tests {
     }
 
     #[test]
+    fn no_uncle_selected_when_zero_window() {
+        // g(0) ----- b1(2)     <- adding b2(3)
+        //  |
+        //  |-- u1(1)
+        //
+        // `u1` is selected with a window that reaches `g`, but never with
+        // `uncle_reference_window_in_slot = 0`, which disables uncle references.
+        let [g, b1, u1] = [0u64, 1, 2];
+        let blocks = [(b1, g, 2.into()), (u1, g, 1.into())];
+
+        let engine = build_tree(3, g, blocks);
+        let selected: Vec<_> = engine
+            .select_uncles(engine.branches().get(&b1).unwrap(), 3.into())
+            .iter()
+            .map(|uncle| uncle.id())
+            .collect();
+        assert_eq!(selected, [u1]);
+
+        let engine = build_tree(0, g, blocks);
+        assert_eq!(
+            engine
+                .era_schedule()
+                .at_slot(3.into())
+                .parameters
+                .uncle_reference_window_in_slot(),
+            0
+        );
+        assert_eq!(
+            engine.select_uncles(engine.branches().get(&b1).unwrap(), 3.into()),
+            Vec::<&Branch<u64>>::new()
+        );
+    }
+
+    #[test]
     fn select_uncles_takes_the_window_of_the_era_of_the_block() {
         //               |-- window of the block's era --|
         //               |                               |
@@ -2137,19 +2171,19 @@ mod uncle_tests {
     /// Back-calculates `uncle_reference_window_in_block` from
     /// `uncle_reference_window_in_slot`, which is handier to specify in tests.
     #[must_use]
-    fn config(uncle_reference_window_in_slot: NonZeroU32) -> Config {
+    fn config(uncle_reference_window_in_slot: u32) -> Config {
         // Pick `f` just below 1, so that `uncle_reference_window_in_block` equals
         // `uncle_reference_window_in_slot`.
-        let f_numerator = uncle_reference_window_in_slot.get() + 1;
-        let f_denominator = NonZeroU32::new(uncle_reference_window_in_slot.get() + 2).unwrap();
+        let f_numerator = uncle_reference_window_in_slot + 1;
+        let f_denominator = NonZeroU32::new(uncle_reference_window_in_slot + 2).unwrap();
         let uncle_reference_window_in_block =
-            (uncle_reference_window_in_slot.get() * f_numerator).div_ceil(f_denominator.get());
+            (uncle_reference_window_in_slot * f_numerator).div_ceil(f_denominator.get());
 
         Config::new(
             NonZero::new(10).unwrap(),
             NonNegativeRatio::new(f_numerator, f_denominator),
             1f64.try_into().expect("1 > 0"),
-            uncle_reference_window_in_block.try_into().unwrap(),
+            uncle_reference_window_in_block,
         )
     }
 
@@ -2161,7 +2195,7 @@ mod uncle_tests {
         blocks: impl IntoIterator<Item = (HeaderId, HeaderId, Slot)>,
     ) -> Cryptarchia<HeaderId> {
         build_tree_over(
-            single_era(config(uncle_reference_window_in_slot.try_into().unwrap())),
+            single_era(config(uncle_reference_window_in_slot)),
             genesis,
             blocks,
         )
@@ -2188,7 +2222,7 @@ mod uncle_tests {
         blocks: impl IntoIterator<Item = (HeaderId, HeaderId, Slot, UncleSlots)>,
     ) -> Cryptarchia<HeaderId> {
         build_tree_with_uncle_slots_over(
-            single_era(config(uncle_reference_window_in_slot.try_into().unwrap())),
+            single_era(config(uncle_reference_window_in_slot)),
             genesis,
             blocks,
         )

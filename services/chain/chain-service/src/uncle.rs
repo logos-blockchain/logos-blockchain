@@ -65,8 +65,7 @@ impl Cryptarchia {
         let uncle_reference_window = era
             .parameters
             .consensus_config
-            .uncle_reference_window_in_slot()
-            .get();
+            .uncle_reference_window_in_slot();
         let window_start = slot.into_inner().saturating_sub(uncle_reference_window);
         self.verify_uncles_ancestry(block.uncle_headers(), parent, window_start)?;
 
@@ -200,7 +199,8 @@ mod tests {
 
     use super::*;
     use crate::tests::{
-        chain_with_fork, chain_with_fork_on, ledger_config, schedule, signed_header,
+        chain_with_fork, chain_with_fork_on, ledger_config,
+        ledger_config_with_uncle_reference_window, schedule, signed_header, single_era,
         try_build_block,
     };
 
@@ -232,6 +232,60 @@ mod tests {
                 .uncle_slots(),
             &[u1.header().slot()].into()
         );
+    }
+
+    #[test]
+    fn zero_window_rejects_any_uncle() {
+        // `W = 0` disables uncle references.
+        let (mut cryptarchia, _, u1, _, zk_key, utxo) = chain_with_fork_on(single_era(
+            ledger_config_with_uncle_reference_window(3.try_into().unwrap(), 0),
+        ));
+
+        let (block, _) = try_build_block(
+            &cryptarchia,
+            cryptarchia.tip(),
+            utxo,
+            &zk_key,
+            u1.header().slot().strict_add(1.into()),
+            UncleHeaders::new(BoundedVec::from(signed_header(&u1))),
+        )
+        .unwrap();
+
+        let block_header_slot = block.header().slot();
+        let Err(err) = cryptarchia.try_apply_block(block, block_header_slot) else {
+            panic!("expected the block to be rejected");
+        };
+        assert!(matches!(
+            err,
+            Error::InvalidUncle {
+                reason: UncleError::ParentNotOnChain,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn zero_window_accepts_block_without_uncles() {
+        let (mut cryptarchia, _, u1, _, zk_key, utxo) = chain_with_fork_on(single_era(
+            ledger_config_with_uncle_reference_window(3.try_into().unwrap(), 0),
+        ));
+
+        let (block, _) = try_build_block(
+            &cryptarchia,
+            cryptarchia.tip(),
+            utxo,
+            &zk_key,
+            u1.header().slot().strict_add(1.into()),
+            UncleHeaders::empty(),
+        )
+        .unwrap();
+
+        let block_header_slot = block.header().slot();
+        let block_id = block.header().id();
+        cryptarchia
+            .try_apply_block(block, block_header_slot)
+            .expect("a block without uncles should be applied");
+        assert_eq!(cryptarchia.tip(), block_id);
     }
 
     #[test]
@@ -303,8 +357,7 @@ mod tests {
             .genesis()
             .parameters
             .consensus_config
-            .uncle_reference_window_in_slot()
-            .get();
+            .uncle_reference_window_in_slot();
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
             u1.header()

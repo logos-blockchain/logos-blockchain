@@ -507,7 +507,7 @@ mod tests {
             NonZero::new(2).unwrap(),
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().unwrap(),
-            NonZero::new(12).unwrap(),
+            12,
         );
         let epoch_config = lb_cryptarchia_engine::EpochConfig {
             epoch_stake_distribution_stabilization: 1.try_into().unwrap(),

@@ -18,7 +18,7 @@ pub struct Config {
     stake_inference_learning_rate: NonNegativeF64,
     /// `W`, the width of the uncle reference window in expected
     /// block-intervals.
-    uncle_reference_window_in_block: NonZero<u32>,
+    uncle_reference_window_in_block: u32,
     /// Lottery approximation constants computed from `slot_activation_coeff`
     #[serde(skip)]
     lottery_constants: LotteryConstants,
@@ -34,7 +34,7 @@ impl<'de> serde::Deserialize<'de> for Config {
             security_param: NonZero<u32>,
             slot_activation_coeff: NonNegativeRatio,
             stake_inference_learning_rate: NonNegativeF64,
-            uncle_reference_window_in_block: NonZero<u32>,
+            uncle_reference_window_in_block: u32,
         }
 
         let raw = RawConfig::deserialize(deserializer)?;
@@ -55,7 +55,7 @@ impl Config {
         security_param: NonZero<u32>,
         slot_activation_coeff: NonNegativeRatio,
         stake_inference_learning_rate: NonNegativeF64,
-        uncle_reference_window_in_block: NonZero<u32>,
+        uncle_reference_window_in_block: u32,
     ) -> Self {
         Self {
             security_param,
@@ -68,12 +68,14 @@ impl Config {
 
     /// `W * f^-1`, the maximum number of slots by which the parent of a
     /// referenced uncle may precede the block referencing it.
+    ///
+    /// Zero when `W` is zero, which disables uncle references.
     #[must_use]
-    pub const fn uncle_reference_window_in_slot(&self) -> NonZero<u64> {
-        average_slots_for_blocks(
-            self.uncle_reference_window_in_block,
-            self.slot_activation_coeff,
-        )
+    pub const fn uncle_reference_window_in_slot(&self) -> u64 {
+        match NonZero::new(self.uncle_reference_window_in_block) {
+            Some(window) => average_slots_for_blocks(window, self.slot_activation_coeff).get(),
+            None => 0,
+        }
     }
 
     #[must_use]
@@ -176,19 +178,27 @@ mod tests {
             NonZero::new(10).unwrap(),
             NonNegativeRatio::new(1, 5.try_into().unwrap()),
             0.1.try_into().unwrap(),
-            NonZero::new(12).unwrap(),
+            12,
         );
         assert_eq!(config.security_param(), NonZero::new(10).unwrap());
         assert_eq!(config.base_period_length(), NonZero::new(50).unwrap());
-        assert_eq!(
-            config.uncle_reference_window_in_slot(),
-            NonZero::new(60).unwrap()
-        );
+        assert_eq!(config.uncle_reference_window_in_slot(), 60);
         assert_eq!(config.s_gen(), NonZero::new(12).unwrap());
         assert_eq!(
             config.stake_inference_learning_rate().mul(10.0).floor() as u64,
             1,
         );
+    }
+
+    #[test]
+    fn test_zero_uncle_reference_window() {
+        let config = Config::new(
+            NonZero::new(10).unwrap(),
+            NonNegativeRatio::new(1, 5.try_into().unwrap()),
+            0.1.try_into().unwrap(),
+            0,
+        );
+        assert_eq!(config.uncle_reference_window_in_slot(), 0);
     }
 
     #[test]

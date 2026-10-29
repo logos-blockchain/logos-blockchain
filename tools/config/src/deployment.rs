@@ -134,8 +134,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
             },
             cryptarchia: CryptarchiaDeploymentSettings {
                 security_param: NonZero::new(SECURITY_PARAM).unwrap(),
-                uncle_reference_window_in_block: NonZero::new(UNCLE_REFERENCE_WINDOW_IN_BLOCK)
-                    .unwrap(),
+                uncle_reference_window_in_block: UNCLE_REFERENCE_WINDOW_IN_BLOCK,
                 slot_activation_coeff: NonNegativeRatio::new(
                     SLOT_ACTIVATION_COEFF_NUMERATOR,
                     NonZero::new(SLOT_ACTIVATION_COEFF_DENOMINATOR).unwrap(),

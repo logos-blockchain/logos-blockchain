@@ -186,7 +186,7 @@ fn simulation_config() -> Config {
             NonZero::new(SLOT_ACTIVATION_COEFF.1).unwrap(),
         ),
         1f64.try_into().expect("1 > 0"),
-        NonZero::new(UNCLE_REFERENCE_WINDOW_IN_BLOCK).unwrap(),
+        UNCLE_REFERENCE_WINDOW_IN_BLOCK,
     );
     config
 }

@@ -651,7 +651,7 @@ mod tests {
             NonZero::new(5).unwrap(),
             NonNegativeRatio::new(1, 2.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
-            NonZero::new(12).unwrap(),
+            12,
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
@@ -721,7 +721,7 @@ mod tests {
             NonZero::new(5).unwrap(),
             NonNegativeRatio::new(1, 2.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
-            NonZero::new(12).unwrap(),
+            12,
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
         super::Config {
@@ -805,7 +805,7 @@ mod tests {
             NonZero::new(5).unwrap(),
             NonNegativeRatio::new(1, 2.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
-            NonZero::new(12).unwrap(),
+            12,
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 

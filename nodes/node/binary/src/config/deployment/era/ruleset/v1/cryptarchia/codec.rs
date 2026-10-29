@@ -177,7 +177,7 @@ pub fn fixture_settings() -> Settings {
         security_param: NonZeroU32::new(15).unwrap(),
         slot_activation_coeff: NonNegativeRatio::new(16, NonZeroU32::new(17).unwrap()),
         learning_rate: NonNegativeF64::try_from(18.0).unwrap(),
-        uncle_reference_window_in_block: NonZeroU32::new(19).unwrap(),
+        uncle_reference_window_in_block: 19,
         sdp_config: fixture_sdp_config(),
         pow_config: fixture_pow_config(),
     }
