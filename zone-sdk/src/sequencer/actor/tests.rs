@@ -1934,6 +1934,60 @@ async fn dead_input_bundle_expires_without_a_lineage_change() {
     );
 }
 
+/// A pending entry whose parent is neither the channel tip nor another
+/// pending entry is shed on a block that moves no message. Restored from a
+/// checkpoint after the block taking its parent finalized, such an entry is
+/// off the pending suffix, so it is never posted, and the first event's diff
+/// is silent about finalized history: without a shed it would stay pending
+/// for good, unreported.
+#[tokio::test]
+async fn off_suffix_pending_entry_is_shed_without_a_lineage_change() {
+    let channel_id = ChannelId::from([0; 32]);
+    let key = Ed25519Key::from_bytes(&[0; 32]);
+    let mut sequencer = ready_sequencer_with_channel(None, key).await;
+    assert_eq!(sequencer.current_tip, Some(header_id(1)));
+
+    // Chained on a message that is not the tip (root) and not pending.
+    let taken = MsgId::from([7u8; 32]);
+    let stranded = inscribe_op(channel_id, taken, b"queued out of turn");
+    let stranded_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(stranded.clone())]);
+    let stranded_hash = stranded_tx.hash();
+    sequencer
+        .state
+        .as_mut()
+        .unwrap()
+        .submit_inscription(stranded_tx, taken, stranded.id(), stranded.inscription)
+        .unwrap();
+    assert!(
+        sequencer
+            .state
+            .as_ref()
+            .unwrap()
+            .pending_txs(header_id(1))
+            .is_empty(),
+        "fixture: off the suffix, the entry is never posted"
+    );
+
+    let (update, ..) = sequencer.apply_block_result(BlockEventResult {
+        finalized_items: Vec::new(),
+        channel_update: None,
+        view_before: ViewBefore::new(&[], HashSet::new()),
+        deposits: Vec::new(),
+    });
+    let ChannelUpdate::Conflict { orphaned, .. } = update else {
+        panic!("the stranded entry must be reported orphaned, got {update:?}")
+    };
+    assert_eq!(
+        orphaned
+            .iter()
+            .map(ChannelUpdateTx::tx_hash)
+            .collect::<Vec<_>>(),
+        vec![stranded_hash]
+    );
+    assert_eq!(sequencer.state.as_ref().unwrap().pending_publish_count(), 0);
+    assert_eq!(sequencer.last_msg_id, MsgId::root());
+}
+
 fn assert_history_matches_update(sequencer: &ZoneSequencer<MockNode>, update: &ChannelUpdate) {
     let history = sequencer
         .channel_history()
