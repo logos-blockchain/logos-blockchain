@@ -11,7 +11,6 @@ use std::{
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
-    time::Duration,
 };
 
 use backends::BlendBackend;
@@ -193,10 +192,9 @@ where
             era_schedule,
         } = settings_handle.notifier().get_updated_settings();
 
-        // Bounded infrastructure readiness; membership initialization follows.
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             TimeService<_, _>,
             PreloadKmsService<_>,
             NetworkService<Dispatcher::Backend, _, _>

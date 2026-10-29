@@ -1,7 +1,4 @@
-use std::{
-    fmt::{Debug, Display},
-    time::Duration,
-};
+use std::fmt::{Debug, Display};
 
 use async_trait::async_trait;
 use backends::NetworkBackend;
@@ -76,7 +73,7 @@ where
         // the clock enters after it.
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             TimeService<TimeBackend, RuntimeServiceId>
         )
         .await?;

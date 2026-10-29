@@ -325,19 +325,12 @@ where
             .notifier()
             .get_updated_settings();
 
-        // Bounded infrastructure dependencies.
-        wait_until_services_are_ready!(
-            &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_mins(1)),
-            NetworkService<_, _, _>,
-            TxMempoolService<_, _, _, _, _>,
-            TimeService<_, _>
-        )
-        .await?;
-        // Chain recovery can exceed the infrastructure readiness deadline.
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
             None,
+            NetworkService<_, _, _>,
+            TxMempoolService<_, _, _, _, _>,
+            TimeService<_, _>,
             Cryptarchia // becomes ready after recovering persisted blocks
         )
         .await?;

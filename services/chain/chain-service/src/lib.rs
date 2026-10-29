@@ -16,7 +16,6 @@ use std::{
     fmt::Display,
     pin::Pin,
     sync::Arc,
-    time::Duration,
 };
 
 use educe::Educe;
@@ -745,10 +744,10 @@ where
             .notifier()
             .get_updated_settings();
 
-        // Bounded infrastructure dependencies; persisted-chain recovery follows.
+        // Storage and the slot clock are needed to recover the persisted chain.
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             BlockBroadcastService<_>,
             StorageService<_>,
             TimeService<_, _>

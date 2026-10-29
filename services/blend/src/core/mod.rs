@@ -339,11 +339,11 @@ where
             ..
         } = settings_handle.notifier().get_updated_settings();
 
-        // Bounded mode dependencies; the orchestrator already awaited SDP and chain
-        // readiness.
+        // Chain readiness is established by the orchestrator; Core still uses the SDP
+        // relay below.
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             NetworkService<_, _, _>,
             TimeService<_, _>,
             SdpService,

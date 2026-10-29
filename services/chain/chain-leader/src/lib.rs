@@ -9,7 +9,7 @@ mod tx_selection;
 mod wallet;
 
 use core::fmt::Debug;
-use std::{fmt::Display, pin::Pin, sync::Arc, time::Duration};
+use std::{fmt::Display, pin::Pin, sync::Arc};
 
 use futures::{Stream, StreamExt as _, stream};
 use lb_blend_service::message::proposal_diagnostic_timestamp_unix_ms;
@@ -366,21 +366,13 @@ where
         )
         .await;
 
-        // Wait for other services to become ready, with timeout.
-        // (except Chain, ChainNetwork, Blend, and Wallet)
-        wait_until_services_are_ready!(
-            &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_mins(1)),
-            TxMempoolService<_, _, _, _, _>,
-            TimeService<_, _>,
-            PreloadKmsService<_>
-        )
-        .await?;
-        // Wait for the remaining dependencies to become ready, without timeout
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
             None,
-            CryptarchiaService, // becomes ready after recoverying blocks
+            TxMempoolService<_, _, _, _, _>,
+            TimeService<_, _>,
+            PreloadKmsService<_>,
+            CryptarchiaService, // becomes ready after block recovery
             ChainNetwork,       // becomes ready after IBD
             BlendService,       // becomes ready after chain becomes online
             Wallet              // becomes ready after Chain

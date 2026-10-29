@@ -10,7 +10,6 @@ use std::{
     iter,
     marker::PhantomData,
     pin::Pin,
-    time::Duration,
 };
 
 use futures::StreamExt as _;
@@ -234,7 +233,7 @@ where
         // clock is in, and follow the eras the clock enters after it.
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             TimeService<TimeBackend, RuntimeServiceId>
         )
         .await?;
@@ -293,10 +292,9 @@ where
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
 
-        // Wait for network readiness before entering the mempool event loop.
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             NetworkService<_, _, _>
         )
         .await?;
