@@ -207,42 +207,38 @@ mod test {
         channel_notes,
         gas::test_utils::FixedThresholds,
         ledger::BoundedInputs,
-        ops::op_proof::samples::SampleProof as _,
+        ops::{channel::MAX_OPERATION_DATA_SIZE, op_proof::samples::SampleProof as _},
         transactions::tx_list::signed_ops::test_utils::make_channel_state,
     };
 
-    /// `MAX_OPERATION_DATA_SIZE` from the Mantle Transaction Encoding spec.
-    const SPEC_MAX_OPERATION_DATA_SIZE: u32 = 1_835_008;
-
     /// A deposit encoding with no inputs and a metadata length prefix of
     /// `metadata_len`, followed by `metadata_len` bytes of metadata.
-    fn encoded_deposit_with_metadata_len(metadata_len: u32) -> Vec<u8> {
+    fn encoded_deposit_with_metadata_len(metadata_len: usize) -> Vec<u8> {
         let mut encoded = Vec::new();
         // ChannelId
         encoded.extend_from_slice(&[0x42; 32]);
         // Input count
         encoded.push(0);
         // Metadata length prefix and payload
-        encoded.extend_from_slice(&metadata_len.to_le_bytes());
-        encoded.resize(encoded.len() + metadata_len as usize, 0x01);
+        let metadata_len_prefix =
+            u32::try_from(metadata_len).expect("metadata length must fit in a u32 prefix");
+        encoded.extend_from_slice(&metadata_len_prefix.to_le_bytes());
+        encoded.resize(encoded.len() + metadata_len, 0x01);
         encoded
     }
 
     #[test]
     fn decode_accepts_metadata_at_the_spec_limit() {
-        let encoded = encoded_deposit_with_metadata_len(SPEC_MAX_OPERATION_DATA_SIZE);
+        let encoded = encoded_deposit_with_metadata_len(MAX_OPERATION_DATA_SIZE);
 
         let (_, deposit) = DepositOp::decode(&encoded).unwrap();
 
-        assert_eq!(
-            deposit.metadata.len(),
-            SPEC_MAX_OPERATION_DATA_SIZE as usize
-        );
+        assert_eq!(deposit.metadata.len(), MAX_OPERATION_DATA_SIZE);
     }
 
     #[test]
     fn decode_rejects_metadata_above_the_spec_limit() {
-        let encoded = encoded_deposit_with_metadata_len(SPEC_MAX_OPERATION_DATA_SIZE + 1);
+        let encoded = encoded_deposit_with_metadata_len(MAX_OPERATION_DATA_SIZE + 1);
 
         assert!(matches!(
             DepositOp::decode(&encoded),

@@ -18,7 +18,7 @@ pub type ChannelKeyIndex = u16;
 /// Maximum payload size, in bytes, of a Mantle operation data field
 /// (`MAX_OPERATION_DATA_SIZE` in the Mantle Transaction Encoding spec).
 ///
-/// The spec requires this to be exactly 1_835_008 bytes, which is
+/// The spec requires this to be exactly `1_835_008` bytes, which is
 /// `MAX_BLOCK_TRANSACTIONS_SIZE * 7 / 8` and leaves room for the rest of a
 /// block's transactions. The bound excludes the length prefix. Channel
 /// inscription data and channel deposit metadata both use this limit.
