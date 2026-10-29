@@ -512,14 +512,6 @@ fn standalone_deployment_config_deserializes() {
         yaml_path.exists(),
         "standalone deployment config should exist at {yaml_path:?}"
     );
-    let bytes = std::fs::read(&yaml_path).expect("standalone deployment config should exist");
-
-    let parsed: Result<DeploymentSettings, serde_yaml::Error> = serde_yaml::from_slice(&bytes);
-    assert!(
-        parsed.is_ok(),
-        "standalone deployment config should deserialize ({:?})",
-        parsed.err(),
-    );
 
     let parsed = deserialize_value_at_path::<DeploymentSettings>(&yaml_path, OnUnknownKeys::Fail);
     assert!(

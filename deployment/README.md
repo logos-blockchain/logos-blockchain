@@ -96,14 +96,15 @@ tests validate:
 | Trigger | Inputs | Output (committed) |
 | --- | --- | --- |
 | `.github/workflows/genesis-ceremony.yml` (devnet / testnet) | `deployment/ceremony/genesis/<env>/*` | `nodes/node/binary/src/config/deployment/settings.yaml` and the era files it includes, `era/schedule/<era number>.yaml` next to it |
-| `scripts/standalone-genesis-ceremony.sh` (local) | `deployment/ceremony/genesis/standalone/*` | `nodes/node/standalone-deployment-config.yaml`, with its era inline |
+| `scripts/standalone-genesis-ceremony.sh` (local) | `deployment/ceremony/genesis/standalone/*` | `nodes/node/standalone-deployment-config.yaml` and the era file it includes, `era/schedule/0.yaml` next to it |
 
 ### Eras
 
 A deployment schedules its eras under `eras`, each keyed by the epoch it
-starts at; the first starts at epoch 0. The binary's default deployment keeps
-each era in its own file, named after its era number (its place in the
-schedule, from 0), which `settings.yaml` includes:
+starts at; the first starts at epoch 0. The deployments the ceremony writes,
+the binary's default and the standalone one, keep each era in its own file,
+named after its era number (its place in the schedule, from 0), which the main
+file includes (`settings.yaml` for the default):
 
 ```yaml
 eras:
@@ -162,4 +163,5 @@ Per-type blueprints; change only when a network type is re-defined.
 Generated each release (by the ceremony, not hand-edited):
 `nodes/node/binary/src/config/deployment/settings.yaml` and its genesis era
 file, `nodes/node/binary/src/config/deployment/era/schedule/0.yaml`,
-`nodes/node/standalone-deployment-config.yaml`.
+`nodes/node/standalone-deployment-config.yaml` and its genesis era file,
+`nodes/node/era/schedule/0.yaml`.

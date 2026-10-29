@@ -143,7 +143,9 @@ fn node_dir() -> PathBuf {
         .join("nodes/node")
 }
 
-/// An isolated copy of the standalone node and deployment configs.
+/// An isolated copy of the standalone node config, and the standalone
+/// deployment config, read in place: the node only reads it, and the era files
+/// it includes are next to it.
 struct TestConfigPaths {
     temp_dir: TempDir,
     node_config: CString,
@@ -157,7 +159,6 @@ impl TestConfigPaths {
             .expect("Failed to create log dir");
 
         let node_config_path = temp_dir.path().join("standalone-node-config.yaml");
-        let deployment_config_path = temp_dir.path().join("standalone-deployment-config.yaml");
 
         let mut node_config = deserialize_value_at_path::<UserConfig>(
             &node_dir().join("standalone-node-config.yaml"),
@@ -173,15 +174,10 @@ impl TestConfigPaths {
             serde_yaml::to_string(&node_config).expect("Config should serialize"),
         )
         .expect("Failed to write node config");
-        std::fs::copy(
-            node_dir().join("standalone-deployment-config.yaml"),
-            &deployment_config_path,
-        )
-        .expect("Failed to copy deployment config");
 
         Self {
             node_config: cstring(&node_config_path),
-            deployment_config: cstring(&deployment_config_path),
+            deployment_config: cstring(&node_dir().join("standalone-deployment-config.yaml")),
             temp_dir,
         }
     }
