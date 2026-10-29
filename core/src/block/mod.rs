@@ -7,7 +7,7 @@ use core::fmt::Debug;
 
 use lb_binary_codec::{
     bincode::SerializeOp as _,
-    canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
+    canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError, length_prefix_len},
 };
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
@@ -28,6 +28,10 @@ use crate::{
 
 /// The maximum number of transactions allowed in a block.
 const MAX_BLOCK_TRANSACTIONS: usize = 1024;
+/// The bytes a block's transactions, or a proposal's references to them, are
+/// counted in when canonically encoded: the length prefix of a collection of
+/// at most [`MAX_BLOCK_TRANSACTIONS`] items.
+const BLOCK_TRANSACTIONS_COUNT_SIZE: usize = length_prefix_len::<MAX_BLOCK_TRANSACTIONS>();
 /// The maximum total size of all transactions in a block, in bytes (2 MiB).
 /// Note: This is not the total block size.
 pub const MAX_BLOCK_TRANSACTIONS_SIZE: usize = 1024 * 1024 * 2;
@@ -134,8 +138,8 @@ pub struct References {
 
 impl References {
     /// Maximum canonical representation of the bounded transaction references.
-    pub const MAX_CANONICAL_ENCODED_SIZE: usize =
-        2 + BlockTransactionReferences::MAX * TxHashPrefix::CANONICAL_ENCODED_SIZE;
+    pub const MAX_CANONICAL_ENCODED_SIZE: usize = BLOCK_TRANSACTIONS_COUNT_SIZE
+        + BlockTransactionReferences::MAX * TxHashPrefix::CANONICAL_ENCODED_SIZE;
 
     /// Constructs a `References` instance from a list of transactions,
     /// extracting their hashes.
@@ -383,12 +387,12 @@ impl<Tx> Block<Tx> {
 
     /// Maximum canonical encoded size of a block whose era allows
     /// `max_uncles`: its transactions take at most
-    /// [`MAX_BLOCK_TRANSACTIONS_SIZE`] bytes besides their two-byte count.
+    /// [`MAX_BLOCK_TRANSACTIONS_SIZE`] bytes besides their count.
     #[must_use]
     pub fn max_encoded_size(max_uncles: u8) -> usize {
         Header::CANONICAL_ENCODED_SIZE
             + UncleHeaders::max_encoded_size(max_uncles)
-            + 2
+            + BLOCK_TRANSACTIONS_COUNT_SIZE
             + MAX_BLOCK_TRANSACTIONS_SIZE
             + Ed25519Signature::CANONICAL_ENCODED_SIZE
     }
