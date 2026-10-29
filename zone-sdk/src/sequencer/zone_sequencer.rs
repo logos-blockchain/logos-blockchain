@@ -306,7 +306,7 @@ where
                     warn!(target: TARGET, "Dropping checkpointed tx {hash:?}: {taken}");
                 }
             }
-            tx_state.restore_fundings(funding, lib_slot);
+            tx_state.restore_fundings(funding);
             (Some(tx_state), lib_slot, last_msg_id, false)
         } else {
             info!(target: TARGET, "Starting fresh (no checkpoint)");
