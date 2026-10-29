@@ -180,7 +180,7 @@ mod tests {
         pub fn new(public_key: identity::PublicKey) -> Self {
             let settings = NatSettings::Traversal(crate::config::TraversalSettings {
                 autonat: AutonatClientSettings {
-                    probe_interval_millisecs: Some(10),
+                    probe_interval: Some(Duration::from_millis(10)),
                     ..Default::default()
                 },
                 ..Default::default()

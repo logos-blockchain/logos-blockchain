@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use lb_libp2p::{ChainSyncSettings, IdentifySettings, KademliaSettings, SwarmConfig};
+use lb_libp2p::{
+    ChainSyncSettings, IdentifySettings, KademliaSettings, SwarmConfig, config::CachingSettings,
+};
 use lb_network_service::{backends::libp2p::config::Libp2pConfig, config::NetworkConfig};
 
 use crate::config::{deployment::ProtocolNames, network::serde::Config};
@@ -34,7 +36,15 @@ impl ServiceConfig {
                     chain_sync_protocol_name: protocol_names.chain_sync.clone(),
                     gossipsub_config: user.backend.swarm.gossipsub.into(),
                     kademlia_config: KademliaSettings {
-                        caching: user.backend.swarm.kademlia.caching.map(Into::into),
+                        caching: Some(
+                            user.backend
+                                .swarm
+                                .kademlia
+                                .cache_size
+                                .map_or(CachingSettings::Disabled, |max_peers| {
+                                    CachingSettings::Enabled { max_peers }
+                                }),
+                        ),
                         replication_factor: user.backend.swarm.kademlia.replication_factor,
                         parallelism: user.backend.swarm.kademlia.parallelism,
                         disjoint_query_paths: user.backend.swarm.kademlia.disjoint_query_paths,
@@ -45,18 +55,18 @@ impl ServiceConfig {
                             .kademlia
                             .kbucket_inserts
                             .map(Into::into),
-                        periodic_bootstrap_interval_secs: user
+                        periodic_bootstrap_interval: user
                             .backend
                             .swarm
                             .kademlia
-                            .periodic_bootstrap_interval_secs,
-                        query_timeout_secs: user.backend.swarm.kademlia.query_timeout_secs,
+                            .periodic_bootstrap_interval,
+                        query_timeout: user.backend.swarm.kademlia.query_timeout,
                     },
                     identify_config: IdentifySettings {
                         agent_version: user.backend.swarm.identify.agent_version,
                         cache_size: user.backend.swarm.identify.cache_size,
                         hide_listen_addrs: user.backend.swarm.identify.hide_listen_addrs,
-                        interval_secs: user.backend.swarm.identify.interval_secs,
+                        interval: user.backend.swarm.identify.interval,
                         push_listen_addr_updates: user
                             .backend
                             .swarm

@@ -9,7 +9,6 @@ use lb_http_api_common::bodies::{
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_node::config::UserConfig;
-use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use serde::{Deserialize, de::IntoDeserializer as _};
 use url::Url;
 
@@ -125,14 +124,12 @@ async fn post_blend_declaration(
         password,
     }: PostBlendDeclarationArgs,
 ) -> Result<()> {
-    let user_config =
-        deserialize_value_at_path::<UserConfig>(&user_config_path, OnUnknownKeys::Fail)
-            .with_context(|| {
-                format!(
-                    "Failed to read user config at '{}'",
-                    user_config_path.display()
-                )
-            })?;
+    let user_config = UserConfig::load(&user_config_path).map_err(|error| {
+        anyhow!(
+            "Failed to read user config at '{}': {error}",
+            user_config_path.display()
+        )
+    })?;
 
     let client = {
         let credentials = username.map(|u| BasicAuthCredentials::new(u, password));

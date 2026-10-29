@@ -1,65 +1,65 @@
 use std::path::Path;
 
 use color_eyre::eyre::{Result, WrapErr as _};
-use lb_core::mantle::Value;
-use lb_pow_service::ClaimTarget;
-use libp2p::{Multiaddr, PeerId};
+use lb_utils::yaml::{OnUnknownKeys, deserialize_from_value};
+use libp2p::PeerId;
+use serde_yaml::{Mapping, Value};
 use thiserror::Error;
 
 use crate::{
-    NetworkArgs, UserConfig,
-    cli::{
-        InitArgs,
-        config::keystore::{KeyTitle, Keystore, KeystoreError},
-    },
+    UserConfig,
+    cli::InitArgs,
     config::{
-        ApiConfig, BlendArgs, CryptarchiaArgs, CryptarchiaConfig, KmsConfig, MempoolConfig,
-        PoWConfig, SdpArgs, SdpConfig, StateConfig, StorageConfig, TimeConfig, TracingConfig,
-        WalletConfig,
-        blend::serde::{Config as BlendConfig, RequiredValues as BlendConfigRequiredValues},
-        cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
-        network::serde::Config as NetworkConfig,
-        sdp::serde::RequiredValues as SdpConfigRequiredValues,
-        update_api, update_blend, update_cryptarchia, update_network, update_sdp, update_state,
-        update_tracing,
-        wallet::serde::RequiredValues as WalletConfigRequiredValues,
+        changed_values, keystore::Keystore, update_api, update_blend, update_cryptarchia,
+        update_network, update_sdp, update_state, update_tracing,
     },
 };
 
 #[derive(Error, Debug)]
 enum InitError {
-    #[error("User configuration file exists. Use `update` command.")]
+    #[error("User configuration file exists. Use `--overwrite` to replace it.")]
     UserFileExists,
-
-    #[error("Keystore file exists. Use `update` command.")]
-    KeystoreFileExists,
 }
 
-pub fn run(args: InitArgs) -> Result<()> {
-    let user_config_path = args.output.clone();
-    let keystore_path = args.keystore.clone().unwrap_or_else(|| {
-        user_config_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join("keystore.yaml")
-    });
-
-    if user_config_path.exists() && !args.overwrite {
+/// Writes a user config holding only the values set through `args`. Everything
+/// else is left to the defaults and to the keystore, which is generated unless
+/// it already exists.
+pub fn run(mut args: InitArgs) -> Result<()> {
+    if args.output.exists() && !args.overwrite {
         return Err(InitError::UserFileExists.into());
     }
+    let output_dir = args.output.parent().unwrap_or_else(|| Path::new("."));
+    let keystore_path = output_dir.join(&args.keystore);
+    args.keystore = keystore_path
+        .strip_prefix(output_dir)
+        .map_or_else(|_| keystore_path.clone(), Path::to_path_buf);
+    let existing_keystore = keystore_path.is_file();
+    let keystore = if existing_keystore {
+        Keystore::load(&keystore_path)?
+    } else {
+        Keystore::default()
+    };
 
-    if keystore_path.exists() && !args.overwrite {
-        return Err(InitError::KeystoreFileExists.into());
+    let defaults: UserConfig =
+        deserialize_from_value(keystore.config_values()?, OnUnknownKeys::Fail)?;
+    let mut config = defaults.clone();
+    let output = args.output.clone();
+    apply(&mut config, args)?;
+
+    let overrides = changed_values(
+        &serde_yaml::to_value(&defaults)?,
+        serde_yaml::to_value(&config)?,
+    )
+    .unwrap_or_else(|| Value::Mapping(Mapping::new()));
+    // Nothing is written before every override has been validated.
+    if !existing_keystore {
+        write_creating_parent_dirs(
+            &keystore_path,
+            &serde_yaml::to_string(&keystore)?,
+            "keystore",
+        )?;
     }
-
-    let keystore = Keystore::default();
-    let user_config = build_user_config(&keystore, args)?;
-
-    let user_config_yaml = serde_yaml::to_string(&user_config)?;
-    write_creating_parent_dirs(&user_config_path, &user_config_yaml, "user config")?;
-
-    let keystore_yaml = serde_yaml::to_string(&keystore)?;
-    write_creating_parent_dirs(&keystore_path, &keystore_yaml, "keystore")?;
+    write_creating_parent_dirs(&output, &serde_yaml::to_string(&overrides)?, "user config")?;
 
     Ok(())
 }
@@ -75,123 +75,28 @@ fn write_creating_parent_dirs(path: &Path, contents: &str, description: &str) ->
         .wrap_err_with(|| format!("writing {description} to {}", path.display()))
 }
 
-/// # Errors
-///
-/// Returns [`KeystoreError`] if the keystore lacks a predefined key or holds
-/// it with the wrong key type.
-pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> Result<UserConfig, KeystoreError> {
+fn apply(config: &mut UserConfig, args: InitArgs) -> Result<()> {
     let InitArgs {
-        log: log_args,
-        network: network_args,
-        blend: blend_args,
-        cryptarchia: cryptarchia_args,
-        sdp: sdp_args,
-        api: api_args,
-        state: state_args,
-        storage_path: storage_args,
+        keystore,
+        log,
+        network,
+        blend,
+        cryptarchia,
+        sdp,
+        api,
+        state,
+        storage_path,
         ..
     } = args;
 
-    let time_config = TimeConfig::default();
-
-    let mut storage_config = StorageConfig::default();
-    if let Some(storage_path) = storage_args {
-        storage_config.backend.folder_name = storage_path.to_string_lossy().into_owned();
+    config.kms.keystore = keystore;
+    if let Some(storage_path) = storage_path {
+        config.storage.backend.folder_name = storage_path.to_string_lossy().into_owned();
     }
-
-    let mut state_config = StateConfig::default();
-    update_state(&mut state_config, state_args);
-
-    let mut api_config = ApiConfig::default();
-    update_api(&mut api_config, api_args);
-
-    let mut tracing_config = TracingConfig::default();
-    update_tracing(&mut tracing_config, log_args).expect("Cli tracing params can be parsed");
-
-    let initial_peers = network_args.initial_peers.clone();
-    let network_config = build_network_config(keystore, network_args)?;
-
-    let blend_config = build_blend_config(keystore, blend_args)?;
-
-    let cryptarchia_config = build_cryptarchia_config(keystore, initial_peers, cryptarchia_args)?;
-
-    let sdp_config = build_sdp_config(keystore, sdp_args)?;
-
-    let mempool_config = MempoolConfig::default();
-
-    let wallet_config = build_wallet_config(keystore)?;
-
-    let kms_config = build_kms_config(keystore);
-
-    let pow_config = build_pow_config(keystore)?;
-
-    Ok(UserConfig {
-        network: network_config,
-        blend: blend_config,
-        cryptarchia: cryptarchia_config,
-        time: time_config,
-        sdp: sdp_config,
-        api: api_config,
-        storage: storage_config,
-        kms: kms_config,
-        mempool: mempool_config,
-        wallet: wallet_config,
-        pow: pow_config,
-        tracing: tracing_config,
-        state: state_config,
-    })
-}
-
-fn build_network_config(
-    keystore: &Keystore,
-    network_args: NetworkArgs,
-) -> Result<NetworkConfig, KeystoreError> {
-    let (_, unsecured_key) = keystore.get_ed25519(KeyTitle::NETWORK_SWARM)?;
-    let mut network_secret_key_bytes: [u8; 32] = *unsecured_key.as_bytes();
-
-    let mut network_config = NetworkConfig::default();
-    network_config.backend.swarm.node_key =
-        lb_libp2p::ed25519::SecretKey::try_from_bytes(&mut network_secret_key_bytes)
-            .expect("Valid default secret key structure");
-    update_network(&mut network_config, network_args)
-        .expect("Network configuration should update from cli args");
-
-    Ok(network_config)
-}
-
-fn build_blend_config(
-    keystore: &Keystore,
-    blend_args: BlendArgs,
-) -> Result<BlendConfig, KeystoreError> {
-    let (blend_signing_key_id, _) = keystore
-        .get(KeyTitle::BLEND_SIGNING)
-        .ok_or_else(|| KeystoreError::NotFound(KeyTitle::BLEND_SIGNING.into()))?;
-    let (blend_zk_key_id, _) = keystore
-        .get(KeyTitle::BLEND_ZK)
-        .ok_or_else(|| KeystoreError::NotFound(KeyTitle::BLEND_ZK.into()))?;
-    let mut blend_config = BlendConfig::with_required_values(BlendConfigRequiredValues {
-        non_ephemeral_signing_key_id: blend_signing_key_id,
-        secret_key_kms_id: blend_zk_key_id,
-    });
-    update_blend(&mut blend_config, blend_args);
-
-    Ok(blend_config)
-}
-
-fn build_cryptarchia_config(
-    keystore: &Keystore,
-    initial_peers: Option<Vec<Multiaddr>>,
-    cryptarchia_args: CryptarchiaArgs,
-) -> Result<CryptarchiaConfig, KeystoreError> {
-    let (_, cryptarchia_funding_key) = keystore.get_zk(KeyTitle::LEADER_FUNDING)?;
-    let mut cryptarchia_config =
-        CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues {
-            funding_pk: cryptarchia_funding_key.to_public_key(),
-        });
-    if !cryptarchia_args.skip_ibd
-        && let Some(initial_peers) = initial_peers
+    if !cryptarchia.skip_ibd
+        && let Some(initial_peers) = &network.initial_peers
     {
-        cryptarchia_config.network.bootstrap.ibd.peers = initial_peers
+        config.cryptarchia.network.bootstrap.ibd.peers = initial_peers
             .iter()
             .filter_map(|addr| match addr.iter().last() {
                 Some(lb_libp2p::Protocol::P2p(bytes)) => PeerId::from_multihash(bytes.into()).ok(),
@@ -199,64 +104,15 @@ fn build_cryptarchia_config(
             })
             .collect();
     }
-    update_cryptarchia(&mut cryptarchia_config, cryptarchia_args);
+    update_tracing(&mut config.tracing, log)?;
+    update_network(&mut config.network, network)?;
+    update_blend(&mut config.blend, blend);
+    update_cryptarchia(&mut config.cryptarchia, cryptarchia);
+    update_sdp(&mut config.sdp, sdp);
+    update_api(&mut config.api, api);
+    update_state(&mut config.state, state);
 
-    Ok(cryptarchia_config)
-}
-
-fn build_sdp_config(keystore: &Keystore, sdp_args: SdpArgs) -> Result<SdpConfig, KeystoreError> {
-    let (_, sdp_funding_key) = keystore.get_zk(KeyTitle::SDP_FUNDING)?;
-    let mut sdp_config = SdpConfig::with_required_values(SdpConfigRequiredValues {
-        funding_pk: sdp_funding_key.to_public_key(),
-    });
-    update_sdp(&mut sdp_config, sdp_args);
-
-    Ok(sdp_config)
-}
-
-fn build_kms_config(keystore: &Keystore) -> KmsConfig {
-    let mut kms_config = KmsConfig::default();
-    kms_config.backend.keys = keystore
-        .get_all()
-        .map(|(id, key)| (id, key.clone()))
-        .collect();
-
-    kms_config
-}
-
-/// Balance, in tokens, the generated auto-claim target aims for before it
-/// stops being paid.
-const DEFAULT_POW_CLAIM_THRESHOLD: Value = 2_000_000_000;
-
-/// Mining defaults, with auto-claim paying the `PoWClaim` key up to
-/// [`DEFAULT_POW_CLAIM_THRESHOLD`], so a generated node claims its mined
-/// rewards unattended once mining is started.
-fn build_pow_config(keystore: &Keystore) -> Result<PoWConfig, KeystoreError> {
-    let (_, pow_claim_key) = keystore.get_zk(KeyTitle::POW_CLAIM)?;
-
-    let mut pow_config = PoWConfig::default();
-    pow_config.auto_claim.targets = vec![ClaimTarget {
-        public_key: pow_claim_key.to_public_key(),
-        threshold: DEFAULT_POW_CLAIM_THRESHOLD,
-    }];
-
-    Ok(pow_config)
-}
-
-fn build_wallet_config(keystore: &Keystore) -> Result<WalletConfig, KeystoreError> {
-    let (voucher_master_key_id, _) = keystore
-        .get(KeyTitle::VAUCHER_MASTER)
-        .ok_or_else(|| KeystoreError::NotFound(KeyTitle::VAUCHER_MASTER.into()))?;
-
-    let mut wallet_config = WalletConfig::with_required_values(WalletConfigRequiredValues {
-        voucher_master_key_id,
-    });
-    wallet_config.known_keys = keystore
-        .get_all_zk()
-        .map(|(id, key)| (id, key.to_public_key()))
-        .collect();
-
-    Ok(wallet_config)
+    Ok(())
 }
 
 #[cfg(test)]

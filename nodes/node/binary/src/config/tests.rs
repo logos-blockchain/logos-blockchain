@@ -8,12 +8,12 @@ use bytes::Bytes;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_services_utils::overwatch::RecoveryData;
 use lb_tracing::logging::local::TextKind;
-use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
+use lb_utils::yaml::{OnUnknownKeys, deserialize_from_value, deserialize_value_at_path};
 use tracing::Level;
 
 use crate::{
     UserConfig,
-    cli::{CliArgs, build_run_config_from_env},
+    cli::{CliArgs, InitArgs, build_run_config_from_env},
     config::{
         DeploymentSettings, RequiredValues as ConfigRequiredValues,
         blend::{
@@ -23,7 +23,9 @@ use crate::{
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaRequiredValues,
         },
+        keystore::{KeyTitle, Keystore},
         mempool::ServiceConfig as MempoolServiceConfig,
+        network::serde::nat,
         parse_log_filter_layer,
         sdp::{
             ServiceConfig as SdpServiceConfig,
@@ -36,7 +38,9 @@ use crate::{
         tracing::serde::{
             console::{Layer as ConsoleLayer, TokioConfig},
             filter::{EnvConfig, Layer},
-            logger::LogFormat,
+            logger::{LogFormat, OtlpConfig as LoggerOtlpConfig},
+            metrics::{Layer as MetricsLayer, OtlpConfig as MetricsOtlpConfig},
+            tracing::{Layer as TracingLayer, OtlpConfig as TracingOtlpConfig},
         },
         wallet::{
             ServiceConfig as WalletServiceConfig,
@@ -400,6 +404,96 @@ fn env_config_deserialization_rejects_unknown_blend_target() {
             .to_string()
             .contains("unknown log filter target `logos_blockchain::blend::service::missing`")
     );
+}
+
+#[test]
+#[serial_test::serial]
+fn init_config_writes_only_overrides_and_load_fills_them_from_the_keystore() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("user_config.yaml");
+    let mut args = InitArgs::default();
+    args.output.clone_from(&config_path);
+    args.network.port = Some(4000);
+    args.log.directory = Some("/logs".into());
+    crate::cli::config::init::run(args).unwrap();
+
+    let written: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+    assert_eq!(
+        written,
+        serde_yaml::from_str::<serde_yaml::Value>(
+            "{network: {backend: {swarm: {port: 4000}}}, tracing: {logger: {file: {directory: /logs}}}}"
+        )
+        .unwrap()
+    );
+
+    let keystore = Keystore::load(&dir.path().join("keystore.yaml")).unwrap();
+    let (_, node_key) = keystore.get_ed25519(KeyTitle::NETWORK_SWARM).unwrap();
+    let config = UserConfig::load(&config_path).unwrap();
+    assert_eq!(config.network.backend.swarm.port, 4000);
+    assert_eq!(
+        config.tracing.logger.file.unwrap().directory,
+        Path::new("/logs")
+    );
+    assert_eq!(
+        config.network.backend.swarm.node_key.as_ref(),
+        node_key.as_bytes()
+    );
+    assert_eq!(config.kms.backend.keys.len(), keystore.get_all().count());
+
+    std::fs::write(&config_path, "").unwrap();
+    assert!(UserConfig::load(&config_path).is_ok());
+}
+
+#[test]
+fn redacted_config_hides_the_keys_and_the_otlp_authorization_headers() {
+    let mut config = minimal_user_config();
+    config.tracing.logger.otlp = Some(LoggerOtlpConfig {
+        authorization_header: Some("Bearer logs".into()),
+        ..Default::default()
+    });
+    config.tracing.metrics = MetricsLayer::new(
+        Some(MetricsOtlpConfig {
+            authorization_header: Some("Bearer metrics".into()),
+            ..Default::default()
+        }),
+        None,
+    );
+    config.tracing.tracing = TracingLayer::Otlp(TracingOtlpConfig {
+        authorization_header: Some("Bearer traces".into()),
+        ..Default::default()
+    });
+
+    let redacted = serde_yaml::to_string(&config.redacted().unwrap()).unwrap();
+    assert!(!redacted.contains("Bearer"));
+    assert!(!redacted.contains(&hex::encode(config.network.backend.swarm.node_key.as_ref())));
+    assert_eq!(redacted.matches("<secret>").count(), 5);
+}
+
+#[test]
+fn nat_config_defaults_its_type_and_rejects_unknown_keys() {
+    let nat = |yaml| {
+        deserialize_from_value::<nat::Config>(
+            serde_yaml::from_str(yaml).unwrap(),
+            OnUnknownKeys::Fail,
+        )
+        .map_err(|error| error.to_string())
+    };
+
+    assert!(matches!(
+        nat("{autonat: {max_candidates: 3}}").unwrap(),
+        nat::Config::Traversal(config) if config.autonat.max_candidates == Some(3)
+    ));
+    assert!(matches!(
+        nat("{type: static, external_address: /ip4/1.2.3.4/udp/1/quic-v1}").unwrap(),
+        nat::Config::Static { .. }
+    ));
+    assert!(
+        nat("{autonat: {probe_intreval: 5s}}")
+            .unwrap_err()
+            .contains("[\"autonat.probe_intreval\"]")
+    );
+    assert!(nat("{type: static, autonat: {}}").is_err());
 }
 
 fn repo_file(path_from_crate_root: &str) -> std::path::PathBuf {

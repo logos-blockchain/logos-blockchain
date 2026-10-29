@@ -1,8 +1,9 @@
 use core::time::Duration;
 use std::num::NonZeroUsize;
 
+use lb_utils::bounded_duration::{MILLI, MinimalBoundedDuration};
 use serde::{Deserialize, Serialize};
-use serde_with::{DurationMilliSeconds, serde_as};
+use serde_with::serde_as;
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -10,7 +11,7 @@ use serde_with::{DurationMilliSeconds, serde_as};
 pub struct Config {
     /// The maximum duration to wait for a peer to respond
     /// with a message.
-    #[serde_as(as = "DurationMilliSeconds<u64>")]
+    #[serde_as(as = "MinimalBoundedDuration<1, MILLI>")]
     pub peer_response_timeout: Duration,
     /// The maximum number of inbound block download requests that can be
     /// served concurrently. The same limit separately applies to inbound
@@ -22,7 +23,7 @@ pub struct Config {
     /// `peer_response_timeout`, which bounds each message, this bounds the
     /// whole download, so a peer that keeps reading slowly cannot hold a
     /// download slot indefinitely.
-    #[serde_as(as = "DurationMilliSeconds<u64>")]
+    #[serde_as(as = "MinimalBoundedDuration<1, MILLI>")]
     pub inbound_download_stream_timeout: Duration,
 }
 

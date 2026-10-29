@@ -43,7 +43,7 @@ where
     deserialize_from_value(resolved, unknown_keys_strategy)
 }
 
-fn deserialize_from_value<Value>(
+pub fn deserialize_from_value<Value>(
     value: serde_yaml::Value,
     unknown_keys_strategy: OnUnknownKeys,
 ) -> Result<Value, ValueDeserializationError<Value>>
@@ -100,6 +100,24 @@ fn apply_unknown_keys_strategy<Value>(
                 value,
             })
         }
+    }
+}
+
+/// Deep-merges `overrides` into `base`: mappings merge key by key, any other
+/// value in `overrides` replaces the one in `base`.
+pub fn merge(base: &mut Value, overrides: Value) {
+    match (base, overrides) {
+        (Value::Mapping(base), Value::Mapping(overrides)) => {
+            for (key, value) in overrides {
+                match base.get_mut(&key) {
+                    Some(existing) => merge(existing, value),
+                    None => {
+                        base.insert(key, value);
+                    }
+                }
+            }
+        }
+        (base, overrides) => *base = overrides,
     }
 }
 
@@ -178,7 +196,7 @@ mod tests {
     };
     use tempfile::TempDir;
 
-    use super::{YamlIncludeError, resolve_includes};
+    use super::{YamlIncludeError, merge, resolve_includes};
 
     fn include_tag(path: &str) -> Value {
         Value::Tagged(Box::new(TaggedValue {
@@ -193,6 +211,16 @@ mod tests {
             .map(|(k, v)| (Value::String(k.into()), v))
             .collect();
         Value::Mapping(m)
+    }
+
+    #[test]
+    fn merge_combines_mappings_and_replaces_other_values() {
+        let mut base: Value = serde_yaml::from_str("{a: {b: 1, c: 2}, d: [1], e: 3}").unwrap();
+        let overrides = serde_yaml::from_str("{a: {b: 9, f: 8}, d: [2, 3]}").unwrap();
+        merge(&mut base, overrides);
+        let expected: Value =
+            serde_yaml::from_str("{a: {b: 9, c: 2, f: 8}, d: [2, 3], e: 3}").unwrap();
+        assert_eq!(base, expected);
     }
 
     #[test]
