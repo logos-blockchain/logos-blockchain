@@ -11,8 +11,11 @@ use std::collections::HashSet;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        OpRef, SignedOps, ledger::verification_mode::StandardMode, ops::channel::ChannelId,
-        traits::Hashable, transactions::states::Unverified,
+        OpRef, SignedOps,
+        ledger::verification_mode::StandardMode,
+        ops::channel::{ChannelId, MsgId},
+        traits::Hashable,
+        transactions::states::Unverified,
     },
 };
 use lb_zone_sdk::{
@@ -32,6 +35,8 @@ pub struct Mirror {
     /// node once both agree on it.
     lib: Option<HeaderId>,
     pending: HashSet<TxHash>,
+    /// The message and config ids the pending txs carry.
+    pending_msgs: HashSet<MsgId>,
     violations: Violations,
 }
 
@@ -105,6 +110,32 @@ fn hashes<'a>(
     txs.into_iter().map(Hashable::hash).collect()
 }
 
+/// The message and config ids a tx carries, on any channel.
+fn msg_ids(tx: &SignedOps<Unverified, StandardMode>) -> Vec<MsgId> {
+    tx.op_refs_iter()
+        .filter_map(|op| match op {
+            OpRef::ChannelInscribe(i) => Some(i.id()),
+            OpRef::ChannelConfig(c) => Some(c.id()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The ids a held entry stands for: an entry is the message it carries, not
+/// the tx that carried it. A writer rebuilds an orphaned tx with fresh fee
+/// inputs on the same parent, and the SDK keeps the entry under the new hash
+/// without a view change, as `ChannelUpdate` identifies entries by message.
+fn entry_ids(tx: &ChannelUpdateTx) -> Vec<MsgId> {
+    match tx {
+        ChannelUpdateTx::Config(signed) | ChannelUpdateTx::Custom(signed) => msg_ids(signed),
+        other => other
+            .inscription()
+            .map(|i| i.this_msg)
+            .into_iter()
+            .collect(),
+    }
+}
+
 impl Mirror {
     #[must_use]
     pub const fn violations(&self) -> &Violations {
@@ -149,6 +180,11 @@ impl Mirror {
         self.chain.retain(|tx| !finalized.contains(&tx.tx_hash()));
         self.lib = Some(checkpoint.lib);
         self.pending = checkpoint.pending_txs.iter().map(|(h, _)| *h).collect();
+        self.pending_msgs = checkpoint
+            .pending_txs
+            .iter()
+            .flat_map(|(_, tx)| msg_ids(tx))
+            .collect();
     }
 
     /// Compare the mirrored view with `node`'s canonical chain for `channel`.
@@ -226,12 +262,27 @@ impl Mirror {
             .chain(node.rejected().into_iter().map(|r| r.tx_hash))
             .chain(self.pending.iter().copied())
             .collect();
-        for (hash, _) in &held {
-            if !known.contains(hash) {
-                self.record(format!(
-                    "{name}: mirrored view holds {hash:?}, which the node never saw"
-                ));
-            }
+        let known_msgs: HashSet<MsgId> = node
+            .canonical_txs()
+            .iter()
+            .chain(node.mempool().iter())
+            .flat_map(msg_ids)
+            .chain(self.pending_msgs.iter().copied())
+            .collect();
+        let unseen: Vec<TxHash> = self
+            .chain
+            .iter()
+            .filter(|tx| {
+                let ids = entry_ids(tx);
+                let same_message = !ids.is_empty() && ids.iter().all(|id| known_msgs.contains(id));
+                !known.contains(&tx.tx_hash()) && !same_message
+            })
+            .map(ChannelUpdateTx::tx_hash)
+            .collect();
+        for hash in unseen {
+            self.record(format!(
+                "{name}: mirrored view holds {hash:?}, which the node never saw"
+            ));
         }
     }
 
