@@ -41,8 +41,6 @@ where
         prefix: Key::Prefix,
         reply_channel: Sender<Result<TxsWithCommonPrefix<Item>, MempoolError>>,
     },
-    /// Retire the items that block building found inapplicable.
-    Remove { ids: Vec<Key> },
     /// The canonical chain was updated, either by growing with a new block or
     /// by a reorg.
     ///
@@ -95,7 +93,6 @@ where
                 )
             }
             Self::Add { payload, .. } => write!(f, "MempoolMsg::Add{{payload: {payload:?}}}"),
-            Self::Remove { ids } => write!(f, "MempoolMsg::Prune{{ids: {ids:?}}}"),
             Self::CanonicalChainUpdated { entered, reorged } => write!(
                 f,
                 "MempoolMsg::CanonicalChainUpdated{{entered: {entered:?}, reorged: {reorged:?}}}"

@@ -1,12 +1,9 @@
 use lb_core::{
     header::HeaderId,
     mantle::{
-        SignedOps,
-        batch::DeferredProofs,
-        gas::MainnetGasProfile,
-        ledger::verification_mode::StandardMode,
-        traits::Hashable,
-        transactions::{hash::TxHash, states::Preverified},
+        SignedOps, batch::DeferredProofs, gas::MainnetGasProfile,
+        ledger::verification_mode::StandardMode, traits::Hashable as _,
+        transactions::states::Preverified,
     },
 };
 use lb_ledger::{GasAndFees, LedgerState, config::EraScheduledConfig};
@@ -69,7 +66,6 @@ impl BlockBuilder {
 pub struct TransactionSelection {
     pub(super) ledger_state: LedgerState,
     pub(super) selected_txs: Vec<SignedOps<Preverified, StandardMode>>,
-    pub(super) invalid_tx_hashes: Vec<TxHash>,
 }
 
 #[expect(
@@ -83,7 +79,6 @@ pub fn select_transactions(
 ) -> TransactionSelection {
     let mut block_builder = BlockBuilder::new(ledger_state);
     let mut selected_txs = Vec::new();
-    let mut invalid_tx_hashes = Vec::new();
 
     // A transaction may only become valid once another transaction it depends
     // on has already been applied. Repeatedly attempt to apply the pending
@@ -129,7 +124,6 @@ pub fn select_transactions(
                         %err,
                         "transaction execution gas exceeds the block limit",
                     );
-                    invalid_tx_hashes.push(tx.hash());
                 }
                 Err(err) => {
                     tracing::trace!(
@@ -146,18 +140,9 @@ pub fn select_transactions(
         pending = still_pending;
     }
 
-    // Transactions that never became applicable are genuinely invalid against
-    // this block's ledger state and can be evicted from the mempool. If assembly
-    // stopped at the gas limit, unprocessed transactions are not invalid and
-    // must remain in the mempool.
-    if !matches!(assembly_state, AssemblyState::GasCapacityReached) {
-        invalid_tx_hashes.extend(pending.iter().map(Hashable::hash));
-    }
-
     TransactionSelection {
         ledger_state: block_builder.into_ledger_state(),
         selected_txs,
-        invalid_tx_hashes,
     }
 }
 
@@ -276,7 +261,6 @@ mod tests {
 
         let selection = select_transactions(ledger_state.clone(), candidates, &eras);
         assert_eq!(selection.selected_txs.len(), CANDIDATE_COUNT - 1);
-        assert_eq!(selection.invalid_tx_hashes, []);
 
         let block_txs = txs_for_block(stream::iter(selection.selected_txs)).await;
         assert_eq!(block_txs.len(), CANDIDATE_COUNT - 1);

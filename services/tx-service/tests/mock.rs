@@ -3,7 +3,7 @@ use std::{
     num::{NonZero, NonZeroU64},
     pin::Pin,
     sync::{Arc, Mutex, atomic::AtomicBool},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use async_trait::async_trait;
@@ -517,7 +517,7 @@ async fn expired_tx_is_evicted_on_next_sweep() {
         vec![old_tx_id]
     );
 
-    pool.remove(&[]).await;
+    processed_block(&mut pool, 1).await;
 
     assert_eq!(pool.pending_item_count(), 1);
     assert_eq!(pool.status(&[old_tx_id]), vec![Status::Unknown]);
@@ -556,8 +556,8 @@ async fn expired_tx_is_not_evicted_when_ttl_is_disabled() {
     .await;
     let tx_id = tx.hash();
 
-    for _ in 0..10 {
-        pool.remove(&[]).await;
+    for slot in 1..=10 {
+        processed_block(&mut pool, slot).await;
     }
 
     assert_eq!(pool.pending_item_count(), 1);
@@ -587,63 +587,9 @@ async fn storage_failure_does_not_mark_tx_pending() {
 }
 
 #[tokio::test]
-async fn removed_items_are_not_pending_but_still_fetchable() {
-    let storage = InMemoryStorageAdapter::default();
-    let mut pool = InMemoryPool::new(MempoolSettings::default(), Era::genesis(), storage.clone());
-
-    let tx = sample_removed_tx();
+async fn evicted_items_remain_fetchable_after_recovery() {
+    let (pool, storage, tx) = pool_with_evicted_tx().await;
     let tx_id = tx.hash();
-
-    pool.add_item(tx_id, tx.clone())
-        .await
-        .expect("tx should be added");
-
-    assert_eq!(pool.pending_item_count(), 1);
-    assert_eq!(pool.status(&[tx_id]), vec![Status::Pending]);
-
-    let pending_before_remove = pool
-        .view([0; 32].into())
-        .await
-        .expect("pending view should load")
-        .collect::<Vec<_>>()
-        .await;
-
-    assert_eq!(pending_before_remove, vec![tx.clone()]);
-
-    pool.remove(&[tx_id]).await;
-
-    assert_eq!(pool.pending_item_count(), 0);
-    assert_eq!(pool.status(&[tx_id]), vec![Status::Unknown]);
-
-    let pending_after_remove = pool
-        .view([0; 32].into())
-        .await
-        .expect("pending view should still work")
-        .collect::<Vec<_>>()
-        .await;
-    assert_eq!(pending_after_remove, []);
-
-    let fetched_after_remove = pool
-        .get_items_by_keys([tx_id])
-        .await
-        .expect("removed tx should still be fetchable")
-        .collect::<Vec<_>>()
-        .await;
-    assert_eq!(fetched_after_remove, vec![tx.clone()]);
-}
-
-#[tokio::test]
-async fn removed_items_remain_fetchable_after_recovery() {
-    let storage = InMemoryStorageAdapter::default();
-    let mut pool = InMemoryPool::new(MempoolSettings::default(), Era::genesis(), storage.clone());
-
-    let tx = sample_removed_tx();
-    let tx_id = tx.hash();
-
-    pool.add_item(tx_id, tx.clone())
-        .await
-        .expect("tx should be added");
-    pool.remove(&[tx_id]).await;
 
     let saved_state = pool.save();
     assert!(saved_state.pending_items.is_empty());
@@ -664,31 +610,24 @@ async fn removed_items_remain_fetchable_after_recovery() {
             .copied()
             .collect::<Vec<_>>(),
         vec![tx_id],
-        "a removed tx must still resolve after recovery"
+        "an evicted tx must still resolve after recovery"
     );
 
     let fetched_after_recovery = recovered_pool
         .get_items_by_keys([tx_id])
         .await
-        .expect("removed tx should still be fetchable after recovery")
+        .expect("evicted tx should still be fetchable after recovery")
         .collect::<Vec<_>>()
         .await;
     assert_eq!(fetched_after_recovery, vec![tx]);
 }
 
-/// A removed tx keeps resolving until its grace period ends, so a competing
+/// An evicted tx keeps resolving until its grace period ends, so a competing
 /// proposal that references it can still be reconstructed.
 #[tokio::test]
-async fn removed_tx_resolves_until_its_grace_period_ends() {
-    let storage = InMemoryStorageAdapter::default();
-    let mut pool = InMemoryPool::new(MempoolSettings::default(), Era::genesis(), storage.clone());
-
-    let tx = sample_removed_tx();
+async fn evicted_tx_resolves_until_its_grace_period_ends() {
+    let (pool, storage, tx) = pool_with_evicted_tx().await;
     let tx_id = tx.hash();
-    pool.add_item(tx_id, tx.clone())
-        .await
-        .expect("tx should be added");
-    pool.remove(&[tx_id]).await;
 
     assert_eq!(
         pool.keys_by_prefix(&tx_id.key_prefix())
@@ -703,7 +642,7 @@ async fn removed_tx_resolves_until_its_grace_period_ends() {
     saved_state
         .removed_items
         .get_mut(&tx_id)
-        .expect("tx should be removed")
+        .expect("tx should be evicted")
         .removed_at = 0;
     let mut pool = InMemoryPool::recover(
         MempoolSettings::default(),
@@ -711,8 +650,8 @@ async fn removed_tx_resolves_until_its_grace_period_ends() {
         saved_state,
         storage,
     );
-    // Trigger pruning removed items by calling `remove`
-    pool.remove(&[]).await;
+    // Trigger pruning removed items with the next processed block.
+    processed_block(&mut pool, 2).await;
 
     // Check that the tx item (including prefix) has been pruned
     assert!(pool.keys_by_prefix(&tx_id.key_prefix()).next().is_none());
@@ -727,25 +666,15 @@ async fn removed_tx_resolves_until_its_grace_period_ends() {
     );
 }
 
-/// A removed tx admitted again within its grace period is indexed once, so
+/// An evicted tx admitted again within its grace period is indexed once, so
 /// its references stay unique.
 #[tokio::test]
-async fn readmitted_removed_tx_is_indexed_once() {
-    let mut pool = InMemoryPool::new(
-        MempoolSettings::default(),
-        Era::genesis(),
-        InMemoryStorageAdapter::default(),
-    );
-
-    let tx = sample_removed_tx();
+async fn readmitted_evicted_tx_is_indexed_once() {
+    let (mut pool, _storage, tx) = pool_with_evicted_tx().await;
     let tx_id = tx.hash();
-    pool.add_item(tx_id, tx.clone())
-        .await
-        .expect("tx should be added");
-    pool.remove(&[tx_id]).await;
     pool.add_item(tx_id, tx)
         .await
-        .expect("a removed tx should be admitted again");
+        .expect("an evicted tx should be admitted again");
 
     assert_eq!(pool.status(&[tx_id]), vec![Status::Pending]);
     assert_eq!(
@@ -753,34 +682,6 @@ async fn readmitted_removed_tx_is_indexed_once() {
             .copied()
             .collect::<Vec<_>>(),
         vec![tx_id]
-    );
-}
-
-/// Removing a hash the pool does not hold, such as a transaction of a
-/// downloaded block, records nothing: there is no body to keep or prune.
-#[tokio::test]
-async fn removing_a_tx_the_pool_never_held_records_nothing() {
-    let mut pool = InMemoryPool::new(
-        MempoolSettings::default(),
-        Era::genesis(),
-        InMemoryStorageAdapter::default(),
-    );
-
-    let held = tx("held");
-    let held_id = held.hash();
-    pool.add_item(held_id, held)
-        .await
-        .expect("tx should be added");
-    let unknown_id = tx("unknown").hash();
-
-    pool.remove(&[unknown_id]).await;
-
-    assert_eq!(pool.status(&[held_id]), vec![Status::Pending]);
-    assert!(!pool.save().removed_items.contains_key(&unknown_id));
-    assert!(
-        pool.keys_by_prefix(&unknown_id.key_prefix())
-            .next()
-            .is_none()
     );
 }
 
@@ -945,19 +846,12 @@ async fn included_tx_is_a_duplicate_at_admission() {
     assert!(pool.save().included_in_canonical.contains_key(&tx_id));
 }
 
-/// A tx retired earlier, e.g. as inapplicable, moves to `included_in_canonical`
-/// once a canonical block carries it.
+/// A tx evicted earlier moves to `included_in_canonical` once a canonical
+/// block carries it.
 #[tokio::test]
-async fn removed_tx_entering_the_canonical_chain_moves_to_included() {
-    let mut pool = InMemoryPool::new(
-        MempoolSettings::default(),
-        Era::genesis(),
-        InMemoryStorageAdapter::default(),
-    );
-    let tx = tx("removed then included");
+async fn evicted_tx_entering_the_canonical_chain_moves_to_included() {
+    let (mut pool, _storage, tx) = pool_with_evicted_tx().await;
     let tx_id = tx.hash();
-    pool.add_item(tx_id, tx).await.expect("tx should be added");
-    pool.remove(&[tx_id]).await;
 
     pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
         .await;
@@ -1040,13 +934,15 @@ async fn included_tx_remains_resolvable_after_recovery() {
 #[tokio::test]
 async fn readmitted_tx_keeps_its_admission_time() {
     let (first, second) = (tx("first"), tx("second"));
+    let fresh = now_millis();
     let mut pool = pool_with_admission_times(
-        no_eviction_settings(),
+        ttl_settings(TEST_TX_TTL),
         InMemoryStorageAdapter::default(),
-        &[(&first, 100), (&second, 200)],
+        &[(&first, 100), (&second, fresh)],
     )
     .await;
-    pool.remove(&[first.hash()]).await;
+    processed_block(&mut pool, 1).await;
+    assert_eq!(pool.status(&[first.hash()]), vec![Status::Unknown]);
 
     pool.add_item(first.hash(), first.clone())
         .await
@@ -1054,7 +950,7 @@ async fn readmitted_tx_keeps_its_admission_time() {
 
     assert_eq!(
         pool.save().pending_items,
-        IndexMap::from([(first.hash(), 100), (second.hash(), 200)])
+        IndexMap::from([(first.hash(), 100), (second.hash(), fresh)])
     );
 }
 
@@ -1084,15 +980,16 @@ async fn reorged_tx_keeps_its_admission_time() {
 /// A retired tx keeps its admission time while it moves between
 /// `removed_items` and `included_in_canonical`.
 #[tokio::test]
-async fn removed_tx_keeps_its_admission_time_through_inclusion_and_reorg() {
+async fn evicted_tx_keeps_its_admission_time_through_inclusion_and_reorg() {
     let (first, second) = (tx("first"), tx("second"));
+    let fresh = now_millis();
     let mut pool = pool_with_admission_times(
-        no_eviction_settings(),
+        ttl_settings(TEST_TX_TTL),
         InMemoryStorageAdapter::default(),
-        &[(&first, 100), (&second, 200)],
+        &[(&first, 100), (&second, fresh)],
     )
     .await;
-    pool.remove(&[first.hash()]).await;
+    processed_block(&mut pool, 1).await;
     pool.on_canonical_chain_updated(HashMap::from([(first.hash(), Slot::from(10u64))]), vec![])
         .await;
 
@@ -1101,7 +998,7 @@ async fn removed_tx_keeps_its_admission_time_through_inclusion_and_reorg() {
 
     assert_eq!(
         pool.save().pending_items,
-        IndexMap::from([(first.hash(), 100), (second.hash(), 200)])
+        IndexMap::from([(first.hash(), 100), (second.hash(), fresh)])
     );
 }
 
@@ -1146,23 +1043,24 @@ async fn readmission_does_not_reset_tx_ttl() {
 async fn retained_admission_time_survives_recovery() {
     let storage = InMemoryStorageAdapter::default();
     let (first, second) = (tx("first"), tx("second"));
+    let fresh = now_millis();
+    let settings = ttl_settings(TEST_TX_TTL);
     let mut pool = pool_with_admission_times(
-        no_eviction_settings(),
+        settings.clone(),
         storage.clone(),
-        &[(&first, 100), (&second, 200)],
+        &[(&first, 100), (&second, fresh)],
     )
     .await;
-    pool.remove(&[first.hash()]).await;
+    processed_block(&mut pool, 1).await;
 
-    let mut pool =
-        InMemoryPool::recover(no_eviction_settings(), Era::genesis(), pool.save(), storage);
+    let mut pool = InMemoryPool::recover(settings, Era::genesis(), pool.save(), storage);
     pool.add_item(first.hash(), first.clone())
         .await
         .expect("a retired tx should be admitted again");
 
     assert_eq!(
         pool.save().pending_items,
-        IndexMap::from([(first.hash(), 100), (second.hash(), 200)])
+        IndexMap::from([(first.hash(), 100), (second.hash(), fresh)])
     );
 }
 
@@ -1193,6 +1091,30 @@ async fn pool_with_admission_times(
         .map(|(tx, admitted_at)| (tx.hash(), *admitted_at))
         .collect();
     Mempool::recover(settings, Era::genesis(), saved_state, storage)
+}
+
+/// Build a pool whose only tx was evicted by its TTL, with the storage it
+/// keeps the evicted body in.
+async fn pool_with_evicted_tx() -> (InMemoryPool, InMemoryStorageAdapter, Ops) {
+    let storage = InMemoryStorageAdapter::default();
+    let tx = sample_removed_tx();
+    let mut pool =
+        pool_with_admission_times(MempoolSettings::default(), storage.clone(), &[(&tx, 0)]).await;
+    processed_block(&mut pool, 1).await;
+    assert_eq!(pool.status(&[tx.hash()]), vec![Status::Unknown]);
+
+    (pool, storage, tx)
+}
+
+/// The current wall-clock time as an admission timestamp, so a tx admitted
+/// at it is far from expiring under [`TEST_TX_TTL`].
+fn now_millis() -> AdmissionTime {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("the clock should be past the unix epoch")
+        .as_millis()
+        .try_into()
+        .expect("the timestamp should fit in an admission time")
 }
 
 #[test]
@@ -1396,7 +1318,7 @@ fn test_mock_mempool() {
 /// sync with the pending set. These drive the real service message end to end:
 /// index lookup, storage fetch, stream.
 #[test]
-fn prefix_lookup_tracks_pending_and_removed_txs() {
+fn prefix_lookup_tracks_pending_and_included_txs() {
     run_with_mock_pool_node(Vec::new(), |settings, _temp_dir| {
         let app = OverwatchRunner::<MockPoolNode>::run(settings, None)
             .map_err(|e| eprintln!("Error encountered: {e}"))
@@ -1452,21 +1374,23 @@ fn prefix_lookup_tracks_pending_and_removed_txs() {
 
         app.runtime().handle().block_on(async {
             mempool_outbound
-                .send(MempoolMsg::Remove {
-                    ids: vec![tx.hash()],
+                .send(MempoolMsg::CanonicalChainUpdated {
+                    entered: HashMap::from([(tx.hash(), Slot::from(10u64))]),
+                    reorged: vec![],
                 })
                 .await
                 .unwrap();
         });
 
-        // A removed transaction stays reachable during its grace period, so a
-        // competing proposal that references it can still be reconstructed.
+        // An included transaction stays reachable until its block becomes
+        // immutable, so a competing proposal that references it can still be
+        // reconstructed.
         assert_eq!(
             app.runtime()
                 .handle()
                 .block_on(txs_by_prefix(&mempool_outbound, prefix)),
             vec![tx],
-            "a removed transaction must stay reachable through its prefix during its grace period"
+            "an included transaction must stay reachable through its prefix until its block is immutable"
         );
 
         drop(app.runtime().handle().block_on(app.handle().shutdown()));
@@ -1682,14 +1606,18 @@ async fn claim_included_in_a_block_is_not_evicted_twice() {
         .await
         .expect("claim tx should be added");
 
-    pool.remove(&[claim_id]).await;
-    let removed_at = pool.save().removed_items[&claim_id].removed_at;
+    pool.on_canonical_chain_updated(HashMap::from([(claim_id, Slot::from(105u64))]), vec![])
+        .await;
 
     processed_block(&mut pool, 1_000).await;
     assert_eq!(pool.status(&[claim_id]), vec![Status::Unknown]);
+    let state = pool.save();
+    assert!(
+        !state.removed_items.contains_key(&claim_id),
+        "an included tx must not be retired again by the sweep"
+    );
     assert_eq!(
-        pool.save().removed_items[&claim_id].removed_at,
-        removed_at,
-        "an already removed tx must not be retired again by the sweep"
+        state.included_in_canonical[&claim_id].slot,
+        Slot::from(105u64)
     );
 }

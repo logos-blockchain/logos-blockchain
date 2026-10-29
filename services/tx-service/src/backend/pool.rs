@@ -63,8 +63,7 @@ where
     /// Pending item keys mapped to their admission timestamp in milliseconds,
     /// oldest first.
     pub pending_items: IndexMap<Key, AdmissionTime>,
-    /// Retired item keys not carried by a canonical block (inapplicable or
-    /// evicted).
+    /// Retired item keys not carried by a canonical block, i.e. evicted.
     pub removed_items: BTreeMap<Key, RemovedItem>,
     /// Retired item keys carried by a canonical block that is not yet
     /// immutable.
@@ -115,9 +114,9 @@ where
     /// would cost a hash table per bucket to deduplicate keys that are already
     /// unique.
     by_prefix: HashMap<<ItemKey<Item> as PrefixedKey>::Prefix, Vec<ItemKey<Item>>>,
-    /// Retired items not carried by a canonical block (inapplicable or
-    /// evicted). They keep their prefix index entry and body for a grace
-    /// period after retirement, unlike [`Self::included_in_canonical`], which
+    /// Retired items not carried by a canonical block, i.e. evicted. They
+    /// keep their prefix index entry and body for a grace period after
+    /// retirement, unlike [`Self::included_in_canonical`], which
     /// keeps them until the carrying block becomes immutable.
     removed_items: BTreeMap<ItemKey<Item>, RemovedItem>,
     /// Retired items carried by a canonical block that is not yet immutable.
@@ -282,26 +281,6 @@ where
             .map_err(|e| MempoolError::StorageError(format!("{e:?}")))
     }
 
-    async fn remove(&mut self, keys: &[Self::Key]) {
-        self.prune_removed_items().await;
-
-        let removed_at = current_timestamp_millis();
-
-        self.retire(keys.iter().copied(), removed_at, "removed");
-
-        // Removals come from leaders dropping inapplicable transactions, so
-        // they double as a trigger for eviction alongside processed-block
-        // notifications.
-        self.retire(
-            self.evictor
-                .select_evictions(removed_at, &self.pending_items),
-            removed_at,
-            "evicted",
-        );
-
-        metrics::mempool_transactions_pending(self.pending_items.len());
-    }
-
     async fn on_canonical_chain_updated(
         &mut self,
         entered: HashMap<Self::Key, Slot>,
@@ -369,11 +348,7 @@ where
         self.evictor.on_processed_block(&block_id, slot);
 
         let now = current_timestamp_millis();
-        self.retire(
-            self.evictor.select_evictions(now, &self.pending_items),
-            now,
-            "evicted",
-        );
+        self.evict(self.evictor.select_evictions(now, &self.pending_items), now);
 
         metrics::mempool_transactions_pending(self.pending_items.len());
     }
@@ -526,16 +501,16 @@ where
         }
     }
 
-    /// Retire pending items that are inapplicable or evicted, keeping the
-    /// evictor in sync. Items carried by a canonical block go through
-    /// `on_canonical_chain_updated` instead.
+    /// Retire pending items the evictor selected, keeping it in sync. Items
+    /// carried by a canonical block go through `on_canonical_chain_updated`
+    /// instead.
     ///
     /// A retired item keeps its prefix index entry, and its body, until
     /// [`Self::prune_removed_items`] drops both after the grace period.
     ///
     /// Items not in `pending_items` are ignored, such as ones the mempool
     /// doesn't hold (e.g. from a downloaded block).
-    fn retire(&mut self, keys: impl IntoIterator<Item = ItemKey<Item>>, at: u64, cause: &str) {
+    fn evict(&mut self, keys: impl IntoIterator<Item = ItemKey<Item>>, at: u64) {
         let mut count = 0usize;
         for key in keys {
             let Some(admitted_at) = self.pending_items.shift_remove(&key) else {
@@ -552,7 +527,7 @@ where
             count += 1;
         }
 
-        log_retired_items(count, cause, self.pending_items.len());
+        log_retired_items(count, "evicted", self.pending_items.len());
         metrics::mempool_transactions_removed(count);
     }
 

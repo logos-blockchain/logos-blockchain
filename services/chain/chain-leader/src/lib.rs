@@ -685,21 +685,16 @@ where
                 era_schedule,
             )?;
         // Collect all candidate transactions up front so the ones that fail can
-        // be retried across multiple rounds.
+        // be retried across multiple rounds. Candidates left out stay in the
+        // mempool: they may still apply on another fork, and the mempool's
+        // eviction policies decide when to drop them.
+        let candidates: Vec<_> = tx_stream.collect().await;
+        let candidate_count = candidates.len();
         let TransactionSelection {
             ledger_state,
             selected_txs,
-            invalid_tx_hashes,
-        } = select_transactions(ledger_state, tx_stream.collect().await, era_schedule);
-
-        if !invalid_tx_hashes.is_empty()
-            && let Err(e) = relays
-                .mempool_adapter()
-                .remove_transactions(&invalid_tx_hashes)
-                .await
-        {
-            error!(target: LOG_TARGET, "Failed to remove invalid transactions from mempool: {e:?}");
-        }
+        } = select_transactions(ledger_state, candidates, era_schedule);
+        let skipped_count = candidate_count - selected_txs.len();
 
         let valid_tx_stream = stream::iter(selected_txs);
         let txs = txs_for_block(valid_tx_stream).await;
@@ -719,10 +714,10 @@ where
 
         info!(
             target: LOG_TARGET,
-            "proposed block {:?} with {} transactions ({} removed)",
+            "proposed block {:?} with {} transactions ({} skipped)",
             block.header().id(),
             block.transactions_iter().len(),
-            invalid_tx_hashes.len()
+            skipped_count
         );
 
         Ok(block)

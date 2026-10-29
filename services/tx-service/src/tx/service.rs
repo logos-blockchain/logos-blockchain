@@ -414,10 +414,6 @@ where
                     tracing::debug!(target: LOG_TARGET, "Failed to send prefix lookup reply");
                 }
             }
-            MempoolMsg::Remove { ids } => {
-                pool.remove(&ids).await;
-                state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
-            }
             MempoolMsg::CanonicalChainUpdated { entered, reorged } => {
                 Self::handle_canonical_chain_updated_message(
                     pool,

@@ -79,9 +79,6 @@ pub trait MemPool {
     where
         I: IntoIterator<Item = Self::Key> + Send;
 
-    /// Retire the items that block building found inapplicable.
-    async fn remove(&mut self, items: &[Self::Key]);
-
     /// The canonical chain was updated, either by growing with a new block or
     /// by a reorg.
     ///
