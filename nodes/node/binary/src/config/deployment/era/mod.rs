@@ -56,6 +56,18 @@ impl EraDeclarations {
     pub const fn eras_after_genesis(&self) -> &EraEntriesAfterGenesis<EraRuleset> {
         &self.eras_after_genesis
     }
+
+    /// Checks each era's ruleset, alone and against the era before it,
+    /// panicking on the first value found invalid.
+    pub(super) fn validate(&self) {
+        let rulesets =
+            iter::once(&self.genesis_era_ruleset).chain(self.eras_after_genesis.values());
+        let mut previous = None;
+        for ruleset in rulesets {
+            ruleset.validate(previous);
+            previous = Some(ruleset);
+        }
+    }
 }
 
 impl From<EraDeclarations> for BTreeMap<Epoch, EraRuleset> {

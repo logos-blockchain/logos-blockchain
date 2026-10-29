@@ -200,8 +200,14 @@ impl TopologyConfig {
 
     pub(crate) fn apply_deployment_overrides(&self, settings: &mut DeploymentSettings) {
         settings.update_genesis_era_parameters(|parameters| {
-            parameters.cryptarchia.security_param = self.security_param;
-            parameters.cryptarchia.slot_activation_coeff = self.active_slot_coeff;
+            let cryptarchia = &mut parameters.cryptarchia;
+            cryptarchia.security_param = self.security_param;
+            cryptarchia.slot_activation_coeff = self.active_slot_coeff;
+            // A lower `k` narrows the widest uncle reference window the era
+            // allows.
+            cryptarchia.uncle_reference_window_in_block = cryptarchia
+                .uncle_reference_window_in_block
+                .min(cryptarchia.widest_uncle_reference_window());
         });
     }
 }

@@ -5141,6 +5141,7 @@ dependencies = [
  "serde_with",
  "serde_yaml",
  "serial_test",
+ "strum",
  "tempfile",
  "thiserror 2.0.21",
  "tikv-jemallocator",
