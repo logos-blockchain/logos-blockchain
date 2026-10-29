@@ -9,7 +9,7 @@ mod tx_selection;
 mod wallet;
 
 use core::fmt::Debug;
-use std::{fmt::Display, pin::Pin, time::Duration};
+use std::{fmt::Display, pin::Pin};
 
 use futures::{Stream, StreamExt as _, stream};
 use lb_blend_service::message::proposal_diagnostic_timestamp_unix_ms;
@@ -399,11 +399,11 @@ where
 
         let blend_adapter = BlendAdapter::<BlendService>::new(relays.blend_relay().clone());
 
-        // Wait for other services to become ready, with timeout.
+        // Wait for other services to become ready.
         // (except Chain, ChainNetwork, Blend, and Wallet)
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             TxMempoolService<_, _, _, _>,
             TimeService<_, _>,
             PreloadKmsService<_>

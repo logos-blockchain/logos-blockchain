@@ -5,7 +5,6 @@ use std::{
     hash::Hash,
     marker::PhantomData,
     sync::Arc,
-    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -332,7 +331,7 @@ where
 
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             NetworkService<_, _>,
             TimeService<_, _>,
             SdpService,

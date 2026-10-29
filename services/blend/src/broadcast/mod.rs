@@ -1,4 +1,4 @@
-use core::{fmt::Debug, hash::Hash, marker::PhantomData, time::Duration};
+use core::{fmt::Debug, hash::Hash, marker::PhantomData};
 use std::fmt::Display;
 
 use async_trait::async_trait;
@@ -112,7 +112,7 @@ where
 
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             NetworkService<_, _>,
             TimeService<_, _>,
             PreloadKmsService<_>,
@@ -270,6 +270,8 @@ async fn handle_inbound_message<NodeId, Dispatcher, RuntimeServiceId>(
 
 #[cfg(test)]
 mod tests {
+    use core::time::Duration;
+
     use futures::{stream, stream::BoxStream};
     use lb_network_service::backends::NetworkBackend;
     use overwatch::{overwatch::OverwatchHandle, services::relay::OutboundRelay};

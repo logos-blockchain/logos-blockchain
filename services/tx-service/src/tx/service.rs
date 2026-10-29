@@ -8,7 +8,6 @@ use std::{
     fmt::{Debug, Display},
     marker::PhantomData,
     pin::Pin,
-    time::Duration,
 };
 
 use futures::StreamExt as _;
@@ -246,7 +245,7 @@ where
 
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             NetworkService<_, _>
         )
         .await?;

@@ -1,7 +1,7 @@
 pub mod api;
 mod states;
 
-use std::{collections::HashMap, num::NonZeroU64, time::Duration};
+use std::{collections::HashMap, num::NonZeroU64};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -441,10 +441,10 @@ where
             ..
         } = self;
 
-        // Wait for services (except Chain) to become ready, with timeout
+        // Wait for services (except Chain) to become ready.
         wait_until_services_are_ready!(
             &service_resources_handle.overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             lb_storage_service::StorageService<_>,
             Kms
         )
