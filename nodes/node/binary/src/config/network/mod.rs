@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use lb_libp2p::{ChainSyncSettings, IdentifySettings, KademliaSettings, SwarmConfig, config::CachingSettings};
+use lb_libp2p::{
+    ChainSyncSettings, IdentifySettings, KademliaSettings, SwarmConfig, config::CachingSettings,
+};
 use lb_network_service::{backends::libp2p::config::Libp2pConfig, config::NetworkConfig};
 
 use crate::config::{deployment::ProtocolNames, network::serde::Config};

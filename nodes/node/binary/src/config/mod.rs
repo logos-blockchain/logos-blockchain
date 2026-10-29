@@ -49,6 +49,7 @@ pub mod deployment;
 pub mod keystore;
 pub mod kms;
 pub mod mempool;
+mod migration;
 pub mod network;
 pub mod pow;
 pub mod sdp;
@@ -89,6 +90,46 @@ pub struct UserConfig {
     pub state: StateConfig,
 }
 
+/// Keeps the 0.3.2 config at `path` as a backup and writes the upgraded
+/// `config` in its place. Failing to do so doesn't stop the node, which
+/// already runs on the upgraded config, and the upgrade is retried on the next
+/// start.
+fn save_migrated(path: &Path, config: &Value) {
+    let backup_path = |n: u32| {
+        let mut backup = path.as_os_str().to_owned();
+        backup.push(".0.3.2.bak");
+        if n > 0 {
+            backup.push(format!(".{n}"));
+        }
+        PathBuf::from(backup)
+    };
+    let mut n = 0;
+    let mut backup = backup_path(n);
+    while backup.exists() {
+        n += 1;
+        backup = backup_path(n);
+    }
+    let result = serde_yaml::to_string(config)
+        .map_err(|error| eyre!("{error}"))
+        .and_then(|yaml| {
+            std::fs::copy(path, &backup)?;
+            std::fs::write(path, yaml)?;
+            Ok(())
+        });
+    match result {
+        Ok(()) => eprintln!(
+            "Upgraded the 0.3.2 config {} to the current format; the original is kept at {}.",
+            path.display(),
+            backup.display(),
+        ),
+        Err(error) => eprintln!(
+            "Running on an upgraded copy of the 0.3.2 config {}, but it could not be rewritten \
+             ({error}). Upgrade it to the current format to silence this warning.",
+            path.display(),
+        ),
+    }
+}
+
 pub struct RequiredValues {
     pub blend: BlendConfig,
     pub cryptarchia: CryptarchiaConfig,
@@ -101,11 +142,23 @@ impl UserConfig {
     /// next to it, or `kms.keystore`) exists, the node identity, the key ids,
     /// `wallet` and `kms` are populated from it and the config only overrides
     /// them; without one the config has to be complete.
+    ///
+    /// A 0.3.2 config is upgraded to the current format: the original is kept
+    /// as `<config>.0.3.2.bak` and the upgraded config written in its place.
     pub fn load(path: &Path) -> Result<Self> {
-        let overrides = match deserialize_value_at_path(path, OnUnknownKeys::Fail)? {
+        let mut overrides = match deserialize_value_at_path(path, OnUnknownKeys::Fail)? {
             Value::Null => Value::Mapping(serde_yaml::Mapping::new()),
             overrides => overrides,
         };
+        let migrated = migration::migrate_0_3_2(&mut overrides);
+        let config = Self::load_overrides(path, overrides.clone())?;
+        if migrated {
+            save_migrated(path, &overrides);
+        }
+        Ok(config)
+    }
+
+    fn load_overrides(path: &Path, overrides: Value) -> Result<Self> {
         let kms = overrides
             .get("kms")
             .cloned()
