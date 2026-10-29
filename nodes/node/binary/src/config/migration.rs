@@ -133,19 +133,13 @@ fn migrate_kademlia_caching(config: &mut Value) -> bool {
     true
 }
 
-/// 0.3.2 `enable_open_metrics: <bool>` became `open_metrics: {enabled:
-/// <bool>}`.
+/// 0.3.2 `enable_open_metrics: <bool>` is dropped rather than translated to
+/// `open_metrics: {enabled: <bool>}`: 0.3.2 wrote its `false` default into
+/// every config, and upgraded nodes are meant to get the new always-on default.
 fn migrate_open_metrics(config: &mut Value) -> bool {
-    let Some(metrics) = mapping_at(config, &["tracing", "metrics"]) else {
-        return false;
-    };
-    let Some(enabled) = metrics.remove("enable_open_metrics") else {
-        return false;
-    };
-    let mut open_metrics = Mapping::new();
-    open_metrics.insert("enabled".into(), enabled);
-    metrics.insert("open_metrics".into(), Value::Mapping(open_metrics));
-    true
+    mapping_at(config, &["tracing", "metrics"])
+        .and_then(|metrics| metrics.remove("enable_open_metrics"))
+        .is_some()
 }
 
 /// Rewrites the two 0.3.2 duration encodings found anywhere in the config:
@@ -277,9 +271,11 @@ mod tests {
         );
         assert!(written.get("kms").is_none());
         assert!(written.get("mempool").is_none());
+        assert!(written["tracing"].get("metrics").is_none());
         assert_eq!(
-            written["tracing"]["metrics"]["open_metrics"]["enabled"],
-            Value::Bool(false)
+            serde_yaml::to_value(&config).unwrap()["tracing"]["metrics"]["open_metrics"]["enabled"],
+            Value::Bool(true),
+            "OpenMetrics takes the new default, on"
         );
         assert_eq!(
             serde_yaml::to_value(UserConfig::load(&path).unwrap()).unwrap(),
@@ -403,7 +399,7 @@ mod tests {
     fn translates_open_metrics_and_nested_durations() {
         let (config, changed) = migrated(
             "tracing:
-               metrics: {enable_open_metrics: true}
+               metrics: {enable_open_metrics: false}
                logger:
                  file:
                    appender_type: !Rolling
@@ -415,7 +411,7 @@ mod tests {
             config,
             yaml(
                 "tracing:
-               metrics: {open_metrics: {enabled: true}}
+               metrics: {}
                logger:
                  file:
                    appender_type: !Rolling
@@ -435,4 +431,3 @@ mod tests {
         assert!(!changed);
     }
 }
-
