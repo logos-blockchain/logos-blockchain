@@ -209,7 +209,6 @@ mod no_node {
         let id = [0u8; 32];
         let s = c"x".as_ptr();
         let null_s: *const c_char = ptr::null();
-        let null_port: *const u16 = ptr::null();
         let np = OperationStatusCode::NullPointer;
 
         unsafe {
@@ -257,8 +256,8 @@ mod no_node {
             assert_eq!(code(start_lb_node(null_s, null_s)), np);
             assert_eq!(code(start_lb_node(null_s, s)), np);
             assert_eq!(code(get_peer_id(null_s)), np);
-            assert_eq!(code(participate(null_s, s, null_s, null_port)), np);
-            assert_eq!(code(participate(s, null_s, null_s, null_port)), np);
+            assert_eq!(code(participate(null_s, s, null_s)), np);
+            assert_eq!(code(participate(s, null_s, null_s)), np);
             assert_eq!(code(generate_key(null_s, KeyType::Zk as u32, null_s)), np);
             assert_eq!(code(add_key(null_s, KeyType::Zk as u32, s, null_s)), np);
             assert_eq!(code(add_key(s, KeyType::Zk as u32, null_s, null_s)), np);
@@ -579,7 +578,7 @@ mod no_node {
                 );
                 assert_ne!(code(get_peer_id(p)), OperationStatusCode::Ok);
                 assert_ne!(
-                    code(participate(p, p, ptr::null(), ptr::null())),
+                    code(participate(p, p, ptr::null())),
                     OperationStatusCode::Ok
                 );
                 assert_ne!(
@@ -595,17 +594,7 @@ mod no_node {
                 code(participate(
                     missing.as_ptr(),
                     missing.as_ptr(),
-                    c"not-an-ip".as_ptr(),
-                    &3000,
-                )),
-                OperationStatusCode::ValidationError
-            );
-            assert_eq!(
-                code(participate(
-                    missing.as_ptr(),
-                    missing.as_ptr(),
-                    ptr::null(),
-                    &0
+                    c"not-an-ip".as_ptr()
                 )),
                 OperationStatusCode::ValidationError
             );
