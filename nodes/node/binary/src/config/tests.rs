@@ -528,3 +528,13 @@ fn standalone_deployment_config_deserializes() {
         parsed.err()
     );
 }
+
+#[test]
+fn partial_blend_backend_keeps_the_peering_degree_check_default() {
+    let backend: crate::config::blend::serde::core::BackendConfig =
+        serde_yaml::from_str("listening_address: /ip4/0.0.0.0/udp/3500/quic-v1").unwrap();
+    assert_eq!(
+        backend.peering_degree_check_interval,
+        Some(std::time::Duration::from_mins(1))
+    );
+}
