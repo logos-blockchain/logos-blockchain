@@ -8,8 +8,13 @@
 //! [`UserConfig::load`]: crate::config::UserConfig::load
 
 use core::time::Duration;
+use std::collections::HashMap;
 
+use lb_tracing::filter::envfilter::default_envfilter_config;
 use serde_yaml::{Mapping, Value};
+use tracing::Level;
+
+use crate::config::TracingConfig;
 
 #[derive(Clone, Copy)]
 enum Unit {
@@ -103,7 +108,49 @@ pub fn migrate_0_3_2(config: &mut Value) -> bool {
 
     changed |= migrate_kademlia_caching(config);
     changed |= migrate_open_metrics(config);
+    // Only alongside the other changes: a current config may well list the
+    // built-in filter.
+    if changed {
+        drop_default_log_filter(config);
+    }
     changed
+}
+
+/// 0.3.2 wrote the built-in log filter for the configured level into every
+/// config. Unchanged, it's dropped, so the node keeps following the built-in
+/// filter, which is applied at startup when none is configured.
+fn drop_default_log_filter(config: &mut Value) {
+    let Some(tracing) = mapping_at(config, &["tracing"]) else {
+        return;
+    };
+    let level = match tracing.get("level") {
+        None => TracingConfig::default().level,
+        Some(level) => match level.as_str().map(str::parse::<Level>) {
+            Some(Ok(level)) => level,
+            _ => return,
+        },
+    };
+    let Some(Value::Tagged(filter)) = tracing.get("filter") else {
+        return;
+    };
+    let Some(filters) = filter.value.get("filters").and_then(Value::as_mapping) else {
+        return;
+    };
+    let Some(built_in) = default_envfilter_config(level) else {
+        return;
+    };
+    let configured: Option<HashMap<&str, String>> = filters
+        .iter()
+        .map(|(target, level)| Some((target.as_str()?, level.as_str()?.to_uppercase())))
+        .collect();
+    let built_in: HashMap<&str, String> = built_in
+        .filters
+        .iter()
+        .map(|(target, level)| (target.as_str(), level.to_string()))
+        .collect();
+    if filter.tag == "Env" && configured == Some(built_in) {
+        tracing.remove("filter");
+    }
 }
 
 /// 0.3.2 `caching: null | {type: Disabled} | {type: Enabled, config:
@@ -272,6 +319,10 @@ mod tests {
         assert!(written.get("kms").is_none());
         assert!(written.get("mempool").is_none());
         assert!(written["tracing"].get("metrics").is_none());
+        assert!(
+            written["tracing"].get("filter").is_none(),
+            "the built-in log filter is left to the node"
+        );
         assert_eq!(
             serde_yaml::to_value(&config).unwrap()["tracing"]["metrics"]["open_metrics"]["enabled"],
             Value::Bool(true),
@@ -419,6 +470,31 @@ mod tests {
                        compression_threshold: 2h"
             )
         );
+    }
+
+    #[test]
+    fn keeps_a_customised_log_filter() {
+        let config = CONFIG_0_3_2.replace("logos_blockchain: INFO", "logos_blockchain: DEBUG");
+        let (config, changed) = migrated(&config);
+        assert!(changed);
+        assert_eq!(
+            config["tracing"]["filter"]["filters"]["logos_blockchain"],
+            Value::String("DEBUG".into())
+        );
+    }
+
+    #[test]
+    fn leaves_the_log_filter_of_a_current_config_alone() {
+        let (config, changed) = migrated(
+            "tracing:
+               filter: !Env
+                 filters: {'*': WARN, tower: WARN, rustls: WARN, tonic: WARN, h2: WARN,
+                   opentelemetry: WARN, opentelemetry_sdk: WARN, reqwest: WARN,
+                   libp2p_gossipsub: ERROR, logos_blockchain: INFO, hyper_util: WARN,
+                   hyper: WARN}",
+        );
+        assert!(!changed);
+        assert!(config["tracing"].get("filter").is_some());
     }
 
     #[test]
