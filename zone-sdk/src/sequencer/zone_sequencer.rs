@@ -34,7 +34,7 @@ use tracing::{debug, info, warn};
 
 use super::{
     TARGET,
-    block_fetch::classify_channel_tx,
+    block_fetch::{channel_inscriptions, classify_channel_tx},
     block_states::{ChannelTxKind, SharedTx},
     channel_wallet::select_channel_notes,
     client::SequencerClient,
@@ -1597,12 +1597,31 @@ where
     ) -> Result<PublishReceipt, Error> {
         self.ensure_ready()?;
 
+        let id = tx.hash();
+        // A hand-built tx chains where it was prepared. One whose inscription
+        // parent is no longer the publish parent can never land: the pending
+        // continuation check in `track_pending_tx` only sees pending children,
+        // and a mined or finalized one has left them, so the entry would pend
+        // on a passed position, re-posted and refused by the node until it
+        // expires. Refuse it here, like a stale bundle. A tx already tracked
+        // is a re-submission and goes through unchanged.
+        let first_parent = channel_inscriptions(&tx, self.channel_id)
+            .first()
+            .map(|info| info.parent_msg);
+        let publish_parent = self.compute_publish_parent();
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
-        let id = tx.hash();
+        if let Some(parent) = first_parent
+            && parent != publish_parent
+            && !state.is_tracked(&id)
+        {
+            return Err(Error::ChannelStateChanged(format!(
+                "inscription parent {parent:?} is no longer the publish tip {publish_parent:?}"
+            )));
+        }
         let derived_tip = track_pending_tx(state, tx.clone(), self.channel_id)?;
         state.stamp_funding(&id, self.lib_slot, None);
-        let parent_msg = self.last_msg_id;
+        let parent_msg = first_parent.unwrap_or(self.last_msg_id);
         // The tip the tx leaves behind is defined by its inscriptions (the
         // last one); a tx without any — e.g. a pure config — leaves the tip
         // unchanged and has no tip for the caller's `msg_id` to match, so
