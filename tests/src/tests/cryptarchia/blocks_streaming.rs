@@ -77,6 +77,8 @@ fn blocks_streaming_config(mut config: RunConfig) -> RunConfig {
         .update_genesis_era_parameters(|parameters| {
             parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
             parameters.cryptarchia.security_param = NonZero::new(SECURITY_PARAM).unwrap();
+            // The widest uncle reference window k allows, ⌊0.6k⌋.
+            parameters.cryptarchia.uncle_reference_window_in_block = 4;
         });
     config
         .user

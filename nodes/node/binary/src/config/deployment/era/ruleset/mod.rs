@@ -24,6 +24,17 @@ impl EraRuleset {
         }
     }
 
+    /// Checks the era's parameters, alone and against those of the era before
+    /// it, `previous`, if there is one, panicking on the first value found
+    /// invalid.
+    pub(super) fn validate(&self, previous: Option<&Self>) {
+        match self {
+            Self::V1(parameters) => {
+                parameters.validate(previous.map(|Self::V1(previous)| previous));
+            }
+        }
+    }
+
     /// How long each slot of the era lasts.
     #[must_use]
     pub const fn slot_duration(&self) -> Duration {

@@ -422,6 +422,8 @@ fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
             parameters.cryptarchia.security_param = NonZero::new(2).unwrap();
             parameters.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
+            // The widest uncle reference window k allows, ⌊0.6k⌋.
+            parameters.cryptarchia.uncle_reference_window_in_block = 1;
             parameters.cryptarchia.epoch_config = EpochConfig {
                 epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
                 epoch_period_nonce_buffer: 1.try_into().unwrap(),

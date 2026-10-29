@@ -144,6 +144,8 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
             parameters.cryptarchia.security_param = NonZero::new(4).unwrap();
             parameters.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
+            // The widest uncle reference window k allows, ⌊0.6k⌋.
+            parameters.cryptarchia.uncle_reference_window_in_block = 2;
 
             // Set a small inactivity period so the inactivity window is short
             // enough for the test to observe `active` being refreshed quickly.

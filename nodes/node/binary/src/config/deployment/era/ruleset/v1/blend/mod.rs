@@ -24,6 +24,16 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// Checks the settings an era runs Blend with, in slots of `slot_duration`,
+    /// panicking on the first value found invalid.
+    pub(super) fn validate(&self, slot_duration: &Duration) {
+        // Each panics on values the node cannot run with: computed now rather
+        // than once the era runs. A share `r₁` of at least one message leaves
+        // room for an edge connection too: `r_E = 2V/3 − Φ_CC · r₁ ≥ r₁`.
+        let _ = self.connection_share_per_round();
+        let _ = self.edge_node_connection_timeout(slot_duration);
+    }
+
     #[must_use]
     pub const fn round_duration(&self, slot_duration: &Duration) -> Duration {
         *slot_duration
