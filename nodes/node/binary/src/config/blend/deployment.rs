@@ -14,6 +14,18 @@ use crate::config::{
     time::deployment::Settings as TimeDeploymentSettings,
 };
 
+/// `M`: the messages a core connection carries from cover traffic alone in one
+/// observation window, which sizes the window (see
+/// [`Settings::rounds_per_observation_window`]).
+///
+/// It is a protocol parameter every node must agree on, but it is a constant
+/// rather than a deployment setting: the deployment settings are committed to
+/// by the era digest, so adding it to them would change the digest and split
+/// the network.
+// TODO: Move it into the deployment settings with the next change that is
+// allowed to change the era digest.
+pub const COVER_MESSAGES_PER_OBSERVATION_WINDOW: NonZeroU64 = NonZeroU64::new(90).unwrap();
+
 /// Deployment-specific Blend settings.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Settings {
@@ -36,22 +48,30 @@ impl Settings {
             .expect("There must be at least one round per epoch.")
     }
 
-    /// Number of rounds per observation window.
+    /// `W = ⌈M / (F_C · β_C)⌉`: the observation window, the rounds in which a
+    /// core connection carries `M` messages from cover traffic alone, `M`
+    /// being [`COVER_MESSAGES_PER_OBSERVATION_WINDOW`].
     ///
-    /// The Blend spec defines this as `10 * ∆max`, where `∆max` is the maximal
-    /// delay time between two release rounds.
+    /// With fewer messages in the window, a node more often reads an honest
+    /// neighbour as not live and closes its connection.
     #[must_use]
     pub const fn rounds_per_observation_window(&self) -> NonZeroU128 {
-        // TODO: Is `10` fixed or can it be derived from some other value?
-        NonZeroU128::new(
-            10 * self
-                .core
-                .scheduler
-                .delayer
-                .maximum_release_delay_in_rounds
-                .get() as u128,
-        )
-        .unwrap()
+        self.rounds_per_observation_window_for(COVER_MESSAGES_PER_OBSERVATION_WINDOW)
+    }
+
+    /// `W` for `M` cover messages per window, as described in
+    /// [`Self::rounds_per_observation_window`].
+    const fn rounds_per_observation_window_for(
+        &self,
+        cover_messages_per_window: NonZeroU64,
+    ) -> NonZeroU128 {
+        let cover_messages_per_round = self.core.scheduler.cover.message_frequency_per_round.get()
+            * self.common.num_blend_layers.get() as f64;
+        let cover_messages_per_window = cover_messages_per_window.get() as f64;
+        NonZeroU128::new((cover_messages_per_window / cover_messages_per_round).ceil() as u128)
+            .expect(
+                "The cover traffic of a round must be finite, so the window spans at least one round.",
+            )
     }
 
     /// `r₁ = ⌊(2V/3) / (Φ_CC + 1)⌋`: the messages a core connection may carry
@@ -219,4 +239,65 @@ pub struct CoverTrafficSettings {
 pub struct MessageDelayerSettings {
     /// ∆max: maximal delay time between two release rounds.
     pub maximum_release_delay_in_rounds: NonZeroU64,
+}
+
+#[cfg(test)]
+mod tests {
+    use core::num::NonZeroU64;
+
+    use lb_utils::math::PositiveF64;
+
+    use super::{COVER_MESSAGES_PER_OBSERVATION_WINDOW, Settings};
+    use crate::config::DeploymentSettings;
+
+    /// The default deployment's Blend settings, with `F_C` and `β_C` set to the
+    /// values given, which are all the window depends on besides `M`.
+    fn with_cover_traffic(message_frequency_per_round: f64, num_blend_layers: u64) -> Settings {
+        let mut settings = DeploymentSettings::default()
+            .genesis_era_parameters()
+            .blend
+            .clone();
+        settings.core.scheduler.cover.message_frequency_per_round =
+            PositiveF64::try_from(message_frequency_per_round).unwrap();
+        settings.common.num_blend_layers = NonZeroU64::new(num_blend_layers).unwrap();
+        settings
+    }
+
+    /// The spec's 90 messages at `F_C = 1` and `β_C = 3`, where the window is
+    /// the 30 rounds that `10·Δ_max` gave it, so neither the liveness test nor
+    /// the blacklist expiry changes.
+    #[test]
+    fn the_window_is_30_rounds_at_the_reference_parameters() {
+        assert_eq!(COVER_MESSAGES_PER_OBSERVATION_WINDOW.get(), 90);
+        assert_eq!(
+            with_cover_traffic(1.0, 3)
+                .rounds_per_observation_window()
+                .get(),
+            30
+        );
+    }
+
+    /// The spec's 90 messages on one blending layer at `F_C = 1`, where
+    /// `10·Δ_max` gave 10 rounds.
+    #[test]
+    fn the_window_is_90_rounds_at_the_testnet_parameters() {
+        assert_eq!(
+            with_cover_traffic(1.0, 1)
+                .rounds_per_observation_window()
+                .get(),
+            90
+        );
+    }
+
+    /// A window that falls between two rounds takes the later one, so a
+    /// connection still carries at least the messages asked for in it.
+    #[test]
+    fn a_window_between_two_rounds_rounds_up() {
+        assert_eq!(
+            with_cover_traffic(1.0, 3)
+                .rounds_per_observation_window_for(NonZeroU64::new(100).unwrap())
+                .get(),
+            34
+        );
+    }
 }

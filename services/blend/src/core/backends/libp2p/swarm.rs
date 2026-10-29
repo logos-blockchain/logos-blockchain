@@ -277,8 +277,9 @@ where
 
     /// Dial random peers from the membership list,
     /// excluding the peers with a negotiated connection in the ongoing epoch,
-    /// the peers with a dial entry (being dialed, or given up on), the blocked
-    /// peers, and any extra peers specified in `except`.
+    /// the peers with a dial entry (being dialed, or given up on), the peers
+    /// the behaviour refuses (blacklisted, or closed for not being live less
+    /// than `W` rounds ago), and any extra peers specified in `except`.
     fn dial_random_peers_except(&mut self, amount: usize, except: &HashSet<PeerId>) {
         // Nothing to do when the peering degree is already satisfied.
         if amount == 0 {
@@ -292,7 +293,9 @@ where
         let current_membership = self.current_epoch_info.membership.clone();
 
         let exclude_peers: HashSet<PeerId> = negotiated_peers
-            .chain(self.swarm.behaviour().blend.with_core().blacklisted_peers())
+            // A refused peer would only have its connection refused, at this dial
+            // and at every one after until its refusal is over.
+            .chain(self.swarm.behaviour().blend.with_core().refused_peers())
             // A peer part way through a handshake already holds a degree slot,
             // so dialing it would take a second one until the two connections
             // are resolved against each other.
@@ -450,13 +453,14 @@ where
     /// pushed into `pending_retries`. When the future fires, `execute_retry`
     /// will re-check the peering degree before actually dialing. A peer that
     /// has reached the maximum attempts is set aside as exhausted instead, and
-    /// a blacklisted one is dropped.
+    /// a refused one is dropped.
     fn retry_or_give_up(&mut self, peer_id: PeerId, attempt: DialAttempt) {
         // Blacklisting a peer closes the connection this node was still shaking
-        // hands on, which surfaces here as a dial failure. Do not retry with that peer
-        // anymore.
-        if self.is_peer_blacklisted(&peer_id) {
-            tracing::debug!(target: LOG_TARGET, "Not retrying blacklisted peer {peer_id:?}. Dialing another peer instead.");
+        // hands on, and a connection with a refused peer is refused once
+        // established, both of which surface here as a dial failure. Do not retry
+        // with that peer anymore.
+        if self.is_peer_refused(&peer_id) {
+            tracing::debug!(target: LOG_TARGET, "Not retrying refused peer {peer_id:?}. Dialing another peer instead.");
             self.check_and_dial_new_peers();
             return;
         }
@@ -523,11 +527,11 @@ where
             );
             return;
         }
-        // The peer may have been blacklisted while this retry was sleeping.
-        if self.is_peer_blacklisted(&peer_id) {
+        // The peer may have been refused while this retry was sleeping.
+        if self.is_peer_refused(&peer_id) {
             tracing::debug!(
                 target: LOG_TARGET,
-                "Dropping retry for peer {peer_id:?}: it has been blacklisted since the retry was scheduled. Dialing another peer instead."
+                "Dropping retry for peer {peer_id:?}: it has been refused since the retry was scheduled. Dialing another peer instead."
             );
             self.check_and_dial_new_peers();
             return;
@@ -881,13 +885,13 @@ impl<Rng, ProofsVerifier> BlendSwarm<Rng, ProofsVerifier>
 where
     ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
-    /// Whether the behaviour currently refuses to deal with the peer.
-    fn is_peer_blacklisted(&self, peer_id: &PeerId) -> bool {
+    /// Whether the behaviour currently refuses connections with the peer.
+    fn is_peer_refused(&self, peer_id: &PeerId) -> bool {
         self.swarm
             .behaviour()
             .blend
             .with_core()
-            .is_peer_blacklisted(peer_id)
+            .is_peer_refused(peer_id)
     }
 
     fn log_blend_peer_negotiation_failure(
