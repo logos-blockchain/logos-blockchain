@@ -23,7 +23,7 @@ pub struct Config {
     /// `peer_response_timeout`, which bounds each message, this bounds the
     /// whole download, so a peer that keeps reading slowly cannot hold a
     /// download slot indefinitely.
-    #[serde_as(as = "DurationMilliSeconds<u64>")]
+    #[serde_as(as = "MinimalBoundedDuration<1, MILLI>")]
     pub inbound_download_stream_timeout: Duration,
 }
 

@@ -54,7 +54,7 @@ network:
       chain_sync:
         peer_response_timeout: 5s
         max_inbound_requests: 10
-        inbound_download_stream_timeout: 120000
+        inbound_download_stream_timeout: 2m
       nat:
         type: traversal
         autonat:
