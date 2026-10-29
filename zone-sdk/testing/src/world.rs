@@ -174,9 +174,6 @@ pub enum KnownIssue {
     /// A config landing sheds a pending inscription but not the custom tx
     /// chained on it, which leaves the view unreported.
     CustomTxUnderConfigShed,
-    /// Another sequencer's config mined on a branch the chain abandons stays
-    /// pending in the view: not reported orphaned, not re-posted, not shed.
-    OthersConfigOnAbandonedBranch,
     /// A restored pending publish whose parent another sequencer took in a
     /// block that finalized while this one was down stays pending: not
     /// posted again, never reported orphaned.
@@ -1269,36 +1266,10 @@ impl World {
                         .iter()
                         .any(|hash| violation.contains(&format!("Tx({hash:?})")))
             };
-            if chain_violations.iter().all(stranded_custom_tx) {
-                return Some(KnownIssue::CustomTxUnderConfigShed);
-            }
-            // A mirror still holding another sequencer's config that the
-            // chain abandoned: a config the run saw land that is not
-            // canonical now (its block may have been pruned since).
-            let abandoned_configs: Vec<TxHash> = self
-                .node()
-                .mined_txs()
-                .iter()
-                .chain(self.node().posted().iter())
-                .chain(self.writers.iter().flat_map(|writer| writer.posted.iter()))
-                .chain(self.writers.iter().flat_map(|writer| writer.rebuilt.iter()))
-                .filter(|tx| {
-                    tx.op_refs_iter()
-                        .any(|op| matches!(op, OpRef::ChannelConfig(config) if config.channel() == channel))
-                })
-                .map(Hashable::hash)
-                .filter(|hash| !self.node().is_included(hash))
-                .collect();
-            let stranded_config = |violation: &String| {
-                violation.contains("which the node never saw")
-                    && abandoned_configs
-                        .iter()
-                        .any(|hash| violation.contains(&format!("{hash:?}")))
-            };
             return chain_violations
                 .iter()
-                .all(stranded_config)
-                .then_some(KnownIssue::OthersConfigOnAbandonedBranch);
+                .all(stranded_custom_tx)
+                .then_some(KnownIssue::CustomTxUnderConfigShed);
         }
         if settled {
             return None;

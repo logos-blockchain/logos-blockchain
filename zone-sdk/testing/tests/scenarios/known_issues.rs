@@ -121,15 +121,13 @@ async fn publish_queued_out_of_turn_is_stranded_when_its_parent_is_taken_while_d
     world.finish();
 }
 
-/// Known SDK issue: another sequencer's config mined on a branch the chain
-/// abandons is never reported orphaned. The config joins the view when its
-/// block is canonical; when a longer fork from below it wins, the sequencer
-/// keeps it as a pending entry chained on the config tip and reports no
-/// change, never re-posts it and, since it is another sequencer's, never
-/// sheds it: the view carries it for good.
+/// Another sequencer's config mined on a branch the chain abandons stays in
+/// the view as a pending entry chained on the config tip, like a reorged-out
+/// inscription whose parent is still the tip: the position never moved, so
+/// no change is reported, and the sequencer re-posts it until it lands
+/// again, even after the node lost its mempool.
 #[tokio::test(start_paused = true)]
-#[ignore = "known issue: another sequencer's config on an abandoned branch stays pending, unreported, never re-posted"]
-async fn others_config_on_an_abandoned_branch_is_not_reported_orphaned() {
+async fn others_config_on_an_abandoned_branch_is_kept_and_re_posted() {
     let mut world = World::new(chains::linear());
     let a = world.start("SEQ_A", passive()).await;
     world.config_finalized(a, &["SEQ_B"], 3, 0).await;
@@ -190,18 +188,31 @@ async fn others_config_on_an_abandoned_branch_is_not_reported_orphaned() {
     world.harness.settle().await;
     assert_eq!(world.node().tip(), winner, "the fork must win");
     assert!(!world.node().is_included(&config_hash));
-    world.steps(3).await;
+    let holds_config = |world: &mut World| {
+        world
+            .checkpoint(a)
+            .pending_txs
+            .iter()
+            .any(|(hash, _)| *hash == config_hash)
+    };
+    assert!(holds_config(&mut world), "the config stays pending");
 
-    // Reported orphaned, the config leaves the pending set and the view.
-    let pending: Vec<_> = world
-        .checkpoint(a)
-        .pending_txs
-        .iter()
-        .map(|(hash, _)| *hash)
-        .collect();
+    // The node loses its mempool: only a re-post brings the config back.
+    world.node().node_down();
+    world.harness.settle().await;
+    world.node().node_up();
+    let landed = world
+        .step_until(20, |w| w.node().is_included(&config_hash))
+        .await;
     assert!(
-        !pending.contains(&config_hash),
-        "the orphaned config is still pending: {pending:?}"
+        landed,
+        "the abandoned config was not re-posted:\n{}",
+        world.diagnostics()
+    );
+    world.finalize_tx(config_hash).await;
+    assert!(
+        !holds_config(&mut world),
+        "the finalized config left the pending set"
     );
     world.harness.assert_layers();
 }

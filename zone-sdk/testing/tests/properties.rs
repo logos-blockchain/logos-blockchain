@@ -567,8 +567,7 @@ fn assert_one_lineage(finalized: &[FinalizedTx]) {
 /// shows how often it got there (`--no-capture` or `--success-output
 /// immediate`), and reaches zero once the fix lands.
 fn record_known_issue(issue: KnownIssue, scenario: &Scenario) {
-    static HITS: [AtomicUsize; 6] = [
-        AtomicUsize::new(0),
+    static HITS: [AtomicUsize; 5] = [
         AtomicUsize::new(0),
         AtomicUsize::new(0),
         AtomicUsize::new(0),
