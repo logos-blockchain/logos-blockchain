@@ -308,6 +308,22 @@ fn split_eras_into_files(config: &mut Value, output: &Path) -> Result<()> {
         .join(ERA_FILES_DIR);
     fs::create_dir_all(&era_files_dir)
         .with_context(|| format!("cannot create '{}'", era_files_dir.display()))?;
+    // The config holds a whole schedule, so the era files of an earlier one,
+    // which the node's build would otherwise embed, go first.
+    for entry in fs::read_dir(&era_files_dir)
+        .with_context(|| format!("cannot read '{}'", era_files_dir.display()))?
+    {
+        let path = entry
+            .with_context(|| format!("cannot read '{}'", era_files_dir.display()))?
+            .path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "yaml" || extension == "yml")
+        {
+            fs::remove_file(&path)
+                .with_context(|| format!("cannot remove '{}'", path.display()))?;
+        }
+    }
     let eras_by_first_epoch = {
         // Eras are numbered in the order they start, whatever order the config
         // lists them in, so they are collected and sorted by starting epoch (globally

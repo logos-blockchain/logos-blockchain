@@ -127,7 +127,7 @@ way, relative to itself, so they must be shipped next to it:
 `/node-data/deployment.yaml`.
 
 The ceremony writes the genesis era only: re-running it replaces a schedule
-with that era alone.
+with that era alone, and removes the era files of the schedule it replaces.
 
 Protocol and gossipsub topic names are not configured: every node derives them
 from its deployment. Blend, chain sync and the cryptarchia and mempool topics are
