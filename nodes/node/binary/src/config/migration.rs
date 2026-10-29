@@ -211,6 +211,8 @@ mod tests {
     /// A config written by `init-config` on the 0.3.3 release branch before
     /// this upgrade, i.e. in the 0.3.2 format.
     const CONFIG_0_3_2: &str = include_str!("fixtures/user_config_0_3_2.yaml");
+    /// The keystore `init-config` wrote next to [`CONFIG_0_3_2`].
+    const KEYSTORE_0_3_2: &str = include_str!("fixtures/keystore_0_3_2.yaml");
 
     fn migrated(yaml: &str) -> (Value, bool) {
         let mut config = serde_yaml::from_str(yaml).unwrap();
@@ -253,6 +255,85 @@ mod tests {
         assert!(!changed, "the rewritten config is in the current format");
         UserConfig::load(&path).unwrap();
         assert!(!dir.path().join("user_config.yaml.0.3.2.bak.1").exists());
+    }
+
+    #[test]
+    fn load_writes_only_the_non_default_values_when_there_is_a_keystore() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("user_config.yaml");
+        std::fs::write(&path, CONFIG_0_3_2).unwrap();
+        std::fs::write(dir.path().join("keystore.yaml"), KEYSTORE_0_3_2).unwrap();
+
+        let config = UserConfig::load(&path).unwrap();
+
+        // The keys and every default are left to the keystore and the
+        // defaults; what the 0.3.2 init set explicitly is kept.
+        let written: Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(
+            written["network"]["backend"]["swarm"]
+                .get("node_key")
+                .is_none()
+        );
+        assert!(written.get("kms").is_none());
+        assert!(written.get("mempool").is_none());
+        assert_eq!(
+            written["tracing"]["metrics"]["open_metrics"]["enabled"],
+            Value::Bool(false)
+        );
+        assert_eq!(
+            serde_yaml::to_value(UserConfig::load(&path).unwrap()).unwrap(),
+            serde_yaml::to_value(config).unwrap(),
+            "the sparse config loads back to the same config"
+        );
+    }
+
+    #[test]
+    fn load_writes_a_sparse_config_with_sets_and_partial_sections() {
+        // IBD peers serialize in no particular order, and a partial blend
+        // backend must keep the defaults of the fields it omits.
+        let config = CONFIG_0_3_2
+            .replace(
+                "        peers: []",
+                "        peers:
+        - 12D3KooWFrouXfmrR4nsLMtE7wu15DoMJ6VtoUtHinREZCvbWHar
+        - 12D3KooWJRGau8M1rjT7R5e4YYsgdFhsMX35nRDtMwCDjxQkXAHz
+        - 12D3KooWQXJavMDTRscjauFSgVAB1VLB6Rzpy2uY5SU9Tk7927tb",
+            )
+            .replace("udp/3400/quic-v1", "udp/3500/quic-v1");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("user_config.yaml");
+        std::fs::write(&path, config).unwrap();
+        std::fs::write(dir.path().join("keystore.yaml"), KEYSTORE_0_3_2).unwrap();
+
+        UserConfig::load(&path).unwrap();
+
+        let written: Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(
+            written.get("kms").is_none(),
+            "the config was written sparse"
+        );
+        assert_eq!(
+            written["blend"]["core"]["backend"],
+            yaml("{listening_address: /ip4/0.0.0.0/udp/3500/quic-v1}")
+        );
+        assert_eq!(
+            written["cryptarchia"]["network"]["bootstrap"]["ibd"]["peers"]
+                .as_sequence()
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(
+            UserConfig::load(&path)
+                .unwrap()
+                .blend
+                .core
+                .backend
+                .peering_degree_check_interval,
+            Some(Duration::from_mins(1))
+        );
     }
 
     #[test]
@@ -354,3 +435,4 @@ mod tests {
         assert!(!changed);
     }
 }
+

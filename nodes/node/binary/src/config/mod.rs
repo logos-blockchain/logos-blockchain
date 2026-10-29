@@ -19,7 +19,7 @@ use lb_tracing::{
 use lb_utils::yaml::{OnUnknownKeys, deserialize_from_value, deserialize_value_at_path, merge};
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
-use serde_yaml::Value;
+use serde_yaml::{Mapping, Value};
 
 pub use crate::config::{
     api::serde::Config as ApiConfig, blend::serde::Config as BlendConfig,
@@ -90,6 +90,49 @@ pub struct UserConfig {
     pub state: StateConfig,
 }
 
+/// The part of `after` that differs from `before`, or `None` when nothing does.
+pub(crate) fn changed_values(before: &Value, after: Value) -> Option<Value> {
+    match (before, after) {
+        (Value::Mapping(before), Value::Mapping(after)) => {
+            let changed: Mapping = after
+                .into_iter()
+                .filter_map(|(key, value)| {
+                    let value = match before.get(&key) {
+                        Some(previous) => changed_values(previous, value)?,
+                        None => value,
+                    };
+                    Some((key, value))
+                })
+                .collect();
+            (!changed.is_empty()).then_some(Value::Mapping(changed))
+        }
+        (before, after) => (*before != after).then_some(after),
+    }
+}
+
+/// `value` with every sequence sorted, to compare configs holding sets, which
+/// serialize in no particular order.
+fn unordered(value: Value) -> Value {
+    match value {
+        Value::Sequence(values) => {
+            let mut values: Vec<_> = values.into_iter().map(unordered).collect();
+            values.sort_by_cached_key(|value| serde_yaml::to_string(value).unwrap_or_default());
+            Value::Sequence(values)
+        }
+        Value::Mapping(mapping) => Value::Mapping(
+            mapping
+                .into_iter()
+                .map(|(key, value)| (key, unordered(value)))
+                .collect(),
+        ),
+        Value::Tagged(mut tagged) => {
+            tagged.value = unordered(tagged.value);
+            Value::Tagged(tagged)
+        }
+        value => value,
+    }
+}
+
 /// Keeps the 0.3.2 config at `path` as a backup and writes the upgraded
 /// `config` in its place. Failing to do so doesn't stop the node, which
 /// already runs on the upgraded config, and the upgrade is retried on the next
@@ -147,15 +190,29 @@ impl UserConfig {
     /// as `<config>.0.3.2.bak` and the upgraded config written in its place.
     pub fn load(path: &Path) -> Result<Self> {
         let mut overrides = match deserialize_value_at_path(path, OnUnknownKeys::Fail)? {
-            Value::Null => Value::Mapping(serde_yaml::Mapping::new()),
+            Value::Null => Value::Mapping(Mapping::new()),
             overrides => overrides,
         };
         let migrated = migration::migrate_0_3_2(&mut overrides);
         let config = Self::load_overrides(path, overrides.clone())?;
         if migrated {
-            save_migrated(path, &overrides);
+            save_migrated(path, &config.sparse(path).unwrap_or(overrides));
         }
         Ok(config)
+    }
+
+    /// The values of this config that differ from what the keystore and the
+    /// defaults provide, as `config init` writes them. `None` without a
+    /// keystore, or if the sparse config wouldn't load back to this one.
+    fn sparse(&self, path: &Path) -> Option<Value> {
+        let keystore = Keystore::load(&self.kms.keystore_path(path)).ok()?;
+        let defaults: Self =
+            deserialize_from_value(keystore.config_values().ok()?, OnUnknownKeys::Fail).ok()?;
+        let config = serde_yaml::to_value(self).ok()?;
+        let sparse = changed_values(&serde_yaml::to_value(defaults).ok()?, config.clone())
+            .unwrap_or_else(|| Value::Mapping(Mapping::new()));
+        let reloaded = Self::load_overrides(path, sparse.clone()).ok()?;
+        (unordered(serde_yaml::to_value(reloaded).ok()?) == unordered(config)).then_some(sparse)
     }
 
     fn load_overrides(path: &Path, overrides: Value) -> Result<Self> {
@@ -169,7 +226,7 @@ impl UserConfig {
         let mut config = if has_keystore {
             Keystore::load(&keystore_path)?.config_values()?
         } else {
-            Value::Mapping(serde_yaml::Mapping::new())
+            Value::Mapping(Mapping::new())
         };
         merge(&mut config, overrides);
         deserialize_from_value(config, OnUnknownKeys::Fail).map_err(|error| {
