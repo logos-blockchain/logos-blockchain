@@ -26,7 +26,7 @@ use lb_chain_service::{
 use lb_core::{
     header::HeaderId,
     mantle::{
-        NoteId, Op, OpProof, TxHash,
+        Op, OpProof, TxHash,
         channel::ChannelState,
         ledger::verification_mode::StandardMode,
         ops::channel::ChannelId,
@@ -701,83 +701,11 @@ where
         + AsServiceId<WalletService>
         + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
-    let service_note_id = match blend_service_note::<BlendService, WalletService, RuntimeServiceId>(
-        &handle,
-        req.service_note_id,
-    )
-    .await
-    {
-        Ok(note_id) => note_id,
-        Err(error) => return error.into_response(),
-    };
-
-    make_request_and_return_response!(blend::blend_join_network::<BlendService, RuntimeServiceId>(
-        &handle,
-        req.locator,
-        service_note_id
-    ))
-}
-
-async fn blend_service_note<BlendService, WalletService, RuntimeServiceId>(
-    handle: &OverwatchHandle<RuntimeServiceId>,
-    requested: Option<NoteId>,
-) -> Result<NoteId, ApiError>
-where
-    BlendService: ServiceData<
-            Message = ProxyServiceMessage<lb_blend_service::message::ServiceMessage<PeerId>>,
-        > + 'static,
-    WalletService: WalletServiceData + 'static,
-    RuntimeServiceId: Debug
-        + Send
-        + Sync
-        + Display
-        + 'static
-        + AsServiceId<BlendService>
-        + AsServiceId<WalletService>
-        + AsServiceId<Cryptarchia<RuntimeServiceId>>,
-{
-    if let Some(note_id) = requested {
-        return Ok(note_id);
-    }
-
-    let zk_id = blend::blend_zk_id::<BlendService, RuntimeServiceId>(handle)
-        .await
-        .map_err(ApiError::Internal)?;
-
-    let wallet_relay = get_relay::<WalletService, _>(handle).await?;
-    let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay);
-    let lb_wallet_service::TipResponse { tip, response } = wallet
-        .get_balance(None, zk_id)
-        .await
-        .map_err(ApiError::internal)?;
-    let balance = response.ok_or_else(|| {
-        ApiError::NotFound(format!("wallet does not hold blend ZK key {zk_id:?}"))
-    })?;
-
-    let chain =
-        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
-    let ledger = chain
-        .get_ledger_state(tip)
-        .await
-        .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::internal_message(format!("no ledger state at tip {tip:?}")))?;
-    // The minimum stake of the era of the tip the balance is read at.
-    let threshold = chain
-        .get_ledger_config(ledger.slot())
-        .await
-        .map_err(ApiError::internal)?
-        .sdp_config
-        .min_stake
-        .threshold;
-    let locked = ledger.mantle_ledger().service_notes();
-
-    let notes: Vec<_> = balance.notes.into_iter().collect();
-    blend::select_service_note(
-        &notes,
-        |note_id| locked.is_used_for_service(&note_id, &ServiceType::BlendNetwork),
-        threshold,
-    )
-    .map_err(|error| ApiError::NotFound(format!("blend ZK key {zk_id:?}: {error}")))
+    make_request_and_return_response!(blend::blend_join_network::<
+        BlendService,
+        WalletService,
+        RuntimeServiceId,
+    >(&handle, req.locator, req.service_note_id))
 }
 
 #[utoipa::path(

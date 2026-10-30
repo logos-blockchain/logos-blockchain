@@ -1018,6 +1018,14 @@ mod with_node {
                     blend_join_as_core_node(node, locator.as_ptr(), zero.as_ptr()),
                 );
             }
+            log(
+                "blend_join_as_core_node(auto note)",
+                blend_join_as_core_node(
+                    node,
+                    c"/ip4/127.0.0.1/udp/3400/quic-v1".as_ptr(),
+                    ptr::null(),
+                ),
+            );
             assert_ne!(
                 log(
                     "blend_join_as_core_node(invalid note)",

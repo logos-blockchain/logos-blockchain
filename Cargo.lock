@@ -4154,6 +4154,7 @@ dependencies = [
  "logos-blockchain-storage-service",
  "logos-blockchain-time-service",
  "logos-blockchain-tx-service",
+ "logos-blockchain-wallet-service",
  "overwatch",
  "serde",
  "thiserror 2.0.21",
