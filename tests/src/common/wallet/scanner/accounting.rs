@@ -324,6 +324,7 @@ mod tests {
 
     use lb_common_http_client::{ApiBlock, ApiHeader, Slot};
     use lb_core::{
+        era::ForkDigest,
         events::{Event, Events, HeaderEvent},
         header::{ContentId, HeaderId},
         mantle::{
@@ -379,10 +380,13 @@ mod tests {
     /// A transaction creating `outputs`. A channel withdraw no longer creates
     /// notes, so a transfer is what the accounting observes owned outputs from.
     fn transfer_tx(outputs: [Note; 2]) -> SignedOps<Unverified, StandardMode> {
-        let ops = Ops::from([Op::Transfer(TransferOp::new(
-            Inputs::empty(),
-            Outputs::new(outputs),
-        ))]);
+        let ops = Ops::new(
+            ForkDigest::new([0x11; 32]),
+            [Op::Transfer(TransferOp::new(
+                Inputs::empty(),
+                Outputs::new(outputs),
+            ))],
+        );
         SignedOps::from_ops_with_sample_proofs(ops)
     }
 
@@ -454,11 +458,14 @@ mod tests {
     #[test]
     fn accounting_removes_spent_utxos() {
         let owned = utxo(10, 0, pk(1));
-        let ops = Ops::from([Op::ChannelDeposit(DepositOp {
-            channel_id: ChannelId::from([0; 32]),
-            inputs: BoundedInputs::from(owned.id()).into(),
-            metadata: b"deposit".into(),
-        })]);
+        let ops = Ops::new(
+            ForkDigest::new([0x11; 32]),
+            [Op::ChannelDeposit(DepositOp {
+                channel_id: ChannelId::from([0; 32]),
+                inputs: BoundedInputs::from(owned.id()).into(),
+                metadata: b"deposit".into(),
+            })],
+        );
         let spend = SignedOps::from_ops_with_sample_proofs(ops);
         let mut accounting =
             ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[owned])
@@ -483,12 +490,18 @@ mod tests {
     fn withdrawal_restores_locked_utxo_only_after_final_unlock_event() {
         let locked = utxo(10, 0, pk(1));
         let declaration = sdp_declaration(locked.id(), ServiceType::BlendNetwork);
-        let declare_ops = Ops::from([Op::SDPDeclare(declaration.clone())]);
+        let declare_ops = Ops::new(
+            ForkDigest::new([0x11; 32]),
+            [Op::SDPDeclare(declaration.clone())],
+        );
         let declare_tx = SignedOps::from_ops_with_sample_proofs(declare_ops);
-        let withdraw_ops = Ops::from([Op::SDPWithdraw(WithdrawMessage {
-            declaration_id: declaration.id(),
-            nonce: Nonce::new(0.into(), 0),
-        })]);
+        let withdraw_ops = Ops::new(
+            ForkDigest::new([0x11; 32]),
+            [Op::SDPWithdraw(WithdrawMessage {
+                declaration_id: declaration.id(),
+                nonce: Nonce::new(0.into(), 0),
+            })],
+        );
         let withdraw_tx = SignedOps::from_ops_with_sample_proofs(withdraw_ops);
         let mut accounting =
             ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[locked])
@@ -518,9 +531,10 @@ mod tests {
     fn restored_snapshot_keeps_locked_collateral_until_final_unlock() {
         let locked = utxo(10, 0, pk(1));
         let declaration = sdp_declaration(locked.id(), ServiceType::BlendNetwork);
-        let declare_tx = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::SDPDeclare(
-            declaration.clone(),
-        )]));
+        let declare_tx = SignedOps::from_ops_with_sample_proofs(Ops::new(
+            ForkDigest::new([0x11; 32]),
+            [Op::SDPDeclare(declaration.clone())],
+        ));
         let mut accounting =
             ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[locked])
                 .expect("accounting should build");
@@ -538,11 +552,13 @@ mod tests {
         )
         .expect("restored accounting should build");
 
-        let withdraw_tx =
-            SignedOps::from_ops_with_sample_proofs(Ops::from([Op::SDPWithdraw(WithdrawMessage {
+        let withdraw_tx = SignedOps::from_ops_with_sample_proofs(Ops::new(
+            ForkDigest::new([0x11; 32]),
+            [Op::SDPWithdraw(WithdrawMessage {
                 declaration_id: declaration.id(),
                 nonce: Nonce::new(0.into(), 1),
-            })]));
+            })],
+        ));
         restored.apply_block(&block(2, vec![withdraw_tx]));
         assert_eq!(restored.wallet_utxos()["alice"], []);
 
@@ -575,16 +591,19 @@ mod tests {
         .expect("accounting should restore the shared collateral lock");
         assert_eq!(accounting.wallet_utxos()["alice"], []);
 
-        let withdrawals = SignedOps::from_ops_with_sample_proofs(Ops::from([
-            Op::SDPWithdraw(WithdrawMessage {
-                declaration_id: declaration_id_a,
-                nonce: Nonce::new(0.into(), 1),
-            }),
-            Op::SDPWithdraw(WithdrawMessage {
-                declaration_id: declaration_id_b,
-                nonce: Nonce::new(0.into(), 1),
-            }),
-        ]));
+        let withdrawals = SignedOps::from_ops_with_sample_proofs(Ops::new(
+            ForkDigest::new([0x11; 32]),
+            [
+                Op::SDPWithdraw(WithdrawMessage {
+                    declaration_id: declaration_id_a,
+                    nonce: Nonce::new(0.into(), 1),
+                }),
+                Op::SDPWithdraw(WithdrawMessage {
+                    declaration_id: declaration_id_b,
+                    nonce: Nonce::new(0.into(), 1),
+                }),
+            ],
+        ));
         accounting.apply_block(&block(2, vec![withdrawals]));
         assert_eq!(accounting.wallet_utxos()["alice"], []);
 

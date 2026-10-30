@@ -12,6 +12,7 @@ use indexmap::IndexMap;
 use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_core::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
+    era::{AcceptedForkDigests, ForkDigest},
     header::HeaderId,
     mantle::{
         Op,
@@ -53,8 +54,8 @@ use lb_utils::noop_service::NoService;
 use logos_blockchain_tx_service::{
     MempoolMsg, TxMempoolSettings,
     backend::{
-        AdmissionTime, MemPool as _, Mempool, MempoolError, MempoolSettings, PoolRecoveryState,
-        PowClaimEvictionSettings, RecoverableMempool as _, Status,
+        AdmissionTime, DEFAULT_TX_TTL, MemPool as _, Mempool, MempoolError, MempoolSettings,
+        PoolRecoveryState, PowClaimEvictionSettings, RecoverableMempool as _, Status,
     },
     network::adapters::mock::{MOCK_TX_CONTENT_TOPIC, MockAdapter, mock_message},
     storage::{BlockSlotLookup, MempoolStorageAdapter, adapters::rocksdb::RocksStorageAdapter},
@@ -97,6 +98,9 @@ struct MockPoolNode {
     no_service: NoService,
 }
 
+/// The fork digest the transactions of these tests carry.
+const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
+
 /// A transaction whose only op inscribes `payload`, so distinct payloads
 /// give distinct transactions.
 fn tx(payload: &str) -> Ops {
@@ -104,20 +108,26 @@ fn tx(payload: &str) -> Ops {
 }
 
 fn inscribing(bytes: &[u8]) -> Ops {
-    Ops::from([Op::ChannelInscribe(InscriptionOp {
-        inscription: Inscription::try_from_iter(bytes.iter().copied())
-            .expect("inscription should fit"),
-        ..InscriptionOp::sample()
-    })])
+    Ops::new(
+        FORK_DIGEST,
+        [Op::ChannelInscribe(InscriptionOp {
+            inscription: Inscription::try_from_iter(bytes.iter().copied())
+                .expect("inscription should fit"),
+            ..InscriptionOp::sample()
+        })],
+    )
 }
 
 /// A transaction claiming the `PoW` reward for a puzzle solved against
 /// `anchor`.
 fn claim_tx(anchor: HeaderId) -> Ops {
-    Ops::from([Op::ClaimPowReward(ClaimPowRewardOp {
-        block_hash: anchor.into(),
-        ..ClaimPowRewardOp::sample()
-    })])
+    Ops::new(
+        FORK_DIGEST,
+        [Op::ClaimPowReward(ClaimPowRewardOp {
+            block_hash: anchor.into(),
+            ..ClaimPowRewardOp::sample()
+        })],
+    )
 }
 
 fn sample_removed_tx() -> Ops {
@@ -147,7 +157,7 @@ fn mock_pool_node_settings(
                 column_family: None,
             },
             mockpool: TxMempoolSettings {
-                pool: MempoolSettings::default(),
+                pool: default_settings(),
                 network_adapter: (),
                 seen_items_subscription_channel_size: 64.try_into().unwrap(),
                 recovery_data: RecoveryData::default(),
@@ -422,11 +432,23 @@ fn test_mock_pool_recovery_state() {
     );
 }
 
-const fn ttl_settings(tx_ttl: Duration) -> MempoolSettings {
+/// The default expiry, no claim eviction, and every era accepting the fork
+/// digest of the tests' transactions.
+fn default_settings() -> MempoolSettings {
+    ttl_settings(DEFAULT_TX_TTL)
+}
+
+fn ttl_settings(tx_ttl: Duration) -> MempoolSettings {
     MempoolSettings {
         tx_ttl: Some(tx_ttl),
         pow_claim: None,
+        accepted_fork_digests: accepted_fork_digests(),
     }
+}
+
+/// Every era of the tests accepts the fork digest their transactions carry.
+fn accepted_fork_digests() -> EraSchedule<AcceptedForkDigests> {
+    era_schedule().map(|_| AcceptedForkDigests::new(vec![FORK_DIGEST]))
 }
 
 /// The single era the tests run in, of 100-slot epochs.
@@ -453,6 +475,7 @@ fn pow_claim_settings() -> MempoolSettings {
         pow_claim: Some(era_schedule().map(|_| PowClaimEvictionSettings {
             slot_window: NonZeroU64::new(TEST_SLOT_WINDOW).expect("non-zero"),
         })),
+        accepted_fork_digests: accepted_fork_digests(),
     }
 }
 
@@ -552,6 +575,7 @@ async fn expired_tx_is_not_evicted_when_ttl_is_disabled() {
     let (mut pool, tx) = pool_with_backdated_tx(MempoolSettings {
         tx_ttl: None,
         pow_claim: None,
+        accepted_fork_digests: accepted_fork_digests(),
     })
     .await;
     let tx_id = tx.hash();
@@ -565,9 +589,76 @@ async fn expired_tx_is_not_evicted_when_ttl_is_disabled() {
 }
 
 #[tokio::test]
+async fn a_tx_whose_fork_digest_the_era_in_force_does_not_accept_is_refused() {
+    let mut pool = InMemoryPool::new(
+        default_settings(),
+        Era::genesis(),
+        InMemoryStorageAdapter::default(),
+    );
+    let other_fork = ForkDigest::new([0x22; 32]);
+    let tx = Ops::new(other_fork, [Op::ChannelInscribe(InscriptionOp::sample())]);
+    let tx_id = tx.hash();
+
+    let error = pool
+        .add_item(tx_id, tx)
+        .await
+        .expect_err("the era in force does not accept the fork digest");
+
+    assert!(matches!(
+        error,
+        MempoolError::UnacceptedForkDigest(fork_digest) if fork_digest == other_fork
+    ));
+    assert_eq!(pool.status(&[tx_id]), vec![Status::Unknown]);
+}
+
+#[tokio::test]
+async fn the_pool_admits_the_fork_digests_of_the_era_it_rotates_to() {
+    let next_fork = ForkDigest::new([0x22; 32]);
+    let timing = EraTiming {
+        slot_duration: Duration::from_secs(1),
+        epoch_length: NonZero::new(100).unwrap(),
+    };
+    let two_eras = EraSchedule::new(
+        OffsetDateTime::UNIX_EPOCH,
+        timing,
+        EraEntriesAfterGenesis::try_from_iter([(NonZero::new(1).unwrap(), timing)]).unwrap(),
+    )
+    .unwrap()
+    .map(|era| {
+        if era.era == Era::genesis() {
+            AcceptedForkDigests::new(vec![FORK_DIGEST])
+        } else {
+            AcceptedForkDigests::new(vec![FORK_DIGEST, next_fork])
+        }
+    });
+    let mut pool = InMemoryPool::new(
+        MempoolSettings {
+            accepted_fork_digests: two_eras,
+            ..default_settings()
+        },
+        Era::genesis(),
+        InMemoryStorageAdapter::default(),
+    );
+    let tx = Ops::new(next_fork, [Op::ChannelInscribe(InscriptionOp::sample())]);
+    let tx_id = tx.hash();
+
+    assert!(matches!(
+        pool.add_item(tx_id, tx.clone()).await,
+        Err(MempoolError::UnacceptedForkDigest(_))
+    ));
+
+    pool.rotate_era(Era::new(1)).await;
+
+    pool.add_item(tx_id, tx)
+        .await
+        .expect("the next era accepts its own fork digest");
+    assert_eq!(pool.status(&[tx_id]), vec![Status::Pending]);
+}
+
+#[tokio::test]
 async fn storage_failure_does_not_mark_tx_pending() {
     let mut pool = Mempool::<HeaderId, Ops, FailingStorageAdapter, RuntimeServiceId>::new(
-        MempoolSettings::default(),
+        default_settings(),
         Era::genesis(),
         FailingStorageAdapter,
     );
@@ -589,7 +680,7 @@ async fn storage_failure_does_not_mark_tx_pending() {
 #[tokio::test]
 async fn removed_items_are_not_pending_but_still_fetchable() {
     let storage = InMemoryStorageAdapter::default();
-    let mut pool = InMemoryPool::new(MempoolSettings::default(), Era::genesis(), storage.clone());
+    let mut pool = InMemoryPool::new(default_settings(), Era::genesis(), storage.clone());
 
     let tx = sample_removed_tx();
     let tx_id = tx.hash();
@@ -635,7 +726,7 @@ async fn removed_items_are_not_pending_but_still_fetchable() {
 #[tokio::test]
 async fn removed_items_remain_fetchable_after_recovery() {
     let storage = InMemoryStorageAdapter::default();
-    let mut pool = InMemoryPool::new(MempoolSettings::default(), Era::genesis(), storage.clone());
+    let mut pool = InMemoryPool::new(default_settings(), Era::genesis(), storage.clone());
 
     let tx = sample_removed_tx();
     let tx_id = tx.hash();
@@ -649,12 +740,8 @@ async fn removed_items_remain_fetchable_after_recovery() {
     assert!(saved_state.pending_items.is_empty());
     assert!(saved_state.removed_items.contains_key(&tx_id));
 
-    let recovered_pool = InMemoryPool::recover(
-        MempoolSettings::default(),
-        Era::genesis(),
-        saved_state,
-        storage,
-    );
+    let recovered_pool =
+        InMemoryPool::recover(default_settings(), Era::genesis(), saved_state, storage);
 
     assert_eq!(recovered_pool.pending_item_count(), 0);
     assert_eq!(recovered_pool.status(&[tx_id]), vec![Status::Unknown]);
@@ -681,7 +768,7 @@ async fn removed_items_remain_fetchable_after_recovery() {
 #[tokio::test]
 async fn removed_tx_resolves_until_its_grace_period_ends() {
     let storage = InMemoryStorageAdapter::default();
-    let mut pool = InMemoryPool::new(MempoolSettings::default(), Era::genesis(), storage.clone());
+    let mut pool = InMemoryPool::new(default_settings(), Era::genesis(), storage.clone());
 
     let tx = sample_removed_tx();
     let tx_id = tx.hash();
@@ -705,12 +792,7 @@ async fn removed_tx_resolves_until_its_grace_period_ends() {
         .get_mut(&tx_id)
         .expect("tx should be removed")
         .removed_at = 0;
-    let mut pool = InMemoryPool::recover(
-        MempoolSettings::default(),
-        Era::genesis(),
-        saved_state,
-        storage,
-    );
+    let mut pool = InMemoryPool::recover(default_settings(), Era::genesis(), saved_state, storage);
     // Trigger pruning removed items by calling `remove`
     pool.remove(&[]).await;
 
@@ -732,7 +814,7 @@ async fn removed_tx_resolves_until_its_grace_period_ends() {
 #[tokio::test]
 async fn readmitted_removed_tx_is_indexed_once() {
     let mut pool = InMemoryPool::new(
-        MempoolSettings::default(),
+        default_settings(),
         Era::genesis(),
         InMemoryStorageAdapter::default(),
     );
@@ -761,7 +843,7 @@ async fn readmitted_removed_tx_is_indexed_once() {
 #[tokio::test]
 async fn removing_a_tx_the_pool_never_held_records_nothing() {
     let mut pool = InMemoryPool::new(
-        MempoolSettings::default(),
+        default_settings(),
         Era::genesis(),
         InMemoryStorageAdapter::default(),
     );
@@ -801,7 +883,7 @@ async fn stored_items(pool: &InMemoryPool, key: TxHash) -> Vec<Ops> {
 #[tokio::test]
 async fn included_tx_resolves_until_its_block_is_immutable() {
     let mut pool = InMemoryPool::new(
-        MempoolSettings::default(),
+        default_settings(),
         Era::genesis(),
         InMemoryStorageAdapter::default(),
     );
@@ -840,7 +922,7 @@ async fn included_tx_resolves_until_its_block_is_immutable() {
 #[tokio::test]
 async fn reorged_tx_returns_to_pending() {
     let mut pool = InMemoryPool::new(
-        MempoolSettings::default(),
+        default_settings(),
         Era::genesis(),
         InMemoryStorageAdapter::default(),
     );
@@ -867,7 +949,7 @@ async fn reorged_tx_returns_to_pending() {
 #[tokio::test]
 async fn reorged_tx_already_pending_is_not_readmitted() {
     let mut pool = InMemoryPool::new(
-        MempoolSettings::default(),
+        default_settings(),
         Era::genesis(),
         InMemoryStorageAdapter::default(),
     );
@@ -923,7 +1005,7 @@ async fn reorged_tx_not_admitted_again_moves_to_removed_items() {
 #[tokio::test]
 async fn included_tx_is_a_duplicate_at_admission() {
     let mut pool = InMemoryPool::new(
-        MempoolSettings::default(),
+        default_settings(),
         Era::genesis(),
         InMemoryStorageAdapter::default(),
     );
@@ -950,7 +1032,7 @@ async fn included_tx_is_a_duplicate_at_admission() {
 #[tokio::test]
 async fn removed_tx_entering_the_canonical_chain_moves_to_included() {
     let mut pool = InMemoryPool::new(
-        MempoolSettings::default(),
+        default_settings(),
         Era::genesis(),
         InMemoryStorageAdapter::default(),
     );
@@ -973,7 +1055,7 @@ async fn removed_tx_entering_the_canonical_chain_moves_to_included() {
 #[tokio::test]
 async fn tx_carried_by_both_branches_takes_the_adopted_block_slot() {
     let mut pool = InMemoryPool::new(
-        MempoolSettings::default(),
+        default_settings(),
         Era::genesis(),
         InMemoryStorageAdapter::default(),
     );
@@ -997,7 +1079,7 @@ async fn tx_carried_by_both_branches_takes_the_adopted_block_slot() {
 #[tokio::test]
 async fn never_held_tx_entering_the_canonical_chain_is_not_retained() {
     let mut pool = InMemoryPool::new(
-        MempoolSettings::default(),
+        default_settings(),
         Era::genesis(),
         InMemoryStorageAdapter::default(),
     );
@@ -1014,7 +1096,7 @@ async fn never_held_tx_entering_the_canonical_chain_is_not_retained() {
 #[tokio::test]
 async fn included_tx_remains_resolvable_after_recovery() {
     let storage = InMemoryStorageAdapter::default();
-    let mut pool = InMemoryPool::new(MempoolSettings::default(), Era::genesis(), storage.clone());
+    let mut pool = InMemoryPool::new(default_settings(), Era::genesis(), storage.clone());
     let tx = tx("included");
     let tx_id = tx.hash();
     pool.add_item(tx_id, tx.clone())
@@ -1023,12 +1105,7 @@ async fn included_tx_remains_resolvable_after_recovery() {
     pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
         .await;
 
-    let pool = InMemoryPool::recover(
-        MempoolSettings::default(),
-        Era::genesis(),
-        pool.save(),
-        storage,
-    );
+    let pool = InMemoryPool::recover(default_settings(), Era::genesis(), pool.save(), storage);
 
     assert!(pool.save().included_in_canonical.contains_key(&tx_id));
     assert_eq!(keys_with_prefix(&pool, tx_id), vec![tx_id]);
@@ -1167,10 +1244,11 @@ async fn retained_admission_time_survives_recovery() {
 }
 
 /// Settings with no eviction, so only the tests' own operations retire txs.
-const fn no_eviction_settings() -> MempoolSettings {
+fn no_eviction_settings() -> MempoolSettings {
     MempoolSettings {
         tx_ttl: None,
         pow_claim: None,
+        accepted_fork_digests: accepted_fork_digests(),
     }
 }
 
@@ -1222,7 +1300,7 @@ fn local_submission_rejects_oversized_tx() {
             .expect("a maximal inscription should fit"),
             ..InscriptionOp::sample()
         });
-        let oversized_tx = Ops::from([max_inscription.clone(), max_inscription]);
+        let oversized_tx = Ops::new(FORK_DIGEST, [max_inscription.clone(), max_inscription]);
 
         let error = app
             .runtime()
@@ -1376,7 +1454,7 @@ fn test_mock_mempool() {
         })
         .expect("Should load recovery data from storage.");
         let recovery_settings = TxMempoolSettings {
-            pool: MempoolSettings::default(),
+            pool: default_settings(),
             network_adapter: (),
             seen_items_subscription_channel_size: 64.try_into().unwrap(),
             recovery_data,
@@ -1607,16 +1685,19 @@ async fn failed_anchor_lookup_keeps_the_resolved_anchors() {
         .with_failing_block(failing);
     let mut pool = InMemoryPool::new(pow_claim_settings(), Era::genesis(), storage);
 
-    let both = Ops::from([
-        Op::ClaimPowReward(ClaimPowRewardOp {
-            block_hash: resolved.into(),
-            ..ClaimPowRewardOp::sample()
-        }),
-        Op::ClaimPowReward(ClaimPowRewardOp {
-            block_hash: failing.into(),
-            ..ClaimPowRewardOp::sample()
-        }),
-    ]);
+    let both = Ops::new(
+        FORK_DIGEST,
+        [
+            Op::ClaimPowReward(ClaimPowRewardOp {
+                block_hash: resolved.into(),
+                ..ClaimPowRewardOp::sample()
+            }),
+            Op::ClaimPowReward(ClaimPowRewardOp {
+                block_hash: failing.into(),
+                ..ClaimPowRewardOp::sample()
+            }),
+        ],
+    );
     let both_id = both.hash();
     let failing_only = claim_tx(failing);
     let failing_only_id = failing_only.hash();
@@ -1651,14 +1732,7 @@ async fn failed_anchor_lookup_keeps_the_resolved_anchors() {
 async fn claim_eviction_is_disabled_without_settings() {
     let anchor = HeaderId::from([1u8; 32]);
     let storage = InMemoryStorageAdapter::default().with_block(anchor, 0);
-    let mut pool = InMemoryPool::new(
-        MempoolSettings {
-            tx_ttl: None,
-            pow_claim: None,
-        },
-        Era::genesis(),
-        storage,
-    );
+    let mut pool = InMemoryPool::new(no_eviction_settings(), Era::genesis(), storage);
 
     let claim = claim_tx(anchor);
     let claim_id = claim.hash();

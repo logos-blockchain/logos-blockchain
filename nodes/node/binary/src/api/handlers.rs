@@ -24,6 +24,7 @@ use lb_chain_service::{
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
+    era::ForkDigest,
     header::HeaderId,
     mantle::{
         NoteId, Op, OpProof, SignedOps, TxHash,
@@ -43,7 +44,7 @@ use lb_http_api_common::{
     EraTiming, TimeInfo,
     bodies::{
         blend::JoinBlendRequestBody,
-        chain::ChainIdResponseBody,
+        chain::{ChainForkResponseBody, ChainIdResponseBody},
         channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
         mantle::GasPricesResponseBody,
         wallet::{
@@ -496,6 +497,51 @@ pub async fn version() -> Response {
 )]
 pub async fn chain_id(Extension(chain_id): Extension<ChainId>) -> Response {
     Json(ChainIdResponseBody { chain_id }).into_response()
+}
+
+/// The era in force comes from the time service's clock, and its fork digest
+/// from the deployment, handed to the API backend like the chain ID.
+#[utoipa::path(
+    get,
+    path = paths::CHAIN_FORK,
+    responses(
+        (status = 200, description = "The fork digest a transaction signed now carries", body = ChainForkResponseBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn chain_fork<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Extension(fork_digests): Extension<Vec<ForkDigest>>,
+) -> Response
+where
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<TimeService>,
+{
+    make_request_and_return_response!(async {
+        let fork_digest = fork_digest_in_force(&handle, &fork_digests).await?;
+        Ok::<_, DynError>(ChainForkResponseBody { fork_digest })
+    })
+}
+
+/// The fork digest, of `fork_digests`, of the era the time service's clock is
+/// in.
+async fn fork_digest_in_force<RuntimeServiceId>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+    fork_digests: &[ForkDigest],
+) -> Result<ForkDigest, DynError>
+where
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<TimeService>,
+{
+    let (sender, receiver) = oneshot::channel();
+    handle
+        .relay::<TimeService>()
+        .await?
+        .send(TimeServiceMessage::CurrentSlot { sender })
+        .await?;
+    let era = receiver.await?.era;
+    fork_digests
+        .get(usize::from(era.into_inner()))
+        .copied()
+        .ok_or_else(|| format!("The deployment has no era {}", era.into_inner()).into())
 }
 
 #[derive(Deserialize)]
@@ -2349,6 +2395,7 @@ pub mod wallet {
     )]
     pub async fn fund<WalletService, StorageAdapter, RuntimeServiceId>(
         State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Extension(fork_digests): Extension<Vec<ForkDigest>>,
         Json(req): Json<WalletFundRequestBody>,
     ) -> Response
     where
@@ -2371,6 +2418,7 @@ pub mod wallet {
             + 'static
             + AsServiceId<StorageService<RuntimeServiceId>>
             + AsServiceId<WalletService>
+            + AsServiceId<TimeService>
             + AsServiceId<
                 TxMempoolService<
                     MempoolNetworkAdapter<
@@ -2419,7 +2467,8 @@ pub mod wallet {
                 .map(|utxo| utxo.note.pk)
                 .collect();
 
-            let funded_tx = funded_tx_builder.build()?;
+            let funded_tx =
+                funded_tx_builder.build(fork_digest_in_force(&handle, &fork_digests).await?)?;
             let transfer_proof = if funding_note_pks.is_empty() {
                 None
             } else {

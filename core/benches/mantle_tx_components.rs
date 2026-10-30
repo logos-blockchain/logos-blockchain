@@ -17,6 +17,7 @@ use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey};
 use lb_poseidon2::Digest;
 use logos_blockchain_core::{
     crypto::{Hasher, ZkHasher},
+    era::ForkDigest,
     mantle::{
         ledger::verification_mode::StandardMode,
         ops::{
@@ -51,12 +52,15 @@ const SIZES: &[usize] = &[
 // Helper fn to create an inscription `MantleTx`, no ledger inputs ot outputs.
 fn make_inscription_tx(payload_size: usize) -> Ops {
     let signing_key = Ed25519Key::from_bytes(&[1; 32]);
-    Ops::from([Op::ChannelInscribe(InscriptionOp {
-        channel_id: ChannelId::from([0xAA; 32]),
-        inscription: Inscription::new_unchecked(vec![0xAB; payload_size]),
-        parent: MsgId::from([0xBB; 32]),
-        signer: signing_key.public_key().into_unverified(),
-    })])
+    Ops::new(
+        ForkDigest::new([0x11; 32]),
+        [Op::ChannelInscribe(InscriptionOp {
+            channel_id: ChannelId::from([0xAA; 32]),
+            inscription: Inscription::new_unchecked(vec![0xAB; payload_size]),
+            parent: MsgId::from([0xBB; 32]),
+            signer: signing_key.public_key().into_unverified(),
+        })],
+    )
 }
 
 // Helper fn to create a `SignedOps`.

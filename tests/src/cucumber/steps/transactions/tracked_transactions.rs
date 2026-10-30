@@ -1,12 +1,15 @@
 use std::{collections::HashSet, time::Duration};
 
 use lb_common_http_client::ApiBlock;
-use lb_core::mantle::{
-    Note, NoteId, Op, OpProof, SignedOps,
-    ledger::{BoundedInputs, Inputs, Outputs, verification_mode::StandardMode},
-    ops::transfer::TransferOp,
-    traits::Hashable as _,
-    transactions::{OpProofs, Ops, hash::TxHash, states::Unverified},
+use lb_core::{
+    era::ForkDigest,
+    mantle::{
+        Note, NoteId, Op, OpProof, SignedOps,
+        ledger::{BoundedInputs, Inputs, Outputs, verification_mode::StandardMode},
+        ops::transfer::TransferOp,
+        traits::Hashable as _,
+        transactions::{OpProofs, Ops, hash::TxHash, states::Unverified},
+    },
 };
 use lb_groth16::Fr;
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
@@ -39,7 +42,7 @@ pub async fn submit_invalid_transfer_transaction(
             warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
 
-    let signed_tx = create_stateful_invalid_transaction();
+    let signed_tx = create_stateful_invalid_transaction(world.fork_digest_in_force().await?);
     let tx_hash = signed_tx.hash();
 
     node.submit_transaction(&signed_tx).await.inspect_err(|e| {
@@ -69,7 +72,7 @@ pub async fn submit_stateless_invalid_transfer_transaction(
             warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
 
-    let signed_tx = create_stateless_invalid_transaction();
+    let signed_tx = create_stateless_invalid_transaction(world.fork_digest_in_force().await?);
     let outcome = node
         .submit_transaction(&signed_tx)
         .await
@@ -251,16 +254,20 @@ async fn transaction_is_in_chain(
 
 /// Builds a transaction that fails stateless validation: a `TransferOp` with no
 /// inputs.
-pub fn create_stateless_invalid_transaction() -> SignedOps<Unverified, StandardMode> {
+pub fn create_stateless_invalid_transaction(
+    fork_digest: ForkDigest,
+) -> SignedOps<Unverified, StandardMode> {
     let output_note = Note::new(1000, ZkPublicKey::new(1u8.into()));
     let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([output_note]));
 
-    build_signed_transfer(transfer_op)
+    build_signed_transfer(transfer_op, fork_digest)
 }
 
 /// Builds a transaction that passes stateless validation but is invalid against
 /// ledger state: its input note id does not correspond to any real UTXO.
-fn create_stateful_invalid_transaction() -> SignedOps<Unverified, StandardMode> {
+fn create_stateful_invalid_transaction(
+    fork_digest: ForkDigest,
+) -> SignedOps<Unverified, StandardMode> {
     let nonexistent_input = NoteId(Fr::from(0xDEAD_BEEFu64));
     let output_note = Note::new(1000, ZkPublicKey::new(1u8.into()));
     let transfer_op = TransferOp::new(
@@ -268,11 +275,14 @@ fn create_stateful_invalid_transaction() -> SignedOps<Unverified, StandardMode> 
         Outputs::new([output_note]),
     );
 
-    build_signed_transfer(transfer_op)
+    build_signed_transfer(transfer_op, fork_digest)
 }
 
-fn build_signed_transfer(transfer_op: TransferOp) -> SignedOps<Unverified, StandardMode> {
-    let mantle_tx = Ops::from([Op::Transfer(transfer_op)]);
+fn build_signed_transfer(
+    transfer_op: TransferOp,
+    fork_digest: ForkDigest,
+) -> SignedOps<Unverified, StandardMode> {
+    let mantle_tx = Ops::new(fork_digest, [Op::Transfer(transfer_op)]);
 
     let transfer_proof = ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr())
         .expect("invalid transfer proof should still be constructible");

@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, time::Duration};
 
-use lb_core::mantle::transactions::genesis_tx::ChainId;
+use lb_core::{era::ForkDigest, mantle::transactions::genesis_tx::ChainId};
 
 /// Configuration for the Http Server
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -13,6 +13,11 @@ pub struct AxumBackendSettings {
     /// API can serve it without asking a running service for a value that
     /// cannot change.
     pub chain_id: ChainId,
+    /// The fork digest of every era of the deployment, era `n` at position
+    /// `n`, from which the API serves the one in force.
+    ///
+    /// Not user configurable, like `chain_id`.
+    pub fork_digests: Vec<ForkDigest>,
     /// Socket where the server will be listening on for incoming requests.
     pub address: SocketAddr,
     /// Allowed origins for this server deployment requests.

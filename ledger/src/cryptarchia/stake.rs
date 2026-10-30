@@ -83,7 +83,7 @@ impl StakeInference {
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use lb_core::sdp::MinStake;
+    use lb_core::{era::AcceptedForkDigests, sdp::MinStake};
     use lb_groth16::ModulusShift;
     use lb_utils::math::NonNegativeRatio;
 
@@ -91,7 +91,7 @@ mod tests {
     use crate::{
         Config,
         mantle::sdp::{ServiceRewardsParameters, rewards::blend},
-        test_utils::single_era,
+        test_utils::{FORK_DIGEST, single_era},
     };
 
     const SECURITY_PARAM: u32 = 10;
@@ -219,6 +219,7 @@ mod tests {
                 },
                 reward: crate::cryptarchia::tests::disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![FORK_DIGEST]),
         }
     }
 

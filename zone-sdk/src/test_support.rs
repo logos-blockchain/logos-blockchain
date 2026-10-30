@@ -16,6 +16,7 @@ use lb_common_http_client::{
     ProcessedBlockEvent, Slot, State, TimeInfo,
 };
 use lb_core::{
+    era::ForkDigest,
     events::{DepositNote, Event as ChainEvent, TxEvent, TxEventPayload},
     header::{ContentId, HeaderId},
     mantle::{
@@ -32,7 +33,7 @@ use lb_core::{
             },
         },
         traits::Hashable as _,
-        transactions::{Ops, states::Unverified},
+        transactions::{Ops, TxList, states::Unverified},
     },
     proofs::leader_proof::Groth16LeaderProof,
 };
@@ -46,6 +47,9 @@ use crate::{
     adapter::{self, BoxStream},
     sequencer::FundingConfig,
 };
+
+/// The fork digest the transactions of the tests carry.
+pub const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
 
 /// One scripted `block_stream` connection: serve `events`, then `then`.
 #[derive(Clone)]
@@ -357,7 +361,7 @@ impl adapter::Node for MockNode {
         // node would at zero gas price.
         Ok(WalletFundResponseBody {
             tip: header_id(0),
-            funded_tx: request.tx_builder.build().map_err(|e| {
+            funded_tx: request.tx_builder.build(FORK_DIGEST).map_err(|e| {
                 lb_common_http_client::Error::Server(format!("mock funding failed: {e:?}"))
             })?,
             transfer_proof: None,
@@ -439,7 +443,9 @@ pub fn live_event(block: &ApiBlock) -> ProcessedBlockEvent {
 /// Build a `SignedOps` carrying the given ops, with sample proofs.
 /// Suitable for tests that only care about op extraction, not verification.
 pub fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedOps<Unverified, StandardMode> {
-    let ops = Ops::try_from(ops).expect("ops fit");
+    let ops = TxList::try_from(ops)
+        .map(|ops| Ops::new(FORK_DIGEST, ops))
+        .expect("ops fit");
     SignedOps::from_ops_with_sample_proofs(ops)
 }
 

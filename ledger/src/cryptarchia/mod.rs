@@ -881,6 +881,7 @@ pub mod tests {
 
     use lb_core::{
         crypto::{Digest as _, Hasher},
+        era::AcceptedForkDigests,
         mantle::{
             Note, Op,
             OpProof::ZkSig,
@@ -919,7 +920,7 @@ pub mod tests {
                 rewards::{self},
             },
         },
-        test_utils::{schedule, single_era},
+        test_utils::{FORK_DIGEST, schedule, single_era},
     };
 
     type HeaderId = [u8; 32];
@@ -1149,6 +1150,7 @@ pub mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![FORK_DIGEST]),
         }
     }
 
@@ -2029,7 +2031,7 @@ pub mod tests {
             Inputs::try_new(inputs).expect("Invalid inputs size"),
             Outputs::try_new(outputs).expect("Invalid outputs size"),
         );
-        let mantle_tx = Ops::from([Op::Transfer(transfer_op.clone())]);
+        let mantle_tx = Ops::new(FORK_DIGEST, [Op::Transfer(transfer_op.clone())]);
         let transfer_sig = ZkKey::multi_sign(&sks, &mantle_tx.hash().to_fr()).unwrap();
         let op_proofs = OpProofs::from([ZkSig(transfer_sig.clone())]);
         let tx = SignedOps::from_parts(mantle_tx, op_proofs).unwrap();

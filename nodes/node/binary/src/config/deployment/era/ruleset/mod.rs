@@ -35,6 +35,16 @@ impl EraRuleset {
         }
     }
 
+    /// Whether an era of this ruleset refuses the transactions of the eras
+    /// before it, coming after an era of the ruleset `previous`. An era whose
+    /// ruleset changes how transactions are encoded or validated must.
+    #[must_use]
+    pub(crate) const fn refuses_earlier_transactions(&self, previous: &Self) -> bool {
+        match (previous, self) {
+            (Self::V1(_), Self::V1(_)) => false,
+        }
+    }
+
     /// How long each slot of the era lasts.
     #[must_use]
     pub const fn slot_duration(&self) -> Duration {

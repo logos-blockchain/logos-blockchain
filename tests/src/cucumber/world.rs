@@ -14,6 +14,7 @@ use cucumber::World;
 use educe::Educe;
 use lb_binary_codec::bincode::DeserializeOp as _;
 use lb_core::{
+    era::ForkDigest,
     header::HeaderId,
     mantle::{
         GenesisTime, SignedOps, Utxo,
@@ -1664,6 +1665,19 @@ impl CucumberWorld {
             })?
             .client
             .clone())
+    }
+
+    /// The fork digest a transaction signed now carries, as the first node to
+    /// answer reports it.
+    pub async fn fork_digest_in_force(&self) -> Result<ForkDigest, StepError> {
+        for node_info in self.nodes_info.values() {
+            if let Ok(fork_digest) = node_info.client.chain_fork().await {
+                return Ok(fork_digest);
+            }
+        }
+        Err(StepError::LogicalError {
+            message: "No node reported the fork digest in force".to_owned(),
+        })
     }
 
     /// Helper to retrieve all node names.

@@ -31,6 +31,7 @@ impl ServiceConfig {
                 WalletEraSettings {
                     epoch_length: era.parameters.epoch_length(),
                     security_param: parameters.cryptarchia.security_param,
+                    fork_digest: era.parameters.fork_digest,
                 }
             }),
         }

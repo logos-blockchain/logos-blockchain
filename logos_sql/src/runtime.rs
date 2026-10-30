@@ -726,8 +726,9 @@ const fn is_retryable_apply_error(error: &Error) -> bool {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use lb_core::mantle::{
-        Op, SignedOps, ops::channel::inscribe::InscriptionOp, transactions::Ops,
+    use lb_core::{
+        era::ForkDigest,
+        mantle::{Op, SignedOps, ops::channel::inscribe::InscriptionOp, transactions::Ops},
     };
     use lb_key_management_system_service::keys::{Ed25519Key, UnverifiedEd25519PublicKey};
     use lb_zone_sdk::{
@@ -776,14 +777,15 @@ mod tests {
         }
         .encode()
         .unwrap();
-        let tx = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::ChannelInscribe(
-            InscriptionOp {
+        let tx = SignedOps::from_ops_with_sample_proofs(Ops::new(
+            ForkDigest::new([0x11; 32]),
+            [Op::ChannelInscribe(InscriptionOp {
                 channel_id,
                 inscription: payload.try_into().unwrap(),
                 parent: MsgId::root(),
                 signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
-            },
-        )]));
+            })],
+        ));
         let inscription = channel_inscriptions(&tx, channel_id).remove(0);
         let checkpoint = SequencerCheckpoint {
             last_msg_id: inscription.this_msg,

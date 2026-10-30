@@ -76,7 +76,13 @@ pub async fn funded_signed_tx(
         .expect("funded tx gas cost should calculate")
         .into_inner();
 
-    let mantle_tx = funded_builder.build().expect("funded builder should build");
+    let fork_digest = node
+        .chain_fork()
+        .await
+        .expect("the node should report the fork digest in force");
+    let mantle_tx = funded_builder
+        .build(fork_digest)
+        .expect("funded builder should build");
     let tx_hash = mantle_tx.hash();
 
     let mut proofs = vec![op_proof(tx_hash)];

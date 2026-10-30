@@ -5,6 +5,7 @@ pub use lb_chain_broadcast_service::BlockInfo;
 pub use lb_chain_service::{ChainServiceInfo, CryptarchiaInfo, PhaseTag, Slot, State};
 use lb_core::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
+    era::ForkDigest,
     header::{ContentId, HeaderId},
     mantle::{
         SignedOps, channel::ChannelState, ledger::verification_mode::StandardMode,
@@ -23,7 +24,7 @@ use lb_http_api_common::{
     MAX_BLOCKS_STREAM_BLOCKS, MAX_BLOCKS_STREAM_CHUNK_SIZE,
     bodies::{
         blend::JoinBlendRequestBody,
-        chain::ChainIdResponseBody,
+        chain::{ChainForkResponseBody, ChainIdResponseBody},
         mantle::GasPricesResponseBody,
         wallet::{
             aged_notes::LeaderAgedNotesResponseBody,
@@ -35,7 +36,7 @@ use lb_http_api_common::{
     },
     paths::{
         BLEND_DISPERSE_TRANSACTION, BLEND_JOIN_NETWORK, BLEND_PENDING_TRANSACTIONS, BLOCK_EVENTS,
-        BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHAIN_ID, CHANNEL,
+        BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHAIN_FORK, CHAIN_ID, CHANNEL,
         CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_AGED_NOTES, LEADER_CLAIM_VOUCHERS,
         MANTLE_GAS_PRICES, MANTLE_SDP_FINALIZED_DECLARATION, MANTLE_SDP_FINALIZED_DECLARATIONS,
         MEMPOOL_ADD_TX, NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
@@ -451,6 +452,15 @@ impl CommonHttpClient {
         self.get::<(), ChainIdResponseBody>(request_url, None)
             .await
             .map(|body| body.chain_id)
+    }
+
+    pub async fn chain_fork(&self, base_url: Url) -> Result<ForkDigest, Error> {
+        let request_url = base_url
+            .join(CHAIN_FORK.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.get::<(), ChainForkResponseBody>(request_url, None)
+            .await
+            .map(|body| body.fork_digest)
     }
 
     /// Get consensus info (tip, height, etc.)

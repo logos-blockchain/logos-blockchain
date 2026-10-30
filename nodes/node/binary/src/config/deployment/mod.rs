@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use lb_chain_service::TipEra;
 use lb_core::{
     block::genesis::GenesisBlock,
-    era::{EraDigest, ForkDigest},
+    era::{AcceptedForkDigests, EraDigest, ForkDigest},
     header::HeaderId,
     mantle::{
         traits::GenesisTx as _,
@@ -77,16 +77,28 @@ impl DeploymentSettings {
         );
         let eras_after_genesis = eras.eras_after_genesis();
         let mut era_digests = Vec::with_capacity(eras_after_genesis.len() + 1);
+        let mut accepted_fork_digests = Vec::with_capacity(eras_after_genesis.len() + 1);
+        let mut previous_ruleset: Option<EraRuleset> = None;
         // Called in activation order: the fork digest of an era is over the
-        // digests of the eras up to it.
+        // digests of the eras up to it, and an era accepts the fork digests
+        // of the eras before it until one refuses the transactions of those.
         let mut definition = |first_epoch: Epoch, ruleset: &EraRuleset| {
             let digest = EraDigest::compute(first_epoch, ruleset);
             era_digests.push(digest);
             let fork_digest = ForkDigest::compute(genesis_id, era_digests.iter().copied());
+            if previous_ruleset
+                .as_ref()
+                .is_some_and(|previous| ruleset.refuses_earlier_transactions(previous))
+            {
+                accepted_fork_digests.clear();
+            }
+            accepted_fork_digests.push(fork_digest);
+            previous_ruleset = Some(ruleset.clone());
             EraDefinition {
                 ruleset: ruleset.clone(),
                 digest,
                 fork_digest,
+                accepted_fork_digests: AcceptedForkDigests::new(accepted_fork_digests.clone()),
             }
         };
         let genesis = definition(GENESIS_EPOCH, eras.genesis_era());
@@ -255,6 +267,8 @@ pub struct EraDefinition {
     pub digest: EraDigest,
     /// The digest of the eras up to this one, in activation order.
     pub fork_digest: ForkDigest,
+    /// The fork digests a transaction may carry in this era.
+    pub accepted_fork_digests: AcceptedForkDigests,
 }
 
 impl SlotDuration for EraDefinition {
@@ -282,7 +296,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use lb_chain_service::TipEra;
-    use lb_core::era::ForkDigest;
+    use lb_core::era::{AcceptedForkDigests, ForkDigest};
     use lb_time::{Epoch, Era, Slot, era::EpochLength as _};
     use lb_utils::{math::NonNegativeRatio, yaml::INCLUDE_TAG};
     use serde_yaml::Value;
@@ -477,6 +491,22 @@ mod tests {
             fork_digest: era_1.parameters.fork_digest,
         };
         DeploymentSettings::default().assert_keeps_tip_era(tip_era);
+    }
+
+    #[test]
+    fn an_era_accepts_the_fork_digests_of_the_eras_before_it() {
+        let two_eras = two_eras();
+        let genesis_era = two_eras.era_schedule().genesis().parameters;
+        let era_1 = two_eras.era_schedule().get(Era::new(1)).unwrap().parameters;
+
+        assert_eq!(
+            genesis_era.accepted_fork_digests,
+            AcceptedForkDigests::new(vec![genesis_era.fork_digest])
+        );
+        assert_eq!(
+            era_1.accepted_fork_digests,
+            AcceptedForkDigests::new(vec![genesis_era.fork_digest, era_1.fork_digest])
+        );
     }
 
     #[test]

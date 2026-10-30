@@ -366,6 +366,7 @@ mod tests {
     use futures::stream;
     use lb_core::{
         block::Proposal,
+        era::{AcceptedForkDigests, ForkDigest},
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::{EpochConfig, Era, Slot, UncleSlots};
@@ -1045,6 +1046,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
         }
     }
 }

@@ -29,6 +29,7 @@ macro_rules! api_routes {
             get lb_http_api_common::paths::MANTLE_METRICS => crate::api::handlers::mantle_metrics, mantle_metrics::<MempoolStorageAdapter, RuntimeServiceId>;
             post lb_http_api_common::paths::MANTLE_STATUS => crate::api::handlers::mantle_status, mantle_status::<MempoolStorageAdapter, RuntimeServiceId>;
             get lb_http_api_common::paths::CHAIN_ID => crate::api::handlers::chain_id, chain_id;
+            get lb_http_api_common::paths::CHAIN_FORK => crate::api::handlers::chain_fork, chain_fork::<RuntimeServiceId>;
             get lb_http_api_common::paths::CRYPTARCHIA_INFO => crate::api::handlers::cryptarchia_info, cryptarchia_info::<RuntimeServiceId>;
             get lb_http_api_common::paths::TIME_INFO => crate::api::handlers::time_info, time_info::<RuntimeServiceId>;
             get lb_http_api_common::paths::CRYPTARCHIA_HEADERS => crate::api::handlers::cryptarchia_headers, cryptarchia_headers::<RuntimeServiceId>;

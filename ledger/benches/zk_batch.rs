@@ -25,6 +25,7 @@ use std::{
 };
 
 use lb_core::{
+    era::{AcceptedForkDigests, ForkDigest},
     header::HeaderId,
     mantle::{
         Note, Op, OpProof, SignedOps, Utxo,
@@ -246,7 +247,7 @@ fn build_tx(utxo: Utxo, key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
         // Most of the tx's value goes as a tip, to withstand gas cost increases.
         Outputs::new([Note::new(1, key.to_public_key())]),
     );
-    let ops = Ops::from([Op::Transfer(transfer_op)]);
+    let ops = Ops::new(ForkDigest::new([0x11; 32]), [Op::Transfer(transfer_op)]);
     let signature = ZkKey::multi_sign(std::slice::from_ref(key), &ops.hash().to_fr()).unwrap();
     let op_proofs = OpProofs::from([OpProof::ZkSig(signature)]);
 
@@ -333,5 +334,6 @@ fn config() -> Config {
                 slot_window: NonZero::new(100).unwrap(),
             },
         },
+        accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
     }
 }

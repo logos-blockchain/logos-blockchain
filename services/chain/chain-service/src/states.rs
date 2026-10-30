@@ -163,7 +163,10 @@ mod tests {
     };
 
     use lb_binary_codec::bincode::SerializeOp as _;
-    use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
+    use lb_core::{
+        era::AcceptedForkDigests,
+        sdp::{MinStake, ServiceParameters, ServiceType},
+    };
     use lb_cryptarchia_engine::{State::Bootstrapping, UncleSlots};
     use lb_ledger::{
         ConsensusExcludedKeys,
@@ -258,6 +261,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
         };
 
         let (cryptarchia_engine, pruned_blocks) = {
@@ -450,6 +454,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
         };
 
         // Build a chain: b0 (genesis) - b1 - b2 - b3 - b4 - b5
