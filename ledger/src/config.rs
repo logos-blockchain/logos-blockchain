@@ -1,7 +1,10 @@
 use std::num::{NonZero, NonZeroU32, NonZeroU64, NonZeroU128};
 
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
-use lb_core::mantle::{Value, ops::pow::PowSlotWindows};
+use lb_core::mantle::{
+    Value,
+    ops::pow::{PowSlotWindows, PowTarget},
+};
 use lb_cryptarchia_engine::{Epoch, EraSchedule, Slot};
 pub use lb_groth16::ModulusShift;
 use lb_pol::LotteryConstants;
@@ -266,6 +269,14 @@ pub enum RewardPoWConfigError {
         pow_share: u64,
         share_den: NonZeroU64,
     },
+    #[error(
+        "reward target cap ({minimum_difficulty}) must be above the reward target floor \
+         ({floor}), or the target can never move"
+    )]
+    TargetCapNotAboveFloor {
+        minimum_difficulty: ModulusShift,
+        floor: NonZeroU64,
+    },
 }
 
 impl RewardPoWConfig {
@@ -277,8 +288,9 @@ impl RewardPoWConfig {
     /// # Errors
     ///
     /// Returns [`RewardPoWConfigError`] if the EMA smoothing factor is not
-    /// below the precision, or the configured part of the payout-rate
-    /// denominator overflows `u64`.
+    /// below the precision, the fee share exceeds its denominator, the reward
+    /// target cap is not above the floor, or the configured part of the
+    /// payout-rate denominator overflows `u64`.
     pub fn validate(&self) -> Result<(), RewardPoWConfigError> {
         if self.ema_smoothing_factor >= self.ema_smoothing_precision.get() {
             return Err(RewardPoWConfigError::EmaSmoothingFactorNotBelowPrecision {
@@ -294,8 +306,16 @@ impl RewardPoWConfig {
             });
         }
 
-        // Only the errors matter here; the computed values are unused.
-        self.checked_reward_target_floor()?;
+        // The retarget clamps between the floor and the cap, the genesis
+        // target: at or below the floor, it would always return the cap.
+        let floor = self.checked_reward_target_floor()?;
+        if PowTarget::from(self.minimum_difficulty) <= PowTarget::from(floor.get()) {
+            return Err(RewardPoWConfigError::TargetCapNotAboveFloor {
+                minimum_difficulty: self.minimum_difficulty,
+                floor,
+            });
+        }
+
         self.checked_claim_rate_scale()?;
         Ok(())
     }
@@ -598,6 +618,20 @@ mod tests {
         config.pow_share = 10;
         config.share_den = NonZeroU64::new(10).unwrap();
         assert_eq!(config.validate(), Ok(()));
+    }
+
+    #[test]
+    fn reward_config_rejects_target_cap_not_above_floor() {
+        // p / 2^253 is 1, below the floor of 9 that F/P = 9/10 sets.
+        let mut config = disabled_reward_config();
+        config.minimum_difficulty = ModulusShift::new::<253>();
+        assert_eq!(
+            config.validate(),
+            Err(RewardPoWConfigError::TargetCapNotAboveFloor {
+                minimum_difficulty: config.minimum_difficulty,
+                floor: NonZeroU64::new(9).unwrap(),
+            })
+        );
     }
 
     #[test]

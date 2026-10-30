@@ -27,6 +27,10 @@ use lb_groth16::{Fr, fr_from_bytes};
 use lb_log_targets::ledger;
 use lb_utxotree::MerklePath;
 
+/// The precision the total stake inference scales the slot activation
+/// coefficient and the learning rate by, truncating each: it cannot measure a
+/// coefficient below its inverse, which truncates to zero.
+pub use self::stake::PRECISION as STAKE_INFERENCE_PRECISION;
 use crate::{
     config::{
         ConsensusExcludedKeys, EraScheduledConfig, config_for_epoch, nonce_snapshot,

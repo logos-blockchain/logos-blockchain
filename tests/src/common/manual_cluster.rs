@@ -193,7 +193,11 @@ fn fast_chain_config(mut config: RunConfig) -> RunConfig {
             parameters.time.slot_duration_in_seconds = NonZero::new(2).expect("nonzero");
             parameters.cryptarchia.security_param = NonZero::new(3).expect("nonzero");
             parameters.cryptarchia.slot_activation_coeff =
-                NonNegativeRatio::new(1, 2.try_into().expect("nonzero"));
+                NonNegativeRatio::new(1, 2.try_into().expect("nonzero"))
+                    .try_into()
+                    .expect("1/2 is a valid slot activation coefficient");
+            // The widest uncle reference window k allows, ⌊0.6k⌋.
+            parameters.cryptarchia.uncle_reference_window_in_block = 1;
         });
     config
 }

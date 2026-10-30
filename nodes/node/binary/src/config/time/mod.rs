@@ -31,13 +31,43 @@ impl ServiceConfig {
                 ntp_server: self.user.backend.server,
                 update_interval: self.user.backend.update_interval,
             },
-            era_schedule: eras.map(|era| TimeServiceEraSettings {
-                timing: EraTiming {
-                    slot_duration: era.parameters.slot_duration(),
-                    epoch_length: era.parameters.epoch_length(),
-                },
-                transition_slots: era.parameters.ruleset.era_transition_slots(),
-            }),
+            era_schedule: eras.map(|era| era_settings(era.parameters)),
         }
+    }
+}
+
+/// How the time service follows `era`.
+fn era_settings(era: &EraDefinition) -> TimeServiceEraSettings {
+    TimeServiceEraSettings {
+        timing: EraTiming {
+            slot_duration: era.slot_duration(),
+            epoch_length: era.epoch_length(),
+        },
+        transition_slots: era.ruleset.era_transition_slots(),
+    }
+}
+
+/// Checks that the transition period each era opens ends before the era after
+/// it starts: the time service follows one transition period at a time.
+///
+/// # Panics
+///
+/// If an era ends within the transition period it opens.
+pub(crate) fn check_transition_periods(eras: &EraSchedule<EraDefinition>) {
+    for ((previous, era), next) in eras
+        .iter()
+        .zip(eras.iter().skip(1))
+        .zip(eras.iter().skip(2))
+    {
+        let era_slots = next.first_slot.into_inner() - era.first_slot.into_inner();
+        let transition_slots = era_settings(previous.parameters)
+            .transition_period_in_slots_of(&era_settings(era.parameters))
+            .unwrap_or(u64::MAX);
+        assert!(
+            transition_slots < era_slots,
+            "Era {} lasts {era_slots} slots, not more than the {transition_slots} slots of the \
+             transition period it opens.",
+            era.era.into_inner()
+        );
     }
 }

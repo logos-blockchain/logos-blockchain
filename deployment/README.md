@@ -130,6 +130,14 @@ way, relative to itself, so they must be shipped next to it:
 The ceremony writes the genesis era only: re-running it replaces a schedule
 with that era alone, and removes the era files of the schedule it replaces.
 
+The node checks every era when it loads a deployment, and refuses to start on
+one it cannot run: values the specifications rule out (a slot activation
+coefficient `f` of 1 or more, an uncle reference window `W` wider than `⌊0.6k⌋`,
+...), values the node cannot compute with (`f` below 1/1000, `⌊k/4f⌋` of zero,
+...), an era whose `W·f⁻¹` exceeds a fifth of the previous era's finalization
+window `3⌊k/f⌋`, and an era that ends within the transition period it opens.
+`--check-config` runs the same checks.
+
 Protocol and gossipsub topic names are not configured: every node derives them
 from its deployment. Blend, chain sync and the cryptarchia and mempool topics are
 named `/logos-blockchain/<fork digest>/<protocol>`, so nodes on different forks

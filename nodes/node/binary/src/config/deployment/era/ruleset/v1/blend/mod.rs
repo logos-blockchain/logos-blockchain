@@ -16,6 +16,13 @@ use super::{
 
 pub(crate) mod codec;
 
+/// `Φ_CC`: the peering degree a core node maintains with other core nodes.
+///
+/// The Blend spec sets it to 4, within the 3 to 5 it allows: below 3, a node
+/// opens no connection of its own; above 5, nodes must open more connections
+/// than nodes can accept, and dials are refused.
+pub const TARGET_PEERING_DEGREE: NonZeroU32 = NonZeroU32::new(4).unwrap();
+
 /// Deployment-specific Blend settings.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Settings {
@@ -24,6 +31,16 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// Checks the settings an era runs Blend with, in slots of `slot_duration`,
+    /// panicking on the first value found invalid.
+    pub(super) fn validate(&self, slot_duration: &Duration) {
+        // Each panics on values the node cannot run with: computed now rather
+        // than once the era runs. A share `r₁` of at least one message leaves
+        // room for an edge connection too: `r_E = 2V/3 − Φ_CC · r₁ ≥ r₁`.
+        let _ = self.connection_share_per_round();
+        let _ = self.edge_node_connection_timeout(slot_duration);
+    }
+
     #[must_use]
     pub const fn round_duration(&self, slot_duration: &Duration) -> Duration {
         *slot_duration
@@ -67,7 +84,7 @@ impl Settings {
     #[must_use]
     pub fn connection_share_per_round(&self) -> NonZeroU64 {
         let readable_per_round = 2 * u64::from(self.core.verification_rate_per_second.get()) / 3;
-        let shares = u64::from(self.core.target_peering_degree.get()) + 1;
+        let shares = u64::from(TARGET_PEERING_DEGREE.get()) + 1;
         NonZeroU64::new(readable_per_round / shares).expect(
             "The verification rate must allow at least one message per connection per round.",
         )
@@ -78,8 +95,8 @@ impl Settings {
     #[must_use]
     pub fn accepted_edge_connections_per_round(&self) -> NonZeroU64 {
         let readable_per_round = 2 * u64::from(self.core.verification_rate_per_second.get()) / 3;
-        let taken_by_core_connections = u64::from(self.core.target_peering_degree.get())
-            * self.connection_share_per_round().get();
+        let taken_by_core_connections =
+            u64::from(TARGET_PEERING_DEGREE.get()) * self.connection_share_per_round().get();
         NonZeroU64::new(readable_per_round.saturating_sub(taken_by_core_connections)).expect(
             "The verification rate must leave room for at least one edge connection per round.",
         )
@@ -197,8 +214,6 @@ impl From<MinimumNetworkSize> for NonZeroU64 {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CoreSettings {
     pub scheduler: SchedulerSettings,
-    /// `Φ_CC`: the peering degree a core node maintains with other core nodes.
-    pub target_peering_degree: NonZeroU32,
     /// `V`: the messages per second the slowest node the protocol targets can
     /// verify the public header of. Every admission share is sized so that what
     /// a node reads in a round stays within it.

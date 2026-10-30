@@ -68,7 +68,11 @@ fn test_config(mut config: RunConfig, leader_funding_pk: ZkPublicKey) -> RunConf
             };
             parameters.cryptarchia.security_param = NonZero::new(2).unwrap();
             parameters.cryptarchia.slot_activation_coeff =
-                NonNegativeRatio::new(1, 2.try_into().unwrap());
+                NonNegativeRatio::new(1, 2.try_into().unwrap())
+                    .try_into()
+                    .unwrap();
+            // The widest uncle reference window k allows, ⌊0.6k⌋.
+            parameters.cryptarchia.uncle_reference_window_in_block = 1;
         });
     config.user.cryptarchia.leader.wallet.funding_pk = leader_funding_pk;
 

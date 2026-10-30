@@ -21,7 +21,10 @@ pub mod era;
 use era::GENESIS_EPOCH;
 pub use era::{EraDeclarations, EraScheduleError};
 
-use crate::config::deployment::era::ruleset::{EraRuleset, v1};
+use crate::config::{
+    deployment::era::ruleset::{EraRuleset, v1},
+    time::check_transition_periods,
+};
 
 /// The main file of the default deployment, which includes each of its eras
 /// from its own file.
@@ -44,8 +47,8 @@ struct EraDefinitions {
 /// the genesis block they start from.
 ///
 /// It is read and written as its file declares it, its eras then its genesis
-/// block, and the eras are resolved as it is read: a schedule that does not
-/// resolve is refused at load.
+/// block, and the eras are checked and resolved as it is read: loading a
+/// schedule that does not resolve, or whose eras cannot run, panics.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(from = "EraDefinitions", into = "EraDefinitions")]
 pub struct DeploymentSettings {
@@ -60,9 +63,13 @@ impl DeploymentSettings {
     ///
     /// # Panics
     ///
-    /// If an era starts beyond the slots or the time this node can represent.
+    /// If an era's values cannot run, alone or after the era before it, an era
+    /// starts beyond the slots or the time this node can represent, or an era
+    /// ends within the transition period it opens.
     #[must_use]
     pub fn new(eras: &EraDeclarations, genesis_block: GenesisBlock) -> Self {
+        // Before resolving the eras, which reads their epoch lengths.
+        eras.validate();
         let (genesis_id, genesis_time) = (
             genesis_block.header().id(),
             genesis_block.genesis_tx().genesis_parameters().start_time,
@@ -91,7 +98,9 @@ impl DeploymentSettings {
             },
         ))
         .expect("The resolved eras are as many as the declared ones.");
-        let eras = EraSchedule::new(genesis_time.into(), genesis, after_genesis).unwrap();
+        let eras = EraSchedule::new(genesis_time.into(), genesis, after_genesis)
+            .unwrap_or_else(|error| panic!("The eras cannot be resolved: {error}."));
+        check_transition_periods(&eras);
         Self {
             eras,
             genesis_block,
@@ -163,8 +172,7 @@ impl DeploymentSettings {
     ///
     /// # Panics
     ///
-    /// If the change makes a later era start beyond the slots or the time this
-    /// node can represent.
+    /// If [`Self::new`] does on the changed deployment.
     pub fn update_genesis_era_parameters<Update>(&mut self, update: Update)
     where
         Update: FnOnce(&mut v1::Parameters),
@@ -247,30 +255,80 @@ impl Default for DeploymentSettings {
 
 #[cfg(test)]
 mod tests {
+    use core::num::NonZero;
     use std::collections::{BTreeMap, BTreeSet};
 
     use lb_core::era::ForkDigest;
     use lb_time::{Epoch, Era};
-    use lb_utils::yaml::INCLUDE_TAG;
+    use lb_utils::{math::NonNegativeRatio, yaml::INCLUDE_TAG};
     use serde_yaml::Value;
 
     use super::{EraDeclarations, EraDefinitions, SERIALIZED_DEPLOYMENT, SERIALIZED_ERAS};
-    use crate::config::DeploymentSettings;
+    use crate::config::{
+        DeploymentSettings,
+        deployment::era::ruleset::{
+            EraRuleset,
+            v1::{self, cryptarchia::EpochConfig},
+        },
+    };
+
+    /// The default deployment's genesis block, starting `eras`, each keyed by
+    /// its first epoch.
+    fn deployment(eras: impl IntoIterator<Item = (u32, EraRuleset)>) -> DeploymentSettings {
+        let EraDefinitions { genesis_block, .. } = DeploymentSettings::default().into();
+        let eras = EraDeclarations::try_from(
+            eras.into_iter()
+                .map(|(first_epoch, ruleset)| (Epoch::new(first_epoch), ruleset))
+                .collect::<BTreeMap<_, _>>(),
+        )
+        .unwrap();
+        DeploymentSettings::new(&eras, genesis_block)
+    }
+
+    /// The default deployment's genesis era, changed by `change`.
+    fn ruleset(change: impl FnOnce(&mut v1::Parameters)) -> EraRuleset {
+        let mut parameters = DeploymentSettings::default()
+            .genesis_era_parameters()
+            .clone();
+        change(&mut parameters);
+        EraRuleset::V1(parameters)
+    }
 
     /// The default deployment, with a second era from epoch 10 that runs the
     /// genesis era's ruleset.
     fn two_eras() -> DeploymentSettings {
-        let EraDefinitions {
-            eras,
-            genesis_block,
-        } = DeploymentSettings::default().into();
-        let ruleset = eras.genesis_era().clone();
-        let eras = EraDeclarations::try_from(BTreeMap::from([
-            (Epoch::new(0), ruleset.clone()),
-            (Epoch::new(10), ruleset),
-        ]))
-        .unwrap();
-        DeploymentSettings::new(&eras, genesis_block)
+        let genesis = ruleset(|_| ());
+        deployment([(0, genesis.clone()), (10, genesis)])
+    }
+
+    /// A genesis era at f = 1/20, whose transition period lasts ⌊1/f⌋ = 20 of
+    /// its one-second slots, then two eras of 12-slot epochs (3 phases of
+    /// ⌊k/f⌋ = 4 slots), from epoch 10 and from `third_era_epoch`.
+    fn eras_after_a_transition_period(third_era_epoch: u32) -> DeploymentSettings {
+        let genesis = ruleset(|parameters| {
+            parameters.cryptarchia.slot_activation_coeff =
+                NonNegativeRatio::new(1, NonZero::new(20).unwrap())
+                    .try_into()
+                    .unwrap();
+        });
+        let short_epochs = ruleset(|parameters| {
+            let cryptarchia = &mut parameters.cryptarchia;
+            cryptarchia.security_param = NonZero::new(2).unwrap();
+            cryptarchia.slot_activation_coeff = NonNegativeRatio::new(1, NonZero::new(2).unwrap())
+                .try_into()
+                .unwrap();
+            cryptarchia.uncle_reference_window_in_block = 1;
+            cryptarchia.epoch_config = EpochConfig {
+                epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
+                epoch_period_nonce_buffer: NonZero::new(1).unwrap(),
+                epoch_period_nonce_stabilization: NonZero::new(1).unwrap(),
+            };
+        });
+        deployment([
+            (0, genesis),
+            (10, short_epochs.clone()),
+            (third_era_epoch, short_epochs),
+        ])
     }
 
     #[test]
@@ -358,6 +416,18 @@ mod tests {
                 [genesis.parameters.digest, second.parameters.digest].into_iter()
             )
         );
+    }
+
+    #[test]
+    fn an_era_that_outlasts_the_transition_period_it_opens_is_accepted() {
+        // Era 1 lasts 24 slots.
+        drop(eras_after_a_transition_period(12));
+    }
+
+    #[test]
+    #[should_panic(expected = "Era 1 lasts 12 slots, not more than the 20 slots")]
+    fn an_era_that_ends_within_the_transition_period_it_opens_is_refused() {
+        drop(eras_after_a_transition_period(11));
     }
 
     #[test]

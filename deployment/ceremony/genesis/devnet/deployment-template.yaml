@@ -11,7 +11,6 @@ blend:
         message_frequency_per_round: 1.0
       delayer:
         maximum_release_delay_in_rounds: 1
-    target_peering_degree: 4
     verification_rate_per_second: 156
     edge_node_send_deadline_in_rounds: 1
     core_handshake_deadline_in_rounds: 2
@@ -69,9 +68,10 @@ cryptarchia:
       # block-intervals of tolerance for a claim to reach a block.
       slot_window: 300
   sdp_config:
+    # One entry per service type, in the order they are declared: the Blend
+    # network.
     service_params:
-      BN:
-        inactivity_period: 2
+      - inactivity_period: 2
         epoch: 0
     min_stake:
       threshold: 1000000000
