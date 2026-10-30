@@ -105,7 +105,12 @@ impl ServiceConfig {
                         .state_recording_interval,
                 },
             },
-            era_schedule: Arc::clone(&era_schedule),
+            era_schedule: Arc::new(eras.map(|era| {
+                (
+                    ledger_config_for_era(era.parameters),
+                    era.parameters.fork_digest,
+                )
+            })),
             recovery_data: recovery_data.clone(),
             starting_state: genesis_block.clone().into(),
             sync: lb_chain_service::SyncConfig {

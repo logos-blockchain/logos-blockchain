@@ -8,6 +8,7 @@ use std::{
 use futures::StreamExt as _;
 use lb_core::{
     block::{Block, BlockTransactions, SignedHeader, UncleHeaders},
+    era::ForkDigest,
     mantle::{
         Note, Op, OpProof, SignedOps, Utxo,
         channel::Channels,
@@ -55,7 +56,7 @@ use tokio::{
 
 use crate::{
     BlockOrigin, BootstrapConfig, Cryptarchia, CryptarchiaConsensus, CryptarchiaConsensusState,
-    Error, OfflineGracePeriodConfig,
+    Error, OfflineGracePeriodConfig, TipEra,
     relays::CryptarchiaConsensusRelays,
     service::{get_block_ids, process_block},
 };
@@ -343,6 +344,10 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
 
     let recovery_state = CryptarchiaConsensusState {
         tip: b2_id,
+        tip_era: TipEra {
+            slot: b2_slot,
+            fork_digest: ForkDigest::from([0; 32]),
+        },
         lib: b1_id,
         lib_ledger_state: stored.ledger.state(&b1_id).unwrap().clone(),
         lib_block_length: 1,
@@ -433,6 +438,10 @@ async fn recovery_chain_with_tip_ahead_of_current_slot() {
 
     let recovery_state = CryptarchiaConsensusState {
         tip: b2_id,
+        tip_era: TipEra {
+            slot: b2.header().slot(),
+            fork_digest: ForkDigest::from([0; 32]),
+        },
         lib: b1_id,
         lib_ledger_state: stored.ledger.state(&b1_id).unwrap().clone(),
         lib_block_length: 1,
@@ -548,6 +557,10 @@ async fn get_block_ids_past_recovered_lib() {
 
     let recovery_state = CryptarchiaConsensusState {
         tip: b2_id,
+        tip_era: TipEra {
+            slot: b2.header().slot(),
+            fork_digest: ForkDigest::from([0; 32]),
+        },
         lib: b1_id,
         lib_ledger_state: stored.ledger.state(&b1_id).unwrap().clone(),
         lib_block_length: 1,

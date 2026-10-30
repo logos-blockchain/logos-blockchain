@@ -24,6 +24,7 @@ use futures::{Stream, TryStreamExt as _};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
     block::{Block, UncleHeaders, genesis::GenesisBlock},
+    era::ForkDigest,
     events::Events,
     header::HeaderId,
     mantle::{
@@ -35,7 +36,7 @@ use lb_core::{
     },
     sdp::{Declaration, DeclarationId},
 };
-use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots};
+use lb_cryptarchia_engine::{Branch, EraSchedule, PrunedBlocks, ReorgedBlocks, UncleSlots};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
 pub use lb_ledger::EpochState;
 use lb_ledger::{LedgerState, config::EraScheduledConfig};
@@ -65,7 +66,7 @@ use tracing_futures::Instrument as _;
 pub use crate::{
     bootstrap::config::{BootstrapConfig, OfflineGracePeriodConfig},
     service::phases::PhaseTag,
-    states::CryptarchiaConsensusState,
+    states::{CryptarchiaConsensusState, TipEra, saved_tip_era},
     sync::config::{BlockProviderConfig, SyncConfig},
     uncle::UncleError,
 };
@@ -628,7 +629,7 @@ impl Cryptarchia {
 
 #[derive(Debug, Clone)]
 pub struct CryptarchiaSettings {
-    pub era_schedule: Arc<EraScheduledConfig>,
+    pub era_schedule: Arc<EraSchedule<(lb_ledger::Config, ForkDigest)>>,
     pub starting_state: StartingState,
     pub bootstrap: BootstrapConfig,
     pub sync: SyncConfig,
@@ -725,6 +726,7 @@ where
         })
     }
 
+    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     async fn run(self) -> Result<(), DynError> {
         let relays: CryptarchiaConsensusRelays<Tx> =
             CryptarchiaConsensusRelays::from_service_resources_handle::<
@@ -755,6 +757,7 @@ where
         .await?;
 
         let (current_slot, slot_timer) = Self::get_slot_timer(&relays).await?;
+        let fork_digests = Arc::new(era_schedule.map(|era| era.parameters.1));
 
         let InitializedCryptarchia {
             cryptarchia,
@@ -763,7 +766,7 @@ where
         } = Self::initialize_cryptarchia(
             &self.state,
             &bootstrap_config,
-            era_schedule,
+            Arc::new(era_schedule.map(|era| era.parameters.0.clone())),
             &relays,
             &self.new_block_subscription_sender,
             &self.lib_subscription_sender,
@@ -785,6 +788,7 @@ where
             persist_recovery_state(
                 &cryptarchia,
                 storage_blocks_to_remove.clone(),
+                &fork_digests,
                 &self.service_resources_handle.state_updater,
             );
         }
@@ -816,6 +820,7 @@ where
             cryptarchia,
             service_resources_handle.inbound_relay,
             service_resources_handle.state_updater,
+            fork_digests,
             new_block_subscription_sender,
             lib_subscription_sender,
             chain_online_notifier,

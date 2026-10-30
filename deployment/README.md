@@ -138,6 +138,12 @@ coefficient `f` of 1 or more, an uncle reference window `W` wider than `⌊0.6k�
 window `3⌊k/f⌋`, and an era that ends within the transition period it opens.
 `--check-config` runs the same checks.
 
+A release may append eras, or change eras that have not begun, but must not
+change an era a node has already executed. A node refuses to start with a
+deployment that gives the slot of its tip another fork digest than the one the
+tip was applied under: run the release the node ran with, or remove the node's
+state and sync again.
+
 Protocol and gossipsub topic names are not configured: every node derives them
 from its deployment. Blend, chain sync and the cryptarchia and mempool topics are
 named `/logos-blockchain/<fork digest>/<protocol>`, so nodes on different forks

@@ -6,6 +6,7 @@ use core::fmt::Debug;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     pin::Pin,
+    sync::Arc,
     time::Duration,
 };
 
@@ -13,6 +14,7 @@ use futures::{Stream, StreamExt as _, future::join_all, stream};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockInfo};
 use lb_core::{
     block::{Block, SignedHeader, UncleHeaders},
+    era::ForkDigest,
     header::HeaderId,
     mantle::{
         OpRef, TxHash,
@@ -22,7 +24,7 @@ use lb_core::{
     },
     sdp::{Declaration, DeclarationId, ServiceType},
 };
-use lb_cryptarchia_engine::{Epoch, PrunedBlocks, Slot};
+use lb_cryptarchia_engine::{Epoch, EraSchedule, PrunedBlocks, Slot};
 use lb_cryptarchia_sync::{BlocksUnavailableReason, ProviderResponse, TipResponseFailureReason};
 use lb_ledger::config::{config_for_slot, stake_distribution_snapshot};
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
@@ -225,6 +227,7 @@ where
     cryptarchia: Cryptarchia,
     inbound_relay: InboundRelay<ConsensusMsg<Tx>>,
     state_updater: StateUpdater<Option<CryptarchiaConsensusState>>,
+    fork_digests: Arc<EraSchedule<ForkDigest>>,
     new_block_subscription_sender: broadcast::Sender<ProcessedBlockEvent>,
     lib_subscription_sender: broadcast::Sender<LibUpdate>,
     chain_online_notifier: ChainOnlineNotifier,
@@ -261,6 +264,7 @@ where
             cryptarchia: self.cryptarchia,
             inbound_relay: self.inbound_relay,
             state_updater: self.state_updater,
+            fork_digests: self.fork_digests,
             new_block_subscription_sender: self.new_block_subscription_sender,
             lib_subscription_sender: self.lib_subscription_sender,
             chain_online_notifier: self.chain_online_notifier,
@@ -594,6 +598,7 @@ where
         persist_recovery_state(
             &self.cryptarchia,
             self.storage_blocks_to_remove.clone(),
+            &self.fork_digests,
             &self.state_updater,
         );
     }
@@ -1397,11 +1402,13 @@ async fn broadcast_finalized_block(
 pub fn persist_recovery_state(
     cryptarchia: &Cryptarchia,
     storage_blocks_to_remove: HashSet<HeaderId>,
+    fork_digests: &EraSchedule<ForkDigest>,
     state_updater: &StateUpdater<Option<CryptarchiaConsensusState>>,
 ) {
     match CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
         cryptarchia,
         storage_blocks_to_remove,
+        fork_digests,
     ) {
         Ok(state) => {
             state_updater.update(Some(state));
