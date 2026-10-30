@@ -3,7 +3,7 @@ use std::{
     net::Ipv4Addr,
     num::NonZeroU16,
     path::PathBuf,
-    slice,
+    ptr, slice,
     str::FromStr as _,
 };
 
@@ -12,7 +12,13 @@ use lb_node::cli::{EmbeddedInitArgs, InitArgs, ParticipateArgs};
 use multiaddr::Multiaddr;
 use tokio::runtime::Runtime;
 
-use crate::{OperationStatus, errors::OperationStatusCode, return_error_if_null_pointer};
+use crate::{
+    OperationStatus,
+    api::{deployment::to_c_string, lifecycle::resolve_run_config},
+    errors::OperationStatusCode,
+    result::FfiStatusResult,
+    return_error_if_null_pointer, unwrap_or_return_error,
+};
 
 /// Converts a non-null C string pointer into a [`PathBuf`].
 ///
@@ -264,6 +270,42 @@ pub unsafe extern "C" fn participate(
     }
 }
 
+pub type FfiShowConfigResult = FfiStatusResult<*mut c_char>;
+
+/// The config a node started from `config_path` would run with, as YAML with
+/// the secrets redacted: the keystore merged in and the environment overrides
+/// applied, like `--show-config` on the node binary. Starts nothing.
+///
+/// # Safety
+///
+/// `config_path` must be a valid NUL-terminated C string.
+///
+/// # Memory Management
+///
+/// The caller must free the returned string with
+/// [`free_cstring`](super::free_cstring).
+#[must_use]
+#[panic_to_error]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn show_config(config_path: *const c_char) -> FfiShowConfigResult {
+    return_error_if_null_pointer!(config_path);
+
+    let run_config =
+        unwrap_or_return_error!(unsafe { resolve_run_config(config_path, ptr::null()) });
+    let yaml = unwrap_or_return_error!(
+        run_config
+            .user
+            .redacted()
+            .and_then(|config| serde_yaml::to_string(&config))
+            .map_err(|error| OperationStatus::error(
+                OperationStatusCode::RuntimeError,
+                format!("Failed to serialize config: {error}"),
+            ))
+    );
+    let yaml = unwrap_or_return_error!(to_c_string(&yaml));
+    FfiShowConfigResult::ok(yaml.into_raw())
+}
+
 #[cfg(test)]
 mod test {
     use std::{ffi::CString, path::Path};
@@ -362,5 +404,37 @@ mod test {
             "Failed to generate participation data: {status:?}"
         );
         assert!(output_dir.join("participation_data.yaml").exists());
+    }
+
+    #[test]
+    fn show_config_fills_in_the_defaults_and_redacts_the_secrets() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let config_path = temp_dir.path().join("user_config.yaml");
+        let status = generate_config_sync(EmbeddedInitArgs {
+            output: config_path.clone(),
+            ..Default::default()
+        });
+        assert!(status.is_ok(), "Failed to generate config: {status:?}");
+        let written = std::fs::read_to_string(&config_path).expect("Config should be readable");
+
+        let config_c = cstring(&config_path);
+        let result = unsafe { show_config(config_c.as_ptr()) };
+        assert!(result.is_ok(), "Failed to show config: {:?}", result.error);
+        let yaml = unsafe { CStr::from_ptr(result.value) }
+            .to_str()
+            .expect("Config should be valid UTF-8")
+            .to_owned();
+        assert!(unsafe { free_cstring(result.value) }.is_ok());
+
+        let config: serde_yaml::Value = serde_yaml::from_str(&yaml).expect("Config should be YAML");
+        let swarm = &config["network"]["backend"]["swarm"];
+        assert_eq!(swarm["node_key"], "<secret>");
+        assert_eq!(config["kms"]["backend"]["keys"], "<secret>");
+        assert!(swarm["port"].is_u64());
+        assert!(config["pow"]["auto_claim"]["targets"].is_sequence());
+        assert_eq!(
+            std::fs::read_to_string(&config_path).expect("Config should be readable"),
+            written
+        );
     }
 }
