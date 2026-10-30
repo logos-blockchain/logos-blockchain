@@ -45,7 +45,7 @@ use tempfile::TempDir;
 use crate::{
     LogosBlockchainNode, OperationStatus, OperationStatusCode,
     api::{
-        blend::{blend_info, blend_join_as_core_node, blend_requirements},
+        blend::{blend_info, blend_join_as_core_node, blend_requirements, blend_withdraw},
         chain::get_chain_id,
         channel::get_channel_state,
         config::{GenerateConfigArgs, generate_user_config, participate},
@@ -249,6 +249,7 @@ mod no_node {
             assert_eq!(code(blend_join_as_core_node(node, s, id.as_ptr())), np);
             assert_eq!(code(blend_info(node)), np);
             assert_eq!(code(blend_requirements(node)), np);
+            assert_eq!(code(blend_withdraw(node)), np);
             assert_eq!(code(shutdown_node(ptr::null_mut())), np);
 
             assert_eq!(code(start_lb_node(null_s, null_s)), np);

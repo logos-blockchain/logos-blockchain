@@ -598,6 +598,7 @@ pub struct ProviderInfo {
 }
 
 pub const SNAPSHOT_FINALIZATION_DELAY: Epoch = Epoch::new(2);
+pub const WITHDRAWAL_UNLOCK_DELAY: Epoch = SNAPSHOT_FINALIZATION_DELAY.strict_add(Epoch::new(1));
 
 impl Declaration {
     #[must_use]

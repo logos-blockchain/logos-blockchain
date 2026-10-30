@@ -63,3 +63,80 @@ pub unsafe extern "C" fn get_chain_id(node: *const LogosBlockchainNode) -> FfiGe
         )),
     }
 }
+
+pub mod api {
+    use lb_chain_service::{CryptarchiaInfo, Epoch, State, api::CryptarchiaServiceApi};
+    use lb_node::{RuntimeServiceId, generic_services::CryptarchiaService};
+    use overwatch::overwatch::OverwatchHandle;
+
+    use crate::{
+        OperationStatus, OperationStatusCode, StatusResult, api::common::overwatch::ensure_ready,
+    };
+
+    type NodeChainApi = CryptarchiaServiceApi<CryptarchiaService<RuntimeServiceId>>;
+
+    pub struct ChainFfiApi {
+        api: NodeChainApi,
+    }
+
+    impl ChainFfiApi {
+        /// Creates a Chain FFI Api from the service api
+        ///
+        /// # Errors
+        ///
+        /// Fails with [`OperationStatusCode::ServiceError`] if the chain
+        /// service isn't ready.
+        pub async fn new(
+            api: NodeChainApi,
+            overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
+        ) -> StatusResult<Self> {
+            ensure_ready::<CryptarchiaService<RuntimeServiceId>>(overwatch_handle).await?;
+            Ok(Self { api })
+        }
+
+        /// Creates a Chain FFI Api, including the internal service api
+        ///
+        /// # Errors
+        ///
+        /// Fails with [`OperationStatusCode::ServiceError`] if the chain
+        /// service isn't ready.
+        pub async fn from_overwatch_handle(
+            overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
+        ) -> StatusResult<Self> {
+            let api = NodeChainApi::from_overwatch_handle(overwatch_handle).await;
+            Self::new(api, overwatch_handle).await
+        }
+
+        /// Gets the epoch of the current chain tip, but only once the chain is
+        /// `Online`.
+        ///
+        /// # Errors
+        ///
+        /// Fails with [`OperationStatusCode::RelayError`] if the chain service
+        /// can't be reached, and with [`OperationStatusCode::ServiceError`]
+        /// while the chain is still bootstrapping or if the tip's epoch state
+        /// can't be computed.
+        pub async fn get_online_epoch(&self) -> StatusResult<Epoch> {
+            let tip_slot = self.get_online_cryptarchia_info().await?.slot;
+            let epoch_state = self.api.get_epoch_state(tip_slot).await?.map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::ServiceError,
+                    format!("Failed to get the epoch state at slot {tip_slot:?}: {error}"),
+                )
+            })?;
+            Ok(epoch_state.epoch)
+        }
+
+        /// Gets the chain info, but only once the chain is `Online`.
+        async fn get_online_cryptarchia_info(&self) -> StatusResult<CryptarchiaInfo> {
+            let cryptarchia_info = self.api.info().await?.cryptarchia_info;
+            if cryptarchia_info.state != State::Online {
+                return Err(OperationStatus::error(
+                    OperationStatusCode::ServiceError,
+                    "The node is not online yet.",
+                ));
+            }
+            Ok(cryptarchia_info)
+        }
+    }
+}

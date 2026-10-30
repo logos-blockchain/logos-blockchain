@@ -173,10 +173,29 @@ pub enum SdpMessage {
         declaration_id: DeclarationId,
         reply_channel: oneshot::Sender<Result<SdpSubmission, DynError>>,
     },
+    GetParticipation {
+        reply_channel: oneshot::Sender<Option<Participation>>,
+    },
     SetCurrentDeclarationId {
         declaration_id: Option<DeclarationId>,
         reply_channel: oneshot::Sender<Result<(), SdpError>>,
     },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum Participation {
+    Live(DeclarationId),
+    Withdrawn(DeclarationId),
+}
+
+impl Participation {
+    #[must_use]
+    pub const fn live(&self) -> Option<DeclarationId> {
+        match self {
+            Self::Live(id) => Some(*id),
+            Self::Withdrawn(_) => None,
+        }
+    }
 }
 
 pub struct SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
@@ -185,7 +204,7 @@ where
     StateStorage: SdpStateStorage<RuntimeServiceId>,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    declaration_id: Option<DeclarationId>,
+    participation: Option<Participation>,
     wallet_config: SdpWalletConfig,
     active_message_tracker_config: intent::Config,
     active_message_tracker: Option<IntentTracker<Activity, CryptarchiaServiceApi<ChainService>>>,
@@ -237,13 +256,13 @@ where
             .notifier()
             .get_updated_settings();
 
-        let declaration_id = initial_state
+        let participation = initial_state
             .updated
-            .and(initial_state.declaration_id)
-            .or_else(|| settings.declaration_id());
+            .and(initial_state.participation)
+            .or_else(|| settings.declaration_id().map(Participation::Live));
 
         Ok(Self {
-            declaration_id,
+            participation,
             service_resources_handle,
             wallet_config: settings.wallet_config,
             active_message_tracker_config: settings.active_message_tracker,
@@ -377,6 +396,11 @@ where
                     reply_channel,
                 )
                 .await;
+            }
+            SdpMessage::GetParticipation { reply_channel } => {
+                if reply_channel.send(self.participation).is_err() {
+                    error!(target: LOG_TARGET, "Failed to send get participation response");
+                }
             }
             SdpMessage::SetCurrentDeclarationId {
                 declaration_id,
@@ -544,11 +568,14 @@ where
         &self,
         chain_api: &CryptarchiaServiceApi<ChainService>,
     ) -> Result<(), DynError> {
-        let Some(id) = self.declaration_id else {
+        let Some(Participation::Live(declaration_id)) = self.participation else {
             return Ok(());
         };
 
-        match self.try_fetch_runtime_declaration(id, chain_api).await {
+        match self
+            .try_fetch_runtime_declaration(declaration_id, chain_api)
+            .await
+        {
             Ok(_) => Ok(()),
             Err(e) => match e {
                 SdpError::ChainApi(err) => {
@@ -660,7 +687,7 @@ where
             "post declaration",
         );
 
-        self.declaration_id = Some(declaration_id);
+        self.participation = Some(Participation::Live(declaration_id));
         self.update_state();
     }
 
@@ -672,7 +699,7 @@ where
         chain_api: &CryptarchiaServiceApi<ChainService>,
         reply_channel: Option<oneshot::Sender<Result<SdpSubmission, DynError>>>,
     ) {
-        let Some(declaration_id) = self.declaration_id else {
+        let Some(Participation::Live(declaration_id)) = self.participation else {
             tracing::error!(target: LOG_TARGET, "No declaration_id set. Cannot post activity without declaration.");
             Self::reply(
                 reply_channel,
@@ -918,7 +945,6 @@ where
                 return;
             }
         };
-
         let tx_id = signed_tx.hash();
 
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
@@ -936,7 +962,7 @@ where
             "post withdrawal",
         );
 
-        self.declaration_id = None;
+        self.participation = Some(Participation::Withdrawn(declaration_id));
         self.active_message_tracker = None;
         self.update_state();
     }
@@ -948,7 +974,7 @@ where
         chain_api: &CryptarchiaServiceApi<ChainService>,
     ) {
         let result = self
-            .validate_declaration_id(declaration_id, chain_api)
+            .set_current_declaration_id(declaration_id, chain_api)
             .await;
 
         if let Err(e) = reply_channel.send(result) {
@@ -956,12 +982,12 @@ where
         }
     }
 
-    async fn validate_declaration_id(
+    async fn set_current_declaration_id(
         &mut self,
         declaration_id: Option<DeclarationId>,
         chain_api: &CryptarchiaServiceApi<ChainService>,
     ) -> Result<(), SdpError> {
-        let validated_id = match declaration_id {
+        let validated_declaration_id = match declaration_id {
             Some(id) => self
                 .try_fetch_runtime_declaration(id, chain_api)
                 .await
@@ -969,7 +995,7 @@ where
             None => None,
         };
 
-        self.declaration_id = validated_id;
+        self.participation = validated_declaration_id.map(Participation::Live);
         self.update_state();
 
         Ok(())
@@ -1012,7 +1038,10 @@ where
         chain_api: &CryptarchiaServiceApi<ChainService>,
     ) -> Result<(), DynError> {
         let tip_epoch = self.fetch_tip_epoch(chain_api).await?;
-        Ok(activity.validate(self.declaration_id, tip_epoch)?)
+        let live_declaration_id = self
+            .participation
+            .and_then(|participation| participation.live());
+        Ok(activity.validate(live_declaration_id, tip_epoch)?)
     }
 
     async fn fetch_tip_epoch(
@@ -1035,7 +1064,7 @@ where
             .map(|tracker| tracker.intent().clone());
         self.service_resources_handle
             .state_updater
-            .update(Some(SdpState::new(self.declaration_id, pending_activity)));
+            .update(Some(SdpState::new(self.participation, pending_activity)));
     }
 }
 
