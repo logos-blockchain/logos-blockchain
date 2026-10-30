@@ -190,6 +190,13 @@ pub enum Participation {
 
 impl Participation {
     #[must_use]
+    pub const fn declaration_id(&self) -> DeclarationId {
+        match self {
+            Self::Live(id) | Self::Withdrawn(id) => *id,
+        }
+    }
+
+    #[must_use]
     pub const fn live(&self) -> Option<DeclarationId> {
         match self {
             Self::Live(id) => Some(*id),

@@ -616,6 +616,13 @@ impl SdpLedger {
     }
 
     #[must_use]
+    pub fn blend_reward_estimate(&self, provider_id: &ProviderId) -> Option<blend::RewardEstimate> {
+        match self.services.get(&ServiceType::BlendNetwork)? {
+            Service::BlendNetwork(state) => state.rewards.estimate(provider_id),
+        }
+    }
+
+    #[must_use]
     pub fn get_declaration(&self, declaration_id: &DeclarationId) -> Option<&Declaration> {
         self.services.iter().find_map(|(_, service)| {
             let declarations = match service {

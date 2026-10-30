@@ -59,8 +59,8 @@ use crate::{
     BlendService, PoWService, TracingService, WalletService,
     api::{
         handlers::{
-            blend_join_network, channel, channel_deposit, leader_claim, post_activity,
-            post_declaration, post_set_declaration_id, post_withdrawal, pow_claim,
+            blend_join_network, blend_rewards, channel, channel_deposit, leader_claim,
+            post_activity, post_declaration, post_set_declaration_id, post_withdrawal, pow_claim,
             pow_claimable_rewards, pow_start_auto_claim, pow_start_mining, pow_status,
             pow_stop_auto_claim, pow_stop_mining,
         },

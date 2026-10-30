@@ -65,7 +65,10 @@ pub unsafe extern "C" fn get_chain_id(node: *const LogosBlockchainNode) -> FfiGe
 }
 
 pub mod api {
-    use lb_chain_service::{CryptarchiaInfo, Epoch, State, api::CryptarchiaServiceApi};
+    use lb_chain_service::{
+        BlendRewards, CryptarchiaInfo, Epoch, State, api::CryptarchiaServiceApi,
+    };
+    use lb_core::sdp::DeclarationId;
     use lb_node::{RuntimeServiceId, generic_services::CryptarchiaService};
     use overwatch::overwatch::OverwatchHandle;
 
@@ -125,6 +128,41 @@ pub mod api {
                 )
             })?;
             Ok(epoch_state.epoch)
+        }
+
+        /// Fails unless the chain is `Online`.
+        ///
+        /// # Errors
+        ///
+        /// Fails with [`OperationStatusCode::RelayError`] if the chain service
+        /// can't be reached, and with [`OperationStatusCode::ServiceError`]
+        /// while the chain is still bootstrapping.
+        pub async fn ensure_online(&self) -> StatusResult<()> {
+            self.get_online_cryptarchia_info().await?;
+            Ok(())
+        }
+
+        /// Gets the Blend rewards at the tip of the declaration
+        /// `declaration_id`.
+        ///
+        /// # Errors
+        ///
+        /// Fails with [`OperationStatusCode::RelayError`] if the chain service
+        /// can't be reached, and with [`OperationStatusCode::NotFound`] if
+        /// the declaration is not in the ledger.
+        pub async fn get_blend_rewards(
+            &self,
+            declaration_id: DeclarationId,
+        ) -> StatusResult<BlendRewards> {
+            self.api
+                .get_blend_rewards(declaration_id)
+                .await?
+                .ok_or_else(|| {
+                    OperationStatus::error(
+                        OperationStatusCode::NotFound,
+                        "The node has no Blend declaration in the ledger.",
+                    )
+                })
         }
 
         /// Gets the chain info, but only once the chain is `Online`.

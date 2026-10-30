@@ -17,6 +17,7 @@ use lb_core::{
 };
 use lb_log_targets::ledger;
 use lb_utils::math::PositiveF64;
+pub use target_epoch::{Network, RewardEstimate};
 use tracing::debug;
 
 use crate::{
@@ -186,6 +187,21 @@ where
 }
 
 impl<ProofsVerifier> Rewards<ProofsVerifier> {
+    /// The reward estimate for `provider_id` in the epoch being paid out, or
+    /// `None` while no epoch is being paid out, such as when the target epoch
+    /// had fewer providers than the minimum network size.
+    #[must_use]
+    pub fn estimate(&self, provider_id: &ProviderId) -> Option<RewardEstimate> {
+        match self {
+            Self::WithoutTargetEpoch { .. } => None,
+            Self::WithTargetEpoch {
+                target_epoch_state,
+                target_epoch_tracker,
+                ..
+            } => Some(target_epoch_tracker.estimate(target_epoch_state, provider_id)),
+        }
+    }
+
     /// Create a new uninitialized [`Rewards`] that doesn't accept activity
     /// messages until the first epoch update.
     #[must_use]
@@ -346,6 +362,15 @@ mod tests {
         VerifiedProofOfSelection::from_bytes_unchecked([byte; _]).into()
     }
 
+    fn new_activity_proof(epoch: u32, byte: u8) -> ActivityMetadata {
+        ActivityMetadata::Blend(Box::new(blend::ActivityProof {
+            epoch: epoch.into(),
+            proof_of_quota: new_proof_of_quota_unchecked(byte),
+            signing_key: new_signing_key(byte),
+            proof_of_selection: new_proof_of_selection_unchecked(byte),
+        }))
+    }
+
     /// No reward should be calculated after epoch 0, since it is the first
     /// epoch. The reward for epoch 0 is calculated at epoch transition 1->2.
     #[test]
@@ -406,6 +431,42 @@ mod tests {
         assert_eq!(rewards.len(), 0);
     }
 
+    #[test]
+    fn estimate_is_none_while_no_epoch_is_being_paid_out() {
+        let params = create_blend_rewards_params(86_400, 1);
+        let epoch0 = create_epoch_state(
+            &[create_provider_id(1), create_provider_id(2)],
+            ServiceType::BlendNetwork,
+            0.into(),
+            Fr::ZERO,
+        );
+        let rewards_tracker = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0);
+
+        assert_eq!(rewards_tracker.estimate(&create_provider_id(1)), None);
+    }
+
+    #[test]
+    fn estimate_for_a_provider_outside_the_target_epoch_is_zero() {
+        let config = create_service_parameters();
+        let params = create_blend_rewards_params(86_400, 1);
+        let epoch0 = create_epoch_state(
+            &[create_provider_id(1), create_provider_id(2)],
+            ServiceType::BlendNetwork,
+            0.into(),
+            Fr::ZERO,
+        );
+        let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
+        let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
+            .add_income(1000)
+            .update_epoch(&epoch0, &epoch1, &config, &params, &params);
+
+        let estimate = rewards_tracker
+            .estimate(&create_provider_id(3))
+            .expect("an epoch is being paid out");
+        assert!(!estimate.did_submit_proof);
+        assert_eq!(estimate.estimated_reward, 0);
+    }
+
     // Rewards should be calculated correctly at epoch transition 1->2
     // based on the activity proofs for epoch 0 during epoch 1.
     // Providers who submitted a valid activity message must receive rewards,
@@ -434,46 +495,32 @@ mod tests {
 
         // provider1 submits an activity proof
         let rewards_tracker = rewards_tracker
-            .update_active(
-                provider1,
-                &ActivityMetadata::Blend(Box::new(blend::ActivityProof {
-                    epoch: 0.into(),
-                    proof_of_quota: new_proof_of_quota_unchecked(1),
-                    signing_key: new_signing_key(1),
-                    proof_of_selection: new_proof_of_selection_unchecked(1),
-                })),
-            )
+            .update_active(provider1, &new_activity_proof(0, 1))
             .unwrap();
 
         // provider2 submits an activity proof, which has the minimum
         // Hamming distance among all proofs.
         let rewards_tracker = rewards_tracker
-            .update_active(
-                provider2,
-                &ActivityMetadata::Blend(Box::new(blend::ActivityProof {
-                    epoch: 0.into(),
-                    proof_of_quota: new_proof_of_quota_unchecked(4),
-                    signing_key: new_signing_key(4),
-                    proof_of_selection: new_proof_of_selection_unchecked(4),
-                })),
-            )
+            .update_active(provider2, &new_activity_proof(0, 4))
             .unwrap();
 
-        // provider3 submits an activity proof
+        // provider3 submits an activity proof, the same one as provider1's.
         let rewards_tracker = rewards_tracker
-            .update_active(
-                provider3,
-                // Use the same proof as provider1 just for testing
-                &ActivityMetadata::Blend(Box::new(blend::ActivityProof {
-                    epoch: 0.into(),
-                    proof_of_quota: new_proof_of_quota_unchecked(1),
-                    signing_key: new_signing_key(1),
-                    proof_of_selection: new_proof_of_selection_unchecked(1),
-                })),
-            )
+            .update_active(provider3, &new_activity_proof(0, 1))
             .unwrap();
 
         // provider4 doesn't submit an activity proof.
+
+        let estimates: HashMap<ProviderId, RewardEstimate> =
+            [provider1, provider2, provider3, provider4]
+                .into_iter()
+                .map(|provider_id| {
+                    let estimate = rewards_tracker
+                        .estimate(&provider_id)
+                        .expect("an epoch is being paid out");
+                    (provider_id, estimate)
+                })
+                .collect();
 
         // Update epoch from 1 to 2.
         let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
@@ -513,6 +560,20 @@ mod tests {
         );
         // Provider4 should get no rewards.
         assert_eq!(rewards.get(&provider4), None);
+
+        for (provider_id, estimate) in &estimates {
+            assert_eq!(estimate.activity_epoch, 0);
+            assert_eq!(estimate.did_submit_proof, *provider_id != provider4);
+            assert_eq!(estimate.is_premium, *provider_id == provider2);
+            assert_eq!(
+                estimate.estimated_reward,
+                rewards.get(provider_id).copied().unwrap_or(0)
+            );
+
+            let network = &estimate.network;
+            assert_eq!(network.size, 4);
+            assert_eq!(network.proofs, 3);
+        }
     }
 
     // Any activity message with a duplicate epoch number must be rejected.
