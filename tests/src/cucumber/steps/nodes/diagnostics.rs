@@ -256,7 +256,9 @@ impl BlendDiagnosticParameterSet {
                 1,
                 NonZeroU32::new(self.slot_activation_coeff_denominator)
                     .expect("named Blend diagnostic slot coefficient denominator must be non-zero"),
-            );
+            )
+            .try_into()
+            .expect("named Blend diagnostic slot activation coefficient must be valid");
         });
     }
 

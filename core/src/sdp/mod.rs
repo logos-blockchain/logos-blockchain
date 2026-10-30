@@ -29,7 +29,7 @@ use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, Zk
 use lb_utils::bounded::{BoundedVec, NonEmptyBoundedOrderedSet};
 use multiaddr::{Multiaddr, Protocol};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use strum::EnumIter;
+use strum::{EnumCount, EnumIter};
 
 use crate::{
     block::BlockNumber,
@@ -287,7 +287,7 @@ impl BinaryDecode for Locator {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, EnumIter)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, EnumIter, EnumCount)]
 pub enum ServiceType {
     #[serde(rename = "BN")]
     BlendNetwork,

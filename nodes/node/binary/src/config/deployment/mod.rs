@@ -307,12 +307,16 @@ mod tests {
     fn eras_after_a_transition_period(third_era_epoch: u32) -> DeploymentSettings {
         let genesis = ruleset(|parameters| {
             parameters.cryptarchia.slot_activation_coeff =
-                NonNegativeRatio::new(1, NonZero::new(20).unwrap());
+                NonNegativeRatio::new(1, NonZero::new(20).unwrap())
+                    .try_into()
+                    .unwrap();
         });
         let short_epochs = ruleset(|parameters| {
             let cryptarchia = &mut parameters.cryptarchia;
             cryptarchia.security_param = NonZero::new(2).unwrap();
-            cryptarchia.slot_activation_coeff = NonNegativeRatio::new(1, NonZero::new(2).unwrap());
+            cryptarchia.slot_activation_coeff = NonNegativeRatio::new(1, NonZero::new(2).unwrap())
+                .try_into()
+                .unwrap();
             cryptarchia.uncle_reference_window_in_block = 1;
             cryptarchia.epoch_config = EpochConfig {
                 epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
