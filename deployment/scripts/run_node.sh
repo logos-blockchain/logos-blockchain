@@ -15,7 +15,7 @@ export CFG_FILE_PATH="/node-data/${LB_HOST_IDX}/user_config.yaml" \
     done
 
     logosctl module load blockchain_module
-    logosctl call blockchain_module start "$CFG_FILE_PATH" "$CFG_DEPLOYMENT_PATH"
+    logosctl call blockchain_module start "$CFG_FILE_PATH" ""
 
     echo "Logos Blockchain Module started."
 ) &
