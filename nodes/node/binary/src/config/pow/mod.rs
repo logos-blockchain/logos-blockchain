@@ -32,6 +32,7 @@ impl ServiceConfig {
                     max_data_payload_body_size: usize::from(
                         era.parameters.ruleset.blend_payload_body_size(),
                     ),
+                    fork_digest: era.parameters.fork_digest,
                 }
             }),
             recovery_data,

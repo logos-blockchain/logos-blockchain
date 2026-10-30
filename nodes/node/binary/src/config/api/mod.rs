@@ -1,5 +1,5 @@
 use lb_api_service::ApiServiceSettings;
-use lb_core::mantle::transactions::genesis_tx::ChainId;
+use lb_core::{era::ForkDigest, mantle::transactions::genesis_tx::ChainId};
 use lb_http_api_common::settings::AxumBackendSettings;
 
 use crate::config::api::serde::Config;
@@ -10,6 +10,9 @@ pub struct ServiceConfig {
     pub user: Config,
     /// The chain this node runs on, taken from the deployment settings.
     pub chain_id: ChainId,
+    /// The fork digest of every era of the deployment, era `n` at position
+    /// `n`.
+    pub fork_digests: Vec<ForkDigest>,
 }
 
 impl ServiceConfig {
@@ -18,6 +21,7 @@ impl ServiceConfig {
         ApiServiceSettings {
             backend_settings: AxumBackendSettings {
                 chain_id: self.chain_id.clone(),
+                fork_digests: self.fork_digests.clone(),
                 address: self.user.backend.listen_address,
                 cors_origins: self.user.backend.cors_origins.clone(),
                 timeout: self.user.backend.timeout,

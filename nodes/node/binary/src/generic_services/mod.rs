@@ -72,6 +72,7 @@ pub type WalletService<Cryptarchia, RuntimeServiceId> = lb_wallet_service::Walle
     KeyManagementService<RuntimeServiceId>,
     Cryptarchia,
     ValidatedTx,
+    NtpTimeBackend,
     RuntimeServiceId,
 >;
 

@@ -9,6 +9,7 @@ use time::OffsetDateTime;
 
 use crate::{
     crypto::{Digest as _, Hasher},
+    era::ForkDigest,
     mantle::{
         ledger::verification_mode::GenesisMode,
         ops::{
@@ -61,10 +62,19 @@ pub enum Error {
     InvalidGenesisParameters(String),
     #[error("Too many operations in genesis transaction: {count}")]
     TooManyOps { count: usize },
+    #[error("The genesis transaction carries the fork digest {0} instead of zero")]
+    UnexpectedForkDigest(ForkDigest),
 }
 
 impl GenesisTx {
+    /// The fork digest of the genesis transaction: 32 zero bytes, since every
+    /// fork digest hashes the genesis block.
+    pub const FORK_DIGEST: ForkDigest = ForkDigest::new([0; 32]);
+
     pub fn from_tx(signed_ops: SignedOps<Preverified, GenesisMode>) -> Result<Self, Error> {
+        if signed_ops.fork_digest != Self::FORK_DIGEST {
+            return Err(Error::UnexpectedForkDigest(signed_ops.fork_digest));
+        }
         // Genesis transactions must contain exactly one transfer as the first op,
         // one inscription as the second op, and then may contain other SDP declarations
         let genesis_parameters = match signed_ops.op_refs().as_slice() {
@@ -175,7 +185,7 @@ impl MantleTx for GenesisTx {
 
 impl GenesisTxTrait for GenesisTx {
     fn into_genesis_ops(self) -> GenesisOps {
-        let mut signed_ops = self.signed_ops.into_inner().into_inner().into_iter();
+        let mut signed_ops = self.signed_ops.into_iter();
 
         let transfer = match signed_ops.next() {
             Some(SignedOp::Transfer(signed_operation)) => signed_operation,
@@ -407,7 +417,7 @@ mod tests {
             OpProof,
             ledger::{BoundedInputs, Inputs, Note, Outputs, Utxo, Value},
             ops::channel::inscribe::Inscription,
-            transactions::{OpProofs, Ops},
+            transactions::{OpProofs, Ops, TxList},
         },
         sdp::{Locator, ProviderId, ServiceType},
     };
@@ -472,7 +482,7 @@ mod tests {
     ) -> SignedOps<Preverified, GenesisMode> {
         let mut new_ops = vec![Op::Transfer(transfer_op)];
         new_ops.append(&mut ops);
-        let mantle_tx = Ops::new_unchecked(new_ops);
+        let mantle_tx = Ops::new(GenesisTx::FORK_DIGEST, TxList::new_unchecked(new_ops));
         let mut op_proofs = OpProofs::from([OpProof::ZkSig(
             ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr()).unwrap(),
         )]);
@@ -754,6 +764,25 @@ mod tests {
         );
 
         assert_eq!(GenesisTx::from_tx(tx), Err(Error::UnexpectedInput));
+    }
+
+    #[test]
+    fn from_tx_rejects_a_fork_digest_other_than_zero() {
+        let mut tx = create_trusted_tx(
+            vec![Op::ChannelInscribe(inscription_op(
+                ChannelId::from([0; 32]),
+                &genesis_parameters(),
+                MsgId::root(),
+                UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+            ))],
+            vec![OpProof::Ed25519Sig(Ed25519Signature::zero())],
+        );
+        tx.fork_digest = ForkDigest::new([1; 32]);
+
+        assert_eq!(
+            GenesisTx::from_tx(tx),
+            Err(Error::UnexpectedForkDigest(ForkDigest::new([1; 32])))
+        );
     }
 
     #[test]

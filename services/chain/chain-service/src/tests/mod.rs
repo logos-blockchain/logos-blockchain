@@ -821,13 +821,19 @@ fn transfer_tx_with_fake_sig(utxo: Utxo, fake_key: &ZkKey) -> SignedOps<Preverif
         .expect("a fake signature is only caught by the stateful checks")
 }
 
+/// The fork digest the transactions of these tests carry.
+const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
+
 /// Creates a tx spending `utxo` with no outputs, so its whole value pays the
 /// fee.
 fn burn_tx(utxo: Utxo, key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
-    let ops = Ops::from([Op::Transfer(TransferOp::new(
-        BoundedInputs::from(utxo.id()).into(),
-        Outputs::new([]),
-    ))]);
+    let ops = Ops::new(
+        FORK_DIGEST,
+        [Op::Transfer(TransferOp::new(
+            BoundedInputs::from(utxo.id()).into(),
+            Outputs::new([]),
+        ))],
+    );
     let op_proofs = OpProofs::from([OpProof::ZkSig(
         ZkKey::multi_sign(std::slice::from_ref(key), &ops.hash().to_fr()).unwrap(),
     )]);
@@ -842,7 +848,7 @@ fn transfer_tx(utxo: Utxo, output_note: Note, key: &ZkKey) -> SignedOps<Unverifi
         BoundedInputs::from(utxo.id()).into(),
         Outputs::new([output_note]),
     );
-    let ops = Ops::from([Op::Transfer(transfer_op)]);
+    let ops = Ops::new(FORK_DIGEST, [Op::Transfer(transfer_op)]);
     let op_proofs = OpProofs::from([OpProof::ZkSig(
         ZkKey::multi_sign(std::slice::from_ref(key), &ops.hash().to_fr()).unwrap(),
     )]);

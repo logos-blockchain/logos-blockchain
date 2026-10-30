@@ -12,6 +12,7 @@ use indexmap::IndexMap;
 use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_core::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
+    era::ForkDigest,
     header::HeaderId,
     mantle::{
         Op,
@@ -97,6 +98,9 @@ struct MockPoolNode {
     no_service: NoService,
 }
 
+/// The fork digest the transactions of these tests carry.
+const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
+
 /// A transaction whose only op inscribes `payload`, so distinct payloads
 /// give distinct transactions.
 fn tx(payload: &str) -> Ops {
@@ -104,20 +108,26 @@ fn tx(payload: &str) -> Ops {
 }
 
 fn inscribing(bytes: &[u8]) -> Ops {
-    Ops::from([Op::ChannelInscribe(InscriptionOp {
-        inscription: Inscription::try_from_iter(bytes.iter().copied())
-            .expect("inscription should fit"),
-        ..InscriptionOp::sample()
-    })])
+    Ops::new(
+        FORK_DIGEST,
+        [Op::ChannelInscribe(InscriptionOp {
+            inscription: Inscription::try_from_iter(bytes.iter().copied())
+                .expect("inscription should fit"),
+            ..InscriptionOp::sample()
+        })],
+    )
 }
 
 /// A transaction claiming the `PoW` reward for a puzzle solved against
 /// `anchor`.
 fn claim_tx(anchor: HeaderId) -> Ops {
-    Ops::from([Op::ClaimPowReward(ClaimPowRewardOp {
-        block_hash: anchor.into(),
-        ..ClaimPowRewardOp::sample()
-    })])
+    Ops::new(
+        FORK_DIGEST,
+        [Op::ClaimPowReward(ClaimPowRewardOp {
+            block_hash: anchor.into(),
+            ..ClaimPowRewardOp::sample()
+        })],
+    )
 }
 
 fn sample_removed_tx() -> Ops {
@@ -1222,7 +1232,7 @@ fn local_submission_rejects_oversized_tx() {
             .expect("a maximal inscription should fit"),
             ..InscriptionOp::sample()
         });
-        let oversized_tx = Ops::from([max_inscription.clone(), max_inscription]);
+        let oversized_tx = Ops::new(FORK_DIGEST, [max_inscription.clone(), max_inscription]);
 
         let error = app
             .runtime()
@@ -1607,16 +1617,19 @@ async fn failed_anchor_lookup_keeps_the_resolved_anchors() {
         .with_failing_block(failing);
     let mut pool = InMemoryPool::new(pow_claim_settings(), Era::genesis(), storage);
 
-    let both = Ops::from([
-        Op::ClaimPowReward(ClaimPowRewardOp {
-            block_hash: resolved.into(),
-            ..ClaimPowRewardOp::sample()
-        }),
-        Op::ClaimPowReward(ClaimPowRewardOp {
-            block_hash: failing.into(),
-            ..ClaimPowRewardOp::sample()
-        }),
-    ]);
+    let both = Ops::new(
+        FORK_DIGEST,
+        [
+            Op::ClaimPowReward(ClaimPowRewardOp {
+                block_hash: resolved.into(),
+                ..ClaimPowRewardOp::sample()
+            }),
+            Op::ClaimPowReward(ClaimPowRewardOp {
+                block_hash: failing.into(),
+                ..ClaimPowRewardOp::sample()
+            }),
+        ],
+    );
     let both_id = both.hash();
     let failing_only = claim_tx(failing);
     let failing_only_id = failing_only.hash();

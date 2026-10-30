@@ -1,7 +1,7 @@
 use lb_core::mantle::{
     SignedOps,
     ledger::{BoundedInputs, verification_mode::StandardMode},
-    transactions::OpProofs,
+    transactions::{OpProofs, Ops},
 };
 
 use super::*;
@@ -212,9 +212,18 @@ pub async fn submit_atomic_zone_deposit(
         build_atomic_deposit_transfer(available_utxos, funding_public_key, amount)?;
     let deposit = build_atomic_deposit_op(channel_id, metadata, &transfer)?;
 
+    let fork_digest = CommonHttpClient::new(None)
+        .chain_fork(node_url.clone())
+        .await
+        .map_err(|error| ZoneTestError::BuildAtomicDeposit {
+            message: format!("fork digest request failed: {error}"),
+        })?;
     let (ops, msg_id, sequencer_sig) = client
         .prepare_tx(
-            [Op::Transfer(transfer), Op::ChannelDeposit(deposit.clone())].into(),
+            Ops::new(
+                fork_digest,
+                [Op::Transfer(transfer), Op::ChannelDeposit(deposit.clone())],
+            ),
             inscription_data,
         )
         .await
