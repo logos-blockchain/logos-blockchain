@@ -1443,6 +1443,83 @@ async fn cold_start_backfill_finalizes_configs_with_their_keys() {
     assert_eq!(configs[1].config.keys().len(), 1);
 }
 
+/// Cold start over finalized history that is empty but for a block at
+/// genesis and one deep in, as on a chain whose slots follow the wall clock.
+/// A wide `backfill_batch_slots` replays both inscriptions in a few node reads.
+#[tokio::test]
+async fn cold_start_backfill_reads_configured_batch_slots() {
+    const LIB_SLOT: u64 = 1_000_000;
+    const BATCH_SLOTS: u64 = 10_000;
+
+    let channel_id = ChannelId::from([7; 32]);
+    let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+
+    let genesis_inscribe = inscribe_op(channel_id, MsgId::root(), b"genesis");
+    let deep_inscribe = inscribe_op(channel_id, genesis_inscribe.id(), b"deep");
+    let genesis_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(genesis_inscribe.clone())]);
+    let deep_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(deep_inscribe.clone())]);
+
+    let genesis_block = api_block(1, 0, 0, vec![genesis_tx]);
+    let deep_block = api_block(2, 1, LIB_SLOT - 1_234, vec![deep_tx]);
+    let lib_block = api_block(3, 2, LIB_SLOT, Vec::new());
+    let live_block = api_block(4, 3, LIB_SLOT + 1, Vec::new());
+
+    let (calls_tx, mut calls_rx) = mpsc::unbounded_channel();
+    let node = MockNode {
+        lib: lib_block.header.id,
+        lib_slot: lib_block.header.slot,
+        tip: lib_block.header.id,
+        scripts: scripts(vec![StreamScript {
+            events: vec![ProcessedBlockEvent {
+                block: live_block.clone(),
+                tip: live_block.header.id,
+                tip_slot: live_block.header.slot,
+                lib: lib_block.header.id,
+                lib_slot: lib_block.header.slot,
+            }],
+            then: StreamEnd::Hang,
+        }]),
+        immutable: vec![genesis_block, deep_block, lib_block.clone()],
+        immutable_blocks_calls: Some(calls_tx),
+        ..MockNode::default()
+    };
+    let config = SequencerConfig {
+        backfill_batch_slots: BATCH_SLOTS,
+        ..SequencerConfig::new(funding_config())
+    };
+    let mut sequencer =
+        ZoneSequencer::init_with_config(channel_id, sequencer_key, node, config, None);
+
+    let mut inscriptions = Vec::new();
+    loop {
+        match sequencer.next_event().await {
+            Event::Ready => break,
+            Event::BlocksProcessed { finalized, .. } => {
+                inscriptions.extend(finalized.iter().flat_map(|tx| &tx.ops).filter_map(
+                    |op| match op {
+                        FinalizedOp::Inscription(info) => Some(info.this_msg),
+                        _ => None,
+                    },
+                ));
+            }
+            Event::TurnNotification { .. } => {}
+        }
+    }
+
+    assert_eq!(
+        inscriptions,
+        vec![genesis_inscribe.id(), deep_inscribe.id()]
+    );
+    assert_eq!(sequencer.lib_slot, lib_block.header.slot);
+
+    let mut reads = 0u64;
+    while calls_rx.try_recv().is_ok() {
+        reads += 1;
+    }
+    // Slots `0..=LIB_SLOT`, `BATCH_SLOTS + 1` per batch (inclusive at both ends).
+    assert_eq!(reads, (LIB_SLOT + 1).div_ceil(BATCH_SLOTS + 1));
+}
+
 /// The one finalized tx with `tx_hash` carries a single root inscription
 /// with `msg_id`.
 fn assert_genesis_inscription_finalized(items: &[FinalizedTx], tx_hash: TxHash, msg_id: MsgId) {
