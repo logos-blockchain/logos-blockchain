@@ -41,22 +41,33 @@ impl<R: Clone + Send + RngCore + 'static> Behaviour<R> {
         }
     }
 
+    /// Removes `addr` of `peer_id` from Kademlia, even if it is the last
+    /// address of the peer.
     pub(crate) fn kademlia_remove_address(&mut self, peer_id: PeerId, addr: &Multiaddr) {
         if self.kademlia.remove_address(&peer_id, addr).is_some() {
             tracing::warn!(
                 target: LOG_TARGET,
-                "Removed address {:?} from peer {:?}",
-                addr,
-                peer_id
+                "Removed peer {:?} from Kademlia with its last address {:?}",
+                peer_id,
+                addr
             );
         } else {
             tracing::warn!(
                 target: LOG_TARGET,
-                "Address {:?} for peer {:?} was not present in Kademlia",
+                "Removed address {:?} of peer {:?} from Kademlia, if it was present",
                 addr,
                 peer_id
             );
         }
+    }
+
+    /// Returns whether `addr` is an address of `peer_id` in the routing table.
+    pub(crate) fn kademlia_contains_address(&mut self, peer_id: PeerId, addr: &Multiaddr) -> bool {
+        self.kademlia.kbucket(peer_id).is_some_and(|bucket| {
+            bucket.iter().any(|entry| {
+                *entry.node.key.preimage() == peer_id && entry.node.value.iter().any(|a| a == addr)
+            })
+        })
     }
 
     pub(crate) fn kademlia_routing_table_dump(&mut self) -> HashMap<u32, Vec<PeerId>> {
