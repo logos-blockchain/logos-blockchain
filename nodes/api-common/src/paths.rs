@@ -2,6 +2,10 @@ pub const MANTLE_METRICS: &str = "/mantle/metrics";
 pub const MANTLE_STATUS: &str = "/mantle/status";
 pub const MANTLE_SDP_DECLARATIONS: &str = "/mantle/sdp/declarations";
 pub const MANTLE_SDP_SNAPSHOT: &str = "/mantle/sdp/snapshot";
+pub const MANTLE_SDP_FINALIZED_DECLARATION: &str =
+    "/mantle/sdp/finalized/declaration/{declaration_id}";
+pub const MANTLE_SDP_FINALIZED_DECLARATIONS: &str =
+    "/mantle/sdp/finalized/declarations/{service_type}";
 pub const MANTLE_GAS_PRICES: &str = "/mantle/gas-prices";
 pub const CHAIN_ID: &str = "/chain/id";
 pub const CRYPTARCHIA_INFO: &str = "/cryptarchia/info";
@@ -14,7 +18,7 @@ pub const BLEND_JOIN_NETWORK: &str = "/blend/join";
 pub const BLEND_DISPERSE_TRANSACTION: &str = "/blend/transactions/disperse";
 pub const BLEND_PENDING_TRANSACTIONS: &str = "/blend/transactions/pending";
 pub const MEMPOOL_ADD_TX: &str = "/mempool/add/tx";
-pub const CHANNEL: &str = "/channel/:id";
+pub const CHANNEL: &str = "/channel/{id}";
 pub const CHANNEL_DEPOSIT: &str = "/channel/deposit";
 pub const SDP_POST_DECLARATION: &str = "/sdp/declaration";
 pub const SDP_POST_ACTIVITY: &str = "/sdp/activity";
@@ -36,14 +40,14 @@ pub const LEADER_AGED_NOTES: &str = "/leader/aged-notes";
 // Cryptarchia
 pub const BLOCKS: &str = "/cryptarchia/blocks";
 pub const BLOCKS_RANGE_STREAM: &str = "/cryptarchia/blocks_range";
-pub const BLOCKS_DETAIL: &str = "/cryptarchia/blocks/:id";
-pub const BLOCK_EVENTS: &str = "/cryptarchia/blocks/:id/events";
+pub const BLOCKS_DETAIL: &str = "/cryptarchia/blocks/{id}";
+pub const BLOCK_EVENTS: &str = "/cryptarchia/blocks/{id}/events";
 pub const BLOCKS_STREAM: &str = "/cryptarchia/events/blocks/stream";
 
-pub const TRANSACTION: &str = "/cryptarchia/transaction/:id";
+pub const TRANSACTION: &str = "/cryptarchia/transaction/{id}";
 
 pub mod wallet {
-    pub const BALANCE: &str = "/wallet/:public_key/balance";
+    pub const BALANCE: &str = "/wallet/{public_key}/balance";
     pub const TRANSACTIONS_TRANSFER_FUNDS: &str = "/wallet/transactions/transfer-funds";
     pub const SIGN_TX_ED25519: &str = "/wallet/sign/ed25519";
     pub const SIGN_TX_ZK: &str = "/wallet/sign/zk";

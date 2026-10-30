@@ -7,6 +7,8 @@ use std::pin::Pin;
 
 use futures::Stream;
 use lb_core::mantle::transactions::hash::PrefixedKey;
+use lb_cryptarchia_engine::Slot;
+pub use policy::{EvictableTx, EvictionPolicy, PowClaimEvictionSettings};
 pub use pool::{DEFAULT_TX_TTL, Mempool, MempoolSettings, PoolRecoveryState};
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +18,8 @@ pub enum MempoolError {
     ExistingItem,
     #[error("Item is too large: {size} bytes exceeds maximum {max} bytes")]
     ItemTooLarge { size: usize, max: usize },
+    #[error("Item can no longer be included in a block")]
+    Expired,
     #[error("Storage operation failed: {0}")]
     StorageError(String),
     #[error(transparent)]
@@ -68,6 +72,10 @@ pub trait MemPool {
 
     /// Remove items from the mempool..
     async fn remove(&mut self, items: &[Self::Key]);
+
+    /// The chain processed block `block_id` at `slot`. This is the pool's
+    /// only notion of chain time, so it also triggers eviction.
+    async fn on_processed_block(&mut self, block_id: Self::BlockId, slot: Slot);
 
     fn pending_item_count(&self) -> usize;
     fn last_item_timestamp(&self) -> u64;

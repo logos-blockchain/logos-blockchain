@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 /// When a value is None, the libp2p defaults are used.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
-    /// The timeout for a single query in seconds
+    /// The timeout for a single query
     /// Default from libp2p: 60 seconds
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub query_timeout_secs: Option<u64>,
+    pub query_timeout: Option<Duration>,
 
     /// The replication factor to use
     /// Default from libp2p: 20 (`K_VALUE`)
@@ -41,15 +41,15 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caching: Option<CachingSettings>,
 
-    /// The interval in seconds for periodic bootstrap
-    /// If enabled the periodic bootstrap will run every x seconds in addition
+    /// The interval for periodic bootstrap
+    /// If enabled the periodic bootstrap will run at this interval in addition
     /// to the automatic bootstrap that is triggered when a new peer is added
     /// Default from libp2p: 5 minutes (300 seconds)
     /// None means use libp2p default
-    /// Some(0) means periodic bootstrap is disabled
-    /// Some(x) means periodic bootstrap is enabled for x seconds period
+    /// `Some(Duration::ZERO)` means periodic bootstrap is disabled
+    /// Some(x) means periodic bootstrap is enabled with period x
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub periodic_bootstrap_interval_secs: Option<u64>,
+    pub periodic_bootstrap_interval: Option<Duration>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -71,8 +71,8 @@ impl Settings {
     pub fn to_libp2p_config(&self, protocol_name: StreamProtocol) -> kad::Config {
         let mut config = kad::Config::new(protocol_name);
 
-        if let Some(timeout) = self.query_timeout_secs {
-            config.set_query_timeout(Duration::from_secs(timeout));
+        if let Some(timeout) = self.query_timeout {
+            config.set_query_timeout(timeout);
         }
 
         if let Some(replication_factor) = self.replication_factor {
@@ -118,11 +118,11 @@ impl Settings {
         // Set the periodic bootstrap interval if provided
         // If not provided, use the libp2p default
         // disable periodic bootstrap if interval is 0
-        if let Some(interval) = &self.periodic_bootstrap_interval_secs {
-            if *interval == 0 {
+        if let Some(interval) = self.periodic_bootstrap_interval {
+            if interval.is_zero() {
                 config.set_periodic_bootstrap_interval(None);
             } else {
-                config.set_periodic_bootstrap_interval(Some(Duration::from_secs(*interval)));
+                config.set_periodic_bootstrap_interval(Some(interval));
             }
         }
 

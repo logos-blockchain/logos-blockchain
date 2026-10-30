@@ -51,5 +51,4 @@ rand                          = { workspace = true }
 tempfile                      = { workspace = true }
 
 [features]
-default = []
 openapi = ["dep:utoipa", "lb-core/openapi", "lb-cryptarchia-engine/openapi"]

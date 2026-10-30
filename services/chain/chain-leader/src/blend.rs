@@ -8,11 +8,14 @@
 
 use std::marker::PhantomData;
 
-use lb_blend_service::message::{DataPayload, ProxyServiceMessage, ServiceMessage};
+use lb_blend_service::message::{
+    DataPayload, ProxyServiceMessage, ServiceMessage, proposal_diagnostic_digest_from_encoded,
+    proposal_diagnostic_timestamp_unix_ms,
+};
 use lb_core::block::Proposal;
 use lb_log_targets::chain;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
-use tracing::error;
+use tracing::{debug, error};
 
 const LOG_TARGET: &str = chain::leader::BLEND;
 
@@ -54,9 +57,25 @@ where
             );
             return;
         };
+        let payload_clone = payload.clone();
 
         if let Err(error) = self.relay.send(ServiceMessage::Blend(payload).into()).await {
             error!(target: LOG_TARGET, "Failed to relay proposal to blend service: {error}");
+            return;
         }
+
+        log_proposal_submitted(&proposal, &payload_clone);
     }
+}
+
+fn log_proposal_submitted(proposal: &Proposal, payload: &DataPayload) {
+    debug!(
+        target: LOG_TARGET,
+        event = "blend_proposal_submitted",
+        timestamp_unix_ms = proposal_diagnostic_timestamp_unix_ms(),
+        block_id = %proposal.header().id(),
+        slot = u64::from(proposal.header().slot()),
+        proposal_digest = %proposal_diagnostic_digest_from_encoded(payload.body()),
+        "Successfully enqueued local block proposal to Blend"
+    );
 }

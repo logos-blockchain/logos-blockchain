@@ -1,5 +1,9 @@
 use futures::{Stream, StreamExt as _};
-use lb_core::mantle::mock::{MockTransaction, MockTxId};
+use lb_binary_codec::canonical::{BinaryDecode as _, BinaryEncode as _};
+use lb_core::mantle::{
+    traits::Hashable as _,
+    transactions::{hash::TxHash, tx_list::ops::Ops},
+};
 use lb_log_targets::mempool;
 use lb_network_service::{
     NetworkService,
@@ -15,6 +19,29 @@ pub const MOCK_TX_CONTENT_TOPIC: MockContentTopic = MockContentTopic::new("Mock"
 
 const LOG_TARGET: &str = mempool::network::ROOT;
 
+/// The mock message carrying `tx`: its canonical encoding, hex-encoded in
+/// the payload.
+#[must_use]
+pub fn mock_message(tx: &Ops, timestamp: usize) -> MockMessage {
+    MockMessage {
+        payload: hex::encode(tx.encode_to_vec()),
+        content_topic: MOCK_TX_CONTENT_TOPIC,
+        version: 0,
+        timestamp,
+    }
+}
+
+/// The transaction a mock message carries, if it carries one.
+#[must_use]
+pub fn tx_from_mock_message(message: &MockMessage) -> Option<Ops> {
+    if message.content_topic() != &MOCK_TX_CONTENT_TOPIC {
+        return None;
+    }
+    let bytes = hex::decode(message.payload()).ok()?;
+    let (rest, tx) = Ops::decode(&bytes, &()).ok()?;
+    rest.is_empty().then_some(tx)
+}
+
 pub struct MockAdapter<RuntimeServiceId> {
     network_relay: OutboundRelay<<NetworkService<Mock, RuntimeServiceId> as ServiceData>::Message>,
 }
@@ -23,8 +50,8 @@ pub struct MockAdapter<RuntimeServiceId> {
 impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeServiceId> {
     type Backend = Mock;
     type Settings = ();
-    type Payload = MockTransaction<MockMessage>;
-    type Key = MockTxId;
+    type Payload = Ops;
+    type Key = TxHash;
 
     async fn new(
         _settings: Self::Settings,
@@ -72,10 +99,7 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
         Box::new(Box::pin(stream.filter_map(async |event| match event {
             Ok(NetworkEvent::RawMessage(message)) => {
                 tracing::debug!(target: LOG_TARGET, "Received message: {:?}", message.payload());
-                message.content_topic().eq(&MOCK_TX_CONTENT_TOPIC).then(|| {
-                    let tx = MockTransaction::new(message);
-                    (tx.id(), tx)
-                })
+                tx_from_mock_message(&message).map(|tx| (tx.hash(), tx))
             }
             Err(_e) => None,
         })))
@@ -86,7 +110,7 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
             .network_relay
             .send(NetworkMsg::Process(MockBackendMessage::Broadcast {
                 topic: MOCK_PUB_SUB_TOPIC.into(),
-                msg: msg.message().clone(),
+                msg: mock_message(&msg, 0),
             }))
             .await
         {

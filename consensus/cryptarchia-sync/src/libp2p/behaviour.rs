@@ -143,8 +143,8 @@ pub struct Behaviour {
     /// Futures for managing the progress of externally initiated tip
     /// requests.
     sending_tip_responses: FuturesUnordered<SendingTipResponsesFuture>,
-    /// Futures for closing incoming streams that were rejected due to excess
-    /// requests.
+    /// Futures for closing rejected incoming streams. Only pushed to by
+    /// `reject_incoming_stream`.
     incoming_streams_to_close: FuturesUnordered<BoxFuture<'static, ()>>,
     /// Waker to notify the behaviour when `request_tip` or
     /// `start_blocks_download` is called.
@@ -252,25 +252,19 @@ impl Behaviour {
         &self,
         peer_id: PeerId,
         request: DownloadBlocksRequest,
-        mut stream: Libp2pStream,
+        stream: Libp2pStream,
     ) -> Poll<ToSwarmEvent> {
-        if request.known_blocks.additional_blocks.len() > MAX_ADDITIONAL_BLOCKS {
-            error!(target: LOG_TARGET, "Received excessive number of additional blocks");
-
-            self.incoming_streams_to_close.push(
-                async move {
-                    drop(stream.close().await);
-                }
-                .boxed(),
-            );
-
-            return Poll::Pending;
-        }
-
         let (reply_sender, reply_receiver) = mpsc::channel(1);
 
         self.sending_block_responses.push(
-            async move { Provider::provide_blocks(reply_receiver, peer_id, stream).await }.boxed(),
+            Provider::provide_blocks(
+                reply_receiver,
+                peer_id,
+                stream,
+                self.config.peer_response_timeout,
+                self.config.inbound_download_stream_timeout,
+            )
+            .boxed(),
         );
 
         Poll::Ready(ToSwarm::GenerateEvent(Event::ProvideBlocksRequest {
@@ -282,22 +276,16 @@ impl Behaviour {
         }))
     }
 
-    fn handle_incoming_stream(&self, peer_id: PeerId, mut stream: Libp2pStream) {
-        let concurrent_requests = self.receiving_requests.len()
-            + self.sending_block_responses.len()
-            + self.sending_tip_responses.len();
-
-        if concurrent_requests >= self.config.max_inbound_requests.into() {
-            self.incoming_streams_to_close.push(
-                async move {
-                    drop(stream.close().await);
-                }
-                .boxed(),
-            );
-            error!(target: LOG_TARGET, "Rejected excess pending incoming request");
+    fn handle_incoming_stream(&self, peer_id: PeerId, stream: Libp2pStream) {
+        // Only requests still being read are limited here. Once the request type
+        // is known, `admit_request` applies the per-type limits.
+        if self.receiving_requests.len() >= self.config.max_inbound_requests.get() {
+            self.reject_incoming_stream(stream, "too many pending incoming requests");
         } else {
-            self.receiving_requests
-                .push(Provider::process_request(peer_id, stream).boxed());
+            self.receiving_requests.push(
+                Provider::process_request(peer_id, stream, self.config.peer_response_timeout)
+                    .boxed(),
+            );
         }
 
         self.try_notify_waker();
@@ -334,6 +322,11 @@ impl Behaviour {
     > {
         let (peer_id, stream, request) = receive_request_stream;
 
+        if let Err(reason) = self.admit_request(&request) {
+            self.reject_incoming_stream(stream, reason);
+            return Poll::Pending;
+        }
+
         let event = match request {
             RequestMessage::DownloadBlocksRequest(request) => {
                 self.handle_download_request(peer_id, request, stream)
@@ -344,6 +337,36 @@ impl Behaviour {
         self.try_notify_waker();
 
         event
+    }
+
+    /// Decides whether a fully read inbound request should be served.
+    fn admit_request(&self, request: &RequestMessage) -> Result<(), &'static str> {
+        match request {
+            RequestMessage::DownloadBlocksRequest(request) => {
+                if self.sending_block_responses.len() >= self.config.max_inbound_requests.get() {
+                    return Err("too many concurrent download requests");
+                }
+                if request.known_blocks.additional_blocks.len() > MAX_ADDITIONAL_BLOCKS {
+                    return Err("excessive number of additional blocks");
+                }
+                Ok(())
+            }
+            // Tip requests are cheap to serve, so they are never rejected.
+            RequestMessage::GetTip => Ok(()),
+        }
+    }
+
+    fn reject_incoming_stream(&self, mut stream: Libp2pStream, reason: &str) {
+        error!(target: LOG_TARGET, "Rejected incoming request: {reason}");
+
+        self.incoming_streams_to_close.push(
+            async move {
+                drop(stream.close().await);
+            }
+            .boxed(),
+        );
+
+        self.try_notify_waker();
     }
 
     fn try_notify_waker(&self) {
@@ -529,12 +552,12 @@ mod tests {
     use std::{collections::HashSet, iter, time::Duration};
 
     use futures::StreamExt as _;
-    use lb_core::header::HeaderId;
+    use lb_core::{block::MAX_BLOCK_TRANSACTIONS_SIZE, header::HeaderId};
     use lb_cryptarchia_engine::Slot;
     use libp2p::{Multiaddr, PeerId, StreamProtocol, Swarm, bytes::Bytes, swarm::SwarmEvent};
     use libp2p_swarm_test::SwarmExt as _;
     use rand::{Rng as _, thread_rng};
-    use tokio::sync::oneshot;
+    use tokio::sync::{mpsc, oneshot};
 
     use crate::{
         BlocksResponse, BlocksUnavailableReason, DynError,
@@ -554,6 +577,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_and_downloader(200, config).await;
@@ -581,6 +605,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_and_downloader(1, config.clone()).await;
@@ -608,6 +633,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_and_downloader(1, config).await;
@@ -635,6 +661,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_and_downloader(0, config).await;
@@ -653,10 +680,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_tip_while_download_requests_are_full() {
+        let config = Config {
+            peer_response_timeout: Duration::from_secs(5),
+            max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
+        };
+        let (provider_swarm, provider_peer_id, provider_addr) =
+            setup_provider_swarm(config.clone());
+
+        // Never answer download requests so they keep occupying all slots, but
+        // report each one as it arrives.
+        let (download_tx, mut download_rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let mut provider_swarm = provider_swarm;
+            #[expect(
+                clippy::collection_is_never_read,
+                reason = "Holding the reply senders keeps the download requests pending."
+            )]
+            let mut pending_downloads = Vec::new();
+            while let Some(event) = provider_swarm.next().await {
+                match event {
+                    SwarmEvent::Behaviour(Event::ProvideTipsRequest { reply_sender }) => {
+                        reply_sender
+                            .send(StandardProvider { blocks_count: 0 }.handle_tip_request())
+                            .await
+                            .unwrap();
+                    }
+                    SwarmEvent::Behaviour(Event::ProvideBlocksRequest { reply_sender, .. }) => {
+                        pending_downloads.push(reply_sender);
+                        download_tx.send(()).unwrap();
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        let mut downloader_swarm =
+            setup_downloader_and_connect(provider_addr, config.clone()).await;
+        let streams = request_download(
+            &mut downloader_swarm,
+            config.max_inbound_requests.get(),
+            HeaderId::from([0; 32]),
+            HeaderId::from([0; 32]),
+            HeaderId::from([0; 32]),
+            &HashSet::new(),
+            provider_peer_id,
+        );
+        let tip_receiver = request_tip(&mut downloader_swarm, provider_peer_id);
+        let excess_streams = request_download(
+            &mut downloader_swarm,
+            1,
+            HeaderId::from([0; 32]),
+            HeaderId::from([0; 32]),
+            HeaderId::from([0; 32]),
+            &HashSet::new(),
+            provider_peer_id,
+        );
+
+        tokio::spawn(async move { downloader_swarm.loop_on_next().await });
+
+        tokio::time::timeout(Duration::from_secs(10), async move {
+            // Exactly `max_inbound_requests` downloads reach the provider.
+            for _ in 0..config.max_inbound_requests.get() {
+                download_rx.recv().await.unwrap();
+            }
+
+            let Tip { tip, .. } = tip_receiver.await.unwrap().unwrap() else {
+                panic!("Expected a tip response");
+            };
+            assert_eq!(tip, HeaderId::from([0; 32]));
+
+            let (blocks, errors) = wait_block_messages(excess_streams).await;
+            assert_eq!(blocks.len(), 0);
+            assert_eq!(errors.len(), 1);
+            assert!(download_rx.try_recv().is_err());
+        })
+        .await
+        .expect("test timed out");
+
+        drop(streams);
+    }
+
+    #[tokio::test]
     async fn test_timeout() {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let mut provider_swarm = new_swarm_with_quic(config.clone());
         let provider_swarm_peer_id = *provider_swarm.local_peer_id();
@@ -703,6 +814,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let (mut downloader_swarm, provider_peer_id) = start_rejecting_provider(config).await;
 
@@ -720,6 +832,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let (mut downloader_swarm, provider_peer_id) = start_rejecting_provider(config).await;
 
@@ -746,6 +859,7 @@ mod tests {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
             max_inbound_requests: 4.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
         };
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_with_stream_error(config).await;
@@ -766,6 +880,179 @@ mod tests {
 
         assert_eq!(blocks.len(), 1);
         assert_eq!(errors.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_stalled_download_frees_provider_slot() {
+        // A single download slot, and enough block bytes that the provider
+        // can't finish sending unless the downloader keeps reading.
+        let config = Config {
+            peer_response_timeout: Duration::from_secs(1),
+            max_inbound_requests: 1.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
+        };
+        let blocks_count = 400;
+        let (provider_swarm, provider_peer_id, provider_addr) =
+            setup_provider_swarm(config.clone());
+        tokio::spawn(run_provider(
+            provider_swarm,
+            LargeBlocksProvider {
+                blocks_count,
+                block_size: 64 * 1024,
+            },
+        ));
+        let mut downloader_swarm = setup_downloader_and_connect(provider_addr, config).await;
+        let request = |swarm: &mut Swarm<Behaviour>| {
+            request_download(
+                swarm,
+                1,
+                HeaderId::from([0; 32]),
+                HeaderId::from([0; 32]),
+                HeaderId::from([0; 32]),
+                &HashSet::new(),
+                provider_peer_id,
+            )
+        };
+
+        // Start a download that is never consumed.
+        let _stalled = request(&mut downloader_swarm);
+        drop(
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    downloader_swarm.select_next_some().await;
+                }
+            })
+            .await,
+        );
+
+        let streams = request(&mut downloader_swarm);
+        tokio::spawn(async move { downloader_swarm.loop_on_next().await });
+
+        let (blocks, errors) = wait_block_messages(streams).await;
+
+        assert_eq!(blocks.len(), blocks_count);
+        assert_eq!(errors.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_slow_consumer_frees_provider_slot() {
+        // A single download slot, and more block bytes than the transport
+        // buffers, so the provider only finishes early if the downloader reads
+        // ahead of its consumer.
+        let config = Config {
+            peer_response_timeout: Duration::from_secs(1),
+            max_inbound_requests: 1.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(120),
+        };
+        let blocks_count = 400;
+        let (provider_swarm, provider_peer_id, provider_addr) =
+            setup_provider_swarm(config.clone());
+        tokio::spawn(run_provider(
+            provider_swarm,
+            LargeBlocksProvider {
+                blocks_count,
+                block_size: 64 * 1024,
+            },
+        ));
+        let request = |swarm: &mut Swarm<Behaviour>| {
+            request_download(
+                swarm,
+                1,
+                HeaderId::from([0; 32]),
+                HeaderId::from([0; 32]),
+                HeaderId::from([0; 32]),
+                &HashSet::new(),
+                provider_peer_id,
+            )
+        };
+
+        // Consume a download slower than the provider sends it, but faster
+        // than the provider's send timeout.
+        let mut slow_swarm =
+            setup_downloader_and_connect(provider_addr.clone(), config.clone()).await;
+        let slow_streams = request(&mut slow_swarm);
+        tokio::spawn(async move { slow_swarm.loop_on_next().await });
+        let slow_download = tokio::spawn(async move {
+            let mut stream = slow_streams.into_iter().next().unwrap().await.unwrap();
+            let mut blocks = 0;
+            while let Some(block) = stream.next().await {
+                block.unwrap();
+                blocks += 1;
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            blocks
+        });
+
+        // Well before the slow consumer is done, the slot is free again.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let mut downloader_swarm = setup_downloader_and_connect(provider_addr, config).await;
+        let streams = request(&mut downloader_swarm);
+        tokio::spawn(async move { downloader_swarm.loop_on_next().await });
+
+        let (blocks, errors) = wait_block_messages(streams).await;
+
+        assert_eq!(blocks.len(), blocks_count);
+        assert_eq!(errors.len(), 0);
+        assert_eq!(slow_download.await.unwrap(), blocks_count);
+    }
+
+    /// If a download request reads each block within `peer_response_timeout`,
+    /// but slowly enough to hold the stream, it is cut aff after
+    /// `inbound_download_stream_timeout`, so the provider's slot can be
+    /// freed to serve a next request.
+    #[tokio::test]
+    async fn test_inbound_download_stream_timeout_frees_provider_slot() {
+        // The provider sends more block bytes than the downloader's read-ahead
+        // and the transport buffers, so it can only send as fast as the
+        // requester consumes.
+        let config = Config {
+            peer_response_timeout: Duration::from_secs(1),
+            max_inbound_requests: 1.try_into().unwrap(),
+            inbound_download_stream_timeout: Duration::from_secs(2),
+        };
+        let (provider_swarm, provider_peer_id, provider_addr) =
+            setup_provider_swarm(config.clone());
+        tokio::spawn(run_provider(
+            provider_swarm,
+            LargeBlocksProvider {
+                blocks_count: 60,
+                block_size: MAX_BLOCK_TRANSACTIONS_SIZE,
+            },
+        ));
+        let request = |swarm: &mut Swarm<Behaviour>| {
+            request_download(
+                swarm,
+                1,
+                HeaderId::from([0; 32]),
+                HeaderId::from([0; 32]),
+                HeaderId::from([0; 32]),
+                &HashSet::new(),
+                provider_peer_id,
+            )
+        };
+
+        // Consume a download one block per 500ms (< `peer_response_timeout`).
+        // The whole download would take ~30s (> `inbound_download_stream_timeout`).
+        let mut slow_swarm =
+            setup_downloader_and_connect(provider_addr.clone(), config.clone()).await;
+        let slow_streams = request(&mut slow_swarm);
+        tokio::spawn(async move { slow_swarm.loop_on_next().await });
+        tokio::spawn(async move {
+            let mut stream = slow_streams.into_iter().next().unwrap().await.unwrap();
+            while stream.next().await.is_some() {
+                tokio::time::sleep(config.peer_response_timeout / 2).await;
+            }
+        });
+
+        // After `inbound_download_stream_timeout`, the slot is free again.
+        // So, a new download should succeed.
+        tokio::time::sleep(config.inbound_download_stream_timeout + Duration::from_secs(1)).await;
+        let mut downloader_swarm = setup_downloader_and_connect(provider_addr, config).await;
+        let streams = request(&mut downloader_swarm);
+        tokio::spawn(async move { downloader_swarm.loop_on_next().await });
+
+        let mut stream = streams.into_iter().next().unwrap().await.unwrap();
+        assert!(matches!(stream.next().await, Some(Ok(_))));
     }
 
     async fn setup_downloader_and_connect(
@@ -803,6 +1090,26 @@ mod tests {
                         .map(Ok),
                 )
                 .boxed(),
+            )
+        }
+    }
+
+    struct LargeBlocksProvider {
+        blocks_count: usize,
+        block_size: usize,
+    }
+
+    impl ProviderBehavior for LargeBlocksProvider {
+        fn handle_tip_request(&self) -> TipResponse {
+            ProviderResponse::Unavailable {
+                reason: GetTipResponseReason::NodeNotOnline,
+            }
+        }
+
+        fn handle_blocks_request(&self, _requested: usize) -> BlocksResponse {
+            let block = Bytes::from(vec![0; self.block_size]);
+            ProviderResponse::Available(
+                futures::stream::iter(iter::repeat_n(block, self.blocks_count).map(Ok)).boxed(),
             )
         }
     }

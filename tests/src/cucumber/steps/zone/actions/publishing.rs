@@ -118,7 +118,7 @@ pub(in super::super) async fn publish_zone_messages_concurrently(
     for row in rows {
         world
             .zone
-            .remember_zone_message(row.message_alias, row.payload, None, None, None);
+            .remember_zone_message(row.message_alias, row.payload, None, None, None, None);
     }
 
     if world.zone.indexer().is_err() {

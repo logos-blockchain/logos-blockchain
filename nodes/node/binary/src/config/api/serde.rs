@@ -3,6 +3,7 @@ use core::{
     time::Duration,
 };
 
+use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
@@ -20,8 +21,8 @@ pub struct AxumBackendSettings {
     pub listen_address: core::net::SocketAddr,
     /// Allowed origins for these server deployment requests.
     pub cors_origins: Vec<String>,
-    /// Timeout for API requests in seconds.
-    #[serde_as(as = "serde_with::DurationSeconds<u64>")]
+    /// Timeout for API requests.
+    #[serde_as(as = "MinimalBoundedDuration<1, SECOND>")]
     pub timeout: Duration,
     /// Maximum request body size in bytes.
     pub max_body_size: u64,

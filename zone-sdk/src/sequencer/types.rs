@@ -31,6 +31,11 @@ use super::tx_builder::sign_prepared;
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const DEFAULT_PUBLISH_CHANNEL_CAPACITY: usize = 256;
+/// Unmined inscriptions the node may hold at once, which bounds how many a
+/// block can carry: past it, publishes queue in the sequencer until those
+/// ahead land. Inscriptions are small next to the block size cap, so this
+/// is set by what the wallet can fund at once, not by block space.
+const DEFAULT_MAX_PENDING_PUBLISH_DEPTH: usize = 100;
 /// Long enough that a merely slow tx is not rebuilt: a valid tx the node
 /// holds lands within a few blocks, so one unmined this long is stuck.
 const DEFAULT_STALE_REFUND_SLOTS: u64 = 30;
@@ -268,6 +273,7 @@ pub enum PreparedBundleKind {
     },
     PinDeposit {
         consumed_notes: Inputs,
+        outputs: Outputs,
     },
 }
 
@@ -319,7 +325,8 @@ pub enum WithdrawInputs {
 ///   }`.
 /// - [`ChannelUpdateTx::PinDeposit`] →
 ///   [`publish_pin_deposit`](super::SequencerHandle::publish_pin_deposit) with
-///   `info.inscription.payload` and `info.consumed_notes`.
+///   `info.inscription.payload` and `info.consumed_notes`, which re-creates the
+///   notes 1:1; `info.outputs` shows whether the original did.
 /// - [`ChannelUpdateTx::Config`] / [`ChannelUpdateTx::Custom`] →
 ///   caller-recovered; the SDK cannot re-sign a multi-sig config or rebuild a
 ///   custom tx, so it never auto-resubmits them.
@@ -421,7 +428,7 @@ impl SequencerConfig {
             reconnect_delay: DEFAULT_RECONNECT_DELAY,
             publish_channel_capacity: DEFAULT_PUBLISH_CHANNEL_CAPACITY,
             min_slots_remaining_in_turn: 1,
-            max_pending_publish_depth: 10,
+            max_pending_publish_depth: DEFAULT_MAX_PENDING_PUBLISH_DEPTH,
             stale_refund_slots: DEFAULT_STALE_REFUND_SLOTS,
             funding,
         }
@@ -508,8 +515,8 @@ pub enum Error {
 )]
 pub enum Event {
     /// Fires per ingested block. Carries how the channel view moved
-    /// (`channel_update`), the deposits observed in this block, and the
-    /// finalized txs; any of them may be empty. Cold-start
+    /// (`channel_update`), the deposits that turned canonical with it, and
+    /// the finalized txs; any of them may be empty. Cold-start
     /// backfill emits one `BlocksProcessed` per batch with an empty
     /// [`ChannelUpdate::Extension`]: it walks finalized history, so there is
     /// no view change to report.
@@ -722,11 +729,18 @@ pub struct PinDepositInfo {
     /// The channel notes the bundled transfer consumes (the deposit being
     /// pinned). Recovering an orphaned bundle re-supplies these.
     pub consumed_notes: Inputs,
+    /// The notes the bundled transfer re-creates, in op order. A
+    /// `publish_pin_deposit` bundle re-creates `consumed_notes` 1:1; a
+    /// custom-built one may not.
+    pub outputs: Outputs,
 }
 
-/// A channel deposit observed in a finalized L1 block. Sequencers do not
-/// publish deposits — these are pure observations enriched with the deposit
-/// `amount` from the chain events API.
+/// A channel deposit observed in an L1 block.
+///
+/// Sequencers do not publish deposits — these are pure observations enriched
+/// with the deposit `amount` from the chain events API. Reported in
+/// `BlocksProcessed::deposits` each time its block joins the canonical chain,
+/// like an adopted inscription, and in `finalized` once final.
 #[derive(Debug, Clone)]
 pub struct DepositInfo {
     /// The transaction hash containing this deposit op.

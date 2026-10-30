@@ -1,7 +1,7 @@
 pub mod api;
 mod states;
 
-use std::{collections::HashMap, num::NonZeroU64, time::Duration};
+use std::{collections::HashMap, num::NonZeroU64};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -33,6 +33,7 @@ use lb_core::{
         },
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
+    sdp::DeclarationId,
 };
 use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
@@ -99,7 +100,7 @@ pub enum WalletServiceError {
     MissingChannelState(ChannelId),
 
     #[error("Declaration {0:?} is missing in ledger")]
-    MissingDeclaration(lb_core::sdp::DeclarationId),
+    MissingDeclaration(DeclarationId),
 
     #[error("Service note {0:?} is missing in ledger")]
     MissingServiceNote(NoteId),
@@ -440,10 +441,10 @@ where
             ..
         } = self;
 
-        // Wait for services (except Chain) to become ready, with timeout
+        // Wait for services (except Chain) to become ready.
         wait_until_services_are_ready!(
             &service_resources_handle.overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             lb_storage_service::StorageService<_>,
             Kms
         )

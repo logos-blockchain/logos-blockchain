@@ -1,18 +1,12 @@
 use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
-#[cfg(feature = "test-utils")]
-use lb_groth16::Fr;
-#[cfg(feature = "test-utils")]
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[cfg(any(test, feature = "test-utils"))]
-use crate::mantle::{Note, NoteId};
 use crate::{
     events::TxEvent,
     mantle::{
-        batch::DeferredZkpVerification,
+        batch::DeferredZkSig,
         channel::Channels,
         gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
@@ -71,6 +65,11 @@ impl TransferOp {
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
+        use lb_groth16::Fr;
+        use lb_key_management_system_keys::keys::ZkPublicKey;
+
+        use crate::mantle::{Note, NoteId};
+
         Self::new(
             ledger::BoundedInputs::try_from_iter([NoteId(Fr::from(1u64)), NoteId(Fr::from(2u64))])
                 .unwrap()
@@ -139,13 +138,11 @@ impl PreverifiableOperation<StandardMode>
 }
 
 impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverified, StandardMode> {
+    type DeferredProof = DeferredZkSig;
     type Context<'a> = TransferValidationContext<'a>;
     type Error = TransferError;
 
-    fn verify(
-        &self,
-        context: &Self::Context<'_>,
-    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
         // Validate Inputs
@@ -159,10 +156,7 @@ impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverifi
         let pks = operation.inputs.get_pk(context.utxos)?;
         let inputs = public_inputs_from_pks((*context.tx_hash_view.as_fr()).into(), &pks)
             .map_err(|_| TransferError::InvalidProof)?;
-        Ok(Some(DeferredZkpVerification::ZkSig(
-            *self.proof().as_proof(),
-            inputs,
-        )))
+        Ok(DeferredZkSig::new(*self.proof().as_proof(), inputs))
     }
 }
 
@@ -194,7 +188,7 @@ mod test {
     use crate::{
         mantle::{
             Note, NoteId, TxHash, Utxo,
-            batch::{DeferredZkpVerification, Error as BatchError, test_utils::batch_verify},
+            batch::{DeferredZkSig, Error as BatchError, test_utils::batch_verify},
             channel::Channels,
             gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
             ledger::{
@@ -294,7 +288,7 @@ mod test {
         ZkKey::from(BigUint::from(7u8))
     }
 
-    fn deferred_zkp_signed_by(signers: &[ZkKey]) -> Option<DeferredZkpVerification> {
+    fn deferred_proof_signed_by(signers: &[ZkKey]) -> DeferredZkSig {
         let input_utxo = Utxo {
             op_id: [1u8; 32],
             output_index: 0,
@@ -325,14 +319,14 @@ mod test {
     }
 
     #[test]
-    fn deferred_zkp_is_accepted() {
-        assert!(batch_verify(deferred_zkp_signed_by(&[input_key()])).is_ok());
+    fn deferred_proof_is_accepted() {
+        assert!(batch_verify(deferred_proof_signed_by(&[input_key()])).is_ok());
     }
 
     #[test]
-    fn wrong_deferred_zkp_is_rejected() {
+    fn wrong_deferred_proof_is_rejected() {
         assert!(matches!(
-            batch_verify(deferred_zkp_signed_by(&[unrelated_key()])),
+            batch_verify(deferred_proof_signed_by(&[unrelated_key()])),
             Err(BatchError::InvalidZkSignatures)
         ));
     }

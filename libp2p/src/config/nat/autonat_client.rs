@@ -14,7 +14,7 @@ pub struct Settings {
     /// The interval at which we will attempt to confirm candidates as external
     /// addresses, only used for new candidates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub probe_interval_millisecs: Option<u64>,
+    pub probe_interval: Option<Duration>,
 
     /// The interval at which we will retest successful external addresses.
     /// This is used to ensure that the external address is still valid and
@@ -38,8 +38,8 @@ impl Settings {
             config = config.with_max_candidates(max_candidates);
         }
 
-        if let Some(probe_interval_millisecs) = self.probe_interval_millisecs {
-            config = config.with_probe_interval(Duration::from_millis(probe_interval_millisecs));
+        if let Some(probe_interval) = self.probe_interval {
+            config = config.with_probe_interval(probe_interval);
         }
 
         config

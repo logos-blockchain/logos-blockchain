@@ -1,7 +1,10 @@
 use core::{fmt::Debug, hash::Hash};
 use std::fmt::Display;
 
-use lb_core::{header::HeaderId, mantle::transactions::hash::PrefixedKey};
+use lb_core::{
+    header::HeaderId,
+    mantle::{traits::MantleTx, transactions::hash::PrefixedKey},
+};
 use lb_network_service::backends::NetworkBackend;
 use lb_storage_service::StorageService;
 use lb_tx_service::{MempoolMsg, TxMempoolService, backend::Mempool, network::NetworkAdapter};
@@ -14,26 +17,33 @@ pub async fn add_tx<
     MempoolNetworkAdapter,
     StorageAdapter,
     Item,
-    Key,
     RuntimeServiceId,
 >(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
     item: Item,
-    converter: impl Fn(&Item) -> Key,
+    converter: impl Fn(&Item) -> Item::Hash,
 ) -> Result<(), DynError>
 where
     MempoolNetworkBackend: NetworkBackend<RuntimeServiceId>,
-    MempoolNetworkAdapter: NetworkAdapter<RuntimeServiceId, Backend = MempoolNetworkBackend, Payload = Item, Key = Key>
-        + Send
+    MempoolNetworkAdapter: NetworkAdapter<
+            RuntimeServiceId,
+            Backend = MempoolNetworkBackend,
+            Payload = Item,
+            Key = Item::Hash,
+        > + Send
         + Sync
         + 'static,
     MempoolNetworkAdapter::Settings: Send + Sync,
-    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<RuntimeServiceId, Key = Key, Item = Item>
-        + Clone
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+            RuntimeServiceId,
+            Key = Item::Hash,
+            Item = Item,
+            BlockId = HeaderId,
+        > + Clone
         + 'static,
     StorageAdapter::Error: Debug,
-    Item: Clone + Debug + Send + Sync + Serialize + DeserializeOwned + 'static,
-    Key: Clone
+    Item: Clone + Debug + Send + Sync + Serialize + DeserializeOwned + MantleTx + 'static,
+    Item::Hash: Clone
         + Debug
         + Ord
         + Hash
@@ -53,7 +63,7 @@ where
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter,
-                Mempool<HeaderId, Item, Key, StorageAdapter, RuntimeServiceId>,
+                Mempool<HeaderId, Item, StorageAdapter, RuntimeServiceId>,
                 StorageAdapter,
                 RuntimeServiceId,
             >,
@@ -62,7 +72,7 @@ where
     let relay = handle
         .relay::<TxMempoolService<
             MempoolNetworkAdapter,
-            Mempool<HeaderId, Item, Key, StorageAdapter, RuntimeServiceId>,
+            Mempool<HeaderId, Item, StorageAdapter, RuntimeServiceId>,
             StorageAdapter,
             RuntimeServiceId,
         >>()

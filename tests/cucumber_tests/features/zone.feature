@@ -945,17 +945,16 @@ Feature: Zone SDK
     And sequencer "SEQ_A" submits the following zone messages without waiting for inclusion:
       | alias | data      |
       | MSG_1 | message 1 |
-    And node "NODE_1" alone reaches height 8 in 240 seconds
+    And zone message "MSG_1" from sequencer "SEQ_A" is included on node "NODE_1" in 240 seconds
     # NODE_1 down wipes its wallet reservations; NODE_4 out-builds it blind
     When I stop node "NODE_1"
     And I restart node "NODE_4"
     And node "NODE_4" alone reaches height 14 in 300 seconds
-    # NODE_1 rejoins, adopts NODE_4's longer branch, orphans MSG_1; SEQ_A
-    # reconnects and republishes MSG_1 byte-identically (its note is free again)
+    # NODE_1 rejoins, adopts NODE_4's longer branch and re-admits the orphaned
+    # MSG_1 to its mempool; SEQ_A reconnects. The next publish double-hands
+    # MSG_1's note if it is funded before MSG_1 is mined again
     When I restart node "NODE_1"
     And node "NODE_1" is at height 14 in 240 seconds
-    # The next publish double-hands MSG_1's note; the wedged inscription can
-    # only finalize via the sequencer's stale-refund rebuild
     And sequencer "SEQ_A" submits the following zone messages without waiting for inclusion:
       | alias | data      |
       | MSG_2 | message 2 |
@@ -964,6 +963,9 @@ Feature: Zone SDK
     When I save current checkpoint of sequencer "SEQ_A" as "REFUND_CHECKPOINT"
     And I restart zone sequencer "SEQ_A" from checkpoint "REFUND_CHECKPOINT"
     Then the zone indexer returns all zone messages exactly once in any order in 600 seconds
-    And zone message "MSG_2" finalized under a different tx hash than submitted
+    And zone messages double-handed in checkpoint "REFUND_CHECKPOINT" finalized with the losers re-funded:
+      | alias |
+      | MSG_1 |
+      | MSG_2 |
     Then the channel view contract holds for all zone sequencers
     And I stop all nodes

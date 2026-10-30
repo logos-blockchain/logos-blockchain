@@ -10,12 +10,17 @@ use lb_tracing::{
     logging::{
         gelf::{GelfConfig, create_gelf_layer},
         local::{
-            AppenderType, FileConfig, create_file_layer, create_writer_layer, flush_appenders,
+            AppenderType, FileConfig, LogFormat, create_file_layer, create_json_file_layer,
+            create_json_writer_layer, create_writer_layer, flush_appenders,
         },
         loki::{LokiConfig, create_loki_layer},
         otlp::{OtlpLoggingConfig, create_otlp_layer},
     },
-    metrics::{layer::create_metrics_layer, open_metrics::OpenMetrics, otlp::OtlpMetricsConfig},
+    metrics::{
+        layer::create_metrics_layer,
+        open_metrics::{OpenMetrics, OpenMetricsConfig},
+        otlp::OtlpMetricsConfig,
+    },
     tracing::otlp::{OtlpTracingConfig, create_otlp_tracing_layer},
 };
 use overwatch::{
@@ -107,6 +112,11 @@ pub struct LoggerLayerSettings {
     pub loki: Option<LokiConfig>,
     pub gelf: Option<GelfConfig>,
     pub otlp: Option<OtlpLoggingConfig>,
+    /// Format used by local file, stdout, and stderr sinks.
+    ///
+    /// Remote sinks (Loki, GELF, and OTLP) keep their structured wire formats.
+    #[serde(default)]
+    pub format: LogFormat,
     pub stdout: bool,
     pub stderr: bool,
 }
@@ -126,7 +136,7 @@ pub enum FilterLayerSettings {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MetricsLayerSettings {
     pub otlp: Option<OtlpMetricsConfig>,
-    pub enable_open_metrics: bool,
+    pub open_metrics: OpenMetricsConfig,
 }
 
 impl MetricsLayerSettings {
@@ -134,7 +144,7 @@ impl MetricsLayerSettings {
     pub const fn none() -> Self {
         Self {
             otlp: None,
-            enable_open_metrics: false,
+            open_metrics: OpenMetricsConfig::disabled(),
         }
     }
 }
@@ -180,6 +190,7 @@ impl Default for TracingSettings {
                 loki: None,
                 gelf: None,
                 otlp: None,
+                format: LogFormat::default(),
             },
             tracing: TracingLayerSettings::None,
             filter: FilterLayerSettings::None,
@@ -240,19 +251,41 @@ where
             .settings_handle
             .notifier()
             .get_updated_settings();
+        let log_format = config.logger.format;
 
         let mut logger_layers = LoggerLayers::new(initial_env_filter(&config)?);
 
         if let Some(file_config) = config.logger.file {
-            logger_layers.add_layer(create_file_layer(file_config));
+            match log_format {
+                LogFormat::Text(kind) => {
+                    logger_layers.add_layer(create_file_layer(file_config, kind));
+                }
+                LogFormat::Json => {
+                    logger_layers.add_layer(create_json_file_layer(file_config));
+                }
+            }
         }
 
         if config.logger.stdout {
-            logger_layers.add_layer(create_writer_layer(std::io::stdout()));
+            match log_format {
+                LogFormat::Text(kind) => {
+                    logger_layers.add_layer(create_writer_layer(std::io::stdout(), kind));
+                }
+                LogFormat::Json => {
+                    logger_layers.add_layer(create_json_writer_layer(std::io::stdout()));
+                }
+            }
         }
 
         if config.logger.stderr {
-            logger_layers.add_layer(create_writer_layer(std::io::stderr()));
+            match log_format {
+                LogFormat::Text(kind) => {
+                    logger_layers.add_layer(create_writer_layer(std::io::stderr(), kind));
+                }
+                LogFormat::Json => {
+                    logger_layers.add_layer(create_json_writer_layer(std::io::stderr()));
+                }
+            }
         }
 
         if let Some(loki_config) = config.logger.loki {
@@ -286,7 +319,7 @@ where
         }
 
         let open_metrics =
-            match create_metrics_layer(config.metrics.otlp, config.metrics.enable_open_metrics)? {
+            match create_metrics_layer(config.metrics.otlp, &config.metrics.open_metrics)? {
                 Some((metrics_layer, open_metrics)) => {
                     other_layers.push(Box::new(metrics_layer));
                     open_metrics

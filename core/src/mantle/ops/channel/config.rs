@@ -12,7 +12,6 @@ use crate::{
     events::TxEvent,
     mantle::{
         Value,
-        batch::DeferredZkpVerification,
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
         gas::{
             Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
@@ -124,13 +123,11 @@ impl PreverifiableOperation<StandardMode>
 impl VerifiableOperation<StandardMode>
     for SignedOperation<ChannelConfigOp, Preverified, StandardMode>
 {
+    type DeferredProof = ();
     type Context<'a> = ChannelConfigValidationContext<'a>;
     type Error = Error;
 
-    fn verify(
-        &self,
-        context: &Self::Context<'_>,
-    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
         let proof = self.proof();
 
@@ -194,7 +191,7 @@ impl VerifiableOperation<StandardMode>
             }
         }
 
-        Ok(None)
+        Ok(())
     }
 }
 
@@ -379,24 +376,6 @@ mod tests {
         assert_eq!(
             signed_operation.preverify(&()),
             Err(Error::InvalidChannelConfig)
-        );
-    }
-
-    #[test]
-    fn has_no_deferred_zkp() {
-        let signed_operation = preverified(
-            ChannelConfigOp::sample(),
-            ChannelMultiSigProof::sample_with_signatures(0),
-        );
-
-        assert!(
-            signed_operation
-                .verify(&ChannelConfigValidationContext {
-                    channels: &Channels::new(),
-                    tx_hash_view: &TxHashView::from(TxHash::from([9u8; 32])),
-                })
-                .expect("an unregistered channel is configured without signatures")
-                .is_none()
         );
     }
 

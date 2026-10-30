@@ -157,7 +157,7 @@ async fn publish_zone_messages_with_republish_policy(
     for row in rows {
         world
             .zone
-            .remember_zone_message(row.message_alias, row.payload, None, None, None);
+            .remember_zone_message(row.message_alias, row.payload, None, None, None, None);
     }
     if world.zone.indexer().is_err() {
         initialize_zone_indexer(world, step, DEFAULT_ZONE_SEQUENCER)?;
@@ -244,6 +244,7 @@ async fn step_publish_zone_balance_updates_with_balance_policy(
             world.zone.remember_zone_message(
                 message_alias.clone(),
                 payload.clone(),
+                None,
                 None,
                 None,
                 None,

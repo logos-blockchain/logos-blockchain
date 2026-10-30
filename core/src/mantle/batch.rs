@@ -1,38 +1,64 @@
 use lb_poc::{PoCProof, PoCVerifierInput};
 use lb_zksign::{ZkSignProof, ZkSignVerifierInputs};
 
-/// A ZKP verification deferred while processing an operation.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "This is short-lived; each is pushed into DeferredZkpVerifications almost immediately, \
-    which stores the two kinds in separate vectors. Also, most of them are the larger ZkSig variant."
-)]
+/// A proof that can be handed off to a [`DeferredProofs`] batch.
+pub trait DeferrableProof {
+    fn defer_into(self, batch: &mut DeferredProofs);
+}
+
+/// A deferred proof verification while processing an operation
 #[derive(Debug)]
-pub enum DeferredZkpVerification {
-    ZkSig(ZkSignProof, ZkSignVerifierInputs),
-    LeaderClaim(PoCProof, PoCVerifierInput),
+pub struct DeferredProof<Proof, Inputs> {
+    proof: Proof,
+    inputs: Inputs,
 }
 
-/// ZKP verifications deferred while applying a block.
-#[derive(Default)]
-pub struct DeferredZkpVerifications {
-    zk_sigs: Vec<(ZkSignProof, ZkSignVerifierInputs)>,
-    leader_claims: Vec<(PoCProof, PoCVerifierInput)>,
-}
-
-impl DeferredZkpVerifications {
+impl<Proof, Inputs> DeferredProof<Proof, Inputs> {
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub const fn new(proof: Proof, inputs: Inputs) -> Self {
+        Self { proof, inputs }
     }
 
-    pub fn push(&mut self, verification: DeferredZkpVerification) {
-        match verification {
-            DeferredZkpVerification::ZkSig(zk_sig, inputs) => self.zk_sigs.push((zk_sig, inputs)),
-            DeferredZkpVerification::LeaderClaim(proof, public) => {
-                self.leader_claims.push((proof, public));
-            }
-        }
+    pub const fn proof(&self) -> &Proof {
+        &self.proof
+    }
+
+    pub const fn inputs(&self) -> &Inputs {
+        &self.inputs
+    }
+
+    #[must_use]
+    pub fn into_parts(self) -> (Proof, Inputs) {
+        (self.proof, self.inputs)
+    }
+}
+
+pub type DeferredZkSig = DeferredProof<ZkSignProof, ZkSignVerifierInputs>;
+pub type DeferredLeaderClaim = DeferredProof<PoCProof, PoCVerifierInput>;
+
+impl DeferrableProof for DeferredZkSig {
+    fn defer_into(self, batch: &mut DeferredProofs) {
+        batch.zk_sigs.push(self);
+    }
+}
+
+impl DeferrableProof for DeferredLeaderClaim {
+    fn defer_into(self, batch: &mut DeferredProofs) {
+        batch.leader_claims.push(self);
+    }
+}
+
+/// A group of deferred proof verifications while applying a block
+#[derive(Default)]
+#[must_use]
+pub struct DeferredProofs {
+    zk_sigs: Vec<DeferredZkSig>,
+    leader_claims: Vec<DeferredLeaderClaim>,
+}
+
+impl DeferredProofs {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn extend(&mut self, other: Self) {
@@ -41,28 +67,36 @@ impl DeferredZkpVerifications {
     }
 
     pub fn verify(self) -> Result<(), Error> {
-        Self::verify_zk_sigs(&self.zk_sigs)?;
-        Self::verify_leader_claims(&self.leader_claims)
+        Self::verify_zk_sigs(self.zk_sigs)?;
+        Self::verify_leader_claims(self.leader_claims)
     }
 
-    fn verify_zk_sigs(zk_sigs: &[(ZkSignProof, ZkSignVerifierInputs)]) -> Result<(), Error> {
-        if zk_sigs.is_empty() {
+    fn verify_zk_sigs(proofs: Vec<DeferredZkSig>) -> Result<(), Error> {
+        if proofs.is_empty() {
             return Ok(());
         }
 
-        match lb_zksign::batch_verify(zk_sigs) {
+        let proof_parts = proofs
+            .into_iter()
+            .map(DeferredZkSig::into_parts)
+            .collect::<Vec<_>>();
+        match lb_zksign::batch_verify(proof_parts.as_slice()) {
             Ok(true) => Ok(()),
             Ok(false) => Err(Error::InvalidZkSignatures),
             Err(e) => Err(Error::MalformedZkSignature(format!("{e:?}"))),
         }
     }
 
-    fn verify_leader_claims(proofs: &[(PoCProof, PoCVerifierInput)]) -> Result<(), Error> {
+    fn verify_leader_claims(proofs: Vec<DeferredLeaderClaim>) -> Result<(), Error> {
         if proofs.is_empty() {
             return Ok(());
         }
 
-        match lb_poc::batch_verify(proofs) {
+        let proof_parts = proofs
+            .into_iter()
+            .map(DeferredLeaderClaim::into_parts)
+            .collect::<Vec<_>>();
+        match lb_poc::batch_verify(proof_parts.as_slice()) {
             Ok(true) => Ok(()),
             Ok(false) => Err(Error::InvalidLeaderClaimProofs),
             Err(e) => Err(Error::MalformedLeaderClaimProof(format!("{e:?}"))),
@@ -71,18 +105,24 @@ impl DeferredZkpVerifications {
 
     #[cfg(any(test, feature = "unsafe-test-functions"))]
     #[must_use]
-    pub fn zk_sigs(&self) -> &[(ZkSignProof, ZkSignVerifierInputs)] {
+    pub fn zk_sigs(&self) -> &[DeferredZkSig] {
         &self.zk_sigs
+    }
+
+    #[cfg(any(test, feature = "unsafe-test-functions"))]
+    #[must_use]
+    pub fn leader_claims(&self) -> &[DeferredLeaderClaim] {
+        &self.leader_claims
     }
 }
 
-impl FromIterator<DeferredZkpVerification> for DeferredZkpVerifications {
-    fn from_iter<T: IntoIterator<Item = DeferredZkpVerification>>(iter: T) -> Self {
-        let mut verifications = Self::new();
-        for verification in iter {
-            verifications.push(verification);
+impl<Proof: DeferrableProof> FromIterator<Proof> for DeferredProofs {
+    fn from_iter<T: IntoIterator<Item = Proof>>(iter: T) -> Self {
+        let mut batch = Self::new();
+        for item in iter {
+            item.defer_into(&mut batch);
         }
-        verifications
+        batch
     }
 }
 
@@ -100,13 +140,10 @@ pub enum Error {
 
 #[cfg(test)]
 pub mod test_utils {
-    use super::{DeferredZkpVerification, DeferredZkpVerifications, Error};
+    use super::{DeferrableProof, DeferredProofs, Error};
 
-    pub fn batch_verify(deferred_zkp: Option<DeferredZkpVerification>) -> Result<(), Error> {
-        deferred_zkp
-            .into_iter()
-            .collect::<DeferredZkpVerifications>()
-            .verify()
+    pub fn batch_verify(proof: impl DeferrableProof) -> Result<(), Error> {
+        DeferredProofs::from_iter([proof]).verify()
     }
 }
 
@@ -128,16 +165,14 @@ mod tests {
 
     #[test]
     fn verify_accepts_empty_batch() {
-        DeferredZkpVerifications::new()
-            .verify()
-            .expect("must succeed");
+        DeferredProofs::new().verify().expect("must succeed");
     }
 
     #[test]
     fn verify_accepts_batch_of_valid_zk_signatures() {
         [valid_zk_sig(7), valid_zk_sig(8), valid_zk_sig(9)]
             .into_iter()
-            .collect::<DeferredZkpVerifications>()
+            .collect::<DeferredProofs>()
             .verify()
             .expect("must succeed");
     }
@@ -146,7 +181,7 @@ mod tests {
     fn verify_rejects_batch_containing_invalid_zk_signature() {
         let err = [valid_zk_sig(7), invalid_zk_sig(8), valid_zk_sig(9)]
             .into_iter()
-            .collect::<DeferredZkpVerifications>()
+            .collect::<DeferredProofs>()
             .verify()
             .unwrap_err();
         assert!(matches!(err, Error::InvalidZkSignatures));
@@ -156,7 +191,7 @@ mod tests {
     fn verify_accepts_batch_of_valid_leader_claims() {
         [valid_leader_claim(7), valid_leader_claim(8)]
             .into_iter()
-            .collect::<DeferredZkpVerifications>()
+            .collect::<DeferredProofs>()
             .verify()
             .expect("must succeed");
     }
@@ -165,7 +200,7 @@ mod tests {
     fn verify_rejects_batch_containing_invalid_leader_claim() {
         let err = [valid_leader_claim(7), invalid_leader_claim(8)]
             .into_iter()
-            .collect::<DeferredZkpVerifications>()
+            .collect::<DeferredProofs>()
             .verify()
             .unwrap_err();
         assert!(matches!(err, Error::InvalidLeaderClaimProofs));
@@ -173,39 +208,39 @@ mod tests {
 
     #[test]
     fn verify_rejects_invalid_leader_claim_alongside_valid_zk_signature() {
-        let err = [valid_zk_sig(7), invalid_leader_claim(8)]
-            .into_iter()
-            .collect::<DeferredZkpVerifications>()
-            .verify()
-            .unwrap_err();
+        let mut batch = DeferredProofs::new();
+        valid_zk_sig(7).defer_into(&mut batch);
+        invalid_leader_claim(8).defer_into(&mut batch);
+
+        let err = batch.verify().unwrap_err();
         assert!(matches!(err, Error::InvalidLeaderClaimProofs));
     }
 
-    fn valid_zk_sig(message: u64) -> DeferredZkpVerification {
+    fn valid_zk_sig(message: u64) -> DeferredZkSig {
         zk_sig(message, message)
     }
 
-    fn invalid_zk_sig(message: u64) -> DeferredZkpVerification {
+    fn invalid_zk_sig(message: u64) -> DeferredZkSig {
         zk_sig(message + 1, message)
     }
 
     /// Signs `msg`, but pairs the proof with the public inputs the
     /// verifier checks it against: those of `msg_for_input`.
     /// If `msg != msg_for_input`, an invalid proof will be produced.
-    fn zk_sig(msg: u64, msg_for_input: u64) -> DeferredZkpVerification {
+    fn zk_sig(msg: u64, msg_for_input: u64) -> DeferredZkSig {
         let key = ZkKey::from(BigUint::from(1u8));
         let signature = ZkKey::multi_sign(std::slice::from_ref(&key), &Fr::from(msg)).unwrap();
         let inputs =
             public_inputs_from_pks(Fr::from(msg_for_input).into(), &[key.to_public_key()]).unwrap();
 
-        DeferredZkpVerification::ZkSig(*signature.as_proof(), inputs)
+        DeferredZkSig::new(*signature.as_proof(), inputs)
     }
 
-    fn valid_leader_claim(voucher: u64) -> DeferredZkpVerification {
+    fn valid_leader_claim(voucher: u64) -> DeferredLeaderClaim {
         leader_claim(voucher, voucher)
     }
 
-    fn invalid_leader_claim(voucher: u64) -> DeferredZkpVerification {
+    fn invalid_leader_claim(voucher: u64) -> DeferredLeaderClaim {
         leader_claim(voucher + 1, voucher)
     }
 
@@ -213,7 +248,7 @@ mod tests {
     /// with the nullifier the verifier checks it against: that of
     /// `secret_for_input`.
     /// If `secret != secret_for_input`, an invalid proof will be produced.
-    fn leader_claim(secret: u64, secret_for_input: u64) -> DeferredZkpVerification {
+    fn leader_claim(secret: u64, secret_for_input: u64) -> DeferredLeaderClaim {
         let voucher_secret = VoucherSecret::from(Fr::from(secret));
         let (mmr, voucher_path) = MerkleMountainRange::<VoucherCm, ZkHasher>::new()
             .push_with_paths(VoucherCm::from_secret(voucher_secret), &mut [])
@@ -234,7 +269,7 @@ mod tests {
         )
         .expect("proof generation should succeed");
 
-        DeferredZkpVerification::LeaderClaim(
+        DeferredLeaderClaim::new(
             *proof.proof(),
             PoCVerifierInput::new(
                 VoucherNullifier::from_secret(VoucherSecret::from(Fr::from(secret_for_input)))

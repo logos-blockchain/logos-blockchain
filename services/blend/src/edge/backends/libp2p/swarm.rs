@@ -13,7 +13,7 @@ use lb_blend::{
     network::{message::OutgoingMessage, send_msg},
     scheduling::membership::{Membership, Node},
 };
-use lb_libp2p::{DialError, DialErrorExt as _, DialOpts, SwarmEvent};
+use lb_libp2p::{DialError, DialErrorExt as _, DialOpts, SwarmEvent, system_dns_config};
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
     identity::Keypair,
@@ -122,11 +122,11 @@ where
         command_receiver: mpsc::Receiver<Command>,
         identity: Keypair,
     ) -> Self {
+        let (dns_config, dns_options) = system_dns_config();
         let swarm = SwarmBuilder::with_existing_identity(identity)
             .with_tokio()
             .with_quic()
-            .with_dns()
-            .expect("DNS transport should be supported")
+            .with_dns_config(dns_config, dns_options)
             .with_behaviour(|_| libp2p_stream::Behaviour::new())
             .expect("Behaviour should be built")
             .with_swarm_config(|cfg| {

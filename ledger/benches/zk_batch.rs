@@ -1,4 +1,4 @@
-//! Benchmarks for the per-block ZKP batch verification
+//! Benchmarks for the per-block proof batch verification
 //!
 //! Run with `cargo bench -p logos-blockchain-ledger --bench zk_batch`.
 //!
@@ -27,7 +27,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, Op, OpProof, SignedOps, Utxo,
-        batch::DeferredZkpVerifications,
+        batch::DeferredProofs,
         gas::MainnetGasProfile,
         ledger::{BoundedInputs, Outputs, verification_mode::StandardMode},
         ops::transfer::TransferOp,
@@ -216,8 +216,10 @@ fn apply_sequential(
     txs: impl Iterator<Item = SignedOps<Preverified, StandardMode>>,
 ) -> LedgerState {
     let (state, deferred) = apply(state, txs);
-    for (proof, inputs) in deferred.zk_sigs() {
-        assert!(verify(proof, inputs).expect("proof should verify"));
+    for deferred_proof in deferred.zk_sigs() {
+        assert!(
+            verify(deferred_proof.proof(), deferred_proof.inputs()).expect("proof should verify")
+        );
     }
     state
 }
@@ -225,7 +227,7 @@ fn apply_sequential(
 fn apply(
     state: &LedgerState,
     txs: impl Iterator<Item = SignedOps<Preverified, StandardMode>>,
-) -> (LedgerState, DeferredZkpVerifications) {
+) -> (LedgerState, DeferredProofs) {
     let (state, _, deferred) = state
         .clone()
         .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(&TX_POOL.config, txs)

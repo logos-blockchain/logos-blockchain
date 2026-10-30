@@ -36,7 +36,7 @@ macro_rules! api_routes {
             get lb_http_api_common::paths::NETWORK_INFO => crate::api::handlers::libp2p_info, libp2p_info::<RuntimeServiceId>;
             post lb_http_api_common::paths::DIAL_PEER => crate::api::handlers::dial_peer, dial_peer::<RuntimeServiceId>;
             get lb_http_api_common::paths::BLEND_NETWORK_INFO => crate::api::handlers::blend_info, blend_info::<BlendService, RuntimeServiceId>;
-            post lb_http_api_common::paths::BLEND_JOIN_NETWORK => crate::api::handlers::blend_join_network, blend_join_network::<BlendService, RuntimeServiceId>;
+            post lb_http_api_common::paths::BLEND_JOIN_NETWORK => crate::api::handlers::blend_join_network, blend_join_network::<BlendService, WalletService, RuntimeServiceId>;
             get lb_http_api_common::paths::BLEND_PENDING_TRANSACTIONS => crate::api::handlers::blend_pending_transactions, blend_pending_transactions::<BlendService, RuntimeServiceId>;
             post lb_http_api_common::paths::MEMPOOL_ADD_TX => crate::api::handlers::add_tx, add_tx::<MempoolStorageAdapter, RuntimeServiceId>;
             post lb_http_api_common::paths::BLEND_DISPERSE_TRANSACTION => crate::api::handlers::blend_tx, blend_tx::<BlendService, RuntimeServiceId>;
@@ -49,6 +49,8 @@ macro_rules! api_routes {
             post lb_http_api_common::paths::SDP_POST_SET_DECLARATION_ID => crate::api::handlers::post_set_declaration_id, post_set_declaration_id::<SdpMempool, SdpWallet, Cryptarchia<RuntimeServiceId>, SdpStateStorage, RuntimeServiceId>;
             get lb_http_api_common::paths::MANTLE_SDP_DECLARATIONS => crate::api::handlers::get_sdp_declarations, get_sdp_declarations::<RuntimeServiceId>;
             get lb_http_api_common::paths::MANTLE_SDP_SNAPSHOT => crate::api::handlers::get_sdp_snapshot, get_sdp_snapshot::<RuntimeServiceId>;
+            get lb_http_api_common::paths::MANTLE_SDP_FINALIZED_DECLARATION => crate::api::handlers::get_finalized_sdp_declaration, get_finalized_sdp_declaration::<RuntimeServiceId>;
+            get lb_http_api_common::paths::MANTLE_SDP_FINALIZED_DECLARATIONS => crate::api::handlers::get_finalized_sdp_declarations, get_finalized_sdp_declarations::<RuntimeServiceId>;
             post lb_http_api_common::paths::LEADER_CLAIM => crate::api::handlers::leader_claim, leader_claim::<ChainLeader, RuntimeServiceId>;
             put lb_http_api_common::paths::POW_START_MINING => crate::api::handlers::pow_start_mining, pow_start_mining::<PoWService, RuntimeServiceId>;
             put lb_http_api_common::paths::POW_STOP_MINING => crate::api::handlers::pow_stop_mining, pow_stop_mining::<PoWService, RuntimeServiceId>;

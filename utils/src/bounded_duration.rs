@@ -30,11 +30,9 @@ use time::Duration;
     private_bounds,
     reason = "The `TimeTag` trait is not public, is just to tie up types for `MinimalBoundedDuration` and its implemented only by the supported types."
 )]
-#[derive(Serialize, Copy, Clone, Debug)]
-#[serde(transparent)]
+#[derive(Copy, Clone, Debug)]
 pub struct MinimalBoundedDuration<const MIN_DURATION: usize, TAG: TimeTag> {
     duration: Duration,
-    #[serde(skip_serializing)]
     _tag: PhantomData<*const TAG>,
 }
 
@@ -72,6 +70,22 @@ fn fill_duration_measure<T: TimeTag>() -> Result<String, impl Display> {
     }
 }
 
+impl<const MIN_DURATION: usize, TAG: TimeTag> Serialize
+    for MinimalBoundedDuration<MIN_DURATION, TAG>
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if !serializer.is_human_readable() {
+            return self.duration.serialize(serializer);
+        }
+        let std_duration: core::time::Duration =
+            self.duration.try_into().map_err(S::Error::custom)?;
+        serializer.collect_str(&humantime::format_duration(std_duration))
+    }
+}
+
 impl<const MIN_DURATION: usize, TAG: TimeTag> SerializeAs<Duration>
     for MinimalBoundedDuration<MIN_DURATION, TAG>
 {
@@ -79,7 +93,11 @@ impl<const MIN_DURATION: usize, TAG: TimeTag> SerializeAs<Duration>
     where
         S: Serializer,
     {
-        source.serialize(serializer)
+        let to_serialize: Self = Self {
+            duration: *source,
+            _tag: PhantomData,
+        };
+        to_serialize.serialize(serializer)
     }
 }
 
@@ -136,7 +154,15 @@ impl<'de, const MIN_DURATION: usize, TAG: TimeTag> Deserialize<'de>
     where
         D: Deserializer<'de>,
     {
-        let value: Duration = Duration::deserialize(deserializer)?;
+        let value: Duration = if deserializer.is_human_readable() {
+            let value = String::deserialize(deserializer)?;
+            humantime::parse_duration(&value)
+                .map_err(D::Error::custom)?
+                .try_into()
+                .map_err(D::Error::custom)?
+        } else {
+            Duration::deserialize(deserializer)?
+        };
 
         let reformat_measure = fill_duration_measure::<TAG>().map_err(D::Error::custom)?;
         let parsed_duration =
@@ -202,7 +228,7 @@ mod test {
 
     #[test]
     fn success_deserialize() {
-        let json_value = json!([1, 0]);
+        let json_value = json!("1s");
         let value = serde_json::to_value(json_value).unwrap();
         let _duration: MinimalBoundedDuration<1, SECOND> = serde_json::from_value(value).unwrap();
     }
@@ -210,7 +236,7 @@ mod test {
     #[test]
     #[should_panic(expected = "Minimal duration is 1d but got 1s")]
     fn fail_deserialize_with_type_bound() {
-        let value = serde_json::to_value(Duration::seconds(1)).unwrap();
+        let value = json!("1s");
 
         let _duration: MinimalBoundedDuration<1, DAY> = serde_json::from_value(value).unwrap();
     }

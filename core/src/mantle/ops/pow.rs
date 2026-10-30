@@ -14,7 +14,6 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         Note, TxHash, Utxo, Value,
-        batch::DeferredZkpVerification,
         gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
@@ -307,13 +306,11 @@ impl PreverifiableOperation<StandardMode>
 impl VerifiableOperation<StandardMode>
     for SignedOperation<ClaimPowRewardOp, Preverified, StandardMode>
 {
+    type DeferredProof = ();
     type Context<'a> = ClaimPoWRewardVerificationContext<'a>;
     type Error = ClaimPowRewardError;
 
-    fn verify(
-        &self,
-        context: &Self::Context<'_>,
-    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
         context.are_pow_reward_enabled()?;
@@ -322,7 +319,7 @@ impl VerifiableOperation<StandardMode>
         let puzzle_ticket = operation.get_puzzle_ticket();
         context.validate_difficulty_reward(puzzle_ticket)?;
         context.validate_double_claiming(puzzle_ticket)?;
-        Ok(None)
+        Ok(())
     }
 }
 
@@ -572,22 +569,6 @@ mod tests {
     }
 
     #[test]
-    fn has_no_deferred_zkp() {
-        let nullifiers = HashTrieMapSync::new_sync();
-        let ctx = accepting_context(&nullifiers);
-        let signed_operation = SignedOperation::new(claim_op(CURRENT_EPOCH), NoOpProof)
-            .into_preverified(&())
-            .unwrap();
-
-        assert!(
-            signed_operation
-                .verify(&ctx)
-                .expect("a claim with the current epoch nonce is accepted")
-                .is_none()
-        );
-    }
-
-    #[test]
     fn verify_accepts_a_claim_with_the_current_epoch_nonce() {
         let nullifiers = HashTrieMapSync::new_sync();
         let ctx = accepting_context(&nullifiers);
@@ -718,12 +699,11 @@ mod tests {
     #[test]
     fn execute_issues_reward_utxo_and_registers_nullifier() {
         let op = claim_op(CURRENT_EPOCH);
-        let verified_signed_operation = SignedOperation::new(op, NoOpProof)
+        let signed_operation = SignedOperation::new(op, NoOpProof)
             .into_preverified(&())
             .unwrap()
             .into_verified(&accepting_context(&HashTrieMapSync::new_sync()))
             .unwrap();
-        let (signed_operation, _) = verified_signed_operation.into_parts();
         let puzzle_ticket = signed_operation.operation().get_puzzle_ticket();
         let operation_op_id = signed_operation.operation().op_id();
         let operation_public_key = signed_operation.operation().public_key;
@@ -785,12 +765,11 @@ mod tests {
         // and aborts loudly rather than minting a reward note the pool
         // cannot back.
         let op = claim_op(CURRENT_EPOCH);
-        let verified_signed_operation = SignedOperation::new(op, NoOpProof)
+        let signed_operation = SignedOperation::new(op, NoOpProof)
             .into_preverified(&())
             .unwrap()
             .into_verified(&accepting_context(&HashTrieMapSync::new_sync()))
             .unwrap();
-        let (signed_operation, _) = verified_signed_operation.into_parts();
 
         drop(signed_operation.execute(ClaimPoWRewardExecutionContext {
             reward_pool: 5,

@@ -1,14 +1,17 @@
 use std::collections::HashMap;
 
-use lb_blend_primitives::time::RoundCount;
+use lb_blend_primitives::time::{Round, RoundCount};
+use lb_log_targets::blend;
 use libp2p::PeerId;
+
+const MAINTENANCE_TARGET: &str = blend::network::core::core::behaviour::MAINTENANCE;
 
 /// Tracks which core neighbours are still delivering messages.
 ///
-/// A connection whose neighbour is [`Silent`](PeerState::Silent) is closed, but
-/// that neighbour is never blacklisted for it: falling silent is not
-/// attributable, since a neighbour can be silenced by an attack on it rather
-/// than by any choice of its own.
+/// A connection whose neighbour is [`Silent`](PeerState::Silent) is closed, and
+/// the neighbour refused for `W` rounds (see [`NotLiveRefusals`]), but never
+/// blacklisted for it: falling silent is not attributable, since a neighbour
+/// can be silenced by an attack on it rather than by any choice of its own.
 ///
 /// The window is measured in **connected** rounds, not in elapsed ones. Rounds
 /// during which the node held no connection with a neighbour are not rounds in
@@ -22,6 +25,11 @@ use libp2p::PeerId;
 /// observation window matures, without being considered silent, leading to one
 /// slot constantly taken: multiplied by `N` malicious nodes, this one node can
 /// be easily eclipsed.
+///
+/// The count of a neighbour starts over only when the node closes its
+/// connection for not being live, and the neighbour has to sit out its refusal
+/// to get the fresh window: a silent identity holds a slot for at most `W` of
+/// every `2·W` rounds.
 pub struct PeerLivenessMap {
     /// `W`: how many **connected** rounds a neighbour may go without delivering
     /// a message before the node concludes that it has fallen silent.
@@ -30,7 +38,8 @@ pub struct PeerLivenessMap {
 }
 
 /// What the node has observed of one core neighbour, counted per identity for
-/// the epoch and across every connection the node has held with it.
+/// the epoch and across every connection the node has held with it, since it
+/// last closed one for not being live.
 #[derive(Debug, Clone, Copy, Default)]
 struct Observation {
     /// How many rounds the node has held a connection with this identity.
@@ -83,6 +92,15 @@ impl PeerLivenessMap {
         self.observations.entry(peer).or_default();
     }
 
+    /// Forgets what the node has observed of a neighbour, so that the next
+    /// connection with it starts a fresh count.
+    ///
+    /// Only for a neighbour whose connection the node closed for not being
+    /// live, which is refused for `W` rounds first.
+    pub fn forget(&mut self, peer: &PeerId) {
+        self.observations.remove(peer);
+    }
+
     /// Counts one connected round for each neighbour the node currently holds a
     /// connection with.
     pub fn enter_new_round_with_peers<'peer, Peers>(&mut self, connected_peers: Peers)
@@ -132,6 +150,61 @@ impl PeerLivenessMap {
 
     pub fn clear(&mut self) {
         self.observations.clear();
+    }
+}
+
+/// The neighbours this node refuses on incoming and on outgoing connections,
+/// for `W` rounds after it closed a connection with them for not being live.
+pub struct NotLiveRefusals {
+    /// `W`: how many rounds a refusal lasts.
+    duration: RoundCount,
+    /// The round each refused neighbour may connect again from.
+    refused_until: HashMap<PeerId, Round>,
+}
+
+impl NotLiveRefusals {
+    #[must_use]
+    pub fn new(duration: RoundCount) -> Self {
+        Self {
+            duration,
+            refused_until: HashMap::new(),
+        }
+    }
+
+    /// Refuses a neighbour for `W` rounds from `now`.
+    pub fn refuse(&mut self, peer: PeerId, now: Round) {
+        self.refused_until
+            .insert(peer, now.saturating_add(self.duration));
+    }
+
+    /// Whether the neighbour is refused as of `now`.
+    #[must_use]
+    pub fn is_refused_at(&self, peer: &PeerId, now: Round) -> bool {
+        self.refused_until
+            .get(peer)
+            .is_some_and(|refused_until| now < *refused_until)
+    }
+
+    /// The neighbours refused as of `now`.
+    pub fn iter(&self, now: Round) -> impl Iterator<Item = &PeerId> {
+        self.refused_until
+            .iter()
+            .filter(move |(_, refused_until)| now < **refused_until)
+            .map(|(peer, _)| peer)
+    }
+
+    /// Drops the refusals whose window has passed as of `now`.
+    pub fn prune_expired(&mut self, now: Round) {
+        self.refused_until.retain(|peer, refused_until| {
+            if now < *refused_until {
+                return true;
+            }
+            tracing::debug!(
+                target: MAINTENANCE_TARGET,
+                "Peer {peer:?} is no longer refused: the window since its connection was closed for not being live has passed."
+            );
+            false
+        });
     }
 }
 

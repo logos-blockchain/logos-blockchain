@@ -88,7 +88,7 @@ eras:
           timestamp: 0
       faucet_pk: d2a1977db29daf6691f7ce897fe7b666ec964b1bf027814cacd1a2c141b12f10
     time:
-      slot_duration: '1.000000000'
+      slot_duration: 1s
 genesis_block:
   header:
     slot: 0

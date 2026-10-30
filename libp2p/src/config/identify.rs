@@ -12,10 +12,10 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_version: Option<String>,
 
-    /// Interval in seconds between pushes of identify info
+    /// Interval between pushes of identify info
     /// Default from libp2p: 5 minutes (300 seconds)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub interval_secs: Option<u64>,
+    pub interval: Option<Duration>,
 
     /// Whether new/expired listen addresses should trigger
     /// an active push of an identify message to all connected peers
@@ -49,8 +49,8 @@ impl Settings {
             config = config.with_agent_version(agent_version.clone());
         }
 
-        if let Some(interval) = self.interval_secs {
-            config = config.with_interval(Duration::from_secs(interval));
+        if let Some(interval) = self.interval {
+            config = config.with_interval(interval);
         }
 
         if let Some(push_updates) = self.push_listen_addr_updates {

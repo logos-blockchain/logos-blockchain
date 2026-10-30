@@ -2,7 +2,6 @@ use std::{
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
-    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -184,12 +183,15 @@ where
         let settings = settings_handle.notifier().get_updated_settings();
         let minimal_network_size = settings.common.minimum_network_size;
 
+        // Wait for services (except Chain and SDP) to become ready.
+        wait_until_services_are_ready!(&overwatch_handle, None, PreloadKmsService<_>).await?;
+        // Wait for Chain, which becomes ready after recovering blocks, and SDP,
+        // which becomes ready after Chain, without timeout.
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_mins(1)),
-            PreloadKmsService<_>,
-            SdpService,
-            <EdgeService as EdgeServiceComponents>::ChainService
+            None,
+            <EdgeService as EdgeServiceComponents>::ChainService,
+            SdpService
         )
         .await?;
 
@@ -304,6 +306,11 @@ where
                                 .await
                             ).unwrap_or_else(|e| {
                                 debug!(target: LOG_TARGET, "Failed to send JoinAsCore reply: {e:?}");
+                            });
+                        },
+                        ProxyServiceMessage::GetZkId { reply } => {
+                            reply.send(zk_public_key).unwrap_or_else(|e| {
+                                debug!(target: LOG_TARGET, "Failed to send GetZkId reply: {e:?}");
                             });
                         },
                         ProxyServiceMessage::Inner(inner_message) => {

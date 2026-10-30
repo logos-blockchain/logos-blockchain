@@ -20,6 +20,7 @@ dhat                             = { optional = true, workspace = true }
 futures                          = { workspace = true }
 hex                              = { workspace = true }
 http                             = { workspace = true }
+humantime                        = { workspace = true }
 lb-api-service                   = { workspace = true }
 lb-binary-codec                  = { workspace = true }
 lb-blend                         = { workspace = true }

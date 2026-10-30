@@ -115,6 +115,6 @@ async fn transfer_funds(
 
 pub fn faucet_app(state: Arc<FaucetServerState>) -> Router {
     Router::new()
-        .route("/faucet/:pk", post(transfer_funds))
+        .route("/faucet/{pk}", post(transfer_funds))
         .with_state(state)
 }

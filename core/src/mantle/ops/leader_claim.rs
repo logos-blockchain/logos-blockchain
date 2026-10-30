@@ -16,7 +16,7 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         Note, Utxo, Value,
-        batch::DeferredZkpVerification,
+        batch::DeferredLeaderClaim,
         gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
@@ -242,13 +242,11 @@ impl PreverifiableOperation<StandardMode>
 impl VerifiableOperation<StandardMode>
     for SignedOperation<LeaderClaimOp, Preverified, StandardMode>
 {
+    type DeferredProof = DeferredLeaderClaim;
     type Context<'a> = LeaderClaimVerificationContext<'a>;
     type Error = LeaderClaimError;
 
-    fn verify(
-        &self,
-        context: &Self::Context<'_>,
-    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
         // Check that the nullifier isn't in the set
@@ -263,14 +261,14 @@ impl VerifiableOperation<StandardMode>
 
         // Defer the proof verification so that the caller can batch it.
         // TODO: Remove. Already checked in preverify.
-        Ok(Some(DeferredZkpVerification::LeaderClaim(
+        Ok(DeferredLeaderClaim::new(
             *self.proof().proof(),
             PoCVerifierInput::new(
                 operation.voucher_nullifier.into(),
                 context.claimable_vouchers_root.0,
                 *context.tx_hash_view.as_fr(),
             ),
-        )))
+        ))
     }
 }
 
@@ -318,7 +316,7 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
-            batch::{Error as BatchError, test_utils::batch_verify},
+            batch::{DeferredProofs, Error as BatchError, test_utils::batch_verify},
             gas::test_utils::FixedThresholds,
         },
         proofs::leader_claim_proof::LeaderClaimPrivate,
@@ -541,7 +539,7 @@ mod tests {
         );
     }
 
-    fn deferred_zkp_verified_over(tx_hash: TxHash) -> Option<DeferredZkpVerification> {
+    fn deferred_proof_verified_over(tx_hash: TxHash) -> DeferredLeaderClaim {
         let (rewards_root, _, signed_operation) = preverified_claim(TxHash::from([11u8; 32]));
 
         signed_operation
@@ -554,14 +552,14 @@ mod tests {
     }
 
     #[test]
-    fn deferred_zkp_is_accepted() {
-        assert!(batch_verify(deferred_zkp_verified_over(TxHash::from([11u8; 32]))).is_ok());
+    fn deferred_proof_is_accepted() {
+        assert!(batch_verify(deferred_proof_verified_over(TxHash::from([11u8; 32]))).is_ok());
     }
 
     #[test]
-    fn wrong_deferred_zkp_is_rejected() {
+    fn wrong_deferred_proof_is_rejected() {
         assert!(matches!(
-            batch_verify(deferred_zkp_verified_over(TxHash::from([12u8; 32]))),
+            batch_verify(deferred_proof_verified_over(TxHash::from([12u8; 32]))),
             Err(BatchError::InvalidLeaderClaimProofs)
         ));
     }
@@ -610,13 +608,14 @@ mod tests {
         let preverified_signed_operation = unverified_signed_operation
             .into_preverified(&preverify_context)
             .expect("preverify should accept a valid proof");
+
+        let mut batch = DeferredProofs::new();
         let verified_signed_operation = preverified_signed_operation
-            .into_verified(&verify_context)
+            .into_verified_deferred(&verify_context, &mut batch)
             .expect("verify should accept a valid claim");
-        let operation = verified_signed_operation.signed_operation().operation();
+        let operation = verified_signed_operation.operation().clone();
 
         let (context, events) = verified_signed_operation
-            .signed_operation()
             .execute(LeaderClaimExecutionContext {
                 nullifiers: rpds::HashTrieSetSync::new_sync(),
                 reward_amount,

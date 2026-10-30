@@ -10,7 +10,7 @@ use operations::{
     AtomicZoneDepositRequest, BundleAnnounce, CustomRepublishDeps, DiscardedPayloads, MultiSigBus,
     PolicyRuntime, PublishDeadline, ZoneAccountBalances, ZoneDeposit, ZoneTestError,
     balance_update_payload, build_zone_deposit, build_zone_deposit_from_values,
-    collect_indexed_messages, collect_indexed_messages_exactly_once,
+    collect_indexed_messages, collect_indexed_messages_exactly_once, ensure_zone_message_included,
     ensure_zone_transactions_included, keygen, parse_balance_payload, pin_payload,
     publish_atomic_zone_withdraw, publish_message_with_retry, replay_finalized_history,
     replayed_inscription_payloads, sequencer_config, sequencer_config_with_pending_submit_depth,
