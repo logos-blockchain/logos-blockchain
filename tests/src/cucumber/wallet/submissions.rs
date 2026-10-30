@@ -1691,7 +1691,10 @@ mod cache_removal_tests {
     #[test]
     fn workload_retry_recognizes_both_funds_deficit_errors() {
         assert!(is_user_wallet_funds_deficit(&StepError::WalletError(
-            WalletError::InsufficientFunds { available: 1 }
+            WalletError::InsufficientFunds {
+                available: 1,
+                required: 2,
+            }
         )));
         assert!(is_user_wallet_funds_deficit(&StepError::FundsDeficit {
             available: 1,

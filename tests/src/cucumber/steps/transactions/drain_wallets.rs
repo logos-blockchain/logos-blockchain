@@ -413,7 +413,10 @@ fn drain_amount(total: u64, tranches: usize, fee: u64) -> Result<u64, StepError>
             message: "Drain fee total overflowed".to_owned(),
         })?;
     let distributable = total.checked_sub(fee_total).ok_or_else(|| {
-        StepError::WalletError(lb_wallet::WalletError::InsufficientFunds { available: total })
+        StepError::WalletError(lb_wallet::WalletError::InsufficientFunds {
+            available: total,
+            required: fee_total,
+        })
     })?;
     let amount = distributable / tranches as u64;
     if amount == 0 {

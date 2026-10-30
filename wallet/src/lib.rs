@@ -15,7 +15,7 @@ use lb_core::{
     events::{Event, Events, HeaderEvent, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
-        GasProfile, NoteId, TxHash, Utxo, Value,
+        GasProfile, Note, NoteId, TxHash, Utxo, Value,
         ledger::verification_mode::StandardMode,
         ops::{
             OpId as _, OpRef,
@@ -322,8 +322,14 @@ impl WalletState {
             }
         }
 
+        let available = utxos.iter().map(|u| u.note.value).sum::<u64>();
+        let tx_with_all_utxos = tx_builder
+            .clone()
+            .extend_ledger_inputs(utxos.iter().copied())?;
+        let shortfall = resubmit_topup::<G>(&tx_with_all_utxos, context, priority_fee_percent)?;
         Err(WalletError::InsufficientFunds {
-            available: utxos.iter().map(|u| u.note.value).sum::<u64>(),
+            available,
+            required: available.saturating_add(shortfall),
         })
     }
 
@@ -864,6 +870,37 @@ pub struct WalletBalance {
     pub notes: HashMap<NoteId, Value>,
 }
 
+/// How much more spendable value [`WalletState::fund_tx`] needs when the gap
+/// arrives as one new note on top of the inputs already in `tx`.
+///
+/// A later attempt cannot grow an existing note. The added note is another
+/// input, so it costs more gas than the set that just failed, and it will not
+/// land exactly on the fee. The quote therefore prices one extra input and a
+/// change output worth at least 1, at this attempt's gas price.
+fn resubmit_topup<G: GasProfile>(
+    tx: &MantleTxBuilder,
+    context: &OpsContext,
+    priority_fee_percent: u64,
+) -> Result<u64, WalletError> {
+    let quoted = tx
+        .clone()
+        .add_ledger_input(Utxo::new(
+            [u8::MAX; 32],
+            usize::MAX,
+            Note::new(0, ZkPublicKey::zero()),
+        ))?
+        .with_dummy_change_note()?;
+    let delta = quoted.funding_delta_with_priority_fee::<G>(context, priority_fee_percent)?;
+    // `delta` is the surplus of that shape while the new note and the change
+    // output are still worth 0. The change output must be worth at least 1.
+    let extra = match 1i128.checked_sub(delta) {
+        Some(extra) if extra > 0 => u64::try_from(extra).unwrap_or(u64::MAX),
+        Some(_) => 1,
+        None => u64::MAX,
+    };
+    Ok(extra)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -913,6 +950,40 @@ mod tests {
 
     fn tx_hash(v: u8) -> Hash {
         [v; 32]
+    }
+
+    /// `required` still funds the transaction when the gap arrives as one new
+    /// note.
+    fn assert_topup_resubmit_funds(
+        existing: impl IntoIterator<Item = Utxo>,
+        owner: ZkPublicKey,
+        tx_builder: &MantleTxBuilder,
+        context: &OpsContext,
+        priority_fee_percent: u64,
+        available: u64,
+        required: u64,
+    ) {
+        assert!(required > available);
+        let mut notes: Vec<Utxo> = existing.into_iter().collect();
+        notes.push(Utxo::new(
+            tx_hash(9),
+            notes.len(),
+            Note::new(required - available, owner),
+        ));
+        let wallet_state = WalletState::from_ledger(
+            &HashMap::from_iter([(owner, 1)]),
+            &LedgerState::from_utxos(notes, &ledger_config()),
+        );
+        wallet_state
+            .fund_tx::<Gas>(
+                tx_builder,
+                owner,
+                [owner],
+                context,
+                &HashSet::new(),
+                priority_fee_percent,
+            )
+            .expect("one new note of the reported gap funds the resubmit");
     }
 
     fn voucher(key_id: u64, idx: u64) -> (VoucherCm, VoucherNullifier) {
@@ -1634,9 +1705,22 @@ mod tests {
         let fund_attempt =
             wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
 
-        assert_eq!(
-            fund_attempt.unwrap_err(),
-            WalletError::InsufficientFunds { available: 400 }
+        let WalletError::InsufficientFunds {
+            available,
+            required,
+        } = fund_attempt.unwrap_err()
+        else {
+            panic!("expected insufficient funds");
+        };
+        assert_eq!(available, 400);
+        assert_topup_resubmit_funds(
+            (0..4).map(|i| Utxo::new(tx_hash(0), i, Note::new(100, alice))),
+            alice,
+            &tx_builder,
+            &context,
+            0,
+            available,
+            required,
         );
     }
 
@@ -1661,9 +1745,22 @@ mod tests {
         let fund_attempt =
             wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
 
-        assert_eq!(
-            fund_attempt.unwrap_err(),
-            WalletError::InsufficientFunds { available: 0 }
+        let WalletError::InsufficientFunds {
+            available,
+            required,
+        } = fund_attempt.unwrap_err()
+        else {
+            panic!("expected insufficient funds");
+        };
+        assert_eq!(available, 0);
+        assert_topup_resubmit_funds(
+            std::iter::empty(),
+            alice,
+            &tx_builder,
+            &context,
+            0,
+            available,
+            required,
         );
     }
 
@@ -1691,10 +1788,10 @@ mod tests {
         let fund_attempt =
             wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
 
-        assert_eq!(
+        assert!(matches!(
             fund_attempt.unwrap_err(),
-            WalletError::InsufficientFunds { available: 0 }
-        );
+            WalletError::InsufficientFunds { available: 0, .. }
+        ));
     }
 
     #[test]
@@ -1723,10 +1820,10 @@ mod tests {
         let fund_attempt =
             wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
 
-        assert_eq!(
+        assert!(matches!(
             fund_attempt.unwrap_err(),
-            WalletError::InsufficientFunds { available: 0 }
-        );
+            WalletError::InsufficientFunds { available: 0, .. }
+        ));
 
         // Fund the transaction with Bob's notes.
         wallet_state
@@ -1818,9 +1915,25 @@ mod tests {
                 0,
             );
 
-            assert_eq!(
-                fund_attempt.unwrap_err(),
-                WalletError::InsufficientFunds { available: value }
+            // 795 would fund this same note with a change output, but a resubmit
+            // has to add a second note. `required` covers that extra input.
+            let WalletError::InsufficientFunds {
+                available,
+                required,
+            } = fund_attempt.unwrap_err()
+            else {
+                panic!("expected insufficient funds");
+            };
+            assert_eq!(available, value);
+            assert!(required > 795);
+            assert_topup_resubmit_funds(
+                [Utxo::new(tx_hash(0), 0, Note::new(value, alice))],
+                alice,
+                &tx_builder,
+                &context,
+                0,
+                available,
+                required,
             );
         }
 
@@ -2038,7 +2151,10 @@ mod tests {
                 0,
             )
             .unwrap_err();
-        assert_eq!(err, WalletError::InsufficientFunds { available: 0 });
+        assert!(matches!(
+            err,
+            WalletError::InsufficientFunds { available: 0, .. }
+        ));
     }
 
     /// A `ChannelTransfer` must drop the consumed channel note from the
@@ -2307,7 +2423,10 @@ mod tests {
             )
             .unwrap_err();
         // The error detail says that the withdrawn note is now spendable.
-        assert_eq!(err, WalletError::InsufficientFunds { available: 100 });
+        assert!(matches!(
+            err,
+            WalletError::InsufficientFunds { available: 100, .. }
+        ));
     }
 
     #[test]
