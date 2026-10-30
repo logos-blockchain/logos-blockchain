@@ -20,14 +20,14 @@ lb-core                       = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-log-targets                = { workspace = true }
-lb-utils                      = { workspace = true }
+lb-utils                      = { features = ["tokio"], workspace = true }
 libp2p                        = { workspace = true }
 libp2p-stream                 = { workspace = true }
 rand                          = { workspace = true }
 serde                         = { workspace = true }
-serde_with                    = { workspace = true }
+serde_with                    = { features = ["macros"], workspace = true }
 thiserror                     = { workspace = true }
-tokio                         = { workspace = true }
+tokio                         = { features = ["sync", "time"], workspace = true }
 tracing                       = { workspace = true }
 
 [dev-dependencies]

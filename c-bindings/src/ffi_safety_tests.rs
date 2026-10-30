@@ -48,10 +48,7 @@ use crate::{
         blend::{blend_info, blend_join_as_core_node},
         chain::get_chain_id,
         channel::get_channel_state,
-        config::{
-            GenerateConfigArgs, MergeConfigFlags, generate_user_config, merge_user_config,
-            migrate_user_config, migrate_user_config_0_1_2, participate, update_user_config,
-        },
+        config::{GenerateConfigArgs, generate_user_config, participate},
         cryptarchia::{free_cryptarchia_info, get_block_events, get_cryptarchia_info},
         deployment::{free_deployment_info, get_deployment_info},
         free_cstring,
@@ -200,11 +197,6 @@ impl TestConfigPaths {
     }
 }
 
-const NO_INSERT: MergeConfigFlags = MergeConfigFlags {
-    source_insert_missing: 0,
-    extra_insert_missing: 0,
-};
-
 mod no_node {
     use super::*;
 
@@ -264,32 +256,13 @@ mod no_node {
             assert_eq!(code(start_lb_node(null_s, null_s)), np);
             assert_eq!(code(start_lb_node(null_s, s)), np);
             assert_eq!(code(get_peer_id(null_s)), np);
-            assert_eq!(code(update_user_config(null_s, s)), np);
-            assert_eq!(code(update_user_config(s, null_s)), np);
-            assert_eq!(code(migrate_user_config(null_s, s)), np);
-            assert_eq!(code(migrate_user_config(s, null_s)), np);
-            assert_eq!(code(migrate_user_config_0_1_2(null_s, s, s)), np);
-            assert_eq!(code(migrate_user_config_0_1_2(s, null_s, s)), np);
-            assert_eq!(code(migrate_user_config_0_1_2(s, s, null_s)), np);
-            assert_eq!(code(merge_user_config(null_s, s, null_s, NO_INSERT)), np);
-            assert_eq!(code(merge_user_config(s, null_s, null_s, NO_INSERT)), np);
-            assert_eq!(code(participate(null_s, s, s, null_s)), np);
-            assert_eq!(code(participate(s, null_s, s, null_s)), np);
-            assert_eq!(code(participate(s, s, null_s, null_s)), np);
-            assert_eq!(
-                code(generate_key(null_s, s, KeyType::Zk as u32, null_s)),
-                np
-            );
-            assert_eq!(
-                code(generate_key(s, null_s, KeyType::Zk as u32, null_s)),
-                np
-            );
-            assert_eq!(code(add_key(null_s, s, KeyType::Zk as u32, s, null_s)), np);
-            assert_eq!(code(add_key(s, null_s, KeyType::Zk as u32, s, null_s)), np);
-            assert_eq!(code(add_key(s, s, KeyType::Zk as u32, null_s, null_s)), np);
-            assert_eq!(code(remove_key(null_s, s, s)), np);
-            assert_eq!(code(remove_key(s, null_s, s)), np);
-            assert_eq!(code(remove_key(s, s, null_s)), np);
+            assert_eq!(code(participate(null_s, s, null_s)), np);
+            assert_eq!(code(participate(s, null_s, null_s)), np);
+            assert_eq!(code(generate_key(null_s, KeyType::Zk as u32, null_s)), np);
+            assert_eq!(code(add_key(null_s, KeyType::Zk as u32, s, null_s)), np);
+            assert_eq!(code(add_key(s, KeyType::Zk as u32, null_s, null_s)), np);
+            assert_eq!(code(remove_key(null_s, s)), np);
+            assert_eq!(code(remove_key(s, null_s)), np);
             assert_eq!(code(get_deployment_info(null_s, null_s)), np);
         }
     }
@@ -469,48 +442,14 @@ mod no_node {
         assert_eq!(code(status), OperationStatusCode::Ok);
 
         for key_type in [2, 7, u32::MAX] {
-            let (code, message) = consume(unsafe {
-                generate_key(config.as_ptr(), kms.as_ptr(), key_type, ptr::null())
-            });
+            let (code, message) =
+                consume(unsafe { generate_key(kms.as_ptr(), key_type, ptr::null()) });
             assert_eq!(code, OperationStatusCode::ValidationError, "{message}");
             assert_eq!(
-                self::code(unsafe {
-                    add_key(
-                        config.as_ptr(),
-                        kms.as_ptr(),
-                        key_type,
-                        c"11".as_ptr(),
-                        ptr::null(),
-                    )
-                }),
+                self::code(unsafe { add_key(kms.as_ptr(), key_type, c"11".as_ptr(), ptr::null()) }),
                 OperationStatusCode::ValidationError
             );
         }
-
-        // Any non-zero flag is on: the missing key is inserted, not reported.
-        let source = temp_dir.path().join("source.yaml");
-        let destination = temp_dir.path().join("destination.yaml");
-        std::fs::write(&source, "{ a: 2, b: 2 }").unwrap();
-        std::fs::write(&destination, "{ a: 1 }").unwrap();
-        let result = unsafe {
-            merge_user_config(
-                cstring(&source).as_ptr(),
-                cstring(&destination).as_ptr(),
-                ptr::null(),
-                MergeConfigFlags {
-                    source_insert_missing: 0xAB,
-                    extra_insert_missing: 0,
-                },
-            )
-        };
-        assert!(result.value.is_null(), "Expected no conflict report");
-        assert_eq!(code(result), OperationStatusCode::Ok);
-        let merged: serde_yaml::Value =
-            serde_yaml::from_str(&std::fs::read_to_string(&destination).unwrap()).unwrap();
-        assert_eq!(
-            merged,
-            serde_yaml::from_str::<serde_yaml::Value>("{ a: 2, b: 2 }").unwrap()
-        );
     }
 
     #[test]
@@ -596,14 +535,7 @@ mod no_node {
         assert!(result.is_ok());
         assert!(unsafe { free_cstring(result.value) }.is_ok());
 
-        let result = unsafe {
-            generate_key(
-                output.as_ptr(),
-                kms.as_ptr(),
-                KeyType::Zk as u32,
-                ptr::null(),
-            )
-        };
+        let result = unsafe { generate_key(kms.as_ptr(), KeyType::Zk as u32, ptr::null()) };
         assert!(result.is_ok());
         assert!(unsafe { free_cstring(result.value) }.is_ok());
 
@@ -645,32 +577,21 @@ mod no_node {
                     OperationStatusCode::Ok
                 );
                 assert_ne!(code(get_peer_id(p)), OperationStatusCode::Ok);
-                assert_ne!(code(update_user_config(p, p)), OperationStatusCode::Ok);
-                assert_ne!(code(migrate_user_config(p, p)), OperationStatusCode::Ok);
                 assert_ne!(
-                    code(migrate_user_config_0_1_2(p, p, p)),
+                    code(participate(p, p, ptr::null())),
                     OperationStatusCode::Ok
                 );
                 assert_ne!(
-                    code(merge_user_config(p, p, ptr::null(), NO_INSERT)),
+                    code(generate_key(p, KeyType::Ed25519 as u32, ptr::null())),
                     OperationStatusCode::Ok
                 );
                 assert_ne!(
-                    code(participate(p, p, p, ptr::null())),
-                    OperationStatusCode::Ok
-                );
-                assert_ne!(
-                    code(generate_key(p, p, KeyType::Ed25519 as u32, ptr::null())),
-                    OperationStatusCode::Ok
-                );
-                assert_ne!(
-                    code(remove_key(p, p, c"title".as_ptr())),
+                    code(remove_key(p, c"title".as_ptr())),
                     OperationStatusCode::Ok
                 );
             }
             assert_eq!(
                 code(participate(
-                    missing.as_ptr(),
                     missing.as_ptr(),
                     missing.as_ptr(),
                     c"not-an-ip".as_ptr()
@@ -680,7 +601,6 @@ mod no_node {
             assert_eq!(
                 code(add_key(
                     missing.as_ptr(),
-                    missing.as_ptr(),
                     KeyType::Zk as u32,
                     c"zz".as_ptr(),
                     ptr::null()
@@ -689,7 +609,6 @@ mod no_node {
             );
             assert_eq!(
                 code(add_key(
-                    missing.as_ptr(),
                     missing.as_ptr(),
                     KeyType::Ed25519 as u32,
                     c"abcd".as_ptr(),
@@ -840,12 +759,11 @@ mod with_node {
 
             let result = get_time_info(node);
             assert!(result.is_ok());
-            assert!((*result.value).slot_duration_ms > 0);
             assert!(free_time_info(result.value).is_ok());
 
             assert_eq!(
                 string_result("get_open_metrics", get_open_metrics(node)),
-                OperationStatusCode::NotFound
+                OperationStatusCode::Ok
             );
 
             let result = get_cryptarchia_info(node);

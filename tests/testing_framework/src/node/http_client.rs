@@ -13,7 +13,7 @@ use lb_core::{
         ledger::verification_mode::StandardMode,
         transactions::{genesis_tx::ChainId, hash::TxHash, states::VerificationState},
     },
-    sdp::{Declaration, DeclarationId, Locator},
+    sdp::{Declaration, DeclarationId, Locator, ServiceType},
 };
 use lb_http_api_common::{
     TimeInfo,
@@ -267,6 +267,30 @@ impl NodeHttpClient {
         self.get_sdp_declarations_at(self.base_url.clone()).await
     }
 
+    pub async fn get_finalized_sdp_declaration(
+        &self,
+        declaration_id: DeclarationId,
+    ) -> Result<Option<Declaration>, Error> {
+        self.with_timeout(
+            "Finalized SDP declaration request",
+            self.http_client
+                .get_finalized_sdp_declaration(self.base_url.clone(), declaration_id),
+        )
+        .await
+    }
+
+    pub async fn get_finalized_sdp_declarations(
+        &self,
+        service_type: ServiceType,
+    ) -> Result<Option<HashMap<DeclarationId, Declaration>>, Error> {
+        self.with_timeout(
+            "Finalized SDP declarations request",
+            self.http_client
+                .get_finalized_sdp_declarations(self.base_url.clone(), service_type),
+        )
+        .await
+    }
+
     pub async fn test_mempool_view(&self) -> Result<Vec<TxHash>, Error> {
         let request_url = Self::join_path(&self.base_url, MEMPOOL_VIEW)?;
 
@@ -416,7 +440,7 @@ impl NodeHttpClient {
     pub async fn join_blend_network(
         &self,
         locator: Locator,
-        service_note_id: NoteId,
+        service_note_id: Option<NoteId>,
     ) -> Result<SdpSubmission, Error> {
         self.http_client
             .join_blend_network(

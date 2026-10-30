@@ -3,6 +3,7 @@
 
 mod actions;
 mod assertions;
+mod password_manager;
 mod steps;
 mod tables;
 

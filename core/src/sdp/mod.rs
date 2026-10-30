@@ -423,6 +423,23 @@ impl AsRef<[u8; 32]> for DeclarationId {
     }
 }
 
+impl FromStr for DeclarationId {
+    type Err = String;
+
+    fn from_str(encoded: &str) -> Result<Self, Self::Err> {
+        let encoded = encoded.strip_prefix("0x").unwrap_or(encoded);
+        if encoded.len() != 64 {
+            return Err("Declaration ID must contain exactly 32 bytes of hex".into());
+        }
+
+        let mut bytes = [0; 32];
+        hex::decode_to_slice(encoded, &mut bytes)
+            .map_err(|_| "Declaration ID contains invalid hex".to_owned())?;
+
+        Ok(Self(bytes))
+    }
+}
+
 impl BoundedSerializeOp for DeclarationId {
     type Bytes = [u8; 32];
 }
@@ -677,7 +694,10 @@ impl BinaryDecode for ActivityMetadata {
 
 #[cfg(test)]
 mod tests {
-    use lb_binary_codec::bincode::{BoundedSerializeOp as _, SerializeOp as _};
+    use lb_binary_codec::{
+        bincode::{BoundedSerializeOp as _, SerializeOp as _},
+        canonical::BinaryEncode as _,
+    };
     use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
@@ -815,6 +835,61 @@ mod tests {
 
         assert_eq!(ordinary.len(), 32);
         assert_eq!(bounded.as_ref(), ordinary.as_ref());
+    }
+
+    #[test]
+    fn declaration_id_parses_unprefixed_and_prefixed_hex() {
+        let expected = DeclarationId([0x66; 32]);
+        let encoded = hex::encode(expected.0);
+
+        assert_eq!(encoded.parse::<DeclarationId>().unwrap(), expected);
+        assert_eq!(
+            format!("0x{encoded}").parse::<DeclarationId>().unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn declaration_id_parses_uppercase_hex_and_roundtrips_display() {
+        let expected = DeclarationId([0xab; 32]);
+        let uppercase = hex::encode_upper(expected.0);
+
+        assert_eq!(uppercase.parse::<DeclarationId>().unwrap(), expected);
+        assert_eq!(
+            expected.to_string().parse::<DeclarationId>().unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn declaration_id_rejects_wrong_length_and_invalid_hex() {
+        for encoded in [String::new(), "00".to_owned(), "00".repeat(33)] {
+            assert_eq!(
+                encoded.parse::<DeclarationId>().unwrap_err(),
+                "Declaration ID must contain exactly 32 bytes of hex"
+            );
+        }
+
+        let invalid_hex = format!("{}g", "0".repeat(63));
+        assert_eq!(
+            invalid_hex.parse::<DeclarationId>().unwrap_err(),
+            "Declaration ID contains invalid hex"
+        );
+    }
+
+    #[test]
+    fn declaration_id_parsing_preserves_identity_and_binary_encoding() {
+        let message = DeclarationMessage {
+            service_type: ServiceType::BlendNetwork,
+            zk_id: ZkPublicKey::new(Fr::from(25u64)),
+            ..declaration_message(vec!["/ip4/203.0.113.10/tcp/4001".parse().unwrap()])
+        };
+        let expected = message.id();
+        let parsed = expected.to_string().parse::<DeclarationId>().unwrap();
+
+        assert_eq!(parsed, expected);
+        assert_eq!(parsed.encode_to_vec(), expected.0);
+        assert_eq!(parsed.to_bytes().unwrap(), expected.to_bytes().unwrap());
     }
 
     #[test]

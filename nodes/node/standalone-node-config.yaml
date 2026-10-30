@@ -13,34 +13,20 @@ network:
         retain_scores: 4
         gossip_lazy: 6
         gossip_factor: 0.25
-        heartbeat_initial_delay:
-          secs: 5
-          nanos: 0
-        heartbeat_interval:
-          secs: 1
-          nanos: 0
-        fanout_ttl:
-          secs: 60
-          nanos: 0
+        heartbeat_initial_delay: 5s
+        heartbeat_interval: 1s
+        fanout_ttl: 1m
         check_explicit_peers_ticks: 300
-        duplicate_cache_time:
-          secs: 86400
-          nanos: 0
+        duplicate_cache_time: 1d
         validate_messages: false
         allow_self_origin: false
         do_px: false
         prune_peers: 0
-        prune_backoff:
-          secs: 60
-          nanos: 0
-        unsubscribe_backoff:
-          secs: 10
-          nanos: 0
+        prune_backoff: 1m
+        unsubscribe_backoff: 10s
         backoff_slack: 1
         flood_publish: true
-        graft_flood_threshold:
-          secs: 10
-          nanos: 0
+        graft_flood_threshold: 10s
         mesh_outbound_min: 2
         opportunistic_graft_ticks: 60
         opportunistic_graft_peers: 2
@@ -48,52 +34,41 @@ network:
         max_messages_per_rpc: null
         max_ihave_length: 5000
         max_ihave_messages: 10
-        iwant_followup_time:
-          secs: 3
-          nanos: 0
-        published_message_ids_cache_time:
-          secs: 10
-          nanos: 0
+        iwant_followup_time: 3s
+        published_message_ids_cache_time: 10s
       kademlia:
-        query_timeout_secs: null
+        query_timeout: null
         replication_factor: null
         parallelism: null
         disjoint_query_paths: null
         max_packet_size: null
         kbucket_inserts: null
-        caching: null
-        periodic_bootstrap_interval_secs: null
+        cache_size: 1
+        periodic_bootstrap_interval: null
       identify:
         agent_version: null
-        interval_secs: null
+        interval: null
         push_listen_addr_updates: null
         cache_size: null
         hide_listen_addrs: true
       chain_sync:
-        peer_response_timeout: 5000
+        peer_response_timeout: 5s
         max_inbound_requests: 10
+        inbound_download_stream_timeout: 2m
       nat:
         type: traversal
         autonat:
           max_candidates: null
-          probe_interval_millisecs: null
-          retest_successful_external_addresses_interval:
-            secs: 60
-            nanos: 0
+          probe_interval: null
+          retest_successful_external_addresses_interval: 1m
         mapping:
-          timeout: '1.000000000'
-          lease_duration:
-            secs: 7200
-            nanos: 0
+          timeout: 1s
+          lease_duration: 2h
           max_retries: 3
           renewal_delay_fraction: 0.8
-          retry_interval:
-            secs: 30
-            nanos: 0
+          retry_interval: 30s
         gateway_monitor:
-          check_interval:
-            secs: 300
-            nanos: 0
+          check_interval: 5m
     initial_peers: [ ]
 blend:
   non_ephemeral_signing_key_id: aa70aafc48536ae13168ed4845981a40cbd2dc1c38df88d04c46250e9ad65ce0
@@ -110,11 +85,11 @@ blend:
 cryptarchia:
   service:
     bootstrap:
-      prolonged_bootstrap_period: '5.000000000'
+      prolonged_bootstrap_period: 5s
       force_bootstrap: false
       offline_grace_period:
-        grace_period: '5.000000000'
-        state_recording_interval: '60.000000000'
+        grace_period: 5s
+        state_recording_interval: 1m
     sync:
       block_provider:
         batch_size: 1000
@@ -122,19 +97,11 @@ cryptarchia:
     bootstrap:
       ibd:
         peers: [ ]
-        delay_before_new_download:
-          secs: 10
-          nanos: 0
+        delay_before_new_download: 10s
         tips_fetch_max_attempts: 3
-        tips_fetch_min_delay:
-          secs: 0
-          nanos: 250000000
-        tips_fetch_max_delay:
-          secs: 1
-          nanos: 0
-        round_delay:
-          secs: 1
-          nanos: 0
+        tips_fetch_min_delay: 250ms
+        tips_fetch_max_delay: 1s
+        round_delay: 1s
     sync:
       orphan:
         max_orphan_cache_size: 1000
@@ -150,9 +117,9 @@ time:
   backend:
     server: pool.ntp.org:123
     client:
-      timeout: '5.000000000'
+      timeout: 5s
       listening_interface: 0.0.0.0
-    update_interval: '15.000000000'
+    update_interval: 15s
 sdp:
   declaration: null
   wallet:
@@ -164,7 +131,7 @@ api:
   backend:
     listen_address: 127.0.0.1:8080
     cors_origins: [ ]
-    timeout: 30
+    timeout: 30s
     max_body_size: 10485760
     max_concurrent_requests: 500
 storage:
@@ -232,7 +199,8 @@ tracing:
       hyper_util: WARN
   metrics:
     otlp: null
-    enable_open_metrics: false
+    open_metrics:
+      enabled: true
   console: None
   level: "INFO"
 state:

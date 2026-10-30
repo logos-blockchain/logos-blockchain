@@ -65,6 +65,7 @@
 mod actor;
 mod backfill;
 mod block_fetch;
+mod block_states;
 mod channel_wallet;
 mod client;
 mod handle;

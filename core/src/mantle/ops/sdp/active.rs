@@ -7,7 +7,7 @@ use super::{SDPActiveOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        batch::DeferredZkpVerification,
+        batch::DeferredZkSig,
         gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
@@ -58,13 +58,11 @@ impl PreverifiableOperation<StandardMode>
 }
 
 impl VerifiableOperation<StandardMode> for SignedOperation<SDPActiveOp, Preverified, StandardMode> {
+    type DeferredProof = DeferredZkSig;
     type Context<'a> = SDPActiveValidationContext<'a>;
     type Error = SdpError;
 
-    fn verify(
-        &self,
-        context: &Self::Context<'_>,
-    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
         // Check the declaration exists
@@ -96,10 +94,7 @@ impl VerifiableOperation<StandardMode> for SignedOperation<SDPActiveOp, Preverif
         let inputs =
             public_inputs_from_pks((*context.tx_hash_view.as_fr()).into(), &[declaration.zk_id])
                 .map_err(|_| SdpError::InvalidZkSignature)?;
-        Ok(Some(DeferredZkpVerification::ZkSig(
-            *self.proof().as_proof(),
-            inputs,
-        )))
+        Ok(DeferredZkSig::new(*self.proof().as_proof(), inputs))
     }
 }
 
@@ -145,7 +140,7 @@ mod tests {
     use crate::{
         mantle::{
             TxHash,
-            batch::{DeferredZkpVerification, Error as BatchError, test_utils::batch_verify},
+            batch::{DeferredZkSig, Error as BatchError, test_utils::batch_verify},
             gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
             ledger::{
                 Declarations, PreverifiableOperation as _, ProvableOperation,
@@ -293,7 +288,7 @@ mod tests {
         ZkKey::from(BigUint::from(7u8))
     }
 
-    fn deferred_zkp_signed_by(signers: &[ZkKey]) -> Option<DeferredZkpVerification> {
+    fn deferred_proof_signed_by(signers: &[ZkKey]) -> DeferredZkSig {
         let (message, declaration) = declaration();
         let declaration_id = message.id();
         let declarations = Declarations::new_sync().insert(declaration_id, declaration);
@@ -317,14 +312,14 @@ mod tests {
     }
 
     #[test]
-    fn deferred_zkp_is_accepted() {
-        assert!(batch_verify(deferred_zkp_signed_by(&[declaration_key()])).is_ok());
+    fn deferred_proof_is_accepted() {
+        assert!(batch_verify(deferred_proof_signed_by(&[declaration_key()])).is_ok());
     }
 
     #[test]
-    fn wrong_deferred_zkp_is_rejected() {
+    fn wrong_deferred_proof_is_rejected() {
         assert!(matches!(
-            batch_verify(deferred_zkp_signed_by(&[unrelated_key()])),
+            batch_verify(deferred_proof_signed_by(&[unrelated_key()])),
             Err(BatchError::InvalidZkSignatures)
         ));
     }
@@ -349,16 +344,13 @@ mod tests {
         let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
         let signed_operation = preverified(operation, &signed_view);
 
-        assert!(
-            signed_operation
-                .verify(&SDPActiveValidationContext {
-                    declarations: &declarations,
-                    tx_hash_view: &signed_view,
-                    epoch: Epoch::from(2),
-                })
-                .unwrap()
-                .is_some()
-        );
+        signed_operation
+            .verify(&SDPActiveValidationContext {
+                declarations: &declarations,
+                tx_hash_view: &signed_view,
+                epoch: Epoch::from(2),
+            })
+            .expect("a withdrawal epoch still ahead keeps the declaration active");
     }
 
     const WITHDRAW_AT: Epoch = Epoch::new(5);

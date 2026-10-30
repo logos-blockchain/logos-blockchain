@@ -201,6 +201,7 @@ pub struct BlendBehaviourBuilder {
     peer_id: PeerId,
     membership: Membership<PeerId>,
     peering_degree: Option<NonZeroUsize>,
+    liveness_window_in_rounds: Option<NonZeroU128>,
     proofs_verifier: TestProofsVerifier,
 }
 
@@ -210,6 +211,7 @@ impl BlendBehaviourBuilder {
             peer_id,
             membership,
             peering_degree: None,
+            liveness_window_in_rounds: None,
             proofs_verifier: TestProofsVerifier,
         }
     }
@@ -217,6 +219,11 @@ impl BlendBehaviourBuilder {
     /// Sets `Φ_CC`, which must be within the range the specification allows.
     pub fn with_peering_degree(mut self, peering_degree: NonZeroUsize) -> Self {
         self.peering_degree = Some(peering_degree);
+        self
+    }
+
+    pub fn with_liveness_window_in_rounds(mut self, window_in_rounds: NonZeroU128) -> Self {
+        self.liveness_window_in_rounds = Some(window_in_rounds);
         self
     }
 
@@ -238,7 +245,9 @@ impl BlendBehaviourBuilder {
                         target_peering_degree: peering_degree,
                         // Long enough that no connection in a test goes stale
                         // by accident.
-                        liveness_window_in_rounds: u128::from(u32::MAX).try_into().unwrap(),
+                        liveness_window_in_rounds: self
+                            .liveness_window_in_rounds
+                            .unwrap_or_else(|| u128::from(u32::MAX).try_into().unwrap()),
                     },
                     with_edge: CoreToEdgeConfig {
                         connection_timeout: Duration::from_secs(1),

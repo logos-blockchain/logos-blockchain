@@ -35,11 +35,12 @@ use tracing::{debug, info, warn};
 use super::{
     TARGET,
     block_fetch::classify_channel_tx,
+    block_states::{ChannelTxKind, SharedTx},
     channel_wallet::select_channel_notes,
     client::SequencerClient,
     handle::SequencerHandle,
     slot_clock::SlotClock,
-    state::{BlockChannelTx, ParentTaken, TxState},
+    state::{ParentTaken, TxState},
     tx_builder::{
         assemble_atomic_bundle_tx, assemble_channel_config_tx, build_and_fund_config,
         create_channel_config_tx, create_inscribe_tx, find_own_key_index, fund_ops,
@@ -47,10 +48,10 @@ use super::{
         validate_multi_sig,
     },
     types::{
-        AtomicWithdrawInfo, ChannelWalletView, Error, Event, FundingConfig, InscriptionInfo,
-        PendingTx, PinDepositInfo, PreparedAtomicBundle, PreparedBundleKind, PreparedChannelConfig,
-        PublishResult, SequencerChannelView, SequencerCheckpoint, SequencerConfig,
-        TurnNotification, WithdrawArg, WithdrawInfo, WithdrawInputs,
+        AtomicWithdrawInfo, ChannelUpdateTx, ChannelWalletView, Error, Event, FundingConfig,
+        InscriptionInfo, PendingTx, PinDepositInfo, PreparedAtomicBundle, PreparedBundleKind,
+        PreparedChannelConfig, PublishResult, SequencerChannelView, SequencerCheckpoint,
+        SequencerConfig, TurnNotification, WithdrawArg, WithdrawInfo, WithdrawInputs,
     },
 };
 use crate::{adapter, adapter::BoxStream};
@@ -426,6 +427,23 @@ where
     #[must_use]
     pub fn checkpoint(&self) -> Option<SequencerCheckpoint> {
         self.checkpoint_tx.borrow().clone()
+    }
+
+    /// Returns the current unfinalized channel history, including pending
+    /// writes. Returns `None` until the live branch is available after
+    /// backfill. The view may lag behind the chain while disconnected.
+    ///
+    /// To read the history for a processed block, call this before publishing
+    /// or polling another event. Ordering follows
+    /// [`super::ChannelUpdate::canonical_chain`].
+    #[must_use]
+    pub fn channel_history(&self) -> Option<Vec<ChannelUpdateTx>> {
+        if self.backfill_from.is_some() {
+            return None;
+        }
+
+        let tip = self.current_tip?;
+        Some(self.state.as_ref()?.channel_view_txs(tip, &HashSet::new()))
     }
 
     /// The channel's note set as tracked from block data: finalized base
@@ -1054,6 +1072,7 @@ where
 
         let transfer_op = self.build_deposit_transfer(&consumed_notes)?;
         let consumed_inputs = transfer_op.inputs.clone();
+        let outputs = transfer_op.outputs.clone();
 
         let (ops, parent, msg_id) =
             self.wrap_bundle_ops(&inscribe, vec![Op::ChannelTransfer(transfer_op)]);
@@ -1080,6 +1099,7 @@ where
             inscribe,
             PreparedBundleKind::PinDeposit {
                 consumed_notes: consumed_inputs,
+                outputs,
             },
         ))
     }
@@ -1264,12 +1284,16 @@ where
                     withdraws.clone(),
                     outputs.clone(),
                 )?,
-            PreparedBundleKind::PinDeposit { consumed_notes } => state.submit_pin_deposit(
+            PreparedBundleKind::PinDeposit {
+                consumed_notes,
+                outputs,
+            } => state.submit_pin_deposit(
                 signed_tx.clone(),
                 parent,
                 msg_id,
                 inscribe.clone(),
                 consumed_notes.clone(),
+                outputs.clone(),
             )?,
         }
         // Only a bundle this sequencer signs alone can be re-funded on
@@ -1304,13 +1328,15 @@ where
                     outputs,
                 })
             }
-            PreparedBundleKind::PinDeposit { consumed_notes } => {
-                PendingTx::PinDeposit(PinDepositInfo {
-                    tx_hash,
-                    inscription,
-                    consumed_notes,
-                })
-            }
+            PreparedBundleKind::PinDeposit {
+                consumed_notes,
+                outputs,
+            } => PendingTx::PinDeposit(PinDepositInfo {
+                tx_hash,
+                inscription,
+                consumed_notes,
+                outputs,
+            }),
         };
 
         Ok((PublishResult { tx }, checkpoint))
@@ -1667,7 +1693,7 @@ where
         self.posting.insert(tx_hash);
         self.in_flight.push(Box::pin(post_batch(
             self.node.clone(),
-            vec![(tx_hash, signed_tx)],
+            vec![(tx_hash, signed_tx.into())],
         )));
     }
 
@@ -1675,10 +1701,7 @@ where
     /// before pushing; the future clears it on completion. Caller must
     /// check `resubmit_active` first to avoid duplicate sweeps —
     /// `resubmit_pending` does this gate.
-    pub(super) fn queue_resubmit_batch(
-        &mut self,
-        batch: Vec<(TxHash, SignedOps<Unverified, StandardMode>)>,
-    ) {
+    pub(super) fn queue_resubmit_batch(&mut self, batch: Vec<(TxHash, SharedTx)>) {
         if batch.is_empty() {
             return;
         }
@@ -1696,17 +1719,14 @@ where
     }
 }
 
-async fn post_batch<Node>(
-    node: Node,
-    batch: Vec<(TxHash, SignedOps<Unverified, StandardMode>)>,
-) -> Vec<(TxHash, bool)>
+async fn post_batch<Node>(node: Node, batch: Vec<(TxHash, SharedTx)>) -> Vec<(TxHash, bool)>
 where
     Node: adapter::Node + Clone + Send + Sync + 'static,
 {
     let mut results = Vec::with_capacity(batch.len());
     let mut iter = batch.into_iter();
     while let Some((tx_hash, signed_tx)) = iter.next() {
-        match node.post_transaction(signed_tx).await {
+        match node.post_transaction((*signed_tx).clone()).await {
             Ok(()) => results.push((tx_hash, true)),
             Err(e) => {
                 // TODO: We need to distinguish node rejection (invalid tx) from node
@@ -1743,7 +1763,11 @@ pub(super) fn build_checkpoint(
 ) -> SequencerCheckpoint {
     SequencerCheckpoint {
         last_msg_id,
-        pending_txs: state.all_pending_txs(),
+        pending_txs: state
+            .all_pending_txs()
+            .into_iter()
+            .map(|(hash, tx)| (hash, (*tx).clone()))
+            .collect(),
         lib: state.lib(),
         lib_slot,
         channel_notes: state.channel_notes_base(),
@@ -1784,13 +1808,14 @@ pub(super) fn track_pending_tx(
     tx: SignedOps<Unverified, StandardMode>,
     channel_id: ChannelId,
 ) -> Result<Option<MsgId>, ParentTaken> {
-    match classify_channel_tx(&tx, channel_id, &mut None) {
-        Some(BlockChannelTx::Inscription(i)) => {
+    let tx: SharedTx = tx.into();
+    match classify_channel_tx(&tx, channel_id, &mut None).map(|classified| classified.kind) {
+        Some(ChannelTxKind::Inscription(i)) => {
             let this_msg = i.this_msg;
             state.submit_inscription(tx, i.parent_msg, this_msg, i.payload)?;
             Ok(Some(this_msg))
         }
-        Some(BlockChannelTx::AtomicWithdraw(aw)) => {
+        Some(ChannelTxKind::AtomicWithdraw(aw)) => {
             let this_msg = aw.inscription.this_msg;
             state.submit_atomic_withdraw(
                 tx,
@@ -1802,7 +1827,7 @@ pub(super) fn track_pending_tx(
             )?;
             Ok(Some(this_msg))
         }
-        Some(BlockChannelTx::PinDeposit(ad)) => {
+        Some(ChannelTxKind::PinDeposit(ad)) => {
             let this_msg = ad.inscription.this_msg;
             state.submit_pin_deposit(
                 tx,
@@ -1810,6 +1835,7 @@ pub(super) fn track_pending_tx(
                 this_msg,
                 ad.inscription.payload,
                 ad.consumed_notes,
+                ad.outputs,
             )?;
             Ok(Some(this_msg))
         }

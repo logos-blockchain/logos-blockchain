@@ -5,7 +5,6 @@ use std::{
     hash::Hash,
     marker::PhantomData,
     sync::Arc,
-    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -134,6 +133,10 @@ mod state;
 #[cfg(test)]
 mod tests;
 pub use state::RecoveryServiceState as CoreServiceState;
+
+use crate::message::{
+    proposal_diagnostic_digest_from_encoded, proposal_diagnostic_timestamp_unix_ms,
+};
 
 const LOG_TARGET: &str = blend::service::CORE;
 
@@ -328,7 +331,7 @@ where
 
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             NetworkService<_, _>,
             TimeService<_, _>,
             SdpService,
@@ -2623,6 +2626,15 @@ where
             |processed_message_to_release| -> BoxFuture<'fut, ()> {
                 match processed_message_to_release {
                     ProcessedMessage::Decapsulated(payload) => {
+                        if let DataPayload::BlockProposal(encoded_proposal) = &payload {
+                            debug!(
+                                target: LOG_TARGET,
+                                event = "blend_proposal_normal_exit",
+                                timestamp_unix_ms = proposal_diagnostic_timestamp_unix_ms(),
+                                proposal_digest = %proposal_diagnostic_digest_from_encoded(encoded_proposal),
+                                "Blend scheduler released fully decapsulated block proposal for ordinary broadcast"
+                            );
+                        }
                         payload_dispatcher.dispatch(payload).boxed()
                     }
                     ProcessedMessage::Encapsulated(encapsulated_message) => {

@@ -1,4 +1,5 @@
 use core::{
+    error,
     fmt::{self, Display, Formatter},
     mem::{self},
     num::{NonZeroU64, NonZeroU128, NonZeroUsize},
@@ -39,7 +40,7 @@ use crate::core::{
         behaviour::{
             blacklist::{BlacklistReason, PeerBlacklist},
             handler::{ConnectionHandler, FromBehaviour, ToBehaviour},
-            liveness::PeerLivenessMap,
+            liveness::{NotLiveRefusals, PeerLivenessMap},
             message_cache::MessageCache,
             old_epoch::OldEpoch,
             utils::{
@@ -232,6 +233,9 @@ pub struct Behaviour<ProofsVerifier> {
     /// The peers this node refuses to exchange Blend messages with, for a
     /// while, because they sent something no honest node would have.
     blacklist: PeerBlacklist,
+    /// The neighbours this node refuses connections with, for a while, because
+    /// it closed one with them for not being live.
+    not_live_refusals: NotLiveRefusals,
     /// When this node last dropped below the connections the spec asks it to
     /// hold, if it is still below them.
     below_target_degree_since: Option<Round>,
@@ -255,11 +259,35 @@ pub enum ConnectionUpgradeFailureReason {
     /// any of the above cases.
     ConnectionFailure,
     /// This node declined to speak Blend on the connection: the peer is
-    /// blacklisted, or it is not a core node of the current epoch, or the
-    /// network is too small for this node to peer at all. Dialing the same
-    /// peer again does not fix any of them.
+    /// blacklisted, or was closed for not being live less than `W` rounds ago,
+    /// or it is not a core node of the current epoch, or the network is too
+    /// small for this node to peer at all. Dialing the same peer again does not
+    /// fix any of them.
     Refused,
 }
+
+/// Why this node refuses connections with a peer.
+#[derive(Debug, Clone, Copy)]
+enum RefusalReason {
+    /// The peer is blacklisted.
+    Blacklisted(BlacklistReason),
+    /// This node closed a connection with the peer for not being live less
+    /// than `W` rounds ago.
+    NotLive,
+}
+
+impl Display for RefusalReason {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Blacklisted(reason) => write!(f, "the peer is blacklisted ({reason})"),
+            Self::NotLive => f.write_str(
+                "a connection with the peer was closed for not being live less than `W` rounds ago",
+            ),
+        }
+    }
+}
+
+impl error::Error for RefusalReason {}
 
 /// Why this node is dropping a connection.
 #[derive(Debug, Clone, Copy)]
@@ -277,15 +305,18 @@ enum CloseReason {
     AlreadyConnected,
     /// The connection with this peer in the other direction is the one to keep.
     ReverseDirectionPreferred,
-    /// This node refuses to exchange Blend messages with the peer.
-    PeerBlacklisted,
+    /// This node refuses connections with the peer: it is blacklisted, or was
+    /// closed for not being live less than `W` rounds ago.
+    Refused,
 }
 
 impl Display for CloseReason {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::EpochOver => "the epoch it belongs to is over",
-            Self::NotLive => "the neighbour delivered nothing within the observation window",
+            Self::NotLive => {
+                "the neighbour delivered nothing within the observation window, so it is refused for `W` rounds"
+            }
             Self::HandshakeDeadlineMissed => "the handshake did not finish within `T_H`",
             Self::NoRoomLeft => "this node is already at its peering degree",
             Self::AlreadyConnected => {
@@ -294,7 +325,7 @@ impl Display for CloseReason {
             Self::ReverseDirectionPreferred => {
                 "the connection with this peer in the other direction is the one to keep"
             }
-            Self::PeerBlacklisted => "the peer is blacklisted",
+            Self::Refused => "this node refuses connections with the peer",
         })
     }
 }
@@ -386,6 +417,9 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
                     .expect("Blacklist capacity overflowed `usize`."),
                 RoundCount::new(core_config.liveness_window_in_rounds),
             ),
+            not_live_refusals: NotLiveRefusals::new(RoundCount::new(
+                core_config.liveness_window_in_rounds,
+            )),
         }
     }
 
@@ -516,13 +550,34 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         self.negotiated_peers.len()
     }
 
-    /// How many connections the node should open right now.
+    /// How many connections the node should open right now, besides the ones it
+    /// is already dialing.
     ///
     /// The node opens while it holds fewer than `Φ_CC - 1` live connections,
     /// **or** fewer than `Φ_CC - 2` live ones that it opened itself, as per the
-    /// spec.
+    /// spec. Each peer being dialed counts toward both, unless it is negotiated
+    /// already. A dial whose connection is part way through its handshake holds
+    /// a slot already, and the others take one once they connect.
     #[must_use]
-    pub fn connections_to_open(&self) -> usize {
+    pub fn connections_to_open<'peer>(
+        &self,
+        peers_being_dialed: impl IntoIterator<Item = &'peer PeerId>,
+    ) -> usize {
+        let mut total_ongoing_dials = 0;
+        let mut dials_without_negotiated_slot = 0;
+        for peer_id in peers_being_dialed {
+            if self.negotiated_peers.contains_key(peer_id) {
+                continue;
+            }
+            total_ongoing_dials += 1;
+            if !self
+                .peers_with_handshake_in_progress()
+                .any(|pending| pending == peer_id)
+            {
+                dials_without_negotiated_slot += 1;
+            }
+        }
+
         let live_shortfall = self
             .minimum_live_peers()
             .saturating_sub(self.num_live_peers());
@@ -532,7 +587,11 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
 
         live_shortfall
             .max(dialed_shortfall)
-            .min(self.available_connection_slots())
+            .saturating_sub(total_ongoing_dials)
+            .min(
+                self.available_connection_slots()
+                    .saturating_sub(dials_without_negotiated_slot),
+            )
     }
 
     /// The connections the node could still hold before reaching `Φ_CC + 1`.
@@ -764,16 +823,17 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             return;
         };
 
-        // A handshake that finished just as the peer was blacklisted must not be
-        // taken up. The blacklisting already asked every connection with the peer
-        // to close, but this one was past that point, so it has to be refused
-        // here.
-        if let Some(reason) = self.blacklisted_reason(&peer_id) {
+        // A handshake that finished just as this node came to refuse the peer
+        // must not be taken up. It was past the point where connections are
+        // refused: blacklisting the peer asked it to close but it was already
+        // negotiating, and closing a connection for not being live leaves the
+        // others with the peer alone. So it has to be refused here.
+        if let Some(refusal) = self.refusal_reason(&peer_id) {
             tracing::debug!(
                 target: LOG_TARGET,
-                "Connection {connection_id:?} finished negotiating with peer {peer_id:?} after it was blacklisted for {reason:?}."
+                "Connection {connection_id:?} finished negotiating with peer {peer_id:?} after this node came to refuse it: {refusal}."
             );
-            self.close_connection((peer_id, connection_id), CloseReason::PeerBlacklisted);
+            self.close_connection((peer_id, connection_id), CloseReason::Refused);
             self.notify_about_connection_upgrade_failure(
                 peer_id,
                 ConnectionUpgradeFailure {
@@ -1001,7 +1061,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     }
 
     /// Close the connection with every neighbour that has stopped delivering
-    /// messages.
+    /// messages, and refuse the neighbour for `W` rounds.
     fn close_unhealthy_connections(&mut self) {
         let unhealthy_connections = self
             .negotiated_peers
@@ -1011,13 +1071,15 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             .collect::<Vec<_>>();
 
         for (peer_id, connection_id) in unhealthy_connections {
+            self.not_live_refusals.refuse(peer_id, self.current_round);
             self.close_connection((peer_id, connection_id), CloseReason::NotLive);
         }
     }
 
     /// Reports the peers this node has stopped refusing to deal with.
-    fn prune_expired_blacklist_entries(&mut self) {
+    fn prune_expired_refusals(&mut self) {
         drop(self.blacklist.prune_expired_entries(self.current_round));
+        self.not_live_refusals.prune_expired(self.current_round);
     }
 
     /// Reports the node crossing into or out of holding fewer connections than
@@ -1086,7 +1148,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             .collect::<Vec<_>>();
 
         for connection_id in negotiated.into_iter().chain(waiting_upgrade) {
-            self.close_connection((*peer_id, connection_id), CloseReason::PeerBlacklisted);
+            self.close_connection((*peer_id, connection_id), CloseReason::Refused);
         }
 
         if let Some(old_epoch) = &mut self.old_epoch {
@@ -1102,6 +1164,14 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             .map(|entry| &entry.peer)
     }
 
+    /// The peers this node currently refuses connections with: the blacklisted
+    /// ones, and the ones it closed a connection with for not being live less
+    /// than `W` rounds ago.
+    pub fn refused_peers(&self) -> impl Iterator<Item = &PeerId> {
+        self.blacklisted_peers()
+            .chain(self.not_live_refusals.iter(self.current_round))
+    }
+
     /// The peers this node is part way through a handshake with, in either
     /// direction.
     ///
@@ -1115,15 +1185,20 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             .map(|(peer_id, _)| peer_id)
     }
 
-    /// Why this node currently refuses to deal with the peer, if it does.
-    fn blacklisted_reason(&self, peer: &PeerId) -> Option<BlacklistReason> {
-        self.blacklist.reason(peer, self.current_round)
+    /// Why this node currently refuses connections with the peer, if it does.
+    fn refusal_reason(&self, peer: &PeerId) -> Option<RefusalReason> {
+        if let Some(reason) = self.blacklist.reason(peer, self.current_round) {
+            return Some(RefusalReason::Blacklisted(reason));
+        }
+        self.not_live_refusals
+            .is_refused_at(peer, self.current_round)
+            .then_some(RefusalReason::NotLive)
     }
 
-    /// Whether this node currently refuses to deal with the peer.
+    /// Whether this node currently refuses connections with the peer.
     #[must_use]
-    pub fn is_peer_blacklisted(&self, peer: &PeerId) -> bool {
-        self.blacklisted_reason(peer).is_some()
+    pub fn is_peer_refused(&self, peer: &PeerId) -> bool {
+        self.refusal_reason(peer).is_some()
     }
 
     #[must_use]
@@ -1369,12 +1444,12 @@ where
         _: &Multiaddr,
         remote_addr: &Multiaddr,
     ) -> Result<THandler<Self>, ConnectionDenied> {
-        if let Some(blacklist_reason) = self.blacklisted_reason(&peer_id) {
-            tracing::debug!(target: LOG_TARGET, "Inbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded: the peer is blacklisted ({blacklist_reason:?}).");
+        if let Some(refusal) = self.refusal_reason(&peer_id) {
+            tracing::debug!(target: LOG_TARGET, "Inbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded: {refusal}.");
             // We don't return a dummy handler, which relies on the swarm timeout
             // configuration to close the connection. We prevent the connection from being
             // established at all.
-            return Err(ConnectionDenied::new(blacklist_reason));
+            return Err(ConnectionDenied::new(refusal));
         }
 
         // A connection offered above either bound is refused: the maximum the node
@@ -1438,12 +1513,12 @@ where
         _: Endpoint,
         _: PortUse,
     ) -> Result<THandler<Self>, ConnectionDenied> {
-        if let Some(blacklist_reason) = self.blacklisted_reason(&peer_id) {
-            tracing::debug!(target: LOG_TARGET, "Outbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded: the peer is blacklisted ({blacklist_reason:?}).");
+        if let Some(refusal) = self.refusal_reason(&peer_id) {
+            tracing::debug!(target: LOG_TARGET, "Outbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded: {refusal}.");
             // We don't return a dummy handler, which relies on the swarm timeout
             // configuration to close the connection. We prevent the connection from being
             // established at all.
-            return Err(ConnectionDenied::new(blacklist_reason));
+            return Err(ConnectionDenied::new(refusal));
         }
 
         // Only the overall maximum applies to a connection the node opened itself:
@@ -1556,6 +1631,15 @@ where
 
             if negotiated_connection_id == connection_id {
                 peer_details_entry.remove();
+                // A neighbour this node closed for not being live starts its count
+                // over, after its refusal. One that dropped the connection itself
+                // resumes where it left off instead.
+                if self
+                    .not_live_refusals
+                    .is_refused_at(&peer_id, self.current_round)
+                {
+                    self.liveness.forget(&peer_id);
+                }
                 self.events
                     .push_back(ToSwarm::GenerateEvent(Event::PeerDisconnected(peer_id)));
                 self.try_wake();
@@ -1622,7 +1706,7 @@ where
                 .enter_new_round_with_peers(self.negotiated_peers.keys());
             self.abandon_stale_handshakes();
             self.close_unhealthy_connections();
-            self.prune_expired_blacklist_entries();
+            self.prune_expired_refusals();
             self.check_and_report_low_peering_degree();
         }
 

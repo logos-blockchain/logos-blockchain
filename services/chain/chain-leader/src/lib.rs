@@ -9,9 +9,10 @@ mod tx_selection;
 mod wallet;
 
 use core::fmt::Debug;
-use std::{fmt::Display, pin::Pin, time::Duration};
+use std::{fmt::Display, pin::Pin};
 
 use futures::{Stream, StreamExt as _, stream};
+use lb_blend_service::message::proposal_diagnostic_timestamp_unix_ms;
 use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
 use lb_chain_service::{
     Epoch,
@@ -54,7 +55,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{Level, error, info, instrument, span, trace};
+use tracing::{Level, debug, error, info, instrument, span, trace};
 use tracing_futures::Instrument as _;
 use tx_selection::{TransactionSelection, select_transactions};
 
@@ -398,14 +399,13 @@ where
 
         let blend_adapter = BlendAdapter::<BlendService>::new(relays.blend_relay().clone());
 
-        // Wait for other services to become ready, with timeout.
-        // (except Chain, ChainNetwork, and Blend)
+        // Wait for other services to become ready.
+        // (except Chain, ChainNetwork, Blend, and Wallet)
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             TxMempoolService<_, _, _, _>,
             TimeService<_, _>,
-            Wallet,
             PreloadKmsService<_>
         )
         .await?;
@@ -415,7 +415,8 @@ where
             None,
             CryptarchiaService, // becomes ready after recoverying blocks
             ChainNetwork,       // becomes ready after IBD
-            BlendService        // becomes ready after chain becomes online
+            BlendService,       // becomes ready after chain becomes online
+            Wallet              // becomes ready after Chain
         )
         .await?;
 
@@ -683,6 +684,14 @@ where
         let txs = txs_for_block(valid_tx_stream).await;
 
         let block = Block::create(parent, slot, uncle_headers, proof, txs, signing_key)?;
+        debug!(
+            target: LOG_TARGET,
+            event = "leader_proposal_created",
+            timestamp_unix_ms = proposal_diagnostic_timestamp_unix_ms(),
+            block_id = %block.header().id(),
+            slot = u64::from(block.header().slot()),
+            "Created local block proposal"
+        );
         if tracing::enabled!(Level::DEBUG) {
             log_sdp_activity_selected_for_proposal(&block, &ledger_state);
         }

@@ -6,7 +6,7 @@ use std::{
 use ::libp2p::PeerId;
 use axum::{
     Extension, Json,
-    extract::{Path, Query, State},
+    extract::{Path, Query, State, rejection::JsonRejection},
     http::StatusCode,
     response::{IntoResponse as _, Response},
 };
@@ -26,7 +26,7 @@ use lb_chain_service::{
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Op, OpProof, SignedOps, TxHash,
+        NoteId, Op, OpProof, SignedOps, TxHash,
         channel::ChannelState,
         ledger::verification_mode::StandardMode,
         ops::channel::ChannelId,
@@ -37,6 +37,7 @@ use lb_core::{
             states::{Preverified, Unverified},
         },
     },
+    sdp::{DeclarationId, ServiceType},
 };
 use lb_http_api_common::{
     TimeInfo,
@@ -377,6 +378,7 @@ where
             RuntimeServiceId,
             Item = SignedOps<Preverified, StandardMode>,
             Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            BlockId = HeaderId,
         > + Send
         + Sync
         + Clone
@@ -399,7 +401,6 @@ where
                 Mempool<
                     HeaderId,
                     SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -431,6 +432,7 @@ where
             RuntimeServiceId,
             Item = SignedOps<Preverified, StandardMode>,
             Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            BlockId = HeaderId,
         > + Send
         + Sync
         + Clone
@@ -453,7 +455,6 @@ where
                 Mempool<
                     HeaderId,
                     SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -675,10 +676,11 @@ where
     request_body = JoinBlendRequestBody,
     responses(
         (status = 200, description = "Join the blend network", body = lb_sdp_service::SdpSubmission),
+        (status = 404, description = "No eligible note on this node's blend ZK key", body = ErrorBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
-pub async fn blend_join_network<BlendService, RuntimeServiceId>(
+pub async fn blend_join_network<BlendService, WalletService, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(req): Json<JoinBlendRequestBody>,
 ) -> Response
@@ -686,13 +688,92 @@ where
     BlendService: ServiceData<
             Message = ProxyServiceMessage<lb_blend_service::message::ServiceMessage<PeerId>>,
         > + 'static,
-    RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
+    WalletService: WalletServiceData + 'static,
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<BlendService>
+        + AsServiceId<WalletService>
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
+    let service_note_id = match blend_service_note::<BlendService, WalletService, RuntimeServiceId>(
+        &handle,
+        req.service_note_id,
+    )
+    .await
+    {
+        Ok(note_id) => note_id,
+        Err(error) => return error.into_response(),
+    };
+
     make_request_and_return_response!(blend::blend_join_network::<BlendService, RuntimeServiceId>(
         &handle,
         req.locator,
-        req.service_note_id
+        service_note_id
     ))
+}
+
+async fn blend_service_note<BlendService, WalletService, RuntimeServiceId>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+    requested: Option<NoteId>,
+) -> Result<NoteId, ApiError>
+where
+    BlendService: ServiceData<
+            Message = ProxyServiceMessage<lb_blend_service::message::ServiceMessage<PeerId>>,
+        > + 'static,
+    WalletService: WalletServiceData + 'static,
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<BlendService>
+        + AsServiceId<WalletService>
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    if let Some(note_id) = requested {
+        return Ok(note_id);
+    }
+
+    let zk_id = blend::blend_zk_id::<BlendService, RuntimeServiceId>(handle)
+        .await
+        .map_err(ApiError::Internal)?;
+
+    let wallet_relay = get_relay::<WalletService, _>(handle).await?;
+    let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay);
+    let lb_wallet_service::TipResponse { tip, response } = wallet
+        .get_balance(None, zk_id)
+        .await
+        .map_err(ApiError::internal)?;
+    let balance = response.ok_or_else(|| {
+        ApiError::NotFound(format!("wallet does not hold blend ZK key {zk_id:?}"))
+    })?;
+
+    let chain =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
+    let threshold = chain
+        .get_ledger_config()
+        .await
+        .map_err(ApiError::internal)?
+        .sdp_config
+        .min_stake
+        .threshold;
+    let ledger = chain
+        .get_ledger_state(tip)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::internal_message(format!("no ledger state at tip {tip:?}")))?;
+    let locked = ledger.mantle_ledger().service_notes();
+
+    let notes: Vec<_> = balance.notes.into_iter().collect();
+    blend::select_service_note(
+        &notes,
+        |note_id| locked.is_used_for_service(&note_id, &ServiceType::BlendNetwork),
+        threshold,
+    )
+    .map_err(|error| ApiError::NotFound(format!("blend ZK key {zk_id:?}: {error}")))
 }
 
 #[utoipa::path(
@@ -763,6 +844,7 @@ where
             RuntimeServiceId,
             Item = SignedOps<Preverified, StandardMode>,
             Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            BlockId = HeaderId,
         > + Send
         + Sync
         + Clone
@@ -785,7 +867,6 @@ where
                 Mempool<
                     HeaderId,
                     SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -803,7 +884,6 @@ where
         >,
         StorageAdapter,
         SignedOps<Preverified, StandardMode>,
-        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
         RuntimeServiceId,
     >(&handle, tx, Hashable::hash))
 }
@@ -824,6 +904,7 @@ where
             RuntimeServiceId,
             Item = SignedOps<Preverified, StandardMode>,
             Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            BlockId = HeaderId,
         > + Send
         + Sync
         + Clone
@@ -847,7 +928,6 @@ where
                 Mempool<
                     HeaderId,
                     SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -869,6 +949,7 @@ where
             RuntimeServiceId,
             Item = SignedOps<Preverified, StandardMode>,
             Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            BlockId = HeaderId,
         > + Send
         + Sync
         + Clone
@@ -892,7 +973,6 @@ where
                 Mempool<
                     HeaderId,
                     SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -916,6 +996,7 @@ where
             RuntimeServiceId,
             Item = SignedOps<Preverified, StandardMode>,
             Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            BlockId = HeaderId,
         > + Send
         + Sync
         + Clone
@@ -938,7 +1019,6 @@ where
                 Mempool<
                     HeaderId,
                     SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -957,7 +1037,6 @@ where
             Mempool<
                 HeaderId,
                 SignedOps<Preverified, StandardMode>,
-                <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                 StorageAdapter,
                 RuntimeServiceId,
             >,
@@ -1029,6 +1108,7 @@ where
             RuntimeServiceId,
             Item = SignedOps<Preverified, StandardMode>,
             Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            BlockId = HeaderId,
         > + Send
         + Sync
         + Clone
@@ -1052,7 +1132,6 @@ where
                 Mempool<
                     HeaderId,
                     SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -1097,7 +1176,6 @@ where
             >,
             StorageAdapter,
             SignedOps<Preverified, StandardMode>,
-            <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
             RuntimeServiceId,
         >(&handle, signed_tx, Hashable::hash)
         .await?;
@@ -1218,7 +1296,7 @@ pub async fn post_withdrawal<
     RuntimeServiceId,
 >(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(declaration_id): Json<lb_core::sdp::DeclarationId>,
+    Json(declaration_id): Json<DeclarationId>,
 ) -> Response
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
@@ -1254,7 +1332,7 @@ where
     post,
     path = paths::SDP_POST_SET_DECLARATION_ID,
     responses(
-        (status = 200, description = "Post declaration to SDP service to be set as current", body = lb_core::sdp::DeclarationId),
+        (status = 200, description = "Post declaration to SDP service to be set as current", body = DeclarationId),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1266,7 +1344,7 @@ pub async fn post_set_declaration_id<
     RuntimeServiceId,
 >(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(declaration): Json<Option<lb_core::sdp::DeclarationId>>,
+    Json(declaration): Json<Option<DeclarationId>>,
 ) -> Response
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
@@ -1304,7 +1382,7 @@ where
     get,
     path = paths::MANTLE_SDP_DECLARATIONS,
     responses(
-        (status = 200, description = "Get current SDP declarations keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, Object>),
+        (status = 200, description = "Get current SDP declarations keyed by declaration id", body = std::collections::HashMap<DeclarationId, Object>),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1322,7 +1400,7 @@ where
     get,
     path = paths::MANTLE_SDP_SNAPSHOT,
     responses(
-        (status = 200, description = "Get the SDP snapshot for the current epoch keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, Object>),
+        (status = 200, description = "Get the SDP snapshot for the current epoch keyed by declaration id", body = std::collections::HashMap<DeclarationId, Object>),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1334,6 +1412,75 @@ where
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
     make_request_and_return_response!(mantle::get_sdp_snapshot::<RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    get,
+    path = paths::MANTLE_SDP_FINALIZED_DECLARATION,
+    params(
+        ("declaration_id" = String, Path, description = "Declaration ID as 64 hex digits, optionally prefixed with 0x")
+    ),
+    responses(
+        (status = 200, description = "Declaration from finalized SDP state", body = Object),
+        (status = 400, description = "Invalid declaration ID", body = ErrorBody),
+        (status = 404, description = "Declaration not found in finalized state", body = ErrorBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn get_finalized_sdp_declaration<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(declaration_id): Path<String>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    let declaration_id = match declaration_id.parse::<DeclarationId>() {
+        Ok(id) => id,
+        Err(error) => return ApiError::BadRequest(error).into_response(),
+    };
+
+    match mantle::get_finalized_sdp_declaration::<RuntimeServiceId>(&handle, declaration_id).await {
+        Ok(Some(declaration)) => (StatusCode::OK, Json(declaration)).into_response(),
+        Ok(None) => {
+            ApiError::NotFound("Declaration not found in finalized state".into()).into_response()
+        }
+        Err(error) => ApiError::Internal(error).into_response(),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = paths::MANTLE_SDP_FINALIZED_DECLARATIONS,
+    params(
+        ("service_type" = u8, Path, description = "Canonical one-byte ServiceType discriminant")
+    ),
+    responses(
+        (status = 200, description = "Declarations of the service from finalized SDP state", body = std::collections::HashMap<DeclarationId, Object>),
+        (status = 400, description = "Unknown service type", body = ErrorBody),
+        (status = 404, description = "Service is absent from finalized state", body = ErrorBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn get_finalized_sdp_declarations<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(service_discriminant): Path<u8>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    let Ok(service_type) = ServiceType::try_from(service_discriminant) else {
+        return ApiError::BadRequest("Unknown service type".into()).into_response();
+    };
+
+    match mantle::get_finalized_sdp_declarations::<RuntimeServiceId>(&handle, service_type).await {
+        Ok(Some(declarations)) => (StatusCode::OK, Json(declarations)).into_response(),
+        Ok(None) => {
+            ApiError::NotFound("Service absent from finalized state".into()).into_response()
+        }
+        Err(error) => ApiError::Internal(error).into_response(),
+    }
 }
 
 #[utoipa::path(
@@ -1439,13 +1586,13 @@ pub async fn pow_claim<PoW, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     // An absent or empty body means "pay the auto-claim target", so the body
     // is optional rather than required.
-    body: Option<Json<pow::PoWClaimRequestBody>>,
+    body: Result<Json<pow::PoWClaimRequestBody>, JsonRejection>,
 ) -> Response
 where
     PoW: PoWServiceData,
     RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
 {
-    let claim_address = body.and_then(|Json(body)| body.claim_address);
+    let claim_address = body.ok().and_then(|Json(body)| body.claim_address);
     make_request_and_return_response!(pow::claim::<PoW, RuntimeServiceId>(&handle, claim_address))
 }
 
@@ -1964,6 +2111,7 @@ pub mod wallet {
                 RuntimeServiceId,
                 Item = SignedOps<Preverified, StandardMode>,
                 Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                BlockId = HeaderId,
             > + Send
             + Sync
             + Clone
@@ -1987,7 +2135,6 @@ pub mod wallet {
                     Mempool<
                         HeaderId,
                         SignedOps<Preverified, StandardMode>,
-                        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                         StorageAdapter,
                         RuntimeServiceId,
                     >,
@@ -2029,7 +2176,6 @@ pub mod wallet {
                     >,
                     StorageAdapter,
                     SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                     RuntimeServiceId,
                 >(&handle, transaction.clone(), Hashable::hash)
                 .await
@@ -2061,6 +2207,7 @@ pub mod wallet {
                 RuntimeServiceId,
                 Item = SignedOps<Preverified, StandardMode>,
                 Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                BlockId = HeaderId,
             > + Send
             + Sync
             + Clone
@@ -2084,7 +2231,6 @@ pub mod wallet {
                     Mempool<
                         HeaderId,
                         SignedOps<Preverified, StandardMode>,
-                        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                         StorageAdapter,
                         RuntimeServiceId,
                     >,
@@ -2121,6 +2267,7 @@ pub mod wallet {
                 RuntimeServiceId,
                 Item = SignedOps<Preverified, StandardMode>,
                 Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                BlockId = HeaderId,
             > + Send
             + Sync
             + Clone
@@ -2144,7 +2291,6 @@ pub mod wallet {
                     Mempool<
                         HeaderId,
                         SignedOps<Preverified, StandardMode>,
-                        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                         StorageAdapter,
                         RuntimeServiceId,
                     >,
@@ -2181,6 +2327,7 @@ pub mod wallet {
                 RuntimeServiceId,
                 Item = SignedOps<Preverified, StandardMode>,
                 Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                BlockId = HeaderId,
             > + Send
             + Sync
             + Clone
@@ -2204,7 +2351,6 @@ pub mod wallet {
                     Mempool<
                         HeaderId,
                         SignedOps<Preverified, StandardMode>,
-                        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
                         StorageAdapter,
                         RuntimeServiceId,
                     >,

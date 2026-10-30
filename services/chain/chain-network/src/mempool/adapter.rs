@@ -5,6 +5,7 @@ use lb_core::{
         transactions::hash::{TxHash, TxHashPrefix},
     },
 };
+use lb_cryptarchia_engine::Slot;
 use lb_tx_service::{MempoolMsg, TxsWithCommonPrefix};
 use overwatch::services::relay::OutboundRelay;
 use tokio::sync::oneshot;
@@ -50,6 +51,19 @@ where
             .send(MempoolMsg::Remove { ids: ids.to_vec() })
             .await
             .map_err(|error| format!("Could not remove transactions from mempool: {error}"))?;
+
+        Ok(())
+    }
+
+    async fn notify_processed_block(
+        &self,
+        block_id: HeaderId,
+        slot: Slot,
+    ) -> Result<(), overwatch::DynError> {
+        self.mempool_relay
+            .send(MempoolMsg::ProcessedBlock { block_id, slot })
+            .await
+            .map_err(|error| format!("Could not notify mempool of processed block: {error}"))?;
 
         Ok(())
     }

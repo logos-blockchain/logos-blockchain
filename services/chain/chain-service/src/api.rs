@@ -214,6 +214,21 @@ where
         })
     }
 
+    pub async fn get_ledger_config(&self) -> Result<lb_ledger::Config, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(Query::GetLedgerConfig { reply_channel }.into())
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending GetLedgerConfig"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetLedgerConfig"))
+        })
+    }
+
     /// All declarations in the current SDP registry at the tip, keyed by
     /// declaration id. This is the live registry, not the epoch snapshot.
     pub async fn get_sdp_declarations(
@@ -230,6 +245,61 @@ where
 
         rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetSdpDeclarations"))
+        })
+    }
+
+    /// One declaration from the last irreversible block's SDP registry.
+    pub async fn get_finalized_sdp_declaration(
+        &self,
+        declaration_id: DeclarationId,
+    ) -> Result<Option<Declaration>, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(
+                Query::GetFinalizedSdpDeclaration {
+                    declaration_id,
+                    reply_channel,
+                }
+                .into(),
+            )
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending GetFinalizedSdpDeclaration"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!(
+                "{relay_error} while receiving GetFinalizedSdpDeclaration"
+            ))
+        })
+    }
+
+    /// All declarations for a service from the last irreversible block's SDP
+    /// registry.
+    pub async fn get_finalized_sdp_declarations(
+        &self,
+        service_type: lb_core::sdp::ServiceType,
+    ) -> Result<Option<HashMap<DeclarationId, Declaration>>, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(
+                Query::GetFinalizedSdpDeclarations {
+                    service_type,
+                    reply_channel,
+                }
+                .into(),
+            )
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending GetFinalizedSdpDeclarations"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!(
+                "{relay_error} while receiving GetFinalizedSdpDeclarations"
+            ))
         })
     }
 

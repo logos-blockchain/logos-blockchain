@@ -14,7 +14,8 @@ use crate::{
             transactions::{
                 drain_wallets::{drain_all_node_wallets, drain_node_wallet, drain_user_wallet},
                 manual_control::{
-                    DependentTransactionLoadState, execute_coin_splits_all_user_wallets,
+                    ContinuousWorkloadReservations, DependentTransactionLoadState,
+                    execute_coin_splits_all_user_wallets,
                     execute_continuous_dependent_next_wallet_user_wallet_with_cancellation,
                     execute_continuous_next_wallet_user_wallet,
                     execute_continuous_next_wallet_user_wallet_with_cancellation,

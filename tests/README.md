@@ -155,5 +155,15 @@ Filtering based on test names can be done using the `--name` option. For example
 cargo test --release --features cucumber --test cucumber -- --name "Idle smoke"
 ```
 
+The password-manager scenario drives the actual example executable. From the workspace root:
+
+```bash
+cargo build -p logos-sql --example password_manager
+cargo test -p logos-blockchain-tests --features cucumber --test cucumber -- --tags "@password_manager"
+```
+
+Set `PASSWORD_MANAGER_BIN` to an absolute executable path when using a different build directory or profile.
+The scenario saves the application's stdout and stderr alongside its database in the scenario artifacts.
+
 For more information on running Cucumber tests, refer to https://github.com/cucumber-rs/cucumber or 
 https://cucumber.io/docs.

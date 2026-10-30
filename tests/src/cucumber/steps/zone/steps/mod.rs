@@ -27,7 +27,7 @@ use super::{
         wait_until_sorted_conflict_settles,
     },
     balance_update_payload, collect_indexed_messages, collect_indexed_messages_exactly_once,
-    ensure_zone_transactions_included,
+    ensure_zone_message_included, ensure_zone_transactions_included,
     errors::{log_step_error, zone_step_error},
     parse_balance_payload, pin_payload, publish_message_with_retry, replay_finalized_history,
     tables::{

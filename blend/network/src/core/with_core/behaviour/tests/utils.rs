@@ -22,13 +22,16 @@ use libp2p::{
     swarm::ConnectionId,
 };
 use libp2p_swarm_test::SwarmExt as _;
+use tokio::time::timeout;
 
 use crate::core::{
     poq_verification::PendingPoQVerifications,
     tests::utils::{PROTOCOL_NAME, TestProofsVerifier, TestSwarm},
     with_core::behaviour::{
         Behaviour, ConnectionDirection, Event, PendingUpgrade, RemotePeerConnectionDetails,
-        blacklist::PeerBlacklist, liveness::PeerLivenessMap, message_cache::MessageCache,
+        blacklist::PeerBlacklist,
+        liveness::{NotLiveRefusals, PeerLivenessMap},
+        message_cache::MessageCache,
     },
 };
 
@@ -219,6 +222,7 @@ impl BehaviourBuilder {
                     .unwrap(),
                 RoundCount::new(liveness_window),
             ),
+            not_live_refusals: NotLiveRefusals::new(RoundCount::new(liveness_window)),
         };
 
         for index in 0..self.handshakes_in_progress.unwrap_or(0) {
@@ -294,6 +298,32 @@ impl SwarmExt for Swarm<TestBehaviour> {
             }
         }
     }
+}
+
+/// Drives both swarms until the listener upgrades an inbound connection with
+/// the dialer, giving up after `patience`.
+pub async fn wait_for_upgrade(
+    dialer: &mut TestSwarm<TestBehaviour>,
+    listener: &mut TestSwarm<TestBehaviour>,
+    patience: Duration,
+) -> bool {
+    let dialer_peer_id = *dialer.local_peer_id();
+    timeout(patience, async {
+        loop {
+            select! {
+                _ = dialer.select_next_some() => {}
+                event = listener.select_next_some() => {
+                    if let SwarmEvent::Behaviour(Event::InboundConnectionUpgradeSucceeded(peer)) = event
+                        && peer == dialer_peer_id
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+    })
+    .await
+    .is_ok()
 }
 
 pub fn build_memberships<Behaviour: NetworkBehaviour>(

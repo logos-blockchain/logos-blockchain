@@ -1,7 +1,9 @@
 use core::time::Duration;
 
+use lb_utils::bounded_duration::{MILLI, MinimalBoundedDuration, SECOND};
 use libp2p::gossipsub;
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 
 /// How long gossipsub remembers seen message IDs before accepting the same
 /// message again.
@@ -14,6 +16,7 @@ const DEFAULT_DUPLICATE_CACHE_TIME: Duration = Duration::from_hours(24);
 
 // A partial copy of gossipsub::Config for deriving Serialize/Deserialize
 // remotely https://serde.rs/remote-derive.html
+#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 #[expect(
@@ -29,19 +32,26 @@ pub struct Config {
     pub retain_scores: usize,
     pub gossip_lazy: usize,
     pub gossip_factor: f64,
+    #[serde_as(as = "MinimalBoundedDuration<0, MILLI>")]
     pub heartbeat_initial_delay: Duration,
+    #[serde_as(as = "MinimalBoundedDuration<0, MILLI>")]
     pub heartbeat_interval: Duration,
+    #[serde_as(as = "MinimalBoundedDuration<0, SECOND>")]
     pub fanout_ttl: Duration,
     pub check_explicit_peers_ticks: u64,
+    #[serde_as(as = "MinimalBoundedDuration<0, SECOND>")]
     pub duplicate_cache_time: Duration,
     pub validate_messages: bool,
     pub allow_self_origin: bool,
     pub do_px: bool,
     pub prune_peers: usize,
+    #[serde_as(as = "MinimalBoundedDuration<0, SECOND>")]
     pub prune_backoff: Duration,
+    #[serde_as(as = "MinimalBoundedDuration<0, SECOND>")]
     pub unsubscribe_backoff: Duration,
     pub backoff_slack: u32,
     pub flood_publish: bool,
+    #[serde_as(as = "MinimalBoundedDuration<0, SECOND>")]
     pub graft_flood_threshold: Duration,
     pub mesh_outbound_min: usize,
     pub opportunistic_graft_ticks: u64,
@@ -50,7 +60,9 @@ pub struct Config {
     pub max_messages_per_rpc: Option<usize>,
     pub max_ihave_length: usize,
     pub max_ihave_messages: usize,
+    #[serde_as(as = "MinimalBoundedDuration<0, SECOND>")]
     pub iwant_followup_time: Duration,
+    #[serde_as(as = "MinimalBoundedDuration<0, SECOND>")]
     pub published_message_ids_cache_time: Duration,
 }
 

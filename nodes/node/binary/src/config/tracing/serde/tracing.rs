@@ -28,16 +28,24 @@ impl From<Layer> for TracingLayerSettings {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct OtlpConfig {
     pub endpoint: Url,
-    #[serde(default = "default_sample_ratio")]
     pub sample_ratio: f64,
     pub service_name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub authorization_header: Option<String>,
     pub protocol: OtlpProtocol,
 }
 
-const fn default_sample_ratio() -> f64 {
-    0.5
+impl Default for OtlpConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: super::default_otlp_endpoint(),
+            sample_ratio: 0.5,
+            service_name: super::default_service_name(),
+            authorization_header: None,
+            protocol: OtlpProtocol::default(),
+        }
+    }
 }

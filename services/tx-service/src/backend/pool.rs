@@ -9,15 +9,23 @@ use std::{
 use async_trait::async_trait;
 use futures::Stream;
 use indexmap::{IndexMap, IndexSet};
-use lb_core::mantle::transactions::hash::PrefixedKey;
+use lb_core::mantle::{
+    traits::{Hashable, MantleTx},
+    transactions::hash::PrefixedKey,
+};
+use lb_cryptarchia_engine::Slot;
 use lb_log_targets::mempool;
 use serde::{Deserialize, Serialize};
 
 use super::Status;
 use crate::{
-    backend::{MemPool, MempoolError, RecoverableMempool, evictor::Evictor},
+    backend::{
+        MemPool, MempoolError, RecoverableMempool,
+        evictor::Evictor,
+        policy::{BlockSlots, EvictableTx as _, PowClaimEvictionSettings},
+    },
     metrics,
-    storage::MempoolStorageAdapter,
+    storage::{BlockSlotLookup, MempoolStorageAdapter},
 };
 
 const REMOVED_ITEM_GRACE_PERIOD: Duration = Duration::from_mins(10);
@@ -33,12 +41,17 @@ pub struct MempoolSettings {
     /// it is evicted. `None` disables expiry-based eviction.
     #[serde(default = "default_tx_ttl")]
     pub tx_ttl: Option<Duration>,
+    /// Eviction of transactions carrying an expired `PoW` reward claim.
+    /// `None` disables it.
+    #[serde(default)]
+    pub pow_claim: Option<PowClaimEvictionSettings>,
 }
 
 impl Default for MempoolSettings {
     fn default() -> Self {
         Self {
             tx_ttl: default_tx_ttl(),
+            pow_claim: None,
         }
     }
 }
@@ -62,32 +75,37 @@ where
     pub last_item_timestamp: u64,
 }
 
-pub struct Mempool<BlockId, Item, Key, Storage, RuntimeServiceId>
+/// Transactions are keyed by their hash.
+pub type ItemKey<Item> = <Item as Hashable>::Hash;
+
+pub struct Mempool<BlockId, Item, Storage, RuntimeServiceId>
 where
-    Key: PrefixedKey,
+    Item: Hashable<Hash: PrefixedKey>,
 {
-    pending_items: IndexSet<Key>,
-    /// Secondary index over [`Self::pending_items`], keyed by the hash prefix a
-    /// block proposal would use to refer to a transaction.
+    pending_items: IndexSet<ItemKey<Item>>,
+    /// Secondary index over [`Self::pending_items`] and
+    /// [`Self::removed_items`], keyed by the hash prefix a block proposal
+    /// would use to refer to a transaction. Retired transactions stay
+    /// indexed until their bodies are pruned, so a competing proposal that
+    /// references one still resolves.
     ///
     /// Buckets are plain vectors: a 128-bit prefix cannot be made to collide at
     /// any feasible cost, so every one holds a single key in practice. A set
     /// would cost a hash table per bucket to deduplicate keys that are already
     /// unique.
-    by_prefix: HashMap<Key::Prefix, Vec<Key>>,
-    removed_items: BTreeMap<Key, u64>,
+    by_prefix: HashMap<<ItemKey<Item> as PrefixedKey>::Prefix, Vec<ItemKey<Item>>>,
+    removed_items: BTreeMap<ItemKey<Item>, u64>,
     last_item_timestamp: u64,
-    evictor: Evictor<Key>,
+    evictor: Evictor<Item, BlockId>,
     storage_adapter: Storage,
     _phantom: std::marker::PhantomData<(BlockId, Item, RuntimeServiceId)>,
 }
 
-impl<BlockId, Item, Key, Storage, RuntimeServiceId> Debug
-    for Mempool<BlockId, Item, Key, Storage, RuntimeServiceId>
+impl<BlockId, Item, Storage, RuntimeServiceId> Debug
+    for Mempool<BlockId, Item, Storage, RuntimeServiceId>
 where
     BlockId: Debug,
-    Item: Debug,
-    Key: Debug + PrefixedKey<Prefix: Debug>,
+    Item: Debug + Hashable<Hash: Debug + PrefixedKey<Prefix: Debug>>,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Mempool")
@@ -101,27 +119,31 @@ where
 }
 
 #[async_trait]
-impl<BlockId, Item, Key, Storage, RuntimeServiceId> MemPool
-    for Mempool<BlockId, Item, Key, Storage, RuntimeServiceId>
+impl<BlockId, Item, Storage, RuntimeServiceId> MemPool
+    for Mempool<BlockId, Item, Storage, RuntimeServiceId>
 where
-    Key: Hash
+    Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de> + MantleTx,
+    ItemKey<Item>: Ord + PrefixedKey<Prefix: Eq + Hash + Send + Sync>,
+    BlockId: Hash
         + Eq
-        + Ord
-        + Clone
+        + Copy
+        + Debug
         + Send
         + Sync
-        + PrefixedKey<Prefix: Eq + Hash + Send + Sync>
+        + 'static
+        + Serialize
+        + for<'de> Deserialize<'de>
+        + From<[u8; 32]>,
+    Storage: MempoolStorageAdapter<RuntimeServiceId, Key = ItemKey<Item>, Item = Item, BlockId = BlockId>
+        + Send
+        + Sync
         + 'static,
-    Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
-    BlockId: Hash + Eq + Copy + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
-    Storage:
-        MempoolStorageAdapter<RuntimeServiceId, Key = Key, Item = Item> + Send + Sync + 'static,
     Storage::Error: Debug,
     RuntimeServiceId: Send + Sync,
 {
     type Settings = MempoolSettings;
     type Item = Item;
-    type Key = Key;
+    type Key = ItemKey<Item>;
     type BlockId = BlockId;
     type Storage = Storage;
 
@@ -149,15 +171,24 @@ where
         }
 
         let timestamp = current_timestamp_millis();
+        let item = item.into();
+
+        // By the time a transaction arrives the chain may already be past the
+        // point where a block could include it; such a transaction is refused
+        // rather than admitted and evicted on the next sweep.
+        let block_slots = self.resolve_claim_anchors(&item).await;
+        if self.evictor.is_expired(&item, timestamp, &block_slots) {
+            return Err(MempoolError::Expired);
+        }
 
         self.storage_adapter
-            .store_item(key.clone(), item.into())
+            .store_item(key, item.clone())
             .await
             .map_err(|e| MempoolError::StorageError(format!("{e:?}")))?;
 
         self.removed_items.remove(&key);
         self.index_by_prefix(&key);
-        self.evictor.on_add(key.clone(), timestamp);
+        self.evictor.on_add(&key, &item, timestamp, &block_slots);
         self.pending_items.insert(key);
         self.last_item_timestamp = timestamp;
         tracing::debug!(
@@ -177,7 +208,7 @@ where
         &self,
         _ancestor_hint: BlockId,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, MempoolError> {
-        self.get_items_by_keys(self.pending_items.iter().cloned())
+        self.get_items_by_keys(self.pending_items.iter().copied())
             .await
     }
 
@@ -209,16 +240,27 @@ where
 
         let removed_at = current_timestamp_millis();
 
-        self.retire(keys.iter().cloned(), removed_at, "removed");
+        self.retire(keys.iter().copied(), removed_at, "removed");
 
-        // `remove` is called once per applied canonical block, so it doubles
-        // as the periodic trigger for eviction — without it the pool has no
-        // clock.
+        // Removals come from applied canonical blocks and from leaders
+        // dropping unselectable transactions, so they double as a trigger for
+        // eviction alongside processed-block notifications.
         self.retire(
             self.evictor.select_evictions(removed_at),
             removed_at,
             "evicted",
         );
+
+        metrics::mempool_transactions_pending(self.pending_items.len());
+    }
+
+    async fn on_processed_block(&mut self, block_id: BlockId, slot: Slot) {
+        self.prune_removed_items().await;
+
+        self.evictor.on_processed_block(&block_id, slot);
+
+        let now = current_timestamp_millis();
+        self.retire(self.evictor.select_evictions(now), now, "evicted");
 
         metrics::mempool_transactions_pending(self.pending_items.len());
     }
@@ -245,27 +287,30 @@ where
     }
 }
 
-impl<BlockId, Item, Key, Storage, RuntimeServiceId> RecoverableMempool
-    for Mempool<BlockId, Item, Key, Storage, RuntimeServiceId>
+impl<BlockId, Item, Storage, RuntimeServiceId> RecoverableMempool
+    for Mempool<BlockId, Item, Storage, RuntimeServiceId>
 where
-    Key: Hash
+    Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de> + MantleTx,
+    ItemKey<Item>:
+        Ord + PrefixedKey<Prefix: Eq + Hash + Send + Sync> + Serialize + for<'de> Deserialize<'de>,
+    BlockId: Hash
         + Eq
-        + Ord
-        + Clone
+        + Copy
+        + Debug
         + Send
         + Sync
-        + PrefixedKey<Prefix: Eq + Hash + Send + Sync>
         + 'static
         + Serialize
-        + for<'de> Deserialize<'de>,
-    Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
-    BlockId: Hash + Eq + Copy + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
-    Storage:
-        MempoolStorageAdapter<RuntimeServiceId, Key = Key, Item = Item> + Send + Sync + 'static,
+        + for<'de> Deserialize<'de>
+        + From<[u8; 32]>,
+    Storage: MempoolStorageAdapter<RuntimeServiceId, Key = ItemKey<Item>, Item = Item, BlockId = BlockId>
+        + Send
+        + Sync
+        + 'static,
     Storage::Error: Debug,
     RuntimeServiceId: Send + Sync,
 {
-    type RecoveryState = PoolRecoveryState<Key>;
+    type RecoveryState = PoolRecoveryState<ItemKey<Item>>;
 
     fn save(&self) -> Self::RecoveryState {
         PoolRecoveryState {
@@ -281,17 +326,17 @@ where
         storage: <Self as MemPool>::Storage,
     ) -> Self {
         // `by_prefix` is derived, so it is rebuilt rather than restored.
-        let mut by_prefix: HashMap<Key::Prefix, Vec<Key>> =
-            HashMap::with_capacity(state.pending_items.len());
-        for key in state.pending_items.keys() {
-            by_prefix
-                .entry(key.key_prefix())
-                .or_default()
-                .push(key.clone());
+        let mut by_prefix: HashMap<<ItemKey<Item> as PrefixedKey>::Prefix, Vec<ItemKey<Item>>> =
+            HashMap::with_capacity(state.pending_items.len() + state.removed_items.len());
+        for key in state.pending_items.keys().chain(state.removed_items.keys()) {
+            let bucket = by_prefix.entry(key.key_prefix()).or_default();
+            if !bucket.contains(key) {
+                bucket.push(*key);
+            }
         }
 
         Self {
-            pending_items: state.pending_items.keys().cloned().collect(),
+            pending_items: state.pending_items.keys().copied().collect(),
             by_prefix,
             removed_items: state.removed_items,
             last_item_timestamp: state.last_item_timestamp,
@@ -302,29 +347,44 @@ where
     }
 }
 
-impl<BlockId, Item, Key, Storage, RuntimeServiceId>
-    Mempool<BlockId, Item, Key, Storage, RuntimeServiceId>
+impl<BlockId, Item, Storage, RuntimeServiceId> Mempool<BlockId, Item, Storage, RuntimeServiceId>
 where
-    Key: Hash + Eq + Ord + Clone + Send + Sync + PrefixedKey<Prefix: Eq + Hash> + 'static,
-    Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
-    BlockId: Hash + Eq + Copy + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
-    Storage:
-        MempoolStorageAdapter<RuntimeServiceId, Key = Key, Item = Item> + Send + Sync + 'static,
+    Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de> + MantleTx,
+    ItemKey<Item>: Ord + PrefixedKey<Prefix: Eq + Hash + Send + Sync>,
+    BlockId: Hash
+        + Eq
+        + Copy
+        + Debug
+        + Send
+        + Sync
+        + 'static
+        + Serialize
+        + for<'de> Deserialize<'de>
+        + From<[u8; 32]>,
+    Storage: MempoolStorageAdapter<RuntimeServiceId, Key = ItemKey<Item>, Item = Item, BlockId = BlockId>
+        + Send
+        + Sync
+        + 'static,
     Storage::Error: Debug,
     RuntimeServiceId: Send + Sync,
 {
     /// Record `key` in the prefix index, under the prefix a block proposal
-    /// would use to refer to it.
-    fn index_by_prefix(&mut self, key: &Key) {
-        self.by_prefix
-            .entry(key.key_prefix())
-            .or_default()
-            .push(key.clone());
+    /// would use to refer to it, unless it is already there.
+    ///
+    /// A retired transaction stays indexed during its grace period, so it is
+    /// still there if it is admitted again within that period. Indexing it a
+    /// second time would make the lookup return two keys, and resolution
+    /// treats that as a non-unique reference.
+    fn index_by_prefix(&mut self, key: &ItemKey<Item>) {
+        let bucket = self.by_prefix.entry(key.key_prefix()).or_default();
+        if !bucket.contains(key) {
+            bucket.push(*key);
+        }
     }
 
     /// Drop `key` from the prefix index, dropping the bucket with it once it
     /// holds nothing.
-    fn unindex_by_prefix(&mut self, key: &Key) {
+    fn unindex_by_prefix(&mut self, key: &ItemKey<Item>) {
         let Entry::Occupied(mut bucket) = self.by_prefix.entry(key.key_prefix()) else {
             return;
         };
@@ -343,11 +403,18 @@ where
 
     /// The single exit for pending items: every removal — included in a
     /// block or evicted — goes through here so the evictor stays in sync.
-    fn retire(&mut self, keys: impl IntoIterator<Item = Key>, at: u64, cause: &str) {
+    ///
+    /// A retired item keeps its prefix index entry, and its body, until
+    /// [`Self::prune_removed_items`] drops both after the grace period.
+    ///
+    /// Items not in `pending_items` are ignored, such as ones the mempool
+    /// doesn't hold (e.g. from a downloaded block).
+    fn retire(&mut self, keys: impl IntoIterator<Item = ItemKey<Item>>, at: u64, cause: &str) {
         let mut count = 0usize;
         for key in keys {
-            self.pending_items.shift_remove(&key);
-            self.unindex_by_prefix(&key);
+            if !self.pending_items.shift_remove(&key) {
+                continue;
+            }
             self.evictor.on_remove(&key);
             self.removed_items.insert(key, at);
             count += 1;
@@ -355,6 +422,33 @@ where
 
         log_retired_items(count, cause, self.pending_items.len());
         metrics::mempool_transactions_removed(count);
+    }
+
+    /// Slots of the blocks the `PoW` reward claims in `item` are anchored
+    /// to, for those storage already holds. The rest resolve once the chain
+    /// reports the block processed; that includes anchors whose lookup
+    /// failed, which are logged and left to that notification or the TTL.
+    async fn resolve_claim_anchors(&self, item: &Item) -> BlockSlots<BlockId> {
+        // Collected up front: the op iterator borrows `item` and is not `Send`.
+        let anchors = item
+            .pow_reward_claims()
+            .map(|claim| BlockId::from(claim.block_hash))
+            .collect::<IndexSet<_>>();
+        if anchors.is_empty() {
+            return BlockSlots::new();
+        }
+        let anchors = anchors.into_iter().collect::<Vec<_>>();
+        let BlockSlotLookup { slots, failed } =
+            self.storage_adapter.get_block_slots(&anchors).await;
+        for (anchor, error) in failed {
+            tracing::warn!(
+                target: LOG_TARGET,
+                "Failed to look up the anchor block of a PoW reward claim; \
+                 the claim waits for the block to be processed: \
+                 block_id={anchor:?}, error={error:?}"
+            );
+        }
+        slots
     }
 
     async fn prune_removed_items(&mut self) {
@@ -365,7 +459,7 @@ where
             .removed_items
             .iter()
             .filter(|(_, removed_at)| now.saturating_sub(**removed_at) >= grace_period_millis)
-            .map(|(key, _)| key.clone())
+            .map(|(key, _)| *key)
             .collect::<Vec<_>>();
 
         if expired_keys.is_empty() {
@@ -379,6 +473,7 @@ where
 
         for key in expired_keys {
             self.removed_items.remove(&key);
+            self.unindex_by_prefix(&key);
         }
     }
 }

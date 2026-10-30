@@ -7,7 +7,10 @@ use std::{
     time::Duration,
 };
 
-use lb_core::{header::HeaderId, mantle::TxHash};
+use lb_core::{
+    header::HeaderId,
+    mantle::{SignedOps, TxHash, traits::Hashable as _},
+};
 use lb_testing_framework::NodeHttpClient;
 use tokio::{task::JoinHandle, time::sleep};
 use tracing::{info, warn};
@@ -34,6 +37,7 @@ const MIN_SCANNER_CHECKPOINTS: usize = 8;
 const MAX_SCANNER_CHECKPOINTS: usize = 128;
 const SCANNER_ROLLBACK_BLOCKS: u64 = 5;
 const PUBLISHED_SCANNER_CHECKPOINTS: usize = 8;
+const MAX_PUBLISHED_BLOCK_OBSERVATIONS: usize = 1_024;
 
 #[derive(Clone)]
 struct ScannerCheckpoint {
@@ -391,6 +395,9 @@ async fn run_group_scanner(config: ForkGroupScannerConfig, shutdown_requested: A
                     false
                 });
                 if reseeded {
+                    update_group_state(&config.scanner_state, &config.group_id, |group| {
+                        group.recent_blocks.clear();
+                    });
                     if sleep_or_shutdown(
                         &shutdown_requested,
                         config.poll_interval,
@@ -420,6 +427,11 @@ async fn run_group_scanner(config: ForkGroupScannerConfig, shutdown_requested: A
                     applied_height = checkpoint.applied_height;
                     applied_tip = checkpoint.applied_tip;
                     applied_slot = checkpoint.applied_slot;
+                    update_group_state(&config.scanner_state, &config.group_id, |group| {
+                        group
+                            .recent_blocks
+                            .retain(|block| block.height <= applied_height);
+                    });
                     let source_node_names = checkpoint.source_node_names;
                     checkpoints.retain(|checkpoint| checkpoint.applied_height <= applied_height);
                     if let Some(applied_tip) = applied_tip
@@ -452,6 +464,10 @@ async fn run_group_scanner(config: ForkGroupScannerConfig, shutdown_requested: A
                         "wallet scanner group '{}' failed to reset to genesis after continuity failure: {error}",
                         display_group_key(&config.group_id),
                     );
+                } else {
+                    update_group_state(&config.scanner_state, &config.group_id, |group| {
+                        group.recent_blocks.clear();
+                    });
                 }
             }
         }
@@ -686,6 +702,7 @@ async fn scan_group_once(
     let mut continuity_error = None;
     let mut connected_to_tip = applied_tip.is_none();
     let initial_applied_tip = *applied_tip;
+    let mut newly_applied_blocks = Vec::new();
 
     let streamed_block_count = stream_blocks_range(client, from_slot, best_node.slot, |block| {
         if continuity_error.is_some() {
@@ -715,6 +732,12 @@ async fn scan_group_once(
         *applied_tip = Some(block.header.id);
         *applied_slot = Some(u64::from(block.header.slot));
         applied_block_count += 1;
+        newly_applied_blocks.push(super::state::ScannerBlockObservation {
+            height: *applied_height,
+            block_id: block.header.id,
+            transaction_count: block.transactions.len(),
+            transaction_hashes: block.transactions.iter().map(SignedOps::hash).collect(),
+        });
 
         push_checkpoint(
             checkpoints,
@@ -796,6 +819,11 @@ async fn scan_group_once(
 
     let recent_checkpoints = recent_state_checkpoints(checkpoints);
     update_group_state(&config.scanner_state, &config.group_id, |group| {
+        group.recent_blocks.extend(newly_applied_blocks);
+        if group.recent_blocks.len() > MAX_PUBLISHED_BLOCK_OBSERVATIONS {
+            let excess = group.recent_blocks.len() - MAX_PUBLISHED_BLOCK_OBSERVATIONS;
+            group.recent_blocks.drain(..excess);
+        }
         group.applied_height = *applied_height;
         group.applied_slot = *applied_slot;
         group.applied_tip = *applied_tip;

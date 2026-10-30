@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     panic::AssertUnwindSafe,
-    sync::{Arc, Mutex, atomic::AtomicUsize},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -75,8 +75,8 @@ impl BackgroundTasks {
 
 #[derive(Clone, Default)]
 pub(super) struct ContinuousTransactionLoadProgress {
-    completed_verified_transactions: Arc<AtomicUsize>,
-    checkpoint_transactions: Arc<AtomicUsize>,
+    completed: Arc<Mutex<(usize, usize)>>,
+    checkpoint: Arc<Mutex<(usize, usize)>>,
     transactions_per_round: usize,
 }
 
@@ -87,13 +87,13 @@ fn log_continuous_transaction_load_stop_event(
     task_status: &str,
     error: Option<&str>,
 ) {
-    let (completed_rounds, completed_verified_transactions) = progress.snapshot();
+    let (completed_rounds, completed_included_transactions) = progress.snapshot();
     event_logger.append_named_timeline_record(
         event,
         &serde_json::json!({
             "task_status": task_status,
             "completed_rounds": completed_rounds,
-            "completed_verified_transactions": completed_verified_transactions,
+            "completed_included_transactions": completed_included_transactions,
             "transactions_per_round": progress.transactions_per_round(),
             "error": error,
         }),
@@ -103,9 +103,9 @@ fn log_continuous_transaction_load_stop_event(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ContinuousTransactionLoadCheckpoint {
     pub(super) completed_rounds: usize,
-    pub(super) completed_verified_transactions: usize,
+    pub(super) completed_included_transactions: usize,
     pub(super) rounds_since_previous_check: usize,
-    pub(super) verified_transactions_since_previous_check: usize,
+    pub(super) included_transactions_since_previous_check: usize,
     pub(super) transactions_per_round: usize,
 }
 
@@ -113,17 +113,19 @@ impl ContinuousTransactionLoadProgress {
     #[must_use]
     pub(super) fn new(transactions_per_round: usize) -> Self {
         Self {
-            completed_verified_transactions: Arc::default(),
-            checkpoint_transactions: Arc::default(),
+            completed: Arc::default(),
+            checkpoint: Arc::default(),
             transactions_per_round,
         }
     }
 
-    pub(super) fn record_completed_round(&self) {
-        self.completed_verified_transactions.fetch_add(
-            self.transactions_per_round,
-            std::sync::atomic::Ordering::Release,
-        );
+    pub(super) fn record_completed_round(&self, included_transactions: usize) {
+        let mut completed = self
+            .completed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        completed.0 = completed.0.saturating_add(1);
+        completed.1 = completed.1.saturating_add(included_transactions);
     }
 
     #[must_use]
@@ -133,38 +135,36 @@ impl ContinuousTransactionLoadProgress {
 
     #[must_use]
     pub(super) fn snapshot(&self) -> (usize, usize) {
-        let transactions = self
-            .completed_verified_transactions
-            .load(std::sync::atomic::Ordering::Acquire);
-        let rounds = transactions
-            .checked_div(self.transactions_per_round)
-            .unwrap_or_default();
-        (rounds, transactions)
+        *self
+            .completed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     #[must_use]
     pub(super) fn checkpoint(&self) -> ContinuousTransactionLoadCheckpoint {
-        let completed_verified_transactions = self
-            .completed_verified_transactions
-            .load(std::sync::atomic::Ordering::Acquire);
-        let previous_transactions = self.checkpoint_transactions.swap(
-            completed_verified_transactions,
-            std::sync::atomic::Ordering::AcqRel,
-        );
-        let verified_transactions_since_previous_check =
-            completed_verified_transactions.saturating_sub(previous_transactions);
-        let rounds_since_previous_check = verified_transactions_since_previous_check
-            .checked_div(self.transactions_per_round)
-            .unwrap_or_default();
-        let completed_rounds = completed_verified_transactions
-            .checked_div(self.transactions_per_round)
-            .unwrap_or_default();
+        let current = *self
+            .completed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (rounds_since_previous_check, included_transactions_since_previous_check) = {
+            let mut previous = self
+                .checkpoint
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let deltas = (
+                current.0.saturating_sub(previous.0),
+                current.1.saturating_sub(previous.1),
+            );
+            *previous = current;
+            deltas
+        };
 
         ContinuousTransactionLoadCheckpoint {
-            completed_rounds,
-            completed_verified_transactions,
+            completed_rounds: current.0,
+            completed_included_transactions: current.1,
             rounds_since_previous_check,
-            verified_transactions_since_previous_check,
+            included_transactions_since_previous_check,
             transactions_per_round: self.transactions_per_round,
         }
     }
@@ -230,6 +230,23 @@ impl CucumberWorld {
 
         let mut background = Self::default();
         background.chain.slots_per_epoch = self.chain.slots_per_epoch;
+        background
+            .lifecycle
+            .scenario_base_dir
+            .clone_from(&self.lifecycle.scenario_base_dir);
+        background
+            .lifecycle
+            .scenario_name
+            .clone_from(&self.lifecycle.scenario_name);
+        background.blend_diagnostics.timeline_header_written =
+            Arc::clone(&self.blend_diagnostics.timeline_header_written);
+        background
+            .startup
+            .manual_node_config_overrides
+            .cryptarchia_security_param = self
+            .startup
+            .manual_node_config_overrides
+            .cryptarchia_security_param;
         background.background_best_node_selection.timeout_override = Some(Duration::MAX);
         background.background_best_node_selection.timeline_logger =
             Some(BlendDiagnosticEventLogger::from_world(self));
@@ -481,8 +498,8 @@ mod background_task_tests {
         world.set_scenario_name("abnormal background load cleanup");
 
         let progress = ContinuousTransactionLoadProgress::new(8);
-        progress.record_completed_round();
-        progress.record_completed_round();
+        progress.record_completed_round(8);
+        progress.record_completed_round(8);
         world.continuous_transaction_load_progress = Some(progress);
         world
             .spawn_background_task(
@@ -522,7 +539,7 @@ mod background_task_tests {
         assert_eq!(stop_requested["task_status"], "Running");
         assert_eq!(stopped["task_status"], "Stopped");
         assert_eq!(stopped["completed_rounds"], 2);
-        assert_eq!(stopped["completed_verified_transactions"], 16);
+        assert_eq!(stopped["completed_included_transactions"], 16);
         assert_eq!(stopped["transactions_per_round"], 8);
     }
 }
@@ -532,40 +549,52 @@ mod continuous_transaction_load_progress_tests {
     use super::ContinuousTransactionLoadProgress;
 
     #[test]
-    fn checkpoints_report_completed_rounds_and_verified_transaction_deltas() {
+    fn checkpoints_report_completed_rounds_and_included_transaction_deltas() {
         let progress = ContinuousTransactionLoadProgress::new(80);
         assert_eq!(progress.snapshot(), (0, 0));
         let empty_checkpoint = progress.checkpoint();
         assert_eq!(empty_checkpoint.completed_rounds, 0);
-        assert_eq!(empty_checkpoint.completed_verified_transactions, 0);
+        assert_eq!(empty_checkpoint.completed_included_transactions, 0);
         assert_eq!(empty_checkpoint.rounds_since_previous_check, 0);
         assert_eq!(
-            empty_checkpoint.verified_transactions_since_previous_check,
+            empty_checkpoint.included_transactions_since_previous_check,
             0
         );
 
-        progress.record_completed_round();
+        progress.record_completed_round(80);
         assert_eq!(progress.snapshot(), (1, 80));
         let first_round = progress.checkpoint();
         assert_eq!(first_round.completed_rounds, 1);
-        assert_eq!(first_round.completed_verified_transactions, 80);
+        assert_eq!(first_round.completed_included_transactions, 80);
         assert_eq!(first_round.rounds_since_previous_check, 1);
-        assert_eq!(first_round.verified_transactions_since_previous_check, 80);
+        assert_eq!(first_round.included_transactions_since_previous_check, 80);
 
-        progress.record_completed_round();
-        progress.record_completed_round();
+        progress.record_completed_round(80);
+        progress.record_completed_round(80);
         assert_eq!(progress.snapshot(), (3, 240));
         let later_rounds = progress.checkpoint();
         assert_eq!(later_rounds.completed_rounds, 3);
-        assert_eq!(later_rounds.completed_verified_transactions, 240);
+        assert_eq!(later_rounds.completed_included_transactions, 240);
         assert_eq!(later_rounds.rounds_since_previous_check, 2);
-        assert_eq!(later_rounds.verified_transactions_since_previous_check, 160);
+        assert_eq!(later_rounds.included_transactions_since_previous_check, 160);
 
         let stalled_checkpoint = progress.checkpoint();
         assert_eq!(stalled_checkpoint.rounds_since_previous_check, 0);
         assert_eq!(
-            stalled_checkpoint.verified_transactions_since_previous_check,
+            stalled_checkpoint.included_transactions_since_previous_check,
             0
         );
+    }
+
+    #[test]
+    fn partial_round_counts_only_observed_inclusions_and_still_advances_round_progress() {
+        let progress = ContinuousTransactionLoadProgress::new(200);
+        progress.record_completed_round(196);
+
+        let checkpoint = progress.checkpoint();
+        assert_eq!(checkpoint.completed_rounds, 1);
+        assert_eq!(checkpoint.completed_included_transactions, 196);
+        assert_eq!(checkpoint.rounds_since_previous_check, 1);
+        assert_eq!(checkpoint.included_transactions_since_previous_check, 196);
     }
 }

@@ -48,5 +48,4 @@ lb-network-service            = { workspace = true }
 lb-utils                      = { workspace = true }
 
 [features]
-default          = []
 tokio-task-names = ["lb-utils/tokio-task-names"]

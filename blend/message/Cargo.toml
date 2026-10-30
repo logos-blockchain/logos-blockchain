@@ -29,7 +29,7 @@ lb-utils                      = { workspace = true }
 rand                          = { features = ["getrandom"], workspace = true }
 rand_chacha                   = { workspace = true }
 serde                         = { workspace = true }
-serde_with                    = { features = ["alloc"], workspace = true }
+serde_with                    = { features = ["alloc", "macros"], workspace = true }
 thiserror                     = { workspace = true }
 tracing                       = { workspace = true }
 zeroize                       = { workspace = true }

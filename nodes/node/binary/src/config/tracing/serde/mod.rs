@@ -1,11 +1,21 @@
 pub use ::tracing::Level;
+use lb_tracing::logging::local::TextKind;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 pub mod console;
 pub mod filter;
 pub mod logger;
 pub mod metrics;
 pub mod tracing;
+
+fn default_otlp_endpoint() -> Url {
+    Url::parse("http://localhost:4317").expect("valid URL")
+}
+
+fn default_service_name() -> String {
+    env!("CARGO_PKG_NAME").to_owned()
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
@@ -43,6 +53,7 @@ impl Config {
                 loki: None,
                 gelf: None,
                 otlp: None,
+                format: logger::LogFormat::Text(TextKind::Ansi),
                 stdout: false,
                 stderr: false,
             },

@@ -468,7 +468,7 @@ mod tests {
             // otherwise fall back to defaults.
             kademlia_config: if is_boot {
                 lb_libp2p::KademliaSettings {
-                    periodic_bootstrap_interval_secs: Some(1),
+                    periodic_bootstrap_interval: Some(Duration::from_secs(1)),
                     ..Default::default()
                 }
             } else {
@@ -481,10 +481,11 @@ mod tests {
             chain_sync_config: lb_cryptarchia_sync::Config {
                 peer_response_timeout: Duration::from_secs(5),
                 max_inbound_requests: 10.try_into().unwrap(),
+                inbound_download_stream_timeout: Duration::from_secs(120),
             },
             nat_config: lb_libp2p::NatSettings::Traversal(lb_libp2p::TraversalSettings {
                 autonat: lb_libp2p::AutonatClientSettings {
-                    probe_interval_millisecs: Some(1000),
+                    probe_interval: Some(Duration::from_secs(1)),
                     ..Default::default()
                 },
                 ..Default::default()

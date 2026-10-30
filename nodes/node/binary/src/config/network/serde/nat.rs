@@ -1,14 +1,18 @@
-use core::time::Duration;
+use core::{fmt, time::Duration};
 
 use lb_utils::{
-    bounded_duration::{MinimalBoundedDuration, SECOND},
+    bounded_duration::{MILLI, MinimalBoundedDuration, SECOND},
     math::PositiveF64,
 };
 use libp2p::Multiaddr;
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize, Deserializer, Serialize,
+    de::{Error as _, IgnoredAny, MapAccess, Visitor},
+};
 use serde_with::serde_as;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// `type` defaults to `traversal`, so its settings can be overridden alone.
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Config {
     /// NAT traversal with autonat, mapping, and gateway monitoring
@@ -20,13 +24,104 @@ pub enum Config {
     },
 }
 
+/// Reads the mapping key by key instead of through an intermediate value, so
+/// unknown keys are still seen by the unknown-key check.
+impl<'de> Deserialize<'de> for Config {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(ConfigVisitor)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Type {
+    Traversal,
+    Static,
+}
+
+#[derive(Deserialize)]
+#[serde(field_identifier, rename_all = "snake_case")]
+enum Field {
+    Type,
+    ExternalAddress,
+    Autonat,
+    Mapping,
+    GatewayMonitor,
+    #[serde(other)]
+    Unknown,
+}
+
+const TRAVERSAL_FIELDS: &[&str] = &["type", "autonat", "mapping", "gateway_monitor"];
+const STATIC_FIELDS: &[&str] = &["type", "external_address"];
+
+struct ConfigVisitor;
+
+impl<'de> Visitor<'de> for ConfigVisitor {
+    type Value = Config;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a NAT config mapping")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Config, A::Error> {
+        let mut r#type = None;
+        let mut external_address = None;
+        let mut autonat = None;
+        let mut mapping = None;
+        let mut gateway_monitor = None;
+        while let Some(field) = map.next_key()? {
+            match field {
+                Field::Type => r#type = Some(map.next_value()?),
+                Field::ExternalAddress => external_address = Some(map.next_value()?),
+                Field::Autonat => autonat = Some(map.next_value()?),
+                Field::Mapping => mapping = Some(map.next_value()?),
+                Field::GatewayMonitor => gateway_monitor = Some(map.next_value()?),
+                Field::Unknown => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+
+        match r#type.unwrap_or(Type::Traversal) {
+            Type::Traversal => {
+                if external_address.is_some() {
+                    return Err(A::Error::unknown_field(
+                        "external_address",
+                        TRAVERSAL_FIELDS,
+                    ));
+                }
+                Ok(Config::Traversal(TraversalConfig {
+                    autonat: autonat.unwrap_or_default(),
+                    mapping: mapping.unwrap_or_default(),
+                    gateway_monitor: gateway_monitor.unwrap_or_default(),
+                }))
+            }
+            Type::Static => {
+                for (field, set) in [
+                    ("autonat", autonat.is_some()),
+                    ("mapping", mapping.is_some()),
+                    ("gateway_monitor", gateway_monitor.is_some()),
+                ] {
+                    if set {
+                        return Err(A::Error::unknown_field(field, STATIC_FIELDS));
+                    }
+                }
+                Ok(Config::Static {
+                    external_address: external_address
+                        .ok_or_else(|| A::Error::missing_field("external_address"))?,
+                })
+            }
+        }
+    }
+}
+
 impl From<Config> for lb_libp2p::NatSettings {
     fn from(config: Config) -> Self {
         match config {
             Config::Traversal(traversal_config) => Self::Traversal(lb_libp2p::TraversalSettings {
                 autonat: lb_libp2p::AutonatClientSettings {
                     max_candidates: traversal_config.autonat.max_candidates,
-                    probe_interval_millisecs: traversal_config.autonat.probe_interval_millisecs,
+                    probe_interval: traversal_config.autonat.probe_interval,
                     retest_successful_external_addresses_interval: traversal_config
                         .autonat
                         .retest_successful_external_addresses_interval,
@@ -61,6 +156,7 @@ pub struct TraversalConfig {
     pub gateway_monitor: GatewayConfig,
 }
 
+#[serde_as]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AutonatClientConfig {
@@ -69,11 +165,13 @@ pub struct AutonatClientConfig {
 
     /// The interval at which we will attempt to confirm candidates as external
     /// addresses, only used for new candidates.
-    pub probe_interval_millisecs: Option<u64>,
+    #[serde_as(as = "Option<MinimalBoundedDuration<1, MILLI>>")]
+    pub probe_interval: Option<Duration>,
 
     /// The interval at which we will retest successful external addresses.
     /// This is used to ensure that the external address is still valid and
     /// reachable.
+    #[serde_as(as = "MinimalBoundedDuration<0, SECOND>")]
     pub retest_successful_external_addresses_interval: Duration,
 }
 
@@ -81,7 +179,7 @@ impl Default for AutonatClientConfig {
     fn default() -> Self {
         Self {
             max_candidates: None,
-            probe_interval_millisecs: None,
+            probe_interval: None,
             retest_successful_external_addresses_interval: Duration::from_mins(1),
         }
     }
@@ -93,9 +191,11 @@ impl Default for AutonatClientConfig {
 pub struct MappingConfig {
     #[serde_as(as = "MinimalBoundedDuration<1, SECOND>")]
     pub timeout: Duration,
+    #[serde_as(as = "MinimalBoundedDuration<1, SECOND>")]
     pub lease_duration: Duration,
     pub max_retries: u32,
     pub renewal_delay_fraction: PositiveF64,
+    #[serde_as(as = "MinimalBoundedDuration<0, SECOND>")]
     pub retry_interval: Duration,
 }
 
@@ -111,10 +211,12 @@ impl Default for MappingConfig {
     }
 }
 
+#[serde_as]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GatewayConfig {
     /// How often to check for gateway address changes
+    #[serde_as(as = "MinimalBoundedDuration<1, SECOND>")]
     pub check_interval: Duration,
 }
 

@@ -14,16 +14,13 @@ use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use libp2p::Multiaddr;
 
 use crate::{
-    cli::{
-        config::migrate_0_1_2,
-        keys::{AddKeyArgs, GenerateKeyArgs, RemoveKeyArgs},
-    },
+    cli::keys::{AddKeyArgs, GenerateKeyArgs, RemoveKeyArgs},
     config::{
         ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, LogArgs,
         NetworkArgs, RunConfig, SdpArgs, StateArgs, UserConfig, api::serde::AxumBackendSettings,
-        blend::serde::core::BackendConfig as BlendCoreConfig, network::serde::SwarmConfig,
-        update_api, update_blend, update_cryptarchia, update_network, update_sdp, update_state,
-        update_tracing,
+        apply_default_log_filter, blend::serde::core::BackendConfig as BlendCoreConfig,
+        network::serde::SwarmConfig, update_api, update_blend, update_cryptarchia, update_network,
+        update_sdp, update_state, update_tracing,
     },
 };
 
@@ -47,6 +44,10 @@ pub struct CliArgs {
     /// file and then exit.
     #[clap(long = "check-config", action)]
     check_config_only: bool,
+    /// Print the effective config, with the keystore and every override
+    /// applied and the secret keys redacted, and exit.
+    #[clap(long = "show-config", action)]
+    show_config: bool,
     /// Overrides log config.
     #[clap(flatten)]
     log: LogArgs,
@@ -88,19 +89,17 @@ impl CliArgs {
     pub const fn dry_run(&self) -> bool {
         self.check_config_only
     }
+
+    #[must_use]
+    pub const fn show_config(&self) -> bool {
+        self.show_config
+    }
 }
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Initialize a new user config with generated keys
+    /// Initialize a new user config, generating a keystore unless one exists
     InitConfig(Box<InitArgs>),
-    /// Update existing user config with keys from keystore
-    UpdateConfig(Box<UpdateArgs>),
-    /// Migrates a new user config with generated keys
-    MigrateConfig(Box<MigrateArgs>),
-    /// Migrates 0.1.2 config to a new user config
-    #[command(name = "migrate-from-0.1.2")]
-    Migrate0_1_2(Box<migrate_0_1_2::MigrateArgs>),
     /// Generate a new key of type.
     GenerateKey(Box<GenerateKeyArgs>),
     /// Add a key of type to a keystore.
@@ -119,12 +118,12 @@ pub struct InitArgs {
     #[clap(long = "output", short = 'o', default_value = "user_config.yaml")]
     pub output: PathBuf,
 
-    /// Path for the generated keystore file.
-    /// Defaults to 'keystore.yaml' in the same directory as --output.
-    #[clap(long = "keystore", short = 'k')]
-    pub keystore: Option<PathBuf>,
+    /// Keystore path, relative to the directory of --output. An existing
+    /// keystore is reused, a missing one is generated.
+    #[clap(long = "keystore", short = 'k', default_value = "keystore.yaml")]
+    pub keystore: PathBuf,
 
-    /// Overwrite existing user config and keystore.
+    /// Overwrite an existing user config. The keystore is never overwritten.
     #[arg(long, default_value_t = false)]
     pub overwrite: bool,
 
@@ -190,8 +189,8 @@ pub struct EmbeddedInitArgs {
     /// `warn,logos_blockchain=debug,libp2p_gossipsub::behaviour=error`.
     pub log_filter: Option<String>,
 
-    /// Path for the generated KMS keys YAML file.
-    /// Defaults to 'kms.yaml' in the same directory as --output.
+    /// Keystore path, relative to the directory of `output`.
+    /// Defaults to 'keystore.yaml'.
     pub kms_file: Option<PathBuf>,
 }
 
@@ -199,9 +198,11 @@ impl From<EmbeddedInitArgs> for InitArgs {
     fn from(args: EmbeddedInitArgs) -> Self {
         let mut init_args = Self {
             output: args.output.clone(),
-            keystore: args.kms_file.clone(),
             ..Default::default()
         };
+        if let Some(keystore) = args.kms_file {
+            init_args.keystore = keystore;
+        }
 
         init_args.log.filter.clone_from(&args.log_filter);
         init_args.network.port = Some(args.net_port);
@@ -245,149 +246,6 @@ impl Default for EmbeddedInitArgs {
     }
 }
 
-#[derive(Parser, Debug)]
-pub struct UpdateArgs {
-    /// Output file path for the generated config.
-    #[clap(long = "user-config", short = 'u', default_value = "user_config.yaml")]
-    pub user_config: PathBuf,
-
-    /// Path for the keystore file.
-    #[clap(long = "keystore")]
-    pub keystore: PathBuf,
-
-    /// Auto approve interactive promps.
-    #[arg(short, long, default_value_t = false)]
-    pub yes: bool,
-
-    #[clap(flatten)]
-    log: LogArgs,
-
-    #[clap(flatten)]
-    network: NetworkArgs,
-
-    #[clap(flatten)]
-    blend: BlendArgs,
-
-    #[clap(flatten)]
-    cryptarchia: CryptarchiaArgs,
-
-    #[clap(flatten)]
-    sdp: SdpArgs,
-
-    #[clap(flatten)]
-    api: ApiArgs,
-
-    #[clap(flatten)]
-    state: StateArgs,
-}
-
-impl UpdateArgs {
-    /// Creates arguments programmatically (e.g. from the c-bindings crate),
-    /// leaving all config overrides at their defaults. `auto_approve` skips
-    /// interactive prompts.
-    #[must_use]
-    pub fn new(user_config: PathBuf, keystore: PathBuf, auto_approve: bool) -> Self {
-        Self {
-            user_config,
-            keystore,
-            yes: auto_approve,
-            ..Default::default()
-        }
-    }
-}
-
-// Custom default implementation to require keystore path initialized from clap.
-impl Default for UpdateArgs {
-    fn default() -> Self {
-        Self {
-            user_config: "user_config.yaml".into(),
-            keystore: "keystore.yaml".into(),
-            yes: false,
-            log: LogArgs::default(),
-            network: NetworkArgs::default(),
-            blend: BlendArgs::default(),
-            cryptarchia: CryptarchiaArgs::default(),
-            sdp: SdpArgs::default(),
-            api: ApiArgs::default(),
-            state: StateArgs::default(),
-        }
-    }
-}
-
-#[derive(Parser, Debug)]
-pub struct MigrateArgs {
-    /// Output file path for the generated config.
-    #[clap(long = "output", short = 'o', default_value = "user_config.yaml")]
-    pub output: PathBuf,
-
-    /// Path for the keystore file.
-    #[clap(long = "keystore")]
-    pub keystore: PathBuf,
-
-    #[clap(flatten)]
-    log: LogArgs,
-
-    #[clap(flatten)]
-    network: NetworkArgs,
-
-    #[clap(flatten)]
-    blend: BlendArgs,
-
-    #[clap(flatten)]
-    cryptarchia: CryptarchiaArgs,
-
-    #[clap(flatten)]
-    sdp: SdpArgs,
-
-    #[clap(flatten)]
-    api: ApiArgs,
-
-    #[clap(flatten)]
-    state: StateArgs,
-
-    /// Name (or path, relative to the state folder) of the storage DB folder.
-    #[clap(long = "storage-path")]
-    storage_path: Option<PathBuf>,
-}
-
-impl MigrateArgs {
-    /// Creates arguments programmatically (e.g. from the c-bindings crate),
-    /// leaving all config overrides at their defaults.
-    #[must_use]
-    pub fn new(output: PathBuf, keystore: PathBuf) -> Self {
-        Self {
-            output,
-            keystore,
-            log: LogArgs::default(),
-            network: NetworkArgs::default(),
-            blend: BlendArgs::default(),
-            cryptarchia: CryptarchiaArgs::default(),
-            sdp: SdpArgs::default(),
-            api: ApiArgs::default(),
-            state: StateArgs::default(),
-            storage_path: None,
-        }
-    }
-}
-
-impl From<MigrateArgs> for InitArgs {
-    fn from(migrate: MigrateArgs) -> Self {
-        Self {
-            output: migrate.output,
-            keystore: Some(migrate.keystore),
-            log: migrate.log,
-            network: migrate.network,
-            blend: migrate.blend,
-            cryptarchia: migrate.cryptarchia,
-            sdp: migrate.sdp,
-            api: migrate.api,
-            state: migrate.state,
-            storage_path: migrate.storage_path,
-            overwrite: false,
-        }
-    }
-}
-
 impl Default for InitArgs {
     fn default() -> Self {
         Self::parse_from::<Vec<String>, String>(vec![])
@@ -399,9 +257,6 @@ pub struct ParticipateArgs {
     /// Path to the user config YAML file
     #[arg(long, default_value = "user_config.yaml")]
     pub config: PathBuf,
-    /// Path to the keystore YAML file
-    #[arg(long, default_value = "keystore.yaml")]
-    pub keystore: PathBuf,
     /// Output directory for `participation_data.yaml`
     #[arg(long, default_value = ".")]
     pub output: PathBuf,
@@ -439,6 +294,7 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
     update_sdp(&mut user_config.sdp, sdp_args);
     update_api(&mut user_config.api, api_args);
     update_state(&mut user_config.state, state_args);
+    apply_default_log_filter(&mut user_config.tracing);
 
     let deployment_settings = match deployment_args.custom_deployment_path {
         None => DeploymentSettings::default(),

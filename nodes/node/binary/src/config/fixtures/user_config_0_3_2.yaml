@@ -1,0 +1,256 @@
+network:
+  backend:
+    swarm:
+      host: 0.0.0.0
+      port: 3000
+      node_key: 900d4945048ab83b72b4aef57605ba85d1a9f106f0b0765e323f097a8dde5753
+      gossipsub:
+        history_length: 5
+        history_gossip: 3
+        mesh_n: 6
+        mesh_n_low: 5
+        mesh_n_high: 12
+        retain_scores: 4
+        gossip_lazy: 6
+        gossip_factor: 0.25
+        heartbeat_initial_delay:
+          secs: 5
+          nanos: 0
+        heartbeat_interval:
+          secs: 1
+          nanos: 0
+        fanout_ttl:
+          secs: 60
+          nanos: 0
+        check_explicit_peers_ticks: 300
+        duplicate_cache_time:
+          secs: 86400
+          nanos: 0
+        validate_messages: false
+        allow_self_origin: false
+        do_px: false
+        prune_peers: 0
+        prune_backoff:
+          secs: 60
+          nanos: 0
+        unsubscribe_backoff:
+          secs: 10
+          nanos: 0
+        backoff_slack: 1
+        flood_publish: true
+        graft_flood_threshold:
+          secs: 10
+          nanos: 0
+        mesh_outbound_min: 2
+        opportunistic_graft_ticks: 60
+        opportunistic_graft_peers: 2
+        gossip_retransimission: 3
+        max_messages_per_rpc: null
+        max_ihave_length: 5000
+        max_ihave_messages: 10
+        iwant_followup_time:
+          secs: 3
+          nanos: 0
+        published_message_ids_cache_time:
+          secs: 10
+          nanos: 0
+      kademlia:
+        query_timeout_secs: null
+        replication_factor: null
+        parallelism: null
+        disjoint_query_paths: null
+        max_packet_size: null
+        kbucket_inserts: null
+        caching: null
+        periodic_bootstrap_interval_secs: null
+      identify:
+        agent_version: null
+        interval_secs: null
+        push_listen_addr_updates: null
+        cache_size: null
+        hide_listen_addrs: true
+      chain_sync:
+        peer_response_timeout: 5000
+        max_inbound_requests: 10
+        inbound_download_stream_timeout: 120000
+      nat:
+        type: traversal
+        autonat:
+          max_candidates: null
+          probe_interval_millisecs: null
+          retest_successful_external_addresses_interval:
+            secs: 60
+            nanos: 0
+        mapping:
+          timeout: '1.000000000'
+          lease_duration:
+            secs: 7200
+            nanos: 0
+          max_retries: 3
+          renewal_delay_fraction: 0.8
+          retry_interval:
+            secs: 30
+            nanos: 0
+        gateway_monitor:
+          check_interval:
+            secs: 300
+            nanos: 0
+    initial_peers: []
+blend:
+  non_ephemeral_signing_key_id: b67fbe343920d4801c37f22752044fb8cf94f8d63f181a907a4bde8cf7bba01d
+  core:
+    backend:
+      listening_address: /ip4/0.0.0.0/udp/3400/quic-v1
+      max_dial_attempts_per_peer: 3
+      peering_degree_check_interval: '60.000000000'
+    zk:
+      secret_key_kms_id: 245ecdf5b2dea4d44d2550d0d4059ef70441ded560ad2fdad8e636ed7ebb8510
+  edge:
+    backend:
+      max_dial_attempts_per_peer_per_message: 1
+      replication_factor: 1
+  abstain_on_failure: false
+cryptarchia:
+  service:
+    bootstrap:
+      prolonged_bootstrap_period: '3600.000000000'
+      force_bootstrap: false
+      offline_grace_period:
+        grace_period: '1200.000000000'
+        state_recording_interval: '60.000000000'
+    sync:
+      block_provider:
+        batch_size: 1000
+  network:
+    bootstrap:
+      ibd:
+        peers: []
+        delay_before_new_download:
+          secs: 10
+          nanos: 0
+        tips_fetch_max_attempts: 3
+        tips_fetch_min_delay:
+          secs: 0
+          nanos: 250000000
+        tips_fetch_max_delay:
+          secs: 1
+          nanos: 0
+        round_delay:
+          secs: 1
+          nanos: 0
+    sync:
+      orphan:
+        max_orphan_cache_size: 1000
+        max_rejected_cache_size: 1000
+      tip_poll:
+        enabled: true
+        lag_threshold_blocks: 3
+        max_peers_to_sample: 5
+    network:
+      max_connected_peers_to_try_download: 16
+      max_discovered_peers_to_try_download: 16
+    seen_items_subscription_channel_size: 64
+  leader:
+    wallet:
+      max_tx_fee: 18446744073709551615
+      funding_pk: 49110ee21bc74e4f96eece001b697c50941bf134a402f30a5bdca019e5d64417
+time:
+  backend:
+    server: pool.ntp.org:123
+    client:
+      timeout: '5.000000000'
+      listening_interface: 0.0.0.0
+    update_interval: '15.000000000'
+sdp:
+  declaration: null
+  wallet:
+    max_tx_fee: 18446744073709551615
+    funding_pk: ee5e6c8c2d97b48d143d0fa8360ed0db7c7860aaa8ca71126945abeefb76e207
+  active_message_tracker:
+    status_check_interval_in_tip_changes: 3
+api:
+  backend:
+    listen_address: 127.0.0.1:8080
+    cors_origins: []
+    timeout: 30
+    max_body_size: 10485760
+    max_concurrent_requests: 500
+storage:
+  backend:
+    folder_name: ./db
+    read_only: false
+    column_family: blocks
+kms:
+  backend:
+    keys:
+      49110ee21bc74e4f96eece001b697c50941bf134a402f30a5bdca019e5d64417: !Zk 41901ecd6ca98e5c6e49dd0bb0f4667b48cc0635188926eaf37194a57190041f
+      245ecdf5b2dea4d44d2550d0d4059ef70441ded560ad2fdad8e636ed7ebb8510: !Zk b16f64717670c735e7bc926386e04670eae914a76569b27a9836d17972ba5e21
+      5a28a06daa1320faddef1be9429f550d7bebce09b96cc19a4943600b839b5619: !Zk 9d194fbb912621dcce605a349c1dd4174409e8c3ff2f972b43ed1c09c66c9616
+      9e2f52f2aa9226e1aa6e4dddd72cc28ec0ab86b9d50b73a563db97e378857e2b: !Zk 848fa529600f6871a4f2b3502d5aa75f4a8d1d05ed43f9480a31622cf796fd02
+      ee5e6c8c2d97b48d143d0fa8360ed0db7c7860aaa8ca71126945abeefb76e207: !Zk 42854c3b6e02de5f05b3db2546c9da6f233200124c31f836002e662ec2ae632f
+      f6cff8614b3014aa4b36e2ad41f64018cad9157a626386f8b05d614305c89829: !Zk bd9cae6f248ffcd3dcf57c02b4036abd289d05a1b5712fa504c1461f97cd982b
+      a4561216a3ef94c68b923df116b08c04931db1dd6d8654deb747f660a0883f5b: !Ed25519 900d4945048ab83b72b4aef57605ba85d1a9f106f0b0765e323f097a8dde5753
+      b67fbe343920d4801c37f22752044fb8cf94f8d63f181a907a4bde8cf7bba01d: !Ed25519 3c4552d7026abb16caaa327773eb124b5d60954f074b5ccc9b5321f793d292fa
+mempool:
+  tx_ttl: '32400.000000000'
+  seen_items_subscription_channel_size: 64
+  pow_claim_grace_slots: 0
+wallet:
+  known_keys:
+    5a28a06daa1320faddef1be9429f550d7bebce09b96cc19a4943600b839b5619: 5a28a06daa1320faddef1be9429f550d7bebce09b96cc19a4943600b839b5619
+    49110ee21bc74e4f96eece001b697c50941bf134a402f30a5bdca019e5d64417: 49110ee21bc74e4f96eece001b697c50941bf134a402f30a5bdca019e5d64417
+    f6cff8614b3014aa4b36e2ad41f64018cad9157a626386f8b05d614305c89829: f6cff8614b3014aa4b36e2ad41f64018cad9157a626386f8b05d614305c89829
+    ee5e6c8c2d97b48d143d0fa8360ed0db7c7860aaa8ca71126945abeefb76e207: ee5e6c8c2d97b48d143d0fa8360ed0db7c7860aaa8ca71126945abeefb76e207
+    245ecdf5b2dea4d44d2550d0d4059ef70441ded560ad2fdad8e636ed7ebb8510: 245ecdf5b2dea4d44d2550d0d4059ef70441ded560ad2fdad8e636ed7ebb8510
+    9e2f52f2aa9226e1aa6e4dddd72cc28ec0ab86b9d50b73a563db97e378857e2b: 9e2f52f2aa9226e1aa6e4dddd72cc28ec0ab86b9d50b73a563db97e378857e2b
+  voucher_master_key_id: f6cff8614b3014aa4b36e2ad41f64018cad9157a626386f8b05d614305c89829
+  pending_note_expiry_blocks: 10
+pow:
+  mining:
+    max_threads: 1
+    max_tickets_per_block: 1
+  auto_claim:
+    targets:
+    - public_key: 9e2f52f2aa9226e1aa6e4dddd72cc28ec0ab86b9d50b73a563db97e378857e2b
+      threshold: 2000000000
+    tick:
+      unit: seconds
+      value: 10
+tracing:
+  logger:
+    file:
+      directory: .
+      prefix: logos-blockchain
+      appender_type: !Rolling
+        rotation: Hourly
+        retention: !MaxFiles
+          max_files: 10
+        compression: None
+    loki: null
+    gelf: null
+    otlp: null
+    format: !Text Ansi
+    stdout: true
+    stderr: false
+  tracing: None
+  filter: !Env
+    filters:
+      tower: WARN
+      rustls: WARN
+      tonic: WARN
+      h2: WARN
+      opentelemetry: WARN
+      opentelemetry_sdk: WARN
+      reqwest: WARN
+      libp2p_gossipsub: ERROR
+      logos_blockchain: INFO
+      hyper_util: WARN
+      '*': WARN
+      hyper: WARN
+  metrics:
+    otlp: null
+    enable_open_metrics: false
+  console: None
+  level: INFO
+state:
+  base_folder: ./state

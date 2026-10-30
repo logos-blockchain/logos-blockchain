@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use lb_core::header::HeaderId;
+use lb_core::{header::HeaderId, mantle::TxHash};
 
 use crate::common::wallet::WalletUtxos;
 
@@ -25,6 +25,19 @@ pub struct ScannerStateCheckpoint {
     pub slot: u64,
     /// Wallet UTXOs as observed through this checkpoint's tip.
     pub wallet_utxos: WalletUtxos,
+}
+
+#[derive(Debug, Clone)]
+/// Transaction summary for one block on the scanner's currently applied chain.
+pub struct ScannerBlockObservation {
+    /// Scanner-applied synthetic height of this block.
+    pub height: u64,
+    /// Identifier of this block on the scanner's currently applied chain.
+    pub block_id: HeaderId,
+    /// Number of transactions in the block.
+    pub transaction_count: usize,
+    /// Transaction hashes included in the block.
+    pub transaction_hashes: Vec<TxHash>,
 }
 
 #[derive(Debug, Default)]
@@ -65,6 +78,8 @@ pub struct ForkGroupScannerState {
     pub wallet_count: usize,
     /// Recent scanner-applied checkpoints, newest first.
     pub recent_checkpoints: Vec<ScannerStateCheckpoint>,
+    /// Recent blocks on the scanner's currently applied chain, oldest first.
+    pub recent_blocks: Vec<ScannerBlockObservation>,
 }
 
 impl ForkGroupScannerState {
@@ -86,6 +101,7 @@ impl ForkGroupScannerState {
             observed_tx_hashes: 0,
             wallet_count,
             recent_checkpoints: Vec::new(),
+            recent_blocks: Vec::new(),
         }
     }
 }

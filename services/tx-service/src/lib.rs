@@ -12,6 +12,7 @@ use std::{
 use backend::{MempoolError, Status};
 use futures::Stream;
 use lb_core::mantle::transactions::hash::PrefixedKey;
+use lb_cryptarchia_engine::Slot;
 use tokio::sync::{broadcast, oneshot::Sender};
 pub use tx::{service::TxMempoolService, settings::TxMempoolSettings};
 
@@ -41,6 +42,11 @@ where
     },
     Remove {
         ids: Vec<Key>,
+    },
+    /// The chain processed `block_id` at `slot`.
+    ProcessedBlock {
+        block_id: BlockId,
+        slot: Slot,
     },
     Metrics {
         reply_channel: Sender<MempoolMetrics>,
@@ -74,6 +80,10 @@ where
             }
             Self::Add { payload, .. } => write!(f, "MempoolMsg::Add{{payload: {payload:?}}}"),
             Self::Remove { ids } => write!(f, "MempoolMsg::Prune{{ids: {ids:?}}}"),
+            Self::ProcessedBlock { block_id, slot } => write!(
+                f,
+                "MempoolMsg::ProcessedBlock{{block_id: {block_id:?}, slot: {slot:?}}}"
+            ),
             Self::Metrics { .. } => write!(f, "MempoolMsg::Metrics"),
             Self::Status { items, .. } => write!(f, "MempoolMsg::Status{{items: {items:?}}}"),
             Self::SubscribeToAccepted { .. } => write!(f, "MempoolMsg::SubscribeToAccepted"),

@@ -15,7 +15,6 @@ use std::{
     collections::{BTreeMap, HashMap},
     fmt::Display,
     pin::Pin,
-    time::Duration,
 };
 
 use educe::Educe;
@@ -118,8 +117,8 @@ pub enum Error {
     AwaitingGenesisTime,
     #[error("Invalid uncle {uncle}: {reason}")]
     InvalidUncle { uncle: HeaderId, reason: UncleError },
-    #[error("Batch ZKP verification error: {0}")]
-    BatchZkpVerification(#[from] lb_core::mantle::batch::Error),
+    #[error("Batch deferred proof verification error: {0}")]
+    BatchDeferredProofVerification(#[from] lb_core::mantle::batch::Error),
 }
 
 struct InitializedCryptarchia {
@@ -183,9 +182,22 @@ pub enum Query {
         block_id: HeaderId,
         reply_channel: oneshot::Sender<Option<LedgerState>>,
     },
+    GetLedgerConfig {
+        reply_channel: oneshot::Sender<lb_ledger::Config>,
+    },
     /// Returns all declarations in the current SDP registry, not snapshot
     GetSdpDeclarations {
         reply_channel: oneshot::Sender<HashMap<DeclarationId, Declaration>>,
+    },
+    /// Returns one declaration from the finalized registry (the LIB state).
+    GetFinalizedSdpDeclaration {
+        declaration_id: DeclarationId,
+        reply_channel: oneshot::Sender<Option<Declaration>>,
+    },
+    /// Returns every declaration for one service from the finalized registry.
+    GetFinalizedSdpDeclarations {
+        service_type: lb_core::sdp::ServiceType,
+        reply_channel: oneshot::Sender<Option<HashMap<DeclarationId, Declaration>>>,
     },
     /// Returns the frozen SDP snapshot for the current epoch
     GetSdpSnapshot {
@@ -475,16 +487,16 @@ impl Cryptarchia {
             return Err(Error::AlreadyApplied(id));
         }
 
-        // Reject blocks from future slots
-        if slot > current_slot {
-            return Err(Error::FutureBlock {
-                block_slot: slot,
-                current_slot,
-            });
-        }
-
-        // A block is valid only if every uncle it carries is valid.
         if origin == BlockOrigin::Network {
+            // Reject blocks from future slots
+            if slot > current_slot {
+                return Err(Error::FutureBlock {
+                    block_slot: slot,
+                    current_slot,
+                });
+            }
+
+            // A block is valid only if every uncle it carries is valid.
             self.verify_uncles(&block)?;
         }
 
@@ -738,7 +750,7 @@ where
 
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             BlockBroadcastService<_>,
             StorageService<_>,
             TimeService<_, _>
@@ -1149,5 +1161,9 @@ pub enum BlockOrigin {
     /// The uncle validity rules are skipped for it, since the parent of an
     /// uncle may be older than LIB, and blocks older than LIB are not
     /// recovered.
+    ///
+    /// The future-slot check is also skipped, since the current slot returned
+    /// from the time service may be behind the slot at which the block was
+    /// accepted (e.g., before the time service calibrates the clock with NTP).
     Storage,
 }

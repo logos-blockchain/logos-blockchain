@@ -1,4 +1,3 @@
-use axum::async_trait;
 use lb_blend::{
     message::crypto::key_ext::Ed25519SecretKeyExt as _,
     proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
@@ -60,7 +59,7 @@ pub type BlendCoreService<RuntimeServiceId> = lb_blend_service::core::BlendServi
 #[derive(Clone)]
 pub struct MockLeaderProofsGenerator;
 
-#[async_trait]
+#[async_trait::async_trait]
 impl LeaderProofsGenerator for MockLeaderProofsGenerator {
     fn new(
         _settings: ProofsGeneratorSettings,

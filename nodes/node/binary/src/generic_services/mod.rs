@@ -36,7 +36,6 @@ pub type MempoolRocksStorageAdapter = RocksStorageAdapter<
 pub type MempoolPool<RuntimeServiceId> = Mempool<
     HeaderId,
     SignedOps<Preverified, StandardMode>,
-    TxHash,
     MempoolRocksStorageAdapter,
     RuntimeServiceId,
 >;
@@ -60,7 +59,6 @@ pub type MempoolAdapter<RuntimeServiceId> = lb_tx_service::network::adapters::li
 pub type MempoolBackend<RuntimeServiceId> = Mempool<
     HeaderId,
     SignedOps<Preverified, StandardMode>,
-    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
     RocksStorageAdapter<
         SignedOps<Preverified, StandardMode>,
         <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
@@ -111,7 +109,6 @@ pub type SdpMempoolAdapter<RuntimeServiceId> = sdp::mempool::SdpMempoolAdapter<
     Mempool<
         HeaderId,
         SignedOps<Preverified, StandardMode>,
-        TxHash,
         RocksStorageAdapter<
             SignedOps<Preverified, StandardMode>,
             <SignedOps<Preverified, StandardMode> as Hashable>::Hash,

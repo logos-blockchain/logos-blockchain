@@ -15,7 +15,6 @@ use crate::{
     crypto::{Hash, ZkHasher},
     events::TxEvent,
     mantle::{
-        batch::DeferredZkpVerification,
         channel::Channels,
         ledger::verification_mode::VerificationMode,
         ops::{OpId, channel::ChannelId},
@@ -64,13 +63,20 @@ pub trait PreverifiableOperation<Mode: VerificationMode> {
 }
 
 pub trait VerifiableOperation<Mode: VerificationMode> {
+    /// The proof [`verify`](Self::verify) hands off for batch verification, or
+    /// `()` if there is none.
+    ///
+    /// Unbounded on purpose:
+    /// [`SignedOperation`](crate::mantle::ops::SignedOperation) only provides
+    /// [`into_verified`](crate::mantle::ops::SignedOperation::into_verified)
+    /// for `()` and
+    /// [`into_verified_deferred`](crate::mantle::ops::SignedOperation::into_verified_deferred) for
+    /// [`DeferrableProof`](crate::mantle::batch::DeferrableProof) types.
+    type DeferredProof;
     type Context<'a>;
     type Error;
 
-    fn verify(
-        &self,
-        context: &Self::Context<'_>,
-    ) -> Result<Option<DeferredZkpVerification>, Self::Error>;
+    fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error>;
 }
 
 pub trait ExecutableOperation {

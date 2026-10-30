@@ -1,9 +1,12 @@
-use lb_core::mantle::ops::OpId as _;
+use lb_core::mantle::{
+    ledger::NoteId,
+    ops::{OpId as _, OpRef},
+};
 
 use super::{
     CONCURRENT_DUPLICATE_SETTLE_SECS, CucumberWorld, DEFAULT_ZONE_SEQUENCER, Duration, HashMap,
     HashSet, Inscription, Step, StepError, StepResult, assert_sorted_outcome,
-    collect_indexed_messages, collect_indexed_messages_exactly_once,
+    collect_indexed_messages, collect_indexed_messages_exactly_once, ensure_zone_message_included,
     ensure_zone_transactions_included, log_step_error, make_inscription, parse_balance_payload,
     pin_payload, replay_finalized_history, scan_indexer_for_payloads, single_column_table,
     wait_for_channel_transfer_input_count, wait_for_channel_wallet_counts,
@@ -189,6 +192,46 @@ async fn step_zone_transaction_is_included(
     ensure_zone_transactions_included(&node, &[tx_hash], Duration::from_secs(timeout_seconds))
         .await
         .map_err(|error| zone_step_error(step, &error))
+}
+
+/// The message is mined on the named node's tip chain, under whatever tx
+/// hash carries it. Use it where a scenario needs the inscription in a block
+/// before the next step acts, instead of a height wait that may already be
+/// satisfied.
+#[cucumber::when(
+    expr = "zone message {string} from sequencer {string} is included on node {string} in {int} seconds"
+)]
+#[cucumber::then(
+    expr = "zone message {string} from sequencer {string} is included on node {string} in {int} seconds"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_zone_message_is_included_on_node(
+    world: &mut CucumberWorld,
+    step: &Step,
+    message_alias: String,
+    sequencer_alias: String,
+    node_name: String,
+    timeout_seconds: u64,
+) -> StepResult {
+    let msg_id = log_step_error(step, world.zone.published_message(&message_alias))?
+        .msg_id
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Zone message '{message_alias}' has no tracked message id"),
+        })?;
+    let channel_id = world.zone.sequencer_channel_id(&sequencer_alias)?;
+    let node = world.resolve_node_http_client(&node_name)?;
+
+    ensure_zone_message_included(
+        &node,
+        channel_id,
+        msg_id,
+        Duration::from_secs(timeout_seconds),
+    )
+    .await
+    .map_err(|error| zone_step_error(step, &error))
 }
 
 #[cucumber::then(expr = "zone transaction {string} is finalized in {int} seconds")]
@@ -474,6 +517,100 @@ async fn step_zone_message_finalized_under_a_rebuilt_tx(
                 "Zone message '{message_alias}' finalized as the tx it was submitted with; nothing was re-funded"
             ),
         });
+    }
+    Ok(())
+}
+
+/// Messages whose checkpointed txs spend a common fee note: at most one of
+/// them finalizes as submitted, every other one under a rebuilt tx hash.
+/// Messages sharing no note have nothing to re-fund and pass.
+#[cucumber::then(
+    expr = "zone messages double-handed in checkpoint {string} finalized with the losers re-funded:"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_double_handed_messages_are_refunded(
+    world: &mut CucumberWorld,
+    step: &Step,
+    checkpoint_alias: String,
+) -> StepResult {
+    let aliases = single_column_table(step, "alias", "zone message aliases")?;
+    let checkpoint = log_step_error(step, world.zone.resolve_checkpoint(&checkpoint_alias))?;
+    let mut messages = Vec::new();
+    for alias in aliases {
+        let message = log_step_error(step, world.zone.published_message(&alias))?;
+        let submitted = message
+            .inscription_id
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!("Zone message '{alias}' has no submitted tx hash"),
+            })?;
+        let fee_notes: HashSet<NoteId> = checkpoint
+            .pending_txs
+            .iter()
+            .filter(|(hash, _)| *hash == submitted)
+            .flat_map(|(_, tx)| tx.op_refs())
+            .filter_map(|op| match op {
+                OpRef::Transfer(transfer) => Some(transfer.inputs.iter().copied()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        messages.push((alias, submitted, message.payload.clone(), fee_notes));
+    }
+
+    let reader = log_step_error(step, world.zone.indexer())?;
+    let history = replay_finalized_history(reader)
+        .await
+        .map_err(|error| zone_step_error(step, &error))?;
+    let finalized_as = |payload: &Inscription| {
+        history
+            .iter()
+            .filter(|tx| {
+                tx.ops.iter().any(|op| {
+                    matches!(op, lb_zone_sdk::sequencer::FinalizedOp::Inscription(info) if info.payload == *payload)
+                })
+            })
+            .map(|tx| tx.tx_hash)
+            .collect::<Vec<_>>()
+    };
+
+    for (index, (alias, submitted, payload, fee_notes)) in messages.iter().enumerate() {
+        let rivals: Vec<&str> = messages
+            .iter()
+            .enumerate()
+            .filter(|(other, (_, _, _, notes))| *other != index && !notes.is_disjoint(fee_notes))
+            .map(|(_, (alias, ..))| alias.as_str())
+            .collect();
+        if rivals.is_empty() {
+            continue;
+        }
+        let finalized = finalized_as(payload);
+        if finalized.is_empty() {
+            return Err(StepError::LogicalError {
+                message: format!(
+                    "Zone message '{alias}' shares a fee note with {rivals:?} and is not finalized"
+                ),
+            });
+        }
+        if finalized.contains(submitted) {
+            let other_winner = messages
+                .iter()
+                .filter(|(other, other_submitted, other_payload, _)| {
+                    rivals.contains(&other.as_str())
+                        && finalized_as(other_payload).contains(other_submitted)
+                })
+                .map(|(other, ..)| other.as_str())
+                .next();
+            if let Some(other) = other_winner {
+                return Err(StepError::LogicalError {
+                    message: format!(
+                        "Zone messages '{alias}' and '{other}' both finalized as submitted while spending the same fee note"
+                    ),
+                });
+            }
+        }
     }
     Ok(())
 }

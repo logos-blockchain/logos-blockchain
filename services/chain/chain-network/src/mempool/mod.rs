@@ -1,5 +1,9 @@
 use async_trait::async_trait;
-use lb_core::mantle::transactions::hash::{TxHash, TxHashPrefix};
+use lb_core::{
+    header::HeaderId,
+    mantle::transactions::hash::{TxHash, TxHashPrefix},
+};
+use lb_cryptarchia_engine::Slot;
 use lb_tx_service::TxsWithCommonPrefix;
 
 pub mod adapter;
@@ -9,6 +13,14 @@ pub trait MempoolAdapter<Tx>: Send + Sync {
     async fn add_transaction(&self, tx: Tx) -> Result<(), overwatch::DynError>;
 
     async fn remove_transactions(&self, ids: &[TxHash]) -> Result<(), overwatch::DynError>;
+
+    /// Tell the mempool that `block_id`, at `slot`, has been processed. The
+    /// mempool has no other notion of chain time.
+    async fn notify_processed_block(
+        &self,
+        block_id: HeaderId,
+        slot: Slot,
+    ) -> Result<(), overwatch::DynError>;
 
     /// The local transactions a single proposal reference could mean.
     ///

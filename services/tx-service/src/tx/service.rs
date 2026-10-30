@@ -8,7 +8,6 @@ use std::{
     fmt::{Debug, Display},
     marker::PhantomData,
     pin::Pin,
-    time::Duration,
 };
 
 use futures::StreamExt as _;
@@ -246,7 +245,7 @@ where
 
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             NetworkService<_, _>
         )
         .await?;
@@ -358,6 +357,11 @@ where
             }
             MempoolMsg::Remove { ids } => {
                 pool.remove(&ids).await;
+                state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
+            }
+            MempoolMsg::ProcessedBlock { block_id, slot } => {
+                pool.on_processed_block(block_id, slot).await;
+                state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
             }
             MempoolMsg::Metrics { reply_channel } => {
                 Self::handle_metrics_message(pool, reply_channel);
@@ -411,8 +415,9 @@ where
                 );
             }
             Err(MempoolError::ExistingItem) => {
-                // Tx already in pool, but since this came from a local submission
-                // (not gossip), re-gossip it so leader nodes can pick it up.
+                // Tx already in pool, but since this came from a local
+                // submission (not gossip), re-gossip it so
+                // leader nodes can pick it up.
                 Self::notify_about_accepted_item(accepted_items_channel_sender, item.clone());
                 spawn("logos/mempool/transaction-regossip", async move {
                     let adapter = NetworkAdapter::new(settings, network_relay).await;
@@ -577,6 +582,12 @@ where
                 tracing::trace!(
                     target: LOG_TARGET,
                     "network item already exists in the mempool"
+                );
+            }
+            MempoolError::Expired => {
+                tracing::trace!(
+                    target: LOG_TARGET,
+                    "network item can no longer be included in a block"
                 );
             }
             err => {

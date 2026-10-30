@@ -29,6 +29,7 @@ educe                            = { features = ["Default"], workspace = true }
 futures                          = { workspace = true }
 futures-util                     = { workspace = true }
 hex                              = { workspace = true }
+humantime                        = { workspace = true }
 lb-api-service                   = { workspace = true }
 lb-binary-codec                  = { workspace = true }
 lb-chain-service                 = { workspace = true }

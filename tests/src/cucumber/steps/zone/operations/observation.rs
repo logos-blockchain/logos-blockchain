@@ -519,6 +519,50 @@ pub async fn ensure_zone_transactions_included(
     Err(ZoneTestError::InclusionTimeout)
 }
 
+/// Waits until the inscription with `msg_id` sits on `client`'s tip chain,
+/// under whatever tx hash: a stale refund rebuilds a message under a new hash
+/// but keeps its id, so inclusion is a property of the message.
+pub async fn ensure_zone_message_included(
+    client: &NodeHttpClient,
+    channel_id: ChannelId,
+    msg_id: MsgId,
+    duration: Duration,
+) -> Result<(), ZoneTestError> {
+    timeout(duration, async {
+        loop {
+            let consensus =
+                client
+                    .consensus_info()
+                    .await
+                    .map_err(|error| ZoneTestError::Consensus {
+                        message: error.to_string(),
+                    })?;
+            let mut scanned = HashSet::new();
+            let found = scan_chain_until(
+                consensus.cryptarchia_info.tip,
+                &mut scanned,
+                async |header_id| client.block(&header_id).await.ok().flatten(),
+                |block: &ApiBlock| {
+                    block
+                        .transactions
+                        .iter()
+                        .flat_map(|tx| channel_inscriptions(tx, channel_id))
+                        .any(|info| info.this_msg == msg_id)
+                        .then_some(())
+                },
+            )
+            .await
+            .is_some();
+            if found {
+                return Ok(());
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .map_err(|_| ZoneTestError::InclusionTimeout)?
+}
+
 /// Walks back from LIB until every expected zone transaction is found in the
 /// finalized chain.
 pub async fn wait_for_transactions_finalized(

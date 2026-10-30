@@ -129,5 +129,6 @@ fn build_kms_config_for_node(
             ]
             .into(),
         },
+        ..KmsConfig::default()
     }
 }
