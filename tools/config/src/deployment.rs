@@ -1,9 +1,6 @@
 use core::num::{NonZero, NonZeroU32, NonZeroU64, NonZeroU128};
 
-use lb_core::{
-    block::genesis::GenesisBlock,
-    sdp::{NumberOfEpochs, ServiceType},
-};
+use lb_core::{block::genesis::GenesisBlock, sdp::NumberOfEpochs};
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::ModulusShift;
 use lb_node::config::deployment::{
@@ -38,7 +35,6 @@ const BLEND_COVER_MESSAGES_PER_OBSERVATION_WINDOW: u64 = 90;
 const BLEND_VERIFICATION_RATE_PER_SECOND: u32 = 156;
 /// `η`: the rounds a message spends crossing the network at one hop.
 const BLEND_NETWORK_ABSORPTION_IN_ROUNDS: u64 = 2;
-const BLEND_PEERING_DEGREE: NonZeroU32 = NonZeroU32::new(4).unwrap();
 const MINIMUM_BLEND_NETWORK_SIZE: u64 = 2;
 const NUM_BLEND_LAYERS: u64 = 3;
 const DATA_REPLICATION_FACTOR: u64 = 0;
@@ -105,7 +101,6 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     data_replication_factor: DATA_REPLICATION_FACTOR,
                 },
                 core: BlendCoreSettings {
-                    target_peering_degree: BLEND_PEERING_DEGREE,
                     verification_rate_per_second: NonZeroU32::try_from(
                         BLEND_VERIFICATION_RATE_PER_SECOND,
                     )
@@ -145,7 +140,9 @@ pub fn e2e_deployment_settings_with_genesis_block(
                 slot_activation_coeff: NonNegativeRatio::new(
                     SLOT_ACTIVATION_COEFF_NUMERATOR,
                     NonZero::new(SLOT_ACTIVATION_COEFF_DENOMINATOR).unwrap(),
-                ),
+                )
+                .try_into()
+                .expect("The e2e slot activation coefficient is valid."),
                 epoch_config: EpochConfig {
                     epoch_stake_distribution_stabilization: NonZero::new(
                         EPOCH_STAKE_DISTRIBUTION_STABILIZATION,
@@ -158,14 +155,10 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     .unwrap(),
                 },
                 sdp_config: v1::cryptarchia::SdpConfig {
-                    service_params: (
-                        ServiceType::BlendNetwork,
-                        ServiceParameters {
-                            inactivity_period: SDP_INACTIVITY_PERIOD.try_into().unwrap(),
-                            epoch: SDP_EPOCH,
-                        },
-                    )
-                        .into(),
+                    service_params: [ServiceParameters {
+                        inactivity_period: SDP_INACTIVITY_PERIOD.try_into().unwrap(),
+                        epoch: SDP_EPOCH,
+                    }],
                     min_stake: lb_core::sdp::MinStake {
                         threshold: MIN_STAKE_THRESHOLD,
                         timestamp: MIN_STAKE_TIMESTAMP,

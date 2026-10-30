@@ -202,7 +202,10 @@ impl TopologyConfig {
         settings.update_genesis_era_parameters(|parameters| {
             let cryptarchia = &mut parameters.cryptarchia;
             cryptarchia.security_param = self.security_param;
-            cryptarchia.slot_activation_coeff = self.active_slot_coeff;
+            cryptarchia.slot_activation_coeff = self
+                .active_slot_coeff
+                .try_into()
+                .expect("The topology's slot activation coefficient must be valid.");
             // A lower `k` narrows the widest uncle reference window the era
             // allows.
             cryptarchia.uncle_reference_window_in_block = cryptarchia

@@ -71,7 +71,7 @@ impl ServiceConfig {
             era_schedule: eras.map(|era| {
                 let EraRuleset::V1(parameters) = &era.parameters.ruleset;
                 lb_chain_network_service::ChainNetworkEraSettings {
-                    slot_activation_coeff: parameters.cryptarchia.slot_activation_coeff,
+                    slot_activation_coeff: parameters.cryptarchia.slot_activation_coeff.get(),
                 }
             }),
         }
@@ -150,11 +150,10 @@ fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
             service_params: Arc::new(
                 deployment
                     .sdp_config
-                    .service_params
-                    .iter()
+                    .service_params_by_type()
                     .map(|(service_type, service_params)| {
                         (
-                            *service_type,
+                            service_type,
                             ServiceParameters {
                                 inactivity_period: service_params.inactivity_period,
                                 epoch: service_params.epoch,

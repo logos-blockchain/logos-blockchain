@@ -1,6 +1,8 @@
-use core::num::{NonZero, NonZeroU32, NonZeroU64};
+use core::{
+    num::{NonZero, NonZeroU32, NonZeroU64},
+    ops::Deref,
+};
 
-use lb_binary_codec::canonical::BTreeMap;
 use lb_chain_service::Epoch;
 use lb_core::sdp::{InactivityPeriod, MinStake, ServiceType};
 use lb_cryptarchia_engine::{
@@ -11,7 +13,7 @@ use lb_groth16::ModulusShift;
 use lb_ledger::cryptarchia::STAKE_INFERENCE_PRECISION;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 use serde::{Deserialize, Serialize};
-use strum::IntoEnumIterator as _;
+use strum::{EnumCount as _, IntoEnumIterator as _};
 
 pub(crate) mod codec;
 
@@ -19,7 +21,7 @@ pub(crate) mod codec;
 pub struct Settings {
     pub epoch_config: EpochConfig,
     pub security_param: NonZeroU32,
-    pub slot_activation_coeff: NonNegativeRatio,
+    pub slot_activation_coeff: SlotActivationCoeff,
     pub learning_rate: NonNegativeF64,
     /// `W`, the uncle reference window in expected block-intervals.
     pub uncle_reference_window_in_block: u32,
@@ -32,21 +34,6 @@ impl Settings {
     /// the era before it, `previous`, if there is one, panicking on the first
     /// value found invalid.
     pub(super) fn validate(&self, previous: Option<&Self>) {
-        let NonNegativeRatio {
-            numerator,
-            denominator,
-        } = self.slot_activation_coeff;
-        // Below 1, the lottery's `ln(1 - f)` is finite. At least the inverse of
-        // the precision, the expected density the total stake inference
-        // divides by is not zero.
-        assert!(
-            numerator < denominator.get()
-                && (self.slot_activation_coeff.as_f64() * STAKE_INFERENCE_PRECISION as f64).trunc()
-                    >= 1.0,
-            "The slot activation coefficient {numerator}/{denominator} must be below 1, and at \
-             least 1/{STAKE_INFERENCE_PRECISION}, the precision the total stake inference \
-             measures it with."
-        );
         // Panics if `⌊k/4f⌋` leaves the Genesis density window no slot: now
         // rather than at the first fork choice.
         let _ = self.consensus_config().s_gen();
@@ -82,14 +69,6 @@ impl Settings {
             .reward
             .validate()
             .unwrap_or_else(|error| panic!("Invalid PoW reward parameters: {error}."));
-
-        for service_type in ServiceType::iter() {
-            assert!(
-                self.sdp_config.service_params.contains_key(&service_type),
-                "The SDP service parameters must include those of service type {}.",
-                AsRef::<str>::as_ref(&service_type)
-            );
-        }
     }
 
     /// `⌊0.6k⌋`: the widest uncle reference window `W` the era allows, in
@@ -107,7 +86,7 @@ impl Settings {
         let NonNegativeRatio {
             numerator,
             denominator,
-        } = self.slot_activation_coeff;
+        } = self.slot_activation_coeff.get();
         let widest = u128::from(previous.finalization_window()) * u128::from(numerator)
             / (5 * u128::from(denominator.get()));
         u32::try_from(widest).unwrap_or(u32::MAX)
@@ -115,7 +94,7 @@ impl Settings {
 
     /// `s = 3⌊k/f⌋`: the slots a block takes to become immutable.
     const fn finalization_window(&self) -> u64 {
-        base_period_length(self.security_param, self.slot_activation_coeff)
+        base_period_length(self.security_param, self.slot_activation_coeff.get())
             .get()
             .saturating_mul(3)
     }
@@ -126,7 +105,7 @@ impl Settings {
             self.epoch_config.epoch_stake_distribution_stabilization,
             self.epoch_config.epoch_period_nonce_buffer,
             self.epoch_config.epoch_period_nonce_stabilization,
-            base_period_length(self.security_param, self.slot_activation_coeff),
+            base_period_length(self.security_param, self.slot_activation_coeff.get()),
         )
     }
 
@@ -134,7 +113,7 @@ impl Settings {
     pub const fn average_slots_per_block(&self) -> u64 {
         average_slots_for_blocks(
             NonZero::<u32>::new(1).expect("must be non-zero"),
-            self.slot_activation_coeff,
+            self.slot_activation_coeff.get(),
         )
         .get()
     }
@@ -144,17 +123,69 @@ impl Settings {
     /// denominated in it — see `lb_ledger::config::Config`.
     #[must_use]
     pub const fn expected_blocks_per_epoch(&self) -> NonZeroU64 {
-        expected_blocks_per_epoch(self.slots_per_epoch(), self.slot_activation_coeff)
+        expected_blocks_per_epoch(self.slots_per_epoch(), self.slot_activation_coeff.get())
     }
 
     #[must_use]
     pub fn consensus_config(&self) -> ConsensusConfig {
         ConsensusConfig::new(
             self.security_param,
-            self.slot_activation_coeff,
+            self.slot_activation_coeff.get(),
             self.learning_rate,
             self.uncle_reference_window_in_block,
         )
+    }
+}
+
+/// `f`, the slot activation coefficient.
+///
+/// Below 1, so that the lottery's `ln(1 - f)` is finite, and at least the
+/// inverse of the precision the total stake inference measures it with, so that
+/// the expected density it divides by is not zero.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[serde(try_from = "NonNegativeRatio", into = "NonNegativeRatio")]
+pub struct SlotActivationCoeff(NonNegativeRatio);
+
+impl SlotActivationCoeff {
+    #[must_use]
+    pub const fn get(self) -> NonNegativeRatio {
+        self.0
+    }
+}
+
+impl Deref for SlotActivationCoeff {
+    type Target = NonNegativeRatio;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl TryFrom<NonNegativeRatio> for SlotActivationCoeff {
+    type Error = String;
+
+    fn try_from(coeff: NonNegativeRatio) -> Result<Self, Self::Error> {
+        let NonNegativeRatio {
+            numerator,
+            denominator,
+        } = coeff;
+        if numerator < denominator.get()
+            && (coeff.as_f64() * STAKE_INFERENCE_PRECISION as f64).trunc() >= 1.0
+        {
+            Ok(Self(coeff))
+        } else {
+            Err(format!(
+                "The slot activation coefficient {numerator}/{denominator} must be below 1, and \
+                 at least 1/{STAKE_INFERENCE_PRECISION}, the precision the total stake \
+                 inference measures it with."
+            ))
+        }
+    }
+}
+
+impl From<SlotActivationCoeff> for NonNegativeRatio {
+    fn from(coeff: SlotActivationCoeff) -> Self {
+        coeff.0
     }
 }
 
@@ -177,10 +208,19 @@ pub struct EpochConfig {
 // config instead.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SdpConfig {
-    /// Ordered by service type, which is the order the canonical encoding lists
-    /// them in.
-    pub service_params: BTreeMap<ServiceType, ServiceParameters>,
+    /// The parameters of each service type, in the order [`ServiceType`]
+    /// declares them.
+    pub service_params: [ServiceParameters; ServiceType::COUNT],
     pub min_stake: MinStake,
+}
+
+impl SdpConfig {
+    /// Each service type, with its parameters.
+    pub fn service_params_by_type(
+        &self,
+    ) -> impl Iterator<Item = (ServiceType, &ServiceParameters)> {
+        ServiceType::iter().zip(&self.service_params)
+    }
 }
 
 // The same as `lb_core::sdp::ServiceParameters`.

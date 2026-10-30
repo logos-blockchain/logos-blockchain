@@ -209,14 +209,16 @@ mod tests {
                 .deployment
                 .genesis_era_parameters()
                 .cryptarchia
-                .slot_activation_coeff,
+                .slot_activation_coeff
+                .get(),
             expected_coefficient
         );
         assert_eq!(
             artifact
                 .genesis_era_parameters()
                 .cryptarchia
-                .slot_activation_coeff,
+                .slot_activation_coeff
+                .get(),
             expected_coefficient
         );
     }

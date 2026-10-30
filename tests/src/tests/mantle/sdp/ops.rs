@@ -421,7 +421,9 @@ fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
             parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
             parameters.cryptarchia.security_param = NonZero::new(2).unwrap();
             parameters.cryptarchia.slot_activation_coeff =
-                NonNegativeRatio::new(1, 2.try_into().unwrap());
+                NonNegativeRatio::new(1, 2.try_into().unwrap())
+                    .try_into()
+                    .unwrap();
             // The widest uncle reference window k allows, ⌊0.6k⌋.
             parameters.cryptarchia.uncle_reference_window_in_block = 1;
             parameters.cryptarchia.epoch_config = EpochConfig {
@@ -431,12 +433,8 @@ fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
             };
             parameters.cryptarchia.learning_rate = 0.5.try_into().unwrap();
 
-            let service_params = parameters
-                .cryptarchia
-                .sdp_config
-                .service_params
-                .get_mut(&ServiceType::BlendNetwork)
-                .expect("blend network params should exist");
+            let service_params = &mut parameters.cryptarchia.sdp_config.service_params
+                [ServiceType::BlendNetwork as usize];
             service_params.inactivity_period = 10.try_into().unwrap();
 
             parameters.blend.common.num_blend_layers = 1.try_into().unwrap();

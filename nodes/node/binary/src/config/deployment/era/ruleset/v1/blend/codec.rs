@@ -67,7 +67,6 @@ impl BinaryEncode for CoreSettings {
     fn encoded_length(&self) -> usize {
         let Self {
             scheduler,
-            target_peering_degree,
             verification_rate_per_second,
             edge_node_send_deadline_in_rounds,
             core_handshake_deadline_in_rounds,
@@ -76,7 +75,6 @@ impl BinaryEncode for CoreSettings {
         } = self;
 
         scheduler.encoded_length()
-            + target_peering_degree.encoded_length()
             + verification_rate_per_second.encoded_length()
             + edge_node_send_deadline_in_rounds.encoded_length()
             + core_handshake_deadline_in_rounds.encoded_length()
@@ -87,7 +85,6 @@ impl BinaryEncode for CoreSettings {
     fn encode_into(&self, out: &mut Vec<u8>) {
         let Self {
             scheduler,
-            target_peering_degree,
             verification_rate_per_second,
             edge_node_send_deadline_in_rounds,
             core_handshake_deadline_in_rounds,
@@ -95,7 +92,6 @@ impl BinaryEncode for CoreSettings {
             activity_threshold_sensitivity,
         } = self;
         scheduler.encode_into(out);
-        target_peering_degree.encode_into(out);
         verification_rate_per_second.encode_into(out);
         edge_node_send_deadline_in_rounds.encode_into(out);
         core_handshake_deadline_in_rounds.encode_into(out);
@@ -175,7 +171,6 @@ fn fixture_minimum_network_size() -> MinimumNetworkSize {
 fn fixture_core_settings() -> CoreSettings {
     CoreSettings {
         scheduler: scheduler_settings(),
-        target_peering_degree: NonZeroU32::new(7).unwrap(),
         verification_rate_per_second: NonZeroU32::new(8).unwrap(),
         edge_node_send_deadline_in_rounds: NonZeroU64::new(9).unwrap(),
         core_handshake_deadline_in_rounds: NonZeroU128::new(10).unwrap(),
@@ -205,14 +200,14 @@ const fn message_delayer_settings() -> MessageDelayerSettings {
 
 pub const SETTINGS_HEX: &str = "
     0100000000000000 0200000000000000 0300000000000000 0400000000000000 0000000000001440
-    0600000000000000 07000000 08000000 0900000000000000 0a000000000000000000000000000000
+    0600000000000000 08000000 0900000000000000 0a000000000000000000000000000000
     0b00000000000000 0c00000000000000
 ";
 const COMMON_SETTINGS_HEX: &str = "
     0100000000000000 0200000000000000 0300000000000000 0400000000000000
 ";
 const CORE_SETTINGS_HEX: &str = "
-    0000000000001440 0600000000000000 07000000 08000000 0900000000000000
+    0000000000001440 0600000000000000 08000000 0900000000000000
     0a000000000000000000000000000000 0b00000000000000 0c00000000000000
 ";
 const SCHEDULER_SETTINGS_HEX: &str = "0000000000001440 0600000000000000";
