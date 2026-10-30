@@ -669,6 +669,19 @@ pub struct TurnNotification {
     pub current_slot: Option<u64>,
 }
 
+/// Channel config observed in a finalized L1 block, with what it set.
+#[derive(Debug, Clone)]
+pub struct ConfigInfo {
+    /// The transaction hash containing this config.
+    pub tx_hash: TxHash,
+    /// The config this one chains from, on the config lineage.
+    pub parent_msg: MsgId,
+    /// This config's id on the config lineage.
+    pub this_msg: MsgId,
+    /// The config as mined: accredited keys, thresholds, posting rules.
+    pub config: ChannelConfigOp,
+}
+
 /// Channel inscription observed in an L1 block.
 #[derive(Debug, Clone)]
 pub struct InscriptionInfo {
@@ -878,9 +891,10 @@ pub enum FinalizedOp {
     /// inscription+withdraw bundle (the bundling is implicit via the parent
     /// [`FinalizedTx::tx_hash`]).
     Withdraw(WithdrawInfo),
-    /// A config on the channel. `parent_msg`/`this_msg` are config-lineage
-    /// ids, not message-lineage ids, and the payload is empty.
-    Config(InscriptionInfo),
+    /// A config on the channel, with the keys and rules it set.
+    /// `parent_msg`/`this_msg` are config-lineage ids, not message-lineage
+    /// ids.
+    Config(ConfigInfo),
     /// A channel transfer op on the channel: notes re-keyed/re-denominated
     /// under channel authority.
     ChannelTransfer(ChannelTransferInfo),
