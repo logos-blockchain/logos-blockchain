@@ -735,6 +735,59 @@ where
 }
 
 #[utoipa::path(
+    get,
+    path = paths::BLEND_STATUS,
+    responses(
+        (status = 200, description = "Query this node's Blend status", body = Object),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn blend_status<
+    MempoolAdapter,
+    WalletAdapter,
+    ChainService,
+    StateStorage,
+    BlendService,
+    RuntimeServiceId,
+>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
+    WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
+    ChainService: CryptarchiaServiceData<Tx: Send> + Send + Sync + 'static,
+    StateStorage: SdpStateStorage<RuntimeServiceId>,
+    BlendService: ServiceData<
+            Message = ProxyServiceMessage<lb_blend_service::message::ServiceMessage<PeerId>>,
+        > + 'static,
+    RuntimeServiceId: Debug
+        + Sync
+        + Send
+        + Display
+        + 'static
+        + AsServiceId<ChainService>
+        + AsServiceId<BlendService>
+        + AsServiceId<
+            lb_sdp_service::SdpService<
+                MempoolAdapter,
+                WalletAdapter,
+                ChainService,
+                StateStorage,
+                RuntimeServiceId,
+            >,
+        >,
+{
+    make_request_and_return_response!(blend::blend_status::<
+        MempoolAdapter,
+        WalletAdapter,
+        ChainService,
+        StateStorage,
+        BlendService,
+        RuntimeServiceId,
+    >(&handle))
+}
+
+#[utoipa::path(
     post,
     path = paths::BLEND_JOIN_NETWORK,
     request_body = JoinBlendRequestBody,

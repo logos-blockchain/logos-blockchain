@@ -38,9 +38,9 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
-    AppliedBlock, BlendRewards, BlockOrigin, ChainServiceInfo, ConsensusMsg, Cryptarchia,
-    CryptarchiaConsensusState, EpochStateQueryResult, Error, LOG_TARGET, LibUpdate,
-    ProcessedBlockEvent, PrunedBlocksInfo, Query, metrics,
+    AppliedBlock, BlendDeclarationStatus, BlendRewards, BlendStatus, BlockOrigin, ChainServiceInfo,
+    ConsensusMsg, Cryptarchia, CryptarchiaConsensusState, EpochStateQueryResult, Error, LOG_TARGET,
+    LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo, Query, metrics,
     notifier::ChainOnlineNotifier,
     relays::{BroadcastRelay, CryptarchiaConsensusRelays},
     sync::block_provider::BlockProvider,
@@ -507,6 +507,15 @@ where
                     error!(target: LOG_TARGET, "Could not send Blend rewards through channel");
                 });
             }
+            Query::GetBlendStatus {
+                declaration_id,
+                reply_channel,
+            } => {
+                let status = self.blend_status(declaration_id.as_ref());
+                reply_channel.send(status).unwrap_or_else(|_| {
+                    error!(target: LOG_TARGET, "Could not send Blend status through channel");
+                });
+            }
             Query::GetEpochState {
                 slot,
                 reply_channel,
@@ -576,6 +585,33 @@ where
         Some(BlendRewards {
             zk_id: declaration.zk_id,
             estimate: sdp_ledger.blend_reward_estimate(&declaration.provider_id),
+        })
+    }
+
+    fn blend_status(&self, declaration_id: Option<&DeclarationId>) -> Option<BlendStatus> {
+        let ledger_state = {
+            let tip = self.cryptarchia.tip();
+            self.cryptarchia.ledger.state(&tip)?
+        };
+        let epoch_state = ledger_state.epoch_state();
+        let declaration = {
+            let sdp_ledger = ledger_state.mantle_ledger().sdp_ledger();
+            declaration_id.and_then(|declaration_id| {
+                let declaration = sdp_ledger.get_declaration(declaration_id)?;
+                let in_snapshot = epoch_state
+                    .active_declarations
+                    .for_service(&ServiceType::BlendNetwork)
+                    .is_some_and(|declarations| declarations.contains_key(declaration_id));
+                Some(BlendDeclarationStatus {
+                    declaration: declaration.clone(),
+                    is_in_snapshot: in_snapshot,
+                    estimate: sdp_ledger.blend_reward_estimate(&declaration.provider_id),
+                })
+            })
+        };
+        Some(BlendStatus {
+            epoch: epoch_state.epoch,
+            declaration_status: declaration,
         })
     }
 

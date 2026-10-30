@@ -297,7 +297,6 @@ mod service {
             self.old_epoch_token_collector.take()
         }
 
-        #[cfg(test)]
         pub(crate) const fn current_epoch_token_collector(&self) -> &EpochBlendingTokenCollector {
             &self.current_epoch_token_collector
         }

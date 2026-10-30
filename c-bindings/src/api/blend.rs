@@ -1,11 +1,14 @@
-use std::ffi::{CString, c_char};
+use std::{
+    ffi::{CString, c_char},
+    ptr,
+};
 
 use lb_api_service::http::blend;
 use lb_blend_service::message::NetworkInfo;
 use lb_c_macros::panic_to_error;
 use lb_chain_service::Epoch;
 use lb_core::{
-    mantle::NoteId,
+    mantle::{NoteId, gas::GasCost},
     sdp::{self, Locator, SNAPSHOT_FINALIZATION_DELAY, ServiceType, WITHDRAWAL_UNLOCK_DELAY},
 };
 use lb_groth16::{fr_from_bytes, fr_to_bytes};
@@ -14,15 +17,15 @@ use lb_node::{
     RuntimeServiceId, config::deployment::era::ruleset::EraRuleset,
     generic_services::blend::BlendService,
 };
-use lb_sdp_service::{SdpMessage, SdpSubmission};
+use lb_sdp_service::{SdpMessage, SdpStatus, SdpSubmission, status};
 use multiaddr::PeerId;
 use overwatch::overwatch::OverwatchHandle;
 
 use crate::{
     LogosBlockchainNode,
     api::{
-        chain::api::ChainFfiApi, cryptarchia::TxHash, sdp::make_sdp_request,
-        time::get_time_info_sync, types::value::Value,
+        chain::api::ChainFfiApi, common::overwatch::ensure_ready, cryptarchia::TxHash,
+        sdp::make_sdp_request, time::get_time_info_sync, types::value::Value,
     },
     errors::{OperationStatus, OperationStatusCode},
     option::FfiOption,
@@ -306,8 +309,8 @@ pub struct BlendWithdrawal {
 async fn post_withdraw(
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
 ) -> StatusResult<SdpSubmission> {
-    let participation = make_sdp_request(overwatch_handle, |reply_channel| {
-        SdpMessage::GetParticipation { reply_channel }
+    let SdpStatus { participation, .. } = make_sdp_request(overwatch_handle, |reply_channel| {
+        SdpMessage::GetStatus { reply_channel }
     })
     .await?;
 
@@ -433,6 +436,8 @@ pub struct BlendRewardEstimate {
     pub pool: Value,
     /// The activity epoch's network.
     pub network: BlendNetwork,
+    /// Whether the node was in the activity epoch, and so can earn from it.
+    pub in_activity_epoch: bool,
     /// Whether the node submitted its activity proof.
     pub did_submit_proof: bool,
     /// Whether the node earns the double reward.
@@ -447,6 +452,7 @@ impl From<ledger_blend::RewardEstimate> for BlendRewardEstimate {
             activity_epoch: estimate.activity_epoch.into(),
             pool: estimate.pool,
             network: estimate.network.into(),
+            in_activity_epoch: estimate.in_activity_epoch,
             did_submit_proof: estimate.did_submit_proof,
             is_premium: estimate.is_premium,
             estimated_reward: estimate.estimated_reward,
@@ -490,8 +496,8 @@ fn blend_rewards_sync(node: &LogosBlockchainNode) -> StatusResult<BlendRewards> 
     node.get_runtime_handle()?.block_on(async {
         let chain_ffi_api = ChainFfiApi::from_overwatch_handle(overwatch_handle).await?;
         chain_ffi_api.ensure_online().await?;
-        let participation = make_sdp_request(overwatch_handle, |reply_channel| {
-            SdpMessage::GetParticipation { reply_channel }
+        let SdpStatus { participation, .. } = make_sdp_request(overwatch_handle, |reply_channel| {
+            SdpMessage::GetStatus { reply_channel }
         })
         .await?;
         // A withdrawn declaration still earns until its `withdraw_at`.
@@ -539,4 +545,429 @@ pub unsafe extern "C" fn blend_rewards(node: *const LogosBlockchainNode) -> FfiB
 
     let node = unsafe { &*node };
     blend_rewards_sync(node).into()
+}
+
+/// Where the node's Blend declaration is in its lifecycle.
+///
+/// cbindgen:prefix-with-name
+#[repr(C)]
+#[derive(Default)]
+pub enum DeclarationState {
+    /// No declaration posted.
+    #[default]
+    NotDeclared,
+    /// Posted, but not in the ledger yet.
+    Pending,
+    /// In the ledger, but not in an epoch snapshot yet.
+    Activating,
+    /// In the current epoch's snapshot.
+    Active,
+    /// Past `first_epoch_in_snapshot`, but not in the current epoch's snapshot.
+    Inactive,
+    /// Withdrawal posted. Once it lands, the declaration is withdrawn at
+    /// `withdraw_at`, and the locked note unlocks the epoch after.
+    Withdrawn,
+}
+
+impl From<status::DeclarationState> for DeclarationState {
+    fn from(state: status::DeclarationState) -> Self {
+        match state {
+            status::DeclarationState::NotDeclared => Self::NotDeclared,
+            status::DeclarationState::Pending => Self::Pending,
+            status::DeclarationState::Activating => Self::Activating,
+            status::DeclarationState::Active => Self::Active,
+            status::DeclarationState::Inactive => Self::Inactive,
+            status::DeclarationState::Withdrawn => Self::Withdrawn,
+        }
+    }
+}
+
+/// The kind of [`ProofState`].
+///
+/// cbindgen:prefix-with-name
+#[repr(C)]
+#[derive(Default)]
+pub enum ProofStateKind {
+    /// Submitted, but not in the ledger yet.
+    #[default]
+    Pending,
+    /// In the ledger.
+    Accepted,
+    /// Not in the ledger, and not pending.
+    Failed,
+    /// No proof owed.
+    NotRequired,
+}
+
+/// Why a [`ProofStateKind`] is `Failed` or `NotRequired`.
+#[repr(C)]
+#[derive(Default)]
+pub enum ProofReason {
+    /// `Failed`: no proof submitted. Also seen briefly at the start of an
+    /// epoch, before the proof is submitted.
+    #[default]
+    NoProof,
+    /// `Failed`: the node's declaration wasn't found when submitting the
+    /// proof.
+    DeclarationNotFound,
+    /// `Failed`: the funding key couldn't pay the proof transaction's fee.
+    FundingFailed,
+    /// `Failed`: the proof transaction couldn't be built.
+    TransactionBuildFailed,
+    /// `Failed`: the mempool rejected the proof transaction.
+    MempoolRejected,
+    /// `NotRequired`: the chain is in its first epoch, so there's no activity
+    /// epoch.
+    FirstEpoch,
+    /// `NotRequired`: the activity epoch had fewer providers than the minimum
+    /// network size, so the ledger accepts no proofs for it.
+    NetworkBelowMinimum,
+    /// `NotRequired`: the node wasn't a provider in the activity epoch, as in
+    /// its first active epoch.
+    NotInActivityEpoch,
+}
+
+impl From<status::ProofFailureReason> for ProofReason {
+    fn from(reason: status::ProofFailureReason) -> Self {
+        match reason {
+            status::ProofFailureReason::NoProof => Self::NoProof,
+            status::ProofFailureReason::DeclarationNotFound => Self::DeclarationNotFound,
+            status::ProofFailureReason::FundingFailed => Self::FundingFailed,
+            status::ProofFailureReason::TransactionBuildFailed => Self::TransactionBuildFailed,
+            status::ProofFailureReason::MempoolRejected => Self::MempoolRejected,
+        }
+    }
+}
+
+impl From<status::ProofNotRequiredReason> for ProofReason {
+    fn from(reason: status::ProofNotRequiredReason) -> Self {
+        match reason {
+            status::ProofNotRequiredReason::FirstEpoch => Self::FirstEpoch,
+            status::ProofNotRequiredReason::NetworkBelowMinimum => Self::NetworkBelowMinimum,
+            status::ProofNotRequiredReason::NotInActivityEpoch => Self::NotInActivityEpoch,
+        }
+    }
+}
+
+/// The state of the node's activity proof for the activity epoch.
+#[repr(C)]
+#[derive(Default)]
+pub struct ProofState {
+    pub kind: ProofStateKind,
+    /// Set when `kind` is `Failed` or `NotRequired`.
+    pub reason: FfiOption<ProofReason>,
+}
+
+impl From<status::ProofState> for ProofState {
+    fn from(state: status::ProofState) -> Self {
+        let (kind, reason) = match state {
+            status::ProofState::Pending => (ProofStateKind::Pending, None),
+            status::ProofState::Accepted => (ProofStateKind::Accepted, None),
+            status::ProofState::Failed(reason) => (ProofStateKind::Failed, Some(reason.into())),
+            status::ProofState::NotRequired(reason) => {
+                (ProofStateKind::NotRequired, Some(reason.into()))
+            }
+        };
+        Self {
+            kind,
+            reason: reason.into(),
+        }
+    }
+}
+
+/// The declaration's locators, as C strings.
+#[repr(C)]
+pub struct Locators {
+    pub locators: *mut *mut c_char,
+    pub len: usize,
+}
+
+impl Default for Locators {
+    fn default() -> Self {
+        Self {
+            locators: ptr::null_mut(),
+            len: 0,
+        }
+    }
+}
+
+impl From<&sdp::Locators> for Locators {
+    fn from(locators: &sdp::Locators) -> Self {
+        let pointers: Vec<*mut c_char> = locators
+            .iter()
+            .map(|locator| {
+                CString::new(locator.to_string())
+                    .expect("A multiaddr has no NUL byte.")
+                    .into_raw()
+            })
+            .collect();
+        let len = pointers.len();
+        let locators = Box::leak(pointers.into_boxed_slice()).as_mut_ptr();
+        Self { locators, len }
+    }
+}
+
+impl Locators {
+    /// # Safety
+    ///
+    /// `self` must come from [`Locators::from`], and be freed only once.
+    unsafe fn free(self) {
+        if self.locators.is_null() {
+            return;
+        }
+        let pointers =
+            unsafe { Box::from_raw(ptr::slice_from_raw_parts_mut(self.locators, self.len)) };
+        for &pointer in &*pointers {
+            drop(unsafe { CString::from_raw(pointer) });
+        }
+    }
+}
+
+/// What [`DeclarationStatus`] exposes of a [`sdp::Declaration`].
+#[repr(C)]
+#[derive(Default)]
+pub struct Declaration {
+    /// As 32 bytes.
+    pub provider_id: [u8; KEY_SIZE],
+    /// The note locked by the declaration, as 32 little-endian bytes.
+    pub locked_note_id: [u8; KEY_SIZE],
+    pub locators: Locators,
+    /// As 32 little-endian bytes.
+    pub zk_id: [u8; KEY_SIZE],
+    /// The epoch of the block that contained the declaration.
+    pub created_epoch: u32,
+    /// The epoch at which the declaration is scheduled to be withdrawn. `None`
+    /// until the withdrawal lands.
+    pub withdraw_at: FfiOption<u32>,
+}
+
+impl From<sdp::Declaration> for Declaration {
+    fn from(declaration: sdp::Declaration) -> Self {
+        Self {
+            provider_id: *declaration.provider_id.as_ref(),
+            locked_note_id: fr_to_bytes(declaration.service_note_id.as_fr()),
+            locators: (&declaration.locators).into(),
+            zk_id: fr_to_bytes(declaration.zk_id.as_fr()),
+            created_epoch: declaration.created.into(),
+            withdraw_at: declaration.withdraw_at.map(Into::into).into(),
+        }
+    }
+}
+
+/// The node's Blend declaration in the ledger.
+#[repr(C)]
+#[derive(Default)]
+pub struct DeclarationStatus {
+    pub id: DeclarationId,
+    pub declaration: Declaration,
+    /// The first epoch whose snapshot includes the declaration.
+    pub first_epoch_in_snapshot: u32,
+}
+
+impl From<status::DeclarationStatus> for DeclarationStatus {
+    fn from(status: status::DeclarationStatus) -> Self {
+        Self {
+            id: status.id.into(),
+            declaration: status.declaration.into(),
+            first_epoch_in_snapshot: status.first_epoch_in_snapshot.into(),
+        }
+    }
+}
+
+/// The node's Blend activity.
+#[repr(C)]
+#[derive(Default)]
+pub struct ActivityStatus {
+    /// The epoch being paid out. `None` when there's no activity epoch.
+    pub activity_epoch: FfiOption<u32>,
+    /// The state of the activity proof for `activity_epoch`.
+    pub proof_state: ProofState,
+    /// The epoch in which the node's latest activity proof landed. Starts at
+    /// the declaration's `first_epoch_in_snapshot`.
+    pub last_active_epoch: u32,
+    /// The fee of the node's last activity proof submitted. The proof may
+    /// not have landed. `None` if none was submitted.
+    pub last_fee: FfiOption<Value>,
+}
+
+impl From<status::ActivityStatus> for ActivityStatus {
+    fn from(status: status::ActivityStatus) -> Self {
+        Self {
+            activity_epoch: status.activity_epoch.map(Into::into).into(),
+            proof_state: status.proof_state.into(),
+            last_active_epoch: status.last_active_epoch.into(),
+            last_fee: status.last_fee.map(GasCost::into_inner).into(),
+        }
+    }
+}
+
+/// The negotiated peers for the current epoch.
+#[repr(C)]
+#[derive(Default)]
+pub struct SessionPeers {
+    pub total: usize,
+    pub healthy: usize,
+}
+
+impl From<lb_blend_service::message::SessionPeers> for SessionPeers {
+    fn from(peers: lb_blend_service::message::SessionPeers) -> Self {
+        Self {
+            total: peers.total,
+            healthy: peers.healthy,
+        }
+    }
+}
+
+/// A core node's Blend status.
+#[repr(C)]
+#[derive(Default)]
+pub struct CoreStatus {
+    pub session_peers: SessionPeers,
+    /// Blending tokens collected in the current epoch.
+    pub tokens_collected_in_current_epoch: usize,
+}
+
+impl From<lb_blend_service::message::CoreStatus> for CoreStatus {
+    fn from(status: lb_blend_service::message::CoreStatus) -> Self {
+        Self {
+            session_peers: status.session_peers.into(),
+            tokens_collected_in_current_epoch: status.tokens_collected_in_current_epoch,
+        }
+    }
+}
+
+/// The node's Blend declaration and activity, as seen by SDP.
+#[repr(C)]
+#[derive(Default)]
+pub struct SdpBlendStatus {
+    pub declaration_state: DeclarationState,
+    /// The epoch of the chain tip.
+    pub current_epoch: u32,
+    /// `None` while the declaration isn't in the ledger.
+    pub declaration: FfiOption<DeclarationStatus>,
+    /// `None` while the declaration isn't in the ledger, or while it's
+    /// activating.
+    pub activity: FfiOption<ActivityStatus>,
+}
+
+impl From<status::SdpBlendStatus> for SdpBlendStatus {
+    fn from(status: status::SdpBlendStatus) -> Self {
+        Self {
+            declaration_state: status.declaration_state.into(),
+            current_epoch: status.current_epoch.into(),
+            declaration: status.declaration.map(Into::into).into(),
+            activity: status.activity.map(Into::into).into(),
+        }
+    }
+}
+
+/// The node's Blend status.
+#[repr(C)]
+#[derive(Default)]
+pub struct BlendStatus {
+    pub sdp: SdpBlendStatus,
+    /// `None` when not a core node.
+    pub core: FfiOption<CoreStatus>,
+}
+
+/// Gets this node's Blend status: core or edge, its declaration and its
+/// activity proof for the activity epoch.
+///
+/// # Arguments
+///
+/// - `node`: A [`LogosBlockchainNode`] instance.
+///
+/// # Returns
+///
+/// The status on success, or an [`OperationStatus`] error on failure. Fails
+/// right away if the node is not `Online`.
+fn blend_status_sync(node: &LogosBlockchainNode) -> StatusResult<BlendStatus> {
+    let overwatch_handle = node.get_overwatch_handle();
+    node.get_runtime_handle()?.block_on(async {
+        ensure_ready::<BlendService<RuntimeServiceId>>(overwatch_handle).await?;
+
+        let chain_ffi_api = ChainFfiApi::from_overwatch_handle(overwatch_handle).await?;
+        chain_ffi_api.ensure_online().await?;
+
+        let status = make_sdp_request(overwatch_handle, |reply_channel| {
+            SdpMessage::GetBlendStatus { reply_channel }
+        })
+        .await?
+        .map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::ServiceError,
+                format!("Failed to get the Blend status: {error}"),
+            )
+        })?;
+
+        let core_status = blend::blend_core_status::<
+            BlendService<RuntimeServiceId>,
+            RuntimeServiceId,
+        >(overwatch_handle)
+        .await
+        .map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::RelayError,
+                format!("Failed to query the Blend service: {error}"),
+            )
+        })?;
+
+        Ok(BlendStatus {
+            sdp: status.into(),
+            core: core_status.map(Into::into).into(),
+        })
+    })
+}
+
+pub type FfiBlendStatusResult = FfiStatusResult<BlendStatus>;
+
+/// Gets this node's Blend status: core or edge, its declaration and its
+/// activity proof for the activity epoch.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a running [`LogosBlockchainNode`] instance.
+///
+/// # Returns
+///
+/// A [`FfiBlendStatusResult`] containing the [`BlendStatus`] on success, or an
+/// [`OperationStatus`] error on failure.
+/// Fails right away if the node is not `Online`.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+///
+/// # Memory Management
+///
+/// The declaration's locators are allocated. The caller must free them with
+/// [`free_blend_status`].
+#[must_use]
+#[panic_to_error]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blend_status(node: *const LogosBlockchainNode) -> FfiBlendStatusResult {
+    return_error_if_null_pointer!(node);
+
+    let node = unsafe { &*node };
+    blend_status_sync(node).into()
+}
+
+/// Frees the memory allocated for a [`BlendStatus`].
+///
+/// # Arguments
+///
+/// - `status`: A [`BlendStatus`] previously returned by [`blend_status`].
+///
+/// # Safety
+///
+/// The caller must only pass values returned by [`blend_status`], exactly as
+/// returned, and must call this exactly once per result.
+#[panic_to_error]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_blend_status(status: BlendStatus) -> OperationStatus {
+    let declaration = status.sdp.declaration;
+    if declaration.is_some {
+        unsafe { declaration.value.declaration.locators.free() };
+    }
+    OperationStatus::OK
 }

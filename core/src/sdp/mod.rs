@@ -620,6 +620,12 @@ impl Declaration {
             nonce: Nonce::new(epoch, 0),
         }
     }
+
+    /// The first epoch whose snapshot includes the declaration.
+    #[must_use]
+    pub const fn first_epoch_in_snapshot(&self) -> Epoch {
+        self.created.strict_add(SNAPSHOT_FINALIZATION_DELAY)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

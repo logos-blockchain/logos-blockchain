@@ -1,11 +1,12 @@
 use std::convert::Infallible;
 
+use lb_core::mantle::gas::GasCost;
 pub use lb_services_utils::overwatch::recovery::operators::RecoveryBackend as SdpStateStorage;
 use overwatch::services::state::ServiceState;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::{Activity, Participation, SdpSettings};
+use crate::{Activity, Participation, SdpSettings, activity_submission::ActivityProofReport};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(from = "backwards_compatibility::BackwardsCompatibleSdpState")]
@@ -14,14 +15,20 @@ pub struct SdpState {
     pub updated: Option<OffsetDateTime>,
     /// Activity message being tracked until it is finalized.
     pub pending_activity: Option<Activity>,
+    /// The outcome of the last activity proof submitted.
+    pub last_activity_proof_report: Option<ActivityProofReport>,
+    /// The fee of the last activity proof submitted.
+    pub last_activity_fee: Option<GasCost>,
 }
 
 mod backwards_compatibility {
-    use lb_core::sdp::DeclarationId;
+    use lb_core::{mantle::gas::GasCost, sdp::DeclarationId};
     use serde::Deserialize;
     use time::OffsetDateTime;
 
-    use crate::{Activity, Participation, state::SdpState};
+    use crate::{
+        Activity, Participation, activity_submission::ActivityProofReport, state::SdpState,
+    };
 
     #[derive(Deserialize)]
     pub struct BackwardsCompatibleSdpState {
@@ -30,6 +37,10 @@ mod backwards_compatibility {
         updated: Option<OffsetDateTime>,
         #[serde(default)]
         pending_activity: Option<Activity>,
+        #[serde(default)]
+        last_activity_proof_report: Option<ActivityProofReport>,
+        #[serde(default)]
+        last_activity_fee: Option<GasCost>,
     }
 
     impl From<BackwardsCompatibleSdpState> for SdpState {
@@ -43,6 +54,9 @@ mod backwards_compatibility {
                 participation,
                 updated: backwards_compatible_sdp_state.updated,
                 pending_activity: backwards_compatible_sdp_state.pending_activity,
+                last_activity_proof_report: backwards_compatible_sdp_state
+                    .last_activity_proof_report,
+                last_activity_fee: backwards_compatible_sdp_state.last_activity_fee,
             }
         }
     }
@@ -50,11 +64,18 @@ mod backwards_compatibility {
 
 impl SdpState {
     #[must_use]
-    pub fn new(participation: Option<Participation>, pending_activity: Option<Activity>) -> Self {
+    pub fn new(
+        participation: Option<Participation>,
+        pending_activity: Option<Activity>,
+        last_activity_proof_report: Option<ActivityProofReport>,
+        last_activity_fee: Option<GasCost>,
+    ) -> Self {
         Self {
             updated: participation.map(|_| OffsetDateTime::now_utc()),
             participation,
             pending_activity,
+            last_activity_proof_report,
+            last_activity_fee,
         }
     }
 }
@@ -68,6 +89,8 @@ impl ServiceState for SdpState {
             participation: settings.declaration_id().map(Participation::Live),
             updated: None,
             pending_activity: None,
+            last_activity_proof_report: None,
+            last_activity_fee: None,
         })
     }
 }

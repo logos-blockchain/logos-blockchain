@@ -17,6 +17,8 @@ use overwatch::{
 pub enum SdpWalletError {
     #[error(transparent)]
     WalletApi(DynError),
+    #[error("Failed to fund the transaction: {0}")]
+    Funding(DynError),
     #[error("Transaction fee exceeded the configured max fee. tx_fee={tx_fee} > max_fee={max_fee}")]
     TxFeeExceedsMaxFee { max_fee: GasCost, tx_fee: GasCost },
     #[error(transparent)]
@@ -48,12 +50,13 @@ pub trait SdpWalletAdapter {
         config: &SdpWalletConfig,
     ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError>;
 
+    /// Returns the signed transaction and the fee it pays.
     async fn active_tx(
         &self,
         tx_builder: MantleTxBuilder,
         active_message: ActiveMessage,
         config: &SdpWalletConfig,
-    ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError>;
+    ) -> Result<(SignedOps<Preverified, StandardMode>, GasCost), SdpWalletError>;
 
     async fn withdraw_tx(
         &self,
