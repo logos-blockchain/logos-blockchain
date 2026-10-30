@@ -45,7 +45,7 @@ use super::{
         assemble_atomic_bundle_tx, assemble_channel_config_tx, build_and_fund_config,
         create_channel_config_tx, create_inscribe_tx, find_own_key_index, fund_ops,
         prepare_tx as build_prepare_tx, sign_tx as build_sign_tx, stale_bundle_reasons,
-        validate_multi_sig,
+        stale_parent_reason, validate_multi_sig,
     },
     types::{
         AtomicWithdrawInfo, ChannelUpdateTx, ChannelWalletView, Error, Event, FundingConfig,
@@ -1612,12 +1612,10 @@ where
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
         if let Some(parent) = first_parent
-            && parent != publish_parent
             && !state.is_tracked(&id)
+            && let Some(stale) = stale_parent_reason(parent, publish_parent)
         {
-            return Err(Error::ChannelStateChanged(format!(
-                "inscription parent {parent:?} is no longer the publish tip {publish_parent:?}"
-            )));
+            return Err(Error::ChannelStateChanged(stale));
         }
         let derived_tip = track_pending_tx(state, tx.clone(), self.channel_id)?;
         state.stamp_funding(&id, self.lib_slot, None);
