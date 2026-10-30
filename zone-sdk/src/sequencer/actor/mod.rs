@@ -603,12 +603,9 @@ where
             deposits,
         } = result;
         let lineage_changed = channel_update.is_some();
-        // A bundle whose inputs left the branch with a message move is shed
-        // at once, first, so its children go with it before the lineage
-        // passes see them. On a bare un-mine (a deep reorg dropping the
-        // deposit and nothing else) it is kept: the node readmits what it
-        // dropped and the deposit usually re-lands; a bundle whose inputs
-        // never return expires instead, un-refunded, in `shed_expired_into`.
+        // Dead-input bundles are shed at once only on a message move, children
+        // first. A bare un-mine keeps them: the deposit may re-land, and one
+        // that never does expires un-refunded in `shed_expired_into`.
         let dead_bundles = match (self.state.as_mut(), self.current_tip) {
             (Some(s), Some(tip)) if lineage_changed => {
                 s.shed_bundles_with_missing_inputs(tip, self.channel_id)
