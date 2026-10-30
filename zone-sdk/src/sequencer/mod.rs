@@ -99,8 +99,8 @@ pub use lb_key_management_system_service::keys::{Ed25519Key, UnverifiedEd25519Pu
 pub use tx_builder::sign_prepared;
 pub use types::{
     AtomicWithdrawInfo, ChannelNote, ChannelTransferInfo, ChannelUpdate, ChannelUpdateTx,
-    ChannelWalletView, DepositInfo, Error, Event, FinalizedOp, FinalizedTx, FundingConfig,
-    InscriptionId, InscriptionInfo, PendingFunding, PendingTx, PreparedAtomicBundle,
+    ChannelWalletView, ConfigInfo, DepositInfo, Error, Event, FinalizedOp, FinalizedTx,
+    FundingConfig, InscriptionId, InscriptionInfo, PendingFunding, PendingTx, PreparedAtomicBundle,
     PreparedChannelConfig, PublishResult, SequencerChannelView, SequencerCheckpoint,
     SequencerConfig, TurnNotification, WithdrawArg, WithdrawInfo, WithdrawInputs,
 };
