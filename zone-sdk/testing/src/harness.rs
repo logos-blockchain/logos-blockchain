@@ -1,0 +1,572 @@
+//! Owns the sequencers under test and drives them deterministically.
+//!
+//! Nothing runs on a background task: [`Harness::settle`] polls every
+//! sequencer's `next_event` until no sequencer can make progress, running each
+//! sequencer's policy and the view checker inline. The simulated node answers
+//! synchronously, so a settled harness has processed every block mined so far
+//! and posted every transaction the sequencers decided to post. Tests must run
+//! on a paused tokio clock (`#[tokio::test(start_paused = true)]`) so SDK
+//! timers only fire through [`Harness::advance`].
+
+use std::{collections::HashSet, pin::pin, task::Poll, time::Duration};
+
+use lb_core::{
+    header::HeaderId,
+    mantle::{
+        gas::GasCost,
+        ops::channel::{ChannelId, MsgId},
+    },
+};
+use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
+use lb_zone_sdk::{
+    node_types::TxHash,
+    sequencer::{
+        Event, FinalizedTx, FundingConfig, SequencerCheckpoint, SequencerConfig, ZoneSequencer,
+    },
+};
+use num_bigint::BigUint;
+
+use crate::{
+    layers::{self, Layer},
+    mirror::Mirror,
+    node::SimNode,
+    oracles::Oracles,
+    policy::{PassivePolicy, Policy},
+    view_checker::ViewChecker,
+};
+
+/// Polls `sequencer` once; `None` when it has nothing to do right now.
+pub async fn poll_event(sequencer: &mut ZoneSequencer<SimNode>) -> Option<Event> {
+    let mut fut = pin!(sequencer.next_event());
+    std::future::poll_fn(|cx| {
+        Poll::Ready(match fut.as_mut().poll(cx) {
+            Poll::Ready(event) => Some(event),
+            Poll::Pending => None,
+        })
+    })
+    .await
+}
+
+/// Events one settle may drain before it is declared a busy loop.
+const MAX_EVENTS_PER_SETTLE: usize = 10_000;
+
+/// Resubmit interval used by the suite; fired explicitly via
+/// [`Harness::advance`].
+pub const RESUBMIT_INTERVAL: Duration = Duration::from_secs(3);
+/// Reconnect delay used by the suite; fired explicitly via
+/// [`Harness::advance`].
+pub const RECONNECT_DELAY: Duration = Duration::from_secs(1);
+
+/// The cucumber suite's sequencer configuration.
+#[must_use]
+pub const fn sequencer_config(funding: FundingConfig) -> SequencerConfig {
+    SequencerConfig {
+        resubmit_interval: RESUBMIT_INTERVAL,
+        reconnect_delay: RECONNECT_DELAY,
+        min_slots_remaining_in_turn: 2,
+        ..SequencerConfig::new(funding)
+    }
+}
+
+/// Funding config paying from `node`'s funding wallet, or a placeholder when
+/// the node funds nothing.
+#[must_use]
+pub fn funding_config(node: &SimNode) -> FundingConfig {
+    FundingConfig {
+        funding_pk: node
+            .funding_pk()
+            .unwrap_or_else(|| ZkKey::from(BigUint::from(1u64)).to_public_key()),
+        change_pk: None,
+        max_tx_fee: GasCost::new(u64::MAX),
+        priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
+    }
+}
+
+/// Install a log subscriber from `RUST_LOG` once, so a failing run can be
+/// replayed with the SDK's own log lines (`RUST_LOG=warn cargo test ...`).
+pub fn init_tracing() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        if std::env::var_os("RUST_LOG").is_none() {
+            return;
+        }
+        drop(
+            tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+                .with_test_writer()
+                .try_init(),
+        );
+    });
+}
+
+/// Deterministic signing key from a seed.
+#[must_use]
+pub fn key(seed: u8) -> Ed25519Key {
+    Ed25519Key::from_bytes(&[seed; 32])
+}
+
+/// One sequencer under test with its policy, checker and event log.
+pub struct Seq {
+    pub name: String,
+    pub key: Ed25519Key,
+    pub config: SequencerConfig,
+    /// The node this sequencer talks to.
+    pub node: SimNode,
+    sequencer: Option<ZoneSequencer<SimNode>>,
+    policy: Box<dyn Policy>,
+    pub checker: ViewChecker,
+    /// The consumer-side view, kept across restarts like a zone would.
+    pub mirror: Mirror,
+    /// Deposit, wallet and turn invariants against the node.
+    pub oracles: Oracles,
+    pub events: Vec<Event>,
+}
+
+impl Seq {
+    /// The live sequencer; panics when stopped.
+    pub const fn sequencer(&mut self) -> &mut ZoneSequencer<SimNode> {
+        self.sequencer.as_mut().expect("sequencer is running")
+    }
+
+    #[must_use]
+    pub const fn is_running(&self) -> bool {
+        self.sequencer.is_some()
+    }
+
+    #[must_use]
+    pub fn checkpoint(&self) -> Option<SequencerCheckpoint> {
+        self.sequencer.as_ref().and_then(ZoneSequencer::checkpoint)
+    }
+
+    /// `BlocksProcessed` events seen so far.
+    pub fn block_events(&self) -> impl Iterator<Item = &Event> {
+        self.events
+            .iter()
+            .filter(|e| matches!(e, Event::BlocksProcessed { .. }))
+    }
+
+    /// Every finalized tx reported through this sequencer's events, in order.
+    pub fn finalized(&self) -> impl Iterator<Item = &FinalizedTx> {
+        self.events.iter().flat_map(|e| match e {
+            Event::BlocksProcessed { finalized, .. } => finalized.as_slice(),
+            _ => &[],
+        })
+    }
+}
+
+/// Sequencers over one simulated node.
+pub struct Harness {
+    pub node: SimNode,
+    pub channel_id: ChannelId,
+    pub seqs: Vec<Seq>,
+}
+
+impl Harness {
+    #[must_use]
+    pub const fn new(node: SimNode, channel_id: ChannelId) -> Self {
+        Self {
+            node,
+            channel_id,
+            seqs: Vec::new(),
+        }
+    }
+
+    /// Construct a sequencer on the harness node; it is not polled until the
+    /// next settle.
+    pub fn add(
+        &mut self,
+        name: &str,
+        key: Ed25519Key,
+        config: SequencerConfig,
+        checkpoint: Option<SequencerCheckpoint>,
+        policy: Box<dyn Policy>,
+    ) -> usize {
+        let node = self.node.clone();
+        self.add_on(&node, name, key, config, checkpoint, policy)
+    }
+
+    /// Construct a sequencer talking to `node`, through a handle tagged for
+    /// it so the node can tell what this sequencer's streams delivered.
+    pub fn add_on(
+        &mut self,
+        node: &SimNode,
+        name: &str,
+        key: Ed25519Key,
+        config: SequencerConfig,
+        checkpoint: Option<SequencerCheckpoint>,
+        policy: Box<dyn Policy>,
+    ) -> usize {
+        let node = node.tagged(self.seqs.len() as u64 + 1);
+        let sequencer = ZoneSequencer::init_with_config(
+            self.channel_id,
+            key.clone(),
+            node.clone(),
+            config.clone(),
+            checkpoint,
+        );
+        let key_pk = key.public_key().into_unverified();
+        let min_slots_remaining_in_turn = config.min_slots_remaining_in_turn;
+        let stale_refund_slots = config.stale_refund_slots;
+        let resubmit_interval = config.resubmit_interval;
+        self.seqs.push(Seq {
+            name: name.to_owned(),
+            key,
+            config,
+            node,
+            sequencer: Some(sequencer),
+            policy,
+            checker: ViewChecker::new(self.channel_id),
+            mirror: Mirror::default(),
+            oracles: Oracles::for_sequencer(
+                key_pk,
+                min_slots_remaining_in_turn,
+                stale_refund_slots,
+                resubmit_interval,
+            ),
+            events: Vec::new(),
+        });
+        self.seqs.len() - 1
+    }
+
+    /// Add a sequencer with the suite's default config and settle until it is
+    /// ready.
+    pub async fn start(&mut self, name: &str, key: Ed25519Key, policy: Box<dyn Policy>) -> usize {
+        let config = sequencer_config(funding_config(&self.node));
+        self.start_with(name, key, config, None, policy).await
+    }
+
+    pub async fn start_with(
+        &mut self,
+        name: &str,
+        key: Ed25519Key,
+        config: SequencerConfig,
+        checkpoint: Option<SequencerCheckpoint>,
+        policy: Box<dyn Policy>,
+    ) -> usize {
+        let node = self.node.clone();
+        self.start_with_on(node, name, key, config, checkpoint, policy)
+            .await
+    }
+
+    /// Start a sequencer talking to `node` and settle until it is ready.
+    pub async fn start_with_on(
+        &mut self,
+        node: SimNode,
+        name: &str,
+        key: Ed25519Key,
+        config: SequencerConfig,
+        checkpoint: Option<SequencerCheckpoint>,
+        policy: Box<dyn Policy>,
+    ) -> usize {
+        let index = self.add_on(&node, name, key, config, checkpoint, policy);
+        self.settle_until_ready(index).await;
+        index
+    }
+
+    /// Settle until sequencer `index` is ready, letting reconnect delays pass
+    /// when the node fails it a fetch or a connection on the way.
+    async fn settle_until_ready(&mut self, index: usize) {
+        self.settle().await;
+        for _ in 0..10 {
+            if self.seqs[index].sequencer().is_ready() {
+                return;
+            }
+            self.advance(RECONNECT_DELAY).await;
+        }
+        assert!(
+            self.seqs[index].sequencer().is_ready(),
+            "{} did not become ready",
+            self.seqs[index].name
+        );
+    }
+
+    /// Index of the sequencer called `name`.
+    #[must_use]
+    pub fn index(&self, name: &str) -> usize {
+        self.seqs
+            .iter()
+            .position(|s| s.name == name)
+            .unwrap_or_else(|| panic!("no sequencer {name}"))
+    }
+
+    pub fn seq(&mut self, index: usize) -> &mut ZoneSequencer<SimNode> {
+        self.seqs[index].sequencer()
+    }
+
+    /// Replace the policy of a running sequencer.
+    pub fn set_policy(&mut self, index: usize, policy: Box<dyn Policy>) {
+        self.seqs[index].policy = policy;
+    }
+
+    /// Tell sequencer `index`'s policy that the test published `this_msg`
+    /// through its handle, so the policy owns it like its own publishes.
+    pub fn published(&mut self, index: usize, this_msg: MsgId) {
+        self.seqs[index].policy.published(this_msg);
+    }
+
+    /// Drop the sequencer instance; its log and checker stay for assertions.
+    pub fn stop(&mut self, index: usize) {
+        self.seqs[index].sequencer = None;
+    }
+
+    /// Start a fresh instance for slot `index` from `checkpoint`, keeping the
+    /// policy, and settle until ready.
+    pub async fn restart(&mut self, index: usize, checkpoint: Option<SequencerCheckpoint>) {
+        let checkpoint_before = checkpoint.clone();
+        let events_before = self.seqs[index].events.len();
+        let seq = &mut self.seqs[index];
+        seq.oracles
+            .restart_from(checkpoint.as_ref().map(|cp| cp.lib));
+        seq.sequencer = Some(ZoneSequencer::init_with_config(
+            self.channel_id,
+            seq.key.clone(),
+            seq.node.clone(),
+            seq.config.clone(),
+            checkpoint,
+        ));
+        seq.checker = ViewChecker::new(self.channel_id);
+        self.settle_until_ready(index).await;
+        if let Some(before) = checkpoint_before {
+            let seq = &mut self.seqs[index];
+            let after = seq.checkpoint();
+            let orphaned_since: HashSet<MsgId> = seq.events[events_before..]
+                .iter()
+                .filter_map(|event| match event {
+                    Event::BlocksProcessed { channel_update, .. } => Some(channel_update),
+                    _ => None,
+                })
+                .flat_map(|update| update.orphaned().iter())
+                .filter_map(|entry| entry.inscription().map(|info| info.this_msg))
+                .collect();
+            seq.oracles.check_restored(
+                &before,
+                after.as_ref(),
+                &orphaned_since,
+                &seq.node,
+                self.channel_id,
+                &seq.name,
+            );
+        }
+    }
+
+    /// Poll every running sequencer until none makes progress, then compare
+    /// every mirror with the node.
+    pub async fn settle(&mut self) {
+        let mut idle_rounds = 0;
+        let mut budget = MAX_EVENTS_PER_SETTLE;
+        while idle_rounds < 3 {
+            let mut progressed = false;
+            for seq in &mut self.seqs {
+                let Some(sequencer) = seq.sequencer.as_mut() else {
+                    continue;
+                };
+                while let Some(event) = poll_event(sequencer).await {
+                    progressed = true;
+                    log_event(&seq.name, &seq.node, &event);
+                    seq.checker.observe(&event);
+                    seq.mirror.observe(&event);
+                    seq.oracles.observe(&event, &seq.node, &seq.name);
+                    seq.policy.on_event(sequencer, &event).await;
+                    seq.events.push(event);
+                    budget -= 1;
+                    assert!(
+                        budget > 0,
+                        "{} never went idle: {MAX_EVENTS_PER_SETTLE} events in one settle, last {:?}",
+                        seq.name,
+                        seq.events.iter().rev().take(3).collect::<Vec<_>>()
+                    );
+                }
+            }
+            if progressed {
+                idle_rounds = 0;
+            } else {
+                idle_rounds += 1;
+                tokio::task::yield_now().await;
+            }
+        }
+        for seq in &mut self.seqs {
+            if let Some(sequencer) = seq.sequencer.as_mut() {
+                let connected = sequencer.is_connected();
+                seq.mirror
+                    .check(&seq.node, connected, self.channel_id, &seq.name);
+                seq.oracles
+                    .check(sequencer, &seq.node, self.channel_id, &seq.name);
+            }
+        }
+    }
+
+    /// Mine one block and settle.
+    pub async fn mine(&mut self) -> HeaderId {
+        let id = self.node.mine();
+        self.settle().await;
+        id
+    }
+
+    /// Mine one empty block and settle.
+    pub async fn mine_empty(&mut self) {
+        let _ = self.node.mine_empty();
+        self.settle().await;
+    }
+
+    pub async fn mine_n(&mut self, n: usize) {
+        for _ in 0..n {
+            self.mine().await;
+        }
+    }
+
+    /// Mine and settle until `done` holds, at most `max_blocks` times.
+    pub async fn mine_until(
+        &mut self,
+        max_blocks: usize,
+        mut done: impl FnMut(&mut Self) -> bool,
+    ) -> bool {
+        for _ in 0..max_blocks {
+            if done(self) {
+                return true;
+            }
+            self.mine().await;
+        }
+        done(self)
+    }
+
+    /// Mine until `hash` is on the canonical chain.
+    pub async fn include(&mut self, hash: TxHash, max_blocks: usize) {
+        assert!(
+            self.mine_until(max_blocks, |h| h.node.is_included(&hash))
+                .await,
+            "{hash:?} was not included within {max_blocks} blocks"
+        );
+    }
+
+    /// Mine until `hash` is finalized.
+    pub async fn finalize(&mut self, hash: TxHash, max_blocks: usize) {
+        assert!(
+            self.mine_until(max_blocks, |h| h.node.is_tx_finalized(&hash))
+                .await,
+            "{hash:?} was not finalized within {max_blocks} blocks"
+        );
+    }
+
+    /// Mine empty blocks until LIB reaches the tip, settling after each.
+    pub async fn finalize_tip(&mut self) {
+        let tip = self.node.tip();
+        while !self.node.is_finalized(tip) {
+            self.mine_empty().await;
+        }
+    }
+
+    /// Let SDK timers fire (resubmit, reconnect, turn wake-ups) and settle.
+    pub async fn advance(&mut self, duration: Duration) {
+        tokio::time::advance(duration).await;
+        self.settle().await;
+    }
+
+    /// Finalized history as a fresh read-only sequencer replays it.
+    pub fn indexer_finalized(&self) -> impl Future<Output = Vec<FinalizedTx>> + Send {
+        replay_finalized(self.node.clone(), self.channel_id)
+    }
+
+    /// Every violation any sequencer's checkers recorded, with its layer.
+    pub fn violations(&self) -> impl Iterator<Item = (Layer, String)> {
+        self.seqs.iter().flat_map(|s| {
+            s.checker
+                .violations()
+                .iter()
+                .map(move |(layer, v)| (layer, format!("{}: {v}", s.name)))
+                .chain(s.mirror.violations().iter().map(|(l, v)| (l, v.to_owned())))
+                .chain(
+                    s.oracles
+                        .violations()
+                        .iter()
+                        .map(|(l, v)| (l, v.to_owned())),
+                )
+        })
+    }
+
+    /// Every layer held, or panic naming the lowest broken one.
+    pub fn assert_layers(&self) {
+        self.assert_layers_through(Layer::Restarts);
+    }
+
+    /// Every layer up to and including `top` held; a check of a higher layer
+    /// is left for after the caller's own assertions on `top`.
+    pub fn assert_layers_through(&self, top: Layer) {
+        if let Some(report) = self.layer_report(top) {
+            panic!("{report}");
+        }
+    }
+
+    /// The lowest broken layer up to and including `top`, with its
+    /// violations, if any.
+    #[must_use]
+    pub fn layer_report(&self, top: Layer) -> Option<String> {
+        let violations: Vec<(Layer, String)> = self
+            .violations()
+            .filter(|(layer, _)| *layer <= top)
+            .collect();
+        layers::report(violations.iter().map(|(l, v)| (*l, v.as_str())))
+    }
+}
+
+/// Replay the finalized history of `channel_id` with a fresh read-only
+/// sequencer, up to its `Ready`.
+pub async fn replay_finalized(node: SimNode, channel_id: ChannelId) -> Vec<FinalizedTx> {
+    let mut reader = ZoneSequencer::init(
+        channel_id,
+        key(0xEE),
+        node.clone(),
+        funding_config(&node),
+        None,
+    );
+    let mut finalized = Vec::new();
+    let mut idle_rounds = 0;
+    // A fetch the node fails sends the reader through a reconnect delay,
+    // so idle polls let that delay pass.
+    // A chain that fails fetches makes the reader reconnect several times.
+    while idle_rounds < 60 {
+        match poll_event(&mut reader).await {
+            Some(Event::Ready) => return finalized,
+            Some(Event::BlocksProcessed {
+                finalized: batch, ..
+            }) => finalized.extend(batch),
+            Some(Event::TurnNotification { .. }) => {}
+            None => {
+                idle_rounds += 1;
+                tokio::time::advance(RECONNECT_DELAY).await;
+                tokio::task::yield_now().await;
+            }
+        }
+    }
+    panic!("indexer replay did not reach Ready");
+}
+
+/// A passive policy boxed for [`Harness::start`].
+#[must_use]
+pub fn passive() -> Box<dyn Policy> {
+    Box::new(PassivePolicy)
+}
+
+/// The SDK's own log lines are its actor's; this names the sequencer the
+/// lines just above belong to, and spells out a turn claim.
+fn log_event(name: &str, node: &SimNode, event: &Event) {
+    tracing::debug!(
+        seq = %name,
+        event = match event {
+            Event::BlocksProcessed { .. } => "blocks processed",
+            Event::Ready => "ready",
+            Event::TurnNotification { .. } => "turn notification",
+        }
+    );
+    if let Event::TurnNotification { notification } = event {
+        tracing::debug!(
+            seq = %name,
+            our_turn = notification.our_turn_to_write,
+            at_slot = ?notification.current_slot,
+            starts = ?notification.starting_slot,
+            ends = ?notification.ends_at_slot,
+            delivered = node.delivered_count(),
+            node_slot = ?node.tip_slot(),
+            "turn claim"
+        );
+    }
+}

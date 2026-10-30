@@ -5728,6 +5728,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-zone-sdk-testing"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "logos-blockchain-common-http-client",
+ "logos-blockchain-core",
+ "logos-blockchain-http-api-common",
+ "logos-blockchain-key-management-system-service",
+ "logos-blockchain-zone-sdk",
+ "num-bigint",
+ "proptest",
+ "thiserror 2.0.21",
+ "time",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "logos-blockchain-zone-tests"
 version = "0.0.0"
 dependencies = [
