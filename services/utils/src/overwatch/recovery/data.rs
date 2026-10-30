@@ -29,6 +29,14 @@ impl RecoveryData {
             .map_err(|error| RecoveryError::Backend(error.to_string()))
             .map(|mut entries| entries.remove(key))
     }
+
+    /// The entry under `key`, left in place for the service that takes it.
+    pub fn get(&self, key: &[u8]) -> RecoveryResult<Option<Bytes>> {
+        self.0
+            .lock()
+            .map_err(|error| RecoveryError::Backend(error.to_string()))
+            .map(|entries| entries.get(key).cloned())
+    }
 }
 
 impl fmt::Debug for RecoveryData {
