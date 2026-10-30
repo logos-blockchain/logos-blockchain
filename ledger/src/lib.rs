@@ -1041,7 +1041,7 @@ mod tests {
             },
             traits::Hashable as _,
             transactions::{
-                OpProofs, Ops,
+                OpProofs, Ops, TxList,
                 hash::TxHashView,
                 states::{Preverified, Unverified},
             },
@@ -1067,7 +1067,7 @@ mod tests {
             ledger, update_ledger, utxo_with_sk,
         },
         mantle::{leader::LeaderState, sdp::test_utils::generate_activity_proof},
-        test_utils::{schedule, single_era},
+        test_utils::{FORK_DIGEST, schedule, single_era},
     };
 
     fn create_test_keys() -> (Ed25519Key, Ed25519PublicKey) {
@@ -1085,7 +1085,7 @@ mod tests {
             Inputs::try_new(inputs).expect("Invalid inputs size"),
             Outputs::try_new(outputs).expect("Invalid outputs size"),
         );
-        let mantle_tx = Ops::from([Op::Transfer(transfer_op)]);
+        let mantle_tx = Ops::new(FORK_DIGEST, [Op::Transfer(transfer_op)]);
         let ops_proofs = OpProofs::from([OpProof::ZkSig(
             ZkKey::multi_sign(sks, &mantle_tx.hash().to_fr()).unwrap(),
         )]);
@@ -1169,7 +1169,7 @@ mod tests {
         ops_vec: Vec<Op>,
         signing_keys: Vec<&Key>,
     ) -> SignedOps<Preverified, StandardMode> {
-        let ops = Ops::new_unchecked(ops_vec);
+        let ops = Ops::new(FORK_DIGEST, TxList::new_unchecked(ops_vec));
 
         let tx_hash = ops.hash();
         let ops_proofs = signing_keys
@@ -1230,7 +1230,7 @@ mod tests {
         config_op: ChannelConfigOp,
         signing_key: &Ed25519Key,
     ) -> SignedOps<Preverified, StandardMode> {
-        let ops = Ops::from([Op::ChannelConfig(config_op.clone())]);
+        let ops = Ops::new(FORK_DIGEST, [Op::ChannelConfig(config_op.clone())]);
         let config_tx_hash = ops.hash();
         let config_proof = ChannelMultiSigProof::new(IndexedSignatures::from((
             0,
@@ -1306,10 +1306,13 @@ mod tests {
         let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(1u8).into()));
         let sk = ZkKey::from(BigUint::from(0u8));
         // determine fees
-        let ops = Ops::from([Op::Transfer(TransferOp::new(
-            Inputs::try_new(vec![utxo.id()]).unwrap(),
-            Outputs::try_new(vec![output_note]).unwrap(),
-        ))]);
+        let ops = Ops::new(
+            FORK_DIGEST,
+            [Op::Transfer(TransferOp::new(
+                Inputs::try_new(vec![utxo.id()]).unwrap(),
+                Outputs::try_new(vec![output_note]).unwrap(),
+            ))],
+        );
 
         let gas_context = OpsGasContext::from_channels(&Channels::new(), GasPrices::default());
         let fees = ops
@@ -1872,7 +1875,7 @@ mod tests {
             channel_id,
             inputs: BoundedInputs::from(deposited).into(),
         };
-        let withdraw_tx = Ops::from([Op::ChannelWithdraw(withdraw)]);
+        let withdraw_tx = Ops::new(FORK_DIGEST, [Op::ChannelWithdraw(withdraw)]);
         let withdraw_tx_hash = withdraw_tx.hash();
         let withdraw_proof = ChannelMultiSigProof::new(IndexedSignatures::from((
             0,
@@ -1948,7 +1951,7 @@ mod tests {
             Op::ChannelWithdraw(withdraw),
         ];
 
-        let tx_hash = Ops::new_unchecked(ops.clone()).hash();
+        let tx_hash = Ops::new(FORK_DIGEST, TxList::new_unchecked(ops.clone())).hash();
         let genesis_key = Key::MultiSequencer(ChannelMultiSigProof::empty());
         let deposit_key = Key::Zk(sk);
         let withdraw_key = Key::MultiSequencer(ChannelMultiSigProof::new(IndexedSignatures::from(
@@ -2018,7 +2021,7 @@ mod tests {
             Op::ChannelConfig(config_op),
         ];
 
-        let tx_hash = Ops::new_unchecked(ops.clone()).hash();
+        let tx_hash = Ops::new(FORK_DIGEST, TxList::new_unchecked(ops.clone())).hash();
         let inscribe_key = Key::Ed25519(signing_key.clone());
         let config_key = Key::MultiSequencer(ChannelMultiSigProof::new(IndexedSignatures::from((
             0,
@@ -2089,7 +2092,7 @@ mod tests {
             Op::ChannelWithdraw(withdraw),
         ];
 
-        let tx_hash = Ops::new_unchecked(ops.clone()).hash();
+        let tx_hash = Ops::new(FORK_DIGEST, TxList::new_unchecked(ops.clone())).hash();
         let inscribe_key = Key::Ed25519(signing_key.clone());
         let deposit_key = Key::Zk(sk);
         let withdraw_key = Key::MultiSequencer(ChannelMultiSigProof::new(IndexedSignatures::from(
@@ -2158,7 +2161,7 @@ mod tests {
             Op::ChannelTransfer(transfer),
         ];
 
-        let tx_hash = Ops::new_unchecked(ops.clone()).hash();
+        let tx_hash = Ops::new(FORK_DIGEST, TxList::new_unchecked(ops.clone())).hash();
         let inscribe_key = Key::Ed25519(signing_key.clone());
         let deposit_key = Key::Zk(sk);
         let transfer_key = Key::MultiSequencer(ChannelMultiSigProof::new(IndexedSignatures::from(
@@ -2226,10 +2229,13 @@ mod tests {
 
         // Withdraw releases the channel note under the NoteId the deposit gave
         // it, so the original input never comes back to the ledger.
-        let withdraw_tx = Ops::from([Op::ChannelWithdraw(ChannelWithdrawOp {
-            channel_id,
-            inputs: BoundedInputs::from(deposited).into(),
-        })]);
+        let withdraw_tx = Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelWithdraw(ChannelWithdrawOp {
+                channel_id,
+                inputs: BoundedInputs::from(deposited).into(),
+            })],
+        );
         let withdraw_proof = ChannelMultiSigProof::new(IndexedSignatures::from((
             0,
             signing_key.sign_payload(withdraw_tx.hash().as_signing_bytes()),
@@ -2300,7 +2306,7 @@ mod tests {
             inputs: BoundedInputs::from(deposited).into(),
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
-        let withdraw_tx = Ops::from([Op::ChannelWithdraw(withdraw)]);
+        let withdraw_tx = Ops::new(FORK_DIGEST, [Op::ChannelWithdraw(withdraw)]);
         let withdraw_tx_hash = withdraw_tx.hash();
         let invalid_proof = ChannelMultiSigProof::new(IndexedSignatures::from((
             0,
@@ -2530,7 +2536,7 @@ mod tests {
             Op::ChannelConfig(config_op.clone()),
             Op::ChannelInscribe(inscribe_op3.clone()),
         ];
-        let config_tx = Ops::new_unchecked(ops.clone());
+        let config_tx = Ops::new(FORK_DIGEST, TxList::new_unchecked(ops.clone()));
         let config_tx_hash = config_tx.hash();
         let config_proof = ChannelMultiSigProof::new(IndexedSignatures::from((
             0,
@@ -3121,7 +3127,7 @@ mod tests {
         }
 
         fn claim_tx() -> SignedOps<Preverified, StandardMode> {
-            let mantle_tx = Ops::from([Op::ClaimPowReward(claim_op())]);
+            let mantle_tx = Ops::new(FORK_DIGEST, [Op::ClaimPowReward(claim_op())]);
             let op_proofs = OpProofs::from([OpProof::None(NoOpProof)]);
             SignedOps::from_parts(mantle_tx, op_proofs)
                 .unwrap()

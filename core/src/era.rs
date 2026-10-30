@@ -72,6 +72,11 @@ pub struct ForkDigest([u8; 32]);
 const FORK_DIGEST_V1: &[u8] = b"FORK_DIGEST_V1";
 
 impl ForkDigest {
+    #[must_use]
+    pub const fn new(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
     /// `blake2b256(b"FORK_DIGEST_V1" || genesis_id || era_0 || … || era_n)`,
     /// over the canonical encodings of the genesis block ID and of the digest
     /// of each activated era, in activation order.

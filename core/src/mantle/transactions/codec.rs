@@ -88,6 +88,7 @@ mod tests {
     use crate::{
         mantle::{
             Note, NoteId, Op, OpProof, Utxo,
+            fixtures::ops::op_values::FORK_DIGEST,
             ledger::{
                 BoundedInputs, BoundedOutputs, Inputs, Outputs, verification_mode::StandardMode,
             },
@@ -104,7 +105,7 @@ mod tests {
                 transfer::TransferOp,
             },
             traits::{Hashable as _, MantleTx as _},
-            transactions::{GasPrices, OpProofs, SignedOps, tx_list::Ops},
+            transactions::{GasPrices, OpProofs, SignedOps, TxList, tx_list::Ops},
         },
         proofs::{
             channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
@@ -145,12 +146,15 @@ mod tests {
     #[test]
     fn test_decode_signed_mantle_tx_with_inscribe() {
         let signing_key = Ed25519Key::from_bytes(&[4u8; 32]);
-        let tx = Ops::from([Op::ChannelInscribe(InscriptionOp {
-            channel_id: ChannelId::from([0xAA; 32]),
-            inscription: b"hello".into(),
-            parent: MsgId::from([0xBB; 32]),
-            signer: signing_key.public_key().into_unverified(),
-        })]);
+        let tx = Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelInscribe(InscriptionOp {
+                channel_id: ChannelId::from([0xAA; 32]),
+                inscription: b"hello".into(),
+                parent: MsgId::from([0xBB; 32]),
+                signer: signing_key.public_key().into_unverified(),
+            })],
+        );
 
         let tx_hash = tx.hash();
         let inscribe_sig =
@@ -163,6 +167,7 @@ mod tests {
             reason = "Recommended String::push_str does not support chaining"
         )]
         let test_vector = String::new()
+            + "1111111111111111111111111111111111111111111111111111111111111111" // ForkDigest (32Byte)
             + "01"                                                               // OpCount
             + "11"                                                               // OpCode
             + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // ChannelID (32Byte)
@@ -170,8 +175,8 @@ mod tests {
             + "68656c6c6f"                                                       // Inscription
             + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" // Parent (32Byte)
             + "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c" // Signer (32Byte)
-            + "4ec789fc67b7f7bfba02f8cc7f3f671a107225faefbe60ca0b8e9e7e8e43e8db" // Signature (64Byte)
-            + "835075aed539fac37e0fdc03acc2aba873e43eef8a835476c4c6bdaaba866901";
+            + "8f88bb21e98b642d9407ec6d7502ba3e383d31e22e042c1427e999cc824e46a4" // Signature (64Byte)
+            + "887c4fa622d60790c3c4162eb51e3a06ba21ef6d389a37c6ad8f315e6b218206";
 
         // ENCODING
         let encoded = hex::encode(signed_tx.encode());
@@ -189,26 +194,29 @@ mod tests {
     #[test]
     fn test_decode_signed_mantle_tx_with_multiple_ops() {
         let signing_key = Ed25519Key::from_bytes(&[4u8; 32]);
-        let tx = Ops::new_unchecked(vec![
-            Op::ChannelInscribe(InscriptionOp {
-                channel_id: ChannelId::from([0x11; 32]),
-                inscription: b"first".into(),
-                parent: MsgId::from([0x00; 32]),
-                signer: signing_key.public_key().into_unverified(),
-            }),
-            Op::ChannelConfig(
-                ChannelConfigOp::new(
-                    ChannelId::from([0x22; 32]),
-                    MsgId::from([0x33; 32]),
-                    signing_key.public_key().into(),
-                    1.into(),
-                    2.into(),
-                    NonZero::<u16>::MIN,
-                    NonZero::new(4).unwrap(),
-                )
-                .unwrap(),
-            ),
-        ]);
+        let tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![
+                Op::ChannelInscribe(InscriptionOp {
+                    channel_id: ChannelId::from([0x11; 32]),
+                    inscription: b"first".into(),
+                    parent: MsgId::from([0x00; 32]),
+                    signer: signing_key.public_key().into_unverified(),
+                }),
+                Op::ChannelConfig(
+                    ChannelConfigOp::new(
+                        ChannelId::from([0x22; 32]),
+                        MsgId::from([0x33; 32]),
+                        signing_key.public_key().into(),
+                        1.into(),
+                        2.into(),
+                        NonZero::<u16>::MIN,
+                        NonZero::new(4).unwrap(),
+                    )
+                    .unwrap(),
+                ),
+            ]),
+        );
 
         let tx_hash = tx.hash();
         let sig = signing_key.sign_payload(tx_hash.as_signing_bytes());
@@ -254,7 +262,10 @@ mod tests {
                     signer: signing_key.public_key().into_unverified(),
                 };
 
-                let tx = Ops::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]);
+                let tx = Ops::new(
+                    FORK_DIGEST,
+                    TxList::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]),
+                );
 
                 let tx_hash = tx.hash();
                 let op_sig = signing_key.sign_payload(tx_hash.as_signing_bytes());
@@ -304,7 +315,10 @@ mod tests {
         let transfer_op =
             TransferOp::new(BoundedInputs::from(note_id).into(), Outputs::new([note]));
 
-        let original_tx = Ops::new_unchecked(vec![Op::Transfer(transfer_op)]);
+        let original_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::Transfer(transfer_op)]),
+        );
 
         // Encode
         let encoded = original_tx.encode();
@@ -320,7 +334,7 @@ mod tests {
     #[test]
     fn test_minimum_signed_mantle_tx_size_empty_tx() {
         // Create an empty MantleTx
-        let mantle_tx = Ops::new_unchecked(vec![]);
+        let mantle_tx = Ops::new(FORK_DIGEST, TxList::new_unchecked(vec![]));
 
         // Predict size
         let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
@@ -345,7 +359,10 @@ mod tests {
             signer: signing_key.public_key().into_unverified(),
         };
 
-        let mantle_tx = Ops::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]),
+        );
 
         // Predict size
         let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
@@ -384,7 +401,10 @@ mod tests {
         )
         .unwrap();
 
-        let mantle_tx = Ops::new_unchecked(vec![Op::ChannelConfig(config_op)]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::ChannelConfig(config_op)]),
+        );
 
         // Predict size
         let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
@@ -430,7 +450,10 @@ mod tests {
             service_note_id: service_note.id(),
         };
 
-        let mantle_tx = Ops::new_unchecked(vec![Op::SDPDeclare(sdp_declare_op)]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::SDPDeclare(sdp_declare_op)]),
+        );
 
         // Predict size
         let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
@@ -457,7 +480,10 @@ mod tests {
             nonce: Nonce::new(0.into(), 42),
         };
 
-        let mantle_tx = Ops::new_unchecked(vec![Op::SDPWithdraw(sdp_withdraw_op)]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::SDPWithdraw(sdp_withdraw_op)]),
+        );
 
         let tx_hash = mantle_tx.hash();
 
@@ -495,7 +521,10 @@ mod tests {
             metadata,
         };
 
-        let mantle_tx = Ops::new_unchecked(vec![Op::SDPActive(sdp_active_op)]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::SDPActive(sdp_active_op)]),
+        );
 
         let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
@@ -548,11 +577,14 @@ mod tests {
             metadata: ActivityMetadata::Blend(Box::new(blend_proof)),
         };
 
-        let mantle_tx = Ops::new_unchecked(vec![
-            Op::ChannelInscribe(inscribe_op),
-            Op::ChannelConfig(config_op),
-            Op::SDPActive(sdp_active_op),
-        ]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![
+                Op::ChannelInscribe(inscribe_op),
+                Op::ChannelConfig(config_op),
+                Op::SDPActive(sdp_active_op),
+            ]),
+        );
 
         // Predict size
         let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
@@ -594,7 +626,10 @@ mod tests {
             Outputs::new([note1, note2]),
         );
 
-        let mantle_tx = Ops::new_unchecked(vec![Op::Transfer(transfer_op)]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::Transfer(transfer_op)]),
+        );
 
         // Predict size
         let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
@@ -653,12 +688,15 @@ mod tests {
                 .id(),
         };
 
-        let mantle_tx = Ops::new_unchecked(vec![
-            Op::ChannelInscribe(inscribe_op),
-            Op::ChannelConfig(config_op),
-            Op::SDPDeclare(sdp_declare_op),
-            Op::Transfer(transfer_op),
-        ]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![
+                Op::ChannelInscribe(inscribe_op),
+                Op::ChannelConfig(config_op),
+                Op::SDPDeclare(sdp_declare_op),
+                Op::Transfer(transfer_op),
+            ]),
+        );
 
         // Predict size
         let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
@@ -694,7 +732,10 @@ mod tests {
             pk: ZkPublicKey::from(BigUint::from(0u64)),
         };
 
-        let mantle_tx = Ops::new_unchecked(vec![Op::LeaderClaim(leader_claim_op)]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::LeaderClaim(leader_claim_op)]),
+        );
 
         let empty_gas_context =
             OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
@@ -730,15 +771,18 @@ mod tests {
     #[test]
     fn test_encode_decode_channel_withdraw_tx() {
         let signing_key = Ed25519Key::from_bytes(&[21u8; 32]);
-        let mantle_tx = Ops::new_unchecked(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
-            channel_id: ChannelId::from([0xAB; 32]),
-            inputs: BoundedInputs::try_from_iter([
-                NoteId(BigUint::from(100u64).into()),
-                NoteId(BigUint::from(200u64).into()),
-            ])
-            .unwrap()
-            .into(),
-        })]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
+                channel_id: ChannelId::from([0xAB; 32]),
+                inputs: BoundedInputs::try_from_iter([
+                    NoteId(BigUint::from(100u64).into()),
+                    NoteId(BigUint::from(200u64).into()),
+                ])
+                .unwrap()
+                .into(),
+            })]),
+        );
         let tx_hash = mantle_tx.hash();
         let proof = ChannelMultiSigProof::new(IndexedSignatures::from((
             0,
@@ -802,7 +846,7 @@ mod tests {
             u8::MAX as usize + 1
         ];
 
-        let result = Ops::try_from(ops);
+        let result = TxList::try_from(ops).map(|ops| Ops::new(FORK_DIGEST, ops));
         assert_eq!(
             result,
             Err(BoundedError::TooManyItems {

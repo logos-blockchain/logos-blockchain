@@ -16,7 +16,7 @@ use lb_core::{
                 withdraw::ChannelWithdrawOp,
             },
         },
-        transactions::{OpProofs, Ops, states::Unverified},
+        transactions::{OpProofs, Ops, TxList, states::Unverified},
     },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
@@ -35,8 +35,8 @@ use super::{
     *,
 };
 use crate::test_support::{
-    MockNode, StreamEnd, StreamScript, api_block, funding_config, header_id, inscribe_op,
-    live_event, scripts, single_key_channel_state, unverified_tx_with_ops,
+    FORK_DIGEST, MockNode, StreamEnd, StreamScript, api_block, funding_config, header_id,
+    inscribe_op, live_event, scripts, single_key_channel_state, unverified_tx_with_ops,
 };
 
 #[must_use]
@@ -81,7 +81,7 @@ async fn prepare_submit_deposit_and_inscription() {
     let (tx, msg_id, inscription_sig) = sequencer
         .handle()
         .prepare_tx(
-            [Op::ChannelDeposit(deposit_op.clone())].into(),
+            Ops::new(FORK_DIGEST, [Op::ChannelDeposit(deposit_op.clone())]),
             b"Mint 10 to Alice".into(),
         )
         .unwrap();
@@ -137,7 +137,10 @@ async fn submit_signed_tx_refuses_a_parent_with_a_pending_child() {
 
     let (tx, msg_id, inscription_sig) = sequencer
         .handle()
-        .prepare_tx(Ops::new_unchecked(Vec::new()), b"prepared first".into())
+        .prepare_tx(
+            Ops::new(FORK_DIGEST, TxList::new_unchecked(Vec::new())),
+            b"prepared first".into(),
+        )
         .unwrap();
     let signed_tx =
         SignedOps::from_parts(tx, OpProofs::from([OpProof::Ed25519Sig(inscription_sig)]))
@@ -1155,10 +1158,13 @@ fn track_pending_tx_classifies_atomic_bundle_with_withdraws() {
             .public_key()
             .into_unverified(),
     };
-    let mantle_tx = Ops::from([
-        Op::ChannelWithdraw(withdraw_op.clone()),
-        Op::ChannelInscribe(inscribe_op),
-    ]);
+    let mantle_tx = Ops::new(
+        FORK_DIGEST,
+        [
+            Op::ChannelWithdraw(withdraw_op.clone()),
+            Op::ChannelInscribe(inscribe_op),
+        ],
+    );
     let tx_hash = mantle_tx.hash();
     let signed_tx = SignedOps::from_ops_with_sample_proofs(mantle_tx);
 
@@ -1191,7 +1197,7 @@ fn track_pending_tx_classifies_plain_inscription_with_none_withdraws() {
             .public_key()
             .into_unverified(),
     };
-    let mantle_tx = Ops::from([Op::ChannelInscribe(inscribe_op)]);
+    let mantle_tx = Ops::new(FORK_DIGEST, [Op::ChannelInscribe(inscribe_op)]);
     let tx_hash = mantle_tx.hash();
     let signed_tx = SignedOps::from_ops_with_sample_proofs(mantle_tx);
 
@@ -1218,7 +1224,7 @@ fn track_pending_tx_falls_back_to_other_when_no_inscribe_for_channel() {
             .public_key()
             .into_unverified(),
     };
-    let mantle_tx = Ops::from([Op::ChannelInscribe(inscribe_op)]);
+    let mantle_tx = Ops::new(FORK_DIGEST, [Op::ChannelInscribe(inscribe_op)]);
     let tx_hash = mantle_tx.hash();
     let signed_tx = SignedOps::from_ops_with_sample_proofs(mantle_tx);
 
@@ -2033,7 +2039,7 @@ async fn submit_atomic_bundle_rejects_a_bundle_prepared_by_another_sequencer() {
 
     let sign_payload = vec![0xab; 32];
     let bundle_by = |preparer: &Ed25519Key| PreparedAtomicBundle {
-        tx: Ops::new_unchecked(Vec::new()),
+        tx: Ops::new(FORK_DIGEST, TxList::new_unchecked(Vec::new())),
         transfer_proof: None,
         pre_fund: MantleTxBuilder::new(),
         inscribe_sig: preparer.sign_payload(&sign_payload),

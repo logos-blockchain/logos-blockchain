@@ -540,7 +540,7 @@ where
     txs.map_ref(move |tx| {
         let mut events_by_op = events_by_tx.remove(&tx.hash()).unwrap_or_default();
 
-        let ops = tx.op_refs().into_inner().filter_map_ref(|op_ref| {
+        let ops = tx.op_refs().inner().filter_map_ref(|op_ref| {
             let event = op_id_ref(op_ref).and_then(|id| events_by_op.remove(&id));
             transform_op(op_ref, event)
         });
@@ -874,6 +874,7 @@ mod tests {
 
     use lb_core::{
         crypto::ZkDigest as _,
+        era::ForkDigest,
         mantle::{
             Note, Op, OpProof, SignedOps,
             channel::Channels,
@@ -884,7 +885,7 @@ mod tests {
                 deposit::Metadata,
                 inscribe::{Inscription, InscriptionOp},
             },
-            transactions::{GasPrices, OpProofs, Ops, tx_list::ops::OpsGasContext},
+            transactions::{GasPrices, OpProofs, Ops, TxList, tx_list::ops::OpsGasContext},
         },
         proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
         sdp::{MinStake, ServiceParameters, ServiceType},
@@ -906,6 +907,8 @@ mod tests {
     use rpds::HashTrieSetSync;
 
     use super::*;
+
+    const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
 
     fn pk(v: u64) -> ZkPublicKey {
         ZkPublicKey::from(BigUint::from(v))
@@ -1445,13 +1448,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            794,
+            826,
             funded_tx_builder
                 .minimum_gas_cost::<Gas>(&context)
                 .unwrap()
                 .into_inner()
         );
-        assert_eq!(794, funded_tx_builder.net_balance());
+        assert_eq!(826, funded_tx_builder.net_balance());
         assert_eq!(
             0,
             funded_tx_builder
@@ -1459,7 +1462,7 @@ mod tests {
                 .unwrap()
         );
 
-        let funded_tx = funded_tx_builder.build().unwrap();
+        let funded_tx = funded_tx_builder.build(FORK_DIGEST).unwrap();
 
         if let Some(Op::Transfer(transfer_op)) = funded_tx.last() {
             // ensure alices utxo was used to pay the fee
@@ -1468,7 +1471,7 @@ mod tests {
             assert_eq!(
                 transfer_op.outputs,
                 Outputs::new([Note {
-                    value: 4206,
+                    value: 4174,
                     pk: alice,
                 }])
             );
@@ -1517,8 +1520,8 @@ mod tests {
             .minimum_gas_cost::<Gas>(&context)
             .unwrap()
             .into_inner();
-        assert_eq!(mandatory_fee_without_change, 754);
-        assert_eq!(mandatory_fee, 794);
+        assert_eq!(mandatory_fee_without_change, 786);
+        assert_eq!(mandatory_fee, 826);
         let priority_fee_amount = (mandatory_fee * priority_fee_percent).div_ceil(100);
         assert_eq!(
             i128::from(mandatory_fee + priority_fee_amount),
@@ -1532,7 +1535,7 @@ mod tests {
         );
 
         // The change output shrank by the mandatory fee and percentage tip.
-        let funded_tx = funded_tx_builder.build().unwrap();
+        let funded_tx = funded_tx_builder.build(FORK_DIGEST).unwrap();
         if let Some(Op::Transfer(transfer_op)) = funded_tx.last() {
             assert_eq!(
                 transfer_op.outputs,
@@ -1585,7 +1588,7 @@ mod tests {
         assert_eq!(0, funded_tx_builder.net_balance());
 
         // The empty transfer is dropped, so the built tx carries no transfer op.
-        let funded_tx = funded_tx_builder.build().unwrap();
+        let funded_tx = funded_tx_builder.build(FORK_DIGEST).unwrap();
         assert!(
             !funded_tx.iter().any(|op| matches!(op, Op::Transfer(_))),
             "a fee-less transaction must not contain a transfer op"
@@ -1746,7 +1749,7 @@ mod tests {
 
         // Determine gas cost without change note
         assert_eq!(
-            754,
+            786,
             tx_builder
                 .clone()
                 .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
@@ -1761,7 +1764,7 @@ mod tests {
         let wallet_state = WalletState::from_ledger(
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(754, alice))],
+                [Utxo::new(tx_hash(0), 0, Note::new(786, alice))],
                 &ledger_config(),
                 0,
                 &ConsensusExcludedKeys::empty(),
@@ -1771,7 +1774,7 @@ mod tests {
         let funded_tx_wo_change = wallet_state
             .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
             .unwrap()
-            .build()
+            .build(FORK_DIGEST)
             .unwrap(); // successfully funded the tx
 
         // verify that no change output was used.
@@ -1783,7 +1786,7 @@ mod tests {
 
         // Determine gas cost with change note
         assert_eq!(
-            794,
+            826,
             tx_builder
                 .clone()
                 .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
@@ -1795,7 +1798,7 @@ mod tests {
                 .into_inner()
         );
 
-        for value in 755..=794 {
+        for value in 787..=826 {
             // this region of note values will fail to fund the tx.
             // We can fund the tx if the note value is exactly the gas cost without change
             // note
@@ -1828,7 +1831,7 @@ mod tests {
         let wallet_state = WalletState::from_ledger(
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(795, alice))],
+                [Utxo::new(tx_hash(0), 0, Note::new(827, alice))],
                 &ledger_config(),
                 0,
                 &ConsensusExcludedKeys::empty(),
@@ -1838,7 +1841,7 @@ mod tests {
         let funded_tx_wo_change = wallet_state
             .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
             .unwrap()
-            .build()
+            .build(FORK_DIGEST)
             .unwrap(); // successfully funded the tx
 
         // verify that indeed a change output was used.
@@ -2378,7 +2381,9 @@ mod tests {
     }
 
     fn signed_test_tx(ops: Vec<Op>) -> SignedOps<Preverified, StandardMode> {
-        let ops = Ops::try_from(ops).expect("test operations should fit");
+        let ops = TxList::try_from(ops)
+            .map(|ops| Ops::new(FORK_DIGEST, ops))
+            .expect("test operations should fit");
         let proofs = ops
             .iter()
             .map(|op| match op {

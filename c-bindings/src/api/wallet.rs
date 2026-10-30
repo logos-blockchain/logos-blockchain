@@ -1467,7 +1467,10 @@ pub(crate) fn channel_deposit_sync(
         // `funding_public_key`, so    one signature over the tx hash
         // satisfies both op proofs. Do not "simplify"    this to
         // `sign_tx`.
-        let tx = Ops::from([Op::Transfer(transfer), Op::ChannelDeposit(deposit)]);
+        let tx = Ops::new(
+            node.fork_digest_in_force().await?,
+            [Op::Transfer(transfer), Op::ChannelDeposit(deposit)],
+        );
         let tx_hash = tx.hash();
         let user_sig = api
             .sign_tx_with_zk(tx_hash, vec![funding_public_key])
@@ -1641,12 +1644,14 @@ pub(crate) fn wallet_fund_tx_sync(
             .map(|utxo| utxo.note.pk)
             .collect();
 
-        let funded_tx = funded_tx_builder.build().map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!("Failed to build funded tx: {error}"),
-            )
-        })?;
+        let funded_tx = funded_tx_builder
+            .build(node.fork_digest_in_force().await?)
+            .map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Failed to build funded tx: {error}"),
+                )
+            })?;
         let transfer_proof = if funding_note_pks.is_empty() {
             None
         } else {

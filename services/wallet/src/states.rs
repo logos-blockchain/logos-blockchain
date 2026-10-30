@@ -429,6 +429,7 @@ impl<'u> ServiceState<'u> {
 
 #[cfg(test)]
 mod tests {
+    use lb_core::era::ForkDigest;
     use lb_groth16::{Field as _, Fr};
     use lb_ledger::ConsensusExcludedKeys;
 
@@ -459,6 +460,7 @@ mod tests {
         .map(|_| WalletEraSettings {
             epoch_length: timing.epoch_length,
             security_param: NonZero::new(5).unwrap(),
+            fork_digest: ForkDigest::new([0x11; 32]),
         })
     }
 

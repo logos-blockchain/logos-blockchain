@@ -696,6 +696,7 @@ mod tests {
     use super::*;
     use crate::{
         cryptarchia::tests::utxo_with_sk, mantle::sdp::test_utils::generate_activity_proof,
+        test_utils::FORK_DIGEST,
     };
 
     fn setup(service_params: ServiceParameters) -> Config {
@@ -843,7 +844,7 @@ mod tests {
     }
 
     fn withdraw_tx_hash_view(operation: SDPWithdrawOp) -> TxHashView {
-        TxHashView::from(Ops::from([Op::SDPWithdraw(operation)]).hash())
+        TxHashView::from(Ops::new(FORK_DIGEST, [Op::SDPWithdraw(operation)]).hash())
     }
 
     /// A declaration keeps its service note locked through `withdraw_at` and

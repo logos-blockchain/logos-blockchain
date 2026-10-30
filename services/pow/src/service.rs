@@ -19,6 +19,7 @@ use lb_chain_service::{
     api::{ApiError as ChainApiError, CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
+    era::ForkDigest,
     events::{Event, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
@@ -233,6 +234,8 @@ pub struct PoWEraSettings {
     /// When it is not, no claim can succeed, so auto-claim does not run in the
     /// era.
     pub rewards_enabled: bool,
+    /// The fork digest of the era, which the claims signed in it carry.
+    pub fork_digest: ForkDigest,
 }
 
 /// One auto-claim destination: a key and the balance we want it to reach.
@@ -644,6 +647,7 @@ where
                                 &auto_claim_settings.targets,
                                 &mut state,
                                 &settings.era_schedule,
+                                current_era_settings.parameters.fork_digest,
                             )
                             .await
                             .inspect_err(|e| {
@@ -762,6 +766,7 @@ where
                     &mut state,
                     &state_updater,
                     &settings.era_schedule,
+                    current_era_settings.parameters.fork_digest,
                 )
                 .await;
                 if !is_auto_claiming && is_mining {
@@ -1089,6 +1094,10 @@ fn neediest_target(
 /// The thresholds are checked on every tick, even with no ticket ready: mining
 /// may be paused on the reward pool while earlier claims settle, and the
 /// balances those claims raise are what should stop it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "A claim reads the service's state, its services and the era in force"
+)]
 async fn run_auto_claim<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
@@ -1097,6 +1106,7 @@ async fn run_auto_claim<CryptarchiaService, BlendService, WalletService, Runtime
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     era_schedule: &ServiceEraSchedule,
+    fork_digest: ForkDigest,
 ) -> bool
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -1131,6 +1141,7 @@ where
         state,
         state_updater,
         era_schedule,
+        fork_digest,
     )
     .await;
     true
@@ -1155,6 +1166,7 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     era_schedule: &ServiceEraSchedule,
+    fork_digest: ForkDigest,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
     BlendService: BlendServiceData,
@@ -1177,6 +1189,7 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
             claim_address,
             state,
             era_schedule,
+            fork_digest,
             available_pool,
         )
         .await
@@ -1213,6 +1226,10 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
 /// Serves a [`PoWServiceMessage::Claim`]: one claim transaction paid to
 /// `claim_address`, or to the target auto-claim would pick when the caller did
 /// not name a key.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "A claim reads the service's state, its services and the era in force"
+)]
 async fn manual_claim<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
@@ -1221,6 +1238,7 @@ async fn manual_claim<CryptarchiaService, BlendService, WalletService, RuntimeSe
     targets: &[ClaimTarget],
     state: &mut PoWServiceState,
     era_schedule: &ServiceEraSchedule,
+    fork_digest: ForkDigest,
 ) -> Result<Option<TxHash>, PoWError>
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -1248,6 +1266,7 @@ where
         claim_address,
         state,
         era_schedule,
+        fork_digest,
         available_pool,
     )
     .await?
@@ -1295,6 +1314,7 @@ async fn claim_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
     claim_address: ZkPublicKey,
     state: &mut PoWServiceState,
     era_schedule: &ServiceEraSchedule,
+    fork_digest: ForkDigest,
     available_pool: Value,
 ) -> Result<Option<PublishedClaim>, PoWError>
 where
@@ -1342,8 +1362,14 @@ where
     // caps the batch (op limit / reward pool) and claims a prefix of
     // `tickets` (the canonical ones, in ready order); move exactly those to
     // the pending set.
-    let (signed_tx, claimed_count) =
-        build_reward_claim_tx(claim_address, &ledger_state, available_pool, &tickets).await?;
+    let (signed_tx, claimed_count) = build_reward_claim_tx(
+        claim_address,
+        fork_digest,
+        &ledger_state,
+        available_pool,
+        &tickets,
+    )
+    .await?;
     // Capture the tx id before publishing consumes the signed tx, so it can be
     // reported back to the caller.
     let tx_hash = signed_tx.hash();
@@ -1619,7 +1645,9 @@ fn claim_tx_size(claims: usize) -> Result<u64, PoWError> {
         .collect();
     let transfers = transfer_ops(&note_ids, ZkPublicKey::zero(), &vec![0; groups])?;
 
-    let ops = push_reward_claim_ops(MantleTxBuilder::new(), &probe_claims, transfers)?.build()?;
+    // Every fork digest has the same size, so any sizes the transaction.
+    let ops = push_reward_claim_ops(MantleTxBuilder::new(), &probe_claims, transfers)?
+        .build(ForkDigest::new([0; 32]))?;
     let ops_proofs = claim_ops_proofs(claims, std::iter::repeat_n(signature, groups))?;
 
     Ok(SerializeOp::bytes_size(
@@ -1666,6 +1694,7 @@ static MAX_CLAIMS_BY_PAYLOAD_SIZE: LazyLock<usize> = LazyLock::new(|| {
 /// balance; see [`drain_ready_rewards`].
 async fn build_reward_claim_tx(
     claim_address: ZkPublicKey,
+    fork_digest: ForkDigest,
     ledger_state: &LedgerState,
     reward_pool: Value,
     tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
@@ -1675,6 +1704,7 @@ async fn build_reward_claim_tx(
     // will be off.
     build_reward_claim_tx_inner(
         claim_address,
+        fork_digest,
         ledger_state.mantle_ledger().pow.epoch_reward(),
         reward_pool,
         ledger_state.get_gas_prices(),
@@ -1687,6 +1717,7 @@ async fn build_reward_claim_tx(
 /// full [`LedgerState`]. See [`build_reward_claim_tx`].
 async fn build_reward_claim_tx_inner(
     claim_address: ZkPublicKey,
+    fork_digest: ForkDigest,
     reward_value: Value,
     reward_pool: Value,
     gas_prices: GasPrices,
@@ -1726,7 +1757,8 @@ async fn build_reward_claim_tx_inner(
     let change_outputs = change_outputs(&note_ids, reward_value, fee)?;
     let transfers = transfer_ops(&note_ids, claim_address, &change_outputs)?;
 
-    let mantle_tx = push_reward_claim_ops(MantleTxBuilder::new(), &claims, transfers)?.build()?;
+    let mantle_tx =
+        push_reward_claim_ops(MantleTxBuilder::new(), &claims, transfers)?.build(fork_digest)?;
 
     // Sign each transfer with the keys owning its input notes (a
     // multi-signature over the whole tx hash). Signing is a ZK proof
@@ -1885,6 +1917,7 @@ mod tests {
     use lb_binary_codec::bincode::SerializeOp as _;
     use lb_chain_service::Slot;
     use lb_core::{
+        era::ForkDigest,
         header::HeaderId,
         mantle::{
             Note, NoteId, OpProofRef, OpRef, SignedOps, Utxo,
@@ -1909,6 +1942,8 @@ mod tests {
         slot_period_elapsed, transfer_ops,
     };
     use crate::{test_utils::era_schedule, tickets::WinningTicket};
+
+    const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
 
     const REWARD: u64 = 1_000_000;
     const POOL: u64 = 1_000_000_000;
@@ -2162,7 +2197,7 @@ mod tests {
 
         let tx = push_reward_claim_ops(MantleTxBuilder::new(), &claims, transfers)
             .unwrap()
-            .build()
+            .build(FORK_DIGEST)
             .unwrap();
         let ops = tx.op_refs();
 
@@ -2197,6 +2232,7 @@ mod tests {
 
         let (tx, claimed) = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
+            FORK_DIGEST,
             REWARD,
             POOL,
             GasPrices::new(1, 1),
@@ -2227,6 +2263,7 @@ mod tests {
     async fn build_reward_claim_tx_errors_when_rewards_disabled() {
         let result = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
+            FORK_DIGEST,
             0,
             POOL,
             GasPrices::new(1, 1),
@@ -2241,6 +2278,7 @@ mod tests {
         // Pool below a single reward -> nothing fundable.
         let result = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
+            FORK_DIGEST,
             REWARD,
             REWARD - 1,
             GasPrices::new(1, 1),
@@ -2256,6 +2294,7 @@ mod tests {
         let tickets: Vec<_> = std::iter::repeat_with(ticket).take(5).collect();
         let (tx, claimed) = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
+            FORK_DIGEST,
             REWARD,
             2 * REWARD,
             GasPrices::new(1, 1),
@@ -2289,6 +2328,7 @@ mod tests {
             let tickets = vec![ticket()];
             match build_reward_claim_tx_inner(
                 ZkPublicKey::zero(),
+                FORK_DIGEST,
                 REWARD,
                 available_pool,
                 GasPrices::new(1, 1),
@@ -2321,6 +2361,7 @@ mod tests {
             let tickets = vec![ticket()];
             let (_, claimed) = build_reward_claim_tx_inner(
                 ZkPublicKey::zero(),
+                FORK_DIGEST,
                 REWARD,
                 stale_pool,
                 GasPrices::new(1, 1),
@@ -2345,6 +2386,7 @@ mod tests {
         let tickets: Vec<_> = std::iter::repeat_with(ticket).take(cap + 50).collect();
         let (tx, claimed) = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
+            FORK_DIGEST,
             REWARD,
             POOL, // POOL / REWARD = 1000 > cap, so the pool does not bind
             GasPrices::new(1, 1),
@@ -2385,6 +2427,7 @@ mod tests {
             let tickets: Vec<_> = std::iter::repeat_with(ticket).take(claims).collect();
             let (tx, _) = build_reward_claim_tx_inner(
                 ZkPublicKey::zero(),
+                FORK_DIGEST,
                 REWARD,
                 POOL,
                 GasPrices::new(1, 1),

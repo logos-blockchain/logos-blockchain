@@ -49,8 +49,8 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use super::handlers::{
     add_tx, blend_info, blend_pending_transactions, blend_tx, block, block_events,
-    blocks_range_stream, blocks_stream, chain_id, cryptarchia_headers, cryptarchia_info,
-    cryptarchia_lib_stream, dial_peer, get_finalized_sdp_declaration,
+    blocks_range_stream, blocks_stream, chain_fork, chain_id, cryptarchia_headers,
+    cryptarchia_info, cryptarchia_lib_stream, dial_peer, get_finalized_sdp_declaration,
     get_finalized_sdp_declarations, get_gas_prices, get_sdp_declarations, get_sdp_snapshot,
     immutable_blocks, libp2p_info, mantle_metrics, mantle_status, mempool_view, time_info,
     transaction, version, wallet,
@@ -224,6 +224,9 @@ where
             // The chain ID is a constant of the deployment, so it rides along
             // as a request extension instead of a service round trip.
             .layer(axum::Extension(self.settings.chain_id.clone()))
+            // Each era's fork digest is a constant of the deployment too; the
+            // era in force comes from the time service.
+            .layer(axum::Extension(self.settings.fork_digests.clone()))
             .layer(axum::middleware::from_fn(http_metrics_middleware))
             .layer(axum::extract::DefaultBodyLimit::max(
                 self.settings.max_body_size,

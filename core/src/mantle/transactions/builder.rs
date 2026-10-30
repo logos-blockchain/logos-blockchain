@@ -6,15 +6,15 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
+    era::ForkDigest,
     mantle::{
         GasProfile, Note, NoteId, Op, Utxo, Value,
         gas::{GasCost, GasOverflow, TxGasCalculator as _},
         ledger::{BoundedUtxos, Inputs, Outputs},
         ops::{OpRef, channel::ChannelId, transfer::TransferOp},
-        traits::MantleTx as _,
         transactions::{
-            Ops,
-            tx_list::ops::{OpsContext, mantle_spec},
+            Ops, TxList,
+            tx_list::ops::{OpsContext, unbuilt_tx},
         },
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
@@ -53,7 +53,8 @@ impl From<(BoundedError, BoundedTag)> for TxBuilderError {
     }
 }
 
-/// Builds an [`Ops`] incrementally.
+/// Builds an [`Ops`] incrementally. The transaction gets its fork digest when
+/// it is built, from whoever signs it.
 ///
 /// The builder is intentionally free of any [`OpsContext`]: gas prices are
 /// tip-dependent, so the context is supplied as a parameter to the fee-aware
@@ -63,8 +64,9 @@ impl From<(BoundedError, BoundedTag)> for TxBuilderError {
 /// HTTP) to be funded against a freshly fetched context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MantleTxBuilder {
-    #[serde(rename = "mantle_tx", with = "mantle_spec")] // Shape as per spec
-    ops: Ops,
+    // The spec's transaction shape, without the fork digest it gets when built.
+    #[serde(rename = "mantle_tx", with = "unbuilt_tx")]
+    ops: TxList<Op>,
     ledger_inputs: BoundedUtxos,
     pending_transfer: TransferOp,
     // Maps a Proof to its Op by the Op Index
@@ -82,7 +84,7 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            ops: Ops::empty(),
+            ops: TxList::empty(),
             ledger_inputs: BoundedUtxos::default(),
             pending_transfer: TransferOp::new(Inputs::empty(), Outputs::empty()),
             channel_multi_sig_proofs: HashMap::new(),
@@ -98,7 +100,6 @@ impl MantleTxBuilder {
     pub fn extend_ops(mut self, ops: impl IntoIterator<Item = Op>) -> Result<Self, TxBuilderError> {
         for op in ops {
             self.ops
-                .0
                 .try_push(op)
                 .map_err(|err| TxBuilderError::from((err, BoundedTag::Ops)))?;
         }
@@ -222,7 +223,7 @@ impl MantleTxBuilder {
         &self,
         context: &OpsContext,
     ) -> Result<GasCost, TxBuilderError> {
-        for op_ref in self.ops.op_refs() {
+        for op_ref in self.ops.iter().map(Op::by_ref) {
             let channel_id = match op_ref {
                 OpRef::ChannelWithdraw(operation) => Some(operation.channel_id),
                 OpRef::ChannelTransfer(operation) => Some(operation.channel_id),
@@ -238,7 +239,9 @@ impl MantleTxBuilder {
             }
         }
 
-        let build = self.clone().build()?;
+        // Every fork digest has the same size, so the one the transaction
+        // will carry does not change its gas: any prices it.
+        let build = self.clone().build(ForkDigest::new([0; 32]))?;
         Ok(build.by_ref().total_gas_cost::<G>(&context.gas_context)?)
     }
 
@@ -317,14 +320,15 @@ impl MantleTxBuilder {
 
     // TODO: Change this to a `Result` if genesis tx already contains max number of
     // ops.
-    pub fn build(mut self) -> Result<Ops, TxBuilderError> {
+    /// The transaction, to be signed under the fork digest `fork_digest`,
+    /// with the pending transfer as its last operation.
+    pub fn build(mut self, fork_digest: ForkDigest) -> Result<Ops, TxBuilderError> {
         if !self.pending_transfer.is_empty() {
             self.ops
-                .0
                 .try_push(Op::Transfer(self.pending_transfer))
                 .map_err(|err| TxBuilderError::from((err, BoundedTag::Ops)))?;
         }
-        Ok(self.ops)
+        Ok(Ops::new(fork_digest, self.ops))
     }
 }
 
@@ -336,6 +340,7 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
+            fixtures::ops::op_values::FORK_DIGEST,
             gas::MainnetGasProfile,
             ledger::BoundedInputs,
             ops::{
@@ -378,7 +383,10 @@ mod tests {
 
         assert_eq!(restored.net_balance(), builder.net_balance());
         assert_eq!(restored.ledger_inputs(), builder.ledger_inputs());
-        assert_eq!(restored.build().unwrap(), builder.build().unwrap());
+        assert_eq!(
+            restored.build(FORK_DIGEST).unwrap(),
+            builder.build(FORK_DIGEST).unwrap()
+        );
     }
 
     #[test]

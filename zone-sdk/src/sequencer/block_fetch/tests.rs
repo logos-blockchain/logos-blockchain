@@ -27,7 +27,7 @@ use super::*;
 use crate::{
     adapter::DepositEvent,
     test_support::{
-        MockNode, api_block, deposit_event, header_id, inscribe_op, live_event,
+        FORK_DIGEST, MockNode, api_block, deposit_event, header_id, inscribe_op, live_event,
         unverified_tx_with_ops,
     },
 };
@@ -667,14 +667,17 @@ fn channel_config_with_posting_timeframe(
 }
 
 fn dummy_pending_tx(seed: u8) -> SignedOps<Unverified, StandardMode> {
-    let mantle_tx = Ops::from([Op::ChannelInscribe(InscriptionOp {
-        channel_id: [0u8; 32].into(),
-        inscription: Inscription::new_unchecked(vec![seed]),
-        parent: MsgId::root(),
-        signer: Ed25519Key::from_bytes(&[seed; 32])
-            .public_key()
-            .into_unverified(),
-    })]);
+    let mantle_tx = Ops::new(
+        FORK_DIGEST,
+        [Op::ChannelInscribe(InscriptionOp {
+            channel_id: [0u8; 32].into(),
+            inscription: Inscription::new_unchecked(vec![seed]),
+            parent: MsgId::root(),
+            signer: Ed25519Key::from_bytes(&[seed; 32])
+                .public_key()
+                .into_unverified(),
+        })],
+    );
     let op_proofs = OpProofs::from([OpProof::Ed25519Sig(Ed25519Signature::zero())]);
     SignedOps::from_parts(mantle_tx, op_proofs)
         .expect("Should generate a valid transaction with valid matching proofs.")

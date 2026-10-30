@@ -411,7 +411,10 @@ mod body_root_test_vectors {
     use super::*;
     use crate::{
         block::{SignedHeader, UncleHeaders},
-        mantle::{ops::leader_claim::VoucherCm, traits::Hashable as _, transactions::Ops},
+        mantle::{
+            fixtures::ops::op_values::FORK_DIGEST, ops::leader_claim::VoucherCm,
+            traits::Hashable as _, transactions::Ops,
+        },
         utils::merkle,
     };
 
@@ -466,7 +469,7 @@ mod body_root_test_vectors {
         //    operation's name.
         let txs_with_names: Vec<(&'static str, Ops)> = Ops::sample()
             .into_iter()
-            .map(|op| (op.as_str(), Ops::from([op])))
+            .map(|op| (op.as_str(), Ops::new(FORK_DIGEST, [op])))
             .collect();
         let txs: Vec<Ops> = txs_with_names.iter().map(|(_, tx)| tx.clone()).collect();
         println!("================================================================");

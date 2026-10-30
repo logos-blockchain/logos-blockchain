@@ -4,22 +4,24 @@ use crate::mantle::{
     OpRef,
     fixtures::ops::op_values::{
         ALL_OPS_COLUMN_HEX, CHANNEL_CONFIG, CHANNEL_TRANSFER, CHANNEL_WITHDRAW, CLAIM_POW_REWARD,
-        DEPOSIT, EMPTY_COLUMN_HEX, INSCRIPTION, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE,
-        SDP_WITHDRAW, TRANSFER, TRANSFER_AND_INSCRIPTION_COLUMN_HEX, TRANSFER_COLUMN_HEX,
+        DEPOSIT, EMPTY_COLUMN_HEX, FORK_DIGEST, FORK_DIGEST_HEX, INSCRIPTION, LEADER_CLAIM,
+        SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, TRANSFER, TRANSFER_AND_INSCRIPTION_COLUMN_HEX,
+        TRANSFER_COLUMN_HEX,
     },
-    transactions::OpRefs,
+    transactions::{OpRefs, TxList},
 };
 
 codec_fixtures!(
     OpRefs<'_>,
     encode_only,
-    Self::empty() => EMPTY_COLUMN_HEX,
-    Self::from([OpRef::Transfer(&TRANSFER)]) => TRANSFER_COLUMN_HEX,
-    Self::from([
+    Self::new(FORK_DIGEST, TxList::empty()) => &format!("{FORK_DIGEST_HEX}{EMPTY_COLUMN_HEX}"),
+    Self::new(FORK_DIGEST, [OpRef::Transfer(&TRANSFER)])
+        => &format!("{FORK_DIGEST_HEX}{TRANSFER_COLUMN_HEX}"),
+    Self::new(FORK_DIGEST, [
         OpRef::Transfer(&TRANSFER),
         OpRef::ChannelInscribe(&INSCRIPTION),
-    ]) => TRANSFER_AND_INSCRIPTION_COLUMN_HEX,
-    Self::from([
+    ]) => &format!("{FORK_DIGEST_HEX}{TRANSFER_AND_INSCRIPTION_COLUMN_HEX}"),
+    Self::new(FORK_DIGEST, [
         OpRef::Transfer(&TRANSFER),
         OpRef::ChannelConfig(&CHANNEL_CONFIG),
         OpRef::ChannelInscribe(&INSCRIPTION),
@@ -31,5 +33,5 @@ codec_fixtures!(
         OpRef::SDPActive(&SDP_ACTIVE),
         OpRef::LeaderClaim(&LEADER_CLAIM),
         OpRef::ClaimPowReward(&CLAIM_POW_REWARD),
-    ]) => ALL_OPS_COLUMN_HEX
+    ]) => &format!("{FORK_DIGEST_HEX}{ALL_OPS_COLUMN_HEX}")
 );

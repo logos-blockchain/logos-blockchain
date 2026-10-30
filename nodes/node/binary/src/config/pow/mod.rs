@@ -29,6 +29,7 @@ impl ServiceConfig {
                 PoWEraSettings {
                     slot_window: reward.slot_window,
                     rewards_enabled: reward.rate_num > 0,
+                    fork_digest: era.parameters.fork_digest,
                 }
             }),
             recovery_data,

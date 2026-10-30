@@ -6,18 +6,21 @@ use std::{
 };
 
 use async_trait::async_trait;
-use lb_core::mantle::{
-    SignedOps,
-    ledger::verification_mode::StandardMode,
-    ops::{
-        Op, OpProof,
-        channel::{
-            ChannelId, MsgId,
-            inscribe::{Inscription, InscriptionOp},
+use lb_core::{
+    era::ForkDigest,
+    mantle::{
+        SignedOps,
+        ledger::verification_mode::StandardMode,
+        ops::{
+            Op, OpProof,
+            channel::{
+                ChannelId, MsgId,
+                inscribe::{Inscription, InscriptionOp},
+            },
         },
+        traits::Hashable as _,
+        transactions::{OpProofs, Ops, hash::TxHash, states::Preverified},
     },
-    traits::Hashable as _,
-    transactions::{OpProofs, Ops, hash::TxHash, states::Preverified},
 };
 use lb_key_management_system_service::keys::Ed25519Key;
 use rand::{seq::SliceRandom as _, thread_rng};
@@ -32,7 +35,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     BlockRecord, NodeHttpClient,
-    workloads::{BlockFeedSubscription, LbcRunContextExt as _},
+    workloads::{BlockFeedSubscription, LbcRunContextExt as _, fork_digest_in_force},
 };
 
 const BLOCK_POLL_TIMEOUT: Duration = Duration::from_secs(1);
@@ -219,10 +222,12 @@ impl<'a> InscriptionRunner<'a> {
     }
 
     async fn submit_next(&mut self, channel_idx: usize) -> Result<(), DynError> {
+        let fork_digest = fork_digest_in_force(self.ctx).await?;
         let Some(channel) = self.channels.get_mut(channel_idx) else {
             return Ok(());
         };
-        let (tx, msg_id, tx_hash) = build_inscription_transaction(channel, self.payload_bytes)?;
+        let (tx, msg_id, tx_hash) =
+            build_inscription_transaction(channel, fork_digest, self.payload_bytes)?;
         submit_transaction_via_cluster(self.ctx, Arc::new(tx)).await?;
 
         channel.submitted += 1;
@@ -360,6 +365,7 @@ fn channel_id_from_signing_key(signing_key: &Ed25519Key) -> ChannelId {
 
 fn build_inscription_transaction(
     channel: &mut ChannelState,
+    fork_digest: ForkDigest,
     payload_bytes: usize,
 ) -> Result<(SignedOps<Preverified, StandardMode>, MsgId, TxHash), DynError> {
     let op = InscriptionOp {
@@ -370,7 +376,7 @@ fn build_inscription_transaction(
     };
     let msg_id = op.id();
 
-    let mantle_tx = Ops::from([Op::ChannelInscribe(op)]);
+    let mantle_tx = Ops::new(fork_digest, [Op::ChannelInscribe(op)]);
     let tx_hash = mantle_tx.hash();
 
     let ed25519_signature = channel.signing_key.sign_payload(tx_hash.as_signing_bytes());

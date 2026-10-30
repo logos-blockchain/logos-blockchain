@@ -6,9 +6,12 @@ use lb_core::mantle::{
 };
 use serde::Serialize;
 
+/// A transaction as the specification shapes it, `{ "fork_digest", "ops" }`,
+/// with its hash beside them.
 #[derive(Serialize)]
 pub struct ApiTransactionSerializer<'tx> {
     hash: TxHash,
+    #[serde(flatten)]
     ops: OpRefs<'tx>,
 }
 

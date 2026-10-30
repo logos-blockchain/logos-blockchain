@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use lb_core::era::ForkDigest;
 use lb_time::era::{EraEntriesAfterGenesis, EraSchedule, EraTiming};
 use time::OffsetDateTime;
 
@@ -33,5 +34,6 @@ pub fn era_schedule(reward_windows: &[u64]) -> ServiceEraSchedule {
             slot_window: NonZeroU64::new(reward_windows[usize::from(era.era.into_inner())])
                 .unwrap(),
             rewards_enabled: true,
+            fork_digest: ForkDigest::new([0x11; 32]),
         })
 }

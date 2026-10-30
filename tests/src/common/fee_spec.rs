@@ -19,17 +19,20 @@ use std::collections::{HashMap, HashSet};
 
 use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_common_http_client::ApiBlock;
-use lb_core::mantle::{
-    Note, SignedOps, Utxo,
-    gas::{MainnetGasProfile, TxGasCalculator as _},
-    ledger::verification_mode::{StandardMode, VerificationMode},
-    ops::OpRef,
-    traits::Hashable as _,
-    transactions::{
-        GasPrices, MantleTxBuilder,
-        codec::minimum_signed_transaction_size,
-        states::{Preverified, VerificationState},
-        tx_list::ops::{OpsContext, OpsGasContext},
+use lb_core::{
+    era::ForkDigest,
+    mantle::{
+        Note, SignedOps, Utxo,
+        gas::{MainnetGasProfile, TxGasCalculator as _},
+        ledger::verification_mode::{StandardMode, VerificationMode},
+        ops::OpRef,
+        traits::Hashable as _,
+        transactions::{
+            GasPrices, MantleTxBuilder,
+            codec::minimum_signed_transaction_size,
+            states::{Preverified, VerificationState},
+            tx_list::ops::{OpsContext, OpsGasContext},
+        },
     },
 };
 use lb_testing_framework::configs::wallet::WalletAccount;
@@ -145,6 +148,7 @@ pub fn self_transfer_paying_fee_at(
     account: &WalletAccount,
     prices: &GasPrices,
     tip: i128,
+    fork_digest: ForkDigest,
 ) -> SignedOps<Preverified, StandardMode> {
     const MAX_FEE_CONVERGENCE_ATTEMPTS: usize = 32;
 
@@ -219,7 +223,9 @@ pub fn self_transfer_paying_fee_at(
         "the built transaction must carry exactly the requested tip"
     );
 
-    let mantle_tx = builder.build().expect("transaction should build");
+    let mantle_tx = builder
+        .build(fork_digest)
+        .expect("transaction should build");
     let op_proofs = transfer_proofs_for_funded_wallet_tx(&mantle_tx, &account.secret_key)
         .expect("transfer proofs should build");
 

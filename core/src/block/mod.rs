@@ -422,10 +422,11 @@ mod tests {
     use crate::{
         crypto::ZkHasher,
         mantle::{
+            fixtures::ops::op_values::FORK_DIGEST,
             ledger::{Note, Utxo},
             ops::leader_claim::VoucherCm,
             traits::hashable,
-            transactions::Ops,
+            transactions::{Ops, TxList},
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };
@@ -490,7 +491,7 @@ mod tests {
     }
 
     fn create_tx(count: usize) -> Vec<Ops> {
-        iter::repeat_with(|| Ops::new_unchecked(vec![]))
+        iter::repeat_with(|| Ops::new(FORK_DIGEST, TxList::new_unchecked(vec![])))
             .take(count)
             .collect()
     }
