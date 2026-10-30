@@ -48,7 +48,7 @@ use crate::{
         blend::{blend_info, blend_join_as_core_node},
         chain::get_chain_id,
         channel::get_channel_state,
-        config::{GenerateConfigArgs, generate_user_config, participate},
+        config::{GenerateConfigArgs, generate_user_config, participate, show_config},
         cryptarchia::{free_cryptarchia_info, get_block_events, get_cryptarchia_info},
         deployment::{free_deployment_info, get_deployment_info},
         free_cstring,
@@ -253,6 +253,7 @@ mod no_node {
             assert_eq!(code(start_lb_node(null_s, null_s)), np);
             assert_eq!(code(start_lb_node(null_s, s)), np);
             assert_eq!(code(get_peer_id(null_s)), np);
+            assert_eq!(code(show_config(null_s)), np);
             assert_eq!(code(participate(null_s, s, null_s, null_port)), np);
             assert_eq!(code(participate(s, null_s, null_s, null_port)), np);
             assert_eq!(code(generate_key(null_s, KeyType::Zk as u32, null_s)), np);
@@ -529,6 +530,10 @@ mod no_node {
 
         // The generated files feed the rest of the config/key API.
         let result = unsafe { get_peer_id(output.as_ptr()) };
+        assert!(result.is_ok());
+        assert!(unsafe { free_cstring(result.value) }.is_ok());
+
+        let result = unsafe { show_config(output.as_ptr()) };
         assert!(result.is_ok());
         assert!(unsafe { free_cstring(result.value) }.is_ok());
 
