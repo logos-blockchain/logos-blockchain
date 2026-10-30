@@ -3980,7 +3980,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "logos-blockchain-api-service"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "futures",
@@ -4011,7 +4011,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-binary-codec"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "bincode",
  "bytes",
@@ -4026,7 +4026,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-binary-codec-macros"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "hex",
  "proc-macro2",
@@ -4036,7 +4036,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-blake2btree"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "blake2",
  "logos-blockchain-dynamic-merkle",
@@ -4050,7 +4050,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-blend"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "logos-blockchain-blend-crypto",
  "logos-blockchain-blend-membership",
@@ -4064,7 +4064,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-blend-crypto"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "blake2",
  "logos-blockchain-groth16",
@@ -4079,7 +4079,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-blend-membership"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "logos-blockchain-key-management-system-keys",
  "multiaddr",
@@ -4089,7 +4089,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-blend-message"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "bincode",
  "blake2",
@@ -4118,7 +4118,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-blend-network"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "either",
@@ -4146,7 +4146,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-blend-primitives"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "futures",
  "tokio",
@@ -4154,7 +4154,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-blend-proofs"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "const-hex",
  "ed25519-dalek",
@@ -4177,7 +4177,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-blend-provers"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "educe 0.7.6",
@@ -4203,7 +4203,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-blend-scheduling"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "fork_stream",
  "futures",
@@ -4224,7 +4224,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-blend-service"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "fork_stream",
@@ -4268,7 +4268,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-c"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "cbindgen",
  "futures",
@@ -4303,7 +4303,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-c-macros"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4312,7 +4312,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-chain-broadcast-service"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "educe 0.7.6",
@@ -4326,7 +4326,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-chain-leader-service"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "futures",
@@ -4358,7 +4358,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-chain-network-service"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "backon",
@@ -4392,7 +4392,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-chain-service"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4479,7 +4479,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-prover"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "rust-rapidsnark",
 ]
@@ -4505,14 +4505,14 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-verifier"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "rust-rapidsnark",
 ]
 
 [[package]]
 name = "logos-blockchain-common-http-client"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "futures",
  "hex",
@@ -4536,7 +4536,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-config"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "hex",
  "logos-blockchain-binary-codec",
@@ -4556,7 +4556,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-core"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "ark-ff",
  "bincode",
@@ -4595,7 +4595,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-cryptarchia-engine"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "logos-blockchain-binary-codec",
  "logos-blockchain-log-targets",
@@ -4613,7 +4613,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-cryptarchia-sync"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "bytes",
  "futures",
@@ -4636,7 +4636,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-dynamic-merkle"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "ark-ff",
  "logos-blockchain-poseidon2",
@@ -4648,7 +4648,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-faucet"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "axum 0.8.9",
  "clap",
@@ -4666,7 +4666,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-groth16"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "ark-bn254",
  "ark-ec",
@@ -4687,7 +4687,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-http-api-common"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "axum 0.8.9",
  "logos-blockchain-core",
@@ -4709,7 +4709,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-key-management-system-keys"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "arbitrary-int",
  "async-trait",
@@ -4744,7 +4744,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-key-management-system-macros"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4753,7 +4753,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-key-management-system-operators"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "logos-blockchain-blend-proofs",
@@ -4770,7 +4770,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-key-management-system-service"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4790,7 +4790,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-ledger"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "divan",
  "educe 0.7.6",
@@ -4820,7 +4820,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-libp2p"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "backon",
@@ -4852,14 +4852,14 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-log-targets"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "logos-blockchain-log-targets-macros",
 ]
 
 [[package]]
 name = "logos-blockchain-log-targets-macros"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4868,7 +4868,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-merkle-tree"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "logos-blockchain-dynamic-merkle",
  "rpds",
@@ -4878,7 +4878,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-mmr"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "ark-ff",
  "bincode",
@@ -4895,7 +4895,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-network-service"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4919,7 +4919,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-node"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "axum 0.8.9",
@@ -4991,7 +4991,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-poc"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "divan",
  "logos-blockchain-circuits-poc-sys",
@@ -5008,7 +5008,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-pol"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "astro-float",
  "divan",
@@ -5028,7 +5028,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-poq"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "divan",
  "logos-blockchain-circuits-poq-sys",
@@ -5047,7 +5047,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-poseidon2"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "ark-bn254",
  "ark-ff",
@@ -5057,7 +5057,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-pow-service"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "futures",
@@ -5088,7 +5088,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-proofs-error"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "logos-blockchain-circuits-types",
  "logos-blockchain-groth16",
@@ -5098,7 +5098,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-sdp-service"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "logos-blockchain-blend-proofs",
@@ -5123,7 +5123,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-services-utils"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5140,7 +5140,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-storage-service"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5163,7 +5163,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-system-sig-service"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-ctrlc",
  "async-trait",
@@ -5174,7 +5174,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-tests"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "axum 0.8.9",
  "bincode",
@@ -5236,7 +5236,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-time-service"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "futures",
@@ -5258,7 +5258,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-tools"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -5284,7 +5284,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-tracing"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "flate2",
  "logos-blockchain-log-targets",
@@ -5312,7 +5312,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-tracing-service"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "console-subscriber",
@@ -5330,7 +5330,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-tx-service"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "futures",
@@ -5360,7 +5360,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-utils"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "bincode",
@@ -5386,7 +5386,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-utxotree"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "ark-ff",
  "logos-blockchain-dynamic-merkle",
@@ -5402,7 +5402,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-version"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "serde",
  "utoipa",
@@ -5410,7 +5410,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-wallet"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "bincode",
  "logos-blockchain-core",
@@ -5432,7 +5432,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-wallet-http-client"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "hex",
  "logos-blockchain-binary-codec",
@@ -5445,7 +5445,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-wallet-service"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5473,7 +5473,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-zksign"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "divan",
  "logos-blockchain-circuits-prover",
@@ -5494,7 +5494,7 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-zone-sdk"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "futures",
@@ -5518,7 +5518,7 @@ dependencies = [
 
 [[package]]
 name = "logos-sql"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "bincode",
  "blake2",
@@ -8353,7 +8353,7 @@ dependencies = [
 
 [[package]]
 name = "testing-framework"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "anyhow",
  "async-trait",
