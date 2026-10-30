@@ -78,14 +78,11 @@ struct PendingOtherTx {
     last_config: Option<MsgId>,
     /// Submission order, for checkpoint serialization.
     seq: u64,
-    /// The LIB slot this tx was funded at, for entries this sequencer
-    /// submitted; `None` for one mirrored from a block, which is another
-    /// sequencer's to rebuild and expires on [`Self::unmined_since`] instead.
+    /// The LIB slot this tx was funded at; `None` for one mirrored from a
+    /// block, which expires on `unmined_since` instead.
     funded_at: Option<Slot>,
-    /// For an entry without a funding slot: the LIB slot it was first seen
-    /// unmined on the branch, cleared while it is mined again. Expiry counts
-    /// from it, so one the node rejects for good does not hold the chain
-    /// behind it forever.
+    /// The LIB slot a mirrored entry was first seen unmined on the branch,
+    /// cleared while it is mined again.
     unmined_since: Option<Slot>,
 }
 
@@ -201,10 +198,8 @@ pub struct PendingInscription {
     /// attempt; expiry is measured from it. `None` for a mirrored entry,
     /// which expires on `unmined_since` instead.
     pub funded_at: Option<Slot>,
-    /// For an entry without a funding slot: the LIB slot it was first seen
-    /// unmined on the branch, cleared while it is mined again. Expiry counts
-    /// from it, so a mirrored head the node rejects for good does not hold
-    /// the chain behind it forever.
+    /// The LIB slot a mirrored entry was first seen unmined on the branch,
+    /// cleared while it is mined again.
     pub unmined_since: Option<Slot>,
 }
 
@@ -419,9 +414,8 @@ impl TxState {
         }
     }
 
-    /// Restore a checkpoint's funding records. An entry the checkpoint has
-    /// no record for expires like a mirrored one, from its first unmined
-    /// sighting after the restore.
+    /// Restore a checkpoint's funding records. An entry without one expires
+    /// like a mirrored entry.
     pub fn restore_fundings(&mut self, records: impl IntoIterator<Item = PendingFunding>) {
         for record in records {
             self.stamp_funding(&record.tx_hash, record.funded_at, record.pre_fund);
@@ -561,18 +555,12 @@ impl TxState {
     /// Shed what is not mined on `tip`'s branch, has been pending for more
     /// than `window` LIB slots, and cannot be rebuilt here: own inscriptions
     /// without pre-funding ops, own bundles whose transfer inputs are gone
-    /// from the branch (re-funding would not bring them back), locally
-    /// submitted opaque txs, and mirrored entries, each with everything
-    /// chained on it, since the message they chain on will not land.
-    /// Returned parent-first for orphan reporting.
+    /// from the branch, locally submitted opaque txs, and mirrored entries,
+    /// each with everything chained on it. Returned parent-first for orphan
+    /// reporting.
     ///
-    /// Expiry counts from the funding slot. A mirrored entry is another
-    /// sequencer's to rebuild and carries none; its clock runs from the
-    /// first time it is seen unmined on the branch and stops while it is
-    /// mined again, so a bare un-mine that re-lands costs nothing, while one
-    /// the node rejects for good (its fee input spent on the winning branch,
-    /// say) does not hold the chain behind it, own publishes included,
-    /// forever.
+    /// Expiry counts from the funding slot, or for a mirrored entry from its
+    /// first unmined sighting, reset while it is mined again.
     pub fn shed_expired(
         &mut self,
         tip: HeaderId,
@@ -2910,8 +2898,8 @@ mod tests {
         let mirrored_hash = mirrored.hash();
         state.observe_other_tx(mirrored, channel_id);
 
-        // The mirrored entry carries no funding slot: its clock starts now,
-        // at its first unmined sighting, so only the local one has expired.
+        // The mirrored entry's window starts now, at its first unmined
+        // sighting: only the local one has expired.
         let (shed, shed_other) =
             state.shed_expired(tip, Slot::from(10), 3, ChannelId::from([0u8; 32]));
 
@@ -2923,8 +2911,7 @@ mod tests {
         assert!(state.is_tracked(&mirrored_hash));
         assert!(!state.is_tracked(&local_hash));
 
-        // Still unmined a window later, it expires like an own entry that
-        // cannot be re-funded here.
+        // Still unmined a window later, it expires.
         assert_eq!(
             state
                 .shed_expired(tip, Slot::from(13), 3, ChannelId::from([0u8; 32]))
@@ -2942,10 +2929,9 @@ mod tests {
         assert!(!state.is_tracked(&mirrored_hash));
     }
 
-    /// A mirrored inscription that stays unmined past the window is shed
-    /// with the own publishes chained on it, parent first: a head the node
-    /// rejects for good must not hold the chain behind it forever. One mined
-    /// on the branch never starts a clock.
+    /// A mirrored inscription unmined past the window is shed with the own
+    /// publishes chained on it, parent first; one mined on the branch never
+    /// expires.
     #[test]
     fn unmined_mirrored_inscription_expires_with_the_chain_behind_it() {
         let genesis = header_id(0);
@@ -3017,9 +3003,8 @@ mod tests {
         );
     }
 
-    /// A mirrored entry's clock stops while it is mined again: a bare un-mine
-    /// that re-lands within the window costs nothing, and a later un-mine
-    /// starts the count afresh.
+    /// A mirrored entry mined again resets its window; a later un-mine
+    /// starts it afresh.
     #[test]
     fn mirrored_entry_mined_again_restarts_its_clock() {
         let genesis = header_id(0);
