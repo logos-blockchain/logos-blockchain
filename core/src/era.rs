@@ -117,6 +117,26 @@ display_hex_bytes_newtype!(ForkDigest);
 serde_bytes_newtype!(ForkDigest, 32);
 codec_fixtures!(ForkDigest, Self([0x22u8; 32]) => "2222222222222222222222222222222222222222222222222222222222222222");
 
+/// The fork digests an era accepts on transactions: its own, and those of the
+/// eras before it back to the latest era that refuses the transactions of the
+/// eras before it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct AcceptedForkDigests(Vec<ForkDigest>);
+
+impl AcceptedForkDigests {
+    #[must_use]
+    pub const fn new(fork_digests: Vec<ForkDigest>) -> Self {
+        Self(fork_digests)
+    }
+
+    /// Whether a transaction carrying `fork_digest` is valid under the era.
+    #[must_use]
+    pub fn accepts(&self, fork_digest: &ForkDigest) -> bool {
+        self.0.contains(fork_digest)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use lb_time::Epoch;

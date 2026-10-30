@@ -261,6 +261,10 @@ impl StorageSize for Ops {
 }
 
 impl MantleTx for Ops {
+    fn fork_digest(&self) -> ForkDigest {
+        self.fork_digest
+    }
+
     fn op_refs(&self) -> OpRefs<'_> {
         self.by_ref()
     }

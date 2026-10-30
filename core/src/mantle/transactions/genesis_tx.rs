@@ -174,6 +174,10 @@ impl Hashable for GenesisTx {
 }
 
 impl MantleTx for GenesisTx {
+    fn fork_digest(&self) -> ForkDigest {
+        self.signed_ops.fork_digest
+    }
+
     fn op_refs(&self) -> OpRefs<'_> {
         self.signed_ops.op_refs()
     }
