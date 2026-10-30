@@ -874,7 +874,7 @@ mod tests {
 
     use lb_core::{
         crypto::ZkDigest as _,
-        era::ForkDigest,
+        era::{AcceptedForkDigests, ForkDigest},
         mantle::{
             Note, Op, OpProof, SignedOps,
             channel::Channels,
@@ -1923,6 +1923,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
         }
     }
 

@@ -298,6 +298,10 @@ impl<State: VerificationState, Mode: VerificationMode> StorageSize for SignedOps
 }
 
 impl<State: VerificationState, Mode: VerificationMode> MantleTx for SignedOps<State, Mode> {
+    fn fork_digest(&self) -> ForkDigest {
+        self.fork_digest
+    }
+
     fn op_refs(&self) -> OpRefs<'_> {
         self.op_refs()
     }

@@ -83,14 +83,14 @@ impl BlockDensity {
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use lb_core::sdp::MinStake;
+    use lb_core::{era::AcceptedForkDigests, sdp::MinStake};
     use lb_groth16::ModulusShift;
     use lb_utils::math::NonNegativeRatio;
 
     use super::*;
     use crate::{
         mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters},
-        test_utils::single_era,
+        test_utils::{FORK_DIGEST, single_era},
     };
 
     #[test]
@@ -183,6 +183,7 @@ mod tests {
                 },
                 reward: crate::cryptarchia::tests::disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![FORK_DIGEST]),
         }
     }
 }

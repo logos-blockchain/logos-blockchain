@@ -881,6 +881,7 @@ pub mod tests {
 
     use lb_core::{
         crypto::{Digest as _, Hasher},
+        era::AcceptedForkDigests,
         mantle::{
             Note, Op,
             OpProof::ZkSig,
@@ -1149,6 +1150,7 @@ pub mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![FORK_DIGEST]),
         }
     }
 

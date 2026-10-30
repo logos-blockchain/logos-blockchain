@@ -25,7 +25,7 @@ use std::{
 };
 
 use lb_core::{
-    era::ForkDigest,
+    era::{AcceptedForkDigests, ForkDigest},
     header::HeaderId,
     mantle::{
         Note, Op, OpProof, SignedOps, Utxo,
@@ -334,5 +334,6 @@ fn config() -> Config {
                 slot_window: NonZero::new(100).unwrap(),
             },
         },
+        accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
     }
 }

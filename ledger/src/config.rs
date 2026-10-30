@@ -1,9 +1,12 @@
 use std::num::{NonZero, NonZeroU32, NonZeroU64, NonZeroU128};
 
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
-use lb_core::mantle::{
-    Value,
-    ops::pow::{PowSlotWindows, PowTarget},
+use lb_core::{
+    era::AcceptedForkDigests,
+    mantle::{
+        Value,
+        ops::pow::{PowSlotWindows, PowTarget},
+    },
 };
 use lb_cryptarchia_engine::{Epoch, EraSchedule, Slot};
 pub use lb_groth16::ModulusShift;
@@ -22,6 +25,7 @@ pub struct Config {
     pub consensus_config: lb_cryptarchia_engine::Config,
     pub sdp_config: crate::mantle::sdp::Config,
     pub pow_config: PoWConfig,
+    pub accepted_fork_digests: AcceptedForkDigests,
 }
 
 impl Config {
@@ -519,7 +523,10 @@ mod tests {
         sync::Arc,
     };
 
-    use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
+    use lb_core::{
+        era::AcceptedForkDigests,
+        sdp::{MinStake, ServiceParameters, ServiceType},
+    };
     use lb_cryptarchia_engine::EpochConfig;
     pub use lb_groth16::ModulusShift;
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
@@ -530,7 +537,7 @@ mod tests {
             stake_distribution_snapshot,
         },
         mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters},
-        test_utils::single_era,
+        test_utils::{FORK_DIGEST, single_era},
     };
 
     /// A reward config with claiming disabled, standing in for a real
@@ -728,6 +735,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![FORK_DIGEST]),
         };
         assert_eq!(config.epoch_length(), 100);
         let eras = single_era(config);
@@ -797,6 +805,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![FORK_DIGEST]),
         }
     }
 
@@ -882,6 +891,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![FORK_DIGEST]),
         };
         let eras = single_era(config);
         assert_eq!(eras.epoch_for_slot(1.into()), 0);

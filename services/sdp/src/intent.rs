@@ -166,6 +166,7 @@ mod tests {
     };
 
     use lb_core::{
+        era::{AcceptedForkDigests, ForkDigest},
         mantle::{Note, Utxo},
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
@@ -557,6 +558,7 @@ mod tests {
                         target_transactions_per_block: 1.try_into().unwrap(),
                     },
                 },
+                accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
             },
             0,
             &ConsensusExcludedKeys::empty(),

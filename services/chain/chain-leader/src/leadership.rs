@@ -570,6 +570,7 @@ mod pol_tests {
     use std::{fmt::Formatter, num::NonZero, slice};
 
     use lb_core::{
+        era::{AcceptedForkDigests, ForkDigest},
         mantle::{
             ledger::{Inputs, Note, Outputs},
             ops::{leader_claim::VoucherCm, transfer::TransferOp},
@@ -869,6 +870,7 @@ mod pol_tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
         }
     }
 

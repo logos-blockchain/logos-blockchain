@@ -8,7 +8,7 @@ use std::{
 use futures::StreamExt as _;
 use lb_core::{
     block::{Block, BlockTransactions, SignedHeader, UncleHeaders},
-    era::ForkDigest,
+    era::{AcceptedForkDigests, ForkDigest},
     mantle::{
         Note, Op, OpProof, SignedOps, Utxo,
         channel::Channels,
@@ -1018,6 +1018,7 @@ pub fn ledger_config_with_uncle_reference_window(
             },
             reward: disabled_reward_config(),
         },
+        accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
     }
 }
 

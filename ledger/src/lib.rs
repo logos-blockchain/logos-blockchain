@@ -24,6 +24,7 @@ pub use intent::{Intent, IntentStatus};
 use lb_core::{
     block::BlockNumber,
     crypto::Hash as BlockHash,
+    era::ForkDigest,
     events::{Events, HeaderEvent, TxEvent, TxEventPayload},
     mantle::{
         GenesisParameters, NoteId, Utxo, Value, VerificationError,
@@ -145,6 +146,8 @@ pub enum LedgerError<Id> {
     InvalidStoragePrice,
     #[error("Verification error: {0}")]
     VerificationError(#[from] VerificationError),
+    #[error("The era of the block does not accept the fork digest {0} of the transaction")]
+    UnacceptedForkDigest(ForkDigest),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -964,6 +967,10 @@ impl LedgerState {
         Tx: PreverifiedMantleTransaction,
     {
         let config = config_for_slot(eras, self.slot());
+        let fork_digest = tx.fork_digest();
+        if !config.accepted_fork_digests.accepts(&fork_digest) {
+            return Err(LedgerError::UnacceptedForkDigest(fork_digest));
+        }
         let mut verified_operations = tx.into_verified_operations();
 
         let mut balance: Balance = 0;
@@ -2740,6 +2747,46 @@ mod tests {
         // The transaction should be rejected because the price indicated for execution
         // doesn't cover the base fee that cost 27 050
         assert_eq!(err, LedgerError::InsufficientBalance);
+    }
+
+    #[test]
+    fn a_transaction_whose_fork_digest_the_era_does_not_accept_is_rejected() {
+        let utxo = utxo();
+        let config = config();
+        let ledger = LedgerState::from_utxos(
+            [utxo],
+            &config,
+            GENESIS_POW_REWARD_POOL,
+            &ConsensusExcludedKeys::empty(),
+        );
+        let other_fork = ForkDigest::new([0x22; 32]);
+        let mantle_tx = Ops::new(
+            other_fork,
+            [Op::Transfer(TransferOp::new(
+                Inputs::try_new(vec![utxo.id()]).unwrap(),
+                Outputs::try_new(vec![]).unwrap(),
+            ))],
+        );
+        let ops_proofs = OpProofs::from([OpProof::ZkSig(
+            ZkKey::multi_sign(
+                &[ZkKey::from(BigUint::from(0u8))],
+                &mantle_tx.hash().to_fr(),
+            )
+            .unwrap(),
+        )]);
+        let tx = SignedOps::from_parts(mantle_tx, ops_proofs)
+            .unwrap()
+            .preverify()
+            .unwrap();
+
+        let err = ledger
+            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
+                &single_era(config),
+                std::iter::once(tx),
+            )
+            .err()
+            .unwrap();
+        assert_eq!(err, LedgerError::UnacceptedForkDigest(other_fork));
     }
 
     #[test]

@@ -186,5 +186,6 @@ fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
             // validated ledger type.
             reward: deployment.pow_config.reward.clone(),
         },
+        accepted_fork_digests: era.accepted_fork_digests.clone(),
     }
 }

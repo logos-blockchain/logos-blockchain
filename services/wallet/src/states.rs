@@ -429,7 +429,7 @@ impl<'u> ServiceState<'u> {
 
 #[cfg(test)]
 mod tests {
-    use lb_core::era::ForkDigest;
+    use lb_core::era::{AcceptedForkDigests, ForkDigest};
     use lb_groth16::{Field as _, Fr};
     use lb_ledger::ConsensusExcludedKeys;
 
@@ -614,6 +614,7 @@ mod tests {
                     slot_window: NonZeroU64::new(100).unwrap(),
                 },
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
         }
     }
 

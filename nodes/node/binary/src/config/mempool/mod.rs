@@ -29,7 +29,8 @@ pub struct ServiceConfig {
 impl ServiceConfig {
     /// The settings of the mempool: the user's, and in each era of `eras` the
     /// era's acceptance window for `PoW` reward claims, so the mempool and the
-    /// ledger agree on when a claim expires, and the era's transaction topic.
+    /// ledger agree on when a claim expires, the fork digests it admits, and
+    /// the era's transaction topic.
     #[must_use]
     pub fn into_mempool_service_settings(
         self,
@@ -55,6 +56,7 @@ impl ServiceConfig {
                         slot_window: parameters.cryptarchia.pow_config.reward.slot_window,
                     }
                 })),
+                accepted_fork_digests: eras.map(|era| era.parameters.accepted_fork_digests.clone()),
             },
             seen_items_subscription_channel_size: self
                 .user

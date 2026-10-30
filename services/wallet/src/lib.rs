@@ -54,7 +54,7 @@ use lb_services_utils::{
 };
 use lb_storage_service::{api::StorageApi, recovery::StorageRecoveryBackend};
 use lb_time::era::{EpochLength, EraSchedule};
-use lb_time_service::{EraEvent, SlotTick, TimeService, api::TimeServiceApi};
+use lb_time_service::{EraEvent, TimeService, api::TimeServiceApi};
 use lb_utils::{bounded::BoundedError, tokio::task::spawn_blocking};
 use lb_wallet::{WalletBalance, WalletBlock, WalletError};
 use overwatch::{
