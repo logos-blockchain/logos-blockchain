@@ -157,6 +157,63 @@ async fn submit_signed_tx_refuses_a_parent_with_a_pending_child() {
     assert_eq!(sequencer.state.as_ref().unwrap().pending_publish_count(), 1);
 }
 
+/// A hand-built tx chained on a message whose continuation is already mined
+/// is refused at submit like one whose continuation is pending: the entry
+/// would pend on a passed position, re-posted and refused by the node until
+/// the expiry shed. On the publish tip it is accepted and the receipt names
+/// the parent it chains on.
+#[tokio::test]
+async fn submit_signed_tx_refuses_a_parent_with_a_mined_child() {
+    let channel_id = ChannelId::from([0; 32]);
+    let key = Ed25519Key::from_bytes(&[0; 32]);
+    let mut sequencer = ready_sequencer_with_channel(None, key).await;
+
+    // Block 1 mines entry 1 on root: the publish parent is entry 1 now.
+    let mined = inscribe_op(channel_id, MsgId::root(), b"1");
+    let mined_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(mined.clone())]);
+    let lib = sequencer.state.as_ref().unwrap().lib();
+    sequencer.state.as_mut().unwrap().process_block(
+        header_id(1),
+        lib,
+        lib,
+        std::iter::empty(),
+        vec![BlockChannelTx::new(
+            Arc::new(mined_tx.clone()),
+            mined_tx.hash(),
+            ChannelTxKind::Inscription(InscriptionInfo {
+                tx_hash: mined_tx.hash(),
+                parent_msg: MsgId::root(),
+                this_msg: mined.id(),
+                payload: mined.inscription.clone(),
+                signer: Some(mined.signer),
+            }),
+        )],
+        Vec::new(),
+        vec![],
+    );
+    sequencer.current_tip = Some(header_id(1));
+    assert_eq!(sequencer.compute_publish_parent(), mined.id());
+
+    let behind = inscribe_op(channel_id, MsgId::root(), b"behind the tip");
+    let behind_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(behind.clone())]);
+    let result = sequencer.handle().submit_signed_tx(behind_tx, behind.id());
+    assert!(
+        matches!(result, Err(Error::ChannelStateChanged(_))),
+        "a parent with a mined child must be refused, got {result:?}"
+    );
+    assert_eq!(sequencer.state.as_ref().unwrap().pending_publish_count(), 0);
+
+    let on_tip = inscribe_op(channel_id, mined.id(), b"on the tip");
+    let on_tip_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(on_tip.clone())]);
+    let (result, _) = sequencer
+        .handle()
+        .submit_signed_tx(on_tip_tx, on_tip.id())
+        .expect("a tx on the publish tip is accepted");
+    assert_eq!(result.tx.inscription().parent_msg, mined.id());
+    assert_eq!(result.tx.inscription().this_msg, on_tip.id());
+    assert_eq!(sequencer.state.as_ref().unwrap().pending_publish_count(), 1);
+}
+
 /// A gap block's deposit surfaces once, in order, even when the first
 /// backfill failed, the stream reconnected and the chain switched to
 /// another fork and back before the re-delivered event backfills the gap.
