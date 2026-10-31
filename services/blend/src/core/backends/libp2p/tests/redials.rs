@@ -4,7 +4,8 @@ use core::{
 };
 
 use lb_blend::{
-    message::encap::encapsulated_message_encoded_size, scheduling::membership::Membership,
+    message::encap::{MessageLayout, encapsulated_message_encoded_size},
+    scheduling::membership::Membership,
 };
 use lb_libp2p::{DialOpts, Protocol, SwarmEvent};
 use libp2p::{Multiaddr, PeerId, swarm::dial_opts::PeerCondition};
@@ -14,16 +15,19 @@ use tokio::{
     time::{self, sleep, sleep_until},
 };
 
-use crate::core::backends::{
-    BackendEpochInfo,
-    libp2p::{
-        core_swarm_test_utils::{SwarmExt as _, new_nodes_with_empty_address, update_nodes},
-        swarm::{BlendSwarmMessage, PeerDialState},
-        tests::utils::{
-            BlendBehaviourBuilder, SwarmBuilder, TestProofsVerifier, TestSwarm, build_membership,
-            test_peering_degree,
+use crate::{
+    core::backends::{
+        BackendEpochInfo,
+        libp2p::{
+            core_swarm_test_utils::{SwarmExt as _, new_nodes_with_empty_address, update_nodes},
+            swarm::{BlendSwarmMessage, PeerDialState},
+            tests::utils::{
+                BlendBehaviourBuilder, SwarmBuilder, TestProofsVerifier, TestSwarm,
+                build_membership, test_peering_degree,
+            },
         },
     },
+    test_utils::PAYLOAD_BODY_SIZE,
 };
 
 #[test(tokio::test)]
@@ -945,8 +949,11 @@ async fn core_does_not_retry_a_blacklisted_peer() {
 
     // A message of the right length that decodes into nothing, which is an
     // offence its sender cannot blame on the network.
-    let undecodable_message =
-        vec![0xAB; encapsulated_message_encoded_size(NonZeroU64::new(3).unwrap()).get()];
+    let layout = MessageLayout {
+        num_blend_layers: NonZeroU64::new(3).unwrap(),
+        payload_body_size: PAYLOAD_BODY_SIZE,
+    };
+    let undecodable_message = vec![0xAB; encapsulated_message_encoded_size(layout).get()];
     time::timeout(Duration::from_secs(10), async {
         while !victim
             .behaviour()

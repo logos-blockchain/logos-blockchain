@@ -36,6 +36,7 @@ use overwatch::{
 use tracing::{debug, error, info};
 
 use crate::{
+    api::ApiError,
     broadcast::service_components::ServiceComponents as BroadcastServiceComponents,
     core::{
         dispatcher::PayloadDispatcher as PayloadDispatcherTrait,
@@ -271,6 +272,9 @@ where
         // network size of its era.
         let mut era_minimum_network_size =
             era_schedule.at_epoch(epoch).parameters.minimum_network_size;
+        // Submitted payloads are checked against the payload body size of the
+        // era of the current epoch.
+        let mut era_payload_body_size = era_schedule.at_epoch(epoch).parameters.payload_body_size;
         let mut instance =
             Instance::<CoreService, EdgeService, BroadcastService, RuntimeServiceId>::new(
                 ModeMembership::resolve(membership_info, era_minimum_network_size).mode(),
@@ -293,6 +297,7 @@ where
                         EpochEvent::NewEpoch((epoch, membership_info)) => {
                             let era_settings = era_schedule.at_epoch(epoch).parameters;
                             era_minimum_network_size = era_settings.minimum_network_size;
+                            era_payload_body_size = era_settings.payload_body_size;
                             // The transition out of this epoch lasts its era's period. For same-era epoch events, this is a no-op.
                             remaining_membership_stream.set_transition_period(era_settings.epoch_transition_period);
                             EpochEvent::NewEpoch(membership_info)
@@ -322,6 +327,21 @@ where
                         ProxyServiceMessage::GetZkId { reply } => {
                             reply.send(zk_public_key).unwrap_or_else(|e| {
                                 debug!(target: LOG_TARGET, "Failed to send GetZkId reply: {e:?}");
+                            });
+                        },
+                        ProxyServiceMessage::Blend { payload, reply } => {
+                            let processing_result = match payload.validate_size(era_payload_body_size) {
+                                Ok(()) => instance
+                                    .handle_inbound_message(ServiceMessage::Blend(payload))
+                                    .await
+                                    .map_err(|e| {
+                                        error!(target: LOG_TARGET, "Failed to handle inbound message: {e:?}");
+                                        ApiError::CommsFailure(format!("{e} while handing a payload to Blend"))
+                                    }),
+                                Err(error) => Err(error.into()),
+                            };
+                            reply.send(processing_result).unwrap_or_else(|e| {
+                                debug!(target: LOG_TARGET, "Failed to send Blend reply: {e:?}");
                             });
                         },
                         ProxyServiceMessage::Inner(inner_message) => {

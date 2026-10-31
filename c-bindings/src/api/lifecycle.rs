@@ -313,7 +313,6 @@ mod test {
             std::fs::create_dir_all(&log_dir).expect("Failed to create isolated log dir");
 
             let node_config_path = temp_dir.path().join("standalone-node-config.yaml");
-            let deployment_config_path = temp_dir.path().join("standalone-deployment-config.yaml");
 
             let state_dir_path = temp_dir.path().join("state");
             let mut node_config = deserialize_value_at_path::<UserConfig>(
@@ -330,17 +329,15 @@ mod test {
                 .expect("Standalone node config should be written to file");
             std::fs::write(&node_config_path, node_config_yaml)
                 .expect("Failed to write isolated node config");
-            std::fs::copy(
-                STANDALONE_DEPLOYMENT_CONFIG_PATH.as_path(),
-                &deployment_config_path,
-            )
-            .expect("Failed to copy standalone deployment config");
 
             let node_config = CString::new(node_config_path.to_string_lossy().as_bytes())
                 .expect("Node config path should not contain NUL");
-            let deployment_config =
-                CString::new(deployment_config_path.to_string_lossy().as_bytes())
-                    .expect("Deployment config path should not contain NUL");
+            let deployment_config = CString::new(
+                STANDALONE_DEPLOYMENT_CONFIG_PATH
+                    .to_string_lossy()
+                    .as_bytes(),
+            )
+            .expect("Deployment config path should not contain NUL");
 
             Self {
                 _temp_dir: temp_dir,

@@ -1,10 +1,9 @@
 use std::time::Duration;
 
 use futures::{TryStreamExt as _, stream::BoxStream};
-use lb_binary_codec::bincode::BoundedSerializeOp;
 use lb_log_targets::cryptarchia;
 use libp2p::{PeerId, Stream as Libp2pStream};
-use serde::de::DeserializeOwned;
+use serde::Serialize;
 use tokio::{sync::mpsc, time};
 use tracing::{debug, error};
 
@@ -15,7 +14,7 @@ use crate::{
         errors::{ChainSyncError, ChainSyncErrorKind},
         messages::{BlocksResponse, RequestMessage},
         packing::unpack_from_reader,
-        utils::{close_stream, send_message},
+        utils::{close_stream, send_message, send_message_up_to},
     },
     messages::{SerialisedBlock, TipResponse, TipResponseFailureReason},
 };
@@ -78,19 +77,28 @@ impl Provider {
         send_result
     }
 
-    /// Serves one block download request. The whole response, from waiting
-    /// for the block provider until the stream is closed, is bounded by
-    /// `stream_timeout`, and each write by `send_timeout`.
+    /// Serves one block download request: the blocks the service answers with,
+    /// each in a response of at most `max_response_size` bytes. The whole
+    /// response, from waiting for the block provider until the stream is
+    /// closed, is bounded by `stream_timeout`, and each write by
+    /// `send_timeout`.
     pub async fn provide_blocks(
         reply_receiver: mpsc::Receiver<BlocksProviderResponse>,
         peer_id: PeerId,
         libp2p_stream: Libp2pStream,
+        max_response_size: usize,
         send_timeout: Duration,
         stream_timeout: Duration,
     ) -> Result<(), ChainSyncError> {
         time::timeout(
             stream_timeout,
-            Self::respond_to_blocks_request(reply_receiver, peer_id, libp2p_stream, send_timeout),
+            Self::respond_to_blocks_request(
+                reply_receiver,
+                peer_id,
+                libp2p_stream,
+                max_response_size,
+                send_timeout,
+            ),
         )
         .await
         .map_err(|e| ChainSyncError::from((peer_id, e)))?
@@ -100,6 +108,7 @@ impl Provider {
         mut reply_receiver: mpsc::Receiver<BlocksProviderResponse>,
         peer_id: PeerId,
         mut libp2p_stream: Libp2pStream,
+        max_response_size: usize,
         send_timeout: Duration,
     ) -> Result<(), ChainSyncError> {
         let response = reply_receiver.recv().await.unwrap_or_else(|| {
@@ -111,24 +120,34 @@ impl Provider {
 
         match response {
             ProviderResponse::Available(stream) => {
-                Self::send_blocks(peer_id, stream, libp2p_stream, send_timeout).await
+                Self::send_blocks(
+                    peer_id,
+                    stream,
+                    libp2p_stream,
+                    max_response_size,
+                    send_timeout,
+                )
+                .await
             }
             ProviderResponse::Unavailable { reason } => {
                 let response = BlocksResponse::Failure(reason);
-                send_message(peer_id, &mut libp2p_stream, &response).await?;
+                send_message_up_to(peer_id, &mut libp2p_stream, &response, max_response_size)
+                    .await?;
                 drop(close_stream(peer_id, libp2p_stream).await);
                 Ok(())
             }
         }
     }
 
-    /// Sends every block of `stream` to the peer. Each write is bounded by
+    /// Sends every block of `stream` to the peer, each in a response of at
+    /// most `max_response_size` bytes. Each write is bounded by
     /// `send_timeout`, so a peer that stops reading cannot hold the download
     /// slot indefinitely.
     async fn send_blocks(
         peer_id: PeerId,
         stream: BoxStream<'static, Result<SerialisedBlock, DynError>>,
         mut libp2p_stream: Libp2pStream,
+        max_response_size: usize,
         send_timeout: Duration,
     ) -> Result<(), ChainSyncError> {
         let result = stream
@@ -140,7 +159,14 @@ impl Provider {
             })
             .try_fold(&mut libp2p_stream, async |stream, block| {
                 let message = BlocksResponse::Block(block);
-                send_message_with_timeout(peer_id, stream, &message, send_timeout).await?;
+                send_message_with_timeout(
+                    peer_id,
+                    stream,
+                    &message,
+                    max_response_size,
+                    send_timeout,
+                )
+                .await?;
                 Ok(stream)
             })
             .await;
@@ -148,14 +174,27 @@ impl Provider {
         let final_result = match result {
             Ok(_) => {
                 let message = BlocksResponse::NoMoreBlocks;
-                send_message_with_timeout(peer_id, &mut libp2p_stream, &message, send_timeout).await
+                send_message_with_timeout(
+                    peer_id,
+                    &mut libp2p_stream,
+                    &message,
+                    max_response_size,
+                    send_timeout,
+                )
+                .await
             }
             Err(e) => {
                 error!(target: LOG_TARGET, "Failed to send blocks to peer {}: {}", peer_id, e);
                 let message = BlocksResponse::Failure(BlocksUnavailableReason::Unknown);
                 drop(
-                    send_message_with_timeout(peer_id, &mut libp2p_stream, &message, send_timeout)
-                        .await,
+                    send_message_with_timeout(
+                        peer_id,
+                        &mut libp2p_stream,
+                        &message,
+                        max_response_size,
+                        send_timeout,
+                    )
+                    .await,
                 );
                 Err(e)
             }
@@ -167,13 +206,18 @@ impl Provider {
     }
 }
 
-async fn send_message_with_timeout<M: BoundedSerializeOp + DeserializeOwned + Sync>(
+/// Sends a message of at most `max_bytes` bytes, giving up after `timeout`.
+async fn send_message_with_timeout<M: Serialize + Sync>(
     peer_id: PeerId,
     stream: &mut Libp2pStream,
     message: &M,
+    max_bytes: usize,
     timeout: Duration,
 ) -> Result<(), ChainSyncError> {
-    time::timeout(timeout, send_message(peer_id, stream, message))
-        .await
-        .map_err(|e| ChainSyncError::from((peer_id, e)))?
+    time::timeout(
+        timeout,
+        send_message_up_to(peer_id, stream, message, max_bytes),
+    )
+    .await
+    .map_err(|e| ChainSyncError::from((peer_id, e)))?
 }

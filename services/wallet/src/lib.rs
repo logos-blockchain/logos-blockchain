@@ -6,6 +6,7 @@ use std::{collections::HashMap, num::NonZero};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{StreamExt as _, TryStreamExt as _};
+use lb_binary_codec::canonical::BinaryDecode;
 use lb_chain_service::{
     ChainServiceInfo, LibUpdate,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
@@ -424,6 +425,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + StorageSize
         + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx>,
@@ -576,6 +578,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + StorageSize
         + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx> + Send + 'static,

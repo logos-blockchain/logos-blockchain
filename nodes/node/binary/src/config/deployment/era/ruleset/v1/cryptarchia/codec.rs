@@ -20,6 +20,7 @@ impl BinaryEncode for Settings {
             slot_activation_coeff,
             learning_rate,
             uncle_reference_window_in_block,
+            max_uncles,
             sdp_config,
             pow_config,
         } = self;
@@ -29,6 +30,7 @@ impl BinaryEncode for Settings {
             + slot_activation_coeff.encoded_length()
             + learning_rate.encoded_length()
             + uncle_reference_window_in_block.encoded_length()
+            + max_uncles.encoded_length()
             + sdp_config.encoded_length()
             + pow_config.encoded_length()
     }
@@ -40,6 +42,7 @@ impl BinaryEncode for Settings {
             slot_activation_coeff,
             learning_rate,
             uncle_reference_window_in_block,
+            max_uncles,
             sdp_config,
             pow_config,
         } = self;
@@ -49,6 +52,7 @@ impl BinaryEncode for Settings {
         slot_activation_coeff.encode_into(out);
         learning_rate.encode_into(out);
         uncle_reference_window_in_block.encode_into(out);
+        max_uncles.encode_into(out);
         sdp_config.encode_into(out);
         pow_config.encode_into(out);
     }
@@ -178,6 +182,7 @@ pub fn fixture_settings() -> Settings {
         slot_activation_coeff: NonNegativeRatio::new(16, NonZeroU32::new(17).unwrap()),
         learning_rate: NonNegativeF64::try_from(18.0).unwrap(),
         uncle_reference_window_in_block: 19,
+        max_uncles: 24,
         sdp_config: fixture_sdp_config(),
         pow_config: fixture_pow_config(),
     }
@@ -237,7 +242,7 @@ const fn fixture_blend_pow_config() -> BlendPoWConfig {
 }
 
 pub const SETTINGS_HEX: &str = "
-    0c 0d 0e 0f000000 10000000 11000000 0000000000003240 13000000 01000000 00 14000000
+    0c 0d 0e 0f000000 10000000 11000000 0000000000003240 13000000 18 01000000 00 14000000
     15000000 1600000000000000 1700000000000000 19000000 1a00000000000000
     1b00000000000000 1c000000 1d000000 20000000
     2100000000000000 2200000000000000 2300000000000000 2400000000000000 2500000000000000

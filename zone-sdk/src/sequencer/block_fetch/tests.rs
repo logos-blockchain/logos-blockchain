@@ -799,7 +799,9 @@ fn extract_finalized_items_surfaces_configs_with_their_own_parent() {
             assert_eq!(info.tx_hash, tx_hash);
             assert_eq!(info.parent_msg, parent);
             assert_eq!(info.this_msg, config_id);
-            assert!(info.payload.is_empty());
+            assert_eq!(info.config.id(), config_id);
+            assert_eq!(info.config.keys().len(), 1, "the mined keys travel with it");
+            assert_eq!(info.config.transfer_threshold(), NonZero::<u16>::MIN);
         }
         other => panic!("expected Config, got {other:?}"),
     }

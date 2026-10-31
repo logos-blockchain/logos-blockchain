@@ -124,21 +124,33 @@ mod tests {
         assert_eq!(density.period_range(), &(100.into()..=159.into()));
 
         // A block and its uncles are marked together.
-        density.mark_occupied_slots(Slot::from(110), &[Slot::from(105)].into());
+        density.mark_occupied_slots(
+            Slot::from(110),
+            &UncleSlots::try_new(vec![Slot::from(105)], 4).unwrap(),
+        );
         assert_eq!(density.current_block_density(), 2);
 
         // A slot occupied more than once is counted once:
         // slot 105 by another uncle, and slot 110 by an uncle of another block.
-        density.mark_occupied_slots(Slot::from(120), &[Slot::from(105), Slot::from(110)].into());
+        density.mark_occupied_slots(
+            Slot::from(120),
+            &UncleSlots::try_new(vec![Slot::from(105), Slot::from(110)], 4).unwrap(),
+        );
         assert_eq!(density.current_block_density(), 3);
 
         // Uncle slots outside the period are ignored.
-        density.mark_occupied_slots(Slot::from(130), &[Slot::from(99)].into());
+        density.mark_occupied_slots(
+            Slot::from(130),
+            &UncleSlots::try_new(vec![Slot::from(99)], 4).unwrap(),
+        );
         assert_eq!(density.current_block_density(), 4);
 
         // A block outside the period is skipped entirely, even if its uncles
         // are within the period (late references).
-        density.mark_occupied_slots(Slot::from(160), &[Slot::from(150)].into());
+        density.mark_occupied_slots(
+            Slot::from(160),
+            &UncleSlots::try_new(vec![Slot::from(150)], 4).unwrap(),
+        );
         assert_eq!(density.current_block_density(), 4);
     }
 
@@ -154,6 +166,7 @@ mod tests {
                 NonNegativeRatio::new(1, 2.try_into().unwrap()),
                 1f64.try_into().unwrap(),
                 12.try_into().unwrap(),
+                4,
             ),
             // not used in the tests
             sdp_config: crate::mantle::sdp::Config {

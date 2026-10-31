@@ -24,7 +24,8 @@ pub struct ServiceConfig {
 
 impl ServiceConfig {
     /// The settings of the chain network: the user's, and in each era of `eras`
-    /// the era's block proposal topic and active slot coefficient.
+    /// the era's block proposal topic, uncle maximum and active slot
+    /// coefficient.
     #[must_use]
     pub fn into_chain_network_settings(
         &self,
@@ -48,9 +49,13 @@ impl ServiceConfig {
                 max_discovered_peers_to_try_download: network
                     .network
                     .max_discovered_peers_to_try_download,
-                era_schedule: eras.map(|era| LibP2pAdapterEraSettings {
-                    topic: ProtocolScope::Fork(era.parameters.fork_digest)
-                        .to_string_with_name("cryptarchia"),
+                era_schedule: eras.map(|era| {
+                    let EraRuleset::V1(parameters) = &era.parameters.ruleset;
+                    LibP2pAdapterEraSettings {
+                        topic: ProtocolScope::Fork(era.parameters.fork_digest)
+                            .to_string_with_name("cryptarchia"),
+                        max_uncles: parameters.cryptarchia.max_uncles,
+                    }
                 }),
             },
             sync: lb_chain_network_service::SyncConfig {

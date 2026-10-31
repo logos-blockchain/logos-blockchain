@@ -12,7 +12,7 @@ use std::{
 use async_trait::async_trait;
 use futures::{StreamExt as _, select};
 use lb_blend_membership::{Membership, Node};
-use lb_blend_message::crypto::key_ext::Ed25519SecretKeyExt as _;
+use lb_blend_message::{crypto::key_ext::Ed25519SecretKeyExt as _, encap::MessageLayout};
 use lb_blend_primitives::time::{Round, RoundClock, RoundCount};
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_libp2p::{NetworkBehaviour, SwarmEvent};
@@ -26,7 +26,7 @@ use tokio::time::timeout;
 
 use crate::core::{
     poq_verification::PendingPoQVerifications,
-    tests::utils::{PROTOCOL_NAME, TestProofsVerifier, TestSwarm},
+    tests::utils::{PAYLOAD_BODY_SIZE, PROTOCOL_NAME, TestProofsVerifier, TestSwarm},
     with_core::behaviour::{
         Behaviour, ConnectionDirection, Event, PendingUpgrade, RemotePeerConnectionDetails,
         blacklist::PeerBlacklist,
@@ -196,9 +196,12 @@ impl BehaviourBuilder {
             minimum_network_size: self
                 .minimum_network_size
                 .unwrap_or_else(|| 1usize.try_into().unwrap()),
-            num_blend_layers: self
-                .num_blend_layers
-                .unwrap_or_else(|| 3.try_into().unwrap()),
+            message_layout: MessageLayout {
+                num_blend_layers: self
+                    .num_blend_layers
+                    .unwrap_or_else(|| 3.try_into().unwrap()),
+                payload_body_size: PAYLOAD_BODY_SIZE,
+            },
             old_epoch: None,
             connection_share_per_round: self
                 .connection_share_per_round

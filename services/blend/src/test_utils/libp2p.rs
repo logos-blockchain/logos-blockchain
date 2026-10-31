@@ -6,7 +6,7 @@ use core::{
 
 use lb_blend::{
     message::{
-        PayloadType, crypto::key_ext::Ed25519SecretKeyExt as _,
+        PaddedPayloadBody, PayloadType, crypto::key_ext::Ed25519SecretKeyExt as _,
         encap::validated::EncapsulatedMessageWithVerifiedPublicHeader, input::EncapsulationInput,
     },
     proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
@@ -33,7 +33,7 @@ impl TestEncapsulatedMessage {
             EncapsulatedMessageWithVerifiedPublicHeader::try_new(
                 &generate_valid_inputs(),
                 PayloadType::BlockProposal,
-                payload.try_into().unwrap(),
+                PaddedPayloadBody::try_new(payload, super::PAYLOAD_BODY_SIZE).unwrap(),
                 NUM_BLEND_LAYERS.try_into().unwrap(),
             )
             .unwrap(),

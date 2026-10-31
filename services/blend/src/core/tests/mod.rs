@@ -6,10 +6,7 @@ use futures::{
     stream::{empty, pending, repeat},
 };
 use lb_blend::{
-    message::{
-        MAX_PAYLOAD_BODY_SIZE,
-        reward::{ActivityProof, BlendingToken, EpochBlendingTokenCollector},
-    },
+    message::reward::{ActivityProof, BlendingToken, EpochBlendingTokenCollector},
     proofs::{
         quota::{VerifiedProofOfQuota, inputs::prove::public::LeaderInputs},
         selection::VerifiedProofOfSelection,
@@ -65,6 +62,7 @@ use crate::{
     message::{DataPayload, ServiceMessage},
     pending::{NextLocalMessage, PendingTransactions, next_local_message},
     test_utils::{
+        PAYLOAD_BODY_SIZE,
         crypto::{
             GatedPowProofsGenerator, MockCoreAndLeaderProofsGenerator, PolAwareProofsGenerator,
             PowGate, recorded_starting_core_key_indices, reset_starting_core_key_indices,
@@ -157,7 +155,7 @@ async fn test_handle_incoming_blend_message() {
     let mut processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -211,7 +209,7 @@ async fn test_handle_incoming_blend_message() {
     let mut new_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -312,7 +310,7 @@ async fn test_handle_incoming_blend_message() {
     let mut future_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -397,7 +395,7 @@ async fn test_duplicate_decapsulated_replica_handled_gracefully() {
     let mut processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -491,7 +489,7 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
     let mut processor_0 = new_crypto_processor(
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -512,7 +510,7 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
     let processor_1 = new_crypto_processor(
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -656,7 +654,7 @@ async fn test_handle_epoch_event_discards_queued_proposals() {
     let crypto_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -682,7 +680,7 @@ async fn test_handle_epoch_event_discards_queued_proposals() {
         new_crypto_processor(
             EpochCryptographicProcessorSettings {
                 non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
-                num_blend_layers: settings.num_blend_layers,
+                message_layout: settings.message_layout(),
                 pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
                 spent_core_quota: Quota::ZERO,
             },
@@ -744,7 +742,7 @@ async fn test_handle_epoch_event() {
     let crypto_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -901,7 +899,7 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
     let crypto_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -1004,7 +1002,7 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
     let crypto_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -1118,7 +1116,7 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
     let crypto_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -1196,7 +1194,7 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
     let crypto_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -1714,7 +1712,7 @@ async fn test_proof_generator_epoch_binding() {
     let mut generator_0 = new_crypto_processor(
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -1725,7 +1723,7 @@ async fn test_proof_generator_epoch_binding() {
     let mut generator_1 = new_crypto_processor(
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -2819,10 +2817,9 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
     // One byte over what a payload can hold, so encapsulating it fails the same
     // way however long it waits.
     inbound_message_sender
-        .send(ServiceMessage::Blend(DataPayload::BlockProposal(vec![
-            0;
-            MAX_PAYLOAD_BODY_SIZE + 1
-        ])))
+        .send(ServiceMessage::Blend(DataPayload::BlockProposal(
+            vec![0; usize::from(PAYLOAD_BODY_SIZE) + 1],
+        )))
         .await
         .unwrap();
     inbound_message_sender

@@ -1,3 +1,4 @@
+use lb_blend::message::encap::MessageLayout;
 use lb_blend_service::{
     broadcast::settings::{BroadcastServiceEraSettings, BroadcastServiceSettings},
     core::{
@@ -87,6 +88,7 @@ impl ServiceConfig {
             let slots_per_block = cryptarchia_deployment.average_slots_per_block();
             let slot_duration = time_deployment.slot_duration();
             let num_blend_layers = deployment.common.num_blend_layers;
+            let payload_body_size = definition.ruleset.blend_payload_body_size();
             let minimum_network_size = deployment.common.minimum_network_size.into();
             let time = deployment.timing_settings(slots_per_epoch, slots_per_block, &slot_duration);
             let data_replication_factor = deployment.common.data_replication_factor;
@@ -111,6 +113,7 @@ impl ServiceConfig {
                 },
                 time: time.clone(),
                 num_blend_layers,
+                payload_body_size,
                 minimum_network_size,
                 data_replication_factor,
                 activity_threshold_sensitivity: deployment.core.activity_threshold_sensitivity,
@@ -118,6 +121,7 @@ impl ServiceConfig {
             let edge = EdgeServiceEraSettings {
                 time: time.clone(),
                 num_blend_layers,
+                payload_body_size,
                 minimum_network_size,
                 cover: core.scheduler.cover.clone(),
                 data_replication_factor,
@@ -131,6 +135,7 @@ impl ServiceConfig {
                 orchestrator: EraOrchestratorSettings {
                     minimum_network_size,
                     epoch_transition_period,
+                    payload_body_size,
                 },
                 core,
                 edge,
@@ -149,11 +154,15 @@ impl ServiceConfig {
                         .accepted_edge_connections_per_round(),
                     protocol_name,
                     minimum_network_size,
-                    num_blend_layers,
+                    message_layout: MessageLayout {
+                        num_blend_layers,
+                        payload_body_size,
+                    },
                     time,
                 },
                 dispatcher: Libp2pBroadcastSettings {
                     topic: fork.to_string_with_name("cryptarchia"),
+                    max_proposal_size: cryptarchia_deployment.max_proposal_size(),
                 },
             }
         });

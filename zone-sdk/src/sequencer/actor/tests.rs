@@ -29,7 +29,7 @@ use super::{
         block_fetch::ViewBefore,
         block_states::{BlockChannelTx, ChannelTxKind},
         state::PendingBundle,
-        types::{FinalizedOp, InscriptionInfo, SequencerConfig},
+        types::{ConfigInfo, FinalizedOp, InscriptionInfo, SequencerConfig},
         zone_sequencer::track_pending_tx,
     },
     *,
@@ -1348,6 +1348,99 @@ async fn cold_start_backfills_genesis_slot() {
     );
     assert_eq!(checkpoints[1].lib, lib_block.header.id);
     assert_eq!(notes(&checkpoints[1]), vec![(note_id, 50)]);
+}
+
+/// The complete mined configuration reaches `Event::BlocksProcessed`'s
+/// finalized items during a cold-start backfill: a config accrediting two
+/// keys, then one removing the second, each with its exact key set, across
+/// two backfill batches.
+#[tokio::test]
+async fn cold_start_backfill_finalizes_configs_with_their_keys() {
+    let channel_id = ChannelId::from([7; 32]);
+    let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+    let peer_key = Ed25519Key::from_bytes(&[1; 32]);
+    let config = |parent: MsgId, keys: Vec<_>| {
+        ChannelConfigOp::new(
+            channel_id,
+            parent,
+            VerifiedChannelKeys::try_from(keys).unwrap(),
+            SlotTimeframe::from(3u32),
+            SlotTimeout::from(0u32),
+            NonZero::<u16>::MIN,
+            NonZero::<u16>::MIN,
+        )
+        .unwrap()
+    };
+    let accredit = config(
+        MsgId::root(),
+        vec![sequencer_key.public_key(), peer_key.public_key()],
+    );
+    let remove = config(accredit.id(), vec![sequencer_key.public_key()]);
+    let accredit_tx = unverified_tx_with_ops(vec![Op::ChannelConfig(accredit.clone())]);
+    let remove_tx = unverified_tx_with_ops(vec![Op::ChannelConfig(remove.clone())]);
+
+    let genesis_block = api_block(1, 0, 0, vec![accredit_tx.clone()]);
+    // Slot 120 falls in the second 100-slot batch.
+    let remove_block = api_block(2, 1, 120, vec![remove_tx.clone()]);
+    let lib_block = api_block(3, 2, 150, Vec::new());
+    let live_block = api_block(4, 3, 151, Vec::new());
+
+    let node = MockNode {
+        lib: lib_block.header.id,
+        lib_slot: lib_block.header.slot,
+        tip: lib_block.header.id,
+        scripts: scripts(vec![StreamScript {
+            events: vec![ProcessedBlockEvent {
+                block: live_block.clone(),
+                tip: live_block.header.id,
+                tip_slot: live_block.header.slot,
+                lib: lib_block.header.id,
+                lib_slot: lib_block.header.slot,
+            }],
+            then: StreamEnd::Hang,
+        }]),
+        immutable: vec![genesis_block, remove_block, lib_block.clone()],
+        ..MockNode::default()
+    };
+    let mut sequencer =
+        ZoneSequencer::init(channel_id, sequencer_key, node, funding_config(), None);
+
+    let mut configs: Vec<ConfigInfo> = Vec::new();
+    loop {
+        match sequencer.next_event().await {
+            Event::Ready => break,
+            Event::BlocksProcessed { finalized, .. } => {
+                configs.extend(
+                    finalized
+                        .iter()
+                        .flat_map(|tx| &tx.ops)
+                        .filter_map(|op| match op {
+                            FinalizedOp::Config(info) => Some(info.clone()),
+                            _ => None,
+                        }),
+                );
+            }
+            Event::TurnNotification { .. } => {}
+        }
+    }
+
+    assert_eq!(configs.len(), 2, "both configs finalized: {configs:?}");
+    assert_eq!(configs[0].tx_hash, accredit_tx.hash());
+    assert_eq!(configs[0].parent_msg, MsgId::root());
+    assert_eq!(configs[0].this_msg, accredit.id());
+    assert_eq!(
+        configs[0].config, accredit,
+        "the mined config, keys included"
+    );
+    assert_eq!(configs[0].config.keys().len(), 2);
+    assert_eq!(configs[1].tx_hash, remove_tx.hash());
+    assert_eq!(configs[1].parent_msg, accredit.id());
+    assert_eq!(configs[1].this_msg, remove.id());
+    assert_eq!(
+        configs[1].config, remove,
+        "the removal, with the one key left"
+    );
+    assert_eq!(configs[1].config.keys().len(), 1);
 }
 
 /// The one finalized tx with `tx_hash` carries a single root inscription

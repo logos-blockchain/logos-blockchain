@@ -1,8 +1,10 @@
 use std::io;
 
 use futures::{AsyncReadExt, AsyncWriteExt};
-use lb_binary_codec::bincode::{self, BoundedBytes, BoundedSerializeOp, DeserializeOp as _};
-use serde::de::DeserializeOwned;
+use lb_binary_codec::bincode::{
+    self, BoundedBytes, BoundedSerializeOp, DeserializeOp as _, SerializeOp as _,
+};
+use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
 type Result<T> = std::result::Result<T, PackingError>;
@@ -33,8 +35,18 @@ where
     }
 
     let packed_message = message.to_bounded_bytes()?;
-    let packed_message = packed_message.as_ref();
-    let length_prefix = packed_message.len() as LenType;
+    write_frame(packed_message.as_ref(), writer).await
+}
+
+async fn write_frame<Writer>(packed_message: &[u8], writer: &mut Writer) -> Result<()>
+where
+    Writer: AsyncWriteExt + Send + Unpin,
+{
+    let length_prefix =
+        LenType::try_from(packed_message.len()).map_err(|_| PackingError::MessageTooLarge {
+            max: LenType::MAX as usize,
+            actual: packed_message.len(),
+        })?;
 
     writer
         .write_all(&length_prefix.to_le_bytes())
@@ -42,6 +54,26 @@ where
         .map_err(Into::<PackingError>::into)?;
 
     writer.write_all(packed_message).await.map_err(Into::into)
+}
+
+/// Packs a message of at most `max` bytes.
+pub async fn pack_to_writer_up_to<Message, Writer>(
+    message: &Message,
+    max_bytes: usize,
+    writer: &mut Writer,
+) -> Result<()>
+where
+    Message: Serialize + Sync,
+    Writer: AsyncWriteExt + Send + Unpin,
+{
+    let packed_message = message.to_bytes()?;
+    if packed_message.len() > max_bytes {
+        return Err(PackingError::MessageTooLarge {
+            max: max_bytes,
+            actual: packed_message.len(),
+        });
+    }
+    write_frame(&packed_message, writer).await
 }
 
 async fn read_data_length<R>(reader: &mut R) -> Result<usize>
@@ -58,14 +90,25 @@ where
     Message: BoundedSerializeOp + DeserializeOwned,
     R: AsyncReadExt + Unpin,
 {
+    unpack_from_reader_up_to(reader, <Message::Bytes as BoundedBytes>::MAX).await
+}
+
+/// Unpacks a message of at most `max` bytes.
+pub async fn unpack_from_reader_up_to<Message, R>(
+    reader: &mut R,
+    max_bytes: usize,
+) -> Result<Message>
+where
+    Message: DeserializeOwned,
+    R: AsyncReadExt + Unpin,
+{
     let data_length = read_data_length(reader).await?;
-    // The type-specific bound is the admission and allocation limit. The
-    // length prefix is read before this check, but no payload is allocated or
-    // read until the peer-controlled length has passed it.
-    let message_max = <Message::Bytes as BoundedBytes>::MAX;
-    if data_length > message_max {
+    // The message's bound is the admission and allocation limit. The length
+    // prefix is read before this check, but no payload is allocated or read
+    // until the peer-controlled length has passed it.
+    if data_length > max_bytes {
         return Err(PackingError::MessageTooLarge {
-            max: message_max,
+            max: max_bytes,
             actual: data_length,
         });
     }
@@ -86,8 +129,8 @@ mod tests {
     use super::*;
     use crate::libp2p::{
         messages::{
-            BlocksRequest, BlocksResponse, MAX_BLOCKS_RESPONSE_BINCODE_SIZE,
-            MAX_REQUEST_MESSAGE_BINCODE_SIZE, RequestMessage,
+            BlocksRequest, BlocksResponse, MAX_REQUEST_MESSAGE_BINCODE_SIZE, RequestMessage,
+            max_blocks_response_bincode_size,
         },
         provider::MAX_ADDITIONAL_BLOCKS,
     };
@@ -128,15 +171,18 @@ mod tests {
 
     #[tokio::test]
     async fn sender_rejects_messages_above_message_limit() {
-        let message =
-            BlocksResponse::Block(Bytes::from(vec![0u8; MAX_BLOCKS_RESPONSE_BINCODE_SIZE]));
+        const MAX_BLOCK_SIZE: usize = 1_024;
+        let max = max_blocks_response_bincode_size(MAX_BLOCK_SIZE);
+        let message = BlocksResponse::Block(Bytes::from(vec![0u8; MAX_BLOCK_SIZE + 1]));
         let mut writer = futures::io::Cursor::new(Vec::new());
 
-        let error = pack_to_writer(&message, &mut writer).await.unwrap_err();
+        let error = pack_to_writer_up_to(&message, max, &mut writer)
+            .await
+            .unwrap_err();
 
         assert!(matches!(
             error,
-            PackingError::Serialization(bincode::Error::Serialize(_))
+            PackingError::MessageTooLarge { max: limit, actual } if limit == max && actual == max + 1
         ));
         assert_eq!(writer.into_inner(), b"");
     }

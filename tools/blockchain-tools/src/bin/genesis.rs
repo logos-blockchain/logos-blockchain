@@ -17,7 +17,9 @@ use lb_core::{
 };
 use lb_node::config::deployment::DeploymentSettings;
 use lb_sdp_service::DeclarationConfig;
-use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
+use lb_utils::yaml::{
+    INCLUDE_TAG, OnUnknownKeys, deserialize_value_at_path, deserialize_value_from_reader,
+};
 use logos_blockchain_tools::{
     apply_dotted_kv,
     genesis::{
@@ -26,7 +28,10 @@ use logos_blockchain_tools::{
     },
     overwrite_yaml, set_at_path,
 };
-use serde_yaml::Value;
+use serde_yaml::{
+    Value,
+    value::{Tag, TaggedValue},
+};
 
 // ── CLI definition
 // ────────────────────────────────────────────────────────────
@@ -97,7 +102,8 @@ pub struct CeremonyArgs {
     #[arg(long = "override", value_name = "KEY=VALUE|FILE", num_args = 1)]
     pub overrides: Vec<String>,
 
-    /// Write the final deployment config to FILE instead of stdout.
+    /// Write the final deployment config to FILE instead of stdout, with each
+    /// era in its own file, `era/schedule/<era number>.yaml` next to it.
     #[arg(long, short, value_name = "FILE")]
     pub output: Option<PathBuf>,
 }
@@ -233,6 +239,10 @@ fn main() -> Result<()> {
 
 /// Where a deployment config keeps its genesis block.
 const GENESIS_BLOCK_PATH: &str = "genesis_block";
+/// Where a deployment config keeps its eras.
+const ERAS_PATH: &str = "eras";
+/// The directory, next to a deployment config, of the era files it includes.
+const ERA_FILES_DIR: &str = "era/schedule";
 
 // ── ceremony implementation
 // ─────────────────────────────────────────────────────
@@ -278,7 +288,67 @@ fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
 
     ensure_valid_deployment_settings(&config_value)?;
 
+    if let Some(output) = args.output.as_deref() {
+        split_eras_into_files(&mut config_value, output)?;
+    }
+
     write_yaml(&config_value, args.output.as_deref())
+}
+
+/// Moves each era of `config` to its own file, `era/schedule/<era number>.yaml`
+/// next to `output`, and includes it in its place.
+fn split_eras_into_files(config: &mut Value, output: &Path) -> Result<()> {
+    let eras = config
+        .get_mut(ERAS_PATH)
+        .and_then(Value::as_mapping_mut)
+        .context("the deployment config has no eras")?;
+    let era_files_dir = output
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join(ERA_FILES_DIR);
+    fs::create_dir_all(&era_files_dir)
+        .with_context(|| format!("cannot create '{}'", era_files_dir.display()))?;
+    // The config holds a whole schedule, so the era files of an earlier one,
+    // which the node's build would otherwise embed, go first.
+    for entry in fs::read_dir(&era_files_dir)
+        .with_context(|| format!("cannot read '{}'", era_files_dir.display()))?
+    {
+        let path = entry
+            .with_context(|| format!("cannot read '{}'", era_files_dir.display()))?
+            .path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "yaml" || extension == "yml")
+        {
+            fs::remove_file(&path)
+                .with_context(|| format!("cannot remove '{}'", path.display()))?;
+        }
+    }
+    let eras_by_first_epoch = {
+        // Eras are numbered in the order they start, whatever order the config
+        // lists them in, so they are collected and sorted by starting epoch (globally
+        // unique).
+        let mut unordered_eras_by_first_epoch = eras
+            .iter_mut()
+            .map(|(first_epoch, era)| {
+                let first_epoch = first_epoch
+                    .as_u64()
+                    .context("an era is keyed by the epoch it starts at")?;
+                Ok((first_epoch, era))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        unordered_eras_by_first_epoch.sort_by_key(|(first_epoch, _)| *first_epoch);
+        unordered_eras_by_first_epoch
+    };
+    for (era_number, (_, era)) in eras_by_first_epoch.into_iter().enumerate() {
+        let era_file = format!("{era_number}.yaml");
+        write_yaml(era, Some(&era_files_dir.join(&era_file)))?;
+        *era = Value::Tagged(Box::new(TaggedValue {
+            tag: Tag::new(INCLUDE_TAG),
+            value: Value::from(format!("{ERA_FILES_DIR}/{era_file}")),
+        }));
+    }
+    Ok(())
 }
 
 // ── config implementation
@@ -299,17 +369,16 @@ fn run_config(args: &ConfigArgs) -> Result<()> {
 /// Load a deployment config as a raw YAML value.
 ///
 /// If `path` is `None`, returns the default config as a YAML value. Otherwise,
-/// loads the YAML file at `path` and returns it as a `Value`.
+/// loads the YAML file at `path`, with the files it includes in place, and
+/// returns it as a `Value`.
 fn load_base_config(path: Option<&PathBuf>) -> Result<Value> {
     let Some(path) = path else {
         let default_config = DeploymentSettings::default();
         return struct_to_yaml_value(&default_config);
     };
 
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("cannot read config file '{}'", path.display()))?;
-    serde_yaml::from_str(&content)
-        .with_context(|| format!("cannot parse YAML from '{}'", path.display()))
+    deserialize_value_at_path(path, OnUnknownKeys::Fail)
+        .with_context(|| format!("cannot load config file '{}'", path.display()))
 }
 
 /// Load a genesis template, and assemble from it the deployment config the

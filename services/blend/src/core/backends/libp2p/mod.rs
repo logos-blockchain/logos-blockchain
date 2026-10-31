@@ -7,7 +7,7 @@ use futures::{
     future::{AbortHandle, Abortable},
 };
 use lb_blend::message::encap::{
-    ProofsVerifier as ProofsVerifierTrait, encapsulated_message_encoded_size,
+    MessageLayout, ProofsVerifier as ProofsVerifierTrait, encapsulated_message_encoded_size,
     validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
 use lb_chain_service::Epoch;
@@ -65,9 +65,9 @@ const CHANNEL_SIZE: usize = 64;
 fn connection_receive_window(
     connection_share_per_round: NonZeroU64,
     network_absorption_in_rounds: NonZeroU64,
-    num_blend_layers: NonZeroU64,
+    message_layout: MessageLayout,
 ) -> u32 {
-    let frame_size = encapsulated_message_encoded_size(num_blend_layers).get();
+    let frame_size = encapsulated_message_encoded_size(message_layout).get();
 
     let rounds_of_slack = network_absorption_in_rounds.get().saturating_add(1);
     u32::try_from(
@@ -116,7 +116,7 @@ where
                 connection_receive_window(
                     era.parameters.connection_share_per_round,
                     era.parameters.time.network_absorption_in_rounds,
-                    era.parameters.num_blend_layers,
+                    era.parameters.message_layout,
                 )
             })
             .max()

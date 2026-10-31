@@ -4,13 +4,12 @@
 //! crate that only moves messages around — the network behaviours, say — does
 //! not have to depend on anything that knows how to *produce* one.
 
-use core::num::NonZeroU64;
-
 use lb_binary_codec::canonical::{BinaryDecode as _, BinaryEncode as _};
 
 use crate::{
     Error,
     encap::{
+        MessageLayout,
         encapsulated::EncapsulatedMessage,
         validated::{
             EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
@@ -32,7 +31,7 @@ pub fn serialize_encapsulated_message_with_verified_signature(
     message.encode_to_vec()
 }
 
-/// Decodes a whole encapsulated message, rejecting trailing bytes.
+/// Decodes a whole encapsulated message of `layout`, rejecting trailing bytes.
 ///
 /// # Errors
 ///
@@ -40,9 +39,9 @@ pub fn serialize_encapsulated_message_with_verified_signature(
 /// decodes with bytes left over.
 pub fn deserialize_encapsulated_message(
     message: &[u8],
-    num_blend_layers: &NonZeroU64,
+    layout: &MessageLayout,
 ) -> Result<EncapsulatedMessage, Error> {
-    let (remaining, deserialized_message) = EncapsulatedMessage::decode(message, num_blend_layers)?;
+    let (remaining, deserialized_message) = EncapsulatedMessage::decode(message, layout)?;
     if !remaining.is_empty() {
         return Err(Error::MessageDeserializationFailed);
     }

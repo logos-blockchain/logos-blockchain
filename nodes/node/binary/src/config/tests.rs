@@ -512,19 +512,21 @@ fn standalone_deployment_config_deserializes() {
         yaml_path.exists(),
         "standalone deployment config should exist at {yaml_path:?}"
     );
-    let bytes = std::fs::read(&yaml_path).expect("standalone deployment config should exist");
-
-    let parsed: Result<DeploymentSettings, serde_yaml::Error> = serde_yaml::from_slice(&bytes);
-    assert!(
-        parsed.is_ok(),
-        "standalone deployment config should deserialize ({:?})",
-        parsed.err(),
-    );
 
     let parsed = deserialize_value_at_path::<DeploymentSettings>(&yaml_path, OnUnknownKeys::Fail);
     assert!(
         parsed.is_ok(),
         "standalone deployment config should deserialize via loader, got: {:?}",
         parsed.err()
+    );
+}
+
+#[test]
+fn partial_blend_backend_keeps_the_peering_degree_check_default() {
+    let backend: crate::config::blend::serde::core::BackendConfig =
+        serde_yaml::from_str("listening_address: /ip4/0.0.0.0/udp/3500/quic-v1").unwrap();
+    assert_eq!(
+        backend.peering_degree_check_interval,
+        Some(std::time::Duration::from_mins(1))
     );
 }

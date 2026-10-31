@@ -239,6 +239,24 @@ impl<Mode: VerificationMode> BinaryDecode for SignedOps<Unverified, Mode> {
     }
 }
 
+// Decoded unverified, then preverified, as its serde form is.
+impl BinaryDecode for SignedOps<Preverified, StandardMode> {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (remaining_input, signed_ops) =
+            SignedOps::<Unverified, StandardMode>::decode(input, &())?;
+        let signed_ops = signed_ops.preverify().map_err(|error| {
+            DecodeError::custom(format!("Failed to preverify SignedOps: {error}"))
+        })?;
+
+        Ok((remaining_input, signed_ops))
+    }
+}
+
 impl<State: VerificationState, Mode: VerificationMode> Hashable for TxList<SignedOp<State, Mode>> {
     //noinspection RsTypeCheck: The type is correct, but the linter is confused by
     // the closure.

@@ -87,11 +87,11 @@ mod tests {
 
     use lb_blend::{
         message::{
-            Error as InnerError, PayloadType,
+            Error as InnerError, PaddedPayloadBody, PayloadType,
             crypto::{
                 key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
             },
-            encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
+            encap::{MessageLayout, validated::EncapsulatedMessageWithVerifiedPublicHeader},
             input::EncapsulationInput,
         },
         proofs::{
@@ -115,6 +115,7 @@ mod tests {
     use crate::{
         core::processor::CoreCryptographicProcessor,
         test_utils::{
+            PAYLOAD_BODY_SIZE,
             crypto::{MockCoreAndLeaderProofsGenerator, StaticFetchVerifier},
             membership::{key, membership},
         },
@@ -296,7 +297,7 @@ mod tests {
         EncapsulatedMessageWithVerifiedPublicHeader::try_new(
             &inputs,
             PayloadType::Cover,
-            b"".as_slice().try_into().unwrap(),
+            PaddedPayloadBody::try_new(b"", PAYLOAD_BODY_SIZE).unwrap(),
             3,
         )
         .unwrap()
@@ -305,7 +306,10 @@ mod tests {
     fn settings(local_id: NodeId) -> EpochCryptographicProcessorSettings {
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: key(local_id).0.derive_x25519(),
-            num_blend_layers: NonZeroU64::new(1).unwrap(),
+            message_layout: MessageLayout {
+                num_blend_layers: NonZeroU64::new(1).unwrap(),
+                payload_body_size: PAYLOAD_BODY_SIZE,
+            },
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         }

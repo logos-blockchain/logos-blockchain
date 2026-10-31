@@ -29,7 +29,7 @@ use crate::{
         behaviour::old_era::OldEra,
         downloader::Downloader,
         errors::ChainSyncError,
-        messages::RequestMessage,
+        messages::{RequestMessage, max_blocks_response_bincode_size},
         provider::{MAX_ADDITIONAL_BLOCKS, Provider, ReceivedRequest},
     },
     messages::{SerialisedBlock, TipResponse},
@@ -136,6 +136,10 @@ pub struct Behaviour {
     old_era: Option<OldEra>,
     /// Configuration for the behaviour.
     config: Config,
+    /// The largest response that carries a block: one that carries the largest
+    /// block of any era. Chain-sync is fork digest-bound, but it serves blocks
+    /// of all eras, so the maximum needs to take that into account.
+    max_blocks_response_size: usize,
 }
 
 /// The chain sync over one protocol: the streams of the protocol it accepts,
@@ -183,22 +187,39 @@ struct OngoingRequests {
     waker: Option<std::task::Waker>,
     /// Configuration for the behaviour.
     config: Config,
+    /// The largest response that carries a block.
+    max_blocks_response_size: usize,
 }
 
 impl Behaviour {
+    /// A chain sync speaking `protocol_name` that carries blocks of up to
+    /// `max_block_size` bytes in their canonical encoding: the largest block
+    /// of any era of the chain, since a node syncs the blocks of every era.
+    ///
+    /// # Panics
+    ///
+    /// If a response carrying a block of `max_block_size` bytes is larger than
+    /// the largest message the network carries.
     #[must_use]
-    pub fn new(protocol_name: StreamProtocol, config: Config) -> Self {
+    pub fn new(protocol_name: StreamProtocol, config: Config, max_block_size: usize) -> Self {
+        let max_blocks_response_size = max_blocks_response_bincode_size(max_block_size);
+        assert!(
+            max_blocks_response_size <= lb_utils::net::MAX_WIRE_MESSAGE_SIZE,
+            "A response carrying a block of {max_block_size} bytes is larger than the largest network message."
+        );
         let stream_behaviour = StreamBehaviour::new();
         let sync_protocol_state = SyncProtocolState::new(
             stream_behaviour.new_control(),
             protocol_name,
             config.clone(),
+            max_blocks_response_size,
         );
         Self {
             stream_behaviour,
             sync_protocol_state,
             old_era: None,
             config,
+            max_blocks_response_size,
         }
     }
 
@@ -227,6 +248,7 @@ impl Behaviour {
                 self.stream_behaviour.new_control(),
                 new_era_protocol_name,
                 self.config.clone(),
+                self.max_blocks_response_size,
             ),
         );
         // Switch to the new sync protocol right away by notifying the waker to poll the
@@ -274,14 +296,19 @@ impl Behaviour {
 }
 
 impl SyncProtocolState {
-    fn new(mut control: Control, protocol_name: StreamProtocol, config: Config) -> Self {
+    fn new(
+        mut control: Control,
+        protocol_name: StreamProtocol,
+        config: Config,
+        max_blocks_response_size: usize,
+    ) -> Self {
         let incoming_streams = control
             .accept(protocol_name.clone())
             .expect("Failed to accept incoming streams for sync protocol");
         Self {
             control,
             incoming_streams,
-            ongoing_requests: OngoingRequests::new(config),
+            ongoing_requests: OngoingRequests::new(config, max_blocks_response_size),
             protocol_name,
         }
     }
@@ -348,7 +375,7 @@ impl SyncProtocolState {
 }
 
 impl OngoingRequests {
-    fn new(config: Config) -> Self {
+    fn new(config: Config, max_blocks_response_size: usize) -> Self {
         Self {
             receiving_blocks_responses: FuturesUnordered::new(),
             sending_blocks_responses: FuturesUnordered::new(),
@@ -360,6 +387,7 @@ impl OngoingRequests {
             sending_tip_responses: FuturesUnordered::new(),
             waker: None,
             config,
+            max_blocks_response_size,
         }
     }
 
@@ -380,12 +408,14 @@ impl OngoingRequests {
         stream: Libp2pStream,
     ) -> Poll<ToSwarmEvent> {
         let (reply_sender, reply_receiver) = mpsc::channel(1);
+        let max_response_size = self.max_blocks_response_size;
 
         self.sending_blocks_responses.push(
             Provider::provide_blocks(
                 reply_receiver,
                 peer_id,
                 stream,
+                max_response_size,
                 self.config.peer_response_timeout,
                 self.config.inbound_download_stream_timeout,
             )
@@ -438,6 +468,7 @@ impl OngoingRequests {
             ready(Downloader::receive_blocks_response(
                 blocks_response_reader,
                 self.config.peer_response_timeout,
+                self.max_blocks_response_size,
             ))
             .boxed(),
         );
@@ -691,7 +722,10 @@ mod tests {
     use std::{collections::HashSet, iter, time::Duration};
 
     use futures::StreamExt as _;
-    use lb_core::{block::MAX_BLOCK_TRANSACTIONS_SIZE, header::HeaderId};
+    use lb_core::{
+        block::{Block, MAX_BLOCK_TRANSACTIONS_SIZE},
+        header::HeaderId,
+    };
     use lb_cryptarchia_engine::Slot;
     use libp2p::{Multiaddr, PeerId, StreamProtocol, Swarm, bytes::Bytes, swarm::SwarmEvent};
     use libp2p_swarm_test::SwarmExt as _;
@@ -1607,7 +1641,13 @@ mod tests {
             .with_quic()
             .with_dns()
             .unwrap()
-            .with_behaviour(|_| Behaviour::new(StreamProtocol::new("/tests/chain-sync"), config))
+            .with_behaviour(|_| {
+                Behaviour::new(
+                    StreamProtocol::new("/tests/chain-sync"),
+                    config,
+                    Block::<()>::max_encoded_size(4),
+                )
+            })
             .unwrap()
             .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(10)))
             .build()

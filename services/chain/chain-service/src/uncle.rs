@@ -15,6 +15,28 @@ use crate::{Cryptarchia, Error};
     reason = "grouping the uncle validity rules separately from the main impl"
 )]
 impl Cryptarchia {
+    /// Verifies that the block carries at most as many uncles as the era of its
+    /// slot allows. Unlike the rules of [`Self::verify_uncles`], this one needs
+    /// no ledger state, so it is checked for every block, however it was built,
+    /// decoded or stored.
+    pub(crate) fn verify_uncle_count<Tx>(&self, block: &Block<Tx>) -> Result<(), Error> {
+        let max_uncles = self
+            .ledger
+            .era_schedule()
+            .at_slot(block.header().slot())
+            .parameters
+            .consensus_config
+            .max_uncles();
+        let uncle_count = block.uncle_headers().len();
+        if uncle_count > usize::from(max_uncles) {
+            return Err(Error::TooManyUncles {
+                count: uncle_count,
+                max: max_uncles,
+            });
+        }
+        Ok(())
+    }
+
     /// Verifies every uncle carried by the block against the chain the block
     /// extends.
     ///
@@ -188,20 +210,23 @@ mod tests {
         block::BlockTransactions,
         header::{ContentId, Header},
         mantle::{
-            SignedOps, ledger::verification_mode::StandardMode, transactions::states::Preverified,
+            SignedOps, Utxo, ledger::verification_mode::StandardMode,
+            transactions::states::Preverified,
         },
         proofs::leader_proof::Groth16LeaderProof,
     };
-    use lb_cryptarchia_engine::Slot;
-    use lb_key_management_system_keys::keys::Ed25519Key;
-    use lb_utils::bounded::BoundedVec;
+    use lb_cryptarchia_engine::{Slot, UncleSlots};
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use rand::thread_rng;
 
     use super::*;
-    use crate::tests::{
-        chain_with_fork, chain_with_fork_on, ledger_config,
-        ledger_config_with_uncle_reference_window, schedule, signed_header, single_era,
-        try_build_block,
+    use crate::{
+        BlockOrigin,
+        tests::{
+            GENESIS_ID, chain_with_fork, chain_with_fork_on, genesis_cryptarchia_on, ledger_config,
+            ledger_config_with_max_uncles, ledger_config_with_uncle_reference_window, schedule,
+            signed_header, single_era, try_build_block, utxo,
+        },
     };
 
     #[test]
@@ -214,7 +239,7 @@ mod tests {
             utxo,
             &zk_key,
             u1.header().slot().strict_add(1.into()),
-            UncleHeaders::new(BoundedVec::from(signed_header(&u1))),
+            UncleHeaders::try_new(vec![signed_header(&u1)], 4).unwrap(),
         )
         .unwrap();
 
@@ -230,7 +255,7 @@ mod tests {
                 .get(&b2_header_id)
                 .unwrap()
                 .uncle_slots(),
-            &[u1.header().slot()].into()
+            &UncleSlots::try_new(vec![u1.header().slot()], 4).unwrap()
         );
     }
 
@@ -247,7 +272,7 @@ mod tests {
             utxo,
             &zk_key,
             u1.header().slot().strict_add(1.into()),
-            UncleHeaders::new(BoundedVec::from(signed_header(&u1))),
+            UncleHeaders::try_new(vec![signed_header(&u1)], 4).unwrap(),
         )
         .unwrap();
 
@@ -296,7 +321,7 @@ mod tests {
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
             u1.header().slot(),
-            UncleHeaders::new(BoundedVec::from(signed_header(&u1))),
+            UncleHeaders::try_new(vec![signed_header(&u1)], 4).unwrap(),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -327,7 +352,7 @@ mod tests {
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
             Slot::new(101),
-            UncleHeaders::new(BoundedVec::from(signed_header(&u1))),
+            UncleHeaders::try_new(vec![signed_header(&u1)], 4).unwrap(),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -363,7 +388,7 @@ mod tests {
             u1.header()
                 .slot()
                 .strict_add((uncle_reference_window + 1).into()),
-            UncleHeaders::new(BoundedVec::from(signed_header(&u1))),
+            UncleHeaders::try_new(vec![signed_header(&u1)], 4).unwrap(),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -389,7 +414,7 @@ mod tests {
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
             b1.header().slot().strict_add(1.into()),
-            UncleHeaders::new(BoundedVec::from(signed_header(&b1))),
+            UncleHeaders::try_new(vec![signed_header(&b1)], 4).unwrap(),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -422,7 +447,7 @@ mod tests {
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
             u1.header().slot().strict_add(1.into()),
-            UncleHeaders::new(BoundedVec::from(SignedHeader::new(header, signature))),
+            UncleHeaders::try_new(vec![SignedHeader::new(header, signature)], 4).unwrap(),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -453,10 +478,8 @@ mod tests {
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
             u1.header().slot().strict_add(1.into()),
-            UncleHeaders::new(BoundedVec::from(SignedHeader::new(
-                u1.header().clone(),
-                signature,
-            ))),
+            UncleHeaders::try_new(vec![SignedHeader::new(u1.header().clone(), signature)], 4)
+                .unwrap(),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -491,7 +514,7 @@ mod tests {
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
             u1.header().slot().strict_add(2.into()),
-            UncleHeaders::new(BoundedVec::from(SignedHeader::new(header, signature))),
+            UncleHeaders::try_new(vec![SignedHeader::new(header, signature)], 4).unwrap(),
             u1.header().leader_proof(),
             &u1_key,
         );
@@ -507,6 +530,176 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn reject_block_with_more_uncles_than_its_era_allows() {
+        let (mut cryptarchia, [x1, x2, x3], zk_key, utxo) = era_1_fork();
+
+        // Two valid uncles, built under the bound of era 0 rather than of the
+        // block's own era, which allows one.
+        let (block, _) = try_build_block(
+            &cryptarchia,
+            x1.header().id(),
+            utxo,
+            &zk_key,
+            x1.header().slot().strict_add(1.into()),
+            UncleHeaders::try_new(vec![signed_header(&x2), signed_header(&x3)], 2).unwrap(),
+        )
+        .unwrap();
+
+        // Received from the network, and replayed from storage, where the
+        // other uncle rules are not checked again.
+        let block_header_slot = block.header().slot();
+        for origin in [BlockOrigin::Network, BlockOrigin::Storage] {
+            let Err(err) = cryptarchia.try_apply_block_with_state_retention(
+                block.clone(),
+                block_header_slot,
+                origin,
+            ) else {
+                panic!("expected the block to be rejected from {origin:?}");
+            };
+            assert!(matches!(err, Error::TooManyUncles { count: 2, max: 1 }));
+        }
+    }
+
+    #[test]
+    fn accept_block_with_as_many_uncles_as_its_era_allows() {
+        let (mut cryptarchia, [x1, x2, _], zk_key, utxo) = era_1_fork();
+
+        let (block, _) = try_build_block(
+            &cryptarchia,
+            x1.header().id(),
+            utxo,
+            &zk_key,
+            x1.header().slot().strict_add(1.into()),
+            UncleHeaders::try_new(vec![signed_header(&x2)], 1).unwrap(),
+        )
+        .unwrap();
+
+        let block_header_slot = block.header().slot();
+        cryptarchia
+            .try_apply_block(block, block_header_slot)
+            .expect("a block with as many uncles as its era allows should be applied");
+    }
+
+    #[test]
+    fn accept_earlier_era_block_with_more_uncles_than_a_later_era_allows() {
+        let (zk_key, utxo) = utxo();
+        let mut cryptarchia = genesis_lowering_max_uncles(utxo);
+        let era_1_start = era_1_first_slot(&cryptarchia);
+
+        // `B1`, `U1` and `U2` extend `G` at the same slot of era 0.
+        let [b1, u1, u2] = siblings(&cryptarchia, GENESIS_ID.into(), &zk_key, utxo, Slot::new(1));
+        let b1_id = b1.header().id();
+        let b1_slot = b1.header().slot();
+        cryptarchia.try_apply_block(b1, b1_slot).unwrap();
+
+        let (block, _) = try_build_block(
+            &cryptarchia,
+            b1_id,
+            utxo,
+            &zk_key,
+            b1_slot.strict_add(1.into()),
+            UncleHeaders::try_new(vec![signed_header(&u1), signed_header(&u2)], 2).unwrap(),
+        )
+        .unwrap();
+        assert!(block.header().slot() < era_1_start, "a block of era 0");
+
+        // Applied once era 1, which allows a single uncle, is in force: the
+        // block is held to the limit of its own era.
+        cryptarchia
+            .try_apply_block(block, era_1_start)
+            .expect("a block with as many uncles as its own era allows should be applied");
+    }
+
+    /// A chain with only the genesis block, holding `utxo`, whose era 0 lets a
+    /// block carry two uncles and whose era 1, from epoch 1, only one.
+    fn genesis_lowering_max_uncles(utxo: Utxo) -> Cryptarchia {
+        let security_param = 1.try_into().unwrap();
+        genesis_cryptarchia_on(
+            utxo,
+            schedule(
+                ledger_config_with_max_uncles(security_param, 2),
+                [(1, ledger_config_with_max_uncles(security_param, 1))],
+            ),
+        )
+    }
+
+    fn era_1_first_slot(cryptarchia: &Cryptarchia) -> Slot {
+        cryptarchia
+            .ledger
+            .era_schedule()
+            .iter()
+            .nth(1)
+            .expect("the schedule has an era 1")
+            .first_slot
+    }
+
+    /// Under [`genesis_lowering_max_uncles`], the chain `G --- P --- X1` with
+    /// `P` and `X1` of era 1, and `X2` and `X3` also extending `P` at the slot
+    /// of `X1`: two valid uncles of era 1 for a block extending `X1`. They
+    /// extend `P` rather than `G` so that their parent stays within that
+    /// block's uncle reference window.
+    #[expect(clippy::type_complexity, reason = "a test helper")]
+    fn era_1_fork() -> (
+        Cryptarchia,
+        [Block<SignedOps<Preverified, StandardMode>>; 3],
+        ZkKey,
+        Utxo,
+    ) {
+        let (zk_key, utxo) = utxo();
+        let mut cryptarchia = genesis_lowering_max_uncles(utxo);
+
+        let (p, _) = try_build_block(
+            &cryptarchia,
+            GENESIS_ID.into(),
+            utxo,
+            &zk_key,
+            era_1_first_slot(&cryptarchia),
+            UncleHeaders::empty(),
+        )
+        .unwrap();
+        let p_id = p.header().id();
+        let p_slot = p.header().slot();
+        cryptarchia.try_apply_block(p, p_slot).unwrap();
+
+        let [x1, x2, x3] = siblings(
+            &cryptarchia,
+            p_id,
+            &zk_key,
+            utxo,
+            p_slot.strict_add(1.into()),
+        );
+        let x1_slot = x1.header().slot();
+        cryptarchia.try_apply_block(x1.clone(), x1_slot).unwrap();
+
+        (cryptarchia, [x1, x2, x3], zk_key, utxo)
+    }
+
+    /// `N` blocks extending `parent`, each at the first slot from `start_slot`
+    /// that the key wins, so all at the same slot: they differ only in their
+    /// (randomly generated) block leaders. `parent` must be the tip, since
+    /// blocks are built against its state.
+    fn siblings<const N: usize>(
+        cryptarchia: &Cryptarchia,
+        parent: HeaderId,
+        zk_key: &ZkKey,
+        utxo: Utxo,
+        start_slot: Slot,
+    ) -> [Block<SignedOps<Preverified, StandardMode>>; N] {
+        core::array::from_fn(|_| {
+            try_build_block(
+                cryptarchia,
+                parent,
+                utxo,
+                zk_key,
+                start_slot,
+                UncleHeaders::empty(),
+            )
+            .expect("the key wins a slot")
+            .0
+        })
     }
 
     /// Crafts a block carrying the uncles, without a winning `PoL` for `slot`,

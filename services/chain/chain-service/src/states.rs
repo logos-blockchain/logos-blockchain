@@ -154,6 +154,7 @@ mod tests {
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
             12,
+            4,
         );
         let epoch_config = lb_cryptarchia_engine::EpochConfig {
             epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
@@ -337,6 +338,7 @@ mod tests {
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
             12,
+            4,
         );
         let epoch_config = lb_cryptarchia_engine::EpochConfig {
             epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
@@ -402,7 +404,7 @@ mod tests {
         for (i, &block_id) in block_ids.iter().enumerate() {
             let slot = (i as u64 + 1).into();
             let uncle_slots =
-                UncleSlots::try_from(vec![lb_cryptarchia_engine::Slot::from(i as u64)]).unwrap();
+                UncleSlots::try_new(vec![lb_cryptarchia_engine::Slot::from(i as u64)], 4).unwrap();
             engine
                 .receive_block(block_id, parent, slot, uncle_slots)
                 .unwrap_or_else(|_| panic!("Block {block_id} should be added successfully"));

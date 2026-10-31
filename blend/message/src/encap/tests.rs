@@ -1,4 +1,4 @@
-use core::convert::Infallible;
+use core::{convert::Infallible, num::NonZeroU64};
 
 use lb_binary_codec::{
     bincode::{DeserializeOp as _, SerializeOp as _},
@@ -16,7 +16,7 @@ use crate::{
     Error, PaddedPayloadBody, PayloadType,
     crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
     encap::{
-        ProofsVerifier,
+        MessageLayout, ProofsVerifier,
         decapsulated::DecapsulationOutput,
         encapsulated::{EncapsulatedMessage, EncapsulatedPart},
         validated::{
@@ -25,8 +25,24 @@ use crate::{
         },
     },
     input::EncapsulationInput,
-    message::{payload::MAX_PAYLOAD_BODY_SIZE, public_header::VerifiedPublicHeader},
+    message::public_header::VerifiedPublicHeader,
 };
+
+/// The payload body size of the test messages.
+const PAYLOAD_BODY_SIZE: u16 = 64;
+
+/// `content` padded to [`PAYLOAD_BODY_SIZE`].
+fn body(content: &[u8]) -> PaddedPayloadBody {
+    PaddedPayloadBody::try_new(content, PAYLOAD_BODY_SIZE).unwrap()
+}
+
+/// The layout of a test message with `num_blend_layers` blending headers.
+fn layout(num_blend_layers: u64) -> MessageLayout {
+    MessageLayout {
+        num_blend_layers: NonZeroU64::new(num_blend_layers).unwrap(),
+        payload_body_size: PAYLOAD_BODY_SIZE,
+    }
+}
 
 struct NeverFailingProofsVerifier;
 
@@ -117,12 +133,8 @@ fn encapsulate_and_decapsulate() {
 
     let (inputs, blend_node_enc_keys) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
-        try_new_fully_encapsulated(
-            &inputs,
-            PayloadType::BlockProposal,
-            PAYLOAD_BODY.try_into().unwrap(),
-        )
-        .unwrap(),
+        try_new_fully_encapsulated(&inputs, PayloadType::BlockProposal, body(PAYLOAD_BODY))
+            .unwrap(),
     );
 
     // NOTE: We expect that the decapsulations can be done
@@ -192,9 +204,11 @@ fn payload_too_long() {
     drop(try_new_fully_encapsulated(
         &inputs,
         PayloadType::BlockProposal,
-        vec![0u8; MAX_PAYLOAD_BODY_SIZE + 1]
-            .try_into()
-            .expect("Payload too large"),
+        PaddedPayloadBody::try_new(
+            &vec![0u8; usize::from(PAYLOAD_BODY_SIZE) + 1],
+            PAYLOAD_BODY_SIZE,
+        )
+        .expect("Payload too large"),
     ));
 }
 
@@ -206,12 +220,8 @@ fn invalid_public_header_signature() {
     let msg_with_invalid_signature = {
         let (inputs, _) = generate_inputs(2);
         let mut msg = EncapsulatedMessage::from(
-            try_new_fully_encapsulated(
-                &inputs,
-                PayloadType::BlockProposal,
-                PAYLOAD_BODY.try_into().unwrap(),
-            )
-            .unwrap(),
+            try_new_fully_encapsulated(&inputs, PayloadType::BlockProposal, body(PAYLOAD_BODY))
+                .unwrap(),
         );
         *msg.public_header_mut().signature_mut() = Ed25519Signature::from([100u8; _]);
         msg
@@ -234,12 +244,8 @@ fn invalid_public_header_proof_of_quota() {
 
     let (inputs, _) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
-        try_new_fully_encapsulated(
-            &inputs,
-            PayloadType::BlockProposal,
-            PAYLOAD_BODY.try_into().unwrap(),
-        )
-        .unwrap(),
+        try_new_fully_encapsulated(&inputs, PayloadType::BlockProposal, body(PAYLOAD_BODY))
+            .unwrap(),
     );
 
     let public_header_verification_result = msg.verify_public_header(&verifier);
@@ -260,12 +266,8 @@ fn invalid_blend_header_proof_of_selection() {
 
     let (inputs, blend_node_enc_keys) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
-        try_new_fully_encapsulated(
-            &inputs,
-            PayloadType::BlockProposal,
-            PAYLOAD_BODY.try_into().unwrap(),
-        )
-        .unwrap(),
+        try_new_fully_encapsulated(&inputs, PayloadType::BlockProposal, body(PAYLOAD_BODY))
+            .unwrap(),
     );
     let validated_message = msg.verify_public_header(&verifier).unwrap();
 
@@ -285,12 +287,7 @@ fn invalid_blend_header_proof_of_selection() {
 #[test]
 fn serde_encapsulated_and_verified() {
     let (inputs, _) = generate_inputs(3);
-    let msg = try_new_fully_encapsulated(
-        &inputs,
-        PayloadType::BlockProposal,
-        b"".as_slice().try_into().unwrap(),
-    )
-    .unwrap();
+    let msg = try_new_fully_encapsulated(&inputs, PayloadType::BlockProposal, body(b"")).unwrap();
     let serialized_encapsulated_message = msg.to_bytes().unwrap();
 
     let deserialized_as_unverified =
@@ -308,12 +305,8 @@ fn encapsulate_and_decapsulate_via_two_step_verification() {
 
     let (inputs, blend_node_enc_keys) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
-        try_new_fully_encapsulated(
-            &inputs,
-            PayloadType::BlockProposal,
-            PAYLOAD_BODY.try_into().unwrap(),
-        )
-        .unwrap(),
+        try_new_fully_encapsulated(&inputs, PayloadType::BlockProposal, body(PAYLOAD_BODY))
+            .unwrap(),
     );
 
     // Step 1: verify signature (forwarding would happen here)
@@ -363,11 +356,7 @@ fn encapsulate_and_decapsulate_via_two_step_verification() {
 #[test]
 fn empty_inputs_returns_error() {
     assert!(matches!(
-        try_new_fully_encapsulated(
-            &[],
-            PayloadType::BlockProposal,
-            b"hello".as_slice().try_into().unwrap(),
-        ),
+        try_new_fully_encapsulated(&[], PayloadType::BlockProposal, body(b"hello"),),
         Err(Error::EmptyEncapsulationInputs)
     ));
 }
@@ -379,7 +368,7 @@ fn more_inputs_than_layers_returns_error() {
         EncapsulatedMessageWithVerifiedPublicHeader::try_new(
             &inputs,
             PayloadType::BlockProposal,
-            b"hello".as_slice().try_into().unwrap(),
+            body(b"hello"),
             3
         ),
         Err(Error::EncapsulationCountExceeded)
@@ -402,7 +391,7 @@ fn encapsulate_and_decapsulate_fewer_layers_than_maximum() {
             EncapsulatedMessageWithVerifiedPublicHeader::try_new(
                 &inputs,
                 PayloadType::BlockProposal,
-                PAYLOAD_BODY.try_into().unwrap(),
+                body(PAYLOAD_BODY),
                 MAX_LAYERS,
             )
             .unwrap(),
@@ -459,7 +448,7 @@ fn payload_body_is_padded_with_random_data() {
     const BODY: &[u8] = b"hello";
     let pad_of = |body: &[u8]| {
         let mut encoded = Vec::new();
-        PaddedPayloadBody::try_from(body)
+        PaddedPayloadBody::try_new(body, PAYLOAD_BODY_SIZE)
             .unwrap()
             .encode_into(&mut encoded);
         // Skip the `u16` length prefix and the body itself.
@@ -467,7 +456,7 @@ fn payload_body_is_padded_with_random_data() {
     };
 
     let (first, second) = (pad_of(BODY), pad_of(BODY));
-    assert_eq!(first.len(), MAX_PAYLOAD_BODY_SIZE - BODY.len());
+    assert_eq!(first.len(), usize::from(PAYLOAD_BODY_SIZE) - BODY.len());
     assert_ne!(first, second);
     assert!(
         first.iter().any(|&byte| byte != 0),
@@ -486,18 +475,14 @@ fn payload_body_round_trips_through_encapsulation() {
     let DecapsulationOutput::Completed {
         fully_decapsulated_message,
         ..
-    } = try_new_fully_encapsulated(
-        &inputs,
-        PayloadType::BlockProposal,
-        BODY.try_into().unwrap(),
-    )
-    .unwrap()
-    .decapsulate(
-        blend_node_enc_keys.first().unwrap(),
-        &RequiredProofOfSelectionVerificationInputs::default(),
-        &verifier,
-    )
-    .unwrap()
+    } = try_new_fully_encapsulated(&inputs, PayloadType::BlockProposal, body(BODY))
+        .unwrap()
+        .decapsulate(
+            blend_node_enc_keys.first().unwrap(),
+            &RequiredProofOfSelectionVerificationInputs::default(),
+            &verifier,
+        )
+        .unwrap()
     else {
         panic!("Expected a completed message");
     };
@@ -515,7 +500,7 @@ fn filler_layers_are_not_reconstructable() {
             EncapsulatedMessageWithVerifiedPublicHeader::try_new(
                 &inputs,
                 PayloadType::BlockProposal,
-                b"hello".as_slice().try_into().unwrap(),
+                body(b"hello"),
                 3,
             )
             .unwrap(),
@@ -532,7 +517,7 @@ fn decapsulate_empty_private_headers_returns_error() {
             // Empty inputs
             &[],
             PayloadType::BlockProposal,
-            b"hello".as_slice().try_into().unwrap(),
+            body(b"hello"),
             // ...and no filler layers either, so the private header is empty.
             0,
         );
@@ -554,12 +539,7 @@ fn decapsulate_empty_private_headers_returns_error() {
 
 fn sample_message(num_layers: usize) -> EncapsulatedMessageWithVerifiedPublicHeader {
     let (inputs, _) = generate_inputs(num_layers);
-    try_new_fully_encapsulated(
-        &inputs,
-        PayloadType::BlockProposal,
-        b"payload".as_slice().try_into().unwrap(),
-    )
-    .unwrap()
+    try_new_fully_encapsulated(&inputs, PayloadType::BlockProposal, body(b"payload")).unwrap()
 }
 
 #[test]
@@ -588,10 +568,10 @@ fn encode_decode_round_trip() {
     // layer count reconstructs the original.
     for num_layers in 1..=4u64 {
         let message = EncapsulatedMessage::from(sample_message(num_layers as usize));
+        let layout = layout(num_layers);
 
         let encoded = message.encode();
-        let (remaining, decoded) =
-            EncapsulatedMessage::decode(&encoded, &num_layers.try_into().unwrap()).unwrap();
+        let (remaining, decoded) = EncapsulatedMessage::decode(&encoded, &layout).unwrap();
 
         assert!(
             remaining.is_empty(),

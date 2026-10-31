@@ -44,7 +44,7 @@ use lb_storage_service::{
 };
 use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraTiming};
 use lb_time_service::backends::SystemTimeBackend;
-use lb_utils::{bounded::BoundedVec, math::NonNegativeRatio};
+use lb_utils::math::NonNegativeRatio;
 use overwatch::services::{AsServiceId, relay::OutboundRelay};
 use rand::{RngCore as _, thread_rng};
 use tempfile::TempDir;
@@ -285,7 +285,7 @@ async fn recovery_blocks_fall_back_to_lib_when_tip_missing_from_storage() {
     .await;
 
     assert!(recovery_blocks.fell_back_to_lib);
-    assert!(recovery_blocks.blocks.is_empty());
+    assert_eq!(recovery_blocks.blocks, []);
 }
 
 /// The chain must be recovered successfully from storage by skipping the uncle
@@ -320,7 +320,7 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
         utxo,
         &zk_key,
         u1.header().slot().strict_add(1.into()),
-        UncleHeaders::new(BoundedVec::from(signed_header(&u1))),
+        UncleHeaders::try_new(vec![signed_header(&u1)], 4).unwrap(),
     )
     .unwrap();
     let (b1_id, b2_id, b2_slot) = (b1.header().id(), b2.header().id(), b2.header().slot());
@@ -939,7 +939,7 @@ pub fn single_consensus_era(
 
 #[must_use]
 pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
-    ledger_config_with_uncle_reference_window(security_param, 12)
+    ledger_config_with_uncles(security_param, 12, 4)
 }
 
 /// [`ledger_config`] with `W`, the uncle reference window in blocks.
@@ -947,6 +947,25 @@ pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
 pub fn ledger_config_with_uncle_reference_window(
     security_param: NonZero<u32>,
     uncle_reference_window_in_block: u32,
+) -> lb_ledger::Config {
+    ledger_config_with_uncles(security_param, uncle_reference_window_in_block, 4)
+}
+
+/// [`ledger_config`], with blocks carrying at most `max_uncles` uncles.
+#[must_use]
+pub fn ledger_config_with_max_uncles(
+    security_param: NonZero<u32>,
+    max_uncles: u8,
+) -> lb_ledger::Config {
+    ledger_config_with_uncles(security_param, 12, max_uncles)
+}
+
+/// [`ledger_config`] with `W`, the uncle reference window in blocks, and
+/// blocks carrying at most `max_uncles` uncles.
+fn ledger_config_with_uncles(
+    security_param: NonZero<u32>,
+    uncle_reference_window_in_block: u32,
+    max_uncles: u8,
 ) -> lb_ledger::Config {
     let mut service_params = HashMap::new();
     service_params.insert(
@@ -966,6 +985,7 @@ pub fn ledger_config_with_uncle_reference_window(
         NonNegativeRatio::new(1, 10.try_into().unwrap()),
         1.0.try_into().unwrap(),
         uncle_reference_window_in_block,
+        max_uncles,
     );
     let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 

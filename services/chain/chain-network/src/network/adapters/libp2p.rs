@@ -3,17 +3,18 @@ use std::{
 };
 
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream};
-use lb_binary_codec::canonical::BinaryDecodeExt as _;
+use lb_binary_codec::canonical::{BinaryDecode, DecodeError};
 use lb_core::{
     block::{Block, Proposal},
     header::HeaderId,
     mantle::{
+        TxHash,
         ledger::verification_mode::StandardMode,
-        traits::{SignedMantleTx, StorageSize},
+        traits::{Hashable, SignedMantleTx, StorageSize},
         transactions::states::Preverified,
     },
 };
-use lb_cryptarchia_engine::{Era, EraSchedule};
+use lb_cryptarchia_engine::{Era, EraSchedule, Slot};
 use lb_cryptarchia_sync::TipResponse;
 use lb_log_targets::chain;
 use lb_network_service::{
@@ -77,6 +78,35 @@ pub struct LibP2pAdapterSettings {
 pub struct LibP2pAdapterEraSettings {
     /// The topic block proposals are gossiped on.
     pub topic: String,
+    /// The most uncles a block of the era may reference: the maximum the era's
+    /// proposals and synced blocks are decoded under.
+    pub max_uncles: u8,
+}
+
+/// Decodes a proposal under the uncle maximum of the era of its slot, which its
+/// encoding opens with.
+fn decode_proposal(
+    bytes: &[u8],
+    era_schedule: &EraSchedule<LibP2pAdapterEraSettings>,
+) -> Result<Proposal, DecodeError> {
+    let slot = Slot::peek_decode(bytes, &())?;
+    Proposal::decode_all(bytes, &era_schedule.at_slot(slot).parameters.max_uncles)
+}
+
+/// Decodes a synced block under the uncle maximum of the era of its slot, which
+/// its encoding opens with.
+fn decode_block<Tx>(
+    bytes: &[u8],
+    era_schedule: &EraSchedule<LibP2pAdapterEraSettings>,
+) -> Result<Block<Tx>, DecodeError>
+where
+    Tx: BinaryDecode<Context = ()> + Hashable<Hash = TxHash> + StorageSize,
+{
+    let slot = Slot::peek_decode(bytes, &())?;
+    Block::decode_all(
+        bytes,
+        &(era_schedule.at_slot(slot).parameters.max_uncles, ()),
+    )
 }
 
 impl<Tx, RuntimeServiceId> LibP2pAdapter<Tx, RuntimeServiceId>
@@ -113,6 +143,7 @@ where
     ) -> Result<BlockDownloadStream<Tx>, DynError>
     where
         Tx: SignedMantleTx<Preverified, StandardMode>
+            + BinaryDecode<Context = ()>
             + StorageSize
             + Serialize
             + DeserializeOwned
@@ -223,6 +254,7 @@ where
 impl<Tx, RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for LibP2pAdapter<Tx, RuntimeServiceId>
 where
     Tx: SignedMantleTx<Preverified, StandardMode>
+        + BinaryDecode<Context = ()>
         + StorageSize
         + Serialize
         + DeserializeOwned
@@ -341,10 +373,11 @@ where
             .iter()
             .map(|era| TopicHash::from_raw(era.parameters.topic.clone()))
             .collect();
+        let era_schedule = self.settings.era_schedule.clone();
         let stream = receiver.await.map_err(Box::new)?;
         Ok(Box::new(stream.filter_map(move |message| match message {
             Ok(message) if topic_hashes.contains(&message.topic) => {
-                match Proposal::decode_all(&message.data) {
+                match decode_proposal(&message.data, &era_schedule) {
                     Ok(proposal) => Some(proposal),
                     Err(e) => {
                         tracing::debug!(target: LOG_TARGET, "unrecognized gossipsub message: {e}");
@@ -495,12 +528,16 @@ where
             return Err(Box::new(error));
         }
 
+        let era_schedule = self.settings.era_schedule.clone();
         let stream = receiver.await?;
-        let stream = stream.map_err(|e| Box::new(e) as DynError).map(|result| {
-            let block = result?;
-            let block: Self::Block = Block::try_from(block).map_err(|e| Box::new(e) as DynError)?;
-            Ok((block.header().id(), block))
-        });
+        let stream = stream
+            .map_err(|e| Box::new(e) as DynError)
+            .map(move |result| {
+                let bytes = result?;
+                let block: Self::Block =
+                    decode_block(&bytes, &era_schedule).map_err(|e| Box::new(e) as DynError)?;
+                Ok((block.header().id(), block))
+            });
 
         Ok(Box::new(stream))
     }

@@ -189,6 +189,8 @@ fn bench_decode_mantle_transaction(bencher: Bencher, size: usize) {
     let encoded = signed_tx.encode();
     bencher.bench_local(|| {
         let protected_input_slice = black_box(&encoded);
-        black_box(SignedOps::<_, StandardMode>::decode(protected_input_slice))
+        black_box(SignedOps::<Unverified, StandardMode>::decode(
+            protected_input_slice,
+        ))
     });
 }

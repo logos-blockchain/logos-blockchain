@@ -788,7 +788,7 @@ where
             non_ephemeral_encryption_key: runtime_components
                 .non_ephemeral_signing_key
                 .derive_x25519(),
-            num_blend_layers: blend_config.num_blend_layers,
+            message_layout: blend_config.message_layout(),
             pow_mining_pool: Arc::clone(&runtime_components.pow_mining_pool),
             spent_core_quota,
         },
@@ -1899,7 +1899,7 @@ where
                         non_ephemeral_encryption_key: runtime_components
                             .non_ephemeral_signing_key
                             .derive_x25519(),
-                        num_blend_layers: settings.num_blend_layers,
+                        message_layout: settings.message_layout(),
                         pow_mining_pool: Arc::clone(&runtime_components.pow_mining_pool),
                         spent_core_quota: Quota::ZERO,
                     },

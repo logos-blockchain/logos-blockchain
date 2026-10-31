@@ -395,7 +395,7 @@ pub mod serde {
                 A: SeqAccess<'de>,
             {
                 // An empty vector always satisfies an upper-only bound.
-                let capacity = allocation_size_for_hint::<u8, MAX>(sequence.size_hint());
+                let capacity = allocation_size_for_hint::<u8>(sequence.size_hint(), MAX);
                 let mut bytes = UpperBoundedVec::new_unchecked(Vec::with_capacity(capacity));
 
                 while let Some(byte) = sequence.next_element()? {

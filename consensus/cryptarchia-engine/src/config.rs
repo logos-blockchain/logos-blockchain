@@ -3,9 +3,6 @@ use std::num::NonZero;
 use lb_pol::LotteryConstants;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 
-/// `MAX_UNCLES`, the maximum number of uncles a block may reference.
-pub const MAX_UNCLES: usize = 4;
-
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Config {
     /// The `k` parameter in the Common Prefix property.
@@ -19,6 +16,8 @@ pub struct Config {
     /// `W`, the width of the uncle reference window in expected
     /// block-intervals.
     uncle_reference_window_in_block: u32,
+    /// The most uncles a block may reference.
+    max_uncles: u8,
     /// Lottery approximation constants computed from `slot_activation_coeff`
     #[serde(skip)]
     lottery_constants: LotteryConstants,
@@ -35,6 +34,7 @@ impl<'de> serde::Deserialize<'de> for Config {
             slot_activation_coeff: NonNegativeRatio,
             stake_inference_learning_rate: NonNegativeF64,
             uncle_reference_window_in_block: u32,
+            max_uncles: u8,
         }
 
         let raw = RawConfig::deserialize(deserializer)?;
@@ -44,6 +44,7 @@ impl<'de> serde::Deserialize<'de> for Config {
             slot_activation_coeff: raw.slot_activation_coeff,
             stake_inference_learning_rate: raw.stake_inference_learning_rate,
             uncle_reference_window_in_block: raw.uncle_reference_window_in_block,
+            max_uncles: raw.max_uncles,
             lottery_constants: LotteryConstants::new(raw.slot_activation_coeff),
         })
     }
@@ -56,14 +57,22 @@ impl Config {
         slot_activation_coeff: NonNegativeRatio,
         stake_inference_learning_rate: NonNegativeF64,
         uncle_reference_window_in_block: u32,
+        max_uncles: u8,
     ) -> Self {
         Self {
             security_param,
             slot_activation_coeff,
             stake_inference_learning_rate,
             uncle_reference_window_in_block,
+            max_uncles,
             lottery_constants: LotteryConstants::new(slot_activation_coeff),
         }
+    }
+
+    /// The most uncles a block may reference.
+    #[must_use]
+    pub const fn max_uncles(&self) -> u8 {
+        self.max_uncles
     }
 
     /// `W * f^-1`, the maximum number of slots by which the parent of a
@@ -179,6 +188,7 @@ mod tests {
             NonNegativeRatio::new(1, 5.try_into().unwrap()),
             0.1.try_into().unwrap(),
             12,
+            4,
         );
         assert_eq!(config.security_param(), NonZero::new(10).unwrap());
         assert_eq!(config.base_period_length(), NonZero::new(50).unwrap());
@@ -197,6 +207,7 @@ mod tests {
             NonNegativeRatio::new(1, 5.try_into().unwrap()),
             0.1.try_into().unwrap(),
             0,
+            4,
         );
         assert_eq!(config.uncle_reference_window_in_slot(), 0);
     }

@@ -43,7 +43,8 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
 
-          git add nodes/node/binary/src/config/deployment/settings.yaml
+          git add nodes/node/binary/src/config/deployment/settings.yaml \
+            nodes/node/binary/src/config/deployment/era/schedule
 
           # Only commit and push if there are actual changes
           if git diff --staged --quiet; then

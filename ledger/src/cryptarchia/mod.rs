@@ -1110,6 +1110,7 @@ pub mod tests {
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
             12,
+            4,
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
@@ -2268,6 +2269,7 @@ pub mod tests {
                 NonNegativeRatio::new(1, 5.try_into().unwrap()),
                 0.5f64.try_into().expect("1/2 > 0"),
                 12,
+                4,
             ),
             ..era_0.clone()
         };

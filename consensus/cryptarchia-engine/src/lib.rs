@@ -10,15 +10,16 @@ use std::{
 
 pub use config::*;
 use lb_log_targets::cryptarchia;
-use lb_utils::bounded::UpperBoundedVec;
+use lb_utils::bounded::UpperRuntimeBoundedVec;
 use rpds::{HashTrieMapSync, HashTrieSetSync};
 use thiserror::Error;
 pub use time::{Epoch, EpochConfig, Era, EraEntryView, EraSchedule, Slot};
 
 pub(crate) const LOG_TARGET: &str = cryptarchia::engine::ROOT;
 
-/// Slots occupied by the uncles a block references.
-pub type UncleSlots = UpperBoundedVec<Slot, MAX_UNCLES>;
+/// Slots occupied by the uncles a block references, at most as many as the
+/// era of the block allows.
+pub type UncleSlots = UpperRuntimeBoundedVec<Slot, u8>;
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -184,7 +185,7 @@ where
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Branch<Id> {
     id: Id,
     parent: Id,
@@ -741,7 +742,8 @@ where
     ///
     /// After that,
     /// - All uncle candidates are ordered by `(parent.slot, slot, id)`.
-    /// - The first [`MAX_UNCLES`] uncles are selected.
+    /// - The first uncles, as many as the era of the new block allows, are
+    ///   selected.
     /// - But, if an uncle's slot is already taken by another uncle selected
     ///   earlier, the uncle is excluded.
     ///
@@ -791,7 +793,7 @@ where
         candidates
             .into_iter()
             .filter(|(_, uncle)| selected_slots.insert(uncle.slot))
-            .take(MAX_UNCLES)
+            .take(usize::from(era.parameters.max_uncles()))
             .map(|(_, uncle)| uncle)
             .collect()
     }
@@ -975,6 +977,9 @@ pub mod tests {
     use super::{Cryptarchia, Error, Slot, UncleSlots, maxvalid_bg};
     use crate::{Config, EraSchedule, ReorgedBlocks, State};
 
+    /// The most uncles a block may reference in the tests' eras.
+    pub const TEST_MAX_UNCLES: u8 = 4;
+
     #[must_use]
     pub fn config() -> Config {
         config_with(1)
@@ -1026,6 +1031,7 @@ pub mod tests {
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
             12,
+            TEST_MAX_UNCLES,
         )
     }
 
@@ -1824,7 +1830,7 @@ mod uncle_tests {
 
     use crate::{
         Branch, Config, Cryptarchia, EraSchedule, Slot, State, UncleSlots,
-        tests::{schedule, single_era},
+        tests::{TEST_MAX_UNCLES, schedule, single_era},
     };
 
     #[test]
@@ -1910,7 +1916,7 @@ mod uncle_tests {
         //  |--------------------- u4(4)
         //  |--------------------------- u5(5)
         //
-        // u1~u4 are selected. u5 is excluded because of `MAX_UNCLES=4`.
+        // u1~u4 are selected. u5 is excluded because the era allows 4 uncles.
         let [g, b1, u1, u2, u3, u4, u5] = [0u64, 1, 2, 3, 4, 5, 6];
         let window = 10;
         let engine = build_tree(
@@ -1938,7 +1944,7 @@ mod uncle_tests {
     fn select_uncles_takes_only_uncles_of_the_era_of_the_block() {
         // The tree of `select_uncles_takes_at_most_max_uncles`, with the era of
         // the new block starting at slot 3: u1 and u2 are of the previous era,
-        // and dropped before `MAX_UNCLES` are taken, so u5 makes it.
+        // and dropped before the era's 4 uncles are taken, so u5 makes it.
         let [g, b1, u1, u2, u3, u4, u5] = [0u64, 1, 2, 3, 4, 5, 6];
         let window = config(10.try_into().unwrap());
         let engine = build_tree_over(
@@ -1960,6 +1966,34 @@ mod uncle_tests {
             .map(|uncle| uncle.id())
             .collect();
         assert_eq!(selected, [u3, u4, u5]);
+    }
+
+    #[test]
+    fn select_uncles_takes_at_most_the_maximum_of_the_era_of_the_block() {
+        // The tree of `select_uncles_takes_at_most_max_uncles`, with the era of
+        // the new block starting at slot 3 and allowing 2 uncles: u1 and u2
+        // are of the previous era, and of u3 to u5 the first 2 are taken.
+        let [g, b1, u1, u2, u3, u4, u5] = [0u64, 1, 2, 3, 4, 5, 6];
+        let window = 10;
+        let engine = build_tree_over(
+            schedule(3, config(window), [(1, config_with_max_uncles(window, 2))]),
+            g,
+            [
+                (b1, g, 6.into()),
+                (u1, g, 1.into()),
+                (u2, g, 2.into()),
+                (u3, g, 3.into()),
+                (u4, g, 4.into()),
+                (u5, g, 5.into()),
+            ],
+        );
+
+        let selected: Vec<_> = engine
+            .select_uncles(engine.branches().get(&b1).unwrap(), 7.into())
+            .iter()
+            .map(|uncle| uncle.id())
+            .collect();
+        assert_eq!(selected, [u3, u4]);
     }
 
     #[test]
@@ -2081,7 +2115,12 @@ mod uncle_tests {
             g,
             [
                 (b1, g, 5.into(), UncleSlots::default()),
-                (b3, b1, 7.into(), [6u64.into()].into()),
+                (
+                    b3,
+                    b1,
+                    7.into(),
+                    UncleSlots::try_new(vec![6u64.into()], TEST_MAX_UNCLES).unwrap(),
+                ),
                 (b4, b3, 8.into(), UncleSlots::default()),
                 (u1, b1, 6.into(), UncleSlots::default()),
                 (u2, b1, 7.into(), UncleSlots::default()),
@@ -2172,6 +2211,10 @@ mod uncle_tests {
     /// `uncle_reference_window_in_slot`, which is handier to specify in tests.
     #[must_use]
     fn config(uncle_reference_window_in_slot: u32) -> Config {
+        config_with_max_uncles(uncle_reference_window_in_slot, TEST_MAX_UNCLES)
+    }
+
+    fn config_with_max_uncles(uncle_reference_window_in_slot: u32, max_uncles: u8) -> Config {
         // Pick `f` just below 1, so that `uncle_reference_window_in_block` equals
         // `uncle_reference_window_in_slot`.
         let f_numerator = uncle_reference_window_in_slot + 1;
@@ -2184,6 +2227,7 @@ mod uncle_tests {
             NonNegativeRatio::new(f_numerator, f_denominator),
             1f64.try_into().expect("1 > 0"),
             uncle_reference_window_in_block,
+            max_uncles,
         )
     }
 

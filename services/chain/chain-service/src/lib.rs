@@ -20,6 +20,7 @@ use std::{
 
 use educe::Educe;
 use futures::{Stream, TryStreamExt as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
     block::{Block, UncleHeaders, genesis::GenesisBlock},
@@ -118,6 +119,8 @@ pub enum Error {
     AwaitingGenesisTime,
     #[error("Invalid uncle {uncle}: {reason}")]
     InvalidUncle { uncle: HeaderId, reason: UncleError },
+    #[error("Block carries {count} uncles, more than the {max} its era allows")]
+    TooManyUncles { count: usize, max: u8 },
     #[error("Batch deferred proof verification error: {0}")]
     BatchDeferredProofVerification(#[from] lb_core::mantle::batch::Error),
 }
@@ -486,6 +489,10 @@ impl Cryptarchia {
             return Err(Error::AlreadyApplied(id));
         }
 
+        // Whatever the block's origin: a stored block was checked when it was
+        // first applied, but under the eras this node ran with then.
+        self.verify_uncle_count(&block)?;
+
         if origin == BlockOrigin::Network {
             // Reject blocks from future slots
             if slot > current_slot {
@@ -693,6 +700,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -868,6 +877,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin

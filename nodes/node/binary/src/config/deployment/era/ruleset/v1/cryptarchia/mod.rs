@@ -2,7 +2,10 @@ use core::num::{NonZero, NonZeroU32, NonZeroU64};
 
 use lb_binary_codec::canonical::BTreeMap;
 use lb_chain_service::Epoch;
-use lb_core::sdp::{InactivityPeriod, MinStake, ServiceType};
+use lb_core::{
+    block::Proposal,
+    sdp::{InactivityPeriod, MinStake, ServiceType},
+};
 use lb_cryptarchia_engine::{
     Config as ConsensusConfig, average_slots_for_blocks, base_period_length,
     expected_blocks_per_epoch, time::epoch_length,
@@ -21,6 +24,8 @@ pub struct Settings {
     pub learning_rate: NonNegativeF64,
     /// `W`, the uncle reference window in expected block-intervals.
     pub uncle_reference_window_in_block: u32,
+    /// The most uncles a block may reference.
+    pub max_uncles: u8,
     pub sdp_config: SdpConfig,
     pub pow_config: PoWConfig,
 }
@@ -53,6 +58,13 @@ impl Settings {
         expected_blocks_per_epoch(self.slots_per_epoch(), self.slot_activation_coeff)
     }
 
+    /// The size of the largest block proposal of the era: one that references
+    /// as many uncles as the era allows.
+    #[must_use]
+    pub fn max_proposal_size(&self) -> usize {
+        Proposal::max_encoded_size(self.max_uncles)
+    }
+
     #[must_use]
     pub fn consensus_config(&self) -> ConsensusConfig {
         ConsensusConfig::new(
@@ -60,6 +72,7 @@ impl Settings {
             self.slot_activation_coeff,
             self.learning_rate,
             self.uncle_reference_window_in_block,
+            self.max_uncles,
         )
     }
 }

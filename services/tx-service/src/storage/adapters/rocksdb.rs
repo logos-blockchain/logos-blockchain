@@ -2,6 +2,7 @@ use std::{marker::PhantomData, pin::Pin};
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _};
+use lb_binary_codec::canonical::BinaryDecode;
 use lb_core::{
     header::HeaderId,
     mantle::{
@@ -41,6 +42,7 @@ where
         + 'static
         + Serialize
         + for<'de> Deserialize<'de>
+        + BinaryDecode<Context = ()>
         + Hashable<Hash = TxHash>
         + StorageSize,
     Key: Clone + Send + Sync + 'static + Into<TxHash>,

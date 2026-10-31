@@ -6,7 +6,10 @@ pub mod global_allocators;
 pub mod panic;
 
 use color_eyre::eyre::{Result, eyre};
-use lb_core::mantle::{ledger::verification_mode::StandardMode, transactions::states::Preverified};
+use lb_core::mantle::{
+    ledger::verification_mode::StandardMode,
+    transactions::states::{Preverified, Unverified},
+};
 pub use lb_core::{
     header::HeaderId,
     mantle::{SignedOps, traits::Hashable, transactions::hash::TxHash},
@@ -51,6 +54,10 @@ pub use crate::{
     config::{ApiArgs, LogArgs, NetworkArgs, UserConfig},
 };
 
+pub type Tx<State> = SignedOps<State, StandardMode>;
+pub type ValidatedTx = Tx<Preverified>;
+pub type UnvalidatedTx = Tx<Unverified>;
+
 pub type TracingService = Tracing<RuntimeServiceId>;
 
 pub(crate) type NetworkService =
@@ -90,7 +97,7 @@ pub type PoWService = generic_services::PoWService<RuntimeServiceId>;
 pub type ApiService = lb_api_service::ApiService<
     AxumBackend<
         NtpTimeBackend,
-        RocksStorageAdapter<SignedOps<Preverified, StandardMode>, TxHash>,
+        RocksStorageAdapter<ValidatedTx, TxHash>,
         SdpMempoolAdapter<RuntimeServiceId>,
         SdpWalletAdapter<RuntimeServiceId>,
         SdpRecoveryBackend<RuntimeServiceId>,

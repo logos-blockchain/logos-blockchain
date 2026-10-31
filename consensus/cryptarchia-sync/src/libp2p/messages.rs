@@ -1,12 +1,7 @@
 use std::collections::HashSet;
 
 use lb_binary_codec::bincode::{self, BoundedSerializeOp, UpperBoundedVec};
-use lb_core::{
-    block::{BlockTransactions, MAX_BLOCK_TRANSACTIONS_SIZE},
-    header::HeaderId,
-};
-use lb_cryptarchia_engine::MAX_UNCLES;
-use lb_key_management_system_keys::keys::Ed25519Signature;
+use lb_core::header::HeaderId;
 use serde::{Deserialize, Deserializer, Serialize, de::Visitor};
 
 use crate::{
@@ -20,25 +15,12 @@ pub const MAX_REQUEST_MESSAGE_BINCODE_SIZE: usize = bincode::BINCODE_ENUM_DISCRI
     + bincode::BINCODE_LENGTH_PREFIX_SIZE
     + MAX_ADDITIONAL_BLOCKS * <HeaderId as BoundedSerializeOp>::MAX_ENCODED_SIZE;
 
-/// Maximum configured-bincode size of one stored block. The block stores each
-/// transaction as its canonical bytes inside a bincode byte envelope, so the
-/// existing total transaction-content and transaction-count limits account for
-/// all variable-sized block data.
-pub const MAX_SERIALISED_BLOCK_BINCODE_SIZE: usize =
-    <lb_core::header::Header as BoundedSerializeOp>::MAX_ENCODED_SIZE
-        + <Ed25519Signature as BoundedSerializeOp>::MAX_ENCODED_SIZE
-        + bincode::BINCODE_LENGTH_PREFIX_SIZE
-        + MAX_UNCLES
-            * (<lb_core::header::Header as BoundedSerializeOp>::MAX_ENCODED_SIZE
-                + <Ed25519Signature as BoundedSerializeOp>::MAX_ENCODED_SIZE)
-        + bincode::BINCODE_LENGTH_PREFIX_SIZE
-        + MAX_BLOCK_TRANSACTIONS_SIZE
-        + BlockTransactions::<()>::MAX * bincode::BINCODE_LENGTH_PREFIX_SIZE;
-
-/// Maximum configured-bincode size of a `BlocksResponse` frame.
-pub const MAX_BLOCKS_RESPONSE_BINCODE_SIZE: usize = bincode::BINCODE_ENUM_DISCRIMINANT_SIZE
-    + bincode::BINCODE_LENGTH_PREFIX_SIZE
-    + MAX_SERIALISED_BLOCK_BINCODE_SIZE;
+/// Maximum configured-bincode size of a `BlocksResponse` frame whose block
+/// takes at most `max_block_size` bytes.
+#[must_use]
+pub const fn max_blocks_response_bincode_size(max_block_size: usize) -> usize {
+    bincode::BINCODE_ENUM_DISCRIMINANT_SIZE + bincode::BINCODE_LENGTH_PREFIX_SIZE + max_block_size
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum RequestMessage {
@@ -167,10 +149,6 @@ pub enum BlocksResponse {
     Failure(BlocksUnavailableReason),
 }
 
-impl BoundedSerializeOp for BlocksResponse {
-    type Bytes = UpperBoundedVec<u8, MAX_BLOCKS_RESPONSE_BINCODE_SIZE>;
-}
-
 // These compile-time guards justify removing the former shared Chain Sync
 // admission ceiling without making it runtime policy again.
 const _: () = {
@@ -182,10 +160,6 @@ const _: () = {
         <TipResponse as BoundedSerializeOp>::MAX_ENCODED_SIZE
             <= lb_utils::net::MAX_WIRE_MESSAGE_SIZE
     );
-    assert!(
-        <BlocksResponse as BoundedSerializeOp>::MAX_ENCODED_SIZE
-            <= lb_utils::net::MAX_WIRE_MESSAGE_SIZE
-    );
 };
 
 #[cfg(test)]
@@ -195,13 +169,16 @@ mod tests {
     use lb_binary_codec::bincode::{
         self, BoundedSerializeOp, DeserializeOp as _, SerializeOp as _,
     };
-    use lb_core::header::HeaderId;
+    use lb_core::{block::Block, header::HeaderId};
 
     use super::{
-        BlocksRequest, BlocksResponse, KnownBlocks, MAX_BLOCKS_RESPONSE_BINCODE_SIZE,
-        MAX_REQUEST_MESSAGE_BINCODE_SIZE, MAX_SERIALISED_BLOCK_BINCODE_SIZE, RequestMessage,
+        BlocksRequest, BlocksResponse, KnownBlocks, MAX_REQUEST_MESSAGE_BINCODE_SIZE,
+        RequestMessage, max_blocks_response_bincode_size,
     };
     use crate::BlocksUnavailableReason;
+
+    /// The largest block of the test eras.
+    const MAX_BLOCK_SIZE: usize = 1_024;
 
     #[test]
     fn known_blocks_rejects_more_than_maximum_encoded_entries() {
@@ -280,16 +257,12 @@ mod tests {
 
     #[test]
     fn response_bound_includes_the_block_bincode_envelope() {
-        let response = BlocksResponse::Block(bytes::Bytes::from(vec![
-            0;
-            MAX_SERIALISED_BLOCK_BINCODE_SIZE
-        ]));
-        let ordinary = response.to_bytes().unwrap();
-        let ordinary: &[u8] = ordinary.as_ref();
+        let response = BlocksResponse::Block(bytes::Bytes::from(vec![0; MAX_BLOCK_SIZE]));
 
-        assert_eq!(ordinary.len(), MAX_BLOCKS_RESPONSE_BINCODE_SIZE);
-        let bounded = response.to_bounded_bytes().unwrap();
-        assert_eq!(bounded.as_slice(), ordinary);
+        assert_eq!(
+            response.to_bytes().unwrap().len(),
+            max_blocks_response_bincode_size(MAX_BLOCK_SIZE)
+        );
     }
 
     #[test]
@@ -314,11 +287,13 @@ mod tests {
             let expected = reason.clone();
             let response = BlocksResponse::Failure(reason);
             let ordinary = response.to_bytes().unwrap();
-            let bounded = response.to_bounded_bytes().unwrap();
 
             assert_eq!(ordinary.len(), expected_size);
-            assert!(ordinary.len() <= MAX_BLOCKS_RESPONSE_BINCODE_SIZE);
-            assert_eq!(bounded.as_slice(), ordinary.as_ref());
+            // The smallest bound an era can set: the one of an era without uncles.
+            assert!(
+                ordinary.len()
+                    <= max_blocks_response_bincode_size(Block::<()>::max_encoded_size(0))
+            );
 
             match (expected, BlocksResponse::from_bytes(&ordinary).unwrap()) {
                 (

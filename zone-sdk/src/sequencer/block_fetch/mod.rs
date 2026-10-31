@@ -30,8 +30,8 @@ use super::{
     channel_wallet::note_ops_from_txs,
     state::{ChannelUpdateInfo, PendingBundle, TxState},
     types::{
-        AtomicWithdrawInfo, ChannelTransferInfo, ChannelUpdateTx, DepositInfo, Error, FinalizedOp,
-        FinalizedTx, InscriptionInfo, PendingTx, PinDepositInfo, WithdrawInfo,
+        AtomicWithdrawInfo, ChannelTransferInfo, ChannelUpdateTx, ConfigInfo, DepositInfo, Error,
+        FinalizedOp, FinalizedTx, InscriptionInfo, PendingTx, PinDepositInfo, WithdrawInfo,
     },
 };
 use crate::{
@@ -679,7 +679,8 @@ pub(super) fn landed_msg_ids(items: &[FinalizedTx]) -> HashSet<MsgId> {
         .iter()
         .flat_map(|tx| tx.ops.iter())
         .filter_map(|op| match op {
-            FinalizedOp::Inscription(i) | FinalizedOp::Config(i) => Some(i.this_msg),
+            FinalizedOp::Inscription(i) => Some(i.this_msg),
+            FinalizedOp::Config(c) => Some(c.this_msg),
             _ => None,
         })
         .collect()
@@ -825,12 +826,11 @@ fn extract_finalized_items(
                     ops.push(FinalizedOp::Inscription(info));
                 }
                 OpRef::ChannelConfig(config) if config.channel() == channel_id => {
-                    ops.push(FinalizedOp::Config(InscriptionInfo {
+                    ops.push(FinalizedOp::Config(ConfigInfo {
                         tx_hash,
                         parent_msg: config.parent(),
                         this_msg: config.id(),
-                        payload: Inscription::new_unchecked(Vec::new()),
-                        signer: None,
+                        config: config.clone(),
                     }));
                 }
                 OpRef::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
