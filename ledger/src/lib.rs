@@ -23,7 +23,7 @@ pub use gas_and_fees::GasAndFees;
 pub use intent::{Intent, IntentStatus};
 use lb_core::{
     block::BlockNumber,
-    crypto::Hash as BlockHash,
+    crypto::{Hash as BlockHash, ZkHash},
     events::{Events, HeaderEvent, TxEvent, TxEventPayload},
     mantle::{
         GenesisParameters, NoteId, Utxo, Value, VerificationError,
@@ -642,6 +642,16 @@ impl LedgerState {
     #[must_use]
     pub const fn epoch_state(&self) -> &EpochState {
         self.cryptarchia_ledger.epoch_state()
+    }
+
+    /// The epoch nonces accepted by `PoW` reward claims at this ledger state:
+    /// the current epoch's nonce and the nonce of the preceding epoch.
+    #[must_use]
+    pub const fn accepted_pow_epoch_nonces(&self) -> (ZkHash, ZkHash) {
+        (
+            self.cryptarchia_ledger.epoch_state.nonce,
+            self.cryptarchia_ledger.previous_epoch_nonce,
+        )
     }
 
     #[must_use]
