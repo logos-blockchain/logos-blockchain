@@ -1877,6 +1877,99 @@ async fn update_variant_follows_orphaned() {
     assert_eq!(hashes(&orphaned), hashes(&[orphaned_entry]));
 }
 
+/// A pending bundle whose transfer input is gone from the branch on a block
+/// that moves no message (a deposit reorged out changes no lineage entry) is
+/// kept while the deposit may re-land, then expires un-refunded: a fresh fee
+/// note brings no deposit back, and the bundle would otherwise be re-funded
+/// and re-posted forever while holding the publish parent.
+#[tokio::test]
+async fn dead_input_bundle_expires_without_a_lineage_change() {
+    use lb_core::mantle::transactions::MantleTxBuilder;
+
+    let channel_id = ChannelId::from([0; 32]);
+    let key = Ed25519Key::from_bytes(&[0; 32]);
+    let mut sequencer = ready_sequencer_with_channel(None, key).await;
+    assert_eq!(sequencer.current_tip, Some(header_id(1)));
+    let window = sequencer.config.stale_refund_slots;
+    assert!(window > 0, "fixture: the refund window is on");
+
+    // A withdraw bundle on the channel tip spending a note the channel does
+    // not hold on this branch, funded at slot 0.
+    let (_, utxo) = utxo_with_sk();
+    let withdraw_op = ChannelWithdrawOp {
+        channel_id,
+        inputs: BoundedInputs::from(utxo.id()).into(),
+    };
+    let transfer_op = lb_core::mantle::ops::channel::channel_transfer::ChannelTransferOp {
+        channel_id,
+        inputs: BoundedInputs::from(utxo.id()).into(),
+        outputs: Outputs::new([utxo.note]),
+    };
+    let inscribe = inscribe_op(channel_id, MsgId::root(), b"withdraw");
+    let bundle = unverified_tx_with_ops(vec![
+        Op::ChannelTransfer(transfer_op),
+        Op::ChannelWithdraw(withdraw_op),
+        Op::ChannelInscribe(inscribe.clone()),
+    ]);
+    let bundle_hash = bundle.hash();
+    let state = sequencer.state.as_mut().unwrap();
+    track_pending_tx(state, bundle, channel_id).unwrap();
+    state.stamp_funding(&bundle_hash, Slot::from(0), Some(MantleTxBuilder::new()));
+    state.mark_pending_inscription_posted(&bundle_hash);
+    sequencer.last_msg_id = inscribe.id();
+    let silent = || BlockEventResult {
+        finalized_items: Vec::new(),
+        channel_update: None,
+        view_before: ViewBefore::new(&[], HashSet::new()),
+        deposits: Vec::new(),
+    };
+
+    // Inside the window the bundle is kept: the deposit may come back.
+    sequencer.lib_slot = Slot::from(window / 2);
+    let (update, ..) = sequencer.apply_block_result(silent());
+    assert!(
+        matches!(update, ChannelUpdate::Extension { .. }),
+        "kept: {update:?}"
+    );
+    assert_eq!(sequencer.state.as_ref().unwrap().pending_publish_count(), 1);
+    assert!(
+        sequencer
+            .state
+            .as_ref()
+            .unwrap()
+            .refund_candidates(
+                header_id(1),
+                Slot::from(window * 2),
+                window,
+                usize::MAX,
+                channel_id
+            )
+            .is_empty(),
+        "a dead-input bundle is never re-funded"
+    );
+
+    // Past it, the bundle expires and is reported orphaned.
+    sequencer.lib_slot = Slot::from(window * 2);
+    let (update, ..) = sequencer.apply_block_result(silent());
+    let ChannelUpdate::Conflict { orphaned, .. } = update else {
+        panic!("the dead bundle must be reported orphaned, got {update:?}")
+    };
+    assert_eq!(
+        orphaned
+            .iter()
+            .map(ChannelUpdateTx::tx_hash)
+            .collect::<Vec<_>>(),
+        vec![bundle_hash]
+    );
+    assert!(matches!(orphaned[0], ChannelUpdateTx::AtomicWithdraw(_)));
+    assert_eq!(sequencer.state.as_ref().unwrap().pending_publish_count(), 0);
+    assert_eq!(
+        sequencer.last_msg_id,
+        MsgId::root(),
+        "the publish parent falls back to the channel tip"
+    );
+}
+
 fn assert_history_matches_update(sequencer: &ZoneSequencer<MockNode>, update: &ChannelUpdate) {
     let history = sequencer
         .channel_history()

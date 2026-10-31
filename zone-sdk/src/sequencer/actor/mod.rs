@@ -447,7 +447,13 @@ where
             .max_pending_publish_depth
             .max(1)
             .saturating_sub(state.posted_pending_publish_count(tip));
-        let candidates = state.refund_candidates(tip, self.lib_slot, window, first_post_budget);
+        let candidates = state.refund_candidates(
+            tip,
+            self.lib_slot,
+            window,
+            first_post_budget,
+            self.channel_id,
+        );
         let mut changed = false;
         for candidate in candidates {
             if self.posting.contains(&candidate.tx_hash) {
@@ -687,8 +693,12 @@ where
         let (Some(state), Some(tip)) = (self.state.as_mut(), self.current_tip) else {
             return;
         };
-        let (expired, expired_other) =
-            state.shed_expired(tip, self.lib_slot, self.config.stale_refund_slots);
+        let (expired, expired_other) = state.shed_expired(
+            tip,
+            self.lib_slot,
+            self.config.stale_refund_slots,
+            self.channel_id,
+        );
         if expired.is_empty() && expired_other.is_empty() {
             return;
         }

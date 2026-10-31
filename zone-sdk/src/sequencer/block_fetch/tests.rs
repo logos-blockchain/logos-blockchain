@@ -1978,8 +1978,14 @@ async fn dropped_tip_event_is_backfilled_before_the_tip_is_adopted() {
         "a, b and c are mined: nothing to resubmit"
     );
     assert!(
-        s.refund_candidates(tip, Slot::from(100), 0, usize::MAX)
-            .is_empty(),
+        s.refund_candidates(
+            tip,
+            Slot::from(100),
+            0,
+            usize::MAX,
+            ChannelId::from([0; 32])
+        )
+        .is_empty(),
         "mined publishes are not re-funded"
     );
 }
