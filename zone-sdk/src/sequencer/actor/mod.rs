@@ -602,24 +602,46 @@ where
             view_before,
             deposits,
         } = result;
-        let (adopted, mut orphaned) = match channel_update {
-            Some(update) => {
+        let lineage_changed = channel_update.is_some();
+        // Dead-input bundles are shed at once only on a message move, children
+        // first. A bare un-mine keeps them: the deposit may re-land, and one
+        // that never does expires un-refunded in `shed_expired_into`.
+        let dead_bundles = match (self.state.as_mut(), self.current_tip) {
+            (Some(s), Some(tip)) if lineage_changed => {
+                s.shed_bundles_with_missing_inputs(tip, self.channel_id)
+            }
+            _ => Vec::new(),
+        };
+        let mut orphaned: Vec<ChannelUpdateTx> =
+            dead_bundles.into_iter().map(orphan_from_shed).collect();
+        let (adopted, on_chain) = channel_update.map_or_else(
+            || (Vec::new(), Vec::new()),
+            |update| {
                 Self::log_channel_update(&update);
                 let ChannelUpdateInfo {
                     adopted, orphaned, ..
                 } = update;
-                let orphaned = self.shed_orphans(orphaned);
-
-                // Advance the tip to the current valid publish parent (channel
-                // tip + our pending tail), the same value publishing chains on.
-                if let (Some(state), Some(tip)) = (self.state.as_ref(), self.current_tip) {
-                    self.last_msg_id = state.publish_parent(tip);
-                }
-
                 (adopted, orphaned)
+            },
+        );
+        // The lineage passes run on every block too, not only when the diff
+        // reports a change: an entry restored from a checkpoint can chain on
+        // a parent that a block finalized while the sequencer was down took,
+        // and the first event replays that history without a diff. Off the
+        // pending suffix, the entry would never be posted and never reported.
+        let mut seen: HashSet<_> = orphaned.iter().map(ChannelUpdateTx::tx_hash).collect();
+        for tx in self.shed_orphans(on_chain) {
+            if seen.insert(tx.tx_hash()) {
+                orphaned.push(tx);
             }
-            None => (Vec::new(), Vec::new()),
-        };
+        }
+        // Advance the tip to the current valid publish parent (channel tip +
+        // our pending tail), the same value publishing chains on.
+        if (lineage_changed || !orphaned.is_empty())
+            && let (Some(state), Some(tip)) = (self.state.as_ref(), self.current_tip)
+        {
+            self.last_msg_id = state.publish_parent(tip);
+        }
 
         // Shed pending configs superseded on the config lineage; the lineage
         // diff already reports them orphaned.
@@ -747,19 +769,16 @@ where
         }
     }
 
-    /// Merge the shed passes into the on-chain `orphaned` delta: bundles
-    /// whose inputs left the branch (with their children), entries whose
-    /// lineage no longer reaches the tip, and opaque txs the same way.
-    /// Deduped by `tx_hash`.
+    /// Merge the lineage shed passes into the on-chain `orphaned` delta:
+    /// entries whose lineage no longer reaches the tip, and opaque txs the
+    /// same way. Deduped by `tx_hash`.
     fn shed_orphans(&mut self, on_chain: Vec<ChannelUpdateTx>) -> Vec<ChannelUpdateTx> {
         let channel_id = self.channel_id;
         let (shed, shed_other) = match (self.state.as_mut(), self.current_tip) {
-            (Some(s), Some(tip)) => {
-                // Inputs shed first: it drains a dead bundle's children too.
-                let mut shed = s.shed_bundles_with_missing_inputs(tip, channel_id);
-                shed.extend(s.shed_off_branch_pending(tip));
-                (shed, s.shed_off_branch_pending_other(tip))
-            }
+            (Some(s), Some(tip)) => (
+                s.shed_off_branch_pending(tip),
+                s.shed_off_branch_pending_other(tip),
+            ),
             _ => (Vec::new(), Vec::new()),
         };
         let mut orphaned: Vec<ChannelUpdateTx> = shed.into_iter().map(orphan_from_shed).collect();
