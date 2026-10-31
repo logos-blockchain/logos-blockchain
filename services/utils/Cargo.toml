@@ -28,10 +28,11 @@ log            = { workspace = true }
 overwatch      = { features = ["derive"], workspace = true }
 serde          = { workspace = true }
 thiserror      = { workspace = true }
+tokio          = { features = ["macros", "time"], workspace = true }
 tracing        = { workspace = true }
 
 [dev-dependencies]
 overwatch-derive = { workspace = true }
 serde            = { features = ["derive"], workspace = true }
-tokio            = { workspace = true }
+tokio            = { features = ["macros", "rt", "test-util"], workspace = true }
 tracing          = { workspace = true }

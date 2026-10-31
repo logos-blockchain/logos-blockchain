@@ -111,7 +111,10 @@ use crate::{
         self,
         chain::{BlendEpoch, BlendEpochState},
     },
-    message::{DataPayload, DataPayloadType, ProcessedMessage, ServiceMessage},
+    message::{
+        DataPayload, DataPayloadType, ProcessedMessage, ServiceMessage,
+        proposal_diagnostic_digest_from_encoded, proposal_diagnostic_timestamp_unix_ms,
+    },
     mode::{CoreMembership, ModeMembership},
     pending::{
         EncapsulationResult, LocalEncapsulation, MessageKind, NextLocalMessage, PendingProposals,
@@ -136,10 +139,6 @@ mod state;
 #[cfg(test)]
 mod tests;
 pub use state::RecoveryServiceState as CoreServiceState;
-
-use crate::message::{
-    proposal_diagnostic_digest_from_encoded, proposal_diagnostic_timestamp_unix_ms,
-};
 
 const LOG_TARGET: &str = blend::service::CORE;
 
@@ -340,9 +339,11 @@ where
             ..
         } = settings_handle.notifier().get_updated_settings();
 
+        // Chain readiness is established by the orchestrator; Core still uses the SDP
+        // relay below.
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             NetworkService<_, _, _>,
             TimeService<_, _>,
             SdpService,

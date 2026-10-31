@@ -6,7 +6,11 @@ use std::{
 use lb_services_utils::wait_until_services_are_ready;
 use overwatch::{
     overwatch::OverwatchHandle,
-    services::{AsServiceId, ServiceData, relay::OutboundRelay, status::ServiceStatus},
+    services::{
+        AsServiceId, ServiceData,
+        relay::OutboundRelay,
+        status::{ServiceStatus, WaitPolicy},
+    },
 };
 use tracing::{debug, error, info};
 
@@ -40,11 +44,8 @@ where
             target: LOG_TARGET,
             "Waiting until service {service_id:} is ready"
         );
-        if let Err(e) =
-            wait_until_services_are_ready!(&overwatch_handle, Some(Duration::from_mins(1)), Service)
-                .await
-        {
-            debug!(target: LOG_TARGET, "Service took too long to start. Shutting it down again...");
+        if let Err(e) = wait_until_services_are_ready!(&overwatch_handle, None, Service).await {
+            debug!(target: LOG_TARGET, "Failed to wait for service readiness. Shutting it down...");
             kill_service(&overwatch_handle).await;
             return Err(e.into());
         }
@@ -86,21 +87,24 @@ where
     ///
     /// # Errors
     ///
-    /// Fails if the service does not stop in time or if the status watcher
-    /// cannot be requested.
+    /// Fails if the service does not stop in time, fails before stopping, the
+    /// status notifications close, or the status watcher cannot be requested.
     async fn wait_until_stopped(
         &self,
         timeout: Duration,
     ) -> Result<(), overwatch::overwatch::Error> {
         let mut status_watcher = self.overwatch_handle.status_watcher().await?;
         status_watcher
-            .wait_for(ServiceStatus::Stopped, Some(timeout))
+            .wait_with_policy(
+                ServiceStatus::Stopped,
+                Some(timeout),
+                WaitPolicy::RestartFriendly,
+            )
             .await
             .map(|_| ())
-            .map_err(|current_service_status| {
+            .map_err(|wait_error| {
                 overwatch::overwatch::Error::Any(
-                    format!("Service did not stop in time, last status: {current_service_status}")
-                        .into(),
+                    format!("Service stop wait failed: {wait_error}").into(),
                 )
             })
     }

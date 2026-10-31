@@ -2,7 +2,6 @@ use std::{
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
-    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -185,18 +184,11 @@ where
             era_schedule,
         } = settings_handle.notifier().get_updated_settings();
 
-        // Wait for services (except Chain and SDP) to become ready, with timeout
-        wait_until_services_are_ready!(
-            &overwatch_handle,
-            Some(Duration::from_mins(1)),
-            PreloadKmsService<_>
-        )
-        .await?;
-        // Wait for Chain, which becomes ready after recovering blocks, and SDP,
-        // which becomes ready after Chain, without timeout.
+        // Chain becomes ready after block recovery; SDP becomes ready after Chain.
         wait_until_services_are_ready!(
             &overwatch_handle,
             None,
+            PreloadKmsService<_>,
             <EdgeService as EdgeServiceComponents>::ChainService,
             SdpService
         )
