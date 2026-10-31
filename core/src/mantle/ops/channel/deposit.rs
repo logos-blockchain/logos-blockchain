@@ -27,7 +27,8 @@ use crate::{
     sdp::service_notes::ServiceNotes,
 };
 
-pub const MAX_METADATA_SIZE: usize = u32::MAX as usize;
+/// The maximum number of metadata bytes in a single deposit operation.
+pub const MAX_METADATA_SIZE: usize = super::MAX_OPERATION_DATA_SIZE;
 pub type Metadata = UpperBoundedVec<u8, { MAX_METADATA_SIZE }>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
@@ -194,6 +195,7 @@ impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<DepositOp, 
 
 #[cfg(test)]
 mod test {
+    use lb_binary_codec::canonical::{BinaryDecodeExt as _, DecodeError};
     use lb_groth16::CompressedGroth16Proof;
     use lb_key_management_system_keys::keys::ZkKey;
     use num_bigint::BigUint;
@@ -205,9 +207,44 @@ mod test {
         channel_notes,
         gas::test_utils::FixedThresholds,
         ledger::BoundedInputs,
-        ops::op_proof::samples::SampleProof as _,
+        ops::{channel::MAX_OPERATION_DATA_SIZE, op_proof::samples::SampleProof as _},
         transactions::tx_list::signed_ops::test_utils::make_channel_state,
     };
+
+    /// A deposit encoding with no inputs and a metadata length prefix of
+    /// `metadata_len`, followed by `metadata_len` bytes of metadata.
+    fn encoded_deposit_with_metadata_len(metadata_len: usize) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        // ChannelId
+        encoded.extend_from_slice(&[0x42; 32]);
+        // Input count
+        encoded.push(0);
+        // Metadata length prefix and payload
+        let metadata_len_prefix =
+            u32::try_from(metadata_len).expect("metadata length must fit in a u32 prefix");
+        encoded.extend_from_slice(&metadata_len_prefix.to_le_bytes());
+        encoded.resize(encoded.len() + metadata_len, 0x01);
+        encoded
+    }
+
+    #[test]
+    fn decode_accepts_metadata_at_the_spec_limit() {
+        let encoded = encoded_deposit_with_metadata_len(MAX_OPERATION_DATA_SIZE);
+
+        let (_, deposit) = DepositOp::decode(&encoded).unwrap();
+
+        assert_eq!(deposit.metadata.len(), MAX_OPERATION_DATA_SIZE);
+    }
+
+    #[test]
+    fn decode_rejects_metadata_above_the_spec_limit() {
+        let encoded = encoded_deposit_with_metadata_len(MAX_OPERATION_DATA_SIZE + 1);
+
+        assert!(matches!(
+            DepositOp::decode(&encoded),
+            Err(DecodeError::LengthOutOfBounds { .. })
+        ));
+    }
 
     #[test]
     fn preverify_rejects_empty_inputs() {
