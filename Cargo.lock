@@ -4428,6 +4428,7 @@ dependencies = [
  "futures",
  "logos-blockchain-api-service",
  "logos-blockchain-blend-service",
+ "logos-blockchain-c-common",
  "logos-blockchain-c-macros",
  "logos-blockchain-chain-leader-service",
  "logos-blockchain-chain-service",
@@ -4457,10 +4458,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-c-common"
+version = "0.0.0"
+dependencies = [
+ "logos-blockchain-c-macros",
+]
+
+[[package]]
 name = "logos-blockchain-c-macros"
 version = "0.0.0"
 dependencies = [
- "proc-macro2",
  "quote",
  "syn 2.0.119",
 ]

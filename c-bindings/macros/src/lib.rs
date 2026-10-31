@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Error, ItemFn, ReturnType, parse_macro_input};
+use syn::{ItemFn, ReturnType, Type, parse_macro_input, parse_quote};
 
 /// Turns a panic inside an exported function into an error return.
 ///
@@ -8,11 +8,17 @@ use syn::{Error, ItemFn, ReturnType, parse_macro_input};
 /// instead, taking the host application down with it. This attribute runs the
 /// function body inside [`std::panic::catch_unwind`] and, if it panics,
 /// returns the function's own error value carrying the panic message, with
-/// the `RuntimeError` status code.
+/// the `RuntimeError` status code by default.
 ///
 /// The return type must implement the bindings' `FfiReturn` trait, which is
 /// what builds the error value: `OperationStatus`, `FfiResult<_,
 /// OperationStatus>` and `()` do.
+///
+/// The error type defaults to `crate::OperationStatus`; another library can
+/// supply its own with `#[panic_to_error(SqlStatus)]`. It must implement
+/// `lb_c_common::FfiError`, and the return type must implement
+/// `lb_c_common::FfiReturn` for that error.
+/// The consuming crate must expose the shared dependency as `lb_c_common`.
 ///
 /// # Example
 ///
@@ -25,14 +31,11 @@ use syn::{Error, ItemFn, ReturnType, parse_macro_input};
 /// ```
 #[proc_macro_attribute]
 pub fn panic_to_error(arguments: TokenStream, item: TokenStream) -> TokenStream {
-    if !arguments.is_empty() {
-        return Error::new_spanned(
-            proc_macro2::TokenStream::from(arguments),
-            "`panic_to_error` takes no arguments",
-        )
-        .to_compile_error()
-        .into();
-    }
+    let status: Type = if arguments.is_empty() {
+        parse_quote!(crate::OperationStatus)
+    } else {
+        parse_macro_input!(arguments as Type)
+    };
 
     let ItemFn {
         attrs,
@@ -53,9 +56,12 @@ pub fn panic_to_error(arguments: TokenStream, item: TokenStream) -> TokenStream 
                 move || -> #output #block
             )) {
                 Ok(value) => value,
-                Err(payload) => <#output as crate::macros::FfiReturn>::from_operation_status(
-                    crate::errors::OperationStatus::from_panic(payload.as_ref()),
-                ),
+                Err(payload) => {
+                    let message = ::lb_c_common::panic_message(payload.as_ref());
+                    let error = <#status as ::lb_c_common::FfiError>::from_panic(message);
+                    // SAFETY: The panic handler has just created this owned error.
+                    unsafe { <#output as ::lb_c_common::FfiReturn<#status>>::from_error(error) }
+                }
             }
         }
     }
