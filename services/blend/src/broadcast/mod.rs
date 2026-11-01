@@ -128,7 +128,7 @@ where
             NetworkService<_, _, _>,
             TimeService<_, _>,
             PreloadKmsService<_>,
-            ChainService // becomes ready after chain recovery
+            ChainService
         )
         .await?;
 

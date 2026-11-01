@@ -31,11 +31,15 @@ where
     async fn subscribe(
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     ) -> Option<Self::Stream> {
-        // No timeout since chain-leader service becomes ready only after switching to
-        // Online mode.
-        wait_until_services_are_ready!(overwatch_handle, None, CryptarchiaLeaderService)
-            .await
-            .ok()?;
+        wait_until_services_are_ready!(
+            overwatch_handle,
+            // No timeout since chain-leader service becomes ready
+            // only after switching to Online mode.
+            None,
+            CryptarchiaLeaderService
+        )
+        .await
+        .ok()?;
         let cryptarchia_service_relay = overwatch_handle
             .relay::<CryptarchiaLeaderService>()
             .await

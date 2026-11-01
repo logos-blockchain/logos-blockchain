@@ -490,18 +490,24 @@ where
             _phantom,
         } = self;
 
-        // Mining and claims must wait until the chain is synced and Online.
+        // The PoW service must not mine or claim until the chain is synced:
+        // wait for the chain service to become ready and reach the
+        // Online mode before starting.
         //
-        // A relay only confirms a connection; the service may not yet be
-        // processing requests. Startup reads Wallet keys and subscribes to the
-        // TimeService clock, while claims later use Blend's relay.
+        // Every service this one talks to is awaited, because a relay only
+        // connects — it does not guarantee the peer is serving its inbound
+        // queue, so a message sent too early is simply never answered. Startup
+        // itself sends two: the auto-claim targets are validated against the
+        // wallet's known keys, and the service subscribes to the time service's
+        // slot clock. Blend is awaited on the same grounds, though it is only
+        // used later, to publish claim transactions.
         wait_until_services_are_ready!(
             &service_resources_handle.overwatch_handle,
             None,
-            CryptarchiaService, // becomes ready after recovering persisted blocks
-            WalletService, // becomes ready after chain recovery and wallet backfill
+            CryptarchiaService,
+            WalletService,
             TimeService<TimeBackendType, RuntimeServiceId>,
-            BlendService // becomes ready after chain Online and membership initialization
+            BlendService
         )
         .await?;
 

@@ -331,7 +331,7 @@ where
             NetworkService<_, _, _>,
             TxMempoolService<_, _, _, _, _>,
             TimeService<_, _>,
-            Cryptarchia // becomes ready after recovering persisted blocks
+            Cryptarchia // becomes ready after recovering blocks
         )
         .await?;
 

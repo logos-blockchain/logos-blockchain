@@ -753,7 +753,6 @@ where
             .notifier()
             .get_updated_settings();
 
-        // Storage and the slot clock are needed to recover the persisted chain.
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
             None,

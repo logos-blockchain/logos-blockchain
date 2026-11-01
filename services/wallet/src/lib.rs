@@ -456,13 +456,13 @@ where
             ..
         } = self;
 
-        // Chain recovery depends on Storage; Wallet also needs KMS for signing.
+        // Wait for Chain service to become ready, without timeout
         wait_until_services_are_ready!(
             &service_resources_handle.overwatch_handle,
             None,
             lb_storage_service::StorageService<_>,
             Kms,
-            Cryptarchia // becomes ready after recovering persisted blocks
+            Cryptarchia // becomes ready after recovering blocks
         )
         .await?;
 

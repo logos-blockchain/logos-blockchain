@@ -339,8 +339,6 @@ where
             ..
         } = settings_handle.notifier().get_updated_settings();
 
-        // Chain readiness is established by the orchestrator; Core still uses the SDP
-        // relay below.
         wait_until_services_are_ready!(
             &overwatch_handle,
             None,

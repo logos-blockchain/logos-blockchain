@@ -372,7 +372,7 @@ where
             TxMempoolService<_, _, _, _, _>,
             TimeService<_, _>,
             PreloadKmsService<_>,
-            CryptarchiaService, // becomes ready after block recovery
+            CryptarchiaService, // becomes ready after recovering blocks
             ChainNetwork,       // becomes ready after IBD
             BlendService,       // becomes ready after chain becomes online
             Wallet              // becomes ready after Chain

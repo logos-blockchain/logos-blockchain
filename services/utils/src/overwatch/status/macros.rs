@@ -1,34 +1,56 @@
-/// Wait until all listed services reach `Ready`.
-///
-/// The caller must have `RuntimeServiceId` in scope, and each listed service
-/// type must be registered with this Overwatch instance. Readiness uses
-/// restart-friendly, once-observed semantics: after `Ready` is observed for a
-/// service, a later status change does not undo completion. Status watchers
-/// retain only the latest state, so a brief transition overwritten before it
-/// is observed can be missed.
+/// Macro call that waits for services to be in `ServiceStatus::Ready` state.
+/// It can wait from 1..n services to be ready.
 ///
 /// # Arguments
 ///
-/// * `$overwatch_handle` — handle used to obtain each service's status watcher.
-/// * `$timeout` — optional timeout for each service wait; `None` waits without
-///   a deadline.
-/// * `$service_type` — one or more service types to wait for.
+/// Requires `RuntimeServiceId` to be defined in the current scope.
+///
+/// * `$overwatch_handle`: A reference to the `OverwatchHandle` that manages the
+///   services.
+/// * `$timeout`: An optional `Duration` that specifies how long to wait for the
+///   services to be ready. If `None`, it will wait indefinitely.
+/// * `$( $service_type:ident ),+`: A list of service types that should be
+///   checked for readiness.
 ///
 /// # Returns
 ///
-/// A future returning `Ok(())` when all services reach `Ready`, or `DynError`
-/// if watcher lookup or readiness waiting fails.
+/// An async scope that returns:
+/// - `Ok(())` if all specified services are ready within the timeout.
+/// - `Err(DynError)` if any of the specified services are not ready within the
+///   timeout.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// wait_until_services_are_ready!(
-///     &overwatch_handle,
-///     None,
-///     ServiceA,
-///     ServiceB
-/// ).await?;
+/// use std::time::Duration;
+/// use overwatch::{DynError, overwatch::OverwatchHandle};
+/// use lb_services_utils::overwatch::status::wait_until_services_are_ready;
+///
+/// // The following types would be defined as part of your Overwatch runtime.
+/// struct RuntimeServiceId;
+/// struct ServiceA;
+/// struct ServiceB;
+/// struct ServiceC;
+///
+/// // Mock function to get an OverwatchHandle
+/// fn get_overwatch_handle() -> OverwatchHandle<RuntimeServiceId> {
+///     unimplemented!()
+/// }
+///
+/// async fn main() {
+///     let overwatch_handle = get_overwatch_handle();
+///     let _: Result<(), DynError> = wait_until_services_are_ready!(
+///        &overwatch_handle,
+///        Some(Duration::from_secs(10)),
+///        ServiceA,
+///        ServiceB,
+///        ServiceC
+///     ).await;
+/// }
 /// ```
+///
+/// A complete example with working service implementations is available in this
+/// module's tests.
 #[macro_export]
 macro_rules! wait_until_services_are_ready {
     ( $overwatch_handle:expr, $timeout:expr, $( $service_type:ty ),+ ) => {{
@@ -82,12 +104,12 @@ mod tests {
         sync::{Notify, watch},
     };
 
-    struct RestartableService {
+    struct HeavyService {
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
         stop: watch::Sender<bool>,
     }
 
-    impl ServiceData for RestartableService {
+    impl ServiceData for HeavyService {
         type Settings = watch::Sender<bool>;
         type State = NoState<Self::Settings>;
         type StateOperator = NoOperator<Self::State>;
@@ -95,7 +117,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl ServiceCore<RuntimeServiceId> for RestartableService {
+    impl ServiceCore<RuntimeServiceId> for HeavyService {
         fn init(
             service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
             _initial_state: Self::State,
@@ -192,7 +214,7 @@ mod tests {
 
     #[derive_services(panic_policy = Option<Shutdown>)]
     struct App {
-        restartable_service: RestartableService,
+        restartable_service: HeavyService,
         delayed_service: DelayedService,
         failing_service: FailingService,
     }
@@ -224,11 +246,11 @@ mod tests {
         let handle = overwatch.handle();
 
         handle
-            .start_service::<RestartableService>()
+            .start_service::<HeavyService>()
             .await
             .expect("dependency should start");
         let mut restartable_status = handle
-            .status_watcher::<RestartableService>()
+            .status_watcher::<HeavyService>()
             .await
             .expect("restartable service status watcher should be available");
         assert_eq!(
@@ -256,7 +278,7 @@ mod tests {
         let mut readiness = Box::pin(wait_until_services_are_ready!(
             &handle,
             None,
-            RestartableService,
+            HeavyService,
             DelayedService
         ));
         assert!(futures::poll!(readiness.as_mut()).is_pending());
@@ -265,7 +287,7 @@ mod tests {
 
         stop_sender.send_replace(false);
         handle
-            .start_service::<RestartableService>()
+            .start_service::<HeavyService>()
             .await
             .expect("stopped dependency should restart");
         assert_eq!(

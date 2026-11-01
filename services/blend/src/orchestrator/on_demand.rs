@@ -87,8 +87,8 @@ where
     ///
     /// # Errors
     ///
-    /// Fails if the service does not stop in time, fails before stopping, the
-    /// status notifications close, or the status watcher cannot be requested.
+    /// Fails if the service does not stop in time or if the status watcher
+    /// cannot be requested.
     async fn wait_until_stopped(
         &self,
         timeout: Duration,
