@@ -9,8 +9,9 @@ use lb_groth16::ModulusShift;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio, ProperFraction};
 
 use super::{
-    BlendPoWConfig, EpochConfig, ExecutionMarketConfig, MaxGasPerBlock, PoWConfig, RewardPoWConfig,
-    SdpConfig, ServiceParameters, Settings, SlotActivationCoeff, StorageMarketConfig,
+    BlendPoWConfig, BlockRewardsConfig, EpochConfig, ExecutionMarketConfig, MaxGasPerBlock,
+    PoWConfig, RewardPoWConfig, SdpConfig, ServiceParameters, Settings, SlotActivationCoeff,
+    StorageMarketConfig,
 };
 
 pub fn fixture_settings() -> Settings {
@@ -32,6 +33,14 @@ pub fn fixture_settings() -> Settings {
             max_adjustment_factor: ProperFraction::new(48, 49.try_into().unwrap()).unwrap(),
             ema_smoothing_factor: ProperFraction::new(50, 51.try_into().unwrap()).unwrap(),
         },
+        block_rewards: BlockRewardsConfig::new(
+            53,
+            NonZero::new(54).unwrap(),
+            55,
+            NonNegativeRatio::new(56, NonZeroU32::new(57).unwrap()),
+            ProperFraction::new(58, NonZeroU32::new(59).unwrap()).unwrap(),
+        )
+        .unwrap(),
     }
 }
 
@@ -101,6 +110,7 @@ pub const SETTINGS_HEX: &str = "
     2100000000000000 2200000000000000 2300000000000000 2400000000000000 2500000000000000
     2600000000000000 2700000000000000 2800000000000000 2900000000000000
     2b00000000000000 2c000000 2d000000 2e000000 2f000000 30000000 31000000 32000000 33000000
+    3500000000000000 3600000000000000 3700000000000000 38000000 39000000 3a000000 3b000000
 ";
 const SDP_CONFIG_HEX: &str = "14000000 15000000 1600000000000000 1700000000000000";
 const POW_CONFIG_HEX: &str = "

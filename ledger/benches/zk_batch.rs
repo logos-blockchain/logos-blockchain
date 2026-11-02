@@ -326,6 +326,14 @@ fn config() -> Config {
             ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
                 .unwrap(),
         },
+        block_rewards: logos_blockchain_ledger::config::BlockRewardsConfig::new(
+            3_000_000_000,
+            120_000_000.try_into().unwrap(),
+            10_512,
+            NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+            lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+        )
+        .unwrap(),
         pow_config: PoWConfig {
             blend: BlendPoWConfig {
                 base_difficulty: ModulusShift::new::<234>(),

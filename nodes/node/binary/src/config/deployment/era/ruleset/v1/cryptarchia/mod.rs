@@ -38,6 +38,7 @@ pub struct Settings {
     pub pow_config: PoWConfig,
     pub execution_market: ExecutionMarketConfig,
     pub storage_market: StorageMarketConfig,
+    pub block_rewards: BlockRewardsConfig,
 }
 
 impl Settings {
@@ -260,4 +261,6 @@ pub use lb_ledger::config::RewardPoWConfig;
 // The markets' parameters are used verbatim too, so the ledger types are reused
 // the same way: their field types refuse a rate outside (0, 1) and a gas limit
 // without a target.
-pub use lb_ledger::config::{ExecutionMarketConfig, MaxGasPerBlock, StorageMarketConfig};
+pub use lb_ledger::config::{
+    BlockRewardsConfig, ExecutionMarketConfig, MaxGasPerBlock, StorageMarketConfig,
+};

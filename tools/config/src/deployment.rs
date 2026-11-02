@@ -14,7 +14,7 @@ use lb_node::config::deployment::{
                 SchedulerSettings, Settings as BlendDeploymentSettings,
             },
             cryptarchia::{
-                EpochConfig, MaxGasPerBlock, ServiceParameters,
+                BlockRewardsConfig, EpochConfig, MaxGasPerBlock, ServiceParameters,
                 Settings as CryptarchiaDeploymentSettings,
             },
             time::Settings as TimeDeploymentSettings,
@@ -93,6 +93,17 @@ const STORAGE_MARKET_MAX_ADJUSTMENT_FACTOR: ProperFraction =
 /// `β`: the weight of the latest epoch in the moving average of storage usage.
 const STORAGE_MARKET_EMA_SMOOTHING_FACTOR: ProperFraction =
     ProperFraction::new(1, NonZeroU32::new(2).unwrap()).unwrap();
+/// The block rewards: the stake target, the scale of the emission's weight, the
+/// weight of the pooled fees, a block's emission in full, and the Blend nodes'
+/// share.
+const BLOCK_REWARDS: BlockRewardsConfig = BlockRewardsConfig::new(
+    3_000_000_000,
+    NonZeroU64::new(120_000_000).unwrap(),
+    10_512,
+    NonNegativeRatio::new(62_500, NonZeroU32::new(657).unwrap()),
+    ProperFraction::new(6, NonZeroU32::new(10).unwrap()).unwrap(),
+)
+.unwrap();
 
 #[must_use]
 #[expect(
@@ -222,6 +233,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     max_adjustment_factor: STORAGE_MARKET_MAX_ADJUSTMENT_FACTOR,
                     ema_smoothing_factor: STORAGE_MARKET_EMA_SMOOTHING_FACTOR,
                 },
+                block_rewards: BLOCK_REWARDS,
             },
             time: TimeDeploymentSettings {
                 slot_duration_in_seconds: NonZero::new(slot_duration_in_secs)

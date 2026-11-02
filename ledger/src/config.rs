@@ -13,7 +13,7 @@ use lb_cryptarchia_engine::{Epoch, EraSchedule, Slot};
 pub use lb_groth16::ModulusShift;
 use lb_pol::LotteryConstants;
 use lb_time::era::EpochLength;
-use lb_utils::math::ProperFraction;
+use lb_utils::math::{NonNegativeRatio, ProperFraction};
 
 /// The config of every era: each block is applied under the config of the era
 /// of its slot, and each epoch is settled under the config of its era.
@@ -30,6 +30,7 @@ pub struct Config {
     pub accepted_fork_digests: AcceptedForkDigests,
     pub execution_market: ExecutionMarketConfig,
     pub storage_market: StorageMarketConfig,
+    pub block_rewards: BlockRewardsConfig,
 }
 
 impl Config {
@@ -626,6 +627,231 @@ codec_fixtures!(
     } => STORAGE_MARKET_CONFIG_HEX
 );
 
+/// How each block is rewarded, per the
+/// [block rewards](https://lip.logos.co/blockchain/raw/block-rewards.html).
+///
+/// A block's reward mixes an emission from the reserve with the fee the block
+/// pooled: the further the stake falls short of its target, and the more fees
+/// the window pooled, the more of it is emission. The reward is split between
+/// the Blend nodes and the block's leader.
+///
+/// Its values keep every step of a reward within a `u128`, whatever the fees.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(try_from = "BlockRewardsFields", into = "BlockRewardsFields")]
+pub struct BlockRewardsConfig {
+    /// `STAKE_TARGET`: the total stake the emission steers towards.
+    stake_target: Value,
+    /// `A_SCALE`: the shortfall from the stake target at which a block's
+    /// emission is in full, and the scale of the emission's weight in a
+    /// reward.
+    emission_factor_scale: NonZeroU64,
+    /// `FEE_AVG_NUMERATOR`: how much each unit of the fees pooled over the
+    /// window adds to the emission's weight.
+    fee_average_numerator: u64,
+    /// `INFLATION_NUMERATOR / INFLATION_DENOMINATOR`, `I_max · S_cap · Δt / f`:
+    /// a block's emission in full.
+    max_emission_per_block: NonNegativeRatio,
+    /// The Blend nodes' share of a reward, the leader taking the rest with the
+    /// tips.
+    blend_share: ProperFraction,
+}
+
+/// The values of a [`BlockRewardsConfig`], as a deployment states them.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct BlockRewardsFields {
+    stake_target: Value,
+    emission_factor_scale: NonZeroU64,
+    fee_average_numerator: u64,
+    max_emission_per_block: NonNegativeRatio,
+    blend_share: ProperFraction,
+}
+
+impl BlockRewardsConfig {
+    /// The block rewards of these values, unless a reward could overflow a
+    /// `u128` at some fee: the emission's denominator, the scale and the
+    /// share's denominator must multiply to at most `u128::MAX / Value::MAX`.
+    #[must_use]
+    pub const fn new(
+        stake_target: Value,
+        emission_factor_scale: NonZeroU64,
+        fee_average_numerator: u64,
+        max_emission_per_block: NonNegativeRatio,
+        blend_share: ProperFraction,
+    ) -> Option<Self> {
+        // A reward's numerator reaches the emission's denominator times the
+        // scale times a block's fee, at most a `Value`, and the split then
+        // multiplies it by less than the share's denominator.
+        let bound = match (max_emission_per_block.denominator.get() as u128)
+            .checked_mul(emission_factor_scale.get() as u128)
+        {
+            Some(bound) => bound.checked_mul(blend_share.get().denominator.get() as u128),
+            None => None,
+        };
+        match bound {
+            Some(bound) if bound <= u128::MAX / Value::MAX as u128 => Some(Self {
+                stake_target,
+                emission_factor_scale,
+                fee_average_numerator,
+                max_emission_per_block,
+                blend_share,
+            }),
+            _ => None,
+        }
+    }
+
+    /// A block's rewards, to the Blend nodes then to its leader, before its
+    /// tips: `pooled_fees` sums the fees pooled over the window, `block_fee`,
+    /// the block's own, included, and `total_stake` is the inferred total
+    /// stake.
+    pub(crate) fn rewards(
+        &self,
+        pooled_fees: u128,
+        block_fee: Value,
+        total_stake: Value,
+    ) -> (Value, Value) {
+        let Self {
+            stake_target,
+            emission_factor_scale,
+            fee_average_numerator,
+            max_emission_per_block,
+            blend_share,
+        } = *self;
+        let scale = NonZeroU128::from(emission_factor_scale);
+        // `A_t'`: the emission's weight in the reward, out of `scale`.
+        let emission_weight = u128::from(stake_target)
+            .saturating_add(u128::from(fee_average_numerator).saturating_mul(pooled_fees))
+            .saturating_sub(u128::from(total_stake))
+            .min(scale.get());
+        let emission_denominator = NonZeroU128::from(max_emission_per_block.denominator);
+        let reward_numerator = u128::from(max_emission_per_block.numerator) * emission_weight
+            + emission_denominator.get() * (scale.get() - emission_weight) * u128::from(block_fee);
+        let NonNegativeRatio {
+            numerator: blend_numerator,
+            denominator: share_denominator,
+        } = blend_share.get();
+        let share_denominator = NonZeroU128::from(share_denominator);
+        // The reward's denominator, split: within a `u128`, as `Self::new`
+        // checks, so the product never saturates.
+        let denominator = emission_denominator
+            .saturating_mul(scale)
+            .saturating_mul(share_denominator);
+        let share = |numerator: u128| {
+            Value::try_from(reward_numerator * numerator / denominator).expect(
+                "A reward is at most the larger of a block's emission in full and its fee, both \
+                 within a Value.",
+            )
+        };
+        let blend_numerator = u128::from(blend_numerator);
+        (
+            share(blend_numerator),
+            share(share_denominator.get() - blend_numerator),
+        )
+    }
+}
+
+impl TryFrom<BlockRewardsFields> for BlockRewardsConfig {
+    type Error = String;
+
+    fn try_from(
+        BlockRewardsFields {
+            stake_target,
+            emission_factor_scale,
+            fee_average_numerator,
+            max_emission_per_block,
+            blend_share,
+        }: BlockRewardsFields,
+    ) -> Result<Self, Self::Error> {
+        Self::new(
+            stake_target,
+            emission_factor_scale,
+            fee_average_numerator,
+            max_emission_per_block,
+            blend_share,
+        )
+        .ok_or_else(|| {
+            format!(
+                "The block rewards' emission denominator, {}, scale, {emission_factor_scale}, and \
+                 Blend share denominator, {}, must multiply to at most {}, or a reward could \
+                 overflow.",
+                max_emission_per_block.denominator,
+                blend_share.get().denominator,
+                u128::MAX / u128::from(Value::MAX)
+            )
+        })
+    }
+}
+
+impl From<BlockRewardsConfig> for BlockRewardsFields {
+    fn from(
+        BlockRewardsConfig {
+            stake_target,
+            emission_factor_scale,
+            fee_average_numerator,
+            max_emission_per_block,
+            blend_share,
+        }: BlockRewardsConfig,
+    ) -> Self {
+        Self {
+            stake_target,
+            emission_factor_scale,
+            fee_average_numerator,
+            max_emission_per_block,
+            blend_share,
+        }
+    }
+}
+
+// The block rewards' parameters: every field in declaration order. A node's era
+// digest commits to them through this encoding.
+impl BinaryEncode for BlockRewardsConfig {
+    fn encoded_length(&self) -> usize {
+        let Self {
+            stake_target,
+            emission_factor_scale,
+            fee_average_numerator,
+            max_emission_per_block,
+            blend_share,
+        } = self;
+        stake_target.encoded_length()
+            + emission_factor_scale.encoded_length()
+            + fee_average_numerator.encoded_length()
+            + max_emission_per_block.encoded_length()
+            + blend_share.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        let Self {
+            stake_target,
+            emission_factor_scale,
+            fee_average_numerator,
+            max_emission_per_block,
+            blend_share,
+        } = self;
+        stake_target.encode_into(out);
+        emission_factor_scale.encode_into(out);
+        fee_average_numerator.encode_into(out);
+        max_emission_per_block.encode_into(out);
+        blend_share.encode_into(out);
+    }
+}
+
+/// The encoding of the fixture below, one field per group.
+const BLOCK_REWARDS_CONFIG_HEX: &str =
+    "3500000000000000 3600000000000000 3700000000000000 38000000 39000000 3a000000 3b000000";
+
+codec_fixtures!(
+    BlockRewardsConfig,
+    encode_only,
+    BlockRewardsConfig::new(
+        53,
+        NonZeroU64::new(54).unwrap(),
+        55,
+        NonNegativeRatio::new(56, NonZeroU32::new(57).unwrap()),
+        ProperFraction::new(58, NonZeroU32::new(59).unwrap()).unwrap(),
+    )
+    .unwrap() => BLOCK_REWARDS_CONFIG_HEX
+);
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -855,6 +1081,14 @@ mod tests {
                 ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
                     .unwrap(),
             },
+            block_rewards: crate::config::BlockRewardsConfig::new(
+                3_000_000_000,
+                120_000_000.try_into().unwrap(),
+                10_512,
+                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            )
+            .unwrap(),
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -945,6 +1179,14 @@ mod tests {
                 ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
                     .unwrap(),
             },
+            block_rewards: crate::config::BlockRewardsConfig::new(
+                3_000_000_000,
+                120_000_000.try_into().unwrap(),
+                10_512,
+                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            )
+            .unwrap(),
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -1051,6 +1293,14 @@ mod tests {
                 ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
                     .unwrap(),
             },
+            block_rewards: crate::config::BlockRewardsConfig::new(
+                3_000_000_000,
+                120_000_000.try_into().unwrap(),
+                10_512,
+                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            )
+            .unwrap(),
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),

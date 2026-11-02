@@ -57,46 +57,13 @@ use rpds::HashTrieMapSync;
 use thiserror::Error;
 
 use crate::{
-    config::{EraScheduledConfig, ExecutionMarketConfig, RewardPoWConfig, config_for_slot},
+    config::{EraScheduledConfig, ExecutionMarketConfig, config_for_slot},
     mantle::helpers::MantleOperationVerificationHelper,
     update::{BatchVerifiedUpdate, PreparedUpdate},
 };
 
 const WINDOW_SIZE: usize = 120;
 const LOG_TARGET: &str = ledger::ROOT;
-
-/// Denominator of 1/(`I_max` * `D1_target` * `Delta_t` * `T`)
-/// That correspond to `BLOCK_PER_YEAR` / (`MAX_INFLATION` * `KPI_FEE_TARGET` *
-/// `WINDOW_SIZE`)
-const A_SCALE: u128 = 120_000_000;
-
-/// Numerator of 1/(`I_max` * `D1_target` * `Delta_t` * `T`)
-/// That correspond to `BLOCK_PER_YEAR` / (`MAX_INFLATION` * `KPI_FEE_TARGET` *
-/// `WINDOW_SIZE`)
-const FEE_AVG_NUM: u128 = 10_512;
-
-/// Numerator of `I_max` * `S_TGE` * `DELTA_t` / `f`
-/// It corresponds to `MAX_INFLATION` * `TOKEN_GENESIS` * `BLOCK_PER_BLOCK` /
-/// `BLOCK_PER_YEAR`
-const INFLATION_NUMERATOR: u128 = 62_500;
-
-/// Numerator of `I_max` * `S_TGE` * `DELTA_t` / `f`
-/// It corresponds to `MAX_INFLATION` * `TOKEN_GENESIS` * `BLOCK_PER_BLOCK` /
-/// `BLOCK_PER_YEAR`
-const INFLATION_DENOMINATOR: u128 = 657;
-
-const STAKE_TARGET: u128 = 3_000_000_000;
-
-// That correspond to 40% of the block rewards for leaders
-const LEADER_REWARD_SHARE_NUMERATOR: u128 = 4;
-
-const LEADER_REWARD_SHARE_DENOMINATOR: u128 = 10;
-
-// That correspond to 60% of the block rewards for blend nodes
-
-const BLEND_REWARD_SHARE_NUMERATOR: u128 = 6;
-
-const BLEND_REWARD_SHARE_DENOMINATOR: u128 = 10;
 
 // While individual notes are constrained to be `u64`, intermediate calculations
 // may overflow, so we use `i128` to avoid that and to easily represent negative
@@ -399,48 +366,33 @@ impl LedgerState {
         mut self,
         total_fee_burned: GasCost,
         total_fee_tip: GasCost,
-        reward_config: &RewardPoWConfig,
+        config: &Config,
     ) -> Result<Self, LedgerError<Id>> {
         let window_index = self.block_number as usize % WINDOW_SIZE;
 
         // Divert the PoW share of the collected fees to the PoW reward pool
         // before the rest is pooled for block rewards. See the proof of work
         // specification: <https://lip.logos.co/blockchain/raw/proof-of-work.html>
-        let pow_refill = GasCost::from(reward_config.pow_fee_share(total_fee_burned.into_inner()));
+        let pow_refill = GasCost::from(
+            config
+                .pow_config
+                .reward
+                .pow_fee_share(total_fee_burned.into_inner()),
+        );
 
         // First update the fee pooled in the block, excluding the PoW share
         self.cryptarchia_ledger
             .update_fee_window(window_index, total_fee_burned.checked_sub(pow_refill)?);
 
-        // Then compute the amount of block rewards
-
-        // compute A_t'
-        let sum_fees = self.cryptarchia_ledger.get_summed_fees();
-        let a_numerator = STAKE_TARGET
-            .saturating_add(FEE_AVG_NUM.saturating_mul(sum_fees))
-            .saturating_sub(u128::from(self.cryptarchia_ledger.epoch_state.total_stake))
-            .min(A_SCALE);
-
-        let reward_numerator = INFLATION_NUMERATOR * a_numerator
-            + INFLATION_DENOMINATOR
-                * (A_SCALE - a_numerator)
-                * u128::from(
-                    self.cryptarchia_ledger
-                        .get_fee_from_index(window_index)
-                        .into_inner(),
-                );
-        let reward_denominator = INFLATION_DENOMINATOR * A_SCALE;
-
-        // Blend gets 60% of block rewards while leaders get the 40% remaining + the
-        // tips. Casting as Value truncates the floating points
-        let blend_reward = (reward_numerator * BLEND_REWARD_SHARE_NUMERATOR
-            / (reward_denominator * BLEND_REWARD_SHARE_DENOMINATOR))
-            as Value;
-        let leader_reward = GasCost::from(
-            (reward_numerator * LEADER_REWARD_SHARE_NUMERATOR
-                / (reward_denominator * LEADER_REWARD_SHARE_DENOMINATOR)) as Value,
-        )
-        .checked_add(total_fee_tip)?;
+        // Then compute the block rewards, the leader's with the tips
+        let (blend_reward, leader_reward) = config.block_rewards.rewards(
+            self.cryptarchia_ledger.get_summed_fees(),
+            self.cryptarchia_ledger
+                .get_fee_from_index(window_index)
+                .into_inner(),
+            self.cryptarchia_ledger.epoch_state.total_stake,
+        );
+        let leader_reward = GasCost::from(leader_reward).checked_add(total_fee_tip)?;
 
         self.mantle_ledger.leaders = self
             .mantle_ledger
@@ -564,11 +516,7 @@ impl LedgerState {
         }
 
         // Compute Block rewards and give tips
-        self = self.compute_block_rewards(
-            gas_and_fees.fee_burned,
-            gas_and_fees.fee_tip,
-            &config.pow_config.reward,
-        )?;
+        self = self.compute_block_rewards(gas_and_fees.fee_burned, gas_and_fees.fee_tip, config)?;
         // Update Execution market state
         self = self.update_execution_market(gas_and_fees.execution_gas, &config.execution_market);
         // Accumulate storage gas consumed so the storage market can update the
@@ -3021,6 +2969,7 @@ mod tests {
         };
 
         use super::*;
+        use crate::config::RewardPoWConfig;
 
         /// A reward config with claiming disabled (`rate_num = 0`), standing in
         /// for a real deployment config.
@@ -3562,11 +3511,7 @@ mod tests {
             let pool_before = state.mantle_ledger.pow.reward_pool();
 
             state = state
-                .compute_block_rewards::<HeaderId>(
-                    1_000.into(),
-                    0.into(),
-                    &config.pow_config.reward,
-                )
+                .compute_block_rewards::<HeaderId>(1_000.into(), 0.into(), &config)
                 .expect("reward computation should succeed");
 
             // `from_utxos` starts at block number 0, so the fees land at window index 0.
@@ -3596,11 +3541,7 @@ mod tests {
             let pool_before = state.mantle_ledger.pow.reward_pool();
 
             state = state
-                .compute_block_rewards::<HeaderId>(
-                    1_000.into(),
-                    0.into(),
-                    &config.pow_config.reward,
-                )
+                .compute_block_rewards::<HeaderId>(1_000.into(), 0.into(), &config)
                 .expect("reward computation should succeed");
 
             assert_eq!(
