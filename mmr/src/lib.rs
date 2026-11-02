@@ -8,7 +8,7 @@ use rpds::StackSync;
 mod path;
 
 pub use path::{MerklePath, MerklePathError, is_left_child};
-use path::{update_paths_above_merge, update_paths_at_merge};
+use path::{sibling_height, update_paths_above_merge, update_paths_at_merge};
 
 const EMPTY_VALUE: Fr = Fr::ZERO;
 /// Largest supported MMR height, including leaves at height one.
@@ -163,6 +163,86 @@ where
         elem: T,
         paths: &mut [MerklePath],
     ) -> Result<(Self, MerklePath), PushWithPathsError> {
+        self.push_with_paths_impl(elem, paths, true)
+    }
+
+    /// Like [`Self::push_with_paths`], but only applies the updates that
+    /// settle a sibling for good: those where the new leaf completes the
+    /// sibling subtree of a tracked path. The sibling covering the partially
+    /// filled subtree at the right edge of the tree, which changes on every
+    /// push, is left stale; [`Self::refresh_path`] brings it up to date.
+    ///
+    /// Only paths for which [`Self::push_settles`] holds are changed, so
+    /// callers can pass just those and share the rest between versions.
+    pub fn push_with_settled_paths(
+        &self,
+        elem: T,
+        paths: &mut [MerklePath],
+    ) -> Result<(Self, MerklePath), PushWithPathsError> {
+        self.push_with_paths_impl(elem, paths, false)
+    }
+
+    /// Whether [`Self::push_with_settled_paths`] changes the path of the leaf
+    /// at `leaf_index`, i.e. whether the next leaf completes its sibling
+    /// subtree.
+    #[must_use]
+    pub fn push_settles(&self, leaf_index: usize) -> bool {
+        let new_leaf_index = self.len();
+        leaf_index < new_leaf_index
+            && sibling_height(new_leaf_index, leaf_index) <= new_leaf_index.trailing_ones() as usize
+    }
+
+    /// Bring a path kept by [`Self::push_with_settled_paths`] up to date, so
+    /// that it is valid against [`Self::frontier_root`].
+    ///
+    /// Only the sibling covering the latest leaves can be stale: siblings on
+    /// the left are complete when the path is created, siblings on the right
+    /// are settled when they complete and are empty before they get any leaf.
+    pub fn refresh_path(&self, path: &mut MerklePath) -> Result<(), MerklePathError> {
+        path.validate_for_height(MAX_HEIGHT)?;
+        let len = self.len();
+        path.validate_leaf_index(len)?;
+
+        let last_leaf_index = len - 1;
+        if path.leaf_index() == last_leaf_index {
+            return Ok(());
+        }
+        let height = sibling_height(path.leaf_index(), last_leaf_index);
+
+        // The sibling subtree at `height` holds the latest leaves. Unless it is
+        // complete (and therefore already settled), its leaves are covered by
+        // the peaks lower than `height`.
+        let mut peaks = self
+            .roots
+            .iter()
+            .take_while(|peak| usize::from(peak.height) < height);
+        let Some(first) = peaks.next() else {
+            return Ok(());
+        };
+        let (mut root, mut root_height) = (first.root, first.height);
+        for peak in peaks {
+            while root_height < peak.height {
+                root = Hash::compress(&[root, empty_subtree_root::<Hash>(root_height)]);
+                root_height += 1;
+            }
+            root = Hash::compress(&[peak.root, root]);
+            root_height += 1;
+        }
+        while usize::from(root_height) < height {
+            root = Hash::compress(&[root, empty_subtree_root::<Hash>(root_height)]);
+            root_height += 1;
+        }
+
+        path.set_sibling(height, root);
+        Ok(())
+    }
+
+    fn push_with_paths_impl(
+        &self,
+        elem: T,
+        paths: &mut [MerklePath],
+        update_above_merge: bool,
+    ) -> Result<(Self, MerklePath), PushWithPathsError> {
         if self.roots.peek().is_some_and(|r| r.height == MAX_HEIGHT) {
             return Err(PushWithPathsError::MmrFull(MmrFull));
         }
@@ -212,7 +292,7 @@ where
         update_paths_above_merge::<Hash, MAX_HEIGHT>(
             last_root,
             roots.iter().copied(),
-            paths,
+            if update_above_merge { paths } else { &mut [] },
             &mut new_path,
         );
 
@@ -724,6 +804,45 @@ mod test {
                 .unwrap();
             mmr_b = new_b;
             assert_eq!(mmr_a.frontier_root(), mmr_b.frontier_root());
+        }
+    }
+
+    #[test]
+    fn test_settled_paths_refresh_to_push_with_paths() {
+        const HEIGHT: u8 = 8;
+        let mut full = <MerkleMountainRange<TestFr, ZkHasher, HEIGHT>>::new();
+        let mut settled = <MerkleMountainRange<TestFr, ZkHasher, HEIGHT>>::new();
+        let mut full_paths: Vec<MerklePath> = Vec::new();
+        let mut settled_paths: Vec<MerklePath> = Vec::new();
+
+        for i in 0u64..100 {
+            let elem = || TestFr::from(i.to_le_bytes().as_ref());
+
+            let (new_full, new_path) = full.push_with_paths(elem(), &mut full_paths).unwrap();
+            full = new_full;
+            full_paths.push(new_path);
+
+            let mut changed: Vec<MerklePath> = settled_paths
+                .iter()
+                .filter(|path| settled.push_settles(path.leaf_index()))
+                .cloned()
+                .collect();
+            let (new_settled, new_path) = settled
+                .push_with_settled_paths(elem(), &mut changed)
+                .unwrap();
+            for path in changed {
+                let leaf_index = path.leaf_index();
+                settled_paths[leaf_index] = path;
+            }
+            settled = new_settled;
+            settled_paths.push(new_path);
+
+            assert_eq!(full.frontier_root(), settled.frontier_root());
+            for (full_path, settled_path) in full_paths.iter().zip(&settled_paths) {
+                let mut refreshed = settled_path.clone();
+                settled.refresh_path(&mut refreshed).unwrap();
+                assert_eq!(&refreshed, full_path, "leaf {}", full_path.leaf_index());
+            }
         }
     }
 
