@@ -76,14 +76,15 @@ where
     /// Retired item keys not carried by a canonical block (inapplicable or
     /// evicted), mapped to their admission timestamp in milliseconds.
     pub removed_items: BTreeMap<Key, AdmissionTime>,
-    /// Retired item keys carried by a canonical block that is not yet
-    /// immutable.
+    /// Retired item keys carried by a canonical block that is not yet `k`
+    /// blocks deep.
     #[serde(default)]
     pub included_in_canonical: HashMap<Key, IncludedItem>,
     pub last_item_timestamp: u64,
 }
 
-/// A retired item carried by a canonical block that is not yet immutable.
+/// A retired item carried by a canonical block that is not yet `k` blocks
+/// deep.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IncludedItem {
     /// Slot of the block carrying the item.
@@ -119,11 +120,12 @@ where
     /// evicted), mapped to their admission timestamp in milliseconds. They
     /// keep their prefix index entry and body until the evictor selects them
     /// for release, unlike [`Self::included_in_canonical`], which keeps them
-    /// until the carrying block becomes immutable.
+    /// until the carrying block is `k` blocks deep.
     removed_items: BTreeMap<ItemKey<Item>, AdmissionTime>,
-    /// Retired items carried by a canonical block that is not yet immutable.
-    /// They keep their prefix index entry and body until the block becomes
-    /// immutable, since until then a competing block can carry them too.
+    /// Retired items carried by a canonical block that is not yet `k` blocks
+    /// deep. They keep their prefix index entry and body until then, since
+    /// until then a competing block can carry them too. The depth, unlike
+    /// immutability, also advances while the node bootstraps.
     included_in_canonical: HashMap<ItemKey<Item>, IncludedItem>,
     settings: MempoolSettings,
     last_item_timestamp: u64,
@@ -373,8 +375,8 @@ where
         readmitted
     }
 
-    async fn on_processed_block(&mut self, block_id: BlockId, slot: Slot, lib_slot: Slot) {
-        self.release_immutable(lib_slot).await;
+    async fn on_processed_block(&mut self, block_id: BlockId, slot: Slot, k_deep_slot: Slot) {
+        self.release_k_deep(k_deep_slot).await;
 
         self.evictor.on_processed_block(&block_id, slot);
 
@@ -689,20 +691,21 @@ where
         index
     }
 
-    /// Release the items carried by blocks that became immutable, since no
-    /// competing block can carry them anymore.
-    async fn release_immutable(&mut self, lib_slot: Slot) {
-        let immutable_keys = self
+    /// Release the items carried by blocks at least `k` blocks deep, whose
+    /// slot is at or before `k_deep_slot`, since a competing block can no
+    /// longer carry them.
+    async fn release_k_deep(&mut self, k_deep_slot: Slot) {
+        let k_deep_keys = self
             .included_in_canonical
             .iter()
-            .filter(|(_, included)| included.slot <= lib_slot)
+            .filter(|(_, included)| included.slot <= k_deep_slot)
             .map(|(key, _)| *key)
             .collect::<Vec<_>>();
 
-        if !self.delete_retained(&immutable_keys).await {
+        if !self.delete_retained(&k_deep_keys).await {
             return;
         }
-        for key in immutable_keys {
+        for key in k_deep_keys {
             self.included_in_canonical.remove(&key);
         }
     }

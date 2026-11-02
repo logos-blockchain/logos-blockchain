@@ -290,7 +290,7 @@ where
                         tip: self.cryptarchia.tip(),
                         newly_canonical_txs: outcome.newly_canonical_txs,
                         reorged_txs: outcome.reorged_txs,
-                        lib_slot: self.cryptarchia.lib_branch().slot(),
+                        k_deep_slot: self.cryptarchia.k_deep_branch().slot(),
                     }))
                     .unwrap_or_else(|_| {
                         error!(target: LOG_TARGET, "Could not send process block result through channel");

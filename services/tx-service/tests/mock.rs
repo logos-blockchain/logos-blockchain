@@ -802,10 +802,10 @@ async fn stored_items(pool: &InMemoryPool, key: TxHash) -> Vec<Ops> {
         .await
 }
 
-/// A tx carried by a canonical block stays resolvable until the block becomes
-/// immutable, so a competing proposal that references it still reconstructs.
+/// A tx carried by a canonical block stays resolvable until the block is `k`
+/// blocks deep, so a competing proposal that references it still reconstructs.
 #[tokio::test]
-async fn included_tx_resolves_until_its_block_is_immutable() {
+async fn included_tx_resolves_until_its_block_is_k_deep() {
     let mut pool = InMemoryPool::new(
         MempoolSettings::default(),
         Era::genesis(),
@@ -824,13 +824,13 @@ async fn included_tx_resolves_until_its_block_is_immutable() {
     assert!(pool.save().included_in_canonical.contains_key(&tx_id));
     assert_eq!(keys_with_prefix(&pool, tx_id), vec![tx_id]);
 
-    // The block is not immutable yet.
+    // The block is not `k` blocks deep yet.
     pool.on_processed_block(HeaderId::from([1; 32]), Slot::from(11u64), Slot::from(9u64))
         .await;
     assert_eq!(keys_with_prefix(&pool, tx_id), vec![tx_id]);
     assert_eq!(stored_items(&pool, tx_id).await, vec![tx]);
 
-    // The block becomes immutable.
+    // The block is now `k` blocks deep.
     pool.on_processed_block(
         HeaderId::from([2; 32]),
         Slot::from(12u64),
@@ -961,7 +961,7 @@ async fn removed_tx_entering_the_canonical_chain_moves_to_included() {
 }
 
 /// A tx carried by both a displaced block and an adopted one takes the slot of
-/// the adopted block, so it is released when that block becomes immutable.
+/// the adopted block, so it is released when that block is `k` blocks deep.
 #[tokio::test]
 async fn tx_carried_by_both_branches_takes_the_adopted_block_slot() {
     let mut pool = InMemoryPool::new(

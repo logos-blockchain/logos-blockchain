@@ -86,7 +86,8 @@ pub trait MemPool {
     /// - `entered`: items carried by the blocks that entered the canonical
     ///   chain, keyed by hash, each with the slot of the block carrying it.
     ///   They are retired, or stored if the pool never held them, and remain
-    ///   available for reference resolution until that block becomes immutable.
+    ///   available for reference resolution until that block is `k` blocks
+    ///   deep.
     /// - `reorged`: items carried by the blocks that left the canonical chain
     ///   and not by the blocks now in it, each with the slot of the block
     ///   carrying it. They are no longer retained as included, and are admitted
@@ -100,11 +101,11 @@ pub trait MemPool {
         reorged: Vec<TxInBlock<Self::Item>>,
     ) -> Vec<Self::Item>;
 
-    /// The chain processed block `block_id` at `slot`, and its latest
-    /// immutable block is at `lib_slot`. This is the pool's only notion of
-    /// chain time, so it also triggers eviction, and the release of the items
-    /// whose block became immutable.
-    async fn on_processed_block(&mut self, block_id: Self::BlockId, slot: Slot, lib_slot: Slot);
+    /// The chain processed block `block_id` at `slot`, and the block of its
+    /// local chain `k` blocks deep is at `k_deep_slot`. This is the pool's
+    /// only notion of chain time, so it also triggers eviction, and the
+    /// release of the items whose block is `k` blocks deep.
+    async fn on_processed_block(&mut self, block_id: Self::BlockId, slot: Slot, k_deep_slot: Slot);
 
     fn pending_item_count(&self) -> usize;
     fn last_item_timestamp(&self) -> u64;
