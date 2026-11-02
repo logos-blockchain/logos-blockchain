@@ -423,7 +423,6 @@ where
                     pool,
                     entered,
                     reorged,
-                    network_adapter,
                     &state_updater,
                     accepted_items_channel_sender,
                 )
@@ -461,7 +460,6 @@ where
         pool: &mut Pool,
         entered: HashMap<Pool::Key, Slot>,
         reorged: Vec<Pool::Item>,
-        network_adapter: &NetworkAdapter,
         state_updater: &MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
         accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
     ) where
@@ -471,12 +469,10 @@ where
         let readmitted = pool.on_canonical_chain_updated(entered, reorged).await;
         state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
 
-        // Txs admitted again after a reorg are broadcast, like local submissions.
-        for item in &readmitted {
-            Self::notify_about_accepted_item(accepted_items_channel_sender, item.clone());
-        }
-        if !readmitted.is_empty() {
-            Self::broadcast_items(network_adapter.clone(), readmitted);
+        // Txs admitted again after a reorg are not broadcast: every node
+        // re-admits them from its own copy of the displaced blocks.
+        for item in readmitted {
+            Self::notify_about_accepted_item(accepted_items_channel_sender, item);
         }
     }
 

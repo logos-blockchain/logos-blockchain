@@ -91,7 +91,7 @@ pub trait MemPool {
     ///   and not by the blocks now in it. They are no longer retained as
     ///   included, and are admitted again. Empty when the chain only grows.
     ///
-    /// Returns the reorged items admitted again, for the caller to broadcast.
+    /// Returns the reorged items admitted again.
     async fn on_canonical_chain_updated(
         &mut self,
         entered: HashMap<Self::Key, Slot>,
