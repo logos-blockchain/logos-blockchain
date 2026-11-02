@@ -21,7 +21,6 @@ use lb_core::{
         transactions::hash::PrefixedKey,
     },
 };
-use lb_cryptarchia_engine::Slot;
 use lb_log_targets::mempool;
 use lb_network_service::NetworkService;
 use lb_services_utils::{
@@ -461,7 +460,7 @@ where
 
     async fn handle_canonical_chain_updated_message(
         pool: &mut Pool,
-        entered: HashMap<Pool::Key, Slot>,
+        entered: HashMap<Pool::Key, TxInBlock<Pool::Item>>,
         reorged: Vec<TxInBlock<Pool::Item>>,
         state_updater: &MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
         accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
