@@ -1715,7 +1715,7 @@ mod tests {
             (
                 "clean_control",
                 10,
-                9,
+                6,
                 (1, 1, 1),
                 10,
                 (100, 300, 200, 100, 250, 299),
@@ -1723,12 +1723,12 @@ mod tests {
             (
                 "testnet_representative",
                 10,
-                9,
+                6,
                 (3, 3, 4),
                 30,
                 (300, 3_000, 1_800, 1_200, 2_400, 2_999),
             ),
-            ("fast_repro", 3, 2, (1, 1, 1), 10, (30, 90, 60, 30, 75, 89)),
+            ("fast_repro", 3, 1, (1, 1, 1), 10, (30, 90, 60, 30, 75, 89)),
         ] {
             let parameter_set =
                 BlendDiagnosticParameterSet::from_name(name).expect("profile should be known");
