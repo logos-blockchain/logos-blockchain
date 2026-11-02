@@ -156,7 +156,8 @@ impl ManualNodeConfigOverrides {
                     cryptarchia.uncle_reference_window_in_block = cryptarchia
                         .uncle_reference_window_in_block
                         .min(cryptarchia.widest_uncle_reference_window());
-                });
+                })
+                .expect("The changed deployment must be valid.");
         }
 
         if let Some(prolonged_bootstrap_period) = self.prolonged_bootstrap_period {

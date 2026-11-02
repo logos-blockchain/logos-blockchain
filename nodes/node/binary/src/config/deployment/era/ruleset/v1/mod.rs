@@ -3,6 +3,8 @@ use core::time::Duration;
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use serde::{Deserialize, Serialize};
 
+use crate::config::deployment::InvalidDeployment;
+
 pub mod blend;
 pub mod cryptarchia;
 pub mod time;
@@ -24,11 +26,11 @@ impl Parameters {
     /// Checks the values of the era's parameters, each alone and together, and
     /// against those of the era before it, `previous`, if there is one: the
     /// values the specifications rule out, and those the node could not run
-    /// with. Panics on the first found invalid.
-    pub(super) fn validate(&self, previous: Option<&Self>) {
+    /// with. Refuses the first found invalid.
+    pub(super) fn validate(&self, previous: Option<&Self>) -> Result<(), InvalidDeployment> {
         self.cryptarchia
-            .validate(previous.map(|previous| &previous.cryptarchia));
-        self.blend.validate(&self.time.slot_duration());
+            .validate(previous.map(|previous| &previous.cryptarchia))?;
+        self.blend.validate(&self.time.slot_duration())
     }
 
     #[must_use]
@@ -49,7 +51,7 @@ mod tests {
     use lb_utils::math::NonNegativeRatio;
 
     use super::{Parameters, cryptarchia::SlotActivationCoeff};
-    use crate::config::DeploymentSettings;
+    use crate::config::{DeploymentSettings, deployment::InvalidDeployment};
 
     fn parameters() -> Parameters {
         DeploymentSettings::default()
@@ -58,10 +60,15 @@ mod tests {
     }
 
     /// Validates the default parameters with `change`, as a genesis era.
-    fn validate(change: impl FnOnce(&mut Parameters)) {
+    fn validate(change: impl FnOnce(&mut Parameters)) -> Result<(), InvalidDeployment> {
         let mut parameters = parameters();
         change(&mut parameters);
-        parameters.validate(None);
+        parameters.validate(None)
+    }
+
+    /// Why the default parameters with `change` are refused, as a genesis era.
+    fn rejection(change: impl FnOnce(&mut Parameters)) -> String {
+        validate(change).unwrap_err().to_string()
     }
 
     fn ratio(numerator: u32, denominator: u32) -> NonNegativeRatio {
@@ -97,100 +104,124 @@ mod tests {
         validate(|parameters| {
             parameters.cryptarchia.security_param = NonZero::new(30).unwrap();
             parameters.cryptarchia.uncle_reference_window_in_block = 18;
-        });
+        })
+        .unwrap();
         for coefficient in [coeff(1, 1000), coeff(999, 1000)] {
-            validate(|parameters| parameters.cryptarchia.slot_activation_coeff = coefficient);
+            validate(|parameters| parameters.cryptarchia.slot_activation_coeff = coefficient)
+                .unwrap();
         }
         for degree in [3, 5] {
             validate(|parameters| {
                 parameters.blend.core.target_peering_degree = NonZero::new(degree).unwrap();
-            });
+            })
+            .unwrap();
         }
         // At a peering degree of 4, `⌊2V/3⌋` reaches 5.
         validate(|parameters| {
             parameters.blend.core.target_peering_degree = NonZero::new(4).unwrap();
             parameters.blend.core.verification_rate_per_second = NonZero::new(8).unwrap();
-        });
+        })
+        .unwrap();
         // k = 10 and f = 1/20: s = 600 slots, a fifth of which is 120 slots, 6
         // blocks of the next era at its f of 1/20.
-        parameters_with(30, 20, 6).validate(Some(&parameters_with(10, 20, 6)));
+        parameters_with(30, 20, 6)
+            .validate(Some(&parameters_with(10, 20, 6)))
+            .unwrap();
     }
 
     #[test]
-    #[should_panic(expected = "s_gen")]
     fn a_genesis_density_window_without_slots_is_refused() {
         // ⌊k/4f⌋ = ⌊1/2⌋.
-        validate(|parameters| {
+        let reason = rejection(|parameters| {
             parameters.cryptarchia.security_param = NonZero::new(1).unwrap();
             parameters.cryptarchia.slot_activation_coeff = coeff(1, 2);
         });
+        assert!(reason.contains("s_gen"), "{reason}");
     }
 
     #[test]
-    #[should_panic(expected = "wider than ⌊0.6k⌋, 18 blocks")]
     fn an_uncle_reference_window_wider_than_three_fifths_of_k_is_refused() {
-        validate(|parameters| {
+        let reason = rejection(|parameters| {
             parameters.cryptarchia.security_param = NonZero::new(30).unwrap();
             parameters.cryptarchia.uncle_reference_window_in_block = 19;
         });
+        assert!(reason.contains("of 19 blocks is wider than"), "{reason}");
     }
 
     #[test]
-    #[should_panic(
-        expected = "window of 140 slots is wider than a fifth of the previous era's \
-                    finalization window, 600 slots"
-    )]
     fn an_uncle_reference_window_wider_than_a_fifth_of_the_previous_finalization_window_is_refused()
     {
         // k = 10 and f = 1/20: s = 600 slots, a fifth of which is 120 slots, 6
         // blocks of the next era at its f of 1/20. Its 7 blocks span 140.
-        parameters_with(30, 20, 7).validate(Some(&parameters_with(10, 20, 6)));
+        let reason = parameters_with(30, 20, 7)
+            .validate(Some(&parameters_with(10, 20, 6)))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            reason.contains(
+                "window of 140 slots is wider than a fifth of the previous era's finalization \
+                 window, 600 slots"
+            ),
+            "{reason}"
+        );
     }
 
     #[test]
-    #[should_panic(
-        expected = "window of 240 slots is wider than a fifth of the previous era's \
-                    finalization window, 600 slots"
-    )]
     fn the_same_uncle_reference_window_is_refused_at_a_lower_f() {
         // The 6 blocks that span a fifth of the previous era's 600 slots at an
         // f of 1/20 span 240 at the next era's f of 1/40.
-        parameters_with(30, 40, 6).validate(Some(&parameters_with(10, 20, 6)));
+        let reason = parameters_with(30, 40, 6)
+            .validate(Some(&parameters_with(10, 20, 6)))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            reason.contains(
+                "window of 240 slots is wider than a fifth of the previous era's finalization \
+                 window, 600 slots"
+            ),
+            "{reason}"
+        );
     }
 
     #[test]
-    #[should_panic(expected = "damping exponent")]
     fn a_blend_damping_denominator_beyond_a_u32_is_refused() {
-        validate(|parameters| {
+        let reason = rejection(|parameters| {
             let blend = &mut parameters.cryptarchia.pow_config.blend;
             blend.damping_num = NonZeroU32::MAX;
             blend.damping_den_offset = 1;
         });
+        assert!(reason.contains("damping exponent"), "{reason}");
     }
 
     #[test]
-    #[should_panic(expected = "peering degree, 6, must be in 3..=5")]
     fn a_blend_peering_degree_above_5_is_refused() {
-        validate(|parameters| {
+        let reason = rejection(|parameters| {
             parameters.blend.core.target_peering_degree = NonZero::new(6).unwrap();
         });
+        assert!(
+            reason.contains("peering degree, 6, must be in 3..=5"),
+            "{reason}"
+        );
     }
 
     #[test]
-    #[should_panic(expected = "at least one message per connection per round")]
     fn a_blend_verification_rate_without_a_message_per_connection_is_refused() {
         // At a peering degree of 4, `⌊2V/3⌋` is 4.
-        validate(|parameters| {
+        let reason = rejection(|parameters| {
             parameters.blend.core.target_peering_degree = NonZero::new(4).unwrap();
             parameters.blend.core.verification_rate_per_second = NonZero::new(7).unwrap();
         });
+        assert!(
+            reason.contains("at least one message per connection per round"),
+            "{reason}"
+        );
     }
 
     #[test]
-    #[should_panic(expected = "`T_E` must fit")]
     fn a_blend_edge_node_send_deadline_beyond_a_timeout_is_refused() {
-        validate(|parameters| {
+        let reason = rejection(|parameters| {
             parameters.blend.core.edge_node_send_deadline_in_rounds = NonZero::<u64>::MAX;
         });
+        assert!(reason.contains("`T_E` must fit"), "{reason}");
     }
 }

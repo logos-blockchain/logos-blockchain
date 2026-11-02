@@ -198,7 +198,8 @@ fn fast_chain_config(mut config: RunConfig) -> RunConfig {
                     .expect("1/2 is a valid slot activation coefficient");
             // The widest uncle reference window k allows, ⌊0.6k⌋.
             parameters.cryptarchia.uncle_reference_window_in_block = 1;
-        });
+        })
+        .expect("The changed deployment must be valid.");
     config
 }
 

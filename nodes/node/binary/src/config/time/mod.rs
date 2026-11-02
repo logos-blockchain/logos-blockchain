@@ -4,7 +4,10 @@ use lb_time_service::{
     backends::{NtpTimeBackendSettings, ntp::async_client::NTPClientSettings},
 };
 
-use crate::config::{deployment::EraDefinition, time::serde::Config};
+use crate::config::{
+    deployment::{EraDefinition, InvalidDeployment, ensure},
+    time::serde::Config,
+};
 
 pub mod serde;
 
@@ -50,10 +53,12 @@ fn era_settings(era: &EraDefinition) -> TimeServiceEraSettings {
 /// Checks that the transition period each era opens ends before the era after
 /// it starts: the time service follows one transition period at a time.
 ///
-/// # Panics
+/// # Errors
 ///
 /// If an era ends within the transition period it opens.
-pub(crate) fn check_transition_periods(eras: &EraSchedule<EraDefinition>) {
+pub(crate) fn check_transition_periods(
+    eras: &EraSchedule<EraDefinition>,
+) -> Result<(), InvalidDeployment> {
     for ((previous, era), next) in eras
         .iter()
         .zip(eras.iter().skip(1))
@@ -63,11 +68,12 @@ pub(crate) fn check_transition_periods(eras: &EraSchedule<EraDefinition>) {
         let transition_slots = era_settings(previous.parameters)
             .transition_period_in_slots_of(&era_settings(era.parameters))
             .unwrap_or(u64::MAX);
-        assert!(
+        ensure!(
             transition_slots < era_slots,
             "Era {} lasts {era_slots} slots, not more than the {transition_slots} slots of the \
              transition period it opens.",
             era.era.into_inner()
         );
     }
+    Ok(())
 }

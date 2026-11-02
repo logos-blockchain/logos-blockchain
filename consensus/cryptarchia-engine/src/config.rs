@@ -124,10 +124,10 @@ impl Config {
     /// production with enough statistical significance.
     #[must_use]
     pub const fn s_gen(&self) -> NonZero<u64> {
-        NonZero::new(
-            ((self.security_param.get() as f64) / (4.0 * self.slot_activation_coeff.as_f64()))
-                .floor() as u64,
-        )
+        NonZero::new(genesis_density_window(
+            self.security_param,
+            self.slot_activation_coeff,
+        ))
         .expect("s_gen with proper configuration should never be zero")
     }
 }
@@ -141,6 +141,16 @@ pub fn max_allowed_uncle_reference_window_in_block(security_param: NonZero<u32>)
     // Widen `k` to `u64` first, because `6k` can overflow `u32`.
     let k = NonZeroU64::from(security_param);
     u32::try_from(k.get() * 6 / 10).expect("floor(0.6k) <= k, so it fits in u32")
+}
+
+/// `⌊k/4f⌋`: the slots [`Config::s_gen`] measures block density over, which a
+/// configuration must keep above zero.
+#[must_use]
+pub const fn genesis_density_window(
+    security_param: NonZero<u32>,
+    slot_activation_coeff: NonNegativeRatio,
+) -> u64 {
+    ((security_param.get() as f64) / (4.0 * slot_activation_coeff.as_f64())).floor() as u64
 }
 
 #[must_use]

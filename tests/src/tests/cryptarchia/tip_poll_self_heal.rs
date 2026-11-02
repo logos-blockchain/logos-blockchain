@@ -77,7 +77,8 @@ fn config(mut config: RunConfig) -> RunConfig {
                 NonNegativeRatio::new(1, 2.try_into().unwrap())
                     .try_into()
                     .unwrap();
-        });
+        })
+        .expect("The changed deployment must be valid.");
     config
         .user
         .cryptarchia

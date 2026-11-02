@@ -10,13 +10,16 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{
     Config as ConsensusConfig, average_slots_for_blocks, base_period_length,
-    expected_blocks_per_epoch, max_allowed_uncle_reference_window_in_block, time::epoch_length,
+    expected_blocks_per_epoch, genesis_density_window, max_allowed_uncle_reference_window_in_block,
+    time::epoch_length,
 };
 use lb_groth16::ModulusShift;
 use lb_ledger::cryptarchia::STAKE_INFERENCE_PRECISION;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 use serde::{Deserialize, Serialize};
 use strum::{EnumCount as _, IntoEnumIterator as _};
+
+use crate::config::deployment::{InvalidDeployment, ensure};
 
 pub(crate) mod codec;
 
@@ -36,26 +39,33 @@ pub struct Settings {
 
 impl Settings {
     /// Checks the cryptarchia settings of an era, alone and against those of
-    /// the era before it, `previous`, if there is one, panicking on the first
-    /// value found invalid.
-    pub(super) fn validate(&self, previous: Option<&Self>) {
-        let consensus_config = self.consensus_config();
-        // Panics if `⌊k/4f⌋` leaves the Genesis density window no slot: now
-        // rather than at the first fork choice.
-        let _ = consensus_config.s_gen();
+    /// the era before it, `previous`, if there is one, refusing the first value
+    /// found invalid.
+    pub(super) fn validate(&self, previous: Option<&Self>) -> Result<(), InvalidDeployment> {
+        // Now rather than at the first fork choice, which measures block
+        // density over these slots.
+        let (security_param, slot_activation_coeff) =
+            (self.security_param, self.slot_activation_coeff.get());
+        ensure!(
+            genesis_density_window(security_param, slot_activation_coeff) > 0,
+            "The Genesis density window `s_gen = ⌊k/4f⌋` holds no slot at k = {security_param} \
+             and f = {}/{}.",
+            slot_activation_coeff.numerator,
+            slot_activation_coeff.denominator
+        );
 
         let window = self.uncle_reference_window_in_block;
         let widest = self.widest_uncle_reference_window();
-        assert!(
+        ensure!(
             window <= widest,
             "The uncle reference window of {window} blocks is wider than ⌊0.6k⌋, {widest} blocks."
         );
         // While the latest immutable block still lies in the previous era, an
         // uncle's parent must not lie below it.
         if let Some(previous) = previous {
-            let window = consensus_config.uncle_reference_window_in_slot();
+            let window = self.consensus_config().uncle_reference_window_in_slot();
             let finalization_window = previous.consensus_config().slot_security_param().get();
-            assert!(
+            ensure!(
                 u128::from(window) * 5 <= u128::from(finalization_window),
                 "The uncle reference window of {window} slots is wider than a fifth of the \
                  previous era's finalization window, {finalization_window} slots."
@@ -67,15 +77,14 @@ impl Settings {
             damping_den_offset,
             ..
         } = self.pow_config.blend;
-        assert!(
+        ensure!(
             damping_num.checked_add(damping_den_offset).is_some(),
             "The denominator of the Blend PoW damping exponent, {damping_num} + \
              {damping_den_offset}, must fit in a u32."
         );
-        self.pow_config
-            .reward
-            .validate()
-            .unwrap_or_else(|error| panic!("Invalid PoW reward parameters: {error}."));
+        self.pow_config.reward.validate().map_err(|error| {
+            InvalidDeployment::new(format!("Invalid PoW reward parameters: {error}."))
+        })
     }
 
     /// `⌊0.6k⌋`: the widest uncle reference window `W` the era allows, in

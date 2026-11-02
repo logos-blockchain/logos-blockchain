@@ -166,7 +166,8 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
             // the probability that all nodes can collect a blend token from
             // a single blend message.
             parameters.blend.common.num_blend_layers = (NODE_COUNT as u64).try_into().unwrap();
-        });
+        })
+        .expect("The changed deployment must be valid.");
 
     slots_per_epoch.store(
         config

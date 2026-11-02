@@ -237,29 +237,33 @@ impl BlendDiagnosticParameterSet {
     }
 
     fn apply_to(&self, settings: &mut DeploymentSettings) {
-        settings.update_genesis_era_parameters(|parameters| {
-            parameters.cryptarchia.security_param = self.security_param();
-            parameters.cryptarchia.uncle_reference_window_in_block =
-                self.uncle_reference_window_in_block();
-            parameters.time.slot_duration_in_seconds = NonZero::new(self.slot_duration_secs)
-                .expect("named Blend diagnostic slot duration must be non-zero");
-            let epoch_config = &mut parameters.cryptarchia.epoch_config;
-            epoch_config.epoch_stake_distribution_stabilization =
-                NonZero::new(self.epoch_stake_distribution_stabilization)
-                    .expect("named Blend diagnostic phase must be non-zero");
-            epoch_config.epoch_period_nonce_buffer = NonZero::new(self.epoch_period_nonce_buffer)
-                .expect("named Blend diagnostic phase must be non-zero");
-            epoch_config.epoch_period_nonce_stabilization =
-                NonZero::new(self.epoch_period_nonce_stabilization)
-                    .expect("named Blend diagnostic phase must be non-zero");
-            parameters.cryptarchia.slot_activation_coeff = NonNegativeRatio::new(
-                1,
-                NonZeroU32::new(self.slot_activation_coeff_denominator)
-                    .expect("named Blend diagnostic slot coefficient denominator must be non-zero"),
-            )
-            .try_into()
-            .expect("named Blend diagnostic slot activation coefficient must be valid");
-        });
+        settings
+            .update_genesis_era_parameters(|parameters| {
+                parameters.cryptarchia.security_param = self.security_param();
+                parameters.cryptarchia.uncle_reference_window_in_block =
+                    self.uncle_reference_window_in_block();
+                parameters.time.slot_duration_in_seconds = NonZero::new(self.slot_duration_secs)
+                    .expect("named Blend diagnostic slot duration must be non-zero");
+                let epoch_config = &mut parameters.cryptarchia.epoch_config;
+                epoch_config.epoch_stake_distribution_stabilization =
+                    NonZero::new(self.epoch_stake_distribution_stabilization)
+                        .expect("named Blend diagnostic phase must be non-zero");
+                epoch_config.epoch_period_nonce_buffer =
+                    NonZero::new(self.epoch_period_nonce_buffer)
+                        .expect("named Blend diagnostic phase must be non-zero");
+                epoch_config.epoch_period_nonce_stabilization =
+                    NonZero::new(self.epoch_period_nonce_stabilization)
+                        .expect("named Blend diagnostic phase must be non-zero");
+                parameters.cryptarchia.slot_activation_coeff = NonNegativeRatio::new(
+                    1,
+                    NonZeroU32::new(self.slot_activation_coeff_denominator).expect(
+                        "named Blend diagnostic slot coefficient denominator must be non-zero",
+                    ),
+                )
+                .try_into()
+                .expect("named Blend diagnostic slot activation coefficient must be valid");
+            })
+            .expect("The changed deployment must be valid.");
     }
 
     fn effective_deployment_settings(self) -> DeploymentSettings {

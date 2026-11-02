@@ -14,6 +14,7 @@ use super::{
     cryptarchia::Settings as CryptarchiaDeploymentSettings,
     time::Settings as TimeDeploymentSettings,
 };
+use crate::config::deployment::{InvalidDeployment, ensure};
 
 pub(crate) mod codec;
 
@@ -31,18 +32,19 @@ pub struct Settings {
 
 impl Settings {
     /// Checks the settings an era runs Blend with, in slots of `slot_duration`,
-    /// panicking on the first value found invalid.
-    pub(super) fn validate(&self, slot_duration: &Duration) {
+    /// refusing the first value found invalid.
+    pub(super) fn validate(&self, slot_duration: &Duration) -> Result<(), InvalidDeployment> {
         let degree = self.core.target_peering_degree.get();
-        assert!(
+        ensure!(
             TARGET_PEERING_DEGREE.contains(&degree),
             "The Blend peering degree, {degree}, must be in {TARGET_PEERING_DEGREE:?}."
         );
-        // Each panics on values the node cannot run with: computed now rather
-        // than once the era runs. A share `r₁` of at least one message leaves
-        // room for an edge connection too: `r_E = 2V/3 − Φ_CC · r₁ ≥ r₁`.
-        let _ = self.connection_share_per_round();
-        let _ = self.edge_node_connection_timeout(slot_duration);
+        // Computed now rather than once the era runs. A share `r₁` of at least
+        // one message leaves room for an edge connection too:
+        // `r_E = 2V/3 − Φ_CC · r₁ ≥ r₁`.
+        self.try_connection_share_per_round()?;
+        self.try_edge_node_connection_timeout(slot_duration)?;
+        Ok(())
     }
 
     #[must_use]
@@ -87,11 +89,20 @@ impl Settings {
     /// nodes it serves.
     #[must_use]
     pub fn connection_share_per_round(&self) -> NonZeroU64 {
+        self.try_connection_share_per_round()
+            .expect("Checked when the deployment loads.")
+    }
+
+    /// [`Self::connection_share_per_round`], or why the era cannot run with it.
+    fn try_connection_share_per_round(&self) -> Result<NonZeroU64, InvalidDeployment> {
         let readable_per_round = 2 * u64::from(self.core.verification_rate_per_second.get()) / 3;
         let shares = u64::from(self.core.target_peering_degree.get()) + 1;
-        NonZeroU64::new(readable_per_round / shares).expect(
-            "The verification rate must allow at least one message per connection per round.",
-        )
+        NonZeroU64::new(readable_per_round / shares).ok_or_else(|| {
+            InvalidDeployment::new(
+                "The verification rate must allow at least one message per connection per round."
+                    .to_owned(),
+            )
+        })
     }
 
     /// `r_E = 2V/3 − Φ_CC · r₁`: the edge connections a node accepts in a
@@ -117,15 +128,30 @@ impl Settings {
 
     #[must_use]
     pub fn edge_node_connection_timeout(&self, slot_duration: &Duration) -> Duration {
+        self.try_edge_node_connection_timeout(slot_duration)
+            .expect("Checked when the deployment loads.")
+    }
+
+    /// [`Self::edge_node_connection_timeout`], or why the era cannot run with
+    /// it.
+    fn try_edge_node_connection_timeout(
+        &self,
+        slot_duration: &Duration,
+    ) -> Result<Duration, InvalidDeployment> {
+        let deadline_in_rounds = self.core.edge_node_send_deadline_in_rounds.get();
+        let rounds = u32::try_from(deadline_in_rounds).map_err(|_| {
+            InvalidDeployment::new(format!(
+                "`T_E` must fit in a `u32` number of rounds, not {deadline_in_rounds}."
+            ))
+        })?;
         self.round_duration(slot_duration)
-            .checked_mul(
-                self.core
-                    .edge_node_send_deadline_in_rounds
-                    .get()
-                    .try_into()
-                    .expect("`T_E` must fit in a `u32` number of rounds."),
-            )
-            .expect("The edge connection timeout overflowed a `Duration`.")
+            .checked_mul(rounds)
+            .ok_or_else(|| {
+                InvalidDeployment::new(format!(
+                    "The edge connection timeout of {deadline_in_rounds} rounds overflows a \
+                     `Duration`."
+                ))
+            })
     }
 
     #[must_use]

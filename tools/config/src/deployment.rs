@@ -203,4 +203,5 @@ pub fn e2e_deployment_settings_with_genesis_block(
         })),
         GenesisBlock::genesis(genesis_tx.clone()),
     )
+    .expect("The e2e deployment must be valid.")
 }

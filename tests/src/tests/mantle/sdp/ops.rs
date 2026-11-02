@@ -445,7 +445,8 @@ fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
                 .scheduler
                 .delayer
                 .maximum_release_delay_in_rounds = 1.try_into().unwrap();
-        });
+        })
+        .expect("The changed deployment must be valid.");
 
     config
 }
