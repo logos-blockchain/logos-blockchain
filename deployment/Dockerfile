@@ -33,7 +33,7 @@ RUN apt-get update && apt-get install -yq \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Binaries
-COPY --from=builder /logos-blockchain/target/release/logos-blockchain-node /usr/bin/
+COPY --from=builder /logos-blockchain/target/release-profiling/logos-blockchain-node /usr/bin/
 COPY --from=builder /logos-blockchain/target/release/logos-blockchain-faucet /usr/bin/
 
 # Copy Scripts
