@@ -147,7 +147,10 @@ fn mock_pool_node_settings(
                 column_family: None,
             },
             mockpool: TxMempoolSettings {
-                pool: MempoolSettings::default(),
+                pool: MempoolSettings {
+                    tx_maturity: Duration::ZERO,
+                    ..MempoolSettings::default()
+                },
                 network_adapter: (),
                 seen_items_subscription_channel_size: 64.try_into().unwrap(),
                 recovery_data: RecoveryData::default(),
@@ -425,6 +428,7 @@ fn test_mock_pool_recovery_state() {
 const fn ttl_settings(tx_ttl: Duration) -> MempoolSettings {
     MempoolSettings {
         tx_ttl: Some(tx_ttl),
+        tx_maturity: Duration::ZERO,
         pow_claim: None,
         era_timing: None,
     }
@@ -451,6 +455,7 @@ const TEST_SLOT_WINDOW: u64 = 10;
 fn pow_claim_settings() -> MempoolSettings {
     MempoolSettings {
         tx_ttl: None,
+        tx_maturity: Duration::ZERO,
         pow_claim: Some(era_schedule().map(|_| PowClaimEvictionSettings {
             slot_window: NonZeroU64::new(TEST_SLOT_WINDOW).expect("non-zero"),
         })),
@@ -554,6 +559,7 @@ async fn expired_tx_is_evicted_on_next_sweep() {
 async fn expired_tx_is_not_evicted_when_ttl_is_disabled() {
     let (mut pool, tx) = pool_with_backdated_tx(MempoolSettings {
         tx_ttl: None,
+        tx_maturity: Duration::ZERO,
         pow_claim: None,
         era_timing: None,
     })
@@ -593,7 +599,14 @@ async fn storage_failure_does_not_mark_tx_pending() {
 #[tokio::test]
 async fn removed_items_are_not_pending_but_still_fetchable() {
     let storage = InMemoryStorageAdapter::default();
-    let mut pool = InMemoryPool::new(MempoolSettings::default(), Era::genesis(), storage.clone());
+    let mut pool = InMemoryPool::new(
+        MempoolSettings {
+            tx_maturity: Duration::ZERO,
+            ..MempoolSettings::default()
+        },
+        Era::genesis(),
+        storage.clone(),
+    );
 
     let tx = sample_removed_tx();
     let tx_id = tx.hash();
@@ -1145,6 +1158,27 @@ async fn never_held_reorged_tx_is_dated_by_its_block_slot() {
     assert_eq!(readmitted, vec![recent]);
 }
 
+/// The view offers only mature txs, which have had time to reach every node.
+#[tokio::test]
+async fn view_offers_only_mature_txs() {
+    let (mature, immature) = (tx("mature"), tx("immature"));
+    let pool = pool_with_admission_times(
+        MempoolSettings::default(),
+        InMemoryStorageAdapter::default(),
+        &[(&mature, minutes_ago(1)), (&immature, minutes_ago(0))],
+    )
+    .await;
+
+    let view = pool
+        .view([0; 32].into())
+        .await
+        .expect("view should load")
+        .collect::<Vec<_>>()
+        .await;
+
+    assert_eq!(view, vec![mature]);
+}
+
 /// A retired tx admitted again keeps its first admission time, and so its
 /// position among the pending txs.
 #[tokio::test]
@@ -1318,6 +1352,7 @@ fn entered(tx: &Ops, slot: u64) -> HashMap<TxHash, TxInBlock<Ops>> {
 const fn no_eviction_settings() -> MempoolSettings {
     MempoolSettings {
         tx_ttl: None,
+        tx_maturity: Duration::ZERO,
         pow_claim: None,
         era_timing: None,
     }
@@ -1525,7 +1560,10 @@ fn test_mock_mempool() {
         })
         .expect("Should load recovery data from storage.");
         let recovery_settings = TxMempoolSettings {
-            pool: MempoolSettings::default(),
+            pool: MempoolSettings {
+                tx_maturity: Duration::ZERO,
+                ..MempoolSettings::default()
+            },
             network_adapter: (),
             seen_items_subscription_channel_size: 64.try_into().unwrap(),
             recovery_data,
@@ -1813,6 +1851,7 @@ async fn claim_eviction_is_disabled_without_settings() {
     let mut pool = InMemoryPool::new(
         MempoolSettings {
             tx_ttl: None,
+            tx_maturity: Duration::ZERO,
             pow_claim: None,
             era_timing: None,
         },

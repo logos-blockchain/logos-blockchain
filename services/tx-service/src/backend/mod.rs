@@ -10,7 +10,9 @@ use lb_core::{block::TxInBlock, mantle::transactions::hash::PrefixedKey};
 use lb_cryptarchia_engine::Slot;
 use lb_time::Era;
 pub use policy::{EvictableTx, EvictionPolicy, PowClaimEvictionSettings};
-pub use pool::{DEFAULT_TX_TTL, IncludedItem, Mempool, MempoolSettings, PoolRecoveryState};
+pub use pool::{
+    DEFAULT_TX_MATURITY, DEFAULT_TX_TTL, IncludedItem, Mempool, MempoolSettings, PoolRecoveryState,
+};
 use serde::{Deserialize, Serialize};
 
 /// Admission time of a transaction, as a Unix timestamp in milliseconds.
@@ -52,9 +54,8 @@ pub trait MemPool {
         item: I,
     ) -> Result<(), MempoolError>;
 
-    /// Return a view over items contained in the mempool.
-    /// Implementations should provide *at least* all the items which have not
-    /// been marked as in a block.
+    /// Return a view over the mature pending items, in admission order: the
+    /// items block building may select.
     /// The hint on the ancestor *can* be used by the implementation to display
     /// additional items that were not included up to that point if
     /// available.
