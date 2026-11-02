@@ -1,8 +1,7 @@
 use lb_core::{
     header::HeaderId,
     mantle::{
-        SignedOps,
-        batch::DeferredProofs,
+        SignedOps, batch,
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         traits::Hashable,
@@ -18,6 +17,12 @@ enum AssemblyState {
     Progress,
     NoProgress,
     GasCapacityReached,
+}
+
+/// Why a transaction could not be added to a proposal under construction.
+enum AddTransactionError {
+    Ledger(lb_ledger::LedgerError<HeaderId>),
+    Proof(batch::Error),
 }
 
 /// Ledger state, gas, and fees for a proposal under construction.
@@ -36,27 +41,32 @@ impl BlockBuilder {
         }
     }
 
+    /// Applies `tx` and verifies its batched proofs before counting its
+    /// execution gas against the block limit, so that only a transaction with
+    /// valid proofs can be rejected for exhausting the block's gas capacity.
     fn try_add_transaction(
         self,
         tx: &SignedOps<Preverified, StandardMode>,
         era_schedule: &EraScheduledConfig,
-    ) -> Result<(Self, DeferredProofs), lb_ledger::LedgerError<HeaderId>> {
+    ) -> Result<Self, AddTransactionError> {
         let Self {
             ledger_state,
             gas_and_fees,
         } = self;
-        let (ledger_state, tx_gas_and_fees, _events, deferred_proofs) =
-            ledger_state
-                .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(era_schedule, tx)?;
-        let gas_and_fees = gas_and_fees.checked_add::<HeaderId>(tx_gas_and_fees)?;
+        let (ledger_state, tx_gas_and_fees, _events, deferred_proofs) = ledger_state
+            .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(era_schedule, tx)
+            .map_err(AddTransactionError::Ledger)?;
+        deferred_proofs
+            .verify()
+            .map_err(AddTransactionError::Proof)?;
+        let gas_and_fees = gas_and_fees
+            .checked_add::<HeaderId>(tx_gas_and_fees)
+            .map_err(AddTransactionError::Ledger)?;
 
-        Ok((
-            Self {
-                ledger_state,
-                gas_and_fees,
-            },
-            deferred_proofs,
-        ))
+        Ok(Self {
+            ledger_state,
+            gas_and_fees,
+        })
     }
 
     #[must_use]
@@ -96,23 +106,23 @@ pub fn select_transactions(
 
         for tx in std::mem::take(&mut pending) {
             match block_builder.clone().try_add_transaction(&tx, era_schedule) {
-                Ok((next_block_builder, deferred_proofs)) => match deferred_proofs.verify() {
-                    Ok(()) => {
-                        block_builder = next_block_builder;
-                        selected_txs.push(tx);
-                        assembly_state = AssemblyState::Progress;
-                    }
-                    Err(err) => {
-                        tracing::trace!(
-                            target: LOG_TARGET,
-                            tx = ?tx.hash(),
-                            %err,
-                            "deferred proof verification failed during block assembly",
-                        );
-                        still_pending.push(tx);
-                    }
-                },
-                Err(err @ lb_ledger::LedgerError::TooMuchExecutionGas { .. }) => {
+                Ok(next_block_builder) => {
+                    block_builder = next_block_builder;
+                    selected_txs.push(tx);
+                    assembly_state = AssemblyState::Progress;
+                }
+                Err(AddTransactionError::Proof(err)) => {
+                    tracing::trace!(
+                        target: LOG_TARGET,
+                        tx = ?tx.hash(),
+                        %err,
+                        "deferred proof verification failed during block assembly",
+                    );
+                    still_pending.push(tx);
+                }
+                Err(AddTransactionError::Ledger(
+                    err @ lb_ledger::LedgerError::TooMuchExecutionGas { .. },
+                )) => {
                     tracing::trace!(
                         target: LOG_TARGET,
                         tx = ?tx.hash(),
@@ -122,7 +132,9 @@ pub fn select_transactions(
                     assembly_state = AssemblyState::GasCapacityReached;
                     break;
                 }
-                Err(err @ lb_ledger::LedgerError::TooMuchTransactionExecutionGas { .. }) => {
+                Err(AddTransactionError::Ledger(
+                    err @ lb_ledger::LedgerError::TooMuchTransactionExecutionGas { .. },
+                )) => {
                     tracing::trace!(
                         target: LOG_TARGET,
                         tx = ?tx.hash(),
@@ -131,7 +143,7 @@ pub fn select_transactions(
                     );
                     invalid_tx_hashes.push(tx.hash());
                 }
-                Err(err) => {
+                Err(AddTransactionError::Ledger(err)) => {
                     tracing::trace!(
                         target: LOG_TARGET,
                         "tx {:?} not (yet) applicable during block assembly: {:?}",
@@ -175,6 +187,7 @@ mod tests {
             transactions::{OpProofs, Ops, states::Unverified},
         },
     };
+    use lb_groth16::Fr;
     use lb_key_management_system_service::keys::ZkKey;
     use lb_ledger::ConsensusExcludedKeys;
 
@@ -184,6 +197,7 @@ mod tests {
     fn transfer_heavy_transaction(
         transaction_index: usize,
         funding_key: &ZkKey,
+        signing_key: &ZkKey,
         transfer_count: usize,
     ) -> (Vec<Utxo>, SignedOps<Preverified, StandardMode>) {
         let funding_utxos = (0..transfer_count)
@@ -203,7 +217,7 @@ mod tests {
         .unwrap();
         let tx_hash = ops.hash();
         let signature =
-            ZkKey::multi_sign(std::slice::from_ref(funding_key), &tx_hash.to_fr()).unwrap();
+            ZkKey::multi_sign(std::slice::from_ref(signing_key), &tx_hash.to_fr()).unwrap();
         let proofs = OpProofs::try_from_iter(
             std::iter::repeat_with(|| OpProof::ZkSig(signature.clone())).take(transfer_count),
         )
@@ -228,6 +242,7 @@ mod tests {
             .map(|transaction_index| {
                 transfer_heavy_transaction(
                     transaction_index,
+                    &funding_key,
                     &funding_key,
                     TRANSFERS_PER_TRANSACTION,
                 )
@@ -286,5 +301,47 @@ mod tests {
                 block_txs.into_iter(),
             )
             .expect("the selected prefix must pass canonical application");
+    }
+
+    #[test]
+    fn invalid_proof_does_not_end_selection_at_gas_limit() {
+        const VALID_COUNT: usize = 21;
+        const TRANSFERS_PER_TRANSACTION: usize = 255;
+
+        let config = leadership::test_config();
+        let eras = leadership::single_era(config.clone());
+        let funding_key = ZkKey::zero();
+        let wrong_key = ZkKey::new(Fr::from(1u64));
+        let (mut funding_utxos, mut candidates): (Vec<_>, Vec<_>) = (0..VALID_COUNT)
+            .map(|transaction_index| {
+                transfer_heavy_transaction(
+                    transaction_index,
+                    &funding_key,
+                    &funding_key,
+                    TRANSFERS_PER_TRANSACTION,
+                )
+            })
+            .unzip();
+        // Its execution gas would exceed the block limit after the valid
+        // candidates, but its proof is invalid.
+        let (invalid_proof_utxos, invalid_proof_candidate) = transfer_heavy_transaction(
+            VALID_COUNT,
+            &funding_key,
+            &wrong_key,
+            TRANSFERS_PER_TRANSACTION,
+        );
+        funding_utxos.push(invalid_proof_utxos);
+        let invalid_proof_hash = invalid_proof_candidate.hash();
+        candidates.push(invalid_proof_candidate);
+
+        let ledger_state = LedgerState::from_utxos(
+            funding_utxos.into_iter().flatten(),
+            &config,
+            0,
+            &ConsensusExcludedKeys::empty(),
+        );
+        let selection = select_transactions(ledger_state, candidates, &eras);
+        assert_eq!(selection.selected_txs.len(), VALID_COUNT);
+        assert_eq!(selection.invalid_tx_hashes, [invalid_proof_hash]);
     }
 }
