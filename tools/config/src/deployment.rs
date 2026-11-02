@@ -35,6 +35,7 @@ const BLEND_COVER_MESSAGES_PER_OBSERVATION_WINDOW: u64 = 90;
 const BLEND_VERIFICATION_RATE_PER_SECOND: u32 = 156;
 /// `η`: the rounds a message spends crossing the network at one hop.
 const BLEND_NETWORK_ABSORPTION_IN_ROUNDS: u64 = 2;
+const BLEND_PEERING_DEGREE: NonZeroU32 = NonZeroU32::new(4).unwrap();
 const MINIMUM_BLEND_NETWORK_SIZE: u64 = 2;
 const NUM_BLEND_LAYERS: u64 = 3;
 const DATA_REPLICATION_FACTOR: u64 = 0;
@@ -102,6 +103,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     data_replication_factor: DATA_REPLICATION_FACTOR,
                 },
                 core: BlendCoreSettings {
+                    target_peering_degree: BLEND_PEERING_DEGREE,
                     verification_rate_per_second: NonZeroU32::try_from(
                         BLEND_VERIFICATION_RATE_PER_SECOND,
                     )

@@ -27,10 +27,7 @@ use lb_time::era::EraSchedule;
 
 use crate::config::{
     blend::serde::Config,
-    deployment::{
-        EraDefinition,
-        era::ruleset::{EraRuleset, v1},
-    },
+    deployment::{EraDefinition, era::ruleset::EraRuleset},
 };
 
 pub mod serde;
@@ -147,7 +144,7 @@ impl ServiceConfig {
                     epoch_transition_period,
                 },
                 core_backend: Libp2pCoreBlendBackendEraSettings {
-                    target_peering_degree: v1::blend::TARGET_PEERING_DEGREE,
+                    target_peering_degree: deployment.core.target_peering_degree,
                     connection_share_per_round: deployment.connection_share_per_round(),
                     edge_node_connection_timeout: deployment
                         .edge_node_connection_timeout(&slot_duration),

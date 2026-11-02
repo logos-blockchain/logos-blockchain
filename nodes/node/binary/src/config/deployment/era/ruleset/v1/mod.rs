@@ -101,8 +101,14 @@ mod tests {
         for coefficient in [coeff(1, 1000), coeff(999, 1000)] {
             validate(|parameters| parameters.cryptarchia.slot_activation_coeff = coefficient);
         }
+        for degree in [3, 5] {
+            validate(|parameters| {
+                parameters.blend.core.target_peering_degree = NonZero::new(degree).unwrap();
+            });
+        }
         // At a peering degree of 4, `⌊2V/3⌋` reaches 5.
         validate(|parameters| {
+            parameters.blend.core.target_peering_degree = NonZero::new(4).unwrap();
             parameters.blend.core.verification_rate_per_second = NonZero::new(8).unwrap();
         });
         // k = 10 and f = 1/20: s = 600 slots, a fifth of which is 120 slots, 6
@@ -163,10 +169,19 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "peering degree, 6, must be in 3..=5")]
+    fn a_blend_peering_degree_above_5_is_refused() {
+        validate(|parameters| {
+            parameters.blend.core.target_peering_degree = NonZero::new(6).unwrap();
+        });
+    }
+
+    #[test]
     #[should_panic(expected = "at least one message per connection per round")]
     fn a_blend_verification_rate_without_a_message_per_connection_is_refused() {
         // At a peering degree of 4, `⌊2V/3⌋` is 4.
         validate(|parameters| {
+            parameters.blend.core.target_peering_degree = NonZero::new(4).unwrap();
             parameters.blend.core.verification_rate_per_second = NonZero::new(7).unwrap();
         });
     }
