@@ -1037,6 +1037,25 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            execution_market: lb_ledger::config::ExecutionMarketConfig {
+                max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                    .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
+                    9,
+                    10.try_into().unwrap(),
+                )
+                .unwrap(),
+            },
+            storage_market: lb_ledger::config::StorageMarketConfig {
+                max_adjustment_factor: lb_utils::math::ProperFraction::new(
+                    1,
+                    8.try_into().unwrap(),
+                )
+                .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
+                    .unwrap(),
+            },
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),

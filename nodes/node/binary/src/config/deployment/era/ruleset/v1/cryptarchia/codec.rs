@@ -6,11 +6,11 @@ use lb_binary_codec::canonical::codec_fixtures;
 use lb_core::sdp::{InactivityPeriod, MinStake};
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::ModulusShift;
-use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+use lb_utils::math::{NonNegativeF64, NonNegativeRatio, ProperFraction};
 
 use super::{
-    BlendPoWConfig, EpochConfig, PoWConfig, RewardPoWConfig, SdpConfig, ServiceParameters,
-    Settings, SlotActivationCoeff,
+    BlendPoWConfig, EpochConfig, ExecutionMarketConfig, MaxGasPerBlock, PoWConfig, RewardPoWConfig,
+    SdpConfig, ServiceParameters, Settings, SlotActivationCoeff, StorageMarketConfig,
 };
 
 pub fn fixture_settings() -> Settings {
@@ -23,6 +23,15 @@ pub fn fixture_settings() -> Settings {
         max_uncles: 24,
         sdp_config: fixture_sdp_config(),
         pow_config: fixture_pow_config(),
+        execution_market: ExecutionMarketConfig {
+            max_gas_per_block: MaxGasPerBlock::new(43).unwrap(),
+            fee_adjustment_rate: ProperFraction::new(44, 45.try_into().unwrap()).unwrap(),
+            ema_smoothing_factor: ProperFraction::new(46, 47.try_into().unwrap()).unwrap(),
+        },
+        storage_market: StorageMarketConfig {
+            max_adjustment_factor: ProperFraction::new(48, 49.try_into().unwrap()).unwrap(),
+            ema_smoothing_factor: ProperFraction::new(50, 51.try_into().unwrap()).unwrap(),
+        },
     }
 }
 
@@ -91,6 +100,7 @@ pub const SETTINGS_HEX: &str = "
     1b00000000000000 1c000000 1d000000 20000000
     2100000000000000 2200000000000000 2300000000000000 2400000000000000 2500000000000000
     2600000000000000 2700000000000000 2800000000000000 2900000000000000
+    2b00000000000000 2c000000 2d000000 2e000000 2f000000 30000000 31000000 32000000 33000000
 ";
 const SDP_CONFIG_HEX: &str = "14000000 15000000 1600000000000000 1700000000000000";
 const POW_CONFIG_HEX: &str = "

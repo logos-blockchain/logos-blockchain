@@ -17,8 +17,6 @@ use std::{hash::Hash, sync::Arc};
 pub use config::{Config, ConsensusExcludedKeys};
 use cryptarchia::LedgerState as CryptarchiaLedger;
 pub use cryptarchia::{EpochState, UtxoTree};
-#[cfg(test)]
-use gas_and_fees::EXECUTION_GAS_LIMIT;
 pub use gas_and_fees::GasAndFees;
 pub use intent::{Intent, IntentStatus};
 use lb_core::{
@@ -59,7 +57,7 @@ use rpds::HashTrieMapSync;
 use thiserror::Error;
 
 use crate::{
-    config::{EraScheduledConfig, RewardPoWConfig, config_for_slot},
+    config::{EraScheduledConfig, ExecutionMarketConfig, RewardPoWConfig, config_for_slot},
     mantle::helpers::MantleOperationVerificationHelper,
     update::{BatchVerifiedUpdate, PreparedUpdate},
 };
@@ -463,11 +461,15 @@ impl LedgerState {
     /// block and the smoothed average consumption. This function updates the
     /// `average_execution_gas` and the `execution_base_fee` stored in the
     /// cryptarchia ledger. See the specification <https://lip.logos.co/blockchain/raw/execution-market.html>
-    fn update_execution_market(self, block_execution_gas_consumed: Gas) -> Self {
+    fn update_execution_market(
+        self,
+        block_execution_gas_consumed: Gas,
+        market: &ExecutionMarketConfig,
+    ) -> Self {
         Self {
             cryptarchia_ledger: self
                 .cryptarchia_ledger
-                .update_execution_market(block_execution_gas_consumed),
+                .update_execution_market(block_execution_gas_consumed, market),
             ..self
         }
     }
@@ -544,6 +546,7 @@ impl LedgerState {
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
     {
+        let config = config_for_slot(eras, self.slot());
         let mut gas_and_fees = GasAndFees::default();
         let mut tx_events = Vec::new();
         let mut deferred_proofs = DeferredProofs::new();
@@ -551,21 +554,23 @@ impl LedgerState {
         for tx in txs {
             let (next_state, tx_gas_and_fees, events, deferred) =
                 self.try_apply_transaction::<_, Id, Profile>(eras, &tx)?;
-            gas_and_fees = gas_and_fees.checked_add::<Id>(tx_gas_and_fees)?;
+            gas_and_fees = gas_and_fees.checked_add::<Id>(
+                tx_gas_and_fees,
+                config.execution_market.max_gas_per_block.into(),
+            )?;
             self = next_state;
             tx_events.extend(events);
             deferred_proofs.extend(deferred);
         }
 
         // Compute Block rewards and give tips
-        let config = config_for_slot(eras, self.slot());
         self = self.compute_block_rewards(
             gas_and_fees.fee_burned,
             gas_and_fees.fee_tip,
             &config.pow_config.reward,
         )?;
         // Update Execution market state
-        self = self.update_execution_market(gas_and_fees.execution_gas);
+        self = self.update_execution_market(gas_and_fees.execution_gas, &config.execution_market);
         // Accumulate storage gas consumed so the storage market can update the
         // price at the next epoch rotation.
         self = self.add_storage_gas_consumed(gas_and_fees.storage_gas)?;

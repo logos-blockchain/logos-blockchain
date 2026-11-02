@@ -5,6 +5,7 @@ use lb_core::{
     era::AcceptedForkDigests,
     mantle::{
         Value,
+        gas::Gas,
         ops::pow::{PowSlotWindows, PowTarget},
     },
 };
@@ -12,6 +13,7 @@ use lb_cryptarchia_engine::{Epoch, EraSchedule, Slot};
 pub use lb_groth16::ModulusShift;
 use lb_pol::LotteryConstants;
 use lb_time::era::EpochLength;
+use lb_utils::math::ProperFraction;
 
 /// The config of every era: each block is applied under the config of the era
 /// of its slot, and each epoch is settled under the config of its era.
@@ -26,6 +28,8 @@ pub struct Config {
     pub sdp_config: crate::mantle::sdp::Config,
     pub pow_config: PoWConfig,
     pub accepted_fork_digests: AcceptedForkDigests,
+    pub execution_market: ExecutionMarketConfig,
+    pub storage_market: StorageMarketConfig,
 }
 
 impl Config {
@@ -463,6 +467,165 @@ impl BlendPoWConfig {
     }
 }
 
+/// `G_max`: the most execution gas a block may consume. At least 2, so that its
+/// half, `G_target`, the usage the base fee steers blocks towards, is never
+/// zero.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(try_from = "u64", into = "u64")]
+pub struct MaxGasPerBlock(u64);
+
+impl MaxGasPerBlock {
+    /// `gas`, if it is at least 2.
+    #[must_use]
+    pub const fn new(gas: u64) -> Option<Self> {
+        if gas >= 2 { Some(Self(gas)) } else { None }
+    }
+
+    /// `G_target`: half of the limit.
+    #[must_use]
+    pub(crate) const fn target(self) -> Gas {
+        Gas::new(self.0 / 2)
+    }
+}
+
+impl TryFrom<u64> for MaxGasPerBlock {
+    type Error = String;
+
+    fn try_from(gas: u64) -> Result<Self, Self::Error> {
+        Self::new(gas).ok_or_else(|| {
+            format!(
+                "The max execution gas per block, {gas}, must be at least 2, so that its half, \
+                 the target, is not zero."
+            )
+        })
+    }
+}
+
+impl From<MaxGasPerBlock> for u64 {
+    fn from(max_gas_per_block: MaxGasPerBlock) -> Self {
+        max_gas_per_block.0
+    }
+}
+
+impl From<MaxGasPerBlock> for Gas {
+    fn from(max_gas_per_block: MaxGasPerBlock) -> Self {
+        Self::new(max_gas_per_block.0)
+    }
+}
+
+// A block's gas limit: the `u64` it counts.
+impl BinaryEncode for MaxGasPerBlock {
+    fn encoded_length(&self) -> usize {
+        self.0.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.0.encode_into(out);
+    }
+}
+
+codec_fixtures!(MaxGasPerBlock, encode_only, MaxGasPerBlock::new(43).unwrap() => "2b00000000000000");
+
+/// The execution market of an era: how the execution base fee follows the
+/// execution gas blocks consume, per the
+/// [execution market](https://lip.logos.co/blockchain/raw/execution-market.html).
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExecutionMarketConfig {
+    /// `G_max`: the most execution gas a block may consume.
+    pub max_gas_per_block: MaxGasPerBlock,
+    /// `φ`: the fraction by which the base fee rises in a block whose average
+    /// usage is twice the target, and falls in one whose average usage is
+    /// zero.
+    pub fee_adjustment_rate: ProperFraction,
+    /// `q`: the weight of the previous average in the moving average of the
+    /// execution gas blocks consume.
+    pub ema_smoothing_factor: ProperFraction,
+}
+
+/// The storage market of an era: how the price of storage gas follows the
+/// storage gas each epoch consumes, per the
+/// [storage markets](https://lip.logos.co/blockchain/raw/storage-markets.html).
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StorageMarketConfig {
+    /// `α`: the largest fraction by which the price moves in an epoch.
+    pub max_adjustment_factor: ProperFraction,
+    /// `β`: the weight of the latest epoch in the moving average of the storage
+    /// gas epochs consume.
+    pub ema_smoothing_factor: ProperFraction,
+}
+
+// The execution market's parameters: every field in declaration order. A
+// node's era digest commits to them through this encoding.
+impl BinaryEncode for ExecutionMarketConfig {
+    fn encoded_length(&self) -> usize {
+        let Self {
+            max_gas_per_block,
+            fee_adjustment_rate,
+            ema_smoothing_factor,
+        } = self;
+        max_gas_per_block.encoded_length()
+            + fee_adjustment_rate.encoded_length()
+            + ema_smoothing_factor.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        let Self {
+            max_gas_per_block,
+            fee_adjustment_rate,
+            ema_smoothing_factor,
+        } = self;
+        max_gas_per_block.encode_into(out);
+        fee_adjustment_rate.encode_into(out);
+        ema_smoothing_factor.encode_into(out);
+    }
+}
+
+/// The encoding of the fixture below, one field per group.
+const EXECUTION_MARKET_CONFIG_HEX: &str = "2b00000000000000 2c000000 2d000000 2e000000 2f000000";
+
+codec_fixtures!(
+    ExecutionMarketConfig,
+    encode_only,
+    ExecutionMarketConfig {
+        max_gas_per_block: MaxGasPerBlock::new(43).unwrap(),
+        fee_adjustment_rate: ProperFraction::new(44, 45.try_into().unwrap()).unwrap(),
+        ema_smoothing_factor: ProperFraction::new(46, 47.try_into().unwrap()).unwrap(),
+    } => EXECUTION_MARKET_CONFIG_HEX
+);
+
+// The storage market's parameters: every field in declaration order. A node's
+// era digest commits to them through this encoding.
+impl BinaryEncode for StorageMarketConfig {
+    fn encoded_length(&self) -> usize {
+        let Self {
+            max_adjustment_factor,
+            ema_smoothing_factor,
+        } = self;
+        max_adjustment_factor.encoded_length() + ema_smoothing_factor.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        let Self {
+            max_adjustment_factor,
+            ema_smoothing_factor,
+        } = self;
+        max_adjustment_factor.encode_into(out);
+        ema_smoothing_factor.encode_into(out);
+    }
+}
+
+/// The encoding of the fixture below, one field per group.
+const STORAGE_MARKET_CONFIG_HEX: &str = "30000000 31000000 32000000 33000000";
+
+codec_fixtures!(
+    StorageMarketConfig,
+    encode_only,
+    StorageMarketConfig {
+        max_adjustment_factor: ProperFraction::new(48, 49.try_into().unwrap()).unwrap(),
+        ema_smoothing_factor: ProperFraction::new(50, 51.try_into().unwrap()).unwrap(),
+    } => STORAGE_MARKET_CONFIG_HEX
+);
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -673,6 +836,25 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            execution_market: crate::config::ExecutionMarketConfig {
+                max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                    .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
+                    9,
+                    10.try_into().unwrap(),
+                )
+                .unwrap(),
+            },
+            storage_market: crate::config::StorageMarketConfig {
+                max_adjustment_factor: lb_utils::math::ProperFraction::new(
+                    1,
+                    8.try_into().unwrap(),
+                )
+                .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
+                    .unwrap(),
+            },
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -743,6 +925,25 @@ mod tests {
                     threshold: 1,
                     timestamp: 0,
                 },
+            },
+            execution_market: crate::config::ExecutionMarketConfig {
+                max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                    .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
+                    9,
+                    10.try_into().unwrap(),
+                )
+                .unwrap(),
+            },
+            storage_market: crate::config::StorageMarketConfig {
+                max_adjustment_factor: lb_utils::math::ProperFraction::new(
+                    1,
+                    8.try_into().unwrap(),
+                )
+                .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
+                    .unwrap(),
             },
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
@@ -830,6 +1031,25 @@ mod tests {
                     threshold: 1,
                     timestamp: 0,
                 },
+            },
+            execution_market: crate::config::ExecutionMarketConfig {
+                max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                    .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
+                    9,
+                    10.try_into().unwrap(),
+                )
+                .unwrap(),
+            },
+            storage_market: crate::config::StorageMarketConfig {
+                max_adjustment_factor: lb_utils::math::ProperFraction::new(
+                    1,
+                    8.try_into().unwrap(),
+                )
+                .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
+                    .unwrap(),
             },
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {

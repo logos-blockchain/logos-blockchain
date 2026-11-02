@@ -78,5 +78,25 @@ cryptarchia:
     min_stake:
       threshold: 1000000000
       timestamp: 0
+  # The execution market: the most execution gas a block may consume, G_max,
+  # whose half is the target, the fee adjustment rate φ and the EMA smoothing
+  # factor q.
+  execution_market:
+    max_gas_per_block: 3193460
+    fee_adjustment_rate:
+      numerator: 1
+      denominator: 8
+    ema_smoothing_factor:
+      numerator: 9
+      denominator: 10
+  # The storage market: the max adjustment factor α and the EMA smoothing factor
+  # β.
+  storage_market:
+    max_adjustment_factor:
+      numerator: 1
+      denominator: 8
+    ema_smoothing_factor:
+      numerator: 1
+      denominator: 2
 time:
   slot_duration_in_seconds: 1

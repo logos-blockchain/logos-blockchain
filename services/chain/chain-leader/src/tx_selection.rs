@@ -9,7 +9,10 @@ use lb_core::{
         transactions::{hash::TxHash, states::Preverified},
     },
 };
-use lb_ledger::{GasAndFees, LedgerState, config::EraScheduledConfig};
+use lb_ledger::{
+    GasAndFees, LedgerState,
+    config::{EraScheduledConfig, config_for_slot},
+};
 
 use crate::LOG_TARGET;
 
@@ -45,10 +48,14 @@ impl BlockBuilder {
             ledger_state,
             gas_and_fees,
         } = self;
+        let max_gas_per_block = config_for_slot(era_schedule, ledger_state.slot())
+            .execution_market
+            .max_gas_per_block;
         let (ledger_state, tx_gas_and_fees, _events, deferred_proofs) =
             ledger_state
                 .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(era_schedule, tx)?;
-        let gas_and_fees = gas_and_fees.checked_add::<HeaderId>(tx_gas_and_fees)?;
+        let gas_and_fees =
+            gas_and_fees.checked_add::<HeaderId>(tx_gas_and_fees, max_gas_per_block.into())?;
 
         Ok((
             Self {

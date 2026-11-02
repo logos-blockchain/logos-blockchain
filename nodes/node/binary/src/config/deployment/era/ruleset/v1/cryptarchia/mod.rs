@@ -36,6 +36,8 @@ pub struct Settings {
     pub max_uncles: u8,
     pub sdp_config: SdpConfig,
     pub pow_config: PoWConfig,
+    pub execution_market: ExecutionMarketConfig,
+    pub storage_market: StorageMarketConfig,
 }
 
 impl Settings {
@@ -255,3 +257,7 @@ pub struct BlendPoWConfig {
 // directly: deserializing the deployment config runs its invariant checks
 // (`RewardPoWConfig::validate`), rejecting an invalid config at load time.
 pub use lb_ledger::config::RewardPoWConfig;
+// The markets' parameters are used verbatim too, so the ledger types are reused
+// the same way: their field types refuse a rate outside (0, 1) and a gas limit
+// without a target.
+pub use lb_ledger::config::{ExecutionMarketConfig, MaxGasPerBlock, StorageMarketConfig};
