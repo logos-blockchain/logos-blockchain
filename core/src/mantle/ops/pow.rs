@@ -682,6 +682,42 @@ mod tests {
     }
 
     #[test]
+    fn verify_shared_nonce_uses_anchor_era_window() {
+        let nullifiers = HashTrieMapSync::new_sync();
+        let mut ctx = accepting_context(&nullifiers);
+        ctx.slot_windows = slot_windows(10, [(10, 100)]);
+        ctx.previous_epoch_nonce = ctx.current_epoch_nonce;
+
+        for (anchor, current, accepted) in [
+            (95, 105, true),
+            (95, 106, false),
+            (101, 105, true),
+            (101, 106, true),
+            (101, 201, true),
+            (101, 202, false),
+        ] {
+            ctx.current_block_slot = Slot::from(current);
+            ctx.blocks_slot
+                .insert_mut(CLAIM_BLOCK_HASH, Slot::from(anchor));
+            let result = SignedOperation::new(claim_op(CURRENT_EPOCH), NoOpProof)
+                .into_preverified(&())
+                .unwrap()
+                .verify(&ctx);
+            if accepted {
+                assert_eq!(result, Ok(()));
+            } else {
+                assert_eq!(
+                    result,
+                    Err(ClaimPowRewardError::OutOfWindowSlot {
+                        slot: Slot::from(anchor),
+                        current_slot: Slot::from(current),
+                    })
+                );
+            }
+        }
+    }
+
+    #[test]
     fn verify_rejects_a_claim_while_the_pool_cannot_cover_the_reward() {
         let nullifiers = HashTrieMapSync::new_sync();
         let mut ctx = accepting_context(&nullifiers);

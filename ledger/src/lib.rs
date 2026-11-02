@@ -3321,6 +3321,56 @@ mod tests {
         }
 
         #[test]
+        fn shared_nonce_claim_uses_anchor_era_window_across_short_to_long_transition() {
+            // Era 1 starts at slot 100 and grows the reward window from 10 to
+            // 100 slots. Keep both accepted epoch nonces equal to the claim's
+            // nonce so eligibility is determined by the anchor era.
+            let mut era_0 = config();
+            era_0.pow_config.reward.slot_window = NonZeroU64::new(10).unwrap();
+            let mut era_1 = era_0.clone();
+            era_1.pow_config.reward.slot_window = NonZeroU64::new(100).unwrap();
+            let eras = schedule(era_0, [(1, era_1)]);
+            let (initial_state, _) = claim_accepting_state();
+
+            for (anchor, current, accepted) in [
+                (95, 105, true),
+                (95, 106, false),
+                (101, 105, true),
+                (101, 201, true),
+                (101, 202, false),
+            ] {
+                let mut state = initial_state.clone();
+                state.cryptarchia_ledger.slot = Slot::from(current);
+                state.cryptarchia_ledger.epoch_state.epoch =
+                    u32::try_from(current / 100).unwrap().into();
+                state.cryptarchia_ledger.epoch_state.nonce = Fr::ZERO;
+                state.cryptarchia_ledger.previous_epoch_nonce = Fr::ZERO;
+                state
+                    .mantle_ledger
+                    .pow
+                    .add_seen_block_slots(claim_op().block_hash, Slot::from(anchor));
+
+                let result = state
+                    .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, claim_tx());
+                if accepted {
+                    assert!(result.is_ok(), "anchor {anchor}, current {current}");
+                } else {
+                    assert!(
+                        matches!(
+                            result,
+                            Err(LedgerError::VerificationError(
+                                VerificationError::ClaimPowRewardError(
+                                    ClaimPowRewardError::OutOfWindowSlot { .. }
+                                )
+                            ))
+                        ),
+                        "anchor {anchor}, current {current} should be out of window"
+                    );
+                }
+            }
+        }
+
+        #[test]
         fn claim_execution_pays_the_reward_and_updates_the_ledger() {
             // The execution path (`try_apply_op`): the claim drains sigma_e
             // from the pool, records the nullifier, inserts the reward note

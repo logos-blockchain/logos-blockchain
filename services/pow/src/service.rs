@@ -2553,6 +2553,35 @@ mod tests {
     }
 
     #[test]
+    fn pruning_shared_nonce_tickets_uses_each_anchor_era_window() {
+        let schedule = era_schedule(&[10, 100]);
+        for (current, expected) in [
+            (105, vec![95, 101]),
+            (106, vec![101]),
+            (201, vec![101]),
+            (202, vec![]),
+        ] {
+            let mut state = PoWServiceState {
+                ready_to_claim: vec![winning_ticket(95), winning_ticket(101)],
+                pending_to_claim: vec![winning_ticket(95), winning_ticket(101)],
+            };
+            let nonce = state.ready_to_claim[0].claim.epoch_nonce;
+            assert!(
+                state
+                    .ready_to_claim
+                    .iter()
+                    .chain(&state.pending_to_claim)
+                    .all(|ticket| ticket.claim.epoch_nonce == nonce)
+            );
+            prune_expired_tickets(&mut state, Slot::new(current), &schedule);
+            for tickets in [&state.ready_to_claim, &state.pending_to_claim] {
+                let slots: Vec<u64> = tickets.iter().map(|t| u64::from(t.block_slot)).collect();
+                assert_eq!(slots, expected, "at slot {current}");
+            }
+        }
+    }
+
+    #[test]
     fn outstanding_tickets_count_ready_and_pending_until_they_expire() {
         // Both sets draw on the reward pool until paid, so both are counted;
         // once a ticket expires it no longer holds a share of the pool.
