@@ -166,11 +166,10 @@ where
         self.push_with_paths_impl(elem, paths, true)
     }
 
-    /// Like [`Self::push_with_paths`], but leaves stale the sibling of each
-    /// path that covers the incomplete right edge of the tree, since it changes
-    /// on every push. Only paths whose sibling subtree the new leaf completes
-    /// are updated, so the other entries stay shared with the previous
-    /// version of `paths`. [`Self::refresh_path`] brings a path up to date.
+    /// Like [`Self::push_with_paths`], but only rewrites the paths whose
+    /// sibling subtree the new leaf completes. The rest stay shared with the
+    /// previous `paths`, with a stale sibling over the newest leaves; call
+    /// [`Self::refresh_path`] before using a path.
     pub fn push_with_lazy_paths<K>(
         &self,
         elem: T,
