@@ -476,6 +476,13 @@ impl<Tx> Block<Tx> {
     }
 }
 
+/// A transaction carried by a block, with the slot of that block.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TxInBlock<Tx> {
+    pub tx: Tx,
+    pub slot: Slot,
+}
+
 /// Validates the header using only the content within the header.
 ///
 /// This does not check `body_root` because it commits to a body this function
