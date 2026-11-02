@@ -28,6 +28,7 @@ use lb_log_targets::ledger;
 use lb_utxotree::MerklePath;
 
 use crate::{
+    ValidationMode,
     config::{
         ConsensusExcludedKeys, EraScheduledConfig, config_for_epoch, nonce_snapshot,
         stake_distribution_snapshot,
@@ -533,6 +534,10 @@ impl LedgerState {
         Ok(self)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Each argument is a distinct part of the block being applied."
+    )]
     pub fn try_apply_header<LeaderProof, Id>(
         self,
         slot: Slot,
@@ -541,6 +546,7 @@ impl LedgerState {
         sdp: &SdpLedger,
         pow: &PowState,
         eras: &EraScheduledConfig,
+        validation_mode: ValidationMode,
     ) -> Result<Self, LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
@@ -548,8 +554,13 @@ impl LedgerState {
         // First, synthesize epoch state for `slot` before update the ledger state.
         // Then, apply the proof and update the nonce. Finally, mark the occupied
         // slots since this function is called for a new block.
-        Ok(self
-            .update_epoch_state_and_apply_proof(slot, proof, sdp, pow, eras)?
+        let state = match validation_mode {
+            ValidationMode::Full => {
+                self.update_epoch_state_and_apply_proof(slot, proof, sdp, pow, eras)?
+            }
+            ValidationMode::Trusted => self.update_epoch_state(slot, sdp, pow, eras)?,
+        };
+        Ok(state
             .update_nonce(&proof.entropy(), slot)
             .mark_occupied_slots(slot, uncle_slots))
     }
@@ -1043,6 +1054,7 @@ pub mod tests {
                 &proof,
                 &UncleSlots::default(),
                 std::iter::empty::<SignedOps<Preverified, StandardMode>>(),
+                ValidationMode::Full,
             )?
             .verify_batch_proofs()
             .map_err(|_| LedgerError::InvalidProof)?;
@@ -2456,6 +2468,7 @@ pub mod tests {
                 &SdpLedger::new(0.into()),
                 &pow_state(),
                 &eras,
+                ValidationMode::Full,
             )
             .unwrap();
 
@@ -2485,6 +2498,7 @@ pub mod tests {
                 &SdpLedger::new(0.into()),
                 &pow_state(),
                 &eras,
+                ValidationMode::Full,
             )
             .unwrap();
         assert_eq!(ledger_state_2.slot, slot);

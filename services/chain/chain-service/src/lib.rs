@@ -39,7 +39,7 @@ use lb_core::{
 use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
 pub use lb_ledger::EpochState;
-use lb_ledger::{LedgerState, config::EraScheduledConfig};
+use lb_ledger::{LedgerState, ValidationMode, config::EraScheduledConfig};
 use lb_log_targets::chain;
 use lb_network_service::message::ChainSyncEvent;
 use lb_services_utils::{
@@ -461,7 +461,7 @@ impl Cryptarchia {
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
     {
         let outcome =
-            self.try_apply_block_with_state_retention(block, current_slot, BlockOrigin::Network)?;
+            self.try_apply_block_with_state_retention(block, current_slot, ValidationMode::Full)?;
         self.prune_ledger_states(outcome.pruned_blocks.all());
         Ok((
             outcome.pruned_blocks,
@@ -476,7 +476,7 @@ impl Cryptarchia {
         &mut self,
         block: Block<Tx>,
         current_slot: Slot,
-        origin: BlockOrigin,
+        validation_mode: ValidationMode,
     ) -> Result<TryApplyBlockOutcome, Error>
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
@@ -490,21 +490,26 @@ impl Cryptarchia {
             return Err(Error::AlreadyApplied(id));
         }
 
-        // Whatever the block's origin: a stored block was checked when it was
-        // first applied, but under the eras this node ran with then.
+        // Even with `ValidationMode::Trusted`: a stored block was checked when it
+        // was first applied, but under the eras this node ran with then.
         self.verify_uncle_count(&block)?;
 
-        if origin == BlockOrigin::Network {
-            // Reject blocks from future slots
-            if slot > current_slot {
-                return Err(Error::FutureBlock {
-                    block_slot: slot,
-                    current_slot,
-                });
-            }
+        match validation_mode {
+            ValidationMode::Full => {
+                // Reject blocks from future slots
+                if slot > current_slot {
+                    return Err(Error::FutureBlock {
+                        block_slot: slot,
+                        current_slot,
+                    });
+                }
 
-            // A block is valid only if every uncle it carries is valid.
-            self.verify_uncles(&block)?;
+                // A block is valid only if every uncle it carries is valid.
+                self.verify_uncles(&block)?;
+            }
+            ValidationMode::Trusted => {
+                trace!(target: LOG_TARGET, block_id = ?id, "skip slot & uncle verification for trusted block");
+            }
         }
 
         let block_uncle_headers_slots = block.uncle_headers().slots();
@@ -524,6 +529,7 @@ impl Cryptarchia {
                 &leader_proof,
                 &block_uncle_headers_slots,
                 transactions.into_iter(),
+                validation_mode,
             )
             .map_err(|err| match err {
                 lb_ledger::LedgerError::ParentNotFound(parent) => Error::ParentMissing {
@@ -1089,7 +1095,7 @@ where
                 &mut cryptarchia,
                 block,
                 current_slot,
-                BlockOrigin::Storage,
+                ValidationMode::Trusted,
                 relays,
                 new_block_subscription_sender,
                 lib_subscription_sender,
@@ -1156,22 +1162,4 @@ where
             recovery_state.lib_block_uncle_slots.clone(),
         ))
     }
-}
-
-/// Where a block being applied comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlockOrigin {
-    /// A block received from the network, or proposed by this node.
-    Network,
-    /// A block that was already verified and stored by this node, which is
-    /// being replayed during the chain recovery.
-    ///
-    /// The uncle validity rules are skipped for it, since the parent of an
-    /// uncle may be older than LIB, and blocks older than LIB are not
-    /// recovered.
-    ///
-    /// The future-slot check is also skipped, since the current slot returned
-    /// from the time service may be behind the slot at which the block was
-    /// accepted (e.g., before the time service calibrates the clock with NTP).
-    Storage,
 }

@@ -32,7 +32,7 @@ use lb_cryptarchia_sync::HeaderId;
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 use lb_ledger::{
-    ConsensusExcludedKeys, LedgerState,
+    ConsensusExcludedKeys, LedgerState, ValidationMode,
     config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
@@ -54,8 +54,8 @@ use tokio::{
 };
 
 use crate::{
-    BlockOrigin, BootstrapConfig, Cryptarchia, CryptarchiaConsensus, CryptarchiaConsensusState,
-    Error, OfflineGracePeriodConfig,
+    BootstrapConfig, Cryptarchia, CryptarchiaConsensus, CryptarchiaConsensusState, Error,
+    OfflineGracePeriodConfig,
     relays::CryptarchiaConsensusRelays,
     service::{get_block_ids, process_block},
 };
@@ -169,7 +169,7 @@ async fn get_block_ids_from_memory_and_storage() {
             &mut cryptarchia,
             block.clone(),
             block.header().slot(),
-            BlockOrigin::Network,
+            ValidationMode::Full,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -223,7 +223,7 @@ async fn get_block_ids_from_memory_and_storage() {
             &mut cryptarchia,
             block.clone(),
             block.header().slot(),
-            BlockOrigin::Network,
+            ValidationMode::Full,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -332,7 +332,7 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
             &mut stored,
             block,
             b2_slot,
-            BlockOrigin::Network,
+            ValidationMode::Full,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -418,7 +418,7 @@ async fn recovery_chain_with_tip_ahead_of_current_slot() {
             &mut stored,
             block.clone(),
             block.header().slot(),
-            BlockOrigin::Network,
+            ValidationMode::Full,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -478,7 +478,7 @@ fn future_block_is_rejected_only_from_network() {
     let result = cryptarchia.clone().try_apply_block_with_state_retention(
         block.clone(),
         current_slot,
-        BlockOrigin::Network,
+        ValidationMode::Full,
     );
     assert!(matches!(
         result,
@@ -488,7 +488,7 @@ fn future_block_is_rejected_only_from_network() {
 
     let mut cryptarchia = cryptarchia;
     cryptarchia
-        .try_apply_block_with_state_retention(block.clone(), current_slot, BlockOrigin::Storage)
+        .try_apply_block_with_state_retention(block.clone(), current_slot, ValidationMode::Trusted)
         .expect("a stored block should be replayed regardless of the current slot");
     assert_eq!(cryptarchia.tip(), block.header().id());
 }
@@ -534,7 +534,7 @@ async fn get_block_ids_past_recovered_lib() {
             &mut stored,
             block.clone(),
             block.header().slot(),
-            BlockOrigin::Network,
+            ValidationMode::Full,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -619,7 +619,7 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
         &mut cryptarchia,
         block,
         block_slot,
-        BlockOrigin::Network,
+        ValidationMode::Full,
         &relays,
         &new_block_tx,
         &lib_tx,
@@ -722,7 +722,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
             &mut cryptarchia,
             block,
             slot,
-            BlockOrigin::Network,
+            ValidationMode::Full,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -791,6 +791,41 @@ fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
         "ledger state should not be committed"
     );
     assert_eq!(cryptarchia.tip(), genesis_id, "tip should not advance");
+}
+
+/// A stored block is trusted, and is applied without verifying its op proofs.
+///
+/// We test it by building a op with a fake proof, and see if the block is
+/// applied successfully.
+#[test]
+fn stored_block_is_applied_without_verifying_tx_proofs() {
+    let config = ledger_config(NonZero::<u32>::new(1).unwrap());
+    let (zk_key, utxo) = utxo();
+    let genesis_id: HeaderId = [0; 32].into();
+    let mut cryptarchia = Cryptarchia::from_genesis(
+        genesis_id,
+        LedgerState::from_utxos([utxo], &config, 0, &ConsensusExcludedKeys::empty()),
+        single_era(config),
+        lb_cryptarchia_engine::State::Bootstrapping,
+    );
+
+    let fake_key = ZkKey::from(Fr::from(42u64));
+    let (block, _) = try_build_block_with_transactions(
+        &cryptarchia,
+        genesis_id,
+        utxo,
+        &zk_key,
+        Slot::new(1),
+        UncleHeaders::empty(),
+        BlockTransactions::from([transfer_tx_with_fake_sig(utxo, &fake_key)]),
+    )
+    .expect("should find a winning slot");
+
+    let block_header = block.header().clone();
+    cryptarchia
+        .try_apply_block_with_state_retention(block, block_header.slot(), ValidationMode::Trusted)
+        .expect("a stored block should be applied without verifying its proofs");
+    assert_eq!(cryptarchia.tip(), block_header.id());
 }
 
 /// Creates a transfer tx with a fake sig.

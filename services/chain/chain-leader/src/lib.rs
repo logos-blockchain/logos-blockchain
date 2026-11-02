@@ -34,7 +34,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
-use lb_ledger::{ConsensusExcludedKeys, LedgerState, config::EraScheduledConfig};
+use lb_ledger::{ConsensusExcludedKeys, LedgerState, ValidationMode, config::EraScheduledConfig};
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
@@ -683,6 +683,7 @@ where
                 &proof,
                 &uncle_headers.slots(),
                 era_schedule,
+                ValidationMode::Full,
             )?;
         // Collect all candidate transactions up front so the ones that fail can
         // be retried across multiple rounds.

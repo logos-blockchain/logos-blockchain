@@ -75,6 +75,16 @@ impl VerifiedOperations {
         )
     }
 
+    /// Yields the next operation as verified, without verifying it.
+    ///
+    /// Only for operations of a block this node already verified, such as a
+    /// stored block being reapplied during chain recovery.
+    #[must_use]
+    pub fn next_trusted(mut self) -> Option<VerifiedOperationStep> {
+        let (_index, signed_op) = self.signed_ops.next()?;
+        Some((self, signed_op.into_state_trusted()))
+    }
+
     #[must_use]
     pub const fn tx_hash_view(&self) -> &TxHashView {
         &self.tx_hash_view
@@ -199,6 +209,29 @@ mod tests {
             .expect("WithdrawOp should verify");
 
         assert!(verified_ops.next(&helper, &mut deferred_proofs).is_none());
+    }
+
+    /// `next_trusted` should skip verification.
+    ///
+    /// This test checks that `next_trusted` doesn't reject a fake op proof
+    /// because it skips verification.
+    #[test]
+    fn next_trusted_yields_an_operation_that_would_fail_verification() {
+        let channel_id = ChannelId::from([10u8; 32]);
+        let key0 = Ed25519Key::from_bytes(&[0; 32]);
+        let signed_tx = create_withdraw_tx(channel_id, &[&key0], None);
+        let expected_tx = signed_tx.clone();
+
+        let (verified_ops, signed_op) = signed_tx
+            .into_verified()
+            .next_trusted()
+            .expect("Cursor should yield the WithdrawOp");
+
+        assert_eq!(
+            signed_op.operation(),
+            expected_tx.op_refs_iter().next().unwrap()
+        );
+        assert!(verified_ops.next_trusted().is_none());
     }
 
     #[test]

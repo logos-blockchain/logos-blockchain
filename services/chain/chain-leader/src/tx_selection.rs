@@ -9,7 +9,7 @@ use lb_core::{
         transactions::{hash::TxHash, states::Preverified},
     },
 };
-use lb_ledger::{GasAndFees, LedgerState, config::EraScheduledConfig};
+use lb_ledger::{GasAndFees, LedgerState, ValidationMode, config::EraScheduledConfig};
 
 use crate::LOG_TARGET;
 
@@ -45,9 +45,12 @@ impl BlockBuilder {
             ledger_state,
             gas_and_fees,
         } = self;
-        let (ledger_state, tx_gas_and_fees, _events, deferred_proofs) =
-            ledger_state
-                .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(era_schedule, tx)?;
+        let (ledger_state, tx_gas_and_fees, _events, deferred_proofs) = ledger_state
+            .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(
+            era_schedule,
+            tx,
+            ValidationMode::Full,
+        )?;
         let gas_and_fees = gas_and_fees.checked_add::<HeaderId>(tx_gas_and_fees)?;
 
         Ok((
@@ -264,6 +267,7 @@ mod tests {
             .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
                 &eras,
                 candidates.iter().cloned(),
+                ValidationMode::Full,
             );
         let all_candidates_error = all_candidates_result.err();
         assert!(
@@ -284,6 +288,7 @@ mod tests {
             .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
                 &eras,
                 block_txs.into_iter(),
+                ValidationMode::Full,
             )
             .expect("the selected prefix must pass canonical application");
     }

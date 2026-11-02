@@ -84,8 +84,8 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOp<State, Mode> {
     /// `SignedOp<NewState, Mode>` without performing any verification.
     ///
     /// This function is intended for
-    /// [`GenesisTx`](crate::mantle::transactions::genesis_tx::GenesisTx) and
-    /// testing purposes only.
+    /// [`GenesisTx`](crate::mantle::transactions::genesis_tx::GenesisTx),
+    /// trusted blocks in storage, and testing purposes only.
     #[must_use]
     #[doc(hidden)]
     pub(crate) fn into_state_trusted<NewState: VerificationState>(

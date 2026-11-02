@@ -217,16 +217,14 @@ mod tests {
     };
     use lb_cryptarchia_engine::{Slot, UncleSlots};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+    use lb_ledger::ValidationMode;
     use rand::thread_rng;
 
     use super::*;
-    use crate::{
-        BlockOrigin,
-        tests::{
-            GENESIS_ID, chain_with_fork, chain_with_fork_on, genesis_cryptarchia_on, ledger_config,
-            ledger_config_with_max_uncles, ledger_config_with_uncle_reference_window, schedule,
-            signed_header, single_era, try_build_block, utxo,
-        },
+    use crate::tests::{
+        GENESIS_ID, chain_with_fork, chain_with_fork_on, genesis_cryptarchia_on, ledger_config,
+        ledger_config_with_max_uncles, ledger_config_with_uncle_reference_window, schedule,
+        signed_header, single_era, try_build_block, utxo,
     };
 
     #[test]
@@ -551,13 +549,13 @@ mod tests {
         // Received from the network, and replayed from storage, where the
         // other uncle rules are not checked again.
         let block_header_slot = block.header().slot();
-        for origin in [BlockOrigin::Network, BlockOrigin::Storage] {
+        for validation_mode in [ValidationMode::Full, ValidationMode::Trusted] {
             let Err(err) = cryptarchia.try_apply_block_with_state_retention(
                 block.clone(),
                 block_header_slot,
-                origin,
+                validation_mode,
             ) else {
-                panic!("expected the block to be rejected from {origin:?}");
+                panic!("expected the block to be rejected with {validation_mode:?}");
             };
             assert!(matches!(err, Error::TooManyUncles { count: 2, max: 1 }));
         }

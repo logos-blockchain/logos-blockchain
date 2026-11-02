@@ -384,6 +384,7 @@ fn apply_block_to_ledger(
             &proof,
             uncle_slots,
             std::iter::empty::<SignedOps<Preverified, StandardMode>>(),
+            crate::ValidationMode::Full,
         )
         .expect("ledger update")
         .verify_batch_proofs()
