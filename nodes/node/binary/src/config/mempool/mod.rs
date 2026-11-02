@@ -5,7 +5,7 @@ use lb_services_utils::overwatch::RecoveryData;
 use lb_time::era::{EpochLength as _, EraTiming, SlotDuration as _};
 use lb_tx_service::{
     TxMempoolSettings,
-    backend::{MempoolSettings, PowClaimEvictionSettings},
+    backend::{DEFAULT_TX_MATURITY, MempoolSettings, PowClaimEvictionSettings},
     network::adapters::libp2p::{
         EraSettings as Libp2pNetworkAdapterEraSettings, Settings as Libp2pNetworkAdapterSettings,
     },
@@ -46,6 +46,7 @@ impl ServiceConfig {
             },
             pool: MempoolSettings {
                 tx_ttl: self.user.tx_ttl,
+                tx_maturity: DEFAULT_TX_MATURITY,
                 pow_claim: Some(eras.map(|era| {
                     let EraRuleset::V1(parameters) = &era.parameters.ruleset;
                     PowClaimEvictionSettings {

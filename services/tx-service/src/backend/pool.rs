@@ -40,12 +40,20 @@ const LOG_TARGET: &str = mempool::POOL;
 /// Default time a pending transaction may stay in the pool before eviction.
 pub const DEFAULT_TX_TTL: Duration = Duration::from_hours(1);
 
+/// Default age at which a pending transaction is mature: the Blend message
+/// traversal time (15 rounds of one second) plus the time a block proposal
+/// takes to reach every node (5 seconds).
+pub const DEFAULT_TX_MATURITY: Duration = Duration::from_secs(20);
+
 /// Settings for the [`Mempool`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MempoolSettings {
     /// How long a pending transaction is allowed to stay in the pool before
     /// it is evicted. `None` disables expiry-based eviction.
     pub tx_ttl: Option<Duration>,
+    /// The age at which a pending transaction is mature, and offered to block
+    /// building: by then it has had time to reach every node.
+    pub tx_maturity: Duration,
     /// Eviction of transactions carrying an expired `PoW` reward claim, with
     /// the settings of every era. `None` disables it.
     pub pow_claim: Option<EraSchedule<PowClaimEvictionSettings>>,
@@ -59,6 +67,7 @@ impl Default for MempoolSettings {
     fn default() -> Self {
         Self {
             tx_ttl: Some(DEFAULT_TX_TTL),
+            tx_maturity: DEFAULT_TX_MATURITY,
             pow_claim: None,
             era_timing: None,
         }
@@ -258,8 +267,17 @@ where
         &self,
         _ancestor_hint: BlockId,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, MempoolError> {
-        self.get_items_by_keys(self.pending_items.keys().copied())
-            .await
+        // Pending items are ordered by admission time, so the mature ones,
+        // old enough to have reached every node, come first.
+        let now = current_timestamp_millis();
+        let maturity_millis = self.settings.tx_maturity.as_millis() as u64;
+        let mature_keys = self
+            .pending_items
+            .iter()
+            .take_while(|(_, admitted_at)| now.saturating_sub(**admitted_at) >= maturity_millis)
+            .map(|(key, _)| *key)
+            .collect::<Vec<_>>();
+        self.get_items_by_keys(mature_keys).await
     }
 
     fn keys_by_prefix(
