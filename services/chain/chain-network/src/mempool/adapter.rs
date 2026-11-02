@@ -35,7 +35,7 @@ where
 
     async fn notify_canonical_chain_updated(
         &self,
-        entered: HashMap<TxHash, Slot>,
+        entered: HashMap<TxHash, TxInBlock<Tx>>,
         reorged: Vec<TxInBlock<Tx>>,
     ) -> Result<(), overwatch::DynError> {
         self.mempool_relay
