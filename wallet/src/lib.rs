@@ -164,9 +164,8 @@ pub struct WalletState {
     pub vouchers: MerkleMountainRange<VoucherCm, ZkHasher>,
     /// All **tracked** voucher merkle paths up to the current block.
     ///
-    /// Paths are only updated when a sibling settles, so the sibling covering
-    /// the latest vouchers may be stale; see
-    /// [`MerkleMountainRange::refresh_path`].
+    /// The sibling covering the latest vouchers may be stale; see
+    /// [`MerkleMountainRange::push_with_lazy_paths`].
     pub voucher_paths: VoucherPaths,
     /// A snapshot of **tracked** voucher merkle paths,
     /// updated at the first block of each epoch.
@@ -451,17 +450,6 @@ impl WalletState {
         })
     }
 
-    /// Tracked voucher paths brought up to date with [`Self::vouchers`].
-    fn refreshed_voucher_paths(&self) -> Result<VoucherPaths, WalletError> {
-        let mut paths = rpds::HashTrieMapSync::new_sync();
-        for (cm, path) in &self.voucher_paths {
-            let mut path = path.clone();
-            self.vouchers.refresh_path(&mut path)?;
-            paths.insert_mut(*cm, path);
-        }
-        Ok(paths)
-    }
-
     /// Apply the voucher commitment from the block to the wallet state.
     ///
     /// Returns:
@@ -483,37 +471,35 @@ impl WalletState {
     > {
         // Snapshot voucher paths if epoch is advancing
         let snapshot = if block.epoch > self.epoch {
-            self.refreshed_voucher_paths()?
+            self.voucher_paths
+                .iter()
+                .map(|(cm, path)| {
+                    let mut path = path.clone();
+                    self.vouchers.refresh_path(&mut path)?;
+                    Ok((*cm, path))
+                })
+                .collect::<Result<_, WalletError>>()?
         } else {
             self.voucher_paths_snapshot.clone()
         };
 
         // Filter out vouchers that have been claimed/finalized.
         // `known_vouchers` always reflects the latest set of vouchers to be tracked.
-        // Of the rest, only the paths that the new voucher settles change: the
-        // others are shared with the parent's state.
         let mut voucher_paths = self.voucher_paths.clone();
-        let mut settled: Vec<(VoucherCm, MerklePath)> = Vec::new();
-        for (cm, path) in &self.voucher_paths {
+        for cm in self.voucher_paths.keys() {
             if known_vouchers.get(cm).is_none() {
                 voucher_paths.remove_mut(cm);
-            } else if self.vouchers.push_settles(path.leaf_index()) {
-                settled.push((*cm, path.clone()));
             }
         }
-        let (cms, mut paths): (Vec<VoucherCm>, Vec<MerklePath>) = settled.into_iter().unzip();
 
-        // Push the new voucher to the MMR and update the settled paths
+        // Push the new voucher to the MMR and update the tracked paths it settles
         let (vouchers, new_path) = self
             .vouchers
-            .push_with_settled_paths(block.voucher_cm, &mut paths)
+            .push_with_lazy_paths(block.voucher_cm, &mut voucher_paths)
             .map_err(|error| match error {
                 lb_mmr::PushWithPathsError::MmrFull(_) => WalletError::VoucherMmrFull,
                 lb_mmr::PushWithPathsError::InvalidTrackedPath(error) => error.into(),
             })?;
-        for (cm, path) in cms.into_iter().zip(paths) {
-            voucher_paths.insert_mut(cm, path);
-        }
 
         // Track the new voucher's path if it is owned by us
         if known_vouchers.get(&block.voucher_cm).is_some() {
