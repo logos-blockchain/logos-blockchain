@@ -502,7 +502,7 @@ async fn expired_tx_is_evicted_on_next_sweep() {
         .expect("fresh tx should be added");
 
     let mut saved_state = pool.save();
-    saved_state.pending_items.insert(old_tx_id, 0);
+    saved_state.pending_items.insert(old_tx_id, minutes_ago(65));
     let mut pool = InMemoryPool::recover(
         ttl_settings(TEST_TX_TTL),
         Era::genesis(),
@@ -904,11 +904,10 @@ async fn reorged_tx_already_pending_is_not_readmitted() {
     assert!(!pool.save().removed_items.contains_key(&tx_id));
 }
 
-/// A reorged tx that is not admitted again, here a claim that expired while
-/// its block was canonical, is retained in `removed_items`, so it stays
-/// resolvable for the grace period.
+/// A claim that expired while its block was canonical is released at its
+/// deadline, and refused if a reorg brings it back.
 #[tokio::test]
-async fn reorged_tx_not_admitted_again_moves_to_removed_items() {
+async fn reorged_claim_past_its_deadline_is_not_admitted_again() {
     let anchor = HeaderId::from([1u8; 32]);
     let storage = InMemoryStorageAdapter::default().with_block(anchor, 100);
     let mut pool = InMemoryPool::new(pow_claim_settings(), Era::genesis(), storage);
@@ -935,8 +934,8 @@ async fn reorged_tx_not_admitted_again_moves_to_removed_items() {
     assert_eq!(readmitted, vec![]);
     let state = pool.save();
     assert!(!state.included_in_canonical.contains_key(&claim_id));
-    assert!(state.removed_items.contains_key(&claim_id));
-    assert_eq!(keys_with_prefix(&pool, claim_id), vec![claim_id]);
+    assert!(!state.removed_items.contains_key(&claim_id));
+    assert_eq!(keys_with_prefix(&pool, claim_id), vec![]);
 }
 
 /// A tx carried by a canonical block is a duplicate at admission, so gossiping
@@ -1649,21 +1648,9 @@ async fn expired_claim_is_evicted_after_its_window_and_grace() {
     processed_block(&mut pool, 131).await;
     assert_eq!(pool.status(&[claim_id]), vec![Status::Unknown]);
     assert_eq!(pool.status(&[plain_id]), vec![Status::Pending]);
-    // An evicted claim still resolves during its grace period.
-    assert_eq!(
-        pool.keys_by_prefix(&claim_id.key_prefix())
-            .copied()
-            .collect::<Vec<_>>(),
-        vec![claim_id]
-    );
-
-    let fetched_after_eviction = pool
-        .get_items_by_keys([claim_id])
-        .await
-        .expect("evicted tx should still be fetchable during grace period")
-        .collect::<Vec<_>>()
-        .await;
-    assert_eq!(fetched_after_eviction, vec![claim]);
+    // An expired claim is released right away: no block can carry it anymore.
+    assert_eq!(keys_with_prefix(&pool, claim_id), vec![]);
+    assert_eq!(stored_items(&pool, claim_id).await, vec![]);
 }
 
 #[tokio::test]
@@ -1810,26 +1797,39 @@ async fn claim_eviction_is_disabled_without_settings() {
     assert_eq!(pool.status(&[claim_id]), vec![Status::Pending]);
 }
 
+/// A retired claim stays resolvable until its deadline, and is released then:
+/// no block can carry it anymore.
 #[tokio::test]
-async fn claim_included_in_a_block_is_not_evicted_twice() {
-    let anchor = HeaderId::from([1u8; 32]);
-    let storage = InMemoryStorageAdapter::default().with_block(anchor, 100);
-    let mut pool = InMemoryPool::new(pow_claim_settings(), Era::genesis(), storage);
+async fn retired_claim_is_released_at_its_deadline() {
+    for included in [false, true] {
+        let anchor = HeaderId::from([1u8; 32]);
+        let storage = InMemoryStorageAdapter::default().with_block(anchor, 100);
+        let mut pool = InMemoryPool::new(pow_claim_settings(), Era::genesis(), storage);
 
-    let claim = claim_tx(anchor);
-    let claim_id = claim.hash();
-    pool.add_item(claim_id, claim)
-        .await
-        .expect("claim tx should be added");
+        let claim = claim_tx(anchor);
+        let claim_id = claim.hash();
+        pool.add_item(claim_id, claim)
+            .await
+            .expect("claim tx should be added");
+        if included {
+            pool.on_canonical_chain_updated(
+                HashMap::from([(claim_id, Slot::from(105u64))]),
+                vec![],
+            )
+            .await;
+        } else {
+            pool.remove(&[claim_id]).await;
+        }
 
-    pool.remove(&[claim_id]).await;
-    let admitted_at = pool.save().removed_items[&claim_id];
+        // The claim's deadline is slot 131.
+        processed_block(&mut pool, 130).await;
+        assert_eq!(keys_with_prefix(&pool, claim_id), vec![claim_id]);
 
-    processed_block(&mut pool, 1_000).await;
-    assert_eq!(pool.status(&[claim_id]), vec![Status::Unknown]);
-    assert_eq!(
-        pool.save().removed_items.get(&claim_id),
-        Some(&admitted_at),
-        "an already removed tx must stay retired, not be retired again by the sweep"
-    );
+        processed_block(&mut pool, 131).await;
+        assert_eq!(keys_with_prefix(&pool, claim_id), vec![]);
+        assert_eq!(stored_items(&pool, claim_id).await, vec![]);
+        let state = pool.save();
+        assert!(!state.removed_items.contains_key(&claim_id));
+        assert!(!state.included_in_canonical.contains_key(&claim_id));
+    }
 }

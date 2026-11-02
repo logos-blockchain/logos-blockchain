@@ -10,7 +10,7 @@ use lb_cryptarchia_engine::Slot;
 use lb_time::era::EraSchedule;
 
 use crate::backend::{
-    AdmissionTime,
+    AdmissionTime, IncludedItem,
     policy::{BlockSlots, EvictableTx, EvictionPolicy, PolicyClock},
 };
 
@@ -87,6 +87,17 @@ where
             .into()
     }
 
+    /// Tracked keys whose deadline the chain reached at `clock`.
+    fn past_deadline(&self, clock: &PolicyClock) -> Vec<Key> {
+        let Some(slot) = clock.slot else {
+            return Vec::new();
+        };
+        self.keys_by_deadline
+            .range(..=slot)
+            .flat_map(|(_, keys)| keys.iter().cloned())
+            .collect()
+    }
+
     /// Track `key` for eviction at `deadline`, or earlier if it already is.
     fn track(&mut self, key: Key, deadline: Slot) {
         if let Some(&current) = self.deadline_by_key.get(&key) {
@@ -150,7 +161,7 @@ where
 impl<Tx, BlockId> EvictionPolicy<Tx, BlockId> for PowClaimPolicy<Tx::Hash, BlockId>
 where
     Tx: Hashable + EvictableTx,
-    Tx::Hash: Send + Sync,
+    Tx::Hash: Ord + Send + Sync,
     BlockId: Hash + Eq + Clone + From<[u8; 32]> + Send + Sync,
 {
     /// A claim whose anchor is known and whose deadline the chain already
@@ -185,7 +196,7 @@ where
         }
     }
 
-    fn on_remove(&mut self, key: &Tx::Hash) {
+    fn on_release(&mut self, key: &Tx::Hash) {
         self.unpark(key);
         if let Some(deadline) = self.deadline_by_key.remove(key) {
             self.untrack_deadline(key, deadline);
@@ -213,12 +224,19 @@ where
         clock: &PolicyClock,
         _pending_txs: &IndexMap<Tx::Hash, AdmissionTime>,
     ) -> Vec<Tx::Hash> {
-        let Some(slot) = clock.slot else {
-            return Vec::new();
-        };
-        self.keys_by_deadline
-            .range(..=slot)
-            .flat_map(|(_, keys)| keys.iter().cloned())
+        self.past_deadline(clock)
+    }
+
+    /// A retired claim past its deadline: no block can carry it anymore.
+    fn select_releases(
+        &self,
+        clock: &PolicyClock,
+        retired_txs: &BTreeMap<Tx::Hash, AdmissionTime>,
+        included_txs: &HashMap<Tx::Hash, IncludedItem>,
+    ) -> Vec<Tx::Hash> {
+        self.past_deadline(clock)
+            .into_iter()
+            .filter(|key| retired_txs.contains_key(key) || included_txs.contains_key(key))
             .collect()
     }
 }
@@ -499,8 +517,8 @@ mod tests {
         let parked_key = add(&mut policy, &parked, &known(&[]));
         assert_eq!(policy.tracked(), 2);
 
-        EvictionPolicy::<Ops, HeaderId>::on_remove(&mut policy, &tracked_key);
-        EvictionPolicy::<Ops, HeaderId>::on_remove(&mut policy, &parked_key);
+        EvictionPolicy::<Ops, HeaderId>::on_release(&mut policy, &tracked_key);
+        EvictionPolicy::<Ops, HeaderId>::on_release(&mut policy, &parked_key);
 
         assert_eq!(policy.tracked(), 0);
         assert!(policy.keys_by_deadline.is_empty());
