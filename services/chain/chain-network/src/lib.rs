@@ -1231,7 +1231,7 @@ mod tests {
     use futures::stream;
     use lb_binary_codec::canonical::BinaryDecodeExt as _;
     use lb_core::{
-        block::UncleHeaders,
+        block::{TxInBlock, UncleHeaders},
         mantle::{
             traits::Hasher,
             transactions::{Ops, hash::REFERENCE_PREFIX_BYTES},
@@ -1278,7 +1278,7 @@ mod tests {
         async fn notify_canonical_chain_updated(
             &self,
             _entered: HashMap<TxHash, Slot>,
-            _reorged: Vec<HashOnlyTx>,
+            _reorged: Vec<TxInBlock<HashOnlyTx>>,
         ) -> Result<(), DynError> {
             unimplemented!("resolution never changes the canonical chain")
         }

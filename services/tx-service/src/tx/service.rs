@@ -15,7 +15,7 @@ use std::{
 
 use futures::StreamExt as _;
 use lb_core::{
-    block::MAX_BLOCK_TRANSACTIONS_SIZE,
+    block::{MAX_BLOCK_TRANSACTIONS_SIZE, TxInBlock},
     mantle::{
         traits::{Hashable, StorageSize},
         transactions::hash::PrefixedKey,
@@ -459,7 +459,7 @@ where
     async fn handle_canonical_chain_updated_message(
         pool: &mut Pool,
         entered: HashMap<Pool::Key, Slot>,
-        reorged: Vec<Pool::Item>,
+        reorged: Vec<TxInBlock<Pool::Item>>,
         state_updater: &MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
         accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
     ) where

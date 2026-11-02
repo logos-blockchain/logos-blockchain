@@ -12,7 +12,7 @@ use std::{
 
 use backend::{MempoolError, Status};
 use futures::Stream;
-use lb_core::mantle::transactions::hash::PrefixedKey;
+use lb_core::{block::TxInBlock, mantle::transactions::hash::PrefixedKey};
 use lb_cryptarchia_engine::Slot;
 use tokio::sync::{broadcast, oneshot::Sender};
 pub use tx::{service::TxMempoolService, settings::TxMempoolSettings};
@@ -51,11 +51,13 @@ where
     ///   retired, and remain available for reference resolution until that
     ///   block becomes immutable.
     /// - `reorged`: items carried by the blocks that left the canonical chain
-    ///   and not by the blocks now in it. They are no longer retained as
-    ///   included, and are admitted again. Empty when the chain only grows.
+    ///   and not by the blocks now in it, each with the slot of the block
+    ///   carrying it. They are no longer retained as included, and are admitted
+    ///   again unless they are older than the TTL. Empty when the chain only
+    ///   grows.
     CanonicalChainUpdated {
         entered: HashMap<Key, Slot>,
-        reorged: Vec<Item>,
+        reorged: Vec<TxInBlock<Item>>,
     },
     /// The chain processed `block_id` at `slot`, and its latest immutable
     /// block is at `lib_slot`.
