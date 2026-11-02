@@ -155,7 +155,7 @@ pub fn run_node_from_config(
     // Before any service starts: a deployment that changed an era the node has
     // already executed must not run on the state the node left.
     if let Some(tip_era) = lb_chain_service::saved_tip_era(&recovery_data)? {
-        config.deployment.assert_keeps_tip_era(tip_era);
+        config.deployment.check_keeps_tip_era(tip_era)?;
     }
 
     let (blend_config, blend_core_config, blend_edge_config, blend_broadcast_config) =

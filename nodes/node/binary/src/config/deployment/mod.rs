@@ -28,7 +28,8 @@ use crate::config::{
 };
 
 /// Why a deployment cannot run: an era whose values the node refuses, alone or
-/// after the era before it, or eras that cannot be resolved.
+/// after the era before it, eras that cannot be resolved, or a change to an
+/// era the node has already executed.
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct InvalidDeployment(String);
@@ -189,23 +190,23 @@ impl DeploymentSettings {
     /// Checks that this deployment gives the slot of the node's saved tip the
     /// fork digest the tip was applied under.
     ///
-    /// # Panics
+    /// # Errors
     ///
     /// If it gives the slot another fork digest: the deployment changes an era
     /// the node has already executed, so the node would run on state executed
     /// under other rules.
-    pub fn assert_keeps_tip_era(&self, tip_era: TipEra) {
+    pub fn check_keeps_tip_era(&self, tip_era: TipEra) -> Result<(), InvalidDeployment> {
         let TipEra { slot, fork_digest } = tip_era;
         let scheduled = self.eras.at_slot(slot).parameters.fork_digest;
-        assert_eq!(
-            scheduled,
-            fork_digest,
+        ensure!(
+            scheduled == fork_digest,
             "The node's tip, at slot {}, was applied under fork {fork_digest}, but this deployment \
              schedules that slot under fork {scheduled}: it changes an era the node has already \
              executed. Run the release the node ran with, or remove the node's state and sync \
              again.",
             slot.into_inner()
         );
+        Ok(())
     }
 
     /// The parameters of the genesis era, in version 1's layout, the only one
@@ -506,11 +507,10 @@ mod tests {
             slot: Slot::new(5 * genesis_era.parameters.epoch_length().get()),
             fork_digest: genesis_era.parameters.fork_digest,
         };
-        two_eras().assert_keeps_tip_era(tip_era);
+        two_eras().check_keeps_tip_era(tip_era).unwrap();
     }
 
     #[test]
-    #[should_panic(expected = "it changes an era the node has already executed")]
     fn a_deployment_that_changes_the_era_of_the_tip_is_refused() {
         let two_eras = two_eras();
         let era_1 = two_eras.era_schedule().get(Era::new(1)).unwrap();
@@ -519,7 +519,14 @@ mod tests {
             slot: era_1.first_slot,
             fork_digest: era_1.parameters.fork_digest,
         };
-        DeploymentSettings::default().assert_keeps_tip_era(tip_era);
+        let reason = DeploymentSettings::default()
+            .check_keeps_tip_era(tip_era)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            reason.contains("it changes an era the node has already executed"),
+            "{reason}"
+        );
     }
 
     #[test]
