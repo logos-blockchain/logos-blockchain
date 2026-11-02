@@ -1270,7 +1270,7 @@ mod tests {
         proofs::leader_proof::Groth16LeaderProof,
     };
     use lb_cryptarchia_engine::Era;
-    use lb_cryptarchia_sync::TipResponse;
+    use lb_cryptarchia_sync::Tip;
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, Ed25519Signature};
     use lb_network_service::{
         backends::mock::Mock,
@@ -1542,11 +1542,11 @@ mod tests {
             unimplemented!()
         }
 
-        async fn request_tip(&self, _peer: Self::PeerId) -> Result<TipResponse, DynError> {
+        async fn request_tip(&self, _peer: Self::PeerId) -> Result<Tip, DynError> {
             unimplemented!()
         }
 
-        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<TipResponse> {
+        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<Tip> {
             unimplemented!()
         }
 

@@ -32,7 +32,7 @@ use crate::{
         messages::{RequestMessage, max_blocks_response_bincode_size},
         provider::{MAX_ADDITIONAL_BLOCKS, Provider, ReceivedRequest},
     },
-    messages::{SerialisedBlock, TipResponse},
+    messages::{SerialisedBlock, Tip},
 };
 
 mod old_era;
@@ -86,14 +86,14 @@ impl BlocksResponseReader {
 pub struct TipResponseReader {
     pub peer_id: PeerId,
     pub stream: Libp2pStream,
-    pub reply_channel: oneshot::Sender<Result<TipResponse, ChainSyncError>>,
+    pub reply_channel: oneshot::Sender<Result<Tip, ChainSyncError>>,
 }
 
 impl TipResponseReader {
     pub const fn new(
         peer_id: PeerId,
         stream: Stream,
-        reply_channel: oneshot::Sender<Result<TipResponse, ChainSyncError>>,
+        reply_channel: oneshot::Sender<Result<Tip, ChainSyncError>>,
     ) -> Self {
         Self {
             peer_id,
@@ -268,7 +268,7 @@ impl Behaviour {
     pub fn request_tip(
         &self,
         peer_id: PeerId,
-        reply_sender: oneshot::Sender<Result<TipResponse, ChainSyncError>>,
+        reply_sender: oneshot::Sender<Result<Tip, ChainSyncError>>,
     ) -> Result<(), ChainSyncError> {
         self.sync_protocol_state.request_tip(peer_id, reply_sender);
         Ok(())
@@ -316,7 +316,7 @@ impl SyncProtocolState {
     fn request_tip(
         &self,
         peer_id: PeerId,
-        reply_sender: oneshot::Sender<Result<TipResponse, ChainSyncError>>,
+        reply_sender: oneshot::Sender<Result<Tip, ChainSyncError>>,
     ) {
         let mut control = self.control.clone();
         let protocol_name = self.protocol_name.clone();
@@ -733,17 +733,15 @@ mod tests {
     use tokio::sync::{mpsc, oneshot};
 
     use crate::{
-        BlocksProviderResponse, BlocksUnavailableReason, DynError, ProviderResponse,
-        TipProviderResponse,
-        TipResponse::Tip,
-        TipResponseFailureReason,
+        BlocksProviderResponse, BlocksUnavailableReason, DynError, ProviderResponse, Tip,
+        TipProviderResponse, TipResponseFailureReason,
         config::Config,
         libp2p::{
             behaviour::{Behaviour, BoxedStream, Event},
             errors::{ChainSyncError, ChainSyncErrorKind},
             provider::MAX_ADDITIONAL_BLOCKS,
         },
-        messages::{SerialisedBlock, TipResponse},
+        messages::SerialisedBlock,
     };
 
     #[tokio::test]
@@ -844,9 +842,7 @@ mod tests {
 
         tokio::spawn(async move { downloader_swarm.loop_on_next().await });
 
-        let Tip { tip, slot, height } = reply_receiver.await.unwrap().unwrap() else {
-            panic!("Expected a tip response");
-        };
+        let Tip { tip, slot, height } = reply_receiver.await.unwrap().unwrap();
 
         assert_eq!(tip, HeaderId::from([0; 32]));
         assert_eq!(slot, Slot::from(0));
@@ -920,9 +916,7 @@ mod tests {
                 download_rx.recv().await.unwrap();
             }
 
-            let Tip { tip, .. } = tip_receiver.await.unwrap().unwrap() else {
-                panic!("Expected a tip response");
-            };
+            let Tip { tip, .. } = tip_receiver.await.unwrap().unwrap();
             assert_eq!(tip, HeaderId::from([0; 32]));
 
             let (blocks, errors) = wait_block_messages(excess_streams).await;
@@ -1593,7 +1587,7 @@ mod tests {
     fn request_tip(
         downloader_swarm: &mut Swarm<Behaviour>,
         peer_id: PeerId,
-    ) -> oneshot::Receiver<Result<TipResponse, ChainSyncError>> {
+    ) -> oneshot::Receiver<Result<Tip, ChainSyncError>> {
         let (reply_sender, reply_receiver) = oneshot::channel();
         downloader_swarm
             .behaviour_mut()

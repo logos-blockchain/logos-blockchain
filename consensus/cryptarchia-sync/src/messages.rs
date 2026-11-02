@@ -24,20 +24,24 @@ pub enum TipResponseFailureReason {
     Unknown,
 }
 
+/// The wire response to a tip request.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum TipResponse {
     /// A success response.
-    Tip {
-        tip: HeaderId,
-        slot: Slot,
-        height: u64,
-    },
+    Tip(Tip),
     /// A response indicating that the request failed.
     Failure(TipResponseFailureReason),
 }
 
 impl BoundedSerializeOp for TipResponse {
     type Bytes = UpperBoundedVec<u8, MAX_TIP_RESPONSE_BINCODE_SIZE>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tip {
+    pub tip: HeaderId,
+    pub slot: Slot,
+    pub height: u64,
 }
 
 #[cfg(test)]
@@ -48,11 +52,11 @@ mod tests {
 
     #[test]
     fn tip_response_reasons_round_trip_within_the_bound() {
-        let tip = TipResponse::Tip {
+        let tip = TipResponse::Tip(Tip {
             tip: HeaderId::from([0; 32]),
             slot: Slot::new(u64::MAX),
             height: u64::MAX,
-        };
+        });
         let reasons = [
             (
                 TipResponseFailureReason::NodeNotOnline,

@@ -3,7 +3,7 @@ use lb_chain_service::{
     Slot,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
-use lb_cryptarchia_sync::{HeaderId, TipResponse};
+use lb_cryptarchia_sync::{HeaderId, Tip};
 use lb_time_service::SlotTick;
 use lb_utils::math::NonNegativeRatio;
 use overwatch::DynError;
@@ -48,14 +48,14 @@ where
     let info = lagging_local_info(cryptarchia, current_slot, params.lag_threshold_slots).await?;
     metrics::tip_poll_triggered_total();
 
-    let tips: Vec<TipResponse> = network_adapter
+    let tips: Vec<Tip> = network_adapter
         .sample_tips(params.max_peers)
         .await
         .collect()
         .await;
 
     // Pick the most-advanced reported tip that is strictly ahead of us.
-    let Some((height, _, tip)) = select_catchup_tip(tips, info.height, info.lib_slot) else {
+    let Some(Tip { tip, height, .. }) = select_catchup_tip(tips, info.height, info.lib_slot) else {
         debug!(
             target: LOG_TARGET,
             local_height = info.height,
@@ -105,27 +105,19 @@ where
     Some(info)
 }
 
-/// From a set of polled tip responses, pick the most-advanced tip that is
-/// strictly ahead of `local_height`. Ties on height are broken by the higher
-/// slot. `Failure` responses are ignored, as are tips at or before the local
-/// LIB slot: such a tip cannot descend from the LIB, so catching up to it
-/// would only walk a fork that diverged before it, the same rule the gossip
-/// path applies. Returns `(height, slot, tip)`.
+/// From a set of polled tips, pick the most-advanced tip that is strictly
+/// ahead of `local_height`. Ties on height are broken by the higher slot.
+/// Tips at or before the local LIB slot are ignored: such a tip cannot
+/// descend from the LIB, so catching up to it would only walk a fork that
+/// diverged before it, the same rule the gossip path applies.
 fn select_catchup_tip(
-    tips: impl IntoIterator<Item = TipResponse>,
+    tips: impl IntoIterator<Item = Tip>,
     local_height: u64,
     lib_slot: Slot,
-) -> Option<(u64, Slot, HeaderId)> {
+) -> Option<Tip> {
     tips.into_iter()
-        .filter_map(|resp| match resp {
-            TipResponse::Tip { tip, slot, height } => Some((height, slot, tip)),
-            TipResponse::Failure(reason) => {
-                debug!(target: LOG_TARGET, %reason, "tip poll: peer reported failure");
-                None
-            }
-        })
-        .filter(|(height, slot, _)| *height > local_height && !is_at_or_before_lib(*slot, lib_slot))
-        .max_by_key(|(height, slot, _)| (*height, u64::from(*slot)))
+        .filter(|tip| tip.height > local_height && !is_at_or_before_lib(tip.slot, lib_slot))
+        .max_by_key(|tip| (tip.height, u64::from(tip.slot)))
 }
 
 pub struct PolledTip {
@@ -177,12 +169,10 @@ impl TipPollParams {
 
 #[cfg(test)]
 mod tests {
-    use lb_cryptarchia_sync::TipResponseFailureReason;
-
     use super::*;
 
-    fn tip(height: u64, slot: u64, id: u8) -> TipResponse {
-        TipResponse::Tip {
+    fn tip(height: u64, slot: u64, id: u8) -> Tip {
+        Tip {
             tip: HeaderId::from([id; 32]),
             slot: Slot::new(slot),
             height,
@@ -204,24 +194,11 @@ mod tests {
             tip(15, 400, 3), // same height, higher slot -> winner
             tip(14, 999, 4),
         ];
-        let (height, slot, id) =
+        let Tip { tip, slot, height } =
             select_catchup_tip(tips, 11, Slot::new(0)).expect("a tip ahead exists");
         assert_eq!(height, 15);
         assert_eq!(slot, Slot::new(400));
-        assert_eq!(id, HeaderId::from([3; 32]));
-    }
-
-    #[test]
-    fn select_catchup_tip_skips_failures() {
-        let tips = vec![
-            TipResponse::Failure(TipResponseFailureReason::NodeNotOnline),
-            tip(20, 500, 7),
-            TipResponse::Failure(TipResponseFailureReason::NodeNotOnline),
-        ];
-        let (height, _, id) =
-            select_catchup_tip(tips, 5, Slot::new(0)).expect("a tip ahead exists");
-        assert_eq!(height, 20);
-        assert_eq!(id, HeaderId::from([7; 32]));
+        assert_eq!(tip, HeaderId::from([3; 32]));
     }
 
     #[test]
@@ -231,8 +208,11 @@ mod tests {
             tip(25, 90, 2),  // before the LIB slot
             tip(20, 150, 3), // past the LIB slot -> winner
         ];
-        let (height, slot, id) =
-            select_catchup_tip(tips, 10, Slot::new(100)).expect("a tip past the LIB exists");
+        let Tip {
+            tip: id,
+            slot,
+            height,
+        } = select_catchup_tip(tips, 10, Slot::new(100)).expect("a tip past the LIB exists");
         assert_eq!(height, 20);
         assert_eq!(slot, Slot::new(150));
         assert_eq!(id, HeaderId::from([3; 32]));

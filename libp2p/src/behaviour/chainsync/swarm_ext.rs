@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use lb_cryptarchia_sync::{BoxedStream, ChainSyncError, HeaderId, SerialisedBlock, TipResponse};
+use lb_cryptarchia_sync::{BoxedStream, ChainSyncError, HeaderId, SerialisedBlock, Tip};
 use libp2p::PeerId;
 use rand::RngCore;
 use tokio::sync::oneshot;
@@ -33,7 +33,7 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
     pub fn request_tip(
         &self,
         peer_id: PeerId,
-        reply_sender: oneshot::Sender<Result<TipResponse, ChainSyncError>>,
+        reply_sender: oneshot::Sender<Result<Tip, ChainSyncError>>,
     ) -> Result<(), BehaviourError> {
         let chain_sync = &self.swarm.behaviour().chain_sync;
 

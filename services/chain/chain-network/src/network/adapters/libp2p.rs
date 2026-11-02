@@ -15,7 +15,7 @@ use lb_core::{
     },
 };
 use lb_cryptarchia_engine::{Era, EraSchedule, Slot};
-use lb_cryptarchia_sync::TipResponse;
+use lb_cryptarchia_sync::Tip;
 use lb_log_targets::chain;
 use lb_network_service::{
     backends::libp2p::{
@@ -412,7 +412,7 @@ where
         })))
     }
 
-    async fn request_tip(&self, peer: Self::PeerId) -> Result<TipResponse, DynError> {
+    async fn request_tip(&self, peer: Self::PeerId) -> Result<Tip, DynError> {
         let started_at = Instant::now();
         tracing::debug!(target: LOG_TARGET, "Requesting chain tip from peer {peer:?}");
         let (reply_sender, receiver) = oneshot::channel();
@@ -434,20 +434,20 @@ where
         metrics::chainsync_observe_request_tip(started_at.elapsed(), response)
     }
 
-    async fn sample_tips(&self, max_peers: usize) -> BoxedStream<TipResponse> {
+    async fn sample_tips(&self, max_peers: usize) -> BoxedStream<Tip> {
         use futures::stream::StreamExt as FuturesStreamExt;
         let connected_peers = match Self::get_connected_peers(&self.network_relay).await {
             Ok(peers) => peers,
             Err(e) => {
                 tracing::warn!(target: LOG_TARGET, "tip poll: failed to fetch connected peers: {e}");
-                return Box::new(stream::empty::<TipResponse>());
+                return Box::new(stream::empty::<Tip>());
             }
         };
         let chainsync_peers = match Self::get_chainsync_eligible_peers(&self.network_relay).await {
             Ok(peers) => peers,
             Err(e) => {
                 tracing::warn!(target: LOG_TARGET, "tip poll: failed to fetch chainsync-eligible peers: {e}");
-                return Box::new(stream::empty::<TipResponse>());
+                return Box::new(stream::empty::<Tip>());
             }
         };
         let connected_peers = connected_peers
@@ -461,7 +461,7 @@ where
 
         if sampled.is_empty() {
             tracing::debug!(target: LOG_TARGET, "tip poll: no connected peers to sample");
-            return Box::new(stream::empty::<TipResponse>());
+            return Box::new(stream::empty::<Tip>());
         }
         let result_stream = FuturesStreamExt::filter_map(
             stream::iter(

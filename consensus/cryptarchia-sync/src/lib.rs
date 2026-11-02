@@ -2,7 +2,7 @@ pub mod config;
 mod libp2p;
 pub use libp2p::messages::BlocksRequest;
 mod messages;
-pub use messages::{SerialisedBlock, TipResponse, TipResponseFailureReason};
+pub use messages::{SerialisedBlock, Tip, TipResponse, TipResponseFailureReason};
 
 pub type DynError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
@@ -25,7 +25,7 @@ pub enum ProviderResponse<Response, Reason = String> {
     Unavailable { reason: Reason },
 }
 
-pub type TipProviderResponse = ProviderResponse<TipResponse, TipResponseFailureReason>;
+pub type TipProviderResponse = ProviderResponse<Tip, TipResponseFailureReason>;
 
 pub type BlocksProviderResponse = ProviderResponse<
     BoxStream<'static, Result<SerialisedBlock, DynError>>,
