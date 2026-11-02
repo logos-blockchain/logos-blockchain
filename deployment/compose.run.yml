@@ -66,7 +66,7 @@ services:
 
   logos-blockchain-node-2:
     container_name: logos_blockchain_node_2
-    image: ghcr.io/logos-blockchain/logos-blockchain-node:${NODE_IMAGE_LABEL}
+    image: ghcr.io/logos-blockchain/logos-blockchain:0.3.4-mem
     volumes:
       - node-data:/node-data
       - ./deployment:/etc/logos-blockchain
