@@ -72,6 +72,16 @@ mod tests {
         ratio(numerator, denominator).try_into().unwrap()
     }
 
+    /// The default parameters with `k`, `f = 1/f_inverse` and `W` replaced.
+    fn parameters_with(security_param: u32, f_inverse: u32, window: u32) -> Parameters {
+        let mut parameters = parameters();
+        let cryptarchia = &mut parameters.cryptarchia;
+        cryptarchia.security_param = NonZero::new(security_param).unwrap();
+        cryptarchia.slot_activation_coeff = coeff(1, f_inverse);
+        cryptarchia.uncle_reference_window_in_block = window;
+        parameters
+    }
+
     #[test]
     fn the_slot_activation_coeff_is_below_1_and_at_least_the_inference_precision() {
         for (numerator, denominator) in [(0, 1), (1, 1), (3, 2), (1, 1001)] {
@@ -95,6 +105,9 @@ mod tests {
         validate(|parameters| {
             parameters.blend.core.verification_rate_per_second = NonZero::new(8).unwrap();
         });
+        // k = 10 and f = 1/20: s = 600 slots, a fifth of which is 120 slots, 6
+        // blocks of the next era at its f of 1/20.
+        parameters_with(30, 20, 6).validate(Some(&parameters_with(10, 20, 6)));
     }
 
     #[test]
@@ -117,21 +130,26 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "wider than the 6 that a fifth of the previous era's")]
+    #[should_panic(
+        expected = "window of 140 slots is wider than a fifth of the previous era's \
+                    finalization window, 600 slots"
+    )]
     fn an_uncle_reference_window_wider_than_a_fifth_of_the_previous_finalization_window_is_refused()
     {
-        // k = 10 and f = 1/20: s = 600 slots, a fifth of which is 6 blocks of
-        // the next era, at its f of 1/20.
-        let mut previous = parameters();
-        previous.cryptarchia.security_param = NonZero::new(10).unwrap();
-        previous.cryptarchia.slot_activation_coeff = coeff(1, 20);
-        previous.cryptarchia.uncle_reference_window_in_block = 6;
-        let mut next = parameters();
-        next.cryptarchia.security_param = NonZero::new(30).unwrap();
-        next.cryptarchia.slot_activation_coeff = coeff(1, 20);
-        next.cryptarchia.uncle_reference_window_in_block = 7;
+        // k = 10 and f = 1/20: s = 600 slots, a fifth of which is 120 slots, 6
+        // blocks of the next era at its f of 1/20. Its 7 blocks span 140.
+        parameters_with(30, 20, 7).validate(Some(&parameters_with(10, 20, 6)));
+    }
 
-        next.validate(Some(&previous));
+    #[test]
+    #[should_panic(
+        expected = "window of 240 slots is wider than a fifth of the previous era's \
+                    finalization window, 600 slots"
+    )]
+    fn the_same_uncle_reference_window_is_refused_at_a_lower_f() {
+        // The 6 blocks that span a fifth of the previous era's 600 slots at an
+        // f of 1/20 span 240 at the next era's f of 1/40.
+        parameters_with(30, 40, 6).validate(Some(&parameters_with(10, 20, 6)));
     }
 
     #[test]

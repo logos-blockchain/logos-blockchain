@@ -10,7 +10,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{
     Config as ConsensusConfig, average_slots_for_blocks, base_period_length,
-    expected_blocks_per_epoch, time::epoch_length,
+    expected_blocks_per_epoch, max_allowed_uncle_reference_window_in_block, time::epoch_length,
 };
 use lb_groth16::ModulusShift;
 use lb_ledger::cryptarchia::STAKE_INFERENCE_PRECISION;
@@ -39,9 +39,10 @@ impl Settings {
     /// the era before it, `previous`, if there is one, panicking on the first
     /// value found invalid.
     pub(super) fn validate(&self, previous: Option<&Self>) {
+        let consensus_config = self.consensus_config();
         // Panics if `⌊k/4f⌋` leaves the Genesis density window no slot: now
         // rather than at the first fork choice.
-        let _ = self.consensus_config().s_gen();
+        let _ = consensus_config.s_gen();
 
         let window = self.uncle_reference_window_in_block;
         let widest = self.widest_uncle_reference_window();
@@ -52,11 +53,12 @@ impl Settings {
         // While the latest immutable block still lies in the previous era, an
         // uncle's parent must not lie below it.
         if let Some(previous) = previous {
-            let widest = self.widest_uncle_reference_window_after(previous);
+            let window = consensus_config.uncle_reference_window_in_slot();
+            let finalization_window = previous.consensus_config().slot_security_param().get();
             assert!(
-                window <= widest,
-                "The uncle reference window of {window} blocks is wider than the {widest} that a \
-                 fifth of the previous era's finalization window allows."
+                u128::from(window) * 5 <= u128::from(finalization_window),
+                "The uncle reference window of {window} slots is wider than a fifth of the \
+                 previous era's finalization window, {finalization_window} slots."
             );
         }
 
@@ -80,28 +82,8 @@ impl Settings {
     /// blocks, whose `W·f⁻¹` slots then span about a fifth of the slots a block
     /// takes to become immutable.
     #[must_use]
-    pub const fn widest_uncle_reference_window(&self) -> u32 {
-        (3 * self.security_param.get() as u64 / 5) as u32
-    }
-
-    /// `⌊s·f/5⌋`: the widest uncle reference window `W`, in blocks, whose
-    /// `W·f⁻¹` slots span at most a fifth of the finalization window `s` of
-    /// the era before, `previous`.
-    fn widest_uncle_reference_window_after(&self, previous: &Self) -> u32 {
-        let NonNegativeRatio {
-            numerator,
-            denominator,
-        } = self.slot_activation_coeff.get();
-        let widest = u128::from(previous.finalization_window()) * u128::from(numerator)
-            / (5 * u128::from(denominator.get()));
-        u32::try_from(widest).unwrap_or(u32::MAX)
-    }
-
-    /// `s = 3⌊k/f⌋`: the slots a block takes to become immutable.
-    const fn finalization_window(&self) -> u64 {
-        base_period_length(self.security_param, self.slot_activation_coeff.get())
-            .get()
-            .saturating_mul(3)
+    pub fn widest_uncle_reference_window(&self) -> u32 {
+        max_allowed_uncle_reference_window_in_block(self.security_param)
     }
 
     #[must_use]
@@ -221,8 +203,8 @@ pub struct EpochConfig {
 // config instead.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SdpConfig {
-    /// The parameters of each service type, in the order [`ServiceType`]
-    /// declares them.
+    /// The parameters of each service type, at the position of the byte the
+    /// type encodes as, which is the order [`ServiceType`] declares them in.
     pub service_params: [ServiceParameters; ServiceType::COUNT],
     pub min_stake: MinStake,
 }
