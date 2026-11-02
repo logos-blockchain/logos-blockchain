@@ -433,9 +433,9 @@ where
             MempoolMsg::ProcessedBlock {
                 block_id,
                 slot,
-                lib_slot,
+                k_deep_slot,
             } => {
-                pool.on_processed_block(block_id, slot, lib_slot).await;
+                pool.on_processed_block(block_id, slot, k_deep_slot).await;
                 state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
             }
             MempoolMsg::Metrics { reply_channel } => {

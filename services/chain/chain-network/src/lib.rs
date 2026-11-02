@@ -1104,7 +1104,7 @@ async fn notify_mempool_of_highest_block<Cryptarchia, Mempool>(
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
 {
-    // The genesis slot as the LIB releases nothing.
+    // The genesis slot as the block `k` deep releases nothing.
     match cryptarchia.highest_block().await {
         Ok((highest_id, highest_slot)) => {
             if let Err(err) = mempool
@@ -1148,7 +1148,7 @@ where
         tip,
         newly_canonical_txs,
         reorged_txs,
-        lib_slot,
+        k_deep_slot,
     } = cryptarchia.apply_block(block).await?;
     debug!(
         target: LOG_TARGET, ?block_id, ?tip,
@@ -1166,10 +1166,10 @@ where
         error!(target: LOG_TARGET, err, "could not notify mempool of canonical chain update");
     }
 
-    // Notify the mempool to trigger evictions and release txs whose block became
-    // immutable.
+    // Notify the mempool to trigger evictions and release txs whose block is `k`
+    // blocks deep.
     if let Err(err) = mempool
-        .notify_processed_block(block_id, block_slot, lib_slot)
+        .notify_processed_block(block_id, block_slot, k_deep_slot)
         .await
     {
         error!(target: LOG_TARGET, err, "could not notify mempool of processed block");
@@ -1318,7 +1318,7 @@ mod tests {
             &self,
             _block_id: HeaderId,
             _slot: Slot,
-            _lib_slot: Slot,
+            _k_deep_slot: Slot,
         ) -> Result<(), DynError> {
             unimplemented!("resolution never processes blocks")
         }

@@ -312,8 +312,9 @@ pub struct AppliedBlock<Tx> {
     /// except those also carried by the blocks that entered it, each with
     /// the slot of the block carrying it.
     pub reorged_txs: Vec<TxInBlock<Tx>>,
-    /// The slot of the latest immutable block after applying the block.
-    pub lib_slot: Slot,
+    /// The slot of the block of the local chain `k` blocks deep after
+    /// applying the block.
+    pub k_deep_slot: Slot,
 }
 
 /// Event emitted when a block is processed by cryptarchia.
@@ -466,6 +467,13 @@ impl Cryptarchia {
             .branches()
             .max_by_key(|branch| branch.slot())
             .expect("the block tree has at least one tip")
+    }
+
+    /// The block of the local chain `k` blocks deep, which moves up with the
+    /// tip even while the LIB stays put during bootstrapping.
+    #[must_use]
+    pub fn k_deep_branch(&self) -> &Branch<HeaderId> {
+        self.consensus.k_deep_branch()
     }
 
     /// Try to apply a block to the chain.
