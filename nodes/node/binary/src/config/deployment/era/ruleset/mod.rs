@@ -2,6 +2,8 @@ use core::{num::NonZero, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::deployment::InvalidDeployment;
+
 pub mod v1;
 
 /// The rules an era runs under, named by their version, with the values of
@@ -21,6 +23,17 @@ impl EraRuleset {
     pub(super) const fn version(&self) -> u16 {
         match self {
             Self::V1(_) => 1,
+        }
+    }
+
+    /// Checks the era's parameters, alone and against those of the era before
+    /// it, `previous`, if there is one, refusing the first value found
+    /// invalid.
+    pub(super) fn validate(&self, previous: Option<&Self>) -> Result<(), InvalidDeployment> {
+        match self {
+            Self::V1(parameters) => {
+                parameters.validate(previous.map(|Self::V1(previous)| previous))
+            }
         }
     }
 

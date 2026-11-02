@@ -1,9 +1,6 @@
 use core::num::{NonZero, NonZeroU32, NonZeroU64, NonZeroU128};
 
-use lb_core::{
-    block::genesis::GenesisBlock,
-    sdp::{NumberOfEpochs, ServiceType},
-};
+use lb_core::{block::genesis::GenesisBlock, sdp::NumberOfEpochs};
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::ModulusShift;
 use lb_node::config::deployment::{
@@ -147,7 +144,9 @@ pub fn e2e_deployment_settings_with_genesis_block(
                 slot_activation_coeff: NonNegativeRatio::new(
                     SLOT_ACTIVATION_COEFF_NUMERATOR,
                     NonZero::new(SLOT_ACTIVATION_COEFF_DENOMINATOR).unwrap(),
-                ),
+                )
+                .try_into()
+                .expect("The e2e slot activation coefficient is valid."),
                 epoch_config: EpochConfig {
                     epoch_stake_distribution_stabilization: NonZero::new(
                         EPOCH_STAKE_DISTRIBUTION_STABILIZATION,
@@ -160,14 +159,10 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     .unwrap(),
                 },
                 sdp_config: v1::cryptarchia::SdpConfig {
-                    service_params: (
-                        ServiceType::BlendNetwork,
-                        ServiceParameters {
-                            inactivity_period: SDP_INACTIVITY_PERIOD.try_into().unwrap(),
-                            epoch: SDP_EPOCH,
-                        },
-                    )
-                        .into(),
+                    service_params: [ServiceParameters {
+                        inactivity_period: SDP_INACTIVITY_PERIOD.try_into().unwrap(),
+                        epoch: SDP_EPOCH,
+                    }],
                     min_stake: lb_core::sdp::MinStake {
                         threshold: MIN_STAKE_THRESHOLD,
                         timestamp: MIN_STAKE_TIMESTAMP,
@@ -208,4 +203,5 @@ pub fn e2e_deployment_settings_with_genesis_block(
         })),
         GenesisBlock::genesis(genesis_tx.clone()),
     )
+    .expect("The e2e deployment must be valid.")
 }

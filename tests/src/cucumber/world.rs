@@ -149,8 +149,15 @@ impl ManualNodeConfigOverrides {
             config
                 .deployment
                 .update_genesis_era_parameters(|parameters| {
-                    parameters.cryptarchia.security_param = security_param;
-                });
+                    let cryptarchia = &mut parameters.cryptarchia;
+                    cryptarchia.security_param = security_param;
+                    // A lower `k` narrows the widest uncle reference window the
+                    // era allows.
+                    cryptarchia.uncle_reference_window_in_block = cryptarchia
+                        .uncle_reference_window_in_block
+                        .min(cryptarchia.widest_uncle_reference_window());
+                })
+                .expect("The changed deployment must be valid.");
         }
 
         if let Some(prolonged_bootstrap_period) = self.prolonged_bootstrap_period {
