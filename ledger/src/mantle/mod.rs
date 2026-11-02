@@ -15,7 +15,7 @@ use lb_core::{
                 config::{ChannelConfigExecutionContext, ChannelConfigOp},
                 inscribe::{InscriptionExecutionContext, InscriptionOp},
             },
-            pow::ClaimPowRewardError,
+            pow::{ClaimPowRewardError, PowReward},
             program::ProgramRegisterError,
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferError,
@@ -29,7 +29,11 @@ use lb_log_targets::ledger;
 use sdp::Error as SdpLedgerError;
 use tracing::error;
 
-use crate::{Config, EpochState, mantle::sdp::HeaderEffect};
+use crate::{
+    Config, EpochState,
+    config::{EraScheduledConfig, config_for_epoch, pow_slot_windows},
+    mantle::sdp::HeaderEffect,
+};
 
 const LOG_TARGET: &str = ledger::mantle::ROOT;
 
@@ -63,12 +67,12 @@ pub struct LedgerState {
 
 impl LedgerState {
     #[must_use]
-    pub fn new(config: &Config, epoch_state: &EpochState) -> Self {
+    pub fn new(config: &Config, pow_reward_pool: PowReward, epoch_state: &EpochState) -> Self {
         Self {
             channels: channel::Channels::new(),
             sdp: sdp::SdpLedger::new(epoch_state.epoch())
                 .with_blend_service(&config.sdp_config.service_rewards_params.blend, epoch_state),
-            pow: pow::PowState::from_reward_config(&config.pow_config.reward),
+            pow: pow::PowState::from_reward_pool_and_config(pow_reward_pool, config),
             programs: Programs::new(),
         }
     }
@@ -78,6 +82,7 @@ impl LedgerState {
         signed_operation_declarations: GenesisDeclarations,
         tx_hash_view: &TxHashView,
         config: &Config,
+        pow_reward_pool: PowReward,
         note_sets: NoteSets,
         epoch_state: &EpochState,
     ) -> Result<(Self, NoteSets, Vec<TxEvent>), Error> {
@@ -99,7 +104,7 @@ impl LedgerState {
             Self {
                 channels,
                 sdp,
-                pow: pow::PowState::from_reward_config(&config.pow_config.reward),
+                pow: pow::PowState::from_reward_pool_and_config(pow_reward_pool, config),
                 programs: Programs::new(),
             },
             note_sets,
@@ -146,11 +151,16 @@ impl LedgerState {
         mut self,
         last_epoch_state: &EpochState,
         epoch_state: &EpochState,
-        config: &Config,
+        eras: &EraScheduledConfig,
     ) -> Result<(Self, HeaderEffect), Error> {
-        let (new_sdp, effect) =
-            self.sdp
-                .try_apply_header(&config.sdp_config, last_epoch_state, epoch_state)?;
+        let last_config = config_for_epoch(eras, last_epoch_state.epoch);
+        let config = config_for_epoch(eras, epoch_state.epoch);
+        let (new_sdp, effect) = self.sdp.try_apply_header(
+            &last_config.sdp_config,
+            &config.sdp_config,
+            last_epoch_state,
+            epoch_state,
+        )?;
         self.sdp = new_sdp;
         self.pow = self
             .pow
@@ -159,19 +169,20 @@ impl LedgerState {
     }
 
     /// Record a newly applied block among the recently seen blocks that
-    /// `PoW` reward claims may anchor to, pruning entries that aged out of
-    /// the acceptance window.
+    /// `PoW` reward claims may anchor to, pruning the blocks, and the
+    /// nullifiers of the claims anchored to them, that aged out of the
+    /// acceptance window of their era: no claim in this block or a later one
+    /// can anchor to them any more.
     ///
     /// This runs only on the canonical apply path, where the block's id is
     /// known — a proposer applying the header of a block it is still
     /// building has no id to record (and that block's transactions cannot
     /// anchor to it anyway).
-    pub fn add_seen_block(&mut self, block_hash: Hash, slot: Slot, config: &Config) {
+    pub fn add_seen_block(&mut self, block_hash: Hash, slot: Slot, eras: &EraScheduledConfig) {
+        let slot_windows = pow_slot_windows(eras);
         self.pow.add_seen_block_slots(block_hash, slot);
-        self.pow
-            .prune_seen_block_slots(slot, config.pow_config.reward.slot_window);
-        self.pow
-            .prune_nullifiers_by_slots(slot, config.pow_config.reward.slot_window);
+        self.pow.prune_seen_block_slots(slot, &slot_windows);
+        self.pow.prune_nullifiers_by_slots(slot, &slot_windows);
     }
 
     pub fn try_apply_channel_inscription(

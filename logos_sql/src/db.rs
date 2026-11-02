@@ -217,6 +217,12 @@ const SELECT_LOCAL_WRITE: &str = "
     WHERE this_msg = ?1
 ";
 
+const HAS_LOCAL_PUBLICATION: &str = "
+    SELECT EXISTS (
+        SELECT 1 FROM __logos_sql_local_writes WHERE this_msg = ?1
+    )
+";
+
 const UPSERT_WRITE_STATUS: &str = "
     INSERT INTO __logos_sql_write_statuses (tx_id, status)
     VALUES (?1, ?2)
@@ -860,6 +866,12 @@ impl Databases {
         self.live
             .connection
             .query_row(HAS_PENDING_WRITES, [], |row| row.get(0))
+            .map_err(Error::from)
+    }
+
+    pub(crate) fn has_local_publication(&self, this_msg: MsgId) -> Result<bool, Error> {
+        self.control
+            .query_row(HAS_LOCAL_PUBLICATION, [this_msg.as_ref()], |row| row.get(0))
             .map_err(Error::from)
     }
 

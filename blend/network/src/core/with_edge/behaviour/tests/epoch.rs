@@ -42,9 +42,11 @@ async fn start_new_epoch_closes_all_edge_connections() {
         id: core_membership_peer,
         public_key: Ed25519PublicKey::from_bytes(&[1; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
     }]);
-    blend_swarm
-        .behaviour_mut()
-        .start_new_epoch((new_membership, 0.into()), TestProofsVerifier::accepting());
+    blend_swarm.behaviour_mut().start_new_epoch(
+        (new_membership, 0.into()),
+        TestProofsVerifier::accepting(),
+        None,
+    );
 
     assert_eq!(
         blend_swarm.behaviour().upgraded_edge_peers.len(),
@@ -118,9 +120,11 @@ async fn epoch_transition_updates_membership_for_new_connections() {
         id: other_core_peer,
         public_key: Ed25519PublicKey::from_bytes(&[1; _]).unwrap(),
     }]);
-    blend_swarm
-        .behaviour_mut()
-        .start_new_epoch((new_membership, 0.into()), TestProofsVerifier::accepting());
+    blend_swarm.behaviour_mut().start_new_epoch(
+        (new_membership, 0.into()),
+        TestProofsVerifier::accepting(),
+        None,
+    );
 
     // Now edge_swarm should be able to connect and upgrade.
     let _stream = edge_swarm

@@ -3,14 +3,20 @@ pub mod policy;
 pub mod pool;
 
 use core::hash::Hash;
-use std::pin::Pin;
+use std::{collections::HashMap, pin::Pin};
 
 use futures::Stream;
 use lb_core::mantle::transactions::hash::PrefixedKey;
 use lb_cryptarchia_engine::Slot;
+use lb_time::Era;
 pub use policy::{EvictableTx, EvictionPolicy, PowClaimEvictionSettings};
-pub use pool::{DEFAULT_TX_TTL, Mempool, MempoolSettings, PoolRecoveryState};
+pub use pool::{
+    DEFAULT_TX_TTL, IncludedItem, Mempool, MempoolSettings, PoolRecoveryState, RemovedItem,
+};
 use serde::{Deserialize, Serialize};
+
+/// Admission time of a transaction, as a Unix timestamp in milliseconds.
+pub type AdmissionTime = u64;
 
 #[derive(thiserror::Error, Debug)]
 pub enum MempoolError {
@@ -35,7 +41,10 @@ pub trait MemPool {
     type Storage: Send;
 
     /// Construct a new empty pool with storage
-    fn new(settings: Self::Settings, storage: Self::Storage) -> Self;
+    fn new(settings: Self::Settings, current_era: Era, storage: Self::Storage) -> Self;
+
+    async fn rotate_era(&mut self, era: Era);
+    async fn complete_era_transition(&mut self, ended_era: Era);
 
     /// Add a new item to the mempool, for example because we received it from
     /// the network. The item is stored in external storage.
@@ -70,12 +79,32 @@ pub trait MemPool {
     where
         I: IntoIterator<Item = Self::Key> + Send;
 
-    /// Remove items from the mempool..
+    /// Retire the items that block building found inapplicable.
     async fn remove(&mut self, items: &[Self::Key]);
 
-    /// The chain processed block `block_id` at `slot`. This is the pool's
-    /// only notion of chain time, so it also triggers eviction.
-    async fn on_processed_block(&mut self, block_id: Self::BlockId, slot: Slot);
+    /// The canonical chain was updated, either by growing with a new block or
+    /// by a reorg.
+    ///
+    /// - `entered`: items carried by the blocks that entered the canonical
+    ///   chain, each mapped to the slot of the block carrying it. They are
+    ///   retired, and remain available for reference resolution until that
+    ///   block becomes immutable.
+    /// - `reorged`: items carried by the blocks that left the canonical chain
+    ///   and not by the blocks now in it. They are no longer retained as
+    ///   included, and are admitted again. Empty when the chain only grows.
+    ///
+    /// Returns the reorged items admitted again, for the caller to broadcast.
+    async fn on_canonical_chain_updated(
+        &mut self,
+        entered: HashMap<Self::Key, Slot>,
+        reorged: Vec<Self::Item>,
+    ) -> Vec<Self::Item>;
+
+    /// The chain processed block `block_id` at `slot`, and its latest
+    /// immutable block is at `lib_slot`. This is the pool's only notion of
+    /// chain time, so it also triggers eviction, and the release of the items
+    /// whose block became immutable.
+    async fn on_processed_block(&mut self, block_id: Self::BlockId, slot: Slot, lib_slot: Slot);
 
     fn pending_item_count(&self) -> usize;
     fn last_item_timestamp(&self) -> u64;
@@ -105,6 +134,7 @@ pub trait RecoverableMempool: MemPool {
     /// Recover from saved state with storage
     fn recover(
         settings: <Self as MemPool>::Settings,
+        current_era: Era,
         state: Self::RecoveryState,
         storage: <Self as MemPool>::Storage,
     ) -> Self;

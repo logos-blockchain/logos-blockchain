@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{num::NonZero, sync::Arc};
 
 use lb_core::{
     header::HeaderId,
@@ -27,7 +27,7 @@ use super::{
         block_fetch::ViewBefore,
         block_states::{BlockChannelTx, ChannelTxKind},
         state::PendingBundle,
-        types::{FinalizedOp, InscriptionInfo, SequencerConfig},
+        types::{ConfigInfo, FinalizedOp, InscriptionInfo, SequencerConfig},
         zone_sequencer::track_pending_tx,
     },
     *,
@@ -835,11 +835,11 @@ async fn assert_turns_alternate_without_blocks(posting_timeframe: u32, posting_t
     channel.posting_timeout = posting_timeout.into();
     let node = MockNode {
         channel_state: Some(channel),
-        slot_duration_ms: 100,
+        slot_duration: core::time::Duration::from_millis(100),
         ..MockNode::default()
     };
     let config = SequencerConfig {
-        resubmit_interval: std::time::Duration::from_secs(600),
+        resubmit_interval: core::time::Duration::from_secs(600),
         ..SequencerConfig::new(funding_config())
     };
     let mut sequencer =
@@ -882,7 +882,7 @@ async fn turn_notification_closes_with_the_publish_margin() {
     channel.posting_timeframe = 4u32.into();
     let node = MockNode {
         channel_state: Some(channel),
-        slot_duration_ms: 300,
+        slot_duration: core::time::Duration::from_millis(300),
         ..MockNode::default()
     };
     let config = SequencerConfig {
@@ -962,14 +962,15 @@ async fn publish_after_bundle_chains_on_the_bundle_inscription_tip() {
         signer: sequencer_key.public_key().into_unverified(),
         steps: ChannelSteps::default(),
     };
-    let config = ChannelConfigOp {
-        channel: channel_id,
-        parent: MsgId::root(),
-        keys: VerifiedChannelKeys::try_from(vec![sequencer_key.public_key()]).unwrap(),
-        posting_timeframe: SlotTimeframe::from(0u32),
-        posting_timeout: SlotTimeout::from(0u32),
-        configuration_threshold: 1,
-    };
+    let config = ChannelConfigOp::new(
+        channel_id,
+        MsgId::root(),
+        VerifiedChannelKeys::try_from(vec![sequencer_key.public_key()]).unwrap(),
+        SlotTimeframe::from(0u32),
+        SlotTimeout::from(0u32),
+        NonZero::<u16>::MIN,
+    )
+    .unwrap();
     let inscribe_msg = inscribe.id();
     let bundle = unverified_tx_with_ops(vec![
         Op::ChannelInscribe(inscribe),
@@ -1003,15 +1004,15 @@ async fn config_only_block_orphans_pending_inscription_but_keeps_message_tip() {
     let channel_id = ChannelId::from([0; 32]);
     let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
 
-    let config_op = ChannelConfigOp {
-        channel: channel_id,
-        parent: MsgId::root(),
-        keys: VerifiedChannelKeys::try_from(vec![Ed25519Key::from_bytes(&[0; 32]).public_key()])
-            .unwrap(),
-        posting_timeframe: SlotTimeframe::from(0u32),
-        posting_timeout: SlotTimeout::from(0u32),
-        configuration_threshold: 1,
-    };
+    let config_op = ChannelConfigOp::new(
+        channel_id,
+        MsgId::root(),
+        VerifiedChannelKeys::try_from(vec![Ed25519Key::from_bytes(&[0; 32]).public_key()]).unwrap(),
+        SlotTimeframe::from(0u32),
+        SlotTimeout::from(0u32),
+        NonZero::<u16>::MIN,
+    )
+    .unwrap();
     let config_tx = unverified_tx_with_ops(vec![Op::ChannelConfig(config_op)]);
     let config_hash = config_tx.hash();
     let config_block = api_block(2, 1, 2, vec![config_tx]);
@@ -1251,6 +1252,98 @@ async fn cold_start_backfills_genesis_slot() {
     assert_eq!(checkpoints[1].lib, lib_block.header.id);
 }
 
+/// The complete mined configuration reaches `Event::BlocksProcessed`'s
+/// finalized items during a cold-start backfill: a config accrediting two
+/// keys, then one removing the second, each with its exact key set, across
+/// two backfill batches.
+#[tokio::test]
+async fn cold_start_backfill_finalizes_configs_with_their_keys() {
+    let channel_id = ChannelId::from([7; 32]);
+    let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+    let peer_key = Ed25519Key::from_bytes(&[1; 32]);
+    let config = |parent: MsgId, keys: Vec<_>| {
+        ChannelConfigOp::new(
+            channel_id,
+            parent,
+            VerifiedChannelKeys::try_from(keys).unwrap(),
+            SlotTimeframe::from(3u32),
+            SlotTimeout::from(0u32),
+            NonZero::<u16>::MIN,
+        )
+        .unwrap()
+    };
+    let accredit = config(
+        MsgId::root(),
+        vec![sequencer_key.public_key(), peer_key.public_key()],
+    );
+    let remove = config(accredit.id(), vec![sequencer_key.public_key()]);
+    let accredit_tx = unverified_tx_with_ops(vec![Op::ChannelConfig(accredit.clone())]);
+    let remove_tx = unverified_tx_with_ops(vec![Op::ChannelConfig(remove.clone())]);
+
+    let genesis_block = api_block(1, 0, 0, vec![accredit_tx.clone()]);
+    // Slot 120 falls in the second 100-slot batch.
+    let remove_block = api_block(2, 1, 120, vec![remove_tx.clone()]);
+    let lib_block = api_block(3, 2, 150, Vec::new());
+    let live_block = api_block(4, 3, 151, Vec::new());
+
+    let node = MockNode {
+        lib: lib_block.header.id,
+        lib_slot: lib_block.header.slot,
+        tip: lib_block.header.id,
+        scripts: scripts(vec![StreamScript {
+            events: vec![ProcessedBlockEvent {
+                block: live_block.clone(),
+                tip: live_block.header.id,
+                tip_slot: live_block.header.slot,
+                lib: lib_block.header.id,
+                lib_slot: lib_block.header.slot,
+            }],
+            then: StreamEnd::Hang,
+        }]),
+        immutable: vec![genesis_block, remove_block, lib_block.clone()],
+        ..MockNode::default()
+    };
+    let mut sequencer =
+        ZoneSequencer::init(channel_id, sequencer_key, node, funding_config(), None);
+
+    let mut configs: Vec<ConfigInfo> = Vec::new();
+    loop {
+        match sequencer.next_event().await {
+            Event::Ready => break,
+            Event::BlocksProcessed { finalized, .. } => {
+                configs.extend(
+                    finalized
+                        .iter()
+                        .flat_map(|tx| &tx.ops)
+                        .filter_map(|op| match op {
+                            FinalizedOp::Config(info) => Some(info.clone()),
+                            _ => None,
+                        }),
+                );
+            }
+            Event::TurnNotification { .. } => {}
+        }
+    }
+
+    assert_eq!(configs.len(), 2, "both configs finalized: {configs:?}");
+    assert_eq!(configs[0].tx_hash, accredit_tx.hash());
+    assert_eq!(configs[0].parent_msg, MsgId::root());
+    assert_eq!(configs[0].this_msg, accredit.id());
+    assert_eq!(
+        configs[0].config, accredit,
+        "the mined config, keys included"
+    );
+    assert_eq!(configs[0].config.keys().len(), 2);
+    assert_eq!(configs[1].tx_hash, remove_tx.hash());
+    assert_eq!(configs[1].parent_msg, accredit.id());
+    assert_eq!(configs[1].this_msg, remove.id());
+    assert_eq!(
+        configs[1].config, remove,
+        "the removal, with the one key left"
+    );
+    assert_eq!(configs[1].config.keys().len(), 1);
+}
+
 /// The one finalized tx with `tx_hash` carries a single root inscription
 /// with `msg_id`.
 fn assert_genesis_inscription_finalized(items: &[FinalizedTx], tx_hash: TxHash, msg_id: MsgId) {
@@ -1338,15 +1431,15 @@ async fn resume_backfill_refines_finalized_config_from_a_replayed_config() {
     let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
 
     // A pure config sits in the finalized history the backfill replays.
-    let config_op = ChannelConfigOp {
-        channel: channel_id,
-        parent: MsgId::root(),
-        keys: VerifiedChannelKeys::try_from(vec![Ed25519Key::from_bytes(&[0; 32]).public_key()])
-            .unwrap(),
-        posting_timeframe: SlotTimeframe::from(0u32),
-        posting_timeout: SlotTimeout::from(0u32),
-        configuration_threshold: 1,
-    };
+    let config_op = ChannelConfigOp::new(
+        channel_id,
+        MsgId::root(),
+        VerifiedChannelKeys::try_from(vec![Ed25519Key::from_bytes(&[0; 32]).public_key()]).unwrap(),
+        SlotTimeframe::from(0u32),
+        SlotTimeout::from(0u32),
+        NonZero::<u16>::MIN,
+    )
+    .unwrap();
     let config_id = config_op.id();
     let config_tx = unverified_tx_with_ops(vec![Op::ChannelConfig(config_op)]);
     // The config finalized during downtime at slot 1 — above the checkpoint
@@ -1748,7 +1841,7 @@ async fn channel_config_signs_with_own_current_accredited_index() {
         .expect("config update from an accredited non-leading key must build");
 
     assert_eq!(
-        config_op_of(&signed_ops).parent,
+        config_op_of(&signed_ops).parent(),
         MsgId::root(),
         "parent must equal the channel's config tip"
     );
@@ -1799,7 +1892,7 @@ async fn channel_config_on_unclaimed_channel_carries_empty_proof() {
     };
     assert!(proof.signatures().is_empty());
     assert_eq!(
-        config_op_of(&signed_ops).parent,
+        config_op_of(&signed_ops).parent(),
         MsgId::root(),
         "claiming an unclaimed channel must be rooted at ZERO"
     );
@@ -1828,6 +1921,34 @@ async fn channel_config_fails_when_not_accredited() {
         error.to_string().contains("accredited"),
         "unexpected error: {error}"
     );
+}
+
+/// A config the ledger would reject (a zero threshold, or a configuration
+/// threshold above the key count) fails locally, before it is funded.
+#[tokio::test]
+async fn channel_config_rejects_an_ill_formed_config() {
+    let own_key = Ed25519Key::from_bytes(&[7; 32]);
+    let mut sequencer = ready_sequencer_with_channel(None, own_key.clone()).await;
+
+    for (configuration_threshold, reason) in [
+        (2, "exceeds the 1 accredited keys"),
+        (0, "configuration_threshold must be at least 1"),
+    ] {
+        let error = sequencer
+            .handle()
+            .channel_config(
+                VerifiedChannelKeys::new_unchecked(vec![own_key.public_key()]),
+                SlotTimeframe::from(0u32),
+                SlotTimeout::from(0u32),
+                configuration_threshold,
+            )
+            .await
+            .expect_err("an ill-formed config must fail locally");
+        assert!(
+            error.to_string().contains(reason),
+            "unexpected error: {error}"
+        );
+    }
 }
 
 /// `configuration_threshold > 1` needs signatures the sequencer cannot
@@ -1906,7 +2027,7 @@ async fn a_second_config_on_a_pending_config_position_is_refused() {
         .await;
 
     assert_eq!(
-        config_op_of(&first_tx).parent,
+        config_op_of(&first_tx).parent(),
         MsgId::root(),
         "the config claiming an unclaimed channel must be rooted at ZERO"
     );

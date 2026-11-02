@@ -343,7 +343,7 @@ mod tests {
             Op::ChannelWithdraw(ChannelWithdrawOp::sample()),
         ]);
         let context = OpsGasContext::new(
-            [(ChannelConfigOp::sample().channel, CONFIGURATION_THRESHOLD)].into(),
+            [(ChannelConfigOp::sample().channel(), CONFIGURATION_THRESHOLD)].into(),
             GasPrices::new(1, 0),
         );
 

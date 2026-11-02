@@ -18,7 +18,7 @@ use lb_core::{
         transactions::{hash::TxHash, states::Preverified},
     },
 };
-use lb_cryptarchia_sync::GetTipResponse;
+use lb_cryptarchia_sync::TipResponse;
 use lb_log_targets::chain;
 use lb_tx_service::backend::RecoverableMempool;
 use overwatch::DynError;
@@ -299,8 +299,8 @@ where
 {
     let tips: HashSet<HeaderId> = join_all(peers.into_iter().map(async |peer| {
         let result: Result<HeaderId, DynError> = match network.request_tip(peer).await {
-            Ok(GetTipResponse::Tip { tip, .. }) => Ok(tip),
-            Ok(GetTipResponse::Failure(reason)) => Err(DynError::from(reason)),
+            Ok(TipResponse::Tip { tip, .. }) => Ok(tip),
+            Ok(TipResponse::Failure(reason)) => Err(DynError::from(reason)),
             Err(e) => Err(e),
         };
         result
@@ -368,18 +368,19 @@ mod tests {
         block::Proposal,
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
-    use lb_cryptarchia_engine::{EpochConfig, Slot, UncleSlots};
+    use lb_cryptarchia_engine::{EpochConfig, Era, Slot, UncleSlots};
     use lb_ledger::{
-        LedgerState,
-        config::{BlendPoWConfig, ConsensusExcludedKeys, ModulusShift, PoWConfig, RewardPoWConfig},
+        ConsensusExcludedKeys, LedgerState,
+        config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
-    use lb_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
-    use lb_utils::math::{NonNegativeRatio, PositiveF64};
-    use overwatch::{
-        overwatch::OverwatchHandle,
-        services::{ServiceData, relay::OutboundRelay},
+    use lb_network_service::{
+        backends::NetworkBackend,
+        message::{BackendNetworkMsg, ChainSyncEvent},
     };
+    use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
+    use lb_utils::math::{NonNegativeRatio, PositiveF64};
+    use overwatch::{overwatch::OverwatchHandle, services::relay::OutboundRelay};
     use tokio_stream::wrappers::BroadcastStream;
 
     use super::*;
@@ -829,12 +830,15 @@ mod tests {
 
         async fn new(
             _settings: Self::Settings,
-            _network_relay: OutboundRelay<
-                <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-            >,
+            _current_era: Era,
+            _network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
         ) -> Self {
             unimplemented!()
         }
+
+        async fn rotate_era(&mut self, _era: Era) {}
+
+        async fn complete_era_transition(&mut self, _ended_era: Era) {}
 
         async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
             unimplemented!()
@@ -844,14 +848,14 @@ mod tests {
             unimplemented!()
         }
 
-        async fn request_tip(&self, peer: Self::PeerId) -> Result<GetTipResponse, DynError> {
+        async fn request_tip(&self, peer: Self::PeerId) -> Result<TipResponse, DynError> {
             let tip = self
                 .providers
                 .iter()
                 .find_map(|(id, p)| (*id == peer).then(|| p.next_tip()))
                 .expect("test setup: peer must exist in providers");
             match tip {
-                Ok(tip) => Ok(GetTipResponse::Tip {
+                Ok(tip) => Ok(TipResponse::Tip {
                     tip: tip.id,
                     slot: tip.slot,
                     height: tip.height,
@@ -860,7 +864,7 @@ mod tests {
             }
         }
 
-        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<GetTipResponse> {
+        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<TipResponse> {
             Box::new(stream::empty())
         }
 
@@ -917,12 +921,21 @@ mod tests {
 
         fn new(
             _config: Self::Settings,
+            _current_era: Era,
             _overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         ) -> Self {
             unimplemented!()
         }
 
         async fn process(&self, _msg: Self::Message) {
+            unimplemented!()
+        }
+
+        async fn rotate_era(&mut self, _era: Era) {
+            unimplemented!()
+        }
+
+        async fn complete_era_transition(&mut self, _ended_era: Era) {
             unimplemented!()
         }
 
@@ -939,9 +952,25 @@ mod tests {
         let ledger_config = ledger_config();
         lb_chain_service::Cryptarchia::from_genesis(
             [GENESIS_ID; 32].into(),
-            LedgerState::from_notes(empty(), &ledger_config),
-            ledger_config,
+            LedgerState::from_notes(empty(), &ledger_config, 0, &ConsensusExcludedKeys::empty()),
+            single_era(ledger_config),
             lb_cryptarchia_engine::State::Bootstrapping,
+        )
+    }
+
+    /// `config` as the only era, from genesis.
+    fn single_era(config: lb_ledger::Config) -> Arc<EraScheduledConfig> {
+        Arc::new(
+            EraSchedule::new(
+                time::OffsetDateTime::UNIX_EPOCH,
+                EraTiming {
+                    slot_duration: Duration::from_secs(1),
+                    epoch_length: EpochLength::epoch_length(&config),
+                },
+                EraEntriesAfterGenesis::empty(),
+            )
+            .expect("a single era resolves")
+            .map(move |_| config.clone()),
         )
     }
 
@@ -949,8 +978,6 @@ mod tests {
     /// deployment config in tests.
     fn disabled_reward_config() -> RewardPoWConfig {
         RewardPoWConfig {
-            reward_pool_genesis: 1_000_000_000,
-            epoch_reward_genesis: 1_000_000,
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
@@ -975,7 +1002,8 @@ mod tests {
             NonZero::new(1).unwrap(),
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
-            NonZero::new(12).unwrap(),
+            12,
+            4,
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
@@ -1008,7 +1036,6 @@ mod tests {
                     timestamp: 0,
                 },
             },
-            consensus_excluded_keys: ConsensusExcludedKeys::empty(),
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),

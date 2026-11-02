@@ -8,49 +8,6 @@ use std::{
 use futures::StreamExt as _;
 use tokio::time::{Sleep, sleep};
 
-use crate::stream::{FirstReadyStreamError, UninitializedFirstReadyStream};
-
-/// A staging type that initializes a [`EpochEventStream`] by consuming
-/// the first [`Event`] from the underlying stream, expected to be yielded
-/// within a short timeout.
-pub struct UninitializedEpochEventStream<EventStream> {
-    stream: UninitializedFirstReadyStream<EventStream>,
-    transition_period: Duration,
-}
-
-impl<EventStream> UninitializedEpochEventStream<EventStream> {
-    #[must_use]
-    pub const fn new(event_stream: EventStream, transition_period: Duration) -> Self {
-        Self {
-            stream: UninitializedFirstReadyStream::new(event_stream),
-            transition_period,
-        }
-    }
-}
-
-impl<EventStream> UninitializedEpochEventStream<EventStream>
-where
-    EventStream: futures::Stream + Unpin,
-{
-    /// Initializes a [`EpochEventStream`] by consuming the first [`Epoch`]
-    /// from the underlying stream.
-    ///
-    /// It returns the first [`Epoch`] and the initialized
-    /// [`EpochEventStream`], awaiting the first epoch for as long as
-    /// necessary.
-    /// It returns an error only if the underlying stream closes before yielding
-    /// an epoch.
-    pub async fn await_first_ready(
-        self,
-    ) -> Result<(EventStream::Item, EpochEventStream<EventStream>), FirstReadyStreamError> {
-        let (first_epoch, remaining_stream) = self.stream.first().await?;
-        Ok((
-            first_epoch,
-            EpochEventStream::new(remaining_stream, self.transition_period),
-        ))
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum EpochEvent<Event> {
     NewEpoch(Event),
@@ -80,12 +37,18 @@ pub struct EpochEventStream<EventStream> {
 
 impl<EventStream> EpochEventStream<EventStream> {
     #[must_use]
-    const fn new(event_stream: EventStream, transition_period: Duration) -> Self {
+    pub const fn new(event_stream: EventStream, transition_period: Duration) -> Self {
         Self {
             event_stream,
             transition_period,
             transition_period_timer: None,
         }
+    }
+
+    /// Sets the transition period of the epochs to come. A transition period
+    /// already running keeps the length it started with.
+    pub const fn set_transition_period(&mut self, transition_period: Duration) {
+        self.transition_period = transition_period;
     }
 }
 
@@ -210,18 +173,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn first_ready_stream_yields_first_item_immediately() {
-        // Use an underlying stream that yields the first item nearly immediately.
-        let stream = UninitializedFirstReadyStream::new(
-            IntervalStream::new(interval(Duration::from_secs(1)))
-                .enumerate()
-                .map(|(i, _)| i),
+    async fn a_new_transition_period_applies_from_the_next_epoch() {
+        let epoch_duration = Duration::from_millis(500);
+        let old_transition_period = Duration::from_millis(300);
+        let new_transition_period = Duration::from_millis(100);
+        let time_tolerance = Duration::from_millis(50);
+
+        let mut stream = EpochEventStream::new(
+            Box::pin(IntervalStream::new(interval(epoch_duration))),
+            old_transition_period,
         );
 
-        let (first, mut stream) = stream.first().await.expect("first item should be yielded");
-        assert_eq!(first, 0);
-        // Next items are yielded normally.
-        assert_eq!(stream.next().await, Some(1));
-        assert_eq!(stream.next().await, Some(2));
+        // The transition already running keeps the period it started with.
+        assert!(matches!(stream.next().await, Some(EpochEvent::NewEpoch(_))));
+        stream.set_transition_period(new_transition_period);
+        let start_time = Instant::now();
+        assert!(matches!(
+            stream.next().await,
+            Some(EpochEvent::TransitionPeriodExpired)
+        ));
+        let elapsed = start_time.elapsed();
+        assert!(
+            elapsed.abs_diff(old_transition_period) <= time_tolerance,
+            "elapsed:{elapsed:?}, expected:{old_transition_period:?}",
+        );
+
+        // The transition of the next epoch lasts the new period.
+        assert!(matches!(stream.next().await, Some(EpochEvent::NewEpoch(_))));
+        let start_time = Instant::now();
+        assert!(matches!(
+            stream.next().await,
+            Some(EpochEvent::TransitionPeriodExpired)
+        ));
+        let elapsed = start_time.elapsed();
+        assert!(
+            elapsed.abs_diff(new_transition_period) <= time_tolerance,
+            "elapsed:{elapsed:?}, expected:{new_transition_period:?}",
+        );
     }
 }

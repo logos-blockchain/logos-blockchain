@@ -1,7 +1,7 @@
 use crate::{
     events::TxEvent,
     mantle::ledger::verification_mode::VerificationMode,
-    sdp::{Declaration, DeclarationId},
+    sdp::{Declaration, DeclarationId, ProviderId},
 };
 
 pub mod verification_mode {
@@ -56,5 +56,7 @@ pub trait ExecutableOperation {
 }
 
 pub type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
+/// Per-service provider-to-declaration index used by SDP Declare validation.
+pub type ProviderIndex = rpds::RedBlackTreeMapSync<ProviderId, DeclarationId>;
 
 pub type Value = u64;

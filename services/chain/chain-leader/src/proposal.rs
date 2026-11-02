@@ -79,7 +79,7 @@ mod tests {
         proofs::leader_proof::{check_winning, pol_wallet_inputs},
     };
     use lb_key_management_system_service::keys::UnsecuredZkKey;
-    use lb_ledger::LedgerState;
+    use lb_ledger::{ConsensusExcludedKeys, LedgerState};
 
     use super::*;
     use crate::leadership::public_inputs_for_slot;
@@ -90,7 +90,7 @@ mod tests {
         let secret_key = Fr::from(7u64);
         let public_key = UnsecuredZkKey::new(secret_key).to_public_key();
         let note = notes::Note::new(1_000, Fr::from(11u64), public_key);
-        let ledger = LedgerState::from_notes([note], &config);
+        let ledger = LedgerState::from_notes([note], &config, 0, &ConsensusExcludedKeys::empty());
         let (_, aged_path) = CommitmentMmr::new()
             .push_with_paths(note.commitment(), &mut [])
             .unwrap();

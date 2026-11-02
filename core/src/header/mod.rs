@@ -470,7 +470,7 @@ fn pol_msg_hashes_the_header_fields_under_its_dst() {
 #[test]
 fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
     let body_root = ContentId(
-        hex::decode("df924be4bc3e189e22c4470cb3bfe23fe7c7da3960ff9bf256a813e82506322a")
+        hex::decode("2dc97b2bf6b57bf22cf6eaa43eb97dd2f159329b5ec0cb3a552e7fd340e98bd1")
             .unwrap()
             .try_into()
             .unwrap(),
@@ -489,7 +489,7 @@ fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
     };
     assert_eq!(
         hex::encode(header(0x22).id().0),
-        "8ac4d83ac098d07530028d73666744328672ee8d04866b828786c91a5ef38036"
+        "08efd2edaec65c54a209f46d17a2fd7817a548830337869ca81d7830fb4e7c46"
     );
     assert_eq!(header(0x22).id(), header(0x23).id());
     assert_eq!(
@@ -506,7 +506,7 @@ fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
     let spec_header = Header::new(
         HeaderId([0x11; 32]),
         ContentId(
-            hex::decode("df924be4bc3e189e22c4470cb3bfe23fe7c7da3960ff9bf256a813e82506322a")
+            hex::decode("2dc97b2bf6b57bf22cf6eaa43eb97dd2f159329b5ec0cb3a552e7fd340e98bd1")
                 .unwrap()
                 .try_into()
                 .unwrap(),
@@ -520,7 +520,7 @@ fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
     );
     assert_eq!(
         hex::encode(spec_header.id().0),
-        "8ac4d83ac098d07530028d73666744328672ee8d04866b828786c91a5ef38036"
+        "08efd2edaec65c54a209f46d17a2fd7817a548830337869ca81d7830fb4e7c46"
     );
 }
 
@@ -628,6 +628,9 @@ mod body_root_test_vectors {
         utils::merkle,
     };
 
+    /// The uncle maximum of the vectors' era.
+    const VECTOR_MAX_UNCLES: u8 = 4;
+
     fn uncle(byte: u8) -> Header {
         Header::new(
             HeaderId([byte; 32]),
@@ -702,7 +705,8 @@ mod body_root_test_vectors {
         // 4. The same transactions with two carried uncles. Nothing downstream consumes
         //    this vector; it is here so that another implementation can check its
         //    `uncle_headers` encoding.
-        let uncles = UncleHeaders::new([uncle(0x66), uncle(0x77)]);
+        let uncles =
+            UncleHeaders::try_new(vec![uncle(0x66), uncle(0x77)], VECTOR_MAX_UNCLES).unwrap();
         println!("================================================================");
         println!("vector 4  : body_root with 2 uncles, over vector 2's transactions");
         println!("{:20}: {:02x}", "uncle_count", uncles.len());
@@ -781,16 +785,17 @@ mod body_root_test_vectors {
             .collect();
         assert_eq!(
             hex::encode(merkle::calculate_transactions_root(&txs)),
-            "fb93b884b2b6d762a1c6d3ed2d587bc6a05dc8be5085f4617696444ee7a4cf08"
+            "f4b3a5f930ed2b502faf17aac050bae411a28d1e99516dc502ed2a95ab29df5f"
         );
         assert_eq!(
             hex::encode(crate::block::body_root(&UncleHeaders::empty(), &txs).0),
-            "df924be4bc3e189e22c4470cb3bfe23fe7c7da3960ff9bf256a813e82506322a"
+            "2dc97b2bf6b57bf22cf6eaa43eb97dd2f159329b5ec0cb3a552e7fd340e98bd1"
         );
-        let uncles = UncleHeaders::new([uncle(0x66), uncle(0x77)]);
+        let uncles =
+            UncleHeaders::try_new(vec![uncle(0x66), uncle(0x77)], VECTOR_MAX_UNCLES).unwrap();
         assert_eq!(
             hex::encode(crate::block::body_root(&uncles, &txs).0),
-            "3866807f89823a09cd8bf45145c2e6da317db67add0d0e747aaf5b61d60894aa"
+            "105059078a4206b1b1eff47b9bbaacff9e85523d620f728cc3e17076a81eb4ca"
         );
     }
 }

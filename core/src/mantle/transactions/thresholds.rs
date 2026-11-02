@@ -34,8 +34,10 @@ impl<'a> RunningThresholds<'a> {
     pub fn apply(&mut self, op: OpRef<'_>) {
         match op {
             OpRef::ChannelConfig(operation) => {
-                self.configuration_thresholds
-                    .insert(operation.channel, operation.configuration_threshold);
+                self.configuration_thresholds.insert(
+                    operation.channel(),
+                    operation.configuration_threshold().get(),
+                );
             }
             // An inscription creates the channel when it does not exist yet.
             OpRef::ChannelInscribe(operation) => {

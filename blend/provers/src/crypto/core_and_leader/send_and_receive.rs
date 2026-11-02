@@ -46,7 +46,7 @@ where
     ) -> Self {
         let EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key,
-            num_blend_layers,
+            message_layout,
             pow_mining_pool,
             spent_core_quota,
         } = settings;
@@ -58,7 +58,7 @@ where
                 epoch,
             ),
             sender_processor: SenderEpochCryptographicProcessor::new(
-                num_blend_layers,
+                message_layout,
                 membership,
                 public_info,
                 core_proof_of_quota_generator,
@@ -128,7 +128,7 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier> DerefMut
 
 #[cfg(test)]
 mod test {
-    use std::{num::NonZeroU64, sync::Arc};
+    use std::sync::Arc;
 
     use futures::{StreamExt as _, stream::repeat};
     use lb_blend_membership::{Membership, Node};
@@ -152,7 +152,7 @@ mod test {
         core_and_leader::send_and_receive::EpochCryptographicProcessor,
         test_utils::{
             MockCorePoQGenerator, TestEpochChangeCoreAndLeaderProofsGenerator,
-            TestEpochChangeProofsVerifier,
+            TestEpochChangeProofsVerifier, message_layout,
         },
     };
 
@@ -175,7 +175,7 @@ mod test {
         >::new(
             EpochCryptographicProcessorSettings {
                 non_ephemeral_encryption_key: [0; _].into(),
-                num_blend_layers: NonZeroU64::new(1).unwrap(),
+                message_layout: message_layout(1),
                 pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
                 spent_core_quota: Quota::ZERO,
             },

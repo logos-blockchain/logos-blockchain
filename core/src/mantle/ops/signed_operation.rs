@@ -289,11 +289,17 @@ mod tests {
     #[test]
     fn into_verified_returns_the_operation_alongside_the_error() {
         let parent = MsgId::from([27u8; 32]);
+        let sample = ChannelConfigOp::sample();
         let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
-            ChannelConfigOp {
+            ChannelConfigOp::new(
+                sample.channel(),
                 parent,
-                ..ChannelConfigOp::sample()
-            },
+                sample.keys().clone(),
+                sample.posting_timeframe().clone(),
+                sample.posting_timeout().clone(),
+                sample.configuration_threshold(),
+            )
+            .unwrap(),
             ChannelMultiSigProof::empty(),
         )
         .into_state_trusted::<Preverified>();
@@ -314,7 +320,7 @@ mod tests {
         assert_eq!(
             error,
             Error::InvalidParent {
-                channel_id: ChannelConfigOp::sample().channel,
+                channel_id: ChannelConfigOp::sample().channel(),
                 parent: parent.into(),
                 actual: MsgId::root().into(),
             }

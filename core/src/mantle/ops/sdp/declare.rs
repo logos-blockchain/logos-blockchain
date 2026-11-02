@@ -12,7 +12,7 @@ use crate::{
         gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
-            VerifiableOperation,
+            ProviderIndex, VerifiableOperation,
             verification_mode::{GenesisMode, StandardMode, VerificationMode},
         },
         note_set::{LEDGER_SET, NoteSets, SDP_SET},
@@ -26,7 +26,12 @@ use crate::{
 };
 
 trait SDPDeclareValidationExt {
-    fn validate(&self, declarations: &Declarations, min_stake: &MinStake) -> Result<(), SdpError>;
+    fn validate(
+        &self,
+        declarations: &Declarations,
+        provider_index: &ProviderIndex,
+        min_stake: &MinStake,
+    ) -> Result<(), SdpError>;
 
     fn execute(
         &self,
@@ -35,12 +40,17 @@ trait SDPDeclareValidationExt {
 }
 
 impl SDPDeclareValidationExt for SDPDeclareOp {
-    fn validate(&self, declarations: &Declarations, min_stake: &MinStake) -> Result<(), SdpError> {
+    fn validate(
+        &self,
+        declarations: &Declarations,
+        provider_index: &ProviderIndex,
+        min_stake: &MinStake,
+    ) -> Result<(), SdpError> {
         // Check that the declaration doesn't already exist
         if declarations.contains_key(&self.id()) {
             return Err(SdpError::DuplicateDeclaration(self.id()));
         }
-        validate_service_scoped_uniqueness(self, declarations)?;
+        validate_service_scoped_uniqueness(self, provider_index)?;
 
         // Ensure the stake is sufficient for joining the service.
         if self.amount < min_stake.threshold {
@@ -59,7 +69,10 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
     ) -> Result<(SDPDeclareExecutionContext, Vec<TxEvent>), SdpError> {
         let declaration_id = self.id();
         let declaration = Declaration::new(context.epoch, self);
-        context.declarations = context.declarations.insert(declaration_id, declaration);
+        context.declarations.insert_mut(declaration_id, declaration);
+        context
+            .provider_index
+            .insert_mut(self.provider_id, declaration_id);
 
         // Spend the inputs from the ledger set and add the service note to the SDP set
         let ledger = context
@@ -83,29 +96,19 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
     }
 }
 
-/// `provider_id` and `zk_id` must each be unique within the same service.
+/// The declaration-ID lookup enforces `zk_id` uniqueness; this index enforces
+/// `provider_id` uniqueness without scanning the service's declarations.
 fn validate_service_scoped_uniqueness(
     op: &SDPDeclareOp,
-    declarations: &Declarations,
+    provider_index: &ProviderIndex,
 ) -> Result<(), SdpError> {
-    declarations
-        .values()
-        .filter(|d| d.service_type == op.service_type)
-        .try_for_each(|existing| {
-            if existing.provider_id == op.provider_id {
-                Err(SdpError::DuplicateProviderId {
-                    service_type: op.service_type,
-                    provider_id: Box::new(op.provider_id),
-                })
-            } else if existing.zk_id == op.zk_id {
-                Err(SdpError::DuplicateZkId {
-                    service_type: op.service_type,
-                    zk_id: op.zk_id,
-                })
-            } else {
-                Ok(())
-            }
-        })
+    if provider_index.contains_key(&op.provider_id) {
+        return Err(SdpError::DuplicateProviderId {
+            service_type: op.service_type,
+            provider_id: Box::new(op.provider_id),
+        });
+    }
+    Ok(())
 }
 
 pub struct SDPDeclarePreverificationContext<'a> {
@@ -117,6 +120,7 @@ pub struct SDPDeclareVerificationContext<'a> {
     pub block_number: BlockNumber,
     pub tx_hash_view: &'a TxHashView,
     pub declarations: &'a Declarations,
+    pub provider_index: &'a ProviderIndex,
     pub min_stake: &'a MinStake,
 }
 
@@ -124,6 +128,7 @@ pub struct SDPDeclareGenesisValidationContext<'a> {
     pub note_sets: &'a NoteSets,
     pub tx_hash_view: &'a TxHashView,
     pub declarations: &'a Declarations,
+    pub provider_index: &'a ProviderIndex,
     pub min_stake: &'a MinStake,
 }
 
@@ -131,6 +136,7 @@ pub struct SDPDeclareExecutionContext {
     pub note_sets: NoteSets,
     pub epoch: Epoch,
     pub declarations: Declarations,
+    pub provider_index: ProviderIndex,
 }
 
 impl OpId for SDPDeclareOp {
@@ -172,7 +178,12 @@ impl VerifiableOperation<StandardMode>
     fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
-        SDPDeclareValidationExt::validate(operation, context.declarations, context.min_stake)?;
+        SDPDeclareValidationExt::validate(
+            operation,
+            context.declarations,
+            context.provider_index,
+            context.min_stake,
+        )?;
 
         // Validate Inputs
         let ledger = context
@@ -233,7 +244,12 @@ impl VerifiableOperation<GenesisMode> for SignedOperation<SDPDeclareOp, Preverif
     fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
-        SDPDeclareValidationExt::validate(operation, context.declarations, context.min_stake)?;
+        SDPDeclareValidationExt::validate(
+            operation,
+            context.declarations,
+            context.provider_index,
+            context.min_stake,
+        )?;
 
         let ledger = context
             .note_sets
@@ -300,7 +316,7 @@ mod tests {
             TxHash,
             batch::DeferredZkTransfer,
             gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
-            ledger::Declarations,
+            ledger::{Declarations, ProviderIndex},
             note_set::{CommitmentMmr, LEDGER_SET, NoteSet, NoteSetError, NoteSets, SDP_SET},
             notes::{
                 self, NoteCommitment, NoteNullifier, OutputCommitments, derive_note_nonce,
@@ -349,30 +365,22 @@ mod tests {
         let declare_a = declare_op(1, 1, "/ip4/1.1.1.1/udp/3000");
         let declare_b = declare_op(1, 2, "/ip4/2.2.2.2/udp/3000");
 
-        let declarations = Declarations::new_sync()
-            .insert(declare_a.id(), Declaration::new(Epoch::new(0), &declare_a));
+        let provider_index =
+            ProviderIndex::new_sync().insert(declare_a.provider_id, declare_a.id());
 
         assert!(matches!(
-            validate_service_scoped_uniqueness(&declare_b, &declarations),
+            validate_service_scoped_uniqueness(&declare_b, &provider_index),
             Err(SdpError::DuplicateProviderId { .. })
         ));
     }
 
-    /// Two declarations in the same service sharing the same `zk_id`
-    /// (different `provider_id` and locators) must be rejected by the SDP
-    /// per-service uniqueness check.
+    /// The declaration ID itself is the per-service `zk_id` uniqueness key.
     #[test]
-    fn rejects_duplicate_zk_id_within_service() {
+    fn same_service_and_zk_id_produce_the_same_declaration_id() {
         let declare_a = declare_op(1, 1, "/ip4/1.1.1.1/udp/3000");
         let declare_b = declare_op(2, 1, "/ip4/2.2.2.2/udp/3000");
 
-        let declarations = Declarations::new_sync()
-            .insert(declare_a.id(), Declaration::new(Epoch::new(0), &declare_a));
-
-        assert!(matches!(
-            validate_service_scoped_uniqueness(&declare_b, &declarations),
-            Err(SdpError::DuplicateZkId { .. })
-        ));
+        assert_eq!(declare_a.id(), declare_b.id());
     }
 
     mod standard_mode {
@@ -397,6 +405,7 @@ mod tests {
                     block_number: 1,
                     tx_hash_view: &tx_hash_view(),
                     declarations,
+                    provider_index: &ProviderIndex::new_sync(),
                     min_stake: &MinStake {
                         threshold,
                         timestamp: 0,
@@ -700,6 +709,7 @@ mod tests {
                     note_sets: NoteSets::new(),
                     epoch: Epoch::new(4),
                     declarations: Declarations::new_sync(),
+                    provider_index: ProviderIndex::new_sync(),
                 })
                 .expect("the input is unspent");
 
@@ -774,6 +784,7 @@ mod tests {
                         note_sets: &note_sets(),
                         tx_hash_view: &tx_hash_view,
                         declarations: &Declarations::new_sync(),
+                        provider_index: &ProviderIndex::new_sync(),
                         min_stake: &MinStake {
                             threshold: 0,
                             timestamp: 0,
@@ -824,6 +835,7 @@ mod tests {
                     note_sets: &note_sets(),
                     tx_hash_view: &tx_hash_view,
                     declarations: &Declarations::new_sync(),
+                    provider_index: &ProviderIndex::new_sync(),
                     min_stake: &MinStake {
                         threshold: 0,
                         timestamp: 0,
@@ -882,6 +894,7 @@ mod tests {
                     note_sets,
                     tx_hash_view: &tx_hash_view(),
                     declarations: &Declarations::new_sync(),
+                    provider_index: &ProviderIndex::new_sync(),
                     min_stake: &MinStake {
                         threshold: 0,
                         timestamp: 0,

@@ -1,4 +1,5 @@
 use core::{
+    iter,
     num::{NonZeroU64, NonZeroU128},
     time::Duration,
 };
@@ -6,17 +7,27 @@ use core::{
 use futures::StreamExt as _;
 use lb_blend_primitives::time::RoundCount;
 use lb_libp2p::SwarmEvent;
-use libp2p::identity::ed25519;
+use libp2p::{
+    Multiaddr, PeerId,
+    core::ConnectedPoint,
+    identity::ed25519,
+    swarm::{ConnectionClosed, ConnectionId, FromSwarm, NetworkBehaviour as _},
+};
 use libp2p_swarm_test::SwarmExt as _;
 use test_log::test;
-use tokio::{select, time::sleep};
+use tokio::{
+    select,
+    time::{sleep, timeout},
+};
 
 use crate::core::{
-    tests::utils::{TestEncapsulatedMessage, TestSwarm},
+    tests::utils::{TestEncapsulatedMessage, TestSwarm, drive_for},
     with_core::behaviour::{
-        Event,
+        ConnectionDirection, Event, RemotePeerConnectionDetails,
+        liveness::PeerState,
         tests::utils::{
             BehaviourBuilder, PEERING_DEGREE, SwarmExt as _, new_nodes_with_empty_address,
+            wait_for_upgrade,
         },
     },
 };
@@ -103,6 +114,139 @@ async fn a_connection_that_delivers_nothing_is_closed() {
             .negotiated_peers()
             .contains_key(silent_swarm.local_peer_id()),
         "a peer whose connection was closed should not still be negotiated"
+    );
+}
+
+/// A neighbour closed as not live is refused for `W` rounds, and then let back
+/// in with its count started over: it settles afresh, rather than being read
+/// as not live, and closed, at the next round.
+#[test(tokio::test)]
+async fn a_neighbour_closed_as_not_live_is_refused_for_a_window_then_settles_afresh() {
+    let (mut identities, nodes) = new_nodes_with_empty_address(2);
+    let mut silent_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    let mut listening_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id)
+            .with_membership(&nodes)
+            .with_liveness(ROUND, WINDOW_IN_ROUNDS)
+            .build()
+    });
+    let silent_peer = *silent_swarm.local_peer_id();
+
+    let (listening_address, _) = listening_swarm.listen().with_memory_addr_external().await;
+    silent_swarm
+        .connect_and_wait_for_upgrade(&mut listening_swarm)
+        .await;
+
+    // Nothing is ever sent, so the window runs out and the connection is closed.
+    timeout(window() * 5, async {
+        loop {
+            select! {
+                listening_event = listening_swarm.select_next_some() => {
+                    if let SwarmEvent::ConnectionClosed { peer_id, .. } = listening_event
+                        && peer_id == silent_peer
+                    {
+                        return;
+                    }
+                }
+                _ = silent_swarm.select_next_some() => {}
+            }
+        }
+    })
+    .await
+    .expect("the observing node should have closed the connection once its window ran out");
+    assert!(
+        listening_swarm.behaviour().is_peer_refused(&silent_peer),
+        "a neighbour closed as not live must be refused"
+    );
+    assert!(
+        listening_swarm
+            .behaviour()
+            .blacklisted_peers()
+            .next()
+            .is_none(),
+        "falling silent is not attributable, so the refusal must not be a blacklisting"
+    );
+
+    silent_swarm.dial(listening_address.clone()).unwrap();
+    assert!(
+        !wait_for_upgrade(&mut silent_swarm, &mut listening_swarm, window() / 2).await,
+        "a neighbour closed as not live must not be let back in before its window has passed"
+    );
+
+    // A dial placed within the window is refused once and never retried, so the
+    // wait has to come first.
+    drive_for(&mut silent_swarm, &mut listening_swarm, window()).await;
+    silent_swarm.dial(listening_address).unwrap();
+    assert!(
+        wait_for_upgrade(
+            &mut silent_swarm,
+            &mut listening_swarm,
+            Duration::from_secs(5)
+        )
+        .await,
+        "the refusal must end once its window has passed"
+    );
+    assert_eq!(
+        listening_swarm
+            .behaviour()
+            .liveness
+            .current_peer_state(&silent_peer),
+        Some(PeerState::Settling),
+        "the neighbour resumed the window it had spent, so it would be closed again at the next round"
+    );
+}
+
+/// A neighbour that drops the connection itself resumes its count when it
+/// comes back, so it cannot earn a fresh window by reconnecting: the count
+/// starts over only when this node closes the connection for not being live.
+#[test(tokio::test)]
+async fn a_neighbour_that_disconnects_itself_resumes_its_count() {
+    let mut behaviour = BehaviourBuilder::new(&ed25519::Keypair::generate())
+        .with_liveness(ROUND, WINDOW_IN_ROUNDS)
+        .build();
+    let (peer, connection_id) = (PeerId::random(), ConnectionId::new_unchecked(1));
+    behaviour.negotiated_peers.insert(
+        peer,
+        RemotePeerConnectionDetails {
+            direction: ConnectionDirection::Incoming,
+            connection_id,
+        },
+    );
+    behaviour.liveness.start_or_resume_observing(peer);
+
+    // Connected for all but the last round of its window, delivering nothing,
+    // and then gone.
+    for _ in 1..WINDOW_IN_ROUNDS.get() {
+        behaviour
+            .liveness
+            .enter_new_round_with_peers(iter::once(&peer));
+    }
+    behaviour.on_swarm_event(FromSwarm::ConnectionClosed(ConnectionClosed {
+        peer_id: peer,
+        connection_id,
+        endpoint: &ConnectedPoint::Listener {
+            local_addr: Multiaddr::empty(),
+            send_back_addr: Multiaddr::empty(),
+        },
+        cause: None,
+        remaining_established: 0,
+    }));
+    assert!(
+        !behaviour.is_peer_refused(&peer),
+        "a neighbour that left of its own accord must not be refused"
+    );
+
+    // Back, it has only the one round of grace it had left.
+    behaviour.liveness.start_or_resume_observing(peer);
+    behaviour
+        .liveness
+        .enter_new_round_with_peers(iter::once(&peer));
+    assert_eq!(
+        behaviour.liveness.current_peer_state(&peer),
+        Some(PeerState::Silent),
+        "reconnecting earned the neighbour a fresh window"
     );
 }
 

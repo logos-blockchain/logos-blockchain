@@ -6,7 +6,7 @@ use lb_core::mantle::transactions::UNITS_PER_LGO;
 use lb_groth16::fr_to_bytes;
 use lb_http_api_common::bodies::wallet::balance::WalletBalanceResponseBody;
 use lb_key_management_system_service::keys::ZkPublicKey;
-use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};
+use lb_node::config::{RunConfig, deployment::era::ruleset::v1::cryptarchia::EpochConfig};
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig as TfTopologyConfig,
     configs::wallet::{WalletAccount, WalletConfig},
@@ -102,28 +102,17 @@ async fn wait_for_total_balance_above(
 fn test_config(mut config: RunConfig, leader_funding_pk: ZkPublicKey) -> RunConfig {
     config
         .deployment
-        .genesis_era_parameters_mut()
-        .time
-        .slot_duration = Duration::from_secs(1);
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .epoch_config = EpochConfig {
-        epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
-        epoch_period_nonce_buffer: 1.try_into().unwrap(),
-        epoch_period_nonce_stabilization: 1.try_into().unwrap(),
-    };
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .security_param = NonZero::new(2).unwrap();
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .slot_activation_coeff = NonNegativeRatio::new(1, 2.try_into().unwrap());
+        .update_genesis_era_parameters(|parameters| {
+            parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
+            parameters.cryptarchia.epoch_config = EpochConfig {
+                epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
+                epoch_period_nonce_buffer: 1.try_into().unwrap(),
+                epoch_period_nonce_stabilization: 1.try_into().unwrap(),
+            };
+            parameters.cryptarchia.security_param = NonZero::new(2).unwrap();
+            parameters.cryptarchia.slot_activation_coeff =
+                NonNegativeRatio::new(1, 2.try_into().unwrap());
+        });
     config.user.cryptarchia.leader.wallet.funding_pk = leader_funding_pk;
 
     config

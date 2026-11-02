@@ -3,8 +3,9 @@ use lb_chain_service::{
     Slot,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
-use lb_cryptarchia_sync::{GetTipResponse, HeaderId};
+use lb_cryptarchia_sync::{HeaderId, TipResponse};
 use lb_time_service::SlotTick;
+use lb_utils::math::NonNegativeRatio;
 use overwatch::DynError;
 use tracing::{debug, warn};
 
@@ -15,7 +16,7 @@ use crate::{TipPollConfig, metrics, network::NetworkAdapter, sync::LOG_TARGET};
 /// Fires on a slot-tick cadence (`params.cadence_slots`, ≈ one expected
 /// block interval). When the local tip has fallen behind the current slot
 /// by more than `params.lag_threshold_slots`, it samples a handful of
-/// peers with `GetTip` and returns the most-advanced tip that is strictly
+/// peers with tip requests and returns the most-advanced tip that is strictly
 /// ahead of the local height. The caller is expected to hand it to the
 /// orphan downloader, which performs the actual catch-up download and
 /// full validation.
@@ -45,7 +46,7 @@ where
     let info = lagging_local_info(cryptarchia, current_slot, params.lag_threshold_slots).await?;
     metrics::tip_poll_triggered_total();
 
-    let tips: Vec<GetTipResponse> = network_adapter
+    let tips: Vec<TipResponse> = network_adapter
         .sample_tips(params.max_peers)
         .await
         .collect()
@@ -106,13 +107,13 @@ where
 /// strictly ahead of `local_height`. Ties on height are broken by the higher
 /// slot. `Failure` responses are ignored. Returns `(height, slot, tip)`.
 fn select_catchup_tip(
-    tips: impl IntoIterator<Item = GetTipResponse>,
+    tips: impl IntoIterator<Item = TipResponse>,
     local_height: u64,
 ) -> Option<(u64, Slot, HeaderId)> {
     tips.into_iter()
         .filter_map(|resp| match resp {
-            GetTipResponse::Tip { tip, slot, height } => Some((height, slot, tip)),
-            GetTipResponse::Failure(reason) => {
+            TipResponse::Tip { tip, slot, height } => Some((height, slot, tip)),
+            TipResponse::Failure(reason) => {
                 debug!(target: LOG_TARGET, %reason, "tip poll: peer reported failure");
                 None
             }
@@ -127,39 +128,30 @@ pub struct PolledTip {
     pub local: lb_chain_service::CryptarchiaInfo,
 }
 
-/// Derived parameters for the proactive tip-poll lag watchdog.
+/// Derived parameters for the proactive tip-poll lag watchdog in an era.
 #[derive(Clone, Copy)]
 pub struct TipPollParams {
     /// Act every this many slots (≈ one expected block interval, `1/f`).
     pub cadence_slots: u64,
     /// Lag, in slots, beyond which we proactively poll peers for their tip.
     pub lag_threshold_slots: u64,
-    /// Maximum number of peers to sample with `GetTip` per poll.
+    /// Maximum number of peers to sample with a tip request per poll.
     pub max_peers: usize,
 }
 
 impl TipPollParams {
-    /// Derive the polling cadence and lag threshold from the active slot
+    /// Derive the polling cadence and lag threshold from an era's active slot
     /// coefficient `f`. The expected number of slots between blocks is `1/f`,
     /// so the cadence is `ceil(1/f)` slots and the lag threshold is
     /// `lag_threshold_blocks` such intervals.
-    pub async fn derive<Cryptarchia>(
+    pub fn derive(
         config: &TipPollConfig,
-        cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
-    ) -> Result<Self, DynError>
-    where
-        Cryptarchia: CryptarchiaServiceData<Tx: Send>,
-    {
-        let (_, consensus_config) = cryptarchia
-            .get_epoch_config()
-            .await
-            .map_err(|e| DynError::from(format!("failed to fetch epoch config: {e}")))?;
-
+        slot_activation_coeff: NonNegativeRatio,
+    ) -> Result<Self, DynError> {
         // `f = numerator / denominator`, so `1/f = denominator / numerator`.
         // Compute `ceil(1/f)` with integer arithmetic to avoid float casts.
-        let coeff = consensus_config.slot_activation_coeff();
-        let numerator = u64::from(coeff.numerator);
-        let denominator = core::num::NonZeroU64::from(coeff.denominator).get();
+        let numerator = u64::from(slot_activation_coeff.numerator);
+        let denominator = core::num::NonZeroU64::from(slot_activation_coeff.denominator).get();
         if numerator == 0 {
             return Err(DynError::from(
                 "active slot coefficient f must be > 0 for tip polling",
@@ -179,12 +171,12 @@ impl TipPollParams {
 
 #[cfg(test)]
 mod tests {
-    use lb_cryptarchia_sync::GetTipResponseReason;
+    use lb_cryptarchia_sync::TipResponseFailureReason;
 
     use super::*;
 
-    fn tip(height: u64, slot: u64, id: u8) -> GetTipResponse {
-        GetTipResponse::Tip {
+    fn tip(height: u64, slot: u64, id: u8) -> TipResponse {
+        TipResponse::Tip {
             tip: HeaderId::from([id; 32]),
             slot: Slot::new(slot),
             height,
@@ -215,9 +207,9 @@ mod tests {
     #[test]
     fn select_catchup_tip_skips_failures() {
         let tips = vec![
-            GetTipResponse::Failure(GetTipResponseReason::NodeNotOnline),
+            TipResponse::Failure(TipResponseFailureReason::NodeNotOnline),
             tip(20, 500, 7),
-            GetTipResponse::Failure(GetTipResponseReason::NodeNotOnline),
+            TipResponse::Failure(TipResponseFailureReason::NodeNotOnline),
         ];
         let (height, _, id) = select_catchup_tip(tips, 5).expect("a tip ahead exists");
         assert_eq!(height, 20);

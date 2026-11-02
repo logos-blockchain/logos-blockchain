@@ -1,5 +1,6 @@
 [toolchain]
 # Keep this version in sync also in the following places:
+# * .oss-scanner/Dockerfile
 # * flake.nix
 # * deployment/Dockerfile
 # * tests/tf_integration/logos/assets/runtime/Dockerfile.node (2 places)

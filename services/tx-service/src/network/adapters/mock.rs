@@ -6,11 +6,11 @@ use lb_core::mantle::{
 };
 use lb_log_targets::mempool;
 use lb_network_service::{
-    NetworkService,
     backends::mock::{Mock, MockBackendMessage, MockContentTopic, MockMessage, NetworkEvent},
-    message::NetworkMsg,
+    message::{BackendNetworkMsg, NetworkMsg},
 };
-use overwatch::services::{ServiceData, relay::OutboundRelay};
+use lb_time::Era;
+use overwatch::services::relay::OutboundRelay;
 
 use crate::network::NetworkAdapter;
 
@@ -42,8 +42,9 @@ pub fn tx_from_mock_message(message: &MockMessage) -> Option<Ops> {
     rest.is_empty().then_some(tx)
 }
 
+#[derive(Clone)]
 pub struct MockAdapter<RuntimeServiceId> {
-    network_relay: OutboundRelay<<NetworkService<Mock, RuntimeServiceId> as ServiceData>::Message>,
+    network_relay: OutboundRelay<BackendNetworkMsg<Mock, RuntimeServiceId>>,
 }
 
 #[async_trait::async_trait]
@@ -55,9 +56,8 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
 
     async fn new(
         _settings: Self::Settings,
-        network_relay: OutboundRelay<
-            <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-        >,
+        _current_era: Era,
+        network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
     ) -> Self {
         // send message to boot the network producer
         if let Err(error) = network_relay
@@ -82,6 +82,10 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
         }
         Self { network_relay }
     }
+
+    async fn rotate_era(&mut self, _era: Era) {}
+
+    async fn complete_era_transition(&mut self, _ended_era: Era) {}
 
     async fn payload_stream(
         &self,

@@ -65,12 +65,11 @@ unsafe fn key_title_from_ptr(key_title: *const c_char) -> Option<String> {
 /// NUL-terminated C string containing the new key's id.
 pub type FfiGenerateKeyResult = FfiStatusResult<*mut c_char>;
 
-/// Generates a new key and persists it to the keystore and user config files,
-/// equivalent to the `generate-key` CLI command. Runs non-interactively.
+/// Generates a new key and persists it to the keystore file, equivalent to the
+/// `generate-key` CLI command. Runs non-interactively.
 ///
 /// # Arguments
 ///
-/// - `user_config_path`: Path to the user config YAML file.
 /// - `keystore_path`: Path to the keystore YAML file.
 /// - `key_type`: The [`KeyType`] of key to generate, as its integer value.
 /// - `key_title`: Optional (nullable) title for the new key. When null, a title
@@ -94,17 +93,14 @@ pub type FfiGenerateKeyResult = FfiStatusResult<*mut c_char>;
 #[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn generate_key(
-    user_config_path: *const c_char,
     keystore_path: *const c_char,
     key_type: u32,
     key_title: *const c_char,
 ) -> FfiGenerateKeyResult {
-    return_error_if_null_pointer!(user_config_path);
     return_error_if_null_pointer!(keystore_path);
     let key_type = unwrap_or_return_error!(KeyType::try_from(key_type));
 
     let args = GenerateKeyArgs::new(
-        unsafe { cstr_to_path(user_config_path) },
         unsafe { cstr_to_path(keystore_path) },
         key_type.into(),
         unsafe { key_title_from_ptr(key_title) },
@@ -130,12 +126,11 @@ pub unsafe extern "C" fn generate_key(
     }
 }
 
-/// Adds an existing key to the keystore and user config files, equivalent to
-/// the `add-key` CLI command. Runs non-interactively.
+/// Adds an existing key to the keystore file, equivalent to the `add-key` CLI
+/// command. Runs non-interactively.
 ///
 /// # Arguments
 ///
-/// - `user_config_path`: Path to the user config YAML file.
 /// - `keystore_path`: Path to the keystore YAML file.
 /// - `key_type`: The [`KeyType`] of the provided key, as its integer value.
 /// - `key_hex`: The secret key as a hex-encoded C string.
@@ -154,13 +149,11 @@ pub unsafe extern "C" fn generate_key(
 #[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn add_key(
-    user_config_path: *const c_char,
     keystore_path: *const c_char,
     key_type: u32,
     key_hex: *const c_char,
     key_title: *const c_char,
 ) -> OperationStatus {
-    return_error_if_null_pointer!(user_config_path);
     return_error_if_null_pointer!(keystore_path);
     return_error_if_null_pointer!(key_hex);
     let key_type = unwrap_or_return_error!(KeyType::try_from(key_type));
@@ -178,7 +171,6 @@ pub unsafe extern "C" fn add_key(
     };
 
     let args = AddKeyArgs::new(
-        unsafe { cstr_to_path(user_config_path) },
         unsafe { cstr_to_path(keystore_path) },
         unsafe { key_title_from_ptr(key_title) },
         &key,
@@ -212,12 +204,11 @@ fn parse_key_hex(key_type: KeyType, key_hex: &str) -> Result<Key, String> {
     }
 }
 
-/// Removes a key with the given title from the keystore and user config
-/// files, equivalent to the `remove-key` CLI command. Runs non-interactively.
+/// Removes a key with the given title from the keystore file, equivalent to
+/// the `remove-key` CLI command. Runs non-interactively.
 ///
 /// # Arguments
 ///
-/// - `user_config_path`: Path to the user config YAML file.
 /// - `keystore_path`: Path to the keystore YAML file.
 /// - `key_title`: Title of the key to remove.
 ///
@@ -233,11 +224,9 @@ fn parse_key_hex(key_type: KeyType, key_hex: &str) -> Result<Key, String> {
 #[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn remove_key(
-    user_config_path: *const c_char,
     keystore_path: *const c_char,
     key_title: *const c_char,
 ) -> OperationStatus {
-    return_error_if_null_pointer!(user_config_path);
     return_error_if_null_pointer!(keystore_path);
     return_error_if_null_pointer!(key_title);
 
@@ -245,12 +234,7 @@ pub unsafe extern "C" fn remove_key(
         .to_string_lossy()
         .to_string();
 
-    let args = RemoveKeyArgs::new(
-        unsafe { cstr_to_path(user_config_path) },
-        unsafe { cstr_to_path(keystore_path) },
-        key_title,
-        true,
-    );
+    let args = RemoveKeyArgs::new(unsafe { cstr_to_path(keystore_path) }, key_title, true);
 
     match run_remove_key(args) {
         Ok(()) => OperationStatus::OK,

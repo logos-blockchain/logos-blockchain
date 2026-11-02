@@ -2,6 +2,7 @@ use core::fmt::{self, Debug};
 use std::{collections::HashSet, pin::Pin, time::Duration};
 
 use futures::StreamExt as _;
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_core::{
     header::HeaderId,
     mantle::{
@@ -58,6 +59,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -169,8 +172,8 @@ fn create_genesis_timer(starting_state: StartingState) -> Option<Pin<Box<Sleep>>
     let StartingState::Genesis { genesis_block } = starting_state;
     let genesis_time: OffsetDateTime = genesis_block
         .genesis_tx()
-        .cryptarchia_parameter()
-        .genesis_time
+        .genesis_parameters()
+        .start_time
         .into();
     let now = OffsetDateTime::now_utc();
 

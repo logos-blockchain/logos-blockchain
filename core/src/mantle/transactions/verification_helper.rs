@@ -1,5 +1,3 @@
-use std::num::NonZeroU64;
-
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::UnverifiedEd25519PublicKey;
 use rpds::HashTrieMapSync;
@@ -10,15 +8,16 @@ use crate::{
     mantle::{
         VerificationError,
         channel::Channels,
-        ledger::Declarations,
+        ledger::{Declarations, ProviderIndex},
         note_set::NoteSets,
         ops::{
             channel::{ChannelId, ChannelKeyIndex},
-            pow::{PowNullifier, PowReward, PowTarget},
+            pow::{PowNullifier, PowReward, PowSlotWindows, PowTarget},
+            sdp::SdpError,
         },
         programs::Programs,
     },
-    sdp::{DeclarationId, MinStake, ServiceType},
+    sdp::{Declaration, DeclarationId, MinStake, ServiceType},
 };
 
 pub trait OperationVerificationHelper {
@@ -39,6 +38,19 @@ pub trait OperationVerificationHelper {
         &self,
         id: &DeclarationId,
     ) -> Result<&Declarations, VerificationError>;
+
+    fn get_provider_index_by_service(
+        &self,
+        service: ServiceType,
+    ) -> Result<&ProviderIndex, VerificationError>;
+
+    fn get_declaration_by_id(&self, id: &DeclarationId) -> Result<&Declaration, VerificationError> {
+        self.get_declarations_by_id(id)?
+            .get(id)
+            .ok_or(VerificationError::SDPVerificationError(
+                SdpError::DeclarationNotFound(*id),
+            ))
+    }
 
     fn get_min_stake(&self) -> &MinStake;
 
@@ -83,14 +95,14 @@ pub trait OperationVerificationHelper {
     /// used for the window-of-acceptance check.
     fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot>;
 
-    /// Acceptance window, in slots, for the window-of-acceptance check.
-    /// Configured per-deployment.
-    fn get_pow_slot_window(&self) -> NonZeroU64;
+    /// Acceptance window, in slots, of the claims anchored to the blocks of
+    /// each era.
+    fn get_pow_slot_windows(&self) -> PowSlotWindows;
 }
 
 #[cfg(test)]
 pub mod test_utils {
-    use std::{collections::HashMap, num::NonZeroU64};
+    use std::collections::HashMap;
 
     use lb_cryptarchia_engine::{Epoch, Slot};
     use lb_key_management_system_keys::keys::UnverifiedEd25519PublicKey;
@@ -102,16 +114,19 @@ pub mod test_utils {
         mantle::{
             VerificationError,
             channel::Channels,
-            ledger::Declarations,
+            ledger::{Declarations, ProviderIndex},
             note_set::NoteSets,
             ops::{
                 channel::{ChannelId, ChannelKeyIndex},
-                pow::{PowNullifier, PowReward, PowTarget},
+                pow::{
+                    PowNullifier, PowReward, PowSlotWindows, PowTarget, test_utils::slot_windows,
+                },
+                sdp::SdpError,
             },
             programs::Programs,
             transactions::OperationVerificationHelper,
         },
-        sdp::{DeclarationId, MinStake, ServiceType},
+        sdp::{Declaration, DeclarationId, MinStake, ServiceType},
     };
 
     pub struct TestOperationVerificationHelper {
@@ -121,6 +136,7 @@ pub mod test_utils {
         programs: Programs,
         block_number: BlockNumber,
         declarations: Declarations,
+        provider_index: ProviderIndex,
         min_stake: MinStake,
         epoch: Epoch,
         block_slot: Slot,
@@ -131,7 +147,7 @@ pub mod test_utils {
         current_epoch_nonce: ZkHash,
         previous_epoch_nonce: ZkHash,
         blocks_slot: HashTrieMapSync<Hash, Slot>,
-        pow_slot_window: NonZeroU64,
+        pow_slot_windows: PowSlotWindows,
     }
 
     impl TestOperationVerificationHelper {
@@ -147,6 +163,7 @@ pub mod test_utils {
                 programs: Programs::new(),
                 block_number: 0,
                 declarations: Declarations::new_sync(),
+                provider_index: ProviderIndex::new_sync(),
                 min_stake: MinStake {
                     threshold: 0,
                     timestamp: 0,
@@ -160,7 +177,7 @@ pub mod test_utils {
                 current_epoch_nonce: ZkHash::default(),
                 previous_epoch_nonce: ZkHash::default(),
                 blocks_slot: HashTrieMapSync::new_sync(),
-                pow_slot_window: NonZeroU64::new(100).expect("100 is not 0"),
+                pow_slot_windows: slot_windows(100, []),
             }
         }
 
@@ -219,12 +236,6 @@ pub mod test_utils {
         }
 
         #[must_use]
-        pub const fn with_pow_slot_window(mut self, slot_window: NonZeroU64) -> Self {
-            self.pow_slot_window = slot_window;
-            self
-        }
-
-        #[must_use]
         pub fn with_note_sets(mut self, note_sets: NoteSets) -> Self {
             self.note_sets = note_sets;
             self
@@ -266,6 +277,24 @@ pub mod test_utils {
             _id: &DeclarationId,
         ) -> Result<&Declarations, VerificationError> {
             Ok(&self.declarations)
+        }
+
+        fn get_provider_index_by_service(
+            &self,
+            _service: ServiceType,
+        ) -> Result<&ProviderIndex, VerificationError> {
+            Ok(&self.provider_index)
+        }
+
+        fn get_declaration_by_id(
+            &self,
+            id: &DeclarationId,
+        ) -> Result<&Declaration, VerificationError> {
+            self.declarations
+                .get(id)
+                .ok_or(VerificationError::SDPVerificationError(
+                    SdpError::DeclarationNotFound(*id),
+                ))
         }
 
         fn get_min_stake(&self) -> &MinStake {
@@ -321,8 +350,8 @@ pub mod test_utils {
             self.blocks_slot.clone()
         }
 
-        fn get_pow_slot_window(&self) -> NonZeroU64 {
-            self.pow_slot_window
+        fn get_pow_slot_windows(&self) -> PowSlotWindows {
+            self.pow_slot_windows.clone()
         }
     }
 }
