@@ -7,7 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{Stream, StreamExt as _};
 use indexmap::{IndexMap, IndexSet};
 use lb_core::{
     block::TxInBlock,
@@ -406,6 +406,7 @@ where
     }
 }
 
+#[async_trait]
 impl<BlockId, Item, Storage, RuntimeServiceId> RecoverableMempool
     for Mempool<BlockId, Item, Storage, RuntimeServiceId>
 where
@@ -440,7 +441,7 @@ where
         }
     }
 
-    fn recover(
+    async fn recover(
         settings: <Self as MemPool>::Settings,
         _: Era,
         state: Self::RecoveryState,
@@ -465,7 +466,7 @@ where
             }
         }
 
-        Self {
+        let mut pool = Self {
             pending_items: state.pending_items,
             by_prefix,
             removed_items: state.removed_items,
@@ -475,7 +476,10 @@ where
             settings,
             storage_adapter: storage,
             _phantom: std::marker::PhantomData,
-        }
+        };
+
+        pool.add_recovered_items_to_evictor().await;
+        pool
     }
 }
 
@@ -556,6 +560,29 @@ where
 
         log_retired_items(count, cause, self.pending_items.len());
         metrics::mempool_transactions_removed(count);
+    }
+
+    /// Add every recovered item to the evictor, which is not saved.
+    async fn add_recovered_items_to_evictor(&mut self) {
+        let keys = self
+            .pending_items
+            .keys()
+            .chain(self.removed_items.keys())
+            .chain(self.included_in_canonical.keys())
+            .copied()
+            .collect::<Vec<_>>();
+        let items = match self.get_items_by_keys(keys).await {
+            Ok(items) => items.collect::<Vec<_>>().await,
+            Err(e) => {
+                tracing::warn!(target: LOG_TARGET, "Failed to load recovered items: {e:?}");
+                return;
+            }
+        };
+        let now = current_timestamp_millis();
+        for item in items {
+            let block_slots = self.resolve_claim_anchors(&item).await;
+            self.evictor.on_add(&item.hash(), &item, now, &block_slots);
+        }
     }
 
     /// Slots of the blocks the `PoW` reward claims in `item` are anchored
