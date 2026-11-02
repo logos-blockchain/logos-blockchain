@@ -208,7 +208,7 @@ where
         }
     }
 
-    fn select(
+    fn select_retirements(
         &self,
         clock: &PolicyClock,
         _pending_txs: &IndexMap<Tx::Hash, AdmissionTime>,
@@ -303,7 +303,11 @@ mod tests {
     }
 
     fn select(policy: &Policy, slot: u64) -> Vec<TxHash> {
-        EvictionPolicy::<Ops, HeaderId>::select(policy, &clock(Some(slot)), &IndexMap::new())
+        EvictionPolicy::<Ops, HeaderId>::select_retirements(
+            policy,
+            &clock(Some(slot)),
+            &IndexMap::new(),
+        )
     }
 
     #[test]
@@ -403,7 +407,11 @@ mod tests {
         add(&mut policy, &tx, &known(&[(anchor, 0)]));
 
         assert_eq!(
-            EvictionPolicy::<Ops, HeaderId>::select(&policy, &clock(None), &IndexMap::new()),
+            EvictionPolicy::<Ops, HeaderId>::select_retirements(
+                &policy,
+                &clock(None),
+                &IndexMap::new()
+            ),
             NONE
         );
     }

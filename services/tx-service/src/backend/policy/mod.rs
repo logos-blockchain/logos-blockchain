@@ -1,7 +1,7 @@
 pub mod powclaim;
 pub mod ttl;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use indexmap::IndexMap;
 use lb_core::mantle::{
@@ -37,7 +37,7 @@ pub type BlockSlots<BlockId> = HashMap<BlockId, Slot>;
 /// Policies own their state and see every transaction the pool admits or
 /// retires; the evictor composes them and the pool executes what they
 /// select. The admission time of each pending transaction is the pool's
-/// state, which policies read in [`Self::select`].
+/// state, which policies read in [`Self::select_retirements`].
 pub trait EvictionPolicy<Tx, BlockId>: Send + Sync
 where
     Tx: Hashable,
@@ -71,11 +71,22 @@ where
 
     /// Keys this policy wants gone at `clock`, given the `pending_txs` keys
     /// mapped to their admission timestamp, oldest first.
-    fn select(
+    fn select_retirements(
         &self,
         clock: &PolicyClock,
         pending_txs: &IndexMap<Tx::Hash, AdmissionTime>,
     ) -> Vec<Tx::Hash>;
+
+    /// Retired keys this policy wants released at `clock`, given the
+    /// `retired_txs` that no canonical block carries, mapped to their admission
+    /// timestamp: they no longer need to stay resolvable.
+    fn select_releases(
+        &self,
+        _clock: &PolicyClock,
+        _retired_txs: &BTreeMap<Tx::Hash, AdmissionTime>,
+    ) -> Vec<Tx::Hash> {
+        Vec::new()
+    }
 }
 
 /// What eviction policies may inspect about a pool item.

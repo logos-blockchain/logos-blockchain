@@ -32,7 +32,6 @@ use crate::{
     storage::{BlockSlotLookup, MempoolStorageAdapter},
 };
 
-const REMOVED_ITEM_GRACE_PERIOD: Duration = Duration::from_mins(10);
 const LOG_TARGET: &str = mempool::POOL;
 
 /// Default time a pending transaction may stay in the pool before eviction.
@@ -61,23 +60,13 @@ where
     /// oldest first.
     pub pending_items: IndexMap<Key, AdmissionTime>,
     /// Retired item keys not carried by a canonical block (inapplicable or
-    /// evicted).
-    pub removed_items: BTreeMap<Key, RemovedItem>,
+    /// evicted), mapped to their admission timestamp in milliseconds.
+    pub removed_items: BTreeMap<Key, AdmissionTime>,
     /// Retired item keys carried by a canonical block that is not yet
     /// immutable.
     #[serde(default)]
     pub included_in_canonical: HashMap<Key, IncludedItem>,
     pub last_item_timestamp: u64,
-}
-
-/// A retired item not carried by a canonical block.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RemovedItem {
-    /// Retirement timestamp in milliseconds.
-    pub removed_at: u64,
-    /// Admission timestamp in milliseconds, kept if the item is admitted
-    /// again.
-    pub admitted_at: AdmissionTime,
 }
 
 /// A retired item carried by a canonical block that is not yet immutable.
@@ -113,10 +102,11 @@ where
     /// unique.
     by_prefix: HashMap<<ItemKey<Item> as PrefixedKey>::Prefix, Vec<ItemKey<Item>>>,
     /// Retired items not carried by a canonical block (inapplicable or
-    /// evicted). They keep their prefix index entry and body for a grace
-    /// period after retirement, unlike [`Self::included_in_canonical`], which
-    /// keeps them until the carrying block becomes immutable.
-    removed_items: BTreeMap<ItemKey<Item>, RemovedItem>,
+    /// evicted), mapped to their admission timestamp in milliseconds. They
+    /// keep their prefix index entry and body until the evictor selects them
+    /// for release, unlike [`Self::included_in_canonical`], which keeps them
+    /// until the carrying block becomes immutable.
+    removed_items: BTreeMap<ItemKey<Item>, AdmissionTime>,
     /// Retired items carried by a canonical block that is not yet immutable.
     /// They keep their prefix index entry and body until the block becomes
     /// immutable, since until then a competing block can carry them too.
@@ -241,7 +231,7 @@ where
         // If `item` is admitted again after being retired, remove it from
         // `removed_items` and use the original admission time stored there.
         let removed_item = self.removed_items.remove(&key);
-        let admitted_at = removed_item.map_or(timestamp, |removed| removed.admitted_at);
+        let admitted_at = removed_item.unwrap_or(timestamp);
         self.index_by_prefix(&key);
         self.evictor.on_add(&key, &item, timestamp, &block_slots);
         let index = self.insert_pending(key, admitted_at);
@@ -296,17 +286,14 @@ where
     async fn remove(&mut self, keys: &[Self::Key]) {
         self.prune_removed_items().await;
 
-        let removed_at = current_timestamp_millis();
-
-        self.retire(keys.iter().copied(), removed_at, "removed");
+        self.retire(keys.iter().copied(), "removed");
 
         // Removals come from leaders dropping inapplicable transactions, so
         // they double as a trigger for eviction alongside processed-block
         // notifications.
         self.retire(
             self.evictor
-                .select_evictions(removed_at, &self.pending_items),
-            removed_at,
+                .select_retirements(current_timestamp_millis(), &self.pending_items),
             "evicted",
         );
 
@@ -321,17 +308,10 @@ where
         // A reorged tx leaves `included_in_canonical` to be admitted again
         // below. If its admission fails, it is retained in `removed_items`
         // like any other retired tx.
-        let now = current_timestamp_millis();
         for item in &reorged {
             let key = item.hash();
             if let Some(included) = self.included_in_canonical.remove(&key) {
-                self.removed_items.insert(
-                    key,
-                    RemovedItem {
-                        removed_at: now,
-                        admitted_at: included.admitted_at,
-                    },
-                );
+                self.removed_items.insert(key, included.admitted_at);
             }
         }
 
@@ -341,8 +321,8 @@ where
                 self.evictor.on_remove(&key);
                 count += 1;
                 admitted_at
-            } else if let Some(removed) = self.removed_items.remove(&key) {
-                removed.admitted_at
+            } else if let Some(admitted_at) = self.removed_items.remove(&key) {
+                admitted_at
             } else if let Some(included) = self.included_in_canonical.get(&key) {
                 included.admitted_at
             } else {
@@ -381,8 +361,7 @@ where
 
         let now = current_timestamp_millis();
         self.retire(
-            self.evictor.select_evictions(now, &self.pending_items),
-            now,
+            self.evictor.select_retirements(now, &self.pending_items),
             "evicted",
         );
 
@@ -544,24 +523,19 @@ where
     /// `on_canonical_chain_updated` instead.
     ///
     /// A retired item keeps its prefix index entry, and its body, until
-    /// [`Self::prune_removed_items`] drops both after the grace period.
+    /// [`Self::prune_removed_items`] drops both once the evictor selects it for
+    /// release.
     ///
     /// Items not in `pending_items` are ignored, such as ones the mempool
     /// doesn't hold (e.g. from a downloaded block).
-    fn retire(&mut self, keys: impl IntoIterator<Item = ItemKey<Item>>, at: u64, cause: &str) {
+    fn retire(&mut self, keys: impl IntoIterator<Item = ItemKey<Item>>, cause: &str) {
         let mut count = 0usize;
         for key in keys {
             let Some(admitted_at) = self.pending_items.shift_remove(&key) else {
                 continue;
             };
             self.evictor.on_remove(&key);
-            self.removed_items.insert(
-                key,
-                RemovedItem {
-                    removed_at: at,
-                    admitted_at,
-                },
-            );
+            self.removed_items.insert(key, admitted_at);
             count += 1;
         }
 
@@ -596,16 +570,12 @@ where
         slots
     }
 
+    /// Release the items in [`Self::removed_items`] that the evictor selects
+    /// for release.
     async fn prune_removed_items(&mut self) {
-        let now = current_timestamp_millis();
-        let grace_period_millis = REMOVED_ITEM_GRACE_PERIOD.as_millis() as u64;
-
         let expired_keys = self
-            .removed_items
-            .iter()
-            .filter(|(_, removed)| now.saturating_sub(removed.removed_at) >= grace_period_millis)
-            .map(|(key, _)| *key)
-            .collect::<Vec<_>>();
+            .evictor
+            .select_releases(current_timestamp_millis(), &self.removed_items);
 
         if !self.delete_retained(&expired_keys).await {
             return;
