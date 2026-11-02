@@ -346,7 +346,7 @@ impl CommonHttpClient {
         base_url: Url,
         service_type: ServiceType,
     ) -> Result<Option<HashMap<DeclarationId, Declaration>>, Error> {
-        let service_discriminant: u8 = *service_type.as_ref();
+        let service_discriminant = u8::from(service_type);
         let path = MANTLE_SDP_FINALIZED_DECLARATIONS
             .trim_start_matches('/')
             .replace(":service_type", &service_discriminant.to_string());

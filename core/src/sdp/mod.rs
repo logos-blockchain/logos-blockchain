@@ -29,7 +29,7 @@ use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, Zk
 use lb_utils::bounded::{BoundedVec, NonEmptyBoundedOrderedSet};
 use multiaddr::{Multiaddr, Protocol};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use strum::{EnumCount, EnumIter};
+use strum::{EnumCount, EnumIter, FromRepr};
 
 use crate::{
     block::BlockNumber,
@@ -287,7 +287,22 @@ impl BinaryDecode for Locator {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, EnumIter, EnumCount)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    EnumIter,
+    EnumCount,
+    FromRepr,
+)]
+#[repr(u8)]
 pub enum ServiceType {
     #[serde(rename = "BN")]
     BlendNetwork,
@@ -306,50 +321,27 @@ impl AsRef<str> for ServiceType {
     }
 }
 
+impl From<ServiceType> for u8 {
+    fn from(service_type: ServiceType) -> Self {
+        service_type as Self
+    }
+}
+
 impl TryFrom<u8> for ServiceType {
     type Error = ();
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::BlendNetwork),
-            #[cfg(test)]
-            1 => Ok(Self::Test),
-            _ => Err(()),
-        }
-    }
-}
-
-impl AsRef<u8> for ServiceType {
-    fn as_ref(&self) -> &u8 {
-        match self {
-            Self::BlendNetwork => &0,
-            #[cfg(test)]
-            Self::Test => &1,
-        }
-    }
-}
-
-impl PartialOrd for ServiceType {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-/// Service types are ordered by the byte each is encoded as, so a map keyed by
-/// service type iterates in the order of their encodings.
-impl Ord for ServiceType {
-    fn cmp(&self, other: &Self) -> Ordering {
-        <Self as AsRef<u8>>::as_ref(self).cmp(<Self as AsRef<u8>>::as_ref(other))
+        Self::from_repr(value).ok_or(())
     }
 }
 
 impl BinaryEncode for ServiceType {
     fn encoded_length(&self) -> usize {
-        <Self as AsRef<u8>>::as_ref(self).encoded_length()
+        u8::from(*self).encoded_length()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
-        <Self as AsRef<u8>>::as_ref(self).encode_into(out);
+        u8::from(*self).encode_into(out);
     }
 }
 
@@ -364,23 +356,6 @@ impl BinaryDecode for ServiceType {
         let service = Self::try_from(value)
             .map_err(|()| DecodeError::invalid_value::<Self>("unknown service type"))?;
         Ok((rest, service))
-    }
-}
-
-#[cfg(test)]
-mod service_type_tests {
-    use strum::IntoEnumIterator as _;
-
-    use crate::sdp::ServiceType;
-
-    #[test]
-    // We make sure the two directions never diverge.
-    fn u8_roundtrip() {
-        for service_type in ServiceType::iter() {
-            let encoded: &u8 = service_type.as_ref();
-            let decoded = ServiceType::try_from(*encoded).expect("valid byte");
-            assert_eq!(service_type, decoded);
-        }
     }
 }
 
@@ -554,7 +529,7 @@ impl BoundedSerializeOp for DeclarationId {
 
 fn declaration_id_preimage(service_type: ServiceType, zk_id: ZkPublicKey) -> [u8; 33] {
     let mut preimage = [0; 33];
-    preimage[0] = *service_type.as_ref();
+    preimage[0] = u8::from(service_type);
     preimage[1..].copy_from_slice(&fr_to_bytes(zk_id.as_fr()));
     preimage
 }
