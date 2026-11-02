@@ -205,7 +205,7 @@ where
         key: Self::Key,
         item: I,
     ) -> Result<(), MempoolError> {
-        self.prune_removed_items().await;
+        self.release_retained().await;
 
         if self.pending_items.contains_key(&key) || self.included_in_canonical.contains_key(&key) {
             return Err(MempoolError::ExistingItem);
@@ -293,8 +293,6 @@ where
     }
 
     async fn remove(&mut self, keys: &[Self::Key]) {
-        self.prune_removed_items().await;
-
         self.retire(keys.iter().copied(), "removed");
 
         // Removals come from leaders dropping inapplicable transactions, so
@@ -305,6 +303,7 @@ where
                 .select_retirements(current_timestamp_millis(), &self.pending_items),
             "evicted",
         );
+        self.release_retained().await;
 
         metrics::mempool_transactions_pending(self.pending_items.len());
     }
@@ -327,7 +326,6 @@ where
         let mut count = 0usize;
         for (key, slot) in entered {
             let admitted_at = if let Some(admitted_at) = self.pending_items.shift_remove(&key) {
-                self.evictor.on_remove(&key);
                 count += 1;
                 admitted_at
             } else if let Some(admitted_at) = self.removed_items.remove(&key) {
@@ -375,7 +373,6 @@ where
     }
 
     async fn on_processed_block(&mut self, block_id: BlockId, slot: Slot, lib_slot: Slot) {
-        self.prune_removed_items().await;
         self.release_immutable(lib_slot).await;
 
         self.evictor.on_processed_block(&block_id, slot);
@@ -385,6 +382,7 @@ where
             self.evictor.select_retirements(now, &self.pending_items),
             "evicted",
         );
+        self.release_retained().await;
 
         metrics::mempool_transactions_pending(self.pending_items.len());
     }
@@ -539,12 +537,13 @@ where
         }
     }
 
-    /// Retire pending items that are inapplicable or evicted, keeping the
-    /// evictor in sync. Items carried by a canonical block go through
-    /// `on_canonical_chain_updated` instead.
+    /// Retire pending items that are inapplicable or evicted. Items carried by
+    /// a canonical block go through `on_canonical_chain_updated` instead. The
+    /// evictor keeps tracking a retired item until it is released, so a
+    /// retained claim is still released at its deadline.
     ///
     /// A retired item keeps its prefix index entry, and its body, until
-    /// [`Self::prune_removed_items`] drops both once the evictor selects it for
+    /// [`Self::release_retained`] drops both once the evictor selects it for
     /// release.
     ///
     /// Items not in `pending_items` are ignored, such as ones the mempool
@@ -555,7 +554,6 @@ where
             let Some(admitted_at) = self.pending_items.shift_remove(&key) else {
                 continue;
             };
-            self.evictor.on_remove(&key);
             self.removed_items.insert(key, admitted_at);
             count += 1;
         }
@@ -591,23 +589,33 @@ where
         slots
     }
 
-    /// Release the items in [`Self::removed_items`] that the evictor selects
-    /// for release.
-    async fn prune_removed_items(&mut self) {
-        let expired_keys = self
-            .evictor
-            .select_releases(current_timestamp_millis(), &self.removed_items);
-
-        if !self.delete_retained(&expired_keys).await {
+    /// Release the retired items the evictor selects for release, in
+    /// [`Self::removed_items`] or [`Self::included_in_canonical`].
+    async fn release_retained(&mut self) {
+        let releases = self.evictor.select_releases(
+            current_timestamp_millis(),
+            &self.removed_items,
+            &self.included_in_canonical,
+        );
+        debug_assert!(
+            releases
+                .iter()
+                .all(|key| self.removed_items.contains_key(key)
+                    || self.included_in_canonical.contains_key(key)),
+            "the evictor must only select retired items for release"
+        );
+        if !self.delete_retained(&releases).await {
             return;
         }
-        for key in expired_keys {
-            self.removed_items.remove(&key);
+        for key in &releases {
+            self.removed_items.remove(key);
+            self.included_in_canonical.remove(key);
         }
     }
 
-    /// Delete the bodies of retired `keys` and drop them from the prefix
-    /// index. Returns `false`, leaving everything in place, if storage fails.
+    /// Delete the bodies of retired `keys`, drop them from the prefix index
+    /// and stop tracking them for eviction. Returns `false`, leaving
+    /// everything in place, if storage fails.
     async fn delete_retained(&mut self, keys: &[ItemKey<Item>]) -> bool {
         if keys.is_empty() {
             return true;
@@ -618,6 +626,7 @@ where
         }
         for key in keys {
             self.unindex_by_prefix(key);
+            self.evictor.on_release(key);
         }
         true
     }
