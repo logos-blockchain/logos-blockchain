@@ -676,6 +676,17 @@ where
             return;
         }
 
+        if enqueue_if_orphan(
+            relays.cryptarchia(),
+            block_id,
+            proposal.header().parent(),
+            orphan_downloader,
+        )
+        .await
+        {
+            return;
+        }
+
         let reconstruct_started_at = Instant::now();
         let block = match reconstruct_block_from_proposal(proposal, relays.mempool_adapter()).await
         {
@@ -705,10 +716,6 @@ where
             .await;
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "Keep proposal error handling in one match."
-    )]
     fn handle_proposal_processing_error(
         err: Error,
         block_id: HeaderId,
@@ -718,18 +725,7 @@ where
     {
         match err {
             Error::Cryptarchia(lb_chain_service::api::ApiError::ParentMissing { parent, info }) => {
-                debug!(
-                    target: LOG_TARGET, ?block_id, ?parent,
-                    "Parent block missing. Trying to enqueue block for orphan processing",
-                );
-                if let Err(e) =
-                    orphan_downloader.enqueue_orphan(block_id, Some(parent), info.tip, info.lib)
-                {
-                    error!(
-                        target: LOG_TARGET, %e, ?block_id, ?parent,
-                        "Failed to enqueue block for orphan processing",
-                    );
-                }
+                enqueue_orphan_with_missing_parent(orphan_downloader, block_id, parent, &info);
             }
             Error::Cryptarchia(lb_chain_service::api::ApiError::FutureBlock {
                 block_slot,
@@ -931,6 +927,67 @@ where
 enum DoNotProcessBlock {
     OlderThanLib,
     AlreadyApplied,
+}
+
+/// Enqueues `block_id` for orphan processing if its `parent` is not known
+/// locally.
+///
+/// Returns `true` if the parent is missing, in which case the block cannot be
+/// applied until the orphan downloader fetches its missing ancestors.
+async fn enqueue_if_orphan<Cryptarchia, NetAdapter, RuntimeServiceId>(
+    cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
+    block_id: HeaderId,
+    parent: HeaderId,
+    orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
+) -> bool
+where
+    Cryptarchia: CryptarchiaServiceData<Tx: Send>,
+    NetAdapter: NetworkAdapter<RuntimeServiceId> + Send + Sync + Clone + 'static,
+    NetAdapter::Block: Clone + Send + Sync + 'static,
+    RuntimeServiceId: Send + Sync + 'static,
+{
+    // On a query failure, fall back to applying the block, which reports a
+    // missing parent itself.
+    match cryptarchia.get_ledger_state(parent).await {
+        Ok(Some(_)) => return false,
+        Ok(None) => {}
+        Err(err) => {
+            error!(target: LOG_TARGET, err = ?err, "Failure when checking if parent block is known");
+            return false;
+        }
+    }
+    let info = match cryptarchia.info().await {
+        Ok(info) => info.cryptarchia_info,
+        Err(err) => {
+            error!(target: LOG_TARGET, err = ?err, "Failure when getting local chain info");
+            return false;
+        }
+    };
+
+    enqueue_orphan_with_missing_parent(orphan_downloader, block_id, parent, &info);
+    true
+}
+
+fn enqueue_orphan_with_missing_parent<NetAdapter, RuntimeServiceId>(
+    orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
+    block_id: HeaderId,
+    parent: HeaderId,
+    info: &lb_chain_service::CryptarchiaInfo,
+) where
+    NetAdapter: NetworkAdapter<RuntimeServiceId> + Send + Sync + Clone + 'static,
+    NetAdapter::Block: Clone + Send + Sync + 'static,
+    RuntimeServiceId: Send + Sync + 'static,
+{
+    debug!(
+        target: LOG_TARGET, ?block_id, ?parent,
+        "Parent block missing. Trying to enqueue block for orphan processing",
+    );
+    if let Err(e) = orphan_downloader.enqueue_orphan(block_id, Some(parent), info.tip, info.lib) {
+        error!(
+            target: LOG_TARGET, %e, ?block_id, ?parent,
+            "Failed to enqueue block for orphan processing",
+        );
+    }
 }
 
 /// Verifies the proposal header and signature without mempool scanning.
@@ -1477,6 +1534,69 @@ mod tests {
 
         verify_proposal_and_cache_rejected(&genuine, &mut orphan_downloader)
             .expect("genuine proposal must pass");
+    }
+
+    /// A proposal whose parent is not known locally is enqueued for orphan
+    /// processing before any reference is resolved.
+    #[tokio::test]
+    async fn block_with_missing_parent_is_enqueued_as_orphan() {
+        let cryptarchia = ChainWithoutBlocks::spawn();
+        let mut orphan_downloader =
+            OrphanBlocksDownloader::<_, usize>::new(NoopNetworkAdapter, NonZeroUsize::MIN, 1);
+        let block_id = HeaderId::from([1; 32]);
+
+        assert!(
+            enqueue_if_orphan(
+                &cryptarchia,
+                block_id,
+                HeaderId::from([2; 32]),
+                &mut orphan_downloader,
+            )
+            .await
+        );
+        assert!(orphan_downloader.remove_orphan(&block_id).is_some());
+    }
+
+    /// A chain service that knows no blocks.
+    struct ChainWithoutBlocks;
+
+    impl ServiceData for ChainWithoutBlocks {
+        type Settings = ();
+        type State = NoState<Self::Settings>;
+        type StateOperator = NoOperator<Self::State>;
+        type Message = lb_chain_service::ConsensusMsg<HashOnlyTx>;
+    }
+
+    impl ChainWithoutBlocks {
+        fn spawn() -> CryptarchiaServiceApi<Self> {
+            let (msg_sender, mut msg_receiver) = mpsc::channel(10);
+
+            tokio::spawn(async move {
+                while let Some(msg) = msg_receiver.recv().await {
+                    match msg {
+                        lb_chain_service::ConsensusMsg::Query(
+                            lb_chain_service::Query::GetLedgerState { reply_channel, .. },
+                        ) => drop(reply_channel.send(None)),
+                        lb_chain_service::ConsensusMsg::Query(lb_chain_service::Query::Info {
+                            reply_channel,
+                        }) => drop(reply_channel.send(lb_chain_service::ChainServiceInfo {
+                            cryptarchia_info: lb_chain_service::CryptarchiaInfo {
+                                lib: HeaderId::from([0; 32]),
+                                lib_slot: Slot::new(0),
+                                tip: HeaderId::from([0; 32]),
+                                slot: Slot::new(0),
+                                height: 0,
+                                state: lb_chain_service::State::Online,
+                            },
+                            phase: lb_chain_service::PhaseTag::Following,
+                        })),
+                        _ => unimplemented!("the parent check sends only these queries"),
+                    }
+                }
+            });
+
+            CryptarchiaServiceApi::new(OutboundRelay::new(msg_sender))
+        }
     }
 
     /// A network adapter that the orphan downloader holds but never calls here.
