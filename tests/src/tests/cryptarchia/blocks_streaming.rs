@@ -81,7 +81,7 @@ fn blocks_streaming_config(mut config: RunConfig) -> RunConfig {
                 UnvalidatedCryptarchiaDeploymentSettings::from(parameters.cryptarchia.clone());
             parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
             cryptarchia.security_param = NonZero::new(SECURITY_PARAM).unwrap();
-            cryptarchia.uncle_reference_window_in_block = NonZero::new(4).unwrap();
+            cryptarchia.uncle_reference_window_in_block = 4;
             parameters.cryptarchia = cryptarchia
                 .try_into()
                 .expect("updated cryptarchia settings must be valid");

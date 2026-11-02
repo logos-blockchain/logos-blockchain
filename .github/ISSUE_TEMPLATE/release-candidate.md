@@ -34,7 +34,7 @@ Most of the template content is the same or very similar to what is in `release.
 - [ ] Commit and push the changes
 - [ ] Manually trigger the [ceremony workflow][ceremony-workflow] from the `HEAD` of the release branch specifying the `devnet` image tag and the right version number `X.Y.Z-rc.N`
 - [ ] Post the link to the workflow run to this issue for easier review
-- [ ] Wait for the workflow run to complete. The workflow will push a new commit on the release branch overwriting the binary's embedded deployment settings (`nodes/node/binary/src/config/deployment/settings.yaml`) with the devnet settings.
+- [ ] Wait for the workflow run to complete. The workflow will push a new commit on the release branch overwriting the binary's embedded deployment settings (`nodes/node/binary/src/config/deployment/settings.yaml` and the era files it includes, in `era/schedule/`) with the devnet settings.
 
 ## Release candidate preparation
 

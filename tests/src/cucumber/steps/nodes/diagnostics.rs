@@ -230,9 +230,7 @@ impl BlendDiagnosticParameterSet {
                 UnvalidatedCryptarchiaDeploymentSettings::from(parameters.cryptarchia.clone());
             cryptarchia.security_param = NonZero::new(self.security_parameter)
                 .expect("named Blend diagnostic security parameter must be non-zero");
-            cryptarchia.uncle_reference_window_in_block =
-                NonZeroU32::new(self.uncle_reference_window_in_block)
-                    .expect("named Blend diagnostic uncle reference window must be non-zero");
+            cryptarchia.uncle_reference_window_in_block = self.uncle_reference_window_in_block;
             parameters.time.slot_duration_in_seconds = NonZero::new(self.slot_duration_secs)
                 .expect("named Blend diagnostic slot duration must be non-zero");
             let epoch_config = &mut cryptarchia.epoch_config;
@@ -435,8 +433,7 @@ pub fn set_blend_diagnostic_parameter_set(
         uncle_reference_window_in_block = settings
             .genesis_era_parameters()
             .cryptarchia
-            .uncle_reference_window_in_block()
-            .get(),
+            .uncle_reference_window_in_block(),
         slot_duration_secs = settings.genesis_era_parameters().time.slot_duration().as_secs(),
         epoch_stake_distribution_stabilization = settings
             .genesis_era_parameters().cryptarchia
@@ -471,8 +468,7 @@ pub fn set_blend_diagnostic_parameter_set(
         settings
             .genesis_era_parameters()
             .cryptarchia
-            .uncle_reference_window_in_block()
-            .get(),
+            .uncle_reference_window_in_block(),
         settings
             .genesis_era_parameters().cryptarchia
             .epoch_config()
@@ -507,8 +503,7 @@ pub fn set_blend_diagnostic_parameter_set(
             "uncle_reference_window_in_block": settings
                 .genesis_era_parameters()
                 .cryptarchia
-                .uncle_reference_window_in_block()
-                .get(),
+                .uncle_reference_window_in_block(),
             "slot_duration_secs": settings.genesis_era_parameters().time.slot_duration().as_secs(),
             "slot_duration_ms": settings.genesis_era_parameters().time.slot_duration().as_millis(),
             "epoch_stake_distribution_stabilization": settings
@@ -1268,8 +1263,7 @@ fn log_diagnostic_identities(world: &CucumberWorld) -> StepResult {
             "security_parameter": parameters.cryptarchia.security_param().get(),
             "uncle_reference_window_in_block": parameters
                 .cryptarchia
-                .uncle_reference_window_in_block()
-                .get(),
+                .uncle_reference_window_in_block(),
             "slot_duration_secs": parameters.time.slot_duration().as_secs(),
             "slot_duration_ms": parameters.time.slot_duration().as_millis(),
             "slot_activation_coeff_numerator": parameters
@@ -1310,8 +1304,7 @@ fn log_diagnostic_identities(world: &CucumberWorld) -> StepResult {
         "security_parameter": parameters.cryptarchia.security_param().get(),
         "uncle_reference_window_in_block": parameters
             .cryptarchia
-            .uncle_reference_window_in_block()
-            .get(),
+            .uncle_reference_window_in_block(),
         "slot_duration_secs": parameters.time.slot_duration().as_secs(),
         "slot_duration_ms": parameters.time.slot_duration().as_millis(),
         "slot_activation_coeff_numerator": parameters
@@ -1356,8 +1349,7 @@ fn log_diagnostic_identities(world: &CucumberWorld) -> StepResult {
             "security_parameter": node_parameters.cryptarchia.security_param().get(),
             "uncle_reference_window_in_block": node_parameters
                 .cryptarchia
-                .uncle_reference_window_in_block()
-                .get(),
+                .uncle_reference_window_in_block(),
             "slot_duration_secs": node_parameters.time.slot_duration().as_secs(),
             "slot_duration_ms": node_parameters.time.slot_duration().as_millis(),
             "slot_activation_coeff_numerator": node_parameters
@@ -1741,8 +1733,7 @@ mod tests {
                 settings
                     .genesis_era_parameters()
                     .cryptarchia
-                    .uncle_reference_window_in_block()
-                    .get(),
+                    .uncle_reference_window_in_block(),
                 uncle_reference_window
             );
             assert_eq!(

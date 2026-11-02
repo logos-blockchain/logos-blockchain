@@ -176,7 +176,7 @@ mod tests {
     fn cryptarchia_settings_are_shared_by_local_and_artifact_configs() {
         let topology = DeploymentBuilder::new(TopologyConfig::with_node_numbers(1))
             .with_security_param(NonZeroU32::new(5).unwrap())
-            .with_uncle_reference_window_in_block(NonZeroU32::new(3).unwrap())
+            .with_uncle_reference_window_in_block(3)
             .with_slot_activation_coeff(1, NonZeroU32::new(2).unwrap())
             .build()
             .expect("topology should build");

@@ -2,6 +2,7 @@ use core::fmt::Debug;
 use std::{collections::HashMap, fmt::Display, num::NonZeroUsize};
 
 use futures::{Stream, StreamExt as _};
+use lb_binary_codec::canonical::BinaryDecode;
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
 use lb_chain_service::{
     CryptarchiaInfo, ProcessedBlockEvent, Slot,
@@ -18,7 +19,7 @@ use lb_core::{
         traits::{Hashable, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
     },
-    sdp::{Declaration, DeclarationId},
+    sdp::{Declaration, DeclarationId, ServiceType},
 };
 use lb_log_targets::api;
 use lb_storage_service::{StorageService, api::StorageApi};
@@ -227,6 +228,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -293,6 +295,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -363,6 +366,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -471,6 +475,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -507,6 +512,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -630,6 +636,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -694,6 +701,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -792,4 +800,46 @@ where
     let chain_api =
         CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
     Ok(chain_api.get_sdp_snapshot().await?)
+}
+
+/// One declaration from finalized (LIB) SDP state.
+pub async fn get_finalized_sdp_declaration<RuntimeServiceId>(
+    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
+    declaration_id: DeclarationId,
+) -> Result<Option<Declaration>, super::DynError>
+where
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + 'static,
+{
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
+    Ok(chain_api
+        .get_finalized_sdp_declaration(declaration_id)
+        .await?)
+}
+
+/// All declarations of one service from finalized (LIB) SDP state.
+pub async fn get_finalized_sdp_declarations<RuntimeServiceId>(
+    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
+    service_type: ServiceType,
+) -> Result<Option<HashMap<DeclarationId, Declaration>>, super::DynError>
+where
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + 'static,
+{
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
+    Ok(chain_api
+        .get_finalized_sdp_declarations(service_type)
+        .await?)
 }

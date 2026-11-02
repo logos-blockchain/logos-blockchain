@@ -17,4 +17,5 @@ pub struct OrchestratorSettings {
 pub struct EraOrchestratorSettings {
     pub minimum_network_size: NonZeroU64,
     pub epoch_transition_period: Duration,
+    pub payload_body_size: u16,
 }

@@ -95,8 +95,40 @@ tests validate:
 
 | Trigger | Inputs | Output (committed) |
 | --- | --- | --- |
-| `.github/workflows/genesis-ceremony.yml` (devnet / testnet) | `deployment/ceremony/genesis/<env>/*` | `nodes/node/binary/src/config/deployment/settings.yaml` |
-| `scripts/standalone-genesis-ceremony.sh` (local) | `deployment/ceremony/genesis/standalone/*` | `nodes/node/standalone-deployment-config.yaml` |
+| `.github/workflows/genesis-ceremony.yml` (devnet / testnet) | `deployment/ceremony/genesis/<env>/*` | `nodes/node/binary/src/config/deployment/settings.yaml` and the era files it includes, `era/schedule/<era number>.yaml` next to it |
+| `scripts/standalone-genesis-ceremony.sh` (local) | `deployment/ceremony/genesis/standalone/*` | `nodes/node/standalone-deployment-config.yaml` and the era file it includes, `era/schedule/0.yaml` next to it |
+
+### Eras
+
+A deployment schedules its eras under `eras`, each keyed by the epoch it
+starts at; the first starts at epoch 0. The deployments the ceremony writes,
+the binary's default and the standalone one, keep each era in its own file,
+named after its era number (its place in the schedule, from 0), which the main
+file includes (`settings.yaml` for the default):
+
+```yaml
+eras:
+  0: !include era/schedule/0.yaml
+  40: !include era/schedule/1.yaml
+genesis_block:
+  ...
+```
+
+To schedule an era in the default deployment, add its file to
+`nodes/node/binary/src/config/deployment/era/schedule/`, named after its era
+number, and include it from `settings.yaml` under the epoch it starts at. The
+node's build script embeds every `.yaml` file in `era/schedule/` in the binary,
+and a config test fails when a file there is not included, an include names no
+file there, or an era's file is not named after its era number.
+
+Any deployment file passed with `--deployment` can include era files the same
+way, relative to itself, so they must be shipped next to it:
+`compose.setup.yml` mounts the `era/schedule/` directory and
+`cleanup_node_data.sh` copies it to `/node-data/era/schedule/`, next to
+`/node-data/deployment.yaml`.
+
+The ceremony writes the genesis era only: re-running it replaces a schedule
+with that era alone, and removes the era files of the schedule it replaces.
 
 Protocol and gossipsub topic names are not configured: every node derives them
 from its deployment. Blend, chain sync and the cryptarchia and mempool topics are
@@ -129,5 +161,7 @@ Per-type blueprints; change only when a network type is re-defined.
 - The `version` input of the genesis ceremony workflow (named in the ceremony's commit message)
 
 Generated each release (by the ceremony, not hand-edited):
-`nodes/node/binary/src/config/deployment/settings.yaml`,
-`nodes/node/standalone-deployment-config.yaml`.
+`nodes/node/binary/src/config/deployment/settings.yaml` and its genesis era
+file, `nodes/node/binary/src/config/deployment/era/schedule/0.yaml`,
+`nodes/node/standalone-deployment-config.yaml` and its genesis era file,
+`nodes/node/era/schedule/0.yaml`.

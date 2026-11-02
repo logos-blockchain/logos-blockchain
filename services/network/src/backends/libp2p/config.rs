@@ -22,6 +22,8 @@ pub struct Libp2pEraConfig {
     /// The digest of the era's fork, which the names of its protocols carry.
     pub fork_digest: ForkDigest,
     pub chain_sync_protocol_name: StreamProtocol,
+    /// The largest block of the era.
+    pub chain_sync_max_block_size: usize,
     /// Application-data limits of the era's gossipsub topics.
     pub max_data_size_by_topic: HashMap<TopicHash, usize>,
 }

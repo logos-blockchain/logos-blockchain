@@ -1,48 +1,25 @@
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError, codec_fixtures, take};
 use lb_blend_crypto::fill_random_bytes;
-use lb_core::block::Proposal;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use serde_with::serde_as;
 
 use crate::Error;
 
-/// Every dispersed payload body is padded to this size, so it must fit the
-/// largest thing the blend network carries: a block proposal.
-///
-/// A block proposal is bounded by `Proposal::MAX_ENCODED_SIZE`.
-const MAX_PAYLOAD_BODY_SIZE_U16: u16 = {
-    assert!(Proposal::MAX_ENCODED_SIZE <= u16::MAX as usize);
-    Proposal::MAX_ENCODED_SIZE as u16
-};
-
-pub const MAX_PAYLOAD_BODY_SIZE: usize = MAX_PAYLOAD_BODY_SIZE_U16 as usize;
-
-/// The length of the unpadded portion of a payload body.
-///
-/// Construction guarantees that the length does not exceed
-/// [`MAX_PAYLOAD_BODY_SIZE`].
+/// The length of the unpadded portion of a payload body, at most the size the
+/// body is padded to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "u16")]
+#[serde(transparent)]
 struct PayloadBodyLen(u16);
 
-impl TryFrom<u16> for PayloadBodyLen {
-    type Error = Error;
-
-    fn try_from(value: u16) -> Result<Self, Self::Error> {
-        if value > MAX_PAYLOAD_BODY_SIZE_U16 {
+impl PayloadBodyLen {
+    /// The length of `len` bytes of content, in a body padded to `body_size`.
+    fn try_new(len: usize, body_size: u16) -> Result<Self, Error> {
+        let len = u16::try_from(len).map_err(|_| Error::PayloadTooLarge)?;
+        if len > body_size {
             return Err(Error::PayloadTooLarge);
         }
 
-        Ok(Self(value))
-    }
-}
-
-impl TryFrom<usize> for PayloadBodyLen {
-    type Error = Error;
-
-    fn try_from(value: usize) -> Result<Self, Self::Error> {
-        let value = u16::try_from(value).map_err(|_| Error::PayloadTooLarge)?;
-        Self::try_from(value)
+        Ok(Self(len))
     }
 }
 
@@ -63,21 +40,26 @@ impl BinaryEncode for PayloadBodyLen {
 }
 
 impl BinaryDecode for PayloadBodyLen {
-    type Context = ();
+    /// The size the body is padded to, which the length is held to.
+    type Context = u16;
 
     fn decode<'input>(
         input: &'input [u8],
-        (): &Self::Context,
+        body_size: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (remaining, value) = u16::decode(input, &())?;
-        let value = Self::try_from(value).map_err(|_| {
-            DecodeError::length_out_of_bounds::<Self>(usize::from(value), 0, MAX_PAYLOAD_BODY_SIZE)
-        })?;
-        Ok((remaining, value))
+        let (remaining, len) = u16::decode(input, &())?;
+        if len > *body_size {
+            return Err(DecodeError::length_out_of_bounds::<Self>(
+                usize::from(len),
+                0,
+                usize::from(*body_size),
+            ));
+        }
+        Ok((remaining, Self(len)))
     }
 }
 
-codec_fixtures!(PayloadBodyLen, PayloadBodyLen(0) => "0000");
+codec_fixtures!(PayloadBodyLen, context = 0, PayloadBodyLen(0) => "0000");
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[repr(u8)]
@@ -141,7 +123,8 @@ impl BinaryDecode for PayloadType {
     }
 }
 
-/// The decapsulated payload body, padded to a fixed size with random bytes.
+/// The decapsulated payload body, padded with random bytes to the payload body
+/// size of its era.
 ///
 /// `actual_len` is the length of the real (unpadded) content and is the single
 /// source of truth for it — the payload no longer stores it a second time.
@@ -149,36 +132,61 @@ impl BinaryDecode for PayloadType {
 /// (<https://github.com/logos-co/logos-lips/blob/master/docs/blockchain/raw/payload-formatting.md#body>),
 /// must be random rather than a fixed filler, so that the body never carries
 /// a region of plaintext known to an observer.
+///
+/// Every body of an era has the era's size, the largest thing the blend
+/// network carries in it (its largest block proposal), so that messages cannot
+/// be told apart by their size. The size is the context the body decodes
+/// under.
 #[serde_as]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PaddedPayloadBody {
     actual_len: PayloadBodyLen,
 
     #[serde_as(as = "serde_with::Bytes")]
-    padded: Box<[u8; MAX_PAYLOAD_BODY_SIZE]>,
+    padded: Box<[u8]>,
 }
 
-impl TryFrom<Vec<u8>> for PaddedPayloadBody {
-    type Error = Error;
+impl PaddedPayloadBody {
+    /// Pads `content` with random bytes to `body_size`, the payload body size
+    /// of the era the body is sent in.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::PayloadTooLarge`] if `content` is longer than `body_size`.
+    pub fn try_new(content: &[u8], body_size: u16) -> Result<Self, Error> {
+        let actual_len = PayloadBodyLen::try_new(content.len(), body_size)?;
 
-    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-        Self::try_from(value.as_slice())
+        let mut padded = vec![0; usize::from(body_size)].into_boxed_slice();
+        let padding_start = content.len();
+        padded[..padding_start].copy_from_slice(content);
+        fill_random_bytes(&mut padded[padding_start..]);
+
+        Ok(Self { actual_len, padded })
     }
 }
 
-impl TryFrom<&[u8]> for PaddedPayloadBody {
-    type Error = Error;
+// Serde reads are trusted (the node's own recovery state): the body keeps the
+// size it was stored with, and only its content length is checked against it.
+impl<'de> Deserialize<'de> for PaddedPayloadBody {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[serde_as]
+        #[derive(Deserialize)]
+        struct RawPaddedPayloadBody {
+            actual_len: PayloadBodyLen,
+            #[serde_as(as = "serde_with::Bytes")]
+            padded: Box<[u8]>,
+        }
 
-    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        let actual_len = PayloadBodyLen::try_from(value.len())?;
-
-        let mut padded: Box<[u8; MAX_PAYLOAD_BODY_SIZE]> = vec![0; MAX_PAYLOAD_BODY_SIZE]
-            .into_boxed_slice()
-            .try_into()
-            .expect("body must be created with the correct size");
-        let padding_start = value.len();
-        padded[..padding_start].copy_from_slice(value);
-        fill_random_bytes(&mut padded[padding_start..]);
+        let RawPaddedPayloadBody { actual_len, padded } =
+            RawPaddedPayloadBody::deserialize(deserializer)?;
+        let body_size =
+            u16::try_from(padded.len()).map_err(|_| D::Error::custom(Error::PayloadTooLarge))?;
+        if actual_len.0 > body_size {
+            return Err(D::Error::custom(Error::PayloadTooLarge));
+        }
 
         Ok(Self { actual_len, padded })
     }
@@ -188,78 +196,71 @@ impl BinaryEncode for PaddedPayloadBody {
     fn encoded_length(&self) -> usize {
         self.actual_len
             .encoded_length()
-            .checked_add(MAX_PAYLOAD_BODY_SIZE)
+            .checked_add(self.padded.len())
             .unwrap()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.actual_len.encode_into(out);
-        out.extend_from_slice(&self.padded[..]);
+        out.extend_from_slice(&self.padded);
     }
 }
 
 impl BinaryDecode for PaddedPayloadBody {
-    type Context = ();
+    /// The size the body is padded to.
+    type Context = u16;
 
     fn decode<'input>(
         input: &'input [u8],
-        (): &Self::Context,
+        body_size: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, actual_len) = PayloadBodyLen::decode(input, &())?;
-        let (body_bytes, remaining) = take::<Self>(input, MAX_PAYLOAD_BODY_SIZE)?;
-        let padded: Box<[u8; MAX_PAYLOAD_BODY_SIZE]> = body_bytes
-            .to_vec()
-            .into_boxed_slice()
-            .try_into()
-            .expect("Take guarantees the length");
-        Ok((remaining, Self { actual_len, padded }))
+        let (input, actual_len) = PayloadBodyLen::decode(input, body_size)?;
+        let (body_bytes, remaining) = take::<Self>(input, usize::from(*body_size))?;
+        Ok((
+            remaining,
+            Self {
+                actual_len,
+                padded: body_bytes.into(),
+            },
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use serde::Serialize;
-    use serde_with::serde_as;
-
     use super::*;
 
-    // Malformed-wire tests need MAX_PAYLOAD_BODY_SIZE + 1 to fit in the u16 field.
-    const _: () = assert!(MAX_PAYLOAD_BODY_SIZE_U16 < u16::MAX);
-
-    #[serde_as]
-    #[derive(Serialize)]
-    struct InvalidPaddedPayloadBody {
-        actual_len: u16,
-        #[serde_as(as = "serde_with::Bytes")]
-        padded: Box<[u8; MAX_PAYLOAD_BODY_SIZE]>,
-    }
+    /// A payload body size for the tests.
+    const BODY_SIZE: u16 = 64;
 
     #[test]
-    fn binary_decode_rejects_invalid_actual_length() {
-        let actual_len = MAX_PAYLOAD_BODY_SIZE_U16 + 1;
-        let mut encoded = Vec::with_capacity(size_of::<u16>() + MAX_PAYLOAD_BODY_SIZE);
+    fn binary_decode_rejects_a_length_past_the_body_size() {
+        let actual_len = BODY_SIZE + 1;
+        let mut encoded = Vec::with_capacity(size_of::<u16>() + usize::from(BODY_SIZE));
         actual_len.encode_into(&mut encoded);
         encoded.resize(encoded.capacity(), 0);
 
-        let error = PaddedPayloadBody::decode(&encoded, &()).unwrap_err();
+        let error = PaddedPayloadBody::decode(&encoded, &BODY_SIZE).unwrap_err();
         assert!(matches!(
             error,
-            DecodeError::LengthOutOfBounds {
-                len,
-                max: MAX_PAYLOAD_BODY_SIZE,
-                ..
-            } if len == usize::from(actual_len)
+            DecodeError::LengthOutOfBounds { len, max, .. }
+                if len == usize::from(actual_len) && max == usize::from(BODY_SIZE)
         ));
     }
 
     #[test]
-    fn serde_deserialize_rejects_invalid_actual_length() {
+    fn serde_deserialize_rejects_a_length_past_the_padded_body() {
+        #[serde_as]
+        #[derive(Serialize)]
+        struct InvalidPaddedPayloadBody {
+            actual_len: u16,
+            #[serde_as(as = "serde_with::Bytes")]
+            padded: Box<[u8]>,
+        }
+
         let raw = InvalidPaddedPayloadBody {
-            actual_len: MAX_PAYLOAD_BODY_SIZE_U16 + 1,
-            padded: vec![0; MAX_PAYLOAD_BODY_SIZE]
-                .into_boxed_slice()
-                .try_into()
-                .unwrap(),
+            actual_len: BODY_SIZE + 1,
+            padded: vec![0; usize::from(BODY_SIZE)].into_boxed_slice(),
         };
         let encoded = bincode::serialize(&raw).unwrap();
         let error = bincode::deserialize::<PaddedPayloadBody>(&encoded).unwrap_err();
@@ -268,25 +269,17 @@ mod tests {
     }
 
     #[test]
-    fn payload_body_len_accepts_maximum_and_rejects_next_length() {
-        let maximum = PayloadBodyLen::try_from(MAX_PAYLOAD_BODY_SIZE_U16).unwrap();
-        assert_eq!(usize::from(maximum), MAX_PAYLOAD_BODY_SIZE);
-
-        assert!(PayloadBodyLen::try_from(MAX_PAYLOAD_BODY_SIZE + 1).is_err());
-    }
-
-    #[test]
-    fn serde_deserialize_rejects_invalid_payload_body_len() {
-        let invalid_len = MAX_PAYLOAD_BODY_SIZE_U16 + 1;
-        let encoded = bincode::serialize(&invalid_len).unwrap();
-        let error = bincode::deserialize::<PayloadBodyLen>(&encoded).unwrap_err();
-
-        assert!(format!("{error}").contains("Payload too large"));
+    fn a_body_takes_content_up_to_its_size() {
+        assert!(PaddedPayloadBody::try_new(&[1; BODY_SIZE as usize], BODY_SIZE).is_ok());
+        assert!(matches!(
+            PaddedPayloadBody::try_new(&[1; BODY_SIZE as usize + 1], BODY_SIZE),
+            Err(Error::PayloadTooLarge)
+        ));
     }
 
     #[test]
     fn serde_payload_body_len_keeps_u16_representation() {
-        let length = PayloadBodyLen::try_from(1u16).unwrap();
+        let length = PayloadBodyLen::try_new(1, BODY_SIZE).unwrap();
 
         assert_eq!(
             bincode::serialize(&length).unwrap(),
@@ -297,7 +290,7 @@ mod tests {
     #[test]
     fn payload_body_returns_original_unpadded_bytes() {
         let original = b"payload body";
-        let body = PaddedPayloadBody::try_from(original.as_slice()).unwrap();
+        let body = PaddedPayloadBody::try_new(original.as_slice(), BODY_SIZE).unwrap();
         let payload = Payload::new(PayloadType::Transaction, body);
 
         assert_eq!(payload.body(), original);
@@ -308,12 +301,16 @@ mod tests {
     }
 }
 
-/// The exact number of bytes a [`Payload`] encodes to: a fixed enum
-/// discriminant, the `u16` body length, and the body padded to
-/// [`MAX_PAYLOAD_BODY_SIZE`]. Compile-time constant, so the encapsulated
-/// (ciphered) form can be stored as a `Box<[u8; PAYLOAD_ENCODED_SIZE]>`.
-pub const PAYLOAD_ENCODED_SIZE: usize =
-    size_of::<PayloadType>() + size_of::<u16>() + MAX_PAYLOAD_BODY_SIZE;
+/// The bytes a [`Payload`] encodes to besides its body's: its type and the
+/// body's content length.
+pub const PAYLOAD_HEADER_SIZE: usize = size_of::<PayloadType>() + size_of::<u16>();
+
+/// The exact number of bytes a [`Payload`] whose body is padded to `body_size`
+/// encodes to: a fixed enum discriminant, the `u16` body length, and the body.
+#[must_use]
+pub fn payload_encoded_size(body_size: u16) -> usize {
+    PAYLOAD_HEADER_SIZE + usize::from(body_size)
+}
 
 /// A payload that is fully decapsulated.
 /// This must be encapsulated when being sent to the blend network.
@@ -345,7 +342,10 @@ impl Payload {
 
 impl BinaryEncode for Payload {
     fn encoded_length(&self) -> usize {
-        PAYLOAD_ENCODED_SIZE
+        self.payload_type
+            .encoded_length()
+            .checked_add(self.body.encoded_length())
+            .unwrap()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
@@ -355,14 +355,15 @@ impl BinaryEncode for Payload {
 }
 
 impl BinaryDecode for Payload {
-    type Context = ();
+    /// The size the body is padded to.
+    type Context = u16;
 
     fn decode<'input>(
         input: &'input [u8],
-        (): &Self::Context,
+        body_size: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
         let (input, payload_type) = PayloadType::decode(input, &())?;
-        let (input, body) = PaddedPayloadBody::decode(input, &())?;
+        let (input, body) = PaddedPayloadBody::decode(input, body_size)?;
         Ok((input, Self { payload_type, body }))
     }
 }

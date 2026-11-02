@@ -26,17 +26,14 @@ use lb_chain_service::{
 use lb_core::{
     header::HeaderId,
     mantle::{
-        NoteId, Op, OpProof, SignedOps, TxHash,
+        NoteId, Op, OpProof, TxHash,
         channel::ChannelState,
         ledger::verification_mode::StandardMode,
         ops::channel::ChannelId,
         traits::Hashable,
-        transactions::{
-            MantleTxBuilder,
-            genesis_tx::ChainId,
-            states::{Preverified, Unverified},
-        },
+        transactions::{MantleTxBuilder, genesis_tx::ChainId, states::Unverified},
     },
+    sdp::{DeclarationId, ServiceType},
 };
 use lb_http_api_common::{
     EraTiming, TimeInfo,
@@ -82,7 +79,7 @@ use tracing::debug;
 use utoipa::ToSchema;
 
 use crate::{
-    TimeService,
+    TimeService, UnvalidatedTx, ValidatedTx,
     api::{
         errors::{ApiError, BlocksStreamHandlerError, BlocksStreamWindowError, ErrorBody},
         openapi::schema,
@@ -375,8 +372,8 @@ pub async fn mantle_metrics<StorageAdapter, RuntimeServiceId>(
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedOps<Preverified, StandardMode>,
-            Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            Item = ValidatedTx,
+            Key = <ValidatedTx as Hashable>::Hash,
             BlockId = HeaderId,
         > + Send
         + Sync
@@ -393,16 +390,11 @@ where
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
-                    SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                    ValidatedTx,
+                    <ValidatedTx as Hashable>::Hash,
                     RuntimeServiceId,
                 >,
-                Mempool<
-                    HeaderId,
-                    SignedOps<Preverified, StandardMode>,
-                    StorageAdapter,
-                    RuntimeServiceId,
-                >,
+                Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
                 StorageAdapter,
                 NtpTimeBackend,
                 RuntimeServiceId,
@@ -426,13 +418,13 @@ where
 )]
 pub async fn mantle_status<StorageAdapter, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(items): Json<Vec<<SignedOps<Preverified, StandardMode> as Hashable>::Hash>>,
+    Json(items): Json<Vec<<ValidatedTx as Hashable>::Hash>>,
 ) -> Response
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedOps<Preverified, StandardMode>,
-            Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            Item = ValidatedTx,
+            Key = <ValidatedTx as Hashable>::Hash,
             BlockId = HeaderId,
         > + Send
         + Sync
@@ -449,16 +441,11 @@ where
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
-                    SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                    ValidatedTx,
+                    <ValidatedTx as Hashable>::Hash,
                     RuntimeServiceId,
                 >,
-                Mempool<
-                    HeaderId,
-                    SignedOps<Preverified, StandardMode>,
-                    StorageAdapter,
-                    RuntimeServiceId,
-                >,
+                Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
                 StorageAdapter,
                 NtpTimeBackend,
                 RuntimeServiceId,
@@ -787,7 +774,7 @@ where
     let notes: Vec<_> = balance.notes.into_iter().collect();
     blend::select_service_note(
         &notes,
-        |note_id| locked.is_used_for_service(&note_id, &lb_core::sdp::ServiceType::BlendNetwork),
+        |note_id| locked.is_used_for_service(&note_id, &ServiceType::BlendNetwork),
         threshold,
     )
     .map_err(|error| ApiError::NotFound(format!("blend ZK key {zk_id:?}: {error}")))
@@ -812,7 +799,7 @@ where
 {
     make_request_and_return_response!(blend::blend_pending_transactions::<
         BlendService,
-        SignedOps<Preverified, StandardMode>,
+        ValidatedTx,
         TxHash,
         RuntimeServiceId,
     >(&handle, Hashable::hash))
@@ -828,7 +815,7 @@ where
 )]
 pub async fn blend_tx<BlendService, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(tx): Json<SignedOps<Preverified, StandardMode>>,
+    Json(tx): Json<ValidatedTx>,
 ) -> Response
 where
     BlendService: ServiceData<
@@ -838,7 +825,7 @@ where
 {
     make_request_and_return_response!(blend::blend_transaction::<
         BlendService,
-        SignedOps<Preverified, StandardMode>,
+        ValidatedTx,
         TxHash,
         RuntimeServiceId,
     >(&handle, tx, Hashable::hash))
@@ -854,13 +841,13 @@ where
 )]
 pub async fn add_tx<StorageAdapter, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(tx): Json<SignedOps<Preverified, StandardMode>>,
+    Json(tx): Json<ValidatedTx>,
 ) -> Response
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedOps<Preverified, StandardMode>,
-            Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            Item = ValidatedTx,
+            Key = <ValidatedTx as Hashable>::Hash,
             BlockId = HeaderId,
         > + Send
         + Sync
@@ -877,16 +864,11 @@ where
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
-                    SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                    ValidatedTx,
+                    <ValidatedTx as Hashable>::Hash,
                     RuntimeServiceId,
                 >,
-                Mempool<
-                    HeaderId,
-                    SignedOps<Preverified, StandardMode>,
-                    StorageAdapter,
-                    RuntimeServiceId,
-                >,
+                Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
                 StorageAdapter,
                 NtpTimeBackend,
                 RuntimeServiceId,
@@ -895,13 +877,9 @@ where
 {
     make_request_and_return_response!(mempool::add_tx::<
         Libp2pNetworkBackend,
-        MempoolNetworkAdapter<
-            SignedOps<Preverified, StandardMode>,
-            <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-            RuntimeServiceId,
-        >,
+        MempoolNetworkAdapter<ValidatedTx, <ValidatedTx as Hashable>::Hash, RuntimeServiceId>,
         StorageAdapter,
-        SignedOps<Preverified, StandardMode>,
+        ValidatedTx,
         NtpTimeBackend,
         RuntimeServiceId,
     >(&handle, tx, Hashable::hash))
@@ -921,8 +899,8 @@ pub async fn mempool_view<StorageAdapter, RuntimeServiceId>(
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedOps<Preverified, StandardMode>,
-            Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            Item = ValidatedTx,
+            Key = <ValidatedTx as Hashable>::Hash,
             BlockId = HeaderId,
         > + Send
         + Sync
@@ -940,16 +918,11 @@ where
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
-                    SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                    ValidatedTx,
+                    <ValidatedTx as Hashable>::Hash,
                     RuntimeServiceId,
                 >,
-                Mempool<
-                    HeaderId,
-                    SignedOps<Preverified, StandardMode>,
-                    StorageAdapter,
-                    RuntimeServiceId,
-                >,
+                Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
                 StorageAdapter,
                 NtpTimeBackend,
                 RuntimeServiceId,
@@ -967,8 +940,8 @@ async fn current_tip_mempool_view<StorageAdapter, RuntimeServiceId>(
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedOps<Preverified, StandardMode>,
-            Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            Item = ValidatedTx,
+            Key = <ValidatedTx as Hashable>::Hash,
             BlockId = HeaderId,
         > + Send
         + Sync
@@ -986,16 +959,11 @@ where
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
-                    SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                    ValidatedTx,
+                    <ValidatedTx as Hashable>::Hash,
                     RuntimeServiceId,
                 >,
-                Mempool<
-                    HeaderId,
-                    SignedOps<Preverified, StandardMode>,
-                    StorageAdapter,
-                    RuntimeServiceId,
-                >,
+                Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
                 StorageAdapter,
                 NtpTimeBackend,
                 RuntimeServiceId,
@@ -1015,8 +983,8 @@ async fn mempool_view_at<StorageAdapter, RuntimeServiceId>(
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedOps<Preverified, StandardMode>,
-            Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            Item = ValidatedTx,
+            Key = <ValidatedTx as Hashable>::Hash,
             BlockId = HeaderId,
         > + Send
         + Sync
@@ -1033,16 +1001,11 @@ where
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
-                    SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                    ValidatedTx,
+                    <ValidatedTx as Hashable>::Hash,
                     RuntimeServiceId,
                 >,
-                Mempool<
-                    HeaderId,
-                    SignedOps<Preverified, StandardMode>,
-                    StorageAdapter,
-                    RuntimeServiceId,
-                >,
+                Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
                 StorageAdapter,
                 NtpTimeBackend,
                 RuntimeServiceId,
@@ -1051,17 +1014,8 @@ where
 {
     let relay = handle
         .relay::<TxMempoolService<
-            MempoolNetworkAdapter<
-                SignedOps<Preverified, StandardMode>,
-                <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-                RuntimeServiceId,
-            >,
-            Mempool<
-                HeaderId,
-                SignedOps<Preverified, StandardMode>,
-                StorageAdapter,
-                RuntimeServiceId,
-            >,
+            MempoolNetworkAdapter<ValidatedTx, <ValidatedTx as Hashable>::Hash, RuntimeServiceId>,
+            Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
             StorageAdapter,
             NtpTimeBackend,
             RuntimeServiceId,
@@ -1079,7 +1033,7 @@ where
     let txs = receiver.await?;
 
     Ok(
-        tokio_stream::StreamExt::map(txs, |tx: SignedOps<Preverified, StandardMode>| tx.hash())
+        tokio_stream::StreamExt::map(txs, |tx: ValidatedTx| tx.hash())
             .collect()
             .await,
     )
@@ -1129,8 +1083,8 @@ where
     WalletService: WalletServiceData,
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedOps<Preverified, StandardMode>,
-            Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            Item = ValidatedTx,
+            Key = <ValidatedTx as Hashable>::Hash,
             BlockId = HeaderId,
         > + Send
         + Sync
@@ -1148,16 +1102,11 @@ where
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
-                    SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                    ValidatedTx,
+                    <ValidatedTx as Hashable>::Hash,
                     RuntimeServiceId,
                 >,
-                Mempool<
-                    HeaderId,
-                    SignedOps<Preverified, StandardMode>,
-                    StorageAdapter,
-                    RuntimeServiceId,
-                >,
+                Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
                 StorageAdapter,
                 NtpTimeBackend,
                 RuntimeServiceId,
@@ -1193,13 +1142,9 @@ where
 
         mempool::add_tx::<
             Libp2pNetworkBackend,
-            MempoolNetworkAdapter<
-                SignedOps<Preverified, StandardMode>,
-                <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-                RuntimeServiceId,
-            >,
+            MempoolNetworkAdapter<ValidatedTx, <ValidatedTx as Hashable>::Hash, RuntimeServiceId>,
             StorageAdapter,
-            SignedOps<Preverified, StandardMode>,
+            ValidatedTx,
             NtpTimeBackend,
             RuntimeServiceId,
         >(&handle, signed_tx, Hashable::hash)
@@ -1321,7 +1266,7 @@ pub async fn post_withdrawal<
     RuntimeServiceId,
 >(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(declaration_id): Json<lb_core::sdp::DeclarationId>,
+    Json(declaration_id): Json<DeclarationId>,
 ) -> Response
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
@@ -1357,7 +1302,7 @@ where
     post,
     path = paths::SDP_POST_SET_DECLARATION_ID,
     responses(
-        (status = 200, description = "Post declaration to SDP service to be set as current", body = lb_core::sdp::DeclarationId),
+        (status = 200, description = "Post declaration to SDP service to be set as current", body = DeclarationId),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1369,7 +1314,7 @@ pub async fn post_set_declaration_id<
     RuntimeServiceId,
 >(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(declaration): Json<Option<lb_core::sdp::DeclarationId>>,
+    Json(declaration): Json<Option<DeclarationId>>,
 ) -> Response
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
@@ -1407,7 +1352,7 @@ where
     get,
     path = paths::MANTLE_SDP_DECLARATIONS,
     responses(
-        (status = 200, description = "Get current SDP declarations keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, Object>),
+        (status = 200, description = "Get current SDP declarations keyed by declaration id", body = std::collections::HashMap<DeclarationId, Object>),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1425,7 +1370,7 @@ where
     get,
     path = paths::MANTLE_SDP_SNAPSHOT,
     responses(
-        (status = 200, description = "Get the SDP snapshot for the current epoch keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, Object>),
+        (status = 200, description = "Get the SDP snapshot for the current epoch keyed by declaration id", body = std::collections::HashMap<DeclarationId, Object>),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1437,6 +1382,75 @@ where
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
     make_request_and_return_response!(mantle::get_sdp_snapshot::<RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    get,
+    path = paths::MANTLE_SDP_FINALIZED_DECLARATION,
+    params(
+        ("declaration_id" = String, Path, description = "Declaration ID as 64 hex digits, optionally prefixed with 0x")
+    ),
+    responses(
+        (status = 200, description = "Declaration from finalized SDP state", body = Object),
+        (status = 400, description = "Invalid declaration ID", body = ErrorBody),
+        (status = 404, description = "Declaration not found in finalized state", body = ErrorBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn get_finalized_sdp_declaration<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(declaration_id): Path<String>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    let declaration_id = match declaration_id.parse::<DeclarationId>() {
+        Ok(id) => id,
+        Err(error) => return ApiError::BadRequest(error).into_response(),
+    };
+
+    match mantle::get_finalized_sdp_declaration::<RuntimeServiceId>(&handle, declaration_id).await {
+        Ok(Some(declaration)) => (StatusCode::OK, Json(declaration)).into_response(),
+        Ok(None) => {
+            ApiError::NotFound("Declaration not found in finalized state".into()).into_response()
+        }
+        Err(error) => ApiError::Internal(error).into_response(),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = paths::MANTLE_SDP_FINALIZED_DECLARATIONS,
+    params(
+        ("service_type" = u8, Path, description = "Canonical one-byte ServiceType discriminant")
+    ),
+    responses(
+        (status = 200, description = "Declarations of the service from finalized SDP state", body = std::collections::HashMap<DeclarationId, Object>),
+        (status = 400, description = "Unknown service type", body = ErrorBody),
+        (status = 404, description = "Service is absent from finalized state", body = ErrorBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn get_finalized_sdp_declarations<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(service_discriminant): Path<u8>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    let Ok(service_type) = ServiceType::try_from(service_discriminant) else {
+        return ApiError::BadRequest("Unknown service type".into()).into_response();
+    };
+
+    match mantle::get_finalized_sdp_declarations::<RuntimeServiceId>(&handle, service_type).await {
+        Ok(Some(declarations)) => (StatusCode::OK, Json(declarations)).into_response(),
+        Ok(None) => {
+            ApiError::NotFound("Service absent from finalized state".into()).into_response()
+        }
+        Err(error) => ApiError::Internal(error).into_response(),
+    }
 }
 
 #[utoipa::path(
@@ -1611,10 +1625,11 @@ where
         + AsServiceId<StorageService<RuntimeServiceId>>,
 {
     let api_blocks = async {
-        let blocks = mantle::get_immutable_blocks::<
-            SignedOps<Unverified, StandardMode>,
-            RuntimeServiceId,
-        >(&handle, query.slot_from, query.slot_to)
+        let blocks = mantle::get_immutable_blocks::<UnvalidatedTx, RuntimeServiceId>(
+            &handle,
+            query.slot_from,
+            query.slot_to,
+        )
         .await?;
 
         let api_blocks = blocks
@@ -1642,13 +1657,10 @@ pub async fn block<RuntimeServiceId>(
 where
     RuntimeServiceId: AsServiceId<StorageService<RuntimeServiceId>> + Debug + Sync + Display,
 {
-    let storage =
-        match StorageApi::<SignedOps<Unverified, StandardMode>>::from_overwatch_handle(&handle)
-            .await
-        {
-            Ok(storage) => storage,
-            Err(error) => return ApiError::internal(error).into_response(),
-        };
+    let storage = match StorageApi::<UnvalidatedTx>::from_overwatch_handle(&handle).await {
+        Ok(storage) => storage,
+        Err(error) => return ApiError::internal(error).into_response(),
+    };
     let block = storage.try_get_block(&id).await;
     match block {
         Ok(Some(block)) => {
@@ -1750,7 +1762,7 @@ pub async fn blocks_stream<ConsensusService, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
 ) -> Response
 where
-    ConsensusService: CryptarchiaServiceData<Tx = SignedOps<Preverified, StandardMode>>,
+    ConsensusService: CryptarchiaServiceData<Tx = ValidatedTx>,
     RuntimeServiceId: Debug
         + Sync
         + Display
@@ -1867,13 +1879,10 @@ pub async fn transaction<RuntimeServiceId>(
 where
     RuntimeServiceId: AsServiceId<StorageService<RuntimeServiceId>> + Debug + Sync + Display,
 {
-    let storage =
-        match StorageApi::<SignedOps<Unverified, StandardMode>>::from_overwatch_handle(&handle)
-            .await
-        {
-            Ok(storage) => storage,
-            Err(error) => return ApiError::internal(error).into_response(),
-        };
+    let storage = match StorageApi::<UnvalidatedTx>::from_overwatch_handle(&handle).await {
+        Ok(storage) => storage,
+        Err(error) => return ApiError::internal(error).into_response(),
+    };
     let Ok(transactions) = storage.try_get_transactions(vec![id]).await else {
         return ApiError::InternalServerError.into_response();
     };
@@ -2065,8 +2074,8 @@ pub mod wallet {
         WalletService: WalletServiceData + 'static,
         StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
                 RuntimeServiceId,
-                Item = SignedOps<Preverified, StandardMode>,
-                Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                Item = ValidatedTx,
+                Key = <ValidatedTx as Hashable>::Hash,
                 BlockId = HeaderId,
             > + Send
             + Sync
@@ -2084,16 +2093,11 @@ pub mod wallet {
             + AsServiceId<
                 TxMempoolService<
                     MempoolNetworkAdapter<
-                        SignedOps<Preverified, StandardMode>,
-                        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                        ValidatedTx,
+                        <ValidatedTx as Hashable>::Hash,
                         RuntimeServiceId,
                     >,
-                    Mempool<
-                        HeaderId,
-                        SignedOps<Preverified, StandardMode>,
-                        StorageAdapter,
-                        RuntimeServiceId,
-                    >,
+                    Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
                     StorageAdapter,
                     NtpTimeBackend,
                     RuntimeServiceId,
@@ -2127,12 +2131,12 @@ pub mod wallet {
                 if let Err(e) = mempool::add_tx::<
                     Libp2pNetworkBackend,
                     MempoolNetworkAdapter<
-                        SignedOps<Preverified, StandardMode>,
-                        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                        ValidatedTx,
+                        <ValidatedTx as Hashable>::Hash,
                         RuntimeServiceId,
                     >,
                     StorageAdapter,
-                    SignedOps<Preverified, StandardMode>,
+                    ValidatedTx,
                     NtpTimeBackend,
                     RuntimeServiceId,
                 >(&handle, transaction.clone(), Hashable::hash)
@@ -2163,8 +2167,8 @@ pub mod wallet {
         WalletService: WalletServiceData,
         StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
                 RuntimeServiceId,
-                Item = SignedOps<Preverified, StandardMode>,
-                Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                Item = ValidatedTx,
+                Key = <ValidatedTx as Hashable>::Hash,
                 BlockId = HeaderId,
             > + Send
             + Sync
@@ -2182,16 +2186,11 @@ pub mod wallet {
             + AsServiceId<
                 TxMempoolService<
                     MempoolNetworkAdapter<
-                        SignedOps<Preverified, StandardMode>,
-                        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                        ValidatedTx,
+                        <ValidatedTx as Hashable>::Hash,
                         RuntimeServiceId,
                     >,
-                    Mempool<
-                        HeaderId,
-                        SignedOps<Preverified, StandardMode>,
-                        StorageAdapter,
-                        RuntimeServiceId,
-                    >,
+                    Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
                     StorageAdapter,
                     NtpTimeBackend,
                     RuntimeServiceId,
@@ -2224,8 +2223,8 @@ pub mod wallet {
         WalletService: WalletServiceData,
         StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
                 RuntimeServiceId,
-                Item = SignedOps<Preverified, StandardMode>,
-                Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                Item = ValidatedTx,
+                Key = <ValidatedTx as Hashable>::Hash,
                 BlockId = HeaderId,
             > + Send
             + Sync
@@ -2243,16 +2242,11 @@ pub mod wallet {
             + AsServiceId<
                 TxMempoolService<
                     MempoolNetworkAdapter<
-                        SignedOps<Preverified, StandardMode>,
-                        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                        ValidatedTx,
+                        <ValidatedTx as Hashable>::Hash,
                         RuntimeServiceId,
                     >,
-                    Mempool<
-                        HeaderId,
-                        SignedOps<Preverified, StandardMode>,
-                        StorageAdapter,
-                        RuntimeServiceId,
-                    >,
+                    Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
                     StorageAdapter,
                     NtpTimeBackend,
                     RuntimeServiceId,
@@ -2285,8 +2279,8 @@ pub mod wallet {
         WalletService: WalletServiceData,
         StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
                 RuntimeServiceId,
-                Item = SignedOps<Preverified, StandardMode>,
-                Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                Item = ValidatedTx,
+                Key = <ValidatedTx as Hashable>::Hash,
                 BlockId = HeaderId,
             > + Send
             + Sync
@@ -2304,16 +2298,11 @@ pub mod wallet {
             + AsServiceId<
                 TxMempoolService<
                     MempoolNetworkAdapter<
-                        SignedOps<Preverified, StandardMode>,
-                        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                        ValidatedTx,
+                        <ValidatedTx as Hashable>::Hash,
                         RuntimeServiceId,
                     >,
-                    Mempool<
-                        HeaderId,
-                        SignedOps<Preverified, StandardMode>,
-                        StorageAdapter,
-                        RuntimeServiceId,
-                    >,
+                    Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
                     StorageAdapter,
                     NtpTimeBackend,
                     RuntimeServiceId,

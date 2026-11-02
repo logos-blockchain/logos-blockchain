@@ -3,9 +3,6 @@ use std::num::{NonZero, NonZeroU64};
 use lb_pol::LotteryConstants;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 
-/// `MAX_UNCLES`, the maximum number of uncles a block may reference.
-pub const MAX_UNCLES: usize = 4;
-
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Config {
     /// The `k` parameter in the Common Prefix property.
@@ -18,7 +15,9 @@ pub struct Config {
     stake_inference_learning_rate: NonNegativeF64,
     /// `W`, the width of the uncle reference window in expected
     /// block-intervals.
-    uncle_reference_window_in_block: NonZero<u32>,
+    uncle_reference_window_in_block: u32,
+    /// The most uncles a block may reference.
+    max_uncles: u8,
     /// Lottery approximation constants computed from `slot_activation_coeff`
     #[serde(skip)]
     lottery_constants: LotteryConstants,
@@ -34,7 +33,8 @@ impl<'de> serde::Deserialize<'de> for Config {
             security_param: NonZero<u32>,
             slot_activation_coeff: NonNegativeRatio,
             stake_inference_learning_rate: NonNegativeF64,
-            uncle_reference_window_in_block: NonZero<u32>,
+            uncle_reference_window_in_block: u32,
+            max_uncles: u8,
         }
 
         let raw = RawConfig::deserialize(deserializer)?;
@@ -44,6 +44,7 @@ impl<'de> serde::Deserialize<'de> for Config {
             slot_activation_coeff: raw.slot_activation_coeff,
             stake_inference_learning_rate: raw.stake_inference_learning_rate,
             uncle_reference_window_in_block: raw.uncle_reference_window_in_block,
+            max_uncles: raw.max_uncles,
             lottery_constants: LotteryConstants::new(raw.slot_activation_coeff),
         })
     }
@@ -55,25 +56,35 @@ impl Config {
         security_param: NonZero<u32>,
         slot_activation_coeff: NonNegativeRatio,
         stake_inference_learning_rate: NonNegativeF64,
-        uncle_reference_window_in_block: NonZero<u32>,
+        uncle_reference_window_in_block: u32,
+        max_uncles: u8,
     ) -> Self {
         Self {
             security_param,
             slot_activation_coeff,
             stake_inference_learning_rate,
             uncle_reference_window_in_block,
+            max_uncles,
             lottery_constants: LotteryConstants::new(slot_activation_coeff),
         }
     }
 
+    /// The most uncles a block may reference.
+    #[must_use]
+    pub const fn max_uncles(&self) -> u8 {
+        self.max_uncles
+    }
+
     /// `W * f^-1`, the maximum number of slots by which the parent of a
     /// referenced uncle may precede the block referencing it.
+    ///
+    /// Zero when `W` is zero, which disables uncle references.
     #[must_use]
-    pub const fn uncle_reference_window_in_slot(&self) -> NonZero<u64> {
-        average_slots_for_blocks(
-            self.uncle_reference_window_in_block,
-            self.slot_activation_coeff,
-        )
+    pub const fn uncle_reference_window_in_slot(&self) -> u64 {
+        match NonZero::new(self.uncle_reference_window_in_block) {
+            Some(window) => average_slots_for_blocks(window, self.slot_activation_coeff).get(),
+            None => 0,
+        }
     }
 
     #[must_use]
@@ -145,6 +156,11 @@ pub const fn average_slots_for_blocks(
 /// ten base periods and a base period is `k / f` slots. It is therefore never a
 /// free parameter — anything that needs a per-epoch block count derives it from
 /// the schedule rather than carrying its own copy.
+///
+/// # Panics
+///
+/// If the configuration yields zero expected blocks per epoch (e.g. an `f` of
+/// zero), since such a chain produces no blocks at all.
 #[must_use]
 #[expect(
     clippy::cast_possible_truncation,
@@ -163,12 +179,8 @@ pub const fn expected_blocks_per_epoch(
     } else {
         blocks as u64
     };
-    match NonZero::new(blocks) {
-        Some(blocks) => blocks,
-        // Only an `f` of zero gets here, a chain that produces no blocks at
-        // all. One keeps arithmetic that divides by this value well-defined.
-        None => NonZero::<u64>::MIN,
-    }
+    NonZero::new(blocks)
+        .expect("expected_blocks_per_epoch with proper configuration should never be zero")
 }
 
 /// `⌊0.6k⌋`, the upper bound on uncle reference window (`W` blocks).
@@ -194,15 +206,13 @@ mod tests {
             NonZero::new(10).unwrap(),
             NonNegativeRatio::new(1, 5.try_into().unwrap()),
             0.1.try_into().unwrap(),
-            NonZero::new(12).unwrap(),
+            12,
+            4,
         );
         assert_eq!(config.security_param(), NonZero::new(10).unwrap());
         assert_eq!(config.base_period_length(), NonZero::new(50).unwrap());
         assert_eq!(config.slot_security_param(), NonZero::new(150).unwrap());
-        assert_eq!(
-            config.uncle_reference_window_in_slot(),
-            NonZero::new(60).unwrap()
-        );
+        assert_eq!(config.uncle_reference_window_in_slot(), 60);
         assert_eq!(config.s_gen(), NonZero::new(12).unwrap());
         assert_eq!(
             config.stake_inference_learning_rate().mul(10.0).floor() as u64,
@@ -232,6 +242,18 @@ mod tests {
     }
 
     #[test]
+    fn test_zero_uncle_reference_window() {
+        let config = Config::new(
+            NonZero::new(10).unwrap(),
+            NonNegativeRatio::new(1, 5.try_into().unwrap()),
+            0.1.try_into().unwrap(),
+            0,
+            4,
+        );
+        assert_eq!(config.uncle_reference_window_in_slot(), 0);
+    }
+
+    #[test]
     fn test_expected_blocks_per_epoch_is_ten_k() {
         // k = 10, f = 1/5: a base period is 50 slots and the standard 3/3/4
         // split makes the epoch ten of them.
@@ -242,5 +264,12 @@ mod tests {
             expected_blocks_per_epoch(epoch_length, slot_activation_coeff),
             NonZero::new(100).unwrap(),
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "expected_blocks_per_epoch")]
+    fn test_expected_blocks_per_epoch_panics_on_zero_slot_activation_coeff() {
+        let slot_activation_coeff = NonNegativeRatio::new(0, 1.try_into().unwrap());
+        let _ = expected_blocks_per_epoch(1_000, slot_activation_coeff);
     }
 }

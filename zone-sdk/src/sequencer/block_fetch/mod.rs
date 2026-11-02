@@ -30,8 +30,8 @@ use super::{
     channel_wallet::note_ops_from_txs,
     state::{ChannelUpdateInfo, PendingBundle, TxState},
     types::{
-        AtomicWithdrawInfo, ChannelTransferInfo, ChannelUpdateTx, DepositInfo, Error, FinalizedOp,
-        FinalizedTx, InscriptionInfo, PendingTx, PinDepositInfo, WithdrawInfo,
+        AtomicWithdrawInfo, ChannelTransferInfo, ChannelUpdateTx, ConfigInfo, DepositInfo, Error,
+        FinalizedOp, FinalizedTx, InscriptionInfo, PendingTx, PinDepositInfo, WithdrawInfo,
     },
 };
 use crate::{
@@ -527,13 +527,15 @@ pub fn channel_configs(
     let tx_hash = tx.op_refs().hash();
     tx.op_refs_iter()
         .filter_map(|op| match op {
-            OpRef::ChannelConfig(config) if config.channel == channel_id => Some(InscriptionInfo {
-                tx_hash,
-                parent_msg: config.parent,
-                this_msg: config.id(),
-                payload: Inscription::new_unchecked(Vec::new()),
-                signer: None,
-            }),
+            OpRef::ChannelConfig(config) if config.channel() == channel_id => {
+                Some(InscriptionInfo {
+                    tx_hash,
+                    parent_msg: config.parent(),
+                    this_msg: config.id(),
+                    payload: Inscription::new_unchecked(Vec::new()),
+                    signer: None,
+                })
+            }
             _ => None,
         })
         .collect()
@@ -677,7 +679,8 @@ pub(super) fn landed_msg_ids(items: &[FinalizedTx]) -> HashSet<MsgId> {
         .iter()
         .flat_map(|tx| tx.ops.iter())
         .filter_map(|op| match op {
-            FinalizedOp::Inscription(i) | FinalizedOp::Config(i) => Some(i.this_msg),
+            FinalizedOp::Inscription(i) => Some(i.this_msg),
+            FinalizedOp::Config(c) => Some(c.this_msg),
             _ => None,
         })
         .collect()
@@ -822,13 +825,12 @@ fn extract_finalized_items(
                     };
                     ops.push(FinalizedOp::Inscription(info));
                 }
-                OpRef::ChannelConfig(config) if config.channel == channel_id => {
-                    ops.push(FinalizedOp::Config(InscriptionInfo {
+                OpRef::ChannelConfig(config) if config.channel() == channel_id => {
+                    ops.push(FinalizedOp::Config(ConfigInfo {
                         tx_hash,
-                        parent_msg: config.parent,
+                        parent_msg: config.parent(),
                         this_msg: config.id(),
-                        payload: Inscription::new_unchecked(Vec::new()),
-                        signer: None,
+                        config: config.clone(),
                     }));
                 }
                 OpRef::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
@@ -1082,7 +1084,7 @@ pub(super) fn classify_channel_tx(
                 });
                 *block_tip = Some(this_msg);
             }
-            OpRef::ChannelConfig(config) if config.channel == channel_id => {
+            OpRef::ChannelConfig(config) if config.channel() == channel_id => {
                 configs += 1;
                 // Configs sit on the separate config lineage — `this_msg` is a
                 // config id, `parent_msg` its config parent, payload empty.
@@ -1091,7 +1093,7 @@ pub(super) fn classify_channel_tx(
                 // node's single tip.
                 config_entries.push(InscriptionInfo {
                     tx_hash,
-                    parent_msg: config.parent,
+                    parent_msg: config.parent(),
                     this_msg: config.id(),
                     payload: [].into(),
                     signer: None,
@@ -1172,7 +1174,7 @@ pub(super) fn is_pure_config<Mode: VerificationMode>(
     let mut transfers = 0usize;
     for op in tx.op_refs_iter() {
         match op {
-            OpRef::ChannelConfig(config) if config.channel == channel_id => configs += 1,
+            OpRef::ChannelConfig(config) if config.channel() == channel_id => configs += 1,
             OpRef::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => return false,
             OpRef::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => return false,
             OpRef::Transfer(_) => transfers += 1,
@@ -1202,7 +1204,7 @@ fn touches_channel_tip<State: VerificationState, Mode: VerificationMode>(
 ) -> bool {
     tx.op_refs().iter().any(|op| match op {
         OpRef::ChannelInscribe(inscribe) => inscribe.channel_id == channel_id,
-        OpRef::ChannelConfig(set_keys) => set_keys.channel == channel_id,
+        OpRef::ChannelConfig(set_keys) => set_keys.channel() == channel_id,
         _ => false,
     })
 }

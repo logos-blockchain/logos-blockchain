@@ -14,7 +14,7 @@ use lb_blend_membership::Membership;
 use lb_blend_message::{
     deserialize_encapsulated_message,
     encap::{
-        ProofsVerifier as ProofsVerifierTrait, encapsulated_message_encoded_size,
+        MessageLayout, ProofsVerifier as ProofsVerifierTrait, encapsulated_message_encoded_size,
         validated::EncapsulatedMessageWithVerifiedPublicHeader,
     },
 };
@@ -102,7 +102,7 @@ pub struct Behaviour<ProofsVerifier> {
     round_clock: RoundClock,
     protocol_name: StreamProtocol,
     minimum_network_size: NonZeroUsize,
-    num_blend_layers: NonZeroU64,
+    message_layout: MessageLayout,
 }
 
 impl<ProofsVerifier> Behaviour<ProofsVerifier> {
@@ -131,7 +131,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             round_clock,
             protocol_name,
             minimum_network_size: common_config.minimum_network_size,
-            num_blend_layers: common_config.num_blend_layers,
+            message_layout: common_config.message_layout,
         }
     }
 
@@ -172,8 +172,8 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             accept_share,
             connection_timeout,
             max_incoming_connections,
+            message_layout,
             minimum_network_size,
-            num_blend_layers,
             protocol_name,
             round_clock,
             current_epoch: _,
@@ -195,7 +195,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         );
         *protocol_name = new_era_protocol_name;
         *minimum_network_size = new_era_common_config.minimum_network_size;
-        *num_blend_layers = new_era_common_config.num_blend_layers;
+        *message_layout = new_era_common_config.message_layout;
     }
 
     fn try_wake(&mut self) {
@@ -259,7 +259,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         ProofsVerifier: ProofsVerifierTrait + Send + Sync + 'static,
     {
         let Ok(deserialized_encapsulated_message) =
-            deserialize_encapsulated_message(serialized_message, &self.num_blend_layers)
+            deserialize_encapsulated_message(serialized_message, &self.message_layout)
         else {
             tracing::trace!(target: LOG_TARGET, "Failed to deserialize received message. Ignoring...");
             return;
@@ -356,7 +356,7 @@ where
         Ok(Either::Left(ConnectionHandler::new(
             self.connection_timeout,
             self.protocol_name.clone(),
-            encapsulated_message_encoded_size(self.num_blend_layers),
+            encapsulated_message_encoded_size(self.message_layout),
         )))
     }
 

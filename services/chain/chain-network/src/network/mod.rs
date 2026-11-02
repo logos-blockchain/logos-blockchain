@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use futures::Stream;
 use lb_core::header::HeaderId;
 use lb_cryptarchia_engine::Era;
-use lb_cryptarchia_sync::GetTipResponse;
+use lb_cryptarchia_sync::TipResponse;
 use lb_network_service::{
     backends::NetworkBackend,
     message::{BackendNetworkMsg, ChainSyncEvent},
@@ -35,14 +35,15 @@ pub trait NetworkAdapter<RuntimeServiceId> {
 
     async fn chainsync_events_stream(&self) -> Result<BoxedStream<ChainSyncEvent>, DynError>;
 
-    async fn request_tip(&self, peer: Self::PeerId) -> Result<GetTipResponse, DynError>;
+    async fn request_tip(&self, peer: Self::PeerId) -> Result<TipResponse, DynError>;
 
     /// Sample up to `max_peers` currently-connected peers and request their
-    /// chain tip via `GetTip`, concurrently. The returned stream yields each
-    /// successful response as it resolves; per-peer failures are dropped.
+    /// chain tip via tip requests, concurrently. The returned stream yields
+    /// each successful response as it resolves; per-peer failures are
+    /// dropped.
     ///
     /// Used by the proactive tip-polling lag watchdog.
-    async fn sample_tips(&self, max_peers: usize) -> BoxedStream<GetTipResponse>;
+    async fn sample_tips(&self, max_peers: usize) -> BoxedStream<TipResponse>;
 
     async fn request_blocks_from_peer(
         &self,

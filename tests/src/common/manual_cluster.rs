@@ -196,7 +196,7 @@ fn fast_chain_config(mut config: RunConfig) -> RunConfig {
                 UnvalidatedCryptarchiaDeploymentSettings::from(parameters.cryptarchia.clone());
             parameters.time.slot_duration_in_seconds = NonZero::new(2).expect("nonzero");
             cryptarchia.security_param = NonZero::new(3).expect("nonzero");
-            cryptarchia.uncle_reference_window_in_block = NonZero::new(1).expect("nonzero");
+            cryptarchia.uncle_reference_window_in_block = 1;
             cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().expect("nonzero"));
             parameters.cryptarchia = cryptarchia

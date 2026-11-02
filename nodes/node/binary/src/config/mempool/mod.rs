@@ -1,9 +1,4 @@
-use lb_core::mantle::{
-    SignedOps,
-    ledger::verification_mode::StandardMode,
-    traits::Hashable as _,
-    transactions::{hash::TxHash, states::Preverified},
-};
+use lb_core::mantle::{traits::Hashable as _, transactions::hash::TxHash};
 use lb_cryptarchia_engine::time::EraSchedule;
 use lb_libp2p::protocol_name::ProtocolScope;
 use lb_services_utils::overwatch::RecoveryData;
@@ -15,9 +10,12 @@ use lb_tx_service::{
     },
 };
 
-use crate::config::{
-    deployment::{EraDefinition, era::ruleset::EraRuleset},
-    mempool::serde::Config,
+use crate::{
+    ValidatedTx,
+    config::{
+        deployment::{EraDefinition, era::ruleset::EraRuleset},
+        mempool::serde::Config,
+    },
 };
 
 pub mod serde;
@@ -35,13 +33,10 @@ impl ServiceConfig {
         self,
         eras: &EraSchedule<EraDefinition>,
         recovery_data: &RecoveryData,
-    ) -> TxMempoolSettings<
-        MempoolSettings,
-        Libp2pNetworkAdapterSettings<TxHash, SignedOps<Preverified, StandardMode>>,
-    > {
+    ) -> TxMempoolSettings<MempoolSettings, Libp2pNetworkAdapterSettings<TxHash, ValidatedTx>> {
         TxMempoolSettings {
             network_adapter: Libp2pNetworkAdapterSettings {
-                id: SignedOps::<Preverified, StandardMode>::hash,
+                id: ValidatedTx::hash,
                 era_schedule: eras.map(|era| Libp2pNetworkAdapterEraSettings {
                     topic: ProtocolScope::Fork(era.parameters.fork_digest)
                         .to_string_with_name("mempool"),

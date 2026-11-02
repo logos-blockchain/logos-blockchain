@@ -2,7 +2,7 @@ use std::num::NonZeroU64;
 
 use ark_ff::Zero as _;
 use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{EraSchedule, Slot};
 use lb_groth16::{Fr, fr_from_mod_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use rpds::HashTrieMapSync;
@@ -29,6 +29,8 @@ use crate::{
 pub type PowTarget = Fr;
 /// A `PoW` reward amount, denominated like any other note [`Value`].
 pub type PowReward = Value;
+/// The acceptance window, in slots, of the `PoW` reward claims of each era.
+pub type PowSlotWindows = EraSchedule<NonZeroU64>;
 
 /// Nullifier of a spent `PoW` solution, recorded on claim to prevent the same
 /// solution from being claimed twice.
@@ -160,13 +162,10 @@ pub struct ClaimPoWRewardVerificationContext<'a> {
     /// Slots of known blocks, used to check the claim's block is within
     /// the acceptance window.
     pub blocks_slot: HashTrieMapSync<Hash, Slot>,
-    /// Acceptance window, in slots, of the claims for the current epoch: how
-    /// far back their anchor block may be from the current block. That of
-    /// the era of the current epoch.
-    pub current_epoch_slot_window: NonZeroU64,
-    /// Acceptance window, in slots, of the claims for the previous epoch:
-    /// that of the era of the previous epoch.
-    pub previous_epoch_slot_window: NonZeroU64,
+    /// Acceptance window, in slots, of each era: how far back a claim's
+    /// anchor block may be from the current block. A claim is judged under
+    /// the window of the era of its anchor block.
+    pub slot_windows: PowSlotWindows,
 }
 
 impl ClaimPoWRewardVerificationContext<'_> {
@@ -181,15 +180,12 @@ impl ClaimPoWRewardVerificationContext<'_> {
     }
 
     /// On-chain `block_hash` window check, measured in slots, against the
-    /// acceptance window of the epoch the claim is for.
-    pub fn accept_claim(
-        &self,
-        block_id: Hash,
-        slot_window: NonZeroU64,
-    ) -> Result<(), ClaimPowRewardError> {
+    /// acceptance window of the era of the anchor block.
+    pub fn accept_claim(&self, block_id: Hash) -> Result<(), ClaimPowRewardError> {
         let Some(&block_slot) = self.blocks_slot.get(&block_id) else {
             return Err(ClaimPowRewardError::MissingBlock { block_id });
         };
+        let slot_window = self.slot_window_at(block_slot);
 
         let Some(slot_gap) = self.current_block_slot.checked_sub(block_slot) else {
             return Err(ClaimPowRewardError::OutOfWindowSlot {
@@ -206,25 +202,23 @@ impl ClaimPoWRewardVerificationContext<'_> {
         Ok(())
     }
 
-    /// The acceptance window of the epoch a claim is for. A claim is for the
-    /// epoch whose nonce it carries, which must be the current or the
-    /// previous one, and is judged under the era of that epoch. When both
-    /// epochs have the same nonce, the claim is for either, so it takes the
-    /// larger window.
-    fn slot_window_for(
-        &self,
-        claim_epoch_nonce: ZkHash,
-    ) -> Result<NonZeroU64, ClaimPowRewardError> {
-        let current = (claim_epoch_nonce == self.current_epoch_nonce)
-            .then_some(self.current_epoch_slot_window);
-        let previous = (claim_epoch_nonce == self.previous_epoch_nonce)
-            .then_some(self.previous_epoch_slot_window);
-        current
-            .max(previous)
-            .ok_or(ClaimPowRewardError::MismatchEpochNonce {
+    /// The acceptance window of a claim anchored to a block at
+    /// `block_slot`: that of the era of the block.
+    fn slot_window_at(&self, block_slot: Slot) -> NonZeroU64 {
+        *self.slot_windows.at_slot(block_slot).parameters
+    }
+
+    /// The claim's epoch nonce must be the current or the previous one.
+    fn validate_epoch_nonce(&self, claim_epoch_nonce: ZkHash) -> Result<(), ClaimPowRewardError> {
+        if claim_epoch_nonce != self.current_epoch_nonce
+            && claim_epoch_nonce != self.previous_epoch_nonce
+        {
+            return Err(ClaimPowRewardError::MismatchEpochNonce {
                 claim: claim_epoch_nonce,
                 accepted: (self.previous_epoch_nonce, self.current_epoch_nonce),
-            })
+            });
+        }
+        Ok(())
     }
 
     /// The puzzle ticket must be strictly below the current reward
@@ -326,8 +320,8 @@ impl VerifiableOperation<StandardMode>
         let operation = self.operation();
 
         context.are_pow_reward_enabled()?;
-        let slot_window = context.slot_window_for(operation.epoch_nonce)?;
-        context.accept_claim(operation.block_hash, slot_window)?;
+        context.validate_epoch_nonce(operation.epoch_nonce)?;
+        context.accept_claim(operation.block_hash)?;
         let puzzle_ticket = operation.get_puzzle_ticket();
         context.validate_difficulty_reward(puzzle_ticket)?;
         context.validate_double_claiming(puzzle_ticket)?;
@@ -380,15 +374,49 @@ impl ExecutableOperation for SignedOperation<ClaimPowRewardOp, Verified, Standar
 }
 
 #[cfg(test)]
+pub(crate) mod test_utils {
+    use std::{iter, num::NonZero, time::Duration};
+
+    use lb_time::era::{EraEntriesAfterGenesis, EraTiming};
+    use time::OffsetDateTime;
+
+    use super::{EraSchedule, PowSlotWindows};
+
+    /// Acceptance windows over epochs of 10 slots: `genesis` from epoch 0,
+    /// then each `(first_epoch, window)` of `after_genesis`.
+    pub fn slot_windows<const AFTER_GENESIS: usize>(
+        genesis: u64,
+        after_genesis: [(u32, u64); AFTER_GENESIS],
+    ) -> PowSlotWindows {
+        let timing = EraTiming {
+            slot_duration: Duration::from_secs(1),
+            epoch_length: NonZero::new(10).expect("10 is not 0"),
+        };
+        let windows: Vec<_> = iter::once(genesis)
+            .chain(after_genesis.iter().map(|&(_, window)| window))
+            .collect();
+        let after_genesis = EraEntriesAfterGenesis::try_from_iter(
+            after_genesis.map(|(first_epoch, _)| (NonZero::new(first_epoch).unwrap(), timing)),
+        )
+        .unwrap();
+        EraSchedule::new(OffsetDateTime::UNIX_EPOCH, timing, after_genesis)
+            .unwrap()
+            .map(|era| NonZero::new(windows[usize::from(era.era.into_inner())]).unwrap())
+    }
+}
+
+#[cfg(test)]
 mod tests {
-    use std::num::NonZero;
+    use std::iter;
 
     use lb_groth16::{AdditiveGroup as _, Field as _};
 
-    use super::*;
+    use super::{test_utils::slot_windows, *};
     use crate::mantle::gas::test_utils::FixedThresholds;
 
     pub const SLOT_WINDOW: NonZeroU64 = NonZeroU64::new(100).expect("100 is not 0");
+    /// The window of the single era of [`accepting_context`].
+    const ACCEPTING_SLOT_WINDOW: NonZeroU64 = NonZeroU64::new(10).expect("10 is not 0");
 
     fn validation_context(
         nullifiers: &HashTrieMapSync<PowNullifier, Slot>,
@@ -404,8 +432,7 @@ mod tests {
             current_epoch_nonce: nonce_for_epoch(0),
             previous_epoch_nonce: nonce_for_epoch(0),
             blocks_slot: HashTrieMapSync::new_sync(),
-            current_epoch_slot_window: SLOT_WINDOW,
-            previous_epoch_slot_window: SLOT_WINDOW,
+            slot_windows: slot_windows(SLOT_WINDOW.get(), []),
         }
     }
 
@@ -476,10 +503,8 @@ mod tests {
             epoch_reward_pool: 1_000,
             current_epoch_nonce: nonce_for_epoch(CURRENT_EPOCH),
             previous_epoch_nonce: nonce_for_epoch(PREVIOUS_EPOCH),
-            blocks_slot: std::iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
-            // Tests below exercise a window of 10 slots.
-            current_epoch_slot_window: NonZero::new(10).expect("10 is not 0"),
-            previous_epoch_slot_window: NonZero::new(10).expect("10 is not 0"),
+            blocks_slot: iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
+            slot_windows: slot_windows(ACCEPTING_SLOT_WINDOW.get(), []),
         }
     }
 
@@ -515,10 +540,10 @@ mod tests {
         ctx.current_block_slot = Slot::from(current_slot);
 
         // Gap of zero: the claim's block is the current block.
-        let slot_window = ctx.current_epoch_slot_window;
+        let slot_window = ACCEPTING_SLOT_WINDOW;
         ctx.blocks_slot
             .insert_mut(CLAIM_BLOCK_HASH, Slot::from(current_slot));
-        assert_eq!(ctx.accept_claim(CLAIM_BLOCK_HASH, slot_window), Ok(()));
+        assert_eq!(ctx.accept_claim(CLAIM_BLOCK_HASH), Ok(()));
 
         // Gap exactly equal to the window is still inside it (§5.1.1:
         // `0 <= current - anchor <= WINDOW`, measured in slots).
@@ -526,7 +551,7 @@ mod tests {
             CLAIM_BLOCK_HASH,
             Slot::from(current_slot - slot_window.get()),
         );
-        assert_eq!(ctx.accept_claim(CLAIM_BLOCK_HASH, slot_window), Ok(()));
+        assert_eq!(ctx.accept_claim(CLAIM_BLOCK_HASH), Ok(()));
     }
 
     #[test]
@@ -535,7 +560,7 @@ mod tests {
         let ctx = accepting_context(&nullifiers);
         let unknown = [9u8; 32];
         assert_eq!(
-            ctx.accept_claim(unknown, ctx.current_epoch_slot_window),
+            ctx.accept_claim(unknown),
             Err(ClaimPowRewardError::MissingBlock { block_id: unknown })
         );
     }
@@ -547,10 +572,10 @@ mod tests {
         let current_slot = 200u64;
         ctx.current_block_slot = Slot::from(current_slot);
         // Gap of WINDOW + 1: one slot too old.
-        let anchor = Slot::from(current_slot - ctx.current_epoch_slot_window.get() - 1);
+        let anchor = Slot::from(current_slot - ACCEPTING_SLOT_WINDOW.get() - 1);
         ctx.blocks_slot.insert_mut(CLAIM_BLOCK_HASH, anchor);
         assert_eq!(
-            ctx.accept_claim(CLAIM_BLOCK_HASH, ctx.current_epoch_slot_window),
+            ctx.accept_claim(CLAIM_BLOCK_HASH),
             Err(ClaimPowRewardError::OutOfWindowSlot {
                 slot: anchor,
                 current_slot: Slot::from(current_slot),
@@ -567,7 +592,7 @@ mod tests {
         ctx.blocks_slot
             .insert_mut(CLAIM_BLOCK_HASH, Slot::from(51u64));
         assert_eq!(
-            ctx.accept_claim(CLAIM_BLOCK_HASH, ctx.current_epoch_slot_window),
+            ctx.accept_claim(CLAIM_BLOCK_HASH),
             Err(ClaimPowRewardError::OutOfWindowSlot {
                 slot: Slot::from(51u64),
                 current_slot: Slot::from(50),
@@ -609,13 +634,14 @@ mod tests {
     }
 
     #[test]
-    fn verify_judges_a_claim_under_the_window_of_the_epoch_whose_nonce_it_carries() {
+    fn verify_judges_a_claim_under_the_window_of_the_era_of_its_anchor_block() {
         let nullifiers = HashTrieMapSync::new_sync();
         let mut ctx = accepting_context(&nullifiers);
-        ctx.current_epoch_slot_window = NonZero::new(10).expect("10 is not 0");
-        ctx.previous_epoch_slot_window = NonZero::new(20).expect("20 is not 0");
-        // The claim's block is 15 slots back: inside the previous epoch's
-        // window, outside the current epoch's.
+        // Era 0 has a window of 20, era 1, from slot 40 on, one of 10. The
+        // claim's block, in era 0, is 15 slots back from the current block,
+        // in era 1: inside the window of the anchor's era, outside the
+        // current one's.
+        ctx.slot_windows = slot_windows(20, [(4, 10)]);
         ctx.blocks_slot
             .insert_mut(CLAIM_BLOCK_HASH, Slot::from(35u64));
         let verify = |epoch| {
@@ -625,31 +651,34 @@ mod tests {
                 .verify(&ctx)
         };
 
+        // Whichever accepted nonce the claim carries.
+        assert_eq!(verify(CURRENT_EPOCH), Ok(()));
         assert_eq!(verify(PREVIOUS_EPOCH), Ok(()));
-        assert_eq!(
-            verify(CURRENT_EPOCH),
-            Err(ClaimPowRewardError::OutOfWindowSlot {
-                slot: Slot::from(35u64),
-                current_slot: Slot::from(50u64),
-            })
-        );
     }
 
     #[test]
-    fn verify_judges_a_claim_whose_nonce_both_epochs_carry_under_the_larger_window() {
+    fn verify_rejects_a_claim_beyond_the_window_of_the_era_of_its_anchor_block() {
         let nullifiers = HashTrieMapSync::new_sync();
         let mut ctx = accepting_context(&nullifiers);
-        ctx.previous_epoch_nonce = ctx.current_epoch_nonce;
-        ctx.current_epoch_slot_window = NonZero::new(10).expect("10 is not 0");
-        ctx.previous_epoch_slot_window = NonZero::new(20).expect("20 is not 0");
-        // 15 slots back: inside the previous epoch's window only.
+        // Era 0 has a window of 10, era 1, from slot 40 on, one of 20. The
+        // claim's block, in era 0, is 15 slots back: outside the window of
+        // the anchor's era, although inside the current one's.
+        ctx.slot_windows = slot_windows(10, [(4, 20)]);
         ctx.blocks_slot
             .insert_mut(CLAIM_BLOCK_HASH, Slot::from(35u64));
-        let signed_operation = SignedOperation::new(claim_op(CURRENT_EPOCH), NoOpProof)
-            .into_preverified(&())
-            .unwrap();
+        let verify = |epoch| {
+            SignedOperation::new(claim_op(epoch), NoOpProof)
+                .into_preverified(&())
+                .unwrap()
+                .verify(&ctx)
+        };
+        let out_of_window = Err(ClaimPowRewardError::OutOfWindowSlot {
+            slot: Slot::from(35u64),
+            current_slot: Slot::from(50u64),
+        });
 
-        assert_eq!(signed_operation.verify(&ctx), Ok(()));
+        assert_eq!(verify(CURRENT_EPOCH), out_of_window);
+        assert_eq!(verify(PREVIOUS_EPOCH), out_of_window);
     }
 
     #[test]
@@ -776,7 +805,7 @@ mod tests {
                 nullifiers: HashTrieMapSync::new_sync(),
                 tx_hash,
                 utxos: Utxos::new(),
-                block_slots: std::iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
+                block_slots: iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
             })
             .expect("claim execution should succeed");
 
@@ -836,7 +865,7 @@ mod tests {
             nullifiers: HashTrieMapSync::new_sync(),
             tx_hash: TxHash::from([11u8; 32]),
             utxos: Utxos::new(),
-            block_slots: std::iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
+            block_slots: iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
         }));
     }
 

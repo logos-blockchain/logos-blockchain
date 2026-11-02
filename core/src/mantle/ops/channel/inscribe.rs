@@ -302,7 +302,7 @@ mod tests {
         assert!(
             format!("{err}").contains(
                 format!(
-                    "Item count {} exceeds static maximum of {MAX_BYTES}",
+                    "Item count {} exceeds maximum of {MAX_BYTES}",
                     MAX_BYTES + 1,
                 )
                 .as_str()

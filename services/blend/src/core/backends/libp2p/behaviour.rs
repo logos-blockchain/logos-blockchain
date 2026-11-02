@@ -43,7 +43,7 @@ pub fn network_config(
     lb_blend::network::core::Config {
         common: lb_blend::network::core::CommonConfig {
             minimum_network_size: era_settings.minimum_network_size.try_into().unwrap(),
-            num_blend_layers: era_settings.num_blend_layers,
+            message_layout: era_settings.message_layout,
             round_duration_in_seconds: era_settings.time.round_duration_in_seconds,
         },
         with_core: lb_blend::network::core::with_core::behaviour::Config {

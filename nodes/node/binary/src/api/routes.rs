@@ -49,6 +49,8 @@ macro_rules! api_routes {
             post lb_http_api_common::paths::SDP_POST_SET_DECLARATION_ID => crate::api::handlers::post_set_declaration_id, post_set_declaration_id::<SdpMempool, SdpWallet, Cryptarchia<RuntimeServiceId>, SdpStateStorage, RuntimeServiceId>;
             get lb_http_api_common::paths::MANTLE_SDP_DECLARATIONS => crate::api::handlers::get_sdp_declarations, get_sdp_declarations::<RuntimeServiceId>;
             get lb_http_api_common::paths::MANTLE_SDP_SNAPSHOT => crate::api::handlers::get_sdp_snapshot, get_sdp_snapshot::<RuntimeServiceId>;
+            get lb_http_api_common::paths::MANTLE_SDP_FINALIZED_DECLARATION => crate::api::handlers::get_finalized_sdp_declaration, get_finalized_sdp_declaration::<RuntimeServiceId>;
+            get lb_http_api_common::paths::MANTLE_SDP_FINALIZED_DECLARATIONS => crate::api::handlers::get_finalized_sdp_declarations, get_finalized_sdp_declarations::<RuntimeServiceId>;
             post lb_http_api_common::paths::LEADER_CLAIM => crate::api::handlers::leader_claim, leader_claim::<ChainLeader, RuntimeServiceId>;
             put lb_http_api_common::paths::POW_START_MINING => crate::api::handlers::pow_start_mining, pow_start_mining::<PoWService, RuntimeServiceId>;
             put lb_http_api_common::paths::POW_STOP_MINING => crate::api::handlers::pow_stop_mining, pow_stop_mining::<PoWService, RuntimeServiceId>;

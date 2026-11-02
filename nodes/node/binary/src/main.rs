@@ -65,9 +65,8 @@ async fn main() -> Result<()> {
     }
 
     let chain_id = run_config.deployment.chain_id();
-    // Only single-era schedules are supported for now, so the node follows the
-    // fork of the genesis era.
-    let fork_digest = run_config.deployment.genesis_fork_digest();
+    // The fork of the era in force when the node starts.
+    let fork_digest = run_config.deployment.fork_digest_in_force();
 
     // A panic in any service leaves the node in an unknown state, so the
     // standalone binary logs it and exits. The hook is process-wide, which is

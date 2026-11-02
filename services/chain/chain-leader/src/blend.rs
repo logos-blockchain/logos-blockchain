@@ -8,9 +8,11 @@
 
 use std::marker::PhantomData;
 
-use lb_blend_service::message::{
-    DataPayload, ProxyServiceMessage, ServiceMessage, proposal_diagnostic_digest_from_encoded,
-    proposal_diagnostic_timestamp_unix_ms,
+use lb_blend_service::{
+    api::{BlendServiceApi, BlendServiceData},
+    message::{
+        DataPayload, proposal_diagnostic_digest_from_encoded, proposal_diagnostic_timestamp_unix_ms,
+    },
 };
 use lb_core::block::Proposal;
 use lb_log_targets::chain;
@@ -45,22 +47,19 @@ where
 
 impl<BlendService> BlendAdapter<BlendService>
 where
-    BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<BlendService::NodeId>>>
-        + lb_blend_service::ServiceComponents,
-    <BlendService as ServiceData>::Message: Send,
+    BlendService: BlendServiceData<NodeId: Send>,
 {
     pub async fn publish_proposal(&self, proposal: Proposal) {
-        let Ok(payload) = DataPayload::try_from_proposal(&proposal) else {
-            error!(
-                target: LOG_TARGET,
-                "Refusing to publish an oversized block proposal"
-            );
-            return;
-        };
+        let payload = DataPayload::from_proposal(&proposal);
         let payload_clone = payload.clone();
 
-        if let Err(error) = self.relay.send(ServiceMessage::Blend(payload).into()).await {
-            error!(target: LOG_TARGET, "Failed to relay proposal to blend service: {error}");
+        // Blend refuses a proposal larger than a payload body of its current
+        // epoch.
+        if let Err(error) = BlendServiceApi::<BlendService, ()>::new(self.relay.clone())
+            .publish(payload)
+            .await
+        {
+            error!(target: LOG_TARGET, "Failed to publish our block proposal through Blend: {error}");
             return;
         }
 

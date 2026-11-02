@@ -29,6 +29,9 @@ impl ServiceConfig {
                 PoWEraSettings {
                     slot_window: reward.slot_window,
                     rewards_enabled: reward.rate_num > 0,
+                    max_data_payload_body_size: usize::from(
+                        era.parameters.ruleset.blend_payload_body_size(),
+                    ),
                 }
             }),
             recovery_data,

@@ -2,7 +2,10 @@ use core::num::{NonZero, NonZeroU32, NonZeroU64};
 
 use lb_binary_codec::canonical::BTreeMap;
 use lb_chain_service::Epoch;
-use lb_core::sdp::{InactivityPeriod, MinStake, ServiceType};
+use lb_core::{
+    block::Proposal,
+    sdp::{InactivityPeriod, MinStake, ServiceType},
+};
 use lb_cryptarchia_engine::{
     Config as ConsensusConfig, average_slots_for_blocks, base_period_length,
     expected_blocks_per_epoch, time::epoch_length,
@@ -28,7 +31,9 @@ pub struct Settings {
     slot_activation_coeff: NonNegativeRatio,
     learning_rate: NonNegativeF64,
     /// `W`, the uncle reference window in expected block-intervals.
-    uncle_reference_window_in_block: NonZeroU32,
+    uncle_reference_window_in_block: u32,
+    /// The most uncles a block may reference.
+    max_uncles: u8,
     sdp_config: SdpConfig,
     pow_config: PoWConfig,
 }
@@ -41,10 +46,7 @@ impl Settings {
     /// If the uncle reference window of `next` exceeds a fifth of the slot
     /// security parameter of these settings: `5⌊W_n/f_n⌋ ≤ s_{n−1}`.
     pub fn validate_successor(&self, next: &Self) {
-        let window = next
-            .consensus_config()
-            .uncle_reference_window_in_slot()
-            .get();
+        let window = next.consensus_config().uncle_reference_window_in_slot();
         let previous_slot_security_param = self.consensus_config().slot_security_param().get();
         assert!(
             u128::from(window) * 5 <= u128::from(previous_slot_security_param),
@@ -80,6 +82,13 @@ impl Settings {
         expected_blocks_per_epoch(self.slots_per_epoch(), self.slot_activation_coeff)
     }
 
+    /// The size of the largest block proposal of the era: one that references
+    /// as many uncles as the era allows.
+    #[must_use]
+    pub fn max_proposal_size(&self) -> usize {
+        Proposal::max_encoded_size(self.max_uncles)
+    }
+
     #[must_use]
     pub fn consensus_config(&self) -> ConsensusConfig {
         ConsensusConfig::new(
@@ -87,6 +96,7 @@ impl Settings {
             self.slot_activation_coeff,
             self.learning_rate,
             self.uncle_reference_window_in_block,
+            self.max_uncles,
         )
     }
 
@@ -102,8 +112,14 @@ impl Settings {
 
     /// `W`, the uncle reference window in expected block-intervals.
     #[must_use]
-    pub const fn uncle_reference_window_in_block(&self) -> NonZeroU32 {
+    pub const fn uncle_reference_window_in_block(&self) -> u32 {
         self.uncle_reference_window_in_block
+    }
+
+    /// The most uncles a block may reference.
+    #[must_use]
+    pub const fn max_uncles(&self) -> u8 {
+        self.max_uncles
     }
 
     #[must_use]
@@ -200,7 +216,7 @@ mod tests {
             error.to_string().contains(
                 &UncleReferenceWindowTooWide {
                     security_param: 10.try_into().unwrap(),
-                    window: 7.try_into().unwrap(),
+                    window: 7,
                     max: 6,
                 }
                 .to_string()
@@ -242,7 +258,7 @@ mod tests {
         unvalidated.security_param = security_param.try_into().unwrap();
         unvalidated.slot_activation_coeff =
             NonNegativeRatio::new(1, f_denominator.try_into().unwrap());
-        unvalidated.uncle_reference_window_in_block = window.try_into().unwrap();
+        unvalidated.uncle_reference_window_in_block = window;
 
         unvalidated.try_into().unwrap()
     }

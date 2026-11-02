@@ -69,7 +69,10 @@ use crate::{
     message::{DataPayload, NetworkInfo},
     settings::{EraTimingSettings, RuntimeComponents},
     test_utils,
-    test_utils::mocks::{TestChainNetworkService, TestMempoolService},
+    test_utils::{
+        PAYLOAD_BODY_SIZE,
+        mocks::{TestChainNetworkService, TestMempoolService},
+    },
 };
 
 pub type NodeId = [u8; 32];
@@ -108,6 +111,7 @@ pub fn settings(
             },
             time: timing_settings(),
             num_blend_layers: NonZeroU64::try_from(1).unwrap(),
+            payload_body_size: PAYLOAD_BODY_SIZE,
             minimum_network_size,
             data_replication_factor,
             activity_threshold_sensitivity: 1,

@@ -415,6 +415,9 @@ mod body_root_test_vectors {
         utils::merkle,
     };
 
+    /// The uncle maximum of the vectors' era.
+    const VECTOR_MAX_UNCLES: u8 = 4;
+
     fn uncle(byte: u8) -> SignedHeader {
         let signing_key = Ed25519Key::from_bytes(&[byte; 32]);
         let header = Header::new(
@@ -494,7 +497,8 @@ mod body_root_test_vectors {
         // 4. The same transactions with two carried uncles. Nothing downstream consumes
         //    this vector; it is here so that another implementation can check its
         //    `uncle_headers` encoding, signatures included.
-        let uncles = UncleHeaders::new([uncle(0x66), uncle(0x77)]);
+        let uncles =
+            UncleHeaders::try_new(vec![uncle(0x66), uncle(0x77)], VECTOR_MAX_UNCLES).unwrap();
         println!("================================================================");
         println!("vector 4  : body_root with 2 uncles, over vector 2's transactions");
         println!("{:20}: {:02x}", "uncle_count", uncles.len());

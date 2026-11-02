@@ -21,6 +21,7 @@ use std::{
 
 use educe::Educe;
 use futures::{Stream, TryStreamExt as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
     block::{Block, UncleHeaders, genesis::GenesisBlock},
@@ -119,6 +120,8 @@ pub enum Error {
     AwaitingGenesisTime,
     #[error("Invalid uncle {uncle}: {reason}")]
     InvalidUncle { uncle: HeaderId, reason: UncleError },
+    #[error("Block carries {count} uncles, more than the {max} its era allows")]
+    TooManyUncles { count: usize, max: u8 },
     #[error("Batch deferred proof verification error: {0}")]
     BatchDeferredProofVerification(#[from] lb_core::mantle::batch::Error),
 }
@@ -192,6 +195,16 @@ pub enum Query {
     /// Returns all declarations in the current SDP registry, not snapshot
     GetSdpDeclarations {
         reply_channel: oneshot::Sender<HashMap<DeclarationId, Declaration>>,
+    },
+    /// Returns one declaration from the finalized registry (the LIB state).
+    GetFinalizedSdpDeclaration {
+        declaration_id: DeclarationId,
+        reply_channel: oneshot::Sender<Option<Declaration>>,
+    },
+    /// Returns every declaration for one service from the finalized registry.
+    GetFinalizedSdpDeclarations {
+        service_type: lb_core::sdp::ServiceType,
+        reply_channel: oneshot::Sender<Option<HashMap<DeclarationId, Declaration>>>,
     },
     /// Returns the frozen SDP snapshot for the current epoch
     GetSdpSnapshot {
@@ -477,6 +490,10 @@ impl Cryptarchia {
             return Err(Error::AlreadyApplied(id));
         }
 
+        // Whatever the block's origin: a stored block was checked when it was
+        // first applied, but under the eras this node ran with then.
+        self.verify_uncle_count(&block)?;
+
         if origin == BlockOrigin::Network {
             // Reject blocks from future slots
             if slot > current_slot {
@@ -684,6 +701,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -858,6 +877,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin

@@ -1,26 +1,24 @@
-use std::num::NonZeroU64;
-
 use lb_core::{
     crypto::{Hash, ZkHash},
     mantle::{
         channel::Channels,
-        ledger::{Declarations, Utxos},
+        ledger::{Declarations, ProviderIndex, Utxos},
         ops::{
             channel::{ChannelId, ChannelKeyIndex},
             leader_claim::{RewardsRoot, VoucherNullifier},
-            pow::{PowNullifier, PowReward, PowTarget},
+            pow::{PowNullifier, PowReward, PowSlotWindows, PowTarget},
             sdp::SdpError,
         },
         transactions::{OperationVerificationHelper, VerificationError},
     },
-    sdp::{DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
+    sdp::{Declaration, DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::UnverifiedEd25519PublicKey;
 use rpds::{HashTrieMapSync, HashTrieSetSync};
 
 use crate::{
-    config::{EraScheduledConfig, config_for_epoch, config_for_slot},
+    config::{EraScheduledConfig, config_for_slot, pow_slot_windows},
     mantle::LedgerState,
 };
 
@@ -74,12 +72,33 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
         &self,
         id: &DeclarationId,
     ) -> Result<&Declarations, VerificationError> {
-        self.ledger_state
+        let service = self
+            .ledger_state
             .sdp_ledger()
-            .get_declarations_by_id(id)
+            .get_declaration(id)
+            .map(|declaration| declaration.service_type)
             .ok_or(VerificationError::SDPVerificationError(
                 SdpError::DeclarationNotFound(*id),
+            ))?;
+        self.get_declarations_by_service(service)
+    }
+
+    fn get_provider_index_by_service(
+        &self,
+        service: ServiceType,
+    ) -> Result<&ProviderIndex, VerificationError> {
+        self.ledger_state
+            .sdp_ledger()
+            .get_provider_index_by_service(service)
+            .ok_or(VerificationError::SDPVerificationError(
+                SdpError::ServiceNotFound(service),
             ))
+    }
+
+    fn get_declaration_by_id(&self, id: &DeclarationId) -> Result<&Declaration, VerificationError> {
+        self.ledger_state.sdp_ledger().get_declaration(id).ok_or(
+            VerificationError::SDPVerificationError(SdpError::DeclarationNotFound(*id)),
+        )
     }
 
     fn get_min_stake(&self) -> &MinStake {
@@ -165,25 +184,7 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
         self.ledger_state.pow.block_slots().clone()
     }
 
-    fn get_current_epoch_pow_slot_window(&self) -> NonZeroU64 {
-        config_for_epoch(self.eras, self.cryptarchia_ledger.epoch_state.epoch)
-            .pow_config
-            .reward
-            .slot_window
-    }
-
-    fn get_previous_epoch_pow_slot_window(&self) -> NonZeroU64 {
-        // The genesis epoch has none before it: until the first epoch
-        // boundary, the previous epoch's nonce is the genesis epoch's.
-        let previous_epoch = self
-            .cryptarchia_ledger
-            .epoch_state
-            .epoch
-            .into_inner()
-            .saturating_sub(1);
-        config_for_epoch(self.eras, Epoch::new(previous_epoch))
-            .pow_config
-            .reward
-            .slot_window
+    fn get_pow_slot_windows(&self) -> PowSlotWindows {
+        pow_slot_windows(self.eras)
     }
 }

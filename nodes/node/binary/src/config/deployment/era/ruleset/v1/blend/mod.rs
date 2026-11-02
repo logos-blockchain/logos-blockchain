@@ -38,22 +38,24 @@ impl Settings {
             .expect("There must be at least one round per epoch.")
     }
 
-    /// Number of rounds per observation window.
+    /// `W = ⌈M / (F_C · (1 + R_C) · β_C)⌉`: the observation window, the rounds
+    /// in which a core connection carries `M` messages from cover traffic
+    /// alone, `M` being
+    /// [`CoreSettings::cover_messages_per_observation_window`].
     ///
-    /// The Blend spec defines this as `10 * ∆max`, where `∆max` is the maximal
-    /// delay time between two release rounds.
+    /// With fewer messages in the window, a node more often reads an honest
+    /// neighbour as not live and closes its connection. No deployment
+    /// replicates cover messages, so `R_C` is `0`.
     #[must_use]
     pub const fn rounds_per_observation_window(&self) -> NonZeroU128 {
-        // TODO: Is `10` fixed or can it be derived from some other value?
-        NonZeroU128::new(
-            10 * self
-                .core
-                .scheduler
-                .delayer
-                .maximum_release_delay_in_rounds
-                .get() as u128,
+        let cover_messages_per_round = self.core.scheduler.cover.message_frequency_per_round.get()
+            * self.common.num_blend_layers.get() as f64;
+        let cover_messages_per_window =
+            self.core.cover_messages_per_observation_window.get() as f64;
+        NonZeroU128::new((cover_messages_per_window / cover_messages_per_round).ceil() as u128)
+        .expect(
+            "The cover traffic of a round must be finite, so the window spans at least one round.",
         )
-        .unwrap()
     }
 
     /// `r₁ = ⌊(2V/3) / (Φ_CC + 1)⌋`: the messages a core connection may carry
@@ -208,6 +210,11 @@ pub struct CoreSettings {
     /// covering the round trips of the transport handshake and of the
     /// neighbour distinction process.
     pub core_handshake_deadline_in_rounds: NonZeroU128,
+    /// The messages a core connection carries from cover traffic alone in one
+    /// observation window, which sizes the window (see
+    /// [`Settings::rounds_per_observation_window`]).
+    // TODO: Is this rather derived from other deployment parameters?
+    pub cover_messages_per_observation_window: NonZeroU64,
     pub activity_threshold_sensitivity: u64,
 }
 
@@ -227,4 +234,72 @@ pub struct CoverTrafficSettings {
 pub struct MessageDelayerSettings {
     /// ∆max: maximal delay time between two release rounds.
     pub maximum_release_delay_in_rounds: NonZeroU64,
+}
+
+#[cfg(test)]
+mod tests {
+    use core::num::NonZeroU64;
+
+    use lb_utils::math::PositiveF64;
+
+    use super::Settings;
+    use crate::config::DeploymentSettings;
+
+    /// The default deployment's Blend settings, with the cover messages per
+    /// window, `F_C` and `β_C` set to the values given, which are all the
+    /// window depends on.
+    fn with_cover_traffic(
+        cover_messages_per_observation_window: u64,
+        message_frequency_per_round: f64,
+        num_blend_layers: u64,
+    ) -> Settings {
+        let mut settings = DeploymentSettings::default()
+            .genesis_era_parameters()
+            .blend
+            .clone();
+        settings.core.cover_messages_per_observation_window =
+            NonZeroU64::new(cover_messages_per_observation_window).unwrap();
+        settings.core.scheduler.cover.message_frequency_per_round =
+            PositiveF64::try_from(message_frequency_per_round).unwrap();
+        settings.common.num_blend_layers = NonZeroU64::new(num_blend_layers).unwrap();
+        settings
+    }
+
+    /// The spec's 90 messages at `F_C = 1` and `β_C = 3`, where the window is
+    /// the 30 rounds that `10·Δ_max` gave it, so neither the liveness test nor
+    /// the blacklist expiry changes.
+    #[test]
+    fn the_window_is_30_rounds_at_the_reference_parameters() {
+        assert_eq!(
+            with_cover_traffic(90, 1.0, 3)
+                .rounds_per_observation_window()
+                .get(),
+            30
+        );
+    }
+
+    /// The spec's 90 messages on one blending layer at `F_C = 1`, where
+    /// `10·Δ_max` gave 10 rounds, in which an honest neighbour delivers about
+    /// five messages.
+    #[test]
+    fn the_window_is_90_rounds_at_the_testnet_parameters() {
+        assert_eq!(
+            with_cover_traffic(90, 1.0, 1)
+                .rounds_per_observation_window()
+                .get(),
+            90
+        );
+    }
+
+    /// A window that falls between two rounds takes the later one, so a
+    /// connection still carries at least the messages asked for in it.
+    #[test]
+    fn a_window_between_two_rounds_rounds_up() {
+        assert_eq!(
+            with_cover_traffic(100, 1.0, 3)
+                .rounds_per_observation_window()
+                .get(),
+            34
+        );
+    }
 }

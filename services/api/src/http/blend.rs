@@ -153,10 +153,14 @@ where
     let payload = DataPayload::try_from_transaction(&transaction)?;
     let relay = handle.relay::<BlendService>().await?;
 
+    // Refused right away if it is larger than a payload body of the current
+    // epoch.
+    let (reply, accepted) = oneshot::channel();
     relay
-        .send(ServiceMessage::Blend(payload).into())
+        .send(ProxyServiceMessage::Blend { payload, reply })
         .await
         .map_err(|error| overwatch::DynError::from(error.to_string()))?;
+    accepted.await??;
 
     Ok(id(&transaction))
 }

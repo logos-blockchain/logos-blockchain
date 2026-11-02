@@ -158,8 +158,10 @@ async fn sdp_ops_e2e() {
     // Submit an withdraw tx immediately.
     let withdraw_message = WithdrawMessage {
         declaration_id,
-        service_note_id,
-        nonce: declaration_created.nonce + 1,
+        nonce: declaration_created
+            .nonce
+            .checked_next()
+            .expect("declaration nonce sequence has not been exhausted"),
     };
 
     let (withdraw_tx, _withdraw_fee) = funded_signed_tx(
@@ -423,7 +425,7 @@ fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
                 UnvalidatedCryptarchiaDeploymentSettings::from(parameters.cryptarchia.clone());
             parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
             cryptarchia.security_param = NonZero::new(2).unwrap();
-            cryptarchia.uncle_reference_window_in_block = NonZero::new(1).unwrap();
+            cryptarchia.uncle_reference_window_in_block = 1;
             cryptarchia.slot_activation_coeff = NonNegativeRatio::new(1, 2.try_into().unwrap());
             cryptarchia.epoch_config = EpochConfig {
                 epoch_stake_distribution_stabilization: 1.try_into().unwrap(),

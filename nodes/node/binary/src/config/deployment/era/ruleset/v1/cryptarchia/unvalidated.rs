@@ -16,7 +16,9 @@ pub struct UnvalidatedSettings {
     pub security_param: NonZeroU32,
     pub slot_activation_coeff: NonNegativeRatio,
     pub learning_rate: NonNegativeF64,
-    pub uncle_reference_window_in_block: NonZeroU32,
+    pub uncle_reference_window_in_block: u32,
+    /// The most uncles a block may reference.
+    pub max_uncles: u8,
     pub sdp_config: SdpConfig,
     pub pow_config: PoWConfig,
 }
@@ -27,7 +29,7 @@ impl TryFrom<UnvalidatedSettings> for Settings {
 
     fn try_from(unvalidated: UnvalidatedSettings) -> Result<Self, Self::Error> {
         let max = max_allowed_uncle_reference_window_in_block(unvalidated.security_param);
-        if unvalidated.uncle_reference_window_in_block.get() > max {
+        if unvalidated.uncle_reference_window_in_block > max {
             return Err(UncleReferenceWindowTooWide {
                 security_param: unvalidated.security_param,
                 window: unvalidated.uncle_reference_window_in_block,
@@ -41,6 +43,7 @@ impl TryFrom<UnvalidatedSettings> for Settings {
             slot_activation_coeff: unvalidated.slot_activation_coeff,
             learning_rate: unvalidated.learning_rate,
             uncle_reference_window_in_block: unvalidated.uncle_reference_window_in_block,
+            max_uncles: unvalidated.max_uncles,
             sdp_config: unvalidated.sdp_config,
             pow_config: unvalidated.pow_config,
         })
@@ -56,6 +59,7 @@ impl From<Settings> for UnvalidatedSettings {
             slot_activation_coeff: settings.slot_activation_coeff,
             learning_rate: settings.learning_rate,
             uncle_reference_window_in_block: settings.uncle_reference_window_in_block,
+            max_uncles: settings.max_uncles,
             sdp_config: settings.sdp_config,
             pow_config: settings.pow_config,
         }
@@ -71,7 +75,7 @@ impl From<Settings> for UnvalidatedSettings {
 )]
 pub struct UncleReferenceWindowTooWide {
     pub security_param: NonZeroU32,
-    pub window: NonZeroU32,
+    pub window: u32,
     pub max: u32,
 }
 
@@ -91,7 +95,7 @@ mod tests {
             Settings::try_from(unvalidated(10, 20, 7)).unwrap_err(),
             UncleReferenceWindowTooWide {
                 security_param: 10.try_into().unwrap(),
-                window: 7.try_into().unwrap(),
+                window: 7,
                 max: 6,
             }
         );
@@ -108,7 +112,7 @@ mod tests {
         unvalidated.security_param = security_param.try_into().unwrap();
         unvalidated.slot_activation_coeff =
             NonNegativeRatio::new(1, f_denominator.try_into().unwrap());
-        unvalidated.uncle_reference_window_in_block = window.try_into().unwrap();
+        unvalidated.uncle_reference_window_in_block = window;
 
         unvalidated
     }

@@ -7,6 +7,7 @@ use std::{
 
 use bytes::Bytes;
 use futures::{StreamExt as _, TryStreamExt as _, future, stream, stream::BoxStream};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_core::{
     block::Block,
     header::HeaderId,
@@ -16,7 +17,7 @@ use lb_core::{
     },
 };
 use lb_cryptarchia_engine::{Branch, Slot};
-use lb_cryptarchia_sync::{BlocksResponse, BlocksUnavailableReason, ProviderResponse};
+use lb_cryptarchia_sync::{BlocksProviderResponse, BlocksUnavailableReason, ProviderResponse};
 use lb_log_targets::chain;
 use lb_storage_service::api::StorageApi;
 use overwatch::DynError;
@@ -70,17 +71,21 @@ impl<Tx> BlockProvider<Tx> {
 
 impl<Tx> BlockProvider<Tx>
 where
-    Tx: DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
+    Tx: DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
+        + Hashable<Hash = TxHash>
+        + StorageSize,
     Tx: Serialize + Clone + Eq + Send + Sync + 'static,
 {
     /// Creates a block stream that leads from one of the [`known_blocks`]
     /// to the [`target_block`], and sends it to the [`reply_sender`].
-    pub async fn send_blocks(
+    pub async fn reply_with_blocks(
         &self,
         cryptarchia: &lb_cryptarchia_engine::Cryptarchia<HeaderId>,
         target_block: HeaderId,
         known_blocks: &HashSet<HeaderId>,
-        reply_sender: Sender<BlocksResponse>,
+        reply_sender: Sender<BlocksProviderResponse>,
     ) {
         debug!(
             target: LOG_TARGET,
@@ -121,7 +126,7 @@ where
                         }
                     },
                 );
-                Self::send_error(reason, reply_sender).await;
+                Self::reply_with_error(reason, reply_sender).await;
             }
         }
     }
@@ -531,7 +536,10 @@ where
             .map_err(|error| GetBlocksError::Storage(error.to_string()))
     }
 
-    async fn send_error(reason: BlocksUnavailableReason, reply_sender: Sender<BlocksResponse>) {
+    async fn reply_with_error(
+        reason: BlocksUnavailableReason,
+        reply_sender: Sender<BlocksProviderResponse>,
+    ) {
         if let BlocksUnavailableReason::BlockNotFound(target) = &reason {
             error!(
                 target: LOG_TARGET,
@@ -556,7 +564,6 @@ where
 mod tests {
     use std::{collections::BTreeMap, num::NonZero};
 
-    use lb_binary_codec::bincode::DeserializeOp as _;
     use lb_core::{
         block::{BlockTransactions, UncleHeaders},
         crypto::ZkHasher,
@@ -918,14 +925,13 @@ mod tests {
             header_id: HeaderId,
         ) {
             let parent_id = block.header().parent();
-            let store_result: Result<_, _> = block.clone().try_into();
             let (sender, receiver) = oneshot::channel();
 
             self.storage_relay
                 .send(StorageMsg::StoreBlockData {
                     header_id,
                     parent_id,
-                    block: store_result.unwrap(),
+                    block: Bytes::from(block.encode_to_vec()),
                     events: Events::new().try_into().unwrap(),
                     immutable_ids: BTreeMap::new(),
                     response_tx: sender,
@@ -972,7 +978,7 @@ mod tests {
             let (tx, mut rx) = mpsc::channel(1);
 
             self.provider
-                .send_blocks(&self.cryptarchia, target_block, known_blocks, tx)
+                .reply_with_blocks(&self.cryptarchia, target_block, known_blocks, tx)
                 .await;
 
             let mut blocks = Vec::new();
@@ -980,7 +986,7 @@ mod tests {
                 while let Some(res) = &stream.next().await {
                     if let Ok(bytes) = &res {
                         let block: Block<SignedOps<Unverified, StandardMode>> =
-                            Block::from_bytes(bytes).unwrap();
+                            Block::decode_all(bytes, &(u8::MAX, ())).unwrap();
                         blocks.push(block.header().id());
                     } else {
                         break;
@@ -1014,7 +1020,7 @@ mod tests {
         ) {
             let (tx, mut rx) = mpsc::channel(1);
             self.provider
-                .send_blocks(&self.cryptarchia, target_block, known_blocks, tx)
+                .reply_with_blocks(&self.cryptarchia, target_block, known_blocks, tx)
                 .await;
 
             let (error_occurred, actual_outcome) = if let Some(response) = rx.recv().await {
@@ -1024,7 +1030,7 @@ mod tests {
                     }
                     ProviderResponse::Available(mut stream) => match stream.next().await {
                         Some(Ok(bytes)) => {
-                            let block: Block<Ops> = Block::try_from(bytes).unwrap();
+                            let block = Block::<Ops>::decode_all(&bytes, &(u8::MAX, ())).unwrap();
                             (
                                 false,
                                 format!("Available(first_block={:?})", block.header().id()),
@@ -1121,6 +1127,7 @@ mod tests {
                     slot_activation_coeff,
                     1f64.try_into().expect("1 > 0"),
                     12.try_into().unwrap(),
+                    4,
                 )),
                 lb_cryptarchia_engine::State::Bootstrapping,
                 0.into(),

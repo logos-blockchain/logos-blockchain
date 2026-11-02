@@ -5,12 +5,7 @@ use std::{
 
 use lb_core::{
     header::HeaderId,
-    mantle::{
-        SignedOps,
-        ledger::verification_mode::StandardMode,
-        traits::Hashable as _,
-        transactions::{hash::TxHash, states::Preverified},
-    },
+    mantle::{traits::Hashable as _, transactions::hash::TxHash},
 };
 use lb_sdp_service::mempool::{MempoolAdapterError, SdpMempoolAdapter as SdpMempoolAdapterTrait};
 use lb_storage_service::StorageService;
@@ -24,6 +19,8 @@ use lb_tx_service::{
 use overwatch::services::{AsServiceId, ServiceData, relay::OutboundRelay};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
+
+use crate::ValidatedTx;
 
 type MempoolRelay<Item, Key> = OutboundRelay<MempoolMsg<HeaderId, Item, Item, Key>>;
 
@@ -42,12 +39,7 @@ where
 impl<MempoolNetAdapter, Mempool, RuntimeServiceId> SdpMempoolAdapterTrait
     for SdpMempoolAdapter<MempoolNetAdapter, Mempool, RuntimeServiceId>
 where
-    Mempool: RecoverableMempool<
-            BlockId = HeaderId,
-            Key = TxHash,
-            Item = SignedOps<Preverified, StandardMode>,
-        > + Send
-        + Sync,
+    Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = ValidatedTx> + Send + Sync,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone + Send + Sync,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Send + Sync + Clone,
@@ -70,7 +62,7 @@ where
         NtpTimeBackend,
         RuntimeServiceId,
     >;
-    type Tx = SignedOps<Preverified, StandardMode>;
+    type Tx = ValidatedTx;
 
     fn new(mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>) -> Self {
         Self {

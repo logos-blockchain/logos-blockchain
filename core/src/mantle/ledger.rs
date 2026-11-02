@@ -19,7 +19,7 @@ use crate::{
         ledger::verification_mode::VerificationMode,
         ops::{OpId, channel::ChannelId},
     },
-    sdp::{Declaration, DeclarationId, service_notes::ServiceNotes},
+    sdp::{Declaration, DeclarationId, ProviderId, service_notes::ServiceNotes},
 };
 
 // ==============================================================================
@@ -91,6 +91,8 @@ pub trait ExecutableOperation {
 
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;
 pub type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
+/// Per-service provider-to-declaration index used by SDP Declare validation.
+pub type ProviderIndex = rpds::RedBlackTreeMapSync<ProviderId, DeclarationId>;
 
 pub type Value = u64;
 

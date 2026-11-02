@@ -6,6 +6,7 @@ use std::{collections::HashMap, num::NonZero, time::Duration};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{StreamExt as _, TryStreamExt as _};
+use lb_binary_codec::canonical::BinaryDecode;
 use lb_chain_service::{
     ChainServiceInfo, LibUpdate,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
@@ -33,6 +34,7 @@ use lb_core::{
         },
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
+    sdp::DeclarationId,
 };
 use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
@@ -100,7 +102,7 @@ pub enum WalletServiceError {
     MissingChannelState(ChannelId),
 
     #[error("Declaration {0:?} is missing in ledger")]
-    MissingDeclaration(lb_core::sdp::DeclarationId),
+    MissingDeclaration(DeclarationId),
 
     #[error("Service note {0:?} is missing in ledger")]
     MissingServiceNote(NoteId),
@@ -423,6 +425,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + StorageSize
         + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx>,
@@ -581,6 +584,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + StorageSize
         + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx> + Send + 'static,
@@ -919,8 +923,10 @@ where
         let channel = ledger
             .mantle_ledger()
             .channels()
-            .channel_state(&set_keys_op.channel)
-            .ok_or(WalletServiceError::MissingChannelState(set_keys_op.channel))?;
+            .channel_state(&set_keys_op.channel())
+            .ok_or(WalletServiceError::MissingChannelState(
+                set_keys_op.channel(),
+            ))?;
 
         let authorized_key = channel.accredited_keys[0]; // First key is authorized key (guaranteed non-empty)
         let Ok(validated_public_key) = Ed25519PublicKey::try_from(authorized_key) else {

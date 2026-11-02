@@ -30,7 +30,7 @@ const DEFAULT_SLOT_TIME_IN_SECS: u64 = 1;
 const DEFAULT_ACTIVE_SLOT_COEFF: NonNegativeRatio =
     NonNegativeRatio::new(1, NonZeroU32::new(10).unwrap());
 const DEFAULT_SECURITY_PARAM: NonZeroU32 = NonZeroU32::new(20).unwrap();
-const DEFAULT_UNCLE_REFERENCE_WINDOW_IN_BLOCK: NonZeroU32 = NonZeroU32::new(12).unwrap();
+const DEFAULT_UNCLE_REFERENCE_WINDOW_IN_BLOCK: u32 = 12;
 
 static RESERVED_AUTOMATIC_GENESIS_TIMES: LazyLock<Mutex<HashSet<GenesisTime>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
@@ -119,7 +119,7 @@ pub struct TopologyConfig {
     pub slot_duration: Option<Duration>,
     pub active_slot_coeff: NonNegativeRatio,
     pub security_param: NonZeroU32,
-    pub uncle_reference_window_in_block: NonZeroU32,
+    pub uncle_reference_window_in_block: u32,
     node_config_overrides: HashMap<usize, RunConfig>,
     allow_multiple_genesis_tokens: bool,
     allow_zero_value_genesis_tokens: bool,
@@ -303,7 +303,7 @@ impl DeploymentBuilder {
     #[must_use]
     pub const fn with_uncle_reference_window_in_block(
         mut self,
-        uncle_reference_window_in_block: NonZeroU32,
+        uncle_reference_window_in_block: u32,
     ) -> Self {
         self.config.uncle_reference_window_in_block = uncle_reference_window_in_block;
         self

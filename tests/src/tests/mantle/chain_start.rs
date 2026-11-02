@@ -113,7 +113,7 @@ fn test_config(mut config: RunConfig) -> RunConfig {
                 epoch_period_nonce_stabilization: 1.try_into().unwrap(),
             };
             cryptarchia.security_param = NonZero::new(2).unwrap();
-            cryptarchia.uncle_reference_window_in_block = NonZero::new(1).unwrap();
+            cryptarchia.uncle_reference_window_in_block = 1;
             cryptarchia.slot_activation_coeff = NonNegativeRatio::new(1, 10.try_into().unwrap());
             parameters.cryptarchia = cryptarchia
                 .try_into()

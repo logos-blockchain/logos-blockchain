@@ -10,6 +10,7 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _, future::join_all, stream};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockInfo};
 use lb_core::{
     block::{Block, SignedHeader, UncleHeaders},
@@ -20,15 +21,14 @@ use lb_core::{
         traits::{Hashable, MantleTx, PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
         transactions::states::Preverified,
     },
-    sdp::ServiceType,
+    sdp::{Declaration, DeclarationId, ServiceType},
 };
 use lb_cryptarchia_engine::{Epoch, PrunedBlocks, Slot};
-use lb_cryptarchia_sync::{BlocksUnavailableReason, GetTipResponseReason, ProviderResponse};
+use lb_cryptarchia_sync::{BlocksUnavailableReason, ProviderResponse, TipResponseFailureReason};
 use lb_ledger::config::{config_for_slot, stake_distribution_snapshot};
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_network_service::message::ChainSyncEvent;
 use lb_storage_service::api::StorageApi;
-use lb_utils::bounded::UpperBoundedVec;
 use overwatch::{
     DynError,
     services::{relay::InboundRelay, state::StateUpdater},
@@ -57,6 +57,109 @@ pub struct ProcessBlockOutcome<Tx> {
 // limits also protect the diagnostic path during a long LIB stall.
 const MAX_QUERY_SOURCES_PER_TIP: usize = 8;
 const MAX_QUERY_SOURCE_TIPS: usize = 64;
+
+/// Shared implementation for the live-tip and finalized-LIB declaration
+/// queries. The test fixture exercises these same methods against two state
+/// snapshots, so a query cannot accidentally bypass the tip/LIB selection.
+trait SdpQuerySource {
+    type Declaration: Clone;
+
+    fn tip_state_id(&self) -> HeaderId;
+    fn lib_state_id(&self) -> HeaderId;
+    fn live_declarations_at(&self, state_id: HeaderId)
+    -> HashMap<DeclarationId, Self::Declaration>;
+    fn finalized_declaration_at(
+        &self,
+        state_id: HeaderId,
+        id: &DeclarationId,
+    ) -> Option<Self::Declaration>;
+    fn finalized_declarations_at(
+        &self,
+        state_id: HeaderId,
+        service_type: ServiceType,
+    ) -> Option<HashMap<DeclarationId, Self::Declaration>>;
+
+    fn live_sdp_declarations(&self) -> HashMap<DeclarationId, Self::Declaration> {
+        self.live_declarations_at(self.tip_state_id())
+    }
+
+    fn finalized_sdp_declaration(&self, id: &DeclarationId) -> Option<Self::Declaration> {
+        self.finalized_declaration_at(self.lib_state_id(), id)
+    }
+
+    fn finalized_sdp_declarations(
+        &self,
+        service_type: ServiceType,
+    ) -> Option<HashMap<DeclarationId, Self::Declaration>> {
+        self.finalized_declarations_at(self.lib_state_id(), service_type)
+    }
+}
+
+impl SdpQuerySource for Cryptarchia {
+    type Declaration = Declaration;
+
+    fn tip_state_id(&self) -> HeaderId {
+        self.tip()
+    }
+
+    fn lib_state_id(&self) -> HeaderId {
+        self.lib()
+    }
+
+    fn live_declarations_at(
+        &self,
+        state_id: HeaderId,
+    ) -> HashMap<DeclarationId, Self::Declaration> {
+        self.ledger
+            .state(&state_id)
+            .map(|ledger_state| {
+                ledger_state
+                    .mantle_ledger()
+                    .sdp
+                    .declarations()
+                    .iter()
+                    .flat_map(|(_, declarations)| {
+                        declarations
+                            .iter()
+                            .map(|(id, declaration)| (*id, declaration.clone()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn finalized_declaration_at(
+        &self,
+        state_id: HeaderId,
+        id: &DeclarationId,
+    ) -> Option<Self::Declaration> {
+        self.ledger
+            .state(&state_id)?
+            .mantle_ledger()
+            .sdp
+            .get_declaration(id)
+            .cloned()
+    }
+
+    fn finalized_declarations_at(
+        &self,
+        state_id: HeaderId,
+        service_type: ServiceType,
+    ) -> Option<HashMap<DeclarationId, Self::Declaration>> {
+        let declarations = self
+            .ledger
+            .state(&state_id)?
+            .mantle_ledger()
+            .sdp
+            .get_declarations_by_service(service_type)?;
+        Some(
+            declarations
+                .iter()
+                .map(|(id, declaration)| (*id, declaration.clone()))
+                .collect(),
+        )
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EpochStateQuerySource {
@@ -146,6 +249,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -349,22 +454,27 @@ where
                     });
             }
             Query::GetSdpDeclarations { reply_channel } => {
-                let tip = self.cryptarchia.tip();
-                let declarations = self
-                    .cryptarchia
-                    .ledger
-                    .state(&tip)
-                    .map(|ledger_state| ledger_state.mantle_ledger().sdp.declarations())
-                    .unwrap_or_default()
-                    .iter()
-                    .flat_map(|(_, declarations)| {
-                        declarations
-                            .iter()
-                            .map(|(id, declaration)| (*id, declaration.clone()))
-                    })
-                    .collect();
+                let declarations = self.cryptarchia.live_sdp_declarations();
                 reply_channel.send(declarations).unwrap_or_else(|_| {
                     error!(target: LOG_TARGET, "Could not send SDP declarations through channel");
+                });
+            }
+            Query::GetFinalizedSdpDeclaration {
+                declaration_id,
+                reply_channel,
+            } => {
+                let declaration = self.cryptarchia.finalized_sdp_declaration(&declaration_id);
+                reply_channel.send(declaration).unwrap_or_else(|_| {
+                    error!(target: LOG_TARGET, "Could not send finalized SDP declaration through channel");
+                });
+            }
+            Query::GetFinalizedSdpDeclarations {
+                service_type,
+                reply_channel,
+            } => {
+                let declarations = self.cryptarchia.finalized_sdp_declarations(service_type);
+                reply_channel.send(declarations).unwrap_or_else(|_| {
+                    error!(target: LOG_TARGET, "Could not send finalized SDP declarations through channel");
                 });
             }
             Query::GetSdpSnapshot { reply_channel } => {
@@ -450,7 +560,8 @@ where
             .record(query_result.source_tip_id, query_source);
     }
 
-    /// Selects uncles for a new block extending `parent` at `slot`.
+    /// Selects uncles for a new block extending `parent` at `slot`, at most as
+    /// many as the era of `slot` allows.
     async fn select_uncles(&self, parent: HeaderId, slot: Slot) -> UncleHeaders {
         let Some(parent_branch) = self.cryptarchia.consensus.branches().get(&parent) else {
             return UncleHeaders::empty();
@@ -475,10 +586,16 @@ where
             ));
         }
 
-        UncleHeaders::new(
-            UpperBoundedVec::try_from(uncles)
-                .expect("at most MAX_UNCLES unique uncles are selected"),
-        )
+        let max_uncles = self
+            .cryptarchia
+            .ledger
+            .era_schedule()
+            .at_slot(slot)
+            .parameters
+            .consensus_config
+            .max_uncles();
+        UncleHeaders::try_new(uncles, max_uncles)
+            .expect("at most as many uncles as the era allows are selected")
     }
 
     /// Record the current service state.
@@ -786,6 +903,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -914,6 +1033,8 @@ where
         + StorageSize
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Clone
         + Eq
         + Send
@@ -949,6 +1070,8 @@ where
         + StorageSize
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Clone
         + Eq
         + Send
@@ -1000,6 +1123,8 @@ where
         + StorageSize
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Clone
         + Eq
         + Send
@@ -1026,6 +1151,8 @@ async fn log_newly_canonical_blocks<Tx>(
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -1081,6 +1208,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -1134,6 +1263,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -1183,7 +1314,14 @@ pub async fn delete_stale_blocks_from_storage<Tx>(
     storage: &StorageApi<Tx>,
 ) -> HashSet<HeaderId>
 where
-    Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
+    Tx: Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
+        + Hashable<Hash = TxHash>
+        + StorageSize,
 {
     match delete_blocks_from_storage(
         stale_blocks.chain(additional_blocks.iter().copied()),
@@ -1213,7 +1351,14 @@ async fn delete_blocks_from_storage<Headers, Tx>(
 ) -> Result<(), Vec<(HeaderId, DynError)>>
 where
     Headers: Iterator<Item = HeaderId> + Send,
-    Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
+    Tx: Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
+        + Hashable<Hash = TxHash>
+        + StorageSize,
 {
     let blocks_to_delete = block_headers.collect::<Vec<_>>();
     let block_deletion_outcomes = blocks_to_delete.iter().copied().zip(
@@ -1308,7 +1453,7 @@ pub fn persist_recovery_state(
 async fn reject_chain_sync_event(event: ChainSyncEvent) {
     debug!(target: LOG_TARGET, "rejecting chainsync event");
     match event {
-        ChainSyncEvent::ProvideBlocksRequest { reply_sender, .. } => {
+        ChainSyncEvent::BlocksRequest { reply_sender, .. } => {
             let response = ProviderResponse::Unavailable {
                 reason: BlocksUnavailableReason::Unknown,
             };
@@ -1316,17 +1461,17 @@ async fn reject_chain_sync_event(event: ChainSyncEvent) {
                 error!(target: LOG_TARGET, %err, "failed to send chain sync response");
             }
         }
-        ChainSyncEvent::ProvideTipRequest { reply_sender } => {
+        ChainSyncEvent::TipRequest { reply_sender } => {
             send_chain_sync_rejection(reply_sender).await;
         }
     }
 }
 
 async fn send_chain_sync_rejection<ResponseType>(
-    sender: mpsc::Sender<ProviderResponse<ResponseType, GetTipResponseReason>>,
+    sender: mpsc::Sender<ProviderResponse<ResponseType, TipResponseFailureReason>>,
 ) {
     let response = ProviderResponse::Unavailable {
-        reason: GetTipResponseReason::NodeNotOnline,
+        reason: TipResponseFailureReason::NodeNotOnline,
     };
     if let Err(err) = sender.send(response).await {
         error!(target: LOG_TARGET, %err, "failed to send chain sync response");
@@ -1365,6 +1510,132 @@ fn log_lib_advanced(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    type SdpQueryFixtureStates =
+        HashMap<HeaderId, HashMap<ServiceType, HashMap<DeclarationId, &'static str>>>;
+
+    struct SdpQueryFixture {
+        tip: HeaderId,
+        lib: HeaderId,
+        states: SdpQueryFixtureStates,
+    }
+
+    impl SdpQuerySource for SdpQueryFixture {
+        type Declaration = &'static str;
+
+        fn tip_state_id(&self) -> HeaderId {
+            self.tip
+        }
+
+        fn lib_state_id(&self) -> HeaderId {
+            self.lib
+        }
+
+        fn live_declarations_at(
+            &self,
+            state_id: HeaderId,
+        ) -> HashMap<DeclarationId, Self::Declaration> {
+            self.states
+                .get(&state_id)
+                .into_iter()
+                .flat_map(HashMap::values)
+                .flat_map(|declarations| declarations.iter())
+                .map(|(id, declaration)| (*id, *declaration))
+                .collect()
+        }
+
+        fn finalized_declaration_at(
+            &self,
+            state_id: HeaderId,
+            id: &DeclarationId,
+        ) -> Option<Self::Declaration> {
+            self.states
+                .get(&state_id)?
+                .values()
+                .find_map(|declarations| declarations.get(id).copied())
+        }
+
+        fn finalized_declarations_at(
+            &self,
+            state_id: HeaderId,
+            service_type: ServiceType,
+        ) -> Option<HashMap<DeclarationId, Self::Declaration>> {
+            self.states.get(&state_id)?.get(&service_type).cloned()
+        }
+    }
+
+    /// The same declaration query methods used by `Cryptarchia` read TIP for
+    /// live queries and LIB for finalized queries. Missing values stay absent,
+    /// while an existing empty service registry stays successful.
+    #[test]
+    fn finalized_sdp_queries_are_distinct_from_tip_registry_queries() {
+        let id = DeclarationId([9; 32]);
+        let tip_id = HeaderId::from([2; 32]);
+        let lib_id = HeaderId::from([1; 32]);
+        let source = SdpQueryFixture {
+            tip: tip_id,
+            lib: lib_id,
+            states: HashMap::from([
+                (
+                    tip_id,
+                    HashMap::from([(
+                        ServiceType::BlendNetwork,
+                        HashMap::from([(id, "tip declaration B")]),
+                    )]),
+                ),
+                (
+                    lib_id,
+                    HashMap::from([(
+                        ServiceType::BlendNetwork,
+                        HashMap::from([(id, "finalized declaration A")]),
+                    )]),
+                ),
+            ]),
+        };
+
+        assert_eq!(
+            source.live_sdp_declarations().get(&id),
+            Some(&"tip declaration B"),
+            "the live declaration query returns TIP state B"
+        );
+        assert_eq!(
+            source.finalized_sdp_declaration(&id),
+            Some("finalized declaration A"),
+            "the finalized by-ID query returns LIB state A"
+        );
+        assert_eq!(
+            source.finalized_sdp_declarations(ServiceType::BlendNetwork),
+            Some(HashMap::from([(id, "finalized declaration A")]))
+        );
+        assert_eq!(
+            source.finalized_sdp_declaration(&DeclarationId([8; 32])),
+            None,
+            "a missing declaration is an absence/error, not an empty result"
+        );
+        let missing_service_source = SdpQueryFixture {
+            tip: tip_id,
+            lib: lib_id,
+            states: HashMap::from([(lib_id, HashMap::new())]),
+        };
+        assert_eq!(
+            missing_service_source.finalized_sdp_declarations(ServiceType::BlendNetwork),
+            None,
+            "a missing service registry is an absence/error"
+        );
+        let empty_service_source = SdpQueryFixture {
+            tip: tip_id,
+            lib: lib_id,
+            states: HashMap::from([(
+                lib_id,
+                HashMap::from([(ServiceType::BlendNetwork, HashMap::new())]),
+            )]),
+        };
+        assert_eq!(
+            empty_service_source.finalized_sdp_declarations(ServiceType::BlendNetwork),
+            Some(HashMap::<DeclarationId, &'static str>::new()),
+            "an existing service with no declarations is distinct from absence"
+        );
+    }
 
     #[test]
     fn epoch_state_query_sources_are_bounded_and_retired_after_lib() {
