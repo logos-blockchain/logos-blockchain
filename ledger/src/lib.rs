@@ -212,6 +212,12 @@ where
         self.states.get(id)
     }
 
+    /// Number of ledger states kept in memory, one per unpruned block.
+    #[must_use]
+    pub fn states_count(&self) -> usize {
+        self.states.size()
+    }
+
     #[must_use]
     pub const fn config(&self) -> &Config {
         &self.config

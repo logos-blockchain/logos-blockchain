@@ -278,6 +278,12 @@ where
         self.tips.iter().map(|id| &self.branches[id])
     }
 
+    /// Number of blocks tracked in the tree, from LIB to every tip.
+    #[must_use]
+    pub fn blocks_count(&self) -> usize {
+        self.branches.size()
+    }
+
     /// find the lowest common ancestor of two branches
     ///
     /// `None` if the two branches have no common ancestor in this tree.

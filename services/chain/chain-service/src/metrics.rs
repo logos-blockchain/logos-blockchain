@@ -11,12 +11,16 @@ pub fn emit_consensus_metrics(consensus: &Cryptarchia<HeaderId>, ledger: &Ledger
     let current_slot = tip_branch.slot();
     let current_epoch = ledger.config().epoch(current_slot);
     let forks_count = consensus.branches().branches().count();
+    let blocks_count = consensus.branches().blocks_count();
+    let ledger_states_count = ledger.states_count();
 
     lb_tracing::metric_gauge_u64!(consensus_tip_height, height as usize);
     lb_tracing::metric_gauge_u64!(consensus_finalized_height, finalized_height as usize);
     lb_tracing::metric_gauge_u64!(consensus_current_epoch, u32::from(current_epoch));
     lb_tracing::metric_gauge_u64!(consensus_current_slot, u64::from(current_slot));
     lb_tracing::metric_gauge_u64!(consensus_forks_count, forks_count);
+    lb_tracing::metric_gauge_u64!(consensus_blocks_count, blocks_count);
+    lb_tracing::metric_gauge_u64!(consensus_ledger_states_count, ledger_states_count);
 }
 
 pub fn emit_block_imported_metric() {

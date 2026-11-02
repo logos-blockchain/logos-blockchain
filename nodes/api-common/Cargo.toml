@@ -32,5 +32,12 @@ validator                     = { features = ["derive"], workspace = true }
 [target.'cfg(not(windows))'.dependencies]
 pprof = { features = ["criterion", "flamegraph", "protobuf-codec"], optional = true, workspace = true }
 
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+jemalloc_pprof    = { optional = true, workspace = true }
+tikv-jemalloc-ctl = { features = ["stats"], optional = true, workspace = true }
+
 [features]
 profiling = ["dep:pprof", "dep:tokio"]
+# jemalloc heap profile and allocator stats endpoints. The binary must use
+# jemalloc built with profiling support (node feature `heap-profiling`).
+heap-profiling = ["dep:jemalloc_pprof", "dep:tikv-jemalloc-ctl"]

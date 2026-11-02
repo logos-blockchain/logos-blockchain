@@ -15,7 +15,8 @@ RUN apt-get update && apt-get install -yq \
     build-essential git clang libssl-dev pkg-config ca-certificates curl unzip
 
 # Build Rust Binaries
-RUN cargo build --locked --release
+RUN cargo build --locked --release -p logos-blockchain-faucet \
+ && cargo build --locked --profile release-profiling -p logos-blockchain-node --features heap-profiling
 
 # ===========================
 # NODE IMAGE

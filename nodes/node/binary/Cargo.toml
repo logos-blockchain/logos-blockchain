@@ -94,6 +94,15 @@ tempfile         = { workspace = true }
 [features]
 dhat-heap = ["dep:dhat"]
 jemalloc  = ["dep:tikv-jemallocator"]
+# jemalloc as the process-wide malloc (so RocksDB is included) with heap
+# profiling compiled in and enabled by default, plus the
+# `/debug/pprof/heap` and `/debug/memory/allocator` endpoints.
+heap-profiling = [
+  "jemalloc",
+  "lb-http-api-common/heap-profiling",
+  "tikv-jemallocator/profiling",
+  "tikv-jemallocator/unprefixed_malloc_on_supported_platforms",
+]
 # Existing broad profiling feature. Keep this as an umbrella feature for
 # backwards compatibility: HTTP pprof + tokio-console support.
 profiling                        = ["lb-http-api-common/profiling", "tokio-console"]

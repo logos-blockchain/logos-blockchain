@@ -297,6 +297,7 @@ impl<'u> ServiceState<'u> {
 
     pub fn apply_block(&mut self, block: &WalletBlock) -> Result<(), WalletError> {
         self.wallet.apply_block(block)?;
+        self.emit_metrics();
         // Note reservations are released after `pending_note_expiry_blocks`
         // (see `evict_expired`), not on spent.
         self.update_state();
@@ -329,6 +330,7 @@ impl<'u> ServiceState<'u> {
         self.lib = new_lib;
         self.wallet.prune_states(pruned_blocks);
         self.wallet.prune_vouchers(pruned_nullifiers);
+        self.emit_metrics();
         self.pending_claims
             .evict_expired(new_immutable_blocks_count, self.security_param);
         self.pending_notes
@@ -404,6 +406,13 @@ impl<'u> ServiceState<'u> {
 
     pub fn release_pending_notes(&mut self, note_ids: impl IntoIterator<Item = NoteId>) {
         self.pending_notes.release(note_ids);
+    }
+
+    fn emit_metrics(&self) {
+        let (states, voucher_paths) = self.wallet.states_stats();
+        lb_tracing::metric_gauge_u64!(wallet_states_count, states);
+        lb_tracing::metric_gauge_u64!(wallet_voucher_paths_total, voucher_paths);
+        lb_tracing::metric_gauge_u64!(wallet_known_vouchers, self.wallet.vouchers().count());
     }
 
     fn update_state(&self) {

@@ -232,6 +232,7 @@ humantime                          = { default-features = false, version = "2.1"
 igd-next                           = { default-features = false, version = "0.16.1" }
 indexmap                           = { default-features = false, version = "2.14.0" }
 itertools                          = { default-features = false, version = "0.14" }
+jemalloc_pprof                     = { default-features = false, version = "0.8" }
 libp2p                             = { default-features = false, version = "0.56" }
 libp2p-stream                      = { default-features = false, version = "0.4.0-alpha" }
 libp2p-swarm-test                  = { default-features = false, version = "0.6" }
@@ -293,6 +294,7 @@ sysinfo               = { default-features = false, version = "0.37" }
 tempfile              = { default-features = false, version = "3" }
 test-log              = { default-features = false, version = "0.2" }
 thiserror             = { default-features = false, version = "2.0" }
+tikv-jemalloc-ctl     = { default-features = false, version = "0.6" }
 tikv-jemallocator     = { default-features = false, version = "0.6" }
 time                  = { default-features = false, version = "0.3" }
 tokio                 = { default-features = false, version = "1" }

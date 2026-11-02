@@ -1,4 +1,6 @@
 pub mod bodies;
+#[cfg(all(feature = "heap-profiling", not(target_env = "msvc")))]
+pub mod heap_profile;
 pub mod metrics;
 pub mod paths;
 #[cfg(feature = "profiling")]

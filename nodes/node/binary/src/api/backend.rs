@@ -258,6 +258,9 @@ where
             app.merge(pprof_routes)
         };
 
+        #[cfg(all(feature = "heap-profiling", not(target_env = "msvc")))]
+        let app = app.merge(lb_http_api_common::heap_profile::create_heap_profile_router());
+
         let listener = TcpListener::bind(&self.settings.address)
             .await
             .map_err(|e| {

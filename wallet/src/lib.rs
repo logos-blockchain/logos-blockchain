@@ -744,6 +744,18 @@ where
         self.wallet_states.contains_key(&block_id)
     }
 
+    /// Number of per-block wallet states, and the voucher Merkle paths held
+    /// across all of them.
+    #[must_use]
+    pub fn states_stats(&self) -> (usize, usize) {
+        let voucher_paths = self
+            .wallet_states
+            .values()
+            .map(|state| state.voucher_paths.size())
+            .sum();
+        (self.wallet_states.len(), voucher_paths)
+    }
+
     pub fn apply_block(&mut self, block: &WalletBlock) -> Result<(), WalletError> {
         if self.wallet_states.contains_key(&block.id) {
             // Already processed this block
