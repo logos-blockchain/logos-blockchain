@@ -95,6 +95,11 @@ impl MerklePath {
     pub fn siblings(&self) -> &[Fr] {
         self.siblings.as_slice()
     }
+
+    /// Set the root of the sibling subtree at `height`.
+    pub(crate) fn set_sibling(&mut self, height: usize, root: Fr) {
+        self.siblings[height - 1] = root;
+    }
 }
 
 /// A malformed or incompatible MMR path.
@@ -232,7 +237,7 @@ const fn are_siblings_at(a: usize, b: usize, height: usize) -> bool {
 }
 
 /// The unique height at which leaves `a` and `b` are siblings.
-const fn sibling_height(a: usize, b: usize) -> usize {
+pub const fn sibling_height(a: usize, b: usize) -> usize {
     (a ^ b).bit_width() as usize
 }
 
