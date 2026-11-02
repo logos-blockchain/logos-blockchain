@@ -1170,6 +1170,7 @@ where
 /// emitting a burst of transactions the chain then rejects. Drawing down a
 /// local balance stops the loop when the funds are spoken for; the next tick
 /// starts again from whatever the chain actually reports.
+#[expect(clippy::too_many_arguments, reason = "Need all args")]
 async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
@@ -1320,6 +1321,7 @@ struct PublishedClaim {
 ///
 /// On any failure the ready set is left untouched so the tickets can be
 /// retried.
+#[expect(clippy::too_many_arguments, reason = "Need all args")]
 async fn claim_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
