@@ -261,12 +261,15 @@ where
             None => {
                 <Pool as MemPoolTrait>::new(settings.pool.clone(), current_era, storage_adapter)
             }
-            Some(recovered_pool_state) => <Pool as RecoverableMempool>::recover(
-                settings.pool.clone(),
-                current_era,
-                recovered_pool_state,
-                storage_adapter,
-            ),
+            Some(recovered_pool_state) => {
+                <Pool as RecoverableMempool>::recover(
+                    settings.pool.clone(),
+                    current_era,
+                    recovered_pool_state,
+                    storage_adapter,
+                )
+                .await
+            }
         };
 
         let network_service_relay = overwatch_handle

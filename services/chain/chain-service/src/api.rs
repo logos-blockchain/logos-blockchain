@@ -122,6 +122,22 @@ where
         })
     }
 
+    /// The ID and slot of the block of the highest slot in the block tree.
+    pub async fn highest_block(&self) -> Result<(HeaderId, Slot), ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(Query::HighestBlock { reply_channel }.into())
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending HighestBlock"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while receiving HighestBlock"))
+        })
+    }
+
     /// Subscribe to new blocks
     pub async fn subscribe_new_blocks(
         &self,

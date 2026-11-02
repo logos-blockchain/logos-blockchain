@@ -500,7 +500,7 @@ async fn pool_with_backdated_tx(settings: MempoolSettings) -> (InMemoryPool, Ops
     saved_state.pending_items.insert(tx_id, 0);
 
     (
-        Mempool::recover(settings, Era::genesis(), saved_state, storage),
+        Mempool::recover(settings, Era::genesis(), saved_state, storage).await,
         tx,
     )
 }
@@ -531,7 +531,8 @@ async fn expired_tx_is_evicted_on_next_sweep() {
         Era::genesis(),
         saved_state,
         storage,
-    );
+    )
+    .await;
 
     assert_eq!(pool.pending_item_count(), 2);
     assert_eq!(pool.status(&[old_tx_id]), vec![Status::Pending]);
@@ -744,7 +745,7 @@ async fn removed_items_remain_fetchable_after_recovery() {
     assert!(saved_state.removed_items.contains_key(&tx_id));
 
     let recovered_pool =
-        InMemoryPool::recover(default_settings(), Era::genesis(), saved_state, storage);
+        InMemoryPool::recover(default_settings(), Era::genesis(), saved_state, storage).await;
 
     assert_eq!(recovered_pool.pending_item_count(), 0);
     assert_eq!(recovered_pool.status(&[tx_id]), vec![Status::Retained]);
@@ -795,7 +796,8 @@ async fn removed_tx_resolves_until_its_release_age() {
         .removed_items
         .get_mut(&tx_id)
         .expect("tx should be removed") = 0;
-    let mut pool = InMemoryPool::recover(default_settings(), Era::genesis(), saved_state, storage);
+    let mut pool =
+        InMemoryPool::recover(default_settings(), Era::genesis(), saved_state, storage).await;
     // Trigger pruning removed items by calling `remove`
     pool.remove(&[]).await;
 
@@ -1125,7 +1127,8 @@ async fn included_tx_remains_resolvable_after_recovery() {
     pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
         .await;
 
-    let pool = InMemoryPool::recover(default_settings(), Era::genesis(), pool.save(), storage);
+    let pool =
+        InMemoryPool::recover(default_settings(), Era::genesis(), pool.save(), storage).await;
 
     assert!(pool.save().included_in_canonical.contains_key(&tx_id));
     assert_eq!(keys_with_prefix(&pool, tx_id), vec![tx_id]);
@@ -1377,7 +1380,7 @@ async fn retained_admission_time_survives_recovery() {
     pool.remove(&[first.hash()]).await;
 
     let mut pool =
-        InMemoryPool::recover(no_eviction_settings(), Era::genesis(), pool.save(), storage);
+        InMemoryPool::recover(no_eviction_settings(), Era::genesis(), pool.save(), storage).await;
     pool.add_item(first.hash(), first.clone())
         .await
         .expect("a retired tx should be admitted again");
@@ -1426,7 +1429,7 @@ async fn pool_with_admission_times(
         .iter()
         .map(|(tx, admitted_at)| (tx.hash(), *admitted_at))
         .collect();
-    Mempool::recover(settings, Era::genesis(), saved_state, storage)
+    Mempool::recover(settings, Era::genesis(), saved_state, storage).await
 }
 
 #[test]
@@ -1870,6 +1873,28 @@ async fn failed_anchor_lookup_keeps_the_resolved_anchors() {
     pool.on_processed_block(failing, Slot::from(100u64), Slot::genesis())
         .await;
     assert_eq!(pool.status(&[failing_only_id]), vec![Status::Unknown]);
+}
+
+/// A claim recovered from a restart expires at its deadline like any other.
+#[tokio::test]
+async fn recovered_claim_expires_at_its_deadline() {
+    let anchor = HeaderId::from([1u8; 32]);
+    let storage = InMemoryStorageAdapter::default().with_block(anchor, 100);
+    let mut pool = InMemoryPool::new(pow_claim_settings(), Era::genesis(), storage.clone());
+    let claim = claim_tx(anchor);
+    let claim_id = claim.hash();
+    pool.add_item(claim_id, claim)
+        .await
+        .expect("claim tx should be added");
+
+    let mut pool =
+        InMemoryPool::recover(pow_claim_settings(), Era::genesis(), pool.save(), storage).await;
+
+    // The claim's deadline is slot 131.
+    processed_block(&mut pool, 130).await;
+    assert_eq!(pool.status(&[claim_id]), vec![Status::Pending]);
+    processed_block(&mut pool, 131).await;
+    assert_eq!(pool.status(&[claim_id]), vec![Status::Unknown]);
 }
 
 #[tokio::test]
