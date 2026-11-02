@@ -69,8 +69,8 @@ mod mantle_test_vectors {
         mantle::{
             fixtures::ops::op_values::{
                 ALL_OPS_COLUMN_HEX, CHANNEL_CONFIG, CHANNEL_TRANSFER, CHANNEL_WITHDRAW,
-                CLAIM_POW_REWARD, DEPOSIT, FORK_DIGEST, INSCRIPTION, LEADER_CLAIM, SDP_ACTIVE,
-                SDP_DECLARE, SDP_WITHDRAW, SDP_WITHDRAW_PAYLOAD_HEX, TRANSFER,
+                CLAIM_POW_REWARD, DEPOSIT, FORK_DIGEST, FORK_DIGEST_HEX, INSCRIPTION, LEADER_CLAIM,
+                SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, SDP_WITHDRAW_PAYLOAD_HEX, TRANSFER,
             },
             traits::Hashable as _,
             transactions::{TxList, tx_list::Ops},
@@ -132,12 +132,16 @@ mod mantle_test_vectors {
         );
         let transaction_encoding = all_ops.encode();
         let transaction_hash = tx_hash_from_payload(&transaction_encoding);
-        assert_eq!(transaction_encoding[0], 0x0b);
-        assert_eq!(hex::encode(&transaction_encoding), ALL_OPS_COLUMN_HEX);
+        // The fork digest, then the operation column, which opens with the
+        // number of operations.
+        let (fork_digest, column) = transaction_encoding.split_at(FORK_DIGEST.encoded_length());
+        assert_eq!(hex::encode(fork_digest), FORK_DIGEST_HEX);
+        assert_eq!(column[0], 0x0b);
+        assert_eq!(hex::encode(column), ALL_OPS_COLUMN_HEX);
         assert_eq!(all_ops.hash().0, transaction_hash);
         assert_eq!(
             hex::encode(transaction_hash),
-            "bd35e8f71e9005df1ba36ad320b57a8db408cf148c1c80f59e76cff9caae40ca"
+            "2d489b91556418db14b646788808065e2562993785e50c9d6449fe8261e8521b"
         );
     }
 
@@ -173,7 +177,8 @@ mod mantle_test_vectors {
         let encoding = current_ops.encode();
         let hash = current_ops.hash().0;
 
-        assert_eq!(encoding[0], 0x0b);
+        // The number of operations follows the fork digest.
+        assert_eq!(encoding[FORK_DIGEST.encoded_length()], 0x0b);
         assert!(matches!(
             current_ops.as_slice(),
             [
@@ -193,7 +198,7 @@ mod mantle_test_vectors {
         assert_eq!(hash, tx_hash_from_payload(&encoding));
         assert_eq!(
             hex::encode(hash),
-            "35f957f9a2688d0e0d8d4c0762c6921f814a4a7243d05e31532ba7ae7a58c910"
+            "d76eb0a6915f9189165ffb5a03d6efc1115f2067176c9b8ea5f3da2c8915785d"
         );
     }
 
