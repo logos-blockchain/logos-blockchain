@@ -492,7 +492,8 @@ impl WalletState {
         };
 
         // Filter out vouchers that have been claimed/finalized.
-        // `known_vouchers` always reflects the latest set of vouchers to be tracked.
+        // `known_vouchers` always reflects the latest set of vouchers to be
+        // tracked.
         let mut voucher_paths = self.voucher_paths.clone();
         for cm in self.voucher_paths.keys() {
             if known_vouchers.get(cm).is_none() {
@@ -500,7 +501,8 @@ impl WalletState {
             }
         }
 
-        // Push the new voucher to the MMR and update the tracked paths it settles
+        // Push the new voucher to the MMR and update the tracked paths it
+        // settles
         let (vouchers, new_path) = self
             .vouchers
             .push_with_lazy_paths(block.voucher_cm, &mut voucher_paths)
