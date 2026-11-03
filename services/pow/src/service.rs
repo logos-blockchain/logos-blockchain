@@ -1199,7 +1199,8 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
         .await
         {
             // Nothing left that can be claimed right now: the ready set is
-            // empty, or what remains is anchored to non-canonical blocks.
+            // empty, or what remains has a non-canonical anchor or an
+            // ineligible epoch nonce.
             Ok(None) => break,
             // A published claim always consumes at least one ready ticket, so
             // the loop is guaranteed to terminate.
@@ -1307,8 +1308,8 @@ struct PublishedClaim {
 /// would keep re-authorising funds already committed. Open the run with
 /// [`current_reward_pool`].
 ///
-/// On any failure the ready set is left untouched so the tickets can be
-/// retried.
+/// After expired tickets are pruned, a failure leaves the remaining ready set
+/// untouched so the tickets can be retried.
 async fn claim_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
@@ -1341,17 +1342,23 @@ where
         .ok_or(PoWError::LedgerStateUnavailable(info.tip))?;
 
     // Build the tx only from tickets whose anchor block is still on the
-    // canonical chain: on chain `accept_claim` requires the block to be in this
-    // branch's known-block set (the map below), so a non-canonical claim —
-    // e.g. one orphaned by a reorg — would be rejected and poison the whole tx.
-    // Such tickets are *kept* in `ready_to_claim` (a later reorg may restore
-    // their block); only the window check in `prune_expired_tickets` discards
-    // tickets for good.
+    // canonical chain and whose epoch nonce the ledger currently accepts.
+    // `accept_claim` requires the block in this branch's known-block set, and
+    // `validate_epoch_nonce` accepts only the current and previous epoch
+    // nonces. Keep ineligible tickets ready: a reorg may restore either their
+    // anchor or nonce eligibility. Only the window check above discards a
+    // ticket for good.
     let known_blocks = ledger_state.mantle_ledger().pow.block_slots();
+    let (current_nonce, previous_nonce) = ledger_state.accepted_pow_epoch_nonces();
+    let is_eligible = |ticket: &WinningTicket| {
+        known_blocks.contains_key(&ticket.claim.block_hash)
+            && (ticket.claim.epoch_nonce == current_nonce
+                || ticket.claim.epoch_nonce == previous_nonce)
+    };
     let tickets: Vec<(UnsecuredZkKey, ClaimPowRewardOp)> = state
         .ready_to_claim
         .iter()
-        .filter(|ticket| known_blocks.contains_key(&ticket.claim.block_hash))
+        .filter(|ticket| is_eligible(ticket))
         .map(|ticket| (ticket.secret_key.clone(), ticket.claim.clone()))
         .collect();
     if tickets.is_empty() {
@@ -1361,7 +1368,7 @@ where
     // Only mutate the ready set once the tx is built and published, so a
     // failure leaves every ticket in place for a later retry. The builder
     // caps the batch (op limit / reward pool) and claims a prefix of
-    // `tickets` (the canonical ones, in ready order); move exactly those to
+    // `tickets` (eligible ones, in ready order); move exactly those to
     // the pending set.
     let (signed_tx, claimed_count) = build_reward_claim_tx(
         claim_address,
@@ -1379,9 +1386,8 @@ where
     let mut remaining = Vec::with_capacity(state.ready_to_claim.len());
     let mut claimed = Vec::with_capacity(claimed_count);
     for ticket in state.ready_to_claim.drain(..) {
-        // Take the first `claimed_count` canonical tickets — the exact prefix
-        // the builder consumed — and keep everything else ready.
-        if claimed.len() < claimed_count && known_blocks.contains_key(&ticket.claim.block_hash) {
+        // Take the eligible prefix the builder consumed and keep the rest ready.
+        if claimed.len() < claimed_count && is_eligible(&ticket) {
             claimed.push(ticket);
         } else {
             remaining.push(ticket);
@@ -1905,6 +1911,10 @@ fn estimate_reward_claim_fee(
         .into_inner();
     Ok(fee)
 }
+
+#[cfg(test)]
+#[path = "claim_tests.rs"]
+mod claim_tests;
 
 #[cfg(test)]
 mod tests {
