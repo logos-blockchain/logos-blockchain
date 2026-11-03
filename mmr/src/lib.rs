@@ -8,7 +8,7 @@ use rpds::{HashTrieMapSync, StackSync};
 mod path;
 
 pub use path::{MerklePath, MerklePathError, is_left_child};
-use path::{sibling_height, update_paths_above_merge, update_paths_at_merge};
+use path::{completes_sibling, sibling_height, update_paths_above_merge, update_paths_at_merge};
 
 const EMPTY_VALUE: Fr = Fr::ZERO;
 /// Largest supported MMR height, including leaves at height one.
@@ -181,11 +181,7 @@ where
         let new_leaf = self.len();
         let (keys, mut completed): (Vec<K>, Vec<MerklePath>) = paths
             .iter()
-            .filter(|(_, path)| {
-                path.leaf_index() < new_leaf
-                    && sibling_height(path.leaf_index(), new_leaf)
-                        <= new_leaf.trailing_ones() as usize
-            })
+            .filter(|(_, path)| completes_sibling(path.leaf_index(), new_leaf))
             .map(|(key, path)| (key.clone(), path.clone()))
             .unzip();
 
