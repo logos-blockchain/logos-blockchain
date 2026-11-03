@@ -400,6 +400,14 @@ where
                         error!(target: LOG_TARGET, "Could not send consensus info through channel: {:?}", e);
                     });
             }
+            Query::HighestBlock { reply_channel } => {
+                let highest = self.cryptarchia.highest_branch();
+                reply_channel
+                    .send((highest.id(), highest.slot()))
+                    .unwrap_or_else(|e| {
+                        error!(target: LOG_TARGET, "Could not send the highest block through channel: {:?}", e);
+                    });
+            }
             Query::NewBlockSubscribe { sender } => {
                 sender
                     .send(self.new_block_subscription_sender.subscribe())

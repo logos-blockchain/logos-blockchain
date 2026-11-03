@@ -127,6 +127,7 @@ pub enum Status {
 }
 
 /// Trait for mempools that can be recovered from saved state
+#[async_trait::async_trait]
 pub trait RecoverableMempool: MemPool {
     type RecoveryState: Send + Sync + Serialize + for<'de> Deserialize<'de>;
 
@@ -134,7 +135,7 @@ pub trait RecoverableMempool: MemPool {
     fn save(&self) -> Self::RecoveryState;
 
     /// Recover from saved state with storage
-    fn recover(
+    async fn recover(
         settings: <Self as MemPool>::Settings,
         current_era: Era,
         state: Self::RecoveryState,

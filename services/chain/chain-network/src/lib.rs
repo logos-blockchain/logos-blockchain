@@ -342,6 +342,12 @@ where
         )
         .await?;
 
+        notify_mempool_of_highest_block::<_, Mempool>(
+            relays.cryptarchia(),
+            relays.mempool_adapter(),
+        )
+        .await;
+
         // The adapters start in the era of the slot the clock is in, follow
         // the eras its slot ticks enter after it, and drop what they keep of
         // the era before when its transition period ends.
@@ -1087,6 +1093,31 @@ where
     }
 
     Err(last_err.expect("future block retry loop should capture last FutureBlock error"))
+}
+
+/// Pass the highest slot of the block tree to the mempool service.
+async fn notify_mempool_of_highest_block<Cryptarchia, Mempool>(
+    cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
+    mempool: &MempoolAdapter<Mempool::Item>,
+) where
+    Cryptarchia: CryptarchiaServiceData<Tx: Send>,
+    Mempool:
+        RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
+{
+    // The genesis slot as the LIB releases nothing.
+    match cryptarchia.highest_block().await {
+        Ok((highest_id, highest_slot)) => {
+            if let Err(err) = mempool
+                .notify_processed_block(highest_id, highest_slot, Slot::genesis())
+                .await
+            {
+                error!(target: LOG_TARGET, err, "could not give the mempool the highest block");
+            }
+        }
+        Err(err) => {
+            error!(target: LOG_TARGET, ?err, "could not read the highest block for the mempool");
+        }
+    }
 }
 
 /// Try to add a [`Block`] to [`Cryptarchia`].
