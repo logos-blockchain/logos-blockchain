@@ -11,9 +11,9 @@
 //! - [Storage Markets]
 //! - [Gas Cost Determination]
 //!
-//! [Execution Market]: https://github.com/logos-co/logos-lips/blob/d311139c9615ab719a8eedcdfa383032744c005c/docs/blockchain/raw/execution-market.md
+//! [Execution Market]: https://github.com/logos-co/logos-lips/blob/fe5a31d6da3dda6833d0a282e121d9633ec73c99/docs/blockchain/raw/execution-market.md
 //! [Storage Markets]: https://github.com/logos-co/logos-lips/blob/38916aa474164ac4acd81e62d19715e17626be17/docs/blockchain/raw/storage-markets.md
-//! [Gas Cost Determination]: https://github.com/logos-co/logos-lips/blob/d311139c9615ab719a8eedcdfa383032744c005c/docs/blockchain/raw/analysis-gas-cost-determination.md
+//! [Gas Cost Determination]: https://github.com/logos-co/logos-lips/blob/fe5a31d6da3dda6833d0a282e121d9633ec73c99/docs/blockchain/raw/analysis-gas-cost-determination.md
 
 use std::collections::{HashMap, HashSet};
 
