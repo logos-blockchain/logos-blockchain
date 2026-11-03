@@ -86,27 +86,27 @@ services:
       - "127.0.0.1:18082:18082/tcp"
     entrypoint: /etc/logos-blockchain/scripts/run_rust_node.sh
 
-#  logos-blockchain-node-3:
-#    container_name: logos_blockchain_node_3
-#    image: ghcr.io/logos-blockchain/logos-blockchain-node:${NODE_IMAGE_LABEL}
-#    volumes:
-#      - node-data:/node-data
-#      - ./deployment:/etc/logos-blockchain
-#    environment:
-#      - LB_HOST_IDX=3
-#      - CFG_HOST_IP=${PUBLIC_IP_ADDR}
-#      - CFG_NETWORK_PORT=${NODE3_NET_PORT}
-#      - CFG_BLEND_PORT=${NODE3_BLEND_PORT}
-#      - CFG_API_PORT=${NODE3_API_PORT}
-#      - LOG_LEVEL=TRACE
-#      - LOG_APPENDER=rolling-max-files
-#      - LOG_APPENDER_MAX_FILES=48
-#      - STATE_PATH=/node-data/3/state
-#    ports:
-#      - "${NODE3_NET_PORT}:3003/udp"
-#      - "${NODE3_BLEND_PORT}:3403/udp"
-#      - "127.0.0.1:${NODE3_API_PORT}:18083/tcp"
-#    entrypoint: /etc/logos-blockchain/scripts/run_node.sh
+  logos-blockchain-node-3:
+    container_name: logos_blockchain_node_3
+    image: ghcr.io/logos-blockchain/logos-blockchain:0.3.4-mem
+    volumes:
+      - node-data:/node-data
+      - ./deployment:/etc/logos-blockchain
+    environment:
+      - LB_HOST_IDX=3
+      - CFG_HOST_IP=${PUBLIC_IP_ADDR}
+      - CFG_NETWORK_PORT=${NODE3_NET_PORT}
+      - CFG_BLEND_PORT=${NODE3_BLEND_PORT}
+      - CFG_API_PORT=${NODE3_API_PORT}
+      - LOG_LEVEL=TRACE
+      - LOG_APPENDER=rolling-max-files
+      - LOG_APPENDER_MAX_FILES=48
+      - STATE_PATH=/node-data/3/state
+    ports:
+      - "${NODE3_NET_PORT}:3003/udp"
+      - "${NODE3_BLEND_PORT}:3403/udp"
+      - "127.0.0.1:${NODE3_API_PORT}:18083/tcp"
+    entrypoint: /etc/logos-blockchain/scripts/run_rust_node.sh
 
   filebrowser:
     container_name: filebrowser
