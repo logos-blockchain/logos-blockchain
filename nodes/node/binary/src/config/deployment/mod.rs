@@ -1,6 +1,7 @@
 use core::{num::NonZero, time::Duration};
 use std::collections::BTreeMap;
 
+use lb_chain_service::TipEra;
 use lb_core::{
     block::genesis::GenesisBlock,
     era::{EraDigest, ForkDigest},
@@ -27,7 +28,8 @@ use crate::config::{
 };
 
 /// Why a deployment cannot run: an era whose values the node refuses, alone or
-/// after the era before it, or eras that cannot be resolved.
+/// after the era before it, eras that cannot be resolved, or a change to an
+/// era the node has already executed.
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct InvalidDeployment(String);
@@ -185,6 +187,28 @@ impl DeploymentSettings {
         self.eras.slot_at(time::OffsetDateTime::now_utc())
     }
 
+    /// Checks that this deployment gives the slot of the node's saved tip the
+    /// fork digest the tip was applied under.
+    ///
+    /// # Errors
+    ///
+    /// If it gives the slot another fork digest: the deployment starts from
+    /// another genesis block or changes an era the node has already executed,
+    /// so the node would run on state executed under other rules.
+    pub fn check_keeps_tip_era(&self, tip_era: TipEra) -> Result<(), InvalidDeployment> {
+        let TipEra { slot, fork_digest } = tip_era;
+        let scheduled = self.eras.at_slot(slot).parameters.fork_digest;
+        ensure!(
+            scheduled == fork_digest,
+            "The node's tip, at slot {}, was applied under fork {fork_digest}, but this deployment \
+             schedules that slot under fork {scheduled}: it starts from another genesis block or \
+             changes an era the node has already executed. Run the release the node ran with, or \
+             remove the node's state and sync again.",
+            slot.into_inner()
+        );
+        Ok(())
+    }
+
     /// The parameters of the genesis era, in version 1's layout, the only one
     /// there is.
     #[must_use]
@@ -292,8 +316,9 @@ mod tests {
     use core::num::NonZero;
     use std::collections::{BTreeMap, BTreeSet};
 
+    use lb_chain_service::TipEra;
     use lb_core::era::ForkDigest;
-    use lb_time::{Epoch, Era};
+    use lb_time::{Epoch, Era, Slot, era::EpochLength as _};
     use lb_utils::{math::NonNegativeRatio, yaml::INCLUDE_TAG};
     use serde_yaml::Value;
 
@@ -469,6 +494,37 @@ mod tests {
         let reason = eras_after_a_transition_period(11).unwrap_err().to_string();
         assert!(
             reason.contains("Era 1 lasts 12 slots, not more than the 20 slots"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn a_deployment_that_appends_an_era_keeps_the_era_of_the_tip() {
+        let default = DeploymentSettings::default();
+        let genesis_era = default.era_schedule().genesis();
+        // In epoch 5, which both deployments give to the genesis era.
+        let tip_era = TipEra {
+            slot: Slot::new(5 * genesis_era.parameters.epoch_length().get()),
+            fork_digest: genesis_era.parameters.fork_digest,
+        };
+        two_eras().check_keeps_tip_era(tip_era).unwrap();
+    }
+
+    #[test]
+    fn a_deployment_that_changes_the_era_of_the_tip_is_refused() {
+        let two_eras = two_eras();
+        let era_1 = two_eras.era_schedule().get(Era::new(1)).unwrap();
+        // A tip in era 1, a slot the default deployment gives to the genesis era.
+        let tip_era = TipEra {
+            slot: era_1.first_slot,
+            fork_digest: era_1.parameters.fork_digest,
+        };
+        let reason = DeploymentSettings::default()
+            .check_keeps_tip_era(tip_era)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            reason.contains("changes an era the node has already executed"),
             "{reason}"
         );
     }
