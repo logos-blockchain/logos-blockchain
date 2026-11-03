@@ -3,7 +3,7 @@ pub mod deserialize;
 use core::fmt::{self, Debug, Formatter};
 
 use ark_bn254::Bn254;
-use ark_ec::pairing::Pairing;
+use ark_ec::{AffineRepr as _, pairing::Pairing};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize as _, SerializationError};
 use generic_array::{ArrayLength, GenericArray, typenum::Unsigned as _};
 
@@ -153,6 +153,8 @@ impl<E: Pairing + CompressSize> TryFrom<&Proof<E>> for CompressedProof<E> {
     }
 }
 
+// Deserialization checks every point is on its curve and in its prime order
+// subgroup. The point at infinity has no encoding, and is rejected here.
 impl<E: Pairing + CompressSize> TryFrom<&CompressedProof<E>> for Proof<E> {
     type Error = SerializationError;
     fn try_from(value: &CompressedProof<E>) -> Result<Self, SerializationError> {
@@ -160,10 +162,51 @@ impl<E: Pairing + CompressSize> TryFrom<&CompressedProof<E>> for Proof<E> {
         let a = <E::G1Affine as CanonicalDeserialize>::deserialize_compressed(&pi_a[..])?;
         let b = <E::G2Affine as CanonicalDeserialize>::deserialize_compressed(&pi_b[..])?;
         let c = <E::G1Affine as CanonicalDeserialize>::deserialize_compressed(&pi_c[..])?;
+        if a.is_zero() || b.is_zero() || c.is_zero() {
+            return Err(SerializationError::InvalidData);
+        }
         Ok(Self {
             pi_a: a,
             pi_b: b,
             pi_c: c,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ark_bn254::{G1Affine, G2Affine};
+
+    use super::*;
+
+    fn generators() -> Proof<Bn254> {
+        Proof {
+            pi_a: G1Affine::generator(),
+            pi_b: G2Affine::generator(),
+            pi_c: G1Affine::generator(),
+        }
+    }
+
+    #[test]
+    fn a_proof_decodes() {
+        let compressed = CompressedProof::<Bn254>::try_from(&generators()).unwrap();
+        assert_eq!(Proof::try_from(&compressed).unwrap(), generators());
+    }
+
+    #[test]
+    fn the_point_at_infinity_is_rejected_at_every_position() {
+        let compressed = CompressedProof::<Bn254>::try_from(&generators()).unwrap();
+        let mut pi_a = compressed.clone();
+        pi_a.pi_a.as_mut_slice().fill(0);
+        pi_a.pi_a.as_mut_slice()[31] = 1 << 6;
+        let mut pi_b = compressed.clone();
+        pi_b.pi_b.as_mut_slice().fill(0);
+        pi_b.pi_b.as_mut_slice()[63] = 1 << 6;
+        let mut pi_c = compressed;
+        pi_c.pi_c.as_mut_slice().fill(0);
+        pi_c.pi_c.as_mut_slice()[31] = 1 << 6;
+        for proof in [pi_a, pi_b, pi_c] {
+            assert!(Proof::<Bn254>::try_from(&proof).is_err());
+        }
     }
 }
