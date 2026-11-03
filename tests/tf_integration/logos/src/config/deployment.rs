@@ -379,10 +379,10 @@ impl DeploymentBuilder {
             .map(|account| (account.secret_key.clone(), account.value))
             .collect::<Vec<_>>();
 
-        let blend_ports = if !self.blend_ports.is_empty() {
-            self.blend_ports.clone()
-        } else {
+        let blend_ports = if self.blend_ports.is_empty() {
             allocate_blend_ports(node_count)?
+        } else {
+            self.blend_ports.clone()
         };
         let network = prepare_network(
             &ids,
