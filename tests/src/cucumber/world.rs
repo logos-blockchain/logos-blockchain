@@ -33,7 +33,7 @@ use lb_testing_framework::{
     ScenarioBuilderExt as _,
     configs::{deployment::SdpFundingConfig, wallet::WalletAccount},
     env::set_default_env,
-    workloads,
+    get_reserved_available_udp_port, workloads,
 };
 use testing_framework_core::{
     scenario::{ClusterHandle, NodeControl, PeerSelection},
@@ -308,6 +308,11 @@ pub struct ClusterState {
     /// Manual: Stable deployment seed reused when the same scenario rebuilds a
     /// manual cluster, for example after restoring from a node snapshot.
     pub manual_cluster_deployment_seed: Option<DeploymentSeed>,
+    /// Manual: Stable Blend ports, by node index, reused when the same scenario
+    /// rebuilds a manual cluster. The genesis block declares them, so new ports
+    /// would give the rebuilt cluster another genesis block, on which nodes
+    /// restored from a snapshot refuse to start.
+    pub manual_cluster_blend_ports: Vec<u16>,
     /// Manual: Number of leading nodes declared as blend providers in the
     /// generated deployment. Defaults to all nodes when unset.
     pub blend_core_nodes: Option<usize>,
@@ -912,6 +917,10 @@ impl Debug for CucumberWorld {
                 &self.cluster.manual_cluster_deployment_seed.is_some(),
             )
             .field(
+                "manual_cluster_blend_ports",
+                &self.cluster.manual_cluster_blend_ports,
+            )
+            .field(
                 "manual_node_config_overrides",
                 &self.startup.manual_node_config_overrides,
             )
@@ -1172,6 +1181,23 @@ impl CucumberWorld {
             .manual_cluster_deployment_seed
             .get_or_insert_with(|| DeploymentSeed::new(rand::random()))
             .clone()
+    }
+
+    /// Return the stable Blend ports of the first `nodes_count` nodes of this
+    /// manual-cluster scenario, allocating ports for nodes that have none yet.
+    pub fn manual_cluster_blend_ports(
+        &mut self,
+        nodes_count: usize,
+    ) -> Result<Vec<u16>, StepError> {
+        let ports = &mut self.cluster.manual_cluster_blend_ports;
+        while ports.len() < nodes_count {
+            let port =
+                get_reserved_available_udp_port().ok_or_else(|| StepError::LogicalError {
+                    message: "failed to allocate a Blend UDP port for the manual cluster".into(),
+                })?;
+            ports.push(port);
+        }
+        Ok(ports[..nodes_count].to_vec())
     }
 
     /// Set a scenario-wide cryptarchia security parameter override for

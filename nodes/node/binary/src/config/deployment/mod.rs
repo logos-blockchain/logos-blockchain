@@ -192,18 +192,18 @@ impl DeploymentSettings {
     ///
     /// # Errors
     ///
-    /// If it gives the slot another fork digest: the deployment changes an era
-    /// the node has already executed, so the node would run on state executed
-    /// under other rules.
+    /// If it gives the slot another fork digest: the deployment starts from
+    /// another genesis block or changes an era the node has already executed,
+    /// so the node would run on state executed under other rules.
     pub fn check_keeps_tip_era(&self, tip_era: TipEra) -> Result<(), InvalidDeployment> {
         let TipEra { slot, fork_digest } = tip_era;
         let scheduled = self.eras.at_slot(slot).parameters.fork_digest;
         ensure!(
             scheduled == fork_digest,
             "The node's tip, at slot {}, was applied under fork {fork_digest}, but this deployment \
-             schedules that slot under fork {scheduled}: it changes an era the node has already \
-             executed. Run the release the node ran with, or remove the node's state and sync \
-             again.",
+             schedules that slot under fork {scheduled}: it starts from another genesis block or \
+             changes an era the node has already executed. Run the release the node ran with, or \
+             remove the node's state and sync again.",
             slot.into_inner()
         );
         Ok(())
@@ -524,7 +524,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            reason.contains("it changes an era the node has already executed"),
+            reason.contains("changes an era the node has already executed"),
             "{reason}"
         );
     }
