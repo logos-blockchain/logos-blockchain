@@ -364,6 +364,17 @@ pub fn pol_wallet_inputs(
         .expect("the low leaf is in the tree");
     let (low_leaf_path, low_leaf_selectors) = nodes_and_selectors(&low_path);
 
+    // The same low leaf at the freeze of the stake distribution, for the PoQ.
+    let (low_aged_index, low_aged) = aged_set
+        .nullifiers()
+        .low_leaf(&nullifier.0)
+        .ok_or(LeaderWitnessError::Spent)?;
+    let low_aged_path = aged_set
+        .nullifiers()
+        .path(low_aged_index)
+        .expect("the low leaf is in the tree");
+    let (low_leaf_aged_path, low_leaf_aged_selectors) = nodes_and_selectors(&low_aged_path);
+
     // Both eligible trees hold the set at the same index, so the selectors agree.
     let (set_aged_path, set_selectors) =
         nodes_and_selectors(&aged.eligible_path(note_set).ok_or(unknown)?);
@@ -376,6 +387,11 @@ pub fn pol_wallet_inputs(
         commitment_aged_path,
         commitment_aged_selectors,
         nullifier_root_aged: aged_set.nullifier_root(),
+        low_leaf_aged_nullifier: low_aged.nullifier,
+        low_leaf_aged_next_nullifier: low_aged.next_nullifier,
+        low_leaf_aged_next_index: low_aged.next_index,
+        low_leaf_aged_path,
+        low_leaf_aged_selectors,
         set_aged_path,
         low_leaf_nullifier: low.nullifier,
         low_leaf_next_nullifier: low.next_nullifier,

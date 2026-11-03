@@ -85,7 +85,10 @@ fn witness_input_for_proof_type(
                 secret_key,
                 note_nonce,
                 commitment_aged_path_and_selectors,
-                nullifier_root_aged,
+                low_leaf_aged_nullifier,
+                low_leaf_aged_next_nullifier,
+                low_leaf_aged_next_index,
+                low_leaf_aged_path_and_selectors,
                 set_aged_path_and_selectors,
             } = *leadership_quota_private_inputs;
 
@@ -95,7 +98,10 @@ fn witness_input_for_proof_type(
                 pol_secret_key: secret_key,
                 note_nonce,
                 commitment_aged_path_and_selectors,
-                nullifier_root_aged,
+                low_leaf_aged_nullifier,
+                low_leaf_aged_next_nullifier,
+                low_leaf_aged_next_index,
+                low_leaf_aged_path_and_selectors,
                 set_aged_path_and_selectors,
             };
             PoQWitnessInputs::from_leader_data(

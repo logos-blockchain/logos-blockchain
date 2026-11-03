@@ -359,7 +359,10 @@ mod test {
             note_value: 2,
             note_nonce: ZkHash::ONE,
             commitment_aged_path_and_selectors: [(ZkHash::ONE, true); _],
-            nullifier_root_aged: ZkHash::ONE,
+            low_leaf_aged_nullifier: ZkHash::ONE,
+            low_leaf_aged_next_nullifier: ZkHash::ONE,
+            low_leaf_aged_next_index: 1,
+            low_leaf_aged_path_and_selectors: [(ZkHash::ONE, true); _],
             set_aged_path_and_selectors: [(ZkHash::ONE, true); _],
             secret_key: ZkHash::ONE,
         };

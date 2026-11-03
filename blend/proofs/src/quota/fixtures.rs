@@ -172,7 +172,10 @@ pub fn valid_proof_of_leadership_quota_inputs(
         note_value: wallet.note_value,
         note_nonce: wallet.note_nonce,
         commitment_aged_path_and_selectors: wallet.commitment_aged_path_and_selectors,
-        nullifier_root_aged: wallet.nullifier_root_aged,
+        low_leaf_aged_nullifier: wallet.low_leaf_aged_nullifier,
+        low_leaf_aged_next_nullifier: wallet.low_leaf_aged_next_nullifier,
+        low_leaf_aged_next_index: wallet.low_leaf_aged_next_index,
+        low_leaf_aged_path_and_selectors: wallet.low_leaf_aged_path_and_selectors,
         set_aged_path_and_selectors: wallet.set_aged_path_and_selectors,
         secret_key: wallet.pol_secret_key,
     };

@@ -83,7 +83,11 @@ pub fn leadership_quota_inputs(leader_private: &LeaderPrivate) -> ProofOfLeaders
                 set_selectors,
                 commitment_aged_path,
                 commitment_aged_selectors,
-                nullifier_root_aged,
+                low_leaf_aged_nullifier,
+                low_leaf_aged_next_nullifier,
+                low_leaf_aged_next_index,
+                low_leaf_aged_path,
+                low_leaf_aged_selectors,
                 set_aged_path,
                 secret_key,
                 ..
@@ -98,7 +102,12 @@ pub fn leadership_quota_inputs(leader_private: &LeaderPrivate) -> ProofOfLeaders
         commitment_aged_path_and_selectors: core::array::from_fn(|i| {
             (commitment_aged_path[i], commitment_aged_selectors[i])
         }),
-        nullifier_root_aged: *nullifier_root_aged,
+        low_leaf_aged_nullifier: *low_leaf_aged_nullifier,
+        low_leaf_aged_next_nullifier: *low_leaf_aged_next_nullifier,
+        low_leaf_aged_next_index: *low_leaf_aged_next_index,
+        low_leaf_aged_path_and_selectors: core::array::from_fn(|i| {
+            (low_leaf_aged_path[i], low_leaf_aged_selectors[i])
+        }),
         set_aged_path_and_selectors: core::array::from_fn(|i| (set_aged_path[i], set_selectors[i])),
         secret_key: *secret_key,
     }
@@ -129,7 +138,17 @@ mod tests {
             ),
             (chain.slot_number, 1000, Fr::from(11u64), Fr::from(7u64))
         );
-        assert_eq!(inputs.nullifier_root_aged, wallet.nullifier_root_aged);
+        assert_eq!(
+            inputs.low_leaf_aged_nullifier,
+            wallet.low_leaf_aged_nullifier
+        );
+        assert_eq!(
+            inputs.low_leaf_aged_path_and_selectors[0],
+            (
+                wallet.low_leaf_aged_path[0],
+                wallet.low_leaf_aged_selectors[0]
+            )
+        );
         assert_eq!(
             inputs.commitment_aged_path_and_selectors[0],
             (
