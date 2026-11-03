@@ -13,21 +13,28 @@ version     = { workspace = true }
 [lints]
 workspace = true
 
+[features]
+testing = ["dep:lb-testing-framework", "dep:testing-framework-app", "dep:testing-framework-core"]
+
 [dependencies]
 async-trait                      = { workspace = true }
 futures                          = { workspace = true }
 hex                              = { workspace = true }
+lb-binary-codec                  = { workspace = true }
 lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-log-targets                   = { workspace = true }
+lb-testing-framework             = { optional = true, workspace = true }
 lb-time                          = { workspace = true }
 rand                             = { workspace = true }
 reqwest                          = { workspace = true }
 rpds                             = { workspace = true }
 serde                            = { features = ["derive"], workspace = true }
+testing-framework-app            = { optional = true, workspace = true }
+testing-framework-core           = { optional = true, workspace = true }
 thiserror                        = { workspace = true }
 time                             = { features = ["std"], workspace = true }
 tokio                            = { features = ["macros", "rt", "sync", "time"], workspace = true }

@@ -5707,8 +5707,10 @@ name = "logos-blockchain-zone-sdk"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "blockchain-test-logos",
  "futures",
  "hex",
+ "logos-blockchain-binary-codec",
  "logos-blockchain-common-http-client",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
@@ -5722,6 +5724,8 @@ dependencies = [
  "rpds",
  "serde",
  "serde_json",
+ "testing-framework-app",
+ "testing-framework-core",
  "thiserror 2.0.21",
  "time",
  "tokio",
