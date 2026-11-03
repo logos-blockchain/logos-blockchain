@@ -1,14 +1,17 @@
 //! Indexed Merkle tree of nullifiers, proving non membership with the low
 //! leaf of a nullifier as defined in the Mantle specification.
 
-use std::{fmt, sync::LazyLock};
+use std::{
+    fmt,
+    sync::{LazyLock, OnceLock},
+};
 
 use ark_ff::AdditiveGroup as _;
 use lb_dynamic_merkle::{DynamicMerkleTree, MerklePath};
 use lb_groth16::{fr_from_bytes, serde::serde_fr};
 use lb_poseidon2::{Digest, Fr};
 use lb_utxotree::UtxoMerkleHasher;
-use rpds::{RedBlackTreeMapSync, VectorSync};
+use rpds::{RedBlackTreeMapSync, RedBlackTreeSetSync, VectorSync};
 
 static NULLIFIER_IMT_LEAF_V1: LazyLock<Fr> = LazyLock::new(|| {
     fr_from_bytes(b"NULLIFIER_IMT_LEAF_V1").expect("BigUint should load from constant string")
@@ -59,6 +62,13 @@ pub enum ImtError {
 /// nullifier. The first leaf is the sentinel `(0, 0, 0)` and positions past the
 /// last leaf hold 0.
 ///
+/// An insertion updates the leaves and the sorted index at once but only marks
+/// the two leaves it writes: their hashes reach the Merkle tree at the next
+/// [`flush`](Self::flush), which hashes each marked leaf and each node above
+/// them once. [`root`](Self::root) and [`path`](Self::path) are those of the
+/// flushed tree whether or not it was flushed: before a flush, the first of
+/// them hashes the marked leaves into a tree kept for the later reads.
+///
 /// Only the leaves are serialized, the Merkle tree and the sorted index are
 /// rebuilt on deserialization.
 pub struct IndexedMerkleTree<Hash: Digest, const HEIGHT: usize> {
@@ -66,6 +76,10 @@ pub struct IndexedMerkleTree<Hash: Digest, const HEIGHT: usize> {
     leaves: VectorSync<NullifierLeaf>,
     // nullifier to leaf index, the sentinel under 0
     sorted: RedBlackTreeMapSync<Fr, u64>,
+    // leaves written since the last flush, whose hashes `tree` does not hold
+    unhashed: RedBlackTreeSetSync<u64>,
+    // `tree` with the unhashed leaves hashed in, computed at the first read
+    hashed: OnceLock<DynamicMerkleTree<UtxoMerkleHasher<Hash>, HEIGHT>>,
 }
 
 impl<Hash: Digest, const HEIGHT: usize> Clone for IndexedMerkleTree<Hash, HEIGHT> {
@@ -74,6 +88,8 @@ impl<Hash: Digest, const HEIGHT: usize> Clone for IndexedMerkleTree<Hash, HEIGHT
             tree: self.tree.clone(),
             leaves: self.leaves.clone(),
             sorted: self.sorted.clone(),
+            unhashed: self.unhashed.clone(),
+            hashed: self.hashed.clone(),
         }
     }
 }
@@ -112,6 +128,8 @@ impl<Hash: Digest, const HEIGHT: usize> IndexedMerkleTree<Hash, HEIGHT> {
             tree: DynamicMerkleTree::new().insert(sentinel.hash::<Hash>()).0,
             leaves: VectorSync::new_sync().push_back(sentinel),
             sorted: RedBlackTreeMapSync::new_sync().insert(Fr::ZERO, 0),
+            unhashed: RedBlackTreeSetSync::new_sync(),
+            hashed: OnceLock::new(),
         }
     }
 
@@ -142,24 +160,55 @@ impl<Hash: Digest, const HEIGHT: usize> IndexedMerkleTree<Hash, HEIGHT> {
             next_index: n as u64,
             ..*low
         };
-        let tree = self.tree.update(low_index as usize, low.hash::<Hash>());
-        let (tree, index) = tree.insert(new_leaf.hash::<Hash>());
-        assert_eq!(index, n, "leaves are appended in insertion order");
 
         Ok(Self {
-            tree,
+            tree: self.tree.clone(),
             leaves: self
                 .leaves
                 .set(low_index as usize, low)
                 .expect("low leaf is in the tree")
                 .push_back(new_leaf),
             sorted: self.sorted.insert(nullifier, n as u64),
+            unhashed: self.unhashed.insert(low_index).insert(n as u64),
+            hashed: OnceLock::new(),
+        })
+    }
+
+    /// Hashes the leaves written since the last flush into the Merkle tree.
+    #[must_use]
+    pub fn flush(&self) -> Self {
+        Self {
+            tree: self.hashed_tree().clone(),
+            leaves: self.leaves.clone(),
+            sorted: self.sorted.clone(),
+            unhashed: RedBlackTreeSetSync::new_sync(),
+            hashed: OnceLock::new(),
+        }
+    }
+
+    // The Merkle tree once the unhashed leaves are hashed into it. The leaves
+    // past the tree are appended in order, so each lands on the next free
+    // position as `DynamicMerkleTree::insert` would place it.
+    fn hashed_tree(&self) -> &DynamicMerkleTree<UtxoMerkleHasher<Hash>, HEIGHT> {
+        if self.unhashed.is_empty() {
+            return &self.tree;
+        }
+        self.hashed.get_or_init(|| {
+            let items: Vec<(usize, Fr)> = self
+                .unhashed
+                .iter()
+                .map(|index| {
+                    let index = *index as usize;
+                    (index, self.leaves[index].hash::<Hash>())
+                })
+                .collect();
+            self.tree.set_batch(&items)
         })
     }
 
     #[must_use]
     pub fn root(&self) -> Fr {
-        self.tree.root()
+        self.hashed_tree().root()
     }
 
     #[must_use]
@@ -185,7 +234,7 @@ impl<Hash: Digest, const HEIGHT: usize> IndexedMerkleTree<Hash, HEIGHT> {
 
     #[must_use]
     pub fn path(&self, index: u64) -> Option<MerklePath<Fr, HEIGHT>> {
-        self.tree.path(usize::try_from(index).ok()?)
+        self.hashed_tree().path(usize::try_from(index).ok()?)
     }
 
     fn from_leaves(leaves: VectorSync<NullifierLeaf>) -> Result<Self, &'static str> {
@@ -224,6 +273,8 @@ impl<Hash: Digest, const HEIGHT: usize> IndexedMerkleTree<Hash, HEIGHT> {
             tree,
             leaves,
             sorted,
+            unhashed: RedBlackTreeSetSync::new_sync(),
+            hashed: OnceLock::new(),
         })
     }
 }
@@ -408,6 +459,91 @@ mod tests {
         assert_eq!(recovered, imt);
         assert_eq!(recovered.root(), imt.root());
         assert_eq!(recovered.low_leaf(&fr(20)), imt.low_leaf(&fr(20)));
+    }
+
+    #[test]
+    fn test_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Imt>();
+    }
+
+    // `MerkleNode` has no `PartialEq`, so the paths compare as (side, sibling)
+    fn path_nodes(path: &MerklePath<Fr, 40>) -> Vec<(bool, Fr)> {
+        path.iter()
+            .map(|node| (matches!(node, MerkleNode::Left(_)), *node.item()))
+            .collect()
+    }
+
+    fn assert_same_tree(imt: &Imt, eager: &DynamicMerkleTree<TestHasher, 40>) {
+        assert_eq!(imt.root(), eager.root());
+        for index in 0..imt.len() {
+            assert_eq!(
+                imt.path(index as u64).as_ref().map(path_nodes),
+                eager.path(index).as_ref().map(path_nodes)
+            );
+        }
+    }
+
+    // Each op inserts a nullifier picked by its kind (below every one, above every
+    // one, next to one inserted earlier in the batch so that leaf is the low leaf,
+    // next below an inserted one, any) or flushes the batch of insertions.
+    #[property_test]
+    fn test_deferred_hashing_matches_eager_tree(ops: Vec<(u8, u64)>) {
+        let mut imt = Imt::new();
+        let mut eager = DynamicMerkleTree::<TestHasher, 40>::new()
+            .insert(imt.leaf(0).unwrap().hash::<ZkHasher>())
+            .0;
+        let mut inserted: Vec<u64> = Vec::new();
+        let mut batch: Vec<u64> = Vec::new();
+        for (kind, value) in ops {
+            let pick = |nullifiers: &[u64]| nullifiers[value as usize % nullifiers.len()];
+            let nullifier = match kind % 6 {
+                0 => inserted.iter().min().map_or(value, |min| min / 2),
+                1 => inserted
+                    .iter()
+                    .max()
+                    .map_or(value, |max| max.wrapping_add(1 + value % 3)),
+                2 if !batch.is_empty() => pick(&batch).wrapping_add(1),
+                3 if !inserted.is_empty() => pick(&inserted).wrapping_sub(1),
+                4 => {
+                    imt = imt.flush();
+                    assert_same_tree(&imt, &eager);
+                    batch.clear();
+                    continue;
+                }
+                _ => value,
+            };
+            if nullifier == 0 {
+                continue;
+            }
+            if imt.contains(&fr(nullifier)) {
+                assert_eq!(
+                    imt.insert(fr(nullifier)),
+                    Err(ImtError::AlreadyPresent(fr(nullifier)))
+                );
+                continue;
+            }
+            let (low_index, _) = imt.low_leaf(&fr(nullifier)).unwrap();
+            if kind % 6 == 2 && batch.contains(&(nullifier - 1)) {
+                assert_eq!(imt.leaf(low_index).unwrap().nullifier, fr(nullifier - 1));
+            }
+            imt = imt.insert(fr(nullifier)).unwrap();
+            eager = eager.update(
+                low_index as usize,
+                imt.leaf(low_index).unwrap().hash::<ZkHasher>(),
+            );
+            let (tree, index) =
+                eager.insert(imt.leaf(imt.len() as u64 - 1).unwrap().hash::<ZkHasher>());
+            assert_eq!(index, imt.len() - 1);
+            eager = tree;
+            inserted.push(nullifier);
+            batch.push(nullifier);
+        }
+        // read before the flush, then flushed
+        assert_eq!(imt.root(), eager.root());
+        let imt = imt.flush();
+        assert_same_tree(&imt, &eager);
+        assert_eq!(imt.root(), naive_root(&imt_leaf_hashes(&imt)));
     }
 
     #[property_test]

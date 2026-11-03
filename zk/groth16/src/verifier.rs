@@ -2,10 +2,10 @@ use core::fmt::{Display, Formatter};
 use std::{error::Error, fmt, ops::Mul as _};
 
 use ark_ec::{CurveGroup as _, VariableBaseMSM as _, pairing::Pairing};
-use ark_ff::{UniformRand as _, Zero as _};
+use ark_ff::{PrimeField, Zero as _};
 use ark_groth16::{Groth16, r1cs_to_qap::LibsnarkReduction};
 use ark_relations::r1cs::SynthesisError;
-use rand::thread_rng;
+use rand::{Rng as _, thread_rng};
 
 use crate::{proof::Proof, verification_key::PreparedVerificationKey};
 
@@ -37,15 +37,22 @@ pub fn groth16_verify<E: Pairing>(
         .map_err(VerificationError)
 }
 
+// The random coefficients of a batch. 128 bits bound the probability that an
+// invalid proof passes to 2^-128, and halve the scalar multiplications of each
+// proof against coefficients of the full field.
+fn batch_coefficients<F: PrimeField>(count: usize) -> Vec<F> {
+    let mut rng = thread_rng();
+    std::iter::repeat_with(|| F::from(rng.r#gen::<u128>()))
+        .take(count)
+        .collect()
+}
+
 pub fn groth16_batch_verify<E: Pairing>(
     vk: &PreparedVerificationKey<E>,
     proofs: &[Proof<E>],
     public_inputs: &[Vec<E::ScalarField>],
 ) -> bool {
-    let mut rng = thread_rng();
-    let ri: Vec<E::ScalarField> = std::iter::repeat_with(|| E::ScalarField::rand(&mut rng))
-        .take(proofs.len())
-        .collect();
+    let ri: Vec<E::ScalarField> = batch_coefficients(proofs.len());
     let r_sum: E::ScalarField = ri.iter().sum();
 
     let pis_c: Vec<E::G1Affine> = proofs.iter().map(|proof| proof.pi_c).collect();
@@ -292,5 +299,16 @@ mod tests {
             .collect();
         let pvk = vk.into_prepared();
         assert!(groth16_verify(&pvk, &proof, &pi).is_ok());
+    }
+
+    #[test]
+    fn batch_coefficients_are_128_bit() {
+        use ark_ff::BigInteger as _;
+
+        let coefficients = batch_coefficients::<ark_bn254::Fr>(64);
+        assert_eq!(coefficients.len(), 64);
+        for coefficient in coefficients {
+            assert!(coefficient.into_bigint().num_bits() <= 128);
+        }
     }
 }
