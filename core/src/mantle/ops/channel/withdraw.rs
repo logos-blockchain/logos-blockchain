@@ -8,11 +8,8 @@ use crate::mantle::{NoteId, ledger::BoundedInputs};
 use crate::{
     events::TxEvent,
     mantle::{
-        TxHash, Value,
+        TxHash,
         channel::{Channels, Error},
-        gas::{
-            Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
-        },
         ledger::{
             ExecutableOperation, Inputs, PreverifiableOperation, ProvableOperation, Utxos,
             VerifiableOperation,
@@ -63,16 +60,6 @@ pub struct WithdrawExecutionContext {
 impl ProvableOperation for ChannelWithdrawOp {
     type Proof = ChannelMultiSigProof;
     const CODE: u8 = 0x13;
-}
-
-impl OperationGas<MainnetGasProfile> for ChannelWithdrawOp {
-    const GAS_COST: Gas = Gas::new(56);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for ChannelWithdrawOp {
-    fn execution_gas(&self, thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
-        Self::GAS_COST.checked_mul(Value::from(thresholds.transfer_threshold(&self.channel_id)))
-    }
 }
 
 impl PreverifiableOperation<StandardMode>
@@ -196,7 +183,10 @@ mod test {
     use super::*;
     use crate::mantle::{
         Note, Utxo, channel_notes,
-        gas::test_utils::FixedThresholds,
+        gas::{
+            Gas,
+            test_utils::{FixedThresholds, GAS_PROFILE},
+        },
         ledger::InputsError,
         ops::channel::{
             UnverifiedChannelKeys, verification::test_utils::create_channel_multi_sig_proof,
@@ -616,7 +606,8 @@ mod test {
     fn channel_withdraw_op_execution_gas_scales_with_the_threshold() {
         for (threshold, expected) in [(1, 56), (2, 112), (3, 168)] {
             assert_eq!(
-                ChannelWithdrawOp::sample().execution_gas(&FixedThresholds(threshold)),
+                crate::mantle::OpRef::from(&ChannelWithdrawOp::sample())
+                    .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(expected))
             );
         }
@@ -625,7 +616,8 @@ mod test {
     #[test]
     fn channel_withdraw_op_execution_gas_is_zero_against_an_unknown_channel() {
         assert_eq!(
-            ChannelWithdrawOp::sample().execution_gas(&FixedThresholds(0)),
+            crate::mantle::OpRef::from(&ChannelWithdrawOp::sample())
+                .execution_gas(&GAS_PROFILE, &FixedThresholds(0)),
             Ok(Gas::new(0))
         );
     }

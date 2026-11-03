@@ -888,6 +888,19 @@ mod pol_tests {
                 lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
+            gas_profile: lb_core::mantle::gas::GasProfile {
+                transfer: 590.into(),
+                channel_config: 56.into(),
+                channel_inscribe: 56.into(),
+                channel_deposit: 590.into(),
+                channel_withdraw: 56.into(),
+                channel_transfer: 56.into(),
+                sdp_declare: 646.into(),
+                sdp_withdraw: 590.into(),
+                sdp_active: 590.into(),
+                leader_claim: 580.into(),
+                claim_pow_reward: 1.into(),
+            },
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),

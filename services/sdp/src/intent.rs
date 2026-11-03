@@ -180,6 +180,21 @@ mod tests {
 
     use super::*;
 
+    /// The costs of the deployments' current gas profile.
+    const GAS_PROFILE: lb_core::mantle::gas::GasProfile = lb_core::mantle::gas::GasProfile {
+        transfer: lb_core::mantle::gas::Gas::new(590),
+        channel_config: lb_core::mantle::gas::Gas::new(56),
+        channel_inscribe: lb_core::mantle::gas::Gas::new(56),
+        channel_deposit: lb_core::mantle::gas::Gas::new(590),
+        channel_withdraw: lb_core::mantle::gas::Gas::new(56),
+        channel_transfer: lb_core::mantle::gas::Gas::new(56),
+        sdp_declare: lb_core::mantle::gas::Gas::new(646),
+        sdp_withdraw: lb_core::mantle::gas::Gas::new(590),
+        sdp_active: lb_core::mantle::gas::Gas::new(590),
+        leader_claim: lb_core::mantle::gas::Gas::new(580),
+        claim_pow_reward: lb_core::mantle::gas::Gas::new(1),
+    };
+
     #[tokio::test]
     async fn unchanged_tip_never_trigger_status_check() {
         let mut tracker = tracker(IntentStatus::NotApplied, IntentStatus::NotApplied, 2);
@@ -582,6 +597,7 @@ mod tests {
                     lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
                 )
                 .unwrap(),
+                gas_profile: GAS_PROFILE,
                 pow_config: PoWConfig {
                     reward: disabled_reward_config(),
                     blend: BlendPoWConfig {

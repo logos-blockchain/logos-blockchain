@@ -33,6 +33,7 @@ impl ServiceConfig {
                         era.parameters.ruleset.blend_payload_body_size(),
                     ),
                     fork_digest: era.parameters.fork_digest,
+                    gas_profile: parameters.cryptarchia.gas_profile,
                 }
             }),
             recovery_data,

@@ -1,6 +1,10 @@
 use core::num::{NonZero, NonZeroU32, NonZeroU64, NonZeroU128};
 
-use lb_core::{block::genesis::GenesisBlock, sdp::NumberOfEpochs};
+use lb_core::{
+    block::genesis::GenesisBlock,
+    mantle::gas::{Gas, GasProfile},
+    sdp::NumberOfEpochs,
+};
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::ModulusShift;
 use lb_node::config::deployment::{
@@ -93,6 +97,23 @@ const STORAGE_MARKET_MAX_ADJUSTMENT_FACTOR: ProperFraction =
 /// `β`: the weight of the latest epoch in the moving average of storage usage.
 const STORAGE_MARKET_EMA_SMOOTHING_FACTOR: ProperFraction =
     ProperFraction::new(1, NonZeroU32::new(2).unwrap()).unwrap();
+/// What each Operation costs, the channel ones per key of their threshold.
+///
+/// The schedule of the e2e deployment, which its clients price transactions
+/// under.
+pub const GAS_PROFILE: GasProfile = GasProfile {
+    transfer: Gas::new(590),
+    channel_config: Gas::new(56),
+    channel_inscribe: Gas::new(56),
+    channel_deposit: Gas::new(590),
+    channel_withdraw: Gas::new(56),
+    channel_transfer: Gas::new(56),
+    sdp_declare: Gas::new(646),
+    sdp_withdraw: Gas::new(590),
+    sdp_active: Gas::new(590),
+    leader_claim: Gas::new(580),
+    claim_pow_reward: Gas::new(1),
+};
 /// The block rewards: the stake target, the scale of the emission's weight, the
 /// weight of the pooled fees, a block's emission in full, and the Blend nodes'
 /// share.
@@ -234,6 +255,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     ema_smoothing_factor: STORAGE_MARKET_EMA_SMOOTHING_FACTOR,
                 },
                 block_rewards: BLOCK_REWARDS,
+                gas_profile: GAS_PROFILE,
             },
             time: TimeDeploymentSettings {
                 slot_duration_in_seconds: NonZero::new(slot_duration_in_secs)

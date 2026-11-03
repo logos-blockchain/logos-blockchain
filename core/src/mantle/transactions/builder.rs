@@ -8,7 +8,7 @@ use thiserror::Error;
 use crate::{
     era::ForkDigest,
     mantle::{
-        GasProfile, Note, NoteId, Op, Utxo, Value,
+        Note, NoteId, Op, Utxo, Value,
         gas::{GasCost, GasOverflow, TxGasCalculator as _},
         ledger::{BoundedUtxos, Inputs, Outputs},
         ops::{OpRef, channel::ChannelId, transfer::TransferOp},
@@ -147,7 +147,7 @@ impl MantleTxBuilder {
 
     /// Return a positive change output while reserving the requested
     /// percentage of the final transaction's mandatory fee.
-    pub fn return_change<G: GasProfile>(
+    pub fn return_change(
         self,
         context: &OpsContext,
         change_pk: ZkPublicKey,
@@ -157,7 +157,7 @@ impl MantleTxBuilder {
         // is based on the final transaction shape.
         let candidate = self.with_dummy_change_note()?;
         let available_change =
-            candidate.funding_delta_with_priority_fee::<G>(context, priority_fee_percent)?;
+            candidate.funding_delta_with_priority_fee(context, priority_fee_percent)?;
 
         match available_change.cmp(&1) {
             Ordering::Less => {
@@ -219,10 +219,7 @@ impl MantleTxBuilder {
     /// Predicts the minimum gas cost of the transaction once signed.
     /// See [`TxGasCalculator::total_gas_cost`] to understand why this is
     /// only a minimum, not an exact cost.
-    pub fn minimum_gas_cost<G: GasProfile>(
-        &self,
-        context: &OpsContext,
-    ) -> Result<GasCost, TxBuilderError> {
+    pub fn minimum_gas_cost(&self, context: &OpsContext) -> Result<GasCost, TxBuilderError> {
         for op_ref in self.ops.iter().map(Op::by_ref) {
             let channel_id = match op_ref {
                 OpRef::ChannelWithdraw(operation) => Some(operation.channel_id),
@@ -242,24 +239,21 @@ impl MantleTxBuilder {
         // Every fork digest has the same size, so the one the transaction
         // will carry does not change its gas: any prices it.
         let build = self.clone().build(ForkDigest::new([0; 32]))?;
-        Ok(build.by_ref().total_gas_cost::<G>(&context.gas_context)?)
+        Ok(build.by_ref().total_gas_cost(&context.gas_context)?)
     }
 
-    pub fn funding_delta<G: GasProfile>(
-        &self,
-        context: &OpsContext,
-    ) -> Result<i128, TxBuilderError> {
-        Ok(self.net_balance() - i128::from(self.minimum_gas_cost::<G>(context)?.into_inner()))
+    pub fn funding_delta(&self, context: &OpsContext) -> Result<i128, TxBuilderError> {
+        Ok(self.net_balance() - i128::from(self.minimum_gas_cost(context)?.into_inner()))
     }
 
     /// Returns the balance remaining after the mandatory fee and the
     /// percentage-based priority fee reserve.
-    pub fn funding_delta_with_priority_fee<G: GasProfile>(
+    pub fn funding_delta_with_priority_fee(
         &self,
         context: &OpsContext,
         priority_fee_percent: u64,
     ) -> Result<i128, TxBuilderError> {
-        let mandatory_fee = self.minimum_gas_cost::<G>(context)?.into_inner();
+        let mandatory_fee = self.minimum_gas_cost(context)?.into_inner();
         let required_fee = Self::required_fee(mandatory_fee, priority_fee_percent)?;
         Ok(self.net_balance() - i128::from(required_fee))
     }
@@ -341,7 +335,7 @@ mod tests {
     use crate::{
         mantle::{
             fixtures::ops::op_values::FORK_DIGEST,
-            gas::MainnetGasProfile,
+            gas::test_utils::GAS_PROFILE,
             ledger::BoundedInputs,
             ops::{
                 channel::{
@@ -403,7 +397,12 @@ mod tests {
 
         // Init a tx builder
         let context = OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0)),
+            gas_context: OpsGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new()
@@ -412,12 +411,7 @@ mod tests {
 
         // Check that the tx is already balanced because of zero gas price
         assert_eq!(builder.net_balance(), 0);
-        assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
-            0
-        );
+        assert_eq!(builder.funding_delta(&context).unwrap(), 0);
     }
 
     #[test]
@@ -431,7 +425,12 @@ mod tests {
 
         // Init a tx builder
         let context = OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0)),
+            gas_context: OpsGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new()
@@ -440,12 +439,7 @@ mod tests {
 
         // Check that the tx is already balanced because of zero gas price
         assert_eq!(builder.net_balance(), 0);
-        assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
-            0
-        );
+        assert_eq!(builder.funding_delta(&context).unwrap(), 0);
     }
 
     #[test]
@@ -462,6 +456,7 @@ mod tests {
                 [(op.channel_id, 1)].into(),
                 HashMap::new(),
                 GasPrices::new(0, 0),
+                GAS_PROFILE,
             ),
             leader_reward_amount: 30,
         };
@@ -471,12 +466,7 @@ mod tests {
 
         // Check that the tx is already balanced because of zero gas price
         assert_eq!(builder.net_balance(), 0);
-        assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
-            0
-        );
+        assert_eq!(builder.funding_delta(&context).unwrap(), 0);
     }
 
     #[test]
@@ -493,11 +483,16 @@ mod tests {
             .unwrap();
 
         let context = OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(1, 0)),
+            gas_context: OpsGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(1, 0),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 0,
         };
 
-        let result = builder.minimum_gas_cost::<MainnetGasProfile>(&context);
+        let result = builder.minimum_gas_cost(&context);
 
         assert!(matches!(
             result,
@@ -518,26 +513,31 @@ mod tests {
 
         // Init a tx builder
         let context = OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0)),
+            gas_context: OpsGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new().push_op(Op::LeaderClaim(op)).unwrap();
 
         // Check that the tx is already balanced because of zero gas price
         assert_eq!(builder.net_balance(), 0);
-        assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
-            0
-        );
+        assert_eq!(builder.funding_delta(&context).unwrap(), 0);
     }
 
     #[test]
     fn transfer_op() {
         // Init a tx builder for sending 30 to the recipient
         let context = OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0)),
+            gas_context: OpsGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new()
@@ -549,24 +549,20 @@ mod tests {
         // Check that the balance is 10 (= 50 - 40)
         assert_eq!(builder.net_balance(), 10);
         assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
+            builder.funding_delta(&context).unwrap(),
             10 // zero gas price for now
         );
 
         // Add change note
         let builder = builder
-            .return_change::<MainnetGasProfile>(&context, ZkPublicKey::zero(), 0)
+            .return_change(&context, ZkPublicKey::zero(), 0)
             .unwrap()
             .unwrap();
 
         // Check the tx is balanced
         assert_eq!(builder.net_balance(), 0);
         assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
+            builder.funding_delta(&context).unwrap(),
             0 // zero gas price for now
         );
     }
@@ -580,6 +576,7 @@ mod tests {
                 [(channel_id, 1)].into(),
                 HashMap::new(),
                 GasPrices::new(0, 0),
+                GAS_PROFILE,
             ),
             leader_reward_amount: 30,
         };
@@ -616,9 +613,7 @@ mod tests {
         // Check the balance before funding tx
         assert_eq!(builder.net_balance(), -40);
         assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
+            builder.funding_delta(&context).unwrap(),
             -40 // zero gas price for now
         );
 
@@ -630,9 +625,7 @@ mod tests {
         // Check the tx is balanced
         assert_eq!(builder.net_balance(), 0);
         assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
+            builder.funding_delta(&context).unwrap(),
             0 // zero gas price for now
         );
     }

@@ -14,7 +14,6 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         Note, TxHash, Utxo, Value,
-        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
             VerifiableOperation, verification_mode::StandardMode,
@@ -304,12 +303,6 @@ impl ProvableOperation for ClaimPowRewardOp {
     const CODE: u8 = 0x40;
 }
 
-impl OperationGas<MainnetGasProfile> for ClaimPowRewardOp {
-    const GAS_COST: Gas = Gas::new(1);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for ClaimPowRewardOp {}
-
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<ClaimPowRewardOp, Unverified, StandardMode>
 {
@@ -424,7 +417,10 @@ mod tests {
     use lb_groth16::{AdditiveGroup as _, Field as _};
 
     use super::{test_utils::slot_windows, *};
-    use crate::mantle::gas::test_utils::FixedThresholds;
+    use crate::mantle::gas::{
+        Gas,
+        test_utils::{FixedThresholds, GAS_PROFILE},
+    };
 
     pub const SLOT_WINDOW: NonZeroU64 = NonZeroU64::new(100).expect("100 is not 0");
     /// The window of the single era of [`accepting_context`].
@@ -921,7 +917,8 @@ mod tests {
     fn claim_pow_reward_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
             assert_eq!(
-                ClaimPowRewardOp::sample().execution_gas(&FixedThresholds(threshold)),
+                crate::mantle::OpRef::from(&ClaimPowRewardOp::sample())
+                    .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(1))
             );
         }

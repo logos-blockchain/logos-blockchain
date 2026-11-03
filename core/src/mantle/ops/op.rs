@@ -8,8 +8,6 @@ use crate::mantle::ops::op_proof::samples::sample_proof_for;
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
-        GasProfile,
-        gas::Gas,
         ledger::ProvableOperation as _,
         ops::{
             OPERATION_ID_V1, OpRef,
@@ -170,11 +168,6 @@ impl Op {
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         self.by_ref().as_str()
-    }
-
-    #[must_use]
-    pub fn gas_cost<Profile: GasProfile>(&self) -> Gas {
-        self.by_ref().gas_cost::<Profile>()
     }
 
     #[cfg(any(test, feature = "test-utils"))]

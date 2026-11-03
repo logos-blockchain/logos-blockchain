@@ -149,7 +149,7 @@ where
     ///
     /// On success, a new [`LedgerState`] is returned, which can then be
     /// committed by calling [`Self::commit_update`].
-    pub fn prepare_update<Tx, LeaderProof, Profile>(
+    pub fn prepare_update<Tx, LeaderProof>(
         &self,
         id: Id,
         parent_id: Id,
@@ -161,7 +161,6 @@ where
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
         LeaderProof: leader_proof::LeaderProof,
-        Profile: GasProfile,
         Id: Into<BlockHash>,
     {
         let parent_state = self
@@ -169,15 +168,14 @@ where
             .get(&parent_id)
             .ok_or(LedgerError::ParentNotFound(parent_id))?;
 
-        let (new_state, events, deferred_proofs) =
-            parent_state.clone().try_update::<_, _, _, Profile>(
-                id,
-                slot,
-                proof,
-                uncle_slots,
-                txs,
-                &self.era_schedule,
-            )?;
+        let (new_state, events, deferred_proofs) = parent_state.clone().try_update(
+            id,
+            slot,
+            proof,
+            uncle_slots,
+            txs,
+            &self.era_schedule,
+        )?;
 
         Ok(PreparedUpdate::new(id, new_state, events, deferred_proofs))
     }
@@ -226,7 +224,7 @@ pub struct LedgerState {
 }
 
 impl LedgerState {
-    fn try_update<Tx, LeaderProof, Id, Profile>(
+    fn try_update<Tx, LeaderProof, Id>(
         self,
         block_id: Id,
         slot: Slot,
@@ -238,7 +236,6 @@ impl LedgerState {
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
         LeaderProof: leader_proof::LeaderProof,
-        Profile: GasProfile,
         Id: Into<BlockHash>,
     {
         let (mut state, header_events) = self.try_apply_header(slot, proof, uncle_slots, eras)?;
@@ -253,11 +250,10 @@ impl LedgerState {
         // block that is actually applied, contents included, belongs in the
         // epoch's average.
         let mut txs_in_block = 0u64;
-        let (mut state, tx_events, deferred_proofs) = state
-            .try_apply_block_contents::<_, _, Profile>(
-                eras,
-                txs.inspect(|_| txs_in_block = txs_in_block.saturating_add(1)),
-            )?;
+        let (mut state, tx_events, deferred_proofs) = state.try_apply_block_contents::<_, _>(
+            eras,
+            txs.inspect(|_| txs_in_block = txs_in_block.saturating_add(1)),
+        )?;
         state.mantle_ledger.pow.record_block_txs(txs_in_block);
         state.update_pow_reward_difficulty(
             // count all claimed rewards
@@ -446,7 +442,7 @@ impl LedgerState {
     ///
     /// Returns the updated state, gas and fees, emitted events, and
     /// deferred proof verifications. Block-wide accounting is not finalized.
-    pub fn try_apply_transaction<Tx, Id, Profile: GasProfile>(
+    pub fn try_apply_transaction<Tx, Id>(
         self,
         eras: &EraScheduledConfig,
         tx: &Tx,
@@ -455,7 +451,7 @@ impl LedgerState {
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
     {
         let (ledger_state, balance, execution_gas, events, deferred_proofs) =
-            self.try_apply_tx_operations::<_, _, Profile>(eras, tx.clone())?;
+            self.try_apply_tx_operations(eras, tx.clone())?;
 
         let gas_prices = ledger_state.get_gas_prices();
         let storage_gas = Gas::new(tx.storage_size() as u64);
@@ -490,7 +486,7 @@ impl LedgerState {
 
     /// Applies all transactions in a block and finalizes block-wide
     /// accounting, under the era of the block's slot.
-    pub fn try_apply_block_contents<Tx, Id, Profile: GasProfile>(
+    pub fn try_apply_block_contents<Tx, Id>(
         mut self,
         eras: &EraScheduledConfig,
         txs: impl Iterator<Item = Tx>,
@@ -505,7 +501,7 @@ impl LedgerState {
 
         for tx in txs {
             let (next_state, tx_gas_and_fees, events, deferred) =
-                self.try_apply_transaction::<_, Id, Profile>(eras, &tx)?;
+                self.try_apply_transaction::<_, Id>(eras, &tx)?;
             gas_and_fees = gas_and_fees.checked_add::<Id>(
                 tx_gas_and_fees,
                 config.execution_market.max_gas_per_block.into(),
@@ -640,12 +636,15 @@ impl LedgerState {
         &self.mantle_ledger
     }
 
+    /// What a transaction is priced against on top of this state, under
+    /// `gas_profile`.
     #[must_use]
-    pub fn tx_context(&self) -> OpsContext {
+    pub fn tx_context(&self, gas_profile: GasProfile) -> OpsContext {
         OpsContext {
             gas_context: OpsGasContext::from_channels(
                 self.mantle_ledger().channels(),
                 self.get_gas_prices(),
+                gas_profile,
             ),
             leader_reward_amount: self.mantle_ledger().leader_reward_amount(),
         }
@@ -732,7 +731,7 @@ impl LedgerState {
         clippy::too_many_lines,
         reason = "This will be refactored in an upcoming PR."
     )]
-    fn try_apply_op<Id, Profile: GasProfile>(
+    fn try_apply_op<Id>(
         mut self,
         signed_op: SignedOp<Verified, StandardMode>,
         config: &Config,
@@ -862,9 +861,9 @@ impl LedgerState {
             SignedOp::Transfer(signed_operation) => {
                 let transfer_balance;
                 let events;
-                (self.cryptarchia_ledger, transfer_balance, events) =
-                    self.cryptarchia_ledger
-                        .try_apply_transfer::<_, Profile>(signed_operation)?;
+                (self.cryptarchia_ledger, transfer_balance, events) = self
+                    .cryptarchia_ledger
+                    .try_apply_transfer(signed_operation)?;
                 balance = balance
                     .checked_add(transfer_balance)
                     .ok_or(LedgerError::BalanceOverflow)?;
@@ -911,7 +910,7 @@ impl LedgerState {
     ///
     /// If any operation fails verification or execution, returns a
     /// [`LedgerError`] describing the failure.
-    fn try_apply_tx_operations<Tx, Id, Profile: GasProfile>(
+    fn try_apply_tx_operations<Tx, Id>(
         mut self,
         eras: &EraScheduledConfig,
         tx: Tx,
@@ -952,10 +951,10 @@ impl LedgerState {
             execution_gas = execution_gas.checked_add(
                 signed_op
                     .operation()
-                    .execution_gas::<Profile>(self.mantle_ledger.channels())?,
+                    .execution_gas(&config.gas_profile, self.mantle_ledger.channels())?,
             )?;
 
-            (self, balance, tx_events) = self.try_apply_op::<_, Profile>(
+            (self, balance, tx_events) = self.try_apply_op(
                 signed_op,
                 config,
                 verified_operations.tx_hash_view().tx_hash(),
@@ -984,7 +983,7 @@ mod tests {
         mantle::{
             Note, Op, OpProof, SignedOps,
             channel::Channels,
-            gas::{MainnetGasProfile, TxGasCalculator as _},
+            gas::TxGasCalculator as _,
             ledger::{BoundedInputs, Inputs, Outputs, Utxos, VerifiableOperation as _},
             ops::{
                 OpId as _, OpRef, SignedOperation,
@@ -1170,7 +1169,7 @@ mod tests {
             &Key::Ed25519(signing_key.clone()),
         );
         ledger_state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(eras, tx)
+            .try_apply_tx_operations::<_, HeaderId>(eras, tx)
             .unwrap()
             .0
     }
@@ -1274,11 +1273,12 @@ mod tests {
             ))],
         );
 
-        let gas_context = OpsGasContext::from_channels(&Channels::new(), GasPrices::default());
-        let fees = ops
-            .by_ref()
-            .total_gas_cost::<MainnetGasProfile>(&gas_context)
-            .unwrap();
+        let gas_context = OpsGasContext::from_channels(
+            &Channels::new(),
+            GasPrices::default(),
+            config().gas_profile,
+        );
+        let fees = ops.by_ref().total_gas_cost(&gas_context).unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
 
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk])
@@ -1300,7 +1300,7 @@ mod tests {
 
         let new_id = [1; 32];
         let update = ledger
-            .prepare_update::<_, _, MainnetGasProfile>(
+            .prepare_update(
                 new_id,
                 genesis_id,
                 Slot::from(1u64),
@@ -1343,7 +1343,7 @@ mod tests {
         };
 
         let tx = create_signed_tx(Op::ChannelInscribe(inscribe_op), &Key::Ed25519(signing_key));
-        let result = state.try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, tx);
+        let result = state.try_apply_tx_operations::<_, HeaderId>(&eras, tx);
         assert!(result.is_ok());
 
         let (new_state, _, _, events, deferred_proofs) = result.unwrap();
@@ -1384,7 +1384,7 @@ mod tests {
         .unwrap();
 
         let tx = create_genesis_config_tx(config_op);
-        let result = state.try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, tx);
+        let result = state.try_apply_tx_operations::<_, HeaderId>(&eras, tx);
         assert!(result.is_ok());
 
         let (new_state, _, _, events, deferred_proofs) = result.unwrap();
@@ -1441,7 +1441,7 @@ mod tests {
         let dangling_tx = create_genesis_config_tx(dangling_config);
         let result = state
             .clone()
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, dangling_tx);
+            .try_apply_tx_operations::<_, HeaderId>(&eras, dangling_tx);
         assert!(matches!(
             result,
             Err(LedgerError::VerificationError(
@@ -1455,7 +1455,7 @@ mod tests {
         let rooted_config = config_with_parent(MsgId::root());
         let rooted_tx = create_genesis_config_tx(rooted_config.clone());
         let new_state = state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, rooted_tx)
+            .try_apply_tx_operations::<_, HeaderId>(&eras, rooted_tx)
             .unwrap()
             .0;
         let channel = new_state
@@ -1494,7 +1494,7 @@ mod tests {
             &Key::Ed25519(signing_key.clone()),
         );
         state = state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, first_tx)
+            .try_apply_tx_operations::<_, HeaderId>(&eras, first_tx)
             .unwrap()
             .0;
 
@@ -1525,14 +1525,14 @@ mod tests {
                 &Key::Ed25519(signing_key.clone()),
             );
             state = state
-                .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, tx)
+                .try_apply_tx_operations::<_, HeaderId>(&eras, tx)
                 .unwrap()
                 .0;
         }
 
         // The configuration is still valid and leaves the message tip untouched
         let new_state = state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, config_tx)
+            .try_apply_tx_operations::<_, HeaderId>(&eras, config_tx)
             .unwrap()
             .0;
         let channel = new_state
@@ -1575,13 +1575,13 @@ mod tests {
         let config1 = config_with(MsgId::root(), 0);
         let config1_tx = create_genesis_config_tx(config1.clone());
         state = state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, config1_tx.clone())
+            .try_apply_tx_operations::<_, HeaderId>(&eras, config1_tx.clone())
             .unwrap()
             .0;
         let config2 = config_with(config1.id(), 0);
         let config2_tx = create_config_tx(config2, &signing_key);
         state = state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, config2_tx)
+            .try_apply_tx_operations::<_, HeaderId>(&eras, config2_tx)
             .unwrap()
             .0;
 
@@ -1589,7 +1589,7 @@ mod tests {
         // reorganization abandons its block
         let result = state
             .clone()
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, config1_tx);
+            .try_apply_tx_operations::<_, HeaderId>(&eras, config1_tx);
         assert!(matches!(
             result,
             Err(LedgerError::VerificationError(
@@ -1602,8 +1602,7 @@ mod tests {
         // Neither can a sibling extending the same superseded parent
         let sibling = config_with(config1.id(), 1);
         let sibling_tx = create_config_tx(sibling, &signing_key);
-        let result =
-            state.try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, sibling_tx);
+        let result = state.try_apply_tx_operations::<_, HeaderId>(&eras, sibling_tx);
         assert!(matches!(
             result,
             Err(LedgerError::VerificationError(
@@ -1639,7 +1638,7 @@ mod tests {
             &Key::Ed25519(signing_key.clone()),
         );
         state = state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, first_tx)
+            .try_apply_tx_operations::<_, HeaderId>(&eras, first_tx)
             .unwrap()
             .0;
 
@@ -1656,7 +1655,7 @@ mod tests {
         .unwrap();
         let config_tx = create_config_tx(config_op.clone(), &signing_key);
         state = state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, config_tx)
+            .try_apply_tx_operations::<_, HeaderId>(&eras, config_tx)
             .unwrap()
             .0;
 
@@ -1672,7 +1671,7 @@ mod tests {
             &Key::Ed25519(signing_key),
         );
         let new_state = state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, second_tx)
+            .try_apply_tx_operations::<_, HeaderId>(&eras, second_tx)
             .unwrap()
             .0;
         let channel = new_state
@@ -1724,8 +1723,7 @@ mod tests {
         let ops = vec![Op::ChannelDeposit(deposit.clone())];
         let tx = create_multi_signed_tx(ops, vec![&Key::Zk(sk)]);
         let tx_hash = tx.hash();
-        let result =
-            ledger_state.try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, tx);
+        let result = ledger_state.try_apply_tx_operations::<_, HeaderId>(&eras, tx);
         let (new_state, balance, _, events, deferred_proofs) = result.unwrap();
         deferred_proofs.verify().unwrap();
 
@@ -1818,7 +1816,7 @@ mod tests {
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
         let tx = create_multi_signed_tx(deposit_ops, vec![&Key::Zk(sk)]);
         ledger_state = ledger_state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, tx)
+            .try_apply_tx_operations::<_, HeaderId>(&eras, tx)
             .unwrap()
             .0;
 
@@ -1847,8 +1845,7 @@ mod tests {
             vec![&Key::MultiSequencer(withdraw_proof)],
         );
 
-        let result = ledger_state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, signed_tx);
+        let result = ledger_state.try_apply_tx_operations::<_, HeaderId>(&eras, signed_tx);
         assert!(result.is_ok());
 
         let (new_state, tx_balance, _, events, deferred_proofs) = result.unwrap();
@@ -1922,15 +1919,15 @@ mod tests {
         // The estimator only sees the state before the transaction, where the
         // channel does not exist yet.
         let prices = GasPrices::default();
-        let gas_context =
-            OpsGasContext::from_channels(ledger_state.mantle_ledger().channels(), prices.clone());
-        let predicted = tx
-            .op_refs()
-            .total_gas_cost::<MainnetGasProfile>(&gas_context)
-            .unwrap();
+        let gas_context = OpsGasContext::from_channels(
+            ledger_state.mantle_ledger().channels(),
+            prices.clone(),
+            config().gas_profile,
+        );
+        let predicted = tx.op_refs().total_gas_cost(&gas_context).unwrap();
 
         let (_, tx_balance, execution_gas, _, deferred_proofs) = ledger_state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, tx.clone())
+            .try_apply_tx_operations::<_, HeaderId>(&eras, tx.clone())
             .unwrap();
         deferred_proofs.verify().unwrap();
         assert_eq!(tx_balance, 0);
@@ -1990,15 +1987,15 @@ mod tests {
         let tx = create_multi_signed_tx(ops, vec![&inscribe_key, &config_key]);
 
         let prices = GasPrices::default();
-        let gas_context =
-            OpsGasContext::from_channels(state.mantle_ledger().channels(), prices.clone());
-        let predicted = tx
-            .op_refs()
-            .total_gas_cost::<MainnetGasProfile>(&gas_context)
-            .unwrap();
+        let gas_context = OpsGasContext::from_channels(
+            state.mantle_ledger().channels(),
+            prices.clone(),
+            config().gas_profile,
+        );
+        let predicted = tx.op_refs().total_gas_cost(&gas_context).unwrap();
 
         let (_, _, execution_gas, _, deferred_proofs) = state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, tx.clone())
+            .try_apply_tx_operations::<_, HeaderId>(&eras, tx.clone())
             .unwrap();
         deferred_proofs.verify().unwrap();
 
@@ -2061,15 +2058,15 @@ mod tests {
         let tx = create_multi_signed_tx(ops, vec![&inscribe_key, &deposit_key, &withdraw_key]);
 
         let prices = GasPrices::default();
-        let gas_context =
-            OpsGasContext::from_channels(ledger_state.mantle_ledger().channels(), prices.clone());
-        let predicted = tx
-            .op_refs()
-            .total_gas_cost::<MainnetGasProfile>(&gas_context)
-            .unwrap();
+        let gas_context = OpsGasContext::from_channels(
+            ledger_state.mantle_ledger().channels(),
+            prices.clone(),
+            config().gas_profile,
+        );
+        let predicted = tx.op_refs().total_gas_cost(&gas_context).unwrap();
 
         let (_, _, execution_gas, _, deferred_proofs) = ledger_state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, tx.clone())
+            .try_apply_tx_operations::<_, HeaderId>(&eras, tx.clone())
             .unwrap();
         deferred_proofs.verify().unwrap();
         assert_eq!(execution_gas.into_inner(), 56 + 590 + 56);
@@ -2130,15 +2127,15 @@ mod tests {
         let tx = create_multi_signed_tx(ops, vec![&inscribe_key, &deposit_key, &transfer_key]);
 
         let prices = GasPrices::default();
-        let gas_context =
-            OpsGasContext::from_channels(ledger_state.mantle_ledger().channels(), prices.clone());
-        let predicted = tx
-            .op_refs()
-            .total_gas_cost::<MainnetGasProfile>(&gas_context)
-            .unwrap();
+        let gas_context = OpsGasContext::from_channels(
+            ledger_state.mantle_ledger().channels(),
+            prices.clone(),
+            config().gas_profile,
+        );
+        let predicted = tx.op_refs().total_gas_cost(&gas_context).unwrap();
 
         let (_, _, execution_gas, _, deferred_proofs) = ledger_state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, tx.clone())
+            .try_apply_tx_operations::<_, HeaderId>(&eras, tx.clone())
             .unwrap();
         deferred_proofs.verify().unwrap();
         assert_eq!(execution_gas.into_inner(), 56 + 590 + 56);
@@ -2183,7 +2180,7 @@ mod tests {
         let deposit_tx =
             create_multi_signed_tx(vec![Op::ChannelDeposit(deposit)], vec![&Key::Zk(sk)]);
         ledger_state = ledger_state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, deposit_tx.clone())
+            .try_apply_tx_operations::<_, HeaderId>(&eras, deposit_tx.clone())
             .unwrap()
             .0;
 
@@ -2205,15 +2202,14 @@ mod tests {
             vec![&Key::MultiSequencer(withdraw_proof)],
         );
         ledger_state = ledger_state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, signed_withdraw)
+            .try_apply_tx_operations::<_, HeaderId>(&eras, signed_withdraw)
             .unwrap()
             .0;
 
         assert!(!ledger_state.latest_utxos().contains(&utxo.id()));
 
         // Replaying the signed deposit fails: its input no longer exists.
-        let result = ledger_state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, deposit_tx);
+        let result = ledger_state.try_apply_tx_operations::<_, HeaderId>(&eras, deposit_tx);
         assert!(result.is_err());
     }
 
@@ -2249,7 +2245,7 @@ mod tests {
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
         let tx = create_multi_signed_tx(deposit_ops, vec![&Key::Zk(sk)]);
         ledger_state = ledger_state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, tx)
+            .try_apply_tx_operations::<_, HeaderId>(&eras, tx)
             .unwrap()
             .0;
         // The deposit re-created the note as a channel note
@@ -2280,7 +2276,7 @@ mod tests {
 
         let err = ledger_state
             .clone()
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, signed_tx)
+            .try_apply_tx_operations::<_, HeaderId>(&eras, signed_tx)
             .err()
             .unwrap();
         assert_eq!(
@@ -2325,7 +2321,7 @@ mod tests {
             &Key::Ed25519(signing_key.clone()),
         );
         state = state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, first_tx)
+            .try_apply_tx_operations::<_, HeaderId>(&eras, first_tx)
             .unwrap()
             .0;
 
@@ -2344,7 +2340,7 @@ mod tests {
         );
         let result = state
             .clone()
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, second_tx);
+            .try_apply_tx_operations::<_, HeaderId>(&eras, second_tx);
         assert!(matches!(
             result,
             Err(LedgerError::VerificationError(
@@ -2367,8 +2363,7 @@ mod tests {
             Op::ChannelInscribe(empty_inscribe),
             &Key::Ed25519(signing_key),
         );
-        let empty_result =
-            state.try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, empty_tx);
+        let empty_result = state.try_apply_tx_operations::<_, HeaderId>(&eras, empty_tx);
         assert!(matches!(
             empty_result,
             Err(LedgerError::VerificationError(
@@ -2407,7 +2402,7 @@ mod tests {
             &Key::Ed25519(signing_key),
         );
         state = state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, first_tx)
+            .try_apply_tx_operations::<_, HeaderId>(&eras, first_tx)
             .unwrap()
             .0;
 
@@ -2423,8 +2418,7 @@ mod tests {
             Op::ChannelInscribe(second_inscribe),
             &Key::Ed25519(unauthorized_signing_key),
         );
-        let result =
-            state.try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, second_tx);
+        let result = state.try_apply_tx_operations::<_, HeaderId>(&eras, second_tx);
         assert!(matches!(
             result,
             Err(LedgerError::VerificationError(
@@ -2514,7 +2508,7 @@ mod tests {
         );
 
         let result = state
-            .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, tx)
+            .try_apply_tx_operations::<_, HeaderId>(&eras, tx)
             .unwrap()
             .0;
 
@@ -2671,11 +2665,12 @@ mod tests {
             std::slice::from_ref(&sk),
         );
         // Pays 2925 fees = 2705 execution base fee + 0 execution tip + 220 storage
-        let gas_context = OpsGasContext::from_channels(&Channels::new(), ledger.get_gas_prices());
-        let fees = tx
-            .op_refs()
-            .total_gas_cost::<MainnetGasProfile>(&gas_context)
-            .unwrap();
+        let gas_context = OpsGasContext::from_channels(
+            &Channels::new(),
+            ledger.get_gas_prices(),
+            config.gas_profile,
+        );
+        let fees = tx.op_refs().total_gas_cost(&gas_context).unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk])
             .preverify()
@@ -2683,10 +2678,7 @@ mod tests {
 
         let result = ledger
             .clone()
-            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
-                &eras,
-                std::iter::once(tx.clone()),
-            );
+            .try_apply_block_contents::<_, HeaderId>(&eras, std::iter::once(tx.clone()));
         // The `unwrap` should succeed because the user pays at least the base fee of
         // 2705
         let _apply_result = result.unwrap();
@@ -2694,7 +2686,7 @@ mod tests {
         ledger.cryptarchia_ledger = ledger.cryptarchia_ledger.set_execution_base_fee(10.into());
 
         let err = ledger
-            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(&eras, std::iter::once(tx))
+            .try_apply_block_contents::<_, HeaderId>(&eras, std::iter::once(tx))
             .err()
             .unwrap();
         // The transaction should be rejected because the price indicated for execution
@@ -2733,10 +2725,7 @@ mod tests {
             .unwrap();
 
         let err = ledger
-            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
-                &single_era(config),
-                std::iter::once(tx),
-            )
+            .try_apply_block_contents::<_, HeaderId>(&single_era(config), std::iter::once(tx))
             .err()
             .unwrap();
         assert_eq!(err, LedgerError::UnacceptedForkDigest(other_fork));
@@ -2764,11 +2753,12 @@ mod tests {
         update_ledger_prices(&mut ledger, 1, 1);
         // The tx pays 794 fees = 590 execution base fee + 0 execution tip + 204
         // storage
-        let gas_context = OpsGasContext::from_channels(&Channels::new(), ledger.get_gas_prices());
-        let fees = tx
-            .op_refs()
-            .total_gas_cost::<MainnetGasProfile>(&gas_context)
-            .unwrap();
+        let gas_context = OpsGasContext::from_channels(
+            &Channels::new(),
+            ledger.get_gas_prices(),
+            config.gas_profile,
+        );
+        let fees = tx.op_refs().total_gas_cost(&gas_context).unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
         let tx = create_tx(
             vec![utxo.id()],
@@ -2780,7 +2770,7 @@ mod tests {
 
         let result = ledger
             .clone()
-            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(&eras, std::iter::once(tx));
+            .try_apply_block_contents::<_, HeaderId>(&eras, std::iter::once(tx));
         // The `unwrap` should succeed because the user pays at least the base fee of
         // 794
         let (no_priority_fee_ledger, events, _) = result.unwrap();
@@ -2797,8 +2787,7 @@ mod tests {
         .preverify()
         .unwrap();
 
-        let result = ledger
-            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(&eras, std::iter::once(tx));
+        let result = ledger.try_apply_block_contents::<_, HeaderId>(&eras, std::iter::once(tx));
         // The `unwrap` should succeed because the user pays at least the base fee of
         // 794
         let (priority_fee_ledger, events, _) = result.unwrap();
@@ -2844,7 +2833,7 @@ mod tests {
         assert!(storage_gas.into_inner() > 0);
 
         let (applied, _, _) = ledger
-            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(&eras, std::iter::once(tx))
+            .try_apply_block_contents::<_, HeaderId>(&eras, std::iter::once(tx))
             .unwrap();
 
         // Storage gas consumed by the tx should be accumulated in the ledger
@@ -3158,10 +3147,7 @@ mod tests {
             assert_eq!(state.mantle_ledger.pow.epoch_reward(), 0);
 
             let err = state
-                .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(
-                    &single_era(config),
-                    claim_tx(),
-                )
+                .try_apply_tx_operations::<_, HeaderId>(&single_era(config), claim_tx())
                 .err()
                 .expect("claim should fail validation");
 
@@ -3181,10 +3167,7 @@ mod tests {
             let (state, config) = pow_ledger_state(1_000);
 
             let err = state
-                .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(
-                    &single_era(config),
-                    claim_tx(),
-                )
+                .try_apply_tx_operations::<_, HeaderId>(&single_era(config), claim_tx())
                 .err()
                 .expect("claim should fail validation");
 
@@ -3222,10 +3205,7 @@ mod tests {
             let epoch_reward = state.mantle_ledger.pow.epoch_reward();
 
             let (state, _balance, _, events, deferred_proofs) = state
-                .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(
-                    &single_era(config),
-                    claim_tx(),
-                )
+                .try_apply_tx_operations::<_, HeaderId>(&single_era(config), claim_tx())
                 .expect("claim should validate and execute");
             deferred_proofs.verify().unwrap();
 
@@ -3266,12 +3246,12 @@ mod tests {
             let (state, config) = claim_accepting_state();
             let eras = single_era(config);
             let (state, _, _, _, deferred_proofs) = state
-                .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, claim_tx())
+                .try_apply_tx_operations::<_, HeaderId>(&eras, claim_tx())
                 .expect("first claim should succeed");
             deferred_proofs.verify().unwrap();
 
             let err = state
-                .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, claim_tx())
+                .try_apply_tx_operations::<_, HeaderId>(&eras, claim_tx())
                 .err()
                 .expect("second claim should be rejected");
 
@@ -3305,7 +3285,7 @@ mod tests {
                     state.cryptarchia_ledger.previous_epoch_nonce,
                     state.cryptarchia_ledger.epoch_state.nonce,
                 ) = nonces;
-                state.try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, claim_tx())
+                state.try_apply_tx_operations::<_, HeaderId>(&eras, claim_tx())
             };
 
             // Whichever accepted nonce the claim carries.
@@ -3357,8 +3337,7 @@ mod tests {
                     .pow
                     .add_seen_block_slots(claim_op().block_hash, Slot::from(anchor));
 
-                let result = state
-                    .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, claim_tx());
+                let result = state.try_apply_tx_operations::<_, HeaderId>(&eras, claim_tx());
                 if accepted {
                     assert!(result.is_ok(), "anchor {anchor}, current {current}");
                 } else {
@@ -3399,13 +3378,7 @@ mod tests {
             let tx_hash = TxHash::from([9u8; 32]);
 
             let (state, _balance, events) = state
-                .try_apply_op::<HeaderId, MainnetGasProfile>(
-                    signed_operation.into(),
-                    &config,
-                    &tx_hash,
-                    0,
-                    Vec::new(),
-                )
+                .try_apply_op::<HeaderId>(signed_operation.into(), &config, &tx_hash, 0, Vec::new())
                 .expect("claim execution should succeed");
 
             assert_eq!(
@@ -3471,7 +3444,7 @@ mod tests {
             let tx_hash = TxHash::from([9u8; 32]);
 
             let (state, _, _) = state
-                .try_apply_op::<HeaderId, MainnetGasProfile>(
+                .try_apply_op::<HeaderId>(
                     signed_operation.clone().into(),
                     &config,
                     &tx_hash,
@@ -3480,13 +3453,7 @@ mod tests {
                 )
                 .expect("first claim should succeed");
             let (state, _, _) = state
-                .try_apply_op::<HeaderId, MainnetGasProfile>(
-                    signed_operation.into(),
-                    &config,
-                    &tx_hash,
-                    0,
-                    Vec::new(),
-                )
+                .try_apply_op::<HeaderId>(signed_operation.into(), &config, &tx_hash, 0, Vec::new())
                 .expect("second claim currently also succeeds (no validation)");
 
             assert_eq!(

@@ -562,7 +562,7 @@ mod tests {
         Note, NoteId, Op, OpProof, SignedOps, Utxo, VerificationError,
         channel::{Channels, Error as ChannelError},
         fixtures::ops::op_values::FORK_DIGEST,
-        gas::{MainnetGasProfile, TxGasCalculator as _},
+        gas::{TxGasCalculator as _, test_utils::GAS_PROFILE},
         ledger::{BoundedInputs, Outputs, OutputsError, verification_mode::StandardMode},
         ops::{
             channel::{
@@ -695,11 +695,12 @@ mod tests {
             [(withdraw_channel, transfer_threshold)].into(),
             [(config_channel, config_threshold)].into(),
             GasPrices::new(1, 0),
+            GAS_PROFILE,
         );
 
         let gas = mantle_tx
             .by_ref()
-            .execution_gas_consumption::<MainnetGasProfile>(&context)
+            .execution_gas_consumption(&context)
             .unwrap();
 
         let expected_config_gas = u64::from(config_threshold) * 56;
@@ -733,15 +734,15 @@ mod tests {
 
         let config_gas = config_op
             .by_ref()
-            .execution_gas::<MainnetGasProfile>(&channels)
+            .execution_gas(&GAS_PROFILE, &channels)
             .unwrap();
         let deposit_gas = deposit_op
             .by_ref()
-            .execution_gas::<MainnetGasProfile>(&channels)
+            .execution_gas(&GAS_PROFILE, &channels)
             .unwrap();
         let withdraw_gas = withdraw_op
             .by_ref()
-            .execution_gas::<MainnetGasProfile>(&channels)
+            .execution_gas(&GAS_PROFILE, &channels)
             .unwrap();
 
         assert_eq!(config_gas.into_inner(), 3 * 56);
@@ -758,7 +759,7 @@ mod tests {
 
         let gas = config_op
             .by_ref()
-            .execution_gas::<MainnetGasProfile>(&Channels::new())
+            .execution_gas(&GAS_PROFILE, &Channels::new())
             .unwrap();
 
         assert_eq!(gas.into_inner(), 0);

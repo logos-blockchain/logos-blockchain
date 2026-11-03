@@ -12,7 +12,7 @@ use lb_core::{
     mantle::{
         Note, Op, OpProof, SignedOps, Utxo,
         channel::Channels,
-        gas::{MainnetGasProfile, TxGasCalculator as _},
+        gas::TxGasCalculator as _,
         ledger::{BoundedInputs, Outputs, verification_mode::StandardMode},
         ops::{
             leader_claim::{VoucherCm, VoucherSecret},
@@ -814,10 +814,14 @@ fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
 /// Creates a transfer tx with a fake sig.
 fn transfer_tx_with_fake_sig(utxo: Utxo, fake_key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
     let mut output_note = Note::new(1, fake_key.to_public_key());
-    let gas_context = OpsGasContext::from_channels(&Channels::new(), GasPrices::default());
+    let gas_context = OpsGasContext::from_channels(
+        &Channels::new(),
+        GasPrices::default(),
+        ledger_config(NonZero::new(1).unwrap()).gas_profile,
+    );
     let fees = transfer_tx(utxo, output_note, fake_key)
         .op_refs()
-        .total_gas_cost::<MainnetGasProfile>(&gas_context)
+        .total_gas_cost(&gas_context)
         .unwrap();
     output_note.value = utxo.note.value - fees.into_inner();
 
@@ -1054,6 +1058,19 @@ fn ledger_config_with_uncles(
             lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
         )
         .unwrap(),
+        gas_profile: lb_core::mantle::gas::GasProfile {
+            transfer: 590.into(),
+            channel_config: 56.into(),
+            channel_inscribe: 56.into(),
+            channel_deposit: 590.into(),
+            channel_withdraw: 56.into(),
+            channel_transfer: 56.into(),
+            sdp_declare: 646.into(),
+            sdp_withdraw: 590.into(),
+            sdp_active: 590.into(),
+            leader_claim: 580.into(),
+            claim_pow_reward: 1.into(),
+        },
         pow_config: PoWConfig {
             blend: BlendPoWConfig {
                 base_difficulty: ModulusShift::new::<19>(),

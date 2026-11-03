@@ -14,7 +14,7 @@ use lb_core::{
     events::TxEvent,
     mantle::{
         NoteId, Utxo, Value,
-        gas::{Gas, GasCost, GasOverflow, GasPrice, GasProfile},
+        gas::{Gas, GasCost, GasOverflow, GasPrice},
         ledger::verification_mode::{GenesisMode, StandardMode},
         ops::{SignedOperation, pow::PowTarget, transfer::TransferOp},
         transactions::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, states::Verified},
@@ -588,7 +588,7 @@ impl LedgerState {
         Ok(())
     }
 
-    pub fn try_apply_transfer<Id, Profile: GasProfile>(
+    pub fn try_apply_transfer<Id>(
         mut self,
         signed_operation: SignedOperation<TransferOp, Verified, StandardMode>,
     ) -> Result<(Self, Balance, Vec<TxEvent>), LedgerError<Id>> {
@@ -899,7 +899,6 @@ pub mod tests {
             Note, Op,
             OpProof::ZkSig,
             SignedOps,
-            gas::MainnetGasProfile,
             ledger::{Inputs, InputsError, Outputs},
             ops::{ZkAndEd25519Proof, leader_claim::VoucherCm, sdp::SDPDeclareOp},
             traits::Hashable as _,
@@ -1051,7 +1050,7 @@ pub mod tests {
         let id = make_id(parent, slot, utxo);
         let proof = generate_proof(&ledger_state, &utxo, slot);
         let update = ledger
-            .prepare_update::<_, _, MainnetGasProfile>(
+            .prepare_update(
                 id,
                 parent,
                 slot,
@@ -1168,6 +1167,7 @@ pub mod tests {
                 ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
+            gas_profile: GAS_PROFILE,
             pow_config: crate::config::PoWConfig {
                 blend: crate::config::BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<234>(),
@@ -1184,6 +1184,21 @@ pub mod tests {
 
     /// The balance the `PoW` reward pool of a test chain starts with.
     pub const GENESIS_POW_REWARD_POOL: lb_core::mantle::ops::pow::PowReward = 1_000_000_000;
+
+    /// The costs of the deployments' current gas profile.
+    pub const GAS_PROFILE: lb_core::mantle::gas::GasProfile = lb_core::mantle::gas::GasProfile {
+        transfer: Gas::new(590),
+        channel_config: Gas::new(56),
+        channel_inscribe: Gas::new(56),
+        channel_deposit: Gas::new(590),
+        channel_withdraw: Gas::new(56),
+        channel_transfer: Gas::new(56),
+        sdp_declare: Gas::new(646),
+        sdp_withdraw: Gas::new(590),
+        sdp_active: Gas::new(590),
+        leader_claim: Gas::new(580),
+        claim_pow_reward: Gas::new(1),
+    };
 
     /// A reward config with claiming disabled, standing in for a real
     /// deployment config in tests that don't exercise the reward parameters.
@@ -2116,7 +2131,7 @@ pub mod tests {
         let signed_operation =
             SignedOperation::new(transfer_op, transfer_proof).into_state_trusted();
         let (new_state, balance, events) = ledger_state
-            .try_apply_transfer::<(), MainnetGasProfile>(signed_operation)
+            .try_apply_transfer::<()>(signed_operation)
             .unwrap();
 
         assert_eq!(
@@ -2149,7 +2164,7 @@ pub mod tests {
         let signed_operation =
             SignedOperation::new(transfer_op, transfer_proof).into_state_trusted();
         let (final_state, final_balance, events) = new_state
-            .try_apply_transfer::<(), MainnetGasProfile>(signed_operation)
+            .try_apply_transfer::<()>(signed_operation)
             .unwrap();
 
         assert_eq!(
@@ -2210,7 +2225,7 @@ pub mod tests {
                 SignedOperation::new(transfer_op, transfer_proof).into_state_trusted();
             let result = ledger_state
                 .clone()
-                .try_apply_transfer::<(), MainnetGasProfile>(signed_operation);
+                .try_apply_transfer::<()>(signed_operation);
             assert!(matches!(result, Err(LedgerError::Mantle(_))));
         }
     }
@@ -2240,7 +2255,7 @@ pub mod tests {
             SignedOperation::new(transfer_op, transfer_proof).into_state_trusted();
         let (_, balance, events) = ledger_state
             .clone()
-            .try_apply_transfer::<(), MainnetGasProfile>(signed_operation)
+            .try_apply_transfer::<()>(signed_operation)
             .unwrap();
         assert_eq!(balance, -1);
         assert_eq!(events, []);
@@ -2251,7 +2266,7 @@ pub mod tests {
             SignedOperation::new(transfer_op, transfer_proof).into_state_trusted();
         assert_eq!(
             ledger_state
-                .try_apply_transfer::<(), MainnetGasProfile>(signed_operation)
+                .try_apply_transfer::<()>(signed_operation)
                 .unwrap()
                 .1,
             0
@@ -2279,7 +2294,7 @@ pub mod tests {
 
         let signed_operation =
             SignedOperation::new(transfer_op, transfer_proof).into_state_trusted();
-        let result = ledger_state.try_apply_transfer::<(), MainnetGasProfile>(signed_operation);
+        let result = ledger_state.try_apply_transfer::<()>(signed_operation);
         assert!(result.is_ok());
 
         let (new_state, balance, events) = result.unwrap();

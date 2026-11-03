@@ -48,6 +48,7 @@ impl Parameters {
 mod tests {
     use core::num::{NonZero, NonZeroU32};
 
+    use lb_core::mantle::gas::Gas;
     use lb_utils::math::NonNegativeRatio;
 
     use super::{Parameters, cryptarchia::SlotActivationCoeff};
@@ -116,6 +117,12 @@ mod tests {
             })
             .unwrap();
         }
+        // An Operation may cost as much as a block consumes.
+        validate(|parameters| {
+            let max_gas_per_block = parameters.cryptarchia.execution_market.max_gas_per_block;
+            parameters.cryptarchia.gas_profile.sdp_active = Gas::from(max_gas_per_block);
+        })
+        .unwrap();
         // At a peering degree of 4, `⌊2V/3⌋` reaches 5.
         validate(|parameters| {
             parameters.blend.core.target_peering_degree = NonZero::new(4).unwrap();
@@ -179,6 +186,19 @@ mod tests {
                 "window of 240 slots is wider than a fifth of the previous era's finalization \
                  window, 600 slots"
             ),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn an_operation_costing_more_than_a_block_consumes_is_refused() {
+        let reason = rejection(|parameters| {
+            let max_gas_per_block = parameters.cryptarchia.execution_market.max_gas_per_block;
+            parameters.cryptarchia.gas_profile.sdp_active =
+                Gas::new(u64::from(max_gas_per_block) + 1);
+        });
+        assert!(
+            reason.contains("The execution gas of an SDP activity"),
             "{reason}"
         );
     }

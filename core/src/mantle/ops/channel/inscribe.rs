@@ -15,7 +15,6 @@ use crate::{
     events::TxEvent,
     mantle::{
         channel::{ChannelState, Channels, Error},
-        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
@@ -112,12 +111,6 @@ impl ProvableOperation for InscriptionOp {
     type Proof = Ed25519Signature;
     const CODE: u8 = 0x11;
 }
-
-impl OperationGas<MainnetGasProfile> for InscriptionOp {
-    const GAS_COST: Gas = Gas::new(56);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for InscriptionOp {}
 
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<InscriptionOp, Unverified, StandardMode>
@@ -250,7 +243,12 @@ mod tests {
     use crate::{
         crypto::Hash,
         mantle::{
-            TxHash, gas::test_utils::FixedThresholds, ops::op_proof::samples::SampleProof as _,
+            TxHash,
+            gas::{
+                Gas,
+                test_utils::{FixedThresholds, GAS_PROFILE},
+            },
+            ops::op_proof::samples::SampleProof as _,
             transactions::tx_list::signed_ops::test_utils::make_channel_state,
         },
     };
@@ -619,7 +617,8 @@ mod tests {
     fn inscription_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
             assert_eq!(
-                InscriptionOp::sample().execution_gas(&FixedThresholds(threshold)),
+                crate::mantle::OpRef::from(&InscriptionOp::sample())
+                    .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(56))
             );
         }

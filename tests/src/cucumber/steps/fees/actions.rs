@@ -10,11 +10,12 @@ use std::{
 use cucumber::gherkin::Step;
 use futures::{StreamExt as _, future::join_all};
 use lb_common_http_client::ApiBlock;
+use lb_config::deployment::GAS_PROFILE;
 use lb_core::{
     header::HeaderId,
     mantle::{
         SignedOps,
-        gas::{GasCost, MainnetGasProfile, TxGasCalculator as _},
+        gas::{GasCost, TxGasCalculator as _},
         ledger::verification_mode::StandardMode,
         traits::Hashable as _,
         transactions::{
@@ -201,10 +202,11 @@ fn record_prepared_priority_fee(
     prices: &GasPrices,
     priority_fee_percent: u64,
 ) -> Result<PreparedPriorityFee, StepError> {
-    let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone());
+    let gas_context =
+        OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone(), GAS_PROFILE);
     let initial_mandatory_fee = signed_tx
         .op_refs()
-        .total_gas_cost::<MainnetGasProfile>(&gas_context)
+        .total_gas_cost(&gas_context)
         .map_err(|source| StepError::StepFail {
             message: format!(
                 "Step `{}` error: initial mandatory fee calculation failed: {source}",

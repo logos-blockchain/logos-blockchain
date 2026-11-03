@@ -195,5 +195,6 @@ fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
         execution_market: deployment.execution_market,
         storage_market: deployment.storage_market,
         block_rewards: deployment.block_rewards,
+        gas_profile: deployment.gas_profile,
     }
 }

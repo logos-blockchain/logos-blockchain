@@ -5,7 +5,7 @@ use lb_core::{
     era::AcceptedForkDigests,
     mantle::{
         Value,
-        gas::Gas,
+        gas::{Gas, GasProfile},
         ops::pow::{PowSlotWindows, PowTarget},
     },
 };
@@ -31,6 +31,7 @@ pub struct Config {
     pub execution_market: ExecutionMarketConfig,
     pub storage_market: StorageMarketConfig,
     pub block_rewards: BlockRewardsConfig,
+    pub gas_profile: GasProfile,
 }
 
 impl Config {
@@ -1089,6 +1090,7 @@ mod tests {
                 lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
+            gas_profile: crate::cryptarchia::tests::GAS_PROFILE,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -1187,6 +1189,7 @@ mod tests {
                 lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
+            gas_profile: crate::cryptarchia::tests::GAS_PROFILE,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -1301,6 +1304,7 @@ mod tests {
                 lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
+            gas_profile: crate::cryptarchia::tests::GAS_PROFILE,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),

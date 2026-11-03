@@ -237,6 +237,7 @@ mod tests {
                 lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
+            gas_profile: crate::cryptarchia::tests::GAS_PROFILE,
             pow_config: crate::config::PoWConfig {
                 blend: crate::config::BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),

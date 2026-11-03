@@ -19,9 +19,9 @@ use crate::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
     era::ForkDigest,
     mantle::{
-        GasProfile, Op, OpRef, TxHash, Value,
+        Op, OpRef, TxHash, Value,
         channel::Channels,
-        gas::{Gas, GasCost, GasOverflow, TxGasCalculator},
+        gas::{Gas, GasCost, GasOverflow, GasProfile, TxGasCalculator},
         ops::channel::{ChannelId, ChannelKeyIndex},
         traits::{Hashable, MantleTx, StorageSize, hashable},
         transactions::{
@@ -37,11 +37,15 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, Default)]
+/// What a transaction is priced against: the thresholds of the channels its
+/// Operations act on, the gas prices, and the schedule of the era it is priced
+/// under.
+#[derive(Debug, Clone)]
 pub struct OpsGasContext {
     transfer_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
     configuration_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
     gas_prices: GasPrices,
+    gas_profile: GasProfile,
 }
 
 impl OpsGasContext {
@@ -50,11 +54,13 @@ impl OpsGasContext {
         transfer_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
         configuration_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
         gas_prices: GasPrices,
+        gas_profile: GasProfile,
     ) -> Self {
         Self {
             transfer_thresholds,
             configuration_thresholds,
             gas_prices,
+            gas_profile,
         }
     }
 
@@ -69,7 +75,11 @@ impl OpsGasContext {
     }
 
     #[must_use]
-    pub fn from_channels(value: &Channels, base_prices: GasPrices) -> Self {
+    pub fn from_channels(
+        value: &Channels,
+        base_prices: GasPrices,
+        gas_profile: GasProfile,
+    ) -> Self {
         let transfer_thresholds = value
             .channels
             .iter()
@@ -80,7 +90,12 @@ impl OpsGasContext {
             .iter()
             .map(|(channel_id, channel)| (*channel_id, channel.configuration_threshold))
             .collect();
-        Self::new(transfer_thresholds, configuration_thresholds, base_prices)
+        Self::new(
+            transfer_thresholds,
+            configuration_thresholds,
+            base_prices,
+            gas_profile,
+        )
     }
 
     #[must_use]
@@ -89,7 +104,7 @@ impl OpsGasContext {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct OpsContext {
     pub gas_context: OpsGasContext,
     pub leader_reward_amount: Value,
@@ -170,11 +185,8 @@ impl<'a> IntoIterator for &'a Ops {
 impl TxGasCalculator for OpRefs<'_> {
     type Context = OpsGasContext;
 
-    fn total_gas_cost<Profile: GasProfile>(
-        &self,
-        context: &Self::Context,
-    ) -> Result<GasCost, GasOverflow> {
-        let execution_gas = self.execution_gas_consumption::<Profile>(context)?;
+    fn total_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow> {
+        let execution_gas = self.execution_gas_consumption(context)?;
         let execution_gas_cost =
             GasCost::calculate(execution_gas, context.gas_prices.execution_base_gas_price)?;
         let storage_gas_cost = self.storage_gas_cost(context)?;
@@ -189,17 +201,15 @@ impl TxGasCalculator for OpRefs<'_> {
         )
     }
 
-    fn execution_gas_consumption<Profile: GasProfile>(
-        &self,
-        context: &Self::Context,
-    ) -> Result<Gas, GasOverflow> {
+    fn execution_gas_consumption(&self, context: &Self::Context) -> Result<Gas, GasOverflow> {
         // The thresholds carry across the fold: an Operation is priced against
         // the ones in force before it, then moves them for the ones after.
         self.iter()
             .try_fold(
                 (RunningThresholds::new(context), Gas::new(0)),
                 |(mut thresholds, total), op| {
-                    let total = total.checked_add(op.execution_gas::<Profile>(&thresholds)?)?;
+                    let total =
+                        total.checked_add(op.execution_gas(&context.gas_profile, &thresholds)?)?;
                     thresholds.apply(*op);
                     Ok((thresholds, total))
                 },
@@ -447,7 +457,7 @@ mod tests {
     use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 
     use super::*;
-    use crate::mantle::{fixtures::ops::op_values::FORK_DIGEST, gas::MainnetGasProfile};
+    use crate::mantle::{fixtures::ops::op_values::FORK_DIGEST, gas::test_utils::GAS_PROFILE};
 
     const CONFIGURATION_THRESHOLD: ChannelKeyIndex = 3;
     const TRANSFER_THRESHOLD: ChannelKeyIndex = 2;
@@ -455,12 +465,14 @@ mod tests {
     #[test]
     fn total_gas_cost_sums_execution_and_storage() {
         let ops = Ops::new(FORK_DIGEST, [Op::ChannelInscribe(InscriptionOp::sample())]);
-        let context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(2, 3));
-
-        assert_eq!(
-            ops.by_ref().total_gas_cost::<MainnetGasProfile>(&context),
-            Ok(GasCost::new(739))
+        let context = OpsGasContext::new(
+            HashMap::new(),
+            HashMap::new(),
+            GasPrices::new(2, 3),
+            GAS_PROFILE,
         );
+
+        assert_eq!(ops.by_ref().total_gas_cost(&context), Ok(GasCost::new(739)));
     }
 
     #[test]
@@ -477,11 +489,11 @@ mod tests {
             [(ChannelWithdrawOp::sample().channel_id, TRANSFER_THRESHOLD)].into(),
             [(ChannelConfigOp::sample().channel(), CONFIGURATION_THRESHOLD)].into(),
             GasPrices::new(1, 0),
+            GAS_PROFILE,
         );
 
         assert_eq!(
-            ops.by_ref()
-                .execution_gas_consumption::<MainnetGasProfile>(&context),
+            ops.by_ref().execution_gas_consumption(&context),
             Ok(Gas::from(168 + 590 + 112))
         );
     }
@@ -498,8 +510,12 @@ mod tests {
         );
 
         assert_eq!(
-            ops.by_ref()
-                .execution_gas_consumption::<MainnetGasProfile>(&OpsGasContext::default()),
+            ops.by_ref().execution_gas_consumption(&OpsGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::default(),
+                GAS_PROFILE
+            )),
             Ok(Gas::from(0))
         );
     }
@@ -509,8 +525,12 @@ mod tests {
         let ops = Ops::new(FORK_DIGEST, [Op::ChannelDeposit(DepositOp::sample())]);
 
         assert_eq!(
-            ops.by_ref()
-                .execution_gas_consumption::<MainnetGasProfile>(&OpsGasContext::default()),
+            ops.by_ref().execution_gas_consumption(&OpsGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::default(),
+                GAS_PROFILE
+            )),
             Ok(Gas::from(590))
         );
     }
@@ -518,7 +538,12 @@ mod tests {
     #[test]
     fn storage_gas_cost_prices_the_signed_size() {
         let ops = Ops::new(FORK_DIGEST, [Op::ChannelInscribe(InscriptionOp::sample())]);
-        let context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(2, 3));
+        let context = OpsGasContext::new(
+            HashMap::new(),
+            HashMap::new(),
+            GasPrices::new(2, 3),
+            GAS_PROFILE,
+        );
 
         assert_eq!(
             ops.by_ref().storage_gas_cost(&context),
@@ -531,7 +556,12 @@ mod tests {
         assert_eq!(
             Ops::new(FORK_DIGEST, TxList::empty())
                 .by_ref()
-                .storage_gas_consumption(&OpsGasContext::default()),
+                .storage_gas_consumption(&OpsGasContext::new(
+                    HashMap::new(),
+                    HashMap::new(),
+                    GasPrices::default(),
+                    GAS_PROFILE
+                )),
             Ok(Gas::new(33))
         );
     }
@@ -541,8 +571,12 @@ mod tests {
         let ops = Ops::new(FORK_DIGEST, [Op::ChannelInscribe(InscriptionOp::sample())]);
 
         assert_eq!(
-            ops.by_ref()
-                .storage_gas_consumption(&OpsGasContext::default()),
+            ops.by_ref().storage_gas_consumption(&OpsGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::default(),
+                GAS_PROFILE
+            )),
             Ok(Gas::new(209))
         );
     }

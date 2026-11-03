@@ -79,5 +79,17 @@ cryptarchia:
     blend_share:
       numerator: 6
       denominator: 10
+  gas_profile:
+    transfer: 590
+    channel_config: 56
+    channel_inscribe: 56
+    channel_deposit: 590
+    channel_withdraw: 56
+    channel_transfer: 56
+    sdp_declare: 646
+    sdp_withdraw: 590
+    sdp_active: 590
+    leader_claim: 580
+    claim_pow_reward: 1
 time:
   slot_duration_in_seconds: 1

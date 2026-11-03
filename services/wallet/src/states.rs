@@ -8,7 +8,7 @@ use std::{
 use lb_core::{
     header::HeaderId,
     mantle::{
-        GasProfile, NoteId,
+        NoteId,
         ops::leader_claim::{VoucherCm, VoucherNullifier},
         transactions::{MantleTxBuilder, tx_list::ops::OpsContext},
     },
@@ -384,7 +384,7 @@ impl<'u> ServiceState<'u> {
     /// reserves that percentage of the final mandatory fee, including both
     /// execution and storage cost. Only the unused reserve becomes an
     /// effective priority tip, and the percentage is not capped at 100.
-    pub fn fund_tx<G: GasProfile>(
+    pub fn fund_tx(
         &self,
         tip: HeaderId,
         tx_builder: &MantleTxBuilder,
@@ -393,7 +393,7 @@ impl<'u> ServiceState<'u> {
         context: &OpsContext,
         priority_fee_percent: u64,
     ) -> Result<MantleTxBuilder, WalletError> {
-        self.wallet.fund_tx::<G>(
+        self.wallet.fund_tx(
             tip,
             tx_builder,
             change_pk,
@@ -434,6 +434,21 @@ mod tests {
     use lb_ledger::ConsensusExcludedKeys;
 
     use super::*;
+
+    /// The costs of the deployments' current gas profile.
+    const GAS_PROFILE: lb_core::mantle::gas::GasProfile = lb_core::mantle::gas::GasProfile {
+        transfer: lb_core::mantle::gas::Gas::new(590),
+        channel_config: lb_core::mantle::gas::Gas::new(56),
+        channel_inscribe: lb_core::mantle::gas::Gas::new(56),
+        channel_deposit: lb_core::mantle::gas::Gas::new(590),
+        channel_withdraw: lb_core::mantle::gas::Gas::new(56),
+        channel_transfer: lb_core::mantle::gas::Gas::new(56),
+        sdp_declare: lb_core::mantle::gas::Gas::new(646),
+        sdp_withdraw: lb_core::mantle::gas::Gas::new(590),
+        sdp_active: lb_core::mantle::gas::Gas::new(590),
+        leader_claim: lb_core::mantle::gas::Gas::new(580),
+        claim_pow_reward: lb_core::mantle::gas::Gas::new(1),
+    };
     use crate::ServiceEraSchedule;
 
     const EXPIRY_BLOCKS: u64 = 4;
@@ -461,6 +476,7 @@ mod tests {
             epoch_length: timing.epoch_length,
             security_param: NonZero::new(5).unwrap(),
             fork_digest: ForkDigest::new([0x11; 32]),
+            gas_profile: GAS_PROFILE,
         })
     }
 
@@ -621,6 +637,7 @@ mod tests {
                 lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
+            gas_profile: GAS_PROFILE,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),

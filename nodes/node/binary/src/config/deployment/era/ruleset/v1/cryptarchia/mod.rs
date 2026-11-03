@@ -7,6 +7,7 @@ use lb_binary_codec::canonical::BinaryEncode;
 use lb_chain_service::Epoch;
 use lb_core::{
     block::Proposal,
+    mantle::gas::{Gas, GasProfile},
     sdp::{InactivityPeriod, MinStake, ServiceType},
 };
 use lb_cryptarchia_engine::{
@@ -39,6 +40,7 @@ pub struct Settings {
     pub execution_market: ExecutionMarketConfig,
     pub storage_market: StorageMarketConfig,
     pub block_rewards: BlockRewardsConfig,
+    pub gas_profile: GasProfile,
 }
 
 impl Settings {
@@ -73,6 +75,44 @@ impl Settings {
                 u128::from(window) * 5 <= u128::from(finalization_window),
                 "The uncle reference window of {window} slots is wider than a fifth of the \
                  previous era's finalization window, {finalization_window} slots."
+            );
+        }
+
+        // An Operation that costs more than a block may consume could never be
+        // included, the protocol's own (reward claims, SDP activity) included.
+        let max_gas_per_block = Gas::from(self.execution_market.max_gas_per_block);
+        let GasProfile {
+            transfer,
+            channel_config,
+            channel_inscribe,
+            channel_deposit,
+            channel_withdraw,
+            channel_transfer,
+            sdp_declare,
+            sdp_withdraw,
+            sdp_active,
+            leader_claim,
+            claim_pow_reward,
+        } = self.gas_profile;
+        for (operation, gas) in [
+            ("a transfer", transfer),
+            ("a channel configuration, per key", channel_config),
+            ("a channel inscription", channel_inscribe),
+            ("a channel deposit", channel_deposit),
+            ("a channel withdrawal, per key", channel_withdraw),
+            ("a channel transfer, per key", channel_transfer),
+            ("an SDP declaration", sdp_declare),
+            ("an SDP withdrawal", sdp_withdraw),
+            ("an SDP activity", sdp_active),
+            ("a leader claim", leader_claim),
+            ("a PoW reward claim", claim_pow_reward),
+        ] {
+            ensure!(
+                gas <= max_gas_per_block,
+                "The execution gas of {operation}, {}, exceeds the {} a block may consume, so no \
+                 block could include it.",
+                gas.into_inner(),
+                max_gas_per_block.into_inner()
             );
         }
 
