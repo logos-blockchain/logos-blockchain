@@ -4,7 +4,7 @@ pub mod time;
 use core::{fmt::Debug, hash::Hash};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    num::NonZero,
+    num::{NonZero, NonZeroU64},
     sync::Arc,
 };
 
@@ -67,21 +67,9 @@ impl State {
     {
         match cryptarchia.state {
             Self::Bootstrapping => cryptarchia.branches.lib,
-            Self::Online => {
-                // The LIB moves up the local chain while it lies deeper than
-                // the `k` of the era of its own slot.
-                let tip = &cryptarchia.local_chain;
-                let is_block_within_the_k_of_its_era = |block: &Branch<Id>| {
-                    let config = cryptarchia.era_schedule.at_slot(block.slot).parameters;
-                    tip.length.saturating_sub(block.length) <= config.security_param().get().into()
-                };
-                cryptarchia
-                    .branches
-                    .lib_to_tip_blocks(tip)
-                    .find(|block| is_block_within_the_k_of_its_era(block))
-                    .expect("The tip is within the `k` of its era.")
-                    .id
-            }
+            // The LIB moves up the local chain while it lies deeper than the
+            // `k` of the era of its own slot.
+            Self::Online => cryptarchia.k_deep_branch().id,
         }
     }
 }
@@ -371,6 +359,7 @@ where
     ///
     /// Starts at the oldest block in the tree if the LIB is not an ancestor of
     /// `tip`.
+    #[cfg(test)]
     fn lib_to_tip_blocks<'a>(
         &'a self,
         tip: &'a Branch<Id>,
@@ -433,6 +422,45 @@ pub struct ForkDivergenceInfo<Id> {
     /// The LCA (lowest common ancestor) of the fork and the local canonical
     /// chain.
     pub lca: Branch<Id>,
+}
+
+impl<Id> Cryptarchia<Id>
+where
+    Id: Eq + Hash + Copy,
+{
+    /// The deepest block of the local chain, from the LIB up, that lies within
+    /// the `k` of the era of its own slot: `k` blocks deep in a steady era.
+    /// Once online this is the LIB. While bootstrapping the LIB stays put, and
+    /// this block keeps moving up with the tip.
+    pub fn k_deep_branch(&self) -> &Branch<Id> {
+        let tip = &self.local_chain;
+        let is_block_within_the_k_of_its_era = |block: &Branch<Id>| {
+            let config = self.era_schedule.at_slot(block.slot).parameters;
+            tip.length.saturating_sub(block.length) <= config.security_param().get().into()
+        };
+        // No block deeper than the largest `k` of any era is within the `k` of
+        // its own, so the search starts no deeper than that, nor below the LIB,
+        // which while bootstrapping can lie far below the tip.
+        let largest_k = self
+            .era_schedule
+            .iter()
+            .map(|era| NonZeroU64::from(era.parameters.security_param()).get())
+            .max()
+            .expect("The schedule has a genesis era.");
+        let tip_to_start_blocks: Vec<_> = core::iter::successors(Some(tip), |block| {
+            if block.id == self.branches.lib || tip.length - block.length >= largest_k {
+                None
+            } else {
+                self.branches.parent(block)
+            }
+        })
+        .collect();
+        tip_to_start_blocks
+            .into_iter()
+            .rev()
+            .find(|block| is_block_within_the_k_of_its_era(block))
+            .expect("The tip is within the `k` of its era.")
+    }
 }
 
 impl<Id> Cryptarchia<Id>
@@ -1320,6 +1348,50 @@ pub mod tests {
                 );
                 id
             });
+    }
+
+    /// The block `k` deep moves up with the tip while the node bootstraps and
+    /// its LIB stays put, and is the LIB once the node is online.
+    #[test]
+    fn k_deep_branch_moves_while_bootstrapping() {
+        let engine = create_canonical_chain(20.try_into().unwrap(), Some(config_with(5)));
+        assert_eq!(engine.lib(), hash(&0u64));
+        assert_eq!(engine.k_deep_branch().id(), hash(&14u64));
+
+        let (engine, _) = engine.online();
+        assert_eq!(engine.lib(), hash(&14u64));
+        assert_eq!(engine.k_deep_branch().id(), hash(&14u64));
+    }
+
+    /// Starting the search near the tip finds the same block as walking up
+    /// from the LIB, also when `k` changes between eras.
+    #[test]
+    fn k_deep_branch_matches_a_walk_up_from_the_lib() {
+        for (genesis_k, later_k) in [(10, 3), (3, 10)] {
+            let eras = schedule(10, config_with(genesis_k), [(3, config_with(later_k))]);
+            for length in 1..60 {
+                let engine =
+                    create_canonical_chain_over(length.try_into().unwrap(), Arc::clone(&eras));
+                let tip = &engine.local_chain;
+                let walked_up = engine
+                    .branches
+                    .lib_to_tip_blocks(tip)
+                    .find(|block| {
+                        let k = engine
+                            .era_schedule
+                            .at_slot(block.slot)
+                            .parameters
+                            .security_param();
+                        tip.length - block.length <= u64::from(k.get())
+                    })
+                    .unwrap();
+                assert_eq!(
+                    engine.k_deep_branch().id(),
+                    walked_up.id(),
+                    "length {length}"
+                );
+            }
+        }
     }
 
     #[test]

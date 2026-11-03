@@ -49,7 +49,8 @@ where
     /// - `entered`: items carried by the blocks that entered the canonical
     ///   chain, keyed by hash, each with the slot of the block carrying it.
     ///   They are retired, or stored if the pool never held them, and remain
-    ///   available for reference resolution until that block becomes immutable.
+    ///   available for reference resolution until that block is `k` blocks
+    ///   deep.
     /// - `reorged`: items carried by the blocks that left the canonical chain
     ///   and not by the blocks now in it, each with the slot of the block
     ///   carrying it. They are no longer retained as included, and are admitted
@@ -59,12 +60,12 @@ where
         entered: HashMap<Key, TxInBlock<Item>>,
         reorged: Vec<TxInBlock<Item>>,
     },
-    /// The chain processed `block_id` at `slot`, and its latest immutable
-    /// block is at `lib_slot`.
+    /// The chain processed `block_id` at `slot`, and the block of its local
+    /// chain `k` blocks deep is at `k_deep_slot`.
     ProcessedBlock {
         block_id: BlockId,
         slot: Slot,
-        lib_slot: Slot,
+        k_deep_slot: Slot,
     },
     Metrics {
         reply_channel: Sender<MempoolMetrics>,
@@ -105,10 +106,10 @@ where
             Self::ProcessedBlock {
                 block_id,
                 slot,
-                lib_slot,
+                k_deep_slot,
             } => write!(
                 f,
-                "MempoolMsg::ProcessedBlock{{block_id: {block_id:?}, slot: {slot:?}, lib_slot: {lib_slot:?}}}"
+                "MempoolMsg::ProcessedBlock{{block_id: {block_id:?}, slot: {slot:?}, k_deep_slot: {k_deep_slot:?}}}"
             ),
             Self::Metrics { .. } => write!(f, "MempoolMsg::Metrics"),
             Self::Status { items, .. } => write!(f, "MempoolMsg::Status{{items: {items:?}}}"),

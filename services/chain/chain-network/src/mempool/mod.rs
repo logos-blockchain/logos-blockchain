@@ -32,13 +32,13 @@ pub trait MempoolAdapter<Tx>: Send + Sync {
     ) -> Result<(), overwatch::DynError>;
 
     /// Tell the mempool that `block_id`, at `slot`, has been processed, and
-    /// that the latest immutable block is at `lib_slot`. The mempool has no
-    /// other notion of chain time.
+    /// that the block of the local chain `k` blocks deep is at `k_deep_slot`.
+    /// The mempool has no other notion of chain time.
     async fn notify_processed_block(
         &self,
         block_id: HeaderId,
         slot: Slot,
-        lib_slot: Slot,
+        k_deep_slot: Slot,
     ) -> Result<(), overwatch::DynError>;
 
     /// The local transactions a single proposal reference could mean.

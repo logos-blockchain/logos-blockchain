@@ -52,13 +52,13 @@ where
         &self,
         block_id: HeaderId,
         slot: Slot,
-        lib_slot: Slot,
+        k_deep_slot: Slot,
     ) -> Result<(), overwatch::DynError> {
         self.mempool_relay
             .send(MempoolMsg::ProcessedBlock {
                 block_id,
                 slot,
-                lib_slot,
+                k_deep_slot,
             })
             .await
             .map_err(|error| format!("Could not notify mempool of processed block: {error}"))?;
