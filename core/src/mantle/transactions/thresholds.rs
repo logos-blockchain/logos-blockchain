@@ -1,9 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
+use lb_groth16::Fr;
+
 use crate::mantle::{
     OpRef,
     channel::Channels,
-    gas::{NoteSetKey, OpGasContext, ThresholdSource},
+    gas::{Gas, GasOverflow, NoteSetKey, OpGasContext, ThresholdSource, root_gas},
     ops::channel::{ChannelId, ChannelKeyIndex, inscribe::Step},
     transactions::tx_list::ops::OpsGasContext,
 };
@@ -37,14 +39,15 @@ impl<C: ChannelSource> ChannelSource for &C {
 
 // The state an Operation is priced against, as the transaction moves it: the
 // thresholds it is verified against, the commitments buffered by the
-// Operations before it and the note sets they changed. The wallet cannot
-// observe the state its Operations will execute against, so it predicts it
-// from the Operations before.
+// Operations before it, the note sets they changed and the roots their proofs
+// extend. The wallet cannot observe the state its Operations will execute
+// against, so it predicts it from the Operations before.
 pub struct TxGasState<C: ChannelSource> {
     channels: C,
     configuration_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
     buffered: HashMap<NoteSetKey, usize>,
     changed_note_sets: HashSet<NoteSetKey>,
+    extended_roots: HashSet<(NoteSetKey, Fr, usize)>,
 }
 
 impl<C: ChannelSource> TxGasState<C> {
@@ -55,7 +58,37 @@ impl<C: ChannelSource> TxGasState<C> {
             configuration_thresholds: HashMap::new(),
             buffered: HashMap::new(),
             changed_note_sets: HashSet::new(),
+            extended_roots: HashSet::new(),
         }
+    }
+
+    // The commitments buffered in the set by the Operations priced so far.
+    #[must_use]
+    pub fn buffered(&self, set: &NoteSetKey) -> usize {
+        self.buffered.get(set).copied().unwrap_or(0)
+    }
+
+    // A proof extending the root over at least one buffered commitment. Proofs
+    // sharing the set, the root and the count share one extended root.
+    fn extend_root(&mut self, set: NoteSetKey, root: Fr, buffered: usize) {
+        if buffered > 0 {
+            self.extended_roots.insert((set, root, buffered));
+        }
+    }
+
+    // A proof over the whole buffer of the set.
+    fn extend_root_over_buffer(&mut self, set: NoteSetKey, root: Fr) {
+        self.extend_root(set, root, self.buffered(&set));
+    }
+
+    // The Execution Gas of the root extensions of the proofs of the transaction,
+    // each paid once.
+    pub fn root_extensions_gas(&self) -> Result<Gas, GasOverflow> {
+        self.extended_roots
+            .iter()
+            .try_fold(Gas::new(0), |total, (_, _, buffered)| {
+                total.checked_add(root_gas(*buffered)?)
+            })
     }
 
     fn channel_exists(&self, channel: &ChannelId) -> bool {
@@ -83,6 +116,7 @@ impl<C: ChannelSource> TxGasState<C> {
     pub fn apply(&mut self, op: OpRef<'_>) {
         match op {
             OpRef::Transfer(operation) => {
+                self.extend_root_over_buffer(NoteSetKey::Ledger, operation.commitment_merkle_root);
                 self.buffer(NoteSetKey::Ledger, operation.outputs.as_slice().len());
             }
             OpRef::ClaimPowReward(_) => self.buffer(NoteSetKey::Ledger, 1),
@@ -99,13 +133,16 @@ impl<C: ChannelSource> TxGasState<C> {
             // channel set, which it leaves unchanged when it has none.
             OpRef::ChannelDeposit(operation) => {
                 let set = NoteSetKey::Channel(operation.channel_id);
+                self.extend_root_over_buffer(NoteSetKey::Ledger, operation.commitment_merkle_root);
                 self.buffer(set, operation.outputs.as_slice().len());
                 if !operation.outputs.is_empty() {
                     self.change(set);
                 }
             }
             OpRef::ChannelWithdraw(operation) => {
-                self.change(NoteSetKey::Channel(operation.channel_id));
+                let set = NoteSetKey::Channel(operation.channel_id);
+                self.extend_root_over_buffer(set, operation.commitment_merkle_root);
+                self.change(set);
             }
             // An inscription creates the channel when it does not exist yet, and
             // changes its set when a step or a payment spends from it or adds to
@@ -122,15 +159,33 @@ impl<C: ChannelSource> TxGasState<C> {
                     self.change(set);
                 }
                 for step in operation.steps.iter() {
-                    if let Step::Program(step) = step {
-                        for payment in step.payments.iter() {
-                            self.buffer(set, payment.outputs.as_slice().len());
+                    match step {
+                        Step::User(step) => self.extend_root(
+                            set,
+                            step.commitment_merkle_root,
+                            usize::from(step.buffered),
+                        ),
+                        Step::Program(step) => {
+                            for payment in step.payments.iter() {
+                                self.extend_root(
+                                    set,
+                                    payment.commitment_merkle_root,
+                                    usize::from(payment.buffered),
+                                );
+                                self.buffer(set, payment.outputs.as_slice().len());
+                            }
+                            // Its spend covers the whole buffer, its payments included.
+                            self.extend_root_over_buffer(set, step.commitment_merkle_root);
                         }
                     }
                     self.buffer(set, step.outputs().as_slice().len());
                 }
             }
-            OpRef::SDPDeclare(_) | OpRef::SDPWithdraw(_) => self.change(NoteSetKey::Sdp),
+            OpRef::SDPDeclare(operation) => {
+                self.extend_root_over_buffer(NoteSetKey::Ledger, operation.commitment_merkle_root);
+                self.change(NoteSetKey::Sdp);
+            }
+            OpRef::SDPWithdraw(_) => self.change(NoteSetKey::Sdp),
             OpRef::SDPActive(_) | OpRef::ProgramRegister(_) => {}
         }
     }
@@ -162,16 +217,10 @@ impl<C: ChannelSource> ThresholdSource for TxGasState<C> {
     }
 }
 
-impl<C: ChannelSource> OpGasContext for TxGasState<C> {
-    fn buffered(&self, set: &NoteSetKey) -> usize {
-        self.buffered.get(set).copied().unwrap_or(0)
-    }
-}
+impl<C: ChannelSource> OpGasContext for TxGasState<C> {}
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::Fr;
-
     use super::*;
     use crate::mantle::{
         Op,
@@ -197,6 +246,74 @@ mod tests {
 
     fn existing(channel: ChannelId, threshold: ChannelKeyIndex) -> OpsGasContext {
         OpsGasContext::new([(channel, threshold)].into(), GasPrices::new(0, 0))
+    }
+
+    fn user_step(root: u64, buffered: u16) -> Step {
+        Step::User(ChannelStep {
+            inputs: [NoteNullifier(Fr::from(u64::from(buffered) + 1))].into(),
+            outputs: OutputCommitments::default(),
+            commitment_merkle_root: Fr::from(root),
+            buffered,
+        })
+    }
+
+    fn inscription_of(steps: Vec<Step>) -> Op {
+        Op::ChannelInscribe(InscriptionOp {
+            steps: steps.try_into().unwrap(),
+            ..InscriptionOp::sample()
+        })
+    }
+
+    #[test]
+    fn steps_sharing_their_root_and_buffered_pay_one_extension() {
+        let context = empty();
+        let mut state = TxGasState::new(&context);
+        state.apply(
+            inscription_of(vec![user_step(7, 4), user_step(7, 4), user_step(7, 4)]).by_ref(),
+        );
+        assert_eq!(state.root_extensions_gas(), root_gas(4));
+    }
+
+    #[test]
+    fn steps_differing_by_root_or_buffered_pay_one_extension_each() {
+        let context = empty();
+        let mut state = TxGasState::new(&context);
+        state.apply(
+            inscription_of(vec![user_step(7, 4), user_step(8, 4), user_step(7, 5)]).by_ref(),
+        );
+        let expected = root_gas(4)
+            .unwrap()
+            .checked_add(root_gas(4).unwrap())
+            .unwrap()
+            .checked_add(root_gas(5).unwrap())
+            .unwrap();
+        assert_eq!(state.root_extensions_gas(), Ok(expected));
+    }
+
+    #[test]
+    fn steps_over_notes_of_earlier_blocks_extend_no_root() {
+        let context = empty();
+        let mut state = TxGasState::new(&context);
+        state.apply(inscription_of(vec![user_step(7, 0), user_step(8, 0)]).by_ref());
+        assert_eq!(state.root_extensions_gas(), Ok(Gas::new(0)));
+    }
+
+    #[test]
+    fn transfers_extend_their_root_over_the_whole_buffer_of_the_ledger() {
+        let context = empty();
+        let mut state = TxGasState::new(&context);
+        let transfer = Op::Transfer(TransferOp::sample()); // two outputs
+        state.apply(transfer.by_ref());
+        assert_eq!(state.root_extensions_gas(), Ok(Gas::new(0)));
+        state.apply(transfer.by_ref());
+        assert_eq!(state.root_extensions_gas(), root_gas(2));
+        // the buffer has grown, so the root is extended over more commitments
+        state.apply(transfer.by_ref());
+        let expected = root_gas(2)
+            .unwrap()
+            .checked_add(root_gas(4).unwrap())
+            .unwrap();
+        assert_eq!(state.root_extensions_gas(), Ok(expected));
     }
 
     #[test]

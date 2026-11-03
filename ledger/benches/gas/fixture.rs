@@ -33,6 +33,7 @@ use lb_core::{
 use lb_cryptarchia_engine::{EpochConfig, Slot};
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
+use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
 use logos_blockchain_ledger::{
     Config, LedgerState,
@@ -42,7 +43,6 @@ use logos_blockchain_ledger::{
     },
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
-use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
 use rand::{Rng as _, SeedableRng as _, rngs::StdRng};
 use time::OffsetDateTime;
 

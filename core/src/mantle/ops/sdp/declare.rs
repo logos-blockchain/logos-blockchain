@@ -10,8 +10,8 @@ use crate::{
     mantle::{
         batch::DeferredZkTransfer,
         gas::{
-            EXECUTION_SIGNATURE_GAS, Gas, GasOverflow, MainnetGasProfile, NoteSetKey,
-            OpGasCalculator, OpGasContext, OperationGas, spend_gas,
+            EXECUTION_SIGNATURE_GAS, Gas, GasOverflow, MainnetGasProfile, OpGasCalculator,
+            OpGasContext, OperationGas, spend_gas,
         },
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
@@ -159,16 +159,11 @@ impl OperationGas<MainnetGasProfile> for SDPDeclareOp {
 
 impl OpGasCalculator<MainnetGasProfile> for SDPDeclareOp {
     // The Operation, plus its signature and the spend of its notes into the
-    // service note, over the commitments the transaction buffered in the ledger
-    // note set before it.
-    fn execution_gas(&self, context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
+    // service note.
+    fn execution_gas(&self, _context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
         Self::GAS_COST
             .checked_add(EXECUTION_SIGNATURE_GAS)?
-            .checked_add(spend_gas(
-                self.inputs.len(),
-                1,
-                context.buffered(&NoteSetKey::Ledger),
-            )?)
+            .checked_add(spend_gas(self.inputs.len(), 1)?)
     }
 }
 

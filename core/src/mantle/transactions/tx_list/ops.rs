@@ -142,11 +142,14 @@ impl TxGasCalculator for OpRefs<'_> {
                 Ok((state, total))
             },
         )?;
-        // The transaction itself, once: its bytes and the note sets it changed.
-        operations_gas.checked_add(tx_terms_gas(
-            minimum_signed_transaction_size(self, context),
-            state.changed_note_sets(),
-        )?)
+        // The transaction itself, once: its bytes, the note sets it changed and the
+        // root extensions its proofs share.
+        operations_gas
+            .checked_add(tx_terms_gas(
+                minimum_signed_transaction_size(self, context),
+                state.changed_note_sets(),
+            )?)?
+            .checked_add(state.root_extensions_gas()?)
     }
 
     fn storage_gas_consumption(&self, context: &Self::Context) -> Result<Gas, GasOverflow> {

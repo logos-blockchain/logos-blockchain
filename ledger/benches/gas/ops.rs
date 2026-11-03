@@ -167,7 +167,11 @@ impl OpShape {
 
 /// Decodes, preverifies and applies the transaction `bytes` encode, as the
 /// node does with a transaction it receives.
-pub fn execute(state: LedgerState, config: &EraScheduledConfig, bytes: &[u8]) -> Result<Applied, String> {
+pub fn execute(
+    state: LedgerState,
+    config: &EraScheduledConfig,
+    bytes: &[u8],
+) -> Result<Applied, String> {
     let tx = SignedOps::<Unverified, StandardMode>::decode_all(bytes, &())
         .map_err(|error| format!("decode: {error}"))?
         .preverify()
@@ -786,8 +790,8 @@ fn claim_pow() -> OpShape {
         1_000_000_000,
         &ConsensusExcludedKeys::empty(),
     )
-        .with_gas_prices(&GasPrices::new(0, 0))
-        .with_latest_note_sets(fixture.state.latest_note_sets().clone());
+    .with_gas_prices(&GasPrices::new(0, 0))
+    .with_latest_note_sets(fixture.state.latest_note_sets().clone());
     let config = crate::fixture::single_era(parameters);
     let ledger = Ledger::new(ANCHOR, state, Arc::new(config.clone()));
     let state = ledger.state(&ANCHOR).expect("the anchor state").clone();
@@ -854,7 +858,12 @@ impl LeaderProof for AcceptedLeadership {
 
 /// `state` after a header at the first slot of `epoch` and, when `txs` holds
 /// any, a block of them.
-pub fn next_epoch(state: LedgerState, config: &EraScheduledConfig, epoch: u64, txs: &[Vec<u8>]) -> LedgerState {
+pub fn next_epoch(
+    state: LedgerState,
+    config: &EraScheduledConfig,
+    epoch: u64,
+    txs: &[Vec<u8>],
+) -> LedgerState {
     let leader = AcceptedLeadership(ZkPublicKey::new(Fr::from(3u64)));
     let (state, _) = state
         .try_apply_header::<_, HeaderId>(
@@ -881,7 +890,10 @@ fn activity_proof(
     current: &EpochState,
     config: &EraScheduledConfig,
 ) -> ActivityProof {
-    let blend = &crate::fixture::parameters(config).sdp_config.service_rewards_params.blend;
+    let blend = &crate::fixture::parameters(config)
+        .sdp_config
+        .service_rewards_params
+        .blend;
     let zk_id = zk_key.to_public_key();
     let tree = MerkleTree::new(vec![zk_id.into_inner()]).expect("one provider");
     let core_path_and_selectors = tree

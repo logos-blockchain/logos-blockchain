@@ -170,11 +170,8 @@ pub enum NoteSetKey {
     Channel(ChannelId),
 }
 
-// The state an Operation is priced against: the thresholds in force and the
-// commitments the transaction has buffered in each note set before it.
-pub trait OpGasContext: ThresholdSource {
-    fn buffered(&self, set: &NoteSetKey) -> usize;
-}
+// The state an Operation is priced against: the thresholds in force.
+pub trait OpGasContext: ThresholdSource {}
 
 // The Execution Gas of an Operation, derived from the Operation and the state
 // it is validated against EXCLUSIVELY.
@@ -199,22 +196,19 @@ pub const EXECUTION_PROGRAM_STEP_GAS: Gas = Gas::new(54);
 pub const EXECUTION_OPENING_GAS: Gas = Gas::new(151);
 pub const EXECUTION_PROGRAM_PROOF_GAS: Gas = Gas::new(6320);
 
-/// The Execution Gas of extending the root of a spend over `buffered`
-/// commitments of the buffer, nothing when the buffer is empty.
+/// The Execution Gas of extending a root over `buffered` commitments of the
+/// buffer, which a transaction pays once for each distinct note set, referenced
+/// root and `buffered` of its proofs.
 pub fn root_gas(buffered: usize) -> Result<Gas, GasOverflow> {
-    if buffered == 0 {
-        return Ok(Gas::new(0));
-    }
     EXECUTION_BUFFERED_GAS
         .checked_mul(Value::try_from(buffered).map_err(|_| GasOverflow)?)?
         .checked_add(EXECUTION_ROOT_GAS)
 }
 
 /// The Execution Gas of a spend of `inputs` nullifiers and `outputs`
-/// commitments, its root extended over `buffered` commitments.
-pub fn spend_gas(inputs: usize, outputs: usize, buffered: usize) -> Result<Gas, GasOverflow> {
+/// commitments.
+pub fn spend_gas(inputs: usize, outputs: usize) -> Result<Gas, GasOverflow> {
     EXECUTION_PROOF_GAS
-        .checked_add(root_gas(buffered)?)?
         .checked_add(
             EXECUTION_NULLIFIER_GAS
                 .checked_mul(Value::try_from(inputs).map_err(|_| GasOverflow)?)?,
@@ -245,7 +239,7 @@ pub fn tx_terms_gas(bytes: usize, changed_note_sets: usize) -> Result<Gas, GasOv
 #[cfg(test)]
 pub mod test_utils {
     use crate::mantle::{
-        gas::{NoteSetKey, OpGasContext, ThresholdSource},
+        gas::{OpGasContext, ThresholdSource},
         ops::channel::{ChannelId, ChannelKeyIndex},
     };
 
@@ -257,17 +251,13 @@ pub mod test_utils {
         }
     }
 
-    impl OpGasContext for FixedThresholds {
-        fn buffered(&self, _set: &NoteSetKey) -> usize {
-            0
-        }
-    }
+    impl OpGasContext for FixedThresholds {}
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OpGasContext, OperationGas,
+        Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OpGasContext, OperationGas, root_gas,
         spend_gas, tx_terms_gas,
     };
     use crate::mantle::{Value, gas::test_utils::FixedThresholds, ops::channel::ChannelId};
@@ -309,16 +299,13 @@ mod tests {
     }
 
     #[test]
-    fn spend_gas_without_buffer_has_no_root() {
-        assert_eq!(spend_gas(1, 2, 0), Ok(Gas::new(1770 + 725 + 2 * 24)));
+    fn spend_gas_charges_the_proof_and_the_notes() {
+        assert_eq!(spend_gas(1, 2), Ok(Gas::new(1770 + 725 + 2 * 24)));
     }
 
     #[test]
-    fn spend_gas_with_buffer_extends_the_root() {
-        assert_eq!(
-            spend_gas(1, 1, 3),
-            Ok(Gas::new(1770 + 879 + 3 * 23 + 725 + 24))
-        );
+    fn root_gas_charges_the_root_and_each_commitment() {
+        assert_eq!(root_gas(3), Ok(Gas::new(879 + 3 * 23)));
     }
 
     #[test]
@@ -334,7 +321,7 @@ mod tests {
 
     #[test]
     fn spend_gas_overflow_is_an_error() {
-        assert_eq!(spend_gas(usize::MAX, 0, 0), Err(GasOverflow));
+        assert_eq!(spend_gas(usize::MAX, 0), Err(GasOverflow));
     }
 
     #[test]

@@ -13,8 +13,8 @@ use crate::{
         batch::DeferredZkTransfer,
         channel::{Channels, Error},
         gas::{
-            Gas, GasOverflow, MainnetGasProfile, NoteSetKey, OpGasCalculator, OpGasContext,
-            OperationGas, spend_gas,
+            Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OpGasContext, OperationGas,
+            spend_gas,
         },
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
@@ -142,14 +142,9 @@ impl OperationGas<MainnetGasProfile> for ChannelWithdrawOp {
 }
 
 impl OpGasCalculator<MainnetGasProfile> for ChannelWithdrawOp {
-    // The Operation, plus the spend of its notes over the commitments the
-    // transaction buffered in the note set of its channel before it.
-    fn execution_gas(&self, context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
-        Self::GAS_COST.checked_add(spend_gas(
-            self.inputs.len(),
-            self.outputs.len(),
-            context.buffered(&NoteSetKey::Channel(self.channel_id)),
-        )?)
+    // The Operation, plus the spend of its notes.
+    fn execution_gas(&self, _context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
+        Self::GAS_COST.checked_add(spend_gas(self.inputs.len(), self.outputs.len())?)
     }
 }
 

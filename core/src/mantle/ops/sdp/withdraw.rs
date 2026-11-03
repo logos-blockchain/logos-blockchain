@@ -65,7 +65,7 @@ impl OpGasCalculator<MainnetGasProfile> for SDPWithdrawOp {
     fn execution_gas(&self, _context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
         Self::GAS_COST
             .checked_add(EXECUTION_SIGNATURE_GAS)?
-            .checked_add(spend_gas(1, self.outputs.len(), 0)?)
+            .checked_add(spend_gas(1, self.outputs.len())?)
     }
 }
 

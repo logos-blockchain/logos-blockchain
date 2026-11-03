@@ -33,8 +33,7 @@ use crate::{
         gas::{
             EXECUTION_OPENING_GAS, EXECUTION_PAYMENT_GAS, EXECUTION_PROGRAM_PROOF_GAS,
             EXECUTION_PROGRAM_STEP_GAS, EXECUTION_SIGNATURE_GAS, EXECUTION_USER_STEP_GAS, Gas,
-            GasOverflow, MainnetGasProfile, NoteSetKey, OpGasCalculator, OpGasContext,
-            OperationGas, spend_gas,
+            GasOverflow, MainnetGasProfile, OpGasCalculator, OpGasContext, OperationGas, spend_gas,
         },
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
@@ -293,25 +292,17 @@ impl OperationGas<MainnetGasProfile> for InscriptionOp {
 }
 
 impl OpGasCalculator<MainnetGasProfile> for InscriptionOp {
-    // The Operation and its signature, plus each step: a user step is a spend
-    // over its claimed buffer, a program step is its proof, an opening per
-    // program note and its spend, plus each payment as a spend over its claimed
-    // buffer. The spend of a program step extends its root over the commitments
-    // buffered in the channel note set before the Operation, by the earlier
-    // steps and by its own payments.
-    fn execution_gas(&self, context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
-        let mut buffered = context.buffered(&NoteSetKey::Channel(self.channel_id));
+    // The Operation and its signature, plus each step: a user step is a spend, a
+    // program step is its proof, an opening per program note and its spend, plus
+    // each payment as a spend.
+    fn execution_gas(&self, _context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
         let mut gas = Self::GAS_COST.checked_add(EXECUTION_SIGNATURE_GAS)?;
         for step in self.steps.iter() {
             match step {
                 Step::User(step) => {
                     gas = gas
                         .checked_add(EXECUTION_USER_STEP_GAS)?
-                        .checked_add(spend_gas(
-                            step.inputs.len(),
-                            step.outputs.len(),
-                            usize::from(step.buffered),
-                        )?)?;
+                        .checked_add(spend_gas(step.inputs.len(), step.outputs.len())?)?;
                 }
                 Step::Program(step) => {
                     gas = gas
@@ -326,21 +317,11 @@ impl OpGasCalculator<MainnetGasProfile> for InscriptionOp {
                     for payment in step.payments.iter() {
                         gas = gas
                             .checked_add(EXECUTION_PAYMENT_GAS)?
-                            .checked_add(spend_gas(
-                                payment.inputs.len(),
-                                payment.outputs.len(),
-                                usize::from(payment.buffered),
-                            )?)?;
-                        buffered = buffered.saturating_add(payment.outputs.len());
+                            .checked_add(spend_gas(payment.inputs.len(), payment.outputs.len())?)?;
                     }
-                    gas = gas.checked_add(spend_gas(
-                        step.inputs.len(),
-                        step.outputs.len(),
-                        buffered,
-                    )?)?;
+                    gas = gas.checked_add(spend_gas(step.inputs.len(), step.outputs.len())?)?;
                 }
             }
-            buffered = buffered.saturating_add(step.outputs().len());
         }
         Ok(gas)
     }
@@ -1234,21 +1215,19 @@ mod tests {
             })
         };
         // A program step is 54 + 6320 + 151 (one opening), its spend of one input
-        // and one output (1770 + 725 + 24, plus 879 + 23 * b when b commitments are
-        // buffered) and, per payment of one input and one output claiming 71
-        // buffered, 233 + 1770 + 725 + 24 + 879 + 23 * 71 = 5_264.
+        // and one output (1770 + 725 + 24) and, per payment of one input and one
+        // output, 233 + 1770 + 725 + 24 = 2_752. The transaction pays the root
+        // extensions.
         for (steps, expected) in [
             (vec![], 182u64),
             // 182 + 6_525 + 2_519
             (vec![program(0)], 9_226),
-            // 182 + 6_525 + 5_264 + (2_519 + 879 + 23)
-            (vec![program(1)], 15_392),
-            // 182 + 2_656 + 15_210, the spec vector inscription
-            (vec![user, program(1)], 18_048),
-            // 15_392 + (6_525 + 3 * 5_264 + 2_519 + 879 + 23 * 5): the second program
-            // step finds the two outputs of the first (its payment and itself) and
-            // its own three payments buffered
-            (vec![program(1), program(3)], 41_222),
+            // 182 + 6_525 + 2_752 + 2_519
+            (vec![program(1)], 11_978),
+            // 182 + 2_656 + 11_796
+            (vec![user, program(1)], 14_634),
+            // 11_978 + (6_525 + 3 * 2_752 + 2_519)
+            (vec![program(1), program(3)], 29_278),
         ] {
             let operation = InscriptionOp {
                 steps: steps.try_into().unwrap(),
@@ -1277,11 +1256,10 @@ mod tests {
             ..InscriptionOp::sample()
         };
         // 182 + (54 + 6320 + 151) + the payment (233 + 1770 + 725 + 24) + the spend
-        // of the step, its root extended over the one output of the payment
-        // (1770 + 879 + 23 + 725 + 24)
+        // of the step (1770 + 725 + 24)
         assert_eq!(
             operation.execution_gas(&FixedThresholds(3)),
-            Ok(Gas::new(182 + 6_525 + 2_752 + 3_421))
+            Ok(Gas::new(182 + 6_525 + 2_752 + 2_519))
         );
     }
 
