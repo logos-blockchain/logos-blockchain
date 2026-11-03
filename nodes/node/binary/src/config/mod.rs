@@ -4,7 +4,7 @@ use std::{
 };
 
 use clap::{Parser, ValueEnum, builder::OsStr};
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Result, bail, eyre};
 use lb_core::sdp::ProviderId;
 use lb_groth16::fr_from_bytes;
 use lb_key_management_system_service::{
@@ -19,7 +19,7 @@ use lb_tracing::{
 use lb_utils::yaml::{OnUnknownKeys, deserialize_from_value, deserialize_value_at_path, merge};
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
-use serde_yaml::Value;
+use serde_yaml::{Mapping, Value};
 
 pub use crate::config::{
     api::serde::Config as ApiConfig, blend::serde::Config as BlendConfig,
@@ -32,6 +32,7 @@ pub use crate::config::{
 };
 use crate::config::{
     keystore::Keystore,
+    migrations::{ConfigVersion, VERSION_KEY},
     network::serde::nat,
     tracing::serde::{
         filter::{EnvConfig, Layer},
@@ -49,6 +50,7 @@ pub mod deployment;
 pub mod keystore;
 pub mod kms;
 pub mod mempool;
+pub mod migrations;
 pub mod network;
 pub mod pow;
 pub mod sdp;
@@ -89,6 +91,40 @@ pub struct UserConfig {
     pub state: StateConfig,
 }
 
+/// `config` with this build's version as its first key, the way every config
+/// the node writes starts.
+pub(crate) fn with_version(config: Value) -> Value {
+    let mut versioned = Mapping::new();
+    versioned.insert(
+        VERSION_KEY.into(),
+        ConfigVersion::current().to_string().into(),
+    );
+    if let Value::Mapping(config) = config {
+        versioned.extend(config);
+    }
+    Value::Mapping(versioned)
+}
+
+/// The part of `after` that differs from `before`, or `None` when nothing does.
+pub(crate) fn changed_values(before: &Value, after: Value) -> Option<Value> {
+    match (before, after) {
+        (Value::Mapping(before), Value::Mapping(after)) => {
+            let changed: Mapping = after
+                .into_iter()
+                .filter_map(|(key, value)| {
+                    let value = match before.get(&key) {
+                        Some(previous) => changed_values(previous, value)?,
+                        None => value,
+                    };
+                    Some((key, value))
+                })
+                .collect();
+            (!changed.is_empty()).then_some(Value::Mapping(changed))
+        }
+        (before, after) => (*before != after).then_some(after),
+    }
+}
+
 pub struct RequiredValues {
     pub blend: BlendConfig,
     pub cryptarchia: CryptarchiaConfig,
@@ -101,11 +137,24 @@ impl UserConfig {
     /// next to it, or `kms.keystore`) exists, the node identity, the key ids,
     /// `wallet` and `kms` are populated from it and the config only overrides
     /// them; without one the config has to be complete.
+    ///
+    /// A config of an earlier release is upgraded to the current format: the
+    /// original is kept as `<config>.<version>.bak` and the upgraded config
+    /// written in its place.
     pub fn load(path: &Path) -> Result<Self> {
-        let overrides = match deserialize_value_at_path(path, OnUnknownKeys::Fail)? {
-            Value::Null => Value::Mapping(serde_yaml::Mapping::new()),
+        let mut overrides = match deserialize_value_at_path(path, OnUnknownKeys::Fail)? {
+            Value::Null => Value::Mapping(Mapping::new()),
             overrides => overrides,
         };
+        let upgraded_from = migrations::upgrade(&mut overrides)?;
+        let config = Self::load_overrides(path, overrides)?;
+        if let Some(from) = upgraded_from {
+            config.save_upgraded(path, from);
+        }
+        Ok(config)
+    }
+
+    fn load_overrides(path: &Path, overrides: Value) -> Result<Self> {
         let kms = overrides
             .get("kms")
             .cloned()
@@ -116,7 +165,7 @@ impl UserConfig {
         let mut config = if has_keystore {
             Keystore::load(&keystore_path)?.config_values()?
         } else {
-            Value::Mapping(serde_yaml::Mapping::new())
+            Value::Mapping(Mapping::new())
         };
         merge(&mut config, overrides);
         deserialize_from_value(config, OnUnknownKeys::Fail).map_err(|error| {
@@ -126,6 +175,44 @@ impl UserConfig {
                 eyre!("{error} (no keystore at {})", keystore_path.display())
             }
         })
+    }
+
+    /// Keeps the config at `path`, of version `from`, as `<path>.<from>.bak`
+    /// and writes this config in its place: only what differs from the
+    /// keystore and the defaults, as `config init` writes it, or all of it
+    /// without a keystore. Failing to doesn't stop the node, which already runs
+    /// on the upgraded config; it's retried on the next start.
+    fn save_upgraded(&self, path: &Path, from: ConfigVersion) {
+        let backup = PathBuf::from(format!("{}.{from}.bak", path.display()));
+        match self.write_upgraded(path, &backup) {
+            Ok(()) => eprintln!(
+                "Upgraded the {from} config {} to the {} format; the original is kept at {}.",
+                path.display(),
+                ConfigVersion::current(),
+                backup.display(),
+            ),
+            Err(error) => eprintln!(
+                "Running on an upgraded copy of the {from} config {}, which could not be rewritten: \
+                 {error}",
+                path.display(),
+            ),
+        }
+    }
+
+    fn write_upgraded(&self, path: &Path, backup: &Path) -> Result<()> {
+        if backup.exists() {
+            bail!("{} exists", backup.display());
+        }
+        let config = serde_yaml::to_value(self)?;
+        let sparse = match Self::load_overrides(path, Value::Mapping(Mapping::new())) {
+            Ok(defaults) => {
+                changed_values(&serde_yaml::to_value(defaults)?, config).unwrap_or_default()
+            }
+            Err(_) => config,
+        };
+        std::fs::copy(path, backup)?;
+        std::fs::write(path, serde_yaml::to_string(&with_version(sparse))?)?;
+        Ok(())
     }
 
     #[must_use]
