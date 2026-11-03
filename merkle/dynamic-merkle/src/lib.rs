@@ -2,9 +2,10 @@
 //! backend.
 //!
 //! The tree stores leaf hashes at positions of a binary tree of fixed height
-//! ([`TREE_HEIGHT_EXCEPT_ROOT`]). Insertions fill the lowest available position
-//! (reusing positions freed by removals), so a leaf's index is stable for the
-//! lifetime of the tree and membership proofs have a constant length.
+//! (`HEIGHT`, [`TREE_HEIGHT_EXCEPT_ROOT`] by default). Insertions fill the
+//! lowest available position (reusing positions freed by removals), so a leaf's
+//! index is stable for the lifetime of the tree and membership proofs have a
+//! constant length.
 //!
 //! The value/hash type and hashing operations are supplied by a
 //! [`MerkleHasher`] implementation, which the tree is parameterized over. How a
@@ -42,6 +43,9 @@ pub trait MerkleHasher {
 /// and the base-2 logarithm of the tree's leaf capacity (`2^32` items).
 pub const TREE_HEIGHT_EXCEPT_ROOT: usize = 32;
 
+/// Largest supported tree height, bounding the cached empty subtree roots.
+pub const MAX_TREE_HEIGHT: usize = 40;
+
 /// Generates a cached [`MerkleHasher::empty_subtree_root`] implementation for a
 /// concrete `Hash` type.
 ///
@@ -62,16 +66,16 @@ macro_rules! empty_subtree_root {
     ($hash:ty) => {
         fn empty_subtree_root(height: usize) -> $hash {
             static PRECOMPUTED_EMPTY_ROOTS: ::std::sync::OnceLock<
-                [$hash; $crate::TREE_HEIGHT_EXCEPT_ROOT + 1],
+                [$hash; $crate::MAX_TREE_HEIGHT + 1],
             > = ::std::sync::OnceLock::new();
             assert!(
-                height <= $crate::TREE_HEIGHT_EXCEPT_ROOT,
+                height <= $crate::MAX_TREE_HEIGHT,
                 "Height{height} must be <={}",
-                $crate::TREE_HEIGHT_EXCEPT_ROOT
+                $crate::MAX_TREE_HEIGHT
             );
             PRECOMPUTED_EMPTY_ROOTS.get_or_init(|| {
-                let mut hashes = [Self::EMPTY_VALUE; $crate::TREE_HEIGHT_EXCEPT_ROOT + 1];
-                for i in 1..=$crate::TREE_HEIGHT_EXCEPT_ROOT {
+                let mut hashes = [Self::EMPTY_VALUE; $crate::MAX_TREE_HEIGHT + 1];
+                for i in 1..=$crate::MAX_TREE_HEIGHT {
                     hashes[i] = Self::compress(&hashes[i - 1], &hashes[i - 1]);
                 }
                 hashes
@@ -163,21 +167,24 @@ impl<Hash: Copy> Node<Hash> {
     /// children. Fully empty sibling subtrees are collapsed into a single
     /// empty parent. Invalid subtree heights or mismatched sibling heights
     /// are rejected.
-    fn rebuild_and_validate<H>(node: &Arc<Self>) -> Result<Arc<Self>, &'static str>
+    fn rebuild_and_validate<H>(
+        node: &Arc<Self>,
+        tree_height: usize,
+    ) -> Result<Arc<Self>, &'static str>
     where
         H: MerkleHasher<Hash = Hash>,
     {
         let node = match node.as_ref() {
             Self::Empty { height } => {
-                if *height > TREE_HEIGHT_EXCEPT_ROOT {
+                if *height > tree_height {
                     return Err("empty subtree height exceeds tree height");
                 }
                 return Ok(Arc::clone(node));
             }
             Self::Leaf { .. } => return Ok(Arc::clone(node)),
             Self::Inner { left, right, .. } => {
-                let left = Self::rebuild_and_validate::<H>(left)?;
-                let right = Self::rebuild_and_validate::<H>(right)?;
+                let left = Self::rebuild_and_validate::<H>(left, tree_height)?;
+                let right = Self::rebuild_and_validate::<H>(right, tree_height)?;
                 // Malformed serialized input must be rejected as a serde
                 // error; `new_inner`'s assertion is for internal misuse.
                 if left.height() != right.height() {
@@ -186,7 +193,7 @@ impl<Hash: Copy> Node<Hash> {
                 Self::new_inner::<H>(left, right)
             }
         };
-        if node.height() > TREE_HEIGHT_EXCEPT_ROOT {
+        if node.height() > tree_height {
             return Err("tree height exceeds fixed tree height");
         }
         Ok(Arc::new(node))
@@ -315,7 +322,7 @@ impl<Hash: Copy> Node<Hash> {
     /// Computes the Merkle path for the item at the given index.
     /// The path is ordered from leaf to root (excluded).
     /// Returns `None` if the index does not exist or has been removed.
-    fn path<H>(self: &Arc<Self>, index: usize) -> Option<Vec<MerkleNode<Hash>>>
+    fn path<H>(self: &Arc<Self>, index: usize, tree_height: usize) -> Option<Vec<MerkleNode<Hash>>>
     where
         H: MerkleHasher<Hash = Hash>,
     {
@@ -330,16 +337,16 @@ impl<Hash: Copy> Node<Hash> {
 
                 if index < left.capacity() {
                     // Going down left subtree, store right sibling hash
-                    let mut path = left.path::<H>(index)?;
-                    if path.len() >= TREE_HEIGHT_EXCEPT_ROOT {
+                    let mut path = left.path::<H>(index, tree_height)?;
+                    if path.len() >= tree_height {
                         return None;
                     }
                     path.push(MerkleNode::Right(right.value::<H>()));
                     Some(path)
                 } else {
                     // Going down right subtree, store left sibling hash
-                    let mut path = right.path::<H>(index - left.capacity())?;
-                    if path.len() >= TREE_HEIGHT_EXCEPT_ROOT {
+                    let mut path = right.path::<H>(index - left.capacity(), tree_height)?;
+                    if path.len() >= tree_height {
                         return None;
                     }
                     path.push(MerkleNode::Left(left.value::<H>()));
@@ -371,12 +378,12 @@ impl<Hash: Copy> Node<Hash> {
 /// canonical structure. Compared to a MPT, the height of this tree is
 /// predictable and bounded by the number of items, for example allowing for
 /// efficient and simple proof of memberships for `PoL`.
-pub struct DynamicMerkleTree<H: MerkleHasher> {
+pub struct DynamicMerkleTree<H: MerkleHasher, const HEIGHT: usize = TREE_HEIGHT_EXCEPT_ROOT> {
     root: Arc<Node<H::Hash>>,
     _hasher: PhantomData<H>,
 }
 
-impl<H: MerkleHasher> Clone for DynamicMerkleTree<H> {
+impl<H: MerkleHasher, const HEIGHT: usize> Clone for DynamicMerkleTree<H, HEIGHT> {
     fn clone(&self) -> Self {
         Self {
             root: Arc::clone(&self.root),
@@ -385,7 +392,7 @@ impl<H: MerkleHasher> Clone for DynamicMerkleTree<H> {
     }
 }
 
-impl<H: MerkleHasher> fmt::Debug for DynamicMerkleTree<H>
+impl<H: MerkleHasher, const HEIGHT: usize> fmt::Debug for DynamicMerkleTree<H, HEIGHT>
 where
     H::Hash: fmt::Debug,
 {
@@ -396,18 +403,16 @@ where
     }
 }
 
-impl<H: MerkleHasher> Default for DynamicMerkleTree<H> {
+impl<H: MerkleHasher, const HEIGHT: usize> Default for DynamicMerkleTree<H, HEIGHT> {
     fn default() -> Self {
         Self {
-            root: Arc::new(Node::Empty {
-                height: TREE_HEIGHT_EXCEPT_ROOT,
-            }),
+            root: Arc::new(Node::Empty { height: HEIGHT }),
             _hasher: PhantomData,
         }
     }
 }
 
-impl<H: MerkleHasher> DynamicMerkleTree<H> {
+impl<H: MerkleHasher, const HEIGHT: usize> DynamicMerkleTree<H, HEIGHT> {
     /// Creates a new, empty tree.
     #[must_use]
     pub fn new() -> Self {
@@ -433,7 +438,7 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
     /// # Panics
     ///
     /// Panics if the tree is already at full capacity
-    /// (`2^TREE_HEIGHT_EXCEPT_ROOT` items).
+    /// (`2^HEIGHT` items).
     pub fn insert(&self, value: H::Hash) -> (Self, usize) {
         assert!(
             self.size() < self.root.capacity(),
@@ -514,8 +519,8 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
     /// The path is ordered from leaf to root (excluded).
     /// Returns `None` if the index does not exist or has been removed.
     #[must_use]
-    pub fn path(&self, index: usize) -> Option<MerklePath<H::Hash>> {
-        self.root.path::<H>(index)?.try_into().ok()
+    pub fn path(&self, index: usize) -> Option<MerklePath<H::Hash, HEIGHT>> {
+        self.root.path::<H>(index, HEIGHT)?.try_into().ok()
     }
 
     /// Rebuilds a tree placing each leaf hash at its given index, representing
@@ -534,7 +539,7 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
     #[must_use]
     pub fn from_sorted_items(items: impl IntoIterator<Item = (usize, H::Hash)>) -> Self {
         let mut items = items.into_iter().peekable();
-        let root = Self::build_sparse_subtree(&mut items, 0, TREE_HEIGHT_EXCEPT_ROOT);
+        let root = Self::build_sparse_subtree(&mut items, 0, HEIGHT);
         assert!(
             items.next().is_none(),
             "all indices must be within tree capacity"
@@ -601,13 +606,13 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
     }
 }
 
-impl<H: MerkleHasher> PartialEq for DynamicMerkleTree<H> {
+impl<H: MerkleHasher, const HEIGHT: usize> PartialEq for DynamicMerkleTree<H, HEIGHT> {
     fn eq(&self, other: &Self) -> bool {
         self.root() == other.root()
     }
 }
 
-impl<H: MerkleHasher> Eq for DynamicMerkleTree<H> {}
+impl<H: MerkleHasher, const HEIGHT: usize> Eq for DynamicMerkleTree<H, HEIGHT> {}
 
 /// [`serde`](::serde) support for [`DynamicMerkleTree`].
 ///
@@ -629,7 +634,7 @@ pub mod serde {
         root: Arc<super::Node<Hash>>,
     }
 
-    impl<H> Serialize for super::DynamicMerkleTree<H>
+    impl<H, const HEIGHT: usize> Serialize for super::DynamicMerkleTree<H, HEIGHT>
     where
         H: MerkleHasher,
         H::Hash: Serialize,
@@ -644,7 +649,7 @@ pub mod serde {
         }
     }
 
-    impl<'de, H> Deserialize<'de> for super::DynamicMerkleTree<H>
+    impl<'de, H, const HEIGHT: usize> Deserialize<'de> for super::DynamicMerkleTree<H, HEIGHT>
     where
         H: MerkleHasher,
         H::Hash: Deserialize<'de>,
@@ -654,11 +659,9 @@ pub mod serde {
             D: Deserializer<'de>,
         {
             let raw = Raw::<H::Hash>::deserialize(deserializer)?;
-            let root = super::Node::rebuild_and_validate::<H>(&raw.root)
+            let root = super::Node::rebuild_and_validate::<H>(&raw.root, HEIGHT)
                 .map_err(serde::de::Error::custom)?;
-            if root.height() != super::TREE_HEIGHT_EXCEPT_ROOT
-                || matches!(root.as_ref(), super::Node::Leaf { .. })
-            {
+            if root.height() != HEIGHT || matches!(root.as_ref(), super::Node::Leaf { .. }) {
                 return Err(serde::de::Error::custom(
                     "dynamic Merkle tree root has an invalid shape",
                 ));
@@ -690,7 +693,7 @@ impl<T> MerkleNode<T> {
 }
 
 /// A Merkle path consisting of sibling nodes from leaf to root (excluded).
-pub type MerklePath<T> = [MerkleNode<T>; TREE_HEIGHT_EXCEPT_ROOT];
+pub type MerklePath<T, const HEIGHT: usize = TREE_HEIGHT_EXCEPT_ROOT> = [MerkleNode<T>; HEIGHT];
 
 #[cfg(test)]
 mod test_fr {
@@ -1151,6 +1154,24 @@ mod tests {
         let path2 = tree.path(idx2).unwrap();
         assert_eq!(path2.len(), TREE_HEIGHT_EXCEPT_ROOT);
         verify_path(item2, &path2, tree.root());
+    }
+
+    #[test]
+    fn test_height_40_root_and_path() {
+        let tree = DynamicMerkleTree::<TestHasher, 40>::new();
+        assert_eq!(tree.root(), TestHasher::empty_subtree_root(40));
+        let (tree, index) = tree.insert(fr_from_usize(7));
+        assert_eq!(index, 0);
+        let path = tree.path(0).unwrap();
+        assert_eq!(path.len(), 40);
+        let mut node = fr_from_usize(7);
+        for sibling in &path {
+            node = match sibling {
+                MerkleNode::Left(left) => TestHasher::compress(left, &node),
+                MerkleNode::Right(right) => TestHasher::compress(&node, right),
+            };
+        }
+        assert_eq!(node, tree.root());
     }
 
     /// Verifies a Merkle path by recomputing the root hash from the leaf value

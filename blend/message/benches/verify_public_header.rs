@@ -116,7 +116,7 @@ static FIXTURE: LazyLock<(EncapsulatedMessage, RealProofsVerifier)> = LazyLock::
         // benchmark optimistic compared to production values.
         leader: LeaderInputs {
             pol_epoch_nonce: full_width_value(1001),
-            pol_ledger_aged: full_width_value(1002),
+            pol_eligible_aged: full_width_value(1002),
             message_quota: Quota::ONE,
             lottery_0: full_width_value(1003),
             lottery_1: full_width_value(1004),

@@ -9,9 +9,12 @@ use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
     Note, Op, OpProof, SignedOps, TxHash,
     gas::GasCost,
-    ops::channel::{
-        ChannelId, MsgId,
-        inscribe::{Inscription, InscriptionOp},
+    ops::{
+        ChannelInscribeProof,
+        channel::{
+            ChannelId, MsgId,
+            inscribe::{ChannelSteps, Inscription, InscriptionOp},
+        },
     },
     traits::Hashable as _,
     transactions::{OpProofs, builder::MantleTxBuilder},
@@ -22,10 +25,14 @@ use lb_testing_framework::NodeHttpClient;
 use tracing::info;
 
 use crate::{
-    common::chain::{scan_chain_until, wait_for_transactions_inclusion},
+    common::{
+        chain::{scan_chain_until, wait_for_transactions_inclusion},
+        wallet::{random_nonce, record_note_openings},
+    },
     cucumber::{
         error::{StepError, StepResult},
         steps::TARGET,
+        utils::lgo_to_units,
         world::CucumberWorld,
     },
 };
@@ -69,8 +76,11 @@ async fn fund_and_submit_payment(
     let funding_pk = funding_wallet.public_key()?;
     let client = world.resolve_node_http_client(node_name)?;
 
+    // The receiving test wallet adopts the note from its recorded opening.
+    let receiver_note = Note::new(lgo_to_units(amount), random_nonce(), receiver_pk);
+    record_note_openings([receiver_note]);
     let tx_builder = MantleTxBuilder::new()
-        .add_ledger_output(Note::new(amount, receiver_pk))
+        .add_ledger_output(receiver_note)
         .map_err(|source| StepError::LogicalError {
             message: format!(
                 "Step `{}` error: failed to add output: {source}",
@@ -440,6 +450,7 @@ async fn step_fund_inscription_transaction(
         inscription,
         parent: MsgId::root(),
         signer: signing_key.public_key().into_unverified(),
+        steps: ChannelSteps::default(),
     };
 
     let tx_builder = MantleTxBuilder::new()
@@ -478,7 +489,10 @@ async fn step_fund_inscription_transaction(
 
     let tx_hash = ops.hash();
     let signature = signing_key.sign_payload(tx_hash.as_signing_bytes());
-    let op_proofs = OpProofs::from([OpProof::Ed25519Sig(signature), transfer_proof]);
+    let op_proofs = OpProofs::from([
+        OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(signature)),
+        transfer_proof,
+    ]);
     let signed_tx = SignedOps::from_parts(ops, op_proofs).expect("funded tx should be valid");
 
     world

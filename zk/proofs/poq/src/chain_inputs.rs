@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Copy, Clone)]
 pub struct PoQChainInputs {
     core_root: Groth16Input,
-    pol_ledger_aged: Groth16Input,
+    pol_eligible_aged: Groth16Input,
     pol_epoch_nonce: Groth16Input,
     pol_t0: Groth16Input,
     pol_t1: Groth16Input,
@@ -13,7 +13,7 @@ pub struct PoQChainInputs {
 #[derive(Clone, Copy)]
 pub struct PoQChainInputsData {
     pub core_root: Fr,
-    pub pol_ledger_aged: Fr,
+    pub pol_eligible_aged: Fr,
     pub pol_epoch_nonce: Fr,
     pub lottery_0: Fr,
     pub lottery_1: Fr,
@@ -22,7 +22,7 @@ pub struct PoQChainInputsData {
 #[derive(Deserialize, Serialize)]
 pub struct PoQChainInputsJson {
     core_root: Groth16InputDeser,
-    pol_ledger_aged: Groth16InputDeser,
+    pol_eligible_aged: Groth16InputDeser,
     pol_epoch_nonce: Groth16InputDeser,
     pol_t0: Groth16InputDeser,
     pol_t1: Groth16InputDeser,
@@ -34,7 +34,7 @@ impl TryFrom<PoQChainInputsJson> for PoQChainInputs {
     fn try_from(
         PoQChainInputsJson {
             core_root,
-            pol_ledger_aged,
+            pol_eligible_aged,
             pol_epoch_nonce,
             pol_t0,
             pol_t1,
@@ -42,7 +42,7 @@ impl TryFrom<PoQChainInputsJson> for PoQChainInputs {
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             core_root: core_root.try_into()?,
-            pol_ledger_aged: pol_ledger_aged.try_into()?,
+            pol_eligible_aged: pol_eligible_aged.try_into()?,
             pol_epoch_nonce: pol_epoch_nonce.try_into()?,
             pol_t0: pol_t0.try_into()?,
             pol_t1: pol_t1.try_into()?,
@@ -54,7 +54,7 @@ impl From<&PoQChainInputs> for PoQChainInputsJson {
     fn from(
         PoQChainInputs {
             core_root,
-            pol_ledger_aged,
+            pol_eligible_aged,
             pol_epoch_nonce,
             pol_t0,
             pol_t1,
@@ -62,7 +62,7 @@ impl From<&PoQChainInputs> for PoQChainInputsJson {
     ) -> Self {
         Self {
             core_root: core_root.into(),
-            pol_ledger_aged: pol_ledger_aged.into(),
+            pol_eligible_aged: pol_eligible_aged.into(),
             pol_epoch_nonce: pol_epoch_nonce.into(),
             pol_t0: pol_t0.into(),
             pol_t1: pol_t1.into(),
@@ -74,7 +74,7 @@ impl From<PoQChainInputsData> for PoQChainInputs {
     fn from(
         PoQChainInputsData {
             core_root,
-            pol_ledger_aged,
+            pol_eligible_aged,
             pol_epoch_nonce,
             lottery_0,
             lottery_1,
@@ -82,7 +82,7 @@ impl From<PoQChainInputsData> for PoQChainInputs {
     ) -> Self {
         Self {
             core_root: core_root.into(),
-            pol_ledger_aged: pol_ledger_aged.into(),
+            pol_eligible_aged: pol_eligible_aged.into(),
             pol_epoch_nonce: pol_epoch_nonce.into(),
             pol_t0: Groth16Input::new(lottery_0),
             pol_t1: Groth16Input::new(lottery_1),

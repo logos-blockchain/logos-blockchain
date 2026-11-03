@@ -1,10 +1,8 @@
 use serde_yaml::{Mapping, Value};
 use testing_framework_core::scenario::DynError;
 
-const SDP_DECLARE_OPCODE: u64 = 0x20;
-
 /// The supported Logos and Nimbos deployment YAML layouts are very similar.
-/// Only two field names need translating here; all other data is preserved.
+/// Only one field name needs translating here; all other data is preserved.
 pub fn from_logos_yaml(source: &str) -> Result<String, DynError> {
     let mut output: Value = serde_yaml::from_str(source)?;
     let cryptarchia = output
@@ -29,35 +27,6 @@ pub fn from_logos_yaml(source: &str) -> Result<String, DynError> {
     }
 
     rename_required_field(min_stake, "timestamp", "epoch")?;
-
-    let transactions = cryptarchia
-        .get_mut("genesis_block")
-        .and_then(|genesis| genesis.get_mut("transactions"))
-        .and_then(Value::as_sequence_mut)
-        .ok_or("Nimbos preparation requires genesis transactions")?;
-
-    for transaction in transactions {
-        let mantle_tx = transaction
-            .get_mut("mantle_tx")
-            .ok_or("Nimbos preparation requires a genesis mantle transaction")?;
-        let ops = mantle_tx
-            .get_mut("ops")
-            .and_then(Value::as_sequence_mut)
-            .ok_or("Nimbos preparation requires genesis transaction operations")?;
-
-        for op in ops {
-            if op["opcode"].as_u64() != Some(SDP_DECLARE_OPCODE) {
-                continue;
-            }
-
-            let payload = op
-                .get_mut("payload")
-                .and_then(Value::as_mapping_mut)
-                .ok_or("Nimbos preparation requires an SDP declaration payload")?;
-
-            rename_required_field(payload, "service_note_id", "locked_note_id")?;
-        }
-    }
 
     // Nimbos validates its native schema; preserve everything we do not translate.
     Ok(serde_yaml::to_string(&output)?)
@@ -144,9 +113,7 @@ cryptarchia:
     fn preserves_network_and_genesis_data_with_native_field_names() {
         let converted: Value =
             serde_yaml::from_str(&from_logos_yaml(LOGOS_INPUT).unwrap()).unwrap();
-        let expected_yaml = LOGOS_INPUT
-            .replace("timestamp: 0", "epoch: 0")
-            .replace("service_note_id:", "locked_note_id:");
+        let expected_yaml = LOGOS_INPUT.replace("timestamp: 0", "epoch: 0");
         let expected: Value = serde_yaml::from_str(&expected_yaml).unwrap();
 
         assert_eq!(converted, expected);

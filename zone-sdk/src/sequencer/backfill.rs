@@ -81,10 +81,7 @@ where
             .flat_map(|t| t.ops.iter().rev())
             .find_map(|op| match op {
                 FinalizedOp::Inscription(i) => Some(i),
-                FinalizedOp::Deposit(_)
-                | FinalizedOp::Withdraw(_)
-                | FinalizedOp::Config(_)
-                | FinalizedOp::ChannelTransfer(_) => None,
+                FinalizedOp::Deposit(_) | FinalizedOp::Config(_) => None,
             })
         {
             self.last_msg_id = last_inscription.this_msg;
@@ -103,10 +100,7 @@ where
             .flat_map(|t| t.ops.iter().rev())
             .find_map(|op| match op {
                 FinalizedOp::Config(c) => Some(c),
-                FinalizedOp::Inscription(_)
-                | FinalizedOp::Deposit(_)
-                | FinalizedOp::Withdraw(_)
-                | FinalizedOp::ChannelTransfer(_) => None,
+                FinalizedOp::Inscription(_) | FinalizedOp::Deposit(_) => None,
             })
             && let Some(s) = self.state.as_mut()
         {

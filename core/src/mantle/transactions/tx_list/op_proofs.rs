@@ -38,23 +38,23 @@ impl OpProofs {
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
-        use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
+        use lb_key_management_system_keys::keys::Ed25519Signature;
 
         use crate::{
-            mantle::ops::{NoOpProof, ZkAndEd25519Proof, op_proof::samples::SampleProof as _},
-            proofs::{
-                channel_multi_sig_proof::ChannelMultiSigProof,
-                leader_claim_proof::Groth16LeaderClaimProof,
+            mantle::ops::{
+                ChannelInscribeProof, NoOpProof, ZkAndEd25519Proof, ZkTransferProof,
+                op_proof::samples::SampleProof as _,
             },
+            proofs::channel_multi_sig_proof::ChannelMultiSigProof,
         };
 
         Self::from([
             OpProof::Ed25519Sig(Ed25519Signature::sample()),
-            OpProof::ZkSig(ZkSignature::sample()),
+            OpProof::ZkTransfer(ZkTransferProof::sample()),
             OpProof::ZkAndEd25519Sigs(ZkAndEd25519Proof::sample()),
-            OpProof::PoC(Groth16LeaderClaimProof::sample()),
             OpProof::ChannelMultiSigProof(ChannelMultiSigProof::sample()),
             OpProof::None(NoOpProof::sample()),
+            OpProof::ChannelInscribe(ChannelInscribeProof::sample()),
         ])
     }
 }

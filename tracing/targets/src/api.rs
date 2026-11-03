@@ -9,7 +9,6 @@ log_targets! {
         wallet::{
             AGED_NOTES,
             BALANCE,
-            CLAIMABLE_VOUCHERS,
             TRANSFER_FUNDS,
         },
     },

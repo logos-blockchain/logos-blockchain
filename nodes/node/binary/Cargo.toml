@@ -86,6 +86,7 @@ tikv-jemallocator = { optional = true, workspace = true }
 [dev-dependencies]
 boon             = { workspace = true }
 bytes            = { workspace = true }
+lb-core          = { features = ["test-utils"], workspace = true }
 rand             = { workspace = true }
 serde_urlencoded = { workspace = true }
 serial_test      = { workspace = true }

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use lb_core::mantle::Utxo;
+use lb_wallet::OwnedNote;
 
 use crate::common::wallet::{WalletId, WalletUtxos};
 
@@ -20,7 +20,7 @@ impl WalletChainStateCache {
     pub fn record_wallets_utxos(
         &mut self,
         header_id: String,
-        wallet_utxos: impl IntoIterator<Item = (WalletId, Vec<Utxo>)>,
+        wallet_utxos: impl IntoIterator<Item = (WalletId, Vec<OwnedNote>)>,
     ) {
         self.utxo_snapshots
             .insert_many_wallet_utxos(header_id, wallet_utxos);
@@ -78,7 +78,7 @@ impl WalletUtxoSnapshot {
     }
 
     /// Iterate wallet UTXOs without cloning them.
-    pub fn iter(&self) -> impl Iterator<Item = (&WalletId, &[Utxo])> {
+    pub fn iter(&self) -> impl Iterator<Item = (&WalletId, &[OwnedNote])> {
         self.utxos_by_wallet
             .iter()
             .map(|(wallet_id, utxos)| (wallet_id, utxos.as_slice()))
@@ -96,7 +96,7 @@ impl WalletUtxoSnapshots {
     pub fn insert_many_wallet_utxos(
         &mut self,
         header_id: String,
-        wallet_utxos: impl IntoIterator<Item = (WalletId, Vec<Utxo>)>,
+        wallet_utxos: impl IntoIterator<Item = (WalletId, Vec<OwnedNote>)>,
     ) {
         let snapshot = self
             .by_header

@@ -1,19 +1,19 @@
 use lb_binary_codec::canonical::codec_fixtures;
 use lb_groth16::CompressedGroth16Proof;
-use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
+use lb_key_management_system_keys::keys::Ed25519Signature;
 
-use crate::mantle::ops::ZkAndEd25519Proof;
+use crate::mantle::ops::{ZkAndEd25519Proof, ZkTransferProof};
 
 codec_fixtures!(
     ZkAndEd25519Proof,
     ZkAndEd25519Proof {
-        zk_sig: ZkSignature::new(
+        zk_proof: ZkTransferProof::new(
             CompressedGroth16Proof::from_bytes(&[0u8; 128]),
         ),
         ed25519_sig: Ed25519Signature::from_bytes(&[0u8; 64]),
     } => "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
     ZkAndEd25519Proof {
-        zk_sig: ZkSignature::new(
+        zk_proof: ZkTransferProof::new(
             CompressedGroth16Proof::from_bytes(&[1u8; 128]),
         ),
         ed25519_sig: Ed25519Signature::from_bytes(&[2u8; 64]),

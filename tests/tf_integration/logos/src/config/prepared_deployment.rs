@@ -85,7 +85,12 @@ fn shared_inputs(
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{ops::OpRef, traits::MantleTx as _};
+    use lb_core::mantle::{
+        notes::derive_note_nullifier,
+        ops::OpRef,
+        traits::{GenesisTx as _, MantleTx as _},
+        transactions::UNITS_PER_LGO,
+    };
     use lb_key_management_system_service::keys::Key;
     use lb_libp2p::identity::ed25519;
     use lb_sdp_service::DeclarationConfig;
@@ -101,7 +106,7 @@ mod tests {
 
     #[test]
     fn prepared_network_survives_native_rendering() {
-        let wallet = WalletAccount::deterministic(0, 500_000, false).unwrap();
+        let wallet = WalletAccount::deterministic(0, 500_000 * UNITS_PER_LGO, false).unwrap();
         let prepared = DeploymentBuilder::new(TopologyConfig::with_node_numbers(2))
             .with_wallet_config(WalletConfig::new(vec![wallet.clone()]))
             .prepare()
@@ -109,12 +114,11 @@ mod tests {
         let shared = prepared.shared_inputs().unwrap();
         let network = prepared.network().unwrap();
         let genesis_id = network.genesis.header().id();
-        let transfer = network.genesis.genesis_tx().transfer().operation();
+        let transfer = network.genesis.genesis_tx().distribution();
         assert_eq!(
             transfer
-                .outputs
                 .iter()
-                .find(|note| note.pk == wallet.public_key())
+                .find(|note| note.public_key == wallet.public_key())
                 .unwrap()
                 .value,
             wallet.value
@@ -122,12 +126,11 @@ mod tests {
         for key in &network.consensus.regular_note_keys {
             assert_eq!(
                 transfer
-                    .outputs
                     .iter()
-                    .find(|note| note.pk == key.to_public_key())
+                    .find(|note| note.public_key == key.to_public_key())
                     .unwrap()
                     .value,
-                2_500_000
+                2_500_000 * UNITS_PER_LGO
             );
         }
         let declarations = network
@@ -137,14 +140,18 @@ mod tests {
             .into_iter()
             .filter_map(|op| match op {
                 OpRef::SDPDeclare(declaration) => {
-                    Some((declaration.id(), declaration.service_note_id))
+                    Some((declaration.id(), declaration.inputs.as_slice()[0]))
                 }
                 _ => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(declarations.len(), 2);
-        for (i, (_, note_id)) in declarations.iter().enumerate() {
-            assert_eq!(*note_id, network.consensus.blend_notes[i].note_id);
+        for (i, (_, nullifier)) in declarations.iter().enumerate() {
+            let blend_note = &network.consensus.blend_notes[i];
+            assert_eq!(
+                *nullifier,
+                derive_note_nullifier(&blend_note.note.commitment(), blend_note.sk.as_fr())
+            );
         }
 
         let plan = build_plan(prepared).unwrap();

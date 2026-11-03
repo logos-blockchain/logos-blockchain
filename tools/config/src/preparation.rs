@@ -3,7 +3,7 @@
 
 use lb_core::{
     block::genesis::GenesisBlock,
-    mantle::GenesisTime,
+    mantle::{GenesisTime, traits::GenesisTx as _},
     sdp::{Locator, ServiceType},
 };
 use lb_key_management_system_service::keys::ZkKey;
@@ -62,8 +62,8 @@ pub fn prepare_network(
             reserved_wallet_outputs.max(wallets.len()),
             sdp_funding,
         );
-    let genesis = create_genesis_block(&consensus.utxos, test_context, genesis_time);
-    let mut transfer = genesis.genesis_tx().transfer().operation().clone();
+    let genesis = create_genesis_block(&consensus.allocations, test_context, genesis_time);
+    let mut transfer = genesis.genesis_tx().distribution();
     let leader_keys = consensus
         .regular_note_keys
         .iter()
@@ -89,16 +89,7 @@ pub fn prepare_network(
     {
         refresh_service_note(note, &transfer);
     }
-    consensus.utxos = transfer
-        .outputs
-        .iter()
-        .enumerate()
-        .map(|(i, _)| {
-            transfer
-                .utxo_by_index(i)
-                .expect("genesis output must exist")
-        })
-        .collect();
+    consensus.allocations = transfer.as_slice().to_vec();
 
     let providers = ids
         .iter()

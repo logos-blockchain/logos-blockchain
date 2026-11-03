@@ -1,11 +1,10 @@
 use super::{
-    BundleAnnounce, DriveMode, Duration, MultiSigBus, Step, StepError, StepResult,
-    ZoneSequencerStartup, ZoneWorld, given, initialize_zone_indexer, log_step_error,
-    parse_optional_submit_depth, register_zone_sequencers_with_shared_key, single_column_table,
-    start_deposit_reaction_sequencer, start_deposit_withdraw_sequencer,
-    start_multisig_lifecycle_sequencer, start_named_sequencer, start_named_sequencer_with_startup,
-    start_nodes_with_zone_resources, stop_zone_sequencer, wait_for_lib_advance, when,
-    zone_account_balances, zone_node_resource_rows, zone_sequencer_start_rows, zone_step_error,
+    DriveMode, Duration, Step, StepError, StepResult, ZoneSequencerStartup, ZoneWorld, given,
+    initialize_zone_indexer, log_step_error, parse_optional_submit_depth,
+    register_zone_sequencers_with_shared_key, single_column_table, start_named_sequencer,
+    start_named_sequencer_with_startup, start_nodes_with_zone_resources, stop_zone_sequencer,
+    wait_for_lib_advance, when, zone_account_balances, zone_node_resource_rows,
+    zone_sequencer_start_rows, zone_step_error,
 };
 
 #[given("I start nodes with wallet and sequencer resources:")]
@@ -70,115 +69,6 @@ async fn start_sequencer_with_indexer(
 ) -> StepResult {
     start_named_sequencer(world, step, sequencer_alias, None, DriveMode::passive()).await?;
     initialize_zone_indexer(world, step, sequencer_alias)
-}
-
-#[when(
-    expr = "I start zone sequencer {string} pinning then withdrawing observed deposits with outputs {string}"
-)]
-async fn step_start_zone_sequencer_deposit_reaction(
-    world: &mut ZoneWorld,
-    step: &Step,
-    sequencer_alias: String,
-    outputs: String,
-) -> StepResult {
-    let withdraw_outputs = outputs
-        .split(',')
-        .map(|amount| {
-            amount
-                .trim()
-                .parse::<u64>()
-                .map_err(|error| StepError::InvalidArgument {
-                    message: format!("invalid withdraw output amount '{amount}': {error}"),
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    start_deposit_reaction_sequencer(world, step, &sequencer_alias, withdraw_outputs).await
-}
-
-#[cucumber::when(
-    expr = "I start multi-sig lifecycle zone sequencers with withdraw outputs {string}:"
-)]
-async fn step_start_multisig_lifecycle_sequencers(
-    world: &mut ZoneWorld,
-    step: &Step,
-    outputs: String,
-) -> StepResult {
-    let withdraw_outputs = outputs
-        .split(',')
-        .map(|amount| {
-            amount
-                .trim()
-                .parse::<u64>()
-                .map_err(|error| StepError::InvalidArgument {
-                    message: format!("invalid withdraw output amount '{amount}': {error}"),
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let aliases = single_column_table(step, "alias", "zone sequencer aliases")?;
-    // Shared gossip stand-in: `bus` holds signatures, `announce` fans out bundles.
-    let bus = MultiSigBus::default();
-    let (announce, _): (BundleAnnounce, _) = tokio::sync::broadcast::channel(256);
-    // Readiness barrier: each start awaits the SDK's ready signal before the
-    // next alias begins, and the policy takes its `announce` subscription
-    // synchronously before its task is spawned. So when the loop exits, every
-    // peer is ready and subscribed — no announcement can be broadcast into an
-    // empty channel.
-    for alias in &aliases {
-        start_multisig_lifecycle_sequencer(
-            world,
-            step,
-            alias,
-            withdraw_outputs.clone(),
-            std::sync::Arc::clone(&bus),
-            announce.clone(),
-        )
-        .await?;
-    }
-    // Make the barrier checkable: one live subscriber per spawned policy.
-    // (The channel's initial receiver was dropped above, so the count is
-    // exactly the policies'.)
-    let subscribed = announce.receiver_count();
-    if subscribed != aliases.len() {
-        return Err(StepError::LogicalError {
-            message: format!(
-                "expected {} multi-sig policies subscribed to the announce channel, found \
-                 {subscribed}",
-                aliases.len()
-            ),
-        });
-    }
-    Ok(())
-}
-
-#[when(
-    expr = "I start zone sequencer {string} withdrawing observed deposit of {int} with outputs {string}"
-)]
-async fn step_start_zone_sequencer_deposit_withdraw(
-    world: &mut ZoneWorld,
-    step: &Step,
-    sequencer_alias: String,
-    target_amount: u64,
-    outputs: String,
-) -> StepResult {
-    let withdraw_outputs = outputs
-        .split(',')
-        .map(|amount| {
-            amount
-                .trim()
-                .parse::<u64>()
-                .map_err(|error| StepError::InvalidArgument {
-                    message: format!("invalid withdraw output amount '{amount}': {error}"),
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    start_deposit_withdraw_sequencer(
-        world,
-        step,
-        &sequencer_alias,
-        target_amount,
-        withdraw_outputs,
-    )
-    .await
 }
 
 #[when("I start zone sequencers:")]

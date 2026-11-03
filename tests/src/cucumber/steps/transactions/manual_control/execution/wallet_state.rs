@@ -1,6 +1,8 @@
+use lb_groth16::fr_to_bytes;
+
 use super::{
-    BTreeMap, CucumberWorld, Path, Serialize, StepError, StepResult, TARGET, Utxo, WalletError,
-    WalletInfo, WalletOutputState, WalletStateView, WalletType,
+    BTreeMap, CucumberWorld, OwnedNote, Path, Serialize, StepError, StepResult, TARGET,
+    WalletError, WalletInfo, WalletOutputState, WalletStateView, WalletType,
     current_available_utxos_for_user_wallets, drain_node_wallet, drain_user_wallet, fs, info,
     utils, warn,
 };
@@ -77,7 +79,7 @@ async fn log_node_wallet_balance(world: &CucumberWorld, wallet: &WalletInfo) -> 
         Ok(balance) => {
             info!(
                 target: TARGET,
-                "Wallet `{}` [On-chain] {}/{} LGO, {}",
+                "Wallet `{}` [On-chain] {}/{} units, {}",
                 wallet.wallet_name,
                 balance.notes.len(),
                 balance.balance,
@@ -113,8 +115,8 @@ fn log_wallet_state_balance(wallet_name: &str, public_key_hex: &str, state: &Wal
 
     info!(
         target: TARGET,
-        "Wallet `{wallet_name}` [Available] {}/{} LGO, [Encumbered] {}/{} LGO, \
-        [On-chain] {}/{} LGO, {}",
+        "Wallet `{wallet_name}` [Available] {}/{} units, [Encumbered] {}/{} units, \
+        [On-chain] {}/{} units, {}",
         available.output_count,
         available.value,
         reserved.output_count,
@@ -215,7 +217,10 @@ pub(super) async fn export_funds(
     Ok(())
 }
 
-fn select_utxos_covering(mut utxos: Vec<Utxo>, value: u64) -> Result<Vec<Utxo>, StepError> {
+fn select_utxos_covering(
+    mut utxos: Vec<OwnedNote>,
+    value: u64,
+) -> Result<Vec<OwnedNote>, StepError> {
     utxos.sort_by_key(|utxo| std::cmp::Reverse(utxo.note.value));
     let available = utxos.iter().map(|utxo| utxo.note.value).sum();
     let mut selected = Vec::new();
@@ -259,9 +264,9 @@ fn exported_secret_key(
         })
 }
 
-fn exported_utxo(utxo: &Utxo) -> Result<ExportedUtxo, StepError> {
+fn exported_utxo(utxo: &OwnedNote) -> Result<ExportedUtxo, StepError> {
     Ok(ExportedUtxo {
-        utxo_id: hex::encode(utxo.id().as_bytes()),
+        utxo_id: hex::encode(fr_to_bytes(&utxo.nullifier.0)),
         value: utxo.note.value,
         encoded_utxo: bincode::serialize(utxo).map(hex::encode).map_err(|error| {
             StepError::StepFail {

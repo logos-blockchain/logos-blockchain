@@ -20,7 +20,7 @@ use lb_chain_service::{
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    block::{Block, BlockTransactions, Proposal, verify_header_alone, verify_header_signature},
+    block::{Block, BlockTransactions, Proposal, verify_header_alone},
     header::HeaderId,
     mantle::{
         ledger::verification_mode::StandardMode,
@@ -92,8 +92,6 @@ pub enum Error {
     InvalidBlock(String),
     #[error("Header is not valid on its own: {0}")]
     InvalidHeader(#[from] lb_core::block::HeaderError),
-    #[error("Invalid block header signature")]
-    InvalidSignature,
     #[error("No combination of candidate transactions reproduces the block root")]
     NoMatchingReconstruction,
     #[error("Reference {index} ({prefix}) matches no local transaction")]
@@ -111,11 +109,9 @@ pub enum Error {
 impl From<lb_core::block::Error> for Error {
     fn from(e: lb_core::block::Error) -> Self {
         match e {
-            lb_core::block::Error::Signature => Self::InvalidSignature,
             lb_core::block::Error::Serialisation(_)
             | lb_core::block::Error::Header(_)
             | lb_core::block::Error::BodyRootMismatch
-            | lb_core::block::Error::KeyMismatch
             | lb_core::block::Error::BoundedError(_)
             | lb_core::block::Error::ContentTooBig { .. } => Self::InvalidBlock(e.to_string()),
         }
@@ -933,14 +929,13 @@ enum DoNotProcessBlock {
     AlreadyApplied,
 }
 
-/// Verifies the proposal header and signature without mempool scanning.
+/// Verifies the proposal header without mempool scanning.
 ///
 /// If the proposal header is invalid, cache the block ID as rejected in the
 /// orphan downloader, so that we don't waste time downloading the block later.
 ///
-/// If the signature is invalid, do not cache the block ID as rejected, because
-/// a genuine proposal with the same block ID may arrive later, and it should be
-/// accepted. The block ID does not commit to the signature.
+/// The proof of leadership, which the block ID does not commit to, is checked
+/// when the block is applied (see `is_recoverable_apply_error`).
 fn verify_proposal_and_cache_rejected<NetAdapter, RuntimeServiceId>(
     proposal: &Proposal,
     orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
@@ -954,25 +949,16 @@ where
         Ok(()) => Ok(()),
         Err(e) => {
             let block_id = proposal.header().id();
-            if matches!(e, Error::InvalidSignature) {
-                error!(target: LOG_TARGET, %e, ?block_id, "invalid proposal signature: not caching block ID as rejected in orphan downloader");
-            } else {
-                error!(target: LOG_TARGET, %e, ?block_id, "invalid proposal header: caching block ID as rejected in orphan downloader");
-                orphan_downloader.insert_rejected_block(proposal.header().id());
-            }
+            error!(target: LOG_TARGET, %e, ?block_id, "invalid proposal header: caching block ID as rejected in orphan downloader");
+            orphan_downloader.insert_rejected_block(proposal.header().id());
             Err(e)
         }
     }
 }
 
-/// Verifies the proposal header and signature without mempool scanning.
+/// Verifies the proposal header without mempool scanning.
 fn verify_proposal(proposal: &Proposal) -> Result<(), Error> {
-    verify_header_alone(proposal.header())?;
-
-    Ok(verify_header_signature(
-        proposal.header(),
-        proposal.signature(),
-    )?)
+    Ok(verify_header_alone(proposal.header())?)
 }
 
 async fn is_after_lib<Cryptarchia>(
@@ -1030,6 +1016,8 @@ const fn is_recoverable_apply_error(err: &Error) -> bool {
             lb_chain_service::api::ApiError::ParentMissing { .. }
                 | lb_chain_service::api::ApiError::FutureBlock { .. }
                 | lb_chain_service::api::ApiError::AlreadyApplied(_)
+                // The block ID does not cover the proof, the genuine block shares the ID.
+                | lb_chain_service::api::ApiError::InvalidLeaderProof(_)
                 | lb_chain_service::api::ApiError::CommsFailure(_),
         ),
     )
@@ -1178,7 +1166,6 @@ where
         proposal.header().clone(),
         proposal.uncle_headers().clone(),
         BlockTransactions::try_from(transactions)?,
-        *proposal.signature(),
     )
     .map_err(|_| Error::NoMatchingReconstruction)
 }
@@ -1229,18 +1216,18 @@ mod tests {
     };
 
     use futures::stream;
-    use lb_binary_codec::canonical::BinaryDecodeExt as _;
     use lb_core::{
         block::UncleHeaders,
         mantle::{
             traits::Hasher,
             transactions::{Ops, hash::REFERENCE_PREFIX_BYTES},
         },
-        proofs::leader_proof::Groth16LeaderProof,
+        proofs::leader_proof::{Groth16LeaderProof, test_utils::note_set_leader_inputs},
     };
     use lb_cryptarchia_engine::Era;
     use lb_cryptarchia_sync::TipResponse;
-    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, Ed25519Signature};
+    use lb_groth16::{AdditiveGroup as _, Fr};
+    use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_network_service::{
         backends::mock::Mock,
         message::{BackendNetworkMsg, ChainSyncEvent},
@@ -1437,46 +1424,30 @@ mod tests {
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 
-    /// A block ID rejected due to a tampered signature must not be cached by
-    /// the orphan downloader, because the genuine proposal (with the same ID)
-    /// may arrive later and must be accepted.
+    /// The block ID does not cover the proof of leadership, so a copy carrying
+    /// an invalid proof must not get the ID rejected: the genuine block
+    /// shares it.
     #[test]
-    fn tampered_signature_block_is_not_cached_by_orphan_downloader() {
-        let leader_key = Ed25519Key::from_bytes(&[1; 32]);
-        let genuine = Block::create(
+    fn invalid_leader_proof_is_not_cached_by_orphan_downloader() {
+        assert!(is_recoverable_apply_error(&Error::Cryptarchia(
+            lb_chain_service::api::ApiError::InvalidLeaderProof(HeaderId::from([1; 32]))
+        )));
+
+        // The proof is bound to no header, which only applying the block checks.
+        let proposal = Block::create(
             HeaderId::from([0; 32]),
             Slot::new(1),
             UncleHeaders::empty(),
-            leader_proof(&leader_key.public_key()),
+            leader_proof(),
             BlockTransactions::<Ops>::empty(),
-            &leader_key,
         )
         .expect("block must be created")
         .to_proposal();
-
-        let mut signature = genuine.signature().to_bytes();
-        signature[0] ^= 1;
-        let tampered = Proposal {
-            signature: Ed25519Signature::from_bytes(&signature),
-            ..genuine.clone()
-        };
-        let block_id = genuine.header().id();
-        // The tampered proposal has the same block ID as the genuine one,
-        // because the block ID doesn't commit to the signature.
-        assert_eq!(tampered.header().id(), block_id);
-
         let mut orphan_downloader =
             OrphanBlocksDownloader::<_, usize>::new(NoopNetworkAdapter, NonZeroUsize::MIN, 1);
-
-        assert!(matches!(
-            verify_proposal_and_cache_rejected(&tampered, &mut orphan_downloader),
-            Err(Error::InvalidSignature)
-        ));
-        // check that the rejected block was not cached in the orphan downloader.
-        assert!(!orphan_downloader.has_rejected_block(&block_id));
-
-        verify_proposal_and_cache_rejected(&genuine, &mut orphan_downloader)
-            .expect("genuine proposal must pass");
+        verify_proposal_and_cache_rejected(&proposal, &mut orphan_downloader)
+            .expect("the header alone is valid");
+        assert!(!orphan_downloader.has_rejected_block(&proposal.header().id()));
     }
 
     /// A network adapter that the orphan downloader holds but never calls here.
@@ -1541,11 +1512,10 @@ mod tests {
         }
     }
 
-    /// A dummy leader proof carrying only `leader_key`
-    fn leader_proof(leader_key: &Ed25519PublicKey) -> Groth16LeaderProof {
-        // Layout: `proof (128B) || entropy_contribution (32B) || leader_key (32B) ||
-        // voucher_cm (32B)`
-        let bytes = [&[0u8; 160][..], leader_key.as_bytes(), &[0u8; 32]].concat();
-        Groth16LeaderProof::decode_all(&bytes).expect("leader proof bytes must decode")
+    /// A leader proof of a note set witness, bound to no header
+    fn leader_proof() -> Groth16LeaderProof {
+        let (_, private_inputs) = note_set_leader_inputs(Fr::ZERO, 1000, Fr::from(1u64), Fr::ZERO);
+        Groth16LeaderProof::prove(private_inputs, ZkPublicKey::zero())
+            .expect("Proof generation should succeed")
     }
 }

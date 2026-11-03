@@ -109,8 +109,9 @@ pub struct LastEngineState {
 #[cfg(test)]
 mod tests {
     use std::{
-        num::{NonZero, NonZeroU64},
+        num::{NonZero, NonZeroU64, NonZeroUsize},
         sync::Arc,
+        time::Duration,
     };
 
     use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
@@ -121,10 +122,14 @@ mod tests {
         config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
+    use lb_services_utils::overwatch::RecoveryData;
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
     use super::*;
-    use crate::tests::single_era;
+    use crate::{
+        BlockProviderConfig, BootstrapConfig, OfflineGracePeriodConfig, SyncConfig,
+        tests::{genesis_block_with, note, single_era},
+    };
 
     /// A reward config with claiming disabled, standing in for a real
     /// deployment config in tests.
@@ -300,7 +305,7 @@ mod tests {
         // Empty ledger state.
         let ledger_state = lb_ledger::Ledger::new(
             cryptarchia_engine.lib(),
-            LedgerState::from_utxos([], &ledger_config, 0, &ConsensusExcludedKeys::empty()),
+            LedgerState::from_notes([], &ledger_config, 0, &ConsensusExcludedKeys::empty()),
             single_era(ledger_config),
         );
 
@@ -424,7 +429,7 @@ mod tests {
             consensus: engine.clone(),
             ledger: lb_ledger::Ledger::new(
                 lib_id,
-                LedgerState::from_utxos([], &ledger_config, 0, &ConsensusExcludedKeys::empty()),
+                LedgerState::from_notes([], &ledger_config, 0, &ConsensusExcludedKeys::empty()),
                 single_era(ledger_config.clone()),
             ),
             genesis_id: genesis_header_id,
@@ -497,5 +502,29 @@ mod tests {
             "Height must be preserved across restart: before={}, after={}",
             info_before.height, info_after.height
         );
+    }
+
+    #[test]
+    fn genesis_block_query_returns_the_starting_block() {
+        let (_, note) = note();
+        let genesis = genesis_block_with(&[note]);
+        let settings = CryptarchiaSettings {
+            era_schedule: single_era(crate::tests::ledger_config(NonZero::new(1).unwrap())),
+            starting_state: genesis.clone().into(),
+            bootstrap: BootstrapConfig {
+                prolonged_bootstrap_period: Duration::ZERO,
+                force_bootstrap: false,
+                offline_grace_period: OfflineGracePeriodConfig::default(),
+            },
+            sync: SyncConfig {
+                block_provider: BlockProviderConfig {
+                    batch_size: NonZeroUsize::MIN,
+                },
+            },
+            recovery_data: RecoveryData::default(),
+        };
+        let state = CryptarchiaConsensusState::from_settings(&settings).unwrap();
+        assert_eq!(state.genesis_id, genesis.header().id());
+        assert_eq!(state.tip(), genesis.header().id());
     }
 }

@@ -163,7 +163,7 @@ mod test {
         let initial_leader = LeaderInputs {
             message_quota: Quota::ONE,
             pol_epoch_nonce: ZkHash::ZERO,
-            pol_ledger_aged: ZkHash::ZERO,
+            pol_eligible_aged: ZkHash::ZERO,
             lottery_0: Fr::ZERO,
             lottery_1: Fr::ZERO,
         };
@@ -199,12 +199,13 @@ mod test {
         assert!(processor.proofs_generator().0.is_none());
 
         let private_inputs = ProofOfLeadershipQuotaInputs {
-            aged_path_and_selectors: [(ZkHash::ONE, true); _],
+            commitment_aged_path_and_selectors: [(ZkHash::ONE, true); _],
             note_value: 42,
-            output_number: 1,
+            note_nonce: ZkHash::ONE,
             slot: 1,
             secret_key: ZkHash::ONE,
-            transaction_hash: ZkHash::ONE,
+            nullifier_root_aged: ZkHash::ONE,
+            set_aged_path_and_selectors: [(ZkHash::ONE, true); _],
         };
 
         processor.set_epoch_private(Box::pin(repeat(private_inputs.clone())), Epoch::new(1));

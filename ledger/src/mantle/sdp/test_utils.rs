@@ -58,7 +58,7 @@ pub fn generate_activity_proof(
     // snapshot's `proof_verifier` was constructed with these values, so any
     // proof must reproduce them exactly.
     let leader_inputs = LeaderInputs {
-        pol_ledger_aged: target_epoch_state.utxos.root(),
+        pol_eligible_aged: target_epoch_state.eligible_root(),
         pol_epoch_nonce: *target_epoch_state.nonce(),
         message_quota,
         lottery_0: target_epoch_state.lottery_0,

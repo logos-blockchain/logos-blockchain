@@ -32,8 +32,6 @@ pub const POW_STOP_AUTO_CLAIM: &str = "/pow/auto-claim/stop";
 pub const POW_CLAIM: &str = "/pow/claim";
 pub const POW_CLAIMABLE_REWARDS: &str = "/pow/rewards/claimable";
 pub const POW_STATUS: &str = "/pow/status";
-pub const LEADER_CLAIM: &str = "/leader/claim";
-pub const LEADER_CLAIM_VOUCHERS: &str = "/leader/claim/vouchers";
 pub const LEADER_AGED_NOTES: &str = "/leader/aged-notes";
 
 // TODO: change prefix to `/chain` since `Block` is defined outside of
@@ -50,8 +48,8 @@ pub mod wallet {
     pub const BALANCE: &str = "/wallet/{public_key}/balance";
     pub const TRANSACTIONS_TRANSFER_FUNDS: &str = "/wallet/transactions/transfer-funds";
     pub const SIGN_TX_ED25519: &str = "/wallet/sign/ed25519";
-    pub const SIGN_TX_ZK: &str = "/wallet/sign/zk";
     pub const FUND: &str = "/wallet/fund";
+    pub const IMPORT_NOTE: &str = "/wallet/notes/import";
 }
 
 pub mod admin {

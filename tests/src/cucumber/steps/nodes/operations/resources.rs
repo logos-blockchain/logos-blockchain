@@ -1,17 +1,11 @@
-use super::*;
+use super::{CucumberWorld, HashSet, StepError, StepResult, Table, WalletStartInfo};
+use crate::cucumber::utils::lgo_to_units;
 
 #[must_use]
-pub fn genesis_block_utxos(genesis_tx: &lb_core::mantle::transactions::GenesisTx) -> Vec<Utxo> {
-    let transfer_signed_operation = genesis_tx.transfer();
-    let transfer_id = transfer_signed_operation.operation().op_id();
-
-    transfer_signed_operation
-        .operation()
-        .outputs
-        .iter()
-        .enumerate()
-        .map(|(idx, note)| Utxo::new(transfer_id, idx, *note))
-        .collect()
+pub fn genesis_block_utxos(
+    genesis_tx: &lb_core::mantle::transactions::GenesisTx,
+) -> crate::common::wallet::GenesisNotes {
+    crate::common::wallet::GenesisNotes::from_genesis_tx(genesis_tx)
 }
 
 const ACCOUNT_INDEX: &str = "account_index";
@@ -77,7 +71,7 @@ pub fn parse_genesis_wallet_tokens_row(
             .map_err(|_| StepError::InvalidArgument {
                 message: format!("Step `{step}` error: {TOKEN_AMOUNT} must be a valid number"),
             })?;
-    Ok((account_index, token_count, token_amount))
+    Ok((account_index, token_count, lgo_to_units(token_amount)))
 }
 
 const NODE_NAME: &str = "node_name";

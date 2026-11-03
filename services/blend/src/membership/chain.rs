@@ -178,7 +178,7 @@ where
                             clock_slot = u64::from(slot),
                             epoch_state_epoch = u32::from(epoch_state.epoch),
                             nonce = ?epoch_state.nonce,
-                            aged_utxo_root = ?epoch_state.utxo_merkle_root(),
+                            aged_eligible_root = ?epoch_state.eligible_root(),
                             lottery_0 = ?epoch_state.lottery_0,
                             lottery_1 = ?epoch_state.lottery_1,
                             blend_pow_difficulty = ?epoch_state.blend_pow_difficulty,
@@ -202,7 +202,7 @@ where
                             BlendEpochState {
                                 epoch,
                                 nonce: epoch_state.nonce,
-                                aged: epoch_state.utxo_merkle_root(),
+                                aged: epoch_state.eligible_root(),
                                 lottery_0: epoch_state.lottery_0,
                                 lottery_1: epoch_state.lottery_1,
                                 pow_difficulty: epoch_state.blend_pow_difficulty,

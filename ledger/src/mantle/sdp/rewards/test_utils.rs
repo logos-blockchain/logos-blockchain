@@ -2,6 +2,10 @@ use std::{collections::HashMap, sync::Arc};
 
 use lb_core::{
     crypto::ZkHash,
+    mantle::{
+        note_set::NoteSets,
+        notes::{NoteCommitment, OutputCommitments},
+    },
     sdp::{
         Declaration, DeclarationId, Declarations, Locator, ProviderId, ServiceParameters,
         ServiceType,
@@ -12,7 +16,7 @@ use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
 use num_bigint::BigUint;
 
-use crate::{EpochState, UtxoTree};
+use crate::EpochState;
 
 pub fn create_epoch_state(
     provider_ids: &[ProviderId],
@@ -24,11 +28,11 @@ pub fn create_epoch_state(
         .iter()
         .enumerate()
         .map(|(i, provider_id)| {
-            let note_id = Fr::from(i as u64).into();
             let declaration = Declaration {
                 service_type,
                 provider_id: *provider_id,
-                service_note_id: note_id,
+                service_note: NoteCommitment(Fr::from(i as u64)),
+                withdraw_outputs: OutputCommitments::default(),
                 locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
                 zk_id: ZkPublicKey::new(BigUint::from(i as u64).into()),
                 created: 0.into(),
@@ -45,7 +49,7 @@ pub fn create_epoch_state(
     EpochState {
         epoch,
         nonce,
-        utxos: UtxoTree::default(),
+        note_sets: NoteSets::new(),
         total_stake: 0,
         lottery_0: Fr::ZERO,
         lottery_1: Fr::ZERO,

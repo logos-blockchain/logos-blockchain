@@ -7,7 +7,7 @@ use std::{
 use hex::ToHex as _;
 use lb_binary_codec::bincode::SerializeOp as _;
 use lb_core::{
-    mantle::{GenesisTime, TxHash},
+    mantle::{GenesisTime, TxHash, transactions::UNITS_PER_LGO},
     sdp::Locator,
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -24,6 +24,13 @@ use crate::cucumber::{
 };
 
 type ScenarioBuilderWith = ScenarioBuilder;
+
+// Feature files state amounts in LGO, the ledger counts units of 10^-9 LGO.
+#[must_use]
+pub const fn lgo_to_units(lgo: u64) -> u64 {
+    lgo.checked_mul(UNITS_PER_LGO)
+        .expect("LGO amount must fit in u64 units")
+}
 
 #[must_use]
 pub fn make_builder(

@@ -4,6 +4,7 @@ use super::{
     rebuild_pending_local_manual_cluster, set_blend_diagnostic_parameter_set,
     set_deployment_config_override, set_user_config_override, when,
 };
+use crate::cucumber::utils::lgo_to_units;
 
 #[given(expr = "the cluster uses diagnostic parameter set {string}")]
 #[when(expr = "the cluster uses diagnostic parameter set {string}")]
@@ -121,7 +122,7 @@ async fn step_set_sdp_funding(
     }
 
     world.set_sdp_funding_config(SdpFundingConfig::new(
-        total_value_per_node,
+        lgo_to_units(total_value_per_node),
         target_notes_per_node,
     ));
     rebuild_pending_local_manual_cluster(world).await

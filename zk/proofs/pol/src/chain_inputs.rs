@@ -8,10 +8,9 @@ pub struct PolChainInputs {
     epoch_nonce: Groth16Input,
     lottery_0: Groth16Input,
     lottery_1: Groth16Input,
-    aged_root: Groth16Input,
-    latest_root: Groth16Input,
-    leader_pk1: Groth16Input,
-    leader_pk2: Groth16Input,
+    eligible_aged: Groth16Input,
+    eligible_latest: Groth16Input,
+    msg: Groth16Input,
 }
 
 /// Public inputs of the POL cirmcom circuit to be provided by the chain.
@@ -21,9 +20,9 @@ pub struct PolChainInputsData {
     pub epoch_nonce: Fr,
     pub lottery_0: Fr,
     pub lottery_1: Fr,
-    pub aged_root: Fr,
-    pub latest_root: Fr,
-    pub leader_pk: (Fr, Fr),
+    pub eligible_aged: Fr,
+    pub eligible_latest: Fr,
+    pub msg: Fr,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -35,14 +34,9 @@ pub struct PolChainInputsJson {
     lottery_0: Groth16InputDeser,
     #[serde(rename = "t1")]
     lottery_1: Groth16InputDeser,
-    #[serde(rename = "ledger_aged")]
-    aged_root: Groth16InputDeser,
-    #[serde(rename = "ledger_latest")]
-    latest_root: Groth16InputDeser,
-    #[serde(rename = "P_lead_part_one")]
-    leader_pk1: Groth16InputDeser,
-    #[serde(rename = "P_lead_part_two")]
-    leader_pk2: Groth16InputDeser,
+    eligible_aged: Groth16InputDeser,
+    eligible_latest: Groth16InputDeser,
+    msg: Groth16InputDeser,
 }
 
 impl TryFrom<PolChainInputsJson> for PolChainInputs {
@@ -54,10 +48,9 @@ impl TryFrom<PolChainInputsJson> for PolChainInputs {
             epoch_nonce,
             lottery_0,
             lottery_1,
-            aged_root,
-            latest_root,
-            leader_pk1,
-            leader_pk2,
+            eligible_aged,
+            eligible_latest,
+            msg,
         }: PolChainInputsJson,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -65,10 +58,9 @@ impl TryFrom<PolChainInputsJson> for PolChainInputs {
             epoch_nonce: epoch_nonce.try_into()?,
             lottery_0: lottery_0.try_into()?,
             lottery_1: lottery_1.try_into()?,
-            aged_root: aged_root.try_into()?,
-            latest_root: latest_root.try_into()?,
-            leader_pk1: leader_pk1.try_into()?,
-            leader_pk2: leader_pk2.try_into()?,
+            eligible_aged: eligible_aged.try_into()?,
+            eligible_latest: eligible_latest.try_into()?,
+            msg: msg.try_into()?,
         })
     }
 }
@@ -80,10 +72,9 @@ impl From<&PolChainInputs> for PolChainInputsJson {
             epoch_nonce,
             lottery_0,
             lottery_1,
-            aged_root,
-            latest_root,
-            leader_pk1: leader_pk_1,
-            leader_pk2: leader_pk_2,
+            eligible_aged,
+            eligible_latest,
+            msg,
         }: &PolChainInputs,
     ) -> Self {
         Self {
@@ -91,10 +82,9 @@ impl From<&PolChainInputs> for PolChainInputsJson {
             epoch_nonce: epoch_nonce.into(),
             lottery_0: lottery_0.into(),
             lottery_1: lottery_1.into(),
-            aged_root: aged_root.into(),
-            latest_root: latest_root.into(),
-            leader_pk1: leader_pk_1.into(),
-            leader_pk2: leader_pk_2.into(),
+            eligible_aged: eligible_aged.into(),
+            eligible_latest: eligible_latest.into(),
+            msg: msg.into(),
         }
     }
 }
@@ -106,9 +96,9 @@ impl From<PolChainInputsData> for PolChainInputs {
             epoch_nonce,
             lottery_0,
             lottery_1,
-            aged_root,
-            latest_root,
-            leader_pk: (pk1, pk2),
+            eligible_aged,
+            eligible_latest,
+            msg,
         }: PolChainInputsData,
     ) -> Self {
         Self {
@@ -116,10 +106,9 @@ impl From<PolChainInputsData> for PolChainInputs {
             epoch_nonce: Groth16Input::new(epoch_nonce),
             lottery_0: Groth16Input::new(lottery_0),
             lottery_1: Groth16Input::new(lottery_1),
-            aged_root: aged_root.into(),
-            latest_root: latest_root.into(),
-            leader_pk1: pk1.into(),
-            leader_pk2: pk2.into(),
+            eligible_aged: eligible_aged.into(),
+            eligible_latest: eligible_latest.into(),
+            msg: msg.into(),
         }
     }
 }

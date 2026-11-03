@@ -1,10 +1,15 @@
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
+#[cfg(any(test, feature = "test-utils"))]
+use lb_key_management_system_keys::keys::Ed25519Signature;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[cfg(any(test, feature = "test-utils"))]
 use crate::mantle::OpProof;
 #[cfg(any(test, feature = "test-utils"))]
-use crate::mantle::ops::op_proof::samples::sample_proof_for;
+use crate::mantle::ops::{
+    ChannelInscribeProof, StepProof,
+    op_proof::samples::{SampleProof as _, sample_proof_for},
+};
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
@@ -14,12 +19,12 @@ use crate::{
         ops::{
             OPERATION_ID_V1, OpRef,
             channel::{
-                channel_transfer::ChannelTransferOp, config::ChannelConfigOp, deposit::DepositOp,
-                inscribe::InscriptionOp, withdraw::ChannelWithdrawOp,
+                config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
+                withdraw::ChannelWithdrawOp,
             },
             internal::{OpDe, OpSer},
-            leader_claim::LeaderClaimOp,
             pow::ClaimPowRewardOp,
+            program::ProgramRegisterOp,
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferOp,
         },
@@ -61,13 +66,12 @@ pub enum Op {
     ChannelConfig(ChannelConfigOp),
     ChannelDeposit(DepositOp),
     ChannelWithdraw(ChannelWithdrawOp),
-    ChannelTransfer(ChannelTransferOp),
     SDPDeclare(SDPDeclareOp),
     SDPWithdraw(SDPWithdrawOp),
     SDPActive(SDPActiveOp),
-    LeaderClaim(LeaderClaimOp),
     Transfer(TransferOp),
     ClaimPowReward(ClaimPowRewardOp),
+    ProgramRegister(ProgramRegisterOp),
 }
 
 /// Delegates serialization through the [`OpInternal`] representation.
@@ -137,8 +141,6 @@ impl BinaryDecode for Op {
             }
             ChannelWithdrawOp::CODE => ChannelWithdrawOp::decode(input, &())
                 .map(|(rest, op)| (rest, Self::ChannelWithdraw(op))),
-            ChannelTransferOp::CODE => ChannelTransferOp::decode(input, &())
-                .map(|(rest, op)| (rest, Self::ChannelTransfer(op))),
             SDPDeclareOp::CODE => {
                 SDPDeclareOp::decode(input, &()).map(|(rest, op)| (rest, Self::SDPDeclare(op)))
             }
@@ -148,14 +150,13 @@ impl BinaryDecode for Op {
             SDPActiveOp::CODE => {
                 SDPActiveOp::decode(input, &()).map(|(rest, op)| (rest, Self::SDPActive(op)))
             }
-            LeaderClaimOp::CODE => {
-                LeaderClaimOp::decode(input, &()).map(|(rest, op)| (rest, Self::LeaderClaim(op)))
-            }
             TransferOp::CODE => {
                 TransferOp::decode(input, &()).map(|(rest, op)| (rest, Self::Transfer(op)))
             }
             ClaimPowRewardOp::CODE => ClaimPowRewardOp::decode(input, &())
                 .map(|(rest, op)| (rest, Self::ClaimPowReward(op))),
+            ProgramRegisterOp::CODE => ProgramRegisterOp::decode(input, &())
+                .map(|(rest, op)| (rest, Self::ProgramRegister(op))),
             other => Err(DecodeError::unknown_discriminant::<Self>(u64::from(other))),
         }
     }
@@ -181,17 +182,23 @@ impl Op {
     #[must_use]
     pub fn sample_proof(&self) -> OpProof {
         match self {
-            Self::ChannelInscribe(op) => sample_proof_for(op),
+            // One step proof per step, so a `SignedOps` sample decodes.
+            Self::ChannelInscribe(op) => OpProof::ChannelInscribe(ChannelInscribeProof::new(
+                Ed25519Signature::sample(),
+                op.steps
+                    .iter()
+                    .map(|step| StepProof::sample_for(step.proof_shape()))
+                    .collect(),
+            )),
             Self::ChannelConfig(op) => sample_proof_for(op),
             Self::ChannelDeposit(op) => sample_proof_for(op),
             Self::ChannelWithdraw(op) => sample_proof_for(op),
-            Self::ChannelTransfer(op) => sample_proof_for(op),
             Self::SDPDeclare(op) => sample_proof_for(op),
             Self::SDPWithdraw(op) => sample_proof_for(op),
             Self::SDPActive(op) => sample_proof_for(op),
-            Self::LeaderClaim(op) => sample_proof_for(op),
             Self::Transfer(op) => sample_proof_for(op),
             Self::ClaimPowReward(op) => sample_proof_for(op),
+            Self::ProgramRegister(op) => sample_proof_for(op),
         }
     }
 }
@@ -213,17 +220,18 @@ impl_from_operation! {
     ChannelConfig => ChannelConfigOp,
     ChannelDeposit => DepositOp,
     ChannelWithdraw => ChannelWithdrawOp,
-    ChannelTransfer => ChannelTransferOp,
     SDPDeclare => SDPDeclareOp,
     SDPWithdraw => SDPWithdrawOp,
     SDPActive => SDPActiveOp,
-    LeaderClaim => LeaderClaimOp,
     Transfer => TransferOp,
     ClaimPowReward => ClaimPowRewardOp,
+    ProgramRegister => ProgramRegisterOp,
 }
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::canonical::{BinaryDecode as _, DecodeError};
+
     use crate::mantle::{
         Op, OpProof, fixtures::ops::op_values::TRANSFER, ledger::ProvableOperation as _,
         ops::transfer::TransferOp, transactions::Ops,
@@ -269,20 +277,37 @@ mod tests {
         assert!(matches!(decoded_op, Op::Transfer(_)));
     }
 
+    #[test]
+    fn decode_rejects_the_retired_channel_transfer_opcode() {
+        assert_eq!(
+            Op::decode(&[0x14], &()).unwrap_err(),
+            DecodeError::unknown_discriminant::<Op>(0x14)
+        );
+    }
+
+    #[test]
+    fn leader_claim_opcode_is_no_operation() {
+        use lb_binary_codec::canonical::BinaryDecode as _;
+
+        // 0x40 was LEADER_CLAIM, followed by its 96 byte payload.
+        let mut bytes = vec![0u8; 97];
+        bytes[0] = 0x40;
+        assert!(Op::decode(&bytes, &()).is_err());
+    }
+
     #[expect(clippy::match_same_arms, reason = "Clarity")]
     fn does_proof_match(op: &Op, op_proof: &OpProof) -> bool {
         match op {
-            Op::ChannelInscribe(_) => matches!(op_proof, OpProof::Ed25519Sig(_)),
+            Op::ChannelInscribe(_) => matches!(op_proof, OpProof::ChannelInscribe(_)),
             Op::ChannelConfig(_) => matches!(op_proof, OpProof::ChannelMultiSigProof(_)),
-            Op::ChannelDeposit(_) => matches!(op_proof, OpProof::ZkSig(_)),
-            Op::ChannelWithdraw(_) => matches!(op_proof, OpProof::ChannelMultiSigProof(_)),
-            Op::ChannelTransfer(_) => matches!(op_proof, OpProof::ChannelMultiSigProof(_)),
+            Op::ChannelDeposit(_) => matches!(op_proof, OpProof::ZkTransfer(_)),
+            Op::ChannelWithdraw(_) => matches!(op_proof, OpProof::ZkTransfer(_)),
             Op::SDPDeclare(_) => matches!(op_proof, OpProof::ZkAndEd25519Sigs(_)),
-            Op::SDPWithdraw(_) => matches!(op_proof, OpProof::ZkSig(_)),
-            Op::SDPActive(_) => matches!(op_proof, OpProof::ZkSig(_)),
-            Op::LeaderClaim(_) => matches!(op_proof, OpProof::PoC(_)),
-            Op::Transfer(_) => matches!(op_proof, OpProof::ZkSig(_)),
+            Op::SDPWithdraw(_) => matches!(op_proof, OpProof::ZkAndEd25519Sigs(_)),
+            Op::SDPActive(_) => matches!(op_proof, OpProof::Ed25519Sig(_)),
+            Op::Transfer(_) => matches!(op_proof, OpProof::ZkTransfer(_)),
             Op::ClaimPowReward(_) => matches!(op_proof, OpProof::None(_)),
+            Op::ProgramRegister(_) => matches!(op_proof, OpProof::None(_)),
         }
     }
 
@@ -297,5 +322,171 @@ mod tests {
                 op.as_str()
             );
         }
+    }
+
+    #[test]
+    fn transfer_deposit_and_withdraw_carry_a_zk_transfer_proof() {
+        use lb_binary_codec::canonical::BinaryEncode as _;
+
+        use crate::mantle::ops::{
+            ZkTransferProof,
+            channel::{deposit::DepositOp, withdraw::ChannelWithdrawOp},
+            op_proof::samples::SampleProof as _,
+        };
+
+        for op in [
+            Op::Transfer(TransferOp::sample()),
+            Op::ChannelDeposit(DepositOp::sample()),
+            Op::ChannelWithdraw(ChannelWithdrawOp::sample()),
+        ] {
+            let proof = op.sample_proof();
+            assert_eq!(
+                proof,
+                OpProof::ZkTransfer(ZkTransferProof::sample()),
+                "{}",
+                op.as_str()
+            );
+            assert_eq!(proof.encode().len(), 128, "{}", op.as_str());
+        }
+    }
+
+    #[test]
+    fn sdp_declare_and_withdraw_carry_a_zk_transfer_then_a_signature() {
+        use lb_binary_codec::canonical::BinaryEncode as _;
+        use lb_groth16::CompressedGroth16Proof;
+        use lb_key_management_system_keys::keys::Ed25519Signature;
+
+        use crate::mantle::ops::{ZkAndEd25519Proof, ZkTransferProof};
+
+        let proof = ZkAndEd25519Proof::new(
+            ZkTransferProof::new(CompressedGroth16Proof::from_bytes(&[1u8; 128])),
+            Ed25519Signature::from_bytes(&[2u8; 64]),
+        );
+        let mut expected = vec![1u8; 128];
+        expected.extend([2u8; 64]);
+        assert_eq!(proof.encode().to_vec(), expected);
+
+        for op in [
+            Op::SDPDeclare(crate::mantle::ops::sdp::SDPDeclareOp::sample()),
+            Op::SDPWithdraw(crate::mantle::ops::sdp::SDPWithdrawOp::sample()),
+        ] {
+            assert!(
+                matches!(op.sample_proof(), OpProof::ZkAndEd25519Sigs(_)),
+                "{}",
+                op.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn execution_gas_follows_the_mantle_gas_table() {
+        use crate::mantle::{
+            gas::{Gas, MainnetGasProfile, test_utils::FixedThresholds},
+            ops::{
+                channel::{
+                    config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
+                    withdraw::ChannelWithdrawOp,
+                },
+                pow::ClaimPowRewardOp,
+                program::ProgramRegisterOp,
+                sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
+            },
+        };
+
+        // Every channel the thresholds are asked about requires 2 signatures.
+        for (op, gas) in [
+            (Op::Transfer(TransferOp::sample()), 619),
+            (Op::ProgramRegister(ProgramRegisterOp::sample()), 1_896),
+            (Op::ChannelConfig(ChannelConfigOp::sample()), 2 * 56),
+            (Op::ChannelInscribe(InscriptionOp::sample()), 59),
+            (Op::ChannelDeposit(DepositOp::sample()), 619),
+            (Op::ChannelWithdraw(ChannelWithdrawOp::sample()), 619),
+            (Op::SDPDeclare(SDPDeclareOp::sample()), 678),
+            (Op::SDPWithdraw(SDPWithdrawOp::sample()), 678),
+            (Op::SDPActive(SDPActiveOp::sample()), 59),
+            (Op::ClaimPowReward(ClaimPowRewardOp::sample()), 0),
+        ] {
+            assert_eq!(
+                op.by_ref()
+                    .execution_gas::<MainnetGasProfile>(&FixedThresholds(2)),
+                Ok(Gas::new(gas)),
+                "{}",
+                op.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn opcodes_are_the_mantle_table() {
+        use lb_binary_codec::canonical::{BinaryDecode as _, DecodeError};
+
+        use crate::mantle::ops::{
+            channel::{
+                config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
+                withdraw::ChannelWithdrawOp,
+            },
+            pow::ClaimPowRewardOp,
+            program::ProgramRegisterOp,
+            sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
+        };
+
+        let table = [
+            TransferOp::CODE,
+            ProgramRegisterOp::CODE,
+            ChannelConfigOp::CODE,
+            InscriptionOp::CODE,
+            DepositOp::CODE,
+            ChannelWithdrawOp::CODE,
+            SDPDeclareOp::CODE,
+            SDPWithdrawOp::CODE,
+            SDPActiveOp::CODE,
+            ClaimPowRewardOp::CODE,
+        ];
+        assert_eq!(
+            table,
+            [0x00, 0x01, 0x10, 0x11, 0x12, 0x13, 0x20, 0x21, 0x22, 0x30]
+        );
+        for opcode in 0..=u8::MAX {
+            let unknown = Op::decode(&[opcode], &()).err()
+                == Some(DecodeError::unknown_discriminant::<Op>(u64::from(opcode)));
+            assert_eq!(unknown, !table.contains(&opcode), "opcode {opcode:#04x}");
+        }
+    }
+
+    #[test]
+    fn program_register_decodes_at_opcode_0x01() {
+        use lb_binary_codec::canonical::{BinaryDecode as _, BinaryEncode as _};
+
+        let op = Op::ProgramRegister(crate::mantle::ops::program::ProgramRegisterOp::sample());
+        let bytes = op.encode();
+        assert_eq!((bytes[0], bytes.len()), (0x01, 1 + 352));
+        assert_eq!(Op::decode(&bytes, &()).unwrap(), (&[][..], op.clone()));
+        assert_eq!(
+            op.sample_proof(),
+            OpProof::None(crate::mantle::ops::NoOpProof)
+        );
+    }
+
+    #[test]
+    fn field_element_not_less_than_the_modulus_is_rejected() {
+        use lb_binary_codec::canonical::BinaryDecode as _;
+
+        // TRANSFER with one input, no output, a zero root and a zero excess.
+        let transfer = |nullifier: &str| {
+            hex::decode(format!(
+                "0001{nullifier}00{}{}",
+                "00".repeat(32),
+                "00".repeat(8)
+            ))
+            .unwrap()
+        };
+        let modulus = "010000f093f5e1439170b97948e833285d588181b64550b829a031e1724e6430";
+        let below = "000000f093f5e1439170b97948e833285d588181b64550b829a031e1724e6430";
+
+        assert!(Op::decode(&transfer(modulus), &()).is_err());
+        let below = transfer(below);
+        let (rest, op) = Op::decode(&below, &()).unwrap();
+        assert_eq!(rest, [0u8; 0]);
+        assert!(matches!(op, Op::Transfer(_)));
     }
 }

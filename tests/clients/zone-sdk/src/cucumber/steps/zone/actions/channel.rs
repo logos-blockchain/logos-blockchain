@@ -1,11 +1,7 @@
 use super::{
-    AtomicZoneDepositRequest, Duration, Ed25519Key, Inscription, Metadata, PublishDeadline,
-    PublishResult, SequencerCheckpoint, Step, StepError, StepResult, TxHash, Utxo,
-    VerifiedChannelKeys, WalletInfo, WalletReservedInputs, ZONE_CHANNEL_DEPOSIT_THRESHOLD,
-    ZONE_CHANNEL_WITHDRAW_THRESHOLD, ZoneDeposit, ZoneTestError, ZoneWorld, build_zone_deposit,
-    build_zone_deposit_from_values, current_available_utxos_for_wallet, log_step_error,
-    make_inscription, publish_atomic_zone_withdraw, submit_atomic_zone_deposit,
-    submit_zone_channel_split, submit_zone_deposit, submit_zone_withdraw, timeout, zone_step_error,
+    Duration, Ed25519Key, Inscription, PublishResult, SequencerCheckpoint, Step, StepError,
+    StepResult, TxHash, VerifiedChannelKeys, ZONE_CHANNEL_WITHDRAW_THRESHOLD, ZoneWorld,
+    log_step_error, timeout,
 };
 
 pub(in super::super) async fn submit_zone_channel_config(
@@ -52,7 +48,6 @@ pub(in super::super) async fn submit_zone_channel_config(
             posting_timeframe.into(),
             posting_timeout.into(),
             ZONE_CHANNEL_WITHDRAW_THRESHOLD,
-            ZONE_CHANNEL_DEPOSIT_THRESHOLD,
         )
         .await
         .map_err(|error| StepError::LogicalError {
@@ -70,7 +65,7 @@ pub(in super::super) async fn submit_zone_channel_config(
     .await
 }
 
-/// `threshold` sets both the config and transfer thresholds;
+/// `threshold` sets the config threshold;
 /// `posting_timeframe` is in slots (0 = no rotation).
 pub(in super::super) async fn prepare_zone_channel_config(
     world: &mut ZoneWorld,
@@ -94,7 +89,6 @@ pub(in super::super) async fn prepare_zone_channel_config(
             posting_timeframe.into(),
             0.into(),
             threshold,
-            threshold,
         )
         .await
         .map_err(|error| StepError::LogicalError {
@@ -106,10 +100,7 @@ pub(in super::super) async fn prepare_zone_channel_config(
     // thresholds we requested — i.e. inspect the config before it is signed.
     let proposed = prepared.proposed_config();
     let proposed_keys = proposed.keys().iter().copied().collect::<Vec<_>>();
-    if proposed_keys != authorized_keys
-        || proposed.configuration_threshold().get() != threshold
-        || proposed.transfer_threshold().get() != threshold
-    {
+    if proposed_keys != authorized_keys || proposed.configuration_threshold().get() != threshold {
         return Err(StepError::LogicalError {
             message: format!(
                 "prepared config '{transaction_alias}' does not match the requested keys/thresholds",
@@ -292,325 +283,4 @@ async fn wait_for_checkpoint_with_tx(
             .await
             .map_err(|error| format!("checkpoint watch closed: {error}"))?;
     }
-}
-
-fn resolve_zone_wallet(world: &ZoneWorld, sequencer_alias: &str) -> Result<WalletInfo, StepError> {
-    let wallet_name = world.zone.sequencer_default_wallet_name(sequencer_alias)?;
-
-    world.node.resolve_wallet(wallet_name)
-}
-
-fn record_zone_wallet_submission(
-    world: &ZoneWorld,
-    wallet_name: &str,
-    tx_hash: TxHash,
-    reserved_inputs: Vec<Utxo>,
-) -> StepResult {
-    world.node.with_wallets_mut(|wallets| {
-        wallets.record_wallet_reservation(
-            wallet_name.to_owned(),
-            tx_hash,
-            WalletReservedInputs::new(reserved_inputs, Vec::new()),
-            0,
-        );
-    })
-}
-
-pub(in super::super) async fn submit_zone_deposit_transaction(
-    world: &mut ZoneWorld,
-    step: &Step,
-    transaction_alias: String,
-    channel_alias: String,
-    amount: u64,
-    metadata: Metadata,
-) -> StepResult {
-    let node_url = log_step_error(step, world.zone_node_url_for_sequencer(&channel_alias))?;
-    let wallet = log_step_error(step, resolve_zone_wallet(world, &channel_alias))?;
-    let public_key = log_step_error(step, wallet.public_key())?;
-    let available_utxos = log_step_error(
-        step,
-        current_available_utxos_for_wallet(&mut world.node, &step.value, &wallet.wallet_name).await,
-    )?;
-    let ZoneDeposit {
-        deposit,
-        reserved_inputs,
-        channel_notes,
-    } = build_zone_deposit(
-        available_utxos,
-        world.zone.sequencer_channel_id(&channel_alias)?,
-        amount,
-        metadata,
-    )
-    .map_err(|error| zone_step_error(step, &error))?;
-
-    let response = submit_zone_deposit(&node_url, &deposit, public_key)
-        .await
-        .map_err(|error| zone_step_error(step, &error))?;
-
-    world
-        .zone
-        .remember_deposit_channel_notes(transaction_alias.clone(), channel_notes);
-    world
-        .zone
-        .remember_submitted_deposit(transaction_alias.clone(), deposit, amount);
-    record_zone_wallet_submission(world, &wallet.wallet_name, response, reserved_inputs)?;
-    world
-        .node
-        .remember_submitted_transaction(transaction_alias, response);
-
-    Ok(())
-}
-
-/// Consumes one wallet note per listed value.
-pub(in super::super) async fn submit_zone_multi_deposit_transaction(
-    world: &mut ZoneWorld,
-    step: &Step,
-    transaction_alias: String,
-    channel_alias: String,
-    input_values: Vec<u64>,
-    metadata: Metadata,
-) -> StepResult {
-    let node_url = log_step_error(step, world.zone_node_url_for_sequencer(&channel_alias))?;
-    let wallet = log_step_error(step, resolve_zone_wallet(world, &channel_alias))?;
-    let public_key = log_step_error(step, wallet.public_key())?;
-    let available_utxos = log_step_error(
-        step,
-        current_available_utxos_for_wallet(&mut world.node, &step.value, &wallet.wallet_name).await,
-    )?;
-    let amount: u64 = input_values.iter().sum();
-    let ZoneDeposit {
-        deposit,
-        reserved_inputs,
-        channel_notes,
-    } = build_zone_deposit_from_values(
-        available_utxos,
-        world.zone.sequencer_channel_id(&channel_alias)?,
-        &input_values,
-        metadata,
-    )
-    .map_err(|error| zone_step_error(step, &error))?;
-
-    let response = submit_zone_deposit(&node_url, &deposit, public_key)
-        .await
-        .map_err(|error| zone_step_error(step, &error))?;
-
-    world
-        .zone
-        .remember_deposit_channel_notes(transaction_alias.clone(), channel_notes);
-    world
-        .zone
-        .remember_submitted_deposit(transaction_alias.clone(), deposit, amount);
-    record_zone_wallet_submission(world, &wallet.wallet_name, response, reserved_inputs)?;
-    world
-        .node
-        .remember_submitted_transaction(transaction_alias, response);
-
-    Ok(())
-}
-
-pub(in super::super) async fn submit_zone_channel_split_transaction(
-    world: &mut ZoneWorld,
-    step: &Step,
-    sequencer_alias: &str,
-    deposit_alias: &str,
-    dust_count: usize,
-    transaction_alias: String,
-) -> StepResult {
-    let node_url = log_step_error(step, world.zone_node_url_for_sequencer(sequencer_alias))?;
-    let wallet = log_step_error(step, resolve_zone_wallet(world, sequencer_alias))?;
-    let public_key = log_step_error(step, wallet.public_key())?;
-    let channel_id = world.zone.sequencer_channel_id(sequencer_alias)?;
-    let signing_key =
-        log_step_error(step, world.zone.sequencer_signing_key(sequencer_alias))?.clone();
-    let input_note = *log_step_error(
-        step,
-        world.zone.resolve_deposit_channel_notes(deposit_alias),
-    )?
-    .first()
-    .ok_or_else(|| StepError::LogicalError {
-        message: format!("Zone deposit '{deposit_alias}' created no channel notes to split"),
-    })?;
-
-    let tx_hash = submit_zone_channel_split(
-        &node_url,
-        channel_id,
-        &signing_key,
-        public_key,
-        input_note,
-        dust_count,
-    )
-    .await
-    .map_err(|error| zone_step_error(step, &error))?;
-
-    world
-        .node
-        .remember_submitted_transaction(transaction_alias, tx_hash);
-
-    Ok(())
-}
-
-pub(in super::super) async fn submit_atomic_zone_deposit_transaction(
-    world: &mut ZoneWorld,
-    step: &Step,
-    sequencer_alias: &str,
-    transaction_alias: String,
-    message_alias: String,
-    amount: u64,
-    metadata: Metadata,
-) -> StepResult {
-    let node_url = log_step_error(step, world.zone_node_url_for_sequencer(sequencer_alias))?;
-    let wallet = log_step_error(step, resolve_zone_wallet(world, sequencer_alias))?;
-    let public_key = log_step_error(step, wallet.public_key())?;
-    let available_utxos = log_step_error(
-        step,
-        current_available_utxos_for_wallet(&mut world.node, &step.value, &wallet.wallet_name).await,
-    )?;
-    let sequencer = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?;
-    let inscription_data = make_inscription(&format!("Mint {amount} to Alice"));
-
-    let submission = submit_atomic_zone_deposit(
-        &node_url,
-        sequencer,
-        AtomicZoneDepositRequest {
-            channel_id: world.zone.sequencer_channel_id(sequencer_alias)?,
-            funding_public_key: public_key,
-            available_utxos,
-            amount,
-            metadata,
-            inscription_data: inscription_data.clone(),
-        },
-    )
-    .await
-    .map_err(|error| zone_step_error(step, &error))?;
-
-    world
-        .zone
-        .remember_submitted_deposit(transaction_alias.clone(), submission.deposit, amount);
-    remember_published_zone_message(
-        world,
-        sequencer_alias,
-        message_alias,
-        inscription_data,
-        &submission.publish,
-    );
-    record_zone_wallet_submission(
-        world,
-        &wallet.wallet_name,
-        submission.publish.inscription_id(),
-        submission.reserved_inputs,
-    )?;
-    world
-        .node
-        .remember_submitted_transaction(transaction_alias, submission.publish.inscription_id());
-
-    Ok(())
-}
-
-pub(in super::super) async fn submit_zone_withdraw_transaction(
-    world: &mut ZoneWorld,
-    step: &Step,
-    sequencer_alias: &str,
-    transaction_alias: String,
-    message_alias: String,
-    amount: u64,
-) -> StepResult {
-    let wallet = log_step_error(step, resolve_zone_wallet(world, sequencer_alias))?;
-    let public_key = log_step_error(step, wallet.public_key())?;
-    let sequencer = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?;
-    let inscription_data = make_inscription(&format!("Burn {amount}"));
-
-    let submission = submit_zone_withdraw(
-        sequencer,
-        world.zone.sequencer_channel_id(sequencer_alias)?,
-        public_key,
-        amount,
-        inscription_data.clone(),
-    )
-    .await
-    .map_err(|error| zone_step_error(step, &error))?;
-
-    world
-        .zone
-        .remember_submitted_withdraw(transaction_alias.clone(), submission.withdraw);
-    remember_published_zone_message(
-        world,
-        sequencer_alias,
-        message_alias,
-        inscription_data,
-        &submission.publish,
-    );
-    world
-        .node
-        .remember_submitted_transaction(transaction_alias, submission.publish.inscription_id());
-
-    Ok(())
-}
-
-/// `withdraw_rows` carries one `(alias, outputs)` per `WithdrawArg`; each
-/// withdraw is remembered under its own alias for per-withdraw indexer
-/// assertions, and `bundle_alias` under the bundle's tx hash.
-pub(in super::super) async fn publish_atomic_zone_withdraw_transaction(
-    world: &mut ZoneWorld,
-    step: &Step,
-    sequencer_alias: &str,
-    bundle_alias: String,
-    message_alias: String,
-    withdraw_rows: Vec<(String, Vec<u64>)>,
-) -> StepResult {
-    let wallet = log_step_error(step, resolve_zone_wallet(world, sequencer_alias))?;
-    let public_key = log_step_error(step, wallet.public_key())?;
-    let total: u64 = withdraw_rows
-        .iter()
-        .flat_map(|(_, outputs)| outputs.iter())
-        .sum();
-    let inscription_data = make_inscription(&format!("Burn {total}"));
-    let outputs_per_arg: Vec<Vec<u64>> = withdraw_rows
-        .iter()
-        .map(|(_, outputs)| outputs.clone())
-        .collect();
-
-    let submission = {
-        let sequencer = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?.clone();
-
-        publish_atomic_zone_withdraw(
-            &sequencer,
-            public_key,
-            outputs_per_arg,
-            inscription_data.clone(),
-            PublishDeadline::from_now(Duration::from_mins(3)),
-        )
-        .await
-        .map_err(|error| zone_step_error(step, &error))?
-    };
-
-    // A bundle carries a single `ChannelWithdrawOp` regardless of how many
-    // withdraw args were passed; every row alias resolves to that one op.
-    let [withdraw_op] = submission.withdraws.as_slice() else {
-        return Err(zone_step_error(
-            step,
-            &ZoneTestError::SubmitWithdraw {
-                message: format!(
-                    "atomic withdraw bundle produced {} withdraw ops, expected exactly 1",
-                    submission.withdraws.len(),
-                ),
-            },
-        ));
-    };
-    for (alias, _) in &withdraw_rows {
-        world
-            .zone
-            .remember_submitted_withdraw(alias.clone(), withdraw_op.clone());
-    }
-    remember_published_zone_message(
-        world,
-        sequencer_alias,
-        message_alias,
-        inscription_data,
-        &submission.publish,
-    );
-    world
-        .node
-        .remember_submitted_transaction(bundle_alias, submission.publish.inscription_id());
-
-    Ok(())
 }

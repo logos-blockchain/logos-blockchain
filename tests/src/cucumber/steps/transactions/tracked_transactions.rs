@@ -2,13 +2,18 @@ use std::{collections::HashSet, time::Duration};
 
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
-    Note, NoteId, Op, OpProof, SignedOps,
-    ledger::{BoundedInputs, Inputs, Outputs, verification_mode::StandardMode},
-    ops::transfer::TransferOp,
+    Note, Op, OpProof, SignedOps,
+    ledger::verification_mode::StandardMode,
+    note_set::CommitmentMmr,
+    notes::{InputNullifiers, derive_note_nullifier},
+    ops::{
+        ZkTransferProof,
+        transfer::{TransferOp, prove_transfer},
+    },
     traits::Hashable as _,
     transactions::{OpProofs, Ops, hash::TxHash, states::Unverified},
 };
-use lb_groth16::Fr;
+use lb_groth16::{CompressedGroth16Proof, Fr};
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use tokio::time::{sleep, timeout};
 use tracing::{info, warn};
@@ -252,30 +257,50 @@ async fn transaction_is_in_chain(
 /// Builds a transaction that fails stateless validation: a `TransferOp` with no
 /// inputs.
 pub fn create_stateless_invalid_transaction() -> SignedOps<Unverified, StandardMode> {
-    let output_note = Note::new(1000, ZkPublicKey::new(1u8.into()));
-    let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([output_note]));
+    let output_note = Note::new(1000, Fr::from(0u64), ZkPublicKey::new(1u8.into()));
+    let transfer_op = TransferOp::new(
+        InputNullifiers::empty(),
+        [output_note.commitment()].into(),
+        Fr::from(0u64),
+        0,
+    );
+    let mantle_tx = Ops::from([Op::Transfer(transfer_op)]);
 
-    build_signed_transfer(transfer_op)
+    // Preverification rejects the empty inputs before the proof is checked.
+    let op_proofs = OpProofs::from([OpProof::ZkTransfer(ZkTransferProof::new(
+        CompressedGroth16Proof::from_bytes(&[0u8; 128]),
+    ))]);
+    SignedOps::from_parts(mantle_tx, op_proofs).expect("transfer fixture should assemble")
 }
 
 /// Builds a transaction that passes stateless validation but is invalid against
-/// ledger state: its input note id does not correspond to any real UTXO.
+/// ledger state: it spends a note of a commitment MMR the ledger never had.
 fn create_stateful_invalid_transaction() -> SignedOps<Unverified, StandardMode> {
-    let nonexistent_input = NoteId(Fr::from(0xDEAD_BEEFu64));
-    let output_note = Note::new(1000, ZkPublicKey::new(1u8.into()));
+    let secret_key = ZkKey::new(Fr::from(0xDEAD_BEEFu64));
+    let input_note = Note::new(1000, Fr::from(0u64), secret_key.to_public_key());
+    let (mmr, path) = CommitmentMmr::new()
+        .push_with_paths(input_note.commitment(), &mut [])
+        .expect("one note fits in the commitment MMR");
+    let root = mmr.frontier_root();
+    let output_note = Note::new(1000, Fr::from(1u64), ZkPublicKey::new(1u8.into()));
     let transfer_op = TransferOp::new(
-        BoundedInputs::from(nonexistent_input).into(),
-        Outputs::new([output_note]),
+        [derive_note_nullifier(
+            &input_note.commitment(),
+            secret_key.as_fr(),
+        )]
+        .into(),
+        [output_note.commitment()].into(),
+        root,
+        0,
     );
-
-    build_signed_transfer(transfer_op)
-}
-
-fn build_signed_transfer(transfer_op: TransferOp) -> SignedOps<Unverified, StandardMode> {
     let mantle_tx = Ops::from([Op::Transfer(transfer_op)]);
 
-    let transfer_proof = ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr())
-        .expect("invalid transfer proof should still be constructible");
-    let op_proofs = OpProofs::from([OpProof::ZkSig(transfer_proof)]);
+    let transfer_proof = prove_transfer(
+        &[(input_note, *secret_key.as_fr(), path)],
+        &[output_note],
+        root,
+        mantle_tx.hash().to_fr(),
+    );
+    let op_proofs = OpProofs::from([OpProof::ZkTransfer(ZkTransferProof::new(transfer_proof))]);
     SignedOps::from_parts(mantle_tx, op_proofs).expect("transfer fixture should assemble")
 }

@@ -1,13 +1,16 @@
 pub mod channel;
 pub(crate) mod internal;
-pub mod leader_claim;
 pub mod op;
 pub mod op_proof;
 pub mod op_proof_ref;
 pub mod op_ref;
 pub mod pow;
+pub mod program;
+pub mod proof_channel_inscribe;
 pub mod proof_noop;
+pub mod proof_program_step;
 pub mod proof_zk_and_ed;
+pub mod proof_zk_transfer;
 pub mod sdp;
 mod serde_;
 pub mod signed_op;
@@ -22,8 +25,14 @@ pub use crate::mantle::ops::{
     op_proof::OpProof,
     op_proof_ref::OpProofRef,
     op_ref::OpRef,
+    proof_channel_inscribe::ChannelInscribeProof,
     proof_noop::NoOpProof,
+    proof_program_step::{
+        ProgramNoteOpening, ProgramProof, ProgramStepProof, StepProof, StepProofShape,
+        ZkProgramSpendProof,
+    },
     proof_zk_and_ed::ZkAndEd25519Proof,
+    proof_zk_transfer::ZkTransferProof,
     signed_op::SignedOp,
     signed_operation::SignedOperation,
 };
@@ -42,9 +51,8 @@ pub(crate) static OPERATION_ID_V1: LazyLock<Vec<u8>> =
 ///   (the canonical operation encoding without the leading opcode byte, i.e.
 ///   exactly what [`OpId::op_bytes`] returns) and the resulting `op_id =
 ///   Blake2b-256(b"OPERATION_ID_V1" || payload)`. For the variants that
-///   implement [`OpId`] (`Transfer`, `ChannelDeposit`, `ChannelTransfer`,
-///   `ChannelWithdraw`, `SDPWithdraw`, `LeaderClaim`) the emitted `op_id` is
-///   asserted to equal `OpId::op_id`.
+///   implement [`OpId`] (`Transfer`, `ChannelDeposit`, `ChannelWithdraw`,
+///   `SDPWithdraw`) the emitted `op_id` is asserted to equal `OpId::op_id`.
 ///
 /// - [`generate_mantle_tx_hash_test_vectors`]: for an empty transaction and for
 ///   a transaction holding one of every operation, the `encoding` (the
@@ -67,14 +75,14 @@ mod mantle_test_vectors {
         crypto::{Digest as _, Hasher},
         mantle::{
             fixtures::ops::op_values::{
-                ALL_OPS_COLUMN_HEX, CHANNEL_CONFIG, CHANNEL_TRANSFER, CHANNEL_WITHDRAW,
-                CLAIM_POW_REWARD, DEPOSIT, INSCRIPTION, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE,
-                SDP_WITHDRAW, SDP_WITHDRAW_PAYLOAD_HEX, TRANSFER,
+                ALL_OPS_COLUMN_HEX, CHANNEL_CONFIG, CHANNEL_WITHDRAW, CLAIM_POW_REWARD, DEPOSIT,
+                INSCRIPTION, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, SDP_WITHDRAW_PAYLOAD_HEX,
+                TRANSFER,
             },
+            ledger::ProvableOperation as _,
             traits::Hashable as _,
             transactions::tx_list::Ops,
         },
-        sdp::{DeclarationId, Nonce, WithdrawMessage},
     };
 
     /// `op_id = blake2b256("OPERATION_ID_V1" || op_payload_bytes)`
@@ -95,22 +103,19 @@ mod mantle_test_vectors {
         Hasher::digest(&preimage).into()
     }
 
-    /// The repository-maintained fixture uses declaration ID 0x70… and nonce
-    /// 0x72, and its all-operation transaction contains all eleven variants.
-    /// These are implementation fixtures, separate from the RFC withdrawal
-    /// vector's 0x1b/0x1d values.
+    /// The repository-maintained fixture uses declaration ID 0x1b… and nonce
+    /// 0x1d, and its all-operation transaction contains one of each variant.
     #[test]
     fn maintained_sdp_withdraw_and_all_operations_vectors() {
-        let withdraw = Op::SDPWithdraw(*SDP_WITHDRAW);
+        let withdraw = Op::SDPWithdraw(SDP_WITHDRAW.clone());
         let withdraw_encoding = withdraw.encode();
         let withdraw_payload = &withdraw_encoding[1..];
         let withdraw_id = SDP_WITHDRAW.op_id();
-        assert_eq!(withdraw_payload.len(), 40);
         assert_eq!(hex::encode(withdraw_payload), SDP_WITHDRAW_PAYLOAD_HEX);
         assert_eq!(withdraw_id, op_id_from_payload(withdraw_payload));
         assert_eq!(
             hex::encode(withdraw_id),
-            "e6d384d4b0efa9e934c08953d225752b91b202f0d085f67e9905343fe74808fa"
+            "f385d531e2efc2cfca261d1b12643937a3ba2d19a6f7be9b617d59e2d3264f8a"
         );
 
         let all_ops = Ops::from([
@@ -119,77 +124,19 @@ mod mantle_test_vectors {
             Op::ChannelInscribe(INSCRIPTION.clone()),
             Op::ChannelDeposit(DEPOSIT.clone()),
             Op::ChannelWithdraw(CHANNEL_WITHDRAW.clone()),
-            Op::ChannelTransfer(CHANNEL_TRANSFER.clone()),
             Op::SDPDeclare(SDP_DECLARE.clone()),
-            Op::SDPWithdraw(*SDP_WITHDRAW),
+            Op::SDPWithdraw(SDP_WITHDRAW.clone()),
             Op::SDPActive(SDP_ACTIVE.clone()),
-            Op::LeaderClaim(LEADER_CLAIM.clone()),
             Op::ClaimPowReward(CLAIM_POW_REWARD.clone()),
         ]);
         let transaction_encoding = all_ops.encode();
         let transaction_hash = tx_hash_from_payload(&transaction_encoding);
-        assert_eq!(transaction_encoding[0], 0x0b);
+        assert_eq!(transaction_encoding[0], 0x09);
         assert_eq!(hex::encode(&transaction_encoding), ALL_OPS_COLUMN_HEX);
         assert_eq!(all_ops.hash().0, transaction_hash);
         assert_eq!(
             hex::encode(transaction_hash),
-            "bd35e8f71e9005df1ba36ad320b57a8db408cf148c1c80f59e76cff9caae40ca"
-        );
-    }
-
-    /// RFC #407's withdrawal row uses ID [0x1b; 32] and nonce 0x1d. Keep its
-    /// payload and operation ID separate from the repository's 0x70/0x72
-    /// implementation fixture.
-    #[test]
-    fn rfc_sdp_withdraw_operation_vector() {
-        let withdraw = WithdrawMessage {
-            declaration_id: DeclarationId([0x1b; 32]),
-            nonce: Nonce::new(0.into(), 0x1d),
-        };
-        let payload = withdraw.encode_to_vec();
-        let expected_payload = [vec![0x1b; 32], 0x1du64.to_le_bytes().to_vec()].concat();
-
-        assert_eq!(payload.len(), 40);
-        assert_eq!(payload, expected_payload);
-        assert_eq!(
-            hex::encode(&payload),
-            format!("{}1d00000000000000", "1b".repeat(32))
-        );
-        assert_eq!(
-            hex::encode(withdraw.op_id()),
-            "a9f938ca71aa93a05f19aff553757b2707041daf0630b7c2d6d3da0705be8aaa"
-        );
-    }
-
-    /// The current one-of-each transaction contains all eleven operation
-    /// variants, including `CLAIM_POW_REWARD`.
-    #[test]
-    fn one_of_each_transaction_vector_includes_claim_pow_reward() {
-        let current_ops = Ops::sample();
-        let encoding = current_ops.encode();
-        let hash = current_ops.hash().0;
-
-        assert_eq!(encoding[0], 0x0b);
-        assert!(matches!(
-            current_ops.as_slice(),
-            [
-                Op::Transfer(_),
-                Op::ChannelConfig(_),
-                Op::ChannelInscribe(_),
-                Op::ChannelDeposit(_),
-                Op::ChannelWithdraw(_),
-                Op::ChannelTransfer(_),
-                Op::SDPDeclare(_),
-                Op::SDPWithdraw(_),
-                Op::SDPActive(_),
-                Op::LeaderClaim(_),
-                Op::ClaimPowReward(_),
-            ]
-        ));
-        assert_eq!(hash, tx_hash_from_payload(&encoding));
-        assert_eq!(
-            hex::encode(hash),
-            "35f957f9a2688d0e0d8d4c0762c6921f814a4a7243d05e31532ba7ae7a58c910"
+            "8b661cd3e5dc9684f08fb94b036190d34d0df49e2f6ad010672e520ab3d775bb"
         );
     }
 
@@ -229,12 +176,10 @@ mod mantle_test_vectors {
             match op {
                 Op::Transfer(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
                 Op::ChannelDeposit(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
-                Op::ChannelTransfer(o) => {
-                    assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes()));
-                }
                 Op::ChannelWithdraw(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
                 Op::SDPWithdraw(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
-                Op::LeaderClaim(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
+                Op::ProgramRegister(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
+                Op::ChannelInscribe(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
                 _ => {}
             }
         }
@@ -253,6 +198,146 @@ mod mantle_test_vectors {
         print_tx_vector("empty (0 ops)", &Ops::new_unchecked(vec![]));
 
         // Transaction holding one of every operation.
-        print_tx_vector("one of each operation (11 ops)", &Ops::sample());
+        print_tx_vector("one of each operation (10 ops)", &Ops::sample());
+    }
+
+    #[test]
+    fn transfer_op_id_matches_the_spec_vector() {
+        let transfer = transfer::TransferOp::sample();
+        assert_eq!(
+            hex::encode(transfer.op_bytes()),
+            "0201000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000020300000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000005000000000000000000000000000000000000000000000000000000000000000600000000000000"
+        );
+        assert_eq!(
+            hex::encode(transfer.op_id()),
+            "b39493d223a2fefae67c6aac3c8f9338e3272137d4ae4ce714607bcbc9d011a4"
+        );
+    }
+
+    #[test]
+    fn claim_pow_reward_op_id_matches_the_spec_vector() {
+        let claim = pow::ClaimPowRewardOp::sample();
+        assert_eq!(
+            hex::encode(claim.op_bytes()),
+            "3000000000000000000000000000000000000000000000000000000000000000313131313131313131313131313131313131313131313131313131313131313132000000000000000000000000000000000000000000000000000000000000003300000000000000000000000000000000000000000000000000000000000000"
+        );
+        assert_eq!(
+            hex::encode(claim.op_id()),
+            "bc5ccb3bf2ceae92f0479fb84cd1e8049d4e7cb33cc72d16a3d5e30780a34c2b"
+        );
+        assert_eq!(pow::ClaimPowRewardOp::CODE, 0x30);
+    }
+
+    #[test]
+    fn program_register_op_id_matches_the_spec_vector() {
+        let register = Op::ProgramRegister(program::ProgramRegisterOp::sample());
+        let payload = &register.encode()[1..];
+        assert_eq!(
+            hex::encode(payload),
+            "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f40404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414242424242424242424242424242424242424242424242424242424242424242434343434343434343434343434343434343434343434343434343434343434344444444444444444444444444444444444444444444444444444444444444444545454545454545454545454545454545454545454545454545454545454545"
+        );
+        assert_eq!(
+            hex::encode(op_id_from_payload(payload)),
+            "c7cc0a188f1d9aeb1dd35b8e951bafa34aebcf51bbcd2181173bf118931351d0"
+        );
+    }
+
+    #[test]
+    fn channel_deposit_op_id_matches_the_spec_vector() {
+        let deposit = channel::deposit::DepositOp::sample();
+        assert_eq!(
+            hex::encode(deposit.op_bytes()),
+            "101010101010101010101010101010101010101010101010101010101010101001110000000000000000000000000000000000000000000000000000000000000026000000000000000000000000000000000000000000000000000000000000000127000000000000000000000000000000000000000000000000000000000000002800000000000000100000006465706f7369742d6d65746164617461"
+        );
+        assert_eq!(
+            hex::encode(deposit.op_id()),
+            "83eeb0ac0b7e03bb6c93c0c7596512413707b9536b2b3d56a86656f8f527d6f6"
+        );
+    }
+
+    #[test]
+    fn channel_withdraw_op_id_matches_the_spec_vector() {
+        let withdraw = channel::withdraw::ChannelWithdrawOp::sample();
+        assert_eq!(
+            hex::encode(withdraw.op_bytes()),
+            "12121212121212121212121212121212121212121212121212121212121212120113000000000000000000000000000000000000000000000000000000000000002900000000000000000000000000000000000000000000000000000000000000012a00000000000000000000000000000000000000000000000000000000000000"
+        );
+        assert_eq!(
+            hex::encode(withdraw.op_id()),
+            "8d6ae69200aab259bca71e5829d43f0a289ba612383d29ddcd7d217f1ede0996"
+        );
+    }
+
+    #[test]
+    fn channel_config_op_id_matches_the_spec_vector() {
+        let config = Op::ChannelConfig(channel::config::ChannelConfigOp::sample());
+        let payload = &config.encode()[1..];
+        assert_eq!(
+            hex::encode(payload),
+            "0707070707070707070707070707070707070707070707070707070707070707000000000000000000000000000000000000000000000000000000000000000002001398f62c6d1a457c51ba6a4b5f3dbd2f69fca93216218dc8997e416bd17d93cafd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f6180a0000000b0000000200"
+        );
+        assert_eq!(
+            hex::encode(op_id_from_payload(payload)),
+            "c9f038b929299dd9ef28856916375021b04ce20e284bbfdc4355edab718846c2"
+        );
+    }
+
+    #[test]
+    fn channel_inscribe_op_id_matches_the_spec_vector() {
+        let inscribe = Op::ChannelInscribe(channel::inscribe::InscriptionOp::sample_with_step());
+        let payload = &inscribe.encode()[1..];
+        assert_eq!(
+            hex::encode(payload),
+            "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0b00000068656c6c6f206c6f676f730000000000000000000000000000000000000000000000000000000000000000d9bf2148748a85c89da5aad8ee0b0fc2d105fd39d41a4c796536354f0ae2900c02000001230000000000000000000000000000000000000000000000000000000000000001240000000000000000000000000000000000000000000000000000000000000025000000000000000000000000000000000000000000000000000000000000004600013400000000000000000000000000000000000000000000000000000000000000010135000000000000000000000000000000000000000000000000000000000000000136000000000000000000000000000000000000000000000000000000000000003700000000000000000000000000000000000000000000000000000000000000470038000000000000003900000000000000000000000000000000000000000000000000000000000000013a00000000000000000000000000000000000000000000000000000000000000013b00000000000000000000000000000000000000000000000000000000000000013c000000000000000000000000000000000000000000000000000000000000003d00000000000000000000000000000000000000000000000000000000000000"
+        );
+        assert_eq!(
+            hex::encode(op_id_from_payload(payload)),
+            "d28d2ef8ab64c9bdfaffeb050251596d2682df7852ee8d532fe10aa45a25c792"
+        );
+        if let Op::ChannelInscribe(operation) = &inscribe {
+            assert_eq!(
+                hex::encode(operation.op_id()),
+                "d28d2ef8ab64c9bdfaffeb050251596d2682df7852ee8d532fe10aa45a25c792"
+            );
+        }
+    }
+
+    #[test]
+    fn sdp_declare_op_id_matches_the_spec_vector() {
+        let declare = sdp::SDPDeclareOp::sample();
+        assert_eq!(
+            hex::encode(declare.op_bytes()),
+            "00010b00047f00000191020bb8cd0353470962558a6e0839022ae65c6b2723b32772e5c0c5f4776cb8e6a3e10ba2f31900000000000000000000000000000000000000000000000000000000000000011a000000000000000000000000000000000000000000000000000000000000002c000000000000000000000000000000000000000000000000000000000000002d00000000000000"
+        );
+        assert_eq!(
+            hex::encode(declare.op_id()),
+            "eee94894496fe11261d5f649f414c586c852436ba4c6c3fdb60294894a3dc19c"
+        );
+    }
+
+    #[test]
+    fn sdp_withdraw_payload_matches_the_spec_vector() {
+        let payload = sdp::SDPWithdrawOp::sample().encode();
+        assert_eq!(
+            hex::encode(&payload),
+            "1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1d000000000000001c00000000000000000000000000000000000000000000000000000000000000012e000000000000000000000000000000000000000000000000000000000000002f00000000000000"
+        );
+        assert_eq!(
+            hex::encode(op_id_from_payload(&payload)),
+            "f385d531e2efc2cfca261d1b12643937a3ba2d19a6f7be9b617d59e2d3264f8a"
+        );
+    }
+
+    #[test]
+    fn one_of_each_operation_hash_matches_the_spec_vector() {
+        let tx = Ops::sample();
+        assert_eq!(
+            hex::encode(tx.encode()),
+            "0a000201000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000020300000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000005000000000000000000000000000000000000000000000000000000000000000600000000000000013e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f40404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414242424242424242424242424242424242424242424242424242424242424242434343434343434343434343434343434343434343434343434343434343434344444444444444444444444444444444444444444444444444444444444444444545454545454545454545454545454545454545454545454545454545454545100707070707070707070707070707070707070707070707070707070707070707000000000000000000000000000000000000000000000000000000000000000002001398f62c6d1a457c51ba6a4b5f3dbd2f69fca93216218dc8997e416bd17d93cafd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f6180a0000000b0000000200110e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0b00000068656c6c6f206c6f676f730000000000000000000000000000000000000000000000000000000000000000d9bf2148748a85c89da5aad8ee0b0fc2d105fd39d41a4c796536354f0ae2900c02000001230000000000000000000000000000000000000000000000000000000000000001240000000000000000000000000000000000000000000000000000000000000025000000000000000000000000000000000000000000000000000000000000004600013400000000000000000000000000000000000000000000000000000000000000010135000000000000000000000000000000000000000000000000000000000000000136000000000000000000000000000000000000000000000000000000000000003700000000000000000000000000000000000000000000000000000000000000470038000000000000003900000000000000000000000000000000000000000000000000000000000000013a00000000000000000000000000000000000000000000000000000000000000013b00000000000000000000000000000000000000000000000000000000000000013c000000000000000000000000000000000000000000000000000000000000003d0000000000000000000000000000000000000000000000000000000000000012101010101010101010101010101010101010101010101010101010101010101001110000000000000000000000000000000000000000000000000000000000000026000000000000000000000000000000000000000000000000000000000000000127000000000000000000000000000000000000000000000000000000000000002800000000000000100000006465706f7369742d6d657461646174611312121212121212121212121212121212121212121212121212121212121212120113000000000000000000000000000000000000000000000000000000000000002900000000000000000000000000000000000000000000000000000000000000012a000000000000000000000000000000000000000000000000000000000000002000010b00047f00000191020bb8cd0353470962558a6e0839022ae65c6b2723b32772e5c0c5f4776cb8e6a3e10ba2f31900000000000000000000000000000000000000000000000000000000000000011a000000000000000000000000000000000000000000000000000000000000002c000000000000000000000000000000000000000000000000000000000000002d00000000000000211b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1d000000000000001c00000000000000000000000000000000000000000000000000000000000000012e000000000000000000000000000000000000000000000000000000000000002f00000000000000221e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1f00000000000000010a0000008a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020303030303030303030303030303030303030303030303030303030303030303303000000000000000000000000000000000000000000000000000000000000000313131313131313131313131313131313131313131313131313131313131313132000000000000000000000000000000000000000000000000000000000000003300000000000000000000000000000000000000000000000000000000000000"
+        );
+        assert_eq!(
+            hex::encode(tx.hash().0),
+            "3e6b9afd07da43c1229bf86daa566449aa92c0349ab522a0c9cca710beea4edc"
+        );
     }
 }

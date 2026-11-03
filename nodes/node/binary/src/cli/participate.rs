@@ -1,13 +1,10 @@
 use std::{net::Ipv4Addr, num::NonZeroU16};
 
 use color_eyre::eyre::{Result, bail, eyre};
-use lb_core::{
-    mantle::NoteId,
-    sdp::{DeclarationId, DeclarationMessage, Locator, Locators, ProviderId, ServiceType},
-};
-use lb_groth16::{AdditiveGroup as _, Fr};
+use lb_core::sdp::{DeclarationId, Locator, Locators, ProviderId, ServiceType};
 use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
 use lb_libp2p::{Multiaddr, Protocol};
+use lb_sdp_service::DeclarationRequest;
 use serde::Serialize;
 
 use super::ParticipateArgs;
@@ -94,14 +91,14 @@ fn build_blend_data(
     let (_, blend_key) = keystore.get_zk(KeyTitle::BLEND_ZK)?;
 
     // Declaration ID is not required for the genesis ceremony, but it is still
-    // useful for looking the declaration up once it is on chain. The service
-    // note is not part of the ID, so a zero one is fine here.
-    let declaration_id = DeclarationMessage {
+    // useful for looking the declaration up once it is on chain. The stake is
+    // not part of the ID, so a zero one is fine here.
+    let declaration_id = DeclarationRequest {
         service_type: ServiceType::BlendNetwork,
         locators: locators.clone(),
         provider_id: ProviderId(provider_id),
         zk_id: blend_key.to_public_key(),
-        service_note_id: NoteId::from(Fr::ZERO),
+        amount: 0,
     }
     .id();
 

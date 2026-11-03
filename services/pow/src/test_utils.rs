@@ -15,7 +15,7 @@ pub const SLOTS_PER_EPOCH: u64 = 100;
 
 /// The size of a Blend payload body in the eras [`era_schedule`] builds: the
 /// largest block proposal of an era that allows four uncles.
-pub const PAYLOAD_BODY_SIZE: usize = 18_187;
+pub const PAYLOAD_BODY_SIZE: usize = 17_712;
 
 /// A schedule with an era per reward window of `reward_windows`, era `i`
 /// starting at epoch `i` with the reward window `reward_windows[i]`, rewards

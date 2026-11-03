@@ -2,8 +2,9 @@
 //!
 //! Watches the chain for newly processed blocks and, for every block still
 //! within the reward window, runs a concurrent search for a "winning" ticket:
-//! a random key whose derived puzzle ticket meets the block's difficulty
-//! target. Winning tickets are surfaced through the [`TicketGenerator`] stream.
+//! a random nonce whose puzzle ticket, bound to the key the reward is paid to,
+//! meets the block's difficulty target. Winning tickets are surfaced through
+//! the [`TicketGenerator`] stream.
 //!
 //! A search is bounded by what the reward pool can still pay: it ends once it
 //! has found as many winners as the pool funds, net of the tickets the node
@@ -31,9 +32,11 @@ use lb_core::{
         ops::pow::{ClaimPowRewardOp, PowTarget},
     },
 };
-use lb_key_management_system_keys::keys::UnsecuredZkKey;
+use lb_groth16::fr_from_mod_bytes;
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_ledger::LedgerState;
 use lb_log_targets::pow;
+use rand::Rng as _;
 use rayon::ThreadPool;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -47,9 +50,9 @@ use crate::service::{ServiceEraSchedule, reward_window};
 
 const LOG_TARGET: &str = pow::ROOT;
 
-/// A winning Proof-of-Work reward: the secret key that produced the ticket,
-/// paired with the reward-claim operation to be published.
-pub type WinnerTicket = (UnsecuredZkKey, ClaimPowRewardOp);
+/// A winning Proof-of-Work reward: the reward-claim operation to be published,
+/// paying its `public_key`.
+pub type WinnerTicket = ClaimPowRewardOp;
 /// A boxed stream of [`WinnerTicket`]s found for a single block, each tagged
 /// with that block's slot (for reward-window bookkeeping).
 pub type WinnerTicketStream = Pin<Box<dyn Stream<Item = (Slot, WinnerTicket)> + Send>>;
@@ -66,8 +69,6 @@ pub struct WinningTicket {
     /// Slot of the block the claim is anchored to, used to check whether the
     /// ticket is still within the reward window.
     pub block_slot: Slot,
-    /// Secret key that produced the winning claim (owns the reward note).
-    pub secret_key: UnsecuredZkKey,
     /// The reward-claim operation to publish.
     pub claim: ClaimPowRewardOp,
 }
@@ -115,6 +116,10 @@ pub struct TicketGenerator {
     /// the pool when sizing a new block's search. Kept current by the consumer
     /// through [`TicketGenerator::set_outstanding_tickets`].
     outstanding_tickets: usize,
+    /// Key the rewards of the tickets searched from now on are paid to, bound
+    /// into each ticket. Set through [`TicketGenerator::set_reward_key`]; no
+    /// search starts before.
+    reward_key: Option<ZkPublicKey>,
 }
 
 impl TicketGenerator {
@@ -155,7 +160,14 @@ impl TicketGenerator {
             max_tickets_per_block,
             era_schedule,
             outstanding_tickets: 0,
+            reward_key: None,
         })
+    }
+
+    /// Sets the key the rewards of the tickets searched from now on are paid
+    /// to. Searches already running keep the key they were started with.
+    pub const fn set_reward_key(&mut self, reward_key: ZkPublicKey) {
+        self.reward_key = Some(reward_key);
     }
 
     /// Records how many winning tickets the node currently holds unpaid (ready
@@ -217,6 +229,8 @@ struct BlockSearch {
     slot: Slot,
     epoch_nonce: ZkHash,
     difficulty: PowTarget,
+    /// The key the winning claims pay.
+    reward_key: ZkPublicKey,
     /// Winners the search may still yield before it ends.
     remaining_winners: NonZeroUsize,
 }
@@ -276,8 +290,8 @@ where
 /// Builds a stream that searches for winning tickets for a single block.
 ///
 /// Up to `max_tickets_per_block` attempts run concurrently; each draws a fresh
-/// random key and checks the resulting ticket against `difficulty`.
-/// The stream yields winning `(secret key, claim)` pairs and ends after
+/// random nonce and checks the resulting ticket against `difficulty`.
+/// The stream yields winning claims paying `reward_key` and ends after
 /// `remaining_winners` of them, dropping any attempt still in flight so the
 /// search pool goes idle. If the limit is not reached first, it is dropped once
 /// the block leaves the reward window (see [`prune_out_of_window_streams`]).
@@ -287,6 +301,7 @@ fn new_block_search_stream(
         slot,
         epoch_nonce,
         difficulty,
+        reward_key,
         remaining_winners,
     }: BlockSearch,
     pool: Arc<ThreadPool>,
@@ -297,7 +312,13 @@ fn new_block_search_stream(
         reason = "`repeat_with` takes a FnMut not an async closure"
     )]
     let tasks = iter::repeat_with(move || {
-        search_winner_ticket(block_header, epoch_nonce, difficulty, Arc::clone(&pool))
+        search_winner_ticket(
+            block_header,
+            epoch_nonce,
+            difficulty,
+            reward_key,
+            Arc::clone(&pool),
+        )
     });
     let results = stream::iter(tasks).buffer_unordered(max_tickets_per_block.get());
     let winners = tokio_stream::StreamExt::filter_map(results, |maybe_winner| maybe_winner)
@@ -309,17 +330,18 @@ fn new_block_search_stream(
 
 /// Runs a single ticket-search attempt for a block.
 ///
-/// Generates a random key, builds the reward claim, and validates its puzzle
-/// ticket against `difficulty`. The heavy computation is off-loaded to the
-/// dedicated `pool` so it does not stall Tokio's runtime threads. Returns the
-/// winning `(key, claim)` when the ticket meets the difficulty target,
-/// otherwise `None`.
+/// Generates a random nonce, builds the reward claim paying `reward_key`, and
+/// validates its puzzle ticket against `difficulty`. The heavy computation is
+/// off-loaded to the dedicated `pool` so it does not stall Tokio's runtime
+/// threads. Returns the winning claim when the ticket meets the difficulty
+/// target, otherwise `None`.
 async fn search_winner_ticket(
     block_header: HeaderId,
     epoch_nonce: ZkHash,
     difficulty: PowTarget,
+    reward_key: ZkPublicKey,
     pool: Arc<ThreadPool>,
-) -> Option<(UnsecuredZkKey, ClaimPowRewardOp)> {
+) -> Option<ClaimPowRewardOp> {
     let (response_sender, response_receiver) = oneshot::channel();
     let pool_task = move || {
         // Skip the work if the search was dropped while this attempt was queued, e.g.
@@ -328,19 +350,18 @@ async fn search_winner_ticket(
             return;
         }
 
-        let mut rng = rand::thread_rng();
-        let sk = UnsecuredZkKey::from_rng(&mut rng);
-        let pk = sk.to_public_key();
+        let nonce = fr_from_mod_bytes(&rand::thread_rng().r#gen::<[u8; 32]>());
         let claim = ClaimPowRewardOp {
             epoch_nonce,
             block_hash: block_header.into(),
-            public_key: pk,
+            public_key: reward_key,
+            nonce,
         };
         let ticket = claim.get_puzzle_ticket();
         let result = ticket
             .validate_difficulty_reward(&difficulty)
             .is_ok()
-            .then_some((sk, claim));
+            .then_some(claim);
         if response_sender.send(result).is_err() {
             trace!(target: LOG_TARGET, "Dropping ticket result: its search was dropped");
         }
@@ -389,14 +410,13 @@ impl Stream for TicketGenerator {
         loop {
             // 1. Emit any winner an active search has already produced, tagged with the
             //    cached tip.
-            if let Poll::Ready(Some((block_id, (block_slot, (secret_key, claim))))) =
+            if let Poll::Ready(Some((block_id, (block_slot, claim)))) =
                 this.tickets_search.poll_next_unpin(cx)
             {
                 this.record_winner(block_id);
                 return Poll::Ready(Some(WinningTicket {
                     tip: this.tip,
                     block_slot,
-                    secret_key,
                     claim,
                 }));
             }
@@ -424,12 +444,14 @@ impl Stream for TicketGenerator {
                         this.outstanding_tickets,
                     ));
                     if let Some(max_winners) = max_winners
+                        && let Some(reward_key) = this.reward_key
                         && frontier_slot(&this.era_schedule, tip_slot, block_slot) < block_slot
                     {
                         let search = BlockSearch {
                             slot: block_slot,
                             epoch_nonce: epoch_state.nonce,
                             difficulty: pow.reward_difficulty(),
+                            reward_key,
                             remaining_winners: max_winners,
                         };
                         let stream = new_block_search_stream(
@@ -480,7 +502,7 @@ mod tests {
     use lb_chain_service::{EpochState, ProcessedBlockEvent, Slot};
     use lb_core::{header::HeaderId, mantle::ops::pow::ClaimPowRewardOp};
     use lb_groth16::{AdditiveGroup as _, Fr};
-    use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
+    use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_ledger::LedgerState;
     use rayon::{ThreadPool, ThreadPoolBuilder};
     use tokio_stream::StreamMap;
@@ -518,6 +540,7 @@ mod tests {
             slot: Slot::new(slot),
             epoch_nonce: zero_fr(),
             difficulty: Fr::ZERO,
+            reward_key: ZkPublicKey::zero(),
             remaining_winners: NonZeroUsize::new(2).unwrap(),
         }
     }
@@ -591,6 +614,7 @@ mod tests {
             max_tickets_per_block,
             era_schedule: era_schedule(&[SLOT_WINDOW]),
             outstanding_tickets: 0,
+            reward_key: None,
         };
 
         let new_pool = test_pool();
@@ -614,6 +638,7 @@ mod tests {
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
             era_schedule: era_schedule(&[SLOT_WINDOW]),
             outstanding_tickets: 0,
+            reward_key: None,
         };
 
         generator.record_winner(block);
@@ -676,8 +701,14 @@ mod tests {
     #[tokio::test]
     async fn search_winner_ticket_rejects_when_difficulty_is_zero() {
         // No ticket can be strictly below zero, so this attempt never wins.
-        let result =
-            search_winner_ticket(HeaderId::from([7u8; 32]), zero_fr(), Fr::ZERO, test_pool()).await;
+        let result = search_winner_ticket(
+            HeaderId::from([7u8; 32]),
+            zero_fr(),
+            Fr::ZERO,
+            ZkPublicKey::zero(),
+            test_pool(),
+        )
+        .await;
         assert!(result.is_none());
     }
 
@@ -688,13 +719,20 @@ mod tests {
         // Maximum field element: every ticket is below it, so the attempt wins.
         let difficulty = Fr::ZERO - Fr::from(1u64);
 
-        let (secret_key, claim) =
-            search_winner_ticket(block_header, epoch_nonce, difficulty, test_pool())
-                .await
-                .expect("a win is essentially certain at maximum difficulty");
+        let reward_key = ZkPublicKey::new(Fr::from(5u64));
 
-        // The claim reflects the search inputs and the winning key.
-        assert_eq!(claim.public_key, secret_key.to_public_key());
+        let claim = search_winner_ticket(
+            block_header,
+            epoch_nonce,
+            difficulty,
+            reward_key,
+            test_pool(),
+        )
+        .await
+        .expect("a win is essentially certain at maximum difficulty");
+
+        // The claim reflects the search inputs and pays the reward key.
+        assert_eq!(claim.public_key, reward_key);
         assert_eq!(claim.epoch_nonce, epoch_nonce);
         assert_eq!(claim.block_hash, <[u8; 32]>::from(block_header));
         // The winning ticket genuinely satisfies the difficulty target.
@@ -735,6 +773,7 @@ mod tests {
             slot: Slot::new(11),
             epoch_nonce: zero_fr(),
             difficulty,
+            reward_key: ZkPublicKey::zero(),
             remaining_winners: NonZeroUsize::new(3).unwrap(),
         };
         let winners: Vec<_> = new_block_search_stream(
@@ -763,22 +802,18 @@ mod tests {
     }
 
     /// A per-block search stream that yields a single winner, then ends.
-    fn ready_search(
-        block_slot: Slot,
-        ticket: (UnsecuredZkKey, ClaimPowRewardOp),
-    ) -> WinnerTicketStream {
+    fn ready_search(block_slot: Slot, ticket: ClaimPowRewardOp) -> WinnerTicketStream {
         Box::pin(stream::iter([(block_slot, ticket)]))
     }
 
-    /// A winning ticket owned by its own freshly generated key.
-    fn ticket() -> (UnsecuredZkKey, ClaimPowRewardOp) {
-        let secret_key = UnsecuredZkKey::from_rng(&mut rand::thread_rng());
-        let claim = ClaimPowRewardOp {
+    /// A winning ticket paying `public_key`.
+    fn ticket(public_key: ZkPublicKey) -> ClaimPowRewardOp {
+        ClaimPowRewardOp {
             epoch_nonce: zero_fr(),
             block_hash: [0u8; 32],
-            public_key: secret_key.to_public_key(),
-        };
-        (secret_key, claim)
+            public_key,
+            nonce: Fr::from(rand::random::<u64>()),
+        }
     }
 
     /// Polls the generator once with a no-op waker.
@@ -800,6 +835,7 @@ mod tests {
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
             era_schedule: era_schedule(&[SLOT_WINDOW]),
             outstanding_tickets: 0,
+            reward_key: None,
         };
         assert!(matches!(poll_once(&mut generator), Poll::Ready(None)));
     }
@@ -822,6 +858,7 @@ mod tests {
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
             era_schedule: era_schedule(&[SLOT_WINDOW]),
             outstanding_tickets: 0,
+            reward_key: None,
         };
         assert!(matches!(poll_once(&mut generator), Poll::Ready(None)));
     }
@@ -839,6 +876,7 @@ mod tests {
             max_tickets_per_block: NonZeroUsize::new(16).unwrap(),
             era_schedule: era_schedule(&[SLOT_WINDOW]),
             outstanding_tickets: 0,
+            reward_key: None,
         };
         assert!(matches!(poll_once(&mut generator), Poll::Pending));
     }
@@ -847,12 +885,12 @@ mod tests {
     async fn poll_emits_ready_winner_tagged_with_cached_tip() {
         let tip = HeaderId::from([42u8; 32]);
         let block_slot = Slot::new(7);
-        let (secret_key, claim) = ticket();
+        let reward_key = ZkPublicKey::new(Fr::from(5u64));
 
         let mut tickets_search = StreamMap::new();
         tickets_search.insert(
             HeaderId::from([1u8; 32]),
-            ready_search(block_slot, (secret_key.clone(), claim)),
+            ready_search(block_slot, ticket(reward_key)),
         );
         let mut generator = TicketGenerator {
             processed_block_stream: pending_blocks(),
@@ -863,6 +901,7 @@ mod tests {
             max_tickets_per_block: NonZeroUsize::new(16).unwrap(),
             era_schedule: era_schedule(&[SLOT_WINDOW]),
             outstanding_tickets: 0,
+            reward_key: None,
         };
 
         let Poll::Ready(Some(winner)) = poll_once(&mut generator) else {
@@ -870,7 +909,7 @@ mod tests {
         };
         assert_eq!(winner.tip, tip);
         assert_eq!(winner.block_slot, block_slot);
-        assert_eq!(winner.claim.public_key, secret_key.to_public_key());
+        assert_eq!(winner.claim.public_key, reward_key);
     }
 
     #[tokio::test]
@@ -878,7 +917,7 @@ mod tests {
         let mut tickets_search = StreamMap::new();
         tickets_search.insert(
             HeaderId::from([1u8; 32]),
-            ready_search(Slot::new(3), ticket()),
+            ready_search(Slot::new(3), ticket(ZkPublicKey::zero())),
         );
         let mut generator = TicketGenerator {
             processed_block_stream: no_blocks(),
@@ -889,6 +928,7 @@ mod tests {
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
             era_schedule: era_schedule(&[SLOT_WINDOW]),
             outstanding_tickets: 0,
+            reward_key: None,
         };
 
         // A winner already produced is emitted first...

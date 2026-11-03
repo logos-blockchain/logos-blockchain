@@ -166,9 +166,10 @@ mod tests {
     };
 
     use lb_core::{
-        mantle::{Note, Utxo},
+        mantle::Note,
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
+    use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_ledger::{
         ConsensusExcludedKeys, Intent,
@@ -495,14 +496,14 @@ mod tests {
     }
 
     fn lib_ledger_state() -> LedgerState {
-        ledger_state([Utxo::new([0; 32], 0, Note::new(1, ZkPublicKey::zero()))])
+        ledger_state([Note::new(1, Fr::ZERO, ZkPublicKey::zero())])
     }
 
     fn tip_ledger_state() -> LedgerState {
         ledger_state([])
     }
 
-    fn ledger_state(utxos: impl IntoIterator<Item = Utxo>) -> LedgerState {
+    fn ledger_state(notes: impl IntoIterator<Item = Note>) -> LedgerState {
         let consensus_config = lb_cryptarchia_engine::Config::new(
             NonZero::new(2).unwrap(),
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
@@ -517,8 +518,8 @@ mod tests {
         };
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
-        LedgerState::from_utxos(
-            utxos,
+        LedgerState::from_notes(
+            notes,
             &lb_ledger::Config {
                 epoch_config,
                 consensus_config,

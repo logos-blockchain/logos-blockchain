@@ -2,11 +2,7 @@ use std::ffi::{CString, c_char};
 
 use lb_blend_service::message::NetworkInfo;
 use lb_c_macros::panic_to_error;
-use lb_core::{
-    mantle::NoteId,
-    sdp::{self, Locator},
-};
-use lb_groth16::fr_from_bytes;
+use lb_core::sdp::{self, Locator};
 use lb_node::{RuntimeServiceId, generic_services::blend::BlendService};
 use lb_sdp_service::SdpSubmission;
 use multiaddr::PeerId;
@@ -28,16 +24,6 @@ impl From<sdp::DeclarationId> for DeclarationId {
     fn from(id: sdp::DeclarationId) -> Self {
         Self(id.0)
     }
-}
-
-unsafe fn parse_service_note_id(ptr: *const u8) -> Result<NoteId, OperationStatus> {
-    let bytes = unsafe { std::slice::from_raw_parts(ptr, KEY_SIZE) };
-    fr_from_bytes(bytes).map(NoteId).map_err(|_| {
-        OperationStatus::error(
-            OperationStatusCode::ValidationError,
-            "Invalid `service_note_id` bytes.",
-        )
-    })
 }
 
 unsafe fn parse_locator(ptr: *const c_char) -> Result<Locator, OperationStatus> {
@@ -66,8 +52,7 @@ unsafe fn parse_locator(ptr: *const c_char) -> Result<Locator, OperationStatus> 
 ///
 /// - `node`: A non-null pointer to a running [`LogosBlockchainNode`] instance.
 /// - `locator`: A non-null pointer to a locator C string.
-/// - `service_note_id`: A non-null pointer to 32 bytes representing the service
-///   note ID.
+/// - `amount`: The stake of the declaration, funded by the node's wallet.
 ///
 /// # Returns
 ///
@@ -82,15 +67,12 @@ unsafe fn parse_locator(ptr: *const c_char) -> Result<Locator, OperationStatus> 
 pub unsafe extern "C" fn blend_join_as_core_node(
     node: *const LogosBlockchainNode,
     locator: *const c_char,
-    service_note_id: *const u8,
+    amount: u64,
 ) -> FfiStatusResult<DeclarationId> {
     return_error_if_null_pointer!(node);
     return_error_if_null_pointer!(locator);
-    return_error_if_null_pointer!(service_note_id);
 
     let locator = unwrap_or_return_error!(unsafe { parse_locator(locator) });
-    let service_note_id =
-        unwrap_or_return_error!(unsafe { parse_service_note_id(service_note_id) });
 
     let node = unsafe { &*node };
 
@@ -99,7 +81,7 @@ pub unsafe extern "C" fn blend_join_as_core_node(
         lb_api_service::http::blend::blend_join_network::<
             BlendService<RuntimeServiceId>,
             RuntimeServiceId,
-        >(node.get_overwatch_handle(), locator, service_note_id)
+        >(node.get_overwatch_handle(), locator, amount)
         .await
         .map_err(|error| {
             OperationStatus::error(

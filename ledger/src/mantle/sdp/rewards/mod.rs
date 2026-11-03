@@ -7,7 +7,10 @@ use std::collections::HashMap;
 use lb_binary_codec::bincode::SerializeOp as _;
 use lb_core::{
     crypto::{Digest, Hash, Hasher},
-    mantle::{Note, Utxo, Value},
+    mantle::{
+        Value,
+        notes::{Note, derive_note_nonce},
+    },
     sdp::{ActivityMetadata, ProviderId, ServiceParameters, ServiceType},
 };
 use lb_cryptarchia_engine::Epoch;
@@ -66,10 +69,13 @@ pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
         config: &ServiceParameters,
         last_params: &Self::Params,
         params: &Self::Params,
-    ) -> (Self, Vec<Utxo>);
+    ) -> (Self, Vec<Note>);
 
     #[must_use]
     fn add_income(&self, income: Value) -> Self;
+
+    // The income earned and not yet settled by an epoch transition.
+    fn pending_income(&self) -> Value;
 }
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
@@ -112,7 +118,7 @@ fn create_reward_op_id(epoch: Epoch, service_type: ServiceType) -> Hash {
     hasher.finalize().into()
 }
 
-/// Distributes rewards as UTXOs, sorted by `zk_id` for determinism.
+/// Distributes rewards as notes, sorted by `zk_id` for determinism.
 ///
 /// Creates reward notes that are:
 /// - Deterministic: Sorted by `zk_id` in ascending order
@@ -122,7 +128,7 @@ fn distribute_rewards(
     rewards: HashMap<ZkPublicKey, RewardAmount>,
     epoch: Epoch,
     service_type: ServiceType,
-) -> Vec<Utxo> {
+) -> Vec<Note> {
     let mut sorted_rewards: Vec<(ZkPublicKey, RewardAmount)> = rewards
         .into_iter()
         .filter(|(_, amount)| *amount > 0)
@@ -134,8 +140,40 @@ fn distribute_rewards(
     sorted_rewards
         .into_iter()
         .enumerate()
-        .map(|(output_index, (zk_id, reward_amount))| {
-            Utxo::new(op_id, output_index, Note::new(reward_amount, zk_id))
+        .map(|(output_number, (zk_id, reward_amount))| {
+            Note::new(
+                reward_amount,
+                derive_note_nonce(&op_id, output_number, reward_amount, &zk_id),
+                zk_id,
+            )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_groth16::Fr;
+
+    use super::*;
+
+    #[test]
+    fn reward_notes_take_the_derived_nonce_in_zk_id_order() {
+        let low = ZkPublicKey::new(Fr::from(1u64));
+        let high = ZkPublicKey::new(Fr::from(2u64));
+        let unpaid = ZkPublicKey::new(Fr::from(3u64));
+        let epoch = Epoch::new(7);
+        let paid = distribute_rewards(
+            HashMap::from([(high, 20), (unpaid, 0), (low, 10)]),
+            epoch,
+            ServiceType::BlendNetwork,
+        );
+        let op_id = create_reward_op_id(epoch, ServiceType::BlendNetwork);
+        assert_eq!(
+            paid,
+            vec![
+                Note::new(10, derive_note_nonce(&op_id, 0, 10, &low), low),
+                Note::new(20, derive_note_nonce(&op_id, 1, 20, &high), high),
+            ]
+        );
+    }
 }

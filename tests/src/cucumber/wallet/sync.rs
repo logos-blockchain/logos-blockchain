@@ -4,14 +4,16 @@ use std::{
     time::Duration,
 };
 
-use lb_core::mantle::{NoteId, Utxo};
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_core::mantle::notes::NoteNullifier;
+use lb_key_management_system_service::keys::UnsecuredZkKey;
+use lb_wallet::OwnedNote;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::{
     common::wallet::{
         TrackedWalletKeysBySource, WalletBalance, WalletId, WalletOutputState, WalletUtxos,
+        scanner::accounting::ScannerAccounting,
     },
     cucumber::{
         error::StepError,
@@ -20,7 +22,7 @@ use crate::{
             TARGET, WalletStateView,
             best_node::{BestNodeInfo, get_best_node_info},
         },
-        world::{CucumberWorld, WalletInfo},
+        world::{CucumberWorld, WalletInfo, WalletType},
     },
 };
 
@@ -46,12 +48,39 @@ pub async fn current_available_utxos_for_user_wallets(
     current_available_utxos_for_wallet_keys_with_requirements(world, &wallet_keys).await
 }
 
+/// Return the UTXOs of all user wallets at the genesis block, their paths
+/// leading to the genesis note set roots.
+pub fn genesis_utxos_for_user_wallets(
+    world: &CucumberWorld,
+    step: &str,
+) -> Result<WalletUtxos, StepError> {
+    let wallets = world.all_user_wallets();
+    let mut wallet_keys = build_tracked_wallet_keys(world, step, &wallets)?;
+    add_scenario_fee_wallet_keys(world, &mut wallet_keys);
+
+    // One accounting per source, as the scanner does: the scenario fee key is
+    // tracked once per source under distinct wallet ids.
+    wallet_keys
+        .batches()
+        .try_fold(WalletUtxos::new(), |mut utxos, batch| {
+            let accounting = ScannerAccounting::new(
+                batch.wallet_keys().to_vec(),
+                &world.chain.genesis_block_utxos,
+            )
+            .map_err(|error| StepError::LogicalError {
+                message: format!("Step `{step}` error: genesis wallet accounting failed: {error}"),
+            })?;
+            utxos.extend(accounting.wallet_utxos());
+            Ok(utxos)
+        })
+}
+
 /// Return currently available UTXOs for one named wallet.
 pub async fn current_available_utxos_for_wallet(
     world: &mut CucumberWorld,
     step: &str,
     wallet_name: &str,
-) -> Result<Vec<Utxo>, StepError> {
+) -> Result<Vec<OwnedNote>, StepError> {
     Ok(current_wallet_state(world, step, wallet_name)
         .await?
         .into_available_utxos())
@@ -64,7 +93,13 @@ pub async fn current_wallet_output_balance(
     wallet: &WalletInfo,
     wallet_state_type: WalletOutputState,
 ) -> Result<WalletBalance, StepError> {
-    if wallet.is_node_wallet() {
+    // The change of a PoW claim is a note only the claiming node's wallet
+    // knows the opening of, so a mining wallet is read from its node too.
+    let is_mining_wallet = world
+        .mining_claim_addresses
+        .values()
+        .any(|claim_address| wallet.public_key().ok() == Some(*claim_address));
+    if wallet.is_node_wallet() || is_mining_wallet {
         let node =
             world
                 .nodes_info
@@ -163,9 +198,9 @@ async fn current_wallet_state_for_wallet(
 pub async fn current_wallet_state_for_key(
     world: &mut CucumberWorld,
     wallet_name: &str,
-    wallet_pk: ZkPublicKey,
+    wallet_key: UnsecuredZkKey,
 ) -> Result<WalletStateView, StepError> {
-    let wallet_keys = tracked_wallet_keys_for_all_active_sources(world, wallet_name, wallet_pk);
+    let wallet_keys = tracked_wallet_keys_for_all_active_sources(world, wallet_name, &wallet_key);
 
     current_wallet_state_for_keys(world, wallet_name, &wallet_keys).await
 }
@@ -224,7 +259,23 @@ fn build_tracked_wallet_keys(
             warn!(target: TARGET, "Step `{}` error: {e}", step);
         })?;
 
-        wallet_keys.add_wallet(group_key, wallet.wallet_name.clone(), wallet_pk);
+        // The scanner derives nullifiers and proves with the secret key, so
+        // node funding wallets are not tracked.
+        let WalletType::User { wallet_account } = &wallet.wallet_type else {
+            warn!(
+                target: TARGET,
+                "Step `{}`: node wallet `{}` ({wallet_pk:?}) is not tracked by the scanner",
+                step,
+                wallet.wallet_name
+            );
+            continue;
+        };
+
+        wallet_keys.add_wallet(
+            group_key,
+            wallet.wallet_name.clone(),
+            UnsecuredZkKey::new(*wallet_account.secret_key.as_fr()),
+        );
     }
 
     Ok(wallet_keys)
@@ -233,16 +284,16 @@ fn build_tracked_wallet_keys(
 fn tracked_wallet_keys_for_all_active_sources(
     world: &CucumberWorld,
     wallet_name: &str,
-    wallet_pk: ZkPublicKey,
+    wallet_key: &UnsecuredZkKey,
 ) -> TrackedWalletKeysBySource {
     let mut wallet_keys = TrackedWalletKeysBySource::new();
 
     for source_id in active_wallet_feed_source_ids(world) {
-        wallet_keys.add_wallet(source_id, wallet_name, wallet_pk);
+        wallet_keys.add_wallet(source_id, wallet_name, wallet_key.clone());
     }
 
     if wallet_keys.batches().next().is_none() {
-        wallet_keys.add_wallet("", wallet_name, wallet_pk);
+        wallet_keys.add_wallet("", wallet_name, wallet_key.clone());
     }
 
     wallet_keys
@@ -272,8 +323,10 @@ fn add_scenario_fee_wallet_keys(
         return;
     };
 
-    wallet_keys
-        .add_wallet_for_each_source(SCENARIO_FEE_ACCOUNT_NAME, fee_wallet_account.public_key());
+    wallet_keys.add_wallet_for_each_source(
+        SCENARIO_FEE_ACCOUNT_NAME,
+        &UnsecuredZkKey::new(*fee_wallet_account.secret_key.as_fr()),
+    );
 }
 
 fn apply_scenario_fee_observations(
@@ -316,7 +369,7 @@ pub async fn wait_wallet_send_ready<S: BuildHasher + Sync>(
     required_available: u64,
     readiness: WalletSendReadiness,
     available_utxos: &mut WalletUtxos,
-    used_input_note_ids: &HashSet<NoteId, S>,
+    used_input_note_ids: &HashSet<NoteNullifier, S>,
 ) -> Result<BestNodeInfo, StepError> {
     wait_wallet_send_ready_with_callback(
         world,
@@ -344,7 +397,7 @@ pub(crate) async fn wait_wallet_send_ready_with_callback<S, F>(
     required_available: u64,
     readiness: WalletSendReadiness,
     available_utxos: &mut WalletUtxos,
-    used_input_note_ids: &HashSet<NoteId, S>,
+    used_input_note_ids: &HashSet<NoteNullifier, S>,
     mut before_poll: F,
 ) -> Result<BestNodeInfo, StepError>
 where
@@ -361,6 +414,30 @@ where
     let (min_required_outputs, min_value_per_transaction) = readiness.get_minimums();
     let mut last_msg = String::new();
 
+    // A node wallet is not scanned: its node selects the inputs, so readiness
+    // is its node's balance.
+    let wallet = world.resolve_wallet(wallet_name)?;
+    if wallet.is_node_wallet() {
+        while start.elapsed() < Duration::from_secs(timeout_seconds) {
+            let best_node_info =
+                get_best_node_info(world, wallet_name, Some(&mut last_msg)).await?;
+            last_available_value =
+                current_wallet_output_balance(world, step, &wallet, WalletOutputState::OnChain)
+                    .await?
+                    .value;
+            if last_available_value >= required_available {
+                return Ok(best_node_info);
+            }
+            sleep(Duration::from_millis(300)).await;
+        }
+        return Err(StepError::StepFail {
+            message: format!(
+                "Timed out waiting for node wallet '{wallet_name}' to hold {required_available}, \
+                last observed: {last_available_value}"
+            ),
+        });
+    }
+
     while start.elapsed() < Duration::from_secs(timeout_seconds) {
         before_poll(world)?;
 
@@ -372,7 +449,7 @@ where
         let raw_available_utxos = fresh_wallet_state.into_available_utxos();
         let filtered_count = raw_available_utxos
             .iter()
-            .filter(|utxo| used_input_note_ids.contains(&utxo.id()))
+            .filter(|utxo| used_input_note_ids.contains(&utxo.nullifier))
             .count();
         if filtered_count > 0 {
             warn!(
@@ -383,7 +460,7 @@ where
         }
         let mut fresh_available_utxos = raw_available_utxos
             .into_iter()
-            .filter(|utxo| !used_input_note_ids.contains(&utxo.id()))
+            .filter(|utxo| !used_input_note_ids.contains(&utxo.nullifier))
             .collect::<Vec<_>>();
 
         // Prefer smaller UTXOs first. The transaction builder selects sufficient
@@ -471,7 +548,7 @@ fn log_available_utxos(available_utxos: &WalletUtxos, wallet_name: &str) {
     if let Some(wallet_available) = available_utxos.get(wallet_name) {
         info!(
             target: TARGET,
-            "Wallet `{wallet_name}` has {} available UTXOs with total value of {} LGO",
+            "Wallet `{wallet_name}` has {} available UTXOs with total value of {} units",
             wallet_available.len(), wallet_available.iter()
                 .map(|utxo| utxo.note.value)
                 .sum::<u64>()

@@ -48,40 +48,39 @@ pub struct BatchVerifiedUpdate<Id> {
 mod tests {
     use lb_core::{
         events::{Event, HeaderEvent},
-        mantle::batch::DeferredZkSig,
+        mantle::{batch::DeferredZkTransfer, notes::OutputCommitments},
         sdp::{DeclarationId, ServiceType},
     };
-    use lb_groth16::Fr;
-    use lb_key_management_system_keys::keys::{ZkKey, public_inputs_from_pks};
-    use num_bigint::BigUint;
+    use lb_groth16::{Field as _, Fr};
+    use lb_zktransfer::ZkTransferVerifierInput;
 
     use super::*;
     use crate::{
         ConsensusExcludedKeys,
-        cryptarchia::tests::{GENESIS_POW_REWARD_POOL, config, utxo},
+        cryptarchia::tests::{GENESIS_POW_REWARD_POOL, config, note},
     };
 
     const ID: [u8; 32] = [1; 32];
 
     #[test]
     fn verify_batch_proofs_carries_the_update_through() {
-        let state = LedgerState::from_utxos(
-            [utxo()],
+        let state = LedgerState::from_notes(
+            [note()],
             &config(),
             GENESIS_POW_REWARD_POOL,
             &ConsensusExcludedKeys::empty(),
         );
-        let utxos_root = state.latest_utxos().root();
+        let utxos_root = state.latest_note_sets().eligible_root();
         let update = PreparedUpdate::new(
             ID,
             state,
             Events::from(header_event()),
-            std::iter::once(valid_zk_sig()).collect(),
+            std::iter::once(valid_zk_transfer()).collect(),
         );
 
         let update = update.verify_batch_proofs().expect("must succeed");
         assert_eq!(update.id, ID);
-        assert_eq!(update.state.latest_utxos().root(), utxos_root);
+        assert_eq!(update.state.latest_note_sets().eligible_root(), utxos_root);
         assert_eq!(update.events.len(), 1);
     }
 
@@ -89,45 +88,50 @@ mod tests {
     fn verify_batch_proofs_rejects_invalid_deferred_proof() {
         let update = PreparedUpdate::new(
             ID,
-            LedgerState::from_utxos(
-                [utxo()],
+            LedgerState::from_notes(
+                [note()],
                 &config(),
                 GENESIS_POW_REWARD_POOL,
                 &ConsensusExcludedKeys::empty(),
             ),
             Events::new(),
-            std::iter::once(invalid_zk_sig()).collect(),
+            std::iter::once(invalid_zk_transfer()).collect(),
         );
         assert!(matches!(
             update.verify_batch_proofs(),
-            Err(batch::Error::InvalidZkSignatures)
+            Err(batch::Error::InvalidZkTransfers)
         ));
     }
 
     fn header_event() -> Event {
-        HeaderEvent::SdpNoteUnlocked {
-            note_id: utxo().id(),
+        HeaderEvent::SdpWithdrawalReleased {
             service_type: ServiceType::BlendNetwork,
             declaration_id: DeclarationId([2; 32]),
+            outputs: OutputCommitments::default(),
         }
         .into()
     }
 
-    fn valid_zk_sig() -> DeferredZkSig {
-        zk_sig(1, 1)
+    fn zk_transfer(msg: Fr) -> DeferredZkTransfer {
+        let mut data = lb_zktransfer::test_utils::sample_witness_data();
+        data.chain.msg = msg;
+        let (proof, inputs) = lb_zktransfer::prove(data.into()).expect("the sample witness proves");
+        DeferredZkTransfer::new(proof, inputs)
     }
 
-    fn invalid_zk_sig() -> DeferredZkSig {
-        zk_sig(1, 2)
+    fn valid_zk_transfer() -> DeferredZkTransfer {
+        zk_transfer(Fr::ONE)
     }
 
-    /// If `msg == msg_for_input`, a valid sig is produced.
-    /// Otherwise, an invalid sig is produced.
-    fn zk_sig(msg: u64, msg_for_input: u64) -> DeferredZkSig {
-        let key = ZkKey::from(BigUint::from(1u8));
-        let signature = ZkKey::multi_sign(std::slice::from_ref(&key), &Fr::from(msg)).unwrap();
-        let inputs =
-            public_inputs_from_pks(Fr::from(msg_for_input).into(), &[key.to_public_key()]).unwrap();
-        DeferredZkSig::new(*signature.as_proof(), inputs)
+    // A proof of `msg = 1` checked against `msg = 2`.
+    fn invalid_zk_transfer() -> DeferredZkTransfer {
+        let (proof, inputs) = zk_transfer(Fr::ONE).into_parts();
+        DeferredZkTransfer::new(
+            proof,
+            ZkTransferVerifierInput {
+                msg: Fr::from(2u64).into(),
+                ..inputs
+            },
+        )
     }
 }

@@ -14,7 +14,6 @@ futures                       = { workspace = true }
 lb-api-service                = { workspace = true }
 lb-blend-service              = { workspace = true }
 lb-c-macros                   = { workspace = true }
-lb-chain-leader-service       = { workspace = true }
 lb-chain-service              = { workspace = true }
 lb-core                       = { workspace = true }
 lb-groth16                    = { workspace = true }
@@ -33,6 +32,7 @@ lb-version                    = { workspace = true }
 lb-wallet-service             = { workspace = true }
 multiaddr                     = { workspace = true }
 overwatch                     = { workspace = true }
+rand                          = { features = ["getrandom"], workspace = true }
 serde                         = { features = ["derive"], workspace = true }
 serde_json                    = { workspace = true }
 serde_yaml                    = { workspace = true }

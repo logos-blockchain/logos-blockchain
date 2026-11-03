@@ -13,12 +13,14 @@ use crate::{
     crypto::{Hash, ZkDigest as _, ZkHash, ZkHasher},
     events::{TxEvent, TxEventPayload},
     mantle::{
-        Note, TxHash, Utxo, Value,
+        TxHash, Value,
         gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
-            ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
-            VerifiableOperation, verification_mode::StandardMode,
+            ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
+            verification_mode::StandardMode,
         },
+        note_set::{LEDGER_SET, NoteSetError, NoteSets},
+        notes::{self, derive_note_nonce},
         ops::{NoOpProof, OpId, SignedOperation},
         transactions::states::{Preverified, Unverified, Verified},
     },
@@ -76,8 +78,8 @@ impl From<PowNullifier> for ZkHash {
 /// Operation claiming the `PoW` reward for a solved puzzle.
 ///
 /// The puzzle solution is not carried directly on the op: it is proven by
-/// deriving a [`PuzzleTicket`] from `epoch_nonce`, `block_hash` and
-/// `public_key` (see [`Self::get_puzzle_ticket`]) and checking that ticket
+/// deriving a [`PuzzleTicket`] from `public_key`, `nonce`, `block_hash` and
+/// `epoch_nonce` (see [`Self::get_puzzle_ticket`]) and checking that ticket
 /// against the current reward difficulty during validation.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ClaimPowRewardOp {
@@ -89,15 +91,19 @@ pub struct ClaimPowRewardOp {
     pub block_hash: Hash,
     /// Public key of the reward beneficiary.
     pub public_key: ZkPublicKey,
+    /// Nonce the puzzle was solved with.
+    #[serde(with = "serde_fr")]
+    pub nonce: Fr,
 }
 
 impl ClaimPowRewardOp {
-    /// Derive this claim's [`PuzzleTicket`] from `epoch_nonce`, `block_hash`
-    /// and `public_key`.
+    /// Derive this claim's [`PuzzleTicket`] from `public_key`, `nonce`,
+    /// `block_hash` and `epoch_nonce`.
     #[must_use]
     pub fn get_puzzle_ticket(&self) -> PuzzleTicket {
         PowNullifier(ZkHasher::digest(&[
             *self.public_key.as_fr(),
+            self.nonce,
             fr_from_mod_bytes(&self.block_hash),
             self.epoch_nonce,
         ]))
@@ -106,10 +112,12 @@ impl ClaimPowRewardOp {
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
+        // The spec test vector values.
         Self {
-            epoch_nonce: ZkHash::from(Fr::from(35u64)),
-            block_hash: Hash::from([36u8; 32]),
-            public_key: ZkPublicKey::from(Fr::from(37u64)),
+            epoch_nonce: Fr::from(0x30u64),
+            block_hash: [0x31u8; 32],
+            public_key: ZkPublicKey::new(Fr::from(0x32u64)),
+            nonce: Fr::from(0x33u64),
         }
     }
 }
@@ -135,6 +143,8 @@ pub enum ClaimPowRewardError {
     OutOfWindowSlot { slot: Slot, current_slot: Slot },
     #[error("Missing block ({block_id:?})")]
     MissingBlock { block_id: Hash },
+    #[error(transparent)]
+    NoteSet(#[from] NoteSetError),
 }
 
 /// Ledger context needed to validate a [`ClaimPowRewardOp`].
@@ -270,8 +280,8 @@ pub struct ClaimPoWRewardExecutionContext {
     pub nullifiers: HashTrieMapSync<PowNullifier, Slot>,
     /// Hash of the transaction carrying this claim.
     pub tx_hash: TxHash,
-    /// Unspent transaction outputs, extended with the reward note.
-    pub utxos: Utxos,
+    /// Note sets, the ledger set extended with the reward note.
+    pub note_sets: NoteSets,
     /// Recorded block slots
     pub block_slots: HashTrieMapSync<Hash, Slot>,
 }
@@ -289,11 +299,11 @@ impl ClaimPoWRewardExecutionContext {
 
 impl ProvableOperation for ClaimPowRewardOp {
     type Proof = NoOpProof;
-    const CODE: u8 = 0x40;
+    const CODE: u8 = 0x30;
 }
 
 impl OperationGas<MainnetGasProfile> for ClaimPowRewardOp {
-    const GAS_COST: Gas = Gas::new(1);
+    const GAS_COST: Gas = Gas::new(0);
 }
 
 impl OpGasCalculator<MainnetGasProfile> for ClaimPowRewardOp {}
@@ -347,14 +357,21 @@ impl ExecutableOperation for SignedOperation<ClaimPowRewardOp, Verified, Standar
         let nullifier = operation.get_puzzle_ticket();
         context.nullifiers.insert_mut(nullifier, *slot);
         // create output note
-        let note = Note::new(context.epoch_reward, operation.public_key);
         let op_id = operation.op_id();
-        let utxo = Utxo {
-            op_id,
-            output_index: 0,
-            note,
-        };
-        context.utxos = context.utxos.insert(utxo.id(), utxo).0;
+        let note = notes::Note::new(
+            context.epoch_reward,
+            derive_note_nonce(&op_id, 0, context.epoch_reward, &operation.public_key),
+            operation.public_key,
+        );
+        let note_commitment = note.commitment();
+        let ledger = context
+            .note_sets
+            .get(LEDGER_SET)
+            .expect("the ledger set always exists")
+            .clone()
+            .execute_adding(&[note_commitment])?
+            .buffer_outputs(&[note_commitment]);
+        context.note_sets = context.note_sets.update(LEDGER_SET, ledger);
         // decrement current pool
         context.decrement_reward_pool();
         // output event
@@ -366,7 +383,7 @@ impl ExecutableOperation for SignedOperation<ClaimPowRewardOp, Verified, Standar
                 op_id,
                 TxEventPayload::PoWRewardClaimed {
                     pow_nullifier: nullifier,
-                    utxo,
+                    note,
                 },
             )],
         ))
@@ -412,7 +429,7 @@ mod tests {
     use lb_groth16::{AdditiveGroup as _, Field as _};
 
     use super::{test_utils::slot_windows, *};
-    use crate::mantle::gas::test_utils::FixedThresholds;
+    use crate::mantle::{gas::test_utils::FixedThresholds, note_set::CommitmentMmr};
 
     pub const SLOT_WINDOW: NonZeroU64 = NonZeroU64::new(100).expect("100 is not 0");
     /// The window of the single era of [`accepting_context`].
@@ -486,6 +503,7 @@ mod tests {
             epoch_nonce: nonce_for_epoch(epoch),
             block_hash: CLAIM_BLOCK_HASH,
             public_key: ZkPublicKey::new(Fr::from(42u64)),
+            nonce: Fr::from(43u64),
         }
     }
 
@@ -516,9 +534,9 @@ mod tests {
             claim_op(CURRENT_EPOCH).get_puzzle_ticket()
         );
 
-        // Spec §3: the ticket commits to all three fields, so changing the
-        // epoch nonce (cross-epoch replay), the anchored block, or the
-        // beneficiary key each invalidates the solution.
+        // Spec §3: the ticket commits to all four fields, so changing the
+        // epoch nonce (cross-epoch replay), the anchored block, the
+        // beneficiary key or the nonce each invalidates the solution.
         let mut other_epoch = op.clone();
         other_epoch.epoch_nonce = nonce_for_epoch(CURRENT_EPOCH + 1);
         assert_ne!(op.get_puzzle_ticket(), other_epoch.get_puzzle_ticket());
@@ -530,6 +548,24 @@ mod tests {
         let mut other_key = op.clone();
         other_key.public_key = ZkPublicKey::new(Fr::from(43u64));
         assert_ne!(op.get_puzzle_ticket(), other_key.get_puzzle_ticket());
+
+        let mut other_nonce = op.clone();
+        other_nonce.nonce = Fr::from(44u64);
+        assert_ne!(op.get_puzzle_ticket(), other_nonce.get_puzzle_ticket());
+    }
+
+    #[test]
+    fn puzzle_ticket_hashes_the_key_the_nonce_the_block_and_the_epoch_nonce() {
+        let claim = ClaimPowRewardOp::sample();
+        assert_eq!(
+            claim.get_puzzle_ticket(),
+            PowNullifier::from(ZkHasher::digest(&[
+                Fr::from(0x32u64),
+                Fr::from(0x33u64),
+                fr_from_mod_bytes(&[0x31u8; 32]),
+                Fr::from(0x30u64),
+            ]))
+        );
     }
 
     #[test]
@@ -821,7 +857,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_issues_reward_utxo_and_registers_nullifier() {
+    fn execute_adds_the_reward_note_to_the_ledger_set() {
         let op = claim_op(CURRENT_EPOCH);
         let signed_operation = SignedOperation::new(op, NoOpProof)
             .into_preverified(&())
@@ -840,7 +876,7 @@ mod tests {
                 epoch_reward,
                 nullifiers: HashTrieMapSync::new_sync(),
                 tx_hash,
-                utxos: Utxos::new(),
+                note_sets: NoteSets::new(),
                 block_slots: iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
             })
             .expect("claim execution should succeed");
@@ -850,15 +886,23 @@ mod tests {
         assert_eq!(ctx.nullifiers.get(&puzzle_ticket), Some(&Slot::from(45u64)));
         assert_eq!(ctx.reward_pool, 990);
 
-        // The reward note lands in the UTXO set, payable to the op's key
-        // (§5.3 execution step 3). Regression: the persistent-tree insert
-        // result used to be discarded, so the note never reached the set.
-        let expected_utxo = Utxo {
-            op_id: operation_op_id,
-            output_index: 0,
-            note: Note::new(epoch_reward, operation_public_key),
-        };
-        assert_eq!(ctx.utxos.get(&expected_utxo.id()), Some(expected_utxo));
+        // The reward note is added to the ledger set, payable to the op's key,
+        // and buffered for the next Operations of the transaction.
+        let expected_note = notes::Note::new(
+            epoch_reward,
+            derive_note_nonce(&operation_op_id, 0, epoch_reward, &operation_public_key),
+            operation_public_key,
+        );
+        let expected_root = CommitmentMmr::new()
+            .push(expected_note.commitment())
+            .unwrap()
+            .frontier_root();
+        let ledger_set = ctx.note_sets.get(LEDGER_SET).unwrap();
+        assert_eq!(ledger_set.commitment_root(), expected_root);
+        assert_eq!(
+            ledger_set.tx_commitment_root(&CommitmentMmr::new().frontier_root(), 0),
+            Ok(expected_root)
+        );
 
         let mut events = events.iter();
         let Some(TxEvent {
@@ -867,7 +911,7 @@ mod tests {
             payload:
                 TxEventPayload::PoWRewardClaimed {
                     pow_nullifier,
-                    utxo,
+                    note,
                 },
         }) = events.next()
         else {
@@ -876,7 +920,7 @@ mod tests {
         assert_eq!(*event_tx_hash, tx_hash);
         assert_eq!(*op_id, operation_op_id);
         assert_eq!(*pow_nullifier, puzzle_ticket);
-        assert_eq!(*utxo, expected_utxo);
+        assert_eq!(*note, expected_note);
         assert!(events.next().is_none());
     }
 
@@ -900,7 +944,7 @@ mod tests {
             epoch_reward: 10,
             nullifiers: HashTrieMapSync::new_sync(),
             tx_hash: TxHash::from([11u8; 32]),
-            utxos: Utxos::new(),
+            note_sets: NoteSets::new(),
             block_slots: iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
         }));
     }
@@ -910,7 +954,7 @@ mod tests {
         for threshold in [0, 1, 3] {
             assert_eq!(
                 ClaimPowRewardOp::sample().execution_gas(&FixedThresholds(threshold)),
-                Ok(Gas::new(1))
+                Ok(Gas::new(0))
             );
         }
     }

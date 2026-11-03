@@ -11,6 +11,7 @@ log_targets! {
         BLEND_POQ,
         ED25519,
         ZK_LEADER,
+        ZK_NULLIFIER,
         ZK_VOUCHER,
     },
 }

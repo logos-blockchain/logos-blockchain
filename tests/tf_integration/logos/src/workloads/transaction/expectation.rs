@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     num::{NonZeroU64, NonZeroUsize},
     sync::{
         Arc,
@@ -10,8 +10,11 @@ use std::{
 
 use async_trait::async_trait;
 use common_http_client::ApiBlock;
-use lb_core::mantle::ops::OpRef;
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_core::mantle::{
+    notes::{NoteNullifier, derive_note_nullifier},
+    ops::OpRef,
+    traits::GenesisTx as _,
+};
 use lb_node::HeaderId;
 use testing_framework_app::AppHostEnv;
 use testing_framework_core::scenario::{DynError, Expectation, RunContext};
@@ -42,6 +45,8 @@ struct CaptureState {
 enum TxExpectationError {
     #[error("transaction workload requires seeded accounts")]
     MissingAccounts,
+    #[error("transaction workload requires a genesis block")]
+    MissingGenesisBlock,
     #[error("transaction workload planned zero transactions")]
     NoPlannedTransactions,
     #[error("transaction inclusion expectation not captured")]
@@ -190,7 +195,7 @@ async fn wait_for_required_inclusions(
 fn build_capture_plan(
     expectation: &TxInclusionExpectation,
     ctx: &RunContext<AppHostEnv>,
-) -> Result<(SubmissionPlan, HashSet<ZkPublicKey>), DynError> {
+) -> Result<(SubmissionPlan, HashSet<NoteNullifier>), DynError> {
     let wallet_accounts = ctx
         .lbc_deployment()?
         .config()
@@ -204,13 +209,32 @@ fn build_capture_plan(
     let available = limited_user_count(expectation.user_limit, wallet_accounts.len());
     let plan = submission_plan(expectation.txs_per_block, ctx, available)?;
 
-    let wallet_pks = wallet_accounts
+    // Outputs are commitments, so a transaction of a tracked account is the
+    // one spending its genesis notes.
+    let wallet_keys = wallet_accounts
         .into_iter()
         .take(plan.transaction_count)
-        .map(|account| account.secret_key.to_public_key())
+        .map(|account| (account.secret_key.to_public_key(), account.secret_key))
+        .collect::<HashMap<_, _>>();
+    let deployment = ctx.lbc_deployment()?;
+    let genesis_block = deployment
+        .config()
+        .genesis_block
+        .as_ref()
+        .ok_or(TxExpectationError::MissingGenesisBlock)?;
+    let wallet_nullifiers = genesis_block
+        .genesis_tx()
+        .distribution()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, allocation)| {
+            wallet_keys.get(&allocation.public_key).map(|secret_key| {
+                derive_note_nullifier(&allocation.note(index).commitment(), secret_key.as_fr())
+            })
+        })
         .collect::<HashSet<_>>();
 
-    Ok((plan, wallet_pks))
+    Ok((plan, wallet_nullifiers))
 }
 
 const fn catchup_wait_budget(_ctx: &RunContext<AppHostEnv>) -> Duration {
@@ -221,7 +245,7 @@ const fn catchup_wait_budget(_ctx: &RunContext<AppHostEnv>) -> Duration {
 
 fn capture_tx_outputs(
     block: &ApiBlock,
-    tracked_accounts: &HashSet<ZkPublicKey>,
+    tracked_accounts: &HashSet<NoteNullifier>,
     observed: &AtomicU64,
 ) {
     for tx in &block.transactions {
@@ -229,10 +253,10 @@ fn capture_tx_outputs(
             let OpRef::Transfer(transfer) = op else {
                 continue;
             };
-            for note in &transfer.outputs {
-                if tracked_accounts.contains(&note.pk) {
+            for nullifier in &transfer.inputs {
+                if tracked_accounts.contains(nullifier) {
                     observed.fetch_add(1, Ordering::Relaxed);
-                    tracing::debug!(pk = ?note.pk, "tx inclusion observed account output");
+                    tracing::debug!(?nullifier, "tx inclusion observed account input");
                     break;
                 }
             }

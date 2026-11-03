@@ -1,7 +1,7 @@
-pub mod channel_transfer;
 pub mod config;
 pub mod deposit;
 pub mod inscribe;
+pub mod program_step;
 pub mod verification;
 pub mod withdraw;
 
@@ -23,6 +23,8 @@ pub type UnverifiedChannelKeys = ChannelKeys<UnverifiedEd25519PublicKey>;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, BinaryCodec)]
 pub struct ChannelId([u8; 32]);
 serde_bytes_newtype!(ChannelId, 32);
+
+pub const NULL_CHANNEL_ID: ChannelId = ChannelId([0; 32]);
 
 impl BoundedSerializeOp for ChannelId {
     type Bytes = [u8; 32];

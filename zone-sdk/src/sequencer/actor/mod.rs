@@ -481,18 +481,9 @@ where
 
     /// Re-fund, re-sign and swap in one candidate; returns its new hash.
     async fn refund_one(&mut self, candidate: RefundCandidate) -> Result<TxHash, Error> {
-        let own_key_index = match (candidate.bundle, self.own_key_index) {
-            (false, _) => None,
-            (true, Some(index)) => Some(index),
-            (true, None) => {
-                return Err(Error::Network(
-                    "not on the accredited list; cannot re-sign the bundle".into(),
-                ));
-            }
-        };
         let (tx, transfer_proof) =
             fund_builder(&self.node, &self.config.funding, candidate.pre_fund.clone()).await?;
-        let signed = sign_own_tx(tx, transfer_proof, &self.signing_key, own_key_index)?;
+        let signed = sign_own_tx(tx, transfer_proof, &self.signing_key)?;
         let funded_at = self.lib_slot;
         self.state
             .as_mut()
@@ -741,9 +732,7 @@ where
         let channel_id = self.channel_id;
         let (shed, shed_other) = match (self.state.as_mut(), self.current_tip) {
             (Some(s), Some(tip)) => {
-                // Inputs shed first: it drains a dead bundle's children too.
-                let mut shed = s.shed_bundles_with_missing_inputs(tip, channel_id);
-                shed.extend(s.shed_off_branch_pending(tip));
+                let shed = s.shed_off_branch_pending(tip);
                 (shed, s.shed_off_branch_pending_other(tip))
             }
             _ => (Vec::new(), Vec::new()),

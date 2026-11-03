@@ -1,13 +1,9 @@
 use std::cmp::Reverse;
 
-use lb_core::mantle::{
-    Note, NoteId, Utxo,
-    ledger::{Inputs, Outputs},
-    ops::transfer::TransferOp,
-};
+use lb_core::mantle::notes::NoteNullifier;
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use lb_testing_framework::configs::wallet::WalletAccount;
-use lb_wallet::WalletError;
+use lb_wallet::{OwnedNote, WalletError};
 
 /// Funding inputs available for one wallet transaction.
 ///
@@ -85,7 +81,7 @@ pub struct WalletFundingSource {
 
 impl WalletFundingSource {
     #[must_use]
-    pub fn new(account: WalletAccount, available_utxos: Vec<Utxo>) -> Self {
+    pub fn new(account: WalletAccount, available_utxos: Vec<OwnedNote>) -> Self {
         let change_pk = account.public_key();
         Self::with_change_pk(account, available_utxos, change_pk)
     }
@@ -93,7 +89,7 @@ impl WalletFundingSource {
     #[must_use]
     pub const fn with_change_pk(
         account: WalletAccount,
-        available_utxos: Vec<Utxo>,
+        available_utxos: Vec<OwnedNote>,
         change_pk: ZkPublicKey,
     ) -> Self {
         Self::with_change_pk_and_strategy(
@@ -107,7 +103,7 @@ impl WalletFundingSource {
     #[must_use]
     pub const fn with_change_pk_and_strategy(
         account: WalletAccount,
-        available_utxos: Vec<Utxo>,
+        available_utxos: Vec<OwnedNote>,
         change_pk: ZkPublicKey,
         input_selection_strategy: WalletInputSelectionStrategy,
     ) -> Self {
@@ -129,7 +125,7 @@ impl WalletFundingSource {
     }
 
     #[must_use]
-    pub fn available_utxos(&self) -> &[Utxo] {
+    pub fn available_utxos(&self) -> &[OwnedNote] {
         self.funding_utxos.available_utxos()
     }
 
@@ -160,12 +156,12 @@ impl WalletFundingSource {
 /// UTXO set for one funding source, including the change public key.
 pub struct WalletFundingUtxos {
     change_pk: ZkPublicKey,
-    available_utxos: Vec<Utxo>,
+    available_utxos: Vec<OwnedNote>,
 }
 
 impl WalletFundingUtxos {
     #[must_use]
-    const fn new(change_pk: ZkPublicKey, available_utxos: Vec<Utxo>) -> Self {
+    const fn new(change_pk: ZkPublicKey, available_utxos: Vec<OwnedNote>) -> Self {
         Self {
             change_pk,
             available_utxos,
@@ -178,25 +174,28 @@ impl WalletFundingUtxos {
     }
 
     #[must_use]
-    pub(crate) fn available_utxos(&self) -> &[Utxo] {
+    pub(crate) fn available_utxos(&self) -> &[OwnedNote] {
         &self.available_utxos
     }
 
     #[must_use]
-    pub(crate) fn into_available_utxos(self) -> Vec<Utxo> {
+    pub(crate) fn into_available_utxos(self) -> Vec<OwnedNote> {
         self.available_utxos
     }
 }
 
 /// Inputs selected to cover a target value.
 pub struct WalletSelectedInputs {
-    inputs: Vec<Utxo>,
+    inputs: Vec<OwnedNote>,
     total: u64,
 }
 
 impl WalletSelectedInputs {
     /// Select largest UTXOs first until `target` is covered.
-    pub fn largest_first_covering(mut utxos: Vec<Utxo>, target: u64) -> Result<Self, WalletError> {
+    pub fn largest_first_covering(
+        mut utxos: Vec<OwnedNote>,
+        target: u64,
+    ) -> Result<Self, WalletError> {
         if target == 0 {
             return Ok(Self {
                 inputs: Vec::new(),
@@ -223,7 +222,7 @@ impl WalletSelectedInputs {
 
     /// Require every provided UTXO while verifying the target is covered.
     pub(crate) fn all_provided_covering(
-        utxos: Vec<Utxo>,
+        utxos: Vec<OwnedNote>,
         target: u64,
     ) -> Result<Self, WalletError> {
         let total = utxos
@@ -245,58 +244,9 @@ impl WalletSelectedInputs {
     }
 
     #[must_use]
-    pub fn into_utxos(self) -> Vec<Utxo> {
+    pub fn into_utxos(self) -> Vec<OwnedNote> {
         self.inputs
     }
-}
-
-/// Transfer operation together with the concrete input UTXOs selected for it.
-pub struct WalletFundedTransfer {
-    transfer: TransferOp,
-    selected_inputs: Vec<Utxo>,
-}
-
-impl WalletFundedTransfer {
-    #[must_use]
-    pub fn into_parts(self) -> (TransferOp, Vec<Utxo>) {
-        (self.transfer, self.selected_inputs)
-    }
-}
-
-/// Build a transfer operation and change output from available UTXOs.
-///
-/// Inputs are selected largest-first, and change is returned to `change_pk`.
-/// `fee` is deliberately left unreturned — it becomes the transaction's
-/// excess balance, which pays the mandatory fees at non-zero gas prices.
-pub fn build_wallet_funded_transfer(
-    available_utxos: Vec<Utxo>,
-    outputs: Vec<Note>,
-    change_pk: ZkPublicKey,
-    fee: u64,
-) -> Result<WalletFundedTransfer, WalletError> {
-    let output_total = outputs
-        .iter()
-        .fold(0u64, |total, output| total.saturating_add(output.value));
-    let funding_target = output_total.saturating_add(fee);
-    let selected_inputs =
-        WalletSelectedInputs::largest_first_covering(available_utxos, funding_target)?;
-    let change = selected_inputs.total() - funding_target;
-    let mut transfer_outputs = outputs;
-
-    if change > 0 {
-        transfer_outputs.push(Note::new(change, change_pk));
-    }
-
-    let selected_inputs = selected_inputs.into_utxos();
-    let transfer = TransferOp {
-        inputs: Inputs::try_new(selected_inputs.iter().map(Utxo::id).collect::<Vec<_>>())?,
-        outputs: Outputs::try_new(transfer_outputs)?,
-    };
-
-    Ok(WalletFundedTransfer {
-        transfer,
-        selected_inputs,
-    })
 }
 
 /// Result of trying to fund a transaction while iterating candidate inputs.
@@ -310,13 +260,13 @@ pub enum WalletFundingOutcome<T> {
 /// Ordered input plan used when building transactions that may need multiple
 /// funding attempts.
 pub struct WalletFundingPlan {
-    ordered_utxos: Vec<Utxo>,
-    base_inputs: Vec<Utxo>,
+    ordered_utxos: Vec<OwnedNote>,
+    base_inputs: Vec<OwnedNote>,
 }
 
 impl WalletFundingPlan {
     #[must_use]
-    pub fn largest_first(mut utxos: Vec<Utxo>, base_inputs: Vec<Utxo>) -> Self {
+    pub fn largest_first(mut utxos: Vec<OwnedNote>, base_inputs: Vec<OwnedNote>) -> Self {
         utxos.sort_by_key(|utxo| Reverse(utxo.note.value));
         Self {
             ordered_utxos: utxos,
@@ -325,7 +275,7 @@ impl WalletFundingPlan {
     }
 
     #[must_use]
-    pub fn smallest_first(mut utxos: Vec<Utxo>, base_inputs: Vec<Utxo>) -> Self {
+    pub fn smallest_first(mut utxos: Vec<OwnedNote>, base_inputs: Vec<OwnedNote>) -> Self {
         utxos.sort_by_key(|utxo| utxo.note.value);
         Self {
             ordered_utxos: utxos,
@@ -334,7 +284,7 @@ impl WalletFundingPlan {
     }
 
     #[must_use]
-    pub const fn all_provided(utxos: Vec<Utxo>) -> Self {
+    pub const fn all_provided(utxos: Vec<OwnedNote>) -> Self {
         Self {
             ordered_utxos: Vec::new(),
             base_inputs: utxos,
@@ -343,7 +293,7 @@ impl WalletFundingPlan {
 
     pub fn fund_with<T, E>(
         &self,
-        mut evaluate_inputs: impl FnMut(&[Utxo]) -> Result<WalletFundingOutcome<T>, E>,
+        mut evaluate_inputs: impl FnMut(&[OwnedNote]) -> Result<WalletFundingOutcome<T>, E>,
     ) -> Result<T, E>
     where
         E: From<WalletError>,
@@ -368,7 +318,7 @@ impl WalletFundingPlan {
         .into())
     }
 
-    fn inputs_with_ordered_prefix(&self, ordered_count: usize) -> Vec<Utxo> {
+    fn inputs_with_ordered_prefix(&self, ordered_count: usize) -> Vec<OwnedNote> {
         let mut selected_inputs = Vec::with_capacity(self.base_inputs.len() + ordered_count);
         selected_inputs.extend_from_slice(&self.base_inputs);
         selected_inputs.extend_from_slice(&self.ordered_utxos[..ordered_count]);
@@ -378,13 +328,13 @@ impl WalletFundingPlan {
 
 #[derive(Debug, Clone)]
 pub struct WalletReservedInputs {
-    sender: Vec<Utxo>,
-    fee_sponsor: Vec<Utxo>,
+    sender: Vec<OwnedNote>,
+    fee_sponsor: Vec<OwnedNote>,
 }
 
 impl WalletReservedInputs {
     #[must_use]
-    pub const fn new(sender: Vec<Utxo>, fee_sponsor: Vec<Utxo>) -> Self {
+    pub const fn new(sender: Vec<OwnedNote>, fee_sponsor: Vec<OwnedNote>) -> Self {
         Self {
             sender,
             fee_sponsor,
@@ -392,37 +342,35 @@ impl WalletReservedInputs {
     }
 
     #[must_use]
-    pub fn into_sender_and_fee_sponsor_inputs(self) -> (Vec<Utxo>, Vec<Utxo>) {
+    pub fn into_sender_and_fee_sponsor_inputs(self) -> (Vec<OwnedNote>, Vec<OwnedNote>) {
         (self.sender, self.fee_sponsor)
     }
 
     #[must_use]
-    pub fn input_note_ids_list(&self) -> Vec<NoteId> {
-        let mut input_notes = self.sender.iter().map(Utxo::id).collect::<Vec<_>>();
-        input_notes.extend_from_slice(&self.fee_sponsor.iter().map(Utxo::id).collect::<Vec<_>>());
-        input_notes
-    }
-
-    #[must_use]
-    pub(crate) fn total_value(&self) -> u64 {
+    pub fn input_note_ids_list(&self) -> Vec<NoteNullifier> {
         self.sender
             .iter()
-            .chain(self.fee_sponsor.iter())
-            .map(|utxo| utxo.note.value)
-            .sum()
+            .chain(&self.fee_sponsor)
+            .map(|utxo| utxo.nullifier)
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use lb_core::mantle::{Note, note_set::LEDGER_SET};
+    use lb_groth16::Fr;
+    use lb_mmr::MerklePath;
+
     use super::*;
 
-    fn utxo(value: u64, output_index: usize) -> Utxo {
-        Utxo::new(
-            [output_index as u8; 32],
-            output_index,
-            Note::new(value, ZkPublicKey::new(1u8.into())),
-        )
+    fn utxo(value: u64, output_index: u64) -> OwnedNote {
+        OwnedNote {
+            note: Note::new(value, Fr::from(output_index), ZkPublicKey::new(1u8.into())),
+            note_set: LEDGER_SET,
+            nullifier: NoteNullifier(Fr::from(output_index)),
+            path: MerklePath::try_new(0, Vec::new()).expect("an empty path is bounded"),
+        }
     }
 
     fn account(index: u64) -> WalletAccount {

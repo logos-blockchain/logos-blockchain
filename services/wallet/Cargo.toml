@@ -14,6 +14,7 @@ async-trait  = { workspace = true }
 bytes        = { workspace = true }
 futures      = { workspace = true }
 hex          = { workspace = true }
+rand         = { features = ["getrandom"], workspace = true }
 serde        = { features = ["derive"], workspace = true }
 thiserror    = { workspace = true }
 tokio        = { features = ["sync"], workspace = true }
@@ -37,7 +38,9 @@ lb-wallet                        = { workspace = true }
 overwatch                        = { workspace = true }
 
 [dev-dependencies]
-time = { workspace = true }
+lb-core    = { features = ["test-utils"], workspace = true }
+serde_json = { workspace = true }
+time       = { workspace = true }
 
 [lints]
 workspace = true

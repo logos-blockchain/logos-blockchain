@@ -14,11 +14,9 @@ version     = { workspace = true }
 workspace = true
 
 [dev-dependencies]
-divan       = { workspace = true }
-lb-core     = { features = ["test-utils"], workspace = true }
-lb-groth16  = { workspace = true }
-lb-mmr      = { workspace = true }
-lb-utxotree = { workspace = true }
+lb-core    = { features = ["test-utils"], workspace = true }
+lb-groth16 = { workspace = true }
+lb-mmr     = { workspace = true }
 
 [dependencies]
 async-trait                      = { workspace = true }
@@ -32,7 +30,6 @@ futures                          = { workspace = true }
 futures-util                     = { workspace = true }
 hex                              = { workspace = true }
 humantime                        = { workspace = true }
-lb-api-service                   = { workspace = true }
 lb-binary-codec                  = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-common-http-client            = { workspace = true }
@@ -47,18 +44,17 @@ lb-log-targets                   = { workspace = true }
 lb-mmr                           = { workspace = true }
 lb-node                          = { features = ["testing"], workspace = true }
 lb-pow-service                   = { workspace = true }
+lb-sdp-service                   = { workspace = true }
 lb-storage-service               = { workspace = true }
 lb-testing-framework             = { workspace = true }
 lb-tx-service                    = { workspace = true }
 lb-utils                         = { workspace = true }
 lb-wallet                        = { workspace = true }
-lb-zksign                        = { workspace = true }
+lb-zktransfer                    = { workspace = true }
 libp2p                           = { workspace = true }
-num-bigint                       = { workspace = true }
 rand                             = { workspace = true }
 rand_chacha                      = { workspace = true }
 reqwest                          = { features = ["json"], workspace = true }
-rpds                             = { workspace = true }
 serde                            = { features = ["derive"], workspace = true }
 serde_json                       = { workspace = true }
 serde_yaml                       = { workspace = true }
@@ -156,7 +152,3 @@ harness           = false                        # Cucumber will have its own ma
 name              = "cucumber"
 path              = "cucumber_tests/cucumber.rs"
 required-features = ["cucumber"]
-
-[[bench]]
-harness = false
-name    = "voucher"

@@ -5,7 +5,7 @@ use lb_blend_message::{
     reward::{BlendingTokenEvaluation, HammingDistance},
 };
 use lb_core::{
-    mantle::{Utxo, Value},
+    mantle::{Value, notes::Note},
     sdp::{ProviderId, ServiceType},
 };
 use lb_cryptarchia_engine::Epoch;
@@ -188,7 +188,7 @@ impl TargetEpochTracker {
     pub fn finalize<ProofsVerifier>(
         &self,
         target_epoch_state: &TargetEpochState<ProofsVerifier>,
-    ) -> (Self, Vec<Utxo>) {
+    ) -> (Self, Vec<Note>) {
         if self.submitted_proofs.is_empty() {
             debug!(
                 target: LOG_TARGET,

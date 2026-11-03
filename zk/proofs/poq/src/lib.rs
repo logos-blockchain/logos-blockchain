@@ -3,6 +3,8 @@ mod chain_inputs;
 mod common_inputs;
 mod inputs;
 mod pow_inputs;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
 mod verification_key;
 mod wallet_inputs;
 mod witness;
@@ -21,10 +23,12 @@ use lb_groth16::{
     groth16_batch_verify,
 };
 use lb_log_targets::proofs;
-pub use lb_pol::AGED_NOTE_MERKLE_TREE_HEIGHT;
+pub use lb_pol::NOTE_SET_TREE_DEPTH;
 pub use pow_inputs::{PoQPowInputs, PoQPowInputsData};
 use tracing::error;
-pub use wallet_inputs::{AgedNotePathAndSelectors, PoQWalletInputs, PoQWalletInputsData};
+pub use wallet_inputs::{
+    AgedNotePathAndSelectors, AgedSetPathAndSelectors, PoQWalletInputs, PoQWalletInputsData,
+};
 
 use crate::inputs::PoQVerifierInputJson;
 
@@ -143,8 +147,6 @@ pub fn batch_verify(
 mod tests {
     use std::str::FromStr as _;
 
-    use lb_pol::LotteryConstants;
-    use lb_utils::math::NonNegativeRatio;
     use num_bigint::BigUint;
 
     use super::*;
@@ -161,7 +163,7 @@ mod tests {
             core_path_and_selectors: [
                 (
                     "7495929195953210541208591724669352166258167386402673863836582332959049741998",
-                    true,
+                    false,
                 ),
                 (
                     "8777307683015870709408351814333112152804794621246499110711643849444602886454",
@@ -185,35 +187,35 @@ mod tests {
                 ),
                 (
                     "20952980496079374121937279088975994236259798048934859728621453910938508315429",
-                    false,
+                    true,
                 ),
                 (
                     "3127567055231452038159138967497074106547716639376277019791213152208715502108",
-                    false,
+                    true,
                 ),
                 (
                     "4156278452715681991545944691699148599903237834447534444828105997249209183668",
-                    true,
+                    false,
                 ),
                 (
                     "18179601246737692255359026481063507429449403349479564041630890140769203876921",
-                    true,
+                    false,
                 ),
                 (
                     "20437752904871274044354648385284243748143753378271484669957282746297202768728",
-                    false,
+                    true,
                 ),
                 (
                     "20964128655175295722279612439890819641847965870342369257222152533521036200042",
-                    false,
+                    true,
                 ),
                 (
                     "8529481264681700999783095712819666338972397694516091342589511693767349600946",
-                    true,
+                    false,
                 ),
                 (
                     "11390366370077994090069924023908925478862142650386311632070176411828525668517",
-                    true,
+                    false,
                 ),
                 (
                     "5917548759338686071972714539493044537194763096388397090814246211223906547270",
@@ -237,7 +239,7 @@ mod tests {
                 ),
                 (
                     "9162839441909107733910143825064550229009975662836406280871655871464192283628",
-                    false,
+                    true,
                 ),
             ]
             .map(|(value, selector)| (BigUint::from_str(value).unwrap().into(), selector)),
@@ -248,7 +250,7 @@ mod tests {
             )
             .unwrap()
             .into(),
-            pol_ledger_aged: BigUint::from_str(
+            pol_eligible_aged: BigUint::from_str(
                 "17215820411670358459256686882934231030146782155124511326026608377144127196093",
             )
             .unwrap()
@@ -305,204 +307,20 @@ mod tests {
             pow_quota: common_data.pow_quota,
             pow_blend_difficulty: common_data.pow_difficulty,
             pol_epoch_nonce: chain_data.pol_epoch_nonce,
-            pol_ledger_aged: chain_data.pol_ledger_aged,
+            pol_eligible_aged: chain_data.pol_eligible_aged,
             lottery_0: chain_data.lottery_0,
             lottery_1: chain_data.lottery_1,
         };
         assert!(verify(&proof, recomputed_verify_inputs.into()).unwrap());
     }
 
-    #[expect(clippy::too_many_lines, reason = "For the sake of the test let it be")]
     #[test]
     fn test_leader_full_flow() {
-        let (lottery_0, lottery_1) =
-            LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
-                .compute_lottery_values(5000);
-        let chain_data = PoQChainInputsData {
-            core_root: BigUint::from_str(
-                "12185619490528295825098195451407217973914857946530829707990590609721812577473",
-            )
-            .unwrap()
-            .into(),
-            pol_ledger_aged: BigUint::from_str(
-                "367970463510572346469727551309607212474618104803583434125220973330505217187",
-            )
-            .unwrap()
-            .into(),
-            pol_epoch_nonce: BigUint::from_str(
-                "19183275818966466009388966937999847470836267418943165691463680548408801149509",
-            )
-            .unwrap()
-            .into(),
-            lottery_0,
-            lottery_1,
-        };
-        let common_data = PoQCommonInputsData {
-            core_quota: Quota::new::<15>(),
-            leader_quota: Quota::new::<10>(),
-            pow_quota: Quota::new::<5>(),
-            message_key: (
-                BigUint::from(123_456u32).into(),
-                BigUint::from(654_321u32).into(),
-            ),
-            selector: PoQSelector::Leader,
-            index: KeyIndex::new::<2>(),
-            pow_difficulty: BigUint::from_str(
-                "2334035772366381927456001473031809359552034265892309520954243351196711606017",
-            )
-            .unwrap()
-            .into(),
-        };
-        let wallet_data = PoQWalletInputsData {
-            slot: 3_934_028_363,
-            note_value: 50,
-            transaction_hash: BigUint::from_str(
-                "2264455058971045832756600439690776883891824153136465835848552732282836700508",
-            )
-            .unwrap()
-            .into(),
-            output_number: 1108,
-            aged_path_and_selectors: [
-                (
-                    "11104092157301530528415266289001896179719940037074919849624292254162611405786",
-                    true,
-                ),
-                (
-                    "7132185073809921262555691477157103985074819342411989543016526500095228117354",
-                    false,
-                ),
-                (
-                    "11907580727147699209958498886101128744892522133797395449242728594286922858086",
-                    false,
-                ),
-                (
-                    "13075221440612698710788795973343285593006804290474838812157163926886238383760",
-                    true,
-                ),
-                (
-                    "17200451570433990100996559280535385805985882628682996186008504614174096791798",
-                    true,
-                ),
-                (
-                    "16750120177808191972292661243802361139298740550633002442851428788856687150475",
-                    false,
-                ),
-                (
-                    "12679489866011049826521697310427217461017078670664946750194685078601853495880",
-                    false,
-                ),
-                (
-                    "15235439481027011453071738627024275793651222671965241576356428348106464813175",
-                    false,
-                ),
-                (
-                    "9961832183928877694020893796261063404160642210645529511233145074735042190217",
-                    true,
-                ),
-                (
-                    "4326894103682035305319995256704866698441157935817295295020304417938631996729",
-                    true,
-                ),
-                (
-                    "17555384873204675431996467471744635783468598594303097832615135885710898785356",
-                    false,
-                ),
-                (
-                    "2067987409200354598518658724620929803515175794312186642703606119551864949264",
-                    true,
-                ),
-                (
-                    "18414033735029028807991144814771963824730052421471947864345037264843089845734",
-                    false,
-                ),
-                (
-                    "11883340736248057870265402327022279289678280641364875114447762692303561445604",
-                    false,
-                ),
-                (
-                    "7157973471780523265294561800756652242511668640260136396798977970116460727342",
-                    true,
-                ),
-                (
-                    "10322140357911263063410611191898227332467973200575964702516054623940247053118",
-                    false,
-                ),
-                (
-                    "12567824105074446475873393314739330450709906448171155888539789943621309224508",
-                    true,
-                ),
-                (
-                    "3778057320817011605792674467466589599030650184482297863404214181285644124757",
-                    true,
-                ),
-                (
-                    "15139857989447407851586537192536170660643402207011818138460800689622488846498",
-                    true,
-                ),
-                (
-                    "4686260554210282279381725438723974181592826312599841000574494090500374964214",
-                    true,
-                ),
-                (
-                    "2017001248552489998639360772220278151302627680149021505074390044394703925937",
-                    false,
-                ),
-                (
-                    "15644113980009580949735073673522118459196764019649835645357551831476441064371",
-                    true,
-                ),
-                (
-                    "5851335105157805239260310112724712629219062160101168478507890653975790109833",
-                    false,
-                ),
-                (
-                    "4506645166310701016292123296822379297660598150676608439399796403413830281952",
-                    false,
-                ),
-                (
-                    "19761070472419507198412744968226383034230108135701041508981821408866293379367",
-                    false,
-                ),
-                (
-                    "16473696535741964167503054455797711177314106892505373545741412745155986927894",
-                    true,
-                ),
-                (
-                    "7024125351521471566160638647544413645870621144999681104961251077959669126366",
-                    false,
-                ),
-                (
-                    "4223261943159590385933901257711007435848118520945782486495445973028111080784",
-                    true,
-                ),
-                (
-                    "2480120922453299704385093407865595899109107879489738668468480942431779023090",
-                    false,
-                ),
-                (
-                    "4872555691447955405629869337126212288862528483324109155414334863586541089650",
-                    false,
-                ),
-                (
-                    "2885249961213344608420596395566111778633573487967873292737118191013543595441",
-                    false,
-                ),
-                (
-                    "20675954944665714887729603321541315818168820606980234992582325333134286444983",
-                    false,
-                ),
-            ]
-            .map(|(value, selector)| (BigUint::from_str(value).unwrap().into(), selector)),
-            pol_secret_key: BigUint::from_str(
-                "14029017592631272654768426994822986470491530234220356957377918534745805708829",
-            )
-            .unwrap()
-            .into(),
-        };
-
+        let (chain_data, common_data, wallet_data) = test_utils::leader_witness_data();
         let witness_inputs =
             PoQWitnessInputs::from_leader_data(chain_data, common_data, wallet_data);
         let (proof, inputs) = prove(witness_inputs).unwrap();
+        assert_eq!(inputs.clone().to_inputs()[5], chain_data.pol_eligible_aged);
         let key_nullifier = inputs.key_nullifier.into_inner();
         // Test that verifying with the inputs returned by `prove` works.
         assert!(verify(&proof, inputs).unwrap());
@@ -519,7 +337,7 @@ mod tests {
             pow_quota: common_data.pow_quota,
             pow_blend_difficulty: common_data.pow_difficulty,
             pol_epoch_nonce: chain_data.pol_epoch_nonce,
-            pol_ledger_aged: chain_data.pol_ledger_aged,
+            pol_eligible_aged: chain_data.pol_eligible_aged,
             lottery_0: chain_data.lottery_0,
             lottery_1: chain_data.lottery_1,
         };
@@ -534,7 +352,7 @@ mod tests {
             )
             .unwrap()
             .into(),
-            pol_ledger_aged: BigUint::from_str(
+            pol_eligible_aged: BigUint::from_str(
                 "15524203674561292134108415479004597997158273575770759806968210936102441082561",
             )
             .unwrap()
@@ -597,7 +415,7 @@ mod tests {
             pow_quota: common_data.pow_quota,
             pow_blend_difficulty: common_data.pow_difficulty,
             pol_epoch_nonce: chain_data.pol_epoch_nonce,
-            pol_ledger_aged: chain_data.pol_ledger_aged,
+            pol_eligible_aged: chain_data.pol_eligible_aged,
             lottery_0: chain_data.lottery_0,
             lottery_1: chain_data.lottery_1,
         };

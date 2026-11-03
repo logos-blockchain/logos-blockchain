@@ -1,5 +1,8 @@
-use lb_poc::{PoCProof, PoCVerifierInput};
-use lb_zksign::{ZkSignProof, ZkSignVerifierInputs};
+use lb_groth16::{CompressedGroth16Proof, Fr};
+use lb_program_spend::{ZkProgramSpendProof, ZkProgramSpendVerifierInput};
+use lb_zktransfer::{ZkTransferProof, ZkTransferVerifierInput};
+
+use crate::mantle::programs::{PROGRAM_PUBLIC_INPUTS, RegisteredProgram};
 
 /// A proof that can be handed off to a [`DeferredProofs`] batch.
 pub trait DeferrableProof {
@@ -33,18 +36,48 @@ impl<Proof, Inputs> DeferredProof<Proof, Inputs> {
     }
 }
 
-pub type DeferredZkSig = DeferredProof<ZkSignProof, ZkSignVerifierInputs>;
-pub type DeferredLeaderClaim = DeferredProof<PoCProof, PoCVerifierInput>;
+pub type DeferredZkTransfer = DeferredProof<ZkTransferProof, ZkTransferVerifierInput>;
+pub type DeferredZkProgramSpend = DeferredProof<ZkProgramSpendProof, ZkProgramSpendVerifierInput>;
+pub type DeferredProgramProof = DeferredProof<CompressedGroth16Proof, ProgramProofInput>;
 
-impl DeferrableProof for DeferredZkSig {
+#[derive(Clone, Debug)]
+pub struct ProgramProofInput {
+    pub program: RegisteredProgram,
+    pub public: [Fr; PROGRAM_PUBLIC_INPUTS],
+}
+
+impl DeferrableProof for DeferredZkTransfer {
     fn defer_into(self, batch: &mut DeferredProofs) {
-        batch.zk_sigs.push(self);
+        batch.zk_transfers.push(self);
     }
 }
 
-impl DeferrableProof for DeferredLeaderClaim {
+impl DeferrableProof for DeferredZkProgramSpend {
     fn defer_into(self, batch: &mut DeferredProofs) {
-        batch.leader_claims.push(self);
+        batch.program_spends.push(self);
+    }
+}
+
+impl DeferrableProof for DeferredProgramProof {
+    fn defer_into(self, batch: &mut DeferredProofs) {
+        batch.program_proofs.push(self);
+    }
+}
+
+// The proofs of the steps of an inscription.
+#[derive(Debug, Default)]
+pub struct InscriptionDeferredProofs {
+    // The ZkTransfers of the user steps and of the payments, in order.
+    pub zk_transfers: Vec<DeferredZkTransfer>,
+    pub program_spends: Vec<DeferredZkProgramSpend>,
+    pub program_proofs: Vec<DeferredProgramProof>,
+}
+
+impl DeferrableProof for InscriptionDeferredProofs {
+    fn defer_into(self, batch: &mut DeferredProofs) {
+        batch.zk_transfers.extend(self.zk_transfers);
+        batch.program_spends.extend(self.program_spends);
+        batch.program_proofs.extend(self.program_proofs);
     }
 }
 
@@ -52,8 +85,9 @@ impl DeferrableProof for DeferredLeaderClaim {
 #[derive(Default)]
 #[must_use]
 pub struct DeferredProofs {
-    zk_sigs: Vec<DeferredZkSig>,
-    leader_claims: Vec<DeferredLeaderClaim>,
+    zk_transfers: Vec<DeferredZkTransfer>,
+    program_spends: Vec<DeferredZkProgramSpend>,
+    program_proofs: Vec<DeferredProgramProof>,
 }
 
 impl DeferredProofs {
@@ -62,57 +96,78 @@ impl DeferredProofs {
     }
 
     pub fn extend(&mut self, other: Self) {
-        self.zk_sigs.extend(other.zk_sigs);
-        self.leader_claims.extend(other.leader_claims);
+        self.zk_transfers.extend(other.zk_transfers);
+        self.program_spends.extend(other.program_spends);
+        self.program_proofs.extend(other.program_proofs);
     }
 
     pub fn verify(self) -> Result<(), Error> {
-        Self::verify_zk_sigs(self.zk_sigs)?;
-        Self::verify_leader_claims(self.leader_claims)
+        Self::verify_zk_transfers(self.zk_transfers)?;
+        Self::verify_program_spends(self.program_spends)?;
+        Self::verify_program_proofs(self.program_proofs)
     }
 
-    fn verify_zk_sigs(proofs: Vec<DeferredZkSig>) -> Result<(), Error> {
+    fn verify_zk_transfers(proofs: Vec<DeferredZkTransfer>) -> Result<(), Error> {
         if proofs.is_empty() {
             return Ok(());
         }
 
         let proof_parts = proofs
             .into_iter()
-            .map(DeferredZkSig::into_parts)
+            .map(DeferredZkTransfer::into_parts)
             .collect::<Vec<_>>();
-        match lb_zksign::batch_verify(proof_parts.as_slice()) {
+        match lb_zktransfer::batch_verify(proof_parts.as_slice()) {
             Ok(true) => Ok(()),
-            Ok(false) => Err(Error::InvalidZkSignatures),
-            Err(e) => Err(Error::MalformedZkSignature(format!("{e:?}"))),
+            Ok(false) => Err(Error::InvalidZkTransfers),
+            Err(e) => Err(Error::MalformedZkTransfer(format!("{e:?}"))),
         }
     }
 
-    fn verify_leader_claims(proofs: Vec<DeferredLeaderClaim>) -> Result<(), Error> {
+    fn verify_program_spends(proofs: Vec<DeferredZkProgramSpend>) -> Result<(), Error> {
         if proofs.is_empty() {
             return Ok(());
         }
 
         let proof_parts = proofs
             .into_iter()
-            .map(DeferredLeaderClaim::into_parts)
+            .map(DeferredZkProgramSpend::into_parts)
             .collect::<Vec<_>>();
-        match lb_poc::batch_verify(proof_parts.as_slice()) {
+        match lb_program_spend::batch_verify(proof_parts.as_slice()) {
             Ok(true) => Ok(()),
-            Ok(false) => Err(Error::InvalidLeaderClaimProofs),
-            Err(e) => Err(Error::MalformedLeaderClaimProof(format!("{e:?}"))),
+            Ok(false) => Err(Error::InvalidProgramSpends),
+            Err(e) => Err(Error::MalformedProgramSpend(format!("{e:?}"))),
         }
     }
 
-    #[cfg(any(test, feature = "unsafe-test-functions"))]
-    #[must_use]
-    pub fn zk_sigs(&self) -> &[DeferredZkSig] {
-        &self.zk_sigs
+    // Each program proof is verified alone, it cannot share the batch of another
+    // key.
+    fn verify_program_proofs(proofs: Vec<DeferredProgramProof>) -> Result<(), Error> {
+        for (proof, input) in proofs.into_iter().map(DeferredProgramProof::into_parts) {
+            match input.program.verify(&proof, &input.public) {
+                Ok(true) => {}
+                Ok(false) => return Err(Error::InvalidProgramProof),
+                Err(e) => return Err(Error::MalformedProgramProof(e.to_string())),
+            }
+        }
+        Ok(())
     }
 
     #[cfg(any(test, feature = "unsafe-test-functions"))]
     #[must_use]
-    pub fn leader_claims(&self) -> &[DeferredLeaderClaim] {
-        &self.leader_claims
+    pub fn zk_transfers(&self) -> &[DeferredZkTransfer] {
+        &self.zk_transfers
+    }
+
+    #[cfg(any(test, feature = "unsafe-test-functions"))]
+    #[must_use]
+    pub fn program_spends(&self) -> &[DeferredZkProgramSpend] {
+        &self.program_spends
+    }
+
+    #[cfg(any(test, feature = "unsafe-test-functions"))]
+    #[must_use]
+    pub fn program_proofs(&self) -> &[DeferredProgramProof] {
+        &self.program_proofs
     }
 }
 
@@ -128,14 +183,18 @@ impl<Proof: DeferrableProof> FromIterator<Proof> for DeferredProofs {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("deferred ZkSignatures are invalid")]
-    InvalidZkSignatures,
-    #[error("deferred ZkSignature is malformed: {0}")]
-    MalformedZkSignature(String),
-    #[error("deferred leader claim proofs are invalid")]
-    InvalidLeaderClaimProofs,
-    #[error("deferred leader claim proof is malformed: {0}")]
-    MalformedLeaderClaimProof(String),
+    #[error("deferred ZkTransfer proofs are invalid")]
+    InvalidZkTransfers,
+    #[error("deferred ZkTransfer proof is malformed: {0}")]
+    MalformedZkTransfer(String),
+    #[error("deferred ZkProgramSpend proofs are invalid")]
+    InvalidProgramSpends,
+    #[error("deferred ZkProgramSpend proof is malformed: {0}")]
+    MalformedProgramSpend(String),
+    #[error("a deferred program proof is invalid")]
+    InvalidProgramProof,
+    #[error("a deferred program proof is malformed: {0}")]
+    MalformedProgramProof(String),
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -149,19 +208,13 @@ pub mod test_utils {
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::Fr;
-    use lb_key_management_system_keys::keys::{ZkKey, public_inputs_from_pks};
-    use lb_mmr::MerkleMountainRange;
-    use num_bigint::BigUint;
+    use lb_groth16::{
+        Field as _,
+        test_utils::{three_input_prove, three_input_setup},
+    };
 
     use super::*;
-    use crate::{
-        crypto::ZkHasher,
-        mantle::ops::leader_claim::{RewardsRoot, VoucherCm, VoucherNullifier, VoucherSecret},
-        proofs::leader_claim_proof::{
-            Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic,
-        },
-    };
+    use crate::mantle::programs::ProgramVerificationKey;
 
     #[test]
     fn verify_accepts_empty_batch() {
@@ -169,8 +222,8 @@ mod tests {
     }
 
     #[test]
-    fn verify_accepts_batch_of_valid_zk_signatures() {
-        [valid_zk_sig(7), valid_zk_sig(8), valid_zk_sig(9)]
+    fn verify_accepts_batch_of_valid_zk_transfers() {
+        [zk_transfer(Fr::ONE), zk_transfer(Fr::from(2u64))]
             .into_iter()
             .collect::<DeferredProofs>()
             .verify()
@@ -178,105 +231,89 @@ mod tests {
     }
 
     #[test]
-    fn verify_rejects_batch_containing_invalid_zk_signature() {
-        let err = [valid_zk_sig(7), invalid_zk_sig(8), valid_zk_sig(9)]
-            .into_iter()
-            .collect::<DeferredProofs>()
-            .verify()
-            .unwrap_err();
-        assert!(matches!(err, Error::InvalidZkSignatures));
+    fn verify_rejects_batch_containing_invalid_zk_transfer() {
+        let err = [
+            zk_transfer(Fr::ONE),
+            zk_transfer_checked_against_another_msg(),
+        ]
+        .into_iter()
+        .collect::<DeferredProofs>()
+        .verify()
+        .unwrap_err();
+        assert!(matches!(err, Error::InvalidZkTransfers));
     }
 
     #[test]
-    fn verify_accepts_batch_of_valid_leader_claims() {
-        [valid_leader_claim(7), valid_leader_claim(8)]
-            .into_iter()
-            .collect::<DeferredProofs>()
-            .verify()
-            .expect("must succeed");
-    }
-
-    #[test]
-    fn verify_rejects_batch_containing_invalid_leader_claim() {
-        let err = [valid_leader_claim(7), invalid_leader_claim(8)]
-            .into_iter()
-            .collect::<DeferredProofs>()
-            .verify()
-            .unwrap_err();
-        assert!(matches!(err, Error::InvalidLeaderClaimProofs));
-    }
-
-    #[test]
-    fn verify_rejects_invalid_leader_claim_alongside_valid_zk_signature() {
+    fn verify_accepts_valid_program_spends_and_program_proofs() {
         let mut batch = DeferredProofs::new();
-        valid_zk_sig(7).defer_into(&mut batch);
-        invalid_leader_claim(8).defer_into(&mut batch);
-
-        let err = batch.verify().unwrap_err();
-        assert!(matches!(err, Error::InvalidLeaderClaimProofs));
+        program_spend(Fr::ONE).defer_into(&mut batch);
+        program_spend(Fr::from(2u64)).defer_into(&mut batch);
+        program_proof(1, 1).defer_into(&mut batch);
+        batch.verify().expect("every proof is valid");
     }
 
-    fn valid_zk_sig(message: u64) -> DeferredZkSig {
-        zk_sig(message, message)
+    #[test]
+    fn verify_rejects_a_program_spend_checked_against_another_paid_value() {
+        let (proof, inputs) = program_spend(Fr::ONE).into_parts();
+        let tampered = DeferredZkProgramSpend::new(
+            proof,
+            ZkProgramSpendVerifierInput {
+                paid_value: Fr::ONE.into(),
+                ..inputs
+            },
+        );
+        assert!(matches!(
+            std::iter::once(tampered)
+                .collect::<DeferredProofs>()
+                .verify(),
+            Err(Error::InvalidProgramSpends)
+        ));
     }
 
-    fn invalid_zk_sig(message: u64) -> DeferredZkSig {
-        zk_sig(message + 1, message)
+    #[test]
+    fn verify_rejects_a_program_proof_under_another_key() {
+        assert!(matches!(
+            std::iter::once(program_proof(1, 2))
+                .collect::<DeferredProofs>()
+                .verify(),
+            Err(Error::InvalidProgramProof)
+        ));
     }
 
-    /// Signs `msg`, but pairs the proof with the public inputs the
-    /// verifier checks it against: those of `msg_for_input`.
-    /// If `msg != msg_for_input`, an invalid proof will be produced.
-    fn zk_sig(msg: u64, msg_for_input: u64) -> DeferredZkSig {
-        let key = ZkKey::from(BigUint::from(1u8));
-        let signature = ZkKey::multi_sign(std::slice::from_ref(&key), &Fr::from(msg)).unwrap();
-        let inputs =
-            public_inputs_from_pks(Fr::from(msg_for_input).into(), &[key.to_public_key()]).unwrap();
-
-        DeferredZkSig::new(*signature.as_proof(), inputs)
+    fn zk_transfer(msg: Fr) -> DeferredZkTransfer {
+        let mut data = lb_zktransfer::test_utils::sample_witness_data();
+        data.chain.msg = msg;
+        let (proof, inputs) = lb_zktransfer::prove(data.into()).expect("the sample witness proves");
+        DeferredZkTransfer::new(proof, inputs)
     }
 
-    fn valid_leader_claim(voucher: u64) -> DeferredLeaderClaim {
-        leader_claim(voucher, voucher)
-    }
-
-    fn invalid_leader_claim(voucher: u64) -> DeferredLeaderClaim {
-        leader_claim(voucher + 1, voucher)
-    }
-
-    /// Proves a claim over the voucher of `secret`, but pairs the proof
-    /// with the nullifier the verifier checks it against: that of
-    /// `secret_for_input`.
-    /// If `secret != secret_for_input`, an invalid proof will be produced.
-    fn leader_claim(secret: u64, secret_for_input: u64) -> DeferredLeaderClaim {
-        let voucher_secret = VoucherSecret::from(Fr::from(secret));
-        let (mmr, voucher_path) = MerkleMountainRange::<VoucherCm, ZkHasher>::new()
-            .push_with_paths(VoucherCm::from_secret(voucher_secret), &mut [])
-            .expect("MMR shouldn't be full");
-        let voucher_root = RewardsRoot::from(mmr.frontier_root());
-        let tx_hash = Fr::from(11u64);
-        let proof = Groth16LeaderClaimProof::prove(
-            LeaderClaimPrivate::try_new(
-                LeaderClaimPublic::new(
-                    VoucherNullifier::from_secret(voucher_secret).into(),
-                    voucher_root.into(),
-                    tx_hash,
-                ),
-                &voucher_path,
-                voucher_secret,
-            )
-            .expect("voucher path should match the PoC circuit height"),
+    fn zk_transfer_checked_against_another_msg() -> DeferredZkTransfer {
+        let (proof, inputs) = zk_transfer(Fr::ONE).into_parts();
+        DeferredZkTransfer::new(
+            proof,
+            ZkTransferVerifierInput {
+                msg: Fr::from(2u64).into(),
+                ..inputs
+            },
         )
-        .expect("proof generation should succeed");
+    }
 
-        DeferredLeaderClaim::new(
-            *proof.proof(),
-            PoCVerifierInput::new(
-                VoucherNullifier::from_secret(VoucherSecret::from(Fr::from(secret_for_input)))
-                    .into(),
-                voucher_root.into(),
-                tx_hash,
-            ),
-        )
+    fn program_spend(msg: Fr) -> DeferredZkProgramSpend {
+        let mut data = lb_program_spend::test_utils::sample_witness_data();
+        data.chain.msg = msg;
+        let (proof, inputs) =
+            lb_program_spend::prove(data.into()).expect("the sample witness proves");
+        DeferredZkProgramSpend::new(proof, inputs)
+    }
+
+    fn program_proof(key_seed: u64, verified_under: u64) -> DeferredProgramProof {
+        let (_, proving_key) = three_input_setup(key_seed);
+        let (key, _) = three_input_setup(verified_under);
+        let program =
+            RegisteredProgram::new(ProgramVerificationKey::try_from(&key).unwrap()).unwrap();
+        let public = [Fr::from(1u64), Fr::from(2u64), Fr::from(3u64)];
+        let proof =
+            CompressedGroth16Proof::try_from(&three_input_prove(&proving_key, public, 4)).unwrap();
+        DeferredProgramProof::new(proof, ProgramProofInput { program, public })
     }
 }

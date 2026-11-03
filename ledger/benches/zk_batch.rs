@@ -9,7 +9,7 @@
 //! - sequential path: every tx's proof is verified one by one.
 //! - batched path: all tx proofs are batched together and verified in one go.
 //!
-//! The benchmarks use only `Transfer` operations that include a ZK signature,
+//! The benchmarks use only `Transfer` operations that include a `ZkTransfer`,
 //! because the ZK cost of other operations is not so different from `Transfer`.
 //!
 //! Multi-block scenarios are also included. But, since the multi-block batching
@@ -27,27 +27,32 @@ use std::{
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Note, Op, OpProof, SignedOps, Utxo,
+        Op, OpProof, SignedOps,
         batch::DeferredProofs,
         gas::MainnetGasProfile,
-        ledger::{BoundedInputs, Outputs, verification_mode::StandardMode},
-        ops::transfer::TransferOp,
+        ledger::verification_mode::StandardMode,
+        note_set::{CommitmentMmr, LEDGER_SET},
+        notes::{self, derive_note_nullifier},
+        ops::{
+            ZkTransferProof,
+            transfer::{TransferOp, test_utils::prove_transfer},
+        },
         traits::Hashable as _,
         transactions::{OpProofs, Ops, states::Preverified},
     },
     sdp::{MinStake, ServiceParameters, ServiceType},
 };
 use lb_cryptarchia_engine::EpochConfig;
-use lb_key_management_system_keys::keys::ZkKey;
+use lb_groth16::Fr;
+use lb_key_management_system_keys::keys::{ZkKey, ZkPublicKey};
+use lb_mmr::MerklePath;
 use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
-use lb_zksign::verify;
 use logos_blockchain_ledger::{
     Config, ConsensusExcludedKeys, LedgerState,
     config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
-use num_bigint::BigUint;
 use time::OffsetDateTime;
 
 fn main() {
@@ -179,27 +184,62 @@ static TX_POOL: LazyLock<TxPool> = LazyLock::new(|| {
     let n_txs = *single_block::TXS_PER_BLOCK.last().unwrap();
 
     let keys: Vec<ZkKey> = (0..n_txs)
-        .map(|i| ZkKey::from(BigUint::from(i as u64 + 1)))
+        .map(|i| ZkKey::new(Fr::from(i as u64 + 1)))
         .collect();
-    let utxos: Vec<Utxo> = keys
+    let notes: Vec<notes::Note> = keys
         .iter()
         .enumerate()
-        .map(|(i, key)| Utxo {
-            op_id: [i as u8; 32],
-            output_index: i,
-            // Assign a large value to withstand gas cost increases.
-            note: Note::new(1_000_000, key.to_public_key()),
+        // Assign a large value to withstand gas cost increases.
+        .map(|(i, key)| {
+            notes::Note::new(10_000_000_000_000, Fr::from(i as u64), key.to_public_key())
         })
         .collect();
 
-    let txs = utxos
+    // Each push updates the paths of the earlier notes in place.
+    let mut mmr = CommitmentMmr::new();
+    let mut paths: Vec<MerklePath> = Vec::with_capacity(n_txs);
+    for note in &notes {
+        let (pushed, path) = mmr
+            .push_with_paths(note.commitment(), &mut paths)
+            .expect("the commitment MMR has room");
+        mmr = pushed;
+        paths.push(path);
+    }
+    let root = mmr.frontier_root();
+
+    let genesis = LedgerState::from_notes(
+        notes.iter().copied(),
+        &config,
+        0,
+        &ConsensusExcludedKeys::empty(),
+    );
+    assert_eq!(
+        genesis
+            .latest_note_sets()
+            .get(LEDGER_SET)
+            .expect("the ledger set exists")
+            .commitment_root(),
+        root
+    );
+
+    let txs = notes
         .iter()
         .zip(&keys)
-        .map(|(utxo, key)| build_tx(*utxo, key))
+        .zip(paths)
+        .enumerate()
+        .map(|(i, ((note, key), path))| {
+            build_tx(
+                *note,
+                *key.as_fr(),
+                path,
+                root,
+                Fr::from((i + n_txs) as u64),
+            )
+        })
         .collect();
 
     TxPool {
-        genesis: LedgerState::from_utxos(utxos, &config, 0, &ConsensusExcludedKeys::empty()),
+        genesis,
         eras: single_era(config),
         txs,
     }
@@ -219,9 +259,10 @@ fn apply_sequential(
     txs: impl Iterator<Item = SignedOps<Preverified, StandardMode>>,
 ) -> LedgerState {
     let (state, deferred) = apply(state, txs);
-    for deferred_proof in deferred.zk_sigs() {
+    for deferred_proof in deferred.zk_transfers() {
         assert!(
-            verify(deferred_proof.proof(), deferred_proof.inputs()).expect("proof should verify")
+            lb_zktransfer::verify(deferred_proof.proof(), deferred_proof.inputs())
+                .expect("proof should verify")
         );
     }
     state
@@ -231,24 +272,42 @@ fn apply(
     state: &LedgerState,
     txs: impl Iterator<Item = SignedOps<Preverified, StandardMode>>,
 ) -> (LedgerState, DeferredProofs) {
-    let (state, _, deferred) = state
+    let (state, _, _, deferred) = state
         .clone()
-        .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(&TX_POOL.eras, txs)
+        .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
+            &TX_POOL.eras,
+            ZkPublicKey::zero(),
+            txs,
+        )
         .expect("block should apply");
     (state, deferred)
 }
 
-/// Builds a transaction with a `Transfer` operation that spends `utxo` and
-/// sends the very little amount to `key`.
-fn build_tx(utxo: Utxo, key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
+/// Builds a transaction with a `Transfer` operation that spends `note` and
+/// sends the very little amount back to its public key.
+fn build_tx(
+    note: notes::Note,
+    secret_key: Fr,
+    path: MerklePath,
+    root: Fr,
+    output_nonce: Fr,
+) -> SignedOps<Preverified, StandardMode> {
+    let output = notes::Note::new(1, output_nonce, note.public_key);
     let transfer_op = TransferOp::new(
-        BoundedInputs::from(utxo.id()).into(),
+        [derive_note_nullifier(&note.commitment(), &secret_key)].into(),
+        [output.commitment()].into(),
+        root,
         // Most of the tx's value goes as a tip, to withstand gas cost increases.
-        Outputs::new([Note::new(1, key.to_public_key())]),
+        9_999_999_999_999,
     );
     let ops = Ops::from([Op::Transfer(transfer_op)]);
-    let signature = ZkKey::multi_sign(std::slice::from_ref(key), &ops.hash().to_fr()).unwrap();
-    let op_proofs = OpProofs::from([OpProof::ZkSig(signature)]);
+    let proof = prove_transfer(
+        &[(note, secret_key, path)],
+        &[output],
+        root,
+        ops.hash().to_fr(),
+    );
+    let op_proofs = OpProofs::from([OpProof::ZkTransfer(ZkTransferProof::new(proof))]);
 
     SignedOps::from_parts(ops, op_proofs)
         .expect("transaction should build")

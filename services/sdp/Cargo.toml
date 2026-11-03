@@ -36,5 +36,6 @@ openapi = ["dep:utoipa", "lb-core/openapi"]
 [dev-dependencies]
 lb-blend-proofs       = { workspace = true }
 lb-cryptarchia-engine = { workspace = true }
+lb-groth16            = { workspace = true }
 lb-utils              = { workspace = true }
 tokio                 = { features = ["macros", "rt"], workspace = true }

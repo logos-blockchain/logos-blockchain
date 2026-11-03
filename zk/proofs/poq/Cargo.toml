@@ -26,13 +26,18 @@ tracing            = { workspace = true }
 divan    = { workspace = true }
 lb-utils = { workspace = true }
 
-[[bench]]
-harness = false
-name    = "prove"
+[features]
+test-utils = []
 
 [[bench]]
-harness = false
-name    = "verify"
+harness           = false
+name              = "prove"
+required-features = ["test-utils"]
+
+[[bench]]
+harness           = false
+name              = "verify"
+required-features = ["test-utils"]
 
 [lints]
 workspace = true

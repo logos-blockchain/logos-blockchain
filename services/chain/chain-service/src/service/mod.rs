@@ -13,7 +13,7 @@ use futures::{Stream, StreamExt as _, future::join_all, stream};
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockInfo};
 use lb_core::{
-    block::{Block, SignedHeader, UncleHeaders},
+    block::{Block, UncleHeaders, genesis::GenesisBlock},
     header::HeaderId,
     mantle::{
         OpRef, TxHash,
@@ -236,6 +236,7 @@ where
     state_recording_timer: tokio::time::Interval,
     prolonged_bootstrap_period: Duration,
     epoch_state_query_sources: EpochStateQuerySourceTracker,
+    genesis_block: Box<GenesisBlock>,
 }
 
 impl<Phase, Tx> Service<Phase, Tx>
@@ -274,6 +275,7 @@ where
             state_recording_timer: self.state_recording_timer,
             prolonged_bootstrap_period: self.prolonged_bootstrap_period,
             epoch_state_query_sources: self.epoch_state_query_sources,
+            genesis_block: self.genesis_block,
         }
     }
 
@@ -398,6 +400,13 @@ where
                     })
                     .unwrap_or_else(|e| {
                         error!(target: LOG_TARGET, "Could not send consensus info through channel: {:?}", e);
+                    });
+            }
+            Query::GetGenesisBlock { reply_channel } => {
+                reply_channel
+                    .send((*self.genesis_block).clone())
+                    .unwrap_or_else(|_| {
+                        error!(target: LOG_TARGET, "Could not send genesis block through channel");
                     });
             }
             Query::NewBlockSubscribe { sender } => {
@@ -580,10 +589,7 @@ where
                 error!(target: LOG_TARGET, candidate = ?candidate.id(), "uncle candidate not found in storage");
                 continue;
             };
-            uncles.push(SignedHeader::new(
-                block.header().clone(),
-                *block.signature(),
-            ));
+            uncles.push(block.header().clone());
         }
 
         let max_uncles = self
@@ -632,7 +638,7 @@ fn log_epoch_state_query(result: &EpochStateQueryResult) {
         source_lib_slot = u64::from(result.source_lib_slot),
         returned_epoch = u32::from(result.epoch_state.epoch),
         returned_nonce = ?result.epoch_state.nonce,
-        returned_aged_utxo_root = ?result.epoch_state.utxo_merkle_root(),
+        returned_aged_eligible_root = ?result.epoch_state.eligible_root(),
         returned_lottery_0 = ?result.epoch_state.lottery_0,
         returned_lottery_1 = ?result.epoch_state.lottery_1,
         returned_blend_pow_difficulty = ?result.epoch_state.blend_pow_difficulty,

@@ -4,9 +4,8 @@ log_targets! {
     root = proofs;
 
     LEADER,
-    LEADER_CLAIM,
-    POC,
     POL,
     POQ,
-    ZKSIGN,
+    PROGRAM_SPEND,
+    ZKTRANSFER,
 }

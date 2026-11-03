@@ -1,6 +1,6 @@
 use core::fmt::{self, Debug, Formatter};
 
-use lb_poq::{AgedNotePathAndSelectors, PoQSelector};
+use lb_poq::{AgedNotePathAndSelectors, AgedSetPathAndSelectors, PoQSelector};
 use zeroize::ZeroizeOnDrop;
 
 use crate::{
@@ -136,9 +136,10 @@ impl From<ProofOfCoreQuotaInputs> for ProofType {
 pub struct ProofOfLeadershipQuotaInputs {
     pub slot: u64,
     pub note_value: u64,
-    pub transaction_hash: ZkHash,
-    pub output_number: u64,
-    pub aged_path_and_selectors: AgedNotePathAndSelectors,
+    pub note_nonce: ZkHash,
+    pub commitment_aged_path_and_selectors: AgedNotePathAndSelectors,
+    pub nullifier_root_aged: ZkHash,
+    pub set_aged_path_and_selectors: AgedSetPathAndSelectors,
     pub secret_key: ZkHash,
 }
 

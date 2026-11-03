@@ -6,7 +6,6 @@ use std::{
 };
 
 use lb_common_http_client::Slot;
-use lb_core::mantle::Utxo;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
@@ -21,7 +20,10 @@ use tempfile::TempDir;
 use testing_framework_core::scenario::{DynError, PeerSelection, StartNodeOptions, StartedNode};
 use tokio::time::error::Elapsed;
 
-use crate::cucumber::defaults::{E2E_ARTIFACTS_DIR, E2E_KEEP_LOGS, E2E_TESTS_BASE_DIR_OVERRIDE};
+use crate::{
+    common::wallet::GenesisNotes,
+    cucumber::defaults::{E2E_ARTIFACTS_DIR, E2E_KEEP_LOGS, E2E_TESTS_BASE_DIR_OVERRIDE},
+};
 
 pub struct LocalManualClusterHarnessBase {
     scenario_base_dir: PathBuf,
@@ -355,16 +357,16 @@ pub fn api_url(node: &NodeHttpClient, path: &str) -> Url {
         .expect("manual-cluster client base URL should join API path")
 }
 
-/// UTXOs created by the genesis transfer of the deployment's genesis block.
+/// Notes created by the deployment's genesis block.
 #[must_use]
-pub fn genesis_wallet_utxos(config: &TopologyConfig) -> Vec<Utxo> {
+pub fn genesis_wallet_notes(config: &TopologyConfig) -> GenesisNotes {
     let genesis_tx = config
         .genesis_block
         .as_ref()
         .expect("manual-cluster deployment should include genesis tx")
         .genesis_tx();
 
-    genesis_tx.transfer().operation().utxos().collect()
+    GenesisNotes::from_genesis_tx(genesis_tx)
 }
 
 #[must_use]

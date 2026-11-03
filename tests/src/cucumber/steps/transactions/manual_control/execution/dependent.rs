@@ -5,7 +5,7 @@ use std::sync::{
 
 use lb_core::mantle::ops::channel::{
     ChannelId, MsgId,
-    inscribe::{Inscription, InscriptionOp},
+    inscribe::{ChannelSteps, Inscription, InscriptionOp},
 };
 use lb_key_management_system_service::keys::Ed25519Key;
 use rand::{RngCore as _, SeedableRng as _, seq::SliceRandom as _};
@@ -130,6 +130,7 @@ impl DependentTransactionLoadState {
                 })?,
             parent: parent_id,
             signer: self.signing_key.public_key().into_unverified(),
+            steps: ChannelSteps::default(),
         };
         let current_id = operation.id();
         lineage.current_id = current_id;

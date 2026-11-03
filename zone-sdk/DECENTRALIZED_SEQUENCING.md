@@ -190,7 +190,6 @@ let ((result, checkpoint), signed_tx) = sequencer
         SlotTimeframe::from(60), // ~3 blocks per turn at 20 slots/block
         SlotTimeout::from(180),  // skip after 3 turn windows of inactivity
         1,                       // configuration_threshold (still single-admin)
-        1,                       // transfer_threshold
     )
     .await?;
 ```
@@ -220,7 +219,6 @@ let prepared = sequencer
         SlotTimeframe::from(60),
         SlotTimeout::from(180),
         2, // configuration_threshold
-        1, // transfer_threshold
     )
     .await?;
 
@@ -235,8 +233,6 @@ let (result, checkpoint) = sequencer
     .handle()
     .submit_channel_config(prepared, signatures)?;
 ```
-
-The `Multi-sig deposit lifecycle reacts across independent sequencers` scenario in `tests/clients/zone-sdk/features/zone.feature` runs this flow with distinct signers, then pins and withdraws a deposit under the resulting 2-of-3 config via `prepare_pin_deposit` / `prepare_atomic_withdraw` and `submit_atomic_bundle`.
 
 
 ## Competing writes and republish
@@ -263,7 +259,7 @@ if let Event::BlocksProcessed { channel_update, .. } = event {
 `ChannelUpdate` has two variants, cut along the channel view rather than the L1 branch:
 
 - `Extension { adopted }` — nothing you hold became invalid. Append `adopted` to your non-finalized state. A block that changes the L1 branch without touching the channel view is still an extension.
-- `Conflict { common_prefix, adopted, orphaned }` — entries left the view: a competing entry took their parent, a competing spend took a bundle's inputs, or a config change invalidated the pending tail. `orphaned` is never empty. `common_prefix` is what the previous and the new view share above the finalized boundary, so `common_prefix ++ adopted`, available as `channel_update.canonical_chain()`, is the whole non-finalized view at the new tip. It includes your own unmined publishes, which chain on the mined tip.
+- `Conflict { common_prefix, adopted, orphaned }` — entries left the view: a competing entry took their parent, or a config change invalidated the pending tail. `orphaned` is never empty. `common_prefix` is what the previous and the new view share above the finalized boundary, so `common_prefix ++ adopted`, available as `channel_update.canonical_chain()`, is the whole non-finalized view at the new tip. It includes your own unmined publishes, which chain on the mined tip.
 
 Two ways to consume a conflict, depending on whether your state can undo an entry's effects:
 
@@ -276,21 +272,19 @@ The integration tests provide reference policies that run this re-publish loop a
 
 If the orphan policy is too aggressive — e.g., the orphan was caused by genuine application-level conflict, not a race — the consumer can choose to drop the payload, deduplicate against a higher-level transaction stream, or apply any other custom rule. The SDK only surfaces the event; the resolution policy is yours.
 
-Channel txs built outside the publish API are classified by shape, not by how they were submitted. A tx that looks like publish output — one inscription plus at most one funding transfer — surfaces as `ChannelUpdateTx::Inscription`; with withdraws (and at most one channel transfer) added, as `ChannelUpdateTx::AtomicWithdraw`; with one channel transfer and no withdraws, as `ChannelUpdateTx::PinDeposit`. A lone config, plus at most one funding transfer, surfaces as `ChannelUpdateTx::Config`. Anything else surfaces as `ChannelUpdateTx::Custom(SignedOps)` — the SDK hands back the whole transaction and it is up to the consumer to parse it (the `channel_inscriptions` helper extracts its inscriptions) and decide how to recover it. The main API is `publish`, `publish_atomic_withdraw` and `publish_pin_deposit`.
+Channel txs built outside the publish API are classified by shape, not by how they were submitted. A tx that looks like publish output — one inscription plus at most one funding transfer — surfaces as `ChannelUpdateTx::Inscription`. A lone config, plus at most one funding transfer, surfaces as `ChannelUpdateTx::Config`. Anything else surfaces as `ChannelUpdateTx::Custom(SignedOps)` — the SDK hands back the whole transaction and it is up to the consumer to parse it (the `channel_inscriptions` helper extracts its inscriptions) and decide how to recover it. The main API is `publish`.
 
 ### Stuck transactions: re-funding and expiry
 
 A pending tx that stays unmined on the branch for longer than `SequencerConfig::stale_refund_slots` LIB slots (default 30, `0` disables) is eligible for stale recovery. The timeout alone does not establish whether the node still holds the tx or whether its fee inputs remain spendable. What happens next depends on who can sign it:
 
-- **Single-signer publishes** — `publish`, `publish_atomic_withdraw`, `publish_pin_deposit` — are re-funded and re-signed by the SDK, then posted again. The message id and parent are unchanged, only the tx hash is: a tx hash is not a stable identity for a published message, the message id is. Nothing is reported, and entries chained on it keep chaining.
+- **Single-signer publishes** — `publish` — are re-funded and re-signed by the SDK, then posted again. The message id and parent are unchanged, only the tx hash is: a tx hash is not a stable identity for a published message, the message id is. Nothing is reported, and entries chained on it keep chaining.
 - **Multi-sig and custom txs** — anything submitted through `submit_channel_config` / `submit_signed_tx` — are shed and reported in `orphaned` on the next `BlocksProcessed`, together with everything chained on them. Re-prepare, collect signatures again, submit again. A config position holds one pending continuation, so `prepare_channel_config` refuses a second config on a parent that already has one pending until it lands or expires.
 
 ## Current limitations
 
 - **`channel_config` is single-sig only.** `SequencerHandle::channel_config` signs with the local sequencer's key only, so it works for `configuration_threshold == 1` channels. For threshold > 1, use the `prepare_channel_config` → `sign_with` → `submit_channel_config` flow above; collecting the signatures is up to the application.
 
-- **`publish_atomic_withdraw` requires `transfer_threshold == 1`.** Multi-sig withdraws use the lower-level flow: `prepare_tx` → distribute → collect signatures → `submit_signed_tx`. See [`BRIDGING.md`](BRIDGING.md#multi-sequencer-zones) for the worked example.
-
 - **No SDK-level coordination layer.** Off-chain coordination (who proposes config changes, how unsigned txs and signatures are transported between sequencers, how orphan-republish is gated across competing writers) is the application's responsibility. The SDK surfaces per-sequencer state and accepts independent calls; coordination is built on top.
 
-- **Reorg-aware recovery for multi-sig.** An orphaned bundle surfaces as `ChannelUpdateTx::AtomicWithdraw` with its withdraws regardless of how it was signed and of whether it was ever mined, but the SDK cannot re-sign a multi-sig tx: the consumer must re-run the `prepare_tx` → collect-signatures → `submit_signed_tx` flow. This is documented in [`BRIDGING.md`](BRIDGING.md#reorgs-and-republish). An orphaned multi-sig config change surfaces as `ChannelUpdateTx::Config` and is recovered the same way, by re-running `prepare_channel_config` → collect signatures → `submit_channel_config`.
+- **Reorg-aware recovery for multi-sig.** The SDK cannot re-sign a multi-sig tx. An orphaned multi-sig config change surfaces as `ChannelUpdateTx::Config`, and the consumer recovers it by re-running `prepare_channel_config` → collect signatures → `submit_channel_config`.

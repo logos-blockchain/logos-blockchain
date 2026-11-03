@@ -727,7 +727,9 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use lb_core::mantle::{
-        Op, SignedOps, ops::channel::inscribe::InscriptionOp, transactions::Ops,
+        Op, SignedOps,
+        ops::channel::inscribe::{ChannelSteps, InscriptionOp},
+        transactions::Ops,
     };
     use lb_key_management_system_service::keys::{Ed25519Key, UnverifiedEd25519PublicKey};
     use lb_zone_sdk::{
@@ -782,6 +784,7 @@ mod tests {
                 inscription: payload.try_into().unwrap(),
                 parent: MsgId::root(),
                 signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+                steps: ChannelSteps::default(),
             },
         )]));
         let inscription = channel_inscriptions(&tx, channel_id).remove(0);
@@ -790,7 +793,6 @@ mod tests {
             pending_txs: vec![(inscription.tx_hash, tx)],
             lib: HeaderId::from([2; 32]),
             lib_slot: Slot::from(1),
-            channel_notes: Vec::new(),
             finalized_config: MsgId::root(),
             funding: Vec::new(),
         };
@@ -1580,7 +1582,6 @@ mod tests {
             node,
             FundingConfig {
                 funding_pk: lb_groth16::Fr::from(1u64).into(),
-                change_pk: None,
                 max_tx_fee: u64::MAX.into(),
                 priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
             },
@@ -1601,7 +1602,6 @@ mod tests {
                 pending_txs: Vec::new(),
                 lib: HeaderId::from([1; 32]),
                 lib_slot: Slot::from(1),
-                channel_notes: Vec::new(),
                 finalized_config: MsgId::root(),
                 funding: Vec::new(),
             },

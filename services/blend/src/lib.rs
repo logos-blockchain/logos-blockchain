@@ -14,8 +14,8 @@ use lb_blend::scheduling::{
 };
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
-    mantle::NoteId,
-    sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
+    mantle::Value,
+    sdp::{Locator, ProviderId, ServiceType},
 };
 use lb_key_management_system_service::{
     api::KmsServiceApi,
@@ -23,7 +23,7 @@ use lb_key_management_system_service::{
 };
 use lb_log_targets::blend;
 use lb_network_service::NetworkService;
-use lb_sdp_service::{SdpMessage, SdpServiceApi, SdpSubmission};
+use lb_sdp_service::{DeclarationRequest, SdpMessage, SdpServiceApi, SdpSubmission};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_time_service::TimeService;
 use overwatch::{
@@ -209,18 +209,17 @@ where
             overwatch_handle.relay::<PreloadKmsService<_>>().await?,
         );
 
-        let PublicKeyEncoding::Zk(zk_public_key) = kms
-            .public_key(zk_secret_key_kms_id)
+        let PublicKeyEncoding::Zk(zk_public_key) = Box::pin(kms.public_key(zk_secret_key_kms_id))
             .await
             .expect("ZK public key for provided ID should be stored in KMS.")
         else {
             panic!("Key with specified ID is not a ZK key.");
         };
 
-        let PublicKeyEncoding::Ed25519(non_ephemeral_signing_key_public) = kms
-            .public_key(non_ephemeral_signing_key_id)
-            .await
-            .expect("KMS does not have key with the specified ID.")
+        let PublicKeyEncoding::Ed25519(non_ephemeral_signing_key_public) =
+            Box::pin(kms.public_key(non_ephemeral_signing_key_id))
+                .await
+                .expect("KMS does not have key with the specified ID.")
         else {
             panic!("Non-ephemeral signing key must be an Ed25519 key");
         };
@@ -318,12 +317,12 @@ where
                 },
                 Some(message) = inbound_relay.next() => {
                     match message {
-                        ProxyServiceMessage::JoinAsCore { locator, service_note_id, reply } => {
+                        ProxyServiceMessage::JoinAsCore { locator, amount, reply } => {
                             reply.send(
                                 submit_blend_sdp_declaration(
                                     &sdp_service_api,
                                     locator,
-                                    service_note_id,
+                                    amount,
                                     non_ephemeral_signing_key_public,
                                     zk_public_key,
                                 )
@@ -367,7 +366,7 @@ where
 async fn submit_blend_sdp_declaration<SdpService>(
     sdp_service_api: &SdpServiceApi<SdpService>,
     locator: Locator,
-    service_note_id: NoteId,
+    amount: Value,
     non_ephemeral_signing_key_public: Ed25519PublicKey,
     zk_id: ZkPublicKey,
 ) -> Result<SdpSubmission, lb_sdp_service::api::Error>
@@ -376,14 +375,14 @@ where
 {
     tracing::info!(
         target: LOG_TARGET,
-        "Submitting Blend service declaration to SDP with locator {locator:?} and service note id {service_note_id:?}",
+        "Submitting Blend service declaration to SDP with locator {locator:?} and stake {amount}",
     );
-    let sdp_declaration = DeclarationMessage {
+    let sdp_declaration = DeclarationRequest {
         locators: locator.into(),
-        service_note_id,
         provider_id: ProviderId(non_ephemeral_signing_key_public),
         service_type: ServiceType::BlendNetwork,
         zk_id,
+        amount,
     };
     sdp_service_api.post_declaration(sdp_declaration).await
 }

@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     #[serde(default)]
     pub known_keys: HashMap<KeyId, ZkPublicKey>,
+    /// The master key the fresh reward key of each proposed block is derived
+    /// from. The name is kept from the leader vouchers.
     pub voucher_master_key_id: KeyId,
     #[serde(default = "default_pending_note_expiry_blocks")]
     pub pending_note_expiry_blocks: u64,

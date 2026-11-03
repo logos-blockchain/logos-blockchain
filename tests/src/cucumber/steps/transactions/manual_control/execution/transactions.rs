@@ -8,6 +8,7 @@ use lb_core::mantle::{
         tx_list::ops::{OpsContext, OpsGasContext},
     },
 };
+use lb_groth16::Fr;
 
 use super::{
     BTreeMap, BestNodeInfo, CucumberWorld, GasPrices, HashSet, ManualCommand, NonZero,
@@ -261,14 +262,13 @@ fn estimate_split_required_fee(
     let mut builder = MantleTxBuilder::new();
     for _ in 0..outputs_per_wallet.saturating_add(1) {
         builder = builder
-            .add_ledger_output(Note::new(1, public_key))
+            .add_ledger_output(Note::new(1, Fr::from(0u64), public_key))
             .map_err(|error| StepError::LogicalError {
                 message: format!("could not build split fee estimate: {error}"),
             })?;
     }
     let context = OpsContext {
-        gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), gas_prices),
-        ..OpsContext::default()
+        gas_context: OpsGasContext::new(HashMap::new(), gas_prices),
     };
     let mandatory_fee = builder
         .minimum_gas_cost::<MainnetGasProfile>(&context)

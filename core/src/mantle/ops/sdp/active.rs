@@ -1,5 +1,5 @@
 use lb_cryptarchia_engine::Epoch;
-use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
+use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_log_targets::mantle;
 use tracing::info;
 
@@ -7,7 +7,6 @@ use super::{SDPActiveOp, SdpError, validate_declaration_id, validate_nonce};
 use crate::{
     events::TxEvent,
     mantle::{
-        batch::DeferredZkSig,
         gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
@@ -37,12 +36,12 @@ pub struct SDPActiveExecutionContext {
 }
 
 impl ProvableOperation for SDPActiveOp {
-    type Proof = ZkSignature;
+    type Proof = Ed25519Signature;
     const CODE: u8 = 0x22;
 }
 
 impl OperationGas<MainnetGasProfile> for SDPActiveOp {
-    const GAS_COST: Gas = Gas::new(590);
+    const GAS_COST: Gas = Gas::new(59);
 }
 
 impl OpGasCalculator<MainnetGasProfile> for SDPActiveOp {}
@@ -59,7 +58,7 @@ impl PreverifiableOperation<StandardMode>
 }
 
 impl VerifiableOperation<StandardMode> for SignedOperation<SDPActiveOp, Preverified, StandardMode> {
-    type DeferredProof = DeferredZkSig;
+    type DeferredProof = ();
     type Context<'a> = SDPActiveValidationContext<'a>;
     type Error = SdpError;
 
@@ -83,11 +82,14 @@ impl VerifiableOperation<StandardMode> for SignedOperation<SDPActiveOp, Preverif
 
         validate_nonce(operation.nonce, declaration)?;
 
-        // Defer the proof verification, so that the caller can batch it.
-        let inputs =
-            public_inputs_from_pks((*context.tx_hash_view.as_fr()).into(), &[declaration.zk_id])
-                .map_err(|_| SdpError::InvalidZkSignature)?;
-        Ok(DeferredZkSig::new(*self.proof().as_proof(), inputs))
+        // Ensure the `provider_id` attached to this declaration authorized this
+        // Operation.
+        declaration
+            .provider_id
+            .0
+            .verify(context.tx_hash_view.as_bytes(), self.proof())
+            .map_err(|_| SdpError::InvalidEddsaSignature)?;
+        Ok(())
     }
 }
 
@@ -125,15 +127,13 @@ impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<SDPActiveOp
 mod tests {
     use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
     use lb_cryptarchia_engine::Epoch;
-    use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkSignature};
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use num_bigint::BigUint;
 
     use super::{SDPActiveOp, SDPActiveValidationContext, SdpError};
     use crate::{
         mantle::{
             TxHash,
-            batch::{DeferredZkSig, Error as BatchError, test_utils::batch_verify},
             gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
             ledger::{
                 Declarations, PreverifiableOperation as _, ProvableOperation,
@@ -149,10 +149,7 @@ mod tests {
                 states::{Preverified, Unverified, Verified},
             },
         },
-        sdp::{
-            ActivityMetadata, Declaration, DeclarationMessage, Nonce, ServiceType,
-            blend::ActivityProof,
-        },
+        sdp::{ActivityMetadata, Declaration, DeclarationMessage, Nonce, blend::ActivityProof},
     };
 
     fn declaration_key() -> ZkKey {
@@ -169,24 +166,80 @@ mod tests {
         (message, declaration)
     }
 
-    fn preverified(
-        operation: SDPActiveOp,
-        tx_hash_view: &TxHashView,
-    ) -> SignedOperation<SDPActiveOp, Preverified, StandardMode> {
-        preverified_with_key(operation, tx_hash_view, declaration_key())
+    // The provider of `DeclarationMessage::sample()`.
+    fn provider_key() -> Ed25519Key {
+        Ed25519Key::from_bytes(&[24; 32])
     }
 
-    fn preverified_with_key(
+    fn preverified(
         operation: SDPActiveOp,
+        signing_key: &Ed25519Key,
         tx_hash_view: &TxHashView,
-        signing_key: ZkKey,
     ) -> SignedOperation<SDPActiveOp, Preverified, StandardMode> {
-        let proof = ZkKey::multi_sign(&[signing_key], tx_hash_view.as_fr())
-            .expect("signing should succeed");
+        SignedOperation::<_, Unverified, StandardMode>::new(
+            operation,
+            signing_key.sign_payload(tx_hash_view.as_bytes().as_ref()),
+        )
+        .into_preverified(&())
+        .expect("preverify accepts every active message")
+    }
 
-        SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
-            .into_preverified(&())
-            .expect("preverify accepts every active message")
+    fn registered_active_op() -> (SDPActiveOp, Declaration) {
+        let (message, declaration) = declaration();
+        let operation = SDPActiveOp {
+            declaration_id: message.id(),
+            ..SDPActiveOp::sample()
+        };
+        (operation, declaration)
+    }
+
+    #[test]
+    fn verify_accepts_the_provider_signature() {
+        let (operation, declaration) = registered_active_op();
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        assert_eq!(
+            preverified(operation, &provider_key(), &signed_view).verify(
+                &SDPActiveValidationContext {
+                    declaration: &declaration,
+                    tx_hash_view: &signed_view,
+                    epoch: Epoch::from(0),
+                }
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_signature_by_another_key() {
+        let (operation, declaration) = registered_active_op();
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        assert_eq!(
+            preverified(operation, &Ed25519Key::from_bytes(&[25; 32]), &signed_view).verify(
+                &SDPActiveValidationContext {
+                    declaration: &declaration,
+                    tx_hash_view: &signed_view,
+                    epoch: Epoch::from(0),
+                }
+            ),
+            Err(SdpError::InvalidEddsaSignature)
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_signature_over_another_transaction() {
+        let (operation, declaration) = registered_active_op();
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let other_view = TxHashView::from(TxHash::from([10u8; 32]));
+        assert_eq!(
+            preverified(operation, &provider_key(), &other_view).verify(
+                &SDPActiveValidationContext {
+                    declaration: &declaration,
+                    tx_hash_view: &signed_view,
+                    epoch: Epoch::from(0),
+                }
+            ),
+            Err(SdpError::InvalidEddsaSignature)
+        );
     }
 
     #[test]
@@ -218,7 +271,7 @@ mod tests {
         };
 
         let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
-        let signed_operation = preverified(operation, &signed_view);
+        let signed_operation = preverified(operation, &provider_key(), &signed_view);
 
         assert_eq!(
             signed_operation
@@ -254,7 +307,7 @@ mod tests {
             ..SDPActiveOp::sample()
         };
         let tx_hash_view = TxHashView::from(TxHash::from([9u8; 32]));
-        let signed_operation = preverified_with_key(operation, &tx_hash_view, declaration_key_b);
+        let signed_operation = preverified(operation, &provider_key(), &tx_hash_view);
 
         assert_eq!(
             signed_operation
@@ -285,7 +338,7 @@ mod tests {
         };
 
         let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
-        let signed_operation = preverified(operation, &signed_view);
+        let signed_operation = preverified(operation, &provider_key(), &signed_view);
 
         assert_eq!(
             signed_operation
@@ -316,7 +369,7 @@ mod tests {
         let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
 
         assert_eq!(
-            preverified(operation, &signed_view)
+            preverified(operation, &provider_key(), &signed_view)
                 .verify(&SDPActiveValidationContext {
                     declaration: declarations.get(&declaration_id).expect("declaration"),
                     tx_hash_view: &signed_view,
@@ -342,7 +395,7 @@ mod tests {
         };
         let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
 
-        let _deferred_proof = preverified(operation, &signed_view)
+        preverified(operation, &provider_key(), &signed_view)
             .verify(&SDPActiveValidationContext {
                 declaration: declarations.get(&declaration_id).expect("declaration"),
                 tx_hash_view: &signed_view,
@@ -368,7 +421,7 @@ mod tests {
         let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
 
         assert_eq!(
-            preverified(operation, &signed_view)
+            preverified(operation, &provider_key(), &signed_view)
                 .verify(&SDPActiveValidationContext {
                     declaration: declarations.get(&declaration_id).expect("declaration"),
                     tx_hash_view: &signed_view,
@@ -380,46 +433,6 @@ mod tests {
                 declaration_sequence: 4,
             }
         );
-    }
-
-    fn unrelated_key() -> ZkKey {
-        ZkKey::from(BigUint::from(7u8))
-    }
-
-    fn deferred_proof_signed_by(signers: &[ZkKey]) -> DeferredZkSig {
-        let (message, declaration) = declaration();
-        let declaration_id = message.id();
-        let declarations = Declarations::new_sync().insert(declaration_id, declaration);
-        let operation = SDPActiveOp {
-            declaration_id,
-            ..SDPActiveOp::sample()
-        };
-        let tx_hash_view = TxHashView::from(TxHash::from([9u8; 32]));
-        let proof =
-            ZkKey::multi_sign(signers, tx_hash_view.as_fr()).expect("signing should succeed");
-
-        SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
-            .into_preverified(&())
-            .expect("preverify accepts every active message")
-            .verify(&SDPActiveValidationContext {
-                declaration: declarations.get(&declaration_id).expect("declaration"),
-                tx_hash_view: &tx_hash_view,
-                epoch: Epoch::from(0),
-            })
-            .expect("verify leaves the proof to the batch")
-    }
-
-    #[test]
-    fn deferred_proof_is_accepted() {
-        assert!(batch_verify(deferred_proof_signed_by(&[declaration_key()])).is_ok());
-    }
-
-    #[test]
-    fn wrong_deferred_proof_is_rejected() {
-        assert!(matches!(
-            batch_verify(deferred_proof_signed_by(&[unrelated_key()])),
-            Err(BatchError::InvalidZkSignatures)
-        ));
     }
 
     #[test]
@@ -440,9 +453,9 @@ mod tests {
         };
 
         let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
-        let signed_operation = preverified(operation, &signed_view);
+        let signed_operation = preverified(operation, &provider_key(), &signed_view);
 
-        let _deferred_proof = signed_operation
+        signed_operation
             .verify(&SDPActiveValidationContext {
                 declaration: declarations.get(&declaration_id).expect("declaration"),
                 tx_hash_view: &signed_view,
@@ -521,13 +534,12 @@ mod tests {
     fn verify_active_at(epoch: Epoch) -> Result<(), SdpError> {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let declare_op = SDPDeclareOp {
-            service_type: ServiceType::BlendNetwork,
             locators: vec!["/ip4/1.1.1.1/udp/3000".parse().unwrap()]
                 .try_into()
                 .unwrap(),
             provider_id: signing_key.public_key().into(),
             zk_id: ZkKey::from(BigUint::from(1u64)).to_public_key(),
-            service_note_id: Fr::ZERO.into(),
+            ..SDPDeclareOp::sample()
         };
         let mut declaration = Declaration::new(Epoch::new(0), &declare_op);
         declaration.withdraw_at = Some(WITHDRAW_AT);
@@ -543,21 +555,19 @@ mod tests {
                 proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0; _]).into(),
             })),
         };
+        let tx_hash_view = TxHashView::from(TxHash::default());
         let signed_operation: SignedOperation<SDPActiveOp, Preverified, StandardMode> =
             SignedOperation::new(
                 active_op,
-                ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
+                signing_key.sign_payload(tx_hash_view.as_bytes().as_ref()),
             )
             .into_state_trusted();
 
-        let tx_hash_view = TxHashView::from(TxHash::default());
-        signed_operation
-            .verify(&SDPActiveValidationContext {
-                declaration: declarations.get(&declare_op.id()).expect("declaration"),
-                tx_hash_view: &tx_hash_view,
-                epoch,
-            })
-            .map(|_| ())
+        signed_operation.verify(&SDPActiveValidationContext {
+            declaration: declarations.get(&declare_op.id()).expect("declaration"),
+            tx_hash_view: &tx_hash_view,
+            epoch,
+        })
     }
 
     #[test]
@@ -565,7 +575,7 @@ mod tests {
         for threshold in [0, 1, 3] {
             assert_eq!(
                 SDPActiveOp::sample().execution_gas(&FixedThresholds(threshold)),
-                Ok(Gas::new(590))
+                Ok(Gas::new(59))
             );
         }
     }

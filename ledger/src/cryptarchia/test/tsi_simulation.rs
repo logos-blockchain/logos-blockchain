@@ -26,9 +26,11 @@ use std::{num::NonZero, sync::Arc};
 use lb_core::{
     crypto::{Digest as _, Hasher},
     mantle::{
-        Note, SignedOps, Utxo, Value,
+        Note, SignedOps, Value,
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
+        note_set::NoteSets,
+        ops::channel::withdraw::PendingWithdrawals,
         transactions::{
             GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, states::Preverified,
         },
@@ -43,9 +45,10 @@ use num_bigint::BigUint;
 use rand::{Rng as _, SeedableRng as _, rngs::StdRng};
 
 use crate::{
-    Config, Ledger, WINDOW_SIZE,
+    Config, Ledger,
+    block_rewards::BlockRewards,
     cryptarchia::{
-        EpochState, LedgerState, UtxoTree,
+        EpochState, LedgerState,
         block_density::BlockDensity,
         tests::{GENESIS_POW_REWARD_POOL, config, generate_proof},
     },
@@ -193,28 +196,24 @@ fn simulation_config() -> Config {
 }
 
 /// The note of the only leader, holding [`TOTAL_STAKE`].
-fn leader_utxo() -> Utxo {
-    Utxo {
-        op_id: [0u8; 32],
-        output_index: 0,
-        note: Note::new(
-            TOTAL_STAKE,
-            ZkKey::from(BigUint::from(0u64)).to_public_key(),
-        ),
-    }
+fn leader_utxo() -> Note {
+    Note::new(
+        TOTAL_STAKE,
+        Fr::ZERO,
+        ZkKey::from(BigUint::from(0u64)).to_public_key(),
+    )
 }
 
 /// A ledger holding a single leader whose note is the entire stake.
-fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
-    let total_stake = leader_utxo.note.value;
+fn genesis_ledger(config: &Config, leader_utxo: Note) -> Ledger<HeaderId> {
+    let total_stake = leader_utxo.value;
     let (lottery_0, lottery_1) = config
         .lottery_constants()
         .compute_lottery_values(total_stake);
-    let utxos: UtxoTree = std::iter::once((leader_utxo.id(), leader_utxo)).collect();
     let epoch_state = EpochState {
         epoch: 0.into(),
         nonce: Fr::ZERO,
-        utxos: utxos.clone(),
+        note_sets: NoteSets::new(),
         total_stake,
         lottery_0,
         lottery_1,
@@ -222,7 +221,8 @@ fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
         blend_pow_difficulty: Fr::ZERO,
     };
     let cryptarchia_ledger = LedgerState {
-        utxos,
+        note_sets: NoteSets::new(),
+        pending_withdrawals: PendingWithdrawals::new(),
         nonce: Fr::ZERO,
         previous_epoch_nonce: Fr::ZERO,
         slot: 0.into(),
@@ -232,7 +232,7 @@ fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
         },
         block_density: BlockDensity::from_genesis_config(config),
         epoch_state,
-        fee_window: [0.into(); WINDOW_SIZE],
+        block_rewards: BlockRewards::genesis(),
         average_execution_gas: 0.into(),
         execution_base_fee: GENESIS_EXECUTION_GAS_PRICE,
         storage_gas_ema: 0.into(),
@@ -342,7 +342,7 @@ fn apply_block(
     engine: &mut Cryptarchia<HeaderId>,
     parent: HeaderId,
     slot: Slot,
-    leader_utxo: Utxo,
+    leader_utxo: Note,
     uncle_slots: UncleSlots,
 ) {
     let block = apply_block_to_ledger(ledger, parent, slot, leader_utxo, &uncle_slots);
@@ -359,7 +359,7 @@ fn apply_block_to_ledger(
     ledger: &mut Ledger<HeaderId>,
     parent: HeaderId,
     slot: Slot,
-    utxo: Utxo,
+    utxo: Note,
     uncle_slots: &UncleSlots,
 ) -> HeaderId {
     let parent_state = ledger

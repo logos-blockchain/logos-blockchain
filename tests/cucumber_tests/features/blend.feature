@@ -47,7 +47,10 @@ Feature: Blend
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
     When all nodes have at least 2 blocks and converged to within 1 blocks in 180 seconds
-    And I send 1 transactions of 1000 LGO each from wallet "WALLET_1A" to blend core zk key of node "NODE_1"
+    # The node funds the stake from its funding key, one note for the stake
+    # and its genesis note for the fee
+    And I send 1 transactions of 1000 LGO each from wallet "WALLET_1A" to wallet "NODE_1_WALLET_FUNDING"
+    And wallet "NODE_1_WALLET_FUNDING" has 2 or more outputs in 120 seconds
     Then I declare node "NODE_1" as blend core node via the API
     And blend core SDP declaration for node "NODE_1" is included on node "NODE_1"
     And I stop all nodes
@@ -63,7 +66,8 @@ Feature: Blend
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
     When all nodes have at least 2 blocks and converged to within 1 blocks in 180 seconds
-    And I send 1 transactions of 1000 LGO each from wallet "WALLET_1A" to blend core zk key of node "NODE_1"
+    And I send 1 transactions of 1000 LGO each from wallet "WALLET_1A" to wallet "NODE_1_WALLET_FUNDING"
+    And wallet "NODE_1_WALLET_FUNDING" has 2 or more outputs in 120 seconds
     Then I declare node "NODE_1" as blend core node via the API without a service note
     And blend core SDP declaration for node "NODE_1" is included on node "NODE_1"
     And I stop all nodes

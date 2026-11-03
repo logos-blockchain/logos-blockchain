@@ -1,23 +1,27 @@
 use std::{
     collections::{HashMap, VecDeque},
     num::{NonZeroU64, NonZeroUsize},
-    slice,
     sync::Arc,
     time::Duration,
 };
 
 use async_trait::async_trait;
 use lb_core::mantle::{
-    Note, OpProof, SignedOps, Utxo,
+    Note, OpProof, SignedOps,
     gas::{MainnetGasProfile, TxGasCalculator as _},
     ledger::verification_mode::StandardMode,
-    ops::OpId as _,
-    traits::Hashable as _,
+    note_set::CommitmentMmr,
+    notes::derive_note_nullifier,
+    ops::{ZkTransferProof, transfer::prove_transfer},
+    traits::{GenesisTx as _, Hashable as _},
     transactions::{
-        GasPrices, MantleTxBuilder, OpProofs, states::Preverified, tx_list::ops::OpsGasContext,
+        GasPrices, MantleTxBuilder, OpProofs, builder::FundingNote, states::Preverified,
+        tx_list::ops::OpsGasContext,
     },
 };
-use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
+use lb_groth16::Fr;
+use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_mmr::MerklePath;
 use rand::{seq::SliceRandom as _, thread_rng};
 use testing_framework_app::AppHostEnv;
 use testing_framework_core::scenario::{
@@ -67,7 +71,15 @@ pub struct WorkloadImpl {
 #[derive(Clone)]
 struct WalletInput {
     account: WalletAccount,
-    utxo: Utxo,
+    note: GenesisNote,
+}
+
+// A genesis note opening with its path to the genesis ledger set root.
+#[derive(Clone)]
+struct GenesisNote {
+    note: Note,
+    path: MerklePath,
+    root: Fr,
 }
 
 pub type Workload = WorkloadImpl;
@@ -125,8 +137,8 @@ fn prepare_accounts(
         .filter_map(|account| {
             utxo_map
                 .get(&account.public_key())
-                .copied()
-                .map(|utxo| WalletInput { account, utxo })
+                .cloned()
+                .map(|note| WalletInput { account, note })
         })
         .collect::<Vec<_>>();
 
@@ -191,7 +203,7 @@ impl<'a> Submission<'a> {
     }
 
     async fn execute(mut self) -> Result<(), DynError> {
-        let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::default());
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::default());
         while let Some(input) = self.plan.pop_front() {
             submit_wallet_transaction(self.ctx, &input, gas_context.clone()).await?;
             if !self.interval.is_zero() {
@@ -277,12 +289,20 @@ fn build_wallet_transaction(
     gas_context: &OpsGasContext,
 ) -> Result<SignedOps<Preverified, StandardMode>, DynError> {
     let receiver = input.account.public_key();
+    let secret_key = *input.account.secret_key.as_fr();
+    let funding = FundingNote {
+        note: input.note.note,
+        nullifier: derive_note_nullifier(&input.note.note.commitment(), &secret_key),
+    };
+    let self_transfer = |value| {
+        MantleTxBuilder::new()
+            .extend_funding_inputs(input.note.root, [funding])
+            .map_err(|err| format!("failed to add input: {err}"))?
+            .add_ledger_output(Note::new(value, random_nonce(), receiver))
+            .map_err(|err| format!("failed to add output: {err}"))
+    };
 
-    let provisional_tx = MantleTxBuilder::new()
-        .add_ledger_input(input.utxo)
-        .map_err(|err| format!("failed to add provisional input: {err}"))?
-        .add_ledger_output(Note::new(input.utxo.note.value, receiver))
-        .map_err(|err| format!("failed to add provisional output: {err}"))?
+    let provisional_tx = self_transfer(input.note.note.value)?
         .build()
         .map_err(|err| format!("failed to build provisional tx: {err}"))?;
 
@@ -290,45 +310,68 @@ fn build_wallet_transaction(
         .by_ref()
         .total_gas_cost::<MainnetGasProfile>(gas_context)?
         .into_inner();
-    let output_value = input.utxo.note.value.checked_sub(fee).ok_or_else(|| {
+    let output_value = input.note.note.value.checked_sub(fee).ok_or_else(|| {
         format!(
             "input note value {} below fee {}",
-            input.utxo.note.value, fee
+            input.note.note.value, fee
         )
     })?;
 
-    let tx = MantleTxBuilder::new()
-        .add_ledger_input(input.utxo)
-        .map_err(|err| format!("failed to add input: {err}"))?
-        .add_ledger_output(Note::new(output_value, receiver))
-        .map_err(|err| format!("failed to add output: {err}"))?
+    let tx_builder = self_transfer(output_value)?;
+    let openings = tx_builder.openings();
+    let tx = tx_builder
         .build()
         .map_err(|err| format!("failed to build tx: {err}"))?;
+    let outputs = openings
+        .into_values()
+        .next()
+        .map(|opening| opening.outputs)
+        .unwrap_or_default();
 
-    let signature = ZkKey::multi_sign(
-        slice::from_ref(&input.account.secret_key),
-        &tx.hash().to_fr(),
-    )
-    .map_err(|err| format!("failed to sign transaction: {err}"))?;
+    let proof = prove_transfer(
+        &[(input.note.note, secret_key, input.note.path.clone())],
+        &outputs,
+        input.note.root,
+        tx.hash().to_fr(),
+    );
 
-    let op_proofs = OpProofs::from([OpProof::ZkSig(signature)]);
+    let op_proofs = OpProofs::from([OpProof::ZkTransfer(ZkTransferProof::new(proof))]);
     SignedOps::from_parts(tx, op_proofs)
         .map_err(|err| format!("failed to build signed transaction: {err}"))?
         .preverify()
         .map_err(|err| format!("failed to build signed transaction: {err}").into())
 }
 
+fn random_nonce() -> Fr {
+    Fr::from(rand::random::<u128>())
+}
+
+// The opening of a genesis allocation is named by its index; its path leads to
+// the genesis ledger set root.
 fn wallet_utxo_map(
     genesis_tx: &lb_core::mantle::transactions::GenesisTx,
-) -> HashMap<ZkPublicKey, Utxo> {
-    let transfer_op = genesis_tx.transfer().operation().clone();
-    let op_id = transfer_op.op_id();
-
-    transfer_op
-        .outputs
+) -> HashMap<ZkPublicKey, GenesisNote> {
+    let notes = genesis_tx
+        .distribution()
         .iter()
         .enumerate()
-        .map(|(idx, note)| (note.pk, Utxo::new(op_id, idx, *note)))
+        .map(|(index, allocation)| allocation.note(index))
+        .collect::<Vec<_>>();
+    let mut mmr = CommitmentMmr::new();
+    let mut paths = Vec::with_capacity(notes.len());
+    for note in &notes {
+        let (next, path) = mmr
+            .push_with_paths(note.commitment(), &mut paths)
+            .expect("genesis notes fit in the commitment MMR");
+        mmr = next;
+        paths.push(path);
+    }
+    let root = mmr.frontier_root();
+
+    notes
+        .into_iter()
+        .zip(paths)
+        .map(|(note, path)| (note.public_key, GenesisNote { note, path, root }))
         .collect()
 }
 

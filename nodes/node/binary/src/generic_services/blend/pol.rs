@@ -5,6 +5,7 @@ use futures::{Stream, StreamExt as _};
 use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use lb_blend_service::epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait};
 use lb_chain_leader_service::{LeaderMsg, WinningPolEpochSlots};
+use lb_core::proofs::leader_proof::LeaderPrivate;
 use lb_pol::{PolChainInputsData, PolWalletInputsData, PolWitnessInputsData};
 use lb_services_utils::wait_until_services_are_ready;
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
@@ -63,36 +64,82 @@ where
                     winning_pol_info_stream: Box::pin(
                         slots
                             .filter_map(|winning_slot| winning_slot)
-                            .map(|leader_private| {
-                                let PolWitnessInputsData {
-                                    wallet:
-                                        PolWalletInputsData {
-                                            aged_path,
-                                            aged_selectors,
-                                            note_value,
-                                            output_number,
-                                            secret_key,
-                                            transaction_hash,
-                                            ..
-                                        },
-                                    chain: PolChainInputsData { slot_number, .. },
-                                } = leader_private.input();
-
-                                let aged_path_and_selectors =
-                                    core::array::from_fn(|i| (aged_path[i], aged_selectors[i]));
-
-                                ProofOfLeadershipQuotaInputs {
-                                    aged_path_and_selectors,
-                                    note_value: *note_value,
-                                    output_number: *output_number,
-                                    secret_key: *secret_key,
-                                    slot: *slot_number,
-                                    transaction_hash: *transaction_hash,
-                                }
-                            }),
+                            .map(|leader_private| leadership_quota_inputs(&leader_private)),
                     ),
                 }
             },
         )))
+    }
+}
+
+/// The `PoQ` leader inputs a winning [`LeaderPrivate`] gives.
+#[must_use]
+pub fn leadership_quota_inputs(leader_private: &LeaderPrivate) -> ProofOfLeadershipQuotaInputs {
+    let PolWitnessInputsData {
+        wallet:
+            PolWalletInputsData {
+                note_value,
+                note_nonce,
+                set_selectors,
+                commitment_aged_path,
+                commitment_aged_selectors,
+                nullifier_root_aged,
+                set_aged_path,
+                secret_key,
+                ..
+            },
+        chain: PolChainInputsData { slot_number, .. },
+    } = leader_private.input();
+
+    ProofOfLeadershipQuotaInputs {
+        slot: *slot_number,
+        note_value: *note_value,
+        note_nonce: *note_nonce,
+        commitment_aged_path_and_selectors: core::array::from_fn(|i| {
+            (commitment_aged_path[i], commitment_aged_selectors[i])
+        }),
+        nullifier_root_aged: *nullifier_root_aged,
+        set_aged_path_and_selectors: core::array::from_fn(|i| (set_aged_path[i], set_selectors[i])),
+        secret_key: *secret_key,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_groth16::{AdditiveGroup as _, Fr};
+
+    use super::*;
+
+    #[test]
+    fn leadership_quota_inputs_take_the_aged_half_of_the_pol_witness() {
+        let (_, private) = lb_core::proofs::leader_proof::test_utils::note_set_leader_inputs(
+            Fr::from(7u64),
+            1000,
+            Fr::from(11u64),
+            Fr::ZERO,
+        );
+        let PolWitnessInputsData { wallet, chain } = private.input().clone();
+        let inputs = leadership_quota_inputs(&private);
+        assert_eq!(
+            (
+                inputs.slot,
+                inputs.note_value,
+                inputs.note_nonce,
+                inputs.secret_key
+            ),
+            (chain.slot_number, 1000, Fr::from(11u64), Fr::from(7u64))
+        );
+        assert_eq!(inputs.nullifier_root_aged, wallet.nullifier_root_aged);
+        assert_eq!(
+            inputs.commitment_aged_path_and_selectors[0],
+            (
+                wallet.commitment_aged_path[0],
+                wallet.commitment_aged_selectors[0]
+            )
+        );
+        assert_eq!(
+            inputs.set_aged_path_and_selectors[0],
+            (wallet.set_aged_path[0], wallet.set_selectors[0])
+        );
     }
 }

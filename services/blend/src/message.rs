@@ -5,7 +5,7 @@ use lb_binary_codec::{bincode::SerializeOp, canonical::BinaryEncode};
 use lb_blend::message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
 use lb_core::{
     crypto::{Digest as _, Hasher},
-    mantle::NoteId,
+    mantle::Value,
     sdp::Locator,
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -40,7 +40,7 @@ pub enum ProxyServiceMessage<InnerMessage> {
     },
     JoinAsCore {
         locator: Locator,
-        service_note_id: NoteId,
+        amount: Value,
         reply: oneshot::Sender<Result<SdpSubmission, lb_sdp_service::api::Error>>,
     },
     GetZkId {

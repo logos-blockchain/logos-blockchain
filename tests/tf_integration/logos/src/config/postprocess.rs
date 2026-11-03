@@ -6,7 +6,7 @@ use lb_config::{
 };
 use lb_core::{
     block::genesis::GenesisBlock,
-    mantle::GenesisTime,
+    mantle::{GenesisTime, traits::GenesisTx as _},
     sdp::{Locator, ServiceType},
 };
 use lb_key_management_system_service::keys::{Key, ZkKey};
@@ -50,7 +50,7 @@ pub fn apply_wallet_genesis_overrides(
         .iter()
         .map(|general| general.consensus_config.funding_pk)
         .collect::<Vec<_>>();
-    let mut transfer_op = genesis_block.genesis_tx().transfer().operation().clone();
+    let mut transfer_op = genesis_block.genesis_tx().distribution();
     fund_wallets(
         &mut transfer_op,
         &leader_keys,
@@ -99,7 +99,11 @@ pub fn apply_wallet_genesis_overrides(
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{ops::OpRef, traits::MantleTx as _};
+    use lb_core::mantle::{
+        notes::derive_note_nullifier,
+        ops::OpRef,
+        traits::{GenesisTx as _, MantleTx as _},
+    };
     use lb_sdp_service::DeclarationConfig;
 
     use crate::{
@@ -127,8 +131,8 @@ mod tests {
         apply_wallet_config_to_deployment(&mut plan, &wallets);
 
         let genesis = plan.config().genesis_block.as_ref().unwrap();
-        let transfer = genesis.genesis_tx().transfer().operation();
-        assert_eq!(transfer.outputs.len(), 254);
+        let transfer = genesis.genesis_tx().distribution();
+        assert_eq!(transfer.len(), 254);
         let declarations = genesis
             .genesis_tx()
             .op_refs()
@@ -141,20 +145,25 @@ mod tests {
         for (i, node) in plan.nodes().iter().enumerate() {
             let consensus = &node.general.consensus_config;
             let outputs = transfer
-                .outputs
                 .iter()
-                .filter(|note| note.pk == consensus.funding_pk)
+                .filter(|note| note.public_key == consensus.funding_pk)
                 .collect::<Vec<_>>();
             assert_eq!(outputs.len(), 123);
             assert_eq!(
                 outputs.iter().map(|note| note.value).sum::<u64>(),
                 funding.total_value_per_node
             );
-            let blend_utxo = transfer
-                .utxo_by_index(consensus.blend_note.output_index)
-                .unwrap();
-            assert_eq!(blend_utxo.note.pk, consensus.blend_note.pk);
-            assert_eq!(declarations[i].service_note_id, blend_utxo.id());
+            let blend_allocation = transfer[consensus.blend_note.output_index];
+            assert_eq!(blend_allocation.public_key, consensus.blend_note.pk);
+            assert_eq!(
+                declarations[i].inputs.as_slice(),
+                [derive_note_nullifier(
+                    &blend_allocation
+                        .note(consensus.blend_note.output_index)
+                        .commitment(),
+                    consensus.blend_note.sk.as_fr(),
+                )]
+            );
             assert_eq!(
                 node.general
                     .sdp_config

@@ -1,19 +1,27 @@
 //! Transfer proof construction and final Mantle transaction signing.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use lb_core::mantle::{
-    NoteId, Op, OpProof, OpRef, SignedOps, TxHash,
+    Op, OpProof, OpRef, SignedOps, TxHash,
     gas::{MainnetGasProfile, TxGasCalculator as _},
+    notes::NoteNullifier,
+    ops::{ChannelInscribeProof, ZkTransferProof, transfer::prove_transfer},
     traits::Hashable as _,
-    transactions::{MantleTxBuilder, OpProofs, Ops, tx_list::ops::OpsContext},
+    transactions::{
+        MantleTxBuilder, OpProofs, Ops, builder::ZkTransferOpening, tx_list::ops::OpsContext,
+    },
 };
-use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
+use lb_key_management_system_service::keys::{Ed25519Key, UnsecuredZkKey, ZkKey, ZkPublicKey};
+use lb_wallet::{
+    KnownNotes, OwnedNote, WalletState,
+    transaction::{WitnessContext, op_witnesses},
+};
 
 use super::{error::WalletTransactionError, signed::SignedWalletTransaction};
 use crate::common::wallet::WalletReservedInputs;
 
-pub(super) type WalletTransferSigners = HashMap<NoteId, ZkKey>;
+pub(super) type WalletTransferSigners = HashMap<NoteNullifier, (OwnedNote, ZkKey)>;
 
 pub(super) fn sign_prepared_wallet_transaction(
     funded_builder: MantleTxBuilder,
@@ -23,6 +31,11 @@ pub(super) fn sign_prepared_wallet_transaction(
     reserved_inputs: WalletReservedInputs,
     leading_op_proofs: OpProofs,
 ) -> Result<SignedWalletTransaction, WalletTransactionError> {
+    let outputs = funded_builder
+        .openings()
+        .into_values()
+        .flat_map(|opening| opening.outputs)
+        .collect();
     let mantle_tx = funded_builder.build()?;
     let op_proofs = {
         let mut leading_op_proofs_vec = leading_op_proofs.into_inner().into_inner();
@@ -35,90 +48,112 @@ pub(super) fn sign_prepared_wallet_transaction(
         .op_refs()
         .total_gas_cost::<MainnetGasProfile>(&context.gas_context)?
         .into_inner();
-    let output_total = signed_tx
+    // The excess of a Transfer is what it pays.
+    let paid_fee = signed_tx
         .op_refs()
         .into_iter()
         .filter_map(|op| match op {
-            OpRef::Transfer(transfer) => Some(transfer),
+            OpRef::Transfer(transfer) => Some(transfer.excess_value),
             _ => None,
         })
-        .flat_map(|transfer| transfer.outputs.iter())
-        .try_fold(0u64, |total, note| {
+        .try_fold(0u64, |total, excess| {
             total
-                .checked_add(note.value)
-                .ok_or(WalletTransactionError::OutputTotalOverflow)
+                .checked_add(excess)
+                .ok_or(WalletTransactionError::FeeAccounting)
         })?;
-    let paid_fee = reserved_inputs
-        .total_value()
-        .checked_sub(output_total)
-        .ok_or(WalletTransactionError::FeeAccounting)?;
 
     Ok(SignedWalletTransaction::new(
         signed_tx,
         tx_hash,
+        outputs,
         reserved_inputs,
         paid_fee,
         mandatory_fee_at_preparation,
     ))
 }
 
-/// Build one `ZkSig` proof per transfer op in a funded transaction, signing
-/// every input with the same wallet key. Suitable for transactions whose
-/// funding inputs all come from a single wallet account.
+/// Build the `ZkTransfer` proof of every Operation of a funded transaction
+/// that spends, keyed by its index, from the witnesses of `state`, each input
+/// proven with the key of its owner.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "The keys are the ones a scanner accounting holds, with the default hasher."
+)]
 pub fn transfer_proofs_for_funded_wallet_tx(
+    state: &WalletState,
+    known: &KnownNotes,
     tx: &Ops,
-    signing_key: &ZkKey,
-) -> Result<OpProofs, WalletTransactionError> {
+    openings: &BTreeMap<usize, ZkTransferOpening>,
+    witness_context: &WitnessContext,
+    signing_keys: &HashMap<ZkPublicKey, UnsecuredZkKey>,
+) -> Result<BTreeMap<usize, ZkTransferProof>, WalletTransactionError> {
     let tx_hash = tx.hash();
-    let proofs = tx
+    op_witnesses(state, known, tx, openings, witness_context, tx_hash.to_fr())?
         .into_iter()
-        .filter_map(|op| match op {
-            Op::Transfer(transfer_op) => Some(transfer_op),
-            _ => None,
-        })
-        .map(|transfer_op| -> Result<OpProof, WalletTransactionError> {
-            let signing_keys = transfer_op
-                .inputs
+        .map(|witness| -> Result<_, WalletTransactionError> {
+            let keys = witness
+                .signers
                 .iter()
-                .map(|_| signing_key.clone())
-                .collect::<Vec<_>>();
-            Ok(OpProof::ZkSig(ZkKey::multi_sign(
-                &signing_keys,
-                &tx_hash.to_fr(),
-            )?))
+                .map(|public_key| {
+                    signing_keys.get(public_key).cloned().ok_or(
+                        WalletTransactionError::MissingSigningKey {
+                            public_key: *public_key,
+                        },
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((
+                witness.op_index,
+                ZkTransferProof::new(UnsecuredZkKey::prove_transfer(&keys, witness.witness)?),
+            ))
         })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(OpProofs::try_from(proofs).expect("transaction proofs are bounded"))
+        .collect()
 }
 
 pub(super) fn build_transfer_proofs(
     ops: &[Op],
+    openings: &BTreeMap<usize, ZkTransferOpening>,
     tx_hash: &TxHash,
     transfer_signers: &WalletTransferSigners,
 ) -> Result<OpProofs, WalletTransactionError> {
     let proofs = ops
         .iter()
-        .filter_map(|op| match op {
-            Op::Transfer(transfer_op) => Some(transfer_op),
+        .enumerate()
+        .filter_map(|(op_index, op)| match op {
+            Op::Transfer(transfer_op) => Some((op_index, transfer_op)),
             _ => None,
         })
-        .map(|transfer_op| -> Result<OpProof, WalletTransactionError> {
-            let signing_keys = transfer_op
-                .inputs
-                .iter()
-                .map(|note_id| {
-                    transfer_signers
-                        .get(note_id)
-                        .cloned()
-                        .ok_or(WalletTransactionError::MissingSigningKey { note_id: *note_id })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+        .map(
+            |(op_index, transfer_op)| -> Result<OpProof, WalletTransactionError> {
+                let opening = openings
+                    .get(&op_index)
+                    .ok_or(lb_wallet::WalletError::MissingOpening { op_index })?;
+                // Each input is proven with the path of its funding note, to the
+                // root the funding Transfer names; no earlier Operation of a test
+                // wallet transaction appends to the ledger set.
+                let inputs = transfer_op
+                    .inputs
+                    .iter()
+                    .map(|nullifier| {
+                        transfer_signers
+                            .get(nullifier)
+                            .map(|(owned, signing_key)| {
+                                (owned.note, *signing_key.as_fr(), owned.path.clone())
+                            })
+                            .ok_or(WalletTransactionError::MissingFundingInput {
+                                nullifier: *nullifier,
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
 
-            Ok(OpProof::ZkSig(ZkKey::multi_sign(
-                &signing_keys,
-                &tx_hash.to_fr(),
-            )?))
-        })
+                Ok(OpProof::ZkTransfer(ZkTransferProof::new(prove_transfer(
+                    &inputs,
+                    &opening.outputs,
+                    transfer_op.commitment_merkle_root,
+                    tx_hash.to_fr(),
+                ))))
+            },
+        )
         .collect::<Result<Vec<_>, _>>()?;
     Ok(OpProofs::try_from(proofs).expect("transaction proofs are bounded"))
 }
@@ -140,8 +175,10 @@ pub(super) fn build_leading_inscription_proofs(
                 return Err(WalletTransactionError::InvalidLeadingInscriptionSigner);
             }
 
-            Ok(OpProof::Ed25519Sig(
-                signing_key.sign_payload(tx_hash.as_signing_bytes()),
+            Ok(OpProof::ChannelInscribe(
+                ChannelInscribeProof::without_steps(
+                    signing_key.sign_payload(tx_hash.as_signing_bytes()),
+                ),
             ))
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -156,7 +193,7 @@ pub(super) fn build_leading_inscription_proofs(
 mod tests {
     use lb_core::mantle::ops::channel::{
         ChannelId, MsgId,
-        inscribe::{Inscription, InscriptionOp},
+        inscribe::{ChannelSteps, Inscription, InscriptionOp},
     };
 
     use super::*;
@@ -170,6 +207,7 @@ mod tests {
                 .expect("small fixed-width payload"),
             parent: MsgId::root(),
             signer: signing_key.public_key().into_unverified(),
+            steps: ChannelSteps::default(),
         };
         let tx_hash = TxHash::default();
         let proofs = build_leading_inscription_proofs(
@@ -178,7 +216,9 @@ mod tests {
             std::slice::from_ref(&signing_key),
         )
         .expect("inscription proof");
-        let Some(OpProof::Ed25519Sig(signature)) = proofs.into_inner().into_inner().pop() else {
+        let Some(OpProof::ChannelInscribe(ChannelInscribeProof { signature, .. })) =
+            proofs.into_inner().into_inner().pop()
+        else {
             panic!("inscription proof should use Ed25519");
         };
 

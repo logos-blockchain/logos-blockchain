@@ -283,7 +283,7 @@ mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
     use lb_core::{
-        mantle::{ledger::Utxos, transactions::hash::TxHash},
+        mantle::{note_set::NoteSets, transactions::hash::TxHash},
         sdp::Declarations,
     };
     use lb_cryptarchia_engine::Epoch;
@@ -292,7 +292,6 @@ mod tests {
 
     use super::*;
     use crate::{
-        UtxoTree,
         config::{ModulusShift, pow_slot_windows},
         test_utils::schedule,
     };
@@ -325,7 +324,7 @@ mod tests {
             epoch: epoch.into(),
             nonce: Fr::ZERO,
             blend_pow_difficulty: PowTarget::ZERO,
-            utxos: UtxoTree::default(),
+            note_sets: NoteSets::new(),
             total_stake: 0,
             lottery_0: Fr::ZERO,
             lottery_1: Fr::ZERO,
@@ -689,7 +688,7 @@ mod tests {
             epoch_reward: 0,
             nullifiers,
             tx_hash: TxHash::from([7u8; 32]),
-            utxos: Utxos::new(),
+            note_sets: NoteSets::new(),
             block_slots: HashTrieMapSync::new_sync(),
         });
 
@@ -742,7 +741,7 @@ mod tests {
             epoch_reward: 0,
             nullifiers: HashTrieMapSync::new_sync().insert(nullifier, Slot::from(anchor)),
             tx_hash: TxHash::from([7u8; 32]),
-            utxos: Utxos::new(),
+            note_sets: NoteSets::new(),
             block_slots: HashTrieMapSync::new_sync(),
         });
 
@@ -770,7 +769,7 @@ mod tests {
             epoch_reward,
             nullifiers: nullifiers.clone(),
             tx_hash: TxHash::from([7u8; 32]),
-            utxos: Utxos::new(),
+            note_sets: NoteSets::new(),
             block_slots: HashTrieMapSync::new_sync(),
         };
 
@@ -794,7 +793,7 @@ mod tests {
             epoch_reward: 0,
             nullifiers: HashTrieMapSync::new_sync().insert(nullifier, Slot::from(7u64)),
             tx_hash: TxHash::from([7u8; 32]),
-            utxos: Utxos::new(),
+            note_sets: NoteSets::new(),
             block_slots: HashTrieMapSync::new_sync(),
         }
     }

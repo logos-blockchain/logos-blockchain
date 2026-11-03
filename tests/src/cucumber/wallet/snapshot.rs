@@ -14,7 +14,6 @@ use crate::{
     common::wallet::{
         TrackedWallets, TrackedWalletsState, WalletId, WalletUtxos,
         scanner::{
-            accounting::ScannerAccountingSnapshot,
             config::{DEFAULT_SCANNER_SNAPSHOT_RESCAN_BLOCKS, ScannerSeed},
             state::ScannerStateCheckpoint,
         },
@@ -49,10 +48,6 @@ struct WalletNodeSnapshot {
     #[serde(default)]
     slot: Option<u64>,
     tracked_wallets: TrackedWalletsState,
-    /// Full scanner seed, including service-locked UTXOs and lock markers.
-    /// Optional only so legacy artifacts can be rejected with a clear error.
-    #[serde(default)]
-    accounting: Option<ScannerAccountingSnapshot>,
     /// Older scanner checkpoints, newest first, used as fallback seed
     /// positions when the snapshot tip is not found on the restored chain.
     #[serde(default)]
@@ -65,9 +60,6 @@ struct WalletSnapshotCheckpoint {
     height: u64,
     slot: u64,
     tracked_wallets: TrackedWalletsState,
-    /// Full scanner seed for correct rollback across a restored snapshot.
-    #[serde(default)]
-    accounting: Option<ScannerAccountingSnapshot>,
 }
 
 impl WalletSnapshot {
@@ -120,17 +112,6 @@ impl WalletSnapshot {
                     group.group_id
                 ),
             })?;
-            let accounting = group
-                .recent_checkpoints
-                .iter()
-                .find(|checkpoint| checkpoint.tip == tip)
-                .map(|checkpoint| checkpoint.accounting.clone())
-                .ok_or_else(|| StepError::LogicalError {
-                    message: format!(
-                        "wallet scanner group `{}` has no accounting checkpoint at its applied tip",
-                        group.group_id
-                    ),
-                })?;
             let tip = tip.to_string();
             let checkpoints = group
                 .recent_checkpoints
@@ -142,7 +123,6 @@ impl WalletSnapshot {
                     tracked_wallets: TrackedWalletsState::from_wallet_utxos(
                         checkpoint.wallet_utxos.clone(),
                     ),
-                    accounting: Some(checkpoint.accounting.clone()),
                 })
                 .collect::<Vec<_>>();
             let group_nodes = scanner_group_node_names(world, &group.group_id);
@@ -152,7 +132,6 @@ impl WalletSnapshot {
                     height: group.applied_height,
                     slot: Some(slot),
                     tracked_wallets: scanner_wallets.clone(),
-                    accounting: Some(accounting.clone()),
                     checkpoints: checkpoints.clone(),
                 };
                 filter_node_snapshot_wallets(world, &node_name, &mut node_snapshot)?;
@@ -160,7 +139,13 @@ impl WalletSnapshot {
             }
         }
 
-        if states_by_node.is_empty() && !wallet_info.is_empty() {
+        // Node funding wallets are not tracked by the scanner, so a scenario
+        // with only those has no state to export.
+        let mut tracks_wallets = false;
+        for node_name in world.nodes_info.keys() {
+            tracks_wallets |= !wallet_ids_for_source(world, node_name)?.is_empty();
+        }
+        if states_by_node.is_empty() && tracks_wallets {
             return Err(StepError::LogicalError {
                 message: "wallet scanner state has no exportable node snapshots".to_owned(),
             });
@@ -197,6 +182,10 @@ impl WalletSnapshot {
         client: &NodeHttpClient,
         world: &mut CucumberWorld,
     ) -> StepResult {
+        let runtime_wallet_ids = wallet_ids_for_source(world, runtime_node_name)?;
+        if runtime_wallet_ids.is_empty() {
+            return Ok(());
+        }
         let Some(node_snapshot) = self
             .states_by_node
             .get(runtime_node_name)
@@ -210,20 +199,12 @@ impl WalletSnapshot {
             });
         };
 
-        let runtime_wallet_ids = wallet_ids_for_source(world, runtime_node_name)?;
         let runtime_wallet_utxos = node_snapshot
             .tracked_wallets
             .to_wallet_utxos()
             .into_iter()
             .filter(|(wallet_id, _)| runtime_wallet_ids.contains(wallet_id))
             .collect::<WalletUtxos>();
-        let accounting = Box::new(
-            require_scanner_accounting(
-                node_snapshot.accounting.as_ref(),
-                &format!("node `{runtime_node_name}` snapshot"),
-            )?
-            .filtered_for_wallets(&runtime_wallet_ids),
-        );
         let tip = parse_header_id(&node_snapshot.tip)?;
         let slot = match node_snapshot.slot {
             Some(slot) => slot,
@@ -232,13 +213,21 @@ impl WalletSnapshot {
         let fallback_checkpoints = node_snapshot
             .checkpoints
             .iter()
+            .filter(|checkpoint| checkpoint.tip != node_snapshot.tip)
             .map(|checkpoint| {
-                restore_fallback_checkpoint(checkpoint, runtime_node_name, &runtime_wallet_ids)
+                Ok(ScannerStateCheckpoint {
+                    wallet_utxos: checkpoint
+                        .tracked_wallets
+                        .to_wallet_utxos()
+                        .into_iter()
+                        .filter(|(wallet_id, _)| runtime_wallet_ids.contains(wallet_id))
+                        .collect(),
+                    tip: parse_header_id(&checkpoint.tip)?,
+                    height: checkpoint.height,
+                    slot: checkpoint.slot,
+                })
             })
-            .collect::<Result<Vec<_>, StepError>>()?
-            .into_iter()
-            .filter(|checkpoint| checkpoint.tip.to_string() != node_snapshot.tip)
-            .collect();
+            .collect::<Result<Vec<_>, StepError>>()?;
 
         world.with_wallets_mut(|wallets| {
             wallets.record_header_height(
@@ -257,7 +246,7 @@ impl WalletSnapshot {
         world.scanner.seeds.insert(
             runtime_node_name.to_owned(),
             ScannerSeed::Snapshot {
-                accounting,
+                wallet_utxos: runtime_wallet_utxos,
                 tip,
                 height: node_snapshot.height,
                 slot,
@@ -287,69 +276,8 @@ impl WalletSnapshot {
     }
 
     fn from_artifact(artifact: &SnapshotArtifact) -> Result<Self, DynError> {
-        let snapshot: Self = serde_json::from_value(artifact.payload.clone())?;
-        snapshot
-            .validate_scanner_accounting()
-            .map_err(|error| -> DynError { Box::new(error) })?;
-        Ok(snapshot)
+        Ok(serde_json::from_value(artifact.payload.clone())?)
     }
-
-    fn validate_scanner_accounting(&self) -> Result<(), StepError> {
-        for (node_name, node_snapshot) in &self.states_by_node {
-            require_scanner_accounting(
-                node_snapshot.accounting.as_ref(),
-                &format!("node `{node_name}` snapshot"),
-            )?;
-            for (index, checkpoint) in node_snapshot.checkpoints.iter().enumerate() {
-                require_scanner_accounting(
-                    checkpoint.accounting.as_ref(),
-                    &format!("node `{node_name}` fallback checkpoint {index}"),
-                )?;
-            }
-        }
-        Ok(())
-    }
-}
-
-fn require_scanner_accounting<'a>(
-    accounting: Option<&'a ScannerAccountingSnapshot>,
-    location: &str,
-) -> Result<&'a ScannerAccountingSnapshot, StepError> {
-    accounting.ok_or_else(|| StepError::LogicalError {
-        message: format!(
-            "wallet {location} is missing scanner accounting state; refusing to resume because \
-             SDP lock state cannot be reconstructed from spendable wallet UTXOs"
-        ),
-    })
-}
-
-fn restore_fallback_checkpoint(
-    checkpoint: &WalletSnapshotCheckpoint,
-    runtime_node_name: &str,
-    runtime_wallet_ids: &HashSet<WalletId>,
-) -> Result<ScannerStateCheckpoint, StepError> {
-    let wallet_utxos = checkpoint
-        .tracked_wallets
-        .to_wallet_utxos()
-        .into_iter()
-        .filter(|(wallet_id, _)| runtime_wallet_ids.contains(wallet_id))
-        .collect();
-    let accounting = require_scanner_accounting(
-        checkpoint.accounting.as_ref(),
-        &format!(
-            "node `{runtime_node_name}` fallback checkpoint at {}",
-            checkpoint.tip
-        ),
-    )?
-    .filtered_for_wallets(runtime_wallet_ids);
-
-    Ok(ScannerStateCheckpoint {
-        wallet_utxos,
-        accounting,
-        tip: parse_header_id(&checkpoint.tip)?,
-        height: checkpoint.height,
-        slot: checkpoint.slot,
-    })
 }
 
 /// Prepare Cucumber wallet state from the synchronized wallet scanner before
@@ -476,16 +404,8 @@ fn filter_node_snapshot_wallets(
     node_snapshot.tracked_wallets = node_snapshot
         .tracked_wallets
         .filtered_to_wallets(&wallet_ids);
-    node_snapshot.accounting = node_snapshot
-        .accounting
-        .as_ref()
-        .map(|accounting| accounting.filtered_for_wallets(&wallet_ids));
     for checkpoint in &mut node_snapshot.checkpoints {
         checkpoint.tracked_wallets = checkpoint.tracked_wallets.filtered_to_wallets(&wallet_ids);
-        checkpoint.accounting = checkpoint
-            .accounting
-            .as_ref()
-            .map(|accounting| accounting.filtered_for_wallets(&wallet_ids));
     }
     Ok(())
 }
@@ -566,203 +486,5 @@ fn parse_header_id(value: &str) -> Result<HeaderId, StepError> {
 fn snapshot_error(source: &DynError) -> StepError {
     StepError::LogicalError {
         message: source.to_string(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use lb_common_http_client::{ApiBlock, ApiHeader, Slot};
-    use lb_core::{
-        events::{Event, Events, HeaderEvent},
-        header::ContentId,
-        mantle::{Note, Utxo},
-        proofs::leader_proof::Groth16LeaderProof,
-    };
-    use lb_key_management_system_service::keys::ZkPublicKey;
-    use serde_json::json;
-
-    use super::*;
-    use crate::common::wallet::{TrackedWalletKeys, scanner::accounting::ScannerAccounting};
-
-    fn wallet_node_snapshot(
-        accounting: Option<ScannerAccountingSnapshot>,
-        checkpoints: Vec<WalletSnapshotCheckpoint>,
-    ) -> WalletNodeSnapshot {
-        WalletNodeSnapshot {
-            tip: "tip".to_owned(),
-            height: 1,
-            slot: Some(1),
-            tracked_wallets: TrackedWalletsState::default(),
-            accounting,
-            checkpoints,
-        }
-    }
-
-    fn artifact_for_node(node: WalletNodeSnapshot) -> SnapshotArtifact {
-        let snapshot = WalletSnapshot {
-            wallet_info: WalletInfoMap::default(),
-            wallet_accounts: HashMap::new(),
-            states_by_node: HashMap::from([("NODE".to_owned(), node)]),
-        };
-        let payload = serde_json::to_value(snapshot).expect("snapshot serializes");
-        SnapshotArtifact::new(2, json!({}), payload)
-    }
-
-    fn empty_block(seed: u8) -> ApiBlock {
-        ApiBlock {
-            header: ApiHeader {
-                id: HeaderId::from([seed; 32]),
-                parent_block: HeaderId::from([seed.saturating_sub(1); 32]),
-                slot: Slot::from(u64::from(seed)),
-                body_root: ContentId::from([0; 32]),
-                proof_of_leadership: Groth16LeaderProof::genesis(),
-            },
-            uncle_headers: Vec::new(),
-            transactions: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn current_snapshot_restores_locked_note_until_unlock_event() {
-        let wallet_id = WalletId::new("alice");
-        let wallet_pk = ZkPublicKey::new(1.into());
-        let locked = Utxo::new([1; 32], 0, Note::new(10, wallet_pk));
-        let note_id = locked.id();
-        let accounting = ScannerAccountingSnapshot {
-            wallet_utxos: HashMap::from([(wallet_id, vec![locked])]),
-            locked_service_note_ids: HashSet::from([note_id]),
-        };
-        let artifact = artifact_for_node(wallet_node_snapshot(Some(accounting), Vec::new()));
-        let restored = WalletSnapshot::from_artifact(&artifact).expect("current snapshot restores");
-        let accounting = require_scanner_accounting(
-            restored.states_by_node["NODE"].accounting.as_ref(),
-            "test node snapshot",
-        )
-        .expect("current-format snapshot has accounting")
-        .clone();
-        let mut scanner = ScannerAccounting::from_snapshot(
-            vec![TrackedWalletKeys::new("alice", [wallet_pk])],
-            accounting,
-        )
-        .expect("scanner restores full accounting");
-        assert_eq!(scanner.wallet_utxos()["alice"], []);
-
-        let unlocked = Events::from(Event::Header(HeaderEvent::SdpNoteUnlocked {
-            note_id,
-            service_type: lb_core::sdp::ServiceType::BlendNetwork,
-            declaration_id: lb_core::sdp::DeclarationId([2; 32]),
-        }));
-        scanner.apply_block_with_events(&empty_block(1), &unlocked);
-        assert_eq!(scanner.wallet_utxos()["alice"], vec![locked]);
-    }
-
-    #[test]
-    fn restored_fallback_keeps_spendable_and_full_accounting_views_distinct() {
-        let wallet_id = WalletId::new("alice");
-        let wallet_pk = ZkPublicKey::new(1.into());
-        let spendable = Utxo::new([1; 32], 0, Note::new(10, wallet_pk));
-        let locked = Utxo::new([2; 32], 0, Note::new(20, wallet_pk));
-        let locked_note_id = locked.id();
-        let checkpoint = WalletSnapshotCheckpoint {
-            tip: HeaderId::from([3; 32]).to_string(),
-            height: 2,
-            slot: 2,
-            tracked_wallets: TrackedWalletsState::from_wallet_utxos(HashMap::from([(
-                wallet_id.clone(),
-                vec![spendable],
-            )])),
-            accounting: Some(ScannerAccountingSnapshot {
-                wallet_utxos: HashMap::from([(wallet_id.clone(), vec![spendable, locked])]),
-                locked_service_note_ids: HashSet::from([locked_note_id]),
-            }),
-        };
-
-        let restored =
-            restore_fallback_checkpoint(&checkpoint, "NODE", &HashSet::from([wallet_id.clone()]))
-                .expect("fallback checkpoint restores with full accounting");
-
-        assert_eq!(restored.wallet_utxos[&wallet_id], vec![spendable]);
-        assert_eq!(
-            restored.accounting.wallet_utxos[&wallet_id],
-            vec![spendable, locked]
-        );
-        assert!(
-            restored
-                .accounting
-                .locked_service_note_ids
-                .contains(&locked_note_id)
-        );
-    }
-
-    #[test]
-    fn legacy_top_level_snapshot_without_accounting_fails_closed() {
-        let artifact = artifact_for_node(wallet_node_snapshot(None, Vec::new()));
-        let mut payload = artifact.payload;
-        payload["states_by_node"]["NODE"]
-            .as_object_mut()
-            .expect("node snapshot is an object")
-            .remove("accounting");
-        let legacy_artifact = SnapshotArtifact::new(2, json!({}), payload);
-
-        let error = WalletSnapshot::from_artifact(&legacy_artifact)
-            .expect_err("legacy snapshot cannot resume without lock accounting");
-        assert!(
-            error
-                .to_string()
-                .contains("missing scanner accounting state")
-        );
-        assert!(
-            error
-                .to_string()
-                .contains("SDP lock state cannot be reconstructed")
-        );
-    }
-
-    #[test]
-    fn snapshot_without_locked_service_note_ids_fails_closed() {
-        let artifact = artifact_for_node(wallet_node_snapshot(
-            Some(ScannerAccountingSnapshot::default()),
-            Vec::new(),
-        ));
-        let mut payload = artifact.payload;
-        payload["states_by_node"]["NODE"]["accounting"]
-            .as_object_mut()
-            .expect("scanner accounting is an object")
-            .remove("locked_service_note_ids");
-        let incomplete_artifact = SnapshotArtifact::new(2, json!({}), payload);
-
-        let error = WalletSnapshot::from_artifact(&incomplete_artifact)
-            .expect_err("snapshot without lock state cannot resume safely");
-        assert!(error.to_string().contains("locked_service_note_ids"));
-    }
-
-    #[test]
-    fn legacy_fallback_checkpoint_without_accounting_fails_closed() {
-        let checkpoint = WalletSnapshotCheckpoint {
-            tip: "older-tip".to_owned(),
-            height: 0,
-            slot: 0,
-            tracked_wallets: TrackedWalletsState::default(),
-            accounting: None,
-        };
-        let artifact = artifact_for_node(wallet_node_snapshot(
-            Some(ScannerAccountingSnapshot::default()),
-            vec![checkpoint],
-        ));
-        let mut payload = artifact.payload;
-        payload["states_by_node"]["NODE"]["checkpoints"][0]
-            .as_object_mut()
-            .expect("fallback checkpoint is an object")
-            .remove("accounting");
-        let legacy_artifact = SnapshotArtifact::new(2, json!({}), payload);
-
-        let error = WalletSnapshot::from_artifact(&legacy_artifact)
-            .expect_err("legacy fallback cannot resume without lock accounting");
-        assert!(error.to_string().contains("fallback checkpoint 0"));
-        assert!(
-            error
-                .to_string()
-                .contains("missing scanner accounting state")
-        );
     }
 }

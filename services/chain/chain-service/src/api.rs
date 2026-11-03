@@ -6,7 +6,7 @@ use std::{
 
 use futures::{Stream, TryStreamExt as _};
 use lb_core::{
-    block::{Block, UncleHeaders},
+    block::{Block, UncleHeaders, genesis::GenesisBlock},
     events::Events,
     header::HeaderId,
     sdp::{Declaration, DeclarationId},
@@ -51,6 +51,8 @@ pub enum ApiError {
     },
     #[error("Block {0} has already been applied")]
     AlreadyApplied(HeaderId),
+    #[error("Invalid proof of leadership in block {0}")]
+    InvalidLeaderProof(HeaderId),
     #[error("Failed to establish connection to chain-service: {0}")]
     CommsFailure(String),
     #[error("Unexpected Error: {0}")]
@@ -119,6 +121,22 @@ where
 
         rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetInfo"))
+        })
+    }
+
+    /// Get the genesis block of the starting state
+    pub async fn get_genesis_block(&self) -> Result<GenesisBlock, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(Query::GetGenesisBlock { reply_channel }.into())
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending GetGenesisBlock"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetGenesisBlock"))
         })
     }
 
@@ -429,6 +447,7 @@ where
     ) -> Result<AppliedBlock<Cryptarchia::Tx>, ApiError> {
         let (reply_channel, rx) = oneshot::channel();
 
+        let id = block.header().id();
         let boxed_block = Box::new(block);
         self.relay
             .send(ConsensusMsg::ApplyBlock {
@@ -454,6 +473,9 @@ where
                     current_slot,
                 },
                 crate::Error::AlreadyApplied(block_id) => ApiError::AlreadyApplied(block_id),
+                crate::Error::Ledger(lb_ledger::LedgerError::InvalidProof) => {
+                    ApiError::InvalidLeaderProof(id)
+                }
                 err => ApiError::Unexpected(format!("Failure while applying block: {err:?}")),
             })
     }

@@ -1,8 +1,9 @@
 use lb_binary_codec::canonical::codec_fixtures;
 
 use super::proof_values::{
-    CHANNEL_MULTI_SIG, CHANNEL_MULTI_SIG_HEX, ED25519_SIG, ED25519_SIG_HEX, POC, POC_HEX,
-    ZK_AND_ED25519_SIGS, ZK_AND_ED25519_SIGS_HEX, ZK_SIG, ZK_SIG_HEX,
+    CHANNEL_INSCRIBE_PROOF, CHANNEL_INSCRIBE_PROOF_HEX, CHANNEL_MULTI_SIG, CHANNEL_MULTI_SIG_HEX,
+    ED25519_SIG, ED25519_SIG_HEX, ZK_AND_ED25519_SIGS, ZK_AND_ED25519_SIGS_HEX, ZK_TRANSFER,
+    ZK_TRANSFER_HEX,
 };
 use crate::mantle::{OpProof, ops::NoOpProof};
 
@@ -10,11 +11,11 @@ codec_fixtures!(
     OpProof,
     encode_only,
     OpProof::None(NoOpProof) => "",
-    OpProof::ZkSig(ZK_SIG.clone()) => ZK_SIG_HEX,
+    OpProof::ZkTransfer(*ZK_TRANSFER) => ZK_TRANSFER_HEX,
     OpProof::Ed25519Sig(*ED25519_SIG) => ED25519_SIG_HEX,
     OpProof::ZkAndEd25519Sigs(ZK_AND_ED25519_SIGS.clone()) => ZK_AND_ED25519_SIGS_HEX,
-    OpProof::PoC(POC.clone()) => POC_HEX,
-    OpProof::ChannelMultiSigProof(CHANNEL_MULTI_SIG.clone()) => CHANNEL_MULTI_SIG_HEX
+    OpProof::ChannelMultiSigProof(CHANNEL_MULTI_SIG.clone()) => CHANNEL_MULTI_SIG_HEX,
+    OpProof::ChannelInscribe(CHANNEL_INSCRIBE_PROOF.clone()) => CHANNEL_INSCRIBE_PROOF_HEX
 );
 
 #[cfg(test)]

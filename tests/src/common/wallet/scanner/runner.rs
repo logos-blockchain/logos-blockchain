@@ -79,7 +79,6 @@ struct ScannerInitialState {
     applied_tip: Option<HeaderId>,
     applied_slot: Option<u64>,
     source_node_names: Vec<String>,
-    seed_fallbacks: VecDeque<ScannerStateCheckpoint>,
 }
 
 #[derive(Debug)]
@@ -204,16 +203,21 @@ fn scanner_group_needs_catch_up(group: &ForkGroupScannerState) -> bool {
         || group
             .target_height
             .is_none_or(|target_height| group.applied_height < target_height)
+        // Notes are proven against the root of the applied tip, which a fork
+        // at the same height leaves off the source's chain.
+        || group.applied_tip != group.target_tip
 }
 
 fn initialize_scanner_from_seed(
     config: &ForkGroupScannerConfig,
 ) -> Result<ScannerInitialState, StepError> {
     match &config.seed {
-        ScannerSeed::Genesis => {
+        // A snapshot holds the notes but not the commitment MMRs their paths
+        // follow, so a restored scanner replays the chain from genesis.
+        ScannerSeed::Genesis | ScannerSeed::Snapshot { .. } => {
             let accounting = ScannerAccounting::new(
                 config.wallet_keys.clone(),
-                &config.genesis_utxos,
+                &config.genesis_notes,
             )
             .map_err(|error| StepError::LogicalError {
                 message: format!("wallet scanner accounting initialization failed: {error}"),
@@ -224,36 +228,6 @@ fn initialize_scanner_from_seed(
                 applied_tip: None,
                 applied_slot: None,
                 source_node_names: Vec::new(),
-                seed_fallbacks: VecDeque::new(),
-            })
-        }
-        ScannerSeed::Snapshot {
-            accounting,
-            tip,
-            height,
-            slot,
-            source_node_names,
-            fallback_checkpoints,
-            ..
-        } => {
-            let accounting = ScannerAccounting::from_snapshot(
-                config.wallet_keys.clone(),
-                accounting.as_ref().clone(),
-            )
-            .map_err(|error| StepError::LogicalError {
-                message: format!("wallet scanner accounting initialization failed: {error}"),
-            })?;
-            Ok(ScannerInitialState {
-                accounting,
-                applied_height: *height,
-                applied_tip: Some(*tip),
-                applied_slot: Some(*slot),
-                source_node_names: source_node_names.clone(),
-                seed_fallbacks: fallback_checkpoints
-                    .iter()
-                    .filter(|checkpoint| checkpoint.tip != *tip)
-                    .cloned()
-                    .collect(),
             })
         }
     }
@@ -313,12 +287,7 @@ async fn run_group_scanner(config: ForkGroupScannerConfig, shutdown_requested: A
     let mut applied_tip = initial_state.applied_tip;
     let mut applied_slot = initial_state.applied_slot;
     let source_node_names = initial_state.source_node_names;
-    let mut seed_fallbacks = initial_state.seed_fallbacks;
     let mut snapshot_rescan = snapshot_rescan_from_seed(&config.seed);
-    let seed_rescan_blocks = match &config.seed {
-        ScannerSeed::Snapshot { rescan_blocks, .. } => *rescan_blocks,
-        ScannerSeed::Genesis => 0,
-    };
     let mut checkpoints = VecDeque::new();
     let mut last_msg = String::new();
     if let Some(applied_tip) = applied_tip
@@ -375,41 +344,8 @@ async fn run_group_scanner(config: ForkGroupScannerConfig, shutdown_requested: A
                 group.last_error = Some(scanner_iteration_error_message(&error));
             });
             let error = if let ScannerIterationError::SeedTipNotFound(step_error) = error {
-                let reseeded = reseed_from_fallback_checkpoint(
-                    &config,
-                    &mut seed_fallbacks,
-                    seed_rescan_blocks,
-                    &source_node_names,
-                    &mut accounting,
-                    &mut applied_height,
-                    &mut applied_tip,
-                    &mut applied_slot,
-                    &mut checkpoints,
-                    &mut snapshot_rescan,
-                )
-                .unwrap_or_else(|reseed_error| {
-                    warn!(
-                        target: TARGET,
-                        "wallet scanner group '{}' fallback checkpoint reseed failed: {reseed_error}",
-                        display_group_key(&config.group_id),
-                    );
-                    false
-                });
-                if reseeded {
-                    update_group_state(&config.scanner_state, &config.group_id, |group| {
-                        group.recent_blocks.clear();
-                    });
-                    if sleep_or_shutdown(
-                        &shutdown_requested,
-                        config.poll_interval,
-                        &config.group_id,
-                    )
-                    .await
-                    {
-                        return;
-                    }
-                    continue;
-                }
+                // A snapshot checkpoint holds no commitment MMR to reseed the
+                // scanner from, so a missing seed tip is a continuity failure.
                 ScannerIterationError::Continuity(step_error)
             } else {
                 error
@@ -511,87 +447,6 @@ fn check_shutdown(shutdown_requested: &Arc<AtomicBool>, group_id: &str) -> bool 
     false
 }
 
-/// Re-seed the scanner from the next restored fallback checkpoint.
-///
-/// Returns `Ok(true)` when a fallback was applied, `Ok(false)` when no
-/// fallback checkpoints remain.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Re-seeding owns the same explicit mutable scanner-loop state as reset."
-)]
-fn reseed_from_fallback_checkpoint(
-    config: &ForkGroupScannerConfig,
-    seed_fallbacks: &mut VecDeque<ScannerStateCheckpoint>,
-    seed_rescan_blocks: u64,
-    source_node_names: &[String],
-    accounting: &mut ScannerAccounting,
-    applied_height: &mut u64,
-    applied_tip: &mut Option<HeaderId>,
-    applied_slot: &mut Option<u64>,
-    checkpoints: &mut VecDeque<ScannerCheckpoint>,
-    snapshot_rescan: &mut Option<SnapshotRescan>,
-) -> Result<bool, StepError> {
-    let Some(checkpoint) = seed_fallbacks.pop_front() else {
-        return Ok(false);
-    };
-
-    warn!(
-        target: TARGET,
-        "wallet scanner group '{}' seed tip not found on restored chain; falling back to \
-        snapshot checkpoint {} at height {} slot {}",
-        display_group_key(&config.group_id),
-        checkpoint.tip,
-        checkpoint.height,
-        checkpoint.slot,
-    );
-
-    *accounting = ScannerAccounting::from_snapshot(
-        config.wallet_keys.clone(),
-        checkpoint.accounting,
-    )
-    .map_err(|error| StepError::LogicalError {
-        message: format!(
-            "wallet scanner accounting re-initialization from fallback checkpoint failed: {error}"
-        ),
-    })?;
-    *applied_height = checkpoint.height;
-    *applied_tip = Some(checkpoint.tip);
-    *applied_slot = Some(checkpoint.slot);
-    *snapshot_rescan = (seed_rescan_blocks > 0).then_some(SnapshotRescan {
-        tip: checkpoint.tip,
-        slot: checkpoint.slot,
-        blocks: seed_rescan_blocks,
-    });
-    checkpoints.clear();
-    push_checkpoint(
-        checkpoints,
-        ScannerCheckpoint::new(
-            accounting,
-            *applied_height,
-            *applied_tip,
-            *applied_slot,
-            source_node_names.to_vec(),
-        ),
-    );
-    if !source_node_names.is_empty()
-        && let Err(error) = publish_wallet_state(
-            &config.wallets,
-            source_node_names,
-            *applied_height,
-            checkpoint.tip.to_string(),
-            accounting.wallet_utxos(),
-        )
-    {
-        warn!(
-            target: TARGET,
-            "wallet scanner group '{}' failed to publish fallback checkpoint state: {error}",
-            display_group_key(&config.group_id),
-        );
-    }
-
-    Ok(true)
-}
-
 fn reset_scanner_to_genesis(
     config: &ForkGroupScannerConfig,
     accounting: &mut ScannerAccounting,
@@ -607,7 +462,7 @@ fn reset_scanner_to_genesis(
         display_group_key(&config.group_id),
     );
 
-    *accounting = ScannerAccounting::new(config.wallet_keys.clone(), &config.genesis_utxos)
+    *accounting = ScannerAccounting::new(config.wallet_keys.clone(), &config.genesis_notes)
         .map_err(|error| StepError::LogicalError {
             message: format!("wallet scanner accounting reset to genesis failed: {error}"),
         })?;
@@ -705,71 +560,72 @@ async fn scan_group_once(
     let initial_applied_tip = *applied_tip;
     let mut newly_applied_blocks = Vec::new();
 
-    let stream_result =
-        stream_blocks_range(client, from_slot, best_node.slot, |block, block_events| {
-            if continuity_error.is_some() {
+    let stream_result = stream_blocks_range(client, from_slot, best_node.slot, |block, events| {
+        if continuity_error.is_some() {
+            return Ok(());
+        }
+
+        if let Some(expected_parent) = *applied_tip
+            && block.header.parent_block != expected_parent
+        {
+            if !connected_to_tip {
+                skipped_unconnected_block_count += 1;
                 return Ok(());
             }
 
-            if let Some(expected_parent) = *applied_tip
-                && block.header.parent_block != expected_parent
-            {
-                if !connected_to_tip {
-                    skipped_unconnected_block_count += 1;
-                    return Ok(());
-                }
+            continuity_error = Some(wallet_scanner_continuity_error(
+                config,
+                block.header.parent_block,
+                expected_parent,
+                skipped_unconnected_block_count,
+            ));
+            return Ok(());
+        }
 
-                continuity_error = Some(wallet_scanner_continuity_error(
-                    config,
-                    block.header.parent_block,
-                    expected_parent,
-                    skipped_unconnected_block_count,
-                ));
-                return Ok(());
-            }
+        connected_to_tip = true;
+        accounting
+            .apply_block(&block, &events)
+            .map_err(|error| ScannerError::Logical(error.to_string()))?;
+        *applied_height = applied_height.saturating_add(1);
+        *applied_tip = Some(block.header.id);
+        *applied_slot = Some(u64::from(block.header.slot));
+        applied_block_count += 1;
+        newly_applied_blocks.push(super::state::ScannerBlockObservation {
+            height: *applied_height,
+            block_id: block.header.id,
+            transaction_count: block.transactions.len(),
+            transaction_hashes: block.transactions.iter().map(SignedOps::hash).collect(),
+        });
 
-            connected_to_tip = true;
-            accounting.apply_block_with_events(&block, &block_events);
-            *applied_height = applied_height.saturating_add(1);
-            *applied_tip = Some(block.header.id);
-            *applied_slot = Some(u64::from(block.header.slot));
-            applied_block_count += 1;
-            newly_applied_blocks.push(super::state::ScannerBlockObservation {
-                height: *applied_height,
-                block_id: block.header.id,
-                transaction_count: block.transactions.len(),
-                transaction_hashes: block.transactions.iter().map(SignedOps::hash).collect(),
-            });
+        push_checkpoint(
+            checkpoints,
+            ScannerCheckpoint::new(
+                accounting,
+                *applied_height,
+                *applied_tip,
+                *applied_slot,
+                best_node.same_tip_nodes.clone(),
+            ),
+        );
 
-            push_checkpoint(
-                checkpoints,
-                ScannerCheckpoint::new(
-                    accounting,
-                    *applied_height,
-                    *applied_tip,
-                    *applied_slot,
-                    best_node.same_tip_nodes.clone(),
-                ),
-            );
+        let wallet_utxos = accounting.wallet_utxos();
+        if *applied_height >= best_node.height
+            || (*applied_height).saturating_sub(last_publish_height) >= config.range_batch_size
+        {
+            publish_wallet_state(
+                &config.wallets,
+                &best_node.same_tip_nodes,
+                *applied_height,
+                block.header.id.to_string(),
+                wallet_utxos,
+            )
+            .map_err(|error| ScannerError::Logical(error.to_string()))?;
+            last_publish_height = *applied_height;
+        }
 
-            let wallet_utxos = accounting.wallet_utxos();
-            if *applied_height >= best_node.height
-                || (*applied_height).saturating_sub(last_publish_height) >= config.range_batch_size
-            {
-                publish_wallet_state(
-                    &config.wallets,
-                    &best_node.same_tip_nodes,
-                    *applied_height,
-                    block.header.id.to_string(),
-                    wallet_utxos,
-                )
-                .map_err(|error| ScannerError::Logical(error.to_string()))?;
-                last_publish_height = *applied_height;
-            }
-
-            Ok(())
-        })
-        .await;
+        Ok(())
+    })
+    .await;
     let streamed_block_count = handle_block_stream_result(
         stream_result,
         &config.observed_transaction_hashes,
@@ -1029,7 +885,6 @@ fn recent_state_checkpoints(
                 height: checkpoint.applied_height,
                 slot,
                 wallet_utxos: checkpoint.accounting.wallet_utxos(),
-                accounting: checkpoint.accounting.snapshot(),
             })
         })
         .take(PUBLISHED_SCANNER_CHECKPOINTS)
@@ -1130,7 +985,7 @@ fn publish_wallet_state(
     source_node_names: &[String],
     height: u64,
     header_id: String,
-    wallet_utxos: impl IntoIterator<Item = (WalletId, Vec<lb_core::mantle::Utxo>)>,
+    wallet_utxos: impl IntoIterator<Item = (WalletId, Vec<lb_wallet::OwnedNote>)>,
 ) -> Result<(), StepError> {
     let wallet_utxos = wallet_utxos.into_iter().collect::<Vec<_>>();
     let mut wallets = wallets.lock().map_err(|_| StepError::LogicalError {
@@ -1173,154 +1028,21 @@ fn parse_header_id(value: &str) -> Option<HeaderId> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::HashSet,
-        sync::{Arc, Mutex},
-    };
-
-    use lb_common_http_client::{ApiBlock, ApiHeader, Slot};
-    use lb_core::{
-        header::{ContentId, HeaderId},
-        mantle::{
-            Note, SignedOps,
-            ledger::{Inputs, Outputs, verification_mode::StandardMode},
-            ops::{Op, transfer::TransferOp},
-            traits::Hashable as _,
-            transactions::{Ops, states::Unverified},
-        },
-        proofs::leader_proof::Groth16LeaderProof,
-    };
-    use lb_key_management_system_service::keys::ZkPublicKey;
-
-    use super::{
-        ScannerAccounting, ScannerError, ScannerIterationError, StepError,
-        handle_block_stream_result, publish_new_observed_transaction_hashes,
-    };
-    use crate::cucumber::world::SharedObservedTransactionHashes;
-
-    fn transfer_tx(seed: u64) -> SignedOps<Unverified, StandardMode> {
-        let owner = ZkPublicKey::zero();
-        let outputs = Outputs::new([
-            Note::new(seed, owner),
-            Note::new(seed.saturating_add(1), owner),
-        ]);
-        let ops = Ops::from([Op::Transfer(TransferOp::new(Inputs::empty(), outputs))]);
-        SignedOps::from_ops_with_sample_proofs(ops)
-    }
-
-    fn block(seed: u8, transactions: Vec<SignedOps<Unverified, StandardMode>>) -> ApiBlock {
-        ApiBlock {
-            header: ApiHeader {
-                id: HeaderId::from([seed; 32]),
-                parent_block: HeaderId::from([seed.saturating_sub(1); 32]),
-                slot: Slot::from(u64::from(seed)),
-                body_root: ContentId::from([0; 32]),
-                proof_of_leadership: Groth16LeaderProof::genesis(),
-            },
-            uncle_headers: Vec::new(),
-            transactions,
-        }
-    }
-
-    fn accounting() -> ScannerAccounting {
-        ScannerAccounting::new(Vec::new(), &[]).expect("empty accounting should initialize")
-    }
-
-    fn shared_observed_hashes() -> SharedObservedTransactionHashes {
-        Arc::new(Mutex::new(HashSet::new()))
-    }
-
-    fn block_events_failure() -> ScannerError {
-        ScannerError::MissingBlockEvents(HeaderId::from([3; 32]))
-    }
+    use super::*;
 
     #[test]
-    fn partial_stream_failure_publishes_applied_hashes_and_retry_adds_remaining_hashes() {
-        let observed = shared_observed_hashes();
-        let mut accounting = accounting();
-        let before_failure = accounting.observed_transaction_hashes().clone();
-        let tx_a = transfer_tx(10);
-        let hash_a = tx_a.hash();
-        let tx_b = transfer_tx(20);
-        let hash_b = tx_b.hash();
-        let block_a = block(2, vec![tx_a]);
-        let applied_slot = u64::from(block_a.header.slot);
-        accounting.apply_block(&block_a);
+    fn a_scanner_on_a_forked_tip_of_the_target_height_still_needs_catch_up() {
+        let mut group = ForkGroupScannerState::new(String::new(), "wallet".to_owned(), 1);
+        group.status = ScannerStatus::Tailing;
+        group.applied_height = 2;
+        group.applied_tip = Some(HeaderId::from([1; 32]));
+        group.target_height = Some(2);
+        group.target_tip = Some(HeaderId::from([2; 32]));
 
-        let error = handle_block_stream_result(
-            Err(block_events_failure()),
-            &observed,
-            &accounting,
-            &before_failure,
-            1,
-            None,
-        );
-        assert!(matches!(
-            error,
-            Err(ScannerIterationError::Step(StepError::LogicalError { message }))
-                if message.starts_with("wallet scanner block stream failed:")
-        ));
-        assert_eq!(*observed.lock().unwrap(), HashSet::from([hash_a]));
-        assert!(!observed.lock().unwrap().contains(&hash_b));
+        assert!(scanner_group_needs_catch_up(&group));
 
-        // The scanner resumes after block A's applied slot and accounts only
-        // block B on the successful retry.
-        let from_slot = applied_slot.saturating_add(1);
-        assert_eq!(from_slot, 3);
-        let before_retry = accounting.observed_transaction_hashes().clone();
-        accounting.apply_block(&block(3, vec![tx_b]));
+        group.applied_tip = group.target_tip;
 
-        assert_eq!(
-            handle_block_stream_result(Ok(1), &observed, &accounting, &before_retry, 1, None)
-                .expect("retry stream should succeed"),
-            1
-        );
-        publish_new_observed_transaction_hashes(&observed, &accounting, &before_retry);
-
-        assert_eq!(*observed.lock().unwrap(), HashSet::from([hash_a, hash_b]));
-        assert_eq!(accounting.observed_transaction_hashes().len(), 2);
-    }
-
-    #[test]
-    fn stream_failure_before_applying_a_block_publishes_no_hashes() {
-        let observed = shared_observed_hashes();
-        let accounting = accounting();
-        let before = accounting.observed_transaction_hashes().clone();
-
-        let error = handle_block_stream_result(
-            Err(block_events_failure()),
-            &observed,
-            &accounting,
-            &before,
-            0,
-            None,
-        );
-
-        assert!(matches!(error, Err(ScannerIterationError::Step(_))));
-        assert!(observed.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn stream_failure_with_continuity_error_does_not_publish_hashes() {
-        let observed = shared_observed_hashes();
-        let mut accounting = accounting();
-        let before = accounting.observed_transaction_hashes().clone();
-        let tx_a = transfer_tx(10);
-        accounting.apply_block(&block(2, vec![tx_a]));
-        let continuity_error = StepError::LogicalError {
-            message: "mock block does not connect to applied tip".to_owned(),
-        };
-
-        let error = handle_block_stream_result(
-            Err(block_events_failure()),
-            &observed,
-            &accounting,
-            &before,
-            1,
-            Some(&continuity_error),
-        );
-
-        assert!(matches!(error, Err(ScannerIterationError::Step(_))));
-        assert!(observed.lock().unwrap().is_empty());
+        assert!(!scanner_group_needs_catch_up(&group));
     }
 }

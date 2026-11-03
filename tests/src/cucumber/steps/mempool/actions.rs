@@ -26,9 +26,13 @@ use crate::{
         error::StepError,
         steps::{TARGET, transactions::tracked_transactions::create_stateless_invalid_transaction},
         utils::{tx_hash_to_hex, user_config_from_node_yaml},
-        wallet::submissions::{
-            SignedUserWalletSubmission, prepare_user_wallet_transaction_submission,
-            record_signed_user_wallet_submission, sign_prepared_user_wallet_transaction,
+        wallet::{
+            submissions::{
+                PreparedUserWalletSubmission, SignedUserWalletSubmission,
+                import_node_wallet_outputs, prepare_user_wallet_transaction_submission,
+                record_signed_user_wallet_submission, sign_prepared_user_wallet_transaction,
+            },
+            sync::genesis_utxos_for_user_wallets,
         },
         world::{CucumberWorld, NodeInfo},
     },
@@ -50,14 +54,65 @@ pub async fn prepare_transfer_transaction(
     let prepared =
         prepare_user_wallet_transaction_submission(world, step, &sender_wallet_name, intent, None)
             .await?;
+    record_prepared_transfer(
+        world,
+        step,
+        transaction_alias,
+        prepared,
+        &sender_wallet_name,
+        &receiver_wallet_name,
+    )
+    .await
+}
+
+/// Prepares a transfer proven against the genesis note set roots.
+pub async fn prepare_genesis_anchored_transfer_transaction(
+    world: &mut CucumberWorld,
+    step: &str,
+    transaction_alias: String,
+    amount: u64,
+    sender_wallet_name: String,
+    receiver_wallet_name: String,
+) -> Result<(), StepError> {
+    let genesis_utxos = genesis_utxos_for_user_wallets(world, step)?;
+    let receiver_pk = receiver_public_key(world, step, &receiver_wallet_name)?;
+    let intent = transfer_intent(receiver_pk, amount)?;
+    let prepared = prepare_user_wallet_transaction_submission(
+        world,
+        step,
+        &sender_wallet_name,
+        intent,
+        Some(&genesis_utxos),
+    )
+    .await?;
+    record_prepared_transfer(
+        world,
+        step,
+        transaction_alias,
+        prepared,
+        &sender_wallet_name,
+        &receiver_wallet_name,
+    )
+    .await
+}
+
+async fn record_prepared_transfer(
+    world: &mut CucumberWorld,
+    step: &str,
+    transaction_alias: String,
+    prepared: PreparedUserWalletSubmission,
+    sender_wallet_name: &str,
+    receiver_wallet_name: &str,
+) -> Result<(), StepError> {
     let signed = sign_prepared_user_wallet_transaction(step, prepared, OpProofs::empty())?;
+    import_node_wallet_outputs(world, signed.outputs()).await?;
     let tx_hash = record_prepared_transaction(world, transaction_alias.clone(), &signed)?;
 
     report_prepared_transaction(
         &transaction_alias,
         tx_hash,
-        &sender_wallet_name,
-        &receiver_wallet_name,
+        sender_wallet_name,
+        receiver_wallet_name,
     );
 
     Ok(())

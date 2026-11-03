@@ -8,13 +8,16 @@ use lb_common_http_client::{
 };
 use lb_core::{
     crypto::Hash,
-    events::{DepositRecreatedNotes, TxEvent},
+    events::TxEvent,
     header::HeaderId,
     mantle::{
-        SignedOps, Value,
+        SignedOps,
         channel::ChannelState,
         ledger::verification_mode::{StandardMode, VerificationMode},
-        ops::{OpId as _, OpRef, channel::ChannelId},
+        ops::{
+            OpId as _, OpRef,
+            channel::{ChannelId, deposit::DepositOp},
+        },
         traits::Hashable as _,
         transactions::{
             hash::TxHash,
@@ -27,7 +30,7 @@ use lb_log_targets::zone_sdk;
 use reqwest::Url;
 use tracing::warn;
 
-use crate::{Deposit, Withdraw, ZoneBlock, ZoneMessage};
+use crate::{Deposit, ZoneBlock, ZoneMessage};
 
 const TARGET: &str = zone_sdk::ADAPTER;
 
@@ -238,16 +241,8 @@ pub(crate) struct DepositOpKey {
     pub op_id: Hash,
 }
 
-/// A deposit's block-event payload: the deposited total and the channel
-/// notes the deposit re-created.
-#[derive(Debug, Clone)]
-pub(crate) struct DepositEvent {
-    pub amount: Value,
-    pub notes: DepositRecreatedNotes,
-}
-
-/// Per-block lookup of deposit events by op identity.
-pub(crate) type DepositEvents = HashMap<DepositOpKey, DepositEvent>;
+/// Per-block lookup of deposit event payloads by op identity.
+pub(crate) type DepositEvents = HashMap<DepositOpKey, TxEventPayload>;
 
 /// Builds the [`DepositEvents`] lookup from a block's events, keeping only
 /// deposit events.
@@ -258,20 +253,39 @@ pub(crate) fn build_deposit_events(events: &Events) -> DepositEvents {
             Event::Tx(TxEvent {
                 tx_hash,
                 op_id,
-                payload: TxEventPayload::Deposit { amount, notes, .. },
+                payload: payload @ TxEventPayload::Deposit { .. },
             }) => Some((
                 DepositOpKey {
                     tx_hash: *tx_hash,
                     op_id: *op_id,
                 },
-                DepositEvent {
-                    amount: *amount,
-                    notes: notes.clone(),
-                },
+                payload.clone(),
             )),
-            Event::Tx { .. } | Event::Header(_) => None,
+            Event::Tx { .. } | Event::Header(_) | Event::Block(_) => None,
         })
         .collect()
+}
+
+/// The [`Deposit`] message of `deposit` in `tx_hash`, with the commitments
+/// its event reports.
+pub(crate) fn deposit_message(
+    tx_hash: TxHash,
+    deposit: &DepositOp,
+    event: &TxEventPayload,
+) -> Deposit {
+    // `build_deposit_events` keeps deposit payloads only.
+    let outputs = if let TxEventPayload::Deposit { outputs, .. } = event {
+        outputs
+    } else {
+        &deposit.outputs
+    };
+    Deposit {
+        tx_hash,
+        op_id: deposit.op_id(),
+        inputs: deposit.inputs.clone(),
+        outputs: outputs.clone(),
+        metadata: deposit.metadata.clone(),
+    }
 }
 
 /// Walks a block's transactions and emits the [`ZoneMessage`]s relevant to
@@ -327,23 +341,11 @@ fn op_to_zone_message(
                         None
                     },
                     |event| {
-                        Some(ZoneMessage::Deposit(Deposit {
-                            tx_hash,
-                            op_id,
-                            inputs: deposit.inputs.clone(),
-                            notes: event.notes.clone(),
-                            amount: event.amount,
-                            metadata: deposit.metadata.clone(),
-                        }))
+                        Some(ZoneMessage::Deposit(deposit_message(
+                            tx_hash, deposit, event,
+                        )))
                     },
                 )
-        }
-        OpRef::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
-            Some(ZoneMessage::Withdraw(Withdraw {
-                tx_hash,
-                op_id: withdraw.op_id(),
-                inputs: withdraw.inputs.clone(),
-            }))
         }
         _ => None,
     }
@@ -352,12 +354,9 @@ fn op_to_zone_message(
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        NoteId, Op,
-        ledger::BoundedInputs,
-        ops::channel::{
-            deposit::{DepositOp, Metadata},
-            withdraw::ChannelWithdrawOp,
-        },
+        Op,
+        notes::{NoteCommitment, NoteNullifier, OutputCommitments},
+        ops::channel::deposit::Metadata,
     };
     use lb_groth16::Fr;
 
@@ -367,24 +366,24 @@ mod tests {
     fn deposit_op(channel_id: ChannelId, input_seed: u32, metadata: Metadata) -> DepositOp {
         DepositOp {
             channel_id,
-            inputs: BoundedInputs::from(NoteId::from(Fr::from(input_seed))).into(),
+            inputs: [NoteNullifier(Fr::from(input_seed))].into(),
+            commitment_merkle_root: Fr::from(0u64),
+            outputs: [NoteCommitment(Fr::from(input_seed))].into(),
+            excess_value: 0,
             metadata,
         }
     }
 
-    /// A withdraw op is identified by `hash(channel_id || inputs)` — it
-    /// carries no nonce — so distinct `input_seed`s are what give two
-    /// withdraws distinct `op_id`s. That mirrors the chain, where the notes
-    /// being released are spent-once.
-    fn withdraw_op(channel_id: ChannelId, input_seed: u32) -> ChannelWithdrawOp {
-        ChannelWithdrawOp {
+    fn deposit_event(channel_id: ChannelId, output_seed: u64) -> TxEventPayload {
+        TxEventPayload::Deposit {
             channel_id,
-            inputs: BoundedInputs::from(NoteId::from(Fr::from(input_seed))).into(),
+            metadata: Metadata::default(),
+            outputs: [NoteCommitment(Fr::from(output_seed))].into(),
         }
     }
 
     /// Each indexer-facing message must carry the identity of the op it was
-    /// built from — not a neighbouring op's, and not a neighbouring tx's.
+    /// built from, not a neighbouring op's, and not a neighbouring tx's.
     /// Zone consumers correlate an L2 mint to a finalized L1 deposit by
     /// `(tx_hash, op_id)`, so a crossed identity is silent corruption of the
     /// exactly-once key rather than a visible failure.
@@ -393,45 +392,44 @@ mod tests {
         let channel_id = ChannelId::from([0; 32]);
         let other_channel = ChannelId::from([9; 32]);
 
-        // tx_a mixes three ops so a walker that reused the wrong op's id
-        // (or the wrong channel's) would surface here.
+        // tx_a mixes our channel's deposit with a foreign one, so a walker that
+        // reused the wrong op's id (or the wrong channel's) would surface here.
         let our_deposit = deposit_op(channel_id, 1, b"to Alice".into());
         let foreign_deposit = deposit_op(other_channel, 2, b"to Bob".into());
-        let our_withdraw = withdraw_op(channel_id, 42);
         let tx_a = unverified_tx_with_ops(vec![
             Op::ChannelDeposit(our_deposit.clone()),
             Op::ChannelDeposit(foreign_deposit.clone()),
-            Op::ChannelWithdraw(our_withdraw.clone()),
         ]);
         let tx_a_hash = tx_a.hash();
 
         // A second tx proves `tx_hash` is stamped per-tx, not per-block.
-        let later_withdraw = withdraw_op(channel_id, 7);
-        let tx_b = unverified_tx_with_ops(vec![Op::ChannelWithdraw(later_withdraw.clone())]);
+        let later_deposit = deposit_op(channel_id, 3, b"to Carol".into());
+        let tx_b = unverified_tx_with_ops(vec![Op::ChannelDeposit(later_deposit.clone())]);
         let tx_b_hash = tx_b.hash();
 
-        // Both deposits get an event, so channel filtering is proven to be
-        // the reason the foreign one is dropped — not a missing amount.
+        // Every deposit gets an event, so channel filtering is proven to be
+        // the reason the foreign one is dropped, not a missing event.
         let deposit_events = DepositEvents::from([
             (
                 DepositOpKey {
                     tx_hash: tx_a_hash,
                     op_id: our_deposit.op_id(),
                 },
-                DepositEvent {
-                    amount: 1234,
-                    notes: DepositRecreatedNotes::default(),
-                },
+                deposit_event(channel_id, 1234),
             ),
             (
                 DepositOpKey {
                     tx_hash: tx_a_hash,
                     op_id: foreign_deposit.op_id(),
                 },
-                DepositEvent {
-                    amount: 999,
-                    notes: DepositRecreatedNotes::default(),
+                deposit_event(other_channel, 999),
+            ),
+            (
+                DepositOpKey {
+                    tx_hash: tx_b_hash,
+                    op_id: later_deposit.op_id(),
                 },
+                deposit_event(channel_id, 5678),
             ),
         ]);
 
@@ -439,37 +437,30 @@ mod tests {
 
         assert_eq!(
             messages.len(),
-            3,
-            "two ops on our channel in tx_a, one in tx_b"
+            2,
+            "one deposit on our channel in tx_a, one in tx_b"
         );
         match &messages[0] {
             ZoneMessage::Deposit(deposit) => {
                 assert_eq!(deposit.tx_hash, tx_a_hash);
                 assert_eq!(deposit.op_id, our_deposit.op_id());
-                assert_eq!(deposit.amount, 1234);
                 assert_eq!(deposit.inputs, our_deposit.inputs);
+                assert_eq!(deposit.outputs, [NoteCommitment(Fr::from(1234u64))].into());
                 assert_ne!(
                     deposit.op_id,
-                    our_withdraw.op_id(),
+                    foreign_deposit.op_id(),
                     "deposit must not inherit its tx-mate's identity"
                 );
             }
-            other => panic!("expected Deposit, got {other:?}"),
+            other @ ZoneMessage::Block(_) => panic!("expected Deposit, got {other:?}"),
         }
         match &messages[1] {
-            ZoneMessage::Withdraw(withdraw) => {
-                assert_eq!(withdraw.tx_hash, tx_a_hash);
-                assert_eq!(withdraw.op_id, our_withdraw.op_id());
-                assert_eq!(withdraw.inputs, our_withdraw.inputs);
+            ZoneMessage::Deposit(deposit) => {
+                assert_eq!(deposit.tx_hash, tx_b_hash);
+                assert_eq!(deposit.op_id, later_deposit.op_id());
+                assert_eq!(deposit.outputs, [NoteCommitment(Fr::from(5678u64))].into());
             }
-            other => panic!("expected Withdraw, got {other:?}"),
-        }
-        match &messages[2] {
-            ZoneMessage::Withdraw(withdraw) => {
-                assert_eq!(withdraw.tx_hash, tx_b_hash);
-                assert_eq!(withdraw.op_id, later_withdraw.op_id());
-            }
-            other => panic!("expected Withdraw, got {other:?}"),
+            other @ ZoneMessage::Block(_) => panic!("expected Deposit, got {other:?}"),
         }
     }
 
@@ -514,5 +505,22 @@ mod tests {
         let messages = block_to_messages(vec![tx], channel_id, &HashMap::new());
 
         assert!(messages.is_empty(), "deposit without an event is skipped");
+    }
+
+    #[test]
+    fn deposit_message_carries_the_commitments_of_the_event() {
+        let deposit = DepositOp::sample();
+        let outputs: OutputCommitments = deposit.outputs.clone();
+        let message = deposit_message(
+            TxHash::from([1; 32]),
+            &deposit,
+            &TxEventPayload::Deposit {
+                channel_id: deposit.channel_id,
+                metadata: deposit.metadata.clone(),
+                outputs: outputs.clone(),
+            },
+        );
+        assert_eq!(message.outputs, outputs);
+        assert_eq!(message.inputs, deposit.inputs);
     }
 }

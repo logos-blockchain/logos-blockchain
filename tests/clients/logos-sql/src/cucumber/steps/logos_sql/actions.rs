@@ -79,7 +79,6 @@ pub(super) async fn start_instances(
                         .clone(),
                     funding: FundingConfig {
                         funding_pk,
-                        change_pk: None,
                         max_tx_fee: GasCost::new(u64::MAX),
                         priority_fee_percent,
                     },

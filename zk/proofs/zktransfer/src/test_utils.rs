@@ -1,0 +1,59 @@
+use std::{array, str::FromStr as _};
+
+use lb_groth16::Fr;
+use serde_json::Value;
+
+use crate::{
+    ZkTransferChainInputsData, ZkTransferInputNoteData, ZkTransferOutputNoteData,
+    ZkTransferWalletInputsData, ZkTransferWitnessInputsData,
+};
+
+pub const SAMPLE_INPUT_JSON: &str = include_str!("../test_vectors/sample.input.json");
+
+fn decimal(value: &Value) -> &str {
+    value.as_str().expect("sample numbers are decimal strings")
+}
+
+fn fr(value: &Value) -> Fr {
+    Fr::from_str(decimal(value)).expect("sample field elements are canonical")
+}
+
+fn u64_value(value: &Value) -> u64 {
+    decimal(value)
+        .parse::<u64>()
+        .expect("sample values fit in u64")
+}
+
+fn flag(value: &Value) -> bool {
+    u64_value(value) == 1
+}
+
+#[must_use]
+pub fn sample_witness_data() -> ZkTransferWitnessInputsData {
+    let json: Value = serde_json::from_str(SAMPLE_INPUT_JSON).expect("sample is valid JSON");
+    let wallet = ZkTransferWalletInputsData {
+        inputs: array::from_fn(|i| ZkTransferInputNoteData {
+            secret_key: fr(&json["inputs_sk"][i]),
+            nonce: fr(&json["inputs_nonce"][i]),
+            value: u64_value(&json["inputs_value"][i]),
+            path_and_selectors: array::from_fn(|j| {
+                (
+                    fr(&json["inputs_path"][i][j]),
+                    flag(&json["inputs_selectors"][i][j]),
+                )
+            }),
+        }),
+        outputs: array::from_fn(|i| ZkTransferOutputNoteData {
+            public_key: fr(&json["outputs_pk"][i]),
+            nonce: fr(&json["outputs_nonce"][i]),
+            value: u64_value(&json["outputs_value"][i]),
+        }),
+    };
+    let chain = ZkTransferChainInputsData {
+        inputs_active: array::from_fn(|i| flag(&json["inputs_active"][i])),
+        outputs_active: array::from_fn(|i| flag(&json["outputs_active"][i])),
+        tx_commitment_root: fr(&json["tx_cm_root"]),
+        msg: fr(&json["msg"]),
+    };
+    ZkTransferWitnessInputsData::from_chain_and_wallet_data(chain, wallet)
+}

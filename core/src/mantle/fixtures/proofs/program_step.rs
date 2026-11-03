@@ -1,0 +1,34 @@
+use lb_binary_codec::canonical::codec_fixtures;
+use lb_groth16::{CompressedGroth16Proof, Fr};
+use lb_key_management_system_keys::keys::ZkPublicKey;
+
+use super::proof_values::{
+    PROGRAM_STEP_PROOF, PROGRAM_STEP_PROOF_HEX, ZK_TRANSFER, ZK_TRANSFER_HEX,
+};
+use crate::mantle::ops::{
+    ProgramNoteOpening, ProgramProof, ProgramStepProof, StepProof, ZkProgramSpendProof,
+};
+
+codec_fixtures!(
+    ProgramNoteOpening,
+    ProgramNoteOpening { value: 1, nonce: Fr::from(2u64), public_key: ZkPublicKey::new(Fr::from(3u64)), data: Fr::from(4u64) }
+        => "0100000000000000020000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000",
+);
+codec_fixtures!(
+    ProgramStepProof,
+    context = crate::mantle::ops::StepProofShape::Program { payments: 1, program_notes: 1 },
+    PROGRAM_STEP_PROOF.clone() => PROGRAM_STEP_PROOF_HEX,
+);
+codec_fixtures!(
+    StepProof,
+    context = crate::mantle::ops::StepProofShape::User,
+    StepProof::User(*ZK_TRANSFER) => ZK_TRANSFER_HEX,
+);
+codec_fixtures!(
+    ZkProgramSpendProof,
+    ZkProgramSpendProof::new(CompressedGroth16Proof::from_bytes(&[2u8; 128])) => "0202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202",
+);
+codec_fixtures!(
+    ProgramProof,
+    ProgramProof::new(CompressedGroth16Proof::from_bytes(&[3u8; 128])) => "0303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303",
+);

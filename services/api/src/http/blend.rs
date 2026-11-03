@@ -48,67 +48,10 @@ where
         .map_err(|e| Box::new(e) as overwatch::DynError)
 }
 
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub enum ServiceNoteError {
-    #[error("holds no notes")]
-    NoNotes,
-    #[error("all {locked} notes are already locked for blend")]
-    AllLocked { locked: usize },
-    #[error(
-        "no single note meets min stake {threshold}: largest is {largest}, total {total}; consolidation may be possible"
-    )]
-    NoSingleNoteMeetsThreshold {
-        largest: Value,
-        total: Value,
-        threshold: Value,
-    },
-    #[error("insufficient total collateral: {total} < min stake {threshold}")]
-    InsufficientTotal { total: Value, threshold: Value },
-}
-
-/// Picks the smallest unlocked note that meets `threshold`, so the least
-/// collateral is locked and larger notes stay free.
-pub fn select_service_note<Id: Copy>(
-    notes: &[(Id, Value)],
-    is_locked: impl Fn(Id) -> bool,
-    threshold: Value,
-) -> Result<Id, ServiceNoteError> {
-    if notes.is_empty() {
-        return Err(ServiceNoteError::NoNotes);
-    }
-
-    let unlocked: Vec<_> = notes.iter().filter(|(id, _)| !is_locked(*id)).collect();
-    if unlocked.is_empty() {
-        return Err(ServiceNoteError::AllLocked {
-            locked: notes.len(),
-        });
-    }
-
-    if let Some((id, _)) = unlocked
-        .iter()
-        .filter(|(_, value)| *value >= threshold)
-        .min_by_key(|(_, value)| *value)
-    {
-        return Ok(*id);
-    }
-
-    let total = unlocked.iter().map(|(_, value)| *value).sum();
-    if total >= threshold {
-        let largest = unlocked.iter().map(|(_, value)| *value).max().unwrap_or(0);
-        return Err(ServiceNoteError::NoSingleNoteMeetsThreshold {
-            largest,
-            total,
-            threshold,
-        });
-    }
-
-    Err(ServiceNoteError::InsufficientTotal { total, threshold })
-}
-
 pub async fn blend_join_network<BlendService, RuntimeServiceId>(
     handle: &overwatch::overwatch::OverwatchHandle<RuntimeServiceId>,
     locator: lb_core::sdp::Locator,
-    service_note_id: lb_core::mantle::NoteId,
+    amount: Value,
 ) -> Result<lb_sdp_service::SdpSubmission, overwatch::DynError>
 where
     BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
@@ -120,7 +63,7 @@ where
     relay
         .send(ProxyServiceMessage::JoinAsCore {
             locator,
-            service_note_id,
+            amount,
             reply: sender,
         })
         .await
@@ -199,74 +142,4 @@ where
             Ok(id(&Transaction::from_bytes(encoded_transaction)?))
         })
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn never_locked(_: u8) -> bool {
-        false
-    }
-
-    #[test]
-    fn picks_smallest_note_that_meets_threshold() {
-        let notes = [(1u8, 1000), (2, 3000), (3, 10000), (4, 5050)];
-        assert_eq!(select_service_note(&notes, never_locked, 5000), Ok(4));
-    }
-
-    #[test]
-    fn exact_threshold_qualifies() {
-        let notes = [(1u8, 5000)];
-        assert_eq!(select_service_note(&notes, never_locked, 5000), Ok(1));
-    }
-
-    #[test]
-    fn total_sufficient_but_no_single_note() {
-        let notes = [(1u8, 1000), (2, 2000), (3, 3000)];
-        assert_eq!(
-            select_service_note(&notes, never_locked, 5000),
-            Err(ServiceNoteError::NoSingleNoteMeetsThreshold {
-                largest: 3000,
-                total: 6000,
-                threshold: 5000,
-            })
-        );
-    }
-
-    #[test]
-    fn total_insufficient() {
-        let notes = [(1u8, 1000), (2, 2000)];
-        assert_eq!(
-            select_service_note(&notes, never_locked, 5000),
-            Err(ServiceNoteError::InsufficientTotal {
-                total: 3000,
-                threshold: 5000,
-            })
-        );
-    }
-
-    #[test]
-    fn locked_notes_are_skipped() {
-        let notes = [(1u8, 10000), (2, 6000)];
-        assert_eq!(select_service_note(&notes, |id| id == 1, 5000), Ok(2));
-    }
-
-    #[test]
-    fn all_locked() {
-        let notes = [(1u8, 10000)];
-        assert_eq!(
-            select_service_note(&notes, |_| true, 5000),
-            Err(ServiceNoteError::AllLocked { locked: 1 })
-        );
-    }
-
-    #[test]
-    fn no_notes() {
-        let notes: [(u8, Value); 0] = [];
-        assert_eq!(
-            select_service_note(&notes, never_locked, 5000),
-            Err(ServiceNoteError::NoNotes)
-        );
-    }
 }

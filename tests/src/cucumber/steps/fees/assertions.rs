@@ -7,8 +7,8 @@ use cucumber::gherkin::Step;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        gas::{GasPrice, MainnetGasProfile, TxGasCalculator as _},
-        transactions::tx_list::ops::OpsGasContext,
+        gas::{GasCost, GasPrice, MainnetGasProfile, TxGasCalculator as _},
+        transactions::{GasPrices, tx_list::ops::OpsGasContext},
     },
 };
 use tracing::info;
@@ -91,15 +91,15 @@ pub async fn wallet_debited_exactly_fee(
     let genesis_funds: u64 = world
         .chain
         .genesis_block_utxos
+        .notes
         .iter()
-        .filter(|utxo| utxo.note.pk == account.public_key())
-        .map(|utxo| utxo.note.value)
+        .filter(|note| note.public_key == account.public_key())
+        .map(|note| note.value)
         .sum();
 
-    let burned = fee_spec::net_balance_against(&world.chain.genesis_block_utxos, &signed_tx)
-        .map_err(|message| StepError::StepFail {
-            message: format!("Step `{}` error: {message}", step.value),
-        })?;
+    let burned = fee_spec::net_balance(&signed_tx).map_err(|message| StepError::StepFail {
+        message: format!("Step `{}` error: {message}", step.value),
+    })?;
 
     let expected = genesis_funds - burned;
 
@@ -110,7 +110,7 @@ pub async fn wallet_debited_exactly_fee(
             Ok(response) if response.balance == expected => {
                 info!(
                     target: TARGET,
-                    "Wallet '{wallet_name}' was debited exactly the {burned} LGO fee of \
+                    "Wallet '{wallet_name}' was debited exactly the {burned} units fee of \
                      `{transaction_alias}` (balance {expected})",
                 );
                 return Ok(());
@@ -145,11 +145,9 @@ pub async fn prepared_transaction_tip_absorbed_fee_increase(
     let client = world.resolve_node_http_client(node_name)?;
     let prices = actions::live_gas_prices(&client, step).await?;
     let remaining_tip =
-        fee_spec::fee_surplus_at(&world.chain.genesis_block_utxos, &signed_tx, &prices).map_err(
-            |message| StepError::StepFail {
-                message: format!("Step `{}` error: {message}", step.value),
-            },
-        )?;
+        fee_spec::fee_surplus_at(&signed_tx, &prices).map_err(|message| StepError::StepFail {
+            message: format!("Step `{}` error: {message}", step.value),
+        })?;
 
     if !(0 < remaining_tip && remaining_tip < i128::from(original_tip)) {
         return Err(StepError::StepFail {
@@ -171,10 +169,10 @@ pub async fn prepared_transaction_tip_absorbed_fee_increase(
     Ok(())
 }
 
-/// Recalculates the mandatory fee of a percentage-funded transaction at the
-/// current prices and verifies that the price increase consumed part of its
-/// original reserve without making it underfunded.
-pub async fn prepared_transaction_percentage_reserve_absorbed_fee_increase(
+/// Verifies that a percentage reserve absorbs the peak recorded storage price.
+///
+/// The transaction must also remain funded at the current prices.
+pub async fn prepared_transaction_percentage_reserve_covers_repriced_fee(
     world: &CucumberWorld,
     step: &Step,
     transaction_alias: &str,
@@ -193,19 +191,21 @@ pub async fn prepared_transaction_percentage_reserve_absorbed_fee_increase(
     }
 
     let signed_tx = world.resolve_prepared_transaction(transaction_alias)?;
+    let mandatory_fee_at = |prices: GasPrices| {
+        signed_tx
+            .op_refs()
+            .total_gas_cost::<MainnetGasProfile>(&OpsGasContext::new(HashMap::new(), prices))
+            .map(GasCost::into_inner)
+            .map_err(|source| StepError::StepFail {
+                message: format!(
+                    "Step `{}` error: mandatory fee calculation failed: {source}",
+                    step.value
+                ),
+            })
+    };
     let client = world.resolve_node_http_client(node_name)?;
     let prices = actions::live_gas_prices(&client, step).await?;
-    let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone());
-    let current_mandatory_fee = signed_tx
-        .op_refs()
-        .total_gas_cost::<MainnetGasProfile>(&gas_context)
-        .map_err(|source| StepError::StepFail {
-            message: format!(
-                "Step `{}` error: current mandatory fee calculation failed: {source}",
-                step.value
-            ),
-        })?
-        .into_inner();
+    let current_mandatory_fee = mandatory_fee_at(prices.clone())?;
     let remaining_reserve = prepared_fee
         .funded_fee
         .checked_sub(current_mandatory_fee)
@@ -217,25 +217,38 @@ pub async fn prepared_transaction_percentage_reserve_absorbed_fee_increase(
             ),
         })?;
 
-    if remaining_reserve >= prepared_fee.initial_reserve {
+    // The execution price decays over the near empty blocks, so the storage
+    // rise is priced at the execution price the transaction was prepared at.
+    let peak_storage_price = recorded_gas_prices(world, step)?
+        .iter()
+        .map(|record| record.storage_price)
+        .max()
+        .unwrap_or(prepared_fee.initial_storage_price);
+    let peak_mandatory_fee = mandatory_fee_at(GasPrices {
+        execution_base_gas_price: GasPrice::new(prepared_fee.initial_execution_price),
+        storage_gas_price: GasPrice::new(peak_storage_price),
+    })?;
+    if !(prepared_fee.initial_mandatory_fee < peak_mandatory_fee
+        && peak_mandatory_fee <= prepared_fee.funded_fee)
+    {
         return Err(StepError::StepFail {
             message: format!(
-                "Step `{}` error: transaction `{transaction_alias}` reserve did not shrink: \
-                 initial mandatory={}, initial reserve={}, funded={}, current mandatory={}, \
-                 remaining reserve={}",
+                "Step `{}` error: transaction `{transaction_alias}` reserve does not absorb \
+                 the storage rise: initial mandatory={}, funded={}, peak storage price={}, \
+                 peak mandatory={}",
                 step.value,
                 prepared_fee.initial_mandatory_fee,
-                prepared_fee.initial_reserve,
                 prepared_fee.funded_fee,
-                current_mandatory_fee,
-                remaining_reserve,
+                peak_storage_price,
+                peak_mandatory_fee,
             ),
         });
     }
 
     info!(
         target: TARGET,
-        "Transaction `{transaction_alias}` retained a smaller effective reserve: \
+        "Transaction `{transaction_alias}` remains funded at current prices and at the peak \
+         storage price {peak_storage_price} (mandatory {peak_mandatory_fee}): \
          {}% of initial mandatory {} => reserve {}, funded {}; prices execution {} -> {}, \
          storage {} -> {}; current mandatory {}, remaining reserve {}",
         prepared_fee.percent,

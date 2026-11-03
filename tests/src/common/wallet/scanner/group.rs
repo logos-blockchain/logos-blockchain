@@ -1,5 +1,10 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+    time::Duration,
+};
 
+use lb_key_management_system_service::keys::UnsecuredZkKey;
 use lb_testing_framework::NodeHttpClient;
 
 use super::{
@@ -9,8 +14,10 @@ use super::{
 use crate::{
     common::wallet::TrackedWalletKeys,
     cucumber::{
-        error::StepError, fee_reserve::SCENARIO_FEE_ACCOUNT_NAME,
-        wallet::best_node::get_best_node_info_from_clients, world::CucumberWorld,
+        error::StepError,
+        fee_reserve::SCENARIO_FEE_ACCOUNT_NAME,
+        wallet::best_node::get_best_node_info_from_clients,
+        world::{CucumberWorld, WalletType},
     },
 };
 
@@ -85,12 +92,17 @@ pub fn build_fork_group_scanner_configs(
                 })?
         };
 
+        // A node wallet key is not tracked, the scanner derives nullifiers and
+        // proves with the secret key.
+        let WalletType::User { wallet_account } = &wallet.wallet_type else {
+            continue;
+        };
         let entry = groups
             .entry(group_id)
             .or_insert_with(|| (Vec::new(), Vec::new(), BTreeMap::new()));
         entry.1.push(TrackedWalletKeys::new(
             wallet.wallet_name.clone(),
-            [wallet.public_key()?],
+            [UnsecuredZkKey::new(*wallet_account.secret_key.as_fr())],
         ));
         entry
             .2
@@ -111,7 +123,7 @@ pub fn build_fork_group_scanner_configs(
             {
                 wallet_keys.push(TrackedWalletKeys::new(
                     SCENARIO_FEE_ACCOUNT_NAME,
-                    [fee_wallet_account.public_key()],
+                    [UnsecuredZkKey::new(*fee_wallet_account.secret_key.as_fr())],
                 ));
                 wallet_to_node.insert(SCENARIO_FEE_ACCOUNT_NAME.to_owned(), node_name);
                 assigned = true;
@@ -123,7 +135,7 @@ pub fn build_fork_group_scanner_configs(
                 .or_insert_with(|| (world.all_node_names(), Vec::new(), BTreeMap::new()));
             entry.1.push(TrackedWalletKeys::new(
                 SCENARIO_FEE_ACCOUNT_NAME,
-                [fee_wallet_account.public_key()],
+                [UnsecuredZkKey::new(*fee_wallet_account.secret_key.as_fr())],
             ));
             if let Some(node_name) = entry.0.first().cloned() {
                 entry
@@ -201,7 +213,7 @@ pub fn build_fork_group_scanner_configs(
             scanner_state: Arc::clone(&scanner_state),
             poll_interval: DEFAULT_SCANNER_POLL_INTERVAL,
             range_batch_size: DEFAULT_SCANNER_RANGE_BATCH_SIZE,
-            genesis_utxos: world.chain.genesis_block_utxos.clone(),
+            genesis_notes: world.chain.genesis_block_utxos.clone(),
             best_node_selector: Arc::clone(&selector),
         });
     }
@@ -222,7 +234,7 @@ fn scanner_seed_for_group(
         .map(|seed| seed.filtered_for_wallets(wallet_keys))
     {
         let ScannerSeed::Snapshot {
-            accounting,
+            wallet_utxos,
             tip,
             height,
             slot,
@@ -235,7 +247,7 @@ fn scanner_seed_for_group(
         };
 
         let seed = merged_seed.get_or_insert_with(|| ScannerSeed::Snapshot {
-            accounting: Box::new(super::accounting::ScannerAccountingSnapshot::default()),
+            wallet_utxos: HashMap::default(),
             tip,
             height,
             slot,
@@ -245,7 +257,7 @@ fn scanner_seed_for_group(
         });
 
         let ScannerSeed::Snapshot {
-            accounting: merged_accounting,
+            wallet_utxos: merged_wallet_utxos,
             tip: merged_tip,
             height: merged_height,
             slot: merged_slot,
@@ -266,7 +278,7 @@ fn scanner_seed_for_group(
             });
         }
 
-        merged_accounting.extend(*accounting);
+        merged_wallet_utxos.extend(wallet_utxos);
         merged_source_node_names.extend(source_node_names);
         *merged_rescan_blocks = (*merged_rescan_blocks).max(rescan_blocks);
         reassemble_fallback_checkpoints(merged_fallback_checkpoints, fallback_checkpoints)?;
@@ -307,7 +319,6 @@ fn reassemble_fallback_checkpoints(
                     });
                 }
                 existing.wallet_utxos.extend(checkpoint.wallet_utxos);
-                existing.accounting.extend(checkpoint.accounting);
             }
         }
     }
@@ -327,7 +338,6 @@ mod tests {
             tip: HeaderId::from([tip_byte; 32]),
             height,
             slot,
-            accounting: super::super::accounting::ScannerAccountingSnapshot::default(),
         }
     }
 

@@ -84,6 +84,8 @@ where
         state_recording_timer: tokio::time::Interval,
         prolonged_bootstrap_period: Duration,
     ) -> Self {
+        let StartingState::Genesis { genesis_block } = &starting_state;
+        let genesis_block = genesis_block.clone();
         Self {
             phase: AwaitingGenesisTime {
                 genesis_timer: create_genesis_timer(starting_state),
@@ -102,6 +104,7 @@ where
             state_recording_timer,
             prolonged_bootstrap_period,
             epoch_state_query_sources: crate::service::EpochStateQuerySourceTracker::default(),
+            genesis_block,
         }
     }
 

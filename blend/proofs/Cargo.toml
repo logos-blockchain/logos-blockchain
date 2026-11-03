@@ -32,6 +32,7 @@ zeroize         = { workspace = true }
 [dev-dependencies]
 const-hex                     = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
+lb-poq                        = { features = ["test-utils"], workspace = true }
 
 [features]
-unsafe-test-functions = []
+unsafe-test-functions = ["lb-poq/test-utils"]

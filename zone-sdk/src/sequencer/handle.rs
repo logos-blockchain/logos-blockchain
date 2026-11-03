@@ -2,7 +2,7 @@ use lb_core::{
     mantle::{
         SignedOps,
         channel::{SlotTimeframe, SlotTimeout},
-        ledger::{NoteId, verification_mode::StandardMode},
+        ledger::verification_mode::StandardMode,
         ops::channel::{MsgId, VerifiedChannelKeys, inscribe::Inscription},
         transactions::{Ops, states::Unverified},
     },
@@ -11,10 +11,7 @@ use lb_core::{
 use lb_key_management_system_service::keys::Ed25519Signature;
 
 use super::{
-    types::{
-        ChannelWalletView, Error, PreparedAtomicBundle, PreparedChannelConfig, WithdrawArg,
-        WithdrawInputs,
-    },
+    types::{Error, PreparedChannelConfig},
     zone_sequencer::ZoneSequencer,
 };
 use crate::{adapter, sequencer::zone_sequencer::PublishReceipt};
@@ -150,7 +147,6 @@ where
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
-        transfer_threshold: u16,
     ) -> Result<(PublishReceipt, SignedOps<Unverified, StandardMode>), Error> {
         self.sequencer
             .do_channel_config(
@@ -158,7 +154,6 @@ where
                 posting_timeframe,
                 posting_timeout,
                 configuration_threshold,
-                transfer_threshold,
             )
             .await
     }
@@ -184,7 +179,6 @@ where
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
-        transfer_threshold: u16,
     ) -> Result<PreparedChannelConfig, Error> {
         self.sequencer
             .do_prepare_channel_config(
@@ -192,7 +186,6 @@ where
                 posting_timeframe,
                 posting_timeout,
                 configuration_threshold,
-                transfer_threshold,
             )
             .await
     }
@@ -213,106 +206,5 @@ where
     ) -> Result<PublishReceipt, Error> {
         self.sequencer
             .do_submit_channel_config(prepared, signatures)
-    }
-
-    /// Publish an atomic inscription+withdraw bundle.
-    ///
-    /// Reads this sequencer's
-    /// accredited-key index from cached channel state (kept fresh by the
-    /// drive loop). Selects the inscription's `parent_msg` from the current
-    /// canonical tip, builds the bundled `MantleTx` (funding it from the
-    /// node's wallet, see
-    /// [`SequencerConfig::funding`](super::SequencerConfig::funding)), signs
-    /// the funded hash locally with the sequencer's key, and submits. Scoped to
-    /// single-sequencer (centralized) channels — only the sequencer's own
-    /// signature is used.
-    ///
-    /// Returns [`Error::Unavailable`] while cold-start backfill is still in
-    /// progress or the node is disconnected, as [`Self::publish`] does.
-    /// Returns [`Error::Network`] if the channel's `transfer_threshold > 1`
-    /// (which would require multi-sig orchestration this API doesn't
-    /// support).
-    ///
-    /// `inputs` chooses which tracked channel notes fund the transfer —
-    /// [`WithdrawInputs::Auto`] lets the SDK pick covering notes (newest
-    /// first, own-key notes ahead of the rest, then sweeping dust into the
-    /// spare input slots), or [`WithdrawInputs::Explicit`] pins an exact input
-    /// set.
-    pub async fn publish_atomic_withdraw(
-        &mut self,
-        inscribe: Inscription,
-        withdraws: Vec<WithdrawArg>,
-        inputs: WithdrawInputs,
-    ) -> Result<PublishReceipt, Error> {
-        self.sequencer
-            .do_publish_atomic_withdraw(inscribe, withdraws, inputs)
-            .await
-    }
-
-    /// Pin an observed deposit without waiting for finalization: publish
-    /// `[CHANNEL_INSCRIBE, CHANNEL_TRANSFER]`, the transfer consuming
-    /// `consumed_notes` (the deposit's channel `NoteId`s from `DepositInfo`) so
-    /// the tx lands only if the deposit is on chain. Same contract as
-    /// [`Self::publish_atomic_withdraw`]; [`Error::Network`] if a note is not
-    /// in the tracked set (deposit not on this branch, or already
-    /// consumed).
-    pub async fn publish_pin_deposit(
-        &mut self,
-        inscribe: Inscription,
-        consumed_notes: Vec<NoteId>,
-    ) -> Result<PublishReceipt, Error> {
-        self.sequencer
-            .do_publish_pin_deposit(inscribe, consumed_notes)
-            .await
-    }
-
-    /// Build and fund an atomic withdraw bundle for external multi-sig signing
-    /// — the multi-sig counterpart of [`Self::publish_atomic_withdraw`].
-    /// Collect signatures over `sign_payload` and submit via
-    /// [`Self::submit_atomic_bundle`]; the bundled inscription is turn-gated,
-    /// so prepare and submit from the current-turn sequencer.
-    pub async fn prepare_atomic_withdraw(
-        &mut self,
-        inscribe: Inscription,
-        withdraws: Vec<WithdrawArg>,
-        inputs: WithdrawInputs,
-    ) -> Result<PreparedAtomicBundle, Error> {
-        self.sequencer
-            .do_prepare_atomic_withdraw(inscribe, withdraws, inputs)
-            .await
-    }
-
-    /// Build and fund a pin-deposit bundle for external multi-sig signing — the
-    /// multi-sig counterpart of [`Self::publish_pin_deposit`]. See
-    /// [`Self::prepare_atomic_withdraw`] for the signing/submission contract.
-    pub async fn prepare_pin_deposit(
-        &mut self,
-        inscribe: Inscription,
-        consumed_notes: Vec<NoteId>,
-    ) -> Result<PreparedAtomicBundle, Error> {
-        self.sequencer
-            .do_prepare_pin_deposit(inscribe, consumed_notes)
-            .await
-    }
-
-    /// Submit a [`PreparedAtomicBundle`] with its externally-collected
-    /// signatures.
-    ///
-    /// `signatures` must be indexed against
-    /// [`PreparedAtomicBundle::accredited_keys`], with at most one signature
-    /// per index, in any order. Handles both atomic-withdraw and pin-deposit
-    /// bundles.
-    pub fn submit_atomic_bundle(
-        &mut self,
-        prepared: PreparedAtomicBundle,
-        signatures: IndexedSignatures,
-    ) -> Result<PublishReceipt, Error> {
-        self.sequencer.do_submit_atomic_bundle(prepared, signatures)
-    }
-
-    /// The channel's tracked note set — see [`ZoneSequencer::channel_wallet`].
-    #[must_use]
-    pub fn channel_wallet(&self) -> ChannelWalletView {
-        self.sequencer.channel_wallet()
     }
 }

@@ -5,7 +5,10 @@ use lb_core::{
     mantle::{
         ConsensusExcludedKeys, GenesisParameters, GenesisTime,
         ops::{
-            channel::{ChannelId, MsgId, inscribe::InscriptionOp},
+            channel::{
+                ChannelId, MsgId,
+                inscribe::{ChannelSteps, InscriptionOp},
+            },
             pow::PowReward,
         },
         transactions::genesis_tx::ChainId,
@@ -68,5 +71,6 @@ pub fn inscribe<D: ZkDigest>(
         parent: MsgId::root(),
         signer: UnverifiedEd25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY)
             .expect("Constant EMPTY_ED25519_PUBLIC_KEY should be valid"),
+        steps: ChannelSteps::default(),
     }
 }

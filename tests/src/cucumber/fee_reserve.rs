@@ -3,8 +3,9 @@ use std::{
     num::NonZero,
 };
 
-use lb_core::mantle::{NoteId, Utxo, transactions::GENESIS_STORAGE_GAS_PRICE};
+use lb_core::mantle::{notes::NoteNullifier, transactions::GENESIS_STORAGE_GAS_PRICE};
 use lb_testing_framework::configs::wallet::WalletAccount;
+use lb_wallet::OwnedNote;
 use thiserror::Error;
 
 use crate::{
@@ -48,7 +49,7 @@ impl ScenarioFeeState {
         &mut self,
         wallet_name: impl Into<String>,
         group_key: impl Into<String>,
-        utxos: Vec<Utxo>,
+        utxos: Vec<OwnedNote>,
     ) {
         self.reservations
             .reserve_for_wallet(wallet_name, group_key, utxos);
@@ -108,7 +109,7 @@ impl ScenarioFeeState {
     pub fn state_observation_for(
         &self,
         wallet_id: impl Into<WalletId>,
-        on_chain_utxos: Vec<Utxo>,
+        on_chain_utxos: Vec<OwnedNote>,
     ) -> WalletStateView {
         let wallet_id = wallet_id.into();
         let group_key = fee_wallet_group_key(wallet_id.as_str()).unwrap_or_default();
@@ -118,7 +119,11 @@ impl ScenarioFeeState {
     }
 
     #[must_use]
-    fn available_utxos_for_group(&self, group_key: &str, on_chain_utxos: Vec<Utxo>) -> Vec<Utxo> {
+    fn available_utxos_for_group(
+        &self,
+        group_key: &str,
+        on_chain_utxos: Vec<OwnedNote>,
+    ) -> Vec<OwnedNote> {
         self.reservations
             .available_utxos_for_group(group_key, on_chain_utxos)
     }
@@ -133,7 +138,7 @@ struct ScenarioFeeReservations {
 #[derive(Clone, Debug, Default)]
 struct ScenarioFeeReservation {
     group_key: String,
-    utxos: Vec<Utxo>,
+    utxos: Vec<OwnedNote>,
 }
 
 impl ScenarioFeeReservations {
@@ -141,7 +146,7 @@ impl ScenarioFeeReservations {
         &mut self,
         wallet_name: impl Into<String>,
         group_key: impl Into<String>,
-        utxos: Vec<Utxo>,
+        utxos: Vec<OwnedNote>,
     ) {
         let reservation = self
             .reserved_by_wallet
@@ -163,28 +168,32 @@ impl ScenarioFeeReservations {
         self.reserved_by_wallet.len()
     }
 
-    fn available_utxos_for_group(&self, group_key: &str, on_chain_utxos: Vec<Utxo>) -> Vec<Utxo> {
+    fn available_utxos_for_group(
+        &self,
+        group_key: &str,
+        on_chain_utxos: Vec<OwnedNote>,
+    ) -> Vec<OwnedNote> {
         let reserved_note_ids = self.reserved_note_ids_for_group(group_key);
 
         on_chain_utxos
             .into_iter()
-            .filter(|utxo| !reserved_note_ids.contains(&utxo.id()))
+            .filter(|utxo| !reserved_note_ids.contains(&utxo.nullifier))
             .collect()
     }
 
-    fn reserved_utxos_for_group(&self, group_key: &str) -> Vec<Utxo> {
+    fn reserved_utxos_for_group(&self, group_key: &str) -> Vec<OwnedNote> {
         self.reserved_by_wallet
             .values()
             .filter(|reservation| reservation.group_key == group_key)
-            .flat_map(|reservation| reservation.utxos.iter().copied())
+            .flat_map(|reservation| reservation.utxos.iter().cloned())
             .collect()
     }
 
-    fn reserved_note_ids_for_group(&self, group_key: &str) -> HashSet<NoteId> {
+    fn reserved_note_ids_for_group(&self, group_key: &str) -> HashSet<NoteNullifier> {
         self.reserved_by_wallet
             .values()
             .filter(|reservation| reservation.group_key == group_key)
-            .flat_map(|reservation| reservation.utxos.iter().map(Utxo::id))
+            .flat_map(|reservation| reservation.utxos.iter().map(|utxo| utxo.nullifier))
             .collect()
     }
 }

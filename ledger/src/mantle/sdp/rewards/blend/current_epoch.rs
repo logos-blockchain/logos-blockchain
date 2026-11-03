@@ -81,6 +81,10 @@ impl CurrentEpochTracker {
         }
     }
 
+    pub const fn epoch_income(&self) -> Value {
+        self.epoch_income
+    }
+
     /// Finalizes the current epoch tracker.
     ///
     /// It returns [`CurrentEpochTrackerOutput::WithTargetEpoch`] by

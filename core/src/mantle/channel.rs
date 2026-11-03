@@ -2,19 +2,21 @@ use std::sync::Arc;
 
 use lb_binary_codec::canonical::BinaryCodec;
 use lb_cryptarchia_engine::Slot;
+use lb_program_spend::ZkProgramSpendInputsError;
+use lb_zktransfer::ZkTransferInputsError;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     events::TxEvent,
     mantle::{
-        NoteId,
-        channel_notes::{self, ChannelNotes},
         gas::ThresholdSource,
-        ledger::{self, verification_mode::GenesisMode},
+        ledger::verification_mode::GenesisMode,
+        note_set::{NoteSetError, NoteSetIndex, NoteSets},
+        notes::{NoteNullifier, ProgramId},
         ops::{
             SignedOperation,
             channel::{
-                ChannelId, ChannelKeyIndex, MsgId, UnverifiedChannelKeys,
+                ChannelId, ChannelKeyIndex, MsgId, NULL_CHANNEL_ID, UnverifiedChannelKeys,
                 inscribe::{InscriptionExecutionContext, InscriptionOp},
             },
         },
@@ -81,14 +83,6 @@ pub enum Error {
     ChannelNotFound { channel_id: ChannelId },
     #[error("The Channel Config isn't well-formed")]
     InvalidChannelConfig,
-    #[error("Channel transfer inputs and outputs have different total value")]
-    UnbalancedTransfer,
-    #[error(transparent)]
-    ChannelNotes(#[from] channel_notes::Error),
-    #[error("Inputs error: {0}")]
-    Inputs(#[from] ledger::InputsError),
-    #[error("Outputs error: {0}")]
-    Outputs(#[from] ledger::OutputsError),
     #[error(
         "Invalid number of signatures (treshold:?) for channel {channel_id:?}, expected {actual:?}"
     )]
@@ -97,12 +91,45 @@ pub enum Error {
         threshold: u16,
         actual: usize,
     },
+    #[error("Channel {channel_id:?} has no note set")]
+    NoNoteSet { channel_id: ChannelId },
+    #[error(transparent)]
+    NoteSet(#[from] NoteSetError),
+    #[error(transparent)]
+    ZkTransferInputs(#[from] ZkTransferInputsError),
+    #[error("The inscription carries {proofs} step proofs for {steps} steps")]
+    StepProofCount { steps: usize, proofs: usize },
+    #[error("Note {0:?} is consumed by two steps of the inscription")]
+    StepDoubleSpend(NoteNullifier),
+    #[error("Program {0:?} is not registered")]
+    UnknownProgram(ProgramId),
+    #[error("The proof of step {step} is not of the kind of the step")]
+    StepProofKind { step: usize },
+    #[error("Program outputs of step {step} name an output it does not have")]
+    ProgramOutputsOutOfRange { step: usize },
+    #[error("Step {step} carries {proofs} payment proofs for {payments} payments")]
+    PaymentProofCount {
+        step: usize,
+        payments: usize,
+        proofs: usize,
+    },
+    #[error("Step {step} carries {openings} openings for {program_outputs} outputs of the program")]
+    ProgramNoteCount {
+        step: usize,
+        openings: usize,
+        program_outputs: usize,
+    },
+    #[error("The opening of output {output} of step {step} does not match it")]
+    ProgramNoteOpening { step: usize, output: usize },
+    #[error("The payments of step {step} overflow")]
+    PaidValueOverflow { step: usize },
+    #[error(transparent)]
+    ZkProgramSpendInputs(#[from] ZkProgramSpendInputsError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Channels {
     pub channels: rpds::HashTrieMapSync<ChannelId, ChannelState>,
-    channel_notes: ChannelNotes,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,12 +156,8 @@ pub struct ChannelState {
     pub posting_timeout: SlotTimeout,     // number of slots (0 = no timeout)
 
     // Bridging
-    pub transfer_threshold: ChannelKeyIndex, /* indicating how many keys are required to
-                                              * transfer or withdraw funds from the
-                                              * channel */
+    pub note_set: Option<NoteSetIndex>, // index of the note set, None for the null channel
 }
-
-pub(crate) const DEFAULT_TRANSFER_THRESHOLD: ChannelKeyIndex = 1;
 
 impl Default for Channels {
     fn default() -> Self {
@@ -148,32 +171,35 @@ impl ThresholdSource for Channels {
             .get(channel)
             .map_or(0, |channel| channel.configuration_threshold)
     }
-
-    fn transfer_threshold(&self, channel: &ChannelId) -> ChannelKeyIndex {
-        self.channels
-            .get(channel)
-            .map_or(0, |channel| channel.transfer_threshold)
-    }
 }
 
 impl Channels {
     pub fn from_genesis(
-        signed_operation: SignedOperation<InscriptionOp, Verified, GenesisMode>,
+        signed_operations: [SignedOperation<InscriptionOp, Verified, GenesisMode>; 2],
     ) -> Result<(Self, Vec<TxEvent>), Error> {
-        let (context, events) = signed_operation
-            .execute(InscriptionExecutionContext {
-                channels: Self::default(),
-                block_slot: Slot::default(),
-            })
-            .map_err(|(_signed_operation, error)| error)?;
-        Ok((context.channels, events))
+        // The Cryptarchia inscription creates the null channel and the distribution
+        // inscription follows it; `GenesisTx` checked the null channel, the null key,
+        // the parent chain and the absence of steps. The null channel gets no note set.
+        let mut context = InscriptionExecutionContext {
+            channels: Self::default(),
+            note_sets: NoteSets::new(),
+            block_slot: Slot::default(),
+        };
+        let mut all_events = Vec::new();
+        for signed_operation in signed_operations {
+            let (result, events) = signed_operation
+                .execute(context)
+                .map_err(|(_signed_operation, error)| error)?;
+            context = result;
+            all_events.extend(events);
+        }
+        Ok((context.channels, all_events))
     }
 
     #[must_use]
     pub fn new() -> Self {
         Self {
             channels: rpds::HashTrieMapSync::new_sync(),
-            channel_notes: ChannelNotes::new(),
         }
     }
 
@@ -182,36 +208,37 @@ impl Channels {
         self.channels.get(channel_id)
     }
 
-    /// Returns `true` if `note_id` is owned by any channel.
     #[must_use]
-    pub fn is_channel_note(&self, note_id: &NoteId) -> bool {
-        self.channel_notes.contains(note_id)
-    }
-
-    /// Returns `true` if `note_id` is a channel note owned by `channel_id`.
-    #[must_use]
-    pub(crate) fn is_channel_note_of(&self, note_id: &NoteId, channel_id: &ChannelId) -> bool {
-        self.channel_notes.is_a_channel(note_id, channel_id)
-    }
-
-    /// Registers `note_id` as a channel note owned by `channel_id`.
-    pub(crate) fn register_channel_note(
+    pub fn create_channel(
         mut self,
-        note_id: &NoteId,
-        channel_id: &ChannelId,
-    ) -> Result<Self, channel_notes::Error> {
-        self.channel_notes = self.channel_notes.into_channel(note_id, channel_id)?;
-        Ok(self)
-    }
-
-    /// Unregisters `note_id`, releasing it from `channel_id`'s ownership.
-    pub(crate) fn unregister_channel_note(
-        mut self,
-        note_id: &NoteId,
-        channel_id: &ChannelId,
-    ) -> Result<Self, channel_notes::Error> {
-        self.channel_notes = self.channel_notes.into_bedrock(note_id, channel_id)?;
-        Ok(self)
+        channel_id: ChannelId,
+        block_slot: Slot,
+        keys: UnverifiedChannelKeys,
+        note_sets: NoteSets,
+    ) -> (Self, NoteSets) {
+        // The null channel only receives the genesis inscriptions and holds no note.
+        let (note_sets, note_set) = if channel_id == NULL_CHANNEL_ID {
+            (note_sets, None)
+        } else {
+            let (note_sets, index) = note_sets.push_empty();
+            (note_sets, Some(index))
+        };
+        self.channels = self.channels.insert(
+            channel_id,
+            ChannelState {
+                accredited_keys: Arc::new(keys),
+                configuration_threshold: 1,
+                tip_message: MsgId::root(),
+                config_tip_hash: MsgId::root(),
+                tip_slot: block_slot,
+                tip_sequencer: 0,
+                tip_sequencer_starting_slot: block_slot,
+                posting_timeframe: 0.into(),
+                posting_timeout: 0.into(),
+                note_set,
+            },
+        );
+        (self, note_sets)
     }
 }
 
@@ -295,7 +322,7 @@ mod tests {
     use lb_key_management_system_keys::keys::{Ed25519Key, UnverifiedEd25519PublicKey};
 
     use super::*;
-    use crate::mantle::transactions::{GasPrices, tx_list::ops::OpsGasContext};
+    use crate::mantle::note_set::NoteSet;
 
     fn test_public_key(seed: u8) -> UnverifiedEd25519PublicKey {
         Ed25519Key::from_bytes(&[seed; 32])
@@ -325,60 +352,61 @@ mod tests {
             configuration_threshold: 0,
             tip_message: MsgId::root(),
             config_tip_hash: MsgId::root(),
-            transfer_threshold: 0,
+            note_set: None,
         }
     }
 
     #[test]
-    fn channels_to_gas_context_tracks_transfer_thresholds() {
-        let first_id = ChannelId::from([1u8; 32]);
-        let second_id = ChannelId::from([2u8; 32]);
-        let missing_id = ChannelId::from([0u8; 32]);
+    fn create_channel_gives_the_null_channel_no_note_set_and_others_the_next_set() {
+        let keys = UnverifiedChannelKeys::from(test_public_key(1));
+        let (channels, note_sets) = Channels::new().create_channel(
+            NULL_CHANNEL_ID,
+            Slot::new(3),
+            keys.clone(),
+            NoteSets::new(),
+        );
+        assert_eq!(note_sets, NoteSets::new());
+        let (channels, note_sets) = channels.create_channel(
+            ChannelId::from([1u8; 32]),
+            Slot::new(3),
+            keys.clone(),
+            note_sets,
+        );
+        let (channels, note_sets) = channels.create_channel(
+            ChannelId::from([2u8; 32]),
+            Slot::new(3),
+            keys.clone(),
+            note_sets,
+        );
 
-        let channels = Channels {
-            channels: rpds::HashTrieMapSync::new_sync()
-                .insert(
-                    first_id,
-                    ChannelState {
-                        accredited_keys: UnverifiedChannelKeys::from(test_public_key(11)).into(),
-                        configuration_threshold: 1,
-                        tip_message: MsgId::root(),
-                        config_tip_hash: MsgId::root(),
-                        tip_slot: Slot::default(),
-                        tip_sequencer: 0,
-                        tip_sequencer_starting_slot: Slot::default(),
-                        posting_timeframe: 0u32.into(),
-                        transfer_threshold: 1,
-                        posting_timeout: 0u32.into(),
-                    },
-                )
-                .insert(
-                    second_id,
-                    ChannelState {
-                        accredited_keys: UnverifiedChannelKeys::from([
-                            test_public_key(22),
-                            test_public_key(23),
-                        ])
-                        .into(),
-                        configuration_threshold: 1,
-                        tip_message: MsgId::root(),
-                        config_tip_hash: MsgId::root(),
-                        tip_slot: Slot::default(),
-                        tip_sequencer: 0,
-                        tip_sequencer_starting_slot: Slot::default(),
-                        posting_timeframe: 0.into(),
-                        transfer_threshold: 2,
-                        posting_timeout: 0.into(),
-                    },
-                ),
-            channel_notes: ChannelNotes::new(),
-        };
-
-        let gas_context = OpsGasContext::from_channels(&channels, GasPrices::new(0, 0));
-
-        assert_eq!(gas_context.transfer_threshold(&first_id), Some(1));
-        assert_eq!(gas_context.transfer_threshold(&second_id), Some(2));
-        assert_eq!(gas_context.transfer_threshold(&missing_id), None);
+        assert_eq!(
+            channels.channel_state(&NULL_CHANNEL_ID).unwrap().note_set,
+            None
+        );
+        assert_eq!(
+            channels
+                .channel_state(&ChannelId::from([2u8; 32]))
+                .unwrap()
+                .note_set,
+            Some(3)
+        );
+        assert_eq!(note_sets.get(3), Some(&NoteSet::empty()));
+        assert!(note_sets.get(4).is_none());
+        assert_eq!(
+            channels.channel_state(&ChannelId::from([1u8; 32])),
+            Some(&ChannelState {
+                accredited_keys: Arc::new(keys),
+                configuration_threshold: 1,
+                tip_message: MsgId::root(),
+                config_tip_hash: MsgId::root(),
+                tip_slot: Slot::new(3),
+                tip_sequencer: 0,
+                tip_sequencer_starting_slot: Slot::new(3),
+                posting_timeframe: 0.into(),
+                posting_timeout: 0.into(),
+                note_set: Some(2),
+            })
+        );
     }
 
     // 1. Infinite timeframe (timeframe=0): sequencer holds indefinitely unless

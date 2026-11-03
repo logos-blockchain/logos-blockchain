@@ -2,6 +2,8 @@
 
 A user guide for zone developers using the Zone SDK to move tokens between the Logos Blockchain and a zone over a channel.
 
+> **Status: suspended (RFC-480).** Channel notes are now private: a deposit creates commitments in the channel's note set, channel notes move only by the steps of `ChannelInscribe` (`ChannelStep`), each proven by the holder of the notes it spends, and a withdrawal is proven by the holder as well. `ChannelTransfer` and `transfer_threshold` are removed. The SDK's bridge (channel note tracking, atomic withdrawals, deposit pinning and the APIs built on them) is therefore removed until it is rebuilt on channel steps. The sequencer keeps publishing inscriptions and still surfaces observed deposits, as the nullifiers they consume and the commitments they create. The rest of this guide describes the former transparent bridge.
+
 
 ## What "bridging" means here
 
@@ -100,7 +102,7 @@ The channel's funds are not a field of `ChannelState`: they are the channel note
 
 The Bedrock user submits a transaction with a [`ChannelDeposit`](https://app.notion.com/p/nomos-tech/1-5-0-Mantle-33d261aa09df8051b0d0cd4d5ddade85?source=copy_link#80b261aa09df8353814a81efe0fbd8ed) operation, naming the target `channel`, the `inputs` notes being consumed, and opaque `metadata` the zone will interpret (e.g., the recipient address).
 
-The operation is proven with a `ZkSignature` over the consumed notes. On-chain execution spends the inputs and re-creates each one as a channel note with the same value and key.
+The operation is proven with a `ZkTransfer` proof over the consumed notes. On-chain execution spends the inputs and re-creates each one as a channel note with the same value and key.
 
 ### What the zone sequencer sees
 

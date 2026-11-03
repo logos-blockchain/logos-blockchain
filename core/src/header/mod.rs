@@ -1,13 +1,16 @@
 use core::fmt::{self, Debug, Formatter};
 
+use ark_ff::PrimeField as _;
 use blake2::Digest as _;
+#[cfg(test)]
+use lb_binary_codec::bincode::SerializeOp as _;
 use lb_binary_codec::{
-    bincode::{BoundedSerializeOp, SerializeOp as _},
+    bincode::BoundedSerializeOp,
     canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
 };
 use lb_cryptarchia_engine::Slot;
-use lb_groth16::fr_to_bytes;
-use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
+use lb_groth16::{Fr, fr_to_bytes};
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
 
 mod fixtures;
@@ -15,7 +18,7 @@ mod fixtures;
 use crate::{
     crypto::Hasher,
     mantle::transactions::GenesisTx,
-    proofs::leader_proof::{Groth16LeaderProof, LeaderProof as _},
+    proofs::leader_proof::{Groth16LeaderProof, LeaderProof, LeaderPublic},
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
@@ -78,7 +81,8 @@ impl BinaryEncode for Header {
             proof_of_leadership,
         } = self;
 
-        slot.encoded_length()
+        BEDROCK_VERSION.encoded_length()
+            + slot.encoded_length()
             + parent_block.encoded_length()
             + body_root.encoded_length()
             + proof_of_leadership.encoded_length()
@@ -92,10 +96,11 @@ impl BinaryEncode for Header {
             proof_of_leadership,
         } = self;
 
-        // The first field, which must never change across eras. A node reads the slot
-        // to learn which era's rules parse the rest of the header.
-        slot.encode_into(out);
+        // The wire layout leads with `bedrock_version`, which tells a node which
+        // rules parse the rest of the header.
+        BEDROCK_VERSION.encode_into(out);
         parent_block.encode_into(out);
+        slot.encode_into(out);
         body_root.encode_into(out);
         proof_of_leadership.encode_into(out);
     }
@@ -108,8 +113,15 @@ impl BinaryDecode for Header {
         input: &'input [u8],
         context: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, slot) = Slot::decode(input, context)?;
+        let (input, bedrock_version) = u8::decode(input, context)?;
+        // The block ID and `pol_msg` hash this constant.
+        if bedrock_version != BEDROCK_VERSION {
+            return Err(DecodeError::invalid_value::<Self>(
+                "unsupported bedrock_version",
+            ));
+        }
         let (input, parent_block) = HeaderId::decode(input, context)?;
+        let (input, slot) = Slot::decode(input, context)?;
         let (input, body_root) = ContentId::decode(input, context)?;
         let (input, proof_of_leadership) = Groth16LeaderProof::decode(input, context)?;
 
@@ -127,7 +139,8 @@ impl BinaryDecode for Header {
 
 impl Header {
     /// The fixed-size canonical representation of a header.
-    pub const CANONICAL_ENCODED_SIZE: usize = Slot::CANONICAL_ENCODED_SIZE
+    pub const CANONICAL_ENCODED_SIZE: usize = size_of::<u8>() // bedrock_version
+        + Slot::CANONICAL_ENCODED_SIZE
         + HeaderId::CANONICAL_ENCODED_SIZE
         + ContentId::CANONICAL_ENCODED_SIZE
         + Groth16LeaderProof::CANONICAL_ENCODED_SIZE;
@@ -139,13 +152,13 @@ impl Header {
 
     fn update_hasher(&self, h: &mut Hasher) {
         h.update(b"BLOCK_ID_V1");
+        h.update([BEDROCK_VERSION]);
         h.update(self.parent_block.0);
         h.update(self.slot.to_le_bytes());
         h.update(self.body_root.0);
-        h.update(self.proof_of_leadership.voucher_cm().to_bytes());
+        // The proof is left out, a Groth16 proof can be re-randomized.
+        h.update(fr_to_bytes(self.proof_of_leadership.reward_key().as_fr()));
         h.update(fr_to_bytes(&self.proof_of_leadership.entropy()));
-        h.update(self.proof_of_leadership.proof().to_bytes());
-        h.update(self.proof_of_leadership.leader_key().to_bytes());
     }
 
     #[must_use]
@@ -153,6 +166,16 @@ impl Header {
         let mut h = Hasher::new();
         self.update_hasher(&mut h);
         HeaderId(h.finalize().into())
+    }
+
+    #[must_use]
+    pub fn pol_msg(&self) -> Fr {
+        pol_msg(
+            &self.parent_block,
+            self.slot,
+            &self.body_root,
+            self.proof_of_leadership.reward_key(),
+        )
     }
 
     #[must_use]
@@ -168,11 +191,6 @@ impl Header {
     #[must_use]
     pub const fn slot(&self) -> Slot {
         self.slot
-    }
-
-    pub fn sign(&self, signing_key: &Ed25519Key) -> Result<Ed25519Signature, crate::block::Error> {
-        let header_bytes = self.to_bytes()?;
-        Ok(signing_key.sign_payload(&header_bytes))
     }
 
     #[must_use]
@@ -204,6 +222,46 @@ impl Header {
             Groth16LeaderProof::genesis(),
         )
     }
+}
+
+impl LeaderProof for Header {
+    fn verify(&self, public_inputs: &LeaderPublic) -> bool {
+        self.proof_of_leadership
+            .verify(public_inputs, self.pol_msg())
+    }
+
+    fn verify_genesis(&self) -> bool {
+        self.proof_of_leadership.verify_genesis()
+    }
+
+    fn entropy(&self) -> Fr {
+        self.proof_of_leadership.entropy()
+    }
+
+    fn reward_key(&self) -> &ZkPublicKey {
+        self.proof_of_leadership.reward_key()
+    }
+}
+
+// The spec's header `bedrock_version`, absorbed by the block ID and `pol_msg`.
+pub const BEDROCK_VERSION: u8 = 1;
+
+// Every header field except the proof and the entropy contribution.
+#[must_use]
+pub fn pol_msg(
+    parent_block: &HeaderId,
+    slot: Slot,
+    body_root: &ContentId,
+    reward_key: &ZkPublicKey,
+) -> Fr {
+    let mut h = Hasher::new();
+    h.update(b"POL_MSG_V1");
+    h.update([BEDROCK_VERSION]);
+    h.update(parent_block.0);
+    h.update(slot.to_le_bytes());
+    h.update(body_root.0);
+    h.update(fr_to_bytes(reward_key.as_fr()));
+    Fr::from_le_bytes_mod_order(&h.finalize())
 }
 
 impl From<[u8; 32]> for HeaderId {
@@ -365,6 +423,163 @@ fn test_serde_json_rejects_oversized_hex() {
     assert!(serde_json::from_str::<HeaderId>(&json).is_err());
 }
 
+#[test]
+fn pol_msg_hashes_the_header_fields_under_its_dst() {
+    use std::str::FromStr as _;
+
+    let parent_block = HeaderId([0x11; 32]);
+    let body_root = ContentId(
+        hex::decode("74e48ccd43051016138065265ee8af74cdd43b97c1624dd463da1fb9b345dc3f")
+            .unwrap()
+            .try_into()
+            .unwrap(),
+    );
+    let reward_key = ZkPublicKey::new(Fr::from(0x4444u64));
+
+    // Digest below p.
+    assert_eq!(
+        pol_msg(&parent_block, Slot::from(42u64), &body_root, &reward_key),
+        Fr::from_str(
+            "5749334279150289623698565865075820845675510690394950232192972695289993830655"
+        )
+        .unwrap()
+    );
+    // Digest 0x59707beb...a75c8d90 read little endian is above p and wraps.
+    assert_eq!(
+        pol_msg(&parent_block, Slot::from(43u64), &body_root, &reward_key),
+        Fr::from_str(
+            "21606329368332620161583374441374310760876754681324953590626645777046608506967"
+        )
+        .unwrap()
+    );
+    // The reward key is covered.
+    assert_eq!(
+        pol_msg(
+            &parent_block,
+            Slot::from(42u64),
+            &body_root,
+            &ZkPublicKey::new(Fr::from(0x4445u64))
+        ),
+        Fr::from_str(
+            "17375742548857974003166263505002194344126125145555977468185665333091871788864"
+        )
+        .unwrap()
+    );
+}
+
+#[test]
+fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
+    let body_root = ContentId(
+        hex::decode("2dc97b2bf6b57bf22cf6eaa43eb97dd2f159329b5ec0cb3a552e7fd340e98bd1")
+            .unwrap()
+            .try_into()
+            .unwrap(),
+    );
+    let header = |proof_byte: u8| {
+        Header::new(
+            HeaderId([0x11; 32]),
+            body_root,
+            Slot::from(42u64),
+            Groth16LeaderProof::from_parts(
+                lb_pol::PoLProof::from_bytes(&[proof_byte; 128]),
+                Fr::from(0x5555u64),
+                ZkPublicKey::new(Fr::from(0x4444u64)),
+            ),
+        )
+    };
+    assert_eq!(
+        hex::encode(header(0x22).id().0),
+        "08efd2edaec65c54a209f46d17a2fd7817a548830337869ca81d7830fb4e7c46"
+    );
+    assert_eq!(header(0x22).id(), header(0x23).id());
+    assert_eq!(
+        header(0x22).pol_msg(),
+        pol_msg(
+            &HeaderId([0x11; 32]),
+            Slot::from(42u64),
+            &body_root,
+            &ZkPublicKey::new(Fr::from(0x4444u64))
+        )
+    );
+
+    // The current spec vector, over the `body_root` of its empty uncle list.
+    let spec_header = Header::new(
+        HeaderId([0x11; 32]),
+        ContentId(
+            hex::decode("2dc97b2bf6b57bf22cf6eaa43eb97dd2f159329b5ec0cb3a552e7fd340e98bd1")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        ),
+        Slot::from(42u64),
+        Groth16LeaderProof::from_parts(
+            lb_pol::PoLProof::from_bytes(&[0x22; 128]),
+            Fr::from(0x5555u64),
+            ZkPublicKey::new(Fr::from(0x4444u64)),
+        ),
+    );
+    assert_eq!(
+        hex::encode(spec_header.id().0),
+        "08efd2edaec65c54a209f46d17a2fd7817a548830337869ca81d7830fb4e7c46"
+    );
+}
+
+#[test]
+fn header_proof_verifies_only_against_its_own_pol_msg() {
+    let parent_block = HeaderId([0x11; 32]);
+    let body_root = ContentId([0x22; 32]);
+    // The witness helper proves at slot 0.
+    let slot = Slot::from(0u64);
+    let reward_key = ZkPublicKey::new(Fr::from(0x44u64));
+    let msg = pol_msg(&parent_block, slot, &body_root, &reward_key);
+    let (public, private) = crate::proofs::leader_proof::test_utils::note_set_leader_inputs(
+        Fr::from(7u64),
+        1000,
+        Fr::from(11u64),
+        msg,
+    );
+    let proof = Groth16LeaderProof::prove(private, reward_key).unwrap();
+
+    assert!(Header::new(parent_block, body_root, slot, proof.clone()).verify(&public));
+    assert!(!Header::new(parent_block, ContentId([0x23; 32]), slot, proof.clone()).verify(&public));
+    let redirected = Groth16LeaderProof::from_parts(
+        *proof.proof(),
+        proof.entropy(),
+        ZkPublicKey::new(Fr::from(0x45u64)),
+    );
+    assert!(!Header::new(parent_block, body_root, slot, redirected).verify(&public));
+}
+
+#[test]
+fn header_wire_starts_with_the_bedrock_version() {
+    use lb_binary_codec::canonical::CodecExamples as _;
+
+    let header = Header::fixtures().into_iter().next().unwrap().value;
+    let mut bytes = header.encode_to_vec();
+    assert_eq!(bytes.len(), Header::CANONICAL_ENCODED_SIZE);
+    assert_eq!(bytes[0], BEDROCK_VERSION);
+    assert_eq!(Header::decode_all(&bytes, &()).unwrap(), header);
+
+    bytes[0] = BEDROCK_VERSION + 1;
+    assert!(Header::decode_all(&bytes, &()).is_err());
+}
+
+#[test]
+fn header_with_a_version_byte_other_than_one_is_rejected() {
+    use lb_binary_codec::canonical::CodecExamples as _;
+
+    assert_eq!(BEDROCK_VERSION, 0x01);
+    let header = Header::fixtures().into_iter().next().unwrap().value;
+    let mut bytes = header.encode_to_vec();
+    for version in (0..=u8::MAX).filter(|version| *version != 0x01) {
+        bytes[0] = version;
+        assert!(
+            Header::decode_all(&bytes, &()).is_err(),
+            "version {version:#04x}"
+        );
+    }
+}
+
 /// Body-root / `HeaderId` test-vector generator.
 ///
 /// This module does not assert library behaviour: it *emits* reference test
@@ -392,13 +607,13 @@ fn test_serde_json_rejects_oversized_hex() {
 ///
 /// `body_root = blake2b256( b"BODY_ROOT_V1" || uncle_headers ||
 /// transactions_root )`, where `uncle_headers` is the list encoding: a 1-byte
-/// little-endian element count followed by that many fixed 360-byte entries.
+/// little-endian element count followed by that many fixed 265-byte entries.
 ///
-/// `HeaderId (block_id) = blake2b256( b"BLOCK_ID_V1" || parent_block (32B) ||`
-/// `slot_le (8B) || body_root (32B) || leader_voucher (32B) ||`
-/// `entropy_contribution (32B) || proof (128B) || leader_key (32B) )`. The
-/// preimage keeps this field order, which is not the header's wire order
-/// (`slot` leads there).
+/// `HeaderId (block_id) = blake2b256( b"BLOCK_ID_V1" || bedrock_version (1B)
+/// ||` `parent_block (32B) || slot_le (8B) || body_root (32B) || reward_key
+/// (32B) ||` `entropy_contribution (32B) )`. The proof is left out, and the
+/// preimage absorbs `reward_key` before `entropy_contribution`, which is not
+/// the header's wire order.
 ///
 /// The test is `#[ignore]`d so it is skipped by `cargo test --all-features`.
 /// Run it on demand with:
@@ -406,33 +621,27 @@ fn test_serde_json_rejects_oversized_hex() {
 /// --nocapture`
 #[cfg(test)]
 mod body_root_test_vectors {
-    use lb_poseidon2::Fr;
-
     use super::*;
     use crate::{
-        block::{SignedHeader, UncleHeaders},
-        mantle::{ops::leader_claim::VoucherCm, traits::Hashable as _, transactions::Ops},
+        block::UncleHeaders,
+        mantle::{traits::Hashable as _, transactions::Ops},
         utils::merkle,
     };
 
     /// The uncle maximum of the vectors' era.
     const VECTOR_MAX_UNCLES: u8 = 4;
 
-    fn uncle(byte: u8) -> SignedHeader {
-        let signing_key = Ed25519Key::from_bytes(&[byte; 32]);
-        let header = Header::new(
+    fn uncle(byte: u8) -> Header {
+        Header::new(
             HeaderId([byte; 32]),
             ContentId([byte; 32]),
             Slot::from(u64::from(byte)),
             Groth16LeaderProof::from_parts(
                 lb_pol::PoLProof::from_bytes(&[byte; 128]),
                 Fr::from(u64::from(byte)),
-                signing_key.public_key(),
-                VoucherCm::from(Fr::from(u64::from(byte))),
+                ZkPublicKey::new(Fr::from(u64::from(byte))),
             ),
-        );
-        let signature = header.sign(&signing_key).expect("header serializes");
-        SignedHeader::new(header, signature)
+        )
     }
 
     /// Generates (and prints) the `body_root` / `HeaderId` test vectors.
@@ -441,7 +650,6 @@ mod body_root_test_vectors {
     /// vectors.
     #[test]
     #[ignore = "generates body_root/HeaderId test vectors on demand; run with --ignored --nocapture"]
-    #[expect(clippy::too_many_lines, reason = "a flat list of printed vectors")]
     fn generate_body_root_test_vectors() {
         println!();
         println!(
@@ -451,8 +659,8 @@ mod body_root_test_vectors {
             "body_root  = blake2b256( b\"BODY_ROOT_V1\" || uncle_headers || transactions_root )"
         );
         println!(
-            "block_id   = blake2b256( b\"BLOCK_ID_V1\" || parent_block || slot_le || body_root \
-             || leader_voucher || entropy_contribution || proof || leader_key )"
+            "block_id   = blake2b256( b\"BLOCK_ID_V1\" || bedrock_version || parent_block || \
+             slot_le || body_root || reward_key || entropy_contribution )"
         );
 
         // 1. Empty block: no transactions.
@@ -496,7 +704,7 @@ mod body_root_test_vectors {
 
         // 4. The same transactions with two carried uncles. Nothing downstream consumes
         //    this vector; it is here so that another implementation can check its
-        //    `uncle_headers` encoding, signatures included.
+        //    `uncle_headers` encoding.
         let uncles =
             UncleHeaders::try_new(vec![uncle(0x66), uncle(0x77)], VECTOR_MAX_UNCLES).unwrap();
         println!("================================================================");
@@ -506,7 +714,7 @@ mod body_root_test_vectors {
             println!(
                 "{:20}: {}",
                 format!("uncle_headers[{index}]"),
-                hex::encode(uncle.to_bytes().expect("uncle serializes"))
+                hex::encode(uncle.encode_to_vec())
             );
         }
         println!(
@@ -523,9 +731,8 @@ mod body_root_test_vectors {
         let slot = Slot::from(42u64);
         let proof = Groth16LeaderProof::from_parts(
             lb_pol::PoLProof::from_bytes(&[0x22u8; 128]),
-            Fr::from(0x5555u64), // entropy_contribution
-            Ed25519Key::from_bytes(&[0x33u8; 32]).public_key(), // leader_key
-            VoucherCm::from(Fr::from(0x4444u64)), // leader_voucher
+            Fr::from(0x5555u64),                   // entropy_contribution
+            ZkPublicKey::new(Fr::from(0x4444u64)), // reward_key
         );
         let header = Header::new(parent_block, body_root, slot, proof);
         let header_id = header.id();
@@ -536,13 +743,12 @@ mod body_root_test_vectors {
         let proof = header.leader_proof();
         let mut h = Hasher::new();
         h.update(b"BLOCK_ID_V1");
+        h.update([BEDROCK_VERSION]);
         h.update(parent_block.0);
         h.update(slot.to_le_bytes());
         h.update(body_root.0);
-        h.update(proof.voucher_cm().to_bytes());
+        h.update(fr_to_bytes(proof.reward_key().as_fr()));
         h.update(fr_to_bytes(&proof.entropy()));
-        h.update(proof.proof().to_bytes());
-        h.update(proof.leader_key().to_bytes());
         let manual: [u8; 32] = h.finalize().into();
         assert_eq!(
             manual, header_id.0,
@@ -552,27 +758,44 @@ mod body_root_test_vectors {
         println!("================================================================");
         // Field labels match the names in the `block_id`/`Header` specification.
         println!("vector 5  : HeaderId (block_id) reusing vector 3's body_root");
+        println!("{:20}: {:02x}", "bedrock_version", BEDROCK_VERSION);
         println!("{:20}: {}", "parent_block", hex::encode(parent_block.0));
         println!("{:20}: {}", "slot", u64::from(slot));
         println!("{:20}: {}", "body_root", hex::encode(body_root.0));
         // proof_of_leadership fields (here, the deterministic genesis proof).
         println!(
             "{:20}: {}",
-            "leader_voucher",
-            hex::encode(proof.voucher_cm().to_bytes())
+            "reward_key",
+            hex::encode(fr_to_bytes(proof.reward_key().as_fr()))
         );
         println!(
             "{:20}: {}",
             "entropy_contribution",
             hex::encode(fr_to_bytes(&proof.entropy()))
         );
-        println!("{:20}: {}", "proof", hex::encode(proof.proof().to_bytes()));
-        println!(
-            "{:20}: {}",
-            "leader_key",
-            hex::encode(proof.leader_key().to_bytes())
-        );
         println!("{:20}: {}", "block_id", hex::encode(header_id.0));
         println!("================================================================");
+    }
+
+    #[test]
+    fn body_root_matches_the_spec_vectors() {
+        let txs: Vec<Ops> = Ops::sample()
+            .into_iter()
+            .map(|op| Ops::from([op]))
+            .collect();
+        assert_eq!(
+            hex::encode(merkle::calculate_transactions_root(&txs)),
+            "f4b3a5f930ed2b502faf17aac050bae411a28d1e99516dc502ed2a95ab29df5f"
+        );
+        assert_eq!(
+            hex::encode(crate::block::body_root(&UncleHeaders::empty(), &txs).0),
+            "2dc97b2bf6b57bf22cf6eaa43eb97dd2f159329b5ec0cb3a552e7fd340e98bd1"
+        );
+        let uncles =
+            UncleHeaders::try_new(vec![uncle(0x66), uncle(0x77)], VECTOR_MAX_UNCLES).unwrap();
+        assert_eq!(
+            hex::encode(crate::block::body_root(&uncles, &txs).0),
+            "105059078a4206b1b1eff47b9bbaacff9e85523d620f728cc3e17076a81eb4ca"
+        );
     }
 }

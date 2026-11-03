@@ -64,7 +64,8 @@ where
     Ok(())
 }
 
-/// Claims the mined rewards, paying them to `claim_address`.
+/// Claims the mined rewards, paying them to `claim_address`, one of the node
+/// wallet's keys.
 ///
 /// `None` defers to the node's auto-claim configuration and pays whichever
 /// target is currently furthest below its threshold; it fails when no target
@@ -111,7 +112,7 @@ where
     )
 }
 
-/// Where a claim request pays the rewards.
+/// Where a claim request pays the rewards: a key of the node wallet.
 ///
 /// The whole body is optional, and so is the key inside it: both omitted mean
 /// "use the node's auto-claim target".

@@ -11,7 +11,7 @@ use lb_core::{
         ops::channel::ChannelId, transactions::states::Unverified,
     },
     proofs::leader_proof::Groth16LeaderProof,
-    sdp::{Declaration, DeclarationId, DeclarationMessage, ServiceType},
+    sdp::{Declaration, DeclarationId, ServiceType},
 };
 pub use lb_core::{
     events::{Event, Events, TxEventPayload},
@@ -28,24 +28,25 @@ use lb_http_api_common::{
         wallet::{
             aged_notes::LeaderAgedNotesResponseBody,
             balance::WalletBalanceResponseBody,
-            claimable_vouchers::WalletClaimableVouchersResponseBody,
             fund::{WalletFundRequestBody, WalletFundResponseBody},
+            import::WalletImportNoteRequestBody,
             transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
         },
     },
     paths::{
         BLEND_DISPERSE_TRANSACTION, BLEND_JOIN_NETWORK, BLEND_PENDING_TRANSACTIONS, BLOCK_EVENTS,
         BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHAIN_ID, CHANNEL,
-        CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_AGED_NOTES, LEADER_CLAIM_VOUCHERS,
-        MANTLE_GAS_PRICES, MANTLE_SDP_FINALIZED_DECLARATION, MANTLE_SDP_FINALIZED_DECLARATIONS,
-        MEMPOOL_ADD_TX, NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
-        wallet::{BALANCE, FUND, TRANSACTIONS_TRANSFER_FUNDS},
+        CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_AGED_NOTES, MANTLE_GAS_PRICES,
+        MANTLE_SDP_FINALIZED_DECLARATION, MANTLE_SDP_FINALIZED_DECLARATIONS, MEMPOOL_ADD_TX,
+        NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
+        wallet::{BALANCE, FUND, IMPORT_NOTE, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
     settings::default_max_body_size,
 };
-use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_log_targets::http_client;
+use lb_sdp_service::DeclarationRequest;
 pub use lb_sdp_service::SdpSubmission;
 use lb_version::BuildVersionInfo;
 use log::warn;
@@ -74,16 +75,8 @@ pub struct ApiHeader {
 #[derive(Clone, Debug, Deserialize)]
 pub struct ApiBlock {
     pub header: ApiHeader,
-    pub uncle_headers: Vec<ApiSignedHeader>,
+    pub uncle_headers: Vec<ApiHeader>,
     pub transactions: Vec<SignedOps<Unverified, StandardMode>>,
-}
-
-/// Client-side signed header representation matching the server's
-/// `ApiSignedHeader`.
-#[derive(Clone, Debug, Deserialize)]
-pub struct ApiSignedHeader {
-    pub header: ApiHeader,
-    pub signature: Ed25519Signature,
 }
 
 /// Processed block event from the block stream.
@@ -426,7 +419,7 @@ impl CommonHttpClient {
     pub async fn post_declaration(
         &self,
         base_url: Url,
-        declaration: &DeclarationMessage,
+        declaration: &DeclarationRequest,
     ) -> Result<SdpSubmission, Error> {
         let request_url = base_url
             .join(SDP_POST_DECLARATION.trim_start_matches('/'))
@@ -722,26 +715,6 @@ impl CommonHttpClient {
             .await
     }
 
-    /// Get claimable reward vouchers tracked by the wallet.
-    pub async fn get_claimable_vouchers(
-        &self,
-        base_url: Url,
-        tip: Option<HeaderId>,
-    ) -> Result<WalletClaimableVouchersResponseBody, Error> {
-        let mut request_url = base_url
-            .join(LEADER_CLAIM_VOUCHERS.trim_start_matches('/'))
-            .map_err(Error::Url)?;
-
-        if let Some(t) = tip {
-            request_url
-                .query_pairs_mut()
-                .append_pair("tip", &t.to_string());
-        }
-
-        self.get::<(), WalletClaimableVouchersResponseBody>(request_url, None)
-            .await
-    }
-
     /// Get the wallet notes that are aged enough to take part in the
     /// leadership lottery at `tip`, or at the current tip when `tip` is
     /// `None`. An empty `notes` means the node cannot win a slot.
@@ -790,6 +763,19 @@ impl CommonHttpClient {
     ) -> Result<WalletFundResponseBody, Error> {
         let request_url = base_url
             .join(FUND.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
+    /// Post a note paid to the node's wallet, so that the wallet can spend it.
+    pub async fn import_note(
+        &self,
+        base_url: Url,
+        body: WalletImportNoteRequestBody,
+    ) -> Result<(), Error> {
+        let request_url = base_url
+            .join(IMPORT_NOTE.trim_start_matches('/'))
             .map_err(Error::Url)?;
 
         self.post(request_url, &body).await

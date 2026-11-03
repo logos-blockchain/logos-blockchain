@@ -13,12 +13,11 @@ use axum::{
 use futures::TryStreamExt as _;
 use lb_api_service::http::{
     DynError, blend,
-    consensus::{self, Cryptarchia, leader::LeaderClaimResponseBody},
+    consensus::{self, Cryptarchia},
     libp2p, mantle, mempool, pow,
 };
 use lb_blend_service::message::ProxyServiceMessage;
 use lb_chain_broadcast_service::BlockBroadcastService;
-use lb_chain_leader_service::api::ChainLeaderServiceData;
 use lb_chain_service::{
     ChainServiceInfo, Slot,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
@@ -26,15 +25,18 @@ use lb_chain_service::{
 use lb_core::{
     header::HeaderId,
     mantle::{
-        NoteId, Op, OpProof, TxHash,
+        Note, Op, TxHash,
         channel::ChannelState,
         ledger::verification_mode::StandardMode,
-        ops::channel::ChannelId,
+        ops::channel::{ChannelId, deposit::DepositOp},
         traits::Hashable,
-        transactions::{MantleTxBuilder, genesis_tx::ChainId, states::Unverified},
+        transactions::{
+            MantleTxBuilder, builder::ZkTransferOpening, genesis_tx::ChainId, states::Unverified,
+        },
     },
     sdp::{DeclarationId, ServiceType},
 };
+use lb_groth16::fr_from_mod_bytes;
 use lb_http_api_common::{
     EraTiming, TimeInfo,
     bodies::{
@@ -44,9 +46,6 @@ use lb_http_api_common::{
         mantle::GasPricesResponseBody,
         wallet::{
             balance::WalletBalanceResponseBody,
-            claimable_vouchers::{
-                ClaimableVoucherInfoResponseBody, WalletClaimableVouchersResponseBody,
-            },
             transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
         },
     },
@@ -58,7 +57,8 @@ use lb_log_targets::node;
 use lb_network_service::{NetworkService, backends::libp2p::Libp2p as Libp2pNetworkBackend};
 use lb_pow_service::api::PoWServiceData;
 use lb_sdp_service::{
-    mempool::SdpMempoolAdapter, state::SdpStateStorage, wallet::SdpWalletAdapter,
+    DeclarationRequest, mempool::SdpMempoolAdapter, state::SdpStateStorage,
+    wallet::SdpWalletAdapter,
 };
 use lb_storage_service::{StorageService, api::StorageApi};
 use lb_time_service::{TimeServiceMessage, backends::NtpTimeBackend};
@@ -90,6 +90,7 @@ use crate::{
             transactions::ApiSignedTransaction,
         },
     },
+    generic_services::sdp::wallet::split_root,
 };
 
 const TARGET: &str = node::api::ROOT;
@@ -679,7 +680,6 @@ where
     request_body = JoinBlendRequestBody,
     responses(
         (status = 200, description = "Join the blend network", body = lb_sdp_service::SdpSubmission),
-        (status = 404, description = "No eligible note on this node's blend ZK key", body = ErrorBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -701,83 +701,28 @@ where
         + AsServiceId<WalletService>
         + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
-    let service_note_id = match blend_service_note::<BlendService, WalletService, RuntimeServiceId>(
-        &handle,
-        req.service_note_id,
-    )
-    .await
-    {
-        Ok(note_id) => note_id,
-        Err(error) => return error.into_response(),
+    let amount = if let Some(amount) = req.amount {
+        amount
+    } else {
+        let chain =
+            CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(&handle)
+                .await;
+        // The minimum stake of the era of the tip.
+        let slot = match chain.info().await {
+            Ok(info) => info.cryptarchia_info.slot,
+            Err(error) => return ApiError::internal(error).into_response(),
+        };
+        match chain.get_ledger_config(slot).await {
+            Ok(config) => config.sdp_config.min_stake.threshold,
+            Err(error) => return ApiError::internal(error).into_response(),
+        }
     };
 
     make_request_and_return_response!(blend::blend_join_network::<BlendService, RuntimeServiceId>(
         &handle,
         req.locator,
-        service_note_id
+        amount
     ))
-}
-
-async fn blend_service_note<BlendService, WalletService, RuntimeServiceId>(
-    handle: &OverwatchHandle<RuntimeServiceId>,
-    requested: Option<NoteId>,
-) -> Result<NoteId, ApiError>
-where
-    BlendService: ServiceData<
-            Message = ProxyServiceMessage<lb_blend_service::message::ServiceMessage<PeerId>>,
-        > + 'static,
-    WalletService: WalletServiceData + 'static,
-    RuntimeServiceId: Debug
-        + Send
-        + Sync
-        + Display
-        + 'static
-        + AsServiceId<BlendService>
-        + AsServiceId<WalletService>
-        + AsServiceId<Cryptarchia<RuntimeServiceId>>,
-{
-    if let Some(note_id) = requested {
-        return Ok(note_id);
-    }
-
-    let zk_id = blend::blend_zk_id::<BlendService, RuntimeServiceId>(handle)
-        .await
-        .map_err(ApiError::Internal)?;
-
-    let wallet_relay = get_relay::<WalletService, _>(handle).await?;
-    let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay);
-    let lb_wallet_service::TipResponse { tip, response } = wallet
-        .get_balance(None, zk_id)
-        .await
-        .map_err(ApiError::internal)?;
-    let balance = response.ok_or_else(|| {
-        ApiError::NotFound(format!("wallet does not hold blend ZK key {zk_id:?}"))
-    })?;
-
-    let chain =
-        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
-    let ledger = chain
-        .get_ledger_state(tip)
-        .await
-        .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::internal_message(format!("no ledger state at tip {tip:?}")))?;
-    // The minimum stake of the era of the tip the balance is read at.
-    let threshold = chain
-        .get_ledger_config(ledger.slot())
-        .await
-        .map_err(ApiError::internal)?
-        .sdp_config
-        .min_stake
-        .threshold;
-    let locked = ledger.mantle_ledger().service_notes();
-
-    let notes: Vec<_> = balance.notes.into_iter().collect();
-    blend::select_service_note(
-        &notes,
-        |note_id| locked.is_used_for_service(&note_id, &ServiceType::BlendNetwork),
-        threshold,
-    )
-    .map_err(|error| ApiError::NotFound(format!("blend ZK key {zk_id:?}: {error}")))
 }
 
 #[utoipa::path(
@@ -1099,6 +1044,7 @@ where
         + 'static
         + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<WalletService>
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
@@ -1118,15 +1064,61 @@ where
             handle.relay::<WalletService>().await?,
         );
 
-        let tx_builder = MantleTxBuilder::new()
-            .push_op(Op::ChannelDeposit(req.deposit))
-            .map_err(|e| overwatch::DynError::from(e.to_string()))?;
+        let owner = *req
+            .funding_public_keys
+            .first()
+            .ok_or_else(|| overwatch::DynError::from("no funding public key"))?;
+        let lb_wallet_service::TipResponse {
+            tip: split_tip,
+            response: (split_builder, exact),
+        } = wallet
+            .prepare_exact_note(
+                req.tip,
+                MantleTxBuilder::new(),
+                req.amount,
+                owner,
+                req.funding_public_keys.clone(),
+            )
+            .await?;
+        let commitment_merkle_root = split_root(&split_builder)?;
+        let holder_note = Note::new(
+            req.amount,
+            fr_from_mod_bytes(&rand::random::<[u8; 32]>()),
+            req.holder_public_key,
+        );
+        // the wallet adopts the holder note when it owns the holder key
+        if wallet
+            .get_known_addresses()
+            .await?
+            .contains(&req.holder_public_key)
+            && let Some(note_set) =
+                mantle::channel_state::<RuntimeServiceId>(&handle, req.channel_id)
+                    .await?
+                    .and_then(|channel| channel.note_set)
+        {
+            wallet.import_note(holder_note, note_set).await?;
+        }
+        let tx_builder = split_builder.push_op_with_opening(
+            Op::ChannelDeposit(DepositOp {
+                channel_id: req.channel_id,
+                inputs: [exact.nullifier].into(),
+                commitment_merkle_root,
+                outputs: [holder_note.commitment()].into(),
+                excess_value: 0,
+                metadata: req.metadata,
+            }),
+            ZkTransferOpening {
+                inputs: vec![exact.note],
+                outputs: vec![holder_note],
+            },
+        )?;
         let lb_wallet_service::TipResponse {
             tip,
             response: funded_tx_builder,
         } = wallet
             .fund_tx(
-                None,
+                // the split is proven against the root of this tip
+                Some(split_tip),
                 tx_builder,
                 req.change_public_key,
                 req.funding_public_keys,
@@ -1150,7 +1142,10 @@ where
         >(&handle, signed_tx, Hashable::hash)
         .await?;
 
-        Ok::<_, overwatch::DynError>(ChannelDepositResponseBody { hash: tx_hash })
+        Ok::<_, overwatch::DynError>(ChannelDepositResponseBody {
+            hash: tx_hash,
+            holder_note,
+        })
     })
 }
 
@@ -1170,7 +1165,7 @@ pub async fn post_declaration<
     RuntimeServiceId,
 >(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(declaration): Json<lb_core::sdp::DeclarationMessage>,
+    Json(declaration): Json<DeclarationRequest>,
 ) -> Response
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
@@ -1451,24 +1446,6 @@ where
         }
         Err(error) => ApiError::Internal(error).into_response(),
     }
-}
-
-#[utoipa::path(
-    post,
-    path = paths::LEADER_CLAIM,
-    responses(
-        (status = 200, description = "Leader claim transaction submitted", body = LeaderClaimResponseBody),
-        (status = 500, description = "Internal server error", body = ErrorBody),
-    )
-)]
-pub async fn leader_claim<ChainLeader, RuntimeServiceId>(
-    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-) -> Response
-where
-    ChainLeader: ChainLeaderServiceData,
-    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<ChainLeader>,
-{
-    make_request_and_return_response!(consensus::leader::claim(&handle))
 }
 
 #[utoipa::path(
@@ -1907,10 +1884,8 @@ pub mod wallet {
     use lb_http_api_common::bodies::wallet::{
         aged_notes::{LeaderAgedNoteResponseBody, LeaderAgedNotesResponseBody},
         fund::{WalletFundRequestBody, WalletFundResponseBody},
-        sign::{
-            WalletSignTxEd25519RequestBody, WalletSignTxEd25519ResponseBody,
-            WalletSignTxZkRequestBody, WalletSignTxZkResponseBody,
-        },
+        import::WalletImportNoteRequestBody,
+        sign::{WalletSignTxEd25519RequestBody, WalletSignTxEd25519ResponseBody},
     };
     use lb_key_management_system_service::keys::ZkPublicKey;
 
@@ -1995,7 +1970,8 @@ pub mod wallet {
                     .notes
                     .into_iter()
                     .map(|note| LeaderAgedNoteResponseBody {
-                        note_id: note.note_id,
+                        commitment: note.commitment,
+                        note_set: note.note_set,
                         value: note.value,
                         public_key: note.public_key,
                     })
@@ -2006,51 +1982,6 @@ pub mod wallet {
                     notes,
                     count,
                     total_value: response.total_value,
-                }
-                .into_response()
-            }
-            Err(error) => ApiError::internal(error).into_response(),
-        }
-    }
-
-    #[utoipa::path(
-    get,
-    path = paths::LEADER_CLAIM_VOUCHERS,
-    responses(
-        (status = 200, description = "Get claimable wallet vouchers"),
-        (status = 500, description = "Internal server error", body = ErrorBody),
-    )
-    )]
-    pub async fn get_claimable_vouchers<WalletService, RuntimeServiceId>(
-        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-        Query(query): Query<TipQuery>,
-    ) -> Response
-    where
-        WalletService: WalletServiceData + 'static,
-        RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
-    {
-        let wallet_relay = match get_relay::<WalletService, _>(&handle).await {
-            Ok(relay) => relay,
-            Err(error) => return error.into_response(),
-        };
-        let wallet_api = WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay);
-
-        match wallet_api.get_claimable_vouchers(query.tip).await {
-            Ok(lb_wallet_service::TipResponse { tip, response }) => {
-                let vouchers = response
-                    .vouchers
-                    .into_iter()
-                    .map(|voucher| ClaimableVoucherInfoResponseBody {
-                        commitment: voucher.commitment,
-                        nullifier: voucher.nullifier,
-                    })
-                    .collect();
-
-                WalletClaimableVouchersResponseBody {
-                    tip,
-                    vouchers,
-                    reward_amount: response.reward_amount,
-                    total_claimable: response.total_claimable,
                 }
                 .into_response()
             }
@@ -2124,9 +2055,10 @@ pub mod wallet {
 
         match transfer_funds {
             Ok(lb_wallet_service::TipResponse {
-                response: transaction,
+                response: (transaction, recipient_note),
                 ..
             }) => {
+                let hash = transaction.hash();
                 // Submit to mempool
                 if let Err(e) = mempool::add_tx::<
                     Libp2pNetworkBackend,
@@ -2139,13 +2071,17 @@ pub mod wallet {
                     ValidatedTx,
                     NtpTimeBackend,
                     RuntimeServiceId,
-                >(&handle, transaction.clone(), Hashable::hash)
+                >(&handle, transaction, Hashable::hash)
                 .await
                 {
                     return ApiError::Internal(e).into_response();
                 }
 
-                WalletTransferFundsResponseBody::from(transaction).into_response()
+                WalletTransferFundsResponseBody {
+                    hash,
+                    recipient_note,
+                }
+                .into_response()
             }
             Err(error) => ApiError::internal(error).into_response(),
         }
@@ -2204,62 +2140,6 @@ pub mod wallet {
 
             let sig = wallet.sign_tx_with_ed25519(req.tx_hash, req.pk).await?;
             Ok::<_, DynError>(WalletSignTxEd25519ResponseBody { sig })
-        })
-    }
-
-    #[utoipa::path(
-        post,
-        path = paths::wallet::SIGN_TX_ZK,
-        responses(
-            (status = 200, description = "Signed transaction"),
-            (status = 500, description = "Internal server error", body = ErrorBody),
-        )
-    )]
-    pub async fn sign_tx_zk<WalletService, StorageAdapter, RuntimeServiceId>(
-        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-        Json(req): Json<WalletSignTxZkRequestBody>,
-    ) -> Response
-    where
-        WalletService: WalletServiceData,
-        StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
-                RuntimeServiceId,
-                Item = ValidatedTx,
-                Key = <ValidatedTx as Hashable>::Hash,
-                BlockId = HeaderId,
-            > + Send
-            + Sync
-            + Clone
-            + 'static,
-        StorageAdapter::Error: Debug,
-        RuntimeServiceId: Debug
-            + Clone
-            + Display
-            + Send
-            + Sync
-            + 'static
-            + AsServiceId<StorageService<RuntimeServiceId>>
-            + AsServiceId<WalletService>
-            + AsServiceId<
-                TxMempoolService<
-                    MempoolNetworkAdapter<
-                        ValidatedTx,
-                        <ValidatedTx as Hashable>::Hash,
-                        RuntimeServiceId,
-                    >,
-                    Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
-                    StorageAdapter,
-                    NtpTimeBackend,
-                    RuntimeServiceId,
-                >,
-            >,
-    {
-        make_request_and_return_response!(async {
-            let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
-                handle.relay::<WalletService>().await?,
-            );
-
-            let sig = wallet.sign_tx_with_zk(req.tx_hash, req.pks).await?;
-            Ok::<_, DynError>(WalletSignTxZkResponseBody { sig })
         })
     }
 
@@ -2330,29 +2210,42 @@ pub mod wallet {
             let tx_fee = funded_tx_builder.tx_fee()?;
             validate_max_tx_fee(tx_fee, req.max_tx_fee)?;
 
-            // Owners of the funding inputs, in input order — the ledger
-            // verifies the transfer proof against this exact list.
-            let funding_note_pks: Vec<ZkPublicKey> = funded_tx_builder
-                .ledger_inputs()
-                .iter()
-                .map(|utxo| utxo.note.pk)
-                .collect();
-
-            let funded_tx = funded_tx_builder.build()?;
-            let transfer_proof = if funding_note_pks.is_empty() {
-                None
-            } else {
-                let tx_hash = funded_tx.hash();
-                Some(OpProof::ZkSig(
-                    wallet.sign_tx_with_zk(tx_hash, funding_note_pks).await?,
-                ))
-            };
+            let (funded_tx, transfer_proof) = wallet
+                .prove_funding(Some(tip), funded_tx_builder)
+                .await?
+                .response;
 
             Ok::<_, DynError>(WalletFundResponseBody {
                 tip,
                 funded_tx,
                 transfer_proof,
             })
+        })
+    }
+
+    #[utoipa::path(
+        post,
+        path = paths::wallet::IMPORT_NOTE,
+        responses(
+            (status = 200, description = "Note registered, adopted once its commitment is appended"),
+            (status = 500, description = "Internal server error", body = ErrorBody),
+        )
+    )]
+    pub async fn import_note<WalletService, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Json(req): Json<WalletImportNoteRequestBody>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData,
+        RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
+    {
+        make_request_and_return_response!(async {
+            let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+                handle.relay::<WalletService>().await?,
+            );
+
+            wallet.import_note(req.note, req.note_set).await?;
+            Ok::<_, DynError>(())
         })
     }
 }
@@ -2424,7 +2317,7 @@ mod tests {
             tip_sequencer_starting_slot: Slot::default(),
             posting_timeframe: SlotTimeframe::from(0),
             posting_timeout: SlotTimeout::from(0),
-            transfer_threshold: 1,
+            note_set: None,
         }
     }
 

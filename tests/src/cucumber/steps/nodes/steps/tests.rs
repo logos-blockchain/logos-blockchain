@@ -1,7 +1,33 @@
 use super::{
-    GenesisTime, OffsetDateTime, StepError,
+    GenesisTime, Key, OffsetDateTime, StepError, WalletAccount,
     genesis::{resolve_step_genesis_time, validate_genesis_time_change},
+    key_id_for_preload_backend,
+    lifecycle::node_wallet_key_overrides,
 };
+
+#[test]
+fn node_wallet_key_overrides_put_the_account_in_the_node_kms_and_wallet() {
+    let account = WalletAccount::deterministic(1, 0, true).expect("account");
+    let key: Key = account.secret_key.clone().into();
+    let key_id = key_id_for_preload_backend(&key);
+
+    let overrides = node_wallet_key_overrides("step", &account).expect("overrides");
+
+    let value_at = |path: String| {
+        overrides
+            .iter()
+            .find(|config_override| config_override.path == path)
+            .map(|config_override| config_override.value.clone())
+    };
+    assert_eq!(
+        value_at(format!("kms.backend.keys.{key_id}")),
+        Some(serde_yaml::to_value(&key).expect("key"))
+    );
+    assert_eq!(
+        value_at(format!("wallet.known_keys.{key_id}")),
+        Some(serde_yaml::to_value(account.public_key()).expect("public key"))
+    );
+}
 
 #[test]
 fn step_relative_genesis_time_uses_now_plus_offset() {

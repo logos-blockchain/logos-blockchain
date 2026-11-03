@@ -12,7 +12,7 @@ use lb_core::mantle::{
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 
-use super::error::WalletTransactionError;
+use super::{builder_funding::random_nonce, error::WalletTransactionError};
 #[derive(Clone)]
 pub struct WalletTransactionIntent {
     tx_builder: MantleTxBuilder,
@@ -47,13 +47,13 @@ impl WalletTransactionIntent {
 
     pub fn transfer(receivers: &[(ZkPublicKey, u64)]) -> Result<Self, WalletTransactionError> {
         let empty_context = OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::default()),
-            ..OpsContext::default()
+            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::default()),
         };
         let mut tx_builder = MantleTxBuilder::new();
 
         for (receiver_pk, value) in receivers {
-            tx_builder = tx_builder.add_ledger_output(Note::new(*value, *receiver_pk))?;
+            tx_builder =
+                tx_builder.add_ledger_output(Note::new(*value, random_nonce(), *receiver_pk))?;
         }
 
         Self::from_builder(tx_builder, empty_context)
@@ -73,7 +73,7 @@ impl WalletTransactionIntent {
 
     #[must_use]
     pub fn with_gas_prices(mut self, gas_prices: GasPrices) -> Self {
-        self.context.gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), gas_prices);
+        self.context.gas_context = OpsGasContext::new(HashMap::new(), gas_prices);
         self
     }
 
@@ -89,13 +89,12 @@ impl WalletTransactionIntent {
 }
 
 fn transfer_output_total(tx_builder: &MantleTxBuilder) -> Result<u64, WalletTransactionError> {
-    let ops = tx_builder.clone().build()?;
-    ops.iter()
-        .filter_map(|op| match op {
-            Op::Transfer(transfer) => Some(transfer),
-            _ => None,
-        })
-        .flat_map(|transfer| transfer.outputs.iter())
+    // The outputs are commitments, their values are in the openings of the
+    // builder.
+    tx_builder
+        .openings()
+        .values()
+        .flat_map(|opening| opening.outputs.iter())
         .try_fold(0u64, |total, note| {
             total
                 .checked_add(note.value)
@@ -105,7 +104,10 @@ fn transfer_output_total(tx_builder: &MantleTxBuilder) -> Result<u64, WalletTran
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::ops::channel::{ChannelId, MsgId, inscribe::Inscription};
+    use lb_core::mantle::ops::channel::{
+        ChannelId, MsgId,
+        inscribe::{ChannelSteps, Inscription},
+    };
 
     use super::*;
 
@@ -114,12 +116,13 @@ mod tests {
         let intent = WalletTransactionIntent::transfer(&[(ZkPublicKey::zero(), 10)])
             .expect("plain transfer intent");
         let (builder, _, sender_output_total, inscription_signers) = intent.into_parts();
-        let ops = builder.build().expect("transfer builder");
 
         assert_eq!(sender_output_total, 10);
         assert_eq!(inscription_signers, Vec::new());
-        assert_eq!(ops.len(), 1);
-        assert!(matches!(ops.iter().next(), Some(Op::Transfer(_))));
+        assert_eq!(
+            builder.openings().keys().copied().collect::<Vec<_>>(),
+            vec![0]
+        );
     }
 
     #[test]
@@ -131,17 +134,18 @@ mod tests {
                 .expect("small fixed-width payload"),
             parent: MsgId::root(),
             signer: signing_key.public_key().into_unverified(),
+            steps: ChannelSteps::default(),
         };
         let intent = WalletTransactionIntent::transfer(&[(ZkPublicKey::zero(), 10)])
             .expect("transfer intent")
             .with_leading_inscription(inscription, signing_key)
             .expect("hybrid intent");
         let (builder, _, _, inscription_signers) = intent.into_parts();
-        let ops = builder.build().expect("hybrid builder");
-
-        assert_eq!(ops.len(), 2);
-        assert!(matches!(ops.iter().next(), Some(Op::ChannelInscribe(_))));
-        assert!(matches!(ops.get(1), Some(Op::Transfer(_))));
+        // the funding Transfer follows the inscription
+        assert_eq!(
+            builder.openings().keys().copied().collect::<Vec<_>>(),
+            vec![1]
+        );
         assert_eq!(inscription_signers.len(), 1);
     }
 }

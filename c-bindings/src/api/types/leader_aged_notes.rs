@@ -1,15 +1,17 @@
 use std::ptr;
 
 use crate::api::{
-    cryptarchia::{HeaderId, NoteId},
+    cryptarchia::{HeaderId, NoteCommitment},
     types::value::Value,
 };
 
-/// One wallet-owned UTXO old enough to take part in the leadership lottery.
+/// One wallet-owned note old enough to take part in the leadership lottery.
 #[repr(C)]
 pub struct LeaderAgedNote {
-    /// The note ID, as 32 little-endian bytes.
-    pub id: NoteId,
+    /// The note commitment, as 32 little-endian bytes.
+    pub commitment: NoteCommitment,
+    /// The note set holding the note.
+    pub note_set: u64,
     /// The value staked by the note.
     pub value: Value,
     /// The wallet address holding the note, as 32 little-endian bytes.

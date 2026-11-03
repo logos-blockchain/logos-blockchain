@@ -31,23 +31,22 @@ pub fn calculate_transactions_root<T: Hashable<Hash = TxHash>>(transactions: &[T
 
 #[cfg(test)]
 mod tests {
-    use lb_key_management_system_keys::keys::ZkPublicKey;
+    use lb_groth16::{AdditiveGroup as _, Fr};
 
     use super::*;
     use crate::mantle::{
-        Note, Op,
-        ledger::{Inputs, Outputs},
+        Op,
+        notes::{InputNullifiers, NoteCommitment},
         ops::transfer::TransferOp,
         transactions::tx_list::Ops,
     };
 
     fn create_random_tx(seed: u32) -> Ops {
         Ops::from([Op::Transfer(TransferOp::new(
-            Inputs::empty(),
-            Outputs::new([Note {
-                value: seed.into(),
-                pk: ZkPublicKey::zero(),
-            }]),
+            InputNullifiers::default(),
+            [NoteCommitment(Fr::from(u64::from(seed)))].into(),
+            Fr::ZERO,
+            0,
         ))])
     }
 

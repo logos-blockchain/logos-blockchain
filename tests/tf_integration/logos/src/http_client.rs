@@ -9,7 +9,7 @@ use lb_chain_service::ChainServiceInfo;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        NoteId, SignedOps,
+        SignedOps, Value,
         ledger::verification_mode::StandardMode,
         transactions::{genesis_tx::ChainId, hash::TxHash, states::VerificationState},
     },
@@ -30,14 +30,14 @@ use lb_http_api_common::{
     paths::{
         BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS, MEMPOOL_VIEW,
         NETWORK_INFO, POW_CLAIM, POW_CLAIMABLE_REWARDS, POW_START_MINING, POW_STATUS,
-        POW_STOP_MINING,
+        POW_STOP_MINING, SDP_POST_WITHDRAWAL,
     },
     queries::BlocksStreamQuery,
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_network_service::backends::libp2p::Libp2pInfo;
-use lb_sdp_service::SdpSubmission;
+use lb_sdp_service::{DeclarationRequest, SdpSubmission};
 use lb_tx_service::MempoolMetrics;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -276,6 +276,33 @@ impl NodeHttpClient {
         self.get_sdp_declarations_at(self.base_url.clone()).await
     }
 
+    /// Posts a declaration the node's wallet funds and proves.
+    pub async fn post_declaration(
+        &self,
+        declaration: &DeclarationRequest,
+    ) -> Result<SdpSubmission, Error> {
+        self.with_timeout(
+            "SDP declaration request",
+            self.http_client
+                .post_declaration(self.base_url.clone(), declaration),
+        )
+        .await
+    }
+
+    /// Withdraws a declaration; the node's wallet spends its service note.
+    pub async fn post_withdrawal(
+        &self,
+        declaration_id: DeclarationId,
+    ) -> Result<SdpSubmission, Error> {
+        let request_url = Self::join_path(&self.base_url, SDP_POST_WITHDRAWAL)?;
+
+        self.with_timeout(
+            "SDP withdrawal request",
+            self.http_client.post(request_url, &declaration_id),
+        )
+        .await
+    }
+
     pub async fn get_finalized_sdp_declaration(
         &self,
         declaration_id: DeclarationId,
@@ -449,16 +476,10 @@ impl NodeHttpClient {
     pub async fn join_blend_network(
         &self,
         locator: Locator,
-        service_note_id: Option<NoteId>,
+        amount: Option<Value>,
     ) -> Result<SdpSubmission, Error> {
         self.http_client
-            .join_blend_network(
-                &self.base_url,
-                JoinBlendRequestBody {
-                    locator,
-                    service_note_id,
-                },
-            )
+            .join_blend_network(&self.base_url, JoinBlendRequestBody { locator, amount })
             .await
     }
 }

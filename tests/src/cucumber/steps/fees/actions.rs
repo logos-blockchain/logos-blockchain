@@ -36,10 +36,14 @@ use tokio::time::timeout;
 use tracing::info;
 
 use crate::{
-    common::fee_spec::{self, GasPriceRecord},
+    common::{
+        fee_spec::{self, GasPriceRecord},
+        wallet::record_note_openings,
+    },
     cucumber::{
         error::{StepError, StepResult},
         steps::TARGET,
+        wallet::submissions::import_notes_into_node,
         world::{CucumberWorld, PreparedPriorityFee, WalletType},
     },
 };
@@ -59,7 +63,7 @@ pub async fn prepare_self_transfer_with_tip(
     let client = world.resolve_node_http_client(node_name)?;
     let prices = live_gas_prices(&client, step).await?;
 
-    let signed_tx = fee_spec::self_transfer_paying_fee_at(
+    let (signed_tx, outputs) = fee_spec::self_transfer_paying_fee_at(
         &world.chain.genesis_block_utxos,
         &account,
         &prices,
@@ -71,6 +75,12 @@ pub async fn prepare_self_transfer_with_tip(
             message: format!("Step `{}` error: {message}", step.value),
         }
     })?;
+
+    // The wallet's node adopts the output only when it knows its opening
+    // before the block revealing its commitment.
+    record_note_openings(outputs.iter().copied());
+    let wallet_node = world.resolve_wallet(wallet_name)?.node_name;
+    import_notes_into_node(world, &wallet_node, outputs).await?;
 
     info!(
         target: TARGET,
@@ -101,7 +111,7 @@ pub async fn prepare_wallet_funded_self_transfer_with_priority_fee(
         fund_self_transfer(&client, step, funding_pk, priority_fee_percent).await?;
     let signed_tx = assemble_funded_transaction(response, step)?;
     let prepared_fee =
-        record_prepared_priority_fee(world, step, &signed_tx, &prices, priority_fee_percent)?;
+        record_prepared_priority_fee(step, &signed_tx, &prices, priority_fee_percent)?;
 
     info!(
         target: TARGET,
@@ -193,13 +203,12 @@ fn assemble_funded_transaction(
 }
 
 fn record_prepared_priority_fee(
-    world: &CucumberWorld,
     step: &Step,
     signed_tx: &SignedOps<Preverified, StandardMode>,
     prices: &GasPrices,
     priority_fee_percent: u64,
 ) -> Result<PreparedPriorityFee, StepError> {
-    let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone());
+    let gas_context = OpsGasContext::new(HashMap::new(), prices.clone());
     let initial_mandatory_fee = signed_tx
         .op_refs()
         .total_gas_cost::<MainnetGasProfile>(&gas_context)
@@ -216,10 +225,9 @@ fn record_prepared_priority_fee(
                 message: format!("Step `{}` error: {message}", step.value),
             },
         )?;
-    let funded_fee = fee_spec::net_balance_against(&world.chain.genesis_block_utxos, signed_tx)
-        .map_err(|message| StepError::StepFail {
-            message: format!("Step `{}` error: {message}", step.value),
-        })?;
+    let funded_fee = fee_spec::net_balance(signed_tx).map_err(|message| StepError::StepFail {
+        message: format!("Step `{}` error: {message}", step.value),
+    })?;
     let expected_funded_fee = initial_mandatory_fee
         .checked_add(initial_reserve)
         .ok_or_else(|| StepError::StepFail {
@@ -556,14 +564,14 @@ pub async fn concurrently_fund_transfers(
     let mut submitted = Vec::with_capacity(responses.len());
 
     for (alias, response) in responses {
-        let hash = response
-            .map_err(|source| StepError::StepFail {
-                message: format!(
-                    "Step `{}` error: concurrent transfer `{alias}` failed: {source}",
-                    step.value
-                ),
-            })?
-            .hash;
+        let response = response.map_err(|source| StepError::StepFail {
+            message: format!(
+                "Step `{}` error: concurrent transfer `{alias}` failed: {source}",
+                step.value
+            ),
+        })?;
+        record_note_openings([response.recipient_note]);
+        let hash = response.hash;
 
         if !hashes.insert(hash) {
             return Err(StepError::StepFail {

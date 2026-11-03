@@ -4,6 +4,7 @@ mod kms;
 mod leadership;
 mod mempool;
 mod metrics;
+mod proposal;
 mod relays;
 mod tx_selection;
 mod wallet;
@@ -29,12 +30,12 @@ use lb_core::{
         traits::{Hashable, MantleTx, SignedMantleTx, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
     },
-    proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
+    proofs::leader_proof::{Error as LeaderProofError, LeaderPrivate},
     sdp::blend::PolEpochState,
 };
 use lb_cryptarchia_engine::Slot;
-use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
-use lb_ledger::{ConsensusExcludedKeys, LedgerState, config::EraScheduledConfig};
+use lb_key_management_system_service::api::KmsServiceApi;
+use lb_ledger::{ConsensusExcludedKeys, EpochState, LedgerState, config::EraScheduledConfig};
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
@@ -45,7 +46,7 @@ use lb_tx_service::{
     network::NetworkAdapter as MempoolNetworkAdapter,
     storage::MempoolStorageAdapter,
 };
-use lb_utils::tokio::task::spawn;
+use lb_utils::tokio::task::{spawn, spawn_blocking};
 use lb_wallet_service::api::{WalletApi, WalletApiError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -53,7 +54,10 @@ use overwatch::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot};
+use tokio::{
+    sync::{mpsc, oneshot},
+    task::JoinError,
+};
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Level, debug, error, info, instrument, span, trace};
 use tracing_futures::Instrument as _;
@@ -62,9 +66,13 @@ use tx_selection::{TransactionSelection, select_transactions};
 pub use crate::wallet::LeaderWalletConfig;
 use crate::{
     blend::BlendAdapter,
-    kms::PreloadKmsService,
-    leadership::{SlotContext, build_proof_for, fetch_slot_context, search_for_winning_slots},
-    mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
+    kms::{KmsAdapter as _, PreloadKmsService},
+    leadership::{
+        PrivateInputsError, SlotContext, WinningNote, fetch_slot_context, find_winning_note,
+        leader_wallet_inputs, search_for_winning_slots,
+    },
+    mempool::MempoolAdapter as _,
+    proposal::{ProposalHeaderProof, assemble_block, block_msg},
     relays::CryptarchiaConsensusRelays,
 };
 
@@ -153,6 +161,12 @@ pub enum Error {
     ChainService(#[from] lb_chain_service::api::ApiError),
     #[error("Ledger state not found for {0:?}")]
     LedgerStateNotFound(HeaderId),
+    #[error("Private input generation failed: {0}")]
+    PrivateInputs(#[from] PrivateInputsError),
+    #[error("Proof generation failed: {0}")]
+    Proof(#[from] LeaderProofError),
+    #[error("Proof generation task failed: {0}")]
+    ProofTask(#[from] JoinError),
 }
 
 impl From<WalletApiError> for Error {
@@ -171,9 +185,6 @@ pub enum LeaderMsg {
     PotentialWinningPolEpochSlotStreamSubscribe {
         sender: oneshot::Sender<WinningPolEpochSlotsStream>,
     },
-    Claim {
-        sender: oneshot::Sender<Result<TxHash, Error>>,
-    },
 }
 
 impl Debug for LeaderMsg {
@@ -182,7 +193,6 @@ impl Debug for LeaderMsg {
             Self::PotentialWinningPolEpochSlotStreamSubscribe { .. } => {
                 f.write_str("PotentialWinningPolEpochSlotStreamSubscribe")
             }
-            Self::Claim { .. } => f.write_str("Claim"),
         }
     }
 }
@@ -416,7 +426,7 @@ where
         let LeaderSettings {
             era_schedule,
             consensus_excluded_keys,
-            wallet_config,
+            ..
         } = self
             .service_resources_handle
             .settings_handle
@@ -489,52 +499,57 @@ where
                             }
                         };
 
-                        let latest_tree = tip_state.latest_utxos();
-                        let proof = match build_proof_for(
+                        // The proof is produced once the body is fixed, in `propose_block`.
+                        let winning = find_winning_note(
                             &eligible_aged,
-                            latest_tree,
                             &epoch_state,
+                            tip_state.latest_note_sets(),
                             slot,
-                            &wallet_api,
                             &kms_api,
                         )
-                        .await
-                        {
-                            Ok(proof) => proof,
-                            Err(e) => {
-                                error!(
-                                    target: LOG_TARGET,
-                                    diagnostic = BLEND_REACHABILITY,
-                                    event = "leadership_proof_failure",
-                                    epoch = u32::from(era_schedule.epoch_for_slot(slot)),
-                                    slot = u64::from(slot),
-                                    error = %e,
-                                    "Failed to build leadership proof"
-                                );
-                                continue;
-                            }
-                        };
+                        .await;
 
-                        if let Some((proof, signing_key)) = proof {
+                        if let Some(winning) = winning {
                             // TODO: spawn as a separate task?
-                            match Self::propose_block(
+                            match Box::pin(Self::propose_block(
                                 wallet_tip,
                                 slot,
-                                proof,
-                                &signing_key,
+                                winning,
+                                &epoch_state,
                                 &cryptarchia_api,
+                                &wallet_api,
+                                &kms_api,
                                 &relays,
                                 tip_state,
                                 &era_schedule,
-                            )
+                            ))
                             .await
                             {
                                 Ok(block) => {
                                     Self::apply_and_publish_block_proposal(block, &chain_network_api, &blend_adapter).await;
                                 }
                                 Err(e) => {
-                                    metrics::consensus_proposals_create_failed("propose_block");
-                                    error!(target: LOG_TARGET, "{e}");
+                                    let proof_stage = match e {
+                                        Error::PrivateInputs(_) => Some("private_inputs"),
+                                        Error::Proof(_) => Some("proof_generation"),
+                                        Error::ProofTask(_) => Some("proof_task"),
+                                        _ => None,
+                                    };
+                                    if let Some(stage) = proof_stage {
+                                        metrics::consensus_proposals_create_failed(stage);
+                                        error!(
+                                            target: LOG_TARGET,
+                                            diagnostic = BLEND_REACHABILITY,
+                                            event = "leadership_proof_failure",
+                                            epoch = u32::from(era_schedule.epoch_for_slot(slot)),
+                                            slot = u64::from(slot),
+                                            error = %e,
+                                            "Failed to build leadership proof"
+                                        );
+                                    } else {
+                                        metrics::consensus_proposals_create_failed("propose_block");
+                                        error!(target: LOG_TARGET, "{e}");
+                                    }
                                 }
                             }
                         }
@@ -545,7 +560,7 @@ where
                     }
 
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
-                        Self::handle_inbound_message(msg, &cryptarchia_api, &wallet_api, &kms_api, relays.time_relay(), &era_schedule, &consensus_excluded_keys, &wallet_config, relays.mempool_adapter()).await;
+                        Self::handle_inbound_message(msg, &cryptarchia_api, &wallet_api, &kms_api, relays.time_relay(), &era_schedule, &consensus_excluded_keys);
                     }
                 }
             }
@@ -639,17 +654,21 @@ where
             ledger_state,
             era_schedule,
             cryptarchia_api,
-            proof,
-            signing_key
+            winning,
+            epoch_state,
+            wallet_api,
+            kms
         )
     )]
     #[expect(clippy::too_many_arguments, reason = "Need all args")]
     async fn propose_block(
         parent: HeaderId,
         slot: Slot,
-        proof: Groth16LeaderProof,
-        signing_key: &Ed25519Key,
+        winning: WinningNote,
+        epoch_state: &EpochState,
         cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
+        wallet_api: &WalletApi<Wallet, RuntimeServiceId>,
+        kms: &KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
         relays: &CryptarchiaConsensusRelays<
             BlendService,
             Mempool,
@@ -676,11 +695,18 @@ where
                 UncleHeaders::empty()
             });
 
+        let reward_key = wallet_api.generate_reward_key().await?;
+        // The witness proves the note unspent in the note sets of the parent.
+        let wallet_inputs =
+            leader_wallet_inputs(&winning, epoch_state, ledger_state.latest_note_sets())?;
+
+        // The proof is produced once the body is fixed; the block is applied
+        // with its real proof by the chain network.
         (ledger_state, _) = ledger_state
             .clone()
-            .try_apply_header::<Groth16LeaderProof, HeaderId>(
+            .try_apply_header::<ProposalHeaderProof, HeaderId>(
                 slot,
-                &proof,
+                &ProposalHeaderProof { reward_key },
                 &uncle_headers.slots(),
                 era_schedule,
             )?;
@@ -704,7 +730,20 @@ where
         let valid_tx_stream = stream::iter(selected_txs);
         let txs = txs_for_block(valid_tx_stream).await;
 
-        let block = Block::create(parent, slot, uncle_headers, proof, txs, signing_key)?;
+        // The PoL is bound to the header by pol_msg, blocks carry no signature.
+        let msg = block_msg(&parent, slot, &uncle_headers, txs.as_slice(), &reward_key);
+        let private = kms
+            .build_private_inputs(
+                winning.note.key_id.clone(),
+                winning.public_inputs,
+                wallet_inputs,
+                msg,
+            )
+            .await?;
+        let block = spawn_blocking("logos/chain/leader-proof-blocking", move || {
+            assemble_block(parent, slot, uncle_headers, txs, private, reward_key)
+        })
+        .await??;
         debug!(
             target: LOG_TARGET,
             event = "leader_proposal_created",
@@ -754,11 +793,7 @@ where
         metrics::consensus_proposals_created_local();
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "All handles are required to serve the winning-slot subscription off the main loop."
-    )]
-    async fn handle_inbound_message(
+    fn handle_inbound_message(
         msg: LeaderMsg,
         cryptarchia: &CryptarchiaServiceApi<CryptarchiaService>,
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
@@ -766,13 +801,8 @@ where
         time_relay: &OutboundRelay<TimeServiceMessage>,
         era_schedule: &Arc<EraScheduledConfig>,
         consensus_excluded_keys: &ConsensusExcludedKeys,
-        config: &LeaderWalletConfig,
-        mempool: &MempoolAdapter<Mempool::Item>,
     ) {
         match msg {
-            LeaderMsg::Claim { sender } => {
-                Self::handle_claim_message(cryptarchia, wallet, config, mempool, sender).await;
-            }
             LeaderMsg::PotentialWinningPolEpochSlotStreamSubscribe { sender } => {
                 // Spawn a dedicated, off-main-loop task that scans winning slots
                 // for this subscriber and streams them in, with the bounded
@@ -798,55 +828,6 @@ where
                 }
             }
         }
-    }
-
-    async fn handle_claim_message(
-        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService>,
-        wallet: &WalletApi<Wallet, RuntimeServiceId>,
-        config: &LeaderWalletConfig,
-        mempool: &MempoolAdapter<Mempool::Item>,
-        resp_tx: oneshot::Sender<Result<TxHash, Error>>,
-    ) {
-        let result = Self::build_and_submit_claim_tx(cryptarchia, wallet, mempool, config).await;
-        if resp_tx.send(result).is_err() {
-            error!(target: LOG_TARGET, "Failed to send claim response");
-        }
-    }
-
-    async fn build_and_submit_claim_tx(
-        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService>,
-        wallet: &WalletApi<Wallet, RuntimeServiceId>,
-        mempool: &MempoolAdapter<Mempool::Item>,
-        config: &LeaderWalletConfig,
-    ) -> Result<TxHash, Error> {
-        let (tip, ledger_state) = Self::get_tip_ledger_state(cryptarchia).await?;
-
-        let reward_amount = ledger_state.mantle_ledger().leader_reward_amount();
-        let signed_tx = wallet
-            .build_leader_claim_tx(
-                tip,
-                *ledger_state.mantle_ledger().vouchers_snapshot_root(),
-                reward_amount,
-                config.funding_pk,
-                config.max_tx_fee,
-            )
-            .await?
-            .response;
-        let tx_hash = signed_tx.hash();
-
-        mempool.post_tx(signed_tx).await.map_err(Error::Mempool)?;
-        Ok(tx_hash)
-    }
-
-    async fn get_tip_ledger_state(
-        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService>,
-    ) -> Result<(HeaderId, LedgerState), Error> {
-        let tip = cryptarchia.info().await?.cryptarchia_info.tip;
-        let ledger_state = cryptarchia
-            .get_ledger_state(tip)
-            .await?
-            .ok_or(Error::LedgerStateNotFound(tip))?;
-        Ok((tip, ledger_state))
     }
 }
 

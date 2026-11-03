@@ -1,19 +1,13 @@
-use lb_core::mantle::{
-    ledger::NoteId,
-    ops::{OpId as _, OpRef},
-};
+use lb_core::mantle::{notes::NoteNullifier, ops::OpRef};
 
 use super::{
     CONCURRENT_DUPLICATE_SETTLE_SECS, DEFAULT_ZONE_SEQUENCER, Duration, HashMap, HashSet,
     Inscription, Step, StepError, StepResult, ZoneWorld, assert_sorted_outcome,
     collect_indexed_messages, collect_indexed_messages_exactly_once, ensure_zone_message_included,
     ensure_zone_transactions_included, log_step_error, make_inscription, parse_balance_payload,
-    pin_payload, replay_finalized_history, scan_indexer_for_payloads, single_column_table,
-    wait_for_channel_transfer_input_count, wait_for_channel_wallet_counts,
-    wait_for_channel_wallet_note, wait_for_deposit, wait_for_exact_indexed_payload_count,
-    wait_for_finalized_deposit_via_sequencer, wait_for_finalized_withdraw_via_sequencer,
-    wait_for_indexer_unordered, wait_for_transactions_finalized, wait_for_withdraw,
-    wait_until_sorted_conflict_settles, withdraw_payload, zone_step_error,
+    replay_finalized_history, scan_indexer_for_payloads, single_column_table,
+    wait_for_exact_indexed_payload_count, wait_for_indexer_unordered,
+    wait_for_transactions_finalized, wait_until_sorted_conflict_settles, zone_step_error,
 };
 
 #[cucumber::then("the channel view contract holds for all zone sequencers")]
@@ -257,197 +251,6 @@ async fn step_zone_transaction_is_finalized(
         .map_err(|error| zone_step_error(step, &error))
 }
 
-#[cucumber::then(expr = "the zone indexer returns finalized deposit {string} in {int} seconds")]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require `&mut World` as the first parameter"
-)]
-async fn step_zone_indexer_returns_finalized_deposit(
-    world: &mut ZoneWorld,
-    step: &Step,
-    deposit_alias: String,
-    timeout_seconds: u64,
-) -> StepResult {
-    let (deposit, amount) = world
-        .zone
-        .resolve_submitted_deposit(&deposit_alias)?
-        .clone();
-    let indexer = log_step_error(step, world.zone.indexer())?;
-
-    wait_for_deposit(
-        indexer,
-        &deposit,
-        amount,
-        Duration::from_secs(timeout_seconds),
-    )
-    .await
-    .map_err(|error| zone_step_error(step, &error))
-}
-
-#[cucumber::then(expr = "the zone indexer returns finalized withdraw {string} in {int} seconds")]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require `&mut World` as the first parameter"
-)]
-async fn step_zone_indexer_returns_finalized_withdraw(
-    world: &mut ZoneWorld,
-    step: &Step,
-    withdraw_alias: String,
-    timeout_seconds: u64,
-) -> StepResult {
-    let withdraw = world
-        .zone
-        .resolve_submitted_withdraw(&withdraw_alias)?
-        .clone();
-    let indexer = log_step_error(step, world.zone.indexer())?;
-
-    wait_for_withdraw(indexer, &withdraw, Duration::from_secs(timeout_seconds))
-        .await
-        .map_err(|error| zone_step_error(step, &error))
-}
-
-#[cucumber::then(
-    expr = "the zone indexer returns a finalized channel transfer consuming {int} inputs in {int} seconds"
-)]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require `&mut World` as the first parameter"
-)]
-async fn step_zone_indexer_returns_finalized_channel_transfer_input_count(
-    world: &mut ZoneWorld,
-    step: &Step,
-    expected_inputs: usize,
-    timeout_seconds: u64,
-) -> StepResult {
-    let indexer = log_step_error(step, world.zone.indexer())?;
-
-    wait_for_channel_transfer_input_count(
-        indexer,
-        expected_inputs,
-        Duration::from_secs(timeout_seconds),
-    )
-    .await
-    .map_err(|error| zone_step_error(step, &error))
-}
-
-#[cucumber::then(
-    expr = "the channel wallet of {string} contains a note of value {int} in {int} seconds"
-)]
-#[cucumber::when(
-    expr = "the channel wallet of {string} contains a note of value {int} in {int} seconds"
-)]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require `&mut World` as the first parameter"
-)]
-async fn step_channel_wallet_contains_note(
-    world: &mut ZoneWorld,
-    step: &Step,
-    sequencer_alias: String,
-    value: u64,
-    timeout_seconds: u64,
-) -> StepResult {
-    let client = log_step_error(step, world.zone.sequencer_client(&sequencer_alias))?;
-    wait_for_channel_wallet_note(client, value, false, Duration::from_secs(timeout_seconds))
-        .await
-        .map_err(|error| zone_step_error(step, &error))
-}
-
-#[cucumber::then(
-    expr = "the channel wallet of {string} contains a finalized note of value {int} in {int} seconds"
-)]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require `&mut World` as the first parameter"
-)]
-async fn step_channel_wallet_contains_finalized_note(
-    world: &mut ZoneWorld,
-    step: &Step,
-    sequencer_alias: String,
-    value: u64,
-    timeout_seconds: u64,
-) -> StepResult {
-    let client = log_step_error(step, world.zone.sequencer_client(&sequencer_alias))?;
-    wait_for_channel_wallet_note(client, value, true, Duration::from_secs(timeout_seconds))
-        .await
-        .map_err(|error| zone_step_error(step, &error))
-}
-
-#[cucumber::then(
-    expr = "the channel wallet of {string} has exactly {int} finalized and {int} unfinalized notes in {int} seconds"
-)]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require `&mut World` as the first parameter"
-)]
-async fn step_channel_wallet_has_exact_counts(
-    world: &mut ZoneWorld,
-    step: &Step,
-    sequencer_alias: String,
-    finalized: usize,
-    unfinalized: usize,
-    timeout_seconds: u64,
-) -> StepResult {
-    let client = log_step_error(step, world.zone.sequencer_client(&sequencer_alias))?;
-    wait_for_channel_wallet_counts(
-        client,
-        finalized,
-        unfinalized,
-        Duration::from_secs(timeout_seconds),
-    )
-    .await
-    .map_err(|error| zone_step_error(step, &error))
-}
-
-#[cucumber::then(expr = "sequencer {string} finalizes deposit {string} in {int} seconds")]
-async fn step_zone_sequencer_finalizes_deposit(
-    world: &mut ZoneWorld,
-    step: &Step,
-    sequencer_alias: String,
-    deposit_alias: String,
-    timeout_seconds: u64,
-) -> StepResult {
-    let (deposit, amount) = world
-        .zone
-        .resolve_submitted_deposit(&deposit_alias)?
-        .clone();
-    let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
-
-    wait_for_finalized_deposit_via_sequencer(
-        events,
-        &deposit,
-        amount,
-        Duration::from_secs(timeout_seconds),
-    )
-    .await
-    .map_err(|error| zone_step_error(step, &error))?;
-    Ok(())
-}
-
-#[cucumber::then(expr = "sequencer {string} finalizes withdraw {string} in {int} seconds")]
-async fn step_zone_sequencer_finalizes_withdraw(
-    world: &mut ZoneWorld,
-    step: &Step,
-    sequencer_alias: String,
-    withdraw_alias: String,
-    timeout_seconds: u64,
-) -> StepResult {
-    let withdraw = world
-        .zone
-        .resolve_submitted_withdraw(&withdraw_alias)?
-        .clone();
-    let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
-
-    wait_for_finalized_withdraw_via_sequencer(
-        events,
-        &withdraw,
-        Duration::from_secs(timeout_seconds),
-    )
-    .await
-    .map_err(|error| zone_step_error(step, &error))?;
-    Ok(())
-}
-
 #[cucumber::then(
     expr = "the zone indexer returns all zone messages exactly once in any order in {int} seconds"
 )]
@@ -550,7 +353,7 @@ async fn step_double_handed_messages_are_refunded(
             .ok_or_else(|| StepError::LogicalError {
                 message: format!("Zone message '{alias}' has no submitted tx hash"),
             })?;
-        let fee_notes: HashSet<NoteId> = checkpoint
+        let fee_notes: HashSet<NoteNullifier> = checkpoint
             .pending_txs
             .iter()
             .filter(|(hash, _)| *hash == submitted)
@@ -656,34 +459,6 @@ fn ensure_indexed_payloads_match_once(
     }
 
     Ok(())
-}
-
-#[cucumber::then(
-    expr = "the zone indexer returns exactly one finalized pin and withdraw for deposit {string} in {int} seconds"
-)]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require `&mut World` as the first parameter"
-)]
-async fn step_zone_indexer_exact_reactive_lifecycle(
-    world: &mut ZoneWorld,
-    step: &Step,
-    deposit_alias: String,
-    timeout_seconds: u64,
-) -> StepResult {
-    // Assert each reactive-policy payload for this op_id appears exactly once:
-    // no missing phase, no surviving duplicate from a benign double-publish.
-    let op_id = log_step_error(step, world.zone.resolve_submitted_deposit(&deposit_alias))?
-        .0
-        .op_id();
-    let indexer = log_step_error(step, world.zone.indexer())?;
-    let duration = Duration::from_secs(timeout_seconds);
-    wait_for_exact_indexed_payload_count(indexer, pin_payload(&op_id), 1, duration)
-        .await
-        .map_err(|error| zone_step_error(step, &error))?;
-    wait_for_exact_indexed_payload_count(indexer, withdraw_payload(&op_id), 1, duration)
-        .await
-        .map_err(|error| zone_step_error(step, &error))
 }
 
 #[cucumber::then(

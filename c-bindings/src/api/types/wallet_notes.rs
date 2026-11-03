@@ -1,15 +1,15 @@
 use std::ptr;
 
 use crate::api::{
-    cryptarchia::{HeaderId, NoteId},
+    cryptarchia::{HeaderId, NoteCommitment},
     types::value::Value,
 };
 
-/// A single spendable wallet note (UTXO): its note ID and value.
+/// A single spendable wallet note: its commitment and value.
 #[repr(C)]
 pub struct WalletNote {
-    /// The note ID.
-    pub id: NoteId,
+    /// The note commitment.
+    pub commitment: NoteCommitment,
     /// The value held by the note.
     pub value: Value,
 }

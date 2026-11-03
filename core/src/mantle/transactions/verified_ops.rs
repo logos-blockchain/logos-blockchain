@@ -89,20 +89,25 @@ impl From<SignedOps<Preverified, StandardMode>> for VerifiedOperations {
 
 #[cfg(test)]
 mod tests {
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
-    use num_bigint::BigUint;
+    use lb_cryptarchia_engine::Slot;
+    use lb_groth16::Fr;
+    use lb_key_management_system_keys::keys::Ed25519Key;
 
     use crate::mantle::{
-        Note, Utxo, VerificationError,
+        Op, OpProof,
         batch::DeferredProofs,
-        channel::{Channels, Error},
-        ledger::{BoundedInputs, verification_mode::StandardMode},
-        ops::channel::ChannelId,
+        channel::Channels,
+        ledger::verification_mode::StandardMode,
+        note_set::NoteSets,
+        notes::{NoteNullifier, OutputCommitments},
+        ops::{
+            ZkTransferProof,
+            channel::{ChannelId, withdraw::ChannelWithdrawOp},
+            op_proof::samples::SampleProof as _,
+        },
         traits::Hashable as _,
         transactions::{
-            SignedOps,
-            states::Preverified,
-            tx_list::signed_ops::test_utils::{create_withdraw_tx, make_channel_state},
+            OpProofs, Ops, SignedOps, states::Preverified,
             verification_helper::test_utils::TestOperationVerificationHelper,
         },
     };
@@ -112,79 +117,37 @@ mod tests {
         TestOperationVerificationHelper,
     ) {
         let channel_id = ChannelId::from([8u8; 32]);
-        let key0 = Ed25519Key::from_bytes(&[8; 32]);
-        let key1 = Ed25519Key::from_bytes(&[9; 32]);
-        let keys = [
-            key0.public_key().into_unverified(),
-            key1.public_key().into_unverified(),
-        ]
+        let keys = [Ed25519Key::from_bytes(&[8; 32])
+            .public_key()
+            .into_unverified()]
         .into();
+        let (channels, note_sets) =
+            Channels::new().create_channel(channel_id, Slot::from(0u64), keys, NoteSets::new());
+        let note_sets = note_sets.end_block(0);
+        let commitment_merkle_root = note_sets
+            .get(2)
+            .expect("the channel holds note set 2")
+            .commitment_root();
 
-        let input_sk = ZkKey::from(BigUint::from(1u8));
-        let utxo = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            note: Note::new(10, input_sk.to_public_key()),
-        };
-        let note_id = utxo.id();
-        let withdraw_inputs = BoundedInputs::from(note_id).into();
-
-        let signed_tx = create_withdraw_tx(channel_id, &[&key0, &key1], Some(withdraw_inputs));
-
-        let channels = {
-            let mut channels = Channels::new();
-            let channel_state = make_channel_state(2, Some(keys));
-            channels.channels.insert_mut(channel_id, channel_state);
-            channels
-                .register_channel_note(&note_id, &channel_id)
-                .expect("Note should be registered.")
-        };
-
-        let helper = TestOperationVerificationHelper::new(
-            channels,
-            [
-                ((channel_id, 0), key0.public_key().into_unverified()),
-                ((channel_id, 1), key1.public_key().into_unverified()),
-            ],
+        let ops = Ops::from([Op::ChannelWithdraw(ChannelWithdrawOp {
+            channel_id,
+            inputs: [NoteNullifier(Fr::from(1u64))].into(),
+            commitment_merkle_root,
+            outputs: OutputCommitments::default(),
+        })]);
+        let signed_tx = SignedOps::from_parts(
+            ops,
+            OpProofs::from([OpProof::ZkTransfer(ZkTransferProof::sample())]),
         )
-        .with_utxos(vec![utxo]);
+        .unwrap()
+        .preverify()
+        .unwrap();
+
+        let helper = TestOperationVerificationHelper::new(channels, [])
+            .with_note_sets(note_sets)
+            .with_block_number(1);
 
         (signed_tx, helper)
-    }
-
-    #[test]
-    fn helper_backed_verification_accepts_valid_channel_withdraw() {
-        let (signed_tx, helper) = valid_withdraw();
-
-        let mut deferred_proofs = DeferredProofs::new();
-        signed_tx
-            .into_verified()
-            .next(&helper, &mut deferred_proofs)
-            .expect("Cursor should yield the WithdrawOp")
-            .expect("WithdrawOp should verify");
-    }
-
-    /// Only checks that a failing op's error reaches the cursor unchanged.
-    /// The specific reasons a channel-withdraw proof can be rejected (missing
-    /// channel/key, threshold, bad signature) are covered where that logic
-    /// lives, in `ops::channel::verification::tests`.
-    #[test]
-    fn helper_backed_verification_surfaces_op_validation_error() {
-        let channel_id = ChannelId::from([10u8; 32]);
-        let key0 = Ed25519Key::from_bytes(&[0; 32]);
-        let signed_tx = create_withdraw_tx(channel_id, &[&key0], None);
-
-        let helper = TestOperationVerificationHelper::new(Channels::new(), []);
-
-        let mut deferred_proofs = DeferredProofs::new();
-        let verification_result = signed_tx
-            .into_verified()
-            .next(&helper, &mut deferred_proofs)
-            .unwrap();
-        assert_eq!(
-            verification_result.err().unwrap(),
-            VerificationError::ChannelVerificationError(Error::InvalidSignature)
-        );
     }
 
     #[test]

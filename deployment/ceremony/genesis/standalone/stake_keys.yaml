@@ -1,0 +1,3 @@
+# Secret key of each provider's stakeholder note, by provider zk_id. The
+# standalone key is public already (nodes/node/standalone-node-config.yaml).
+'852efb444db8c3c811625850df39425f43aeffc69571192c0be9f72523256e0a': '1a66f6ab42521b1ac82784e2e2d3abd2fb49e5e3312a2b5fc2ef9d3ecf365c16'

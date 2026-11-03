@@ -7,12 +7,12 @@ use crate::mantle::{
     ledger::ProvableOperation,
     ops::{
         channel::{
-            channel_transfer::ChannelTransferOp, config::ChannelConfigOp, deposit::DepositOp,
-            inscribe::InscriptionOp, withdraw::ChannelWithdrawOp,
+            config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
+            withdraw::ChannelWithdrawOp,
         },
         internal::OpSer,
-        leader_claim::LeaderClaimOp,
         pow::ClaimPowRewardOp,
+        program::ProgramRegisterOp,
         sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         transfer::TransferOp,
     },
@@ -24,13 +24,12 @@ pub enum OpRef<'a> {
     ChannelConfig(&'a ChannelConfigOp),
     ChannelDeposit(&'a DepositOp),
     ChannelWithdraw(&'a ChannelWithdrawOp),
-    ChannelTransfer(&'a ChannelTransferOp),
     SDPDeclare(&'a SDPDeclareOp),
     SDPWithdraw(&'a SDPWithdrawOp),
     SDPActive(&'a SDPActiveOp),
-    LeaderClaim(&'a LeaderClaimOp),
     Transfer(&'a TransferOp),
     ClaimPowReward(&'a ClaimPowRewardOp),
+    ProgramRegister(&'a ProgramRegisterOp),
 }
 
 const fn gas_cost_of<T, Profile>(_op: &T) -> Gas
@@ -56,13 +55,12 @@ impl OpRef<'_> {
             Self::ChannelConfig(op) => gas_cost_of(op),
             Self::ChannelDeposit(op) => gas_cost_of(op),
             Self::ChannelWithdraw(op) => gas_cost_of(op),
-            Self::ChannelTransfer(op) => gas_cost_of(op),
             Self::SDPDeclare(op) => gas_cost_of(op),
             Self::SDPWithdraw(op) => gas_cost_of(op),
             Self::SDPActive(op) => gas_cost_of(op),
-            Self::LeaderClaim(op) => gas_cost_of(op),
             Self::Transfer(op) => gas_cost_of(op),
             Self::ClaimPowReward(op) => gas_cost_of(op),
+            Self::ProgramRegister(op) => gas_cost_of(op),
         }
     }
 
@@ -75,13 +73,12 @@ impl OpRef<'_> {
             Self::ChannelConfig(op) => op.execution_gas(thresholds),
             Self::ChannelDeposit(op) => op.execution_gas(thresholds),
             Self::ChannelWithdraw(op) => op.execution_gas(thresholds),
-            Self::ChannelTransfer(op) => op.execution_gas(thresholds),
             Self::SDPDeclare(op) => op.execution_gas(thresholds),
             Self::SDPWithdraw(op) => op.execution_gas(thresholds),
             Self::SDPActive(op) => op.execution_gas(thresholds),
-            Self::LeaderClaim(op) => op.execution_gas(thresholds),
             Self::Transfer(op) => op.execution_gas(thresholds),
             Self::ClaimPowReward(op) => op.execution_gas(thresholds),
+            Self::ProgramRegister(op) => op.execution_gas(thresholds),
         }
     }
 
@@ -92,13 +89,12 @@ impl OpRef<'_> {
             Self::ChannelConfig(_) => "ChannelConfig",
             Self::ChannelDeposit(_) => "ChannelDeposit",
             Self::ChannelWithdraw(_) => "ChannelWithdraw",
-            Self::ChannelTransfer(_) => "ChannelTransfer",
             Self::SDPDeclare(_) => "SDPDeclare",
             Self::SDPWithdraw(_) => "SDPWithdraw",
             Self::SDPActive(_) => "SDPActive",
-            Self::LeaderClaim(_) => "LeaderClaim",
             Self::Transfer(_) => "Transfer",
             Self::ClaimPowReward(_) => "ClaimPowReward",
+            Self::ProgramRegister(_) => "ProgramRegister",
         }
     }
 
@@ -108,13 +104,12 @@ impl OpRef<'_> {
             Self::ChannelConfig(op) => code_of(*op),
             Self::ChannelDeposit(op) => code_of(*op),
             Self::ChannelWithdraw(op) => code_of(*op),
-            Self::ChannelTransfer(op) => code_of(*op),
             Self::SDPDeclare(op) => code_of(*op),
             Self::SDPWithdraw(op) => code_of(*op),
             Self::SDPActive(op) => code_of(*op),
-            Self::LeaderClaim(op) => code_of(*op),
             Self::Transfer(op) => code_of(*op),
             Self::ClaimPowReward(op) => code_of(*op),
+            Self::ProgramRegister(op) => code_of(*op),
         }
     }
 }
@@ -126,13 +121,12 @@ impl BinaryEncode for OpRef<'_> {
             Self::ChannelConfig(op) => op.encoded_length(),
             Self::ChannelDeposit(op) => op.encoded_length(),
             Self::ChannelWithdraw(op) => op.encoded_length(),
-            Self::ChannelTransfer(op) => op.encoded_length(),
             Self::SDPDeclare(op) => op.encoded_length(),
             Self::SDPWithdraw(op) => op.encoded_length(),
             Self::SDPActive(op) => op.encoded_length(),
-            Self::LeaderClaim(op) => op.encoded_length(),
             Self::Transfer(op) => op.encoded_length(),
             Self::ClaimPowReward(op) => op.encoded_length(),
+            Self::ProgramRegister(op) => op.encoded_length(),
         };
         self.code().encoded_length().checked_add(payload).unwrap()
     }
@@ -144,13 +138,12 @@ impl BinaryEncode for OpRef<'_> {
             Self::ChannelConfig(op) => op.encode_into(out),
             Self::ChannelDeposit(op) => op.encode_into(out),
             Self::ChannelWithdraw(op) => op.encode_into(out),
-            Self::ChannelTransfer(op) => op.encode_into(out),
             Self::SDPDeclare(op) => op.encode_into(out),
             Self::SDPWithdraw(op) => op.encode_into(out),
             Self::SDPActive(op) => op.encode_into(out),
-            Self::LeaderClaim(op) => op.encode_into(out),
             Self::Transfer(op) => op.encode_into(out),
             Self::ClaimPowReward(op) => op.encode_into(out),
+            Self::ProgramRegister(op) => op.encode_into(out),
         }
     }
 }
@@ -176,13 +169,12 @@ impl_owned_ref_conversions! {
         ChannelConfigOp => ChannelConfig,
         DepositOp => ChannelDeposit,
         ChannelWithdrawOp => ChannelWithdraw,
-        ChannelTransferOp => ChannelTransfer,
         SDPDeclareOp => SDPDeclare,
         SDPWithdrawOp => SDPWithdraw,
         SDPActiveOp => SDPActive,
-        LeaderClaimOp => LeaderClaim,
         TransferOp => Transfer,
         ClaimPowRewardOp => ClaimPowReward,
+        ProgramRegisterOp => ProgramRegister,
 }
 
 impl Serialize for OpRef<'_> {

@@ -119,7 +119,7 @@ impl SignedOps<Unverified, StandardMode> {
     /// - `ops` and `proofs` have the same length
     /// - Each operation has a corresponding proof of the correct type
     /// - [`InscriptionOp`](crate::mantle::ops::channel::inscribe::InscriptionOp)
-    ///   and [`LeaderClaimOp`](crate::mantle::ops::leader_claim::LeaderClaimOp) have valid signatures/proofs.
+    ///   has a valid signature.
     pub fn preverify(self) -> Result<SignedOps<Preverified, StandardMode>, VerificationError> {
         let tx_hash_view = TxHashView::new(self.hash());
         let preverified_signed_op_vec = self
@@ -415,19 +415,16 @@ pub mod test_utils {
     use std::sync::Arc;
 
     use lb_cryptarchia_engine::Slot;
-    use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::Ed25519Key;
 
     use crate::mantle::{
-        NoteId, Op, OpProof,
+        Op,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
-        ledger::{BoundedInputs, Inputs, verification_mode::StandardMode},
         ops::channel::{
-            ChannelId, ChannelKeyIndex, MsgId, UnverifiedChannelKeys, inscribe::InscriptionOp,
-            verification::test_utils::create_channel_multi_sig_proof, withdraw::ChannelWithdrawOp,
+            MsgId, UnverifiedChannelKeys,
+            inscribe::{ChannelSteps, InscriptionOp},
         },
-        traits::Hashable as _,
-        transactions::{OpProofs, Ops, SignedOps, states::Preverified},
+        transactions::Ops,
     };
 
     #[must_use]
@@ -442,16 +439,14 @@ pub mod test_utils {
             inscription: [1, 2, 3].into(),
             parent: [0; 32].into(),
             signer: signing_key.public_key().into_unverified(),
+            steps: ChannelSteps::default(),
         }
     }
 
     // TODO: The generated channels are bare. We should add more realistic channel
     // states for testing.
     #[must_use]
-    pub fn make_channel_state(
-        transfer_threshold: ChannelKeyIndex,
-        accredited_keys: Option<UnverifiedChannelKeys>,
-    ) -> ChannelState {
+    pub fn make_channel_state(accredited_keys: Option<UnverifiedChannelKeys>) -> ChannelState {
         let keys = accredited_keys.unwrap_or_else(|| {
             [Ed25519Key::from_bytes(&[0; 32])
                 .public_key()
@@ -471,36 +466,8 @@ pub mod test_utils {
             posting_timeframe: SlotTimeframe::from(0),
             posting_timeout: SlotTimeout::from(0),
 
-            transfer_threshold,
+            note_set: None,
         }
-    }
-
-    #[must_use]
-    pub fn create_withdraw_tx(
-        channel_id: ChannelId,
-        signing_keys: &[&Ed25519Key],
-        inputs: Option<Inputs>,
-    ) -> SignedOps<Preverified, StandardMode> {
-        let inputs = inputs.unwrap_or_else(|| BoundedInputs::from(NoteId(Fr::from(0u64))).into());
-        let mantle_tx = create_test_mantle_tx(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
-            channel_id,
-            inputs,
-        })]);
-
-        let tx_hash = mantle_tx.hash();
-        let proof = create_channel_multi_sig_proof(&tx_hash, signing_keys);
-        let op_proofs = OpProofs::from([OpProof::ChannelMultiSigProof(proof)]);
-
-        let signed_ops = SignedOps::from_parts(mantle_tx, op_proofs)
-            .unwrap()
-            .preverify()
-            .unwrap();
-        assert_eq!(
-            signed_ops.inner().len(),
-            1,
-            "The tests that rely on this function assume that the transaction has exactly one operation."
-        );
-        signed_ops
     }
 }
 
@@ -512,21 +479,27 @@ mod tests {
         bincode::{DeserializeOp as _, SerializeOp as _},
         canonical::BinaryEncode as _,
     };
-    use lb_groth16::Fr;
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
-    use num_bigint::BigUint;
+    use lb_groth16::{AdditiveGroup as _, Fr};
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
 
     use crate::mantle::{
-        Note, NoteId, Op, OpProof, SignedOps, Utxo, VerificationError,
+        Op, OpProof, SignedOps, VerificationError,
         channel::{Channels, Error as ChannelError},
         gas::{MainnetGasProfile, TxGasCalculator as _},
-        ledger::{BoundedInputs, Outputs, OutputsError, verification_mode::StandardMode},
+        ledger::verification_mode::StandardMode,
+        notes::{InputNullifiers, Note, NoteNullifier, OutputCommitments},
         ops::{
+            ChannelInscribeProof, ProgramNoteOpening, ProgramProof, ProgramStepProof, StepProof,
+            ZkProgramSpendProof,
             channel::{
-                ChannelId, MsgId, config::ChannelConfigOp, deposit::DepositOp,
-                inscribe::InscriptionOp, withdraw::ChannelWithdrawOp,
+                ChannelId, MsgId,
+                config::ChannelConfigOp,
+                deposit::DepositOp,
+                inscribe::{InscriptionOp, Step},
+                program_step::{Payments, ProgramOutputs, ProgramStep},
+                withdraw::ChannelWithdrawOp,
             },
-            transfer::{TransferError, TransferOp},
+            op_proof::samples::SampleProof as _,
         },
         traits::Hashable as _,
         transactions::{
@@ -566,7 +539,6 @@ mod tests {
             0.into(),
             0.into(),
             NonZero::<u16>::MIN,
-            NonZero::<u16>::MIN,
         )
         .unwrap()
     }
@@ -574,7 +546,10 @@ mod tests {
     fn create_deposit_op(channel_id: ChannelId) -> DepositOp {
         DepositOp {
             channel_id,
-            inputs: BoundedInputs::from(NoteId(Fr::from(0u64))).into(),
+            inputs: [NoteNullifier(Fr::ZERO)].into(),
+            commitment_merkle_root: Fr::ZERO,
+            outputs: OutputCommitments::default(),
+            excess_value: 0,
             metadata: [].into(),
         }
     }
@@ -589,7 +564,9 @@ mod tests {
     fn create_withdraw_op(channel_id: ChannelId) -> ChannelWithdrawOp {
         ChannelWithdrawOp {
             channel_id,
-            inputs: BoundedInputs::from(NoteId(Fr::from(0u64))).into(),
+            inputs: [NoteNullifier(Fr::ZERO)].into(),
+            commitment_merkle_root: Fr::ZERO,
+            outputs: OutputCommitments::default(),
         }
     }
 
@@ -641,9 +618,7 @@ mod tests {
         ]);
 
         let config_threshold = 3;
-        let transfer_threshold = 2;
         let context = OpsGasContext::new(
-            [(withdraw_channel, transfer_threshold)].into(),
             [(config_channel, config_threshold)].into(),
             GasPrices::new(1, 0),
         );
@@ -654,8 +629,8 @@ mod tests {
             .unwrap();
 
         let expected_config_gas = u64::from(config_threshold) * 56;
-        let expected_deposit_gas = 590;
-        let expected_withdraw_gas = u64::from(transfer_threshold) * 56;
+        let expected_deposit_gas = 619;
+        let expected_withdraw_gas = 619;
         let expected_total_gas = expected_config_gas + expected_deposit_gas + expected_withdraw_gas;
 
         assert_eq!(gas.into_inner(), expected_total_gas);
@@ -669,14 +644,14 @@ mod tests {
         let deposit_channel = ChannelId::from([7; 32]);
         let withdraw_channel = ChannelId::from([8; 32]);
 
-        let mut config_state = make_channel_state(1, None);
+        let mut config_state = make_channel_state(None);
         config_state.configuration_threshold = 3;
 
         let mut channels = Channels::new();
         channels.channels = channels
             .channels
             .insert(config_channel, config_state)
-            .insert(withdraw_channel, make_channel_state(2, None));
+            .insert(withdraw_channel, make_channel_state(None));
 
         let config_op = Op::ChannelConfig(create_config_op(config_channel, &signing_key));
         let deposit_op = Op::ChannelDeposit(create_deposit_op(deposit_channel));
@@ -696,8 +671,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(config_gas.into_inner(), 3 * 56);
-        assert_eq!(deposit_gas.into_inner(), 590);
-        assert_eq!(withdraw_gas.into_inner(), 2 * 56);
+        assert_eq!(deposit_gas.into_inner(), 619);
+        assert_eq!(withdraw_gas.into_inner(), 619);
     }
 
     // A config creating a channel is verified against a threshold of 0, so it
@@ -725,7 +700,9 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let signature = signing_key.sign_payload(tx_hash.as_signing_bytes());
 
-        let op_proofs = OpProofs::from([OpProof::Ed25519Sig(signature)]);
+        let op_proofs = OpProofs::from([OpProof::ChannelInscribe(
+            ChannelInscribeProof::without_steps(signature),
+        )]);
         let result = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs)
             .unwrap()
             .preverify();
@@ -744,7 +721,9 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let signature = wrong_signing_key.sign_payload(tx_hash.as_signing_bytes());
 
-        let op_proofs = OpProofs::from([OpProof::Ed25519Sig(signature)]);
+        let op_proofs = OpProofs::from([OpProof::ChannelInscribe(
+            ChannelInscribeProof::without_steps(signature),
+        )]);
         let result = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs)
             .unwrap()
             .preverify();
@@ -774,7 +753,10 @@ mod tests {
         let sig1 = signing_key1.sign_payload(tx_hash.as_signing_bytes());
         let sig2 = signing_key2.sign_payload(tx_hash.as_signing_bytes());
 
-        let op_proofs = OpProofs::from([OpProof::Ed25519Sig(sig1), OpProof::Ed25519Sig(sig2)]);
+        let op_proofs = OpProofs::from([
+            OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(sig1)),
+            OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(sig2)),
+        ]);
         let result = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs)
             .unwrap()
             .preverify();
@@ -800,7 +782,10 @@ mod tests {
         let sig1 = signing_key1.sign_payload(tx_hash.as_signing_bytes());
         let sig2 = wrong_key.sign_payload(tx_hash.as_signing_bytes()); // Wrong signature
 
-        let op_proofs = OpProofs::from([OpProof::Ed25519Sig(sig1), OpProof::Ed25519Sig(sig2)]);
+        let op_proofs = OpProofs::from([
+            OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(sig1)),
+            OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(sig2)),
+        ]);
         let result = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs)
             .unwrap()
             .preverify();
@@ -814,43 +799,16 @@ mod tests {
     }
 
     #[test]
-    fn test_signed_mantle_tx_new_rejects_zero_value_transfer_output() {
-        let input_sk = ZkKey::from(BigUint::from(1u8));
-        let input_utxo = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            note: Note::new(10000, input_sk.to_public_key()),
-        };
-
-        let transfer_op = TransferOp::new(
-            BoundedInputs::from(input_utxo.id()).into(),
-            Outputs::new([Note::new(0, Fr::from(BigUint::from(2u8)).into())]),
-        );
-        let mantle_tx = create_test_mantle_tx(vec![Op::Transfer(transfer_op)]);
-        let transfer_sig = ZkKey::multi_sign(&[input_sk], &mantle_tx.hash().to_fr())
-            .expect("Signing should succeed");
-        let op_proofs = OpProofs::from([OpProof::ZkSig(transfer_sig)]);
-        let result = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs)
-            .unwrap()
-            .preverify();
-
-        assert_eq!(
-            result,
-            Err(VerificationError::TransferVerificationError(
-                TransferError::Outputs(OutputsError::ZeroValueNote)
-            ))
-        );
-    }
-
-    #[test]
     fn trusted_constructor_skips_preverification() {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let wrong_key = Ed25519Key::from_bytes(&[2; 32]);
         let ops = create_test_mantle_tx(vec![Op::ChannelInscribe(create_test_inscribe_op(
             &signing_key,
         ))]);
-        let op_proofs = OpProofs::from([OpProof::Ed25519Sig(
-            wrong_key.sign_payload(ops.hash().as_signing_bytes().as_ref()),
+        let op_proofs = OpProofs::from([OpProof::ChannelInscribe(
+            ChannelInscribeProof::without_steps(
+                wrong_key.sign_payload(ops.hash().as_signing_bytes().as_ref()),
+            ),
         )]);
 
         assert!(
@@ -884,15 +842,19 @@ mod tests {
 
         let signed = SignedOps::<Unverified, StandardMode>::from_parts(
             ops.clone(),
-            OpProofs::from([OpProof::Ed25519Sig(
-                signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+            OpProofs::from([OpProof::ChannelInscribe(
+                ChannelInscribeProof::without_steps(
+                    signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+                ),
             )]),
         )
         .expect("the proof matches the op");
         let resigned = SignedOps::<Unverified, StandardMode>::from_parts(
             ops,
-            OpProofs::from([OpProof::Ed25519Sig(
-                other_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+            OpProofs::from([OpProof::ChannelInscribe(
+                ChannelInscribeProof::without_steps(
+                    other_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+                ),
             )]),
         )
         .expect("the proof matches the op");
@@ -969,7 +931,9 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let signature = signing_key.sign_payload(tx_hash.as_signing_bytes());
 
-        let op_proofs = OpProofs::from([OpProof::Ed25519Sig(signature)]);
+        let op_proofs = OpProofs::from([OpProof::ChannelInscribe(
+            ChannelInscribeProof::without_steps(signature),
+        )]);
         let signed_ops = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs)
             .unwrap()
             .preverify()
@@ -992,7 +956,9 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let signature = signing_key.sign_payload(tx_hash.as_signing_bytes());
 
-        let op_proofs = OpProofs::from([OpProof::Ed25519Sig(signature)]);
+        let op_proofs = OpProofs::from([OpProof::ChannelInscribe(
+            ChannelInscribeProof::without_steps(signature),
+        )]);
         let valid =
             SignedOps::<Unverified, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();
 
@@ -1025,7 +991,9 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let wrong_signature = wrong_key.sign_payload(tx_hash.as_signing_bytes());
 
-        let op_proofs = OpProofs::from([OpProof::Ed25519Sig(wrong_signature)]);
+        let op_proofs = OpProofs::from([OpProof::ChannelInscribe(
+            ChannelInscribeProof::without_steps(wrong_signature),
+        )]);
         let helper = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();
 
         let serialized = serde_json::to_string(&helper).unwrap();
@@ -1044,5 +1012,70 @@ mod tests {
             .expect_err("Preverified deserialization should fail")
             .to_string();
         assert!(err_msg.contains("Invalid signature"));
+    }
+
+    #[test]
+    fn a_copy_with_an_altered_opening_does_not_deserialize_as_preverified() {
+        let note = Note {
+            value: 10,
+            nonce: Fr::from(2u64),
+            public_key: ZkPublicKey::new(Fr::from(3u64)),
+            program: Fr::from(7u64),
+            data: Fr::from(4u64),
+        };
+        let step = ProgramStep {
+            program_id: Fr::from(7u64),
+            payments: Payments::default(),
+            inputs: InputNullifiers::default(),
+            outputs: [note.commitment()].into(),
+            program_outputs: ProgramOutputs::from(0b1),
+            commitment_merkle_root: Fr::ZERO,
+            spend_notes_hash: Fr::ZERO,
+        };
+        let ops = Ops::from([Op::ChannelInscribe(InscriptionOp {
+            steps: [Step::Program(step)].into(),
+            ..InscriptionOp::sample()
+        })]);
+        let signature =
+            Ed25519Key::from_bytes(&[15; 32]).sign_payload(ops.hash().as_signing_bytes());
+        let opening = ProgramNoteOpening {
+            value: 10,
+            nonce: Fr::from(2u64),
+            public_key: note.public_key,
+            data: Fr::from(4u64),
+        };
+        let encoded = |opening: ProgramNoteOpening| {
+            let proof = ChannelInscribeProof::new(
+                signature,
+                vec![StepProof::Program(ProgramStepProof {
+                    payment_proofs: vec![],
+                    spend_proof: ZkProgramSpendProof::sample(),
+                    program_proof: ProgramProof::sample(),
+                    program_notes: vec![opening],
+                })],
+            );
+            bincode::serialize(
+                &SignedOps::<Unverified, StandardMode>::from_parts(
+                    ops.clone(),
+                    OpProofs::from([OpProof::ChannelInscribe(proof)]),
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        };
+
+        assert!(
+            bincode::deserialize::<SignedOps<Preverified, StandardMode>>(&encoded(opening)).is_ok()
+        );
+        // Neither the transaction hash nor the block ID covers the opening: the
+        // altered copy is dropped as a copy, before any verdict.
+        let altered = ProgramNoteOpening {
+            data: Fr::from(5u64),
+            ..opening
+        };
+        assert!(
+            bincode::deserialize::<SignedOps<Preverified, StandardMode>>(&encoded(altered))
+                .is_err()
+        );
     }
 }

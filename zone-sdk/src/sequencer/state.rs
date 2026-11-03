@@ -8,7 +8,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         SignedOps,
-        ledger::{Inputs, NoteId, Outputs, verification_mode::StandardMode},
+        ledger::verification_mode::StandardMode,
         ops::{
             OpRef,
             channel::{ChannelId, MsgId, inscribe::Inscription},
@@ -32,12 +32,9 @@ fn inscription_signer(
 }
 
 use super::{
-    block_fetch::{channel_configs, channel_inscriptions, channel_transfers, is_pure_config},
-    block_states::{BlockChannelTx, BlockStates, ChannelTxKind, NoteOp, SharedTx},
-    types::{
-        AtomicWithdrawInfo, ChannelNote, ChannelUpdateTx, ChannelWalletView, DepositInfo, Error,
-        InscriptionInfo, PendingFunding, PendingTx, PinDepositInfo, WithdrawInfo,
-    },
+    block_fetch::{channel_configs, channel_inscriptions, is_pure_config},
+    block_states::{BlockChannelTx, BlockStates, ChannelTxKind, SharedTx},
+    types::{ChannelUpdateTx, DepositInfo, Error, InscriptionInfo, PendingFunding, PendingTx},
 };
 
 /// Result of channel update detection — the linear block-level delta
@@ -163,19 +160,6 @@ impl From<ParentTaken> for Error {
 pub enum PendingBundle {
     /// A plain inscription.
     Plain,
-    /// An atomic inscription+withdraw bundle: the tx's `Op::ChannelWithdraw`
-    /// ops (in tx order) plus the recipient notes it releases (for re-issue
-    /// from an orphan report).
-    Withdraw {
-        withdraws: Vec<WithdrawInfo>,
-        outputs: Outputs,
-    },
-    /// An atomic inscription+transfer bundle pinning a deposit: the channel
-    /// notes the bundled transfer consumes and the notes it re-creates.
-    PinDeposit {
-        consumed_notes: Inputs,
-        outputs: Outputs,
-    },
 }
 
 /// Local pending inscription with lineage metadata.
@@ -206,9 +190,6 @@ type PendingFundingRecord = (Option<MantleTxBuilder>, Option<Slot>);
 pub struct RefundCandidate {
     pub tx_hash: TxHash,
     pub pre_fund: MantleTxBuilder,
-    /// A bundle's transfer and withdraw ops need the sequencer's multi-sig
-    /// proof; a plain inscription only its signature.
-    pub bundle: bool,
 }
 
 impl PendingInscription {
@@ -240,8 +221,7 @@ pub struct TxState {
     pending_other: HashMap<TxHash, PendingOtherTx>,
     /// Monotonic submission counter for [`Self::pending_other`] entries.
     next_other_seq: u64,
-    /// The unfinalized L1 window: blocks, safe sets, note sets and channel
-    /// content.
+    /// The unfinalized L1 window: blocks, safe sets and channel content.
     blocks: BlockStates,
     /// Config tip last seen by the config-driven inscription shed; a change
     /// means a config landed (or the branch's config lineage diverged).
@@ -290,8 +270,7 @@ impl TxState {
         self.observed_config_tip = config;
     }
 
-    /// Submit an inscription tx for tracking with lineage metadata. Use
-    /// [`Self::submit_atomic_withdraw`] for inscription+withdraw bundles.
+    /// Submit an inscription tx for tracking with lineage metadata.
     pub fn submit_inscription(
         &mut self,
         signed_tx: impl Into<SharedTx>,
@@ -305,51 +284,6 @@ impl TxState {
             this_msg,
             payload,
             PendingBundle::Plain,
-        )
-    }
-
-    /// Submit an atomic inscription+withdraw bundle for tracking. `withdraws`
-    /// must mirror the `Op::ChannelWithdraw` ops in the bundle, in tx order;
-    /// `outputs` are the recipient notes it releases (for orphan re-issue).
-    pub fn submit_atomic_withdraw(
-        &mut self,
-        signed_tx: impl Into<SharedTx>,
-        parent_msg: MsgId,
-        this_msg: MsgId,
-        payload: Inscription,
-        withdraws: Vec<WithdrawInfo>,
-        outputs: Outputs,
-    ) -> Result<(), ParentTaken> {
-        self.insert_pending(
-            signed_tx,
-            parent_msg,
-            this_msg,
-            payload,
-            PendingBundle::Withdraw { withdraws, outputs },
-        )
-    }
-
-    /// Submit an atomic inscription+transfer bundle pinning a deposit.
-    /// `consumed_notes` mirrors the bundled transfer's input notes (the
-    /// deposited notes being pinned).
-    pub fn submit_pin_deposit(
-        &mut self,
-        signed_tx: impl Into<SharedTx>,
-        parent_msg: MsgId,
-        this_msg: MsgId,
-        payload: Inscription,
-        consumed_notes: Inputs,
-        outputs: Outputs,
-    ) -> Result<(), ParentTaken> {
-        self.insert_pending(
-            signed_tx,
-            parent_msg,
-            this_msg,
-            payload,
-            PendingBundle::PinDeposit {
-                consumed_notes,
-                outputs,
-            },
         )
     }
 
@@ -544,7 +478,6 @@ impl TxState {
                 p.pre_fund.clone().map(|pre_fund| RefundCandidate {
                     tx_hash: *hash,
                     pre_fund,
-                    bundle: !matches!(p.bundle, PendingBundle::Plain),
                 })
             })
             .collect();
@@ -635,11 +568,6 @@ impl TxState {
         entry.posted = false;
         entry.pre_fund = Some(pre_fund);
         entry.funded_at = Some(funded_at);
-        if let PendingBundle::Withdraw { withdraws, .. } = &mut entry.bundle {
-            for withdraw in withdraws {
-                withdraw.tx_hash = new_hash;
-            }
-        }
         self.pending_by_parent.insert(entry.parent_msg, new_hash);
         self.pending.insert(new_hash, entry);
         Some(new_hash)
@@ -741,23 +669,6 @@ impl TxState {
         let pending = self.pending.get(tx_hash)?;
         let info = pending.info();
         Some(match &pending.bundle {
-            PendingBundle::Withdraw { withdraws, outputs } => {
-                PendingTx::AtomicWithdraw(AtomicWithdrawInfo {
-                    tx_hash: pending.tx_hash,
-                    inscription: info,
-                    withdraws: withdraws.clone(),
-                    outputs: outputs.clone(),
-                })
-            }
-            PendingBundle::PinDeposit {
-                consumed_notes,
-                outputs,
-            } => PendingTx::PinDeposit(PinDepositInfo {
-                tx_hash: pending.tx_hash,
-                inscription: info,
-                consumed_notes: consumed_notes.clone(),
-                outputs: outputs.clone(),
-            }),
             PendingBundle::Plain => PendingTx::Inscription(info),
         })
     }
@@ -887,10 +798,6 @@ impl TxState {
 
     /// Process a new block. Finalization is handled by backfill ground
     /// truth, not by the safe-set walk here.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "one call carries everything the store keeps per block"
-    )]
     pub fn process_block(
         &mut self,
         block_id: HeaderId,
@@ -898,17 +805,10 @@ impl TxState {
         lib: HeaderId,
         our_txs: impl IntoIterator<Item = TxHash>,
         channel_txs: Vec<BlockChannelTx>,
-        note_ops: Vec<NoteOp>,
         deposits: Vec<DepositInfo>,
     ) {
-        self.blocks.insert(
-            block_id,
-            parent_id,
-            our_txs,
-            channel_txs,
-            note_ops,
-            deposits,
-        );
+        self.blocks
+            .insert(block_id, parent_id, our_txs, channel_txs, deposits);
 
         // When lib advances: update finalized_msg and prune.
         // NOTE: we do NOT remove pending txs here. Pending txs are only
@@ -1014,12 +914,8 @@ impl TxState {
     /// with entries a mined sibling displaced since the last pass.
     /// Returns the removed entries in **parent-before-child order** so a
     /// consumer that iterates and republishes naturally rebuilds the chain
-    /// in dependency order.
-    ///
-    /// Bundle-aware: atomic inscription+withdraw bundles are returned as
-    /// [`PendingTx::AtomicWithdraw`] so the caller can re-prepare them with
-    /// a fresh `parent_msg`; plain inscriptions are returned
-    /// as [`PendingTx::Inscription`].
+    /// in dependency order. Inscriptions are returned as
+    /// [`PendingTx::Inscription`].
     pub fn shed_off_branch_pending(&mut self, tip: HeaderId) -> Vec<PendingTx> {
         let mut shed = std::mem::take(&mut self.displaced);
         if self.pending.is_empty() {
@@ -1091,85 +987,6 @@ impl TxState {
             self.remove_pending(&entry.tx_hash());
         }
         ordered
-    }
-
-    /// Pending bundles chaining from `tip`'s channel tip that are not mined
-    /// on its branch, in lineage order.
-    fn unmined_bundles_in_suffix(
-        &self,
-        tip: HeaderId,
-    ) -> Vec<(InscriptionInfo, &PendingInscription)> {
-        let safe = self.blocks.safe_at(tip);
-        self.collect_pending_suffix(self.channel_tip_at(tip))
-            .into_iter()
-            .filter(|info| !safe.contains(&info.tx_hash))
-            .filter_map(|info| self.pending.get(&info.tx_hash).map(|p| (info, p)))
-            .filter(|(_, p)| !matches!(p.bundle, PendingBundle::Plain))
-            .collect()
-    }
-
-    /// Notes a new bundle may spend at `tip`: the branch view minus what
-    /// un-mined pending bundles already consume. Their outputs are not
-    /// offered.
-    #[must_use]
-    pub fn spendable_wallet_view(
-        &self,
-        tip: Option<HeaderId>,
-        channel_id: ChannelId,
-    ) -> ChannelWalletView {
-        let mut view = self.channel_wallet_view(tip);
-        let Some(tip) = tip else {
-            return view;
-        };
-        let reserved: HashSet<NoteId> = self
-            .unmined_bundles_in_suffix(tip)
-            .into_iter()
-            .flat_map(|(_, p)| channel_transfers(&p.signed_tx, channel_id))
-            .flat_map(|t| t.inputs.iter().copied())
-            .collect();
-        view.finalized.retain(|n| !reserved.contains(&n.note_id));
-        view.unfinalized.retain(|n| !reserved.contains(&n.note_id));
-        view
-    }
-
-    /// Shed pending bundles whose transfer inputs are gone from this branch
-    /// (e.g. their deposit reorged out) — they can never land — together with
-    /// every pending entry chaining on them, parent first, as typed
-    /// [`PendingTx`].
-    pub fn shed_bundles_with_missing_inputs(
-        &mut self,
-        tip: HeaderId,
-        channel_id: ChannelId,
-    ) -> Vec<PendingTx> {
-        if self.pending.is_empty() {
-            return Vec::new();
-        }
-        let view = self.channel_wallet_view(Some(tip));
-        let mut available: HashSet<NoteId> = view
-            .finalized
-            .iter()
-            .chain(view.unfinalized.iter())
-            .map(|n| n.note_id)
-            .collect();
-        let mut shed: HashSet<TxHash> = HashSet::new();
-        for (info, pending) in self.unmined_bundles_in_suffix(tip) {
-            let transfers: Vec<_> = channel_transfers(&pending.signed_tx, channel_id).collect();
-            if transfers
-                .iter()
-                .all(|t| t.inputs.iter().all(|id| available.contains(id)))
-            {
-                available.extend(transfers.iter().flat_map(|t| t.utxos().map(|u| u.id())));
-            } else {
-                // A bundle that cannot land takes everything chained on it.
-                shed.insert(info.tx_hash);
-                shed.extend(
-                    self.collect_pending_suffix(info.this_msg)
-                        .iter()
-                        .map(|child| child.tx_hash),
-                );
-            }
-        }
-        self.drain_pending_in_lineage_order(&shed)
     }
 
     /// On a config-tip change, shed the pending entries **not on this branch's
@@ -1553,10 +1370,6 @@ impl TxState {
     fn to_update_tx(&self, info: &InscriptionInfo) -> Option<ChannelUpdateTx> {
         if let Some(block_tx) = self.blocks.channel_tx(info.tx_hash) {
             return match &block_tx.kind {
-                ChannelTxKind::AtomicWithdraw(a) => {
-                    Some(ChannelUpdateTx::AtomicWithdraw(a.clone()))
-                }
-                ChannelTxKind::PinDeposit(a) => Some(ChannelUpdateTx::PinDeposit(a.clone())),
                 ChannelTxKind::Inscription(_) => Some(ChannelUpdateTx::Inscription(info.clone())),
                 ChannelTxKind::Config(_) => {
                     Some(ChannelUpdateTx::Config(SignedOps::clone(&block_tx.tx)))
@@ -1580,44 +1393,7 @@ impl TxState {
                 ChannelUpdateTx::Custom(tx)
             });
         }
-        match self.pending.get(&info.tx_hash).map(|p| &p.bundle) {
-            Some(PendingBundle::Withdraw { withdraws, outputs }) => {
-                Some(ChannelUpdateTx::AtomicWithdraw(AtomicWithdrawInfo {
-                    tx_hash: info.tx_hash,
-                    inscription: info.clone(),
-                    withdraws: withdraws.clone(),
-                    outputs: outputs.clone(),
-                }))
-            }
-            Some(PendingBundle::PinDeposit {
-                consumed_notes,
-                outputs,
-            }) => Some(ChannelUpdateTx::PinDeposit(PinDepositInfo {
-                tx_hash: info.tx_hash,
-                inscription: info.clone(),
-                consumed_notes: consumed_notes.clone(),
-                outputs: outputs.clone(),
-            })),
-            Some(PendingBundle::Plain) | None => Some(ChannelUpdateTx::Inscription(info.clone())),
-        }
-    }
-
-    /// The channel's note set at `tip` (or the finalized set only when no
-    /// tip is known yet).
-    #[must_use]
-    pub fn channel_wallet_view(&self, tip: Option<HeaderId>) -> ChannelWalletView {
-        self.blocks.notes_at(tip)
-    }
-
-    /// Export the finalized channel-note set for checkpointing.
-    #[must_use]
-    pub fn channel_notes_base(&self) -> Vec<ChannelNote> {
-        self.blocks.finalized_notes()
-    }
-
-    /// Restore the finalized channel-note set from a checkpoint.
-    pub fn restore_channel_notes(&mut self, notes: Vec<ChannelNote>) {
-        self.blocks.restore_finalized_notes(notes);
+        Some(ChannelUpdateTx::Inscription(info.clone()))
     }
 
     /// See [`BlockStates::deposits_newly_canonical`].
@@ -1727,7 +1503,11 @@ impl TxState {
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{Op, ops::channel::inscribe::InscriptionOp, transactions::Ops};
+    use lb_core::mantle::{
+        Op,
+        ops::channel::inscribe::{ChannelSteps, InscriptionOp},
+        transactions::Ops,
+    };
     use lb_key_management_system_service::keys::Ed25519PublicKey;
 
     use super::*;
@@ -1748,6 +1528,7 @@ mod tests {
             inscription: [data].into(),
             parent,
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            steps: ChannelSteps::default(),
         })]);
         SignedOps::from_ops_with_sample_proofs(mantle_tx)
     }
@@ -1777,7 +1558,7 @@ mod tests {
         state.submit_other(tx, ChannelId::from([0u8; 32])).unwrap();
 
         // Process block containing our tx, lib stays at genesis
-        state.process_block(b1, genesis, genesis, vec![hash], vec![], Vec::new(), vec![]);
+        state.process_block(b1, genesis, genesis, vec![hash], vec![], vec![]);
 
         // Tx is still pending (not finalized yet, lib hasn't advanced)
         assert_eq!(state.unfinalized_count(), 1);
@@ -1798,12 +1579,12 @@ mod tests {
         state.submit_other(tx, ChannelId::from([0u8; 32])).unwrap();
 
         // b1 with our tx
-        state.process_block(b1, genesis, genesis, vec![hash], vec![], Vec::new(), vec![]);
+        state.process_block(b1, genesis, genesis, vec![hash], vec![], vec![]);
         assert_eq!(state.unfinalized_count(), 1);
 
         // b2, lib advances to b1 — process_block does not remove from
         // pending (that's done by backfill ground truth)
-        state.process_block(b2, b1, b1, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(b2, b1, b1, vec![], vec![], vec![]);
         assert_eq!(
             state.unfinalized_count(),
             1,
@@ -1830,15 +1611,7 @@ mod tests {
         state.submit_other(tx2, ChannelId::from([0u8; 32])).unwrap();
 
         // b1 contains only tx1
-        state.process_block(
-            b1,
-            genesis,
-            genesis,
-            vec![hash1],
-            vec![],
-            Vec::new(),
-            vec![],
-        );
+        state.process_block(b1, genesis, genesis, vec![hash1], vec![], vec![]);
 
         // pending_txs at b1 should only return tx2
         let pending: Vec<_> = state.pending_txs(b1).into_iter().map(|(h, _)| h).collect();
@@ -1860,99 +1633,16 @@ mod tests {
         state.submit_other(tx, ChannelId::from([0u8; 32])).unwrap();
 
         // b1 has our tx
-        state.process_block(b1, genesis, genesis, vec![hash], vec![], Vec::new(), vec![]);
+        state.process_block(b1, genesis, genesis, vec![hash], vec![], vec![]);
 
         // At b1 tip, tx is in safe set (not in pending_txs)
         assert_eq!(state.pending_txs(b1), []);
 
         // b2 forks from genesis, no tx
-        state.process_block(b2, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(b2, genesis, genesis, vec![], vec![], vec![]);
 
         // At b2 tip, tx is back in pending_txs (different branch)
         assert!(state.pending_txs(b2).iter().any(|(h, _)| *h == hash));
-    }
-
-    fn wallet_note(seed: u64, value: u64) -> NoteOp {
-        NoteOp::Add(ChannelNote {
-            note_id: NoteId::from(lb_groth16::Fr::from(seed)),
-            value,
-            pk: lb_groth16::Fr::from(seed).into(),
-            slot: Slot::from(1),
-        })
-    }
-
-    fn wallet_note_id(seed: u64) -> NoteId {
-        NoteId::from(lb_groth16::Fr::from(seed))
-    }
-
-    #[test]
-    fn wallet_view_follows_branch() {
-        // G <- a1 (adds n1)
-        //   <- b1 (adds n2)
-        let genesis = header_id(0);
-        let a1 = header_id(1);
-        let b1 = header_id(2);
-        let mut state = TxState::new(genesis, MsgId::root());
-
-        state.process_block(
-            a1,
-            genesis,
-            genesis,
-            vec![],
-            vec![],
-            vec![wallet_note(1, 10)],
-            vec![],
-        );
-        state.process_block(
-            b1,
-            genesis,
-            genesis,
-            vec![],
-            vec![],
-            vec![wallet_note(2, 20)],
-            vec![],
-        );
-
-        let at_a = state.channel_wallet_view(Some(a1));
-        assert_eq!(at_a.unfinalized.len(), 1);
-        assert_eq!(at_a.unfinalized[0].note_id, wallet_note_id(1));
-
-        let at_b = state.channel_wallet_view(Some(b1));
-        assert_eq!(at_b.unfinalized.len(), 1);
-        assert_eq!(at_b.unfinalized[0].note_id, wallet_note_id(2));
-    }
-
-    #[test]
-    fn wallet_lib_advance_finalizes_the_lib_block_notes() {
-        // G <- a1 (adds n1) <- a2; LIB advances to a1, so n1 moves from the
-        // unfinalized to the finalized part of the view, counted once.
-        let genesis = header_id(0);
-        let a1 = header_id(1);
-        let a2 = header_id(2);
-        let mut state = TxState::new(genesis, MsgId::root());
-
-        state.process_block(
-            a1,
-            genesis,
-            genesis,
-            vec![],
-            vec![],
-            vec![wallet_note(1, 10)],
-            vec![],
-        );
-        let view = state.channel_wallet_view(Some(a1));
-        assert_eq!(view.finalized, []);
-        assert_eq!(view.unfinalized.len(), 1);
-
-        state.process_block(a2, a1, a1, vec![], vec![], Vec::new(), vec![]);
-
-        let view = state.channel_wallet_view(Some(a2));
-        assert_eq!(view.finalized.len(), 1);
-        assert_eq!(view.finalized[0].note_id, wallet_note_id(1));
-        assert!(
-            view.unfinalized.is_empty(),
-            "the finalized note must not be counted again as unfinalized"
-        );
     }
 
     /// Build an `[inscribe(parent), config(root)]` bundle tx for the zero
@@ -1979,6 +1669,7 @@ mod tests {
             inscription: [data].into(),
             parent,
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            steps: ChannelSteps::default(),
         };
         let config = ChannelConfigOp::new(
             [0u8; 32].into(),
@@ -1987,7 +1678,6 @@ mod tests {
                 .unwrap(),
             SlotTimeframe::from(0u32),
             SlotTimeout::from(0u32),
-            NonZero::<u16>::MIN,
             NonZero::<u16>::MIN,
         )
         .unwrap();
@@ -2009,7 +1699,7 @@ mod tests {
         let tip = header_id(1);
         let channel_id = ChannelId::from([0u8; 32]);
         let mut state = TxState::new(genesis, MsgId::root());
-        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(tip, genesis, genesis, vec![], vec![], vec![]);
 
         let (bundle, inscribe_msg, _config_msg) = bundle_tx(MsgId::root(), 1);
         let derived = state.submit_other(bundle, channel_id).unwrap();
@@ -2023,68 +1713,12 @@ mod tests {
     }
 
     #[test]
-    fn wallet_prunes_orphaned_branch_entries() {
-        // G <- a1 <- a2 (lib advances to a1); b1 forks from G with a note.
-        // After the lib advance b1 is pruned, so its note is unreachable
-        // even if a stale tip were queried.
-        let genesis = header_id(0);
-        let a1 = header_id(1);
-        let b1 = header_id(2);
-        let a2 = header_id(3);
-        let mut state = TxState::new(genesis, MsgId::root());
-
-        state.process_block(a1, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
-        state.process_block(
-            b1,
-            genesis,
-            genesis,
-            vec![],
-            vec![],
-            vec![wallet_note(2, 20)],
-            vec![],
-        );
-        state.process_block(a2, a1, a1, vec![], vec![], Vec::new(), vec![]);
-
-        let view = state.channel_wallet_view(Some(b1));
-        assert!(view.unfinalized.is_empty(), "orphaned branch entry pruned");
-    }
-
-    #[test]
-    fn wallet_checkpoint_roundtrip() {
-        let genesis = header_id(0);
-        let a1 = header_id(1);
-        let mut state = TxState::new(genesis, MsgId::root());
-        state.process_block(
-            a1,
-            genesis,
-            a1,
-            vec![],
-            vec![],
-            vec![wallet_note(1, 10), wallet_note(2, 20)],
-            vec![],
-        );
-
-        let mut exported = state.channel_notes_base();
-        exported.sort_by_key(|n| n.note_id);
-
-        let mut restored = TxState::new(genesis, MsgId::root());
-        restored.restore_channel_notes(exported.clone());
-        let mut base = restored.channel_notes_base();
-        base.sort_by_key(|n| n.note_id);
-        assert_eq!(exported, base);
-
-        let view = restored.channel_wallet_view(None);
-        assert_eq!(view.finalized.len(), 2);
-        assert_eq!(view.unfinalized, []);
-    }
-
-    #[test]
     fn pending_txs_orders_chained_bundles_parent_before_child() {
         let genesis = header_id(0);
         let tip = header_id(1);
         let channel_id = ChannelId::from([0u8; 32]);
         let mut state = TxState::new(genesis, MsgId::root());
-        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(tip, genesis, genesis, vec![], vec![], vec![]);
 
         let mut parent = MsgId::root();
         let mut config_parent = MsgId::root();
@@ -2118,7 +1752,7 @@ mod tests {
         let tip = header_id(1);
         let channel_id = ChannelId::from([0u8; 32]);
         let mut state = TxState::new(genesis, MsgId::root());
-        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(tip, genesis, genesis, vec![], vec![], vec![]);
 
         state
             .submit_inscription(make_dummy_tx(1), MsgId::root(), msg_id(10), [1].into())
@@ -2138,7 +1772,7 @@ mod tests {
         let tip = header_id(1);
         let channel_id = ChannelId::from([0u8; 32]);
         let mut state = TxState::new(genesis, MsgId::root());
-        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(tip, genesis, genesis, vec![], vec![], vec![]);
 
         let first = make_dummy_tx(1);
         let first_hash = first.hash();
@@ -2171,7 +1805,7 @@ mod tests {
         let tip = header_id(1);
         let channel_id = ChannelId::from([0u8; 32]);
         let mut state = TxState::new(genesis, MsgId::root());
-        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(tip, genesis, genesis, vec![], vec![], vec![]);
 
         state
             .submit_inscription(make_dummy_tx(1), MsgId::root(), msg_id(10), [1].into())
@@ -2184,7 +1818,6 @@ mod tests {
                 .unwrap(),
             SlotTimeframe::from(0u32),
             SlotTimeout::from(0u32),
-            NonZero::<u16>::MIN,
             NonZero::<u16>::MIN,
         )
         .unwrap();
@@ -2247,7 +1880,7 @@ mod tests {
         let genesis = header_id(0);
         let tip = header_id(1);
         let mut state = TxState::new(genesis, MsgId::root());
-        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(tip, genesis, genesis, vec![], vec![], vec![]);
         let (funded, funded_msg) = submit_own(&mut state, MsgId::root(), 1);
         state.stamp_funding(&funded, Slot::from(10), Some(MantleTxBuilder::new()));
         let (unfunded, _) = submit_own(&mut state, funded_msg, 2);
@@ -2267,7 +1900,6 @@ mod tests {
             vec![funded],
             "only the entry with pre-funding ops is rebuilt"
         );
-        assert!(!candidates[0].bundle);
         let (shed, shed_other) = state.shed_expired(tip, Slot::from(14), 3);
         assert_eq!(
             shed.iter().map(PendingTx::tx_hash).collect::<Vec<_>>(),
@@ -2288,7 +1920,7 @@ mod tests {
         let genesis = header_id(0);
         let tip = header_id(1);
         let mut state = TxState::new(genesis, MsgId::root());
-        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(tip, genesis, genesis, vec![], vec![], vec![]);
         let mut parent = MsgId::root();
         let mut chain = Vec::new();
         for data in 1..=4 {
@@ -2342,15 +1974,7 @@ mod tests {
         assert!(state.mark_pending_inscription_posted(&first));
         assert!(state.mark_pending_inscription_posted(&second));
 
-        state.process_block(
-            b1,
-            genesis,
-            genesis,
-            vec![first],
-            vec![],
-            Vec::new(),
-            vec![],
-        );
+        state.process_block(b1, genesis, genesis, vec![first], vec![], vec![]);
 
         assert_eq!(state.pending_publish_count(), 2);
         assert_eq!(state.posted_pending_publish_count(genesis), 2);
@@ -2363,7 +1987,7 @@ mod tests {
         let genesis = header_id(0);
         let tip = header_id(1);
         let mut state = TxState::new(genesis, MsgId::root());
-        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(tip, genesis, genesis, vec![], vec![], vec![]);
         let (hash, _) = submit_own(&mut state, MsgId::root(), 1);
         state.stamp_funding(&hash, Slot::from(1), None);
 
@@ -2386,8 +2010,8 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
         let (hash, _) = submit_own(&mut state, MsgId::root(), 1);
         state.stamp_funding(&hash, Slot::from(1), Some(MantleTxBuilder::new()));
-        state.process_block(a1, genesis, genesis, vec![hash], vec![], Vec::new(), vec![]);
-        state.process_block(b1, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(a1, genesis, genesis, vec![hash], vec![], vec![]);
+        state.process_block(b1, genesis, genesis, vec![], vec![], vec![]);
 
         assert!(
             state
@@ -2414,15 +2038,7 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
         let (funded, funded_msg) = submit_own(&mut state, MsgId::root(), 1);
         state.stamp_funding(&funded, Slot::from(1), Some(MantleTxBuilder::new()));
-        state.process_block(
-            a1,
-            genesis,
-            genesis,
-            vec![funded],
-            vec![],
-            Vec::new(),
-            vec![],
-        );
+        state.process_block(a1, genesis, genesis, vec![funded], vec![], vec![]);
         let (unfunded, _) = submit_own(&mut state, funded_msg, 2);
         state.stamp_funding(&unfunded, Slot::from(1), None);
 
@@ -2443,7 +2059,7 @@ mod tests {
         let genesis = header_id(0);
         let tip = header_id(1);
         let mut state = TxState::new(genesis, MsgId::root());
-        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(tip, genesis, genesis, vec![], vec![], vec![]);
         let (old, old_msg) = submit_own(&mut state, MsgId::root(), 1);
         assert!(state.mark_pending_inscription_posted(&old));
 
@@ -2510,7 +2126,7 @@ mod tests {
         let tip = header_id(1);
         let channel_id = ChannelId::from([0u8; 32]);
         let mut state = TxState::new(genesis, MsgId::root());
-        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(tip, genesis, genesis, vec![], vec![], vec![]);
         let (head, head_msg) = submit_own(&mut state, MsgId::root(), 1);
         state.stamp_funding(&head, Slot::from(1), None);
         let (child, child_msg) = submit_own(&mut state, head_msg, 2);
@@ -2560,9 +2176,9 @@ mod tests {
         let tip = header_id(1);
         let channel_id = ChannelId::from([0u8; 32]);
         let mut state = TxState::new(genesis, MsgId::root());
-        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(tip, genesis, genesis, vec![], vec![], vec![]);
         let (a, a_id) = pure_config_tx(MsgId::root(), 1);
-        let (b, _) = pure_config_tx(a_id, 5);
+        let (b, _) = pure_config_tx(a_id, 2);
         let (a_hash, b_hash) = (a.hash(), b.hash());
         assert!(
             b_hash.0 < a_hash.0,
@@ -2618,7 +2234,6 @@ mod tests {
             SlotTimeframe::from(0u32),
             SlotTimeout::from(0u32),
             NonZero::<u16>::MIN,
-            NonZero::<u16>::MIN,
         )
         .unwrap()
     }
@@ -2630,7 +2245,7 @@ mod tests {
         let genesis = header_id(0);
         let tip = header_id(1);
         let mut state = TxState::new(genesis, MsgId::root());
-        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(tip, genesis, genesis, vec![], vec![], vec![]);
         let mut parent = MsgId::root();
         let mut chain = Vec::new();
         for data in 1..=6u8 {
@@ -2663,7 +2278,7 @@ mod tests {
         let tip = header_id(1);
         let channel_id = ChannelId::from([0u8; 32]);
         let mut state = TxState::new(genesis, MsgId::root());
-        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(tip, genesis, genesis, vec![], vec![], vec![]);
         let (ours, ours_id) = pure_config_tx(MsgId::root(), 1);
         let (child, _) = pure_config_tx(ours_id, 2);
         let (rival, _) = pure_config_tx(MsgId::root(), 3);
@@ -2689,7 +2304,7 @@ mod tests {
         let tip = header_id(1);
         let channel_id = ChannelId::from([0u8; 32]);
         let mut state = TxState::new(genesis, MsgId::root());
-        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(tip, genesis, genesis, vec![], vec![], vec![]);
         let again_op = config_op(MsgId::root(), 4);
         let again = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::ChannelConfig(
             again_op.clone(),
@@ -2733,15 +2348,7 @@ mod tests {
             [1].into(),
             PendingBundle::Plain,
         );
-        state.process_block(
-            tip,
-            genesis,
-            genesis,
-            vec![original_hash],
-            vec![],
-            Vec::new(),
-            vec![],
-        );
+        state.process_block(tip, genesis, genesis, vec![original_hash], vec![], vec![]);
 
         assert!(state.pending_inscription(&rebuilt).is_none(), "retired");
         assert_eq!(state.pending_child(MsgId::root()), Some(original_hash));
@@ -2773,7 +2380,7 @@ mod tests {
         let tip = header_id(1);
         let channel_id = ChannelId::from([0u8; 32]);
         let mut state = TxState::new(genesis, MsgId::root());
-        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(tip, genesis, genesis, vec![], vec![], vec![]);
         let (local, _, _) = bundle_tx(MsgId::root(), 1);
         let local_hash = local.hash();
         state.submit_other(local, channel_id).unwrap();
@@ -2830,7 +2437,6 @@ mod tests {
             SlotTimeframe::from(data),
             SlotTimeout::from(0u32),
             NonZero::<u16>::MIN,
-            NonZero::<u16>::MIN,
         )
         .unwrap();
         let config_msg = config.id();
@@ -2876,7 +2482,7 @@ mod tests {
 
         // No config has landed yet — the local config tip is root, so ours is
         // still viable.
-        state.process_block(b1, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(b1, genesis, genesis, vec![], vec![], vec![]);
         assert_eq!(state.shed_stale_pending_configs(b1), []);
         assert!(state.pending_other_contains(&stale_hash));
 
@@ -2889,7 +2495,6 @@ mod tests {
             genesis,
             vec![],
             vec![config_block_tx(&rival, rival_msg, MsgId::root())],
-            Vec::new(),
             vec![],
         );
 
@@ -2916,10 +2521,9 @@ mod tests {
                 config_block_tx(&c1_tx, c1, MsgId::root()),
                 config_block_tx(&c2_tx, c2, c1),
             ],
-            Vec::new(),
             vec![],
         );
-        state.process_block(b2, b1, b1, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(b2, b1, b1, vec![], vec![], vec![]);
         assert_eq!(state.finalized_config(), c2);
         assert!(
             state
@@ -2944,7 +2548,6 @@ mod tests {
             genesis,
             vec![],
             vec![config_block_tx(&c1_tx, c1, MsgId::root())],
-            Vec::new(),
             vec![],
         );
         state.process_block(
@@ -2953,11 +2556,10 @@ mod tests {
             genesis,
             vec![],
             vec![config_block_tx(&c2_tx, c2, c1)],
-            Vec::new(),
             vec![],
         );
         let old_lineage = state.channel_lineage(b2);
-        state.process_block(b3, b2, b2, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(b3, b2, b2, vec![], vec![], vec![]);
         assert!(
             state
                 .detect_channel_update(&old_lineage, b3, &HashSet::new())
@@ -2988,15 +2590,7 @@ mod tests {
                 ],
             },
         );
-        state.process_block(
-            b1,
-            genesis,
-            genesis,
-            vec![],
-            vec![custom],
-            Vec::new(),
-            vec![],
-        );
+        state.process_block(b1, genesis, genesis, vec![], vec![custom], vec![]);
         let update = state
             .detect_channel_update(&[], b1, &HashSet::new())
             .expect("configs enter the view");
@@ -3086,7 +2680,6 @@ mod tests {
                 config_block_tx(&c1, c1_msg, MsgId::root()),
                 config_block_tx(&c2, c2_msg, c1_msg),
             ],
-            Vec::new(),
             vec![],
         );
 
@@ -3130,7 +2723,6 @@ mod tests {
             genesis,
             vec![config_hash],
             vec![block_tx],
-            Vec::new(),
             vec![],
         );
 
@@ -3157,7 +2749,6 @@ mod tests {
             genesis,
             vec![],
             vec![config_block_tx(&b_config, b_msg, MsgId::root())],
-            Vec::new(),
             vec![],
         );
 
@@ -3196,7 +2787,6 @@ mod tests {
             genesis,
             vec![p1],
             vec![stored(&make_dummy_tx(1), ChannelTxKind::Inscription(m1))],
-            Vec::new(),
             vec![],
         );
 
@@ -3216,7 +2806,6 @@ mod tests {
             genesis,
             vec![],
             vec![config_block_tx(&cfg, cfg_msg, MsgId::root())],
-            Vec::new(),
             vec![],
         );
 
@@ -3263,7 +2852,6 @@ mod tests {
                 &make_dummy_tx(1),
                 ChannelTxKind::Inscription(m_info),
             )],
-            Vec::new(),
             vec![],
         );
 
@@ -3273,7 +2861,7 @@ mod tests {
         let old_lineage = state.channel_lineage(b1);
 
         // A config-only block classifies to no channel txs at all.
-        state.process_block(b2, b1, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(b2, b1, genesis, vec![], vec![], vec![]);
 
         assert!(
             state
@@ -3305,7 +2893,7 @@ mod tests {
         submit_fake_inscription(&mut state, 3, b2_msg, b3_msg);
         assert_eq!(state.pending.len(), 3);
 
-        state.process_block(block1, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(block1, genesis, genesis, vec![], vec![], vec![]);
 
         // Capture the old lineage before inserting block2, mirroring the real
         // caller; computing it after would let c1 bridge into the "before" view.
@@ -3340,7 +2928,6 @@ mod tests {
                 &make_dummy_tx(99),
                 ChannelTxKind::Inscription(c1_inscription),
             )],
-            Vec::new(),
             vec![],
         );
 
@@ -3386,7 +2973,7 @@ mod tests {
         let genesis = header_id(0);
         let block1 = header_id(1);
         let mut state = TxState::new(genesis, MsgId::root());
-        state.process_block(block1, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(block1, genesis, genesis, vec![], vec![], vec![]);
 
         let b1_msg = msg_id(10);
         let b1_hash = submit_fake_inscription(&mut state, 1, MsgId::root(), b1_msg);
@@ -3416,7 +3003,7 @@ mod tests {
         submit_fake_inscription(&mut state, 1, MsgId::root(), b1_msg);
         submit_fake_inscription(&mut state, 2, b1_msg, b2_msg);
 
-        state.process_block(block1, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(block1, genesis, genesis, vec![], vec![], vec![]);
 
         assert_eq!(state.publish_parent(block1), b2_msg);
     }
@@ -3433,7 +3020,7 @@ mod tests {
         let b1_msg = msg_id(10);
         submit_fake_inscription(&mut state, 1, MsgId::root(), b1_msg);
 
-        state.process_block(block1, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(block1, genesis, genesis, vec![], vec![], vec![]);
 
         // c1 lands, consuming root
         let c1_msg = msg_id(20);
@@ -3453,7 +3040,6 @@ mod tests {
                 &make_dummy_tx(99),
                 ChannelTxKind::Inscription(c1_inscription),
             )],
-            Vec::new(),
             vec![],
         );
 
@@ -3482,19 +3068,11 @@ mod tests {
         state.submit_other(tx2, ChannelId::from([0u8; 32])).unwrap();
 
         // b1 has tx1
-        state.process_block(
-            b1,
-            genesis,
-            genesis,
-            vec![hash1],
-            vec![],
-            Vec::new(),
-            vec![],
-        );
+        state.process_block(b1, genesis, genesis, vec![hash1], vec![], vec![]);
         // b2 has tx2
-        state.process_block(b2, b1, genesis, vec![hash2], vec![], Vec::new(), vec![]);
+        state.process_block(b2, b1, genesis, vec![hash2], vec![], vec![]);
         // b3, lib jumps from genesis to b2 (skipping b1)
-        state.process_block(b3, b2, b2, vec![], vec![], Vec::new(), vec![]);
+        state.process_block(b3, b2, b2, vec![], vec![], vec![]);
         assert_eq!(
             state.unfinalized_count(),
             2,

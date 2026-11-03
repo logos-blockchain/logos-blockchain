@@ -1,115 +1,71 @@
 pub mod error;
-mod voucher;
+pub mod transaction;
 
 use std::{
     borrow::Borrow,
     cmp::Ordering,
     collections::{BTreeMap, HashMap, HashSet},
-    fmt::Debug,
 };
 
 pub use error::WalletError;
 use lb_core::{
-    block::{Block, BlockTransactions},
-    crypto::{Hash, ZkHasher},
-    events::{Event, Events, HeaderEvent, TxEvent, TxEventPayload},
+    block::Block,
+    events::{BlockEvent, Event, Events, HeaderEvent, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
-        GasProfile, NoteId, TxHash, Utxo, Value,
+        GasProfile, Note, TxHash, Value,
+        gas::GasOverflow,
         ledger::verification_mode::StandardMode,
-        ops::{
-            OpId as _, OpRef,
-            channel::{
-                channel_transfer::ChannelTransferOp, deposit::DepositOp,
-                withdraw::ChannelWithdrawOp,
-            },
-            leader_claim::{VoucherCm, VoucherNullifier},
-            transfer::TransferOp,
-        },
-        traits::SignedMantleTx,
+        note_set::{CommitmentMmr, LEDGER_SET, NoteSetIndex, NoteSetUpdate, SDP_SET},
+        notes::{InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments},
+        ops::{OpRef, transfer::TransferOp},
+        traits::{MantleTx, SignedMantleTx},
         transactions::{
-            MAX_OPS_PER_TX, builder::MantleTxBuilder, states::Preverified, tx_list::ops::OpsContext,
+            builder::{FundingNote, MantleTxBuilder, ZkTransferOpening},
+            states::Preverified,
+            tx_list::ops::OpsContext,
         },
     },
-    proofs::leader_proof::LeaderProof as _,
 };
 use lb_cryptarchia_engine::Epoch;
+use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_ledger::LedgerState;
 use lb_log_targets::wallet;
-use lb_mmr::{MerkleMountainRange, MerklePath};
-use lb_utils::bounded::UpperBoundedVec;
+use lb_mmr::{MerklePath, PushWithPathsError};
+use lb_zktransfer::MAX_INPUTS;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-pub use crate::voucher::{Voucher, Vouchers};
-
 const LOG_TARGET: &str = wallet::CORE;
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnedNote {
+    pub note: Note,
+    pub note_set: NoteSetIndex,
+    pub nullifier: NoteNullifier,
+    // path to the current root of its set
+    pub path: MerklePath,
+}
+
+// An opening the wallet adopts once its commitment is appended to its set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnownNote {
+    pub note: Note,
+    pub note_set: NoteSetIndex,
+    pub nullifier: NoteNullifier,
+}
+
+pub type KnownNotes = HashMap<NoteCommitment, KnownNote>;
+
 /// A lightweight projection of a `Block<Tx>` carrying only what the wallet
-/// needs to mirror the ledger's effect on UTXOs and the SDP service notes.
-///
-/// `header_ops` are applied first, then `txs`, matching the ledger's
-/// header -> contents processing order.
+/// needs to follow the note sets the block changed.
 pub struct WalletBlock {
     pub id: HeaderId,
     pub parent: HeaderId,
     pub epoch: Epoch,
-    pub voucher_cm: VoucherCm,
-    pub header_ops: Vec<HeaderOp>,
-    pub txs: BlockTransactions<WalletTx>,
-}
-
-/// Wallet-relevant content of one transaction, in source order.
-#[derive(Clone, Debug, Default)]
-pub struct WalletTx {
-    ops: UpperBoundedVec<WalletOp, MAX_OPS_PER_TX>,
-}
-
-/// A wallet-relevant effect produced by the block header processing.
-#[derive(Clone, Debug)]
-pub enum HeaderOp {
-    /// A service note has been unlocked.
-    Unlock(NoteId),
-    /// An SDP reward UTXO was minted.
-    SdpReward(Utxo),
-}
-
-/// Build a [`HeaderOp`] for a wallet-relevant header event.
-impl From<&HeaderEvent> for HeaderOp {
-    fn from(event: &HeaderEvent) -> Self {
-        match event {
-            HeaderEvent::SdpNoteUnlocked { note_id, .. } => Self::Unlock(*note_id),
-            HeaderEvent::SdpRewardDistributed { utxo, .. } => Self::SdpReward(*utxo),
-        }
-    }
-}
-
-/// A wallet-relevant effect extracted from a tx.
-///
-/// Some variants correspond directly to a Mantle op; others are derived by
-/// pairing an op with the corresponding event it emits. Either way, each
-/// variant carries exactly what `apply_block` needs to mirror the ledger's
-/// effect.
-#[derive(Clone, Debug)]
-pub enum WalletOp {
-    /// Spend `inputs`, create `outputs`.
-    Transfer(TransferOp),
-    /// Mark this note as locked.
-    Lock(NoteId),
-    /// Create the reward note.
-    LeaderClaim(Utxo),
-    /// Create the reward note.
-    ClaimPoW(Utxo),
-    /// Drop the deposited notes from the wallet and insert the channel notes
-    /// they are re-created as. The re-created notes keep the same key, so they
-    /// remain eligible for `PoL`, but are gated out of wallet-driven spending.
-    ChannelDeposit(DepositOp),
-    /// Drop the input channel notes from the wallet and insert the output
-    /// channel notes owned by known keys.
-    ChannelTransfer(ChannelTransferOp),
-    /// Unmark the input channel notes, so they become spendable.
-    ChannelWithdraw(ChannelWithdrawOp),
+    pub updates: Vec<NoteSetUpdate>,
+    // openings the block reveals, adopted only once registered as known notes
+    pub revealed: Vec<(NoteSetIndex, Note)>,
 }
 
 impl WalletBlock {
@@ -118,155 +74,223 @@ impl WalletBlock {
     where
         Tx: SignedMantleTx<Preverified, StandardMode, Hash = TxHash> + Clone,
     {
-        // TODO: devise a better way to mirror ledger's execution always correctly: https://github.com/logos-blockchain/logos-blockchain/issues/2627
-        let (header_events, tx_events) = group_events(events);
         Self {
             id: block.header().id(),
             parent: block.header().parent(),
             epoch,
-            voucher_cm: *block.header().leader_proof().voucher_cm(),
-            header_ops: header_events.iter().map(Into::into).collect(),
-            txs: transform_txs(block.transactions(), tx_events),
+            updates: events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Block(BlockEvent::NoteSetUpdated(update)) => Some(update.clone()),
+                    _ => None,
+                })
+                .collect(),
+            revealed: revealed_notes(
+                events,
+                block.transactions_iter().flat_map(MantleTx::op_refs_iter),
+            ),
         }
     }
+}
 
-    /// Note IDs this block spends or locks.
-    #[must_use]
-    pub fn spent_note_ids(&self) -> HashSet<NoteId> {
-        self.txs
-            .iter()
-            .flat_map(|tx| tx.ops.iter())
-            .flat_map(|op| match op {
-                WalletOp::Transfer(transfer) => transfer.inputs.iter().copied().collect::<Vec<_>>(),
-                WalletOp::ChannelDeposit(op) => op.inputs.iter().copied().collect::<Vec<_>>(),
-                WalletOp::ChannelTransfer(op) => op.inputs.iter().copied().collect::<Vec<_>>(),
-                WalletOp::Lock(note_id) => vec![*note_id],
-                WalletOp::ChannelWithdraw(_) | WalletOp::LeaderClaim(_) | WalletOp::ClaimPoW(_) => {
-                    Vec::new()
-                }
-            })
-            .collect()
-    }
+// The openings a block reveals: the leader, PoW and Blend reward notes from
+// the events, then the service note of each SDP_DECLARE.
+#[must_use]
+pub fn revealed_notes<'a>(
+    events: &Events,
+    ops: impl Iterator<Item = OpRef<'a>>,
+) -> Vec<(NoteSetIndex, Note)> {
+    let rewards = events.iter().filter_map(|event| match event {
+        Event::Block(BlockEvent::LeaderRewardPaid { note })
+        | Event::Header(HeaderEvent::SdpRewardDistributed { note, .. })
+        | Event::Tx(TxEvent {
+            payload: TxEventPayload::PoWRewardClaimed { note, .. },
+            ..
+        }) => Some((LEDGER_SET, *note)),
+        _ => None,
+    });
+    let service_notes = ops.filter_map(|op| match op {
+        OpRef::SDPDeclare(declaration) => Some((SDP_SET, declaration.service_note())),
+        _ => None,
+    });
+    rewards.chain(service_notes).collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletState {
-    pub utxos: rpds::HashTrieMapSync<NoteId, Utxo>,
-    pub pk_index: rpds::HashTrieMapSync<ZkPublicKey, rpds::HashTrieSetSync<NoteId>>,
-    pub service_notes: rpds::HashTrieSetSync<NoteId>,
-    /// Notes known by the wallet but currently owned by a channel. They stay
-    /// in `utxos` and are still eligible for `PoL`, but must be gated out of
-    /// wallet-driven spending.
-    #[serde(default)]
-    pub channel_notes: rpds::HashTrieSetSync<NoteId>,
+    pub commitments: rpds::HashTrieMapSync<NoteSetIndex, CommitmentMmr>,
+    pub notes: rpds::HashTrieMapSync<NoteCommitment, OwnedNote>,
+    // C_LEAD snapshot of the current epoch
+    pub aged_paths: rpds::HashTrieMapSync<NoteCommitment, MerklePath>,
+    // snapshot the next epoch will use
+    pub next_aged_paths: rpds::HashTrieMapSync<NoteCommitment, MerklePath>,
     pub epoch: Epoch,
-    /// MMR of all voucher commitments included in the chain
-    pub vouchers: MerkleMountainRange<VoucherCm, ZkHasher>,
-    /// All **tracked** voucher merkle paths up to the current block
-    pub voucher_paths: VoucherPaths,
-    /// A snapshot of **tracked** voucher merkle paths,
-    /// updated at the first block of each epoch.
-    pub voucher_paths_snapshot: VoucherPaths,
 }
 
-pub type VoucherPaths = rpds::HashTrieMapSync<VoucherCm, MerklePath>;
-
 impl WalletState {
-    pub fn from_ledger<KeyId>(
-        known_keys: &HashMap<ZkPublicKey, KeyId>,
-        ledger: &LedgerState,
-    ) -> Self {
-        let mut utxos = rpds::HashTrieMapSync::new_sync();
-        let mut pk_index = rpds::HashTrieMapSync::new_sync();
-        let mut service_notes = rpds::HashTrieSetSync::new_sync();
-        let mut channel_notes = rpds::HashTrieSetSync::new_sync();
-
-        let all_service_notes = ledger.mantle_ledger().sdp_ledger().service_notes();
-        let channels = ledger.mantle_ledger().channels();
-        for (_, (utxo, _)) in ledger.latest_utxos().utxos().iter() {
-            if known_keys.contains_key(&utxo.note.pk) {
-                let note_id = utxo.id();
-
-                utxos = utxos.insert(note_id, *utxo);
-
-                let note_set = pk_index
-                    .get(&utxo.note.pk)
-                    .cloned()
-                    .unwrap_or_else(rpds::HashTrieSetSync::new_sync)
-                    .insert(note_id);
-                pk_index = pk_index.insert(utxo.note.pk, note_set);
-
-                if all_service_notes.contains(&note_id) {
-                    service_notes = service_notes.insert(note_id);
-                }
-
-                // A channel note keeps the depositor's key but is owned by the channel:
-                // keep it in `utxos` so it stays eligible for PoL,
-                // and mark it so wallet-driven spending gates it out.
-                if channels.is_channel_note(&note_id) {
-                    channel_notes = channel_notes.insert(note_id);
-                }
-            }
+    pub fn from_genesis(
+        known: &KnownNotes,
+        genesis_notes: &[Note],
+        genesis_service_notes: &[Note],
+        epoch: Epoch,
+    ) -> Result<Self, WalletError> {
+        let mut commitments = rpds::HashTrieMapSync::new_sync();
+        let mut notes = rpds::HashTrieMapSync::new_sync();
+        for (note_set, set_notes) in [
+            (LEDGER_SET, genesis_notes),
+            (SDP_SET, genesis_service_notes),
+        ] {
+            commitments.insert_mut(note_set, CommitmentMmr::new());
+            let update = NoteSetUpdate {
+                note_set,
+                nullifiers: vec![],
+                commitments: set_notes.iter().map(Note::commitment).collect(),
+            };
+            apply_update(&mut commitments, &mut notes, known, &update)?;
         }
+        // both genesis epoch states hold the genesis sets
+        let paths = current_paths(&notes);
+        Ok(Self {
+            commitments,
+            notes,
+            aged_paths: paths.clone(),
+            next_aged_paths: paths,
+            epoch,
+        })
+    }
 
-        Self {
-            utxos,
-            pk_index,
-            service_notes,
-            channel_notes,
-            epoch: ledger.epoch_state().epoch,
-            vouchers: ledger.mantle_ledger().vouchers().clone(),
-            voucher_paths: rpds::HashTrieMapSync::new_sync(),
-            voucher_paths_snapshot: rpds::HashTrieMapSync::new_sync(),
+    #[must_use]
+    pub fn notes_owned_by_pks(
+        &self,
+        pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
+    ) -> Vec<OwnedNote> {
+        let pks = pks
+            .into_iter()
+            .map(|pk| *pk.borrow())
+            .collect::<HashSet<_>>();
+        self.notes
+            .values()
+            .filter(|owned| owned.note_set == LEDGER_SET && pks.contains(&owned.note.public_key))
+            .cloned()
+            .collect()
+    }
+
+    #[must_use]
+    pub fn balance(&self, pk: ZkPublicKey) -> Option<WalletBalance> {
+        let notes = self
+            .notes_owned_by_pks([pk])
+            .into_iter()
+            .map(|owned| (owned.note.commitment(), owned.note.value))
+            .collect::<HashMap<_, _>>();
+        if notes.is_empty() {
+            return None;
+        }
+        Some(WalletBalance {
+            balance: notes.values().sum(),
+            notes,
+        })
+    }
+
+    // The owned notes of every set together with their path in the aged
+    // snapshot.
+    #[must_use]
+    pub fn aged_notes(&self) -> Vec<(OwnedNote, MerklePath)> {
+        self.owned_notes_with(&self.aged_paths)
+    }
+
+    // The owned notes with their path in the aged snapshot of `epoch`, which
+    // the first block of `epoch` on top of this state is proven against.
+    #[must_use]
+    pub fn aged_notes_at(&self, epoch: Epoch) -> Vec<(OwnedNote, MerklePath)> {
+        self.owned_notes_with(&self.epoch_paths(epoch).0)
+    }
+
+    fn owned_notes_with(
+        &self,
+        paths: &rpds::HashTrieMapSync<NoteCommitment, MerklePath>,
+    ) -> Vec<(OwnedNote, MerklePath)> {
+        self.notes
+            .iter()
+            .filter_map(|(commitment, owned)| {
+                paths
+                    .get(commitment)
+                    .map(|path| (owned.clone(), path.clone()))
+            })
+            .collect()
+    }
+
+    // The aged and next aged paths of a block of `epoch` on top of this state:
+    // the ledger snapshots the sets of the parent, before any update of the
+    // block.
+    fn epoch_paths(
+        &self,
+        epoch: Epoch,
+    ) -> (
+        rpds::HashTrieMapSync<NoteCommitment, MerklePath>,
+        rpds::HashTrieMapSync<NoteCommitment, MerklePath>,
+    ) {
+        match epoch.into_inner().checked_sub(self.epoch.into_inner()) {
+            None | Some(0) => (self.aged_paths.clone(), self.next_aged_paths.clone()),
+            Some(1) => (self.next_aged_paths.clone(), current_paths(&self.notes)),
+            Some(_) => {
+                let paths = current_paths(&self.notes);
+                (paths.clone(), paths)
+            }
         }
     }
 
-    pub fn utxos_owned_by_pks(
+    pub fn apply_block(
         &self,
-        pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
-    ) -> Vec<Utxo> {
-        pks.into_iter()
-            .filter_map(|pk| self.pk_index.get(pk.borrow()))
-            .flatten()
-            .map(|id| self.utxos[id])
-            .collect()
+        known: &KnownNotes,
+        block: &WalletBlock,
+    ) -> Result<Self, WalletError> {
+        let (aged_paths, next_aged_paths) = self.epoch_paths(block.epoch);
+
+        let mut commitments = self.commitments.clone();
+        let mut notes = self.notes.clone();
+        for update in &block.updates {
+            apply_update(&mut commitments, &mut notes, known, update)?;
+        }
+
+        Ok(Self {
+            commitments,
+            notes,
+            aged_paths,
+            next_aged_paths,
+            epoch: block.epoch,
+        })
     }
 
     /// Funds the transaction so its excess balance is exactly the requested
     /// percentage of the final mandatory fee. Only the unused reserve becomes
     /// the transaction's effective priority tip. `0` funds to the exact
     /// minimum.
+    #[expect(clippy::too_many_arguments, reason = "the funding inputs")]
     pub fn fund_tx<G: GasProfile>(
         &self,
         tx_builder: &MantleTxBuilder,
         change_pk: ZkPublicKey,
+        change_nonce: Fr,
         pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
         context: &OpsContext,
-        excluded_notes: &HashSet<NoteId>,
+        excluded: &HashSet<NoteNullifier>,
         priority_fee_percent: u64,
     ) -> Result<MantleTxBuilder, WalletError> {
-        // Get all UTXOs owned by the provided PKs, excluding the following notes:
-        // - Notes that are being consumed/locked by the tx
-        // - Notes that are already service notes in Ledger
-        // - Notes currently owned by a channel (deposited)
-        // - Notes excluded by the caller (e.g. reserved for in-flight txs)
-        let excluded_notes = tx_builder
-            .notes_consumed_or_used_in_service()
-            .chain(self.service_notes.iter().copied())
-            .chain(self.channel_notes.iter().copied())
-            .chain(excluded_notes.iter().copied())
+        // Get the ledger notes owned by the provided PKs, excluding the ones
+        // the tx already consumes and the ones excluded by the caller (e.g.
+        // reserved for in flight txs). Service and channel notes are in
+        // other sets.
+        let excluded = tx_builder
+            .nullifiers_consumed()
+            .chain(excluded.iter().copied())
             .collect::<HashSet<_>>();
-        let mut utxos = self
-            .utxos_owned_by_pks(pks)
-            .into_iter()
-            .filter(|utxo| !excluded_notes.contains(&utxo.id()))
-            .collect::<Vec<_>>();
-
-        // Consume large valued notes first to ensure we converge.
-        utxos.sort_by_key(|utxo| -i128::from(utxo.note.value));
+        let mut notes = self.funding_candidates(pks, &excluded);
+        // A ZkTransfer spends at most four notes.
+        notes.truncate(MAX_INPUTS.saturating_sub(tx_builder.funding_inputs().len()));
+        let funding_root = self.ledger_root();
 
         // The transaction may already be funded before we add any of the
-        // wallet's UTXOs, for example when it pays no fee or the caller already
+        // wallet's notes, for example when it pays no fee or the caller already
         // supplied inputs. In that case we must not pull in an extra input (and
         // the change note it would require).
         match tx_builder
@@ -278,27 +302,32 @@ impl WalletState {
                 if let Some(tx_with_change) = tx_builder.clone().return_change::<G>(
                     context,
                     change_pk,
+                    change_nonce,
                     priority_fee_percent,
                 )? {
                     return Ok(tx_with_change);
                 }
                 // The change note costs more than the surplus covers, so fall
-                // through and pull in more UTXO's below.
+                // through and pull in more notes below.
             }
             Ordering::Less => {}
         }
 
-        for i in 0..utxos.len() {
-            let funded_tx_builder = tx_builder
-                .clone()
-                .extend_ledger_inputs(utxos[..=i].iter().copied())?;
+        for i in 0..notes.len() {
+            let funded_tx_builder = tx_builder.clone().extend_funding_inputs(
+                funding_root,
+                notes[..=i].iter().map(|owned| FundingNote {
+                    note: owned.note,
+                    nullifier: owned.nullifier,
+                }),
+            )?;
 
             let funding_delta = funded_tx_builder
                 .funding_delta_with_priority_fee::<G>(context, priority_fee_percent)?;
 
             match funding_delta.cmp(&0) {
                 Ordering::Less => {
-                    // Insufficient funds, need more UTXO's.
+                    // Insufficient funds, need more notes.
                 }
                 Ordering::Equal => {
                     // We can exactly pay the tx cost plus the tip, no change
@@ -312,387 +341,247 @@ impl WalletState {
                     if let Some(tx_with_change) = funded_tx_builder.return_change::<G>(
                         context,
                         change_pk,
+                        change_nonce,
                         priority_fee_percent,
                     )? {
                         // We were able to fund the tx with change note added.
                         return Ok(tx_with_change);
                     }
-                    // Otherwise, need more UTXO's.
+                    // Otherwise, need more notes.
                 }
             }
         }
 
         Err(WalletError::InsufficientFunds {
-            available: utxos.iter().map(|u| u.note.value).sum::<u64>(),
+            available: total_value(&notes)?,
         })
     }
 
-    #[must_use]
-    pub fn balance(&self, pk: ZkPublicKey) -> Option<WalletBalance> {
-        let mut balance = WalletBalance {
-            balance: 0,
-            notes: HashMap::new(),
-        };
-
-        self.pk_index.get(&pk)?.iter().for_each(|id| {
-            // Channel notes should be counted in the wallet's total balance
-            if self.channel_notes.contains(id) {
-                return;
-            }
-            let value = self.utxos[id].note.value;
-            balance.balance += value;
-            balance.notes.insert(*id, value);
-        });
-
-        Some(balance)
-    }
-
-    pub fn apply_block<KeyId, VoucherId>(
+    // A Transfer of excess 0 giving `owner` a note of exactly `value` (output
+    // 0) and the rest back to `change_pk` (output 1).
+    #[expect(clippy::too_many_arguments, reason = "the two notes it creates")]
+    pub fn exact_note_split(
         &self,
-        known_keys: &HashMap<ZkPublicKey, KeyId>,
-        known_vouchers: &Vouchers<VoucherId>,
-        block: &WalletBlock,
-    ) -> Result<Self, WalletError> {
-        let mut utxos = self.utxos.clone();
-        let mut pk_index = self.pk_index.clone();
-        let mut service_notes = self.service_notes.clone();
-        let mut channel_notes = self.channel_notes.clone();
-
-        // Header-level effects come first, matching the ledger's
-        // header -> contents processing order.
-        for op in &block.header_ops {
-            match op {
-                HeaderOp::Unlock(note_id) => {
-                    // When unlocking notes, we don't check if the notes are owned
-                    // by the wallet because they will be ignored automatically.
-                    service_notes.remove_mut(note_id);
-                }
-                HeaderOp::SdpReward(utxo) => {
-                    insert_utxo_if_owned(*utxo, known_keys, &mut utxos, &mut pk_index);
-                }
-            }
-        }
-
-        // Apply each tx & op in source order, as the same as how ledger processes them.
-        for tx in &block.txs {
-            for op in &tx.ops {
-                match op {
-                    WalletOp::Transfer(transfer) => {
-                        // When removing spent notes, we don't check if the notes are owned
-                        // by the wallet because they will be ignored automatically.
-                        for input_id in transfer.inputs.iter() {
-                            remove_spent_utxo(input_id, &mut utxos, &mut pk_index);
-                        }
-                        for utxo in transfer.utxos() {
-                            insert_utxo_if_owned(utxo, known_keys, &mut utxos, &mut pk_index);
-                        }
-                    }
-                    WalletOp::ChannelDeposit(op) => {
-                        // The deposit consumes its inputs and re-creates them as channel notes
-                        // under a new NoteId, so drop the inputs and insert the re-created notes.
-                        // They keep the same key, so they're still eligible for PoL.
-                        for (output_index, input) in op.inputs.iter().enumerate() {
-                            let note = utxos.get(input).map(|utxo| utxo.note);
-                            remove_spent_utxo(input, &mut utxos, &mut pk_index);
-
-                            let Some(note) = note else { continue };
-                            let utxo = Utxo::new(op.op_id(), output_index, note);
-                            if insert_utxo_if_owned(utxo, known_keys, &mut utxos, &mut pk_index) {
-                                channel_notes.insert_mut(utxo.id());
-                            }
-                        }
-                    }
-                    WalletOp::ChannelTransfer(op) => {
-                        for input_id in op.inputs.iter() {
-                            remove_spent_utxo(input_id, &mut utxos, &mut pk_index);
-                            channel_notes.remove_mut(input_id);
-                        }
-                        for utxo in op.utxos() {
-                            if insert_utxo_if_owned(utxo, known_keys, &mut utxos, &mut pk_index) {
-                                channel_notes.insert_mut(utxo.id());
-                            }
-                        }
-                    }
-                    WalletOp::ChannelWithdraw(op) => {
-                        // Drop the channel-note marker so they're spendable again.
-                        // They still stay in `utxos`.
-                        for input_id in op.inputs.iter() {
-                            channel_notes.remove_mut(input_id);
-                        }
-                    }
-                    WalletOp::Lock(note_id) => {
-                        if utxos.contains_key(note_id) {
-                            service_notes.insert_mut(*note_id);
-                        }
-                    }
-                    WalletOp::LeaderClaim(utxo) | WalletOp::ClaimPoW(utxo) => {
-                        insert_utxo_if_owned(*utxo, known_keys, &mut utxos, &mut pk_index);
-                    }
-                }
-            }
-        }
-
-        let (vouchers, voucher_paths, voucher_paths_snapshot) =
-            self.apply_voucher(known_vouchers, block)?;
-
-        Ok(Self {
-            utxos,
-            pk_index,
-            service_notes,
-            channel_notes,
-            epoch: block.epoch,
-            vouchers,
-            voucher_paths,
-            voucher_paths_snapshot,
-        })
-    }
-
-    /// Apply the voucher commitment from the block to the wallet state.
-    ///
-    /// Returns:
-    /// - Updated MMR including the new voucher commitment
-    /// - Updated tracked voucher paths, including the new voucher if it is
-    ///   owned by us
-    /// - Snapshot of trakced voucher paths (updated only if epoch is advancing)
-    fn apply_voucher<VoucherId>(
-        &self,
-        known_vouchers: &Vouchers<VoucherId>,
-        block: &WalletBlock,
-    ) -> Result<
-        (
-            MerkleMountainRange<VoucherCm, ZkHasher>,
-            VoucherPaths,
-            VoucherPaths,
-        ),
-        WalletError,
-    > {
-        // Snapshot voucher paths if epoch is advancing
-        let snapshot = if block.epoch > self.epoch {
-            self.voucher_paths.clone()
-        } else {
-            self.voucher_paths_snapshot.clone()
-        };
-
-        // Filter out vouchers that have been claimed/finalized.
-        // `known_vouchers` always reflects the latest set of vouchers to be tracked.
-        let (cms, mut paths): (Vec<VoucherCm>, Vec<MerklePath>) = self
-            .voucher_paths
+        value: Value,
+        owner: ZkPublicKey,
+        nonce: Fr,
+        change_pk: ZkPublicKey,
+        change_nonce: Fr,
+        pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
+        excluded: &HashSet<NoteNullifier>,
+    ) -> Result<(TransferOp, ZkTransferOpening), WalletError> {
+        // The smallest note covering `value` alone, else the smallest notes that
+        // do, else the largest ones, so the larger notes stay free to fund the
+        // fee whenever they can.
+        let candidates = self.funding_candidates(pks, excluded);
+        let (inputs, total) = if let Some(owned) = candidates
             .iter()
-            .filter(|(cm, _)| known_vouchers.get(cm).is_some())
-            .map(|(cm, path)| (*cm, path.clone()))
-            .unzip();
-
-        // Push the new voucher to the MMR and update all tracked paths
-        let (vouchers, new_path) = self
-            .vouchers
-            .push_with_paths(block.voucher_cm, &mut paths)
-            .map_err(|error| match error {
-                lb_mmr::PushWithPathsError::MmrFull(_) => WalletError::VoucherMmrFull,
-                lb_mmr::PushWithPathsError::InvalidTrackedPath(error) => error.into(),
-            })?;
-
-        // Rebuild the tracked voucher paths map with updated paths.
-        let mut voucher_paths = rpds::HashTrieMapSync::new_sync();
-        for (cm, path) in cms.into_iter().zip(paths) {
-            voucher_paths = voucher_paths.insert(cm, path);
-        }
-
-        // Track the new voucher's path if it is owned by us
-        if known_vouchers.get(&block.voucher_cm).is_some() {
-            voucher_paths = voucher_paths.insert(block.voucher_cm, new_path);
-        }
-
-        Ok((vouchers, voucher_paths, snapshot))
-    }
-}
-
-/// Insert `utxo` into `utxos`/`pk_index` if the wallet owns its key.
-/// Returns whether the insertion happened.
-fn insert_utxo_if_owned<KeyId>(
-    utxo: Utxo,
-    known_keys: &HashMap<ZkPublicKey, KeyId>,
-    utxos: &mut rpds::HashTrieMapSync<NoteId, Utxo>,
-    pk_index: &mut rpds::HashTrieMapSync<ZkPublicKey, rpds::HashTrieSetSync<NoteId>>,
-) -> bool {
-    if !known_keys.contains_key(&utxo.note.pk) {
-        return false;
-    }
-
-    let note_id = utxo.id();
-    utxos.insert_mut(note_id, utxo);
-
-    let note_set = pk_index
-        .get(&utxo.note.pk)
-        .cloned()
-        .unwrap_or_else(rpds::HashTrieSetSync::new_sync)
-        .insert(note_id);
-    pk_index.insert_mut(utxo.note.pk, note_set);
-    true
-}
-
-fn transform_txs<Tx>(
-    txs: &BlockTransactions<Tx>,
-    mut events_by_tx: HashMap<TxHash, HashMap<Hash, TxEventPayload>>,
-) -> BlockTransactions<WalletTx>
-where
-    Tx: SignedMantleTx<Preverified, StandardMode, Hash = TxHash>,
-{
-    txs.map_ref(move |tx| {
-        let mut events_by_op = events_by_tx.remove(&tx.hash()).unwrap_or_default();
-
-        let ops = tx.op_refs().into_inner().filter_map_ref(|op_ref| {
-            let event = op_id_ref(op_ref).and_then(|id| events_by_op.remove(&id));
-            transform_op(op_ref, event)
-        });
-
-        WalletTx { ops }
-    })
-}
-
-/// Group a block's events:
-/// - `Event::Header`: effects produced by the block header
-/// - `Event::Tx`: effects produced by txs, indexed by `(tx_hash, op_id)`
-fn group_events(
-    events: &Events,
-) -> (
-    Vec<HeaderEvent>,
-    HashMap<TxHash, HashMap<Hash, TxEventPayload>>,
-) {
-    let mut header_events = Vec::new();
-    let mut tx_events: HashMap<TxHash, HashMap<Hash, TxEventPayload>> = HashMap::new();
-    for event in events.iter() {
-        match event {
-            Event::Tx(TxEvent {
-                tx_hash,
-                op_id,
-                payload,
-            }) => {
-                tx_events
-                    .entry(*tx_hash)
-                    .or_default()
-                    .insert(*op_id, payload.clone());
+            .rev()
+            .find(|owned| owned.note.value >= value)
+        {
+            (vec![owned.clone()], owned.note.value)
+        } else {
+            let (inputs, total) = covering_prefix(candidates.iter().rev(), value)?;
+            if total >= value {
+                (inputs, total)
+            } else {
+                covering_prefix(candidates.iter(), value)?
             }
-            Event::Header(event) => header_events.push(event.clone()),
+        };
+        let Some(rest) = total.checked_sub(value) else {
+            return Err(WalletError::InsufficientFunds { available: total });
+        };
+
+        let mut outputs = vec![Note::new(value, nonce, owner)];
+        if rest > 0 {
+            outputs.push(Note::new(rest, change_nonce, change_pk));
+        }
+        let op = TransferOp::new(
+            InputNullifiers::try_from_iter(inputs.iter().map(|owned| owned.nullifier))?,
+            OutputCommitments::try_from_iter(outputs.iter().map(Note::commitment))?,
+            self.ledger_root(),
+            0,
+        );
+        let opening = ZkTransferOpening {
+            inputs: inputs.iter().map(|owned| owned.note).collect(),
+            outputs,
+        };
+        Ok((op, opening))
+    }
+
+    // The spendable ledger notes of `pks`, largest first.
+    fn funding_candidates(
+        &self,
+        pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
+        excluded: &HashSet<NoteNullifier>,
+    ) -> Vec<OwnedNote> {
+        let mut notes = self
+            .notes_owned_by_pks(pks)
+            .into_iter()
+            .filter(|owned| !excluded.contains(&owned.nullifier))
+            .collect::<Vec<_>>();
+        // Consume large valued notes first to ensure we converge.
+        notes.sort_by_key(|owned| -i128::from(owned.note.value));
+        notes
+    }
+
+    fn ledger_root(&self) -> Fr {
+        self.commitments.get(&LEDGER_SET).map_or_else(
+            || CommitmentMmr::new().frontier_root(),
+            CommitmentMmr::frontier_root,
+        )
+    }
+}
+
+fn total_value(notes: &[OwnedNote]) -> Result<Value, WalletError> {
+    notes
+        .iter()
+        .try_fold(0, |total: Value, owned| total.checked_add(owned.note.value))
+        .ok_or_else(|| GasOverflow.into())
+}
+
+// The first of `notes`, at most `MAX_INPUTS`, until they cover `value`, and
+// their total.
+fn covering_prefix<'a>(
+    notes: impl Iterator<Item = &'a OwnedNote>,
+    value: Value,
+) -> Result<(Vec<OwnedNote>, Value), WalletError> {
+    let mut inputs = Vec::new();
+    let mut total: Value = 0;
+    for owned in notes.take(MAX_INPUTS) {
+        if total >= value {
+            break;
+        }
+        total = total.checked_add(owned.note.value).ok_or(GasOverflow)?;
+        inputs.push(owned.clone());
+    }
+    Ok((inputs, total))
+}
+
+fn current_paths(
+    notes: &rpds::HashTrieMapSync<NoteCommitment, OwnedNote>,
+) -> rpds::HashTrieMapSync<NoteCommitment, MerklePath> {
+    notes
+        .iter()
+        .map(|(commitment, owned)| (*commitment, owned.path.clone()))
+        .collect()
+}
+
+// Append the commitments of `update` to its set, keeping the paths of the
+// owned notes of the set valid and adopting the known ones, then drop the
+// owned notes whose nullifier it inserted.
+fn apply_update(
+    commitments: &mut rpds::HashTrieMapSync<NoteSetIndex, CommitmentMmr>,
+    notes: &mut rpds::HashTrieMapSync<NoteCommitment, OwnedNote>,
+    known: &KnownNotes,
+    update: &NoteSetUpdate,
+) -> Result<(), WalletError> {
+    let note_set = update.note_set;
+    let mut mmr = commitments.get(&note_set).cloned().unwrap_or_default();
+    let (mut owned, mut paths): (Vec<KnownNote>, Vec<MerklePath>) = notes
+        .values()
+        .filter(|owned| owned.note_set == note_set)
+        .map(|owned| {
+            (
+                KnownNote {
+                    note: owned.note,
+                    note_set,
+                    nullifier: owned.nullifier,
+                },
+                owned.path.clone(),
+            )
+        })
+        .unzip();
+
+    for commitment in &update.commitments {
+        let (next, path) =
+            mmr.push_with_paths(*commitment, &mut paths)
+                .map_err(|error| match error {
+                    PushWithPathsError::MmrFull(_) => WalletError::MmrFull(note_set),
+                    PushWithPathsError::InvalidTrackedPath(error) => error.into(),
+                })?;
+        mmr = next;
+        if let Some(known_note) = known
+            .get(commitment)
+            .filter(|known| known.note_set == note_set)
+        {
+            owned.push(*known_note);
+            paths.push(path);
         }
     }
-    (header_events, tx_events)
-}
+    commitments.insert_mut(note_set, mmr);
 
-fn op_id_ref(op_ref: &OpRef) -> Option<Hash> {
-    match op_ref {
-        OpRef::LeaderClaim(o) => Some(o.op_id()),
-        OpRef::ChannelWithdraw(o) => Some(o.op_id()),
-        OpRef::ChannelDeposit(o) => Some(o.op_id()),
-        OpRef::Transfer(o) => Some(o.op_id()),
-        _ => None,
+    let mut by_nullifier = HashMap::new();
+    for (known_note, path) in owned.into_iter().zip(paths) {
+        let commitment = known_note.note.commitment();
+        by_nullifier.insert(known_note.nullifier, commitment);
+        notes.insert_mut(
+            commitment,
+            OwnedNote {
+                note: known_note.note,
+                note_set,
+                nullifier: known_note.nullifier,
+                path,
+            },
+        );
     }
-}
-
-/// Build a [`WalletOp`] for an op together with the event (if any) it
-/// emitted in this block. Returns `None` for ops the wallet doesn't track.
-fn transform_op(op: &OpRef<'_>, event: Option<TxEventPayload>) -> Option<WalletOp> {
-    match *op {
-        OpRef::Transfer(op) => Some(WalletOp::Transfer(op.clone())),
-        OpRef::ChannelDeposit(op) => Some(WalletOp::ChannelDeposit(op.clone())),
-        OpRef::ChannelTransfer(op) => Some(WalletOp::ChannelTransfer(op.clone())),
-        OpRef::ChannelWithdraw(op) => Some(WalletOp::ChannelWithdraw(op.clone())),
-        OpRef::SDPDeclare(op) => Some(WalletOp::Lock(op.service_note_id)),
-        OpRef::LeaderClaim(_) => match event.expect("event for LeaderClaim op must exist") {
-            TxEventPayload::LeaderRewardClaimed { utxo, .. } => Some(WalletOp::LeaderClaim(utxo)),
-            TxEventPayload::Deposit { .. } => {
-                panic!("event for LeaderClaim op must be LeaderRewardClaimed")
-            }
-            TxEventPayload::PoWRewardClaimed { utxo, .. } => Some(WalletOp::ClaimPoW(utxo)),
-        },
-        OpRef::ClaimPowReward(_) => {
-            // TODO: something to track here?
-            None
+    for nullifier in &update.nullifiers {
+        if let Some(commitment) = by_nullifier.get(nullifier) {
+            notes.remove_mut(commitment);
         }
-        // `Op::SDPWithdraw` is ignored here — the note will be unlocked
-        // after the delay and the corresponding event will be handled by
-        // [`HeaderOp::from`].
-        OpRef::ChannelInscribe(_)
-        | OpRef::ChannelConfig(_)
-        | OpRef::SDPWithdraw(_)
-        | OpRef::SDPActive(_) => None,
     }
-}
-
-fn remove_spent_utxo(
-    spent_id: &NoteId,
-    utxos: &mut rpds::HashTrieMapSync<NoteId, Utxo>,
-    pk_index: &mut rpds::HashTrieMapSync<ZkPublicKey, rpds::HashTrieSetSync<NoteId>>,
-) {
-    let Some(utxo) = utxos.get(spent_id) else {
-        return;
-    };
-
-    let pk = utxo.note.pk;
-    utxos.remove_mut(spent_id);
-
-    let Some(note_set) = pk_index.get(&pk) else {
-        return;
-    };
-
-    let updated_set = note_set.remove(spent_id);
-    if updated_set.is_empty() {
-        pk_index.remove_mut(&pk);
-    } else {
-        pk_index.insert_mut(pk, updated_set);
-    }
+    Ok(())
 }
 
 #[derive(Clone)]
-pub struct Wallet<KeyId, VoucherId> {
+pub struct Wallet<KeyId> {
     known_keys: HashMap<ZkPublicKey, KeyId>,
-    known_vouchers: Vouchers<VoucherId>,
+    known_notes: KnownNotes,
     wallet_states: BTreeMap<HeaderId, WalletState>,
 }
 
-impl<KeyId, VoucherId> Wallet<KeyId, VoucherId>
-where
-    VoucherId: Debug,
-{
-    /// Initialize [`Wallet`] from a given [`LedgerState`] at LIB.
-    ///
-    /// It initializes empty Merkle paths for all known vouchers,
-    /// which will be updated as new blocks are applied.
-    pub fn from_lib_ledger_state(
+impl<KeyId> Wallet<KeyId> {
+    pub fn from_genesis(
         known_keys: impl IntoIterator<Item = (ZkPublicKey, KeyId)>,
-        known_vouchers: Vouchers<VoucherId>,
-        lib: HeaderId,
-        ledger: &LedgerState,
-    ) -> Self {
-        let known_keys = known_keys.into_iter().collect();
-        let wallet_state = WalletState::from_ledger(&known_keys, ledger);
+        known_notes: KnownNotes,
+        genesis: HeaderId,
+        genesis_notes: &[Note],
+        genesis_service_notes: &[Note],
+    ) -> Result<Self, WalletError> {
+        let known_keys = known_keys.into_iter().collect::<HashMap<_, _>>();
+        let wallet_state = WalletState::from_genesis(
+            &known_notes,
+            genesis_notes,
+            genesis_service_notes,
+            Epoch::new(0),
+        )?;
 
         info!(
             target: LOG_TARGET,
-            ?lib,
+            ?genesis,
             n_known_keys = known_keys.len(),
-            n_known_vouchers = known_vouchers.count(),
-            n_all_vouchers = wallet_state.vouchers.len(),
-            "initializing wallet with LIB ledger state"
+            n_known_notes = known_notes.len(),
+            n_owned_notes = wallet_state.notes.size(),
+            "initializing wallet with genesis note sets"
         );
 
-        Self {
+        Ok(Self {
             known_keys,
-            known_vouchers,
-            wallet_states: [(lib, wallet_state)].into(),
-        }
+            known_notes,
+            wallet_states: [(genesis, wallet_state)].into(),
+        })
     }
 
     /// Initialize [`Wallet`] from a given [`WalletState`] at LIB
     /// (e.g., restored from persisted state).
     ///
-    /// Tracking of Merkle paths  for known vouchers starts from the paths
+    /// Tracking of the paths of the owned notes starts from the paths
     /// stored in the [`WalletState`]. Persisted Merkle paths are globally
     /// bounded during deserialization. Compatibility with the production
-    /// MMR height is validated when active paths are updated, and `PoC`
-    /// compatibility is validated during witness construction.
+    /// MMR height is validated when active paths are updated.
     pub fn from_lib_wallet_state(
         known_keys: impl IntoIterator<Item = (ZkPublicKey, KeyId)>,
-        known_vouchers: Vouchers<VoucherId>,
+        known_notes: KnownNotes,
         lib: HeaderId,
         wallet_state: WalletState,
     ) -> Self {
@@ -702,16 +591,15 @@ where
             target: LOG_TARGET,
             ?lib,
             n_known_keys = known_keys.len(),
-            n_known_vouchers = known_vouchers.count(),
-            n_all_vouchers = wallet_state.vouchers.len(),
-            n_voucher_paths = wallet_state.voucher_paths.size(),
-            n_snapshotted_voucher_paths = wallet_state.voucher_paths_snapshot.size(),
+            n_known_notes = known_notes.len(),
+            n_owned_notes = wallet_state.notes.size(),
+            n_aged_paths = wallet_state.aged_paths.size(),
             "initializing wallet with LIB wallet state"
         );
 
         Self {
             known_keys,
-            known_vouchers,
+            known_notes,
             wallet_states: [(lib, wallet_state)].into(),
         }
     }
@@ -721,22 +609,21 @@ where
         &self.known_keys
     }
 
-    pub fn add_known_voucher(&mut self, cm: VoucherCm, nf: VoucherNullifier, id: VoucherId) {
-        self.known_vouchers.insert(cm, nf, id);
+    pub fn add_known_key(&mut self, pk: ZkPublicKey, key_id: KeyId) {
+        self.known_keys.insert(pk, key_id);
+    }
+
+    pub fn add_known_notes(&mut self, notes: impl IntoIterator<Item = KnownNote>) {
+        self.known_notes.extend(
+            notes
+                .into_iter()
+                .map(|known_note| (known_note.note.commitment(), known_note)),
+        );
     }
 
     #[must_use]
-    pub fn get_voucher_by_nullifier(&self, nf: &VoucherNullifier) -> Option<&VoucherId> {
-        self.known_vouchers.get_by_nullifier(nf)
-    }
-
-    pub fn voucher_commitments_and_nullifiers(&self) -> impl Iterator<Item = Voucher> + '_ {
-        self.known_vouchers.commitments_and_nullifiers()
-    }
-
-    #[must_use]
-    pub const fn vouchers(&self) -> &Vouchers<VoucherId> {
-        &self.known_vouchers
+    pub const fn known_notes(&self) -> &KnownNotes {
+        &self.known_notes
     }
 
     #[must_use]
@@ -750,37 +637,11 @@ where
             return Ok(());
         }
 
-        let block_wallet_state = self.wallet_state_at(block.parent)?.apply_block(
-            &self.known_keys,
-            &self.known_vouchers,
-            block,
-        )?;
+        let block_wallet_state = self
+            .wallet_state_at(block.parent)?
+            .apply_block(&self.known_notes, block)?;
         self.wallet_states.insert(block.id, block_wallet_state);
         Ok(())
-    }
-
-    /// Get the snapshotted Merkle path for a voucher.
-    pub fn voucher_path_snapshot(
-        &self,
-        tip: HeaderId,
-        cm: &VoucherCm,
-    ) -> Result<Option<MerklePath>, WalletError> {
-        Ok(self
-            .wallet_state_at(tip)?
-            .voucher_paths_snapshot
-            .get(cm)
-            .cloned())
-    }
-
-    /// Get the Merkle path for a voucher that is not yet snapshotted
-    /// (only for testing)
-    #[cfg(test)]
-    fn voucher_path(
-        &self,
-        tip: HeaderId,
-        cm: &VoucherCm,
-    ) -> Result<Option<MerklePath>, WalletError> {
-        Ok(self.wallet_state_at(tip)?.voucher_paths.get(cm).cloned())
     }
 
     pub fn balance(
@@ -800,17 +661,19 @@ where
         tip: HeaderId,
         tx_builder: &MantleTxBuilder,
         change_pk: ZkPublicKey,
+        change_nonce: Fr,
         funding_pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
         context: &OpsContext,
-        excluded_notes: &HashSet<NoteId>,
+        excluded: &HashSet<NoteNullifier>,
         priority_fee_percent: u64,
     ) -> Result<MantleTxBuilder, WalletError> {
         self.wallet_state_at(tip)?.fund_tx::<G>(
             tx_builder,
             change_pk,
+            change_nonce,
             funding_pks,
             context,
-            excluded_notes,
+            excluded,
             priority_fee_percent,
         )
     }
@@ -845,665 +708,482 @@ where
             );
         }
     }
-
-    pub fn prune_vouchers(
-        &mut self,
-        immutable_transactions: impl IntoIterator<Item = VoucherNullifier>,
-    ) {
-        for voucher_nullifier in immutable_transactions {
-            if let Some(id) = self.known_vouchers.remove_by_nullifier(&voucher_nullifier) {
-                tracing::trace!(target: LOG_TARGET, "Pruned voucher {:?} from wallet", id);
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalletBalance {
     pub balance: Value,
-    pub notes: HashMap<NoteId, Value>,
+    pub notes: HashMap<NoteCommitment, Value>,
+}
+
+#[cfg(test)]
+pub(crate) mod test_utils {
+    use super::*;
+
+    pub fn pk(v: u64) -> ZkPublicKey {
+        ZkPublicKey::new(Fr::from(v))
+    }
+
+    pub fn nullifier(v: u64) -> NoteNullifier {
+        NoteNullifier(Fr::from(v))
+    }
+
+    pub fn known(entries: &[(Note, NoteSetIndex, NoteNullifier)]) -> KnownNotes {
+        entries
+            .iter()
+            .map(|&(note, note_set, nullifier)| {
+                (
+                    note.commitment(),
+                    KnownNote {
+                        note,
+                        note_set,
+                        nullifier,
+                    },
+                )
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        iter::empty,
-        num::{NonZero, NonZeroU64},
-        sync::Arc,
-    };
-
     use lb_core::{
-        crypto::ZkDigest as _,
+        crypto::ZkHasher,
         mantle::{
-            Note, Op, OpProof, SignedOps,
-            channel::Channels,
-            gas::MainnetGasProfile as Gas,
-            ledger::{BoundedInputs, Inputs, Outputs},
-            ops::channel::{
-                ChannelId, MsgId,
-                deposit::Metadata,
-                inscribe::{Inscription, InscriptionOp},
-            },
-            transactions::{GasPrices, OpProofs, Ops, tx_list::ops::OpsGasContext},
+            Op,
+            gas::MainnetGasProfile,
+            ops::{channel::inscribe::InscriptionOp, pow::PowNullifier, sdp::SDPDeclareOp},
+            transactions::{GasPrices, tx_list::ops::OpsGasContext},
         },
-        proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
-        sdp::{MinStake, ServiceParameters, ServiceType},
     };
-    use lb_cryptarchia_engine::{EpochConfig, Slot};
-    use lb_groth16::{CompressedGroth16Proof, Field as _, Fr};
-    use lb_key_management_system_keys::keys::{
-        Ed25519Key, Ed25519Signature, UnsecuredZkKey, ZkSignature,
-    };
-    use lb_ledger::{
-        ConsensusExcludedKeys,
-        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
-        mantle::sdp::{ServiceRewardsParameters, rewards},
-    };
-    use lb_pol::LotteryConstants;
-    use lb_utils::math::{NonNegativeRatio, PositiveF64};
-    use lb_utxotree::UtxoTree;
-    use num_bigint::BigUint;
-    use rpds::HashTrieSetSync;
+    use lb_groth16::{AdditiveGroup as _, Field as _};
 
     use super::*;
+    use crate::test_utils::{known, nullifier, pk};
 
-    fn pk(v: u64) -> ZkPublicKey {
-        ZkPublicKey::from(BigUint::from(v))
+    fn commitment(v: u64) -> NoteCommitment {
+        NoteCommitment(Fr::from(v))
     }
 
-    fn tx_hash(v: u8) -> Hash {
-        [v; 32]
+    fn block(id: u8, parent: u8, epoch: u32, updates: Vec<NoteSetUpdate>) -> WalletBlock {
+        WalletBlock {
+            id: HeaderId::from([id; 32]),
+            parent: HeaderId::from([parent; 32]),
+            epoch: Epoch::new(epoch),
+            updates,
+            revealed: vec![],
+        }
     }
 
-    fn voucher(key_id: u64, idx: u64) -> (VoucherCm, VoucherNullifier) {
-        let secret =
-            ZkHasher::digest(&[BigUint::from(key_id).into(), BigUint::from(idx).into()]).into();
-        (
-            VoucherCm::from_secret(secret),
-            VoucherNullifier::from_secret(secret),
-        )
-    }
-
-    type TestVoucherId = (u64, u64);
-
-    #[test]
-    fn test_initialization() {
-        let alice = pk(1);
-        let bob = pk(2);
-        let (voucher_master_key, voucher_index) = (100, 0);
-        let (voucher_cm, voucher_nf) = voucher(voucher_master_key, voucher_index);
-
-        let genesis = HeaderId::from([0; 32]);
-
-        let ledger = LedgerState::from_utxos(
-            [
-                Utxo::new(tx_hash(0), 0, Note::new(100, alice)),
-                Utxo::new(tx_hash(0), 1, Note::new(20, bob)),
-                Utxo::new(tx_hash(0), 2, Note::new(4, alice)),
-            ],
-            &ledger_config(),
-            0,
-            &ConsensusExcludedKeys::empty(),
-        );
-
-        let wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
-            empty::<(ZkPublicKey, u64)>(),
-            Vouchers::default(),
-            genesis,
-            &ledger,
-        );
-        assert_eq!(wallet.balance(genesis, alice).unwrap(), None);
-        assert_eq!(wallet.balance(genesis, bob).unwrap(), None);
-        assert!(wallet.vouchers().get(&voucher_cm).is_none());
-
-        let wallet = Wallet::from_lib_ledger_state(
-            [(alice, 1)],
-            Vouchers::new([(voucher_cm, voucher_nf, (voucher_master_key, voucher_index))]),
-            genesis,
-            &ledger,
-        );
-        assert_eq!(
-            wallet.balance(genesis, alice).unwrap().unwrap().balance,
-            104
-        );
-        assert_eq!(wallet.balance(genesis, bob).unwrap(), None);
-        assert_eq!(
-            wallet.vouchers().get(&voucher_cm),
-            Some(&(voucher_master_key, voucher_index))
-        );
-
-        let wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
-            [(bob, 2)],
-            Vouchers::default(),
-            genesis,
-            &ledger,
-        );
-        assert_eq!(wallet.balance(genesis, alice).unwrap(), None);
-        assert_eq!(wallet.balance(genesis, bob).unwrap().unwrap().balance, 20);
-
-        let wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
-            [(alice, 1), (bob, 2)],
-            Vouchers::default(),
-            genesis,
-            &ledger,
-        );
-        assert_eq!(
-            wallet.balance(genesis, alice).unwrap().unwrap().balance,
-            104
-        );
-        assert_eq!(wallet.balance(genesis, bob).unwrap().unwrap().balance, 20);
+    fn appended(note_set: NoteSetIndex, commitments: Vec<NoteCommitment>) -> NoteSetUpdate {
+        NoteSetUpdate {
+            note_set,
+            nullifiers: vec![],
+            commitments,
+        }
     }
 
     #[test]
-    fn test_recovered_malformed_voucher_path_fails_cleanly_on_append() {
-        let genesis = HeaderId::from([0; 32]);
-        let (voucher_cm, voucher_nf) = voucher(1, 0);
-        let mut state = WalletState::from_ledger(
-            &HashMap::<ZkPublicKey, u64>::new(),
-            &LedgerState::from_utxos([], &ledger_config(), 0, &ConsensusExcludedKeys::empty()),
-        );
-        state.vouchers = MerkleMountainRange::new().push(voucher_cm).unwrap();
-        state.voucher_paths = rpds::HashTrieMapSync::new_sync()
-            .insert(voucher_cm, MerklePath::try_new(0, vec![]).unwrap());
-        state.voucher_paths_snapshot = state.voucher_paths.clone();
-        let state: WalletState =
-            bincode::deserialize(&bincode::serialize(&state).unwrap()).unwrap();
-
-        let mut wallet = Wallet::<u64, TestVoucherId>::from_lib_wallet_state(
-            [],
-            Vouchers::new([(voucher_cm, voucher_nf, (1, 0))]),
-            genesis,
-            state,
+    fn apply_block_keeps_the_paths_of_owned_notes_valid() {
+        let genesis = Note::new(5, Fr::ZERO, pk(9));
+        let owned = Note::new(100, Fr::from(1u64), pk(1));
+        let known = known(&[(owned, LEDGER_SET, nullifier(1))]);
+        let state = WalletState::from_genesis(&known, &[genesis], &[], Epoch::new(0)).unwrap();
+        let state = state
+            .apply_block(
+                &known,
+                &block(
+                    1,
+                    0,
+                    0,
+                    vec![appended(
+                        LEDGER_SET,
+                        vec![owned.commitment(), commitment(7), commitment(8)],
+                    )],
+                ),
+            )
+            .unwrap();
+        let root = CommitmentMmr::new()
+            .push(genesis.commitment())
+            .unwrap()
+            .push(owned.commitment())
+            .unwrap()
+            .push(commitment(7))
+            .unwrap()
+            .push(commitment(8))
+            .unwrap()
+            .frontier_root();
+        assert_eq!(state.commitments[&LEDGER_SET].frontier_root(), root);
+        assert!(
+            state.notes[&owned.commitment()]
+                .path
+                .verify::<ZkHasher>(owned.commitment().0, root)
         );
         assert_eq!(
-            wallet
-                .voucher_path_snapshot(genesis, &voucher_cm)
+            state.balance(pk(1)),
+            Some(WalletBalance {
+                balance: 100,
+                notes: HashMap::from([(owned.commitment(), 100)])
+            })
+        );
+    }
+
+    #[test]
+    fn apply_block_drops_a_note_whose_nullifier_is_inserted() {
+        let owned = Note::new(100, Fr::from(1u64), pk(1));
+        let known = known(&[(owned, LEDGER_SET, nullifier(1))]);
+        let state = WalletState::from_genesis(&known, &[owned], &[], Epoch::new(0)).unwrap();
+        let spend = NoteSetUpdate {
+            note_set: LEDGER_SET,
+            nullifiers: vec![nullifier(1)],
+            commitments: vec![commitment(7)],
+        };
+        let state = state
+            .apply_block(&known, &block(1, 0, 0, vec![spend]))
+            .unwrap();
+        assert!(state.notes.is_empty());
+        assert_eq!(state.balance(pk(1)), None);
+    }
+
+    #[test]
+    fn epoch_change_rotates_the_aged_paths() {
+        let owned = Note::new(100, Fr::from(1u64), pk(1));
+        let known = known(&[(owned, LEDGER_SET, nullifier(1))]);
+        // root of the ledger set holding `owned` then commitment(1)..=commitment(n)
+        let root_at = |n: u64| {
+            (1..=n)
+                .fold(
+                    CommitmentMmr::new().push(owned.commitment()).unwrap(),
+                    |mmr, v| mmr.push(commitment(v)).unwrap(),
+                )
+                .frontier_root()
+        };
+        let aged_root_is = |state: &WalletState, n: u64| {
+            state.aged_paths[&owned.commitment()]
+                .verify::<ZkHasher>(owned.commitment().0, root_at(n))
+        };
+        let append = |state: &WalletState, id: u8, epoch: u32, v: u64| {
+            state
+                .apply_block(
+                    &known,
+                    &block(
+                        id,
+                        id - 1,
+                        epoch,
+                        vec![appended(LEDGER_SET, vec![commitment(v)])],
+                    ),
+                )
                 .unwrap()
-                .unwrap()
-                .siblings()
-                .len(),
-            0
-        );
-        let next_block = WalletBlock {
-            id: HeaderId::from([1; 32]),
-            parent: genesis,
-            epoch: 0.into(),
-            voucher_cm: voucher(2, 0).0,
-            header_ops: vec![],
-            txs: BlockTransactions::empty(),
         };
 
-        assert!(matches!(
-            wallet.apply_block(&next_block),
-            Err(WalletError::InvalidVoucherPath(
-                lb_mmr::MerklePathError::InvalidSiblingCount {
-                    expected: 32,
-                    actual: 0,
-                }
-            ))
-        ));
-        assert!(!wallet.has_processed_block(next_block.id));
+        let state = WalletState::from_genesis(&known, &[owned], &[], Epoch::new(0)).unwrap();
+        let state = append(&state, 1, 0, 1);
+        assert!(aged_root_is(&state, 0));
+        let state = append(&state, 2, 1, 2); // epoch 1 uses the genesis sets
+        assert!(aged_root_is(&state, 0));
+        let state = append(&state, 3, 2, 3); // epoch 2 uses the sets after the last block of epoch 0
+        assert!(aged_root_is(&state, 1));
+        let state = append(&state, 4, 4, 4); // epochs skipped: the sets of the parent
+        assert!(aged_root_is(&state, 3));
+        assert_eq!(state.aged_notes().len(), 1);
     }
 
     #[test]
-    #[expect(clippy::too_many_lines, reason = "Test function.")]
-    fn test_sync() {
-        let alice = pk(1);
-        let bob = pk(2);
+    fn aged_notes_of_a_later_epoch_are_those_its_first_block_will_use() {
+        let owned = Note::new(100, Fr::from(1u64), pk(1));
+        let known = known(&[(owned, LEDGER_SET, nullifier(1))]);
+        let state = WalletState::from_genesis(&known, &[owned], &[], Epoch::new(0)).unwrap();
+        let state = state
+            .apply_block(
+                &known,
+                &block(1, 0, 1, vec![appended(LEDGER_SET, vec![commitment(1)])]),
+            )
+            .unwrap();
+        let state = state
+            .apply_block(
+                &known,
+                &block(2, 1, 1, vec![appended(LEDGER_SET, vec![commitment(2)])]),
+            )
+            .unwrap();
+        for epoch in 1..=3 {
+            let first_block = state
+                .apply_block(&known, &block(3, 2, epoch, vec![]))
+                .unwrap();
+            assert_eq!(
+                state.aged_notes_at(Epoch::new(epoch)),
+                first_block.aged_notes(),
+                "epoch {epoch}"
+            );
+        }
+    }
 
-        let genesis = HeaderId::from([0; 32]);
-
-        let genesis_ledger =
-            LedgerState::from_utxos([], &ledger_config(), 0, &ConsensusExcludedKeys::empty());
-
-        let (v1_cm, v1_nf) = voucher(1, 0);
-        let (v2_cm, v2_nf) = voucher(1, 1);
-        let (v3_cm, _v3_nf) = voucher(2, 0);
-
-        let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
-            [(alice, 1), (bob, 2)],
-            Vouchers::new([(v1_cm, v1_nf, (1, 0)), (v2_cm, v2_nf, (1, 1))]),
-            genesis,
-            &genesis_ledger,
+    #[test]
+    fn notes_of_a_new_channel_set_start_from_an_empty_mmr() {
+        let channel_note = Note::new(50, Fr::from(2u64), pk(1));
+        let known = known(&[(channel_note, 2, nullifier(2))]);
+        let state = WalletState::from_genesis(&known, &[], &[], Epoch::new(0)).unwrap();
+        let state = state
+            .apply_block(
+                &known,
+                &block(
+                    1,
+                    0,
+                    0,
+                    vec![appended(2, vec![commitment(4), channel_note.commitment()])],
+                ),
+            )
+            .unwrap();
+        let root = CommitmentMmr::new()
+            .push(commitment(4))
+            .unwrap()
+            .push(channel_note.commitment())
+            .unwrap()
+            .frontier_root();
+        assert!(
+            state.notes[&channel_note.commitment()]
+                .path
+                .verify::<ZkHasher>(channel_note.commitment().0, root)
         );
+        assert_eq!(state.balance(pk(1)), None);
+    }
 
-        // Block 1 (epoch 1)
-        // - alice is minted 104 NMO in two notes (100 NMO and 4 NMO)
-        // - voucher v1 is ours -> should be tracked
-        let transfer1 = TransferOp {
-            inputs: Inputs::empty(),
-            outputs: Outputs::new([Note::new(100, alice), Note::new(4, alice)]),
-        };
-        // immediately lock the 2nd note from `transfer1`
-        let service_note = transfer1.outputs.utxo_by_index(1, &transfer1).unwrap().id();
+    #[test]
+    fn exact_note_split_leaves_the_largest_note_to_fund_the_fee() {
+        let small = Note::new(1, Fr::from(1u64), pk(1));
+        let large = Note::new(1000, Fr::from(2u64), pk(1));
+        let known = known(&[
+            (small, LEDGER_SET, nullifier(1)),
+            (large, LEDGER_SET, nullifier(2)),
+        ]);
+        let state = WalletState::from_genesis(&known, &[small, large], &[], Epoch::new(0)).unwrap();
+        let (_, opening) = state
+            .exact_note_split(
+                1,
+                pk(1),
+                Fr::from(3u64),
+                pk(1),
+                Fr::from(4u64),
+                [pk(1)],
+                &HashSet::new(),
+            )
+            .unwrap();
+        assert_eq!(opening.inputs, vec![small]);
+    }
 
-        let block_1 = WalletBlock {
-            id: HeaderId::from([1; 32]),
-            parent: genesis,
-            epoch: 1.into(),
-            voucher_cm: v1_cm,
-            // Unknown unlocked note that will be ignored.
-            header_ops: vec![HeaderOp::Unlock(NoteId::from(Fr::ONE))],
-            txs: [WalletTx {
-                ops: [
-                    WalletOp::Transfer(transfer1.clone()),
-                    WalletOp::Lock(service_note),
-                ]
-                .into(),
-            }]
-            .into(),
-        };
+    #[test]
+    fn exact_note_split_takes_one_larger_note_when_the_smaller_ones_fall_short() {
+        let dust: Vec<Note> = (1..=4)
+            .map(|nonce| Note::new(1, Fr::from(nonce), pk(1)))
+            .collect();
+        let large = Note::new(1000, Fr::from(5u64), pk(1));
+        let known = known(
+            &dust
+                .iter()
+                .chain([&large])
+                .zip(1..)
+                .map(|(note, seed)| (*note, LEDGER_SET, nullifier(seed)))
+                .collect::<Vec<_>>(),
+        );
+        let genesis: Vec<Note> = dust.iter().copied().chain([large]).collect();
+        let state = WalletState::from_genesis(&known, &genesis, &[], Epoch::new(0)).unwrap();
+        let (_, opening) = state
+            .exact_note_split(
+                500,
+                pk(1),
+                Fr::from(6u64),
+                pk(1),
+                Fr::from(7u64),
+                [pk(1)],
+                &HashSet::new(),
+            )
+            .unwrap();
+        assert_eq!(opening.inputs, vec![large]);
+    }
 
-        wallet.apply_block(&block_1).unwrap();
-        assert_service_notes(&wallet, block_1.id, [service_note]);
-        // v1 is tracked but not yet claimable (no epoch transition yet)
-        assert_tracked_but_not_snapshotted_voucher(&wallet, block_1.id, &v1_cm);
-
-        // Block 2 (epoch 2) -- epoch transition snapshots v1's path as claimable
-        //  - alice spends 100 NMO utxo, sending 20 NMO to bob and 80 to herself
-        // - voucher v2 is ours -> should be tracked
-        let alice_100_nmo_utxo = transfer1.outputs.utxo_by_index(0, &transfer1).unwrap();
-        let transfer2 = TransferOp {
-            inputs: BoundedInputs::from(alice_100_nmo_utxo.id()).into(),
-            outputs: Outputs::new([Note::new(20, bob), Note::new(80, alice)]),
-        };
-
-        let block_2 = WalletBlock {
-            id: HeaderId::from([2; 32]),
-            parent: block_1.id,
-            epoch: 2.into(),
-            voucher_cm: v2_cm,
-            // Unlock the previously locked note
-            header_ops: vec![HeaderOp::Unlock(service_note)],
-            txs: [WalletTx {
-                ops: [
-                    WalletOp::Transfer(transfer2.clone()),
-                    // Unknown service note that will be ignored
-                    WalletOp::Lock(NoteId::from(Fr::ONE)),
-                ]
-                .into(),
-            }]
-            .into(),
-        };
-        wallet.apply_block(&block_2).unwrap();
-        assert_service_notes(&wallet, block_2.id, []);
-        // v1 is now claimable after epoch transition
-        assert_snapshotted_voucher(&wallet, block_2.id, &v1_cm);
-        // v2 is ours, but not yet snapshotted
-        assert_tracked_but_not_snapshotted_voucher(&wallet, block_2.id, &v2_cm);
-
-        // Query the balance of for each pk at different points in the blockchain
-        assert_eq!(wallet.balance(genesis, alice).unwrap(), None);
-        assert_eq!(wallet.balance(genesis, bob).unwrap(), None);
-
+    #[test]
+    fn revealed_notes_come_from_reward_events_and_declarations() {
+        let leader = Note::new(10, Fr::ZERO, pk(1));
+        let pow = Note::new(20, Fr::from(3u64), pk(2));
+        let events: Events = [
+            Event::from(BlockEvent::LeaderRewardPaid { note: leader }),
+            Event::from(TxEvent::new(
+                TxHash::from([1; 32]),
+                [2; 32],
+                TxEventPayload::PoWRewardClaimed {
+                    pow_nullifier: PowNullifier::from(Fr::ONE),
+                    note: pow,
+                },
+            )),
+        ]
+        .into_iter()
+        .collect();
+        let declaration = SDPDeclareOp::sample();
         assert_eq!(
-            wallet.balance(block_1.id, alice).unwrap().unwrap().balance,
-            104
+            revealed_notes(&events, std::iter::once(OpRef::SDPDeclare(&declaration))),
+            vec![
+                (LEDGER_SET, leader),
+                (LEDGER_SET, pow),
+                (SDP_SET, declaration.service_note())
+            ]
         );
-        assert_eq!(wallet.balance(block_1.id, bob).unwrap(), None);
-
-        assert_eq!(
-            wallet.balance(block_2.id, alice).unwrap().unwrap().balance,
-            84
-        );
-        assert_eq!(
-            wallet.balance(block_2.id, bob).unwrap().unwrap().balance,
-            20
-        );
-
-        // Block 3 (still, epoch 2)
-        // - alice deposits the 80 NMO note into a channel. The note stays in the wallet
-        //   (still eligible for PoL) but is marked as a channel note.
-        // - voucher v3 is not ours -> should not be tracked
-        let alice_80_nmo_utxo = transfer2.outputs.utxo_by_index(1, &transfer2).unwrap();
-
-        let deposit = DepositOp {
-            channel_id: ChannelId::from([0u8; 32]),
-            inputs: BoundedInputs::from(alice_80_nmo_utxo.id()).into(),
-            metadata: Metadata::empty(),
-        };
-        let deposited = Utxo::new(deposit.op_id(), 0, alice_80_nmo_utxo.note);
-
-        let block_3 = WalletBlock {
-            id: HeaderId::from([3; 32]),
-            parent: block_2.id,
-            epoch: 2.into(),
-            voucher_cm: v3_cm,
-            header_ops: vec![],
-            txs: [WalletTx {
-                ops: [
-                    WalletOp::ChannelDeposit(deposit),
-                    WalletOp::LeaderClaim(Utxo::new(tx_hash(9), 0, Note::new(38, alice))),
-                ]
-                .into(),
-            }]
-            .into(),
-        };
-        wallet.apply_block(&block_3).unwrap();
-
-        // The deposited note shouldn't be counted in the wallet's total balance
-        assert_eq!(
-            wallet.balance(block_3.id, alice).unwrap().unwrap().balance,
-            42
-        );
-        assert_eq!(
-            wallet.balance(block_3.id, bob).unwrap().unwrap().balance,
-            20
-        );
-        // The deposit consumes the 80 NMO note and re-creates it as a channel
-        // note under a new NoteId, still owned by Alice so it stays eligible
-        // for PoL.
-        let state = wallet.wallet_state_at(block_3.id).unwrap();
-        assert!(!state.utxos.contains_key(&alice_80_nmo_utxo.id()));
-        assert!(state.utxos.contains_key(&deposited.id()));
-        assert!(state.channel_notes.contains(&deposited.id()));
-
-        // v1 is still claimable
-        assert_snapshotted_voucher(&wallet, block_3.id, &v1_cm);
-        // v2 is still not snapshotted
-        assert_tracked_but_not_snapshotted_voucher(&wallet, block_3.id, &v2_cm);
-        // v3 is not ours, so not tracked at all
-        assert_not_tracked_voucher(&wallet, block_3.id, &v3_cm);
     }
 
     /// Two transfers within a single transaction where the second consumes
     /// the first's change. After applying the block, the intermediate note
-    /// must not appear in the wallet's UTXO set — only the final change
-    /// note from the second transfer remains.
+    /// must not appear in the wallet's notes, only the final notes of the
+    /// second transfer remain.
     #[test]
     fn test_apply_block_dependent_ops_within_tx() {
         let alice = pk(1);
         let bob = pk(2);
         let genesis = HeaderId::from([0; 32]);
-        let genesis_ledger =
-            LedgerState::from_utxos([], &ledger_config(), 0, &ConsensusExcludedKeys::empty());
-        let (v_cm, _v_nf) = voucher(1, 0);
+        // Op A: 100 to alice. Op B: spends it, 30 to bob and 70 back to alice.
+        let intermediate = Note::new(100, Fr::from(1u64), alice);
+        let to_bob = Note::new(30, Fr::from(2u64), bob);
+        let change = Note::new(70, Fr::from(3u64), alice);
+        let known = known(&[
+            (intermediate, LEDGER_SET, nullifier(1)),
+            (to_bob, LEDGER_SET, nullifier(2)),
+            (change, LEDGER_SET, nullifier(3)),
+        ]);
+        let mut wallet =
+            Wallet::from_genesis([(alice, 1), (bob, 2)], known, genesis, &[], &[]).unwrap();
 
-        let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
-            [(alice, 1), (bob, 2)],
-            Vouchers::default(),
-            genesis,
-            &genesis_ledger,
+        // The ledger reports the block's appends and nullifiers in execution
+        // order.
+        let block = block(
+            1,
+            0,
+            0,
+            vec![NoteSetUpdate {
+                note_set: LEDGER_SET,
+                nullifiers: vec![nullifier(1)],
+                commitments: vec![
+                    intermediate.commitment(),
+                    to_bob.commitment(),
+                    change.commitment(),
+                ],
+            }],
         );
-
-        // Op A: mint 100 NMO to alice.
-        let transfer_a = TransferOp {
-            inputs: Inputs::empty(),
-            outputs: Outputs::new([Note::new(100, alice)]),
-        };
-        let intermediate = transfer_a
-            .outputs
-            .utxo_by_index(0, &transfer_a)
-            .unwrap()
-            .id();
-
-        // Op B: spend the 100 NMO note created by op A; send 30 to bob,
-        // 70 change back to alice.
-        let transfer_b = TransferOp {
-            inputs: BoundedInputs::from(intermediate).into(),
-            outputs: Outputs::new([Note::new(30, bob), Note::new(70, alice)]),
-        };
-
-        let block = WalletBlock {
-            id: HeaderId::from([1; 32]),
-            parent: genesis,
-            epoch: 1.into(),
-            voucher_cm: v_cm,
-            header_ops: vec![],
-            txs: [WalletTx {
-                ops: [
-                    WalletOp::Transfer(transfer_a),
-                    WalletOp::Transfer(transfer_b),
-                ]
-                .into(),
-            }]
-            .into(),
-        };
         wallet.apply_block(&block).unwrap();
 
         let alice_balance = wallet.balance(block.id, alice).unwrap().unwrap();
         assert_eq!(alice_balance.balance, 70);
-        assert!(!alice_balance.notes.contains_key(&intermediate));
+        assert!(!alice_balance.notes.contains_key(&intermediate.commitment()));
 
         let bob_balance = wallet.balance(block.id, bob).unwrap().unwrap();
         assert_eq!(bob_balance.balance, 30);
     }
 
-    /// Two transactions in the same block where the second consumes a
-    /// note the first produced. The wallet must end up matching the ledger:
-    /// only the final change is tracked.
-    #[test]
-    fn test_apply_block_dependent_ops_across_txs() {
-        let alice = pk(1);
-        let bob = pk(2);
-        let genesis = HeaderId::from([0; 32]);
-        let genesis_ledger =
-            LedgerState::from_utxos([], &ledger_config(), 0, &ConsensusExcludedKeys::empty());
-        let (v_cm, _v_nf) = voucher(1, 0);
-
-        let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
-            [(alice, 1), (bob, 2)],
-            Vouchers::default(),
-            genesis,
-            &genesis_ledger,
-        );
-
-        let transfer_a = TransferOp {
-            inputs: Inputs::empty(),
-            outputs: Outputs::new([Note::new(100, alice)]),
-        };
-        let intermediate = transfer_a
-            .outputs
-            .utxo_by_index(0, &transfer_a)
-            .unwrap()
-            .id();
-        let transfer_b = TransferOp {
-            inputs: BoundedInputs::from(intermediate).into(),
-            outputs: Outputs::new([Note::new(30, bob), Note::new(70, alice)]),
-        };
-
-        let block = WalletBlock {
-            id: HeaderId::from([1; 32]),
-            parent: genesis,
-            epoch: 1.into(),
-            voucher_cm: v_cm,
-            header_ops: vec![],
-            txs: [
-                WalletTx {
-                    ops: [WalletOp::Transfer(transfer_a)].into(),
-                },
-                WalletTx {
-                    ops: [WalletOp::Transfer(transfer_b)].into(),
-                },
-            ]
-            .into(),
-        };
-        wallet.apply_block(&block).unwrap();
-
-        let alice_balance = wallet.balance(block.id, alice).unwrap().unwrap();
-        assert_eq!(alice_balance.balance, 70);
-        assert!(!alice_balance.notes.contains_key(&intermediate));
-
-        let bob_balance = wallet.balance(block.id, bob).unwrap().unwrap();
-        assert_eq!(bob_balance.balance, 30);
+    fn context(gas_prices: GasPrices) -> OpsContext {
+        OpsContext {
+            gas_context: OpsGasContext::new(HashMap::new(), gas_prices),
+        }
     }
 
-    // TODO: support channel note tracking in wallet
-    // #[test]
-    // fn test_channel_withdraw_outputs_update_balance() {
-    //     let alice = pk(1);
-    //     let bob = pk(2);
-    //     let genesis = HeaderId::from([0; 32]);
-    //     let ledger = LedgerState::from_utxos([], &ledger_config());
-    //     let (voucher_cm, _voucher_nf) = voucher(1, 0);
-    //     let alice_withdraw_utxo = Utxo::new(tx_hash(1), 0, Note::new(42, alice));
-    //     let bob_withdraw_utxo = Utxo::new(tx_hash(1), 1, Note::new(7, bob));
-    //
-    //     let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
-    //         [(alice, 1)],
-    //         Vouchers::default(),
-    //         genesis,
-    //         &ledger,
-    //     );
-    //
-    //     let block = WalletBlock {
-    //         id: HeaderId::from([1; 32]),
-    //         parent: genesis,
-    //         epoch: 1.into(),
-    //         voucher_cm,
-    //         header_ops: vec![],
-    //         txs: vec![WalletTx {
-    //             ops: vec![WalletOp::ChannelWithdraw(vec![
-    //                 alice_withdraw_utxo,
-    //                 bob_withdraw_utxo,
-    //             ])],
-    //         }],
-    //     };
-    //
-    //     wallet.apply_block(&block).unwrap();
-    //
-    //     assert_eq!(
-    //         wallet.balance(block.id, alice).unwrap().unwrap().balance,
-    //         42
-    //     );
-    //     assert_eq!(wallet.balance(block.id, bob).unwrap(), None);
-    // }
+    // `tx_builder` funded by one note of value 0, to price its funding Transfer.
+    fn with_zero_input(tx_builder: &MantleTxBuilder) -> MantleTxBuilder {
+        tx_builder
+            .clone()
+            .extend_funding_inputs(
+                Fr::ZERO,
+                [FundingNote {
+                    note: Note::new(0, Fr::ZERO, pk(0)),
+                    nullifier: nullifier(0),
+                }],
+            )
+            .unwrap()
+    }
 
-    #[test]
-    fn test_sdp_reward_credits_owned_provider() {
-        let alice = pk(1);
-        let bob = pk(2);
-        let genesis = HeaderId::from([0; 32]);
-        let ledger =
-            LedgerState::from_utxos([], &ledger_config(), 0, &ConsensusExcludedKeys::empty());
-        let (voucher_cm, _voucher_nf) = voucher(1, 0);
+    // The funding Transfer, which `build` appends last.
+    fn funding_transfer(tx_builder: MantleTxBuilder) -> TransferOp {
+        match tx_builder.build().unwrap().iter().last() {
+            Some(Op::Transfer(transfer_op)) => transfer_op.clone(),
+            _ => panic!("last op must be a transfer"),
+        }
+    }
 
-        // A wallet that only knows alice's key.
-        let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
-            [(alice, 1)],
-            Vouchers::default(),
-            genesis,
-            &ledger,
-        );
-
-        // Two reward UTXOs — one to alice (owned), one to bob (unknown).
-        let alice_reward = Utxo::new(tx_hash(1), 0, Note::new(100, alice));
-        let bob_reward = Utxo::new(tx_hash(1), 1, Note::new(50, bob));
-
-        let block = WalletBlock {
-            id: HeaderId::from([1; 32]),
-            parent: genesis,
-            epoch: 1.into(),
-            voucher_cm,
-            header_ops: vec![
-                HeaderOp::SdpReward(alice_reward),
-                HeaderOp::SdpReward(bob_reward),
-            ],
-            txs: BlockTransactions::empty(),
+    fn wallet_state_of(notes: &[(Note, NoteSetIndex, NoteNullifier)]) -> WalletState {
+        let known = known(notes);
+        let in_set = |note_set| {
+            notes
+                .iter()
+                .filter(|(_, set, _)| *set == note_set)
+                .map(|(note, _, _)| *note)
+                .collect::<Vec<_>>()
         };
-
-        wallet.apply_block(&block).unwrap();
-
-        assert_eq!(
-            wallet.balance(block.id, alice).unwrap().unwrap().balance,
-            100,
-            "alice's reward UTXO must be credited to her balance",
-        );
-        assert_eq!(
-            wallet.balance(block.id, bob).unwrap(),
-            None,
-            "bob's key is unknown to this wallet; his reward must be ignored",
-        );
+        WalletState::from_genesis(&known, &in_set(LEDGER_SET), &in_set(SDP_SET), Epoch::new(0))
+            .unwrap()
     }
 
     #[test]
     fn test_fund_tx_with_change() {
         let alice = pk(1);
-        let utxo1 = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
-        let utxo2 = Utxo::new(tx_hash(0), 1, Note::new(5000, alice));
-        let ledger_state = LedgerState::from_utxos(
-            [utxo1, utxo2],
-            &ledger_config(),
-            0,
-            &ConsensusExcludedKeys::empty(),
-        );
-
-        let mut wallet_state =
-            WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
-        // Lock `utxo1` deliberately to ensure that `fund_tx` excludes service notes
-        wallet_state.service_notes = wallet_state.service_notes.insert(utxo1.id());
-
-        let context = OpsContext {
-            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
-            leader_reward_amount: 0,
-        };
-        let tx_builder = MantleTxBuilder::new();
+        let ledger_note = Note::new(5000, Fr::from(1u64), alice);
+        // A service note of alice, which `fund_tx` must not spend
+        let service_note = Note::new(5000, Fr::from(2u64), alice);
+        let wallet_state = wallet_state_of(&[
+            (ledger_note, LEDGER_SET, nullifier(1)),
+            (service_note, SDP_SET, nullifier(2)),
+        ]);
+        let context = context(GasPrices::new(1, 1));
+        let change_nonce = Fr::from(3u64);
 
         // Fund the transaction
         let funded_tx_builder = wallet_state
-            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
+            .fund_tx::<MainnetGasProfile>(
+                &MantleTxBuilder::new(),
+                alice,
+                change_nonce,
+                [alice],
+                &context,
+                &HashSet::new(),
+                0,
+            )
             .unwrap();
 
-        assert_eq!(
-            794,
-            funded_tx_builder
-                .minimum_gas_cost::<Gas>(&context)
-                .unwrap()
-                .into_inner()
-        );
-        assert_eq!(794, funded_tx_builder.net_balance());
+        let fee = funded_tx_builder
+            .minimum_gas_cost::<MainnetGasProfile>(&context)
+            .unwrap()
+            .into_inner();
+        assert_eq!(855, fee);
+        assert_eq!(i128::from(fee), funded_tx_builder.net_balance());
         assert_eq!(
             0,
             funded_tx_builder
-                .funding_delta_with_priority_fee::<Gas>(&context, 0)
+                .funding_delta_with_priority_fee::<MainnetGasProfile>(&context, 0)
                 .unwrap()
         );
 
-        let funded_tx = funded_tx_builder.build().unwrap();
-
-        if let Some(Op::Transfer(transfer_op)) = funded_tx.last() {
-            // ensure alices utxo was used to pay the fee
-            assert_eq!(transfer_op.inputs, BoundedInputs::from(utxo2.id()).into());
-            // ensure change was returned to alice
-            assert_eq!(
-                transfer_op.outputs,
-                Outputs::new([Note {
-                    value: 4206,
-                    pk: alice,
-                }])
-            );
-        } else {
-            panic!("last op must be a transfer")
-        }
+        let transfer_op = funding_transfer(funded_tx_builder);
+        // ensure alice's ledger note was used to pay the fee
+        assert_eq!(transfer_op.inputs, [nullifier(1)].into());
+        // ensure change was returned to alice
+        assert_eq!(
+            transfer_op.outputs,
+            [Note::new(5000 - fee, change_nonce, alice).commitment()].into()
+        );
     }
 
     #[test]
     fn test_fund_tx_with_priority_fee_percentage() {
         let alice = pk(1);
-        let utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
-        let ledger_state =
-            LedgerState::from_utxos([utxo], &ledger_config(), 0, &ConsensusExcludedKeys::empty());
-        let wallet_state =
-            WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
-
-        let context = OpsContext {
-            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
-            leader_reward_amount: 0,
-        };
+        let note = Note::new(5000, Fr::from(1u64), alice);
+        let wallet_state = wallet_state_of(&[(note, LEDGER_SET, nullifier(1))]);
+        let context = context(GasPrices::new(1, 1));
+        let change_nonce = Fr::from(3u64);
         let tx_builder = MantleTxBuilder::new();
         let priority_fee_percent = 12;
-        let mandatory_fee_without_change = tx_builder
-            .clone()
-            .add_ledger_input(Utxo::new(tx_hash(1), 0, Note::new(0, alice)))
-            .unwrap()
-            .minimum_gas_cost::<Gas>(&context)
+        let mandatory_fee_without_change = with_zero_input(&tx_builder)
+            .minimum_gas_cost::<MainnetGasProfile>(&context)
             .unwrap()
             .into_inner();
 
         let funded_tx_builder = wallet_state
-            .fund_tx::<Gas>(
+            .fund_tx::<MainnetGasProfile>(
                 &tx_builder,
                 alice,
+                change_nonce,
                 [alice],
                 &context,
                 &HashSet::new(),
@@ -1514,11 +1194,11 @@ mod tests {
         // The final mandatory fee includes the change output, and the tip is
         // the rounded-up percentage of that final fee.
         let mandatory_fee = funded_tx_builder
-            .minimum_gas_cost::<Gas>(&context)
+            .minimum_gas_cost::<MainnetGasProfile>(&context)
             .unwrap()
             .into_inner();
-        assert_eq!(mandatory_fee_without_change, 754);
-        assert_eq!(mandatory_fee, 794);
+        assert_eq!(mandatory_fee_without_change, 823);
+        assert_eq!(mandatory_fee, 855);
         let priority_fee_amount = (mandatory_fee * priority_fee_percent).div_ceil(100);
         assert_eq!(
             i128::from(mandatory_fee + priority_fee_amount),
@@ -1527,64 +1207,64 @@ mod tests {
         assert_eq!(
             0,
             funded_tx_builder
-                .funding_delta_with_priority_fee::<Gas>(&context, priority_fee_percent)
+                .funding_delta_with_priority_fee::<MainnetGasProfile>(
+                    &context,
+                    priority_fee_percent
+                )
                 .unwrap()
         );
 
         // The change output shrank by the mandatory fee and percentage tip.
-        let funded_tx = funded_tx_builder.build().unwrap();
-        if let Some(Op::Transfer(transfer_op)) = funded_tx.last() {
-            assert_eq!(
-                transfer_op.outputs,
-                Outputs::new([Note {
-                    value: 5000 - mandatory_fee - priority_fee_amount,
-                    pk: alice,
-                }])
-            );
-        } else {
-            panic!("last op must be a transfer")
-        }
+        assert_eq!(
+            funding_transfer(funded_tx_builder).outputs,
+            [Note::new(
+                5000 - mandatory_fee - priority_fee_amount,
+                change_nonce,
+                alice
+            )
+            .commitment()]
+            .into()
+        );
     }
 
     #[test]
     fn test_fund_tx_no_fee_adds_no_input() {
         let alice = pk(1);
         // The wallet has a spendable note available...
-        let utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
-        let ledger_state =
-            LedgerState::from_utxos([utxo], &ledger_config(), 0, &ConsensusExcludedKeys::empty());
-        let wallet_state =
-            WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
+        let note = Note::new(5000, Fr::from(1u64), alice);
+        let wallet_state = wallet_state_of(&[(note, LEDGER_SET, nullifier(1))]);
 
         // ...but with zero gas prices a transfer-less transaction owes no fee,
         // so it needs no funding at all.
-        let context = OpsContext {
-            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(0, 0)),
-            leader_reward_amount: 0,
-        };
-        let mut tx_builder = MantleTxBuilder::new();
-
-        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
-        tx_builder = tx_builder
-            .push_op(Op::ChannelInscribe(InscriptionOp {
-                channel_id: ChannelId::from([0xAA; 32]),
-                inscription: [0xAB; 8].into(),
-                parent: MsgId::from([0xBB; 32]),
-                signer: signing_key.public_key().into_unverified(),
-            }))
+        let context = context(GasPrices::new(0, 0));
+        let tx_builder = MantleTxBuilder::new()
+            .push_op(Op::ChannelInscribe(InscriptionOp::sample()))
             .unwrap();
 
-        assert_eq!(0, tx_builder.funding_delta::<Gas>(&context).unwrap());
+        assert_eq!(
+            0,
+            tx_builder
+                .funding_delta::<MainnetGasProfile>(&context)
+                .unwrap()
+        );
 
         let funded_tx_builder = wallet_state
-            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
+            .fund_tx::<MainnetGasProfile>(
+                &tx_builder,
+                alice,
+                Fr::from(3u64),
+                [alice],
+                &context,
+                &HashSet::new(),
+                0,
+            )
             .unwrap();
 
         // No input was pulled in (an added input would push the net balance to
         // 5000) and therefore no change note was added.
         assert_eq!(0, funded_tx_builder.net_balance());
 
-        // The empty transfer is dropped, so the built tx carries no transfer op.
+        // No funding Transfer is appended, so the built tx carries no transfer op.
         let funded_tx = funded_tx_builder.build().unwrap();
         assert!(
             !funded_tx.iter().any(|op| matches!(op, Op::Transfer(_))),
@@ -1595,44 +1275,31 @@ mod tests {
     #[test]
     fn test_fund_tx_insufficient_funds() {
         let alice = pk(1);
-        let ledger_state = LedgerState::from_utxos(
-            [
-                Utxo::new(tx_hash(0), 0, Note::new(100, alice)),
-                Utxo::new(tx_hash(0), 1, Note::new(100, alice)),
-                Utxo::new(tx_hash(0), 2, Note::new(100, alice)),
-                Utxo::new(tx_hash(0), 3, Note::new(100, alice)),
-            ],
-            &ledger_config(),
-            0,
-            &ConsensusExcludedKeys::empty(),
+        let wallet_state = wallet_state_of(
+            &(1..=4)
+                .map(|i| (Note::new(100, Fr::from(i), alice), LEDGER_SET, nullifier(i)))
+                .collect::<Vec<_>>(),
         );
-
-        let context = OpsContext {
-            gas_context: OpsGasContext::from_channels(
-                ledger_state.mantle_ledger().channels(),
-                GasPrices::new(1, 1),
-            ),
-            leader_reward_amount: ledger_state.mantle_ledger().leader_reward_amount(),
-        };
-
-        let wallet_state =
-            WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
-        let mut tx_builder = MantleTxBuilder::new();
+        let context = context(GasPrices::new(1, 1));
 
         // Add a costly inscription
-        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
-        let inscription = Op::ChannelInscribe(InscriptionOp {
-            channel_id: ChannelId::from([0xAA; 32]),
-            inscription: [0xAB; 1000].into(),
-            parent: MsgId::from([0xBB; 32]),
-            signer: signing_key.public_key().into_unverified(),
-        });
-
-        tx_builder = tx_builder.push_op(inscription).unwrap();
+        let tx_builder = MantleTxBuilder::new()
+            .push_op(Op::ChannelInscribe(InscriptionOp {
+                inscription: [0xAB; 1000].into(),
+                ..InscriptionOp::sample()
+            }))
+            .unwrap();
 
         // Fund the transaction
-        let fund_attempt =
-            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
+        let fund_attempt = wallet_state.fund_tx::<MainnetGasProfile>(
+            &tx_builder,
+            alice,
+            Fr::from(5u64),
+            [alice],
+            &context,
+            &HashSet::new(),
+            0,
+        );
 
         assert_eq!(
             fund_attempt.unwrap_err(),
@@ -1643,23 +1310,22 @@ mod tests {
     #[test]
     fn test_fund_tx_zero_funds() {
         let alice = pk(1);
-        let ledger_state =
-            LedgerState::from_utxos([], &ledger_config(), 0, &ConsensusExcludedKeys::empty());
-
-        let wallet_state =
-            WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
+        let wallet_state = wallet_state_of(&[]);
 
         // Use non-zero gas prices so the transaction actually owes a fee and
         // therefore needs funding.
-        let context = OpsContext {
-            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
-            leader_reward_amount: 0,
-        };
-        let tx_builder = MantleTxBuilder::new();
+        let context = context(GasPrices::new(1, 1));
 
         // Fund the transaction
-        let fund_attempt =
-            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
+        let fund_attempt = wallet_state.fund_tx::<MainnetGasProfile>(
+            &MantleTxBuilder::new(),
+            alice,
+            Fr::from(1u64),
+            [alice],
+            &context,
+            &HashSet::new(),
+            0,
+        );
 
         assert_eq!(
             fund_attempt.unwrap_err(),
@@ -1670,26 +1336,36 @@ mod tests {
     #[test]
     fn test_fund_tx_all_service_notes() {
         let alice = pk(1);
-        let utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
-        let ledger_state =
-            LedgerState::from_utxos([utxo], &ledger_config(), 0, &ConsensusExcludedKeys::empty());
-
-        let mut wallet_state =
-            WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
-        // Lock `utxo` deliberately to ensure that `fund_tx` excludes service notes
-        wallet_state.service_notes = wallet_state.service_notes.insert(utxo.id());
+        let service_note = Note::new(5000, Fr::from(1u64), alice);
+        let channel_note = Note::new(5000, Fr::from(2u64), alice);
+        let known = known(&[
+            (service_note, SDP_SET, nullifier(1)),
+            (channel_note, 2, nullifier(2)),
+        ]);
+        // alice only owns a service note and a channel note, which are not in
+        // the ledger set, so `fund_tx` must not spend them
+        let wallet_state = WalletState::from_genesis(&known, &[], &[service_note], Epoch::new(0))
+            .unwrap()
+            .apply_block(
+                &known,
+                &block(1, 0, 0, vec![appended(2, vec![channel_note.commitment()])]),
+            )
+            .unwrap();
 
         // Use non-zero gas prices so the transaction actually owes a fee and
         // therefore needs funding.
-        let context = OpsContext {
-            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
-            leader_reward_amount: 0,
-        };
-        let tx_builder = MantleTxBuilder::new();
+        let context = context(GasPrices::new(1, 1));
 
         // Fund the transaction
-        let fund_attempt =
-            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
+        let fund_attempt = wallet_state.fund_tx::<MainnetGasProfile>(
+            &MantleTxBuilder::new(),
+            alice,
+            Fr::from(3u64),
+            [alice],
+            &context,
+            &HashSet::new(),
+            0,
+        );
 
         assert_eq!(
             fund_attempt.unwrap_err(),
@@ -1701,27 +1377,27 @@ mod tests {
     fn test_fund_tx_respects_pk_list() {
         let alice = pk(1);
         let bob = pk(2);
-        let ledger_state = LedgerState::from_utxos(
-            [Utxo::new(tx_hash(0), 0, Note::new(1_000_000, bob))],
-            &ledger_config(),
-            0,
-            &ConsensusExcludedKeys::empty(),
-        );
-
-        let wallet_state =
-            WalletState::from_ledger(&HashMap::from_iter([(alice, 1), (bob, 2)]), &ledger_state);
+        let wallet_state = wallet_state_of(&[(
+            Note::new(1_000_000, Fr::from(1u64), bob),
+            LEDGER_SET,
+            nullifier(1),
+        )]);
 
         // Use non-zero gas prices so the transaction actually owes a fee and
         // therefore needs funding.
-        let context = OpsContext {
-            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
-            leader_reward_amount: 0,
-        };
+        let context = context(GasPrices::new(1, 1));
         let tx_builder = MantleTxBuilder::new();
 
         // Attempt to fund the transaction with Alice's notes.
-        let fund_attempt =
-            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
+        let fund_attempt = wallet_state.fund_tx::<MainnetGasProfile>(
+            &tx_builder,
+            alice,
+            Fr::from(2u64),
+            [alice],
+            &context,
+            &HashSet::new(),
+            0,
+        );
 
         assert_eq!(
             fund_attempt.unwrap_err(),
@@ -1730,707 +1406,82 @@ mod tests {
 
         // Fund the transaction with Bob's notes.
         wallet_state
-            .fund_tx::<Gas>(&tx_builder, bob, [bob], &context, &HashSet::new(), 0)
+            .fund_tx::<MainnetGasProfile>(
+                &tx_builder,
+                bob,
+                Fr::from(2u64),
+                [bob],
+                &context,
+                &HashSet::new(),
+                0,
+            )
             .unwrap(); // succesfully funded;
     }
 
     #[test]
     fn test_fund_tx_unfundable_region() {
         let alice = pk(1);
-
-        let context = OpsContext {
-            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
-            leader_reward_amount: 0,
-        };
+        let change_nonce = Fr::from(2u64);
+        let context = context(GasPrices::new(1, 1));
         let tx_builder = MantleTxBuilder::new();
-
-        // Determine gas cost without change note
-        assert_eq!(
-            754,
-            tx_builder
-                .clone()
-                .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
-                .unwrap()
-                .minimum_gas_cost::<Gas>(&context)
-                .unwrap()
-                .into_inner()
-        );
-
-        // We can fund the tx if the note value is exactly the gas cost without change
-        // note
-        let wallet_state = WalletState::from_ledger(
-            &HashMap::from_iter([(alice, 1)]),
-            &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(754, alice))],
-                &ledger_config(),
-                0,
-                &ConsensusExcludedKeys::empty(),
-            ),
-        );
-
-        let funded_tx_wo_change = wallet_state
-            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
-            .unwrap()
-            .build()
-            .unwrap(); // successfully funded the tx
-
-        // verify that no change output was used.
-        if let Some(Op::Transfer(transfer_op)) = funded_tx_wo_change.last() {
-            assert_eq!(transfer_op.outputs, Outputs::empty());
-        } else {
-            panic!("last op must be a transfer")
-        }
-
-        // Determine gas cost with change note
-        assert_eq!(
-            794,
-            tx_builder
-                .clone()
-                .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
-                .unwrap()
-                .with_dummy_change_note()
-                .unwrap()
-                .minimum_gas_cost::<Gas>(&context)
-                .unwrap()
-                .into_inner()
-        );
-
-        for value in 755..=794 {
-            // this region of note values will fail to fund the tx.
-            // We can fund the tx if the note value is exactly the gas cost without change
-            // note
-            let wallet_state = WalletState::from_ledger(
-                &HashMap::from_iter([(alice, 1)]),
-                &LedgerState::from_utxos(
-                    [Utxo::new(tx_hash(0), 0, Note::new(value, alice))],
-                    &ledger_config(),
-                    0,
-                    &ConsensusExcludedKeys::empty(),
-                ),
-            );
-
-            let fund_attempt = wallet_state.fund_tx::<Gas>(
+        let fund = |value| {
+            wallet_state_of(&[(
+                Note::new(value, Fr::from(1u64), alice),
+                LEDGER_SET,
+                nullifier(1),
+            )])
+            .fund_tx::<MainnetGasProfile>(
                 &tx_builder,
                 alice,
+                change_nonce,
                 [alice],
                 &context,
                 &HashSet::new(),
                 0,
-            );
+            )
+        };
 
+        // Determine gas cost without change note
+        let cost_without_change = with_zero_input(&tx_builder)
+            .minimum_gas_cost::<MainnetGasProfile>(&context)
+            .unwrap()
+            .into_inner();
+        assert_eq!(823, cost_without_change);
+
+        // We can fund the tx if the note value is exactly the gas cost without change
+        // note
+        let funded_tx_wo_change = fund(cost_without_change).unwrap(); // successfully funded the tx
+
+        // verify that no change output was used.
+        assert_eq!(
+            funding_transfer(funded_tx_wo_change).outputs,
+            OutputCommitments::default()
+        );
+
+        // Determine gas cost with change note
+        let cost_with_change = with_zero_input(&tx_builder)
+            .with_dummy_change_note()
+            .unwrap()
+            .minimum_gas_cost::<MainnetGasProfile>(&context)
+            .unwrap()
+            .into_inner();
+        assert_eq!(855, cost_with_change);
+
+        for value in cost_without_change + 1..=cost_with_change {
+            // this region of note values will fail to fund the tx.
             assert_eq!(
-                fund_attempt.unwrap_err(),
+                fund(value).unwrap_err(),
                 WalletError::InsufficientFunds { available: value }
             );
         }
 
         // We can fund the tx if the note value exceeds gas cost with change note
-        let wallet_state = WalletState::from_ledger(
-            &HashMap::from_iter([(alice, 1)]),
-            &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(795, alice))],
-                &ledger_config(),
-                0,
-                &ConsensusExcludedKeys::empty(),
-            ),
-        );
-
-        let funded_tx_wo_change = wallet_state
-            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
-            .unwrap()
-            .build()
-            .unwrap(); // successfully funded the tx
+        let funded_tx_with_change = fund(cost_with_change + 1).unwrap(); // successfully funded the tx
 
         // verify that indeed a change output was used.
-        if let Some(Op::Transfer(transfer_op)) = funded_tx_wo_change.last() {
-            assert_eq!(transfer_op.outputs, Outputs::new([Note::new(1, alice)]));
-        } else {
-            panic!("the last operation must be a transfer")
-        }
-    }
-
-    /// A reward config with claiming disabled, standing in for a real
-    /// deployment config in tests.
-    fn disabled_reward_config() -> RewardPoWConfig {
-        RewardPoWConfig {
-            minimum_difficulty: ModulusShift::new::<26>(),
-            ema_smoothing_factor: 9,
-            ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
-            target_claims_per_block: 100,
-            rate_num: 0,
-            rate_den: NonZeroU64::MIN,
-            target_claim_per_block: NonZeroU64::MIN,
-            pow_share: 0,
-            share_den: NonZeroU64::MIN,
-            slot_window: NonZeroU64::new(100).unwrap(),
-        }
-    }
-
-    #[must_use]
-    fn ledger_config() -> lb_ledger::Config {
-        let epoch_config = EpochConfig {
-            epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
-            epoch_period_nonce_buffer: NonZero::new(1).unwrap(),
-            epoch_period_nonce_stabilization: NonZero::new(1).unwrap(),
-        };
-        let consensus_config = lb_cryptarchia_engine::Config::new(
-            NonZero::new(1).unwrap(),
-            NonNegativeRatio::new(1, 10.try_into().unwrap()),
-            1f64.try_into().expect("1 > 0"),
-            12,
-            4,
-        );
-        let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
-
-        lb_ledger::Config {
-            epoch_config,
-            consensus_config,
-            sdp_config: lb_ledger::mantle::sdp::Config {
-                service_params: Arc::new(
-                    [(
-                        ServiceType::BlendNetwork,
-                        ServiceParameters {
-                            inactivity_period: 20.try_into().unwrap(),
-                            epoch: 0.into(),
-                        },
-                    )]
-                    .into(),
-                ),
-                service_rewards_params: ServiceRewardsParameters {
-                    blend: rewards::blend::RewardsParameters {
-                        rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
-                        num_blend_layers: NonZeroU64::new(3).unwrap(),
-                        minimum_network_size: NonZeroU64::new(1).unwrap(),
-                        data_replication_factor: 0,
-                        activity_threshold_sensitivity: 1,
-                    },
-                },
-                min_stake: MinStake {
-                    threshold: 1,
-                    timestamp: 0,
-                },
-            },
-            pow_config: PoWConfig {
-                blend: BlendPoWConfig {
-                    base_difficulty: ModulusShift::new::<19>(),
-                    damping_den_offset: 0,
-                    damping_num: 1.try_into().unwrap(),
-                    max_step: 1.try_into().unwrap(),
-                    target_transactions_per_block: 1.try_into().unwrap(),
-                },
-                reward: disabled_reward_config(),
-            },
-        }
-    }
-
-    fn assert_service_notes<KeyId>(
-        wallet: &Wallet<KeyId, TestVoucherId>,
-        tip: HeaderId,
-        notes: impl IntoIterator<Item = NoteId>,
-    ) {
-        let wallet_state = wallet.wallet_state_at(tip).unwrap();
         assert_eq!(
-            wallet_state.service_notes,
-            HashTrieSetSync::from_iter(notes)
+            funding_transfer(funded_tx_with_change).outputs,
+            [Note::new(1, change_nonce, alice).commitment()].into()
         );
-    }
-
-    fn assert_snapshotted_voucher<KeyId>(
-        wallet: &Wallet<KeyId, TestVoucherId>,
-        tip: HeaderId,
-        cm: &VoucherCm,
-    ) {
-        assert!(wallet.voucher_path(tip, cm).unwrap().is_some());
-        assert!(wallet.voucher_path_snapshot(tip, cm).unwrap().is_some());
-    }
-
-    fn assert_tracked_but_not_snapshotted_voucher<KeyId>(
-        wallet: &Wallet<KeyId, TestVoucherId>,
-        tip: HeaderId,
-        cm: &VoucherCm,
-    ) {
-        assert!(wallet.voucher_path(tip, cm).unwrap().is_some());
-        assert!(wallet.voucher_path_snapshot(tip, cm).unwrap().is_none());
-    }
-
-    fn assert_not_tracked_voucher<KeyId>(
-        wallet: &Wallet<KeyId, TestVoucherId>,
-        tip: HeaderId,
-        cm: &VoucherCm,
-    ) {
-        assert!(wallet.voucher_path(tip, cm).unwrap().is_none());
-        assert!(wallet.voucher_path_snapshot(tip, cm).unwrap().is_none());
-    }
-
-    /// A `ChannelDeposit` must keep the deposited note in the wallet so the
-    /// depositor retains `PoL` eligibility on their bridged funds, while
-    /// marking it as a channel note so `fund_tx` gates it
-    /// out.
-    #[test]
-    fn test_channel_deposit_keeps_note() {
-        let alice = pk(1);
-        let genesis = HeaderId::from([0; 32]);
-
-        // Seed the wallet with a 100 NMO note owned by alice.
-        let alice_utxo = Utxo::new(tx_hash(0), 0, Note::new(100, alice));
-        let genesis_ledger = LedgerState::from_utxos(
-            [alice_utxo],
-            &ledger_config(),
-            0,
-            &ConsensusExcludedKeys::empty(),
-        );
-        let (v_cm, _) = voucher(1, 0);
-        let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
-            [(alice, 1)],
-            Vouchers::default(),
-            genesis,
-            &genesis_ledger,
-        );
-
-        // The note starts spendable.
-        let state = wallet.wallet_state_at(genesis).unwrap();
-        assert!(state.utxos.contains_key(&alice_utxo.id()));
-        assert!(!state.channel_notes.contains(&alice_utxo.id()));
-        assert_eq!(state.balance(alice).unwrap().balance, 100);
-
-        // Deposit the note into a channel.
-        let deposit = DepositOp {
-            channel_id: ChannelId::from([0u8; 32]),
-            inputs: BoundedInputs::from(alice_utxo.id()).into(),
-            metadata: Metadata::empty(),
-        };
-        let deposited = Utxo::new(deposit.op_id(), 0, alice_utxo.note);
-        let block = WalletBlock {
-            id: HeaderId::from([1; 32]),
-            parent: genesis,
-            epoch: 1.into(),
-            voucher_cm: v_cm,
-            header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelDeposit(deposit)].into(),
-            }]
-            .into(),
-        };
-        wallet.apply_block(&block).unwrap();
-
-        // The re-created note is still in the wallet (still eligible for PoL)
-        // but marked as a channel note, so it drops out of the balance.
-        let state = wallet.wallet_state_at(block.id).unwrap();
-        assert!(!state.utxos.contains_key(&alice_utxo.id()));
-        assert!(state.utxos.contains_key(&deposited.id()));
-        assert!(state.channel_notes.contains(&deposited.id()));
-        assert_eq!(state.balance(alice).unwrap().balance, 0);
-
-        // `fund_tx` must also exclude the channel note: with no other
-        // UTXOs available, funding a fee-paying tx must fail.
-        let context = OpsContext {
-            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
-            leader_reward_amount: 0,
-        };
-        let err = state
-            .fund_tx::<Gas>(
-                &MantleTxBuilder::new(),
-                alice,
-                [alice],
-                &context,
-                &HashSet::new(),
-                0,
-            )
-            .unwrap_err();
-        assert_eq!(err, WalletError::InsufficientFunds { available: 0 });
-    }
-
-    /// A `ChannelTransfer` must drop the consumed channel note from the
-    /// previous delegate and hand the newly created channel note to the
-    /// new delegate (if their key is known to the wallet), so `PoS`
-    /// participation follows the delegation.
-    #[test]
-    fn test_channel_transfer_moves_notes() {
-        let pk1 = pk(1);
-        let pk2 = pk(2);
-        let channel_id = ChannelId::from([1; 32]);
-        let genesis = HeaderId::from([0; 32]);
-
-        // Seed the wallet with 100 NMO note with `pk1` and mark it as a
-        // channel note via a prior `ChannelDeposit`.
-        let pk1_utxo = Utxo::new(tx_hash(0), 0, Note::new(100, pk1));
-        let genesis_ledger = LedgerState::from_utxos(
-            [pk1_utxo],
-            &ledger_config(),
-            0,
-            &ConsensusExcludedKeys::empty(),
-        );
-        let (v_cm_1, _) = voucher(1, 0);
-        let (v_cm_2, _) = voucher(1, 1);
-        let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
-            [(pk1, 1), (pk2, 2)],
-            Vouchers::default(),
-            genesis,
-            &genesis_ledger,
-        );
-        let deposit = DepositOp {
-            channel_id,
-            inputs: BoundedInputs::from(pk1_utxo.id()).into(),
-            metadata: Metadata::empty(),
-        };
-        let pk1_channel_note = Utxo::new(deposit.op_id(), 0, pk1_utxo.note);
-        let deposit_block = WalletBlock {
-            id: HeaderId::from([1; 32]),
-            parent: genesis,
-            epoch: 1.into(),
-            voucher_cm: v_cm_1,
-            header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelDeposit(deposit)].into(),
-            }]
-            .into(),
-        };
-        wallet.apply_block(&deposit_block).unwrap();
-
-        // Transfer the channel note to `pk2`.
-        let transfer_op = ChannelTransferOp {
-            channel_id,
-            inputs: BoundedInputs::from(pk1_channel_note.id()).into(),
-            outputs: Outputs::new([Note::new(100, pk2)]),
-        };
-        let pk2_output_id = transfer_op
-            .outputs
-            .utxo_by_index(0, &transfer_op)
-            .unwrap()
-            .id();
-        let transfer_block = WalletBlock {
-            id: HeaderId::from([2; 32]),
-            parent: deposit_block.id,
-            epoch: 1.into(),
-            voucher_cm: v_cm_2,
-            header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelTransfer(transfer_op)].into(),
-            }]
-            .into(),
-        };
-        wallet.apply_block(&transfer_block).unwrap();
-
-        let state = wallet.wallet_state_at(transfer_block.id).unwrap();
-        // The `pk1` channel note has been gone from the wallet.
-        assert!(!state.utxos.contains_key(&pk1_channel_note.id()));
-        assert!(!state.channel_notes.contains(&pk1_channel_note.id()));
-        assert!(
-            state
-                .pk_index
-                .get(&pk1)
-                .is_none_or(|set| !set.contains(&pk1_channel_note.id()))
-        );
-        // The `pk2` note has been added to the wallet, as a channel note.
-        assert!(state.utxos.contains_key(&pk2_output_id));
-        assert!(state.channel_notes.contains(&pk2_output_id));
-        assert!(
-            state
-                .pk_index
-                .get(&pk2)
-                .is_some_and(|set| set.contains(&pk2_output_id))
-        );
-        // Balances stay at zero for both: the note is still channel-owned.
-        assert_eq!(state.balance(pk1).map_or(0, |b| b.balance), 0);
-        assert_eq!(state.balance(pk2).unwrap().balance, 0);
-    }
-
-    /// A `ChannelTransfer` output whose new `ZkPublicKey` is unknown to
-    /// the wallet must not be inserted — the wallet stops tracking the
-    /// note entirely.
-    #[test]
-    fn test_channel_transfer_ignores_unknown_outputs() {
-        let alice = pk(1);
-        let stranger = pk(99);
-        let channel_id = ChannelId::from([1; 32]);
-        let genesis = HeaderId::from([0; 32]);
-
-        let alice_utxo = Utxo::new(tx_hash(0), 0, Note::new(100, alice));
-        let genesis_ledger = LedgerState::from_utxos(
-            [alice_utxo],
-            &ledger_config(),
-            0,
-            &ConsensusExcludedKeys::empty(),
-        );
-        let (v_cm_1, _) = voucher(1, 0);
-        let (v_cm_2, _) = voucher(1, 1);
-        let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
-            [(alice, 1)],
-            Vouchers::default(),
-            genesis,
-            &genesis_ledger,
-        );
-        let deposit = DepositOp {
-            channel_id,
-            inputs: BoundedInputs::from(alice_utxo.id()).into(),
-            metadata: Metadata::empty(),
-        };
-        let alice_channel_note = Utxo::new(deposit.op_id(), 0, alice_utxo.note);
-        let deposit_block = WalletBlock {
-            id: HeaderId::from([1; 32]),
-            parent: genesis,
-            epoch: 1.into(),
-            voucher_cm: v_cm_1,
-            header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelDeposit(deposit)].into(),
-            }]
-            .into(),
-        };
-        wallet.apply_block(&deposit_block).unwrap();
-
-        // Transfer Alice -> an unknown-to-wallet pk.
-        let transfer_op = ChannelTransferOp {
-            channel_id,
-            inputs: BoundedInputs::from(alice_channel_note.id()).into(),
-            outputs: Outputs::new([Note::new(100, stranger)]),
-        };
-        let stranger_output_id = transfer_op
-            .outputs
-            .utxo_by_index(0, &transfer_op)
-            .unwrap()
-            .id();
-        let transfer_block = WalletBlock {
-            id: HeaderId::from([2; 32]),
-            parent: deposit_block.id,
-            epoch: 1.into(),
-            voucher_cm: v_cm_2,
-            header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelTransfer(transfer_op)].into(),
-            }]
-            .into(),
-        };
-        wallet.apply_block(&transfer_block).unwrap();
-
-        let state = wallet.wallet_state_at(transfer_block.id).unwrap();
-        // Alice's channel note is gone.
-        assert!(!state.utxos.contains_key(&alice_channel_note.id()));
-        assert!(!state.channel_notes.contains(&alice_channel_note.id()));
-        // Stranger's new note is not tracked.
-        assert!(!state.utxos.contains_key(&stranger_output_id));
-        assert!(!state.channel_notes.contains(&stranger_output_id));
-    }
-
-    /// A `ChannelWithdraw` unmarks channel notes so the wallet can spend
-    /// them again.
-    #[test]
-    fn test_channel_withdraw_releases_note() {
-        let alice = pk(1);
-        let channel_id = ChannelId::from([1; 32]);
-        let genesis = HeaderId::from([0; 32]);
-
-        // Seed Alice with a 100 NMO note and deposit it into a channel.
-        let alice_utxo = Utxo::new(tx_hash(0), 0, Note::new(100, alice));
-        let genesis_ledger = LedgerState::from_utxos(
-            [alice_utxo],
-            &ledger_config(),
-            0,
-            &ConsensusExcludedKeys::empty(),
-        );
-        let (v_cm_1, _) = voucher(1, 0);
-        let (v_cm_2, _) = voucher(1, 1);
-        let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
-            [(alice, 1)],
-            Vouchers::default(),
-            genesis,
-            &genesis_ledger,
-        );
-        let deposit = DepositOp {
-            channel_id,
-            inputs: BoundedInputs::from(alice_utxo.id()).into(),
-            metadata: Metadata::empty(),
-        };
-        let alice_channel_note = Utxo::new(deposit.op_id(), 0, alice_utxo.note);
-        let deposit_block = WalletBlock {
-            id: HeaderId::from([1; 32]),
-            parent: genesis,
-            epoch: 1.into(),
-            voucher_cm: v_cm_1,
-            header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelDeposit(deposit)].into(),
-            }]
-            .into(),
-        };
-        wallet.apply_block(&deposit_block).unwrap();
-
-        // Sanity: after deposit the note is channel-marked, so balance is 0.
-        let state = wallet.wallet_state_at(deposit_block.id).unwrap();
-        assert!(state.channel_notes.contains(&alice_channel_note.id()));
-        assert_eq!(state.balance(alice).unwrap().balance, 0);
-
-        // Withdraw releases the channel note back to spendable. It keeps the
-        // NoteId it got when the deposit re-created it.
-        let withdraw_op = ChannelWithdrawOp {
-            channel_id,
-            inputs: BoundedInputs::from(alice_channel_note.id()).into(),
-        };
-        let withdraw_block = WalletBlock {
-            id: HeaderId::from([2; 32]),
-            parent: deposit_block.id,
-            epoch: 1.into(),
-            voucher_cm: v_cm_2,
-            header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelWithdraw(withdraw_op)].into(),
-            }]
-            .into(),
-        };
-        wallet.apply_block(&withdraw_block).unwrap();
-
-        let state = wallet.wallet_state_at(withdraw_block.id).unwrap();
-        assert!(state.utxos.contains_key(&alice_channel_note.id()));
-        assert!(!state.channel_notes.contains(&alice_channel_note.id()));
-        assert!(
-            state
-                .pk_index
-                .get(&alice)
-                .is_some_and(|set| set.contains(&alice_channel_note.id()))
-        );
-        assert_eq!(state.balance(alice).unwrap().balance, 100);
-
-        // `fund_tx` can now use the released note.
-        let context = OpsContext {
-            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
-            leader_reward_amount: 0,
-        };
-        let err = state
-            .fund_tx::<Gas>(
-                &MantleTxBuilder::new(),
-                alice,
-                [alice],
-                &context,
-                &HashSet::new(),
-                0,
-            )
-            .unwrap_err();
-        // The error detail says that the withdrawn note is now spendable.
-        assert_eq!(err, WalletError::InsufficientFunds { available: 100 });
-    }
-
-    #[test]
-    fn wallet_block_transformation_preserves_bounds_and_source_order() {
-        let first_input = NoteId::from(Fr::from(1));
-        let second_input = NoteId::from(Fr::from(2));
-
-        let transfer = Op::Transfer(TransferOp::new(Inputs::empty(), Outputs::new([])));
-
-        let deposit = Op::ChannelDeposit(DepositOp {
-            channel_id: ChannelId::from([0; 32]),
-            inputs: BoundedInputs::try_from_iter([first_input, second_input])
-                .unwrap()
-                .into(),
-            metadata: Metadata::default(),
-        });
-
-        let ignored_inscription = Op::ChannelInscribe(InscriptionOp {
-            channel_id: ChannelId::from([0; 32]),
-            inscription: Inscription::default(),
-            parent: MsgId::root(),
-            signer: Ed25519Key::from_bytes(&[0; 32])
-                .public_key()
-                .into_unverified(),
-        });
-
-        let source_transactions: BlockTransactions<SignedOps<Preverified, StandardMode>> = [
-            signed_test_tx(vec![transfer, deposit]),
-            signed_test_tx(vec![ignored_inscription]),
-        ]
-        .into();
-
-        let source_block = Block::create(
-            HeaderId::from([0; 32]),
-            Slot::from(1),
-            lb_core::block::UncleHeaders::empty(),
-            test_leader_proof(),
-            source_transactions,
-            &Ed25519Key::from_bytes(&[0; 32]),
-        )
-        .expect("test block should be valid");
-
-        let wallet_block =
-            WalletBlock::from_block(&source_block, Epoch::new(0), &Events::default());
-
-        assert_eq!(wallet_block.txs.len(), source_block.transactions().len());
-
-        // Transaction order is preserved.
-        assert_eq!(wallet_block.txs.len(), 2);
-
-        // The first transaction keeps both wallet-relevant operations in order.
-        let first_wallet_tx = &wallet_block.txs[0];
-        assert_eq!(first_wallet_tx.ops.len(), 2);
-        assert!(matches!(first_wallet_tx.ops[0], WalletOp::Transfer(_)));
-
-        let WalletOp::ChannelDeposit(op) = &first_wallet_tx.ops[1] else {
-            panic!("expected channel deposit as the second wallet operation");
-        };
-
-        assert_eq!(
-            op.inputs.clone().into_inner().as_slice(),
-            &[first_input, second_input]
-        );
-
-        // A transaction containing only ignored operations is retained, but its
-        // wallet operation list is empty.
-        let second_wallet_tx = &wallet_block.txs[1];
-        assert!(second_wallet_tx.ops.is_empty());
-    }
-
-    fn signed_test_tx(ops: Vec<Op>) -> SignedOps<Preverified, StandardMode> {
-        let ops = Ops::try_from(ops).expect("test operations should fit");
-        let proofs = ops
-            .iter()
-            .map(|op| match op {
-                Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
-                _ => OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
-                    &[0; 128],
-                ))),
-            })
-            .collect::<Vec<_>>();
-        let op_proofs = OpProofs::new_unchecked(proofs);
-
-        SignedOps::from_parts(ops, op_proofs)
-            .unwrap()
-            .into_preverified_trusted_standard()
-    }
-
-    fn test_leader_proof() -> Groth16LeaderProof {
-        let leader_sk = UnsecuredZkKey::zero();
-        let utxo = Utxo::new(tx_hash(0), 0, Note::new(1000, leader_sk.to_public_key()));
-        let utxo_tree = UtxoTree::<_, _, ZkHasher>::new().insert(utxo.id(), utxo).0;
-        let utxo_merkle_path = utxo_tree.path(&utxo.id()).unwrap();
-        let (lottery_0, lottery_1) =
-            LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
-                .compute_lottery_values(1000);
-        let public_inputs = (0..1000)
-            .map(|nonce| {
-                LeaderPublic::new(
-                    utxo_tree.root(),
-                    utxo_tree.root(),
-                    Fr::from(nonce),
-                    0,
-                    lottery_0,
-                    lottery_1,
-                )
-            })
-            .find(|inputs| {
-                inputs.check_winning(utxo.note.value, *utxo.id().as_fr(), *leader_sk.as_fr())
-            })
-            .unwrap();
-        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
-        Groth16LeaderProof::prove(
-            LeaderPrivate::new(
-                public_inputs,
-                utxo,
-                &utxo_merkle_path,
-                &utxo_merkle_path,
-                *leader_sk.as_fr(),
-                &signing_key.public_key(),
-            ),
-            VoucherCm::default(),
-        )
-        .unwrap()
     }
 }

@@ -84,20 +84,18 @@ mod test_support;
 /// everything required to write an `impl Node` — request/response bodies,
 /// stream item types, ids, and the error type — is importable from here. The
 /// stream alias is [`adapter::BoxStream`]; the message types themselves
-/// ([`ZoneMessage`], [`ZoneBlock`], [`Deposit`], [`Withdraw`]) live at the
-/// crate root.
+/// ([`ZoneMessage`], [`ZoneBlock`], [`Deposit`]) live at the crate root.
 pub mod node_types {
     pub use lb_common_http_client::{
         ApiBlock, BlockInfo, ChainServiceInfo, Error, Events, ProcessedBlockEvent, Slot, TimeInfo,
     };
     pub use lb_core::{
         crypto::Hash,
-        events::DepositRecreatedNotes,
         header::HeaderId,
         mantle::{
             SignedOps, TxHash, Value,
             channel::ChannelState,
-            ledger::Inputs,
+            notes::{InputNullifiers, OutputCommitments},
             ops::channel::{ChannelId, MsgId, deposit::Metadata, inscribe::Inscription},
             transactions::states::Unverified,
         },
@@ -110,10 +108,9 @@ pub mod node_types {
 pub use lb_common_http_client::{CommonHttpClient, Slot};
 use lb_core::{
     crypto::Hash,
-    events::DepositRecreatedNotes,
     mantle::{
-        TxHash, Value,
-        ledger::Inputs,
+        TxHash,
+        notes::{InputNullifiers, OutputCommitments},
         ops::channel::{MsgId, deposit::Metadata, inscribe::Inscription},
     },
 };
@@ -126,8 +123,6 @@ pub enum ZoneMessage {
     Block(ZoneBlock),
     /// A deposit operation submitted to a channel
     Deposit(Deposit),
-    /// An withdraw operation submitted to a channel
-    Withdraw(Withdraw),
 }
 
 /// A zone block from a zone channel, included/finalized in Bedrock
@@ -149,27 +144,13 @@ pub struct Deposit {
     /// The `op_id` of the deposit op: its stable identity within the tx,
     /// matching `DepositInfo::op_id` on the sequencer side.
     pub op_id: Hash,
-    /// Notes consumed by the deposit (spent-once at the UTXO layer).
-    pub inputs: Inputs,
-    /// The channel notes the deposit re-created its inputs as, sourced from
-    /// the block's events. These carry new `NoteId`s and are what the channel
-    /// now owns.
-    pub notes: DepositRecreatedNotes,
-    /// Total value deposited, sourced from the block's events.
-    pub amount: Value,
+    /// Nullifiers of the ledger notes the deposit consumed.
+    pub inputs: InputNullifiers,
+    /// Commitments of the notes the deposit created in the channel's note
+    /// set, sourced from the block's events.
+    pub outputs: OutputCommitments,
     /// Opaque metadata associated with this deposit
     pub metadata: Metadata,
-}
-
-/// An withdrawal from a zone channel, included/finalized in Bedrock
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Withdraw {
-    /// The transaction hash containing this withdraw op.
-    pub tx_hash: TxHash,
-    /// The `op_id` of the withdraw op: its stable identity within the tx.
-    pub op_id: Hash,
-    /// The channel notes released by the withdrawal
-    pub inputs: Inputs,
 }
 
 impl Deposit {

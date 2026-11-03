@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
+use lb_core::mantle::transactions::UNITS_PER_LGO;
 use lb_faucet::{
     faucet::{Faucet, run_worker},
     server::{FaucetServerState, faucet_app},
@@ -16,12 +17,12 @@ use reqwest::StatusCode;
 use serial_test::serial;
 use tokio::{net::TcpListener, sync::mpsc, time::sleep};
 
-const FAUCET_FUNDS: u64 = 10_000;
-const DRIP_AMOUNT: u64 = 50;
+const FAUCET_FUNDS: u64 = 10_000 * UNITS_PER_LGO;
+const DRIP_AMOUNT: u64 = 50 * UNITS_PER_LGO;
 /// Upper bound on the combined gas fees of the two drip transfers. Each drip
 /// costs 244 at genesis gas prices; the generous margin keeps the test stable
 /// if gas constants or prices change.
-const MAX_TOTAL_FEES: u64 = 2000;
+const MAX_TOTAL_FEES: u64 = 2000 * UNITS_PER_LGO;
 const DRIP_QUEUE_CAPACITY: usize = 16;
 const COOLDOWN: Duration = Duration::from_hours(1);
 const BALANCE_TIMEOUT: Duration = Duration::from_mins(3);

@@ -210,10 +210,10 @@ where
         // when we have libp2p integration with KMS.
         let non_ephemeral_signing_key = {
             let (sender, receiver) = oneshot::channel();
-            kms.execute(
+            Box::pin(kms.execute(
                 non_ephemeral_signing_key_id,
                 KeyOperators::Ed25519(Box::new(LeakSecretKeyOperator::new(sender))),
-            )
+            ))
             .await
             .expect("Failed to interact with KMS to fetch non-ephemeral signing key.");
             receiver

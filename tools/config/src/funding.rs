@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use lb_core::mantle::{Note, ledger::Outputs, ops::transfer::TransferOp};
+use lb_core::mantle::transactions::{Distribution, GenesisAllocation, UNITS_PER_LGO};
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 
 use crate::consensus::{GENESIS_TRANSFER_OUTPUT_LIMIT, SdpFundingConfig, ServiceNote};
@@ -9,7 +9,7 @@ use crate::consensus::{GENESIS_TRANSFER_OUTPUT_LIMIT, SdpFundingConfig, ServiceN
 /// genesis is signed. This operates on protocol data, without native node
 /// configuration.
 pub fn fund_wallets(
-    transfer: &mut TransferOp,
+    transfer: &mut Distribution,
     leader_keys: &[ZkPublicKey],
     funding_keys: &[ZkPublicKey],
     wallets: &[(ZkKey, u64)],
@@ -29,40 +29,37 @@ pub fn fund_wallets(
     let total = wallets.iter().map(|(_, value)| *value).sum();
     let stake = leader_stake_amount(total, leader_keys.len());
 
-    for output in &mut transfer.outputs {
-        if leader_keys.contains(&output.pk) {
+    for output in transfer.iter_mut() {
+        if leader_keys.contains(&output.public_key) {
             output.value = stake;
         }
     }
     for (key, value) in wallets {
         transfer
-            .outputs
-            .try_push(Note::new(*value, key.to_public_key()))
+            .try_push(GenesisAllocation {
+                value: *value,
+                public_key: key.to_public_key(),
+            })
             .expect("wallet account outputs must fit transfer output bounds");
     }
 }
 
-/// Funding can move outputs or change the transfer ID. Refresh references
-/// before building provider declarations or handing notes to an adapter.
-pub fn refresh_service_note(note: &mut ServiceNote, transfer: &TransferOp) {
+/// Funding can move outputs. Refresh references before building provider
+/// declarations or handing notes to an adapter.
+pub fn refresh_service_note(note: &mut ServiceNote, transfer: &Distribution) {
     let (index, output) = transfer
-        .outputs
         .iter()
         .enumerate()
-        .find(|(_, output)| output.pk == note.pk)
+        .find(|(_, output)| output.public_key == note.pk)
         .expect("service note must be present in genesis");
     note.output_index = index;
-    note.note = *output;
-    note.note_id = transfer
-        .utxo_by_index(index)
-        .expect("service output must exist")
-        .id();
+    note.note = output.note(index);
 }
 
 #[must_use]
 pub fn leader_stake_amount(total_wallet_funds: u64, n_participants: usize) -> u64 {
     if total_wallet_funds == 0 {
-        return 100_000;
+        return 100_000 * UNITS_PER_LGO;
     }
 
     let n = n_participants.max(1) as u64;
@@ -70,22 +67,21 @@ pub fn leader_stake_amount(total_wallet_funds: u64, n_participants: usize) -> u6
         .saturating_mul(10)
         .saturating_div(n)
         .max(1);
-    scaled.max(100_000)
+    scaled.max(100_000 * UNITS_PER_LGO)
 }
 
 fn fit_sdp_funding_outputs_to_genesis_capacity(
-    transfer_op: &mut TransferOp,
+    transfer_op: &mut Distribution,
     funding_keys: &HashSet<ZkPublicKey>,
     additional_wallet_outputs: usize,
     sdp_funding_config: SdpFundingConfig,
 ) {
     let n_participants = funding_keys.len();
     let current_sdp_outputs = transfer_op
-        .outputs
         .iter()
-        .filter(|note| funding_keys.contains(&note.pk))
+        .filter(|note| funding_keys.contains(&note.public_key))
         .count();
-    let non_sdp_outputs = transfer_op.outputs.len() - current_sdp_outputs;
+    let non_sdp_outputs = transfer_op.len() - current_sdp_outputs;
     let required_non_sdp_outputs = non_sdp_outputs
         .checked_add(additional_wallet_outputs)
         .expect("genesis output count overflow while fitting SDP funding outputs");
@@ -115,15 +111,14 @@ fn fit_sdp_funding_outputs_to_genesis_capacity(
     let mut retained_per_key = HashMap::new();
     if current_sdp_outputs > required_sdp_outputs {
         let retained_notes = transfer_op
-            .outputs
             .iter()
             .copied()
             .filter_map(|mut note| {
-                if !funding_keys.contains(&note.pk) {
+                if !funding_keys.contains(&note.public_key) {
                     return Some(note);
                 }
 
-                let retained = retained_per_key.entry(note.pk).or_insert(0);
+                let retained = retained_per_key.entry(note.public_key).or_insert(0);
                 if *retained >= selected_sdp_notes_per_node {
                     return None;
                 }
@@ -136,12 +131,12 @@ fn fit_sdp_funding_outputs_to_genesis_capacity(
                 Some(note)
             })
             .collect::<Vec<_>>();
-        transfer_op.outputs = Outputs::try_new(retained_notes)
+        *transfer_op = Distribution::try_from(retained_notes)
             .expect("trimmed genesis transfer outputs must fit the output bound");
     } else {
-        for note in &mut transfer_op.outputs {
-            if funding_keys.contains(&note.pk) {
-                let retained = retained_per_key.entry(note.pk).or_insert(0);
+        for note in transfer_op.iter_mut() {
+            if funding_keys.contains(&note.public_key) {
+                let retained = retained_per_key.entry(note.public_key).or_insert(0);
                 note.value = sdp_funding_note_value(
                     sdp_funding_config,
                     *retained,

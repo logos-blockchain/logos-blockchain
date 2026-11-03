@@ -28,7 +28,7 @@ Feature: Logos SQL
         | alias |
         | SEQ_B |
       When node "NODE_1" is at height 1 in 120 seconds
-      And wallet "WALLET_1A" sends 30 notes of 1000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+      And wallet "WALLET_1A" sends 12 notes of 5000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
       And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
       And I start Logos SQL instances:
         | alias | sequencer |
@@ -103,7 +103,7 @@ Feature: Logos SQL
         | alias |
         | SEQ_B |
       When node "NODE_1" is at height 1 in 120 seconds
-      And wallet "WALLET_1A" sends 30 notes of 1000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+      And wallet "WALLET_1A" sends 12 notes of 5000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
       And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
       And I start Logos SQL instances:
         | alias | sequencer |
@@ -142,7 +142,7 @@ Feature: Logos SQL
         | node_name | account_index | wallet_name | connected_to | sequencers |
         | NODE_1    | 1             | WALLET_1A   |              | SEQ_A      |
       When node "NODE_1" is at height 1 in 120 seconds
-      And wallet "WALLET_1A" sends 30 notes of 1000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+      And wallet "WALLET_1A" sends 12 notes of 5000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
       And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
       And I start Logos SQL instances:
         | alias  | sequencer |
@@ -190,7 +190,7 @@ Feature: Logos SQL
         | node_name | account_index | wallet_name | connected_to | sequencers   |
         | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B |
       When node "NODE_1" is at height 1 in 120 seconds
-      And wallet "WALLET_1A" sends 30 notes of 1000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+      And wallet "WALLET_1A" sends 12 notes of 5000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
       And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
       And I start zone sequencer "SEQ_A" with indexer
       And sequencer "SEQ_A" submits zone config transaction:
@@ -235,7 +235,7 @@ Feature: Logos SQL
         | alias |
         | SEQ_B |
       When node "NODE_1" is at height 1 in 120 seconds
-      And wallet "WALLET_1A" sends 30 notes of 1000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+      And wallet "WALLET_1A" sends 12 notes of 5000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
       And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
       And I start Logos SQL instances:
         | alias | sequencer |
@@ -285,9 +285,9 @@ Feature: Logos SQL
         | SEQ_OBSERVER |
         | SEQ_B        |
       When node "NODE_A" is at height 1 in 120 seconds
-      And wallet "WALLET_A" sends 30 notes of 1000 LGO to node "NODE_A" funding wallet as "FUNDING_TOPUP"
+      And wallet "WALLET_A" sends 12 notes of 5000 LGO to node "NODE_A" funding wallet as "FUNDING_TOPUP"
       And transaction "FUNDING_TOPUP" is included on node "NODE_A" in 180 seconds
-      And wallet "WALLET_B" sends 30 notes of 1000 LGO to node "NODE_B" funding wallet as "FUNDING_TOPUP_B"
+      And wallet "WALLET_B" sends 12 notes of 5000 LGO to node "NODE_B" funding wallet as "FUNDING_TOPUP_B"
       And transaction "FUNDING_TOPUP_B" is included on node "NODE_A" in 180 seconds
       And I start Logos SQL instances:
         | alias        | sequencer    |

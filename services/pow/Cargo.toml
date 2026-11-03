@@ -34,10 +34,11 @@ lb-time                       = { workspace = true }
 lb-time-service               = { workspace = true }
 lb-utils                      = { features = ["tokio"], workspace = true }
 lb-wallet-service             = { workspace = true }
-lb-zksign                     = { workspace = true }
+lb-zktransfer                 = { workspace = true }
 overwatch                     = { workspace = true }
 
 [dev-dependencies]
+lb-wallet  = { workspace = true }
 serde_json = { workspace = true }
 time       = { workspace = true }
 tokio      = { features = ["macros", "rt"], workspace = true }

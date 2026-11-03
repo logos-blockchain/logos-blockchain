@@ -13,17 +13,17 @@ use blake2::Digest as _;
 use divan::{Bencher, black_box};
 use lb_binary_codec::canonical::{BinaryDecodeExt as _, BinaryEncode as _};
 use lb_groth16::{Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes_unchecked};
-use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey};
+use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 use lb_poseidon2::Digest;
 use logos_blockchain_core::{
     crypto::{Hasher, ZkHasher},
     mantle::{
         ledger::verification_mode::StandardMode,
         ops::{
-            Op, OpProof,
+            ChannelInscribeProof, Op, OpProof,
             channel::{
                 ChannelId, MsgId,
-                inscribe::{Inscription, InscriptionOp},
+                inscribe::{ChannelSteps, Inscription, InscriptionOp},
             },
         },
         traits::Hashable as _,
@@ -56,6 +56,7 @@ fn make_inscription_tx(payload_size: usize) -> Ops {
         inscription: Inscription::new_unchecked(vec![0xAB; payload_size]),
         parent: MsgId::from([0xBB; 32]),
         signer: signing_key.public_key().into_unverified(),
+        steps: ChannelSteps::default(),
     })])
 }
 
@@ -65,7 +66,9 @@ fn make_signed_tx(payload_size: usize) -> SignedOps<Unverified, StandardMode> {
     let tx = make_inscription_tx(payload_size);
     let tx_hash = tx.hash();
     let op_sig = signing_key.sign_payload(tx_hash.as_signing_bytes());
-    let op_proofs = OpProofs::from([OpProof::Ed25519Sig(op_sig)]);
+    let op_proofs = OpProofs::from([OpProof::ChannelInscribe(
+        ChannelInscribeProof::without_steps(op_sig),
+    )]);
     SignedOps::from_parts(tx, op_proofs).unwrap()
 }
 
@@ -127,17 +130,6 @@ fn bench_sign_a_ed25519_payload(bencher: Bencher) {
         });
 }
 
-// ZkKey multi-sign proof (payload size has no influence here)
-#[divan::bench()]
-fn bench_sign_b_zk_key_multi_sign_no_keys(bencher: Bencher) {
-    bencher
-        .with_inputs(|| {
-            let tx = make_inscription_tx(1);
-            tx.hash()
-        })
-        .bench_values(|txhash: TxHash| black_box(ZkKey::multi_sign(&[], &txhash.to_fr()).unwrap()));
-}
-
 // Verify ops proofs
 #[divan::bench(args = SIZES)]
 fn bench_sign_c_mantle_tx_new_verify_ops_proofs_single_proof(bencher: Bencher, size: usize) {
@@ -150,7 +142,9 @@ fn bench_sign_c_mantle_tx_new_verify_ops_proofs_single_proof(bencher: Bencher, s
             (tx, op_sig)
         })
         .bench_values(|(tx, op_sig): (Ops, Ed25519Signature)| {
-            let op_proofs = OpProofs::from([OpProof::Ed25519Sig(op_sig)]);
+            let op_proofs = OpProofs::from([OpProof::ChannelInscribe(
+                ChannelInscribeProof::without_steps(op_sig),
+            )]);
             black_box(SignedOps::from_parts(tx, op_proofs).unwrap().preverify())
         });
 }
@@ -170,7 +164,9 @@ fn bench_sign_d_fully_empty(bencher: Bencher, size: usize) {
         })
         .bench_values(|(tx, tx_hash): (Ops, TxHash)| {
             let op_sig = signing_key.sign_payload(tx_hash.as_signing_bytes());
-            let op_proofs = OpProofs::from([OpProof::Ed25519Sig(op_sig)]);
+            let op_proofs = OpProofs::from([OpProof::ChannelInscribe(
+                ChannelInscribeProof::without_steps(op_sig),
+            )]);
             black_box(SignedOps::from_parts(tx, op_proofs).unwrap().preverify())
         });
 }

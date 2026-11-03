@@ -1,17 +1,14 @@
 use bytes::Bytes;
 use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
-use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     crypto::Hash,
     mantle::{
-        NoteId, Utxo, Value,
-        ledger::MAX_TRANSACTION_INPUTS,
+        note_set::{NoteSetIndex, NoteSetUpdate},
+        notes::{InputNullifiers, Note, OutputCommitments},
         ops::{
             channel::{ChannelId, deposit::Metadata},
-            leader_claim::VoucherNullifier,
             pow::PowNullifier,
         },
         transactions::hash::TxHash,
@@ -67,6 +64,8 @@ pub enum Event {
     Header(HeaderEvent),
     /// Emitted while processing a transaction
     Tx(TxEvent),
+    /// Emitted once the block contents are executed
+    Block(BlockEvent),
 }
 
 impl From<TxEvent> for Event {
@@ -78,6 +77,12 @@ impl From<TxEvent> for Event {
 impl From<HeaderEvent> for Event {
     fn from(event: HeaderEvent) -> Self {
         Self::Header(event)
+    }
+}
+
+impl From<BlockEvent> for Event {
+    fn from(event: BlockEvent) -> Self {
+        Self::Block(event)
     }
 }
 
@@ -100,61 +105,53 @@ impl TxEvent {
     }
 }
 
-/// A single channel note a deposit re-created from one of its inputs.
-///
-/// Carries the data a wallet needs to track and later select the note: its id,
-/// value, and owning public key. The public key is the depositor's — a deposit
-/// re-creates each input note unchanged inside the channel — so a withdrawal
-/// client can tell which key must authorize spending it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DepositNote {
-    pub note_id: NoteId,
-    pub value: Value,
-    pub pk: ZkPublicKey,
-}
-
-// A deposit re-creates one channel note per input, so the notes it emits carry
-// the same bound as its inputs.
-pub type DepositRecreatedNotes = UpperBoundedVec<DepositNote, MAX_TRANSACTION_INPUTS>;
-
 /// Event payloads emitted while processing a transaction
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TxEventPayload {
     Deposit {
         channel_id: ChannelId,
-        amount: Value,
         metadata: Metadata,
-        /// The channel notes the deposit re-created its inputs as. They carry
-        /// new `NoteId`s, so a channel cannot derive them from the payload.
-        notes: DepositRecreatedNotes,
-    },
-    /// A leader claim operation created the reward note for its beneficiary.
-    LeaderRewardClaimed {
-        voucher_nullifier: VoucherNullifier,
-        utxo: Utxo,
+        outputs: OutputCommitments,
     },
     /// A `PoW` claim operation created a reward note for its beneficiary
     PoWRewardClaimed {
         pow_nullifier: PowNullifier,
-        utxo: Utxo,
+        note: Note,
     },
 }
 
 /// Events emitted while processing a block header
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HeaderEvent {
-    /// A service note has been unlocked because the epoch after its
-    /// declaration's `withdraw_at` has been reached.
-    SdpNoteUnlocked {
-        note_id: NoteId,
+    /// The outputs of a withdrawal entered the ledger note set because the
+    /// epoch after its declaration's `withdraw_at` has been reached.
+    SdpWithdrawalReleased {
         service_type: ServiceType,
         declaration_id: DeclarationId,
+        outputs: OutputCommitments,
     },
-    /// A reward UTXO was minted to a provider.
+    /// A reward note of a provider entered the ledger note set.
     SdpRewardDistributed {
         service_type: ServiceType,
-        utxo: Utxo,
+        note: Note,
     },
+    /// A channel withdrawal reached its due slot with its notes unspent and its
+    /// outputs entered the ledger note set.
+    ChannelWithdrawalReleased {
+        note_set: NoteSetIndex,
+        inputs: InputNullifiers,
+        outputs: OutputCommitments,
+    },
+}
+
+/// Events emitted once the block contents are executed
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BlockEvent {
+    /// The leader reward note of the block entered the ledger note set.
+    LeaderRewardPaid { note: Note },
+    /// What a note set inserted and appended during the block, in execution
+    /// order.
+    NoteSetUpdated(NoteSetUpdate),
 }
 
 impl TryFrom<Bytes> for Events {
@@ -175,43 +172,30 @@ impl TryFrom<Events> for Bytes {
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::Fr;
-    use num_bigint::BigUint;
+    use lb_groth16::{Field as _, Fr};
+    use lb_key_management_system_keys::keys::ZkPublicKey;
 
     use super::*;
-
-    /// A deposit note with distinct, non-default id/value/pk so the round-trip
-    /// exercises every field rather than zero-valued defaults.
-    fn deposit_note(seed: u64, value: Value) -> DepositNote {
-        DepositNote {
-            note_id: NoteId::from(Fr::from(BigUint::from(seed))),
-            value,
-            pk: ZkPublicKey::from(Fr::from(BigUint::from(
-                seed.wrapping_mul(97).wrapping_add(3),
-            ))),
-        }
-    }
+    use crate::mantle::{
+        note_set::LEDGER_SET,
+        notes::{NoteCommitment, NoteNullifier},
+    };
 
     /// A `Deposit` payload carrying several notes must survive the events codec
     /// round-trip. The wallet reads these notes off the block-events endpoint,
     /// so a broken `DepositNote` (de)serialization would silently drop the
     /// per-note value/pk data that channel-note tracking depends on.
     #[test]
-    fn deposit_event_notes_survive_codec_round_trip() {
-        let expected_notes = vec![
-            deposit_note(11, 1),
-            deposit_note(22, 10_000),
-            deposit_note(33, u64::MAX),
-        ];
-        let notes: DepositRecreatedNotes = expected_notes
-            .clone()
-            .try_into()
-            .expect("note count is within the input bound");
+    fn deposit_event_outputs_survive_codec_round_trip() {
+        let outputs: OutputCommitments = [
+            NoteCommitment(Fr::from(11u64)),
+            NoteCommitment(Fr::from(22u64)),
+        ]
+        .into();
 
         let tx_hash = TxHash([1u8; 32]);
         let op_id: Hash = [2u8; 32];
         let channel_id = ChannelId::from([7u8; 32]);
-        let amount: Value = 424_242;
         let metadata: Metadata = vec![9u8, 8, 7]
             .try_into()
             .expect("metadata is within the size bound");
@@ -221,9 +205,8 @@ mod tests {
             op_id,
             TxEventPayload::Deposit {
                 channel_id,
-                amount,
                 metadata: metadata.clone(),
-                notes,
+                outputs: outputs.clone(),
             },
         )));
 
@@ -240,9 +223,8 @@ mod tests {
             payload:
                 TxEventPayload::Deposit {
                     channel_id: decoded_channel_id,
-                    amount: decoded_amount,
                     metadata: decoded_metadata,
-                    notes: decoded_notes,
+                    outputs: decoded_outputs,
                 },
         }) = event
         else {
@@ -252,8 +234,38 @@ mod tests {
         assert_eq!(*decoded_tx_hash, tx_hash);
         assert_eq!(*decoded_op_id, op_id);
         assert_eq!(*decoded_channel_id, channel_id);
-        assert_eq!(*decoded_amount, amount);
         assert_eq!(decoded_metadata.as_slice(), metadata.as_slice());
-        assert_eq!(decoded_notes.as_slice(), expected_notes.as_slice());
+        assert_eq!(*decoded_outputs, outputs);
+    }
+
+    #[test]
+    fn block_events_survive_codec_round_trip() {
+        let note = Note::new(5, Fr::from(3u64), ZkPublicKey::from(Fr::from(7u64)));
+        let update = NoteSetUpdate {
+            note_set: LEDGER_SET,
+            nullifiers: vec![NoteNullifier(Fr::ONE)],
+            commitments: vec![note.commitment()],
+        };
+        let events: Events = [
+            Event::from(BlockEvent::LeaderRewardPaid { note }),
+            Event::from(BlockEvent::NoteSetUpdated(update.clone())),
+        ]
+        .into_iter()
+        .collect();
+        let decoded = Events::try_from(Bytes::try_from(events).unwrap()).unwrap();
+        let decoded: Vec<BlockEvent> = decoded
+            .iter()
+            .filter_map(|event| match event {
+                Event::Block(event) => Some(event.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            decoded,
+            vec![
+                BlockEvent::LeaderRewardPaid { note },
+                BlockEvent::NoteSetUpdated(update)
+            ]
+        );
     }
 }

@@ -12,16 +12,7 @@ version     = { workspace = true }
 [dependencies]
 ark-ff            = { workspace = true }
 lb-dynamic-merkle = { workspace = true }
-lb-merkle-tree    = { workspace = true }
 lb-poseidon2      = { workspace = true }
-rpds              = { workspace = true }
-serde             = { features = ["derive"], workspace = true }
-
-[dev-dependencies]
-num-bigint        = { workspace = true }
-quickcheck        = { workspace = true }
-quickcheck_macros = { workspace = true }
-rand              = { workspace = true }
 
 [lints]
 workspace = true

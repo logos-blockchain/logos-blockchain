@@ -29,6 +29,9 @@ url                           = { workspace = true }
 utoipa                        = { features = ["macros"], workspace = true }
 validator                     = { features = ["derive"], workspace = true }
 
+[dev-dependencies]
+lb-groth16 = { workspace = true }
+
 [target.'cfg(not(windows))'.dependencies]
 pprof = { features = ["criterion", "flamegraph", "protobuf-codec"], optional = true, workspace = true }
 

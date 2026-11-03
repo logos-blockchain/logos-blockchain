@@ -19,11 +19,15 @@ lb-core                       = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { features = ["unsafe"], workspace = true }
 lb-log-targets                = { workspace = true }
+lb-pol                        = { workspace = true }
 lb-poseidon2                  = { workspace = true }
 lb-utils                      = { features = ["tokio"], workspace = true }
-lb-utxotree                   = { workspace = true }
 tokio                         = { features = ["rt"], workspace = true }
 tracing                       = { workspace = true }
+
+[dev-dependencies]
+lb-core = { features = ["test-utils"], workspace = true }
+tokio   = { features = ["macros", "rt"], workspace = true }
 
 [features]
 tokio-task-names = ["lb-utils/tokio-task-names"]

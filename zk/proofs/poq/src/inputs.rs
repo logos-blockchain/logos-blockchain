@@ -77,9 +77,10 @@ impl PoQWitnessInputs {
         PoQWalletInputs::from(PoQWalletInputsData {
             slot: 0,
             note_value: 0,
-            transaction_hash: Fr::ZERO,
-            output_number: 0,
-            aged_path_and_selectors: [(Fr::ZERO, false); _],
+            note_nonce: Fr::ZERO,
+            commitment_aged_path_and_selectors: [(Fr::ZERO, false); _],
+            nullifier_root_aged: Fr::ZERO,
+            set_aged_path_and_selectors: [(Fr::ZERO, false); _],
             pol_secret_key: Fr::ZERO,
         })
     }
@@ -144,7 +145,7 @@ pub struct PoQVerifierInput {
     pub pol_epoch_nonce: Groth16Input,
     pub pol_t0: Groth16Input,
     pub pol_t1: Groth16Input,
-    pub pol_ledger_aged: Groth16Input,
+    pub pol_eligible_aged: Groth16Input,
 }
 
 pub struct PoQVerifierInputData {
@@ -159,7 +160,7 @@ pub struct PoQVerifierInputData {
     pub pol_epoch_nonce: Fr,
     pub lottery_0: Fr,
     pub lottery_1: Fr,
-    pub pol_ledger_aged: Fr,
+    pub pol_eligible_aged: Fr,
 }
 
 impl TryFrom<PoQVerifierInputJson> for PoQVerifierInput {
@@ -172,7 +173,7 @@ impl TryFrom<PoQVerifierInputJson> for PoQVerifierInput {
             leader_quota,
             core_root,
             pow_quota,
-            pol_ledger_aged,
+            pol_eligible_aged,
             k_part_one,
             k_part_two,
             pow_blend_difficulty,
@@ -192,7 +193,7 @@ impl TryFrom<PoQVerifierInputJson> for PoQVerifierInput {
             pol_epoch_nonce: pol_epoch_nonce.try_into()?,
             pol_t0: pol_t0.try_into()?,
             pol_t1: pol_t1.try_into()?,
-            pol_ledger_aged: pol_ledger_aged.try_into()?,
+            pol_eligible_aged: pol_eligible_aged.try_into()?,
         })
     }
 }
@@ -206,7 +207,7 @@ impl PoQVerifierInput {
             self.leader_quota.into_inner(),
             self.core_root.into_inner(),
             self.pow_quota.into_inner(),
-            self.pol_ledger_aged.into_inner(),
+            self.pol_eligible_aged.into_inner(),
             self.k_part_one.into_inner(),
             self.k_part_two.into_inner(),
             self.pow_blend_difficulty.into_inner(),
@@ -229,7 +230,7 @@ impl From<PoQVerifierInputData> for PoQVerifierInput {
             pow_quota: value.pow_quota.into(),
             pow_blend_difficulty: value.pow_blend_difficulty.into(),
             pol_epoch_nonce: value.pol_epoch_nonce.into(),
-            pol_ledger_aged: value.pol_ledger_aged.into(),
+            pol_eligible_aged: value.pol_eligible_aged.into(),
             pol_t0: Groth16Input::new(value.lottery_0),
             pol_t1: Groth16Input::new(value.lottery_1),
         }

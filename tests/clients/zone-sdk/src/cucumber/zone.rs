@@ -5,7 +5,7 @@ use std::{
 
 use lb_core::{
     mantle::{
-        Utxo, Value,
+        Value,
         ops::channel::{
             ChannelId, MsgId, deposit::DepositOp, inscribe::Inscription,
             withdraw::ChannelWithdrawOp,
@@ -88,10 +88,6 @@ pub struct ZoneState {
     default_sequencer_alias: Option<String>,
     published_messages: HashMap<String, ZonePublishedMessage>,
     submitted_deposits: HashMap<String, (DepositOp, Value)>,
-    /// The channel notes each deposit re-created, keyed by deposit alias — so a
-    /// later channel split transfer can spend them without waiting on the
-    /// indexer.
-    deposit_channel_notes: HashMap<String, Vec<Utxo>>,
     submitted_withdraws: HashMap<String, ChannelWithdrawOp>,
     account_balances: HashMap<String, i64>,
     published_order: Vec<String>,
@@ -268,24 +264,6 @@ impl ZoneState {
 
     pub fn remember_submitted_deposit(&mut self, alias: String, deposit: DepositOp, amount: Value) {
         self.submitted_deposits.insert(alias, (deposit, amount));
-    }
-
-    pub fn remember_deposit_channel_notes(&mut self, alias: String, channel_notes: Vec<Utxo>) {
-        self.deposit_channel_notes.insert(alias, channel_notes);
-    }
-
-    pub fn resolve_deposit_channel_notes(
-        &self,
-        alias: impl AsRef<str>,
-    ) -> Result<&[Utxo], StepError> {
-        let alias = alias.as_ref();
-
-        self.deposit_channel_notes
-            .get(alias)
-            .map(Vec::as_slice)
-            .ok_or(StepError::LogicalError {
-                message: format!("Zone deposit channel notes for alias '{alias}' not found"),
-            })
     }
 
     pub fn resolve_submitted_deposit(
@@ -706,7 +684,6 @@ impl ZoneState {
         self.sequencers.clear();
         self.published_messages.clear();
         self.submitted_deposits.clear();
-        self.deposit_channel_notes.clear();
         self.submitted_withdraws.clear();
         self.account_balances.clear();
         self.published_order.clear();

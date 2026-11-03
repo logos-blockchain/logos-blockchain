@@ -1,23 +1,25 @@
 //! Shared error type for wallet transaction preparation.
 
-use lb_core::mantle::{NoteId, VerificationError, gas::GasOverflow, transactions::TxBuilderError};
+use lb_core::mantle::{
+    VerificationError, gas::GasOverflow, notes::NoteNullifier, transactions::TxBuilderError,
+};
+use lb_key_management_system_service::keys::{ZkPublicKey, errors::KeyError};
 use lb_utils::bounded::BoundedError;
 use lb_wallet::WalletError;
-use lb_zksign::ZkSignError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum WalletTransactionError {
     #[error(transparent)]
     Funding(#[from] WalletError),
-    #[error("missing funding UTXO for transfer input {note_id:?}")]
-    MissingFundingInput { note_id: NoteId },
-    #[error("missing signing key for transfer input {note_id:?}")]
-    MissingSigningKey { note_id: NoteId },
+    #[error("missing funding note for transfer input {nullifier:?}")]
+    MissingFundingInput { nullifier: NoteNullifier },
+    #[error("missing signing key for the transfer input of {public_key:?}")]
+    MissingSigningKey { public_key: ZkPublicKey },
     #[error("leading inscription operation does not match its transaction signing key")]
     InvalidLeadingInscriptionSigner,
     #[error(transparent)]
-    Signing(#[from] ZkSignError),
+    Proving(#[from] KeyError),
     #[error(transparent)]
     Verification(#[from] VerificationError),
     #[error(transparent)]

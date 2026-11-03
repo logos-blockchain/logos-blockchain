@@ -160,8 +160,6 @@ pub trait ThresholdSource {
     // A channel that does not exist yet accredits no key, so both thresholds
     // are 0.
     fn configuration_threshold(&self, channel: &ChannelId) -> ChannelKeyIndex;
-
-    fn transfer_threshold(&self, channel: &ChannelId) -> ChannelKeyIndex;
 }
 
 // The Execution Gas of an Operation, derived from the Operation and the state
@@ -185,10 +183,6 @@ pub mod test_utils {
         fn configuration_threshold(&self, _channel: &ChannelId) -> ChannelKeyIndex {
             self.0
         }
-
-        fn transfer_threshold(&self, _channel: &ChannelId) -> ChannelKeyIndex {
-            self.0
-        }
     }
 }
 
@@ -208,7 +202,7 @@ mod tests {
     impl OpGasCalculator<MainnetGasProfile> for ScalingOp {
         fn execution_gas(&self, thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
             Self::GAS_COST.checked_mul(Value::from(
-                thresholds.transfer_threshold(&ChannelId::from([0; 32])),
+                thresholds.configuration_threshold(&ChannelId::from([0; 32])),
             ))
         }
     }
@@ -230,7 +224,7 @@ mod tests {
     impl OpGasCalculator<MainnetGasProfile> for MaxCostOp {
         fn execution_gas(&self, thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
             Self::GAS_COST.checked_mul(Value::from(
-                thresholds.transfer_threshold(&ChannelId::from([0; 32])),
+                thresholds.configuration_threshold(&ChannelId::from([0; 32])),
             ))
         }
     }

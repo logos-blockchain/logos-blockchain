@@ -11,7 +11,7 @@ Feature: Logos SQL settlement benchmark
     Given I have user config override "wallet.pending_note_expiry_blocks" as "1000"
     And the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 3           | 1000000000   |
+      | 1             | 3           | 200000000    |
     And I have a cluster with capacity of 1 nodes
     And I start nodes with wallet and sequencer resources:
       | node_name | account_index | wallet_name | connected_to | sequencers   |
@@ -20,7 +20,7 @@ Feature: Logos SQL settlement benchmark
       | alias |
       | SEQ_B |
     When node "NODE_1" is at height 1 in 120 seconds
-    And wallet "WALLET_1A" sends 250 notes of 10000000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+    And wallet "WALLET_1A" sends 250 notes of 2000000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
     And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
     # Storage gas can double from its genesis price while funded writes wait.
     # Budget for that increase; this benchmark measures throughput, not fee bidding.

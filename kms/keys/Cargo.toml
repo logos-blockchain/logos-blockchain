@@ -27,7 +27,7 @@ lb-key-management-system-macros = { workspace = true }
 lb-log-targets                  = { workspace = true }
 lb-poseidon2                    = { workspace = true }
 lb-utils                        = { workspace = true }
-lb-zksign                       = { workspace = true }
+lb-zktransfer                   = { workspace = true }
 num-bigint                      = { workspace = true }
 rand_core                       = { workspace = true }
 serde                           = { features = ["derive"], workspace = true }
@@ -41,6 +41,7 @@ zeroize                         = { workspace = true }
 
 [dev-dependencies]
 curve25519-dalek = { workspace = true }
+lb-zktransfer    = { features = ["test-utils"], workspace = true }
 rand             = { workspace = true }
 serde_json       = { workspace = true }
 serde_yaml       = { workspace = true }
