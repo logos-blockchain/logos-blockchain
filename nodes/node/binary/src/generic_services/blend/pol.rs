@@ -1,9 +1,14 @@
-use core::fmt::{Debug, Display};
+use core::{
+    fmt::{Debug, Display},
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 use async_trait::async_trait;
 use futures::{
-    Stream, StreamExt as _, future,
-    stream::{self, BoxStream},
+    FutureExt as _, Stream, StreamExt as _,
+    future::{self, BoxFuture, FusedFuture as _},
+    stream::{self, FusedStream as _},
 };
 use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use lb_blend_service::epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait};
@@ -19,12 +24,15 @@ use crate::CryptarchiaLeaderService;
 /// How many winning slots of an epoch the channel to Blend holds, and so how
 /// many wins the scan gets ahead of Blend before it waits for room.
 ///
-/// Each winning slot backs one block proposal, so a few in hand are enough for
-/// the next proposal to find its winning slot already scanned; the proofs that
-/// slot backs are still generated when the proposal asks for them. The bound
-/// caps the wins held, not the slots scanned: an epoch with at most this many
-/// wins has all its slots scanned back to back as soon as it is handed over.
-const WINNING_SLOTS_AHEAD: usize = 10;
+/// Each winning slot backs one block proposal. The scan only stops for room
+/// when it already holds wins, so the bound never makes a proposal wait: the
+/// next proposal takes one of them, which lets the scan go on. The proofs a win
+/// backs are still generated when the proposal asks for them. The bound caps
+/// the wins held, not the slots scanned: an epoch with at most this many wins
+/// has all its slots scanned back to back as soon as it is handed over. Once
+/// the next epoch is handed over, the wins held are all Blend has left of this
+/// one.
+const WINNING_SLOTS_LOOKAHEAD_COUNT: usize = 2;
 
 /// The provider of a stream of winning `PoL` epoch slots for the Blend service,
 /// without introducing a cyclic dependency from Blend service to chain service.
@@ -64,12 +72,12 @@ where
             .await
             .ok()?;
         let winning_pol_epoch_slots_stream = receiver.await.ok()?;
-        Some(Box::new(scanned_epochs(winning_pol_epoch_slots_stream)))
+        Some(Box::new(ScannedEpochs::new(winning_pol_epoch_slots_stream)))
     }
 }
 
 /// Each epoch's [`PolEpochInfo`] as the chain leader hands it over, with the
-/// epochs' slots scanned for wins as this stream is polled.
+/// latest epoch's slots scanned for wins as this stream is polled.
 ///
 /// The chain-leader stream does no work until polled, and each of its slots
 /// costs a KMS lottery round trip per aged note, while Blend only polls for
@@ -78,36 +86,81 @@ where
 /// for every slot from where the scan last stopped up to its own: minutes to
 /// hours on a node with many notes, by which time the block is orphaned. Blend
 /// polls this stream all along instead, as [`PolInfoProviderTrait::Stream`]
-/// asks, so each epoch's scan runs from here, alongside later epochs' scans,
-/// up to [`WINNING_SLOTS_AHEAD`] wins ahead of the proposals.
-fn scanned_epochs(
-    winning_epoch_slot_stream: impl Stream<Item = WinningPolEpochSlots> + Send + Unpin + 'static,
-) -> impl Stream<Item = PolEpochInfo> + Send + Unpin {
-    winning_epoch_slot_stream
-        .map(epoch_info_then_scan)
-        .flatten_unordered(None)
+/// asks, so the scan runs from here, up to [`WINNING_SLOTS_LOOKAHEAD_COUNT`]
+/// wins ahead of the proposals.
+struct ScannedEpochs<Epochs> {
+    winning_slot_epoch_stream: stream::Fuse<Epochs>,
+    /// The latest epoch's scan, terminated before the first epoch and once the
+    /// scan has ended.
+    scan: future::Fuse<BoxFuture<'static, ()>>,
 }
 
-/// One epoch's [`PolEpochInfo`], then the scan of the epoch's slots, which
-/// yields nothing: it is there to be driven by whoever polls the stream.
-fn epoch_info_then_scan(
+impl<Epochs> ScannedEpochs<Epochs>
+where
+    Epochs: Stream<Item = WinningPolEpochSlots>,
+{
+    fn new(winning_slot_epoch_stream: Epochs) -> Self {
+        Self {
+            winning_slot_epoch_stream: winning_slot_epoch_stream.fuse(),
+            scan: future::Fuse::terminated(),
+        }
+    }
+}
+
+impl<Epochs> Stream for ScannedEpochs<Epochs>
+where
+    Epochs: Stream<Item = WinningPolEpochSlots> + Unpin,
+{
+    type Item = PolEpochInfo;
+
+    /// Starts the scan of a newly handed over epoch in place of the previous
+    /// one, then drives the scan until it waits on KMS or for room for its
+    /// wins.
+    ///
+    /// Ends once the chain leader hands over no more epochs and the scan has
+    /// ended.
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let new_epoch = match this.winning_slot_epoch_stream.poll_next_unpin(cx) {
+            Poll::Ready(Some(epoch)) => {
+                let (epoch_info, scan) = epoch_info_and_scan(epoch);
+                // Drops the previous epoch's scan, if it is still going.
+                this.scan = scan.boxed().fuse();
+                Some(epoch_info)
+            }
+            Poll::Ready(None) | Poll::Pending => None,
+        };
+        // A new epoch's scan is polled here right away, so it starts now and
+        // registers the waker that re-polls us, without depending on an
+        // external re-poll. A scan that has ended just stays pending.
+        let _ = this.scan.poll_unpin(cx);
+
+        match new_epoch {
+            Some(epoch_info) => Poll::Ready(Some(epoch_info)),
+            None if this.winning_slot_epoch_stream.is_terminated() && this.scan.is_terminated() => {
+                Poll::Ready(None)
+            }
+            None => Poll::Pending,
+        }
+    }
+}
+
+/// A handed over epoch's [`PolEpochInfo`], and the scan of its slots that
+/// sends the wins it finds to the info's winning-slot stream.
+fn epoch_info_and_scan(
     WinningPolEpochSlots {
         epoch,
         state,
         slots,
     }: WinningPolEpochSlots,
-) -> BoxStream<'static, PolEpochInfo> {
-    let (found_slots, winning_slots) = mpsc::channel(WINNING_SLOTS_AHEAD);
+) -> (PolEpochInfo, impl Future<Output = ()> + Send + 'static) {
+    let (found_slots, winning_slots) = mpsc::channel(WINNING_SLOTS_LOOKAHEAD_COUNT);
     let epoch_info = PolEpochInfo {
         epoch,
         state,
         winning_pol_info_stream: Box::pin(ReceiverStream::new(winning_slots)),
     };
-    let scan = stream::once(scan_for_winning_slots(slots, found_slots));
-
-    stream::once(future::ready(epoch_info))
-        .chain(scan.filter_map(|()| future::ready(None)))
-        .boxed()
+    (epoch_info, scan_for_winning_slots(slots, found_slots))
 }
 
 /// Sends each win among `slots` to `found_slots`, as Blend leadership-quota
@@ -191,7 +244,7 @@ mod tests {
     use lb_ledger::UtxoTree;
     use tokio::{sync::oneshot, task::yield_now, time::timeout};
 
-    use super::{WINNING_SLOTS_AHEAD, scanned_epochs};
+    use super::{ScannedEpochs, WINNING_SLOTS_LOOKAHEAD_COUNT};
 
     const EPOCH_SLOTS: u64 = 100;
 
@@ -256,7 +309,7 @@ mod tests {
     #[tokio::test]
     async fn scan_gets_ahead_of_blend_up_to_the_bound() {
         let scanned = Arc::new(AtomicUsize::new(0));
-        let mut epochs = scanned_epochs(stream::iter([winning_epoch(&scanned)]));
+        let mut epochs = ScannedEpochs::new(stream::iter([winning_epoch(&scanned)]));
         let mut epoch_info = epochs
             .next()
             .await
@@ -264,7 +317,10 @@ mod tests {
 
         keep_polling(&mut epochs).await;
         // A full channel, and one more win waiting for room.
-        assert_eq!(scanned.load(Ordering::SeqCst), WINNING_SLOTS_AHEAD + 1);
+        assert_eq!(
+            scanned.load(Ordering::SeqCst),
+            WINNING_SLOTS_LOOKAHEAD_COUNT + 1
+        );
 
         let first_win = epoch_info
             .winning_pol_info_stream
@@ -275,7 +331,10 @@ mod tests {
         assert_eq!(first_win.slot, 0);
 
         keep_polling(&mut epochs).await;
-        assert_eq!(scanned.load(Ordering::SeqCst), WINNING_SLOTS_AHEAD + 2);
+        assert_eq!(
+            scanned.load(Ordering::SeqCst),
+            WINNING_SLOTS_LOOKAHEAD_COUNT + 2
+        );
     }
 
     /// Dropping an epoch's winning slots stops its scan, even while a slot is
@@ -285,7 +344,7 @@ mod tests {
         // A slot whose KMS reply never comes.
         let (kms_reply, reply) = oneshot::channel::<Option<LeaderPrivate>>();
         let waiting_slot: WinningSlotFuture = Box::pin(async move { reply.await.ok().flatten() });
-        let mut epochs = scanned_epochs(stream::iter([handoff(stream::iter([waiting_slot]))]));
+        let mut epochs = ScannedEpochs::new(stream::iter([handoff(stream::iter([waiting_slot]))]));
         let epoch_info = epochs
             .next()
             .await
@@ -302,5 +361,41 @@ mod tests {
         assert!(next_epoch.is_none());
         // The scan let go of the slot it was waiting on.
         assert!(kms_reply.is_closed());
+    }
+
+    /// Handing over the next epoch stops the previous epoch's scan, even while
+    /// a slot is waiting on KMS, and ends the previous epoch's winning slots.
+    #[tokio::test]
+    async fn handing_over_an_epoch_stops_the_previous_scan() {
+        // A slot whose KMS reply never comes.
+        let (kms_reply, reply) = oneshot::channel::<Option<LeaderPrivate>>();
+        let waiting_slot: WinningSlotFuture = Box::pin(async move { reply.await.ok().flatten() });
+        let mut epochs = ScannedEpochs::new(stream::iter([
+            handoff(stream::iter([waiting_slot])),
+            handoff(stream::empty()),
+        ]));
+        let mut previous_epoch = epochs
+            .next()
+            .await
+            .expect("The epoch should be handed over.");
+        assert!(
+            !kms_reply.is_closed(),
+            "The scan should be waiting on the slot."
+        );
+
+        epochs
+            .next()
+            .await
+            .expect("The next epoch should be handed over.");
+        // The previous scan let go of the slot it was waiting on, and its
+        // epoch's winning slots end.
+        assert!(kms_reply.is_closed());
+        assert!(
+            previous_epoch
+                .winning_pol_info_stream
+                .next()
+                .await
+                .is_none()
+        );
     }
 }
