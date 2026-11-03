@@ -61,8 +61,13 @@ where
     }
 }
 
-/// A stream wrapper that eagerly pre-polls the wrapped stream so that
-/// buffered futures begin executing before the first consumer poll.
+/// A stream wrapper that pre-polls the wrapped stream once, so that buffered
+/// futures can begin executing before the first consumer poll.
+///
+/// The pre-poll uses a no-op waker, so it only gets as far as the wrapped
+/// stream and its futures go without being woken. Work they hand off to run on
+/// its own, like a spawned task, carries on; a source or future that waits on a
+/// wakeup stays where it is until the consumer polls.
 ///
 /// `BufferLogic` picks the adapter, and with it the order in which outputs are
 /// yielded: see [`Buffered`] and [`BufferedUnordered`].
@@ -81,15 +86,15 @@ where
     BufferLogic: BufferType<WrappedStream>,
 {
     /// Creates a new `Buffered` stream that wraps the given `wrapped_stream`
-    /// and buffers up to `buffer_size` futures, kicking off their computation
-    /// eagerly before the first consumer poll.
+    /// and buffers up to `buffer_size` futures, pre-polling it once: see
+    /// [`Buffered`] for how far that gets.
     pub fn new(wrapped_stream: WrappedStream, buffer_size: usize) -> Self {
         let mut stream = Box::pin(BufferLogic::buffer_stream(wrapped_stream, buffer_size));
-        // Pre-poll once to kick off eager computation. `Poll::Pending` means
-        // futures are now in-flight with their wakers registered; `Poll::Ready`
-        // means an item arrived immediately and is saved so it isn't lost.
-        // A no-op waker is sufficient here: we only need to drive the internal
-        // buffer forward once; real wakers are registered on subsequent consumer polls.
+        // Pre-poll once, pulling in what the wrapped stream has ready and
+        // polling those futures once. `Poll::Ready` means an item arrived
+        // immediately and is saved so it isn't lost. The waker is a no-op, so
+        // whatever returned `Poll::Pending` is not polled again until the
+        // consumer polls, with a real waker.
         let mut cx = Context::from_waker(noop_waker_ref());
         let peeked = match stream.as_mut().poll_next(&mut cx) {
             Poll::Ready(item) => item,
