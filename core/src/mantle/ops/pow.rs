@@ -1,9 +1,9 @@
-use std::num::NonZeroU64;
+use std::{num::NonZeroU64, sync::LazyLock};
 
 use ark_ff::Zero as _;
 use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
 use lb_cryptarchia_engine::{EraSchedule, Slot};
-use lb_groth16::{Fr, fr_from_mod_bytes, serde::serde_fr};
+use lb_groth16::{Fr, fr_from_bytes, fr_from_mod_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use rpds::HashTrieMapSync;
 use serde::{Deserialize, Serialize};
@@ -25,6 +25,10 @@ use crate::{
         transactions::states::{Preverified, Unverified, Verified},
     },
 };
+
+static POW_CLAIM_V1: LazyLock<Fr> = LazyLock::new(|| {
+    fr_from_bytes(b"POW_CLAIM_V1").expect("BigUint should load from constant string")
+});
 
 /// `d_reward`: the difficulty threshold a puzzle ticket must be strictly
 /// below to qualify for a `PoW` reward claim.
@@ -102,6 +106,7 @@ impl ClaimPowRewardOp {
     #[must_use]
     pub fn get_puzzle_ticket(&self) -> PuzzleTicket {
         PowNullifier(ZkHasher::digest(&[
+            *POW_CLAIM_V1,
             *self.public_key.as_fr(),
             self.nonce,
             fr_from_mod_bytes(&self.block_hash),
@@ -555,11 +560,12 @@ mod tests {
     }
 
     #[test]
-    fn puzzle_ticket_hashes_the_key_the_nonce_the_block_and_the_epoch_nonce() {
+    fn puzzle_ticket_hashes_the_tag_the_key_the_nonce_the_block_and_the_epoch_nonce() {
         let claim = ClaimPowRewardOp::sample();
         assert_eq!(
             claim.get_puzzle_ticket(),
             PowNullifier::from(ZkHasher::digest(&[
+                fr_from_bytes(b"POW_CLAIM_V1").unwrap(),
                 Fr::from(0x32u64),
                 Fr::from(0x33u64),
                 fr_from_mod_bytes(&[0x31u8; 32]),

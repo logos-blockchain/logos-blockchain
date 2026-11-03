@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use bitvec::{array::BitArray, order::Lsb0};
 use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
-use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
+use lb_groth16::{Fr, fr_from_bytes, fr_from_mod_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
 use lb_utils::bounded::UpperBoundedVec;
@@ -225,9 +225,10 @@ impl BinaryDecode for ProgramStep {
 
 // The message the ZkTransfer of a payment is bound to.
 #[must_use]
-pub fn payment_msg(program_id: &ProgramId, payment: &Payment) -> Fr {
-    let mut elements = Vec::with_capacity(5 + payment.inputs.len() + payment.outputs.len());
+pub fn payment_msg(channel_id: &ChannelId, program_id: &ProgramId, payment: &Payment) -> Fr {
+    let mut elements = Vec::with_capacity(6 + payment.inputs.len() + payment.outputs.len());
     elements.push(*PROGRAM_PAYMENT_V1);
+    elements.push(fr_from_mod_bytes(&channel_id.0));
     elements.push(*program_id);
     elements.push(payment.intent);
     elements.push(Fr::from(payment.inputs.len() as u64));
@@ -367,10 +368,12 @@ mod tests {
         let dst = fr_from_bytes(b"PROGRAM_PAYMENT_V1").unwrap();
         let payment = Payment::sample(); // nullifier 0x35, commitment 0x36, root 0x37, buffered 0x47, paid 0x38, intent 0x39
         let program = Fr::from(0x34u64);
+        let channel = ChannelId::from([0x33u8; 32]);
         assert_eq!(
-            payment_msg(&program, &payment),
+            payment_msg(&channel, &program, &payment),
             ZkHasher::digest(&[
                 dst,
+                fr_from_mod_bytes(&[0x33u8; 32]),
                 program,
                 Fr::from(0x39u64),
                 Fr::ONE,
@@ -387,12 +390,16 @@ mod tests {
             ..payment.clone()
         };
         assert_eq!(
-            payment_msg(&program, &moved),
-            payment_msg(&program, &payment)
+            payment_msg(&channel, &program, &moved),
+            payment_msg(&channel, &program, &payment)
         );
         assert_ne!(
-            payment_msg(&Fr::from(0x35u64), &payment),
-            payment_msg(&program, &payment)
+            payment_msg(&channel, &Fr::from(0x35u64), &payment),
+            payment_msg(&channel, &program, &payment)
+        );
+        assert_ne!(
+            payment_msg(&ChannelId::from([0x44u8; 32]), &program, &payment),
+            payment_msg(&channel, &program, &payment)
         );
     }
 
