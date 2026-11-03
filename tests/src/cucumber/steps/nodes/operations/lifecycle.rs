@@ -9,6 +9,10 @@ use crate::cucumber::{
 
 const NODE_RESTART_GRACE_PERIOD: Duration = Duration::from_secs(3);
 
+fn needs_source_era_guard(world: &CucumberWorld) -> bool {
+    world.startup.era_boundary_schedule.is_some() && world.cluster.node_peer_ids.is_empty()
+}
+
 pub async fn stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
     let mut background_cleanup_errors = Vec::new();
     if let Err(error) = world.stop_background_activity().await {
@@ -143,6 +147,7 @@ pub async fn start_node(
     immediate_start: bool,
     extra_user_overrides: &[ConfigOverride],
 ) -> StepResult {
+    let check_source_era = needs_source_era_guard(world);
     let mut startup_settings =
         get_startup_settings(world, initial_peers, node_name).inspect_err(|e| {
             warn!(target: TARGET, "Step `{step}` error: {e}");
@@ -371,6 +376,15 @@ pub async fn start_node(
         .inspect_err(|e| {
             warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
+    } else if check_source_era {
+        verify_reponsive_and_network_ready(&client, node_name, &started_node_name).await?;
+    }
+
+    if check_source_era {
+        crate::cucumber::steps::nodes::era_boundaries::check_first_node_source_era(
+            world, node_name,
+        )
+        .await?;
     }
 
     if world.snapshots.node_snapshot_on_startup.is_some() {
@@ -1135,4 +1149,26 @@ pub(super) fn node_wallet_name(
         }
     };
     format!("{node_name}_WALLET_{role}")
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_testing_framework::configs::deployment::EraBoundarySchedule;
+
+    use super::*;
+
+    #[test]
+    fn source_era_guard_applies_only_to_first_scheduled_start() {
+        let mut world = CucumberWorld::default();
+        assert!(!needs_source_era_guard(&world));
+        world.startup.era_boundary_schedule = Some(EraBoundarySchedule::new(0, 1, 1).unwrap());
+        assert!(needs_source_era_guard(&world));
+        world.cluster.node_peer_ids.insert(
+            "NODE_1".into(),
+            "12D3KooWCHo4MSbM2U45gAcvoKFAR256BMp29ugVtfVnh1idfvvm"
+                .parse()
+                .unwrap(),
+        );
+        assert!(!needs_source_era_guard(&world));
+    }
 }

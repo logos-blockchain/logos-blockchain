@@ -1,5 +1,6 @@
 use std::{collections::HashMap, hash::BuildHasher, time::Duration};
 
+use lb_core::sdp::ServiceType;
 use lb_libp2p::{Multiaddr, PeerId, Protocol};
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig,
@@ -73,6 +74,12 @@ fn prepare_manual_cluster_deployment(
             NodeBinaryProfile::Normal
         });
     let mut config = apply_blend_core_nodes(world, config, nodes_count)?;
+    if let Some(parameter_set) = world.cluster.cucumber_parameter_set {
+        config = config.with_parameter_set(parameter_set);
+    }
+    if let Some(schedule) = world.startup.era_boundary_schedule {
+        config = config.with_era_boundary_schedule(schedule);
+    }
     config = config.with_genesis_time(genesis_time);
 
     for genesis_token in &world.chain.genesis_tokens {
@@ -122,6 +129,23 @@ fn prepare_manual_cluster_deployment(
         .map_err(|e| StepError::LogicalError {
             message: format!("failed to build manual cluster: {e}"),
         })?;
+
+    let declared_blend_providers = deployment.network().map_or(0, |network| {
+        network
+            .genesis
+            .genesis_tx()
+            .sdp_declarations()
+            .filter(|declaration| declaration.operation().service_type == ServiceType::BlendNetwork)
+            .count()
+    });
+    let expected_blend_providers = world.cluster.blend_core_nodes.unwrap_or(nodes_count);
+    if declared_blend_providers != expected_blend_providers {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "generated deployment declares {declared_blend_providers} Blend providers, expected {expected_blend_providers}"
+            ),
+        });
+    }
 
     if let Some(genesis_block) = deployment.config().genesis_block.clone() {
         world.chain.genesis_block_utxos =

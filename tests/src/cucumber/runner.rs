@@ -284,6 +284,12 @@ fn prepare_world_for_scenario(
     );
 
     world.set_scenario_base_dir(&scenario_dir, &deployer);
+    if feature_name == "Happy-path era boundaries" {
+        crate::cucumber::steps::nodes::era_boundaries::initialize_evidence_file(&scenario_dir)
+            .unwrap_or_else(|error| {
+                panic!("Failed to initialize era-boundary evidence for scenario `{scenario_name}`: {error}")
+            });
+    }
     world.set_scenario_name(scenario_name);
     world.apply_deployment_config_override_path();
 

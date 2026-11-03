@@ -32,7 +32,10 @@ use lb_node::config::RunConfig;
 use lb_testing_framework::{
     LbcClusterBackend, LbcEnv, LbcK8sManualCluster, LbcScenario, NodeHttpClient, ScenarioBuilder,
     ScenarioBuilderExt as _,
-    configs::{deployment::SdpFundingConfig, wallet::WalletAccount},
+    configs::{
+        deployment::{CucumberParameterSet, EraBoundarySchedule, SdpFundingConfig},
+        wallet::WalletAccount,
+    },
     env::set_default_env,
     get_reserved_available_udp_port, workloads,
 };
@@ -273,6 +276,12 @@ pub struct ChainParameters {
     /// Manual: Header id of the locally generated genesis block, when the
     /// cluster deployment carries one.
     pub genesis_block_id: Option<HeaderId>,
+    /// A finalized source-era block whose ancestry must survive the transition.
+    pub era_boundary_finalized_anchor: Option<HeaderId>,
+    /// Node prepared with an empty local runtime before joining an active era.
+    pub era_boundary_fresh_late_joiner: Option<String>,
+    /// Runtime directories present before a late joiner is launched.
+    pub era_boundary_late_joiner_prior_runtime_dirs: Vec<String>,
     /// Manual: List of genesis tokens allocated to wallets accounts.
     pub genesis_tokens: Vec<GenesisTokens>,
     /// Effective epoch length, populated from the first launched node's
@@ -317,6 +326,8 @@ pub struct ClusterState {
     /// Manual: Number of leading nodes declared as blend providers in the
     /// generated deployment. Defaults to all nodes when unset.
     pub blend_core_nodes: Option<usize>,
+    /// Selected shared Cryptarchia parameter profile for generated deployments.
+    pub cucumber_parameter_set: Option<CucumberParameterSet>,
     /// Manual: Mapping of logical node names to their corresponding libp2p peer
     /// IDs.
     pub node_peer_ids: HashMap<String, PeerId>,
@@ -496,6 +507,8 @@ pub struct NodeStartupConfig {
     /// Manual: If set, nodes use a `DeploymentSettings` loaded from disk
     /// bypassing generated genesis/test deployment.
     pub deployment_config_override_path: Option<PathBuf>,
+    /// Optional consecutive-era fixture for normal era-boundary Cucumber tests.
+    pub era_boundary_schedule: Option<EraBoundarySchedule>,
     /// Manual: Whether to have dynamically started nodes join the external
     /// network
     pub join_external_network: Option<bool>,

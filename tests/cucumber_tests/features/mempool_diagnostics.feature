@@ -97,7 +97,7 @@ Feature: Mempool diagnostics
       | 10            | 1           | 110000000    |
     And I have a cluster with capacity of 12 nodes
     And no nodes are declared as blend providers
-    And the cluster uses diagnostic parameter set "<parameter_set>"
+    And the cluster uses parameter set "<parameter_set>"
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_01A  |              |
@@ -143,7 +143,7 @@ Feature: Mempool diagnostics
       | 10            | 1           | 110000000    |
     And I have a cluster with capacity of 12 nodes
     And no nodes are declared as blend providers
-    And the cluster uses diagnostic parameter set "<parameter_set>"
+    And the cluster uses parameter set "<parameter_set>"
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_01A  |              |

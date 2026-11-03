@@ -2,10 +2,26 @@ use super::{
     CucumberWorld, Duration, HashSet, Instant, Multiaddr, PUBLIC_CRYPTARCHIA_ENDPOINT,
     PUBLIC_CRYPTARCHIA_ENDPOINT_PASSWORD, PUBLIC_CRYPTARCHIA_ENDPOINT_USERNAME, PeerId,
     PublicCryptarchiaEndpointPeer, Step, StepError, StepResult, TARGET, given, info,
-    nodes_converged, parse_url, poll_all_nodes_and_update_consensus_cache, resolve_literal_or_env,
-    sleep, start_node, then, verify_reponsive_and_network_ready_with_timeout,
-    wait_all_nodes_responive, when,
+    nodes_converged, parse_url, resolve_literal_or_env, sleep, start_node, then,
+    verify_reponsive_and_network_ready_with_timeout, wait_all_nodes_responive, when,
 };
+
+#[derive(Clone, Copy)]
+enum CurrentHeightCondition {
+    AtLeast,
+    Exactly,
+}
+
+const fn current_height_satisfies(
+    current: u64,
+    requested: u64,
+    condition: CurrentHeightCondition,
+) -> bool {
+    match condition {
+        CurrentHeightCondition::AtLeast => current >= requested,
+        CurrentHeightCondition::Exactly => current == requested,
+    }
+}
 
 #[given("I have public cryptarchia endpoint peers:")]
 #[when("I have public cryptarchia endpoint peers:")]
@@ -308,6 +324,10 @@ async fn step_wait_all_nodes_responsive(
 
 #[when(expr = "node {string} is at height {int} in {int} seconds")]
 #[then(expr = "node {string} is at height {int} in {int} seconds")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step entrypoints require the world as the first `&mut` argument"
+)]
 async fn step_node_is_at_height(
     world: &mut CucumberWorld,
     step: &Step,
@@ -317,31 +337,56 @@ async fn step_node_is_at_height(
 ) -> StepResult {
     let start = Instant::now();
     let time_out = Duration::from_secs(time_out_seconds);
+    let client = world.resolve_node_http_client(&node_name)?;
 
     let mut count = 0usize;
     loop {
-        poll_all_nodes_and_update_consensus_cache(&step.value, &mut world.nodes_info).await?;
-        let best_height = world.node_best_height(&node_name)?.unwrap_or_default();
-        if best_height >= height {
+        let response = tokio::time::timeout(
+            time_out.saturating_sub(start.elapsed()),
+            client.consensus_info(),
+        )
+        .await
+        .map_err(|_| StepError::Timeout {
+            message: format!("node '{node_name}' consensus query exceeded {time_out_seconds}s"),
+        })?;
+        let last_observation = match response {
+            Ok(consensus) => {
+                let current_height = consensus.cryptarchia_info.height;
+                if current_height_satisfies(current_height, height, CurrentHeightCondition::AtLeast)
+                {
+                    info!(
+                        target: TARGET,
+                        "Node '{node_name}' reached height {height} in {:.2?}",
+                        start.elapsed()
+                    );
+                    return Ok(());
+                }
+                format!("current canonical height {current_height}")
+            }
+            Err(error) => {
+                return Err(StepError::StepFail {
+                    message: format!(
+                        "Step `{}` error: node '{node_name}' current consensus query failed: {error}",
+                        step.value
+                    ),
+                });
+            }
+        };
+
+        if count.is_multiple_of(50) {
             info!(
                 target: TARGET,
-                "Node '{node_name}' reached height {height} in {:.2?}",
-                start.elapsed()
-            );
-            return Ok(());
-        } else if count.is_multiple_of(50) {
-            info!(
-                target: TARGET,
-                "Waiting for '{node_name}' to reach height {height} - elapsed: {:.2?}, current \
-                height: {}", start.elapsed(), best_height
+                "Waiting for '{node_name}' to reach height {height} - elapsed: {:.2?}; {}",
+                start.elapsed(),
+                last_observation
             );
         }
 
         if start.elapsed() >= time_out {
             return Err(StepError::StepFail {
                 message: format!(
-                    "Step `{}` error: Node '{node_name}' did not reach height {height} in {time_out_seconds} s",
-                    step.value
+                    "Step `{}` error: node '{node_name}' did not reach current canonical height {height} in {time_out_seconds}s; {}",
+                    step.value, last_observation
                 ),
             });
         }
@@ -396,17 +441,35 @@ async fn step_node_reaches_blocks_beyond_recorded_height(
     let expected_height = recorded_height.saturating_add(additional_blocks);
     let client = world.resolve_node_http_client(&node_name)?;
     let deadline = Instant::now() + Duration::from_secs(timeout_seconds);
-
     loop {
-        let height = client.consensus_info().await?.cryptarchia_info.height;
-        if height >= expected_height {
-            return Ok(());
-        }
+        let response = tokio::time::timeout_at(deadline, client.consensus_info())
+            .await
+            .map_err(|_| StepError::Timeout {
+                message: format!("node '{node_name}' consensus query exceeded {timeout_seconds}s"),
+            })?;
+        let last_observation = match response {
+            Ok(consensus) => {
+                let height = consensus.cryptarchia_info.height;
+                if current_height_satisfies(
+                    height,
+                    expected_height,
+                    CurrentHeightCondition::AtLeast,
+                ) {
+                    return Ok(());
+                }
+                format!("current canonical height {height}")
+            }
+            Err(error) => {
+                return Err(StepError::StepFail {
+                    message: format!("node '{node_name}' current consensus query failed: {error}"),
+                });
+            }
+        };
 
         if Instant::now() >= deadline {
             return Err(StepError::Timeout {
                 message: format!(
-                    "node '{node_name}' did not reach height {expected_height}; current height is {height}"
+                    "node '{node_name}' did not reach current height {expected_height} within {timeout_seconds}s; {last_observation}"
                 ),
             });
         }
@@ -415,17 +478,31 @@ async fn step_node_reaches_blocks_beyond_recorded_height(
     }
 }
 
-#[when(expr = "node {string} is exactly at height")]
-#[then(expr = "node {string} is exactly at height")]
+#[when(expr = "node {string} is exactly at height {int}")]
+#[then(expr = "node {string} is exactly at height {int}")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step entrypoints require the world as the first `&mut` argument"
+)]
 async fn step_node_is_exactly_at_height(
     world: &mut CucumberWorld,
     step: &Step,
     node_name: String,
     height: u64,
 ) -> StepResult {
-    poll_all_nodes_and_update_consensus_cache(&step.value, &mut world.nodes_info).await?;
-    let node_height = world.node_best_height(&node_name)?.unwrap_or_default();
-    if node_height != height {
+    let client = world.resolve_node_http_client(&node_name)?;
+    let node_height = client
+        .consensus_info()
+        .await
+        .map_err(|error| StepError::StepFail {
+            message: format!(
+                "Step `{}` error: node '{node_name}' current consensus query failed: {error}",
+                step.value
+            ),
+        })?
+        .cryptarchia_info
+        .height;
+    if !current_height_satisfies(node_height, height, CurrentHeightCondition::Exactly) {
         return Err(StepError::StepFail {
             message: format!(
                 "Step `{}` error: Node '{node_name}' is at height {node_height}, required {height}",
@@ -434,6 +511,34 @@ async fn step_node_is_exactly_at_height(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod current_height_tests {
+    use super::{CurrentHeightCondition, current_height_satisfies};
+
+    #[test]
+    fn current_height_predicates_do_not_use_a_historical_high_water_mark() {
+        let historical_height = 120;
+        let current_canonical_height = 118;
+
+        assert!(historical_height >= 120);
+        assert!(!current_height_satisfies(
+            current_canonical_height,
+            120,
+            CurrentHeightCondition::AtLeast
+        ));
+        assert!(current_height_satisfies(
+            current_canonical_height,
+            118,
+            CurrentHeightCondition::Exactly
+        ));
+        assert!(!current_height_satisfies(
+            current_canonical_height,
+            120,
+            CurrentHeightCondition::Exactly
+        ));
+    }
 }
 
 #[when(expr = "all nodes converged to within {int} blocks in {int} seconds")]
