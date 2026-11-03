@@ -58,7 +58,7 @@ use tokio::{
     sync::{broadcast, mpsc, oneshot},
     task::JoinHandle,
 };
-use tracing::{Level, debug, error, info, instrument, span, trace, warn};
+use tracing::{Level, debug, error, info, instrument, span, trace};
 use tracing_futures::Instrument as _;
 
 pub use crate::{
@@ -70,9 +70,6 @@ use crate::{
     mempool::{MempoolAdapter as MempoolAdapterTrait, adapter::MempoolAdapter},
     relays::ChainNetworkRelays,
     sync::{
-        future_blocks::{
-            DEFAULT_FUTURE_BLOCKS_CAPACITY, FutureBlocks, NotParked, is_too_far_in_future,
-        },
         orphan_handler::OrphanBlocksDownloader,
         tip_poll::{PolledTip, TipPollParams, poll_peer_tips_if_behind},
     },
@@ -81,6 +78,10 @@ use crate::{
 const SERVICE_ID: &str = "ChainNetwork";
 
 pub(crate) const LOG_TARGET: &str = chain::network::ROOT;
+/// How many slots ahead of this service's slot ticks a proposal may be and
+/// still be handed to chain-service, which judges it against its own clock.
+/// It covers a tick that has not been processed yet.
+const MAX_FUTURE_SLOTS: u64 = 1;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -432,9 +433,6 @@ where
             sync_config.orphan.max_orphan_cache_size,
             sync_config.orphan.max_rejected_cache_size,
         ));
-        // Blocks a little ahead of the local clock wait here for their slot,
-        // instead of the event loop waiting for it.
-        let mut future_blocks = FutureBlocks::new(DEFAULT_FUTURE_BLOCKS_CAPACITY);
 
         // Set up the proactive tip-poll lag watchdog: in each era, derive the
         // polling cadence / lag threshold from the era's active slot
@@ -477,7 +475,6 @@ where
                             proposal,
                             current_slot,
                             orphan_downloader.as_mut().get_mut(),
-                            &mut future_blocks,
                             &relays,
                         )
                         .await;
@@ -523,16 +520,11 @@ where
 
                         Self::log_received_block(&block);
 
-                        match Self::apply_block(block.clone(), &relays).await {
+                        match Self::apply_block(block, &relays).await {
                             Ok(()) => {
                                 trace!(target: LOG_TARGET, {
                                     counter.consensus_processed_blocks = 1
                                 }, "Processed consensus block");
-                            }
-                            Err(Error::Cryptarchia(ApiError::FutureBlock { .. })) => {
-                                // Its descendants are from the future too.
-                                Self::park_future_block(&mut future_blocks, block, current_slot);
-                                orphan_downloader.cancel_active_download();
                             }
                             Err(e) => {
                                 error!(target: LOG_TARGET, "Error processing orphan downloader block: {e:?}");
@@ -551,17 +543,6 @@ where
                             network_adapter.rotate_era(current_era).await;
                             orphan_downloader.as_mut().get_mut().rotate_era(current_era).await;
                             relays.mempool_adapter_mut().rotate_era(current_era).await;
-                        }
-
-                        for block in future_blocks.take_due(current_slot) {
-                            Self::apply_reconstructed_block(
-                                block,
-                                current_slot,
-                                orphan_downloader.as_mut().get_mut(),
-                                &mut future_blocks,
-                                &relays,
-                            )
-                            .await;
                         }
 
                         let Some(params) = tip_poll_params
@@ -672,7 +653,6 @@ where
         proposal: Proposal,
         current_slot: Slot,
         orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
-        future_blocks: &mut FutureBlocks<Block<Mempool::Item>>,
         relays: &ChainNetworkRelays<
             Cryptarchia,
             Mempool,
@@ -688,9 +668,9 @@ where
         metrics::consensus_proposals_received_total("network");
 
         // Before any other work: nothing else about such a proposal has been
-        // checked, and the leader proof its signature is checked against
-        // cannot be verified until its slot.
-        if is_too_far_in_future(block_slot, current_slot) {
+        // checked yet. Dropping it is safe, since a valid block is fetched
+        // again once a descendant arrives and reports its parent missing.
+        if block_slot.into_inner() > current_slot.into_inner().saturating_add(MAX_FUTURE_SLOTS) {
             metrics::consensus_proposals_ignored_total("too_far_in_future", "network");
             debug!(
                 target: LOG_TARGET, ?block_id, ?block_slot, ?current_slot,
@@ -743,16 +723,13 @@ where
             }
         };
 
-        Self::apply_reconstructed_block(
-            block,
-            current_slot,
-            orphan_downloader,
-            future_blocks,
-            relays,
-        )
-        .await;
+        Self::apply_reconstructed_block(block, orphan_downloader, relays).await;
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "Keep proposal error handling in one match."
+    )]
     fn handle_proposal_processing_error(
         err: Error,
         block_id: HeaderId,
@@ -775,6 +752,15 @@ where
                     );
                 }
             }
+            Error::Cryptarchia(ApiError::FutureBlock {
+                block_slot,
+                current_slot,
+            }) => {
+                debug!(
+                    target: LOG_TARGET, ?block_id, ?block_slot, ?current_slot,
+                    "Dropping block from a future slot; it is fetched again once a descendant arrives",
+                );
+            }
             err => {
                 error!(
                     target: LOG_TARGET, %err, ?block_id,
@@ -789,9 +775,7 @@ where
 
     async fn apply_reconstructed_block(
         block: Block<Mempool::Item>,
-        current_slot: Slot,
         orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
-        future_blocks: &mut FutureBlocks<Block<Mempool::Item>>,
         relays: &ChainNetworkRelays<
             Cryptarchia,
             Mempool,
@@ -807,16 +791,13 @@ where
         let block_id = block.header().id();
         let started_at = Instant::now();
 
-        match Self::apply_block(block.clone(), relays).await {
+        match Self::apply_block(block, relays).await {
             Ok(()) => {
                 metrics::consensus_observe_apply_block_ok(started_at.elapsed());
                 orphan_downloader.remove_orphan(&block_id);
                 trace!(target: LOG_TARGET, {
                     counter.consensus_processed_blocks = 1
                 }, "Processed consensus block");
-            }
-            Err(Error::Cryptarchia(ApiError::FutureBlock { .. })) => {
-                Self::park_future_block(future_blocks, block, current_slot);
             }
             Err(err) => {
                 metrics::consensus_observe_apply_block_err(&err);
@@ -844,28 +825,6 @@ where
             relays.mempool_adapter(),
         )
         .await
-    }
-
-    /// Keep a block the ledger reported as from a future slot until a slot
-    /// tick reaches it.
-    fn park_future_block(
-        future_blocks: &mut FutureBlocks<Block<Mempool::Item>>,
-        block: Block<Mempool::Item>,
-        current_slot: Slot,
-    ) {
-        let block_id = block.header().id();
-        let block_slot = block.header().slot();
-        match future_blocks.park(block_id, block_slot, current_slot, block) {
-            Ok(()) => debug!(
-                target: LOG_TARGET, ?block_id, ?block_slot, ?current_slot,
-                "Future block parked until its slot",
-            ),
-            Err(NotParked::AlreadyParked) => {}
-            Err(reason) => warn!(
-                target: LOG_TARGET, ?block_id, ?block_slot, ?current_slot, ?reason,
-                "Dropping future block",
-            ),
-        }
     }
 
     fn log_received_block(block: &Block<Mempool::Item>) {
