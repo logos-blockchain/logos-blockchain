@@ -185,19 +185,19 @@ pub trait OpGasCalculator<Profile: GasProfile>: OperationGas<Profile> {
 }
 
 // The measured components of the Execution Gas of RFC-506.
-pub const EXECUTION_KB_GAS: Gas = Gas::new(26);
-pub const EXECUTION_NOTE_SET_GAS: Gas = Gas::new(3485);
-pub const EXECUTION_PROOF_GAS: Gas = Gas::new(1773);
-pub const EXECUTION_ROOT_GAS: Gas = Gas::new(887);
+pub const EXECUTION_KB_GAS: Gas = Gas::new(27);
+pub const EXECUTION_NOTE_SET_GAS: Gas = Gas::new(3461);
+pub const EXECUTION_PROOF_GAS: Gas = Gas::new(1770);
+pub const EXECUTION_ROOT_GAS: Gas = Gas::new(879);
 pub const EXECUTION_BUFFERED_GAS: Gas = Gas::new(23);
-pub const EXECUTION_NULLIFIER_GAS: Gas = Gas::new(838);
-pub const EXECUTION_COMMITMENT_GAS: Gas = Gas::new(25);
-pub const EXECUTION_SIGNATURE_GAS: Gas = Gas::new(167);
-pub const EXECUTION_USER_STEP_GAS: Gas = Gas::new(137);
-pub const EXECUTION_PAYMENT_GAS: Gas = Gas::new(211);
-pub const EXECUTION_PROGRAM_STEP_GAS: Gas = Gas::new(60);
-pub const EXECUTION_OPENING_GAS: Gas = Gas::new(157);
-pub const EXECUTION_PROGRAM_PROOF_GAS: Gas = Gas::new(6305);
+pub const EXECUTION_NULLIFIER_GAS: Gas = Gas::new(725);
+pub const EXECUTION_COMMITMENT_GAS: Gas = Gas::new(24);
+pub const EXECUTION_SIGNATURE_GAS: Gas = Gas::new(161);
+pub const EXECUTION_USER_STEP_GAS: Gas = Gas::new(161);
+pub const EXECUTION_PAYMENT_GAS: Gas = Gas::new(233);
+pub const EXECUTION_PROGRAM_STEP_GAS: Gas = Gas::new(54);
+pub const EXECUTION_OPENING_GAS: Gas = Gas::new(151);
+pub const EXECUTION_PROGRAM_PROOF_GAS: Gas = Gas::new(6320);
 
 /// The Execution Gas of extending the root of a spend over `buffered`
 /// commitments of the buffer, nothing when the buffer is empty.
@@ -310,21 +310,21 @@ mod tests {
 
     #[test]
     fn spend_gas_without_buffer_has_no_root() {
-        assert_eq!(spend_gas(1, 2, 0), Ok(Gas::new(1773 + 838 + 2 * 25)));
+        assert_eq!(spend_gas(1, 2, 0), Ok(Gas::new(1770 + 725 + 2 * 24)));
     }
 
     #[test]
     fn spend_gas_with_buffer_extends_the_root() {
         assert_eq!(
             spend_gas(1, 1, 3),
-            Ok(Gas::new(1773 + 887 + 3 * 23 + 838 + 25))
+            Ok(Gas::new(1770 + 879 + 3 * 23 + 725 + 24))
         );
     }
 
     #[test]
     fn tx_terms_gas_floors_the_bytes() {
-        assert_eq!(tx_terms_gas(999, 0), Ok(Gas::new(25)));
-        assert_eq!(tx_terms_gas(1000, 1), Ok(Gas::new(26 + 3485)));
+        assert_eq!(tx_terms_gas(999, 0), Ok(Gas::new(26)));
+        assert_eq!(tx_terms_gas(1000, 1), Ok(Gas::new(27 + 3461)));
     }
 
     #[test]

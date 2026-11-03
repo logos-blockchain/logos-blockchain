@@ -138,7 +138,7 @@ impl ProvableOperation for ChannelWithdrawOp {
 }
 
 impl OperationGas<MainnetGasProfile> for ChannelWithdrawOp {
-    const GAS_COST: Gas = Gas::new(13);
+    const GAS_COST: Gas = Gas::new(31);
 }
 
 impl OpGasCalculator<MainnetGasProfile> for ChannelWithdrawOp {
@@ -444,10 +444,10 @@ mod test {
     #[test]
     fn channel_withdraw_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
-            // 1 input, 1 output, nothing buffered: 13 + 1773 + 838 + 25
+            // 1 input, 1 output, nothing buffered: 31 + 1770 + 725 + 24
             assert_eq!(
                 ChannelWithdrawOp::sample().execution_gas(&FixedThresholds(threshold)),
-                Ok(Gas::new(2_649))
+                Ok(Gas::new(2_550))
             );
         }
     }

@@ -154,7 +154,7 @@ impl ProvableOperation for SDPDeclareOp {
 }
 
 impl OperationGas<MainnetGasProfile> for SDPDeclareOp {
-    const GAS_COST: Gas = Gas::new(669);
+    const GAS_COST: Gas = Gas::new(622);
 }
 
 impl OpGasCalculator<MainnetGasProfile> for SDPDeclareOp {
@@ -751,11 +751,11 @@ mod tests {
         #[test]
         fn sdp_declare_op_execution_gas_does_not_scale_with_the_threshold() {
             // 1 input, the service note, nothing buffered:
-            // 669 + 167 + 1773 + 838 + 25
+            // 622 + 161 + 1770 + 725 + 24
             for threshold in [0, 1, 3] {
                 assert_eq!(
                     SDPDeclareOp::sample().execution_gas(&FixedThresholds(threshold)),
-                    Ok(Gas::new(3_472))
+                    Ok(Gas::new(3_302))
                 );
             }
         }

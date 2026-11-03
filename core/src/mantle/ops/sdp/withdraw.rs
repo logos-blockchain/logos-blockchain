@@ -56,7 +56,7 @@ impl OpId for SDPWithdrawOp {
 }
 
 impl OperationGas<MainnetGasProfile> for SDPWithdrawOp {
-    const GAS_COST: Gas = Gas::new(889);
+    const GAS_COST: Gas = Gas::new(892);
 }
 
 impl OpGasCalculator<MainnetGasProfile> for SDPWithdrawOp {
@@ -613,11 +613,11 @@ mod tests {
 
     #[test]
     fn sdp_withdraw_op_execution_gas_does_not_scale_with_the_threshold() {
-        // The service note, 1 output, no buffer: 889 + 167 + 1773 + 838 + 25
+        // The service note, 1 output, no buffer: 892 + 161 + 1770 + 725 + 24
         for threshold in [0, 1, 3] {
             assert_eq!(
                 SDPWithdrawOp::sample().execution_gas(&FixedThresholds(threshold)),
-                Ok(Gas::new(3_692))
+                Ok(Gas::new(3_572))
             );
         }
     }

@@ -254,7 +254,7 @@ impl ProvableOperation for ChannelConfigOp {
 }
 
 impl OperationGas<MainnetGasProfile> for ChannelConfigOp {
-    const GAS_COST: Gas = Gas::new(18);
+    const GAS_COST: Gas = Gas::new(20);
 }
 
 impl OpGasCalculator<MainnetGasProfile> for ChannelConfigOp {
@@ -837,8 +837,8 @@ mod tests {
 
     #[test]
     fn channel_config_op_execution_gas_scales_with_the_threshold() {
-        // 18 + 167 * threshold
-        for (threshold, expected) in [(1, 185), (2, 352), (3, 519)] {
+        // 20 + 161 * threshold
+        for (threshold, expected) in [(1, 181), (2, 342), (3, 503)] {
             assert_eq!(
                 ChannelConfigOp::sample().execution_gas(&FixedThresholds(threshold)),
                 Ok(Gas::new(expected))
@@ -850,7 +850,7 @@ mod tests {
     fn channel_config_op_execution_gas_is_its_base_cost_against_an_unknown_channel() {
         assert_eq!(
             ChannelConfigOp::sample().execution_gas(&FixedThresholds(0)),
-            Ok(Gas::new(18))
+            Ok(Gas::new(20))
         );
     }
 }

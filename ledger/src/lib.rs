@@ -1604,7 +1604,7 @@ mod tests {
             .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, tx)
             .unwrap();
 
-        assert_eq!(execution_gas, Gas::new(2 * 6_843));
+        assert_eq!(execution_gas, Gas::new(2 * 6_839));
         assert_eq!(events, []);
         assert_eq!(state.mantle_ledger.programs().len(), 1);
         assert_eq!(
@@ -3135,12 +3135,12 @@ mod tests {
                 .frontier_root()
         );
         // The registration, the inscription with its signature, then the program
-        // step (60 + 6305, no opening) with its payment of one input and no output
-        // (211 + 1773 + 838) and its spend of one output (1773 + 25), nothing
+        // step (54 + 6320, no opening) with its payment of one input and no output
+        // (233 + 1770 + 725) and its spend of one output (1770 + 24), nothing
         // buffered in the channel.
         assert_eq!(
             execution_gas,
-            Gas::new(6_843 + (13 + 167) + (60 + 6_305) + (211 + 1_773 + 838) + (1_773 + 25))
+            Gas::new(6_839 + (21 + 161) + (54 + 6_320) + (233 + 1_770 + 725) + (1_770 + 24))
         );
     }
 
@@ -3379,26 +3379,26 @@ mod tests {
             .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(&eras, &tx)
             .unwrap();
 
-        // The first Transfer (30 + 1773 + 838 + 2 * 25), the second one with its
-        // root extended over the 2 commitments buffered (30 + 1773 + 887 +
-        // 2 * 23 + 838 + 25), the registration, the creating inscription, the
-        // Deposit with its root extended over the 3 buffered (16 + 1773 + 887 +
-        // 3 * 23 + 838 + 25) and the inscription of the user step buffering 1
-        // (137 + 1773 + 887 + 23 + 838 + 25) and the program step with its
+        // The first Transfer (12 + 1770 + 725 + 2 * 24), the second one with its
+        // root extended over the 2 commitments buffered (12 + 1770 + 879 +
+        // 2 * 23 + 725 + 24), the registration, the creating inscription, the
+        // Deposit with its root extended over the 3 buffered (6 + 1770 + 879 +
+        // 3 * 23 + 725 + 24) and the inscription of the user step buffering 1
+        // (161 + 1770 + 879 + 23 + 725 + 24) and the program step with its
         // payment, its spend extended over the 2 buffered of the channel.
         assert_eq!(
             operations_gas,
             Gas::new(
-                (30 + 1_773 + 838 + 50)
-                    + (30 + 1_773 + 887 + 46 + 838 + 25)
-                    + 6_843
-                    + (13 + 167)
-                    + (16 + 1_773 + 887 + 69 + 838 + 25)
-                    + (13 + 167)
-                    + (137 + 1_773 + 887 + 23 + 838 + 25)
-                    + (60 + 6_305)
-                    + (211 + 1_773 + 838)
-                    + (1_773 + 887 + 46 + 25)
+                (12 + 1_770 + 725 + 48)
+                    + (12 + 1_770 + 879 + 46 + 725 + 24)
+                    + 6_839
+                    + (21 + 161)
+                    + (6 + 1_770 + 879 + 69 + 725 + 24)
+                    + (21 + 161)
+                    + (161 + 1_770 + 879 + 23 + 725 + 24)
+                    + (54 + 6_320)
+                    + (233 + 1_770 + 725)
+                    + (1_770 + 879 + 46 + 24)
             )
         );
         // The bytes of the transaction and the one channel note set it changed.
@@ -3591,7 +3591,7 @@ mod tests {
         deferred_proofs.verify().unwrap();
 
         // The config is priced against the channel the inscription created.
-        assert_eq!(operations_gas.into_inner(), (13 + 167) + (18 + 167));
+        assert_eq!(operations_gas.into_inner(), (21 + 161) + (20 + 161));
 
         // The transaction adds its bytes and the one channel note set it changed.
         let execution_gas = operations_gas

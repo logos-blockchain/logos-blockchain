@@ -43,7 +43,7 @@ impl ProvableOperation for ProgramRegisterOp {
 }
 
 impl OperationGas<MainnetGasProfile> for ProgramRegisterOp {
-    const GAS_COST: Gas = Gas::new(6843);
+    const GAS_COST: Gas = Gas::new(6839);
 }
 
 impl OpGasCalculator<MainnetGasProfile> for ProgramRegisterOp {}
@@ -194,7 +194,7 @@ mod tests {
     fn program_register_op_execution_gas_is_6843() {
         assert_eq!(
             ProgramRegisterOp::sample().execution_gas(&FixedThresholds(3)),
-            Ok(Gas::new(6_843))
+            Ok(Gas::new(6_839))
         );
     }
 }

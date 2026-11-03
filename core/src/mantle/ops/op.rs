@@ -395,24 +395,24 @@ mod tests {
 
         // Every channel the thresholds are asked about requires 2 signatures.
         for (op, gas) in [
-            // 2 inputs, 2 outputs: 30 + 1773 + 2 * 838 + 2 * 25
-            (Op::Transfer(TransferOp::sample()), 3_529),
-            (Op::ProgramRegister(ProgramRegisterOp::sample()), 6_843),
-            // 18 + 2 * 167
-            (Op::ChannelConfig(ChannelConfigOp::sample()), 352),
-            // 13 + 167
-            (Op::ChannelInscribe(InscriptionOp::sample()), 180),
-            // 1 input, 1 output: 16 + 1773 + 838 + 25
-            (Op::ChannelDeposit(DepositOp::sample()), 2_652),
-            // 1 input, 1 output: 13 + 1773 + 838 + 25
-            (Op::ChannelWithdraw(ChannelWithdrawOp::sample()), 2_649),
-            // 669 + 167 + 1773 + 838 + 25
-            (Op::SDPDeclare(SDPDeclareOp::sample()), 3_472),
-            // 889 + 167 + 1773 + 838 + 25
-            (Op::SDPWithdraw(SDPWithdrawOp::sample()), 3_692),
-            // 6975 + 167
-            (Op::SDPActive(SDPActiveOp::sample()), 7_142),
-            (Op::ClaimPowReward(ClaimPowRewardOp::sample()), 569),
+            // 2 inputs, 2 outputs: 12 + 1770 + 2 * 725 + 2 * 24
+            (Op::Transfer(TransferOp::sample()), 3_280),
+            (Op::ProgramRegister(ProgramRegisterOp::sample()), 6_839),
+            // 20 + 2 * 161
+            (Op::ChannelConfig(ChannelConfigOp::sample()), 342),
+            // 21 + 161
+            (Op::ChannelInscribe(InscriptionOp::sample()), 182),
+            // 1 input, 1 output: 6 + 1770 + 725 + 24
+            (Op::ChannelDeposit(DepositOp::sample()), 2_525),
+            // 1 input, 1 output: 31 + 1770 + 725 + 24
+            (Op::ChannelWithdraw(ChannelWithdrawOp::sample()), 2_550),
+            // 622 + 161 + 1770 + 725 + 24
+            (Op::SDPDeclare(SDPDeclareOp::sample()), 3_302),
+            // 892 + 161 + 1770 + 725 + 24
+            (Op::SDPWithdraw(SDPWithdrawOp::sample()), 3_572),
+            // 6927 + 161
+            (Op::SDPActive(SDPActiveOp::sample()), 7_088),
+            (Op::ClaimPowReward(ClaimPowRewardOp::sample()), 566),
         ] {
             assert_eq!(
                 op.by_ref()

@@ -49,26 +49,26 @@ pub const SPEC_GENESIS_EXECUTION_PRICE: u128 = 1_000_000_000;
 pub const SPEC_EMA_PREV_WEIGHT: u128 = 9;
 /// Execution Market v1.3.0: EMA denominator.
 pub const SPEC_EMA_DENOMINATOR: u128 = 10;
-/// Execution Market v1.3.2: `7 * G_target`, with `G_target = 1_586_774`.
-pub const SPEC_BASE_FEE_NUMERATOR: u128 = 11_107_418;
+/// Execution Market v1.3.2: `7 * G_target`, with `G_target = 1_586_845`.
+pub const SPEC_BASE_FEE_NUMERATOR: u128 = 11_107_915;
 /// Execution Market v1.3.2: `8 * G_target`.
-pub const SPEC_BASE_FEE_DENOMINATOR: u128 = 12_694_192;
-/// Gas Cost Determination 2.0.0: the Transfer Operation costs 30 gas.
-pub const SPEC_TRANSFER_GAS: u64 = 30;
+pub const SPEC_BASE_FEE_DENOMINATOR: u128 = 12_694_760;
+/// Gas Cost Determination 2.0.0: the Transfer Operation costs 12 gas.
+pub const SPEC_TRANSFER_GAS: u64 = 12;
 /// Gas Cost Determination 2.0.0: verifying the proof of a spend.
-pub const SPEC_PROOF_GAS: u64 = 1_773;
+pub const SPEC_PROOF_GAS: u64 = 1_770;
 /// Gas Cost Determination 2.0.0: extending the root of a spend over a
 /// non-empty buffer.
-pub const SPEC_ROOT_GAS: u64 = 887;
+pub const SPEC_ROOT_GAS: u64 = 879;
 /// Gas Cost Determination 2.0.0: each commitment of the buffer the root is
 /// extended over.
 pub const SPEC_BUFFERED_GAS: u64 = 23;
 /// Gas Cost Determination 2.0.0: each nullifier of a spend.
-pub const SPEC_NULLIFIER_GAS: u64 = 838;
+pub const SPEC_NULLIFIER_GAS: u64 = 725;
 /// Gas Cost Determination 2.0.0: each commitment of a spend.
-pub const SPEC_COMMITMENT_GAS: u64 = 25;
+pub const SPEC_COMMITMENT_GAS: u64 = 24;
 /// Gas Cost Determination 2.0.0: each 1000 bytes of a transaction, floored.
-pub const SPEC_KB_GAS: u64 = 26;
+pub const SPEC_KB_GAS: u64 = 27;
 
 /// Computes a percentage reserve with checked widened arithmetic and integer
 /// ceiling, matching the transaction funding rule.

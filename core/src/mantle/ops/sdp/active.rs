@@ -44,7 +44,7 @@ impl ProvableOperation for SDPActiveOp {
 }
 
 impl OperationGas<MainnetGasProfile> for SDPActiveOp {
-    const GAS_COST: Gas = Gas::new(6975);
+    const GAS_COST: Gas = Gas::new(6927);
 }
 
 impl OpGasCalculator<MainnetGasProfile> for SDPActiveOp {
@@ -583,8 +583,8 @@ mod tests {
         for threshold in [0, 1, 3] {
             assert_eq!(
                 SDPActiveOp::sample().execution_gas(&FixedThresholds(threshold)),
-                // 6975 + 167
-                Ok(Gas::new(7_142))
+                // 6927 + 161
+                Ok(Gas::new(7_088))
             );
         }
     }
