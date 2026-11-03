@@ -61,22 +61,27 @@ impl Settings {
             .expect("There must be at least one round per epoch.")
     }
 
-    /// `W = ⌈M / (F_C · (1 + R_C) · β_C)⌉`: the observation window, the rounds
-    /// in which a core connection carries `M` messages from cover traffic
-    /// alone, `M` being
-    /// [`CoreSettings::cover_messages_per_observation_window`].
+    /// `W = ⌈M_W / (F_C · (1 + R_C) · β_C)⌉`: the observation window, the
+    /// rounds in which a core connection carries `M_W` messages from cover
+    /// traffic alone.
     ///
-    /// With fewer messages in the window, a node more often reads an honest
-    /// neighbour as not live and closes its connection. No deployment
+    /// `M_W = λ · (Φ_CC − 1) / (Φ_CC − 2)`, `λ` being
+    /// [`CoreSettings::expected_deliveries_per_observation_window`]. A
+    /// neighbour sends a node every message but the ones it first received
+    /// from that node, so one with the fewest connections, `Φ_CC − 1`, each as
+    /// likely to bring a message first, delivers `(Φ_CC − 2) / (Φ_CC − 1)` of
+    /// them. Only `W` is rounded. The deployment checks that `Φ_CC` is at
+    /// least 3 when it loads, so `Φ_CC − 2` is never zero. No deployment
     /// replicates cover messages, so `R_C` is `0`.
     #[must_use]
     pub const fn rounds_per_observation_window(&self) -> NonZeroU128 {
+        let peering_degree = self.core.target_peering_degree.get() as f64;
         let cover_messages_per_round = self.core.scheduler.cover.message_frequency_per_round.get()
             * self.common.num_blend_layers.get() as f64;
-        let cover_messages_per_window =
-            self.core.cover_messages_per_observation_window.get() as f64;
-        NonZeroU128::new((cover_messages_per_window / cover_messages_per_round).ceil() as u128)
-        .expect(
+        let expected_deliveries = self.core.expected_deliveries_per_observation_window.get() as f64;
+        let rounds = expected_deliveries * (peering_degree - 1.0)
+            / ((peering_degree - 2.0) * cover_messages_per_round);
+        NonZeroU128::new(rounds.ceil() as u128).expect(
             "The cover traffic of a round must be finite, so the window spans at least one round.",
         )
     }
@@ -257,11 +262,10 @@ pub struct CoreSettings {
     /// covering the round trips of the transport handshake and of the
     /// neighbour distinction process.
     pub core_handshake_deadline_in_rounds: NonZeroU128,
-    /// The messages a core connection carries from cover traffic alone in one
-    /// observation window, which sizes the window (see
-    /// [`Settings::rounds_per_observation_window`]).
-    // TODO: Is this rather derived from other deployment parameters?
-    pub cover_messages_per_observation_window: NonZeroU64,
+    /// `λ`: the messages a neighbour is expected to deliver to a node in one
+    /// observation window, which sizes the window with the peering degree and
+    /// the cover traffic (see [`Settings::rounds_per_observation_window`]).
+    pub expected_deliveries_per_observation_window: NonZeroU64,
     pub activity_threshold_sensitivity: u64,
 }
 
@@ -285,18 +289,18 @@ pub struct MessageDelayerSettings {
 
 #[cfg(test)]
 mod tests {
-    use core::num::NonZeroU64;
+    use core::num::{NonZeroU32, NonZeroU64};
 
     use lb_utils::math::PositiveF64;
 
     use super::Settings;
     use crate::config::DeploymentSettings;
 
-    /// The default deployment's Blend settings, with the cover messages per
-    /// window, `F_C` and `β_C` set to the values given, which are all the
-    /// window depends on.
-    fn with_cover_traffic(
-        cover_messages_per_observation_window: u64,
+    /// The default deployment's Blend settings, with `λ`, `Φ_CC`, `F_C` and
+    /// `β_C` set to the values given, which are all the window depends on.
+    fn with_window_inputs(
+        expected_deliveries_per_observation_window: u64,
+        target_peering_degree: u32,
         message_frequency_per_round: f64,
         num_blend_layers: u64,
     ) -> Settings {
@@ -304,49 +308,62 @@ mod tests {
             .genesis_era_parameters()
             .blend
             .clone();
-        settings.core.cover_messages_per_observation_window =
-            NonZeroU64::new(cover_messages_per_observation_window).unwrap();
+        settings.core.expected_deliveries_per_observation_window =
+            NonZeroU64::new(expected_deliveries_per_observation_window).unwrap();
+        settings.core.target_peering_degree = NonZeroU32::new(target_peering_degree).unwrap();
         settings.core.scheduler.cover.message_frequency_per_round =
             PositiveF64::try_from(message_frequency_per_round).unwrap();
         settings.common.num_blend_layers = NonZeroU64::new(num_blend_layers).unwrap();
         settings
     }
 
-    /// The spec's 90 messages at `F_C = 1` and `β_C = 3`, where the window is
-    /// the 30 rounds that `10·Δ_max` gave it, so neither the liveness test nor
-    /// the blacklist expiry changes.
+    /// The spec's 60 deliveries at a peering degree of 4, `F_C = 1` and
+    /// `β_C = 3`: 90 messages, in the 30 rounds the window had when the spec
+    /// fixed it at 90 messages.
     #[test]
     fn the_window_is_30_rounds_at_the_reference_parameters() {
         assert_eq!(
-            with_cover_traffic(90, 1.0, 3)
+            with_window_inputs(60, 4, 1.0, 3)
                 .rounds_per_observation_window()
                 .get(),
             30
         );
     }
 
-    /// The spec's 90 messages on one blending layer at `F_C = 1`, where
-    /// `10·Δ_max` gave 10 rounds, in which an honest neighbour delivers about
-    /// five messages.
+    /// The spec's 60 deliveries at a peering degree of 4 on one blending
+    /// layer: the 90 messages take 90 rounds.
     #[test]
     fn the_window_is_90_rounds_at_the_testnet_parameters() {
         assert_eq!(
-            with_cover_traffic(90, 1.0, 1)
+            with_window_inputs(60, 4, 1.0, 1)
                 .rounds_per_observation_window()
                 .get(),
             90
         );
     }
 
-    /// A window that falls between two rounds takes the later one, so a
-    /// connection still carries at least the messages asked for in it.
+    /// At a peering degree of 3, a neighbour with the fewest connections, two,
+    /// delivers half of the messages, so the window carries 120 of them.
+    #[test]
+    fn the_window_is_40_rounds_at_a_peering_degree_of_3() {
+        assert_eq!(
+            with_window_inputs(60, 3, 1.0, 3)
+                .rounds_per_observation_window()
+                .get(),
+            40
+        );
+    }
+
+    /// At a peering degree of 5, the window carries 80 messages, which take
+    /// 26⅔ rounds. A window that falls between two rounds takes the later one,
+    /// so a connection still carries at least the messages asked for in it.
     #[test]
     fn a_window_between_two_rounds_rounds_up() {
         assert_eq!(
-            with_cover_traffic(100, 1.0, 3)
+            with_window_inputs(60, 5, 1.0, 3)
                 .rounds_per_observation_window()
                 .get(),
-            34
+            27
         );
     }
 }
