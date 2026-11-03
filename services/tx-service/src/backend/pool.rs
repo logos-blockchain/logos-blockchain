@@ -303,7 +303,7 @@ where
 
     async fn on_canonical_chain_updated(
         &mut self,
-        entered: HashMap<Self::Key, Slot>,
+        entered: HashMap<Self::Key, TxInBlock<Self::Item>>,
         reorged: Vec<TxInBlock<Self::Item>>,
     ) -> Vec<Self::Item> {
         // A reorged tx leaves `included_in_canonical` to be admitted again
@@ -316,8 +316,9 @@ where
             }
         }
 
+        let now = current_timestamp_millis();
         let mut count = 0usize;
-        for (key, slot) in entered {
+        for (key, TxInBlock { tx: item, slot }) in entered {
             let admitted_at = if let Some(admitted_at) = self.pending_items.shift_remove(&key) {
                 count += 1;
                 admitted_at
@@ -326,8 +327,16 @@ where
             } else if let Some(included) = self.included_in_canonical.get(&key) {
                 included.admitted_at
             } else {
-                // The mempool never held the tx, so there is no body to retain.
-                continue;
+                // The pool never held the tx (e.g. it came in a downloaded
+                // block), so it stores the tx to resolve a competing proposal
+                // carrying it, and sets its admission time to the start of
+                // the block's slot.
+                if let Err(e) = self.storage_adapter.store_item(key, item).await {
+                    tracing::warn!(target: LOG_TARGET, "Failed to store an included item: {e:?}");
+                    continue;
+                }
+                self.index_by_prefix(&key);
+                self.slot_start(slot).unwrap_or(now)
             };
             self.included_in_canonical
                 .insert(key, IncludedItem { slot, admitted_at });
@@ -337,7 +346,6 @@ where
         metrics::mempool_transactions_removed(count);
         metrics::mempool_transactions_pending(self.pending_items.len());
 
-        let now = current_timestamp_millis();
         let mut readmitted = Vec::with_capacity(reorged.len());
         for TxInBlock { tx: item, slot } in reorged {
             let key = item.hash();
@@ -353,8 +361,8 @@ where
             }
             match self.add_item(key, item.clone()).await {
                 Ok(()) => readmitted.push(item),
-                // Already pending: the pool didn't hold it when its block
-                // entered the canonical chain, and received it afterwards.
+                // Already pending: the pool could not store its body when its
+                // block entered the canonical chain, and received it afterwards.
                 Err(MempoolError::ExistingItem) => {}
                 Err(error) => tracing::debug!(
                     target: LOG_TARGET,

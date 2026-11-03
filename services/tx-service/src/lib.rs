@@ -47,16 +47,16 @@ where
     /// by a reorg.
     ///
     /// - `entered`: items carried by the blocks that entered the canonical
-    ///   chain, each mapped to the slot of the block carrying it. They are
-    ///   retired, and remain available for reference resolution until that
-    ///   block becomes immutable.
+    ///   chain, keyed by hash, each with the slot of the block carrying it.
+    ///   They are retired, or stored if the pool never held them, and remain
+    ///   available for reference resolution until that block becomes immutable.
     /// - `reorged`: items carried by the blocks that left the canonical chain
     ///   and not by the blocks now in it, each with the slot of the block
     ///   carrying it. They are no longer retained as included, and are admitted
     ///   again unless they are older than the TTL. Empty when the chain only
     ///   grows.
     CanonicalChainUpdated {
-        entered: HashMap<Key, Slot>,
+        entered: HashMap<Key, TxInBlock<Item>>,
         reorged: Vec<TxInBlock<Item>>,
     },
     /// The chain processed `block_id` at `slot`, and its latest immutable

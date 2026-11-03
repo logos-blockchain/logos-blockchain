@@ -50,7 +50,7 @@ pub struct ProcessBlockOutcome<Tx> {
     pub pruned_blocks: PrunedBlocks<HeaderId>,
     pub reorged_block_ids: Vec<HeaderId>,
     pub reorged_txs: Vec<TxInBlock<Tx>>,
-    pub newly_canonical_txs: HashMap<TxHash, Slot>,
+    pub newly_canonical_txs: HashMap<TxHash, TxInBlock<Tx>>,
 }
 
 // Source tips normally leave this map when they pass the LIB. These small
@@ -1061,8 +1061,8 @@ where
     .flatten()
 }
 
-/// Tx hashes carried by `newly_canonical_blocks`, each with the slot of the
-/// block carrying it.
+/// Txs carried by `newly_canonical_blocks`, keyed by hash, each with the slot
+/// of the block carrying it.
 ///
 /// If `applied_block` is among the `newly_canonical_blocks`, its txs are loaded
 /// from `applied_block` instead of storage. This saves a storage read in the
@@ -1072,7 +1072,7 @@ async fn newly_canonical_txs<Tx>(
     applied_block: &Block<Tx>,
     newly_canonical_blocks: &[HeaderId],
     storage: &StorageApi<Tx>,
-) -> impl Iterator<Item = (TxHash, Slot)>
+) -> impl Iterator<Item = (TxHash, TxInBlock<Tx>)>
 where
     Tx: Hashable<Hash = TxHash>
         + StorageSize
@@ -1100,7 +1100,7 @@ where
         block
             .into_transactions()
             .into_iter()
-            .map(move |tx| (tx.hash(), slot))
+            .map(move |tx| (tx.hash(), TxInBlock { tx, slot }))
     });
 
     // Gather txs from `applied_block` if it's among the newly canonical blocks.
@@ -1110,7 +1110,16 @@ where
         .then(|| applied_block.transactions_iter())
         .into_iter()
         .flatten()
-        .map(move |tx| (tx.hash(), applied_slot));
+        .map(move |tx| {
+            let tx = tx.clone();
+            (
+                tx.hash(),
+                TxInBlock {
+                    tx,
+                    slot: applied_slot,
+                },
+            )
+        });
 
     // Return all gathered txs.
     early_txs.chain(applied_txs)
@@ -1123,7 +1132,7 @@ where
 /// blocks. Those transactions are still canonical.
 async fn reorged_txs<'a, Tx>(
     reorged_blocks: impl Iterator<Item = &'a HeaderId>,
-    newly_canonical_txs: &HashMap<TxHash, Slot>,
+    newly_canonical_txs: &HashMap<TxHash, TxInBlock<Tx>>,
     storage: &StorageApi<Tx>,
 ) -> impl Iterator<Item = TxInBlock<Tx>>
 where

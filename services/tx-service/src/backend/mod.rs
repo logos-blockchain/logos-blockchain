@@ -84,9 +84,9 @@ pub trait MemPool {
     /// by a reorg.
     ///
     /// - `entered`: items carried by the blocks that entered the canonical
-    ///   chain, each mapped to the slot of the block carrying it. They are
-    ///   retired, and remain available for reference resolution until that
-    ///   block becomes immutable.
+    ///   chain, keyed by hash, each with the slot of the block carrying it.
+    ///   They are retired, or stored if the pool never held them, and remain
+    ///   available for reference resolution until that block becomes immutable.
     /// - `reorged`: items carried by the blocks that left the canonical chain
     ///   and not by the blocks now in it, each with the slot of the block
     ///   carrying it. They are no longer retained as included, and are admitted
@@ -96,7 +96,7 @@ pub trait MemPool {
     /// Returns the reorged items admitted again.
     async fn on_canonical_chain_updated(
         &mut self,
-        entered: HashMap<Self::Key, Slot>,
+        entered: HashMap<Self::Key, TxInBlock<Self::Item>>,
         reorged: Vec<TxInBlock<Self::Item>>,
     ) -> Vec<Self::Item>;
 

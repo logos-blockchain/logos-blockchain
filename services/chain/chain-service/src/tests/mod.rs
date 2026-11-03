@@ -17,9 +17,10 @@ use lb_core::{
             leader_claim::{VoucherCm, VoucherSecret},
             transfer::TransferOp,
         },
-        traits::Hashable as _,
+        traits::Hashable,
         transactions::{
             GasPrices, OpProofs, Ops,
+            hash::TxHash,
             states::{Preverified, Unverified},
             tx_list::ops::OpsGasContext,
         },
@@ -641,6 +642,16 @@ const fn tx_in_block<Tx>(tx: Tx, slot: Slot) -> TxInBlock<Tx> {
     TxInBlock { tx, slot }
 }
 
+/// `txs` keyed by their hash, as `newly_canonical_txs` holds them.
+fn keyed_by_hash<Tx, const N: usize>(txs: [(Tx, Slot); N]) -> HashMap<TxHash, TxInBlock<Tx>>
+where
+    Tx: Hashable<Hash = TxHash>,
+{
+    txs.into_iter()
+        .map(|(tx, slot)| (tx.hash(), tx_in_block(tx, slot)))
+        .collect()
+}
+
 /// A fork switch reports the transactions of every block that entered the
 /// canonical chain, and reorgs only the transactions of the displaced blocks
 /// that the adopted branch does not carry.
@@ -741,7 +752,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
     let outcome = apply(b1).await;
     assert_eq!(
         outcome.newly_canonical_txs,
-        HashMap::from([(tx1.hash(), b1_slot), (tx3.hash(), b1_slot)])
+        keyed_by_hash([(tx1.clone(), b1_slot), (tx3.clone(), b1_slot)])
     );
     assert_eq!(outcome.reorged_txs, vec![]);
 
@@ -754,7 +765,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
     let outcome = apply(f2.clone()).await;
     assert_eq!(
         outcome.newly_canonical_txs,
-        HashMap::from([(tx1.hash(), f1_slot), (tx2.hash(), f2_slot)])
+        keyed_by_hash([(tx1.clone(), f1_slot), (tx2.clone(), f2_slot)])
     );
     assert_eq!(outcome.reorged_txs, vec![tx_in_block(tx3, b1_slot)]);
     assert_eq!(cryptarchia.tip(), f2.header().id());

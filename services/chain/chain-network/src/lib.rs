@@ -1308,7 +1308,7 @@ mod tests {
 
         async fn notify_canonical_chain_updated(
             &self,
-            _entered: HashMap<TxHash, Slot>,
+            _entered: HashMap<TxHash, TxInBlock<HashOnlyTx>>,
             _reorged: Vec<TxInBlock<HashOnlyTx>>,
         ) -> Result<(), DynError> {
             unimplemented!("resolution never changes the canonical chain")

@@ -817,7 +817,7 @@ async fn included_tx_resolves_until_its_block_is_immutable() {
         .await
         .expect("tx should be added");
 
-    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
+    pool.on_canonical_chain_updated(entered(&tx, 10), vec![])
         .await;
 
     assert_eq!(pool.status(&[tx_id]), vec![Status::Retained]);
@@ -855,7 +855,7 @@ async fn reorged_tx_returns_to_pending() {
     pool.add_item(tx_id, tx.clone())
         .await
         .expect("tx should be added");
-    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
+    pool.on_canonical_chain_updated(entered(&tx, 10), vec![])
         .await;
 
     let readmitted = pool
@@ -874,39 +874,6 @@ async fn reorged_tx_returns_to_pending() {
     assert_eq!(keys_with_prefix(&pool, tx_id), vec![tx_id]);
 }
 
-/// A reorged tx that is already pending stays pending, and is not returned as
-/// admitted again, so it isn't broadcast twice.
-#[tokio::test]
-async fn reorged_tx_already_pending_is_not_readmitted() {
-    let mut pool = InMemoryPool::new(
-        MempoolSettings::default(),
-        Era::genesis(),
-        InMemoryStorageAdapter::default(),
-    );
-    let tx = tx("reorged");
-    let tx_id = tx.hash();
-    // The pool didn't hold the tx when its block entered the canonical chain.
-    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
-        .await;
-    pool.add_item(tx_id, tx.clone())
-        .await
-        .expect("tx should be added");
-
-    let readmitted = pool
-        .on_canonical_chain_updated(
-            HashMap::new(),
-            vec![TxInBlock {
-                tx,
-                slot: Slot::from(10u64),
-            }],
-        )
-        .await;
-
-    assert_eq!(readmitted, vec![]);
-    assert_eq!(pool.status(&[tx_id]), vec![Status::Pending]);
-    assert!(!pool.save().removed_items.contains_key(&tx_id));
-}
-
 /// A claim that expired while its block was canonical is released at its
 /// deadline, and refused if a reorg brings it back.
 #[tokio::test]
@@ -919,7 +886,7 @@ async fn reorged_claim_past_its_deadline_is_not_admitted_again() {
     pool.add_item(claim_id, claim.clone())
         .await
         .expect("claim tx should be added");
-    pool.on_canonical_chain_updated(HashMap::from([(claim_id, Slot::from(105u64))]), vec![])
+    pool.on_canonical_chain_updated(entered(&claim, 105), vec![])
         .await;
     // The claim's deadline is slot 131.
     processed_block(&mut pool, 131).await;
@@ -955,7 +922,7 @@ async fn included_tx_is_a_duplicate_at_admission() {
     pool.add_item(tx_id, tx.clone())
         .await
         .expect("tx should be added");
-    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
+    pool.on_canonical_chain_updated(entered(&tx, 10), vec![])
         .await;
 
     let error = pool
@@ -979,10 +946,12 @@ async fn removed_tx_entering_the_canonical_chain_moves_to_included() {
     );
     let tx = tx("removed then included");
     let tx_id = tx.hash();
-    pool.add_item(tx_id, tx).await.expect("tx should be added");
+    pool.add_item(tx_id, tx.clone())
+        .await
+        .expect("tx should be added");
     pool.remove(&[tx_id]).await;
 
-    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
+    pool.on_canonical_chain_updated(entered(&tx, 10), vec![])
         .await;
 
     let state = pool.save();
@@ -1002,11 +971,13 @@ async fn tx_carried_by_both_branches_takes_the_adopted_block_slot() {
     );
     let tx = tx("carried by both branches");
     let tx_id = tx.hash();
-    pool.add_item(tx_id, tx).await.expect("tx should be added");
-    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
+    pool.add_item(tx_id, tx.clone())
+        .await
+        .expect("tx should be added");
+    pool.on_canonical_chain_updated(entered(&tx, 10), vec![])
         .await;
 
-    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(12u64))]), vec![])
+    pool.on_canonical_chain_updated(entered(&tx, 12), vec![])
         .await;
 
     assert_eq!(
@@ -1015,22 +986,28 @@ async fn tx_carried_by_both_branches_takes_the_adopted_block_slot() {
     );
 }
 
-/// A tx the pool never held, e.g. from a downloaded block, has no body to
-/// retain.
+/// A tx the pool never held, e.g. from a downloaded block, is kept from the
+/// block, so a competing proposal that references it still resolves.
 #[tokio::test]
-async fn never_held_tx_entering_the_canonical_chain_is_not_retained() {
+async fn never_held_tx_entering_the_canonical_chain_is_retained() {
     let mut pool = InMemoryPool::new(
         MempoolSettings::default(),
         Era::genesis(),
         InMemoryStorageAdapter::default(),
     );
-    let tx_id = tx("unknown").hash();
+    let tx = tx("unknown");
+    let tx_id = tx.hash();
 
-    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
+    pool.on_canonical_chain_updated(entered(&tx, 10), vec![])
         .await;
 
-    assert!(pool.save().included_in_canonical.is_empty());
-    assert_eq!(keys_with_prefix(&pool, tx_id), vec![]);
+    assert_eq!(pool.status(&[tx_id]), vec![Status::Retained]);
+    assert_eq!(
+        pool.save().included_in_canonical[&tx_id].slot,
+        Slot::from(10u64)
+    );
+    assert_eq!(keys_with_prefix(&pool, tx_id), vec![tx_id]);
+    assert_eq!(stored_items(&pool, tx_id).await, vec![tx]);
 }
 
 /// A restart keeps the included txs and their prefix index entries.
@@ -1043,7 +1020,7 @@ async fn included_tx_remains_resolvable_after_recovery() {
     pool.add_item(tx_id, tx.clone())
         .await
         .expect("tx should be added");
-    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
+    pool.on_canonical_chain_updated(entered(&tx, 10), vec![])
         .await;
 
     let pool = InMemoryPool::recover(
@@ -1091,7 +1068,7 @@ async fn reorged_tx_older_than_ttl_is_not_readmitted() {
         &[(&tx, minutes_ago(65))],
     )
     .await;
-    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
+    pool.on_canonical_chain_updated(entered(&tx, 10), vec![])
         .await;
 
     let readmitted = pool
@@ -1186,7 +1163,7 @@ async fn reorged_tx_keeps_its_admission_time() {
         &[(&first, first_at), (&second, second_at)],
     )
     .await;
-    pool.on_canonical_chain_updated(HashMap::from([(first.hash(), Slot::from(10u64))]), vec![])
+    pool.on_canonical_chain_updated(entered(&first, 10), vec![])
         .await;
 
     pool.on_canonical_chain_updated(
@@ -1217,7 +1194,7 @@ async fn removed_tx_keeps_its_admission_time_through_inclusion_and_reorg() {
     )
     .await;
     pool.remove(&[first.hash()]).await;
-    pool.on_canonical_chain_updated(HashMap::from([(first.hash(), Slot::from(10u64))]), vec![])
+    pool.on_canonical_chain_updated(entered(&first, 10), vec![])
         .await;
 
     pool.on_canonical_chain_updated(
@@ -1305,6 +1282,18 @@ fn minutes_ago(minutes: u64) -> AdmissionTime {
     now.checked_sub(Duration::from_mins(minutes))
         .expect("now should be later than the unix epoch plus `minutes`")
         .as_millis() as AdmissionTime
+}
+
+/// The `entered` argument of `on_canonical_chain_updated` for `tx` carried by
+/// a block at `slot`.
+fn entered(tx: &Ops, slot: u64) -> HashMap<TxHash, TxInBlock<Ops>> {
+    HashMap::from([(
+        tx.hash(),
+        TxInBlock {
+            tx: tx.clone(),
+            slot: Slot::from(slot),
+        },
+    )])
 }
 
 /// Settings with no eviction, so only the tests' own operations retire txs.
@@ -1834,15 +1823,12 @@ async fn retired_claim_is_released_at_its_deadline() {
 
         let claim = claim_tx(anchor);
         let claim_id = claim.hash();
-        pool.add_item(claim_id, claim)
+        pool.add_item(claim_id, claim.clone())
             .await
             .expect("claim tx should be added");
         if included {
-            pool.on_canonical_chain_updated(
-                HashMap::from([(claim_id, Slot::from(105u64))]),
-                vec![],
-            )
-            .await;
+            pool.on_canonical_chain_updated(entered(&claim, 105), vec![])
+                .await;
         } else {
             pool.remove(&[claim_id]).await;
         }

@@ -303,10 +303,10 @@ pub struct PrunedBlocksInfo {
 pub struct AppliedBlock<Tx> {
     /// The canonical tip after applying the block.
     pub tip: HeaderId,
-    /// Hashes of the transactions carried by the blocks that entered the
-    /// canonical chain, including blocks applied earlier while their branch
-    /// was not canonical, each mapped to the slot of the block carrying it.
-    pub newly_canonical_txs: HashMap<TxHash, Slot>,
+    /// Transactions carried by the blocks that entered the canonical chain,
+    /// including blocks applied earlier while their branch was not canonical,
+    /// keyed by hash, each with the slot of the block carrying it.
+    pub newly_canonical_txs: HashMap<TxHash, TxInBlock<Tx>>,
     /// Transactions carried by the blocks that left the canonical chain,
     /// except those also carried by the blocks that entered it, each with
     /// the slot of the block carrying it.

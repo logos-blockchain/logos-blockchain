@@ -20,14 +20,14 @@ pub trait MempoolAdapter<Tx>: Send + Sync {
     /// with a new block or by a reorg.
     ///
     /// - `entered`: txs carried by the blocks that entered the canonical chain,
-    ///   each mapped to the slot of the block carrying it.
+    ///   keyed by hash, each with the slot of the block carrying it.
     /// - `reorged`: txs carried by the blocks that left the canonical chain and
     ///   not by the blocks now in it, each with the slot of the block carrying
     ///   it, which the mempool admits again unless they are older than the TTL.
     ///   Empty when the chain only grows.
     async fn notify_canonical_chain_updated(
         &self,
-        entered: HashMap<TxHash, Slot>,
+        entered: HashMap<TxHash, TxInBlock<Tx>>,
         reorged: Vec<TxInBlock<Tx>>,
     ) -> Result<(), overwatch::DynError>;
 
