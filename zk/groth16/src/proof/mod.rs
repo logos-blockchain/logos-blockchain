@@ -209,4 +209,19 @@ mod tests {
             assert!(Proof::<Bn254>::try_from(&proof).is_err());
         }
     }
+
+    #[test]
+    fn the_point_at_infinity_is_rejected_whatever_its_coordinate_and_with_both_flags() {
+        let compressed = CompressedProof::<Bn254>::try_from(&generators()).unwrap();
+        let mut any_coordinate = compressed.clone();
+        any_coordinate.pi_a.as_mut_slice().fill(0);
+        any_coordinate.pi_a.as_mut_slice()[0] = 5;
+        any_coordinate.pi_a.as_mut_slice()[31] = 1 << 6;
+        let mut both_flags = compressed;
+        both_flags.pi_a.as_mut_slice().fill(0);
+        both_flags.pi_a.as_mut_slice()[31] = 0b11 << 6;
+        for proof in [any_coordinate, both_flags] {
+            assert!(Proof::<Bn254>::try_from(&proof).is_err());
+        }
+    }
 }
