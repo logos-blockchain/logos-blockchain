@@ -1,11 +1,10 @@
+use std::collections::HashMap;
+
 use lb_core::{
     header::HeaderId,
-    mantle::{
-        traits::Hashable,
-        transactions::hash::{TxHash, TxHashPrefix},
-    },
+    mantle::transactions::hash::{TxHash, TxHashPrefix},
 };
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{Era, Slot};
 use lb_tx_service::{MempoolMsg, TxsWithCommonPrefix};
 use overwatch::services::relay::OutboundRelay;
 use tokio::sync::oneshot;
@@ -27,30 +26,23 @@ impl<Tx> MempoolAdapter<Tx> {
 #[async_trait::async_trait]
 impl<Tx> MempoolAdapterTrait<Tx> for MempoolAdapter<Tx>
 where
-    Tx: Hashable<Hash = TxHash> + Send + 'static,
+    Tx: Send + 'static,
 {
-    async fn add_transaction(&self, tx: Tx) -> Result<(), overwatch::DynError> {
-        let (reply_sender, reply_receiver) = oneshot::channel();
-        self.mempool_relay
-            .send(MempoolMsg::Add {
-                key: tx.hash(),
-                payload: tx,
-                reply_channel: reply_sender,
-            })
-            .await
-            .map_err(|error| format!("Could not add transactions to mempool: {error}"))?;
-        reply_receiver
-            .await
-            .map_err(|e| format!("Could not receive response: {e}"))?
-            .map_err(|e| format!("Mempool error: {e}"))?;
-        Ok(())
-    }
+    async fn rotate_era(&mut self, _era: Era) {}
 
-    async fn remove_transactions(&self, ids: &[TxHash]) -> Result<(), overwatch::DynError> {
+    async fn complete_era_transition(&mut self, _ended_era: Era) {}
+
+    async fn notify_canonical_chain_updated(
+        &self,
+        entered: HashMap<TxHash, Slot>,
+        reorged: Vec<Tx>,
+    ) -> Result<(), overwatch::DynError> {
         self.mempool_relay
-            .send(MempoolMsg::Remove { ids: ids.to_vec() })
+            .send(MempoolMsg::CanonicalChainUpdated { entered, reorged })
             .await
-            .map_err(|error| format!("Could not remove transactions from mempool: {error}"))?;
+            .map_err(|error| {
+                format!("Could not notify mempool of canonical chain update: {error}")
+            })?;
 
         Ok(())
     }
@@ -59,9 +51,14 @@ where
         &self,
         block_id: HeaderId,
         slot: Slot,
+        lib_slot: Slot,
     ) -> Result<(), overwatch::DynError> {
         self.mempool_relay
-            .send(MempoolMsg::ProcessedBlock { block_id, slot })
+            .send(MempoolMsg::ProcessedBlock {
+                block_id,
+                slot,
+                lib_slot,
+            })
             .await
             .map_err(|error| format!("Could not notify mempool of processed block: {error}"))?;
 

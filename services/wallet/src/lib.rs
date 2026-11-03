@@ -3,14 +3,16 @@ mod states;
 
 use std::{
     collections::{BTreeMap, HashMap},
+    num::NonZero,
     time::Duration,
 };
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{StreamExt as _, TryStreamExt as _};
+use lb_binary_codec::canonical::BinaryDecode;
 use lb_chain_service::{
-    ChainServiceInfo, Epoch, LibUpdate, Slot,
+    ChainServiceInfo, LibUpdate,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
@@ -33,7 +35,9 @@ use lb_core::{
             states::Preverified, tx_list::ops::OpsContext,
         },
     },
+    sdp::DeclarationId,
 };
+use lb_cryptarchia_engine::Epoch;
 use lb_groth16::Fr;
 use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
@@ -52,6 +56,7 @@ use lb_services_utils::{
     wait_until_services_are_ready,
 };
 use lb_storage_service::{api::StorageApi, recovery::StorageRecoveryBackend};
+use lb_time::era::{EpochLength, EraSchedule};
 use lb_utils::bounded::BoundedError;
 use lb_wallet::{
     KnownNote, OwnedNote, WalletBalance, WalletBlock, WalletError, WalletState,
@@ -104,7 +109,7 @@ pub enum WalletServiceError {
     MissingChannelState(ChannelId),
 
     #[error("Declaration {0:?} is missing in ledger")]
-    MissingDeclaration(lb_core::sdp::DeclarationId),
+    MissingDeclaration(DeclarationId),
 
     #[error(transparent)]
     TxBuilder(#[from] TxBuilderError),
@@ -314,18 +319,31 @@ impl WalletMsg {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug)]
 pub struct WalletServiceSettings {
     pub known_keys: HashMap<KeyId, ZkPublicKey>,
     pub voucher_master_key_id: KeyId,
-    #[serde(skip)]
     pub recovery_data: RecoveryData,
     /// How much LIB progress a pending note reservation survives before being
     /// evicted. Notes funded into in-flight transactions are excluded from
     /// funding until they are observed spent in a block or this many immutable
     /// blocks have passed since the reservation.
-    #[serde(default = "default_pending_note_expiry_blocks")]
     pub pending_note_expiry_blocks: u64,
+    pub era_schedule: ServiceEraSchedule,
+}
+
+pub type ServiceEraSchedule = EraSchedule<WalletEraSettings>;
+
+#[derive(Clone, Debug)]
+pub struct WalletEraSettings {
+    pub epoch_length: NonZero<u64>,
+    pub security_param: NonZero<u32>,
+}
+
+impl EpochLength for WalletEraSettings {
+    fn epoch_length(&self) -> NonZero<u64> {
+        self.epoch_length
+    }
 }
 
 #[must_use]
@@ -369,6 +387,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + StorageSize
         + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx>,
@@ -459,12 +478,6 @@ where
         // Subscribe to LIB updates for wallet state pruning
         let mut lib_updates = BroadcastStream::new(cryptarchia_api.subscribe_lib_updates().await?);
 
-        let (epoch_config, consensus_config) = cryptarchia_api.get_epoch_config().await?;
-        let epoch_config = EpochConfig {
-            epoch_config,
-            consensus_config,
-        };
-
         let mut state = Self::start_state(
             self.initial_state,
             &settings,
@@ -481,7 +494,7 @@ where
             &storage,
             &cryptarchia_api,
             &kms,
-            &epoch_config,
+            &settings.era_schedule,
         )
         .await?;
 
@@ -491,17 +504,17 @@ where
         loop {
             tokio::select! {
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
-                    Box::pin(Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage, &cryptarchia_api, &kms, &epoch_config)).await;
+                    Box::pin(Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage, &cryptarchia_api, &kms, &settings.era_schedule)).await;
                 }
                 // A skipped block shows up as an unknown parent on the next
                 // one and is backfilled from there; the log line is what tells
                 // an operator why the wallet fell behind.
                 Some(event) = new_blocks.next() => match event {
-                    Ok(event) => Self::handle_new_block(event.block_id, &mut state, &storage, &cryptarchia_api, &kms, &epoch_config).await,
+                    Ok(event) => Self::handle_new_block(event.block_id, &mut state, &storage, &cryptarchia_api, &kms, &settings.era_schedule).await,
                     Err(BroadcastStreamRecvError::Lagged(skipped)) => warn_lagged("new-block", skipped),
                 },
                 Some(lib_update) = lib_updates.next() => match lib_update {
-                    Ok(lib_update) => Self::handle_lib_update(&lib_update, &storage, &mut state, &cryptarchia_api, &kms, &epoch_config).await,
+                    Ok(lib_update) => Self::handle_lib_update(&lib_update, &storage, &mut state, &cryptarchia_api, &kms, &settings.era_schedule).await,
                     Err(BroadcastStreamRecvError::Lagged(skipped)) => warn_lagged("LIB", skipped),
                 },
             }
@@ -526,6 +539,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + StorageSize
         + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx> + Send + 'static,
@@ -568,10 +582,10 @@ where
         storage: &StorageApi<Tx>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-        epoch_config: &EpochConfig,
+        era_schedule: &ServiceEraSchedule,
     ) {
         if let Err(err) =
-            Self::backfill_if_not_in_sync(msg.tip(), state, storage, cryptarchia, kms, epoch_config)
+            Self::backfill_if_not_in_sync(msg.tip(), state, storage, cryptarchia, kms, era_schedule)
                 .await
         {
             warn!(
@@ -1046,7 +1060,7 @@ where
     }
 
     fn declaration_provider(
-        declaration_id: &lb_core::sdp::DeclarationId,
+        declaration_id: &DeclarationId,
         tip_ledger: &LedgerState,
     ) -> Result<Ed25519PublicKey, WalletServiceError> {
         let declaration = tip_ledger
@@ -1435,7 +1449,7 @@ where
         storage: &StorageApi<Tx>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-        epoch_config: &EpochConfig,
+        era_schedule: &ServiceEraSchedule,
     ) -> Result<(), WalletServiceError> {
         let tip = Self::msg_tip_or_latest(tip, cryptarchia).await?;
 
@@ -1448,7 +1462,7 @@ where
         // To resolve this, we do a JIT backfill to try to sync the wallet with
         // cryptarchia. If we still have not caught up after the backfill, we return an
         // error to the caller
-        Self::backfill_missing_blocks(tip, state, storage, cryptarchia, kms, epoch_config).await?;
+        Self::backfill_missing_blocks(tip, state, storage, cryptarchia, kms, era_schedule).await?;
 
         if state.wallet().has_processed_block(tip) {
             Ok(())
@@ -1468,7 +1482,7 @@ where
         storage: &StorageApi<Tx>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-        epoch_config: &EpochConfig,
+        era_schedule: &ServiceEraSchedule,
     ) {
         let Ok(block) = Self::load_block(header_id, storage).await.inspect_err(|e| {
             error!(
@@ -1482,8 +1496,11 @@ where
         };
 
         let events = Self::load_block_events(header_id, storage).await;
-        let wallet_block =
-            WalletBlock::from_block(&block, epoch_config.epoch(block.header().slot()), &events);
+        let wallet_block = WalletBlock::from_block(
+            &block,
+            era_schedule.epoch_for_slot(block.header().slot()),
+            &events,
+        );
         // An owned note missed here is never adopted, so the block is left
         // unapplied and is backfilled from the next one.
         if let Err(e) = Self::add_revealed_notes(&wallet_block, state, kms).await {
@@ -1511,7 +1528,7 @@ where
                     storage,
                     cryptarchia_api,
                     kms,
-                    epoch_config,
+                    era_schedule,
                 )
                 .await
                 {
@@ -1563,7 +1580,7 @@ where
         state: &mut ServiceState<'_>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-        epoch_config: &EpochConfig,
+        era_schedule: &ServiceEraSchedule,
     ) {
         log_lib_update(lib_update);
 
@@ -1584,7 +1601,7 @@ where
                 storage,
                 cryptarchia_api,
                 kms,
-                epoch_config,
+                era_schedule,
             )
             .await
             {
@@ -1616,7 +1633,7 @@ where
         storage: &StorageApi<Tx>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-        epoch_config: &EpochConfig,
+        era_schedule: &ServiceEraSchedule,
     ) -> Result<(), WalletServiceError> {
         debug!(
             target: LOG_TARGET,
@@ -1661,8 +1678,11 @@ where
 
             let block = Self::load_block(header_id, storage).await?;
             let events = Self::load_block_events(header_id, storage).await;
-            let wallet_block =
-                WalletBlock::from_block(&block, epoch_config.epoch(block.header().slot()), &events);
+            let wallet_block = WalletBlock::from_block(
+                &block,
+                era_schedule.epoch_for_slot(block.header().slot()),
+                &events,
+            );
             Self::add_revealed_notes(&wallet_block, state, kms).await?;
 
             if let Err(e) = state.apply_block(&wallet_block) {
@@ -1780,19 +1800,6 @@ const fn op_proof(
             Ok(OpProof::None(NoOpProof))
         }
         _ => Err(WalletServiceError::OpProofParts),
-    }
-}
-
-/// A config to calculate epoch from slot
-struct EpochConfig {
-    epoch_config: lb_cryptarchia_engine::EpochConfig,
-    consensus_config: lb_cryptarchia_engine::Config,
-}
-
-impl EpochConfig {
-    fn epoch(&self, slot: Slot) -> Epoch {
-        self.epoch_config
-            .epoch(slot, self.consensus_config.base_period_length())
     }
 }
 

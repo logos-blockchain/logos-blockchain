@@ -21,6 +21,7 @@ use std::{
     collections::HashMap,
     num::NonZero,
     sync::{Arc, LazyLock},
+    time::Duration,
 };
 
 use lb_core::{
@@ -45,12 +46,14 @@ use lb_cryptarchia_engine::EpochConfig;
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{ZkKey, ZkPublicKey};
 use lb_mmr::MerklePath;
+use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
 use logos_blockchain_ledger::{
-    Config, LedgerState,
-    config::{BlendPoWConfig, ConsensusExcludedKeys, ModulusShift, PoWConfig, RewardPoWConfig},
+    Config, ConsensusExcludedKeys, LedgerState,
+    config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
+use time::OffsetDateTime;
 
 fn main() {
     divan::main();
@@ -171,7 +174,7 @@ mod multi_block_with_per_block_batching {
 /// The genesis state seeded with one UTXO per transaction. Each transaction
 /// spends one of them.
 struct TxPool {
-    config: Config,
+    eras: EraScheduledConfig,
     genesis: LedgerState,
     txs: Vec<SignedOps<Preverified, StandardMode>>,
 }
@@ -204,7 +207,12 @@ static TX_POOL: LazyLock<TxPool> = LazyLock::new(|| {
     }
     let root = mmr.frontier_root();
 
-    let genesis = LedgerState::from_notes(notes.iter().copied(), &config);
+    let genesis = LedgerState::from_notes(
+        notes.iter().copied(),
+        &config,
+        0,
+        &ConsensusExcludedKeys::empty(),
+    );
     assert_eq!(
         genesis
             .latest_note_sets()
@@ -231,8 +239,8 @@ static TX_POOL: LazyLock<TxPool> = LazyLock::new(|| {
         .collect();
 
     TxPool {
-        config,
         genesis,
+        eras: single_era(config),
         txs,
     }
 });
@@ -267,7 +275,7 @@ fn apply(
     let (state, _, _, deferred) = state
         .clone()
         .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
-            &TX_POOL.config,
+            &TX_POOL.eras,
             ZkPublicKey::zero(),
             txs,
         )
@@ -307,6 +315,20 @@ fn build_tx(
         .expect("transaction should preverify")
 }
 
+/// `config` as the only era, from genesis.
+fn single_era(config: Config) -> EraScheduledConfig {
+    EraSchedule::new(
+        OffsetDateTime::UNIX_EPOCH,
+        EraTiming {
+            slot_duration: Duration::from_secs(1),
+            epoch_length: EpochLength::epoch_length(&config),
+        },
+        EraEntriesAfterGenesis::empty(),
+    )
+    .expect("a single era resolves")
+    .map(move |_| config.clone())
+}
+
 fn config() -> Config {
     let epoch_config = EpochConfig {
         epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
@@ -317,7 +339,8 @@ fn config() -> Config {
         NonZero::new(1).unwrap(),
         NonNegativeRatio::new(1, 10.try_into().unwrap()),
         1f64.try_into().expect("1 > 0"),
-        NonZero::new(12).unwrap(),
+        12,
+        4,
     );
     let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
@@ -347,7 +370,6 @@ fn config() -> Config {
                 timestamp: 0,
             },
         },
-        consensus_excluded_keys: ConsensusExcludedKeys::empty(),
         pow_config: PoWConfig {
             blend: BlendPoWConfig {
                 base_difficulty: ModulusShift::new::<234>(),
@@ -359,8 +381,6 @@ fn config() -> Config {
             // `rate_num = 0` pays no reward, which keeps the benchmark measuring
             // transaction processing only.
             reward: RewardPoWConfig {
-                reward_pool_genesis: 1_000_000_000,
-                epoch_reward_genesis: 1_000_000,
                 minimum_difficulty: ModulusShift::new::<26>(),
                 ema_smoothing_factor: 9,
                 ema_smoothing_precision: NonZero::new(10).unwrap(),

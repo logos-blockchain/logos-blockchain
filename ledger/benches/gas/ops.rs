@@ -7,7 +7,10 @@
 //! ledger, which defers the ZK proofs. The batch verification of the deferred
 //! proofs is measured by the micro cases.
 
-use std::sync::LazyLock;
+use std::{
+    num::NonZero,
+    sync::{Arc, LazyLock},
+};
 
 use lb_binary_codec::canonical::{BinaryDecode as _, BinaryEncode as _};
 use lb_blend_crypto::merkle::MerkleTree;
@@ -58,13 +61,14 @@ use lb_core::{
         channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
         leader_proof::{LeaderProof, LeaderPublic},
     },
-    sdp::{ActivityMetadata, Locator, ProviderId, ServiceType, blend::ActivityProof},
+    sdp::{ActivityMetadata, Locator, Nonce, ProviderId, ServiceType, blend::ActivityProof},
 };
-use lb_cryptarchia_engine::{Slot, UncleSlots};
+use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
 use lb_groth16::{CompressedGroth16Proof, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey};
 use logos_blockchain_ledger::{
-    Config, EpochState, GasAndFees, Ledger, LedgerState, config::ModulusShift,
+    EpochState, GasAndFees, Ledger, LedgerState,
+    config::{ConsensusExcludedKeys, EraScheduledConfig, ModulusShift},
 };
 
 use crate::{
@@ -108,7 +112,7 @@ pub struct OpShape {
     pub name: &'static str,
     pub dims: Vec<(&'static str, u64)>,
     pub state: LedgerState,
-    pub config: Config,
+    pub config: EraScheduledConfig,
     pub bytes: Vec<u8>,
     pub deferred: Deferred,
 }
@@ -163,7 +167,7 @@ impl OpShape {
 
 /// Decodes, preverifies and applies the transaction `bytes` encode, as the
 /// node does with a transaction it receives.
-pub fn execute(state: LedgerState, config: &Config, bytes: &[u8]) -> Result<Applied, String> {
+pub fn execute(state: LedgerState, config: &EraScheduledConfig, bytes: &[u8]) -> Result<Applied, String> {
     let tx = SignedOps::<Unverified, StandardMode>::decode_all(bytes, &())
         .map_err(|error| format!("decode: {error}"))?
         .preverify()
@@ -516,16 +520,19 @@ fn config_shape(threshold: u16) -> OpShape {
         .map(|index| Ed25519Key::from_bytes(&[0x50 + index as u8; 32]))
         .collect();
     let channel = ChannelId::from([0x40 + threshold as u8; 32]);
-    let config_op = |parent, posting_timeframe: u32| ChannelConfigOp {
-        channel,
-        parent,
-        keys: VerifiedChannelKeys::try_from(
-            keys.iter().map(Ed25519Key::public_key).collect::<Vec<_>>(),
+    let config_op = |parent, posting_timeframe: u32| {
+        ChannelConfigOp::new(
+            channel,
+            parent,
+            VerifiedChannelKeys::try_from(
+                keys.iter().map(Ed25519Key::public_key).collect::<Vec<_>>(),
+            )
+            .expect("the keys fit"),
+            SlotTimeframe::from(posting_timeframe),
+            SlotTimeout::from(0u32),
+            NonZero::new(threshold).expect("the threshold is positive"),
         )
-        .expect("the keys fit"),
-        posting_timeframe: SlotTimeframe::from(posting_timeframe),
-        posting_timeout: SlotTimeout::from(0u32),
-        configuration_threshold: threshold,
+        .expect("the threshold is reachable")
     };
     let create = config_op(MsgId::root(), 0);
     let create_tx = encode(vec![Op::ChannelConfig(create.clone())], |_, _, _| {
@@ -746,7 +753,7 @@ fn sdp_withdraw() -> OpShape {
     .expect("the declaration applies");
     let withdraw = SDPWithdrawOp {
         declaration_id: declare.id(),
-        nonce: 1,
+        nonce: Nonce::new(Epoch::new(0), 1),
         service_note_nullifier: nullifiers(1, 401)[0],
         outputs: fresh_commitments(1, 401),
         excess_value: 0,
@@ -770,13 +777,19 @@ const ANCHOR: HeaderId = [0xc1; 32];
 // anchor block.
 fn claim_pow() -> OpShape {
     let fixture = filled_state();
-    let mut config = fixture.config.clone();
-    config.pow_config.reward.minimum_difficulty = ModulusShift::new::<1>();
+    let mut parameters = crate::fixture::parameters(&fixture.config).clone();
+    parameters.pow_config.reward.minimum_difficulty = ModulusShift::new::<1>();
     let genesis = Note::new(1, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
-    let state = LedgerState::from_notes([genesis], &config)
+    let state = LedgerState::from_notes(
+        [genesis],
+        &parameters,
+        1_000_000_000,
+        &ConsensusExcludedKeys::empty(),
+    )
         .with_gas_prices(&GasPrices::new(0, 0))
         .with_latest_note_sets(fixture.state.latest_note_sets().clone());
-    let ledger = Ledger::new(ANCHOR, state, config.clone());
+    let config = crate::fixture::single_era(parameters);
+    let ledger = Ledger::new(ANCHOR, state, Arc::new(config.clone()));
     let state = ledger.state(&ANCHOR).expect("the anchor state").clone();
     let difficulty = state.mantle_ledger().pow.reward_difficulty();
     let claim = (0u64..1024)
@@ -841,11 +854,11 @@ impl LeaderProof for AcceptedLeadership {
 
 /// `state` after a header at the first slot of `epoch` and, when `txs` holds
 /// any, a block of them.
-pub fn next_epoch(state: LedgerState, config: &Config, epoch: u64, txs: &[Vec<u8>]) -> LedgerState {
+pub fn next_epoch(state: LedgerState, config: &EraScheduledConfig, epoch: u64, txs: &[Vec<u8>]) -> LedgerState {
     let leader = AcceptedLeadership(ZkPublicKey::new(Fr::from(3u64)));
     let (state, _) = state
         .try_apply_header::<_, HeaderId>(
-            Slot::from(epoch * config.epoch_length()),
+            Slot::from(epoch * crate::fixture::parameters(config).epoch_length()),
             &leader,
             &UncleSlots::default(),
             config,
@@ -866,9 +879,9 @@ fn activity_proof(
     zk_key: &ZkKey,
     target: &EpochState,
     current: &EpochState,
-    config: &Config,
+    config: &EraScheduledConfig,
 ) -> ActivityProof {
-    let blend = &config.sdp_config.service_rewards_params.blend;
+    let blend = &crate::fixture::parameters(config).sdp_config.service_rewards_params.blend;
     let zk_id = zk_key.to_public_key();
     let tree = MerkleTree::new(vec![zk_id.into_inner()]).expect("one provider");
     let core_path_and_selectors = tree
@@ -964,7 +977,7 @@ fn sdp_active() -> OpShape {
     let state = next_epoch(state, config, 6, &[]);
     let active = SDPActiveOp {
         declaration_id: declare.id(),
-        nonce: 1,
+        nonce: Nonce::new(Epoch::new(3), 1),
         metadata: ActivityMetadata::Blend(Box::new(activity_proof(
             &zk_key,
             &target,

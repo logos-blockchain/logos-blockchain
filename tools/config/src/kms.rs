@@ -53,6 +53,7 @@ pub fn create_kms_configs(
                 ]
                 .into(),
             },
+            ..KmsConfig::default()
         })
         .collect();
 

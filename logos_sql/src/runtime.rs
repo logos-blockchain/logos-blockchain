@@ -70,6 +70,10 @@ pub fn spawn(
     read_only: bool,
     max_batch_transactions: NonZeroU16,
 ) -> Result<RuntimeHandle, Error> {
+    if read_only {
+        check_read_only_state(&db, restored_checkpoint.as_ref(), channel_id)?;
+    }
+
     let (command_tx, command_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
     let (ready_tx, ready_rx) = oneshot::channel();
 
@@ -686,6 +690,34 @@ impl Runtime {
     }
 }
 
+fn check_read_only_state(
+    db: &Databases,
+    checkpoint: Option<&SequencerCheckpoint>,
+    channel_id: ChannelId,
+) -> Result<(), Error> {
+    if db.has_pending_writes()? {
+        return Err(Error::InvalidLocalState(
+            "read-only startup cannot resume pending publications",
+        ));
+    }
+
+    // The SDK also retains transactions observed from other writers. Only
+    // our own unfinished publications require reopening as a writer.
+    if let Some(checkpoint) = checkpoint {
+        for (_, tx) in &checkpoint.pending_txs {
+            for inscription in channel_inscriptions(tx, channel_id) {
+                if db.has_local_publication(inscription.this_msg)? {
+                    return Err(Error::InvalidLocalState(
+                        "read-only startup cannot resume pending publications",
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 const fn is_retryable_apply_error(error: &Error) -> bool {
     !matches!(error, Error::InvalidLocalState(_))
 }
@@ -694,7 +726,12 @@ const fn is_retryable_apply_error(error: &Error) -> bool {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use lb_key_management_system_service::keys::Ed25519Key;
+    use lb_core::mantle::{
+        Op, SignedOps,
+        ops::channel::inscribe::{ChannelSteps, InscriptionOp},
+        transactions::Ops,
+    };
+    use lb_key_management_system_service::keys::{Ed25519Key, UnverifiedEd25519PublicKey};
     use lb_zone_sdk::{
         CommonHttpClient,
         adapter::NodeHttpClient,
@@ -715,16 +752,76 @@ mod tests {
 
     use super::{
         COMMAND_CHANNEL_CAPACITY, Command, PendingEvent, PublishState, Runtime, RuntimeHandle,
+        channel_inscriptions, check_read_only_state,
     };
     use crate::{
         PublicationConfig,
         db::{Databases, tests::open_databases},
         error::Error,
-        protocol::TxId,
+        protocol::{CapturedFunctionCalls, ChannelWrite, TxId},
         publication::Publication,
         sql::TransactionBuilder,
         status::WriteStatus,
     };
+
+    #[test]
+    fn read_only_resume_distinguishes_observed_and_local_publications() {
+        let directory = TempDir::new().unwrap();
+        let channel_id = [1; 32].into();
+        let (tx_id, transaction) = TransactionBuilder::new("CREATE TABLE items(value INTEGER)")
+            .finish()
+            .unwrap();
+        let payload = ChannelWrite {
+            tx_id,
+            transaction: transaction.clone(),
+            captured_function_calls: CapturedFunctionCalls::new(Vec::new()).unwrap(),
+        }
+        .encode()
+        .unwrap();
+        let tx = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::ChannelInscribe(
+            InscriptionOp {
+                channel_id,
+                inscription: payload.try_into().unwrap(),
+                parent: MsgId::root(),
+                signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+                steps: ChannelSteps::default(),
+            },
+        )]));
+        let inscription = channel_inscriptions(&tx, channel_id).remove(0);
+        let checkpoint = SequencerCheckpoint {
+            last_msg_id: inscription.this_msg,
+            pending_txs: vec![(inscription.tx_hash, tx)],
+            lib: HeaderId::from([2; 32]),
+            lib_slot: Slot::from(1),
+            finalized_config: MsgId::root(),
+            funding: Vec::new(),
+        };
+
+        let db = open_databases(directory.path()).unwrap();
+        db.persist_checkpoint(&checkpoint).unwrap();
+        drop(db);
+
+        // Observing another writer's publication must not prevent a restart.
+        let mut db = open_databases(directory.path()).unwrap();
+        let restored = db.load_checkpoint().unwrap().unwrap();
+        assert_eq!(restored.pending_txs.len(), 1);
+        check_read_only_state(&db, Some(&restored), channel_id).unwrap();
+
+        // Once the SDK accepts our own write, it leaves the SQL queue but
+        // still needs the writer until its publication finishes.
+        db.commit_local_write(tx_id, &transaction).unwrap();
+        let pending = db.pending_publish().unwrap().unwrap();
+        db.complete_publish(&checkpoint, inscription.this_msg, &pending)
+            .unwrap();
+        drop(db);
+
+        let db = open_databases(directory.path()).unwrap();
+        assert!(!db.has_pending_writes().unwrap());
+        assert!(matches!(
+            check_read_only_state(&db, db.load_checkpoint().unwrap().as_ref(), channel_id),
+            Err(Error::InvalidLocalState(_))
+        ));
+    }
 
     #[tokio::test]
     async fn commands_do_not_cancel_an_unfinished_event() {

@@ -7,7 +7,10 @@ use std::{
     time::Duration,
 };
 
-use lb_core::{header::HeaderId, mantle::TxHash};
+use lb_core::{
+    header::HeaderId,
+    mantle::{SignedOps, TxHash, traits::Hashable as _},
+};
 use lb_testing_framework::NodeHttpClient;
 use tokio::{task::JoinHandle, time::sleep};
 use tracing::{info, warn};
@@ -26,6 +29,7 @@ use crate::{
     cucumber::{
         error::StepError,
         wallet::best_node::{BestGroupNode, display_group_key},
+        world::SharedObservedTransactionHashes,
     },
 };
 
@@ -34,6 +38,7 @@ const MIN_SCANNER_CHECKPOINTS: usize = 8;
 const MAX_SCANNER_CHECKPOINTS: usize = 128;
 const SCANNER_ROLLBACK_BLOCKS: u64 = 5;
 const PUBLISHED_SCANNER_CHECKPOINTS: usize = 8;
+const MAX_PUBLISHED_BLOCK_OBSERVATIONS: usize = 1_024;
 
 #[derive(Clone)]
 struct ScannerCheckpoint {
@@ -359,6 +364,11 @@ async fn run_group_scanner(config: ForkGroupScannerConfig, shutdown_requested: A
                     applied_height = checkpoint.applied_height;
                     applied_tip = checkpoint.applied_tip;
                     applied_slot = checkpoint.applied_slot;
+                    update_group_state(&config.scanner_state, &config.group_id, |group| {
+                        group
+                            .recent_blocks
+                            .retain(|block| block.height <= applied_height);
+                    });
                     let source_node_names = checkpoint.source_node_names;
                     checkpoints.retain(|checkpoint| checkpoint.applied_height <= applied_height);
                     if let Some(applied_tip) = applied_tip
@@ -391,6 +401,10 @@ async fn run_group_scanner(config: ForkGroupScannerConfig, shutdown_requested: A
                         "wallet scanner group '{}' failed to reset to genesis after continuity failure: {error}",
                         display_group_key(&config.group_id),
                     );
+                } else {
+                    update_group_state(&config.scanner_state, &config.group_id, |group| {
+                        group.recent_blocks.clear();
+                    });
                 }
             }
         }
@@ -544,73 +558,82 @@ async fn scan_group_once(
     let mut continuity_error = None;
     let mut connected_to_tip = applied_tip.is_none();
     let initial_applied_tip = *applied_tip;
+    let mut newly_applied_blocks = Vec::new();
 
-    let streamed_block_count =
-        stream_blocks_range(client, from_slot, best_node.slot, |block, events| {
-            if continuity_error.is_some() {
+    let stream_result = stream_blocks_range(client, from_slot, best_node.slot, |block, events| {
+        if continuity_error.is_some() {
+            return Ok(());
+        }
+
+        if let Some(expected_parent) = *applied_tip
+            && block.header.parent_block != expected_parent
+        {
+            if !connected_to_tip {
+                skipped_unconnected_block_count += 1;
                 return Ok(());
             }
 
-            if let Some(expected_parent) = *applied_tip
-                && block.header.parent_block != expected_parent
-            {
-                if !connected_to_tip {
-                    skipped_unconnected_block_count += 1;
-                    return Ok(());
-                }
+            continuity_error = Some(wallet_scanner_continuity_error(
+                config,
+                block.header.parent_block,
+                expected_parent,
+                skipped_unconnected_block_count,
+            ));
+            return Ok(());
+        }
 
-                continuity_error = Some(wallet_scanner_continuity_error(
-                    config,
-                    block.header.parent_block,
-                    expected_parent,
-                    skipped_unconnected_block_count,
-                ));
-                return Ok(());
-            }
+        connected_to_tip = true;
+        accounting
+            .apply_block(&block, &events)
+            .map_err(|error| ScannerError::Logical(error.to_string()))?;
+        *applied_height = applied_height.saturating_add(1);
+        *applied_tip = Some(block.header.id);
+        *applied_slot = Some(u64::from(block.header.slot));
+        applied_block_count += 1;
+        newly_applied_blocks.push(super::state::ScannerBlockObservation {
+            height: *applied_height,
+            block_id: block.header.id,
+            transaction_count: block.transactions.len(),
+            transaction_hashes: block.transactions.iter().map(SignedOps::hash).collect(),
+        });
 
-            connected_to_tip = true;
-            accounting
-                .apply_block(&block, &events)
-                .map_err(|error| ScannerError::Logical(error.to_string()))?;
-            *applied_height = applied_height.saturating_add(1);
-            *applied_tip = Some(block.header.id);
-            *applied_slot = Some(u64::from(block.header.slot));
-            applied_block_count += 1;
+        push_checkpoint(
+            checkpoints,
+            ScannerCheckpoint::new(
+                accounting,
+                *applied_height,
+                *applied_tip,
+                *applied_slot,
+                best_node.same_tip_nodes.clone(),
+            ),
+        );
 
-            push_checkpoint(
-                checkpoints,
-                ScannerCheckpoint::new(
-                    accounting,
-                    *applied_height,
-                    *applied_tip,
-                    *applied_slot,
-                    best_node.same_tip_nodes.clone(),
-                ),
-            );
+        let wallet_utxos = accounting.wallet_utxos();
+        if *applied_height >= best_node.height
+            || (*applied_height).saturating_sub(last_publish_height) >= config.range_batch_size
+        {
+            publish_wallet_state(
+                &config.wallets,
+                &best_node.same_tip_nodes,
+                *applied_height,
+                block.header.id.to_string(),
+                wallet_utxos,
+            )
+            .map_err(|error| ScannerError::Logical(error.to_string()))?;
+            last_publish_height = *applied_height;
+        }
 
-            let wallet_utxos = accounting.wallet_utxos();
-            if *applied_height >= best_node.height
-                || (*applied_height).saturating_sub(last_publish_height) >= config.range_batch_size
-            {
-                publish_wallet_state(
-                    &config.wallets,
-                    &best_node.same_tip_nodes,
-                    *applied_height,
-                    block.header.id.to_string(),
-                    wallet_utxos,
-                )
-                .map_err(|error| ScannerError::Logical(error.to_string()))?;
-                last_publish_height = *applied_height;
-            }
-
-            Ok(())
-        })
-        .await
-        .map_err(|error| {
-            ScannerIterationError::Step(StepError::LogicalError {
-                message: format!("wallet scanner block stream failed: {error}"),
-            })
-        })?;
+        Ok(())
+    })
+    .await;
+    let streamed_block_count = handle_block_stream_result(
+        stream_result,
+        &config.observed_transaction_hashes,
+        accounting,
+        &observed_tx_hashes_before,
+        applied_block_count,
+        continuity_error.as_ref(),
+    )?;
 
     if let Some(error) = continuity_error {
         return Err(ScannerIterationError::Continuity(error));
@@ -653,10 +676,19 @@ async fn scan_group_once(
         }
     }
 
-    publish_new_observed_transaction_hashes(config, accounting, &observed_tx_hashes_before);
+    publish_new_observed_transaction_hashes(
+        &config.observed_transaction_hashes,
+        accounting,
+        &observed_tx_hashes_before,
+    );
 
     let recent_checkpoints = recent_state_checkpoints(checkpoints);
     update_group_state(&config.scanner_state, &config.group_id, |group| {
+        group.recent_blocks.extend(newly_applied_blocks);
+        if group.recent_blocks.len() > MAX_PUBLISHED_BLOCK_OBSERVATIONS {
+            let excess = group.recent_blocks.len() - MAX_PUBLISHED_BLOCK_OBSERVATIONS;
+            group.recent_blocks.drain(..excess);
+        }
         group.applied_height = *applied_height;
         group.applied_slot = *applied_slot;
         group.applied_tip = *applied_tip;
@@ -687,12 +719,11 @@ async fn scan_group_once(
 }
 
 fn publish_new_observed_transaction_hashes(
-    config: &ForkGroupScannerConfig,
+    observed_transaction_hashes: &SharedObservedTransactionHashes,
     accounting: &ScannerAccounting,
     observed_tx_hashes_before: &BTreeSet<TxHash>,
 ) {
-    let mut observed = config
-        .observed_transaction_hashes
+    let mut observed = observed_transaction_hashes
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
     observed.extend(
@@ -701,6 +732,32 @@ fn publish_new_observed_transaction_hashes(
             .difference(observed_tx_hashes_before)
             .copied(),
     );
+}
+
+fn handle_block_stream_result(
+    stream_result: Result<usize, ScannerError>,
+    observed_transaction_hashes: &SharedObservedTransactionHashes,
+    accounting: &ScannerAccounting,
+    observed_tx_hashes_before: &BTreeSet<TxHash>,
+    applied_block_count: usize,
+    continuity_error: Option<&StepError>,
+) -> Result<usize, ScannerIterationError> {
+    match stream_result {
+        Ok(streamed_block_count) => Ok(streamed_block_count),
+        Err(error) => {
+            if applied_block_count > 0 && continuity_error.is_none() {
+                publish_new_observed_transaction_hashes(
+                    observed_transaction_hashes,
+                    accounting,
+                    observed_tx_hashes_before,
+                );
+            }
+
+            Err(ScannerIterationError::Step(StepError::LogicalError {
+                message: format!("wallet scanner block stream failed: {error}"),
+            }))
+        }
+    }
 }
 
 fn publish_genesis_wallet_state_if_needed(

@@ -1,101 +1,10 @@
 eras:
-  0:
-    blend:
-      common:
-        num_blend_layers: 1
-        minimum_network_size: 2
-        network_absorption_in_rounds: 2
-        data_replication_factor: 0
-      core:
-        scheduler:
-          cover:
-            message_frequency_per_round: 1.0
-          delayer:
-            maximum_release_delay_in_rounds: 1
-        target_peering_degree: 4
-        verification_rate_per_second: 156
-        edge_node_send_deadline_in_rounds: 1
-        core_handshake_deadline_in_rounds: 2
-        activity_threshold_sensitivity: 1
-    cryptarchia:
-      epoch_config:
-        epoch_stake_distribution_stabilization: 3
-        epoch_period_nonce_buffer: 3
-        epoch_period_nonce_stabilization: 4
-      security_param: 30
-      slot_activation_coeff:
-        numerator: 1
-        denominator: 20
-      learning_rate: 0.5
-      uncle_reference_window_in_block: 12
-      pow_config:
-        blend:
-          # BLEND_DIFFICULTY_BASE, as the exponent n in p / 2^n: the Blend PoW
-          # threshold at the reference load. Fixed by the EmPoWering
-          # specification from a measurement on the target hardware itself
-          # (Raspberry Pi 5, one core), at which one solution is around fifty
-          # seconds of work.
-          base_difficulty: 19
-          # The reference load the threshold is calibrated at, so it has to be the
-          # load the network actually carries: two transactions per block. A
-          # theoretical capacity here would pin the threshold off its calibrated
-          # point.
-          target_transactions_per_block: 2
-          max_step: 2
-          damping_num: 1
-          damping_den_offset: 1
-        reward:
-          # Token-reward PoW parameters, sized for the target network of ~200
-          # mining nodes over the two-week epoch schedule.
-          #
-          # Pool sized to put 200 nodes over the minimum stake, with margin for
-          # mining being spread unevenly across them.
-          reward_pool_genesis: 300000000000
-          # Forced by the pool and the payout rate:
-          # W0 * rate_num / (rate_den * target_claim_per_block *
-          # expected_blocks_per_epoch) = 3e11 / (10 * 1 * 300).
-          # `expected_blocks_per_epoch` is not a config value: the ledger derives
-          # it from the consensus schedule as `10k`, which is 300 at
-          # `security_param: 30`.
-          epoch_reward_genesis: 100000000
-          # Genesis `d_reward`, as the exponent n in p / 2^n — the same form as
-          # the Blend `base_difficulty` above. Fixed by the specification.
-          # Also the minimum difficulty: the retarget never eases past it.
-          minimum_difficulty: 19
-          ema_smoothing_factor: 9
-          ema_smoothing_precision: 10
-          # One claim per block: claims are transactions, and the per-block
-          # transaction budget is 2. Must track `target_claim_per_block` below.
-          target_claims_per_block: 1
-          # rho = rate_num / rate_den = 1/10 of the pool per epoch, which
-          # distributes 97% of it across the two weeks.
-          rate_num: 1
-          rate_den: 10
-          target_claim_per_block: 1
-          # `pow_share / share_den` of the fees each block collects is
-          # diverted to the pow reward pool at the epoch boundary.
-          pow_share: 10
-          share_den: 100
-          # Acceptance window in slots; must match the mining service. Ten
-          # block-intervals of tolerance for a claim to reach a block.
-          slot_window: 300
-      sdp_config:
-        service_params:
-          BN:
-            inactivity_period: 2
-            epoch: 0
-        min_stake:
-          threshold: 1
-          timestamp: 0
-      consensus_excluded_keys:
-        - d2a1977db29daf6691f7ce897fe7b666ec964b1bf027814cacd1a2c141b12f10
-    time:
-      slot_duration: 1s
+  0: !include era/schedule/0.yaml
 genesis_block:
   header:
     slot: 0
     parent_block: '0000000000000000000000000000000000000000000000000000000000000000'
-    body_root: '1012c407848b8ab960447f81f033f2d63a7e5bffb6124952fabc835752f20f34'
+    body_root: '541bfb729669dca42e95133c8aafcb336bc9a294ddab5674a3e216e7db285121'
     proof_of_leadership:
       proof: '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
       entropy_contribution: '0000000000000000000000000000000000000000000000000000000000000000'
@@ -118,7 +27,7 @@ genesis_block:
         - opcode: 17
           payload:
             channel_id: '0000000000000000000000000000000000000000000000000000000000000000'
-            inscription: '107374616e64616c6f6e652d6c6f63616c9169fe692d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a'
+            inscription: '107374616e64616c6f6e652d6c6f63616c9169fe692d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a00b864d94500000001000000d2a1977db29daf6691f7ce897fe7b666ec964b1bf027814cacd1a2c141b12f10'
             parent: '0000000000000000000000000000000000000000000000000000000000000000'
             signer: '0000000000000000000000000000000000000000000000000000000000000000'
             steps: []
@@ -126,7 +35,7 @@ genesis_block:
           payload:
             channel_id: '0000000000000000000000000000000000000000000000000000000000000000'
             inscription: '0500407a10f35a0000e3635f207984ae779cf76b5f20714b514373f61ff96260879fe0a6d71f2dce0700e876481700000039e16b432574571a6bcd8ee36e370589641bd9f35367f6f97a972453c46c322500e87648170000009750fa86471fddc69749aa9f8568ef6635e64d9f9aa815e8cb932cea183c8e1800ca9a3b00000000852efb444db8c3c811625850df39425f43aeffc69571192c0be9f72523256e0affffffffffffffffd2a1977db29daf6691f7ce897fe7b666ec964b1bf027814cacd1a2c141b12f10'
-            parent: '64b852330974383a958cf8a71929c51a4e5e9816d5488a1d8ea70ed90b1a2fc9'
+            parent: '8a1401a018df7e0b13b7c5f4fa51a4433b42fab6dc860d1aa3dd606f7c5790c0'
             signer: '0000000000000000000000000000000000000000000000000000000000000000'
             steps: []
         - opcode: 32
@@ -153,7 +62,7 @@ genesis_block:
         step_proofs: []
       - !ZkAndEd25519Sigs
         zk_proof:
-          pi_a: '934beabb6a8697268a521a91e9eea1fe2058822de634403e909d6a7757ddfc9b'
-          pi_b: f6f4a8d9f6b3427917dda03c5cc92c4bb11bde00eefdd6d5ec775e11032e821917141bdf0e826a0dc022ddfaf1e9cb3e077d18b846bea0d19add4e6073e0fb05
-          pi_c: '3901de76cf58eefe1165b73e879d597df405380748b129561dedbc6ddd1dcb1c'
+          pi_a: 'ad9f332a3fca3f433a30b4efb127a6cded5e7c5f909c984ee4461758a671de2e'
+          pi_b: 06d1a9ca43161d01d371d1ba3d99fd3102e857d1397cd23e7af3cbdbc1bccf2497253ec4c261714d087b0f608cc30da4c159f1574c74e6b885ce47de746a30ae
+          pi_c: 'd2807fc2f43f529a6207b6779f694d66873a44098bf4b2137f6d1b4a20935a00'
         ed25519_sig: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'

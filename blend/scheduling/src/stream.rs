@@ -42,3 +42,29 @@ pub enum FirstReadyStreamError {
     #[error("The underlying stream was closed before yielding the first item")]
     StreamClosed,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tokio::time::interval;
+    use tokio_stream::wrappers::IntervalStream;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn first_ready_stream_yields_first_item_immediately() {
+        // Use an underlying stream that yields the first item nearly immediately.
+        let stream = UninitializedFirstReadyStream::new(
+            IntervalStream::new(interval(Duration::from_secs(1)))
+                .enumerate()
+                .map(|(i, _)| i),
+        );
+
+        let (first, mut stream) = stream.first().await.expect("first item should be yielded");
+        assert_eq!(first, 0);
+        // Next items are yielded normally.
+        assert_eq!(stream.next().await, Some(1));
+        assert_eq!(stream.next().await, Some(2));
+    }
+}

@@ -6,10 +6,10 @@ use core::{
 use std::time::Duration;
 
 use lb_blend_message::{
-    MessageIdentifier, PayloadType,
+    MessageIdentifier, PaddedPayloadBody, PayloadType,
     crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
     encap::{
-        ProofsVerifier, encapsulated_message_encoded_size,
+        MessageLayout, ProofsVerifier, encapsulated_message_encoded_size,
         validated::EncapsulatedMessageWithVerifiedPublicHeader,
     },
     input::EncapsulationInput,
@@ -80,6 +80,11 @@ impl ProofsVerifier for TestProofsVerifier {
 
 /// `ß_max` used by the test messages, matching the `BehaviourBuilder` default.
 const NUM_BLEND_LAYERS: u64 = 3;
+
+/// The size the test messages pad their payload bodies to, the size the
+/// `BehaviourBuilder`s set: the largest block proposal of an era that allows
+/// four uncles, as in the deployments.
+pub const PAYLOAD_BODY_SIZE: u16 = 18_187;
 
 pub struct TestSwarm<Behaviour>(Swarm<Behaviour>)
 where
@@ -186,7 +191,11 @@ pub async fn drive_for<One, Other>(
 /// the malformed-message path means sending the right number of wrong bytes.
 #[must_use]
 pub fn undecodable_message_bytes() -> Vec<u8> {
-    vec![0xAB; encapsulated_message_encoded_size(NUM_BLEND_LAYERS.try_into().unwrap()).get()]
+    let layout = MessageLayout {
+        num_blend_layers: NUM_BLEND_LAYERS.try_into().unwrap(),
+        payload_body_size: PAYLOAD_BODY_SIZE,
+    };
+    vec![0xAB; encapsulated_message_encoded_size(layout).get()]
 }
 
 #[derive(Clone)]
@@ -205,7 +214,7 @@ impl TestEncapsulatedMessage {
             EncapsulatedMessageWithVerifiedPublicHeader::try_new(
                 &generate_distinct_inputs(0.into(), nonce),
                 PayloadType::BlockProposal,
-                payload.try_into().unwrap(),
+                PaddedPayloadBody::try_new(payload, PAYLOAD_BODY_SIZE).unwrap(),
                 NUM_BLEND_LAYERS.try_into().unwrap(),
             )
             .unwrap(),
@@ -241,7 +250,7 @@ impl TestEncapsulatedMessageWithEpoch {
             EncapsulatedMessageWithVerifiedPublicHeader::try_new(
                 &generate_valid_inputs(epoch),
                 PayloadType::BlockProposal,
-                payload.try_into().unwrap(),
+                PaddedPayloadBody::try_new(payload, PAYLOAD_BODY_SIZE).unwrap(),
                 NUM_BLEND_LAYERS.try_into().unwrap(),
             )
             .unwrap(),

@@ -9,6 +9,10 @@ use tracing::warn;
 
 const LOG_TARGET: &str = lb_log_targets::utils::YAML;
 
+/// The tag that includes another YAML file in place of the value it tags:
+/// `!include <path>`, with `path` relative to the including file.
+pub const INCLUDE_TAG: &str = "include";
+
 #[derive(thiserror::Error, Debug)]
 pub enum ValueDeserializationError<Value> {
     #[error("Unrecognized fields in value: {fields:?}")]
@@ -43,7 +47,38 @@ where
     deserialize_from_value(resolved, unknown_keys_strategy)
 }
 
-fn deserialize_from_value<Value>(
+/// Deserializes `main`, a YAML document embedded in the binary, resolving its
+/// `!include`s against `files`: the contents of each file it may include, keyed
+/// by its path relative to `main`.
+///
+/// This is [`deserialize_value_at_path`] for configuration that has no file
+/// system to include from, and it resolves includes the same way.
+pub fn deserialize_embedded_value<Value>(
+    main: &str,
+    files: &[(&str, &str)],
+    unknown_keys_strategy: OnUnknownKeys,
+) -> Result<Value, ValueDeserializationError<Value>>
+where
+    Value: for<'de> Deserialize<'de>,
+{
+    let raw: serde_yaml::Value = serde_yaml::from_str(main)?;
+    let resolved = resolve_includes_with(raw, Path::new(""), &|path| {
+        files
+            .iter()
+            .find(|(file_path, _)| Path::new(file_path) == path)
+            .map(|(_, contents)| (*contents).to_owned())
+            .ok_or_else(|| {
+                YamlIncludeError::InvalidInclude(format!(
+                    "no embedded file for '{}'",
+                    path.display()
+                ))
+            })
+    })
+    .map_err(ValueDeserializationError::from)?;
+    deserialize_from_value(resolved, unknown_keys_strategy)
+}
+
+pub fn deserialize_from_value<Value>(
     value: serde_yaml::Value,
     unknown_keys_strategy: OnUnknownKeys,
 ) -> Result<Value, ValueDeserializationError<Value>>
@@ -103,6 +138,24 @@ fn apply_unknown_keys_strategy<Value>(
     }
 }
 
+/// Deep-merges `overrides` into `base`: mappings merge key by key, any other
+/// value in `overrides` replaces the one in `base`.
+pub fn merge(base: &mut Value, overrides: Value) {
+    match (base, overrides) {
+        (Value::Mapping(base), Value::Mapping(overrides)) => {
+            for (key, value) in overrides {
+                match base.get_mut(&key) {
+                    Some(existing) => merge(existing, value),
+                    None => {
+                        base.insert(key, value);
+                    }
+                }
+            }
+        }
+        (base, overrides) => *base = overrides,
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum YamlIncludeError {
     #[error(transparent)]
@@ -130,8 +183,20 @@ impl<Value> From<YamlIncludeError> for ValueDeserializationError<Value> {
 /// (each included file's own includes resolve relative to that file's
 /// directory).
 fn resolve_includes(value: Value, base_dir: &Path) -> Result<Value, YamlIncludeError> {
+    resolve_includes_with(value, base_dir, &|path| Ok(std::fs::read_to_string(path)?))
+}
+
+/// [`resolve_includes`], reading each included file with `read_file`.
+fn resolve_includes_with<ReadFile>(
+    value: Value,
+    base_dir: &Path,
+    read_file: &ReadFile,
+) -> Result<Value, YamlIncludeError>
+where
+    ReadFile: Fn(&Path) -> Result<String, YamlIncludeError>,
+{
     match value {
-        Value::Tagged(tagged) if tagged.tag == "include" => {
+        Value::Tagged(tagged) if tagged.tag == INCLUDE_TAG => {
             let path_str = match &tagged.value {
                 Value::String(s) => s.clone(),
                 other => {
@@ -145,22 +210,22 @@ fn resolve_includes(value: Value, base_dir: &Path) -> Result<Value, YamlIncludeE
             } else {
                 base_dir.join(&path_str)
             };
-            let contents = std::fs::read_to_string(&resolved_path)?;
+            let contents = read_file(&resolved_path)?;
             let included: Value = serde_yaml::from_str(&contents)?;
             let new_base = resolved_path.parent().unwrap_or(base_dir).to_path_buf();
-            resolve_includes(included, &new_base)
+            resolve_includes_with(included, &new_base, read_file)
         }
         Value::Mapping(map) => {
             let resolved = map
                 .into_iter()
-                .map(|(k, v)| Ok((k, resolve_includes(v, base_dir)?)))
+                .map(|(k, v)| Ok((k, resolve_includes_with(v, base_dir, read_file)?)))
                 .collect::<Result<serde_yaml::Mapping, YamlIncludeError>>()?;
             Ok(Value::Mapping(resolved))
         }
         Value::Sequence(seq) => {
             let resolved = seq
                 .into_iter()
-                .map(|v| resolve_includes(v, base_dir))
+                .map(|v| resolve_includes_with(v, base_dir, read_file))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Value::Sequence(resolved))
         }
@@ -178,7 +243,10 @@ mod tests {
     };
     use tempfile::TempDir;
 
-    use super::{YamlIncludeError, resolve_includes};
+    use super::{
+        OnUnknownKeys, ValueDeserializationError, YamlIncludeError, deserialize_embedded_value,
+        merge, resolve_includes,
+    };
 
     fn include_tag(path: &str) -> Value {
         Value::Tagged(Box::new(TaggedValue {
@@ -193,6 +261,16 @@ mod tests {
             .map(|(k, v)| (Value::String(k.into()), v))
             .collect();
         Value::Mapping(m)
+    }
+
+    #[test]
+    fn merge_combines_mappings_and_replaces_other_values() {
+        let mut base: Value = serde_yaml::from_str("{a: {b: 1, c: 2}, d: [1], e: 3}").unwrap();
+        let overrides = serde_yaml::from_str("{a: {b: 9, f: 8}, d: [2, 3]}").unwrap();
+        merge(&mut base, overrides);
+        let expected: Value =
+            serde_yaml::from_str("{a: {b: 9, c: 2, f: 8}, d: [2, 3], e: 3}").unwrap();
+        assert_eq!(base, expected);
     }
 
     #[test]
@@ -300,5 +378,33 @@ mod tests {
         }));
         let err = resolve_includes(input, Path::new(".")).unwrap_err();
         assert!(matches!(err, YamlIncludeError::InvalidInclude(_)));
+    }
+
+    #[test]
+    fn embedded_includes_resolve_relative_to_the_including_file() {
+        let value: Value = deserialize_embedded_value(
+            "eras:\n  0: !include eras/0.yaml\n",
+            &[
+                ("eras/0.yaml", "k: 30\nlimits: !include limits.yaml\n"),
+                ("eras/limits.yaml", "gas: 7\n"),
+            ],
+            OnUnknownKeys::Fail,
+        )
+        .unwrap();
+
+        let expected: Value =
+            serde_yaml::from_str("eras:\n  0:\n    k: 30\n    limits:\n      gas: 7\n").unwrap();
+        assert_eq!(value, expected);
+    }
+
+    #[test]
+    fn a_missing_embedded_file_is_an_include_error() {
+        let error = deserialize_embedded_value::<Value>(
+            "eras:\n  0: !include eras/0.yaml\n",
+            &[("eras/1.yaml", "k: 30\n")],
+            OnUnknownKeys::Fail,
+        )
+        .unwrap_err();
+        assert!(matches!(error, ValueDeserializationError::IncludeError(_)));
     }
 }

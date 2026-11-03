@@ -31,6 +31,8 @@ lb-log-targets        = { workspace = true }
 lb-network-service    = { workspace = true }
 lb-services-utils     = { workspace = true }
 lb-storage-service    = { workspace = true }
+lb-time               = { workspace = true }
+lb-time-service       = { workspace = true }
 lb-tracing            = { workspace = true }
 lb-utils              = { features = ["tokio"], workspace = true }
 overwatch             = { workspace = true }
@@ -47,10 +49,9 @@ lb-core            = { features = ["test-utils"], workspace = true }
 lb-tracing-service = { workspace = true }
 overwatch-derive   = { workspace = true }
 tempfile           = { workspace = true }
+time               = { workspace = true }
 
 [features]
-default = []
-
 # enable to help generate OpenAPI
 openapi          = ["dep:serde_json", "dep:utoipa"]
 tokio-task-names = ["lb-utils/tokio-task-names"]

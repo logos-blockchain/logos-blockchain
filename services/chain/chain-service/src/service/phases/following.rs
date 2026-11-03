@@ -2,12 +2,13 @@ use core::fmt::{self, Debug};
 use std::collections::HashSet;
 
 use futures::StreamExt as _;
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_core::mantle::{
     ledger::verification_mode::StandardMode,
     traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
     transactions::states::Preverified,
 };
-use lb_cryptarchia_sync::{GetTipResponse, ProviderResponse};
+use lb_cryptarchia_sync::{ProviderResponse, TipResponse};
 use lb_network_service::message::ChainSyncEvent;
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::{debug, error, info, trace};
@@ -38,6 +39,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + Unpin
@@ -72,20 +75,20 @@ where
     /// Serve a chainsync request from a peer.
     async fn handle_chainsync_event(&self, event: ChainSyncEvent) {
         match event {
-            ChainSyncEvent::ProvideBlocksRequest {
+            ChainSyncEvent::BlocksRequest {
                 target_block,
-                local_tip,
+                requester_tip,
                 latest_immutable_block,
                 additional_blocks,
                 reply_sender,
             } => {
-                let known_blocks = vec![local_tip, latest_immutable_block]
+                let known_blocks = vec![requester_tip, latest_immutable_block]
                     .into_iter()
                     .chain(additional_blocks)
                     .collect::<HashSet<_>>();
 
                 self.sync_blocks_provider
-                    .send_blocks(
+                    .reply_with_blocks(
                         &self.cryptarchia.consensus,
                         target_block,
                         &known_blocks,
@@ -93,9 +96,9 @@ where
                     )
                     .await;
             }
-            ChainSyncEvent::ProvideTipRequest { reply_sender } => {
+            ChainSyncEvent::TipRequest { reply_sender } => {
                 let tip = self.cryptarchia.tip_branch();
-                let response = ProviderResponse::Available(GetTipResponse::Tip {
+                let response = ProviderResponse::Available(TipResponse::Tip {
                     tip: tip.id(),
                     slot: tip.slot(),
                     height: tip.length(),

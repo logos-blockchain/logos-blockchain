@@ -32,7 +32,7 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Commit and push the changes
 - [ ] Manually trigger the [ceremony workflow][ceremony-workflow] from the `HEAD` of the release branch specifying the `testnet` image tag and the right version number `X.Y.Z`
 - [ ] Post the link to the workflow run to this issue for easier review
-- [ ] Wait for the workflow run to complete. The workflow will push a new commit on the release branch overwriting the binary's embedded deployment settings (`nodes/node/binary/src/config/deployment/settings.yaml`) with the testnet settings.
+- [ ] Wait for the workflow run to complete. The workflow will push a new commit on the release branch overwriting the binary's embedded deployment settings (`nodes/node/binary/src/config/deployment/settings.yaml` and the era files it includes, in `era/schedule/`) with the testnet settings.
 
 ## Release preparation
 
@@ -70,9 +70,7 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Navigate to the `submodules/logos-blockchain-module` directory and checkout the `X.Y.Z` tag
 - [ ] Commit the changes to the [logos-modules-release] repository
 - [ ] Create a PR for the blockchain module version changes and merge it to the master
-- [ ] Manually trigger the [logos-blockchain-module-workflow] workflow without the `Force build` option selected from the `main` branch
-- [ ] Post the link to the workflow run to this issue for easier review
-- [ ] Wait for the workflow to complete before moving on to the next step
+- [ ] Wait until `blockchain_module` appears in the [index.json](https://github.com/logos-co/logos-modules-release/releases/download/index/index.json) with version `X.Y.Z`
 - [ ] Manually trigger the [node Docker image build workflow][node-docker-build-workflow] from the `X.Y.Z` tag. Use latest (A.B.C) Logos Core release for `LC Core Version` and `X.Y.Z` for `LB Node Version`.
 - [ ] Post the link to the workflow run to this issue for easier review
 - [ ] Wait for the workflow to complete before moving on to the next section
@@ -113,4 +111,3 @@ Most of the template content is the same or very similar to what is in `release-
 [node-docker-build-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/publish-node-image.yml
 [logos-blockchain-module]: https://github.com/logos-blockchain/logos-blockchain-module
 [logos-modules-release]: https://github.com/logos-co/logos-modules-release
-[logos-blockchain-module-workflow]: https://github.com/logos-co/logos-modules-release/actions/workflows/release-logos-blockchain-module.yml

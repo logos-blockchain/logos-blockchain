@@ -37,7 +37,7 @@ impl WalletHttpClient {
             )));
         };
         let wallet_address = hex::encode(wallet_address.iter().as_slice());
-        let path = paths::wallet::BALANCE.replace(":public_key", wallet_address.as_str());
+        let path = paths::wallet::BALANCE.replace("{public_key}", wallet_address.as_str());
         let mut url = base_url.join(path.as_str()).map_err(Error::Url)?;
         if let Some(tip) = tip {
             let Ok(tip) = tip.to_bytes() else {

@@ -1,6 +1,6 @@
 use std::{collections::HashSet, time::SystemTime};
 
-use lb_core::{header::HeaderId, mantle::traits::GenesisTx as _};
+use lb_core::header::HeaderId;
 use lb_ledger::LedgerState;
 use overwatch::{DynError, services::state::ServiceState};
 use serde::{Deserialize, Serialize};
@@ -81,10 +81,10 @@ impl ServiceState for CryptarchiaConsensusState {
     ) -> Result<Self, <Self as ServiceState>::Error> {
         let StartingState::Genesis { genesis_block } = &settings.starting_state;
         let genesis_id = genesis_block.header().id();
-        let genesis_tx = genesis_block.genesis_tx();
-        let epoch_nonce = genesis_tx.cryptarchia_parameter().epoch_nonce;
-        let (lib_ledger_state, _events) =
-            LedgerState::from_genesis_tx(genesis_tx.clone(), &settings.config, epoch_nonce)?;
+        let (lib_ledger_state, _events) = LedgerState::from_genesis_tx(
+            genesis_block.genesis_tx().clone(),
+            settings.era_schedule.genesis().parameters,
+        )?;
 
         Ok(Self {
             tip: genesis_id,
@@ -118,7 +118,8 @@ mod tests {
     use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
     use lb_cryptarchia_engine::{State::Bootstrapping, UncleSlots};
     use lb_ledger::{
-        config::{BlendPoWConfig, ConsensusExcludedKeys, ModulusShift, PoWConfig, RewardPoWConfig},
+        ConsensusExcludedKeys,
+        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_services_utils::overwatch::RecoveryData;
@@ -127,15 +128,13 @@ mod tests {
     use super::*;
     use crate::{
         BlockProviderConfig, BootstrapConfig, OfflineGracePeriodConfig, SyncConfig,
-        tests::{genesis_block_with, note},
+        tests::{genesis_block_with, note, single_era},
     };
 
     /// A reward config with claiming disabled, standing in for a real
     /// deployment config in tests.
     fn disabled_reward_config() -> RewardPoWConfig {
         RewardPoWConfig {
-            reward_pool_genesis: 1_000_000_000,
-            epoch_reward_genesis: 1_000_000,
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
@@ -159,7 +158,8 @@ mod tests {
             security_param,
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
-            NonZero::new(12).unwrap(),
+            12,
+            4,
         );
         let epoch_config = lb_cryptarchia_engine::EpochConfig {
             epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
@@ -171,7 +171,7 @@ mod tests {
 
         let ledger_config = lb_ledger::Config {
             epoch_config,
-            consensus_config: cryptarchia_engine_config.clone(),
+            consensus_config: cryptarchia_engine_config,
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
                     [(
@@ -198,7 +198,6 @@ mod tests {
                     timestamp: 0,
                 },
             },
-            consensus_excluded_keys: ConsensusExcludedKeys::empty(),
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -216,7 +215,10 @@ mod tests {
             // recovery mechanism.
             let mut cryptarchia = lb_cryptarchia_engine::Cryptarchia::<_>::from_genesis(
                 genesis_header_id,
-                cryptarchia_engine_config,
+                Arc::new(
+                    single_era(ledger_config.clone())
+                        .map(|era| era.parameters.consensus_config.clone()),
+                ),
                 Bootstrapping,
             );
 
@@ -303,8 +305,8 @@ mod tests {
         // Empty ledger state.
         let ledger_state = lb_ledger::Ledger::new(
             cryptarchia_engine.lib(),
-            LedgerState::from_notes([], &ledger_config),
-            ledger_config,
+            LedgerState::from_notes([], &ledger_config, 0, &ConsensusExcludedKeys::empty()),
+            single_era(ledger_config),
         );
 
         // Build [`CryptarchiaConsensusState`] with the pruned blocks.
@@ -340,7 +342,8 @@ mod tests {
             security_param,
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
-            NonZero::new(12).unwrap(),
+            12,
+            4,
         );
         let epoch_config = lb_cryptarchia_engine::EpochConfig {
             epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
@@ -352,7 +355,7 @@ mod tests {
 
         let ledger_config = lb_ledger::Config {
             epoch_config,
-            consensus_config: cryptarchia_engine_config.clone(),
+            consensus_config: cryptarchia_engine_config,
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
                     [(
@@ -379,7 +382,6 @@ mod tests {
                     timestamp: 0,
                 },
             },
-            consensus_excluded_keys: ConsensusExcludedKeys::empty(),
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -396,7 +398,10 @@ mod tests {
         // With security_param=2, going online will advance LIB.
         let mut engine = lb_cryptarchia_engine::Cryptarchia::<HeaderId>::from_genesis(
             genesis_header_id,
-            cryptarchia_engine_config,
+            Arc::new(
+                single_era(ledger_config.clone())
+                    .map(|era| era.parameters.consensus_config.clone()),
+            ),
             Bootstrapping,
         );
         let block_ids: Vec<HeaderId> = (1..=5u8).map(|i| [i; 32].into()).collect();
@@ -404,7 +409,7 @@ mod tests {
         for (i, &block_id) in block_ids.iter().enumerate() {
             let slot = (i as u64 + 1).into();
             let uncle_slots =
-                UncleSlots::try_from(vec![lb_cryptarchia_engine::Slot::from(i as u64)]).unwrap();
+                UncleSlots::try_new(vec![lb_cryptarchia_engine::Slot::from(i as u64)], 4).unwrap();
             engine
                 .receive_block(block_id, parent, slot, uncle_slots)
                 .unwrap_or_else(|_| panic!("Block {block_id} should be added successfully"));
@@ -424,8 +429,8 @@ mod tests {
             consensus: engine.clone(),
             ledger: lb_ledger::Ledger::new(
                 lib_id,
-                LedgerState::from_notes([], &ledger_config),
-                ledger_config.clone(),
+                LedgerState::from_notes([], &ledger_config, 0, &ConsensusExcludedKeys::empty()),
+                single_era(ledger_config.clone()),
             ),
             genesis_id: genesis_header_id,
         };
@@ -447,7 +452,7 @@ mod tests {
             engine.lib_branch().parent(),
             saved_state.lib_ledger_state.clone(),
             saved_state.genesis_id,
-            ledger_config,
+            single_era(ledger_config),
             *engine.state(),
             saved_state.lib_block_slot,
             saved_state.lib_block_length,
@@ -504,7 +509,7 @@ mod tests {
         let (_, note) = note();
         let genesis = genesis_block_with(&[note]);
         let settings = CryptarchiaSettings {
-            config: crate::tests::ledger_config(NonZero::new(1).unwrap()),
+            era_schedule: single_era(crate::tests::ledger_config(NonZero::new(1).unwrap())),
             starting_state: genesis.clone().into(),
             bootstrap: BootstrapConfig {
                 prolonged_bootstrap_period: Duration::ZERO,

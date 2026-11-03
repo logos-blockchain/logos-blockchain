@@ -2,6 +2,7 @@ use core::fmt::Debug;
 use std::{collections::HashMap, fmt::Display, num::NonZeroUsize};
 
 use futures::{Stream, StreamExt as _};
+use lb_binary_codec::canonical::BinaryDecode;
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
 use lb_chain_service::{
     CryptarchiaInfo, ProcessedBlockEvent, Slot,
@@ -18,7 +19,7 @@ use lb_core::{
         traits::{Hashable, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
     },
-    sdp::{Declaration, DeclarationId},
+    sdp::{Declaration, DeclarationId, ServiceType},
 };
 use lb_log_targets::api;
 use lb_storage_service::{StorageService, api::StorageApi};
@@ -54,7 +55,7 @@ pub struct BlockWithChainState<Tx> {
     pub lib_slot: Slot,
 }
 
-pub type MempoolService<StorageAdapter, RuntimeServiceId> = TxMempoolService<
+pub type MempoolService<StorageAdapter, TimeBackend, RuntimeServiceId> = TxMempoolService<
     MempoolNetworkAdapter<
         SignedOps<Preverified, StandardMode>,
         <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
@@ -62,6 +63,7 @@ pub type MempoolService<StorageAdapter, RuntimeServiceId> = TxMempoolService<
     >,
     Mempool<HeaderId, SignedOps<Preverified, StandardMode>, StorageAdapter, RuntimeServiceId>,
     StorageAdapter,
+    TimeBackend,
     RuntimeServiceId,
 >;
 
@@ -94,7 +96,7 @@ where
         .ok_or_else(|| "channel not found".into())
 }
 
-pub async fn mantle_mempool_metrics<StorageAdapter, RuntimeServiceId>(
+pub async fn mantle_mempool_metrics<StorageAdapter, TimeBackend, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
 ) -> Result<MempoolMetrics, super::DynError>
 where
@@ -113,10 +115,10 @@ where
         + Display
         + 'static
         + AsServiceId<StorageService<RuntimeServiceId>>
-        + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>,
+        + AsServiceId<MempoolService<StorageAdapter, TimeBackend, RuntimeServiceId>>,
 {
     let relay = handle
-        .relay::<MempoolService<StorageAdapter, RuntimeServiceId>>()
+        .relay::<MempoolService<StorageAdapter, TimeBackend, RuntimeServiceId>>()
         .await?;
     let (sender, receiver) = oneshot::channel();
     relay
@@ -128,7 +130,7 @@ where
     receiver.await.map_err(|e| Box::new(e) as super::DynError)
 }
 
-pub async fn mantle_mempool_status<StorageAdapter, RuntimeServiceId>(
+pub async fn mantle_mempool_status<StorageAdapter, TimeBackend, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
     items: Vec<<SignedOps<Preverified, StandardMode> as Hashable>::Hash>,
 ) -> Result<Vec<Status>, super::DynError>
@@ -148,10 +150,10 @@ where
         + Display
         + 'static
         + AsServiceId<StorageService<RuntimeServiceId>>
-        + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>,
+        + AsServiceId<MempoolService<StorageAdapter, TimeBackend, RuntimeServiceId>>,
 {
     let relay = handle
-        .relay::<MempoolService<StorageAdapter, RuntimeServiceId>>()
+        .relay::<MempoolService<StorageAdapter, TimeBackend, RuntimeServiceId>>()
         .await?;
     let (sender, receiver) = oneshot::channel();
     relay
@@ -226,6 +228,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -292,6 +295,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -362,6 +366,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -470,6 +475,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -506,6 +512,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -629,6 +636,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -693,6 +701,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = ()>
         + Send
         + Sync
         + 'static
@@ -791,4 +800,46 @@ where
     let chain_api =
         CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
     Ok(chain_api.get_sdp_snapshot().await?)
+}
+
+/// One declaration from finalized (LIB) SDP state.
+pub async fn get_finalized_sdp_declaration<RuntimeServiceId>(
+    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
+    declaration_id: DeclarationId,
+) -> Result<Option<Declaration>, super::DynError>
+where
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + 'static,
+{
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
+    Ok(chain_api
+        .get_finalized_sdp_declaration(declaration_id)
+        .await?)
+}
+
+/// All declarations of one service from finalized (LIB) SDP state.
+pub async fn get_finalized_sdp_declarations<RuntimeServiceId>(
+    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
+    service_type: ServiceType,
+) -> Result<Option<HashMap<DeclarationId, Declaration>>, super::DynError>
+where
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + 'static,
+{
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
+    Ok(chain_api
+        .get_finalized_sdp_declarations(service_type)
+        .await?)
 }

@@ -14,7 +14,6 @@ workspace = true
 
 [dependencies]
 async-trait                      = { workspace = true }
-fork_stream                      = { workspace = true }
 futures                          = { workspace = true }
 hex                              = { workspace = true }
 lb-binary-codec                  = { workspace = true }
@@ -44,7 +43,6 @@ rand                             = { features = ["getrandom"], workspace = true 
 rand_chacha                      = { workspace = true }
 rayon                            = { workspace = true }
 serde                            = { workspace = true }
-serde_with                       = { workspace = true }
 thiserror                        = { workspace = true }
 tokio                            = { workspace = true }
 tokio-stream                     = { workspace = true }
@@ -52,11 +50,12 @@ tracing                          = { workspace = true }
 
 [dev-dependencies]
 lb-blend          = { features = ["unsafe-test-functions"], workspace = true }
+lb-time           = { workspace = true }
 libp2p            = { features = ["plaintext", "tcp", "yamux"], workspace = true }
 libp2p-swarm-test = { workspace = true }
 test-log          = { features = ["trace"], workspace = true }
+time              = { workspace = true }
 tokio             = { features = ["test-util"], workspace = true }
 
 [features]
-default          = []
 tokio-task-names = ["lb-utils/tokio-task-names"]

@@ -7,6 +7,7 @@ use std::{
 
 use futures::{channel::oneshot, future::BoxFuture};
 use lb_log_targets::network_service;
+use lb_time::Era;
 use rand::{
     SeedableRng as _,
     distributions::{Distribution as _, WeightedIndex},
@@ -236,7 +237,7 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Mock {
     type Message = MockBackendMessage;
     type PubSubEvent = NetworkEvent;
     type ChainSyncEvent = ();
-    fn new(config: Self::Settings, _: OverwatchHandle<RuntimeServiceId>) -> Self {
+    fn new(config: Self::Settings, _: Era, _: OverwatchHandle<RuntimeServiceId>) -> Self {
         let (pubsub_events_tx, _) = broadcast::channel(BROADCAST_CHANNEL_BUF);
         let (chainsync_events_tx, _) = broadcast::channel(BROADCAST_CHANNEL_BUF);
 
@@ -305,6 +306,10 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Mock {
         }
     }
 
+    async fn rotate_era(&mut self, _era: Era) {}
+
+    async fn complete_era_transition(&mut self, _ended_era: Era) {}
+
     async fn subscribe_to_pubsub(&mut self) -> BroadcastStream<Self::PubSubEvent> {
         BroadcastStream::new(self.pubsub_events_tx.subscribe())
     }
@@ -357,6 +362,7 @@ mod tests {
 
         let mock = Arc::new(Mock::new(
             config,
+            Era::genesis(),
             OverwatchHandle::<()>::new(tokio::runtime::Handle::current(), mpsc::channel(1).0),
         ));
         // run producer

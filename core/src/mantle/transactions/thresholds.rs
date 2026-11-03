@@ -87,11 +87,13 @@ impl<C: ChannelSource> TxGasState<C> {
             }
             OpRef::ClaimPowReward(_) => self.buffer(NoteSetKey::Ledger, 1),
             OpRef::ChannelConfig(operation) => {
-                if !self.channel_exists(&operation.channel) {
-                    self.change(NoteSetKey::Channel(operation.channel));
+                if !self.channel_exists(&operation.channel()) {
+                    self.change(NoteSetKey::Channel(operation.channel()));
                 }
-                self.configuration_thresholds
-                    .insert(operation.channel, operation.configuration_threshold);
+                self.configuration_thresholds.insert(
+                    operation.channel(),
+                    operation.configuration_threshold().get(),
+                );
             }
             // A deposit spends from the ledger set and adds its outputs to its
             // channel set, which it leaves unchanged when it has none.
@@ -259,7 +261,7 @@ mod tests {
     #[test]
     fn config_on_an_existing_channel_changes_no_set() {
         let config = ChannelConfigOp::sample();
-        let context = existing(config.channel, 2);
+        let context = existing(config.channel(), 2);
         let mut state = TxGasState::new(&context);
         state.apply(Op::ChannelConfig(config).by_ref());
         assert_eq!(state.changed_note_sets(), 0);
@@ -409,12 +411,13 @@ mod tests {
     #[test]
     fn channel_config_moves_the_threshold_for_the_operations_after_it() {
         let config = ChannelConfigOp::sample();
-        let channel = config.channel;
+        let channel = config.channel();
+        let threshold = config.configuration_threshold().get();
         let context = empty();
         let mut state = TxGasState::new(&context);
         assert_eq!(state.configuration_threshold(&channel), 0);
         state.apply(Op::ChannelConfig(config).by_ref());
-        assert_eq!(state.configuration_threshold(&channel), 12);
+        assert_eq!(state.configuration_threshold(&channel), threshold);
     }
 
     #[test]

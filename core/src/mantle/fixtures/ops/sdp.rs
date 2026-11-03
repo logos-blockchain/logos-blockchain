@@ -14,7 +14,7 @@ use crate::{
     },
     sdp::{
         ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, InactivityPeriod,
-        Locator, MinStake, ProviderId, ServiceType, WithdrawMessage, blend::ActivityProof,
+        Locator, MinStake, Nonce, ProviderId, ServiceType, WithdrawMessage, blend::ActivityProof,
     },
 };
 
@@ -27,6 +27,11 @@ codec_fixtures!(MinStake, Self { threshold: 1, timestamp: 2 } => "01000000000000
 codec_fixtures!(InactivityPeriod, encode_only, Self::new(Epoch::new(2)).unwrap() => "02000000");
 codec_fixtures!(ProviderId, Self(Ed25519PublicKey::from_bytes(&[1u8; _]).unwrap()) => "0101010101010101010101010101010101010101010101010101010101010101");
 codec_fixtures!(DeclarationId, Self([0u8; _]) => "0000000000000000000000000000000000000000000000000000000000000000");
+codec_fixtures!(
+    Nonce,
+    Self::new(Epoch::new(0), 0x1d) => "1d00000000000000",
+    Self::new(Epoch::new(0x0102_0304), 0x0506_0708) => "0807060504030201",
+);
 codec_fixtures!(
     DeclarationMessage,
     Self {
@@ -44,7 +49,7 @@ codec_fixtures!(
     WithdrawMessage,
     Self {
         declaration_id: DeclarationId([0u8; _]),
-        nonce: 2u64,
+        nonce: Nonce::new(Epoch::new(0), 2),
         service_note_nullifier: NoteNullifier(Fr::from(1u64)),
         outputs: OutputCommitments::default(),
         excess_value: 0,
@@ -55,7 +60,7 @@ codec_fixtures!(
     ActiveMessage,
     Self {
         declaration_id: DeclarationId([0u8; _]),
-        nonce: 0u64,
+        nonce: Nonce::new(Epoch::new(0), 0),
         metadata: ActivityMetadata::Blend(Box::new(ActivityProof {
             epoch: Epoch::new(10),
             signing_key: Ed25519PublicKey::from_bytes(&[1u8; _]).unwrap(),

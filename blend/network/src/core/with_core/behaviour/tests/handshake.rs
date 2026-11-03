@@ -4,7 +4,7 @@ use futures::StreamExt as _;
 use lb_blend_primitives::time::RoundCount;
 use lb_libp2p::SwarmEvent;
 use libp2p::{
-    Multiaddr,
+    Multiaddr, PeerId,
     swarm::{ConnectionId, NetworkBehaviour as _},
 };
 use test_log::test;
@@ -83,7 +83,7 @@ async fn pending_inbound_handshakes_count_against_what_the_node_accepts() {
         "the node accepted a connection beyond the share it lets others fill"
     );
     assert_eq!(
-        filled.behaviour().connections_to_open(),
+        filled.behaviour().connections_to_open([]),
         PEERING_DEGREE.get() - 2,
         "peers stalling handshakes left the node with nothing to dial into"
     );
@@ -96,6 +96,29 @@ async fn pending_inbound_handshakes_count_against_what_the_node_accepts() {
     assert!(
         with_room.behaviour().can_accept_connection(),
         "a node below its accepted share must still take a connection"
+    );
+}
+
+/// A peer being dialed that is part way through a handshake holds a slot
+/// already: it counts toward the connections the node still needs, but not a
+/// second time against the slots the node has left.
+#[test(tokio::test)]
+async fn a_dial_part_way_through_a_handshake_holds_its_slot_already() {
+    let filled = TestSwarm::new_ephemeral(|id| {
+        BehaviourBuilder::new(id)
+            .with_handshakes_in_progress(maximum_accepted_peers())
+            .build()
+    });
+    let behaviour = filled.behaviour();
+    let handshaking_peer = *behaviour.peers_with_handshake_in_progress().next().unwrap();
+
+    // `Φ_CC - 1` live connections short, with `Φ_CC - 2` slots left: the two
+    // dials make up two of the former, and only the one not handshaking takes
+    // one of the latter.
+    assert_eq!(
+        behaviour.connections_to_open([&handshaking_peer, &PeerId::random()]),
+        PEERING_DEGREE.get() - 3,
+        "a dial part way through its handshake was counted against the slots left a second time"
     );
 }
 

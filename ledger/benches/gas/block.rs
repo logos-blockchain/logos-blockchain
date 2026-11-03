@@ -33,12 +33,12 @@ use lb_core::{
         },
         transactions::states::{Preverified, Unverified},
     },
-    sdp::SNAPSHOT_FINALIZATION_DELAY,
+    sdp::{Nonce, SNAPSHOT_FINALIZATION_DELAY},
 };
-use lb_cryptarchia_engine::{Slot, UncleSlots};
+use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use logos_blockchain_ledger::{Config, LedgerState};
+use logos_blockchain_ledger::{LedgerState, config::EraScheduledConfig};
 
 use crate::{
     cycles::Case,
@@ -60,7 +60,7 @@ pub struct BlockShape {
     pub name: &'static str,
     pub dims: Vec<(&'static str, u64)>,
     pub state: LedgerState,
-    pub config: Config,
+    pub config: EraScheduledConfig,
     pub txs: Vec<Vec<u8>>,
     pub verify: bool,
 }
@@ -144,7 +144,7 @@ pub struct HeaderShape {
     pub name: &'static str,
     pub dims: Vec<(&'static str, u64)>,
     pub state: LedgerState,
-    pub config: Config,
+    pub config: EraScheduledConfig,
     pub slot: Slot,
     pub released: Vec<NoteCommitment>,
 }
@@ -189,7 +189,7 @@ pub fn leadership() -> AcceptedLeadership {
 /// Applies the header of a block at `slot` led by `leader`.
 pub fn apply_header(
     state: LedgerState,
-    config: &Config,
+    config: &EraScheduledConfig,
     slot: Slot,
     leader: &AcceptedLeadership,
 ) -> Result<(LedgerState, Vec<HeaderEvent>), String> {
@@ -212,7 +212,7 @@ fn released_outputs(events: &[HeaderEvent]) -> Vec<NoteCommitment> {
         .collect()
 }
 
-fn after_header(state: LedgerState, config: &Config, slot: Slot) -> LedgerState {
+fn after_header(state: LedgerState, config: &EraScheduledConfig, slot: Slot) -> LedgerState {
     apply_header(state, config, slot, &leadership())
         .expect("the setup header applies")
         .0
@@ -227,7 +227,7 @@ fn reward_key() -> ZkPublicKey {
 /// the contents of one block.
 pub fn execute(
     state: LedgerState,
-    config: &Config,
+    config: &EraScheduledConfig,
     txs: &[Vec<u8>],
 ) -> Result<AppliedBlock, String> {
     let txs = txs
@@ -339,8 +339,8 @@ fn withdrawals_header(
     let due = state.slot().strict_add(Slot::from(WITHDRAW_DELAY));
     let parent = Slot::from(u64::from(due) - 1);
     assert_eq!(
-        config.epoch(parent),
-        config.epoch(due),
+        epoch_of(config, parent),
+        epoch_of(config, due),
         "the due slot starts an epoch"
     );
     HeaderShape {
@@ -368,7 +368,7 @@ fn sdp_release_header(withdrawals: usize) -> HeaderShape {
         let salt = 0x3_0000 + index as u64;
         let withdraw = SDPWithdrawOp {
             declaration_id: declare.id(),
-            nonce: 1,
+            nonce: Nonce::new(Epoch::new(0), 1),
             service_note_nullifier: nullifiers(1, salt)[0],
             outputs: fresh_commitments(1, salt),
             excess_value: 0,
@@ -391,7 +391,7 @@ fn sdp_release_header(withdrawals: usize) -> HeaderShape {
         dims: vec![("withdrawals", withdrawals as u64)],
         state,
         config: config.clone(),
-        slot: Slot::from(release * config.epoch_length()),
+        slot: Slot::from(release * crate::fixture::parameters(config).epoch_length()),
         released: released
             .iter()
             .flat_map(|(_, outputs)| outputs.iter().copied())
@@ -542,4 +542,11 @@ fn mixed() -> BlockShape {
         txs,
         verify: true,
     }
+}
+
+fn epoch_of(config: &EraScheduledConfig, slot: Slot) -> Epoch {
+    let parameters = crate::fixture::parameters(config);
+    parameters
+        .epoch_config
+        .epoch(slot, parameters.base_period_length())
 }

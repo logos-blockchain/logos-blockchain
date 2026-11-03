@@ -1,10 +1,11 @@
+use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::Fr;
 use lb_log_targets::mantle;
 use lb_zktransfer::ZkTransferVerifierInput;
 use tracing::debug;
 
-use super::{SDPWithdrawOp, SdpError};
+use super::{SDPWithdrawOp, SdpError, validate_declaration_id, validate_nonce};
 use crate::{
     events::TxEvent,
     mantle::{
@@ -19,19 +20,19 @@ use crate::{
             verification_mode::{StandardMode, VerificationMode},
         },
         note_set::{CommitmentMmr, NoteSetError, NoteSets, SDP_SET},
-        ops::{SignedOperation, ZkAndEd25519Proof},
+        ops::{OpId, SignedOperation, ZkAndEd25519Proof},
         transactions::{
             hash::TxHashView,
             states::{Preverified, Unverified, Verified},
         },
     },
-    sdp,
+    sdp::{self, Declaration},
 };
 
 const LOG_TARGET: &str = mantle::sdp::message::WITHDRAW;
 
 pub struct SDPWithdrawValidationContext<'a> {
-    pub declarations: &'a Declarations,
+    pub declaration: &'a Declaration,
     pub epoch: Epoch,
     pub note_sets: &'a NoteSets,
     pub tx_hash_view: &'a TxHashView,
@@ -46,6 +47,12 @@ pub struct SDPWithdrawExecutionContext {
 impl ProvableOperation for SDPWithdrawOp {
     type Proof = ZkAndEd25519Proof;
     const CODE: u8 = 0x21;
+}
+
+impl OpId for SDPWithdrawOp {
+    fn op_bytes(&self) -> Vec<u8> {
+        self.encode_to_vec()
+    }
 }
 
 impl OperationGas<MainnetGasProfile> for SDPWithdrawOp {
@@ -83,10 +90,8 @@ impl VerifiableOperation<StandardMode>
     fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
-        // Check that the declaration exists
-        let Some(declaration) = context.declarations.get(&operation.declaration_id) else {
-            return Err(SdpError::DeclarationNotFound(operation.declaration_id));
-        };
+        let declaration = context.declaration;
+        validate_declaration_id(operation.declaration_id, declaration)?;
 
         // Check that the declaration hasn't been already scheduled to be withdrawn.
         if let Some(withdraw_at) = declaration.withdraw_at {
@@ -104,13 +109,7 @@ impl VerifiableOperation<StandardMode>
             .verify(context.tx_hash_view.as_bytes(), &self.proof().ed25519_sig)
             .map_err(|_| SdpError::InvalidEddsaSignature)?;
 
-        // Check that the nonce is greater than the previous one
-        if operation.nonce <= declaration.nonce {
-            return Err(SdpError::InvalidNonce {
-                message_nonce: operation.nonce,
-                declaration_nonce: declaration.nonce,
-            });
-        }
+        validate_nonce(operation.nonce, declaration)?;
 
         // Check that the service note is not spent
         if context
@@ -218,7 +217,7 @@ mod tests {
                 transfer::test_utils::prove_transfer,
             },
         },
-        sdp::{Declaration, DeclarationMessage},
+        sdp::{DeclarationMessage, Nonce},
     };
 
     // The provider of `DeclarationMessage::sample()`.
@@ -232,6 +231,14 @@ mod tests {
 
     fn declaration() -> Declaration {
         Declaration::new(Epoch::from(0), &DeclarationMessage::sample())
+    }
+
+    // The sample withdrawal, addressed to the sample declaration.
+    fn operation() -> SDPWithdrawOp {
+        SDPWithdrawOp {
+            declaration_id: DeclarationMessage::sample().id(),
+            ..SDPWithdrawOp::sample()
+        }
     }
 
     fn service_note_root(message: &DeclarationMessage) -> Fr {
@@ -264,11 +271,11 @@ mod tests {
 
     fn verify_withdrawal(
         signed_operation: &SignedOperation<SDPWithdrawOp, Preverified, StandardMode>,
-        declarations: &Declarations,
+        declaration: &Declaration,
         note_sets: &NoteSets,
     ) -> Result<DeferredZkTransfer, SdpError> {
         signed_operation.verify(&SDPWithdrawValidationContext {
-            declarations,
+            declaration,
             epoch: Epoch::from(0),
             note_sets,
             tx_hash_view: &tx_hash_view(),
@@ -277,7 +284,7 @@ mod tests {
 
     fn verify_sample(
         operation: SDPWithdrawOp,
-        declarations: &Declarations,
+        declaration: &Declaration,
     ) -> Result<DeferredZkTransfer, SdpError> {
         verify_withdrawal(
             &preverified(
@@ -286,7 +293,7 @@ mod tests {
                 &provider_key(),
                 &tx_hash_view(),
             ),
-            declarations,
+            declaration,
             &NoteSets::new(),
         )
     }
@@ -302,20 +309,8 @@ mod tests {
     }
 
     #[test]
-    fn verify_rejects_an_unknown_declaration() {
-        let operation = SDPWithdrawOp::sample();
-        let declaration_id = operation.declaration_id;
-        let declarations = Declarations::new_sync();
-
-        assert_eq!(
-            verify_sample(operation, &declarations).unwrap_err(),
-            SdpError::DeclarationNotFound(declaration_id)
-        );
-    }
-
-    #[test]
     fn verify_rejects_a_declaration_already_scheduled_for_withdrawal() {
-        let operation = SDPWithdrawOp::sample();
+        let operation = operation();
         let declaration_id = operation.declaration_id;
 
         let withdraw_at = Epoch::from(7);
@@ -323,10 +318,9 @@ mod tests {
             withdraw_at: Some(withdraw_at),
             ..declaration()
         };
-        let declarations = declarations(&operation, declaration);
 
         assert_eq!(
-            verify_sample(operation, &declarations).unwrap_err(),
+            verify_sample(operation, &declaration).unwrap_err(),
             SdpError::DeclarationWithdrawn {
                 declaration_id,
                 withdraw_at,
@@ -335,26 +329,87 @@ mod tests {
     }
 
     #[test]
-    fn verify_rejects_a_nonce_that_does_not_increase() {
-        let operation = SDPWithdrawOp {
-            nonce: 0,
-            ..SDPWithdrawOp::sample()
-        };
-        let declarations = declarations(&operation, declaration());
+    fn verify_rejects_a_context_declaration_with_a_different_id() {
+        let operation = SDPWithdrawOp::sample();
+        let operation_declaration_id = operation.declaration_id;
+        let declaration = declaration();
+        let supplied_declaration_id = declaration.id();
 
         assert_eq!(
-            verify_sample(operation, &declarations).unwrap_err(),
-            SdpError::InvalidNonce {
-                message_nonce: 0,
-                declaration_nonce: 0,
+            verify_sample(operation, &declaration).unwrap_err(),
+            SdpError::DeclarationIdMismatch {
+                operation_declaration_id,
+                supplied_declaration_id,
             }
         );
     }
 
     #[test]
+    fn verify_rejects_a_nonce_that_does_not_increase() {
+        let operation = SDPWithdrawOp {
+            nonce: Nonce::new(Epoch::new(0), 0),
+            ..operation()
+        };
+
+        assert_eq!(
+            verify_sample(operation, &declaration()).unwrap_err(),
+            SdpError::InvalidNonceSequence {
+                nonce_sequence: 0,
+                declaration_sequence: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_lower_sequence_in_the_same_lifecycle() {
+        let declaration = Declaration {
+            nonce: Nonce::new(Epoch::new(0), 4),
+            ..declaration()
+        };
+        let operation = SDPWithdrawOp {
+            nonce: Nonce::new(Epoch::new(0), 3),
+            ..operation()
+        };
+
+        assert_eq!(
+            verify_sample(operation, &declaration).unwrap_err(),
+            SdpError::InvalidNonceSequence {
+                nonce_sequence: 3,
+                declaration_sequence: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_nonce_from_another_declaration_lifecycle() {
+        let operation = SDPWithdrawOp {
+            nonce: Nonce::new(Epoch::new(1), 1),
+            ..operation()
+        };
+
+        assert_eq!(
+            verify_sample(operation, &declaration()).unwrap_err(),
+            SdpError::InvalidNonceLifecycle {
+                nonce_lifecycle_epoch: Epoch::new(1),
+                declaration_created_epoch: Epoch::new(0),
+            }
+        );
+    }
+
+    #[test]
+    fn verify_accepts_a_sequence_jump_within_the_same_lifecycle() {
+        let operation = SDPWithdrawOp {
+            nonce: Nonce::new(Epoch::new(0), 1_000),
+            ..operation()
+        };
+
+        assert!(verify_sample(operation, &declaration()).is_ok());
+    }
+
+    #[test]
     fn verify_defers_the_zk_transfer_against_the_service_note_root() {
-        let operation = SDPWithdrawOp::sample();
-        let declarations = declarations(&operation, declaration());
+        let declaration = declaration();
+        let operation = operation();
         // Other notes of the SDP set do not change the root the withdrawal is proven
         // against.
         let sdp = NoteSet::empty()
@@ -368,7 +423,7 @@ mod tests {
                 &provider_key(),
                 &tx_hash_view(),
             ),
-            &declarations,
+            &declaration,
             &sets,
         )
         .unwrap();
@@ -389,17 +444,15 @@ mod tests {
 
     #[test]
     fn verify_rejects_a_signature_by_another_key() {
-        let operation = SDPWithdrawOp::sample();
-        let declarations = declarations(&operation, declaration());
         assert_eq!(
             verify_withdrawal(
                 &preverified(
-                    operation,
+                    operation(),
                     ZkTransferProof::sample(),
                     &Ed25519Key::from_bytes(&[25; 32]),
                     &tx_hash_view()
                 ),
-                &declarations,
+                &declaration(),
                 &NoteSets::new(),
             )
             .unwrap_err(),
@@ -409,8 +462,6 @@ mod tests {
 
     #[test]
     fn verify_rejects_a_spent_service_note() {
-        let operation = SDPWithdrawOp::sample();
-        let declarations = declarations(&operation, declaration());
         let spent = NoteSet::empty()
             .execute_spending(&[NoteNullifier(Fr::from(28u64))])
             .unwrap();
@@ -418,12 +469,12 @@ mod tests {
         assert_eq!(
             verify_withdrawal(
                 &preverified(
-                    operation,
+                    operation(),
                     ZkTransferProof::sample(),
                     &provider_key(),
                     &tx_hash_view()
                 ),
-                &declarations,
+                &declaration(),
                 &sets,
             )
             .unwrap_err(),
@@ -438,11 +489,10 @@ mod tests {
                 (1..=9u64).map(|n| NoteCommitment(Fr::from(n))),
             )
             .unwrap(),
-            ..SDPWithdrawOp::sample()
+            ..operation()
         };
-        let declarations = declarations(&operation, declaration());
         assert_eq!(
-            verify_sample(operation, &declarations).unwrap_err(),
+            verify_sample(operation, &declaration()).unwrap_err(),
             SdpError::ZkTransferInputs(ZkTransferInputsError::TooManyOutputs(9))
         );
     }
@@ -461,13 +511,12 @@ mod tests {
         let output = notes::Note::new(40, Fr::from(12u64), ZkPublicKey::new(Fr::from(2u64)));
         let withdrawal = |excess_value| SDPWithdrawOp {
             declaration_id: message.id(),
-            nonce: 1,
+            nonce: Nonce::new(Epoch::new(0), 1),
             service_note_nullifier: derive_note_nullifier(&service_note.commitment(), &secret_key),
             outputs: [output.commitment()].into(),
             excess_value,
         };
-        let declarations = Declarations::new_sync()
-            .insert(message.id(), Declaration::new(Epoch::from(0), &message));
+        let declaration = Declaration::new(Epoch::from(0), &message);
         let proof = prove_transfer(
             &[(service_note, secret_key, path)],
             &[output],
@@ -482,7 +531,7 @@ mod tests {
                 &provider_key(),
                 &tx_hash_view(),
             ),
-            &declarations,
+            &declaration,
             &NoteSets::new(),
         )
         .unwrap();
@@ -495,7 +544,7 @@ mod tests {
                 &provider_key(),
                 &tx_hash_view(),
             ),
-            &declarations,
+            &declaration,
             &NoteSets::new(),
         )
         .unwrap();
@@ -514,7 +563,7 @@ mod tests {
 
     #[test]
     fn execute_schedules_the_withdrawal_and_spends_the_service_note() {
-        let operation = SDPWithdrawOp::sample();
+        let operation = operation();
         let declaration_id = operation.declaration_id;
         let declarations = declarations(&operation, declaration());
         let (context, events) = verified(operation)
@@ -530,7 +579,7 @@ mod tests {
             updated.withdraw_at,
             Some(Epoch::from(4).strict_add(sdp::SNAPSHOT_FINALIZATION_DELAY))
         );
-        assert_eq!(updated.nonce, 29);
+        assert_eq!(updated.nonce, Nonce::new(Epoch::new(0), 29));
         assert_eq!(
             updated.withdraw_outputs,
             [NoteCommitment(Fr::from(46u64))].into()

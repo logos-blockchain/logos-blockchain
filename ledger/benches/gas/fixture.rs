@@ -30,16 +30,21 @@ use lb_core::{
     },
     sdp::{MinStake, ServiceParameters, ServiceType},
 };
-use lb_cryptarchia_engine::EpochConfig;
+use lb_cryptarchia_engine::{EpochConfig, Slot};
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
 use logos_blockchain_ledger::{
     Config, LedgerState,
-    config::{BlendPoWConfig, ConsensusExcludedKeys, ModulusShift, PoWConfig, RewardPoWConfig},
+    config::{
+        BlendPoWConfig, ConsensusExcludedKeys, EraScheduledConfig, ModulusShift, PoWConfig,
+        RewardPoWConfig, config_for_slot,
+    },
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
+use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
 use rand::{Rng as _, SeedableRng as _, rngs::StdRng};
+use time::OffsetDateTime;
 
 pub type HeaderId = [u8; 32];
 
@@ -59,7 +64,7 @@ pub fn fill_from(variable: Option<&str>) -> usize {
 }
 
 pub struct Fixture {
-    pub config: Config,
+    pub config: EraScheduledConfig,
     pub state: LedgerState,
     pub channel: ChannelId,
     pub channel_key: Ed25519Key,
@@ -125,7 +130,7 @@ pub fn program_key() -> ProgramVerificationKey {
 
 fn apply(
     state: LedgerState,
-    config: &Config,
+    config: &EraScheduledConfig,
     tx: &SignedOps<Preverified, StandardMode>,
 ) -> LedgerState {
     state
@@ -139,8 +144,13 @@ fn build() -> Fixture {
     let channel = ChannelId::from([1u8; 32]);
     let channel_key = Ed25519Key::from_bytes(&[7u8; 32]);
     let genesis_note = notes::Note::new(1, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
-    let state =
-        LedgerState::from_notes([genesis_note], &config).with_gas_prices(&GasPrices::new(0, 0));
+    let state = LedgerState::from_notes(
+        [genesis_note],
+        parameters(&config),
+        1_000_000_000,
+        &ConsensusExcludedKeys::empty(),
+    )
+    .with_gas_prices(&GasPrices::new(0, 0));
 
     let create_channel = Op::ChannelInscribe(InscriptionOp {
         channel_id: channel,
@@ -200,7 +210,30 @@ fn build() -> Fixture {
     }
 }
 
-pub fn config() -> Config {
+/// The parameters of the only era of the bench.
+pub fn parameters(eras: &EraScheduledConfig) -> &Config {
+    config_for_slot(eras, Slot::from(0u64))
+}
+
+/// The bench runs one era, from genesis.
+pub fn config() -> EraScheduledConfig {
+    single_era(era_parameters())
+}
+
+pub fn single_era(config: Config) -> EraScheduledConfig {
+    EraSchedule::new(
+        OffsetDateTime::UNIX_EPOCH,
+        EraTiming {
+            slot_duration: std::time::Duration::from_secs(1),
+            epoch_length: EpochLength::epoch_length(&config),
+        },
+        EraEntriesAfterGenesis::empty(),
+    )
+    .expect("a single era resolves")
+    .map(move |_| config.clone())
+}
+
+fn era_parameters() -> Config {
     let epoch_config = EpochConfig {
         epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
         epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
@@ -210,7 +243,8 @@ pub fn config() -> Config {
         NonZero::new(1).unwrap(),
         NonNegativeRatio::new(1, 10.try_into().unwrap()),
         1f64.try_into().expect("1 > 0"),
-        NonZero::new(12).unwrap(),
+        12,
+        5,
     );
     let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
@@ -240,7 +274,6 @@ pub fn config() -> Config {
                 timestamp: 0,
             },
         },
-        consensus_excluded_keys: ConsensusExcludedKeys::empty(),
         pow_config: PoWConfig {
             blend: BlendPoWConfig {
                 base_difficulty: ModulusShift::new::<234>(),
@@ -250,13 +283,11 @@ pub fn config() -> Config {
                 damping_den_offset: 1,
             },
             reward: RewardPoWConfig {
-                reward_pool_genesis: 1_000_000_000,
-                epoch_reward_genesis: 1_000_000,
                 minimum_difficulty: ModulusShift::new::<26>(),
                 ema_smoothing_factor: 9,
                 ema_smoothing_precision: NonZero::new(10).unwrap(),
                 target_claims_per_block: 100,
-                rate_num: 0,
+                rate_num: 1,
                 rate_den: NonZero::<u64>::MIN,
                 target_claim_per_block: NonZero::<u64>::MIN,
                 pow_share: 0,

@@ -642,7 +642,7 @@ mod tests {
     fn deserialize_rejects_input_above_max() {
         let err = serde_json::from_str::<TestBoundedVectorMin2>("[1,2,3,4,5]").unwrap_err();
         assert!(
-            err.to_string().contains("exceeds static maximum"),
+            err.to_string().contains("exceeds maximum"),
             "unexpected error: {err}"
         );
     }

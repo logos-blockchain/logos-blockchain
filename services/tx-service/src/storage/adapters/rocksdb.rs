@@ -2,6 +2,7 @@ use std::{marker::PhantomData, pin::Pin};
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _};
+use lb_binary_codec::canonical::BinaryDecode;
 use lb_core::{
     header::HeaderId,
     mantle::{
@@ -10,6 +11,7 @@ use lb_core::{
     },
 };
 use lb_storage_service::{StorageService, api::StorageApi};
+use lb_time::Era;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +42,7 @@ where
         + 'static
         + Serialize
         + for<'de> Deserialize<'de>
+        + BinaryDecode<Context = ()>
         + Hashable<Hash = TxHash>
         + StorageSize,
     Key: Clone + Send + Sync + 'static + Into<TxHash>,
@@ -50,6 +53,7 @@ where
     type Error = MempoolError;
 
     fn new(
+        _: Era,
         storage_relay: OutboundRelay<<StorageService<RuntimeServiceId> as ServiceData>::Message>,
     ) -> Self {
         Self {
@@ -57,6 +61,10 @@ where
             key: PhantomData,
         }
     }
+
+    async fn rotate_era(&mut self, _: Era) {}
+
+    async fn complete_era_transition(&mut self, _ended_era: Era) {}
 
     async fn store_item(&mut self, key: Self::Key, item: Self::Item) -> Result<(), Self::Error> {
         self.storage
