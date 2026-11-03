@@ -6,7 +6,7 @@ use std::{
 use ark_ff::PrimeField as _;
 use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_cryptarchia_engine::Slot;
-use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
+use lb_groth16::{Fr, fr_from_bytes, fr_from_mod_bytes, serde::serde_fr};
 #[cfg(any(test, feature = "test-utils"))]
 use lb_key_management_system_keys::keys::Ed25519Key;
 use lb_key_management_system_keys::keys::UnverifiedEd25519PublicKey;
@@ -190,9 +190,10 @@ impl BinaryDecode for Step {
 
 // The message the ZkTransfer of a step is bound to.
 #[must_use]
-pub fn step_msg(step: &ChannelStep) -> Fr {
-    let mut elements = Vec::with_capacity(3 + step.inputs.len() + step.outputs.len());
+pub fn step_msg(channel_id: &ChannelId, step: &ChannelStep) -> Fr {
+    let mut elements = Vec::with_capacity(4 + step.inputs.len() + step.outputs.len());
     elements.push(*CHANNEL_STEP_V1);
+    elements.push(fr_from_mod_bytes(&channel_id.0));
     elements.push(Fr::from(step.inputs.len() as u64));
     elements.extend(step.inputs.iter().map(|note_nullifier| note_nullifier.0));
     elements.push(Fr::from(step.outputs.len() as u64));
@@ -526,7 +527,7 @@ impl VerifiableOperation<StandardMode>
                         &commitments,
                         0,
                         tx_commitment_root,
-                        step_msg(step),
+                        step_msg(&operation.channel_id, step),
                     )?;
                     deferred
                         .zk_transfers
@@ -568,7 +569,7 @@ impl VerifiableOperation<StandardMode>
                             &commitments,
                             payment.paid_value,
                             tx_commitment_root,
-                            payment_msg(&step.program_id, payment),
+                            payment_msg(&operation.channel_id, &step.program_id, payment),
                         )?;
                         deferred
                             .zk_transfers
@@ -1304,17 +1305,22 @@ mod tests {
     }
 
     #[test]
-    fn step_msg_hashes_the_counts_and_the_notes() {
+    fn step_msg_hashes_the_channel_the_counts_and_the_notes() {
         let dst = fr_from_bytes(b"CHANNEL_STEP_V1").unwrap();
+        let channel = ChannelId::from([0x22u8; 32]);
         assert_eq!(
-            step_msg(&step(
-                &[nullifier(0x23)],
-                &[commitment(0x24), commitment(0x25)],
-                Fr::ZERO,
-                0
-            )),
+            step_msg(
+                &channel,
+                &step(
+                    &[nullifier(0x23)],
+                    &[commitment(0x24), commitment(0x25)],
+                    Fr::ZERO,
+                    0
+                )
+            ),
             ZkHasher::digest(&[
                 dst,
+                fr_from_mod_bytes(&[0x22u8; 32]),
                 Fr::from(1u64),
                 Fr::from(0x23u64),
                 Fr::from(2u64),
@@ -1323,12 +1329,25 @@ mod tests {
             ])
         );
         assert_ne!(
-            step_msg(&step(&[nullifier(1), nullifier(2)], &[], Fr::ZERO, 0)),
-            step_msg(&step(&[nullifier(1)], &[commitment(2)], Fr::ZERO, 0))
+            step_msg(
+                &channel,
+                &step(&[nullifier(1), nullifier(2)], &[], Fr::ZERO, 0)
+            ),
+            step_msg(
+                &channel,
+                &step(&[nullifier(1)], &[commitment(2)], Fr::ZERO, 0)
+            )
         );
         assert_eq!(
-            step_msg(&step(&[nullifier(1)], &[], Fr::ZERO, 0)),
-            step_msg(&step(&[nullifier(1)], &[], Fr::ONE, 7))
+            step_msg(&channel, &step(&[nullifier(1)], &[], Fr::ZERO, 0)),
+            step_msg(&channel, &step(&[nullifier(1)], &[], Fr::ONE, 7))
+        );
+        assert_ne!(
+            step_msg(&channel, &step(&[nullifier(1)], &[], Fr::ZERO, 0)),
+            step_msg(
+                &ChannelId::from([0x23u8; 32]),
+                &step(&[nullifier(1)], &[], Fr::ZERO, 0)
+            )
         );
     }
 
@@ -1418,7 +1437,10 @@ mod tests {
         assert_eq!(deferred.zk_transfers.len(), 2);
         for (deferred, step) in deferred.zk_transfers.iter().zip(&steps) {
             assert_eq!(deferred.inputs().excess_value.into_inner(), Fr::ZERO);
-            assert_eq!(deferred.inputs().msg.into_inner(), step_msg(step));
+            assert_eq!(
+                deferred.inputs().msg.into_inner(),
+                step_msg(&with_steps(vec![]).channel_id, step)
+            );
             assert_eq!(deferred.inputs().tx_commitment_root.into_inner(), root());
             assert_eq!(
                 deferred.inputs().inputs[0].into_inner(),
@@ -1584,7 +1606,7 @@ mod tests {
             &[(input, secret_key, path)],
             &[output],
             mmr.frontier_root(),
-            step_msg(&step),
+            step_msg(&with_steps(vec![]).channel_id, &step),
         );
 
         let deferred = signed(
@@ -1753,7 +1775,7 @@ mod tests {
             );
             assert_eq!(
                 deferred.inputs().msg.into_inner(),
-                payment_msg(&program_id(), payment)
+                payment_msg(&with_steps(vec![]).channel_id, &program_id(), payment)
             );
         }
         let spend = deferred.program_spends[0].inputs();
@@ -2087,7 +2109,7 @@ mod tests {
             &[(user_note, secret_key, path)],
             &[],
             root,
-            payment_msg(&program_id(), &payment),
+            payment_msg(&with_steps(vec![]).channel_id, &program_id(), &payment),
         );
         let outputs = core::array::from_fn(|j| {
             if j == 0 {
