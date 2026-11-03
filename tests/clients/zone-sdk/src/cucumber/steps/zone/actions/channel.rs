@@ -99,8 +99,8 @@ pub(in super::super) async fn prepare_zone_channel_config(
     // `proposed_config`) and confirm the SDK encoded exactly the key set and
     // thresholds we requested — i.e. inspect the config before it is signed.
     let proposed = prepared.proposed_config();
-    let proposed_keys = proposed.keys.iter().copied().collect::<Vec<_>>();
-    if proposed_keys != authorized_keys || proposed.configuration_threshold != threshold {
+    let proposed_keys = proposed.keys().iter().copied().collect::<Vec<_>>();
+    if proposed_keys != authorized_keys || proposed.configuration_threshold().get() != threshold {
         return Err(StepError::LogicalError {
             message: format!(
                 "prepared config '{transaction_alias}' does not match the requested keys/thresholds",

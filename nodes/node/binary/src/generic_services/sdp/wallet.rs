@@ -21,6 +21,8 @@ use overwatch::{
     services::{AsServiceId, ServiceData, relay::OutboundRelay},
 };
 
+use crate::ValidatedTx;
+
 pub struct SdpWalletAdapter<Service, RuntimeServiceId>
 where
     Service: WalletServiceData,
@@ -191,7 +193,7 @@ where
         mut tx_builder: MantleTxBuilder,
         active: ActiveMessage,
         config: &SdpWalletConfig,
-    ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError> {
+    ) -> Result<ValidatedTx, SdpWalletError> {
         tx_builder = tx_builder.push_op(Op::SDPActive(active))?;
 
         let TipResponse {

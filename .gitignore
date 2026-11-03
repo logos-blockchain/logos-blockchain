@@ -21,8 +21,9 @@ null
 # Integration test temp dirs
 tests/.run_*
 
-# Wildcard for any file that contains ignore
+# Wildcard for any file that contains ignore, except the ignore file of the OSS scanner's Dockerfile
 *ignore*
+!.oss-scanner/Dockerfile.dockerignore
 
 # C headers
 c-bindings/logos_blockchain.h

@@ -1,10 +1,16 @@
-use std::fmt::{Debug, Display};
+use std::{
+    fmt::{Debug, Display},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use backends::NetworkBackend;
+use futures::StreamExt as _;
 use lb_log_targets::network_service;
+use lb_services_utils::wait_until_services_are_ready;
+use lb_time_service::{EraEvent, TimeService, api::TimeServiceApi};
 use overwatch::{
-    OpaqueServiceResourcesHandle,
+    DynError, OpaqueServiceResourcesHandle,
     services::{
         AsServiceId, ServiceCore, ServiceData,
         resources::ServiceResourcesHandle,
@@ -21,15 +27,15 @@ mod metrics;
 
 const LOG_TARGET: &str = network_service::ROOT;
 
-pub struct NetworkService<Backend, RuntimeServiceId>
+pub struct NetworkService<Backend, TimeBackend, RuntimeServiceId>
 where
     Backend: NetworkBackend<RuntimeServiceId> + 'static,
 {
-    backend: Backend,
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
 }
 
-impl<Backend, RuntimeServiceId> ServiceData for NetworkService<Backend, RuntimeServiceId>
+impl<Backend, TimeBackend, RuntimeServiceId> ServiceData
+    for NetworkService<Backend, TimeBackend, RuntimeServiceId>
 where
     Backend: NetworkBackend<RuntimeServiceId> + 'static,
 {
@@ -40,36 +46,62 @@ where
 }
 
 #[async_trait]
-impl<Backend, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for NetworkService<Backend, RuntimeServiceId>
+impl<Backend, TimeBackend, RuntimeServiceId> ServiceCore<RuntimeServiceId>
+    for NetworkService<Backend, TimeBackend, RuntimeServiceId>
 where
     Backend: NetworkBackend<RuntimeServiceId> + Send + 'static,
-    RuntimeServiceId: AsServiceId<Self> + Clone + Display + Send,
+    TimeBackend: lb_time_service::backends::TimeBackend,
+    RuntimeServiceId: AsServiceId<Self>
+        + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
+        + Clone
+        + Debug
+        + Display
+        + Send
+        + Sync
+        + 'static,
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
         _initial_state: Self::State,
-    ) -> Result<Self, overwatch::DynError> {
+    ) -> Result<Self, DynError> {
         Ok(Self {
-            backend: Backend::new(
-                service_resources_handle
-                    .settings_handle
-                    .notifier()
-                    .get_updated_settings()
-                    .backend,
-                service_resources_handle.overwatch_handle.clone(),
-            ),
             service_resources_handle,
         })
     }
 
-    async fn run(mut self) -> Result<(), overwatch::DynError> {
+    async fn run(mut self) -> Result<(), DynError> {
+        let overwatch_handle = self.service_resources_handle.overwatch_handle.clone();
+
+        // The backend starts in the era the clock is in, and follows the eras
+        // the clock enters after it.
+        wait_until_services_are_ready!(
+            &overwatch_handle,
+            Some(Duration::from_mins(1)),
+            TimeService<TimeBackend, RuntimeServiceId>
+        )
+        .await?;
+
+        let (current_era, mut era_events) =
+            TimeServiceApi::<TimeService<TimeBackend, RuntimeServiceId>>::new(&overwatch_handle)
+                .await?
+                .subscribe_to_eras()
+                .await?;
+
+        let mut backend = Backend::new(
+            self.service_resources_handle
+                .settings_handle
+                .notifier()
+                .get_updated_settings()
+                .backend,
+            current_era,
+            overwatch_handle,
+        );
+
         let Self {
             service_resources_handle:
                 ServiceResourcesHandle {
                     mut inbound_relay, ..
                 },
-            mut backend,
         } = self;
 
         self.service_resources_handle.status_updater.notify_ready();
@@ -79,15 +111,28 @@ where
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
 
-        while let Some(msg) = inbound_relay.recv().await {
-            Self::handle_network_service_message(msg, &mut backend).await;
+        loop {
+            tokio::select! {
+                msg = inbound_relay.recv() => {
+                    let Some(msg) = msg else {
+                        break;
+                    };
+                    Self::handle_network_service_message(msg, &mut backend).await;
+                }
+                Some(era_event) = era_events.next() => match era_event {
+                    EraEvent::NewEra { era, .. } => backend.rotate_era(era).await,
+                    EraEvent::TransitionPeriodExpired(transition_end) => {
+                        backend.complete_era_transition(transition_end.era()).await;
+                    }
+                },
+            }
         }
 
         Ok(())
     }
 }
 
-impl<Backend, RuntimeServiceId> NetworkService<Backend, RuntimeServiceId>
+impl<Backend, TimeBackend, RuntimeServiceId> NetworkService<Backend, TimeBackend, RuntimeServiceId>
 where
     Backend: NetworkBackend<RuntimeServiceId> + Send + 'static,
 {

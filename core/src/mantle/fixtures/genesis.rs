@@ -4,7 +4,7 @@ use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 
 use crate::mantle::transactions::genesis_tx::{
-    ChainId, CryptarchiaParameter, GenesisAllocation, GenesisTime,
+    ChainId, ConsensusExcludedKeys, GenesisAllocation, GenesisParameters, GenesisTime,
 };
 
 codec_fixtures!(
@@ -19,8 +19,8 @@ codec_fixtures!(
 );
 
 codec_fixtures!(
-    CryptarchiaParameter,
-    Self { chain_id: ChainId::try_from("logos-chain-1".to_owned()).unwrap(), genesis_time: GenesisTime::new(1000), epoch_nonce: Fr::ZERO } => "0d6c6f676f732d636861696e2d31e80300000000000000000000000000000000000000000000000000000000000000000000"
+    GenesisParameters,
+    Self { chain_id: ChainId::try_from("logos-chain-1".to_owned()).unwrap(), start_time: GenesisTime::new(1000), epoch_nonce: Fr::ZERO, pow_reward_pool: 300_000_000_000, consensus_excluded_keys: ConsensusExcludedKeys::from(ZkPublicKey::new(Fr::from(1u64))) } => "0d6c6f676f732d636861696e2d31e8030000000000000000000000000000000000000000000000000000000000000000000000b864d945000000010000000100000000000000000000000000000000000000000000000000000000000000"
 );
 
 codec_fixtures!(

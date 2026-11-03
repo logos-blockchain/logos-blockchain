@@ -3,42 +3,22 @@
 //! An era is a range of epochs governed by one set of parameters. Its digest
 //! commits to the epoch it starts at and to those parameters. A fork is the
 //! sequence of eras a chain has activated since genesis; its digest commits to
-//! the chain's genesis block, its chain ID and the digest of each of those eras
-//! in order, so two nodes agree on a fork digest exactly when they follow the
-//! same chain under the same rules.
+//! the chain's genesis block, which carries the chain ID, and to the digest of
+//! each of those eras in order, so two nodes agree on a fork digest exactly
+//! when they follow the same chain under the same rules.
 
 use core::fmt::{self, Debug, Formatter};
 
 use blake2::Digest as _;
 use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode, codec_fixtures};
-use lb_cryptarchia_engine::Epoch;
+use lb_time::Epoch;
+pub use lb_time::Era;
 
 use crate::{
     crypto::Hasher,
     header::HeaderId,
-    mantle::transactions::genesis_tx::ChainId,
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
-
-/// An era, by its number: its position in its chain's era schedule, counting
-/// from 0 for the era that starts at genesis.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Era(u16);
-
-impl Era {
-    /// Era 0, the era that starts at genesis.
-    pub const GENESIS: Self = Self(0);
-
-    #[must_use]
-    pub const fn new(inner: u16) -> Self {
-        Self(inner)
-    }
-
-    #[must_use]
-    pub const fn into_inner(self) -> u16 {
-        self.0
-    }
-}
 
 /// The digest of an era: of the epoch it starts at, and of its parameters.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, BinaryCodec)]
@@ -92,22 +72,17 @@ pub struct ForkDigest([u8; 32]);
 const FORK_DIGEST_V1: &[u8] = b"FORK_DIGEST_V1";
 
 impl ForkDigest {
-    /// `blake2b256(b"FORK_DIGEST_V1" || genesis_id || chain_id || era_0 || … ||
-    /// era_n)`, over the canonical encodings of the genesis block ID, of the
-    /// chain ID, and of the digest of each activated era, in activation order.
+    /// `blake2b256(b"FORK_DIGEST_V1" || genesis_id || era_0 || … || era_n)`,
+    /// over the canonical encodings of the genesis block ID and of the digest
+    /// of each activated era, in activation order.
     #[must_use]
-    pub fn compute<EraDigests>(
-        genesis_id: HeaderId,
-        chain_id: &ChainId,
-        era_digests: EraDigests,
-    ) -> Self
+    pub fn compute<EraDigests>(genesis_id: HeaderId, era_digests: EraDigests) -> Self
     where
         EraDigests: Iterator<Item = EraDigest>,
     {
         let mut hasher = Hasher::new();
         hasher.update(FORK_DIGEST_V1);
         hasher.update(genesis_id.encode());
-        hasher.update(chain_id.encode());
         for era in era_digests {
             hasher.update(era.0);
         }
@@ -139,14 +114,10 @@ codec_fixtures!(ForkDigest, Self([0x22u8; 32]) => "22222222222222222222222222222
 
 #[cfg(test)]
 mod tests {
-    use lb_cryptarchia_engine::Epoch;
+    use lb_time::Epoch;
 
     use super::{EraDigest, ForkDigest};
-    use crate::{header::HeaderId, mantle::transactions::genesis_tx::ChainId};
-
-    fn chain_id(chain_id: &str) -> ChainId {
-        ChainId::try_from(chain_id.to_owned()).unwrap()
-    }
+    use crate::header::HeaderId;
 
     fn first_era() -> EraDigest {
         EraDigest::compute(Epoch::new(0), &[0x11u8; 4])
@@ -172,52 +143,29 @@ mod tests {
     fn fork_digest_vectors() {
         let genesis_id = HeaderId::from([0u8; 32]);
         assert_eq!(
-            hex::encode(
-                ForkDigest::compute(genesis_id, &chain_id("test"), [first_era()].into_iter()).0,
-            ),
-            "10a064258df21b594855a84e4d13083922bec0fd11f9f4b6ed4f6486b27e5f1e"
+            hex::encode(ForkDigest::compute(genesis_id, [first_era()].into_iter()).0),
+            "624be61709aca6632bd65d1c2eda2ca0e3f5a27bd5851fcb5685ff5faf2cf244"
+        );
+        assert_eq!(
+            hex::encode(ForkDigest::compute(genesis_id, [first_era(), second_era()].into_iter()).0),
+            "c9c4a350c6c6a900df04998294477a40bf10d5f85bffc782de139db202e26b57"
         );
         assert_eq!(
             hex::encode(
-                ForkDigest::compute(
-                    genesis_id,
-                    &chain_id("test"),
-                    [first_era(), second_era()].into_iter(),
-                )
-                .0
+                ForkDigest::compute(HeaderId::from([0x11u8; 32]), [first_era()].into_iter()).0
             ),
-            "9e1ae6b6fc0768dc545005de63dc7b41b3339c6e1c8e39905042ed00d00f7726"
-        );
-        assert_eq!(
-            hex::encode(
-                ForkDigest::compute(
-                    HeaderId::from([0x11u8; 32]),
-                    &chain_id("logos-blockchain-testnet"),
-                    [first_era()].into_iter()
-                )
-                .0
-            ),
-            "42c090e5565ff31f69c9ef575b3c86b3a8c7c92f95b7104c168947043b85bb09"
+            "ab0a3faffb1c6cdaeacd0ba2de92a1f61b7dc1d7414b170cf3ed5b5ce3fb693c"
         );
     }
 
     #[test]
     fn every_input_moves_the_fork_digest() {
         let genesis_id = HeaderId::from([0u8; 32]);
-        let base = ForkDigest::compute(genesis_id, &chain_id("test"), [first_era()].into_iter());
+        let base = ForkDigest::compute(genesis_id, [first_era()].into_iter());
         for other in [
-            ForkDigest::compute(
-                HeaderId::from([1u8; 32]),
-                &chain_id("test"),
-                [first_era()].into_iter(),
-            ),
-            ForkDigest::compute(genesis_id, &chain_id("tesu"), [first_era()].into_iter()),
-            ForkDigest::compute(genesis_id, &chain_id("test"), [second_era()].into_iter()),
-            ForkDigest::compute(
-                genesis_id,
-                &chain_id("test"),
-                [first_era(), second_era()].into_iter(),
-            ),
+            ForkDigest::compute(HeaderId::from([1u8; 32]), [first_era()].into_iter()),
+            ForkDigest::compute(genesis_id, [second_era()].into_iter()),
+            ForkDigest::compute(genesis_id, [first_era(), second_era()].into_iter()),
         ] {
             assert_ne!(base, other);
         }

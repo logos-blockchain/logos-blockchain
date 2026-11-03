@@ -1,4 +1,3 @@
-use axum::async_trait;
 use lb_blend::{
     message::crypto::key_ext::Ed25519SecretKeyExt as _,
     proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
@@ -28,6 +27,7 @@ pub type BlendPayloadDispatcher<RuntimeServiceId> =
         MempoolNetworkAdapter<RuntimeServiceId>,
         MempoolPool<RuntimeServiceId>,
         ChainNetworkService<RuntimeServiceId>,
+        NtpTimeBackend,
         RuntimeServiceId,
     >;
 
@@ -36,7 +36,7 @@ pub type BlendCoreRecoveryBackend<RuntimeServiceId> = StorageRecoveryBackend<
         lb_blend_service::core::backends::libp2p::Libp2pBlendBackendSettings,
         BlendBroadcastSettings<RuntimeServiceId>,
     >,
-    lb_blend_service::core::settings::StartingBlendConfig<
+    lb_blend_service::core::settings::CoreServiceSettings<
         lb_blend_service::core::backends::libp2p::Libp2pBlendBackendSettings,
         BlendBroadcastSettings<RuntimeServiceId>,
     >,
@@ -60,7 +60,7 @@ pub type BlendCoreService<RuntimeServiceId> = lb_blend_service::core::BlendServi
 #[derive(Clone)]
 pub struct MockLeaderProofsGenerator;
 
-#[async_trait]
+#[async_trait::async_trait]
 impl LeaderProofsGenerator for MockLeaderProofsGenerator {
     fn new(
         _settings: ProofsGeneratorSettings,

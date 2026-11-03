@@ -4,21 +4,23 @@ use std::{
     num::NonZeroU64,
 };
 
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 use lb_core::mantle::traits::Hashable;
 use lb_cryptarchia_engine::Slot;
-use serde::{Deserialize, Serialize};
+use lb_time::era::EraSchedule;
 
-use crate::backend::policy::{
-    BlockSlots, EvictableTx, EvictionPolicy, PolicyClock, PolicySnapshot,
+use crate::backend::{
+    AdmissionTime,
+    policy::{BlockSlots, EvictableTx, EvictionPolicy, PolicyClock},
 };
 
-/// Settings for [`PowClaimPolicy`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Settings for [`PowClaimPolicy`] in an era.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PowClaimEvictionSettings {
-    /// The consensus acceptance window, in slots: a claim anchored at slot
-    /// `s` is accepted by blocks up to slot `s + slot_window` inclusive. Must
-    /// match the ledger's `PoW` reward configuration.
+    /// The consensus acceptance window, in slots, of the claims anchored in
+    /// the era: a claim anchored at slot `s` is accepted by blocks up to slot
+    /// `s + slot_window` inclusive. Must match the era's `PoW` reward
+    /// configuration.
     pub slot_window: NonZeroU64,
 }
 
@@ -40,12 +42,13 @@ impl PowClaimEvictionSettings {
 /// its slot up in storage on admission, and claims whose anchor is not stored
 /// yet wait for the chain to report it processed. A transaction with several
 /// claims expires with its earliest one, since one rejected op rejects the
-/// whole transaction.
+/// whole transaction. A claim expires under the settings of the era of its
+/// anchor block, the era whose window the ledger accepts it with.
 ///
 /// The policy keeps no persistent state: it learns about transactions as the
 /// pool admits them, so claims pending across a restart are left to the TTL.
 pub struct PowClaimPolicy<Key, BlockId> {
-    settings: PowClaimEvictionSettings,
+    settings: EraSchedule<PowClaimEvictionSettings>,
     /// Eviction slot of every tracked transaction.
     deadline_by_key: HashMap<Key, Slot>,
     /// Tracked transactions ordered by eviction slot.
@@ -62,7 +65,7 @@ where
     BlockId: Hash + Eq + Clone,
 {
     #[must_use]
-    pub fn new(settings: PowClaimEvictionSettings) -> Self {
+    pub fn new(settings: EraSchedule<PowClaimEvictionSettings>) -> Self {
         Self {
             settings,
             deadline_by_key: HashMap::new(),
@@ -73,12 +76,14 @@ where
     }
 
     /// The first slot at which a claim anchored at `anchor_slot` is evicted:
-    /// the slot after its acceptance window closes, plus the grace.
+    /// the slot after its acceptance window closes, plus the grace, both of the
+    /// era of the anchor.
     fn deadline_for(&self, anchor_slot: Slot) -> Slot {
+        let settings = self.settings.at_slot(anchor_slot).parameters;
         u64::from(anchor_slot)
-            .saturating_add(self.settings.slot_window.get())
+            .saturating_add(settings.slot_window.get())
             .saturating_add(1)
-            .saturating_add(self.settings.grace_slots())
+            .saturating_add(settings.grace_slots())
             .into()
     }
 
@@ -203,7 +208,11 @@ where
         }
     }
 
-    fn select(&self, clock: &PolicyClock) -> Vec<Tx::Hash> {
+    fn select(
+        &self,
+        clock: &PolicyClock,
+        _pending_txs: &IndexMap<Tx::Hash, AdmissionTime>,
+    ) -> Vec<Tx::Hash> {
         let Some(slot) = clock.slot else {
             return Vec::new();
         };
@@ -212,14 +221,12 @@ where
             .flat_map(|(_, keys)| keys.iter().cloned())
             .collect()
     }
-
-    fn save(&self) -> PolicySnapshot<Tx::Hash> {
-        PolicySnapshot::Stateless
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use core::{num::NonZero, time::Duration};
+
     use lb_core::{
         header::HeaderId,
         mantle::{
@@ -228,6 +235,8 @@ mod tests {
             transactions::{hash::TxHash, tx_list::ops::Ops},
         },
     };
+    use lb_time::era::{EraEntriesAfterGenesis, EraTiming};
+    use time::OffsetDateTime;
 
     use super::*;
 
@@ -237,12 +246,30 @@ mod tests {
 
     const WINDOW: u64 = 10;
 
+    /// A schedule of 100-slot epochs whose era `i`, from epoch `i`, has the
+    /// acceptance window `windows[i]`.
+    fn schedule(windows: &[u64]) -> EraSchedule<PowClaimEvictionSettings> {
+        let timing = EraTiming {
+            slot_duration: Duration::from_secs(1),
+            epoch_length: NonZero::new(100).expect("non-zero"),
+        };
+        let after_genesis = EraEntriesAfterGenesis::try_from_iter((1..windows.len()).map(|era| {
+            let first_epoch = u32::try_from(era).expect("few eras");
+            (NonZero::new(first_epoch).expect("non-zero"), timing)
+        }))
+        .expect("few eras");
+        EraSchedule::new(OffsetDateTime::UNIX_EPOCH, timing, after_genesis)
+            .expect("a representable schedule")
+            .map(|era| PowClaimEvictionSettings {
+                slot_window: NonZeroU64::new(windows[usize::from(era.era.into_inner())])
+                    .expect("non-zero"),
+            })
+    }
+
     /// With a window of 10 and the grace of twice that, a claim anchored at
     /// slot 100 is accepted through slot 110 and evicted from slot 131.
     fn policy() -> Policy {
-        Policy::new(PowClaimEvictionSettings {
-            slot_window: NonZeroU64::new(WINDOW).expect("non-zero"),
-        })
+        Policy::new(schedule(&[WINDOW]))
     }
 
     fn claim(anchor: [u8; 32]) -> Op {
@@ -273,7 +300,7 @@ mod tests {
     }
 
     fn select(policy: &Policy, slot: u64) -> Vec<TxHash> {
-        EvictionPolicy::<Ops, HeaderId>::select(policy, &clock(Some(slot)))
+        EvictionPolicy::<Ops, HeaderId>::select(policy, &clock(Some(slot)), &IndexMap::new())
     }
 
     #[test]
@@ -330,13 +357,39 @@ mod tests {
         assert_eq!(settings.grace_slots(), 14);
 
         let anchor = [1u8; 32];
-        let mut policy = Policy::new(settings);
+        let mut policy = Policy::new(schedule(&[7]));
         let tx = Ops::from([claim(anchor)]);
         let key = add(&mut policy, &tx, &known(&[(anchor, 100)]));
 
         // Window closes after 107, grace runs to 121, eviction from 122.
         assert_eq!(select(&policy, 121), NONE);
         assert_eq!(select(&policy, 122), vec![key]);
+    }
+
+    #[test]
+    fn claim_expires_with_the_window_of_the_era_of_its_anchor() {
+        // Era 0 has a window of 10 and era 1, from slot 100, one of 20.
+        let early = [1u8; 32];
+        let late = [2u8; 32];
+        let mut policy = Policy::new(schedule(&[10, 20]));
+        let early_key = add(
+            &mut policy,
+            &Ops::from([claim(early)]),
+            &known(&[(early, 50)]),
+        );
+        let late_key = add(
+            &mut policy,
+            &Ops::from([claim(late)]),
+            &known(&[(late, 150)]),
+        );
+
+        // Anchored at slot 50, in era 0: accepted through 60, evicted from 81.
+        assert_eq!(select(&policy, 80), NONE);
+        assert_eq!(select(&policy, 81), vec![early_key]);
+        // Anchored at slot 150, in era 1: accepted through 170, evicted from
+        // 211.
+        assert_eq!(select(&policy, 210), vec![early_key]);
+        assert_eq!(select(&policy, 211), vec![early_key, late_key]);
     }
 
     #[test]
@@ -347,7 +400,7 @@ mod tests {
         add(&mut policy, &tx, &known(&[(anchor, 0)]));
 
         assert_eq!(
-            EvictionPolicy::<Ops, HeaderId>::select(&policy, &clock(None)),
+            EvictionPolicy::<Ops, HeaderId>::select(&policy, &clock(None), &IndexMap::new()),
             NONE
         );
     }

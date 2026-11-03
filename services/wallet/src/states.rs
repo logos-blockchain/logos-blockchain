@@ -107,7 +107,7 @@ impl PendingNotes {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryState {
     /// [`WalletState`] at the last known LIB.
-    /// `None` on fresh start; populated after the first LIB update.
+    /// `None` until the first recovery state update.
     lib_wallet_state: Option<(HeaderId, WalletState)>,
     // openings the wallet adopts once their commitments are appended
     known_notes: KnownNotes,
@@ -376,12 +376,40 @@ fn known_keys(settings: &WalletServiceSettings) -> impl Iterator<Item = (ZkPubli
 
 #[cfg(test)]
 mod tests {
+    use core::num::NonZero;
+
     use lb_core::mantle::note_set::LEDGER_SET;
     use lb_groth16::Field as _;
 
     use super::*;
+    use crate::ServiceEraSchedule;
 
     const EXPIRY_BLOCKS: u64 = 4;
+
+    /// A schedule of one era, with epochs of 100 slots and a `k` of 5.
+    fn era_schedule() -> ServiceEraSchedule {
+        use std::time::Duration;
+
+        use lb_time::era::{EraEntriesAfterGenesis, EraSchedule, EraTiming};
+        use time::OffsetDateTime;
+
+        use crate::WalletEraSettings;
+
+        let timing = EraTiming {
+            slot_duration: Duration::from_secs(1),
+            epoch_length: NonZero::new(100).unwrap(),
+        };
+        EraSchedule::new(
+            OffsetDateTime::UNIX_EPOCH,
+            timing,
+            EraEntriesAfterGenesis::empty(),
+        )
+        .unwrap()
+        .map(|_| WalletEraSettings {
+            epoch_length: timing.epoch_length,
+            security_param: NonZero::new(5).unwrap(),
+        })
+    }
 
     #[test]
     fn recovery_state_keeps_the_known_notes_and_the_reward_key_index() {
@@ -462,6 +490,7 @@ mod tests {
             voucher_master_key_id: "voucher-master".into(),
             recovery_data: RecoveryData::default(),
             pending_note_expiry_blocks: 10,
+            era_schedule: era_schedule(),
         };
 
         // Fresh wallet: initialized from the genesis note sets.

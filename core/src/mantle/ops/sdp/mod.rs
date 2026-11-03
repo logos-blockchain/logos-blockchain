@@ -5,14 +5,13 @@ pub mod withdraw;
 pub use active::{SDPActiveExecutionContext, SDPActiveValidationContext};
 pub use declare::{SDPDeclareExecutionContext, SDPDeclareVerificationContext};
 use lb_cryptarchia_engine::Epoch;
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_zktransfer::ZkTransferInputsError;
 use thiserror::Error;
 pub use withdraw::{SDPWithdrawExecutionContext, SDPWithdrawValidationContext};
 
 use crate::{
     mantle::{Value, note_set::NoteSetError},
-    sdp::{DeclarationId, Nonce, ProviderId, ServiceType, StakeThreshold},
+    sdp::{Declaration, DeclarationId, Nonce, ProviderId, ServiceType, StakeThreshold},
 };
 
 pub type SDPDeclareOp = crate::sdp::DeclarationMessage;
@@ -30,13 +29,15 @@ pub enum SdpError {
         service_type: ServiceType,
         provider_id: Box<ProviderId>,
     },
-    #[error("Duplicate zk_id within service {service_type:?}: {zk_id:?}")]
-    DuplicateZkId {
-        service_type: ServiceType,
-        zk_id: ZkPublicKey,
-    },
     #[error("Sdp declaration id could not be found: {0:?}")]
     DeclarationNotFound(DeclarationId),
+    #[error(
+        "SDP declaration ID mismatch: operation_declaration_id={operation_declaration_id:?}, supplied_declaration_id={supplied_declaration_id:?}"
+    )]
+    DeclarationIdMismatch {
+        operation_declaration_id: DeclarationId,
+        supplied_declaration_id: DeclarationId,
+    },
     #[error("Service type could not be found: {0:?}")]
     ServiceNotFound(ServiceType),
     #[error(
@@ -47,11 +48,18 @@ pub enum SdpError {
         withdraw_at: Epoch,
     },
     #[error(
-        "Invalid sdp message nonce: message_nonce={message_nonce:?}, declaration_nonce={declaration_nonce:?}"
+        "Invalid SDP nonce lifecycle: nonce_lifecycle_epoch={nonce_lifecycle_epoch:?}, declaration_created_epoch={declaration_created_epoch:?}"
     )]
-    InvalidNonce {
-        message_nonce: Nonce,
-        declaration_nonce: Nonce,
+    InvalidNonceLifecycle {
+        nonce_lifecycle_epoch: Epoch,
+        declaration_created_epoch: Epoch,
+    },
+    #[error(
+        "Invalid SDP nonce sequence: nonce_sequence={nonce_sequence}, declaration_sequence={declaration_sequence}"
+    )]
+    InvalidNonceSequence {
+        nonce_sequence: u32,
+        declaration_sequence: u32,
     },
     #[error(transparent)]
     NoteSet(#[from] NoteSetError),
@@ -64,4 +72,43 @@ pub enum SdpError {
     },
     #[error("The ZkTransfer of the declaration does not verify")]
     InvalidZkTransfer,
+}
+
+/// Ensures a caller-supplied declaration is the one named by the operation.
+fn validate_declaration_id(
+    operation_declaration_id: DeclarationId,
+    declaration: &Declaration,
+) -> Result<(), SdpError> {
+    let supplied_declaration_id = declaration.id();
+    if operation_declaration_id != supplied_declaration_id {
+        return Err(SdpError::DeclarationIdMismatch {
+            operation_declaration_id,
+            supplied_declaration_id,
+        });
+    }
+
+    Ok(())
+}
+
+/// Validates the lifecycle and monotonic sequence carried by an Active or
+/// Withdraw nonce against the declaration it targets.
+fn validate_nonce(candidate: Nonce, declaration: &Declaration) -> Result<(), SdpError> {
+    let nonce_lifecycle_epoch = candidate.lifecycle_epoch();
+    if nonce_lifecycle_epoch != declaration.created {
+        return Err(SdpError::InvalidNonceLifecycle {
+            nonce_lifecycle_epoch,
+            declaration_created_epoch: declaration.created,
+        });
+    }
+
+    let nonce_sequence = candidate.sequence();
+    let declaration_sequence = declaration.nonce.sequence();
+    if nonce_sequence <= declaration_sequence {
+        return Err(SdpError::InvalidNonceSequence {
+            nonce_sequence,
+            declaration_sequence,
+        });
+    }
+
+    Ok(())
 }

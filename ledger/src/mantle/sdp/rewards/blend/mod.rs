@@ -64,7 +64,6 @@ where
         &self,
         provider_id: ProviderId,
         metadata: &ActivityMetadata,
-        params: &Self::Params,
     ) -> Result<Self, Error> {
         match self {
             Self::WithoutTargetEpoch { .. } => {
@@ -92,12 +91,8 @@ where
 
                 let ActivityMetadata::Blend(proof) = metadata;
 
-                let (zk_id, hamming_distance) = target_epoch_state.verify_proof(
-                    &provider_id,
-                    proof,
-                    current_epoch_state,
-                    params,
-                )?;
+                let (zk_id, hamming_distance) =
+                    target_epoch_state.verify_proof(&provider_id, proof, current_epoch_state)?;
 
                 let target_epoch_tracker = target_epoch_tracker.insert(
                     provider_id,
@@ -121,6 +116,7 @@ where
         last_epoch_state: &EpochState,
         next_epoch_state: &EpochState,
         _config: &ServiceParameters,
+        last_params: &Self::Params,
         params: &Self::Params,
     ) -> (Self, Vec<Note>) {
         match self {
@@ -133,6 +129,7 @@ where
                         current_epoch_state,
                         last_epoch_state,
                         next_epoch_state,
+                        last_params,
                         params,
                     ),
                     TargetEpochTracker::new(),
@@ -153,6 +150,7 @@ where
                         current_epoch_state,
                         last_epoch_state,
                         next_epoch_state,
+                        last_params,
                         params,
                     ),
                     target_epoch_tracker,
@@ -387,8 +385,13 @@ mod tests {
 
         // Update epoch from 0 to 1
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
-        let (rewards_tracker, rewards) =
-            rewards_tracker.update_epoch(&epoch0, &epoch1, &create_service_parameters(), &params);
+        let (rewards_tracker, rewards) = rewards_tracker.update_epoch(
+            &epoch0,
+            &epoch1,
+            &create_service_parameters(),
+            &params,
+            &params,
+        );
         assert!(matches!(rewards_tracker, Rewards::WithTargetEpoch { .. }));
 
         // No rewards should be returned yet because epoch0 just ended,
@@ -411,11 +414,12 @@ mod tests {
         );
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
-            .update_epoch(&epoch0, &epoch1, &config, &params);
+            .update_epoch(&epoch0, &epoch1, &config, &params, &params);
 
         // Update epoch from 1 to 2 without any activity proofs submitted.
         let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
-        let (_, rewards) = rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params);
+        let (_, rewards) =
+            rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params, &params);
         assert_eq!(rewards.len(), 0);
     }
 
@@ -443,7 +447,7 @@ mod tests {
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
             .add_income(1000)
-            .update_epoch(&epoch0, &epoch1, &config, &params);
+            .update_epoch(&epoch0, &epoch1, &config, &params, &params);
 
         // provider1 submits an activity proof
         let rewards_tracker = rewards_tracker
@@ -455,7 +459,6 @@ mod tests {
                     signing_key: new_signing_key(1),
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
-                &params,
             )
             .unwrap();
 
@@ -470,7 +473,6 @@ mod tests {
                     signing_key: new_signing_key(4),
                     proof_of_selection: new_proof_of_selection_unchecked(4),
                 })),
-                &params,
             )
             .unwrap();
 
@@ -485,7 +487,6 @@ mod tests {
                     signing_key: new_signing_key(1),
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
-                &params,
             )
             .unwrap();
 
@@ -493,7 +494,8 @@ mod tests {
 
         // Update epoch from 1 to 2.
         let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
-        let (_, reward_utxos) = rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params);
+        let (_, reward_utxos) =
+            rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params, &params);
 
         assert_eq!(reward_utxos.len(), 3); // except provider4
 
@@ -542,7 +544,7 @@ mod tests {
             create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0.into(), Fr::ZERO);
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
-            .update_epoch(&epoch0, &epoch1, &config, &params);
+            .update_epoch(&epoch0, &epoch1, &config, &params, &params);
 
         // provider1 submits an activity proof.
         let rewards_tracker = rewards_tracker
@@ -554,7 +556,6 @@ mod tests {
                     signing_key: new_signing_key(1),
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
-                &params,
             )
             .unwrap();
 
@@ -569,7 +570,6 @@ mod tests {
                     signing_key: new_signing_key(1),
                     proof_of_selection: new_proof_of_selection_unchecked(2),
                 })),
-                &params,
             )
             .unwrap_err();
         assert_eq!(
@@ -594,7 +594,7 @@ mod tests {
             create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0.into(), Fr::ZERO);
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
-            .update_epoch(&epoch0, &epoch1, &config, &params);
+            .update_epoch(&epoch0, &epoch1, &config, &params, &params);
 
         // provider1 submits an activity proof with invalid epoch.
         let err = rewards_tracker
@@ -606,7 +606,6 @@ mod tests {
                     signing_key: new_signing_key(1),
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
-                &params,
             )
             .unwrap_err();
         assert_eq!(
@@ -619,7 +618,8 @@ mod tests {
 
         // No reward should be calculated after epoch 1.
         let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
-        let (_, rewards) = rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params);
+        let (_, rewards) =
+            rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params, &params);
         assert_eq!(rewards.len(), 0);
     }
 
@@ -637,7 +637,7 @@ mod tests {
             create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0.into(), Fr::ZERO);
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
-            .update_epoch(&epoch0, &epoch1, &config, &params);
+            .update_epoch(&epoch0, &epoch1, &config, &params, &params);
 
         // `unknown` was never declared, so target_epoch_state.providers
         // does not contain it.
@@ -650,7 +650,6 @@ mod tests {
                     signing_key: new_signing_key(1),
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
-                &params,
             )
             .unwrap_err();
         assert!(matches!(err, Error::UnknownProvider(_)));
@@ -671,7 +670,7 @@ mod tests {
             create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0.into(), Fr::ZERO);
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
-            .update_epoch(&epoch0, &epoch1, &config, &params);
+            .update_epoch(&epoch0, &epoch1, &config, &params, &params);
         assert!(matches!(
             rewards_tracker,
             Rewards::WithoutTargetEpoch { .. }
@@ -688,14 +687,14 @@ mod tests {
                     signing_key: new_signing_key(1),
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
-                &params,
             )
             .unwrap_err();
         assert_eq!(err, Error::TargetEpochNotSet);
 
         // No reward should be calculated after epoch 1.
         let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
-        let (_, rewards) = rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params);
+        let (_, rewards) =
+            rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params, &params);
         assert_eq!(rewards.len(), 0);
     }
 
@@ -736,7 +735,7 @@ mod tests {
             Fr::ONE,
         );
         let (rewards_tracker, rewards) =
-            rewards_tracker.update_epoch(&epoch0, &epoch1, &config, &params);
+            rewards_tracker.update_epoch(&epoch0, &epoch1, &config, &params, &params);
         assert!(
             rewards.is_empty(),
             "first transition should not produce rewards yet"
@@ -755,7 +754,6 @@ mod tests {
                     signing_key: new_signing_key(1),
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
-                &params,
             )
             .unwrap();
         let epoch1_income: Value = 500;
@@ -766,7 +764,7 @@ mod tests {
         // because epoch 1 snapshot has only 1 provider.
         let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
         let (rewards_tracker, rewards) =
-            rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params);
+            rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params, &params);
         assert!(matches!(
             rewards_tracker,
             Rewards::WithoutTargetEpoch { .. }
@@ -809,7 +807,7 @@ mod tests {
             Fr::ONE,
         );
         let (rewards_tracker, rewards) =
-            rewards_tracker.update_epoch(&epoch0, &epoch1, &config, &params);
+            rewards_tracker.update_epoch(&epoch0, &epoch1, &config, &params, &params);
         assert!(
             rewards.is_empty(),
             "first transition should not produce rewards yet"
@@ -827,7 +825,7 @@ mod tests {
         // - WithoutTargetEpoch -> WithTargetEpoch (for epoch 1)
         let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
         let (rewards_tracker, rewards) =
-            rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params);
+            rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params, &params);
         assert!(matches!(rewards_tracker, Rewards::WithTargetEpoch { .. }));
         assert!(
             rewards.is_empty(),
@@ -844,13 +842,13 @@ mod tests {
                     signing_key: new_signing_key(1),
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
-                &params,
             )
             .unwrap();
 
         // Transition 2 -> 3, and reward for provider1 is distributed
         let epoch3 = new_epoch_state_with_same_snapshot(3, 3, &epoch2);
-        let (_, rewards) = rewards_tracker.update_epoch(&epoch2, &epoch3, &config, &params);
+        let (_, rewards) =
+            rewards_tracker.update_epoch(&epoch2, &epoch3, &config, &params, &params);
         assert_eq!(rewards.len(), 1); // only for provider 1
         let total_paid: Value = rewards.iter().map(|note| note.value).sum();
         assert_eq!(total_paid, epoch1_income);
@@ -872,7 +870,7 @@ mod tests {
         );
         drop(
             Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
-                .update_epoch(&epoch0, &epoch0, &config, &params),
+                .update_epoch(&epoch0, &epoch0, &config, &params, &params),
         );
     }
 
@@ -892,9 +890,9 @@ mod tests {
         );
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
-            .update_epoch(&epoch0, &epoch1, &config, &params);
+            .update_epoch(&epoch0, &epoch1, &config, &params, &params);
         // Now try to "go back" from epoch 1 to epoch 0.
-        drop(rewards_tracker.update_epoch(&epoch1, &epoch0, &config, &params));
+        drop(rewards_tracker.update_epoch(&epoch1, &epoch0, &config, &params, &params));
     }
 
     /// On a multi-epoch jump, `update_epoch` must transition to
@@ -915,7 +913,7 @@ mod tests {
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
             .add_income(epoch0_income)
-            .update_epoch(&epoch0, &epoch1, &config, &params);
+            .update_epoch(&epoch0, &epoch1, &config, &params, &params);
 
         // Submit activity message for epoch 0 during epoch 1.
         let rewards_tracker = rewards_tracker
@@ -927,13 +925,13 @@ mod tests {
                     signing_key: new_signing_key(1),
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
-                &params,
             )
             .unwrap();
 
         // Jump from epoch 1 directly to epoch 3 (skipping epoch 2).
         let epoch3 = new_epoch_state_with_same_snapshot(3, 3, &epoch1);
-        let (new_state, rewards) = rewards_tracker.update_epoch(&epoch1, &epoch3, &config, &params);
+        let (new_state, rewards) =
+            rewards_tracker.update_epoch(&epoch1, &epoch3, &config, &params, &params);
 
         // Rewards earned during epoch 1 must be distributed from epoch 0's income pool.
         assert_eq!(rewards.len(), 1);
@@ -953,7 +951,6 @@ mod tests {
                     signing_key: new_signing_key(1),
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
-                &params,
             )
             .unwrap_err();
         assert_eq!(err, Error::TargetEpochNotSet);
@@ -972,7 +969,7 @@ mod tests {
 
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, rewards) =
-            rewards_tracker.update_epoch(&epoch0, &epoch1, &config, &params);
+            rewards_tracker.update_epoch(&epoch0, &epoch1, &config, &params, &params);
         assert_eq!(rewards, []);
         let rewards_tracker = rewards_tracker
             .update_active(
@@ -983,7 +980,6 @@ mod tests {
                     signing_key: new_signing_key(1),
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
-                &params,
             )
             .unwrap()
             .add_income(7);
@@ -991,7 +987,7 @@ mod tests {
 
         let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
         let (rewards_tracker, rewards) =
-            rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params);
+            rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params, &params);
         // One provider, base and premium: floor(1001 / 2) * 2 = 1000; the remainder 1
         // is settled, not paid.
         assert_eq!(
@@ -1018,7 +1014,7 @@ mod tests {
         );
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
-            .update_epoch(&epoch0, &epoch1, &config, &params);
+            .update_epoch(&epoch0, &epoch1, &config, &params, &params);
 
         // provider1 submits an activity proof that is larger than activity threshold.
         let err = rewards_tracker
@@ -1030,14 +1026,14 @@ mod tests {
                     signing_key: new_signing_key(4),
                     proof_of_selection: new_proof_of_selection_unchecked(4),
                 })),
-                &params,
             )
             .unwrap_err();
         assert_eq!(err, Error::HammingDistanceTooLarge);
 
         // No reward should be calculated after epoch 1.
         let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
-        let (_, rewards) = rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params);
+        let (_, rewards) =
+            rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params, &params);
         assert_eq!(rewards.len(), 0);
     }
 
@@ -1053,7 +1049,7 @@ mod tests {
             create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0.into(), Fr::ZERO);
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, _) = Rewards::<AlwaysFailureProofsVerifier>::new(&params, &epoch0)
-            .update_epoch(&epoch0, &epoch1, &config, &params);
+            .update_epoch(&epoch0, &epoch1, &config, &params, &params);
 
         // provider1 submits an activity proof, but PoQ/PoSel verification fails.
         let err = rewards_tracker
@@ -1065,14 +1061,14 @@ mod tests {
                     signing_key: new_signing_key(1),
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
-                &params,
             )
             .unwrap_err();
         assert_eq!(err, Error::InvalidProof);
 
         // No reward should be calculated after epoch 1.
         let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
-        let (_, rewards) = rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params);
+        let (_, rewards) =
+            rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params, &params);
         assert_eq!(rewards.len(), 0);
     }
 
@@ -1093,7 +1089,7 @@ mod tests {
         );
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, _) = Rewards::<ZeroNonceFailureProofsVerifier>::new(&params, &epoch0)
-            .update_epoch(&epoch0, &epoch1, &config, &params);
+            .update_epoch(&epoch0, &epoch1, &config, &params, &params);
 
         // provider submits an activity proof, but rejected due to
         // ZeroNonceFailureProofsVerifier
@@ -1106,14 +1102,14 @@ mod tests {
                     signing_key: new_signing_key(1),
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
-                &params,
             )
             .unwrap_err();
         assert_eq!(err, Error::InvalidProof);
 
         // Update epoch from 1 to 2
         let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
-        let (rewards_tracker, _) = rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params);
+        let (rewards_tracker, _) =
+            rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params, &params);
 
         // provider submits an activity proof again, and it should be accepted since the
         // proof verifier should be updated after epoch update.
@@ -1126,7 +1122,6 @@ mod tests {
                     signing_key: new_signing_key(1),
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
-                &params,
             )
             .unwrap();
     }

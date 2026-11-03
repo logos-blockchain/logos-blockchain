@@ -1,10 +1,13 @@
 use std::collections::HashSet;
 
-use lb_libp2p::{Multiaddr, PeerId, Protocol, libp2p::identify};
+use lb_libp2p::{
+    Multiaddr, PeerId, Protocol,
+    libp2p::{StreamProtocol as Libp2pStreamProtocol, identify},
+};
 use lb_log_targets::network_service;
 use rand::RngCore;
 
-use crate::backends::libp2p::swarm::SwarmHandler;
+use crate::backends::libp2p::swarm::{AdvertisedProtocols, SwarmHandler};
 
 const LOG_TARGET: &str = network_service::backends::libp2p::IDENTIFY;
 
@@ -43,8 +46,19 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             "Classified peer protocol capabilities"
         );
 
-        self.peer_advertised_protocols
-            .insert(peer_id, advertised_protocols);
+        self.warn_about_unknown_peer_advertised_fork_digests(
+            peer_id,
+            &info.protocol_version,
+            &advertised_protocols,
+        );
+
+        self.peer_advertised_protocols.insert(
+            peer_id,
+            AdvertisedProtocols {
+                era: self.current_era,
+                protocols: advertised_protocols,
+            },
+        );
 
         if supports_kademlia {
             self.add_identified_kademlia_addresses(peer_id, &info.listen_addrs);
@@ -57,6 +71,27 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 configured chainsync protocol"
             );
         }
+    }
+
+    /// Warns the operator when a peer advertises fork digests
+    /// that no era of the schedule has. The warning does not stop the node.
+    fn warn_about_unknown_peer_advertised_fork_digests(
+        &self,
+        peer_id: PeerId,
+        peer_protocol_version: &str,
+        peer_advertised_protocol_names: &HashSet<Libp2pStreamProtocol>,
+    ) {
+        let unknown_fork_digests = self
+            .unknown_received_fork_digests(peer_protocol_version, peer_advertised_protocol_names)
+            .collect::<HashSet<_>>();
+        if unknown_fork_digests.is_empty() {
+            return;
+        }
+        tracing::warn!(
+            target: LOG_TARGET,
+            "Peer {peer_id} advertises the fork digests {unknown_fork_digests:?}, which no era of \
+            this node's schedule has: it runs an era schedule this node's release lacks"
+        );
     }
 
     fn add_identified_kademlia_addresses(&mut self, peer_id: PeerId, listen_addrs: &[Multiaddr]) {

@@ -102,10 +102,21 @@ pub enum CompressionType {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RollingConfig {
     pub rotation: RotationType,
     pub retention: RetentionType,
     pub compression: CompressionType,
+}
+
+impl Default for RollingConfig {
+    fn default() -> Self {
+        Self {
+            rotation: RotationType::Hourly,
+            retention: RetentionType::MaxFiles { max_files: 10 },
+            compression: CompressionType::None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -1,33 +1,34 @@
-use std::num::NonZeroU64;
-
 use lb_core::{
     block::BlockNumber,
     crypto::{Hash, ZkHash},
     mantle::{
         channel::Channels,
-        ledger::{DeclarationKeys, Declarations},
+        ledger::{Declarations, ProviderIndex},
         note_set::NoteSets,
         ops::{
             channel::{ChannelId, ChannelKeyIndex},
-            pow::{PowNullifier, PowReward, PowTarget},
+            pow::{PowNullifier, PowReward, PowSlotWindows, PowTarget},
             sdp::SdpError,
         },
         programs::Programs,
         transactions::{OperationVerificationHelper, VerificationError},
     },
-    sdp::{DeclarationId, MinStake, ServiceType},
+    sdp::{Declaration, DeclarationId, MinStake, ServiceType},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::UnverifiedEd25519PublicKey;
 use rpds::HashTrieMapSync;
 
-use crate::mantle::LedgerState;
+use crate::{
+    config::{EraScheduledConfig, config_for_slot, pow_slot_windows},
+    mantle::LedgerState,
+};
 
 pub struct MantleOperationVerificationHelper<'a> {
     ledger_state: &'a LedgerState,
     cryptarchia_ledger: &'a crate::CryptarchiaLedger,
     block_number: BlockNumber,
-    config: &'a crate::Config,
+    eras: &'a EraScheduledConfig,
 }
 
 impl<'a> MantleOperationVerificationHelper<'a> {
@@ -36,13 +37,13 @@ impl<'a> MantleOperationVerificationHelper<'a> {
         ledger_state: &'a LedgerState,
         cryptarchia_ledger: &'a crate::CryptarchiaLedger,
         block_number: BlockNumber,
-        config: &'a crate::Config,
+        eras: &'a EraScheduledConfig,
     ) -> Self {
         Self {
             ledger_state,
             cryptarchia_ledger,
             block_number,
-            config,
+            eras,
         }
     }
 }
@@ -76,32 +77,43 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
             ))
     }
 
-    fn get_declaration_keys_by_service(
+    fn get_declarations_by_id(
+        &self,
+        id: &DeclarationId,
+    ) -> Result<&Declarations, VerificationError> {
+        let service = self
+            .ledger_state
+            .sdp_ledger()
+            .get_declaration(id)
+            .map(|declaration| declaration.service_type)
+            .ok_or(VerificationError::SDPVerificationError(
+                SdpError::DeclarationNotFound(*id),
+            ))?;
+        self.get_declarations_by_service(service)
+    }
+
+    fn get_provider_index_by_service(
         &self,
         service: ServiceType,
-    ) -> Result<&DeclarationKeys, VerificationError> {
+    ) -> Result<&ProviderIndex, VerificationError> {
         self.ledger_state
             .sdp_ledger()
-            .get_declaration_keys_by_service(service)
+            .get_provider_index_by_service(service)
             .ok_or(VerificationError::SDPVerificationError(
                 SdpError::ServiceNotFound(service),
             ))
     }
 
-    fn get_declarations_by_id(
-        &self,
-        id: &DeclarationId,
-    ) -> Result<&Declarations, VerificationError> {
-        self.ledger_state
-            .sdp_ledger()
-            .get_declarations_by_id(id)
-            .ok_or(VerificationError::SDPVerificationError(
-                SdpError::DeclarationNotFound(*id),
-            ))
+    fn get_declaration_by_id(&self, id: &DeclarationId) -> Result<&Declaration, VerificationError> {
+        self.ledger_state.sdp_ledger().get_declaration(id).ok_or(
+            VerificationError::SDPVerificationError(SdpError::DeclarationNotFound(*id)),
+        )
     }
 
     fn get_min_stake(&self) -> &MinStake {
-        &self.config.sdp_config.min_stake
+        &config_for_slot(self.eras, self.cryptarchia_ledger.slot)
+            .sdp_config
+            .min_stake
     }
 
     fn get_epoch(&self) -> Epoch {
@@ -160,7 +172,7 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
         self.ledger_state.pow.block_slots().clone()
     }
 
-    fn get_pow_slot_window(&self) -> NonZeroU64 {
-        self.config.pow_config.reward.slot_window
+    fn get_pow_slot_windows(&self) -> PowSlotWindows {
+        pow_slot_windows(self.eras)
     }
 }

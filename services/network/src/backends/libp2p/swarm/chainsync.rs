@@ -2,7 +2,7 @@ use std::{collections::HashSet, fmt::Debug};
 
 use lb_libp2p::{
     PeerId,
-    cryptarchia_sync::{BoxedStream, ChainSyncError, GetTipResponse, HeaderId, SerialisedBlock},
+    cryptarchia_sync::{BoxedStream, ChainSyncError, HeaderId, SerialisedBlock, TipResponse},
 };
 use lb_log_targets::network_service;
 use rand::RngCore;
@@ -20,7 +20,7 @@ pub enum ChainSyncCommand {
     },
     RequestTip {
         peer: PeerId,
-        reply_sender: oneshot::Sender<Result<GetTipResponse, ChainSyncError>>,
+        reply_sender: oneshot::Sender<Result<TipResponse, ChainSyncError>>,
     },
     DownloadBlocks {
         peer: PeerId,
@@ -81,7 +81,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 additional_blocks,
                 reply_sender,
             } => {
-                if let Err(e) = self.swarm.start_blocks_download(
+                if let Err(e) = self.swarm.request_blocks(
                     peer,
                     target_block,
                     local_tip,
@@ -114,21 +114,21 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
 impl From<lb_cryptarchia_sync::Event> for ChainSyncEvent {
     fn from(event: lb_cryptarchia_sync::Event) -> Self {
         match event {
-            lb_cryptarchia_sync::Event::ProvideBlocksRequest {
+            lb_cryptarchia_sync::Event::BlocksRequest {
                 target_block,
-                local_tip,
+                requester_tip,
                 latest_immutable_block,
                 additional_blocks,
                 reply_sender,
-            } => Self::ProvideBlocksRequest {
+            } => Self::BlocksRequest {
                 target_block,
-                local_tip,
+                requester_tip,
                 latest_immutable_block,
                 additional_blocks,
                 reply_sender,
             },
-            lb_cryptarchia_sync::Event::ProvideTipsRequest { reply_sender } => {
-                Self::ProvideTipRequest { reply_sender }
+            lb_cryptarchia_sync::Event::TipRequest { reply_sender } => {
+                Self::TipRequest { reply_sender }
             }
         }
     }

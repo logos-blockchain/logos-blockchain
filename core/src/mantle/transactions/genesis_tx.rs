@@ -1,6 +1,6 @@
 use core::fmt::{self, Display, Formatter};
 
-use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BTreeSet, BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::bounded::{BoundedString, BoundedVec, UpperBoundedVec};
@@ -15,6 +15,7 @@ use crate::{
         ops::{
             Op, OpRef, SignedOp, SignedOperation,
             channel::{ChannelId, MsgId, NULL_CHANNEL_ID, inscribe::InscriptionOp},
+            pow::PowReward,
             sdp::SDPDeclareOp,
             transfer::TransferOp,
         },
@@ -28,7 +29,7 @@ use crate::{
 };
 
 /// The genesis transaction structure is always:
-/// `Transfer` + `ChannelInscribe` (Cryptarchia parameters) + `ChannelInscribe`
+/// `Transfer` + `ChannelInscribe` (genesis parameters) + `ChannelInscribe`
 /// (distribution) + zero or more `SDPDeclareOp`.
 /// With maximum operations bounded in `Ops`.
 pub const GENESIS_REQUIRED_OPS: usize = 3;
@@ -58,7 +59,7 @@ pub type Distribution = UpperBoundedVec<GenesisAllocation, MAX_NOTE_LIST_LEN>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenesisTx {
     signed_ops: SignedOps<Preverified, GenesisMode>,
-    cryptarchia_parameter: CryptarchiaParameter,
+    genesis_parameters: GenesisParameters,
     distribution: Distribution,
 }
 
@@ -76,8 +77,8 @@ pub enum Error {
     MissingTransferAndInscription,
     #[error("Invalid genesis inscription: {0:?}")]
     InvalidInscription(Box<Op>), // TODO: Consider adding explanation
-    #[error("Invalid cryptarchia inscription: {0}")]
-    InvalidCryptarchiaParameter(String),
+    #[error("Invalid genesis parameters inscription: {0}")]
+    InvalidGenesisParameters(String),
     #[error("Too many operations in genesis transaction: {count}")]
     TooManyOps { count: usize },
     #[error("Genesis transaction must have the distribution inscription as its third operation")]
@@ -94,7 +95,7 @@ impl GenesisTx {
     pub fn from_tx(signed_ops: SignedOps<Preverified, GenesisMode>) -> Result<Self, Error> {
         // Genesis transactions must contain exactly one transfer as the first op,
         // one inscription as the second op, and then may contain other SDP declarations
-        let (cryptarchia_parameter, distribution) = match signed_ops.op_refs().as_slice() {
+        let (genesis_parameters, distribution) = match signed_ops.op_refs().as_slice() {
             [
                 OpRef::Transfer(transfer),
                 OpRef::ChannelInscribe(inscription),
@@ -104,7 +105,7 @@ impl GenesisTx {
                 if !transfer.inputs.is_empty() {
                     return Err(Error::UnexpectedInput);
                 }
-                let cryptarchia_parameter = valid_cryptarchia_inscription(inscription)?;
+                let genesis_parameters = valid_genesis_inscription(inscription)?;
                 let distribution =
                     valid_distribution_inscription(inscription, distribution, transfer)?;
 
@@ -119,7 +120,7 @@ impl GenesisTx {
                     return Err(Error::UnsupportedGenesisOp(unsupported_ops));
                 }
 
-                (cryptarchia_parameter, distribution)
+                (genesis_parameters, distribution)
             }
             [OpRef::Transfer(_), OpRef::ChannelInscribe(_), ..] => {
                 return Err(Error::MissingDistributionInscription);
@@ -129,7 +130,7 @@ impl GenesisTx {
 
         Ok(Self {
             signed_ops,
-            cryptarchia_parameter,
+            genesis_parameters,
             distribution,
         })
     }
@@ -177,9 +178,7 @@ impl GenesisTx {
     }
 }
 
-fn valid_cryptarchia_inscription(
-    inscription: &InscriptionOp,
-) -> Result<CryptarchiaParameter, Error> {
+fn valid_genesis_inscription(inscription: &InscriptionOp) -> Result<GenesisParameters, Error> {
     if inscription.parent != MsgId::root() {
         return Err(Error::InvalidInscription(Box::new(Op::ChannelInscribe(
             inscription.clone(),
@@ -204,28 +203,21 @@ fn valid_cryptarchia_inscription(
         ))));
     }
 
-    let (rest, cryptarchia_parameter) =
-        CryptarchiaParameter::decode(inscription.inscription.as_ref(), &())
-            .map_err(|e| Error::InvalidCryptarchiaParameter(format!("Decoding error: {e}")))?;
-    if !rest.is_empty() {
-        return Err(Error::InvalidCryptarchiaParameter(
-            "Trailing bytes after the Cryptarchia parameters".to_owned(),
-        ));
-    }
-    Ok(cryptarchia_parameter)
+    GenesisParameters::decode_all(inscription.inscription.as_ref(), &())
+        .map_err(|e| Error::InvalidGenesisParameters(format!("Decoding error: {e}")))
 }
 
 // The distribution inscription of Cryptarchia Initialization in the genesis
-// spec: on the null channel, by the null key, chained to the Cryptarchia
+// spec: on the null channel, by the null key, chained to the genesis parameters
 // inscription, publishing the value and public key of every Transfer output.
 fn valid_distribution_inscription(
-    cryptarchia: &InscriptionOp,
+    parameters: &InscriptionOp,
     inscription: &InscriptionOp,
     transfer: &TransferOp,
 ) -> Result<Distribution, Error> {
     if inscription.channel_id != NULL_CHANNEL_ID
         || inscription.signer.as_bytes() != &[0; 32]
-        || inscription.parent != cryptarchia.id()
+        || inscription.parent != parameters.id()
         || !inscription.steps.is_empty()
     {
         return Err(Error::InvalidInscription(Box::new(Op::ChannelInscribe(
@@ -320,8 +312,8 @@ impl GenesisTxTrait for GenesisTx {
         }
     }
 
-    fn cryptarchia_parameter(&self) -> CryptarchiaParameter {
-        self.cryptarchia_parameter.clone()
+    fn genesis_parameters(&self) -> GenesisParameters {
+        self.genesis_parameters.clone()
     }
 
     fn distribution(&self) -> Distribution {
@@ -334,7 +326,7 @@ impl Serialize for GenesisTx {
     where
         S: serde::Serializer,
     {
-        // Skip self.cryptarchia_parameter and self.distribution as they are
+        // Skip self.genesis_parameters and self.distribution as they are
         // parsed from the inscription ops
         self.signed_ops.serialize(serializer)
     }
@@ -495,12 +487,18 @@ impl TryFrom<OffsetDateTime> for GenesisTime {
     }
 }
 
-/// Cryptarchia parameters encoded as an inscription in the genesis block.
+/// The keys whose notes never take part in consensus: no leadership proof is
+/// made with them, and they count towards no total stake.
+pub type ConsensusExcludedKeys = BTreeSet<ZkPublicKey>;
+
+/// The parameters of a chain, encoded as an inscription in its genesis block.
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
-pub struct CryptarchiaParameter {
+pub struct GenesisParameters {
     pub chain_id: ChainId,
-    pub genesis_time: GenesisTime,
+    pub start_time: GenesisTime,
     pub epoch_nonce: Fr,
+    pub pow_reward_pool: PowReward,
+    pub consensus_excluded_keys: ConsensusExcludedKeys,
 }
 
 #[cfg(test)]
@@ -529,24 +527,26 @@ mod tests {
 
     fn inscription_op(
         channel_id: ChannelId,
-        cryptarchia_param: &CryptarchiaParameter,
+        genesis_parameters: &GenesisParameters,
         parent: MsgId,
         signer: UnverifiedEd25519PublicKey,
     ) -> InscriptionOp {
         InscriptionOp {
             channel_id,
-            inscription: Inscription::new_unchecked(cryptarchia_param.encode_to_vec()),
+            inscription: Inscription::new_unchecked(genesis_parameters.encode_to_vec()),
             parent,
             signer,
             steps: ChannelSteps::default(),
         }
     }
 
-    fn cryptarchia_param() -> CryptarchiaParameter {
-        CryptarchiaParameter {
+    fn genesis_parameters() -> GenesisParameters {
+        GenesisParameters {
             chain_id: "test".to_owned().try_into().unwrap(),
-            genesis_time: GenesisTime::new(1000),
+            start_time: GenesisTime::new(1000),
             epoch_nonce: Fr::ZERO,
+            pow_reward_pool: 0,
+            consensus_excluded_keys: ConsensusExcludedKeys::empty(),
         }
     }
 
@@ -601,17 +601,17 @@ mod tests {
         )
     }
 
-    fn cryptarchia_op() -> InscriptionOp {
+    fn parameters_op() -> InscriptionOp {
         inscription_op(
             NULL_CHANNEL_ID,
-            &cryptarchia_param(),
+            &genesis_parameters(),
             MsgId::root(),
             UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
         )
     }
 
     fn distribution_op(
-        cryptarchia: &InscriptionOp,
+        parameters: &InscriptionOp,
         allocations: &[GenesisAllocation],
     ) -> InscriptionOp {
         InscriptionOp {
@@ -621,7 +621,7 @@ mod tests {
                     .unwrap()
                     .encode_to_vec(),
             ),
-            parent: cryptarchia.id(),
+            parent: parameters.id(),
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             steps: ChannelSteps::default(),
         }
@@ -660,7 +660,7 @@ mod tests {
         // check inscription with channel id [1; 32] fails
         let c = inscription_op(
             ChannelId::from([1; 32]),
-            &cryptarchia_param(),
+            &genesis_parameters(),
             MsgId::root(),
             UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
         );
@@ -679,7 +679,7 @@ mod tests {
         // check inscription with non-root parent fails
         let c = inscription_op(
             ChannelId::from([0; 32]),
-            &cryptarchia_param(),
+            &genesis_parameters(),
             MsgId::from([1; 32]),
             UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
         );
@@ -698,7 +698,7 @@ mod tests {
         // check inscription with non-zero signer fails
         let c = inscription_op(
             ChannelId::from([0; 32]),
-            &cryptarchia_param(),
+            &genesis_parameters(),
             MsgId::root(),
             UnverifiedEd25519PublicKey::from_bytes(&[1; 32]).unwrap(),
         );
@@ -717,7 +717,7 @@ mod tests {
         // check valid inscription passes
         let c = inscription_op(
             ChannelId::from([0; 32]),
-            &cryptarchia_param(),
+            &genesis_parameters(),
             MsgId::root(),
             UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
         );
@@ -733,7 +733,7 @@ mod tests {
 
     #[test]
     fn test_genesis_inscription_ops() {
-        let c = cryptarchia_op();
+        let c = parameters_op();
         let d = distribution_op(&c, &allocations());
 
         // Test cases: (operations, expected_error)
@@ -778,7 +778,7 @@ mod tests {
 
     #[test]
     fn test_genesis_sdp_ops() {
-        let c = cryptarchia_op();
+        let c = parameters_op();
         let d = distribution_op(&c, &allocations());
         let verifying_key = Ed25519PublicKey::from_bytes(&[1; 32]).unwrap();
         let utxo1 = create_test_note(1000, 0);
@@ -837,7 +837,7 @@ mod tests {
     #[test]
     fn test_genesis_tx_serde() {
         // Create a genesis transaction with inscription (no signature proof required)
-        let c = cryptarchia_op();
+        let c = parameters_op();
         let signed_mantle_tx = create_trusted_tx(
             vec![
                 Op::ChannelInscribe(c.clone()),
@@ -876,17 +876,17 @@ mod tests {
     }
 
     #[test]
-    fn test_cryptarchia_parameter_decode_errors() {
+    fn test_genesis_parameters_decode_errors() {
         // A single byte is a complete 1-byte chain_id length prefix of 0, which
         // is below the chain_id minimum length of 1.
         assert!(matches!(
-            CryptarchiaParameter::decode(&[0; 1], &()).unwrap_err(),
+            GenesisParameters::decode(&[0; 1], &()).unwrap_err(),
             DecodeError::LengthOutOfBounds { .. }
         ));
 
         // Genuinely too short: not even the length prefix can be read.
         assert!(matches!(
-            CryptarchiaParameter::decode(&[], &()).unwrap_err(),
+            GenesisParameters::decode(&[], &()).unwrap_err(),
             DecodeError::UnexpectedEnd { .. }
         ));
 
@@ -894,23 +894,23 @@ mod tests {
         let mut bad = vec![0; 48];
         bad[0] = 100; // chain_id_len = 100
         assert!(matches!(
-            CryptarchiaParameter::decode(&bad, &()).unwrap_err(),
+            GenesisParameters::decode(&bad, &()).unwrap_err(),
             DecodeError::UnexpectedEnd { .. }
         ));
 
         // Invalid UTF-8 chain_id. The chain_id bytes begin right after its
         // single-byte length prefix, so index 1 is the first UTF-8 byte.
-        let mut encoded = cryptarchia_param().encode_to_vec();
+        let mut encoded = genesis_parameters().encode_to_vec();
         encoded[1] = 0xFF; // corrupt the first chain_id UTF-8 byte
         assert!(matches!(
-            CryptarchiaParameter::decode(&encoded, &()).unwrap_err(),
+            GenesisParameters::decode(&encoded, &()).unwrap_err(),
             DecodeError::InvalidValue { .. }
         ));
     }
 
     #[test]
-    fn test_genesis_tx_cryptarchia_parameter() {
-        let param = cryptarchia_param();
+    fn test_genesis_tx_genesis_parameters() {
+        let param = genesis_parameters();
         let c = inscription_op(
             ChannelId::from([0; 32]),
             &param,
@@ -925,7 +925,7 @@ mod tests {
             vec![inscription_proof(), inscription_proof()],
         );
         let genesis_tx = GenesisTx::from_tx(tx).unwrap();
-        assert_eq!(genesis_tx.cryptarchia_parameter(), param);
+        assert_eq!(genesis_tx.genesis_parameters(), param);
     }
 
     #[test]
@@ -934,7 +934,7 @@ mod tests {
             inputs: [NoteNullifier(Fr::ONE)].into(),
             ..transfer_of(&allocations())
         };
-        let c = cryptarchia_op();
+        let c = parameters_op();
         let tx = create_trusted_tx_with_transfer(
             transfer_op,
             vec![
@@ -954,7 +954,7 @@ mod tests {
         let declare_op = sdp_declare_op(utxo, 0, verifying_key);
         let inscribe_op = inscription_op(
             ChannelId::from([0; 32]),
-            &cryptarchia_param(),
+            &genesis_parameters(),
             MsgId::root(),
             UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
         );
@@ -1009,7 +1009,7 @@ mod tests {
     fn from_tx_reads_the_distribution_and_accepts_more_than_eight_outputs() {
         let allocations: Vec<GenesisAllocation> =
             (1..=9u64).map(|i| allocation(100 * i, i)).collect();
-        let cryptarchia = cryptarchia_op();
+        let cryptarchia = parameters_op();
         let tx = create_trusted_tx_with_transfer(
             transfer_of(&allocations),
             vec![
@@ -1026,7 +1026,7 @@ mod tests {
     #[test]
     fn from_tx_rejects_a_distribution_that_does_not_match_the_outputs() {
         let allocations = [allocation(1000, 7), allocation(2000, 8)];
-        let cryptarchia = cryptarchia_op();
+        let cryptarchia = parameters_op();
         let from_tx = |transfer: TransferOp, distribution: InscriptionOp| {
             GenesisTx::from_tx(create_trusted_tx_with_transfer(
                 transfer,
@@ -1089,7 +1089,7 @@ mod tests {
 
     #[test]
     fn from_tx_rejects_trailing_parameter_bytes_and_genesis_steps() {
-        let mut trailing = cryptarchia_op();
+        let mut trailing = parameters_op();
         trailing.inscription =
             Inscription::new_unchecked([trailing.inscription.as_slice(), &[0u8]].concat());
         let tx = create_trusted_tx(
@@ -1101,7 +1101,7 @@ mod tests {
         );
         assert!(matches!(
             GenesisTx::from_tx(tx),
-            Err(Error::InvalidCryptarchiaParameter(_))
+            Err(Error::InvalidGenesisParameters(_))
         ));
 
         let step = ChannelStep {
@@ -1112,7 +1112,7 @@ mod tests {
         };
         let with_step = InscriptionOp {
             steps: [Step::User(step)].into(),
-            ..cryptarchia_op()
+            ..parameters_op()
         };
         let tx = create_trusted_tx(
             vec![

@@ -15,6 +15,8 @@ pub use gas::GasProfile;
 pub use ledger::Value;
 pub use notes::Note;
 pub use ops::{Op, OpProof, OpProofRef, OpRef};
-pub use transactions::{CryptarchiaParameter, GenesisTime, SignedOps, hash::TxHash};
+pub use transactions::{
+    ConsensusExcludedKeys, GenesisParameters, GenesisTime, SignedOps, hash::TxHash,
+};
 
 pub use crate::mantle::transactions::VerificationError;

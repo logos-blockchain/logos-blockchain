@@ -34,6 +34,3 @@ lb-core               = { features = ["test-utils"], workspace = true }
 lb-cryptarchia-engine = { workspace = true }
 lb-pol                = { workspace = true }
 lb-utils              = { workspace = true }
-
-[features]
-default = []

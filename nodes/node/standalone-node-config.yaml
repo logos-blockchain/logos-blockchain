@@ -43,7 +43,7 @@ network:
         disjoint_query_paths: null
         max_packet_size: null
         kbucket_inserts: null
-        caching: null
+        cache_size: 1
         periodic_bootstrap_interval: null
       identify:
         agent_version: null
@@ -54,6 +54,7 @@ network:
       chain_sync:
         peer_response_timeout: 5s
         max_inbound_requests: 10
+        inbound_download_stream_timeout: 2m
       nat:
         type: traversal
         autonat:
@@ -199,7 +200,7 @@ tracing:
   metrics:
     otlp: null
     open_metrics:
-      enabled: false
+      enabled: true
   console: None
   level: "INFO"
 state:

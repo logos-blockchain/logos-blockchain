@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use lb_core::mantle::TxHash;
+use lb_core::mantle::{TxHash, notes::NoteNullifier};
 use lb_wallet::OwnedNote;
 use serde::{Deserialize, Serialize};
 
@@ -81,6 +81,23 @@ impl TrackedWallets {
             .extend(tx_hashes);
 
         fee_sponsor_inputs
+    }
+
+    pub(crate) fn release_wallet_reserved_inputs_if_unspent(
+        &mut self,
+        wallet_name: &str,
+        note_ids: &HashSet<NoteNullifier>,
+    ) -> Vec<OwnedNote> {
+        let Some(wallet) = self.wallet_mut(wallet_name) else {
+            return Vec::new();
+        };
+        let on_chain_note_ids = wallet
+            .on_chain_utxos()
+            .into_iter()
+            .map(|utxo| utxo.nullifier)
+            .filter(|note_id| note_ids.contains(note_id))
+            .collect::<HashSet<_>>();
+        wallet.release_reserved_note_ids(&on_chain_note_ids)
     }
 
     pub fn clear_encumbrances(&mut self, wallet_name: &str) {
@@ -426,7 +443,7 @@ pub struct WalletUtxoSnapshotDiagnostics {
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{Note, note_set::LEDGER_SET, notes::NoteNullifier};
+    use lb_core::mantle::{Note, note_set::LEDGER_SET};
     use lb_groth16::Fr;
     use lb_key_management_system_service::keys::ZkPublicKey;
     use lb_mmr::MerklePath;
@@ -510,6 +527,81 @@ mod tests {
                 .iter()
                 .map(|utxo| utxo.nullifier)
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn releasing_owned_unspent_inputs_preserves_spent_and_other_reservations() {
+        let spent_input = utxo(20, 0);
+        let workload_input = utxo(30, 1);
+        let other_input = utxo(40, 2);
+        let mut wallets = TrackedWallets::default();
+        wallets.replace_current_wallets_utxos([(
+            "sender".into(),
+            vec![
+                spent_input.clone(),
+                workload_input.clone(),
+                other_input.clone(),
+            ],
+        )]);
+        wallets.record_wallet_reservations(
+            "sender",
+            [
+                (
+                    TxHash([12; 32]),
+                    WalletReservedInputs::new(vec![spent_input.clone()], Vec::new()),
+                    0,
+                ),
+                (
+                    TxHash([13; 32]),
+                    WalletReservedInputs::new(vec![workload_input.clone()], Vec::new()),
+                    0,
+                ),
+                (
+                    TxHash([14; 32]),
+                    WalletReservedInputs::new(vec![other_input.clone()], Vec::new()),
+                    0,
+                ),
+            ],
+        );
+        wallets.replace_current_wallets_utxos([(
+            "sender".into(),
+            vec![workload_input.clone(), other_input],
+        )]);
+
+        let released = wallets.release_wallet_reserved_inputs_if_unspent(
+            "sender",
+            &HashSet::from([spent_input.nullifier, workload_input.nullifier]),
+        );
+        assert_eq!(
+            released
+                .iter()
+                .map(|note| note.nullifier)
+                .collect::<HashSet<_>>(),
+            HashSet::from([workload_input.nullifier])
+        );
+        let state = wallets
+            .wallets
+            .get("sender")
+            .expect("sender wallet exists")
+            .state_view("sender");
+        assert_eq!(
+            state
+                .balance(super::super::WalletOutputState::OnChain)
+                .value,
+            70
+        );
+        assert_eq!(
+            state
+                .balance(super::super::WalletOutputState::Reserved)
+                .value,
+            40
+        );
+        assert_eq!(
+            state
+                .balance(super::super::WalletOutputState::Available)
+                .value,
+            30
         );
     }
 }

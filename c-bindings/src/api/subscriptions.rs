@@ -82,7 +82,7 @@ pub fn subscribe_to_new_blocks_sync(
             Ok(mut block_stream) => {
                 runtime_handler.spawn(async move {
                     while let Ok(event) = block_stream.recv().await {
-                        let res = storage.load_block(&event.block_id).await;
+                        let res = storage.try_get_block(&event.block_id).await;
                         if let Ok(Some(block)) = res {
                             let txs_with_id: Vec<TxWithId> = block
                                 .transactions_iter()
