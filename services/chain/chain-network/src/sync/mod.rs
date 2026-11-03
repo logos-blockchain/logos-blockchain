@@ -1,4 +1,5 @@
 pub mod config;
+pub mod future_blocks;
 pub mod orphan_handler;
 pub mod rejected_blocks;
 pub mod tip_poll;
