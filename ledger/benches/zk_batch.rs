@@ -43,7 +43,7 @@ use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
 use lb_zksign::verify;
 use logos_blockchain_ledger::{
-    Config, ConsensusExcludedKeys, LedgerState,
+    Config, ConsensusExcludedKeys, LedgerState, ValidationMode,
     config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
@@ -233,7 +233,11 @@ fn apply(
 ) -> (LedgerState, DeferredProofs) {
     let (state, _, deferred) = state
         .clone()
-        .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(&TX_POOL.eras, txs)
+        .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
+            &TX_POOL.eras,
+            txs,
+            ValidationMode::Full,
+        )
         .expect("block should apply");
     (state, deferred)
 }

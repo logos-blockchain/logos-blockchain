@@ -25,7 +25,10 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Epoch, PrunedBlocks, Slot};
 use lb_cryptarchia_sync::{BlocksUnavailableReason, ProviderResponse, TipResponseFailureReason};
-use lb_ledger::config::{config_for_slot, stake_distribution_snapshot};
+use lb_ledger::{
+    ValidationMode,
+    config::{config_for_slot, stake_distribution_snapshot},
+};
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_network_service::message::ChainSyncEvent;
 use lb_storage_service::api::StorageApi;
@@ -38,9 +41,9 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
-    AppliedBlock, BlockOrigin, ChainServiceInfo, ConsensusMsg, Cryptarchia,
-    CryptarchiaConsensusState, EpochStateQueryResult, Error, LOG_TARGET, LibUpdate,
-    ProcessedBlockEvent, PrunedBlocksInfo, Query, metrics,
+    AppliedBlock, ChainServiceInfo, ConsensusMsg, Cryptarchia, CryptarchiaConsensusState,
+    EpochStateQueryResult, Error, LOG_TARGET, LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo,
+    Query, metrics,
     notifier::ChainOnlineNotifier,
     relays::{BroadcastRelay, CryptarchiaConsensusRelays},
     sync::block_provider::BlockProvider,
@@ -317,7 +320,7 @@ where
             &mut self.cryptarchia,
             block,
             self.current_slot,
-            BlockOrigin::Network,
+            ValidationMode::Full,
             &self.relays,
             &self.new_block_subscription_sender,
             &self.lib_subscription_sender,
@@ -889,7 +892,7 @@ pub async fn process_block<Tx>(
     cryptarchia: &mut Cryptarchia,
     block: Block<Tx>,
     current_slot: Slot,
-    origin: BlockOrigin,
+    validation_mode: ValidationMode,
     relays: &CryptarchiaConsensusRelays<Tx>,
     new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
     lib_broadcaster: &broadcast::Sender<LibUpdate>,
@@ -915,8 +918,11 @@ where
     let prev_lib = cryptarchia.lib();
 
     let mut candidate = cryptarchia.clone();
-    let applied =
-        candidate.try_apply_block_with_state_retention(block.clone(), current_slot, origin)?;
+    let applied = candidate.try_apply_block_with_state_retention(
+        block.clone(),
+        current_slot,
+        validation_mode,
+    )?;
     let new_lib = candidate.lib();
 
     let tx_count = block.transactions_iter().count();
