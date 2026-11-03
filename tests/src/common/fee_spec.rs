@@ -137,19 +137,19 @@ pub fn spec_block_execution_gas(block: &ApiBlock) -> Result<u64, String> {
 
     for tx in &block.transactions {
         let mut buffered = 0u64;
+        // The referenced root and buffered count of the proofs extending a root,
+        // each extension paid once by the transaction.
+        let mut extended_roots = HashSet::new();
         for op in tx.op_refs() {
             match op {
                 OpRef::Transfer(transfer) => {
                     let inputs = transfer.inputs.len() as u64;
                     let outputs = transfer.outputs.len() as u64;
-                    let root = if buffered == 0 {
-                        0
-                    } else {
-                        SPEC_ROOT_GAS + SPEC_BUFFERED_GAS * buffered
-                    };
+                    if buffered > 0 {
+                        extended_roots.insert((transfer.commitment_merkle_root, buffered));
+                    }
                     total += SPEC_TRANSFER_GAS
                         + SPEC_PROOF_GAS
-                        + root
                         + SPEC_NULLIFIER_GAS * inputs
                         + SPEC_COMMITMENT_GAS * outputs;
                     buffered += outputs;
@@ -163,8 +163,12 @@ pub fn spec_block_execution_gas(block: &ApiBlock) -> Result<u64, String> {
                 }
             }
         }
+        total += extended_roots
+            .iter()
+            .map(|(_, buffered)| SPEC_ROOT_GAS + SPEC_BUFFERED_GAS * buffered)
+            .sum::<u64>();
         // Transfers change no channel or SDP note set, so the transaction
-        // adds only its bytes.
+        // adds only its bytes on top.
         total += SPEC_KB_GAS * tx.encode().len() as u64 / 1000;
     }
 

@@ -412,7 +412,7 @@ mod tests {
             (Op::SDPWithdraw(SDPWithdrawOp::sample()), 3_572),
             // 6927 + 161
             (Op::SDPActive(SDPActiveOp::sample()), 7_088),
-            (Op::ClaimPowReward(ClaimPowRewardOp::sample()), 566),
+            (Op::ClaimPowReward(ClaimPowRewardOp::sample()), 592),
         ] {
             assert_eq!(
                 op.by_ref()

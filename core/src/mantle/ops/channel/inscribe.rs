@@ -1191,8 +1191,8 @@ mod tests {
             commitment_merkle_root: Fr::ZERO,
             buffered: 0,
         };
-        // 182 + steps * (161 + 1770 + 725), one input, no output, nothing buffered
-        for (steps, expected) in [(0usize, 182u64), (1, 2_838), (3, 8_150)] {
+        // 182 + steps * (178 + 1770 + 725), one input, no output, nothing buffered
+        for (steps, expected) in [(0usize, 182u64), (1, 2_855), (3, 8_201)] {
             let operation = InscriptionOp {
                 steps: ChannelSteps::try_from(vec![Step::User(step.clone()); steps]).unwrap(),
                 ..InscriptionOp::sample()
@@ -1217,18 +1217,18 @@ mod tests {
         };
         // A program step is 54 + 6320 + 151 (one opening), its spend of one input
         // and one output (1770 + 725 + 24) and, per payment of one input and one
-        // output, 233 + 1770 + 725 + 24 = 2_752. The transaction pays the root
+        // output, 250 + 1770 + 725 + 24 = 2_769. The transaction pays the root
         // extensions.
         for (steps, expected) in [
             (vec![], 182u64),
             // 182 + 6_525 + 2_519
             (vec![program(0)], 9_226),
-            // 182 + 6_525 + 2_752 + 2_519
-            (vec![program(1)], 11_978),
-            // 182 + 2_656 + 11_796
-            (vec![user, program(1)], 14_634),
-            // 11_978 + (6_525 + 3 * 2_752 + 2_519)
-            (vec![program(1), program(3)], 29_278),
+            // 182 + 6_525 + 2_769 + 2_519
+            (vec![program(1)], 11_995),
+            // 182 + 2_673 + 11_813
+            (vec![user, program(1)], 14_668),
+            // 11_995 + (6_525 + 3 * 2_769 + 2_519)
+            (vec![program(1), program(3)], 29_346),
         ] {
             let operation = InscriptionOp {
                 steps: steps.try_into().unwrap(),
@@ -1256,11 +1256,11 @@ mod tests {
             .unwrap(),
             ..InscriptionOp::sample()
         };
-        // 182 + (54 + 6320 + 151) + the payment (233 + 1770 + 725 + 24) + the spend
+        // 182 + (54 + 6320 + 151) + the payment (250 + 1770 + 725 + 24) + the spend
         // of the step (1770 + 725 + 24)
         assert_eq!(
             operation.execution_gas(&FixedThresholds(3)),
-            Ok(Gas::new(182 + 6_525 + 2_752 + 2_519))
+            Ok(Gas::new(182 + 6_525 + 2_769 + 2_519))
         );
     }
 
