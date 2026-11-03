@@ -9,13 +9,19 @@ use std::{
 use async_trait::async_trait;
 use futures::Stream;
 use indexmap::{IndexMap, IndexSet};
-use lb_core::mantle::{
-    traits::{Hashable, MantleTx},
-    transactions::hash::PrefixedKey,
+use lb_core::{
+    block::TxInBlock,
+    mantle::{
+        traits::{Hashable, MantleTx},
+        transactions::hash::PrefixedKey,
+    },
 };
 use lb_cryptarchia_engine::Slot;
 use lb_log_targets::mempool;
-use lb_time::{Era, era::EraSchedule};
+use lb_time::{
+    Era,
+    era::{EraSchedule, EraTiming},
+};
 use serde::{Deserialize, Serialize};
 
 use super::Status;
@@ -43,6 +49,10 @@ pub struct MempoolSettings {
     /// Eviction of transactions carrying an expired `PoW` reward claim, with
     /// the settings of every era. `None` disables it.
     pub pow_claim: Option<EraSchedule<PowClaimEvictionSettings>>,
+    /// The slot timing of every era, to date a reorged transaction the pool
+    /// never held by the start of the slot of the block carrying it. `None`
+    /// dates it at its re-admission instead.
+    pub era_timing: Option<EraSchedule<EraTiming>>,
 }
 
 impl Default for MempoolSettings {
@@ -50,6 +60,7 @@ impl Default for MempoolSettings {
         Self {
             tx_ttl: Some(DEFAULT_TX_TTL),
             pow_claim: None,
+            era_timing: None,
         }
     }
 }
@@ -114,6 +125,7 @@ where
     /// They keep their prefix index entry and body until the block becomes
     /// immutable, since until then a competing block can carry them too.
     included_in_canonical: HashMap<ItemKey<Item>, IncludedItem>,
+    settings: MempoolSettings,
     last_item_timestamp: u64,
     evictor: Evictor<Item, BlockId>,
     storage_adapter: Storage,
@@ -175,6 +187,7 @@ where
             included_in_canonical: HashMap::new(),
             last_item_timestamp: 0,
             evictor: Evictor::new(&settings),
+            settings,
             storage_adapter: storage,
             _phantom: std::marker::PhantomData,
         }
@@ -292,12 +305,12 @@ where
     async fn on_canonical_chain_updated(
         &mut self,
         entered: HashMap<Self::Key, Slot>,
-        reorged: Vec<Self::Item>,
+        reorged: Vec<TxInBlock<Self::Item>>,
     ) -> Vec<Self::Item> {
         // A reorged tx leaves `included_in_canonical` to be admitted again
-        // below. If its admission fails, it is retained in `removed_items`
-        // like any other retired tx.
-        for item in &reorged {
+        // below. If it is too old, or its admission fails, it is retained in
+        // `removed_items` like any other retired tx.
+        for TxInBlock { tx: item, .. } in &reorged {
             let key = item.hash();
             if let Some(included) = self.included_in_canonical.remove(&key) {
                 self.removed_items.insert(key, included.admitted_at);
@@ -326,9 +339,21 @@ where
         metrics::mempool_transactions_removed(count);
         metrics::mempool_transactions_pending(self.pending_items.len());
 
+        let now = current_timestamp_millis();
         let mut readmitted = Vec::with_capacity(reorged.len());
-        for item in reorged {
-            match self.add_item(item.hash(), item.clone()).await {
+        for TxInBlock { tx: item, slot } in reorged {
+            let key = item.hash();
+            // A tx older than the TTL is not admitted again.
+            let admitted_at = self
+                .removed_items
+                .get(&key)
+                .copied()
+                .or_else(|| self.slot_start(slot))
+                .unwrap_or(now);
+            if self.is_expired(admitted_at, now) {
+                continue;
+            }
+            match self.add_item(key, item.clone()).await {
                 Ok(()) => readmitted.push(item),
                 // Already pending: the pool didn't hold it when its block
                 // entered the canonical chain, and received it afterwards.
@@ -445,6 +470,7 @@ where
             included_in_canonical: state.included_in_canonical,
             last_item_timestamp: state.last_item_timestamp,
             evictor: Evictor::new(&settings),
+            settings,
             storage_adapter: storage,
             _phantom: std::marker::PhantomData,
         }
@@ -586,6 +612,21 @@ where
             self.unindex_by_prefix(key);
         }
         true
+    }
+
+    /// When `slot` starts, in milliseconds since the Unix epoch, if the slot
+    /// timing is known.
+    fn slot_start(&self, slot: Slot) -> Option<AdmissionTime> {
+        let start = self.settings.era_timing.as_ref()?.checked_time_of(slot)?;
+        u64::try_from(start.unix_timestamp_nanos() / 1_000_000).ok()
+    }
+
+    /// Whether an item admitted at `admitted_at` is older than the TTL at
+    /// `now`. Never, if expiry is disabled.
+    fn is_expired(&self, admitted_at: AdmissionTime, now: u64) -> bool {
+        self.settings
+            .tx_ttl
+            .is_some_and(|tx_ttl| now.saturating_sub(admitted_at) > tx_ttl.as_millis() as u64)
     }
 
     /// Insert `key` into [`Self::pending_items`] at the position its

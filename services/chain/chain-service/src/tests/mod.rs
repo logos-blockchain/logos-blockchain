@@ -7,7 +7,7 @@ use std::{
 
 use futures::StreamExt as _;
 use lb_core::{
-    block::{Block, BlockTransactions, SignedHeader, UncleHeaders},
+    block::{Block, BlockTransactions, SignedHeader, TxInBlock, UncleHeaders},
     mantle::{
         Note, Op, OpProof, SignedOps, Utxo,
         channel::Channels,
@@ -636,6 +636,11 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     assert!(lib_rx.try_recv().is_err());
 }
 
+/// `tx`, carried by a block at `slot`.
+const fn tx_in_block<Tx>(tx: Tx, slot: Slot) -> TxInBlock<Tx> {
+    TxInBlock { tx, slot }
+}
+
 /// A fork switch reports the transactions of every block that entered the
 /// canonical chain, and reorgs only the transactions of the displaced blocks
 /// that the adopted branch does not carry.
@@ -751,7 +756,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         outcome.newly_canonical_txs,
         HashMap::from([(tx1.hash(), f1_slot), (tx2.hash(), f2_slot)])
     );
-    assert_eq!(outcome.reorged_txs, vec![tx3]);
+    assert_eq!(outcome.reorged_txs, vec![tx_in_block(tx3, b1_slot)]);
     assert_eq!(cryptarchia.tip(), f2.header().id());
 }
 

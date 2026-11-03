@@ -24,7 +24,7 @@ use futures::{Stream, TryStreamExt as _};
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
-    block::{Block, UncleHeaders, genesis::GenesisBlock},
+    block::{Block, TxInBlock, UncleHeaders, genesis::GenesisBlock},
     events::Events,
     header::HeaderId,
     mantle::{
@@ -303,8 +303,9 @@ pub struct AppliedBlock<Tx> {
     /// was not canonical, each mapped to the slot of the block carrying it.
     pub newly_canonical_txs: HashMap<TxHash, Slot>,
     /// Transactions carried by the blocks that left the canonical chain,
-    /// except those also carried by the blocks that entered it.
-    pub reorged_txs: Vec<Tx>,
+    /// except those also carried by the blocks that entered it, each with
+    /// the slot of the block carrying it.
+    pub reorged_txs: Vec<TxInBlock<Tx>>,
     /// The slot of the latest immutable block after applying the block.
     pub lib_slot: Slot,
 }
