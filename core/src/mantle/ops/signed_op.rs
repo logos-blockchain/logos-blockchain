@@ -7,7 +7,7 @@ use crate::mantle::{
         channel::{
             channel_transfer::{ChannelTransferOp, ChannelTransferValidationContext},
             config::{ChannelConfigOp, ChannelConfigValidationContext},
-            deposit::{DepositOp, DepositValidationContext},
+            deposit::{DepositOp, DepositPreverificationContext, DepositValidationContext},
             inscribe::{
                 InscriptionOp, InscriptionPreverificationContext, InscriptionValidationContext,
             },
@@ -113,10 +113,14 @@ impl SignedOp<Unverified, StandardMode> {
     pub(crate) fn into_preverified(
         self,
         tx_hash_view: &TxHashView,
+        max_op_data_size: u32,
     ) -> Result<SignedOp<Preverified, StandardMode>, VerificationError> {
         match self {
             Self::ChannelInscribe(op) => {
-                let context = InscriptionPreverificationContext { tx_hash_view };
+                let context = InscriptionPreverificationContext {
+                    tx_hash_view,
+                    max_inscription_size: max_op_data_size,
+                };
                 op.into_preverified(&context)
                     .map(SignedOp::from)
                     .map_err(VerificationError::ChannelVerificationError)
@@ -126,7 +130,9 @@ impl SignedOp<Unverified, StandardMode> {
                 .map(SignedOp::from)
                 .map_err(VerificationError::ChannelVerificationError),
             Self::ChannelDeposit(op) => op
-                .into_preverified(&())
+                .into_preverified(&DepositPreverificationContext {
+                    max_metadata_size: max_op_data_size,
+                })
                 .map(SignedOp::from)
                 .map_err(VerificationError::ChannelVerificationError),
             Self::ChannelWithdraw(op) => op
@@ -442,7 +448,7 @@ mod tests {
     fn verify_without_declaration(operation: UnverifiedOp) -> VerificationError {
         let tx_hash_view = TxHashView::from(TxHash::from([9u8; 32]));
         let preverified = operation
-            .into_preverified(&tx_hash_view)
+            .into_preverified(&tx_hash_view, u32::MAX)
             .expect("SDP preverification accepts these operations");
         let helper = TestOperationVerificationHelper::new(Channels::new(), []);
         let mut deferred_proofs = DeferredProofs::new();

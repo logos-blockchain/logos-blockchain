@@ -232,6 +232,7 @@ mod tests {
         let preverified = signed_operation
             .into_preverified(&InscriptionPreverificationContext {
                 tx_hash_view: &tx_hash_view(),
+                max_inscription_size: u32::MAX,
             })
             .expect("the sample signer signed this transaction hash");
 
@@ -249,6 +250,7 @@ mod tests {
         let preverified_signed_operation =
             signed_operation.into_preverified(&InscriptionPreverificationContext {
                 tx_hash_view: &tx_hash_view(),
+                max_inscription_size: u32::MAX,
             });
 
         assert_eq!(preverified_signed_operation, Err(Error::InvalidSignature));

@@ -134,12 +134,16 @@ impl SignedOps<Unverified, StandardMode> {
     /// - Each operation has a corresponding proof of the correct type
     /// - [`InscriptionOp`](crate::mantle::ops::channel::inscribe::InscriptionOp)
     ///   and [`LeaderClaimOp`](crate::mantle::ops::leader_claim::LeaderClaimOp) have valid signatures/proofs.
-    pub fn preverify(self) -> Result<SignedOps<Preverified, StandardMode>, VerificationError> {
+    /// - No Operation carries more than `max_op_data_size` bytes of data.
+    pub fn preverify(
+        self,
+        max_op_data_size: u32,
+    ) -> Result<SignedOps<Preverified, StandardMode>, VerificationError> {
         let tx_hash_view = TxHashView::new(self.hash());
         let fork_digest = self.fork_digest;
         let preverified_signed_op_vec = self
             .into_iter()
-            .map(|signed_op| signed_op.into_preverified(&tx_hash_view))
+            .map(|signed_op| signed_op.into_preverified(&tx_hash_view, max_op_data_size))
             .collect::<Result<Vec<SignedOp<Preverified, StandardMode>>, VerificationError>>()?;
         Ok(SignedOps {
             fork_digest,
@@ -263,13 +267,15 @@ impl<State: VerificationState, Mode: VerificationMode> BinaryEncode for SignedOp
 }
 
 impl<Mode: VerificationMode> BinaryDecode for SignedOps<Unverified, Mode> {
-    type Context = ();
+    /// The most bytes of data an Operation may carry in the era the transaction
+    /// is decoded under.
+    type Context = u32;
 
     fn decode<'input>(
         input: &'input [u8],
-        _context: &Self::Context,
+        max_op_data_size: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (remaining_input, ops) = Ops::decode(input, &())?;
+        let (remaining_input, ops) = Ops::decode(input, max_op_data_size)?;
         let (remaining_input, proofs) = OpProofs::decode_with_ops(remaining_input, &ops)?;
 
         let signed_ops = Self::from_parts(ops, proofs).map_err(|error| {
@@ -282,15 +288,17 @@ impl<Mode: VerificationMode> BinaryDecode for SignedOps<Unverified, Mode> {
 
 // Decoded unverified, then preverified, as its serde form is.
 impl BinaryDecode for SignedOps<Preverified, StandardMode> {
-    type Context = ();
+    /// The most bytes of data an Operation may carry in the era the transaction
+    /// is decoded under.
+    type Context = u32;
 
     fn decode<'input>(
         input: &'input [u8],
-        (): &Self::Context,
+        max_op_data_size: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
         let (remaining_input, signed_ops) =
-            SignedOps::<Unverified, StandardMode>::decode(input, &())?;
-        let signed_ops = signed_ops.preverify().map_err(|error| {
+            SignedOps::<Unverified, StandardMode>::decode(input, max_op_data_size)?;
+        let signed_ops = signed_ops.preverify(*max_op_data_size).map_err(|error| {
             DecodeError::custom(format!("Failed to preverify SignedOps: {error}"))
         })?;
 
@@ -373,7 +381,7 @@ mod mantle_spec {
     //! [fork digest][count][ops...][proofs...]
     //! ```
 
-    use lb_binary_codec::canonical::{BinaryDecodeExt as _, BinaryEncode as _};
+    use lb_binary_codec::canonical::{BinaryDecode as _, BinaryEncode as _};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     use crate::mantle::{
@@ -432,7 +440,7 @@ mod mantle_spec {
                 Self::from_parts(helper.ops, helper.ops_proofs).map_err(serde::de::Error::custom)
             } else {
                 let bytes: Vec<u8> = Deserialize::deserialize(deserializer)?;
-                Self::decode_all(bytes.as_slice()).map_err(serde::de::Error::custom)
+                Self::decode_all(bytes.as_slice(), &u32::MAX).map_err(serde::de::Error::custom)
             }
         }
     }
@@ -445,7 +453,7 @@ mod mantle_spec {
             let unverified_signed_ops =
                 SignedOps::<Unverified, StandardMode>::deserialize(deserializer)?;
             unverified_signed_ops
-                .preverify()
+                .preverify(u32::MAX)
                 .map_err(serde::de::Error::custom)
         }
     }
@@ -465,8 +473,10 @@ pub mod test_utils {
         fixtures::ops::op_values::FORK_DIGEST,
         ledger::{BoundedInputs, Inputs, verification_mode::StandardMode},
         ops::channel::{
-            ChannelId, ChannelKeyIndex, MsgId, UnverifiedChannelKeys, inscribe::InscriptionOp,
-            verification::test_utils::create_channel_multi_sig_proof, withdraw::ChannelWithdrawOp,
+            ChannelId, ChannelKeyIndex, MsgId, UnverifiedChannelKeys,
+            inscribe::{Inscription, InscriptionOp},
+            verification::test_utils::create_channel_multi_sig_proof,
+            withdraw::ChannelWithdrawOp,
         },
         traits::Hashable as _,
         transactions::{OpProofs, Ops, SignedOps, TxList, states::Preverified},
@@ -481,7 +491,7 @@ pub mod test_utils {
     pub fn create_test_inscribe_op(signing_key: &Ed25519Key) -> InscriptionOp {
         InscriptionOp {
             channel_id: [0; 32].into(),
-            inscription: [1, 2, 3].into(),
+            inscription: Inscription::new_unchecked(vec![1, 2, 3]),
             parent: [0; 32].into(),
             signer: signing_key.public_key().into_unverified(),
         }
@@ -535,7 +545,7 @@ pub mod test_utils {
 
         let signed_ops = SignedOps::from_parts(mantle_tx, op_proofs)
             .unwrap()
-            .preverify()
+            .preverify(u32::MAX)
             .unwrap();
         assert_eq!(
             signed_ops.inner().len(),
@@ -566,8 +576,11 @@ mod tests {
         ledger::{BoundedInputs, Outputs, OutputsError, verification_mode::StandardMode},
         ops::{
             channel::{
-                ChannelId, MsgId, config::ChannelConfigOp, deposit::DepositOp,
-                inscribe::InscriptionOp, withdraw::ChannelWithdrawOp,
+                ChannelId, MsgId,
+                config::ChannelConfigOp,
+                deposit::{DepositOp, Metadata},
+                inscribe::InscriptionOp,
+                withdraw::ChannelWithdrawOp,
             },
             transfer::{TransferError, TransferOp},
         },
@@ -618,7 +631,7 @@ mod tests {
         DepositOp {
             channel_id,
             inputs: BoundedInputs::from(NoteId(Fr::from(0u64))).into(),
-            metadata: [].into(),
+            metadata: Metadata::empty(),
         }
     }
 
@@ -778,7 +791,7 @@ mod tests {
         let op_proofs = OpProofs::from([OpProof::Ed25519Sig(signature)]);
         let result = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs)
             .unwrap()
-            .preverify();
+            .preverify(u32::MAX);
 
         assert!(result.is_ok());
     }
@@ -797,7 +810,7 @@ mod tests {
         let op_proofs = OpProofs::from([OpProof::Ed25519Sig(signature)]);
         let result = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs)
             .unwrap()
-            .preverify();
+            .preverify(u32::MAX);
 
         assert!(matches!(
             result,
@@ -827,7 +840,7 @@ mod tests {
         let op_proofs = OpProofs::from([OpProof::Ed25519Sig(sig1), OpProof::Ed25519Sig(sig2)]);
         let result = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs)
             .unwrap()
-            .preverify();
+            .preverify(u32::MAX);
 
         assert!(result.is_ok());
     }
@@ -853,7 +866,7 @@ mod tests {
         let op_proofs = OpProofs::from([OpProof::Ed25519Sig(sig1), OpProof::Ed25519Sig(sig2)]);
         let result = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs)
             .unwrap()
-            .preverify();
+            .preverify(u32::MAX);
 
         assert!(matches!(
             result,
@@ -882,7 +895,7 @@ mod tests {
         let op_proofs = OpProofs::from([OpProof::ZkSig(transfer_sig)]);
         let result = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs)
             .unwrap()
-            .preverify();
+            .preverify(u32::MAX);
 
         assert_eq!(
             result,
@@ -906,7 +919,7 @@ mod tests {
         assert!(
             SignedOps::<Unverified, StandardMode>::from_parts(ops.clone(), op_proofs.clone())
                 .expect("the proof matches the op")
-                .preverify()
+                .preverify(u32::MAX)
                 .is_err()
         );
 
@@ -1022,14 +1035,14 @@ mod tests {
         let op_proofs = OpProofs::from([OpProof::Ed25519Sig(signature)]);
         let signed_ops = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs)
             .unwrap()
-            .preverify()
+            .preverify(u32::MAX)
             .unwrap();
 
         // Serialize and deserialize
         let serialized = serde_json::to_string(&signed_ops).unwrap();
         let deserialized: Result<SignedOps<Unverified, StandardMode>, _> =
             serde_json::from_str(&serialized);
-        let deserialized_signed_ops = deserialized.unwrap().preverify().unwrap();
+        let deserialized_signed_ops = deserialized.unwrap().preverify(u32::MAX).unwrap();
 
         assert_eq!(deserialized_signed_ops, signed_ops);
     }

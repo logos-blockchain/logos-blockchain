@@ -69,9 +69,7 @@ pub fn channel_id_for_payload_size(payload_size: usize) -> ChannelId {
 /// Helper function to create an `Inscription` from a UTF-8 string message.
 #[must_use]
 pub fn make_inscription(msg: &str) -> Inscription {
-    Inscription::try_from(msg.as_bytes().to_vec()).unwrap_or_else(|err| {
-        panic!("Failed to create inscription payload from message '{msg}': {err}")
-    })
+    Inscription::new_unchecked(msg.as_bytes().to_vec())
 }
 
 #[cfg(test)]

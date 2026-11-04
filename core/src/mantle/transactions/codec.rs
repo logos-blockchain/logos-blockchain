@@ -73,7 +73,7 @@ mod tests {
     use std::{collections::HashMap, num::NonZero};
 
     use ark_ff::AdditiveGroup as _;
-    use lb_binary_codec::canonical::{BinaryDecodeExt as _, DecodeError};
+    use lb_binary_codec::canonical::{BinaryDecode as _, DecodeError};
     use lb_blend_proofs::{
         quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
         selection::VerifiedProofOfSelection,
@@ -98,7 +98,7 @@ mod tests {
                 channel::{
                     ChannelId, MsgId,
                     config::ChannelConfigOp,
-                    inscribe::{self, Inscription, InscriptionOp},
+                    inscribe::{Inscription, InscriptionOp},
                     withdraw::ChannelWithdrawOp,
                 },
                 leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
@@ -151,7 +151,7 @@ mod tests {
             FORK_DIGEST,
             [Op::ChannelInscribe(InscriptionOp {
                 channel_id: ChannelId::from([0xAA; 32]),
-                inscription: b"hello".into(),
+                inscription: Inscription::new_unchecked(b"hello".to_vec()),
                 parent: MsgId::from([0xBB; 32]),
                 signer: signing_key.public_key().into_unverified(),
             })],
@@ -188,7 +188,7 @@ mod tests {
 
         // DECODING
         let test_vector_bytes = hex::decode(test_vector).unwrap();
-        let (remaining, decoded_tx) = SignedOps::decode(&test_vector_bytes).unwrap();
+        let (remaining, decoded_tx) = SignedOps::decode(&test_vector_bytes, &u32::MAX).unwrap();
         assert_eq!(remaining, b"");
         assert_eq!(decoded_tx, signed_tx);
     }
@@ -200,7 +200,7 @@ mod tests {
             TxList::new_unchecked(vec![
                 Op::ChannelInscribe(InscriptionOp {
                     channel_id: ChannelId::from([0x11; 32]),
-                    inscription: b"first".into(),
+                    inscription: Inscription::new_unchecked(b"first".to_vec()),
                     parent: MsgId::from([0x00; 32]),
                     signer: signing_key.public_key().into_unverified(),
                 }),
@@ -235,7 +235,7 @@ mod tests {
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(tx, op_proofs).unwrap();
 
         let encoded = signed_tx.encode();
-        let (remaining, decoded_tx) = SignedOps::decode(&encoded).unwrap();
+        let (remaining, decoded_tx) = SignedOps::decode(&encoded, &u32::MAX).unwrap();
         assert_eq!(remaining, b"");
         assert_eq!(decoded_tx, signed_tx);
     }
@@ -243,7 +243,7 @@ mod tests {
     #[tokio::test]
     async fn test_large_payload_encoding_decoding() {
         // Test payload sizes from 512kB up to 2MiB in 512kB increments
-        const MAX_SIZE: usize = inscribe::MAX_BYTES;
+        const MAX_SIZE: usize = 2 * 1024 * 1024;
         const CHUNK_SIZE: usize = MAX_SIZE / 10;
 
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
@@ -289,7 +289,7 @@ mod tests {
                     "Size mismatch at payload size {payload_size}",
                 );
 
-                let (remaining, decoded_tx) = SignedOps::decode(&encoded)
+                let (remaining, decoded_tx) = SignedOps::decode(&encoded, &u32::MAX)
                     .unwrap_or_else(|_| panic!("Failed to decode at payload size {payload_size}"));
 
                 assert!(
@@ -329,7 +329,7 @@ mod tests {
         let encoded = original_tx.encode();
 
         // Decode
-        let (remaining, decoded_tx) = Ops::decode(&encoded).unwrap();
+        let (remaining, decoded_tx) = Ops::decode(&encoded, &u32::MAX).unwrap();
 
         // Verify
         assert_eq!(remaining, b"");
@@ -364,7 +364,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let inscribe_op = InscriptionOp {
             channel_id: ChannelId::from([0xAA; 32]),
-            inscription: b"hello world".into(),
+            inscription: Inscription::new_unchecked(b"hello world".to_vec()),
             parent: MsgId::from([0xBB; 32]),
             signer: signing_key.public_key().into_unverified(),
         };
@@ -582,7 +582,7 @@ mod tests {
 
         let inscribe_op = InscriptionOp {
             channel_id: ChannelId::from([0xAA; 32]),
-            inscription: b"test".into(),
+            inscription: Inscription::new_unchecked(b"test".to_vec()),
             parent: MsgId::from([0xBB; 32]),
             signer: signing_key.public_key().into_unverified(),
         };
@@ -697,7 +697,9 @@ mod tests {
 
         let inscribe_op = InscriptionOp {
             channel_id: ChannelId::from([0x11; 32]),
-            inscription: b"complex test inscription with more data".into(),
+            inscription: Inscription::new_unchecked(
+                b"complex test inscription with more data".to_vec(),
+            ),
             parent: MsgId::from([0x22; 32]),
             signer: signing_key1.public_key().into_unverified(),
         };
@@ -817,7 +819,7 @@ mod tests {
         let op = Op::LeaderClaim(leader_claim_op);
 
         let encoded = op.encode();
-        let (remaining, decoded_op) = Op::decode(&encoded).unwrap();
+        let (remaining, decoded_op) = Op::decode(&encoded, &u32::MAX).unwrap();
         assert_eq!(remaining, b"");
         assert_eq!(decoded_op, op);
     }
@@ -846,7 +848,8 @@ mod tests {
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();
 
         let encoded = signed_tx.encode();
-        let (remaining, decoded_tx) = SignedOps::<_, StandardMode>::decode(&encoded).unwrap();
+        let (remaining, decoded_tx) =
+            SignedOps::<_, StandardMode>::decode(&encoded, &u32::MAX).unwrap();
 
         assert_eq!(remaining, b"");
         assert_eq!(decoded_tx, signed_tx);
@@ -855,6 +858,9 @@ mod tests {
     // ==============================================================================
     // Security Tests - Memory Over-Allocation Protection
     // ==============================================================================
+
+    /// The most bytes the era the tests decode under allows an inscription.
+    const MAX_INSCRIPTION_SIZE: u32 = 1_024;
 
     #[test]
     fn test_decode_reject_oversized_inscription() {
@@ -865,14 +871,14 @@ mod tests {
         malicious_input.extend_from_slice(&[0x42; 32]);
 
         // Inscription length (u32) - exceeds MAX_INSCRIPTION_SIZE
-        let oversized_len = inscribe::MAX_BYTES + 1;
+        let oversized_len = MAX_INSCRIPTION_SIZE + 1;
         malicious_input.extend_from_slice(&oversized_len.to_le_bytes());
 
         // We don't need to include the actual inscription data because
         // the decoder should reject it before trying to read that much
 
         // Try to decode - should fail with TooLarge error
-        let result = InscriptionOp::decode(&malicious_input);
+        let result = InscriptionOp::decode(&malicious_input, &MAX_INSCRIPTION_SIZE);
         assert!(result.is_err(), "Should reject oversized inscription");
 
         // Verify it fails with the right error kind
@@ -918,7 +924,7 @@ mod tests {
         let valid_input = vec![u8::MAX];
 
         // Should not fail with TooLarge error (will fail with incomplete data)
-        let result = Ops::decode(&valid_input);
+        let result = Ops::decode(&valid_input, &u32::MAX);
         if let Err(err) = result {
             assert!(
                 !matches!(err, DecodeError::LengthOutOfBounds { .. }),
@@ -936,10 +942,10 @@ mod tests {
         valid_input.extend_from_slice(&[0x42; 32]);
 
         // Inscription length (u32) - exactly MAX_INSCRIPTION_SIZE
-        valid_input.extend_from_slice(&(inscribe::MAX_BYTES as u32).to_le_bytes());
+        valid_input.extend_from_slice(&MAX_INSCRIPTION_SIZE.to_le_bytes());
 
         // Inscription data (MAX_INSCRIPTION_SIZE bytes)
-        valid_input.extend_from_slice(&vec![0x01; inscribe::MAX_BYTES]);
+        valid_input.extend_from_slice(&vec![0x01; MAX_INSCRIPTION_SIZE as usize]);
 
         // Parent MsgId (32 bytes)
         valid_input.extend_from_slice(&[0x43; 32]);
@@ -950,14 +956,17 @@ mod tests {
         valid_input.extend_from_slice(&pk.to_bytes());
 
         // Should succeed (though signature validation might fail later)
-        let result = InscriptionOp::decode(&valid_input);
+        let result = InscriptionOp::decode(&valid_input, &MAX_INSCRIPTION_SIZE);
         assert!(
             result.is_ok(),
             "Should accept inscription at MAX_INSCRIPTION_SIZE: {result:?}",
         );
 
         let (_, inscription_op) = result.unwrap();
-        assert_eq!(inscription_op.inscription.len(), inscribe::MAX_BYTES);
+        assert_eq!(
+            inscription_op.inscription.len(),
+            MAX_INSCRIPTION_SIZE as usize
+        );
     }
 
     #[test]
@@ -968,7 +977,7 @@ mod tests {
         encoded_config_op.extend_from_slice(&[0x33; 32]);
         encoded_config_op.extend_from_slice(&0u16.encode());
 
-        let err = ChannelConfigOp::decode(&encoded_config_op).unwrap_err();
+        let err = ChannelConfigOp::decode(&encoded_config_op, &()).unwrap_err();
         assert!(matches!(err, DecodeError::LengthOutOfBounds { len: 0, .. }));
     }
 
@@ -1005,7 +1014,7 @@ mod tests {
         valid_input.extend_from_slice(&1u16.encode());
         valid_input.extend_from_slice(&1u16.encode());
 
-        let result = ChannelConfigOp::decode(&valid_input);
+        let result = ChannelConfigOp::decode(&valid_input, &());
         assert!(result.is_ok(), "Should accept max key count: {result:?}");
 
         let (_, set_keys_op) = result.unwrap();
@@ -1031,7 +1040,7 @@ mod tests {
 
         // ... rest of SDPDeclare fields ...
 
-        let result = SDPDeclareOp::decode(&malicious_input);
+        let result = SDPDeclareOp::decode(&malicious_input, &());
         assert!(
             matches!(result, Err(DecodeError::LengthOutOfBounds { .. })),
             "Should reject at `MAX_LOCATOR_BYTE_SIZE + 1`",
@@ -1057,7 +1066,7 @@ mod tests {
 
         // ... rest of SDPDeclare fields ...
 
-        let result = SDPDeclareOp::decode(&malicious_input);
+        let result = SDPDeclareOp::decode(&malicious_input, &());
         if let Err(ref err) = result {
             assert!(
                 !matches!(err, DecodeError::LengthOutOfBounds { .. }),
@@ -1081,7 +1090,7 @@ mod tests {
         };
 
         let encoded = op.encode();
-        let result = SDPDeclareOp::decode(&encoded);
+        let result = SDPDeclareOp::decode(&encoded, &());
 
         assert!(
             matches!(result, Err(DecodeError::InvalidValue { .. })),
@@ -1102,7 +1111,7 @@ mod tests {
         );
 
         // Decode should succeed and produce the same number of inputs
-        let result = BoundedInputs::decode(&encoded);
+        let result = BoundedInputs::decode(&encoded, &());
         assert!(result.is_ok(), "Should decode max input count");
         let (_, decoded_inputs) = result.unwrap();
         assert_eq!(
@@ -1126,7 +1135,7 @@ mod tests {
         );
 
         // Decode should succeed and produce the same number of outputs
-        let result = BoundedOutputs::decode(&encoded);
+        let result = BoundedOutputs::decode(&encoded, &());
         assert!(result.is_ok(), "Should decode max output count");
         let (_, decoded_outputs) = result.unwrap();
         assert_eq!(
@@ -1150,7 +1159,7 @@ mod tests {
             valid_input.extend_from_slice(&note_id);
         }
 
-        let result = BoundedInputs::decode(&valid_input);
+        let result = BoundedInputs::decode(&valid_input, &());
         assert!(result.is_ok(), "Should accept max input count");
         let (_, inputs) = result.unwrap();
         assert_eq!(inputs.len(), u8::MAX as usize);
@@ -1164,7 +1173,7 @@ mod tests {
             valid_output.extend_from_slice(&[0x02; 32]); // public key
         }
 
-        let result = BoundedOutputs::decode(&valid_output);
+        let result = BoundedOutputs::decode(&valid_output, &());
         assert!(result.is_ok(), "Should accept max output count");
         let (_, outputs) = result.unwrap();
         assert_eq!(outputs.len(), u8::MAX as usize);

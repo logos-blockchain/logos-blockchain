@@ -234,9 +234,10 @@ pub struct PoWEraSettings {
     /// When it is not, no claim can succeed, so auto-claim does not run in the
     /// era.
     pub rewards_enabled: bool,
-    /// The size of the body of a data payload in the era: the largest
-    /// transaction the network can deliver, so the largest claim transaction.
-    pub max_data_payload_body_size: usize,
+    /// The most bytes a claim transaction may take in the era: it is published
+    /// in the body of a Blend data payload and included in a block, so the
+    /// smaller of what the two carry.
+    pub max_claim_tx_size: usize,
     /// The fork digest of the era, which the claims signed in it carry.
     pub fork_digest: ForkDigest,
     /// What the era's Operations cost, which a claim transaction pays for.
@@ -566,7 +567,7 @@ where
         // the era too. Finding it probes the encoding, so it is found once each time
         // the service enters an era rather than for every claim.
         let mut max_claims_in_payload =
-            max_claims_by_payload_size(current_era_settings.parameters.max_data_payload_body_size);
+            max_claims_by_payload_size(current_era_settings.parameters.max_claim_tx_size);
 
         // Dedicated thread pool for the CPU-heavy ticket search, keeping it off
         // Tokio's runtime threads.
@@ -751,7 +752,7 @@ where
                     if era > current_era_settings.era {
                         info!(target: LOG_TARGET, "PoW follows era {} from slot {}", era.into_inner(), u64::from(slot));
                         current_era_settings = settings.era_schedule.at_slot(slot);
-                        max_claims_in_payload = max_claims_by_payload_size(current_era_settings.parameters.max_data_payload_body_size);
+                        max_claims_in_payload = max_claims_by_payload_size(current_era_settings.parameters.max_claim_tx_size);
                     }
                     if let AutoClaimTick::Slots(period) = auto_claim_settings.tick
                         && is_auto_claiming
@@ -1674,6 +1675,14 @@ fn claim_tx_size(claims: usize) -> Result<u64, PoWError> {
     )?)
 }
 
+/// Size, in bytes, of a transaction that claims a single reward: the smallest
+/// claim transaction, which a Blend payload must carry for any claim to be
+/// published.
+#[must_use]
+pub fn single_claim_tx_size() -> u64 {
+    claim_tx_size(1).expect("A transaction of a single claim builds.")
+}
+
 /// Largest claim count whose transaction still fits the body of a Blend
 /// payload of `payload_body_size` bytes, the transport every claim is
 /// published over.
@@ -1692,7 +1701,7 @@ fn max_claims_by_payload_size(max_payload_body_size: usize) -> usize {
         .find(|&claims| {
             claim_tx_size(claims).is_ok_and(|size| size <= max_payload_body_size as u64)
         })
-        .expect("a single-claim tx fits a Blend payload")
+        .expect("the deployment checks that a single-claim tx fits a Blend payload and a block")
 }
 
 /// Builds and signs a single self-funding reward-claim transaction from a batch
@@ -2040,7 +2049,7 @@ mod tests {
             }
         }
         tx.clone()
-            .preverify()
+            .preverify(u32::MAX)
             .expect("built tx should pass stateless structural verification");
     }
 

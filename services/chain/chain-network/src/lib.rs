@@ -157,6 +157,9 @@ pub struct ChainNetworkEraSettings {
     /// apart, which sets how often the tip poll runs and how far the local tip
     /// may lag before it polls.
     pub slot_activation_coeff: NonNegativeRatio,
+    /// The most bytes the transactions of the era's blocks may take: what a
+    /// block rebuilt from a proposal of the era is held to.
+    pub max_transactions_size: u32,
 }
 
 #[expect(clippy::allow_attributes_without_reason)]
@@ -470,6 +473,7 @@ where
                         self.note_received_proposal(&proposal);
                         self.handle_incoming_proposal(
                             proposal,
+                            &era_schedule,
                             orphan_downloader.as_mut().get_mut(),
                             &relays,
                         )
@@ -648,6 +652,7 @@ where
     async fn handle_incoming_proposal(
         &self,
         proposal: Proposal,
+        era_schedule: &EraSchedule<ChainNetworkEraSettings>,
         orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
         relays: &ChainNetworkRelays<
             Cryptarchia,
@@ -683,7 +688,16 @@ where
         }
 
         let reconstruct_started_at = Instant::now();
-        let block = match reconstruct_block_from_proposal(proposal, relays.mempool_adapter()).await
+        let max_transactions_size = era_schedule
+            .at_slot(block_slot)
+            .parameters
+            .max_transactions_size;
+        let block = match reconstruct_block_from_proposal(
+            proposal,
+            max_transactions_size,
+            relays.mempool_adapter(),
+        )
+        .await
         {
             Ok(block) => {
                 metrics::consensus_observe_proposal_reconstruct_ok(
@@ -1192,9 +1206,11 @@ where
 /// The caller must have validated the header first: this walks the mempool once
 /// per reference, so an unauthenticated proposal has to be discarded before it
 /// gets here. The proposal's uncle headers were decoded under the maximum of
-/// the era of its slot, which the rebuilt block keeps.
+/// the era of its slot, which the rebuilt block keeps, and its transactions
+/// are held to the `max_transactions_size` bytes that era allows them.
 async fn reconstruct_block_from_proposal<Item>(
     proposal: Proposal,
+    max_transactions_size: u32,
     mempool: &impl MempoolAdapterTrait<Item>,
 ) -> Result<Block<Item>, Error>
 where
@@ -1208,8 +1224,11 @@ where
     Block::reconstruct(
         proposal.header().clone(),
         proposal.uncle_headers().clone(),
-        BlockTransactions::try_from(transactions)?,
+        // As many transactions as the proposal references, which were decoded
+        // under the maximum of the era of its slot.
+        BlockTransactions::new_unchecked(transactions),
         *proposal.signature(),
+        max_transactions_size,
     )
     .map_err(|_| Error::NoMatchingReconstruction)
 }
@@ -1480,6 +1499,7 @@ mod tests {
             UncleHeaders::empty(),
             leader_proof(&leader_key.public_key()),
             BlockTransactions::<Ops>::empty(),
+            u32::MAX,
             &leader_key,
         )
         .expect("block must be created")

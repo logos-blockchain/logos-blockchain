@@ -34,7 +34,10 @@ use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 use lb_ledger::{
     ConsensusExcludedKeys, LedgerState,
-    config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
+    config::{
+        BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig,
+        config_for_slot,
+    },
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
 use lb_storage_service::{
@@ -705,7 +708,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         &zk_key,
         Slot::new(1),
         UncleHeaders::empty(),
-        BlockTransactions::from([tx1.clone()]),
+        BlockTransactions::try_new(vec![tx1.clone()], u16::MAX).unwrap(),
     )
     .unwrap();
     fork_view
@@ -718,7 +721,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         &zk_key,
         f1.header().slot().strict_add(1.into()),
         UncleHeaders::empty(),
-        BlockTransactions::from([tx2.clone()]),
+        BlockTransactions::try_new(vec![tx2.clone()], u16::MAX).unwrap(),
     )
     .unwrap();
 
@@ -730,7 +733,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         &zk_key,
         Slot::new(1),
         UncleHeaders::empty(),
-        BlockTransactions::from([tx1.clone(), tx3.clone()]),
+        BlockTransactions::try_new(vec![tx1.clone(), tx3.clone()], u16::MAX).unwrap(),
     )
     .unwrap();
 
@@ -794,7 +797,8 @@ fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
         &zk_key,
         Slot::new(1),
         UncleHeaders::empty(),
-        BlockTransactions::from([transfer_tx_with_fake_sig(utxo, &fake_key)]),
+        BlockTransactions::try_new(vec![transfer_tx_with_fake_sig(utxo, &fake_key)], u16::MAX)
+            .unwrap(),
     )
     .expect("should find a winning slot");
 
@@ -826,7 +830,7 @@ fn transfer_tx_with_fake_sig(utxo: Utxo, fake_key: &ZkKey) -> SignedOps<Preverif
     output_note.value = utxo.note.value - fees.into_inner();
 
     transfer_tx(utxo, output_note, fake_key)
-        .preverify()
+        .preverify(u32::MAX)
         .expect("a fake signature is only caught by the stateful checks")
 }
 
@@ -848,7 +852,7 @@ fn burn_tx(utxo: Utxo, key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
     )]);
     SignedOps::from_parts(ops, op_proofs)
         .unwrap()
-        .preverify()
+        .preverify(u32::MAX)
         .unwrap()
 }
 
@@ -1038,6 +1042,9 @@ fn ledger_config_with_uncles(
                 timestamp: 0,
             },
         },
+        max_transactions: 1024,
+        max_transactions_size: 2 * 1024 * 1024,
+        max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
         execution_market: lb_ledger::config::ExecutionMarketConfig {
             max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_193_460).unwrap(),
             fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
@@ -1154,6 +1161,7 @@ pub fn try_build_block_with_transactions(
             uncle_headers,
             proof,
             transactions,
+            config_for_slot(cryptarchia.ledger.era_schedule(), slot.into()).max_transactions_size,
             &signing_key,
         )
         .unwrap();

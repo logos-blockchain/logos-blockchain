@@ -29,7 +29,7 @@ pub(super) fn sign_prepared_wallet_transaction(
         OpProofs::try_from(leading_op_proofs_vec)?
     };
 
-    let signed_tx = SignedOps::from_parts(mantle_tx, op_proofs)?.preverify()?;
+    let signed_tx = SignedOps::from_parts(mantle_tx, op_proofs)?.preverify(u32::MAX)?;
     let mandatory_fee_at_preparation = signed_tx
         .op_refs()
         .total_gas_cost(&context.gas_context)?
@@ -165,8 +165,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[0x42; 32]);
         let operation = InscriptionOp {
             channel_id: ChannelId::from([0x24; 32]),
-            inscription: Inscription::try_from(1u64.to_le_bytes().to_vec())
-                .expect("small fixed-width payload"),
+            inscription: Inscription::new_unchecked(1u64.to_le_bytes().to_vec()),
             parent: MsgId::root(),
             signer: signing_key.public_key().into_unverified(),
         };

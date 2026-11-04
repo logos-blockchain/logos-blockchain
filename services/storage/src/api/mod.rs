@@ -232,7 +232,7 @@ where
 
 impl<Tx> StorageApi<Tx>
 where
-    Tx: BinaryDecode<Context = ()> + Hashable<Hash = TxHash> + StorageSize,
+    Tx: BinaryDecode<Context = u32> + Hashable<Hash = TxHash> + StorageSize,
 {
     pub async fn get_block(&self, id: &HeaderId) -> Option<Block<Tx>> {
         let bytes = self
@@ -277,13 +277,14 @@ where
 }
 
 /// Decodes a block this node stored. The node checked its blocks against
-/// their era before storing them, so they are read under the most uncles the
-/// maximum's type allows, as it's assumed to be within the era's limits.
+/// their era before storing them, so they are read under the most uncles,
+/// transaction bytes, transactions and inscription bytes the maximums' types
+/// allow, as they're assumed to be within the era's limits.
 fn decode_stored_block<Tx>(bytes: &[u8]) -> Result<Block<Tx>, DecodeError>
 where
-    Tx: BinaryDecode<Context = ()> + Hashable<Hash = TxHash> + StorageSize,
+    Tx: BinaryDecode<Context = u32> + Hashable<Hash = TxHash> + StorageSize,
 {
-    Block::decode_all(bytes, &(u8::MAX, ()))
+    Block::decode_all(bytes, &(u8::MAX, u32::MAX, (u16::MAX, u32::MAX)))
 }
 
 impl<Tx: Serialize + Hashable<Hash = TxHash>> StorageApi<Tx> {

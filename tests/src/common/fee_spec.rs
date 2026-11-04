@@ -233,7 +233,7 @@ pub fn self_transfer_paying_fee_at(
 
     SignedOps::from_parts(mantle_tx, op_proofs)
         .expect("signed transaction should build")
-        .preverify()
+        .preverify(u32::MAX)
         .expect("signed transaction should be valid")
 }
 

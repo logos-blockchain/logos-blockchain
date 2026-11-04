@@ -436,7 +436,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + StorageSize
         + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx>,
@@ -617,7 +617,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + StorageSize
         + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx> + Send + 'static,
@@ -1164,7 +1164,7 @@ where
 
         let signed_mantle_tx = SignedOps::from_parts(mantle_tx, op_proofs)
             .expect("SignedOps should be valid with the provided proofs.")
-            .preverify()
+            .preverify(u32::MAX)
             .expect("Preverification should not fail.");
 
         Ok(signed_mantle_tx)

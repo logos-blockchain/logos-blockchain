@@ -22,7 +22,10 @@ use lb_core::{
         },
     },
 };
-use lb_http_api_common::bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody};
+use lb_http_api_common::bodies::{
+    mantle::LimitsResponseBody,
+    wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
+};
 use lb_log_targets::zone_sdk;
 use reqwest::Url;
 use tracing::error;
@@ -58,6 +61,8 @@ pub trait Node {
     async fn consensus_info(&self) -> Result<ChainServiceInfo, Error>;
 
     async fn time_info(&self) -> Result<TimeInfo, Error>;
+
+    async fn limits(&self) -> Result<LimitsResponseBody, Error>;
 
     async fn channel_state(&self, channel_id: ChannelId) -> Result<Option<ChannelState>, Error>;
 
@@ -159,6 +164,10 @@ impl Node for NodeHttpClient {
 
     async fn time_info(&self) -> Result<TimeInfo, Error> {
         self.client.time_info(self.base_url.clone()).await
+    }
+
+    async fn limits(&self) -> Result<LimitsResponseBody, Error> {
+        self.client.limits(self.base_url.clone()).await
     }
 
     async fn channel_state(&self, channel_id: ChannelId) -> Result<Option<ChannelState>, Error> {
@@ -450,8 +459,12 @@ mod tests {
 
         // tx_a mixes three ops so a walker that reused the wrong op's id
         // (or the wrong channel's) would surface here.
-        let our_deposit = deposit_op(channel_id, 1, b"to Alice".into());
-        let foreign_deposit = deposit_op(other_channel, 2, b"to Bob".into());
+        let our_deposit = deposit_op(channel_id, 1, Metadata::new_unchecked(b"to Alice".to_vec()));
+        let foreign_deposit = deposit_op(
+            other_channel,
+            2,
+            Metadata::new_unchecked(b"to Bob".to_vec()),
+        );
         let our_withdraw = withdraw_op(channel_id, 42);
         let tx_a = unverified_tx_with_ops(vec![
             Op::ChannelDeposit(our_deposit.clone()),
@@ -565,7 +578,7 @@ mod tests {
         let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(deposit_op(
             channel_id,
             1,
-            b"to Alice".into(),
+            Metadata::new_unchecked(b"to Alice".to_vec()),
         ))]);
 
         drop(block_to_messages(vec![tx], channel_id, &HashMap::new()));

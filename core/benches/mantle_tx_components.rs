@@ -11,7 +11,7 @@
 
 use blake2::Digest as _;
 use divan::{Bencher, black_box};
-use lb_binary_codec::canonical::{BinaryDecodeExt as _, BinaryEncode as _};
+use lb_binary_codec::canonical::{BinaryDecode as _, BinaryEncode as _};
 use lb_groth16::{Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes_unchecked};
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey};
 use lb_poseidon2::Digest;
@@ -155,7 +155,11 @@ fn bench_sign_c_mantle_tx_new_verify_ops_proofs_single_proof(bencher: Bencher, s
         })
         .bench_values(|(tx, op_sig): (Ops, Ed25519Signature)| {
             let op_proofs = OpProofs::from([OpProof::Ed25519Sig(op_sig)]);
-            black_box(SignedOps::from_parts(tx, op_proofs).unwrap().preverify())
+            black_box(
+                SignedOps::from_parts(tx, op_proofs)
+                    .unwrap()
+                    .preverify(u32::MAX),
+            )
         });
 }
 
@@ -175,7 +179,11 @@ fn bench_sign_d_fully_empty(bencher: Bencher, size: usize) {
         .bench_values(|(tx, tx_hash): (Ops, TxHash)| {
             let op_sig = signing_key.sign_payload(tx_hash.as_signing_bytes());
             let op_proofs = OpProofs::from([OpProof::Ed25519Sig(op_sig)]);
-            black_box(SignedOps::from_parts(tx, op_proofs).unwrap().preverify())
+            black_box(
+                SignedOps::from_parts(tx, op_proofs)
+                    .unwrap()
+                    .preverify(u32::MAX),
+            )
         });
 }
 
@@ -195,6 +203,7 @@ fn bench_decode_mantle_transaction(bencher: Bencher, size: usize) {
         let protected_input_slice = black_box(&encoded);
         black_box(SignedOps::<Unverified, StandardMode>::decode(
             protected_input_slice,
+            &u32::MAX,
         ))
     });
 }

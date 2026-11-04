@@ -2,7 +2,6 @@ use std::{collections::HashSet, mem};
 
 use futures::Stream;
 use lb_binary_codec::bincode::{self, DeserializeOp as _, SerializeOp as _};
-use lb_core::block::MAX_BLOCK_TRANSACTIONS_SIZE;
 use lb_log_targets::mempool;
 use lb_network_service::{
     backends::libp2p::{Command, Libp2p, Message, PubSubCommand, TopicHash},
@@ -17,18 +16,21 @@ use crate::network::NetworkAdapter;
 
 const LOG_TARGET: &str = mempool::network::LIBP2P;
 
-/// Direct transaction gossip carries canonical bytes in a configured-bincode
-/// byte envelope.
+/// The largest gossip message carrying a transaction of at most
+/// `max_transaction_size` bytes.
 ///
-/// The mempool's existing transaction-content limit therefore leaves one
-/// bincode `u64` length prefix of overhead.
+/// Direct transaction gossip carries canonical bytes in a configured-bincode
+/// byte envelope, so the transaction limit leaves one bincode `u64` length
+/// prefix of overhead.
 /// This is the application payload limit, not the Gossipsub protobuf limit.
-pub const MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE: usize =
-    MAX_BLOCK_TRANSACTIONS_SIZE + bincode::BINCODE_LENGTH_PREFIX_SIZE;
+#[must_use]
+pub const fn max_transaction_gossip_bincode_payload_size(max_transaction_size: usize) -> usize {
+    max_transaction_size + bincode::BINCODE_LENGTH_PREFIX_SIZE
+}
 
 #[must_use]
-const fn transaction_gossip_size_is_valid(size: usize) -> bool {
-    size <= MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE
+const fn transaction_gossip_size_is_valid(size: usize, max_transaction_size: usize) -> bool {
+    size <= max_transaction_gossip_bincode_payload_size(max_transaction_size)
 }
 
 #[derive(Clone)]
@@ -199,11 +201,18 @@ where
         let serialized = item
             .to_bytes()
             .expect("Item should be able to be serialized");
-        if !transaction_gossip_size_is_valid(serialized.len()) {
+        let max_transaction_size = self
+            .settings
+            .era_schedule
+            .get(self.current_era)
+            .expect("The adapter is only ever in a scheduled era.")
+            .parameters
+            .max_transaction_size;
+        if !transaction_gossip_size_is_valid(serialized.len(), max_transaction_size) {
             tracing::debug!(
                 target: LOG_TARGET,
                 size = serialized.len(),
-                maximum = MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE,
+                maximum = max_transaction_gossip_bincode_payload_size(max_transaction_size),
                 "Not broadcasting an oversized transaction"
             );
             return;
@@ -238,6 +247,8 @@ pub struct Settings<K, V> {
 pub struct EraSettings {
     /// The topic transactions are gossiped on.
     pub topic: String,
+    /// The most bytes a transaction may take: larger ones are not gossiped.
+    pub max_transaction_size: usize,
 }
 
 #[cfg(test)]
@@ -263,21 +274,22 @@ mod tests {
 
         assert_eq!(
             bytes.len(),
-            transaction.storage_size() + bincode::BINCODE_LENGTH_PREFIX_SIZE
-        );
-        assert_eq!(
-            MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE,
-            MAX_BLOCK_TRANSACTIONS_SIZE + bincode::BINCODE_LENGTH_PREFIX_SIZE
+            max_transaction_gossip_bincode_payload_size(transaction.storage_size())
         );
     }
 
     #[test]
     fn transaction_gossip_guard_rejects_one_byte_over_the_bound() {
+        let max_transaction_size = 2 * 1024 * 1024;
+        let bound = max_transaction_gossip_bincode_payload_size(max_transaction_size);
+
         assert!(transaction_gossip_size_is_valid(
-            MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE
+            bound,
+            max_transaction_size
         ));
         assert!(!transaction_gossip_size_is_valid(
-            MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE + 1
+            bound + 1,
+            max_transaction_size
         ));
     }
 }

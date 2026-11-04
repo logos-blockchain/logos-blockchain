@@ -1034,7 +1034,7 @@ pub(super) fn classify_channel_tx(
                     tx_hash,
                     parent_msg: config.parent(),
                     this_msg: config.id(),
-                    payload: [].into(),
+                    payload: Inscription::empty(),
                     signer: None,
                 });
             }

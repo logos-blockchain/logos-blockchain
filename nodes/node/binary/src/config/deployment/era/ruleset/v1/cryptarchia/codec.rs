@@ -25,6 +25,8 @@ pub fn fixture_settings() -> Settings {
         learning_rate: NonNegativeF64::try_from(18.0).unwrap(),
         uncle_reference_window_in_block: 19,
         max_uncles: 24,
+        max_transactions: NonZero::new(52).unwrap(),
+        max_transactions_size: 71,
         sdp_config: fixture_sdp_config(),
         pow_config: fixture_pow_config(),
         execution_market: ExecutionMarketConfig {
@@ -120,7 +122,7 @@ const fn fixture_blend_pow_config() -> BlendPoWConfig {
 }
 
 pub const SETTINGS_HEX: &str = "
-    0c 0d 0e 0f000000 10000000 11000000 0000000000003240 13000000 18 14000000 15000000
+    0c 0d 0e 0f000000 10000000 11000000 0000000000003240 13000000 18 3400 47000000 14000000 15000000
     1600000000000000 1700000000000000 19000000 1a00000000000000
     1b00000000000000 1c000000 1d000000 20000000
     2100000000000000 2200000000000000 2300000000000000 2400000000000000 2500000000000000

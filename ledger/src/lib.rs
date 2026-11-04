@@ -992,7 +992,7 @@ mod tests {
                     channel_transfer::ChannelTransferOp,
                     config::ChannelConfigOp,
                     deposit::{DepositOp, Metadata},
-                    inscribe::InscriptionOp,
+                    inscribe::{Inscription, InscriptionOp},
                     withdraw::ChannelWithdrawOp,
                 },
                 leader_claim::{LeaderClaimError, LeaderClaimOp, LeaderClaimVerificationContext},
@@ -1148,7 +1148,7 @@ mod tests {
         let ops_proofs = OpProofs::new_unchecked(ops_proofs);
         SignedOps::from_parts(ops, ops_proofs)
             .unwrap()
-            .preverify()
+            .preverify(u32::MAX)
             .expect("Test transaction should have valid signatures")
     }
 
@@ -1162,7 +1162,7 @@ mod tests {
         let tx = create_signed_tx(
             Op::ChannelInscribe(InscriptionOp {
                 channel_id: id,
-                inscription: [1, 2, 3, 4].into(),
+                inscription: Inscription::new_unchecked(vec![1, 2, 3, 4]),
                 parent: MsgId::root(),
                 signer: verifying_key,
             }),
@@ -1282,7 +1282,7 @@ mod tests {
         output_note.value = utxo.note.value - fees.into_inner();
 
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk])
-            .preverify()
+            .preverify(u32::MAX)
             .unwrap();
         let output_utxo = if let OpRef::Transfer(transfer_op) = tx.op_refs().get(0).unwrap() {
             transfer_op.outputs.utxo_by_index(0, transfer_op).unwrap()
@@ -1337,7 +1337,7 @@ mod tests {
 
         let inscribe_op = InscriptionOp {
             channel_id,
-            inscription: [1, 2, 3, 4].into(),
+            inscription: Inscription::new_unchecked(vec![1, 2, 3, 4]),
             parent: MsgId::root(),
             signer: verifying_key.into_unverified(),
         };
@@ -1484,7 +1484,7 @@ mod tests {
         // Create the channel, its config tip stays ZERO
         let first_inscribe = InscriptionOp {
             channel_id,
-            inscription: [1, 2, 3].into(),
+            inscription: Inscription::new_unchecked(vec![1, 2, 3]),
             parent: MsgId::root(),
             signer: verifying_key.into_unverified(),
         };
@@ -1515,7 +1515,7 @@ mod tests {
         for byte in [4u8, 5, 6] {
             let inscribe = InscriptionOp {
                 channel_id,
-                inscription: [byte].into(),
+                inscription: Inscription::new_unchecked(vec![byte]),
                 parent: tip,
                 signer: verifying_key.into_unverified(),
             };
@@ -1629,7 +1629,7 @@ mod tests {
         // Create the channel, the message tip is now I1
         let first_inscribe = InscriptionOp {
             channel_id,
-            inscription: [1, 2, 3].into(),
+            inscription: Inscription::new_unchecked(vec![1, 2, 3]),
             parent: MsgId::root(),
             signer: verifying_key.into_unverified(),
         };
@@ -1662,7 +1662,7 @@ mod tests {
         // An inscription signed before the configuration still extends I1
         let second_inscribe = InscriptionOp {
             channel_id,
-            inscription: [4, 5, 6].into(),
+            inscription: Inscription::new_unchecked(vec![4, 5, 6]),
             parent: first_inscribe.id(),
             signer: verifying_key.into_unverified(),
         };
@@ -1718,7 +1718,7 @@ mod tests {
         let deposit = DepositOp {
             channel_id,
             inputs: BoundedInputs::from(utxo.id()).into(),
-            metadata: [5, 6, 7, 8].into(),
+            metadata: Metadata::new_unchecked(vec![5, 6, 7, 8]),
         };
         let ops = vec![Op::ChannelDeposit(deposit.clone())];
         let tx = create_multi_signed_tx(ops, vec![&Key::Zk(sk)]);
@@ -1810,7 +1810,7 @@ mod tests {
         let deposit = DepositOp {
             channel_id,
             inputs: BoundedInputs::from(utxo.id()).into(),
-            metadata: [5, 6, 7, 8].into(),
+            metadata: Metadata::new_unchecked(vec![5, 6, 7, 8]),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
@@ -1895,7 +1895,7 @@ mod tests {
         let deposit = DepositOp {
             channel_id,
             inputs: BoundedInputs::from(utxo.id()).into(),
-            metadata: [5, 6, 7, 8].into(),
+            metadata: Metadata::new_unchecked(vec![5, 6, 7, 8]),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
         let withdraw = ChannelWithdrawOp {
@@ -1959,7 +1959,7 @@ mod tests {
 
         let inscribe_op = InscriptionOp {
             channel_id,
-            inscription: [1, 2, 3].into(),
+            inscription: Inscription::new_unchecked(vec![1, 2, 3]),
             parent: MsgId::root(),
             signer: verifying_key.into_unverified(),
         };
@@ -2029,14 +2029,14 @@ mod tests {
 
         let inscribe_op = InscriptionOp {
             channel_id,
-            inscription: [1, 2, 3].into(),
+            inscription: Inscription::new_unchecked(vec![1, 2, 3]),
             parent: MsgId::root(),
             signer: verifying_key.into_unverified(),
         };
         let deposit = DepositOp {
             channel_id,
             inputs: BoundedInputs::from(utxo.id()).into(),
-            metadata: [5, 6, 7, 8].into(),
+            metadata: Metadata::new_unchecked(vec![5, 6, 7, 8]),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
         let withdraw = ChannelWithdrawOp {
@@ -2097,14 +2097,14 @@ mod tests {
 
         let inscribe_op = InscriptionOp {
             channel_id,
-            inscription: [1, 2, 3].into(),
+            inscription: Inscription::new_unchecked(vec![1, 2, 3]),
             parent: MsgId::root(),
             signer: verifying_key.into_unverified(),
         };
         let deposit = DepositOp {
             channel_id,
             inputs: BoundedInputs::from(utxo.id()).into(),
-            metadata: [5, 6, 7, 8].into(),
+            metadata: Metadata::new_unchecked(vec![5, 6, 7, 8]),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
         let transfer = ChannelTransferOp {
@@ -2174,7 +2174,7 @@ mod tests {
         let deposit = DepositOp {
             channel_id,
             inputs: BoundedInputs::from(utxo.id()).into(),
-            metadata: [5, 6, 7, 8].into(),
+            metadata: Metadata::new_unchecked(vec![5, 6, 7, 8]),
         };
         let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
         let deposit_tx =
@@ -2311,7 +2311,7 @@ mod tests {
         // First, create a channel with one message
         let first_inscribe = InscriptionOp {
             channel_id,
-            inscription: [1, 2, 3].into(),
+            inscription: Inscription::new_unchecked(vec![1, 2, 3]),
             parent: MsgId::root(),
             signer: verifying_key.into_unverified(),
         };
@@ -2329,7 +2329,7 @@ mod tests {
         let wrong_parent = MsgId::from([99; 32]);
         let second_inscribe = InscriptionOp {
             channel_id,
-            inscription: [4, 5, 6].into(),
+            inscription: Inscription::new_unchecked(vec![4, 5, 6]),
             parent: wrong_parent,
             signer: verifying_key.into_unverified(),
         };
@@ -2354,7 +2354,7 @@ mod tests {
         let empty_channel_id = ChannelId::from([8; 32]);
         let empty_inscribe = InscriptionOp {
             channel_id: empty_channel_id,
-            inscription: [7, 8, 9].into(),
+            inscription: Inscription::new_unchecked(vec![7, 8, 9]),
             parent: MsgId::from([1; 32]), // non-root parent
             signer: verifying_key.into_unverified(),
         };
@@ -2391,7 +2391,7 @@ mod tests {
         // First, create a channel with authorized signer
         let first_inscribe = InscriptionOp {
             channel_id,
-            inscription: [1, 2, 3].into(),
+            inscription: Inscription::new_unchecked(vec![1, 2, 3]),
             parent: MsgId::root(),
             signer: verifying_key.into_unverified(),
         };
@@ -2409,7 +2409,7 @@ mod tests {
         // Now try to add a message with unauthorized signer
         let second_inscribe = InscriptionOp {
             channel_id,
-            inscription: [4, 5, 6].into(),
+            inscription: Inscription::new_unchecked(vec![4, 5, 6]),
             parent: correct_parent,
             signer: unauthorized_verifying_key.into_unverified(),
         };
@@ -2454,14 +2454,14 @@ mod tests {
 
         let inscribe_op1 = InscriptionOp {
             channel_id: channel1,
-            inscription: [1, 2, 3].into(),
+            inscription: Inscription::new_unchecked(vec![1, 2, 3]),
             parent: MsgId::root(),
             signer: vk1.into_unverified(),
         };
 
         let inscribe_op2 = InscriptionOp {
             channel_id: channel2,
-            inscription: [4, 5, 6].into(),
+            inscription: Inscription::new_unchecked(vec![4, 5, 6]),
             parent: MsgId::root(),
             signer: vk2.into_unverified(),
         };
@@ -2479,7 +2479,7 @@ mod tests {
 
         let inscribe_op3 = InscriptionOp {
             channel_id: channel1,
-            inscription: [7, 8, 9].into(),
+            inscription: Inscription::new_unchecked(vec![7, 8, 9]),
             parent: inscribe_op1.id(),
             signer: vk3.into_unverified(),
         };
@@ -2673,7 +2673,7 @@ mod tests {
         let fees = tx.op_refs().total_gas_cost(&gas_context).unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk])
-            .preverify()
+            .preverify(u32::MAX)
             .unwrap();
 
         let result = ledger
@@ -2765,7 +2765,7 @@ mod tests {
             vec![output_note],
             std::slice::from_ref(&sk),
         )
-        .preverify()
+        .preverify(u32::MAX)
         .unwrap();
 
         let result = ledger
@@ -2784,7 +2784,7 @@ mod tests {
             vec![output_note],
             std::slice::from_ref(&sk),
         )
-        .preverify()
+        .preverify(u32::MAX)
         .unwrap();
 
         let result = ledger.try_apply_block_contents::<_, HeaderId>(&eras, std::iter::once(tx));
@@ -2824,7 +2824,7 @@ mod tests {
         // exact balance is irrelevant.
         let sk = ZkKey::from(BigUint::from(0u8));
         let tx = create_tx(vec![utxo.id()], vec![], std::slice::from_ref(&sk))
-            .preverify()
+            .preverify(u32::MAX)
             .unwrap();
 
         // The tx must consume a non-zero amount of storage gas for the check to
@@ -3121,7 +3121,7 @@ mod tests {
             let op_proofs = OpProofs::from([OpProof::None(NoOpProof)]);
             SignedOps::from_parts(mantle_tx, op_proofs)
                 .unwrap()
-                .preverify()
+                .preverify(u32::MAX)
                 .expect("claim op with OpProof::None should pass preverification")
         }
 

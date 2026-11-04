@@ -252,7 +252,7 @@ fn build_tx(utxo: Utxo, key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
 
     SignedOps::from_parts(ops, op_proofs)
         .expect("transaction should build")
-        .preverify()
+        .preverify(u32::MAX)
         .expect("transaction should preverify")
 }
 
@@ -270,6 +270,10 @@ fn single_era(config: Config) -> EraScheduledConfig {
     .map(move |_| config.clone())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "A ledger config, spelled out field by field."
+)]
 fn config() -> Config {
     let epoch_config = EpochConfig {
         epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
@@ -312,6 +316,9 @@ fn config() -> Config {
                 timestamp: 0,
             },
         },
+        max_transactions: 1024,
+        max_transactions_size: 2 * 1024 * 1024,
+        max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
         execution_market: logos_blockchain_ledger::config::ExecutionMarketConfig {
             max_gas_per_block: logos_blockchain_ledger::config::MaxGasPerBlock::new(3_193_460)
                 .unwrap(),

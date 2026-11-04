@@ -1,8 +1,8 @@
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 #[cfg(any(test, feature = "test-utils"))]
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
-use lb_utils::bounded::UpperBoundedVec;
+use lb_utils::bounded::UpperRuntimeBoundedVec;
 use serde::{Deserialize, Serialize};
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -26,14 +26,42 @@ use crate::{
     sdp::service_notes::ServiceNotes,
 };
 
-pub const MAX_METADATA_SIZE: usize = u32::MAX as usize;
-pub type Metadata = UpperBoundedVec<u8, { MAX_METADATA_SIZE }>;
+/// The bytes a deposit attaches, at most as many as the era it is decoded under
+/// allows.
+///
+/// The length is checked against the era's maximum, a `u32`, when the metadata
+/// is built or decoded. Serde reads it without an era, under the largest
+/// maximum of the type.
+pub type Metadata = UpperRuntimeBoundedVec<u8, u32>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode)]
 pub struct DepositOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
     pub metadata: Metadata,
+}
+
+// Every field in declaration order.
+impl BinaryDecode for DepositOp {
+    /// The most bytes the era the deposit is decoded under allows its metadata.
+    type Context = u32;
+
+    fn decode<'input>(
+        input: &'input [u8],
+        max_metadata_size: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, channel_id) = ChannelId::decode(input, &())?;
+        let (input, inputs) = Inputs::decode(input, &())?;
+        let (input, metadata) = Metadata::decode(input, &(*max_metadata_size, ()))?;
+        Ok((
+            input,
+            Self {
+                channel_id,
+                inputs,
+                metadata,
+            },
+        ))
+    }
 }
 
 impl DepositOp {
@@ -59,8 +87,7 @@ impl DepositOp {
         Self {
             channel_id: ChannelId::from([16u8; 32]),
             inputs: crate::mantle::ledger::BoundedInputs::from(NoteId(Fr::from(17u64))).into(),
-            metadata: Metadata::try_from(b"deposit-metadata".to_vec())
-                .expect("Metadata is within bounds."),
+            metadata: Metadata::new_unchecked(b"deposit-metadata".to_vec()),
         }
     }
 }
@@ -69,6 +96,10 @@ impl OpId for DepositOp {
     fn op_bytes(&self) -> Vec<u8> {
         self.encode_to_vec()
     }
+}
+
+pub struct DepositPreverificationContext {
+    pub max_metadata_size: u32,
 }
 
 pub struct DepositValidationContext<'a> {
@@ -90,12 +121,18 @@ impl ProvableOperation for DepositOp {
 }
 
 impl PreverifiableOperation<StandardMode> for SignedOperation<DepositOp, Unverified, StandardMode> {
-    type Context<'a> = ();
+    type Context<'a> = DepositPreverificationContext;
     type Error = Error;
 
-    fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn preverify(&self, context: &Self::Context<'_>) -> Result<(), Self::Error> {
         // Ensure the inputs is non-empty
         self.operation().inputs.preverify()?;
+
+        let size = self.operation().metadata.len();
+        let max = context.max_metadata_size as usize;
+        if size > max {
+            return Err(Error::MetadataTooLarge { size, max });
+        }
 
         Ok(())
     }
@@ -205,6 +242,10 @@ mod test {
         transactions::tx_list::signed_ops::test_utils::make_channel_state,
     };
 
+    const ANY_METADATA_SIZE: DepositPreverificationContext = DepositPreverificationContext {
+        max_metadata_size: u32::MAX,
+    };
+
     #[test]
     fn preverify_rejects_empty_inputs() {
         let deposit = DepositOp {
@@ -216,8 +257,26 @@ mod test {
         let signed_operation = SignedOperation::new(deposit, proof);
 
         assert_eq!(
-            signed_operation.preverify(&()),
+            signed_operation.preverify(&ANY_METADATA_SIZE),
             Err(Error::Inputs(InputsError::EmptyInputs))
+        );
+    }
+
+    #[test]
+    fn preverify_holds_the_metadata_to_the_era_limit() {
+        let deposit = DepositOp::sample();
+        let size = deposit.metadata.len();
+        let proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
+        let signed_operation = SignedOperation::new(deposit, proof);
+        let context = |max_metadata_size| DepositPreverificationContext { max_metadata_size };
+
+        assert_eq!(signed_operation.preverify(&context(size as u32)), Ok(()));
+        assert_eq!(
+            signed_operation.preverify(&context(size as u32 - 1)),
+            Err(Error::MetadataTooLarge {
+                size,
+                max: size - 1,
+            })
         );
     }
 
@@ -243,7 +302,7 @@ mod test {
 
         let signed_operation =
             SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
-                .into_preverified(&())
+                .into_preverified(&ANY_METADATA_SIZE)
                 .expect("preverify should accept a non-empty deposit");
 
         let locked_notes = ServiceNotes::new();
@@ -287,7 +346,7 @@ mod test {
 
         let signed_operation =
             SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
-                .into_preverified(&())
+                .into_preverified(&ANY_METADATA_SIZE)
                 .expect("preverify should accept a non-empty deposit");
 
         assert_eq!(
@@ -333,7 +392,7 @@ mod test {
 
         let signed_operation =
             SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
-                .into_preverified(&())
+                .into_preverified(&ANY_METADATA_SIZE)
                 .expect("preverify should accept a non-empty deposit");
 
         assert_eq!(
@@ -513,7 +572,7 @@ mod test {
             ZkKey::multi_sign(signers, tx_hash_view.as_fr()).expect("signing should succeed");
 
         SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
-            .into_preverified(&())
+            .into_preverified(&ANY_METADATA_SIZE)
             .expect("preverify should accept a non-empty deposit")
             .verify(&DepositValidationContext {
                 channels: &channels,

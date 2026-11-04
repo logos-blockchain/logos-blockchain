@@ -116,8 +116,9 @@ pub mod node_types {
             transactions::states::Unverified,
         },
     };
-    pub use lb_http_api_common::bodies::wallet::fund::{
-        WalletFundRequestBody, WalletFundResponseBody,
+    pub use lb_http_api_common::bodies::{
+        mantle::LimitsResponseBody,
+        wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
     };
 }
 

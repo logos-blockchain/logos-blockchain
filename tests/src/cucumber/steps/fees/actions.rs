@@ -186,7 +186,7 @@ fn assemble_funded_transaction(
                 step.value
             ),
         })?
-        .preverify()
+        .preverify(u32::MAX)
         .map_err(|source| StepError::StepFail {
             message: format!(
                 "Step `{}` error: percentage-funded self-transfer failed verification: {source}",

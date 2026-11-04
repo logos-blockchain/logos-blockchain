@@ -67,6 +67,10 @@ pub enum Error {
     },
     #[error("Invalid signer")]
     InvalidSigner,
+    #[error("Inscription of {size} bytes exceeds the {max} bytes the era allows")]
+    InscriptionTooLarge { size: usize, max: usize },
+    #[error("Deposit metadata of {size} bytes exceeds the {max} bytes the era allows")]
+    MetadataTooLarge { size: usize, max: usize },
     #[error("Invalid signature")]
     InvalidSignature,
     #[error(

@@ -10,7 +10,9 @@ use lb_core::{block::TxInBlock, era::ForkDigest, mantle::transactions::hash::Pre
 use lb_cryptarchia_engine::Slot;
 use lb_time::Era;
 pub use policy::{EvictableTx, EvictionPolicy, PowClaimEvictionSettings};
-pub use pool::{DEFAULT_TX_TTL, IncludedItem, Mempool, MempoolSettings, PoolRecoveryState};
+pub use pool::{
+    AdmissionLimits, DEFAULT_TX_TTL, IncludedItem, Mempool, MempoolSettings, PoolRecoveryState,
+};
 use serde::{Deserialize, Serialize};
 
 /// Admission time of a transaction, as a Unix timestamp in milliseconds.
@@ -22,6 +24,10 @@ pub enum MempoolError {
     ExistingItem,
     #[error("Item is too large: {size} bytes exceeds maximum {max} bytes")]
     ItemTooLarge { size: usize, max: usize },
+    #[error("Item inscribes {size} bytes, more than the maximum {max} bytes")]
+    InscriptionTooLarge { size: usize, max: usize },
+    #[error("Item deposits {size} bytes of metadata, more than the maximum {max} bytes")]
+    MetadataTooLarge { size: usize, max: usize },
     #[error("Item can no longer be included in a block")]
     Expired,
     #[error("The era in force does not accept the fork digest {0}")]

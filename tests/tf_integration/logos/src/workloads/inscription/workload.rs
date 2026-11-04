@@ -384,7 +384,7 @@ fn build_inscription_transaction(
     let op_proofs_wrapper = OpProofs::from([OpProof::Ed25519Sig(ed25519_signature)]);
     let signed_tx = SignedOps::from_parts(mantle_tx, op_proofs_wrapper)
         .map_err(|error| InscriptionWorkloadError::SignedTransactionBuild(error.to_string()))?
-        .preverify()
+        .preverify(u32::MAX)
         .map_err(|error| InscriptionWorkloadError::SignedTransactionBuild(error.to_string()))?;
 
     channel.next_nonce = channel.next_nonce.saturating_add(1);
