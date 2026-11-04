@@ -764,9 +764,11 @@ impl<KeyId> Wallet<KeyId> {
         Ok(states)
     }
 
-    // The ledger set root a spend of `inputs` from `tip` names: the oldest of
-    // the spend states holding them all, so a young note stays spendable.
-    fn spend_root(&self, tip: HeaderId, inputs: &[NoteCommitment]) -> Result<Fr, WalletError> {
+    /// The ledger set root a spend of `inputs` from `tip` names: the oldest of
+    /// the spend states holding them all, so a young note stays spendable. A
+    /// transaction that creates the notes it spends passes none: every state
+    /// holds them once extended by the transaction, so it gets the oldest.
+    pub fn spend_root(&self, tip: HeaderId, inputs: &[NoteCommitment]) -> Result<Fr, WalletError> {
         let states = self.spend_states(tip)?;
         let holding = states
             .iter()

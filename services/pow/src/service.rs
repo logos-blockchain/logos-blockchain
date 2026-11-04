@@ -1772,9 +1772,9 @@ where
     WalletService: WalletServiceData,
     RuntimeServiceId: AsServiceId<WalletService> + Debug + Display + Sync,
 {
-    // The reward value, gas prices and ledger set are read at `ledger_state`;
-    // they must match the state the tx applies against, or the reconstructed
-    // notes / fee / paths will be off.
+    // The reward value and gas prices are read at `ledger_state`; they must
+    // match the state the tx applies against, or the reconstructed notes / fee
+    // will be off.
     let reward_value = ledger_state.mantle_ledger().pow.epoch_reward();
     let claims = &tickets[..reward_claim_count(
         tickets.len(),
@@ -1782,6 +1782,31 @@ where
         reward_pool,
         max_claims_in_payload,
     )?];
+    let signed_tx = sign_reward_claims(
+        wallet_api,
+        claim_address,
+        tip,
+        reward_value,
+        ledger_state.get_gas_prices(),
+        claims,
+    )
+    .await?;
+    Ok((signed_tx, claims.len()))
+}
+
+/// Builds and signs the reward-claim transaction of `claims` with the wallet.
+async fn sign_reward_claims<WalletService, RuntimeServiceId>(
+    wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
+    claim_address: ZkPublicKey,
+    tip: HeaderId,
+    reward_value: Value,
+    gas_prices: GasPrices,
+    claims: &[ClaimPowRewardOp],
+) -> Result<SignedOps<Preverified, StandardMode>, PoWError>
+where
+    WalletService: WalletServiceData,
+    RuntimeServiceId: AsServiceId<WalletService> + Debug + Display + Sync,
+{
     let mut nullifiers = Vec::with_capacity(claims.len());
     for claim in claims {
         let known = wallet_api
@@ -1794,17 +1819,12 @@ where
         std::iter::repeat_with(|| fr_from_mod_bytes(&rand::random::<[u8; 32]>()))
             .take(claims.len().div_ceil(MAX_TRANSFER_INPUTS))
             .collect();
-    let ledger_root = ledger_state
-        .latest_note_sets()
-        .get(LEDGER_SET)
-        .expect("the ledger note set always exists")
-        .commitments()
-        .frontier_root();
+    let ledger_root = wallet_api.spend_root(Some(tip)).await?.response;
     let (tx_builder, change_notes) = build_reward_claim_tx_inner(
         claim_address,
         &change_nonces,
         reward_value,
-        ledger_state.get_gas_prices(),
+        gas_prices,
         ledger_root,
         claims,
         &nullifiers,
@@ -1815,7 +1835,7 @@ where
     for change in change_notes {
         wallet_api.import_note(change, LEDGER_SET).await?;
     }
-    Ok((signed_tx, claims.len()))
+    Ok(signed_tx)
 }
 
 /// How many of `tickets` claims a transaction takes: as many as `reward_pool`
@@ -1845,7 +1865,7 @@ fn reward_claim_count(
 ///
 /// `change_nonces` holds one nonce per transfer group of `claims`, and
 /// `nullifiers` the nullifier of each claim's reward note. The transfers spend
-/// the buffered reward notes against `ledger_root`, the tip ledger set the
+/// the buffered reward notes against `ledger_root`, the ledger set root the
 /// buffer extends. Returns the unsigned builder, carrying the opening of every
 /// transfer, and the change notes.
 fn build_reward_claim_tx_inner(
@@ -2056,6 +2076,7 @@ fn estimate_reward_claim_fee(
 
 #[cfg(test)]
 mod tests {
+    use core::fmt::{self, Display, Formatter};
     use std::{
         collections::{BTreeMap, HashMap},
         num::{NonZeroU64, NonZeroUsize},
@@ -2069,8 +2090,8 @@ mod tests {
         mantle::{
             Note, Op, OpProof, OpProofRef, OpRef, SignedOps, Value,
             ledger::verification_mode::StandardMode,
-            note_set::{CommitmentMmr, LEDGER_SET},
-            notes::{NoteNullifier, derive_note_nullifier},
+            note_set::{CommitmentMmr, LEDGER_SET, NoteSetUpdate},
+            notes::{NoteCommitment, NoteNullifier, derive_note_nullifier},
             ops::{NoOpProof, ZkTransferProof, pow::ClaimPowRewardOp},
             traits::{Hashable as _, MantleTx as _},
             transactions::{
@@ -2084,10 +2105,20 @@ mod tests {
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
     use lb_wallet::{
-        KnownNote, KnownNotes, WalletError, WalletState,
+        KnownNote, KnownNotes, Wallet, WalletBlock, WalletError, WalletState,
         transaction::{OpWitness, WitnessContext, op_witnesses},
     };
+    use lb_wallet_service::{
+        TipResponse, WalletMsg, WalletServiceSettings,
+        api::{WalletApi, WalletServiceData},
+    };
     use lb_zktransfer::ZkTransferVerifierInput;
+    use overwatch::services::{
+        AsServiceId, ServiceData,
+        relay::OutboundRelay,
+        state::{NoOperator, NoState},
+    };
+    use tokio::sync::mpsc;
 
     use super::{
         AutoClaimSettings, AutoClaimTick, ClaimTarget, MAX_TRANSFER_INPUTS, PoWError,
@@ -2095,7 +2126,8 @@ mod tests {
         claim_tx_size, claimable_rewards_info, estimate_reward_claim_fee, is_claimable,
         max_claims_by_ops, max_claims_by_payload_size, neediest_target, prune_expired_tickets,
         push_reward_claim_ops, replace_search_pool_if_resized, reward_claim_count, reward_note,
-        slot_period_elapsed, transfer_ops, wallet_holds_claim_address, without_openings,
+        sign_reward_claims, slot_period_elapsed, transfer_ops, wallet_holds_claim_address,
+        without_openings,
     };
     use crate::{
         test_utils::{PAYLOAD_BODY_SIZE, era_schedule},
@@ -2648,6 +2680,133 @@ mod tests {
             wallet_holds_claim_address(&[held], foreign),
             Err(PoWError::ClaimAddressNotInWallet(key)) if key == foreign
         ));
+    }
+
+    struct DummyWallet;
+
+    impl ServiceData for DummyWallet {
+        type Settings = WalletServiceSettings;
+        type State = NoState<Self::Settings>;
+        type StateOperator = NoOperator<Self::State>;
+        type Message = WalletMsg;
+    }
+
+    impl WalletServiceData for DummyWallet {
+        type Kms = ();
+        type Cryptarchia = ();
+        type Tx = ();
+    }
+
+    #[derive(Debug)]
+    struct TestRuntimeServiceId;
+
+    impl AsServiceId<DummyWallet> for TestRuntimeServiceId {
+        const SERVICE_ID: Self = Self;
+    }
+
+    impl Display for TestRuntimeServiceId {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            write!(f, "TestRuntimeServiceId")
+        }
+    }
+
+    #[tokio::test]
+    async fn a_claim_survives_a_fork_of_its_tip_block() {
+        // A chain of 40 blocks, each appending one commitment.
+        let mut wallet = Wallet::<u8>::from_genesis(
+            [],
+            KnownNotes::new(),
+            HeaderId::from([0; 32]),
+            &[Note::new(5, Fr::from(9u64), ZkPublicKey::zero())],
+            &[],
+        )
+        .unwrap();
+        let block = |id: u8, parent: u8, appended: u64| WalletBlock {
+            id: HeaderId::from([id; 32]),
+            parent: HeaderId::from([parent; 32]),
+            epoch: Epoch::new(0),
+            updates: vec![NoteSetUpdate {
+                note_set: LEDGER_SET,
+                nullifiers: vec![],
+                commitments: vec![NoteCommitment(Fr::from(appended))],
+            }],
+            revealed: vec![],
+        };
+        for id in 1..=40 {
+            wallet.apply_block(&block(id, id - 1, id.into())).unwrap();
+        }
+        let tip = HeaderId::from([40; 32]);
+        let spend_root = wallet.spend_root(tip, &[]).unwrap();
+
+        // The wallet of the claim, which hands back the transaction to sign.
+        let (msg_sender, mut msg_receiver) = mpsc::channel(1);
+        let wallet_service = tokio::spawn(async move {
+            while let Some(msg) = msg_receiver.recv().await {
+                match msg {
+                    WalletMsg::ImportNote { note, resp_tx, .. } => {
+                        drop(resp_tx.send(Ok(known_note(note))));
+                    }
+                    WalletMsg::SpendRoot { tip, resp_tx } => {
+                        drop(resp_tx.send(Ok(TipResponse {
+                            tip: tip.expect("the claim is built on a tip"),
+                            response: spend_root,
+                        })));
+                    }
+                    WalletMsg::SignTx { tx_builder, .. } => return tx_builder,
+                    other => panic!("unexpected wallet message {other:?}"),
+                }
+            }
+            panic!("the claim is signed");
+        });
+        let api =
+            WalletApi::<DummyWallet, TestRuntimeServiceId>::new(OutboundRelay::new(msg_sender));
+        let claims = vec![ticket()];
+        drop(
+            sign_reward_claims(
+                &api,
+                ZkPublicKey::zero(),
+                tip,
+                REWARD,
+                GasPrices::new(1, 1),
+                &claims,
+            )
+            .await,
+        );
+        let tx_builder = wallet_service.await.unwrap();
+
+        // Block 40 loses to its sibling: the claim is still provable, against the
+        // state of block 10 extended by its own reward note.
+        wallet.apply_block(&block(41, 39, 99)).unwrap();
+        let openings = tx_builder.openings();
+        let ops = tx_builder.build().unwrap();
+        let known: KnownNotes = openings
+            .values()
+            .flat_map(|opening| opening.inputs.iter())
+            .map(|note| (note.commitment(), known_note(*note)))
+            .collect();
+        let witnesses = op_witnesses(
+            &wallet.spend_states(HeaderId::from([41; 32])).unwrap(),
+            &known,
+            &ops,
+            &openings,
+            &WitnessContext {
+                channel_note_sets: HashMap::new(),
+                pow_epoch_reward: REWARD,
+            },
+            ops.hash().to_fr(),
+        )
+        .unwrap();
+        let extended = wallet
+            .wallet_state_at(HeaderId::from([10; 32]))
+            .unwrap()
+            .commitments[&LEDGER_SET]
+            .push(reward_note(&claims[0], REWARD).commitment())
+            .unwrap();
+        assert_eq!(witnesses.len(), 1);
+        assert_eq!(
+            witnesses[0].witness.chain.tx_commitment_root,
+            extended.frontier_root()
+        );
     }
 
     #[test]

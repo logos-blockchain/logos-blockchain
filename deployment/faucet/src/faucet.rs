@@ -23,11 +23,13 @@ const CONFIRMATION_DEPTH: usize = 6;
 /// Pause between transfer attempts for the same drip request that has not been
 /// submitted yet, so transient node errors are not retried in a tight loop.
 const RETRY_DELAY: Duration = Duration::from_secs(5);
-/// Transfer attempts per drip request before it is dropped. Bounds how long
-/// one failing request can stall the queue: at most
-/// `MAX_TRANSFER_ATTEMPTS * RETRY_DELAY` plus the request timeouts, or
-/// `MAX_TRANSFER_ATTEMPTS * CONFIRMATION_TIMEOUT` once one attempt is
-/// submitted.
+/// Transfer attempts per drip request before it is dropped. Until an attempt is
+/// submitted, one failing request stalls the queue for at most
+/// `MAX_TRANSFER_ATTEMPTS * RETRY_DELAY` plus the time the requests take. Once
+/// one is, each attempt waits for confirmation until the balance has been back
+/// at its value before the drip for `CONFIRMATION_TIMEOUT`, so a drip seen at
+/// the tip holds the queue for as long as it stays there short of the
+/// confirmation depth.
 const MAX_TRANSFER_ATTEMPTS: u32 = 5;
 
 pub struct Faucet {
@@ -118,18 +120,19 @@ impl Faucet {
             .map_err(|e| format!("Faucet transfer failed: {e}"))
     }
 
-    /// Waits until the faucet balance is below `balance_before` at the
+    /// Waits until the faucet balance differs from `balance_before` at the
     /// confirmation depth, which signals that the submitted drip is unlikely to
     /// be lost to a fork and the change note is spendable again. Returns false
-    /// if the drip has not been at the tip for `CONFIRMATION_TIMEOUT`.
+    /// if the balance at the tip has been `balance_before` for
+    /// `CONFIRMATION_TIMEOUT`.
     async fn wait_for_confirmation(&self, balance_before: u64) -> bool {
         let mut deadline = tokio::time::Instant::now() + CONFIRMATION_TIMEOUT;
         while tokio::time::Instant::now() < deadline {
             if let Ok(wallet) = self.wallet_at_tip().await
-                && wallet.balance < balance_before
+                && wallet.balance != balance_before
             {
                 if let Ok(balance) = self.confirmed_balance().await
-                    && balance < balance_before
+                    && balance != balance_before
                 {
                     return true;
                 }
