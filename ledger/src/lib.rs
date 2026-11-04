@@ -59,9 +59,10 @@ use rpds::HashTrieMapSync;
 use thiserror::Error;
 
 use crate::{
-    block_rewards::BlockRewardsError,
+    block_rewards::{BlockRewardsError, MAX_SUPPLY, REWARDS_RESERVE_GENESIS},
     config::{EraScheduledConfig, RewardPoWConfig, config_for_slot},
     mantle::helpers::MantleOperationVerificationHelper,
+    mantle::pow::POW_REWARD_POOL_GENESIS,
     update::{BatchVerifiedUpdate, PreparedUpdate},
 };
 
@@ -86,6 +87,11 @@ fn add_excess<Id>(balance: Balance, excess_value: Value) -> Result<Balance, Ledg
         .ok_or(LedgerError::BalanceOverflow)
 }
 
+/// What the published distribution and the `SDP_DECLARE` Operations of a genesis
+/// block hold together: the maximum supply minus the pow reward pool and the
+/// rewards reserve (Mantle Ledger Initialization in the genesis spec).
+pub const GENESIS_STAKE_SUPPLY: Value =
+    MAX_SUPPLY - POW_REWARD_POOL_GENESIS - REWARDS_RESERVE_GENESIS;
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum LedgerError<Id> {
     #[error("Invalid block slot {block:?} for parent slot {parent:?}")]
@@ -106,6 +112,10 @@ pub enum LedgerError<Id> {
     Mantle(#[from] mantle::Error),
     #[error("Input note in genesis block: {0:?}")]
     InputInGenesis(notes::NoteNullifier),
+    #[error(
+        "The genesis distribution and declarations hold {total}, the maximum supply requires {expected}"
+    )]
+    GenesisSupplyMismatch { total: Value, expected: Value },
     #[error("The first Transfer Operation is missing in genesis tx")]
     MissingTransferGenesis(),
     #[error("Fees don't cover the minimal execution base fee cost")]
@@ -590,6 +600,14 @@ impl LedgerState {
                 .iter()
                 .map(|declaration| declaration.operation().amount),
         )?;
+        // Mantle Ledger Initialization: with the pow reward pool and the rewards
+        // reserve, the distribution and the declarations sum to the maximum supply.
+        if total_stake != GENESIS_STAKE_SUPPLY {
+            return Err(LedgerError::GenesisSupplyMismatch {
+                total: total_stake,
+                expected: GENESIS_STAKE_SUPPLY,
+            });
+        }
         let cryptarchia_ledger =
             CryptarchiaLedger::from_genesis_tx(&transfer, total_stake, config, epoch_nonce)?;
         let (mantle_ledger, note_sets, events) = MantleLedger::from_genesis_tx(
@@ -1720,25 +1738,40 @@ mod tests {
         }
     }
 
+    // A genesis transaction holding these notes and a Blend declaration.
+    fn genesis_tx_of(allocations: [GenesisAllocation; 9], declaration: SDPDeclareOp) -> GenesisTx {
+        GenesisBlockBuilder::new()
+            .add_notes(allocations)
+            .set_inscription(cryptarchia_inscription())
+            .add_declaration(declaration)
+            .build()
+            .unwrap()
+            .genesis_tx()
+            .clone()
+    }
+
     // Nine distributed notes and a Blend declaration, which consumes none of them.
+    // The last note holds what the supply rule leaves.
     fn genesis_with_a_declaration() -> (GenesisTx, [GenesisAllocation; 9], SDPDeclareOp) {
-        let allocations: [GenesisAllocation; 9] = core::array::from_fn(|i| GenesisAllocation {
-            value: 1_000 * (i as u64 + 1),
-            public_key: ZkPublicKey::new(Fr::from(100 + i as u64)),
-        });
         let declaration = SDPDeclareOp {
             inputs: InputNullifiers::default(),
             commitment_merkle_root: CommitmentMmr::new().frontier_root(),
             amount: 1_000,
             ..SDPDeclareOp::sample()
         };
-        let block = GenesisBlockBuilder::new()
-            .add_notes(allocations)
-            .set_inscription(cryptarchia_inscription())
-            .add_declaration(declaration.clone())
-            .build()
-            .unwrap();
-        (block.genesis_tx().clone(), allocations, declaration)
+        let allocations: [GenesisAllocation; 9] = core::array::from_fn(|i| GenesisAllocation {
+            value: if i == 8 {
+                GENESIS_STAKE_SUPPLY - 36_000 - declaration.amount
+            } else {
+                1_000 * (i as u64 + 1)
+            },
+            public_key: ZkPublicKey::new(Fr::from(100 + i as u64)),
+        });
+        (
+            genesis_tx_of(allocations, declaration.clone()),
+            allocations,
+            declaration,
+        )
     }
 
     #[test]
@@ -1863,6 +1896,57 @@ mod tests {
         );
     }
 
+    // Mantle Ledger Initialization: the values of the published distribution, the
+    // amounts of the declarations, the pow reward pool and the rewards reserve must
+    // sum to the maximum supply.
+    #[test]
+    fn genesis_rejects_a_total_other_than_the_maximum_supply() {
+        let (_, allocations, declaration) = genesis_with_a_declaration();
+        let rejected_with = |total| {
+            Some(LedgerError::<HeaderId>::GenesisSupplyMismatch {
+                total,
+                expected: GENESIS_STAKE_SUPPLY,
+            })
+        };
+
+        let mut short = allocations;
+        short[8].value -= 1;
+        assert_eq!(
+            LedgerState::from_genesis_tx::<HeaderId>(
+                genesis_tx_of(short, declaration.clone()),
+                &config()
+            )
+            .err(),
+            rejected_with(GENESIS_STAKE_SUPPLY - 1)
+        );
+
+        let over_declared = SDPDeclareOp {
+            amount: declaration.amount + 1,
+            ..declaration
+        };
+        assert_eq!(
+            LedgerState::from_genesis_tx::<HeaderId>(
+                genesis_tx_of(allocations, over_declared),
+                &config()
+            )
+            .err(),
+            rejected_with(GENESIS_STAKE_SUPPLY + 1)
+        );
+    }
+
+    #[test]
+    fn genesis_supply_constants_follow_the_spec() {
+        assert_eq!(MAX_SUPPLY, 10_000_000_000_000_000_000);
+        assert_eq!(REWARDS_RESERVE_GENESIS, 1_000_000_000_000_000_000);
+        assert_eq!(POW_REWARD_POOL_GENESIS, 50_000_000_000_000_000);
+        assert_eq!(GENESIS_STAKE_SUPPLY, 8_950_000_000_000_000_000);
+    }
+
+    #[test]
+    fn genesis_accepts_the_maximum_supply() {
+        let (tx, _, _) = genesis_with_a_declaration();
+        assert!(LedgerState::from_genesis_tx::<HeaderId>(tx, &config()).is_ok());
+    }
     // Mantle Ledger Initialization: the pool starts at POW_REWARD_POOL_GENESIS, five
     // thousandths of the maximum supply, whatever the inscription holds.
     #[test]
