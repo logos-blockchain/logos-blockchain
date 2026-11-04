@@ -131,6 +131,7 @@ api:
   backend:
     listen_address: 127.0.0.1:8080
     cors_origins: [ ]
+    allowed_hosts: [ ]
     timeout: 30s
     max_body_size: 10485760
     max_concurrent_requests: 500
