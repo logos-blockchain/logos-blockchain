@@ -13,6 +13,11 @@ use lb_utils::bounded::NonEmptyBoundedVec;
 
 use crate::utils::serde_bytes_newtype;
 
+/// `MAX_OPERATION_DATA_SIZE` of Mantle Transaction Encoding: the limit of
+/// `ChannelInscribe.Inscription` and `ChannelDeposit.Metadata`, excluding their
+/// `UINT32` length prefix.
+pub const MAX_OPERATION_DATA_SIZE: usize = 1_835_008;
+
 pub type ChannelKeyIndex = u16;
 
 pub const CHANNEL_MAX_KEYS: usize = u16::MAX as usize;
