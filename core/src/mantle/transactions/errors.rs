@@ -1,6 +1,12 @@
 use lb_utils::bounded::BoundedError;
 
-use crate::mantle::ops::channel::{ChannelId, ChannelKeyIndex};
+use crate::mantle::{
+    channel::Error as ChannelError,
+    ops::{
+        channel::{ChannelId, ChannelKeyIndex},
+        sdp::SdpError,
+    },
+};
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum VerificationError {
@@ -33,9 +39,35 @@ pub enum VerificationError {
     #[error("ProgramRegister verification error: {0}")]
     ProgramRegisterError(#[from] crate::mantle::ops::program::ProgramRegisterError),
     #[error("SDP verification error: {0}")]
-    SDPVerificationError(#[from] crate::mantle::ops::sdp::SdpError),
+    SDPVerificationError(#[from] SdpError),
     #[error("ClaimPoWReward verification error: {0}")]
     ClaimPowRewardError(#[from] crate::mantle::ops::pow::ClaimPowRewardError),
     #[error(transparent)]
     BoundsError(#[from] BoundedError),
+}
+
+impl VerificationError {
+    /// Whether an Operation proof failed, rather than the Operations reading
+    /// the state. Block Header Validation: the block ID commits to the
+    /// Operations and not to their proofs, so such a failure condemns one copy
+    /// of a block and not its ID.
+    #[must_use]
+    pub const fn is_operation_proof_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::ChannelMultiSigProofNotEnoughSignatures { .. }
+                | Self::ChannelMultiSigProofInvalidSignature { .. }
+                | Self::ChannelVerificationError(
+                    ChannelError::InvalidSignature
+                        | ChannelError::InvalidSignatureIndex { .. }
+                        | ChannelError::ThresholdUnmet { .. }
+                        | ChannelError::StepProofCount { .. }
+                        | ChannelError::StepProofKind { .. }
+                        | ChannelError::PaymentProofCount { .. }
+                        | ChannelError::ProgramNoteCount { .. }
+                        | ChannelError::ProgramNoteOpening { .. }
+                )
+                | Self::SDPVerificationError(SdpError::InvalidEddsaSignature)
+        )
+    }
 }

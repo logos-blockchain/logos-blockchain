@@ -53,10 +53,36 @@ pub enum ApiError {
     AlreadyApplied(HeaderId),
     #[error("Invalid proof of leadership in block {0}")]
     InvalidLeaderProof(HeaderId),
+    #[error("Invalid Operation proof in block {0}")]
+    InvalidOperationProof(HeaderId),
     #[error("Failed to establish connection to chain-service: {0}")]
     CommsFailure(String),
     #[error("Unexpected Error: {0}")]
     Unexpected(String),
+}
+
+pub(crate) fn apply_block_api_error(err: crate::Error, id: HeaderId) -> ApiError {
+    match err {
+        crate::Error::ParentMissing { parent, info } => ApiError::ParentMissing { parent, info },
+        crate::Error::FutureBlock {
+            block_slot,
+            current_slot,
+        } => ApiError::FutureBlock {
+            block_slot,
+            current_slot,
+        },
+        crate::Error::AlreadyApplied(block_id) => ApiError::AlreadyApplied(block_id),
+        crate::Error::Ledger(lb_ledger::LedgerError::InvalidProof) => {
+            ApiError::InvalidLeaderProof(id)
+        }
+        crate::Error::BatchDeferredProofVerification(_) => ApiError::InvalidOperationProof(id),
+        crate::Error::Ledger(lb_ledger::LedgerError::VerificationError(err))
+            if err.is_operation_proof_failure() =>
+        {
+            ApiError::InvalidOperationProof(id)
+        }
+        err => ApiError::Unexpected(format!("Failure while applying block: {err:?}")),
+    }
 }
 
 pub struct CryptarchiaServiceApi<Cryptarchia>
@@ -461,23 +487,7 @@ where
             .map_err(|relay_error| {
                 ApiError::CommsFailure(format!("{relay_error} while receiving ApplyBlock resp"))
             })?
-            .map_err(|err| match err {
-                crate::Error::ParentMissing { parent, info } => {
-                    ApiError::ParentMissing { parent, info }
-                }
-                crate::Error::FutureBlock {
-                    block_slot,
-                    current_slot,
-                } => ApiError::FutureBlock {
-                    block_slot,
-                    current_slot,
-                },
-                crate::Error::AlreadyApplied(block_id) => ApiError::AlreadyApplied(block_id),
-                crate::Error::Ledger(lb_ledger::LedgerError::InvalidProof) => {
-                    ApiError::InvalidLeaderProof(id)
-                }
-                err => ApiError::Unexpected(format!("Failure while applying block: {err:?}")),
-            })
+            .map_err(|err| apply_block_api_error(err, id))
     }
 
     /// Forward a chain sync event to the chain service.
@@ -533,5 +543,90 @@ where
             })?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_core::{
+        mantle::{VerificationError, batch, channel, ops::sdp::SdpError},
+        sdp::ServiceType,
+    };
+    use lb_ledger::LedgerError;
+
+    use super::*;
+
+    const ID: [u8; 32] = [1; 32];
+
+    fn verification(err: impl Into<VerificationError>) -> crate::Error {
+        crate::Error::Ledger(LedgerError::VerificationError(err.into()))
+    }
+
+    /// Block Header Validation: the block ID does not commit to the Operation
+    /// proofs, so each of these says nothing about the block, only about this
+    /// copy of it.
+    #[test]
+    fn a_failed_operation_proof_is_reported_as_such() {
+        let channel_id = [2; 32].into();
+        for err in [
+            crate::Error::BatchDeferredProofVerification(batch::Error::InvalidZkTransfers),
+            crate::Error::BatchDeferredProofVerification(batch::Error::MalformedZkTransfer(
+                String::new(),
+            )),
+            crate::Error::BatchDeferredProofVerification(batch::Error::InvalidProgramSpends),
+            crate::Error::BatchDeferredProofVerification(batch::Error::MalformedProgramSpend(
+                String::new(),
+            )),
+            crate::Error::BatchDeferredProofVerification(batch::Error::InvalidProgramProof),
+            crate::Error::BatchDeferredProofVerification(batch::Error::MalformedProgramProof(
+                String::new(),
+            )),
+            verification(SdpError::InvalidEddsaSignature),
+            verification(channel::Error::InvalidSignature),
+            verification(channel::Error::InvalidSignatureIndex {
+                channel_id,
+                sequencers: 1,
+                index: 1,
+            }),
+            verification(channel::Error::ThresholdUnmet {
+                channel_id,
+                threshold: 2,
+                actual: 1,
+            }),
+            verification(channel::Error::ProgramNoteOpening { step: 0, output: 0 }),
+        ] {
+            let description = format!("{err:?}");
+            assert!(
+                matches!(
+                    apply_block_api_error(err, ID.into()),
+                    ApiError::InvalidOperationProof(id) if id == ID.into()
+                ),
+                "{description}"
+            );
+        }
+    }
+
+    /// The Operations themselves are committed by the block ID, so a failure
+    /// that reads them is a verdict on the block.
+    #[test]
+    fn a_failure_of_the_operations_is_not_an_operation_proof() {
+        for err in [
+            crate::Error::Ledger(LedgerError::InsufficientBalance),
+            verification(SdpError::DeclarationNotFound(DeclarationId([3; 32]))),
+            verification(SdpError::ServiceNotFound(ServiceType::BlendNetwork)),
+            verification(channel::Error::UnauthorizedSigner {
+                channel_id: [2; 32].into(),
+                signer: String::new(),
+            }),
+        ] {
+            let description = format!("{err:?}");
+            assert!(
+                matches!(
+                    apply_block_api_error(err, ID.into()),
+                    ApiError::Unexpected(_)
+                ),
+                "{description}"
+            );
+        }
     }
 }

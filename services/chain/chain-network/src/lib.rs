@@ -1006,6 +1006,12 @@ fn is_at_or_before_lib(block_slot: Slot, lib_slot: Slot) -> bool {
 /// - `CommsFailure`: relay failure has nothing to do with block validity; a
 ///   blanket "reject" here would poison the cache whenever chain-service is
 ///   temporarily unreachable.
+/// - `InvalidLeaderProof` / `InvalidOperationProof`: Block Header Validation: a
+///   bad copy, discarded without a verdict against the block ID, which does not
+///   cover these proofs. The genuine block shares the ID.
+///
+/// A body failing rule 4 does not reach this point: `Block::reconstruct` rejects
+/// it when the block is decoded or rebuilt from a proposal, before any apply.
 ///
 /// Other apply errors (e.g. validation failures surfaced as
 /// `ApiError::Unexpected`) are treated as terminal for the orphan pipeline.
@@ -1016,8 +1022,8 @@ const fn is_recoverable_apply_error(err: &Error) -> bool {
             lb_chain_service::api::ApiError::ParentMissing { .. }
                 | lb_chain_service::api::ApiError::FutureBlock { .. }
                 | lb_chain_service::api::ApiError::AlreadyApplied(_)
-                // The block ID does not cover the proof, the genuine block shares the ID.
                 | lb_chain_service::api::ApiError::InvalidLeaderProof(_)
+                | lb_chain_service::api::ApiError::InvalidOperationProof(_)
                 | lb_chain_service::api::ApiError::CommsFailure(_),
         ),
     )
@@ -1448,6 +1454,24 @@ mod tests {
         verify_proposal_and_cache_rejected(&proposal, &mut orphan_downloader)
             .expect("the header alone is valid");
         assert!(!orphan_downloader.has_rejected_block(&proposal.header().id()));
+    }
+
+    /// Block Header Validation: the block ID does not cover the Operation
+    /// proofs either, so a copy failing one must not get the ID rejected.
+    #[test]
+    fn invalid_operation_proof_is_not_cached_by_orphan_downloader() {
+        assert!(is_recoverable_apply_error(&Error::Cryptarchia(
+            lb_chain_service::api::ApiError::InvalidOperationProof(HeaderId::from([1; 32]))
+        )));
+    }
+
+    /// The Operations are committed by the block ID, so a block they make
+    /// invalid is rejected for good.
+    #[test]
+    fn invalid_operations_stay_cached_by_orphan_downloader() {
+        assert!(!is_recoverable_apply_error(&Error::Cryptarchia(
+            lb_chain_service::api::ApiError::Unexpected(String::new())
+        )));
     }
 
     /// A network adapter that the orphan downloader holds but never calls here.
