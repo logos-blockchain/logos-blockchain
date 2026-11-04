@@ -3322,12 +3322,10 @@ mod tests {
             excess_value: 0,
             metadata: Metadata::empty(),
         };
-        let mut steps = one_step(11, 12, channel_root, 1)
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
+        // One mini-block covering the deposit.
+        let mut steps: Vec<Step> = one_step(11, 12, channel_root)[0].iter().cloned().collect();
         steps.extend(
-            program_steps(derive_program_id(&key), 21, 22, channel_root, 0)
+            program_steps(derive_program_id(&key), 21, 22, channel_root)[0]
                 .iter()
                 .cloned(),
         );
@@ -3336,14 +3334,14 @@ mod tests {
             inscription: [1].into(),
             parent: MsgId::root(),
             signer: verifying_key.into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         };
         let inscribe = InscriptionOp {
             channel_id,
             inscription: [2].into(),
             parent: creation.id(),
             signer: verifying_key.into_unverified(),
-            steps: ChannelSteps::try_from(steps).unwrap(),
+            mini_blocks: [MiniBlock::try_from(steps).unwrap()].into(),
         };
         let tx = program_step_tx(
             vec![
