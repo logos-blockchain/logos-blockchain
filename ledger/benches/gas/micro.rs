@@ -437,7 +437,7 @@ fn applied_program_spend() -> DeferredZkProgramSpend {
         .channel_state(&fixture.channel)
         .expect("the channel exists")
         .tip_message;
-    let steps: MiniBlocks = [MiniBlock::from([Step::Program(ProgramStep {
+    let mini_blocks: MiniBlocks = [MiniBlock::from([Step::Program(ProgramStep {
         program_id: fixture.program,
         payments: [Payment {
             inputs: [nullifiers(1, 0x9a)[0]].into(),
@@ -454,7 +454,7 @@ fn applied_program_spend() -> DeferredZkProgramSpend {
         spend_notes_hash: Fr::ZERO,
     })])]
     .into();
-    let step_proofs = steps
+    let step_proofs = mini_blocks
         .iter()
         .flat_map(|mini_block| mini_block.iter())
         .map(|step| StepProof::sample_for(step.proof_shape()))
@@ -464,7 +464,7 @@ fn applied_program_spend() -> DeferredZkProgramSpend {
         inscription: [1].into(),
         parent: tip,
         signer: fixture.channel_key.public_key().into_unverified(),
-        mini_blocks: steps,
+        mini_blocks,
     })]);
     let signature = fixture
         .channel_key

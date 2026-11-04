@@ -1263,7 +1263,7 @@ mod tests {
     }
 
     #[test]
-    fn inscription_program_step_counts_its_payment_buffer() {
+    fn inscription_program_step_counts_its_payment_and_its_spend() {
         let operation = with_steps(vec![Step::Program(ProgramStep {
             payments: vec![Payment::sample()].try_into().unwrap(),
             ..ProgramStep::sample()
