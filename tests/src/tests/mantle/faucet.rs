@@ -25,7 +25,9 @@ const DRIP_AMOUNT: u64 = 50 * UNITS_PER_LGO;
 const MAX_TOTAL_FEES: u64 = 2000 * UNITS_PER_LGO;
 const DRIP_QUEUE_CAPACITY: usize = 16;
 const COOLDOWN: Duration = Duration::from_hours(1);
-const BALANCE_TIMEOUT: Duration = Duration::from_mins(3);
+/// Leaves room for the faucet to resubmit a dropped drip after its two minute
+/// confirmation timeout, which restarts when a drip lands on a fork that loses.
+const BALANCE_TIMEOUT: Duration = Duration::from_mins(6);
 const BALANCE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// End-to-end test for the faucet drip queue:
