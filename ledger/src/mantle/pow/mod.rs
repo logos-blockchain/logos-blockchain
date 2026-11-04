@@ -25,8 +25,9 @@ use crate::{
     },
 };
 
-/// `POW_REWARD_POOL_GENESIS`: the balance the pool starts with, five thousandths
-/// of the maximum supply (Initial Proof of Work Reward Pool in the genesis spec).
+/// `POW_REWARD_POOL_GENESIS`: the balance the pool starts with, five
+/// thousandths of the maximum supply (Initial Proof of Work Reward Pool in the
+/// genesis spec).
 pub const POW_REWARD_POOL_GENESIS: PowReward = MAX_SUPPLY / 1000 * 5;
 
 /// `PoW` state of the mantle ledger.

@@ -61,8 +61,7 @@ use thiserror::Error;
 use crate::{
     block_rewards::{BlockRewardsError, MAX_SUPPLY, REWARDS_RESERVE_GENESIS},
     config::{EraScheduledConfig, RewardPoWConfig, config_for_slot},
-    mantle::helpers::MantleOperationVerificationHelper,
-    mantle::pow::POW_REWARD_POOL_GENESIS,
+    mantle::{helpers::MantleOperationVerificationHelper, pow::POW_REWARD_POOL_GENESIS},
     update::{BatchVerifiedUpdate, PreparedUpdate},
 };
 
@@ -87,9 +86,9 @@ fn add_excess<Id>(balance: Balance, excess_value: Value) -> Result<Balance, Ledg
         .ok_or(LedgerError::BalanceOverflow)
 }
 
-/// What the published distribution and the `SDP_DECLARE` Operations of a genesis
-/// block hold together: the maximum supply minus the pow reward pool and the
-/// rewards reserve (Mantle Ledger Initialization in the genesis spec).
+/// What the published distribution and the `SDP_DECLARE` Operations of a
+/// genesis block hold together: the maximum supply minus the pow reward pool
+/// and the rewards reserve (Mantle Ledger Initialization in the genesis spec).
 pub const GENESIS_STAKE_SUPPLY: Value =
     MAX_SUPPLY - POW_REWARD_POOL_GENESIS - REWARDS_RESERVE_GENESIS;
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -2091,8 +2090,8 @@ mod tests {
         );
     }
 
-    // Mantle Ledger Initialization: the pool starts at POW_REWARD_POOL_GENESIS, five
-    // thousandths of the maximum supply, whatever the inscription holds.
+    // Mantle Ledger Initialization: the pool starts at POW_REWARD_POOL_GENESIS,
+    // five thousandths of the maximum supply, whatever the inscription holds.
     #[test]
     fn genesis_seeds_the_pow_reward_pool_with_five_thousandths_of_the_maximum_supply() {
         let config = config();

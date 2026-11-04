@@ -42,7 +42,7 @@ fn coordinate_limbs(coordinate: &[u8]) -> BigInt<4> {
     BigInt::new(limbs)
 }
 
-pub fn flagged_coordinate_is_canonical(coordinate: &[u8]) -> bool {
+pub(crate) fn flagged_coordinate_is_canonical(coordinate: &[u8]) -> bool {
     let last_byte = coordinate[COORDINATE_SIZE - 1];
     if last_byte & INFINITY_FLAG != 0 {
         return false;
@@ -52,7 +52,7 @@ pub fn flagged_coordinate_is_canonical(coordinate: &[u8]) -> bool {
     limbs < Fq::MODULUS
 }
 
-pub fn g2_coordinates_are_canonical(point: &[u8]) -> bool {
+pub(crate) fn g2_coordinates_are_canonical(point: &[u8]) -> bool {
     let (c0, c1) = point.split_at(COORDINATE_SIZE);
     coordinate_limbs(c0) < Fq::MODULUS && flagged_coordinate_is_canonical(c1)
 }
@@ -110,11 +110,12 @@ impl CompressedProof<Bn254> {
         bytes
     }
 
-    /// Mantle Transaction Encoding: a decoder rejects a point with bit 6 set and
-    /// a coordinate not less than the modulus of the base field. This reads the
-    /// bytes alone, four comparisons of 256 bits. Whether the points are on
-    /// their curve and in their subgroup is left to [`Proof::try_from`], where
-    /// the proof is verified and the points decompressed.
+    /// Mantle Transaction Encoding: a decoder rejects a point with bit 6 set
+    /// and a coordinate not less than the modulus of the base field. This
+    /// reads the bytes alone, four comparisons of 256 bits. Whether the
+    /// points are on their curve and in their subgroup is left to
+    /// [`Proof::try_from`], where the proof is verified and the points
+    /// decompressed.
     pub fn check_encoding(&self) -> Result<(), SerializationError> {
         let valid = flagged_coordinate_is_canonical(&self.pi_a)
             && g2_coordinates_are_canonical(&self.pi_b)

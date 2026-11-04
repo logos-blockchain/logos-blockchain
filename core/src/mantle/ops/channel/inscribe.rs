@@ -653,7 +653,8 @@ impl VerifiableOperation<StandardMode>
                 }
                 _ => return Err(Error::StepProofKind { step: index }),
             }
-            // The next program spends and the next mini-blocks cover the outputs of this step
+            // The next program spends and the next mini-blocks cover the outputs of this
+            // step
             note_set = note_set.buffer_outputs(step.outputs().as_slice());
         }
         Ok(deferred)
