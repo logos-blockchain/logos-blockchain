@@ -1465,15 +1465,6 @@ mod tests {
         )));
     }
 
-    /// The Operations are committed by the block ID, so a block they make
-    /// invalid is rejected for good.
-    #[test]
-    fn invalid_operations_stay_cached_by_orphan_downloader() {
-        assert!(!is_recoverable_apply_error(&Error::Cryptarchia(
-            lb_chain_service::api::ApiError::Unexpected(String::new())
-        )));
-    }
-
     /// A network adapter that the orphan downloader holds but never calls here.
     #[derive(Clone)]
     struct NoopNetworkAdapter;

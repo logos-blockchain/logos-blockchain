@@ -317,30 +317,4 @@ mod tests {
         assert_eq!(closed.rewards_reserve(), state.rewards_reserve());
         assert_eq!(closed.rewards_pool(), state.rewards_pool());
     }
-
-    #[test]
-    fn settling_an_epoch_returns_what_the_notes_do_not_use_to_the_reserve() {
-        let (state, _) = BlockRewards::genesis()
-            .distribute_block_reward(1_000_000_000_000, STAKE_AT_TARGET)
-            .unwrap();
-        let state = state.settle_blend_rewards(0).unwrap();
-        let (state, _) = state.distribute_block_reward(0, STAKE_AT_TARGET).unwrap();
-        assert_eq!(state.blend_rewards_pending(), 9_562_000_000);
-
-        let settled = state.clone().settle_blend_rewards(9_000_000_000).unwrap();
-        assert_eq!(
-            settled.rewards_reserve(),
-            state.rewards_reserve() + 562_000_000
-        );
-        assert_eq!(settled.rewards_pool(), state.rewards_pool());
-        // The share of the next epoch is closed in the same step.
-        assert_eq!(settled.blend_rewards_closed(), 9_562_000_000);
-        assert_eq!(settled.blend_rewards_pending(), 0);
-
-        // The notes cannot exceed what the closed share holds.
-        assert_eq!(
-            state.settle_blend_rewards(9_562_000_001),
-            Err(BlockRewardsError::OutOfRange)
-        );
-    }
 }

@@ -821,7 +821,7 @@ fn a_copy_failing_an_operation_proof_leaves_the_genuine_block_applicable() {
     let paths = commitment_paths(&genesis_notes);
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes(genesis_notes, &config, 0, &ConsensusExcludedKeys::empty()),
+        LedgerState::from_notes(genesis_notes, &config, 0),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     );

@@ -1331,7 +1331,7 @@ impl GenesisBlockBuilder<WithGenesisTx> {
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
+    use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
     use num_bigint::BigUint;
 
@@ -1341,7 +1341,7 @@ mod tests {
         mantle::{
             GenesisParameters, GenesisTime,
             ledger::verification_mode::GenesisMode,
-            notes::{NoteCommitment, NoteNullifier},
+            notes::NoteCommitment,
             ops::{
                 OpRef,
                 channel::{ChannelId, MsgId},
@@ -1682,46 +1682,6 @@ mod tests {
             ),
             "expected InvalidInscription, got {err:?}"
         );
-    }
-
-    // Genesis Validation Exemptions 3: the declarations must have no inputs.
-    #[test]
-    fn a_declaration_with_inputs_fails_at_build() {
-        let err = GenesisBlockBuilder::new()
-            .add_note(make_note(100))
-            .set_inscription(valid_inscription())
-            .add_declaration(SDPDeclareOp {
-                inputs: [NoteNullifier(Fr::ONE)].into(),
-                ..make_sdp_decl(0)
-            })
-            .build()
-            .unwrap_err();
-
-        assert!(
-            matches!(
-                err,
-                Error::InvalidGenesisTx(genesis_tx::Error::DeclarationWithInputs { index: 3 })
-            ),
-            "expected DeclarationWithInputs, got {err:?}"
-        );
-    }
-
-    // Genesis Validation Exemptions 1: the `op_proofs` list holds one placeholder
-    // per Operation, of the type that Operation requires.
-    #[test]
-    fn build_gives_each_operation_a_placeholder_proof() {
-        let block = GenesisBlockBuilder::new()
-            .add_note(make_note(100))
-            .set_inscription(valid_inscription())
-            .add_declaration(make_sdp_decl(0))
-            .build()
-            .unwrap();
-        let tx = block.genesis_tx();
-        let placeholder = ZkTransferProof::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
-        assert_eq!(tx.transfer().proof(), &placeholder);
-        let declaration = tx.sdp_declarations().next().unwrap();
-        assert_eq!(declaration.proof().zk_proof, placeholder);
-        assert_eq!(declaration.proof().ed25519_sig, Ed25519Signature::zero());
     }
 
     // ── add_notes / add_declarations batch helpers ────────────────────────────

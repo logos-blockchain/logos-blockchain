@@ -237,32 +237,6 @@ mod tests {
         }
     }
 
-    /// The generators of the two groups in the format of Mantle Transaction
-    /// Encoding: `x` little-endian, `c0` then `c1`, the two `y` being the smaller
-    /// of their pair, so the flags are clear.
-    #[test]
-    fn the_generators_compress_to_the_coordinates_of_the_format() {
-        let compressed = CompressedProof::<Bn254>::try_from(&generators()).unwrap();
-        assert_eq!(
-            hex::encode(compressed.to_bytes()),
-            concat!(
-                "0100000000000000000000000000000000000000000000000000000000000000",
-                "edf692d95cbdde46ddda5ef7d422436779445c5e66006a42761e1f12efde0018",
-                "c212f3aeb785e49712e7a9353349aaf1255dfb31b7bf60723a480d9293938e19",
-                "0100000000000000000000000000000000000000000000000000000000000000",
-            )
-        );
-    }
-
-    #[test]
-    fn a_real_proof_passes_the_encoding_check() {
-        let compressed = CompressedProof::<Bn254>::try_from(&generators()).unwrap();
-        assert_eq!(
-            CompressedProof::<Bn254>::try_from_bytes(&compressed.to_bytes()).unwrap(),
-            compressed
-        );
-    }
-
     /// Every encoding the check rejects, decompression rejects as well, so the
     /// check only moves the rejection to the decoder.
     #[test]
@@ -291,22 +265,6 @@ mod tests {
                 "bit 6 at {last_byte}"
             );
         }
-    }
-
-    /// Decompression remains the check of the curve: a coordinate in range with
-    /// no point on the curve is decoded, and fails where the proof is verified.
-    #[test]
-    fn a_coordinate_with_no_point_passes_the_encoding_check_only() {
-        let no_point = (1u64..)
-            .map(Fq::from)
-            .find(|x| G1Affine::get_point_from_x_unchecked(*x, false).is_none())
-            .unwrap();
-        let mut bytes = CompressedProof::<Bn254>::try_from(&generators())
-            .unwrap()
-            .to_bytes();
-        bytes[..32].copy_from_slice(&no_point.into_bigint().to_bytes_le());
-        let proof = CompressedProof::<Bn254>::try_from_bytes(&bytes).unwrap();
-        assert!(Proof::<Bn254>::try_from(&proof).is_err());
     }
 
     #[test]

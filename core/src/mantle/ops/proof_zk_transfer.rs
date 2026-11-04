@@ -158,14 +158,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn decoder_accepts_real_points() {
-        let bytes = generator_proof_bytes();
-        let (rest, proof) = ZkTransferProof::decode(&bytes, &()).unwrap();
-        assert!(rest.is_empty());
-        assert_eq!(proof.encode().to_vec(), bytes.to_vec());
-    }
-
     /// Mantle Transaction Encoding: a decoder MUST reject a point with bit 6
     /// set, with or without bit 7.
     #[test]

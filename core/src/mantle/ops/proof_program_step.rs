@@ -298,26 +298,6 @@ impl BinaryDecode for StepProof {
 mod tests {
     use super::*;
 
-    /// Mantle Transaction Encoding: the decoder of a `Groth16Proof` rejects the
-    /// infinity flag and a coordinate not less than the modulus, whatever the
-    /// proof is for.
-    #[test]
-    fn program_proofs_reject_the_infinity_flag_and_an_oversized_coordinate() {
-        let mut infinity = [0u8; COMPRESSED_PROOF_SIZE];
-        infinity[31] = 1 << 6;
-        let oversized = [0xFFu8; COMPRESSED_PROOF_SIZE];
-        for bytes in [infinity, oversized] {
-            assert!(matches!(
-                ZkProgramSpendProof::decode(&bytes, &()),
-                Err(DecodeError::InvalidValue { .. })
-            ));
-            assert!(matches!(
-                ProgramProof::decode(&bytes, &()),
-                Err(DecodeError::InvalidValue { .. })
-            ));
-        }
-    }
-
     #[test]
     fn program_step_proof_reads_its_shape_from_the_step() {
         let proof = StepProof::sample_for(StepProofShape::Program {

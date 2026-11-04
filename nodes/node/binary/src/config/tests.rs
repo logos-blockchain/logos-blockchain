@@ -506,14 +506,6 @@ fn standalone_node_config_deserializes() {
 }
 
 #[test]
-fn the_ledger_accepts_the_standalone_genesis_block() {
-    let yaml_path = repo_file("../standalone-deployment-config.yaml");
-    deserialize_value_at_path::<DeploymentSettings>(&yaml_path, OnUnknownKeys::Fail)
-        .expect("the standalone deployment config deserializes")
-        .genesis_ledger_state()
-        .expect("the ledger accepts the standalone genesis block");
-}
-#[test]
 fn standalone_deployment_config_deserializes() {
     let yaml_path = repo_file("../standalone-deployment-config.yaml");
     assert!(

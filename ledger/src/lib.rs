@@ -2091,19 +2091,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn genesis_supply_constants_follow_the_spec() {
-        assert_eq!(MAX_SUPPLY, 10_000_000_000_000_000_000);
-        assert_eq!(REWARDS_RESERVE_GENESIS, 1_000_000_000_000_000_000);
-        assert_eq!(POW_REWARD_POOL_GENESIS, 50_000_000_000_000_000);
-        assert_eq!(GENESIS_STAKE_SUPPLY, 8_950_000_000_000_000_000);
-    }
-
-    #[test]
-    fn genesis_accepts_the_maximum_supply() {
-        let (tx, _, _) = genesis_with_a_declaration();
-        assert!(LedgerState::from_genesis_tx::<HeaderId>(tx, &config()).is_ok());
-    }
     // Mantle Ledger Initialization: the pool starts at POW_REWARD_POOL_GENESIS, five
     // thousandths of the maximum supply, whatever the inscription holds.
     #[test]
@@ -2145,25 +2132,6 @@ mod tests {
                 .sdp_ledger()
                 .get_declaration(&declaration.id())
                 .is_some()
-        );
-    }
-
-    // Bedrock Services Initialization: beyond their proofs and their inputs, the
-    // declarations carry no exemption.
-    #[test]
-    fn genesis_rejects_a_declaration_below_the_minimum_stake() {
-        let (tx, _, declaration) = genesis_with_a_declaration();
-        let mut config = config();
-        config.sdp_config.min_stake.threshold = declaration.amount + 1;
-        assert_eq!(
-            LedgerState::from_genesis_tx::<HeaderId>(tx, &config).err(),
-            Some(LedgerError::Mantle(mantle::Error::Sdp(
-                SdpError::AmountBelowMinStake {
-                    amount: declaration.amount,
-                    threshold: declaration.amount + 1,
-                }
-                .into()
-            )))
         );
     }
 

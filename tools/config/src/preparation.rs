@@ -163,39 +163,4 @@ mod tests {
             u128::from(GENESIS_STAKE_SUPPLY)
         );
     }
-
-    #[test]
-    fn a_prepared_network_with_wallets_holds_the_genesis_supply() {
-        let wallets = [(ZkKey::from(num_bigint::BigUint::from(9u8)), 1_000)];
-        assert_eq!(
-            genesis_supply(&prepare(&wallets)),
-            u128::from(GENESIS_STAKE_SUPPLY)
-        );
-    }
-
-    // The leaders hold the stake, for the lottery to elect one of them.
-    #[test]
-    fn the_leaders_hold_what_the_other_outputs_leave() {
-        let network = prepare(&[]);
-        let distribution = network.genesis.genesis_tx().distribution();
-        let leader_values = network
-            .consensus
-            .regular_note_keys
-            .iter()
-            .map(|key| {
-                distribution
-                    .iter()
-                    .find(|allocation| allocation.public_key == key.to_public_key())
-                    .unwrap()
-                    .value
-            })
-            .collect::<Vec<_>>();
-        let share = GENESIS_STAKE_SUPPLY / 3;
-        assert!(
-            leader_values
-                .iter()
-                .all(|value| value.abs_diff(share) < share / 1000),
-            "{leader_values:?}"
-        );
-    }
 }

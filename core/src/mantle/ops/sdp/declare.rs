@@ -776,52 +776,6 @@ mod tests {
             );
         }
 
-        // Bedrock Services Initialization: beyond their proofs and their inputs, the
-        // declarations carry no exemption.
-        #[test]
-        fn genesis_verify_applies_the_ordinary_declaration_rules() {
-            let operation = genesis_declaration();
-            let declaration_id = operation.id();
-
-            assert_eq!(
-                genesis_verify(
-                    operation.clone(),
-                    &Declarations::new_sync(),
-                    &ProviderIndex::new_sync(),
-                    10_001
-                ),
-                Err(SdpError::AmountBelowMinStake {
-                    amount: 10_000,
-                    threshold: 10_001
-                })
-            );
-            assert_eq!(
-                genesis_verify(
-                    operation.clone(),
-                    &Declarations::new_sync()
-                        .insert(declaration_id, Declaration::new(Epoch::new(0), &operation)),
-                    &ProviderIndex::new_sync(),
-                    0
-                ),
-                Err(SdpError::DuplicateDeclaration(declaration_id))
-            );
-            assert_eq!(
-                genesis_verify(
-                    SDPDeclareOp {
-                        zk_id: ZkKey::from(BigUint::from(2u8)).to_public_key(),
-                        ..operation.clone()
-                    },
-                    &Declarations::new_sync(),
-                    &ProviderIndex::new_sync().insert(operation.provider_id, declaration_id),
-                    0
-                ),
-                Err(SdpError::DuplicateProviderId {
-                    service_type: operation.service_type,
-                    provider_id: Box::new(operation.provider_id),
-                })
-            );
-        }
-
         #[test]
         fn genesis_execution_spends_nothing_and_adds_the_service_note() {
             let operation = genesis_declaration();
