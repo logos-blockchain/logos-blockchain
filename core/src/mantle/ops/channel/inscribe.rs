@@ -6,7 +6,7 @@ use std::{
 use ark_ff::PrimeField as _;
 use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_cryptarchia_engine::Slot;
-use lb_groth16::{Fr, fr_from_bytes, fr_from_mod_bytes, serde::serde_fr};
+use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 #[cfg(any(test, feature = "test-utils"))]
 use lb_key_management_system_keys::keys::Ed25519Key;
 use lb_key_management_system_keys::keys::UnverifiedEd25519PublicKey;
@@ -194,9 +194,9 @@ impl BinaryDecode for Step {
 // The message the ZkTransfer of a step is bound to.
 #[must_use]
 pub fn step_msg(channel_id: &ChannelId, step: &ChannelStep) -> Fr {
-    let mut elements = Vec::with_capacity(4 + step.inputs.len() + step.outputs.len());
+    let mut elements = Vec::with_capacity(5 + step.inputs.len() + step.outputs.len());
     elements.push(*CHANNEL_STEP_V1);
-    elements.push(fr_from_mod_bytes(&channel_id.0));
+    elements.extend(channel_id.field_elements());
     elements.push(Fr::from(step.inputs.len() as u64));
     elements.extend(step.inputs.iter().map(|note_nullifier| note_nullifier.0));
     elements.push(Fr::from(step.outputs.len() as u64));
@@ -748,11 +748,13 @@ impl<Mode: VerificationMode> ExecutableOperation
 #[cfg(test)]
 mod tests {
     use lb_groth16::{
-        AdditiveGroup as _, CompressedGroth16Proof, Field as _, Groth16Input,
+        AdditiveGroup as _, CompressedGroth16Proof, Field as _, Groth16Input, fr_from_mod_bytes,
+        fr_modulus,
         test_utils::{three_input_prove, three_input_setup},
     };
     use lb_key_management_system_keys::keys::{ZkKey, ZkPublicKey};
     use lb_utils::bounded::BoundedError;
+    use num_bigint::BigUint;
 
     use super::*;
     use crate::{
@@ -1338,7 +1340,9 @@ mod tests {
     #[test]
     fn step_msg_hashes_the_channel_the_counts_and_the_notes() {
         let dst = fr_from_bytes(b"CHANNEL_STEP_V1").unwrap();
-        let channel = ChannelId::from([0x22u8; 32]);
+        let mut channel_bytes = [0x22u8; 32];
+        channel_bytes[16..].fill(0x2a);
+        let channel = ChannelId::from(channel_bytes);
         assert_eq!(
             step_msg(
                 &channel,
@@ -1350,7 +1354,8 @@ mod tests {
             ),
             ZkHasher::digest(&[
                 dst,
-                fr_from_mod_bytes(&[0x22u8; 32]),
+                fr_from_mod_bytes(&[0x22u8; 16]),
+                fr_from_mod_bytes(&[0x2au8; 16]),
                 Fr::from(1u64),
                 Fr::from(0x23u64),
                 Fr::from(2u64),
@@ -1375,6 +1380,26 @@ mod tests {
                 &ChannelId::from([0x23u8; 32]),
                 &step(&[nullifier(1)], &[], Fr::ZERO)
             )
+        );
+    }
+
+    #[test]
+    fn channels_differing_by_the_field_modulus_have_different_messages() {
+        let channel = |id: BigUint| {
+            let mut bytes = id.to_bytes_le();
+            bytes.resize(32, 0);
+            ChannelId::from(<[u8; 32]>::try_from(bytes).unwrap())
+        };
+        let low = channel(BigUint::from(1u8));
+        let high = channel(fr_modulus() + 1u8);
+
+        let user_step = step(&[nullifier(1)], &[commitment(2)], Fr::ZERO);
+        assert_ne!(step_msg(&low, &user_step), step_msg(&high, &user_step));
+
+        let payment = Payment::sample();
+        assert_ne!(
+            payment_msg(&low, &Fr::ONE, &payment),
+            payment_msg(&high, &Fr::ONE, &payment)
         );
     }
 
