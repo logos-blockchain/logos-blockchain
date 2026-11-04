@@ -1448,8 +1448,8 @@ mod tests {
             .minimum_gas_cost::<MainnetGasProfile>(&context)
             .unwrap()
             .into_inner();
-        // 204 bytes at a storage price of 1, and 12 + 1770 + 725 + 204 * 27 // 1000 = 2512
-        // Execution Gas at a price of 1.
+        // 204 bytes at a storage price of 1, and 12 + 1770 + 725 + 204 * 27 // 1000 =
+        // 2512 Execution Gas at a price of 1.
         assert_eq!(2716, cost_without_change);
 
         // We can fund the tx if the note value is exactly the gas cost without change

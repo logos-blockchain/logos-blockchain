@@ -410,10 +410,11 @@ fn user_inscription_shape(mini_blocks: Vec<Vec<Step>>, buffered: u16, payload: u
 }
 
 // Three series, each step spending one note: the user steps of one output at
-// no buffered output and no payload; a step of one output in a second mini-block
-// covering the outputs of the first, one step creating them; the payload of one
-// step of one output. The outputs of all the steps are a dimension, the buffered
-// series being the only one where they differ from the steps.
+// no buffered output and no payload; a step of one output in a second
+// mini-block covering the outputs of the first, one step creating them; the
+// payload of one step of one output. The outputs of all the steps are a
+// dimension, the buffered series being the only one where they differ from the
+// steps.
 fn inscriptions() -> Vec<OpShape> {
     let mut shapes = Vec::new();
     for user_steps in [0, 1, 2, 4, 8] {

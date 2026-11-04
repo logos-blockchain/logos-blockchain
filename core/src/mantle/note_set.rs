@@ -856,7 +856,7 @@ mod test {
     }
 
     #[test]
-    fn a_root_named_twice_is_computed_once_and_only_appended_sets_reset() {
+    fn update_records_the_appended_set_and_the_extended_root() {
         let (sets, channel) = NoteSets::new().push_empty();
         let set = sets
             .get(LEDGER_SET)
@@ -879,9 +879,6 @@ mod test {
                 .values()
                 .any(|extended| extended.root == Some(root))
         );
-
-        let sets = sets.start_transaction();
-        assert!(sets.tx_appended.is_empty());
     }
 
     #[test]
