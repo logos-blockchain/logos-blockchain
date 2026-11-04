@@ -77,11 +77,10 @@ optional `shared/` dir, so files common to every environment have a natural home
 deployment/ceremony/genesis/
   shared/                         # (optional) inputs common to ALL environments
   <env>/
-    inscribe.yaml                 # TEMPLATE entropy/PoW reward pool + PER-RELEASE chain_id/genesis_time
+    inscribe.yaml                 # TEMPLATE entropy + PER-RELEASE chain_id/genesis_time
     deployment-template.yaml      # PER-TYPE era-zero params (consensus / blend / time)
     stakeholders.yaml             # PER-TYPE genesis stake distribution
-    providers.yaml                # PER-TYPE bootstrap providers (id, locators)
-    consensus_excluded_keys.yaml  # PER-TYPE consensus-excluded identity + funds
+    providers.yaml                # PER-TYPE bootstrap providers (id, locators, declared amount)
 ```
 
 The per-environment `.env` files (`.env.devnet`, `.env.testnet`) live in
@@ -97,6 +96,11 @@ tests validate:
 | --- | --- | --- |
 | `.github/workflows/genesis-ceremony.yml` (devnet / testnet) | `deployment/ceremony/genesis/<env>/*` | `nodes/node/binary/src/config/deployment/settings.yaml` and the era files it includes, `era/schedule/<era number>.yaml` next to it |
 | `scripts/standalone-genesis-ceremony.sh` (local) | `deployment/ceremony/genesis/standalone/*` | `nodes/node/standalone-deployment-config.yaml` and the era file it includes, `era/schedule/0.yaml` next to it |
+
+The stakes of `stakeholders.yaml` and the amounts of `providers.yaml` must sum to
+8950000000000000000 lepta: with the 50000000000000000 of the pow reward pool and
+the 1000000000000000000 of the rewards reserve, this is the maximum supply. The
+ceremony and the node reject a genesis block that does not.
 
 ### Eras
 
@@ -143,13 +147,12 @@ Shared blueprints reused by every deployment type; not edited per release.
 - `Dockerfile`, `deployment/Dockerfile`
 - `deployment/cfgsync.yaml`, `deployment/cfgsync/deployment-settings.yaml`
 - `deployment/nginx/*`, `deployment/scripts/*`, `deployment/systemd/*`
-- the `# TEMPLATE` section (`entropy_sources`, `pow_reward_pool`) of each `deployment/ceremony/genesis/<env>/inscribe.yaml`
+- the `# TEMPLATE` section (`entropy_sources`) of each `deployment/ceremony/genesis/<env>/inscribe.yaml`
 
 ### 2. Template for a certain deployment type
 Per-type blueprints; change only when a network type is re-defined.
 
-- The blueprint files in `deployment/ceremony/genesis/<env>/` (`deployment-template.yaml`, `stakeholders.yaml`, `providers.yaml`,
-  `consensus_excluded_keys.yaml`)
+- The blueprint files in `deployment/ceremony/genesis/<env>/` (`deployment-template.yaml`, `stakeholders.yaml`, `providers.yaml`)
 - The `# DEPLOYMENT TYPE` section of `.env.<env>`
   (`TOOLS_IMAGE_LABEL`, `EXPLORER_IMAGE_LABEL`, `ENV_TITLE_STRING`,
   `PUBLIC_IP_ADDR`, `DOCKER_COMPOSE_LIBP2P_REPLICAS`, node ports)

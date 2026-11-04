@@ -3,7 +3,7 @@
 
 use lb_core::{
     block::genesis::GenesisBlock,
-    mantle::{GenesisTime, traits::GenesisTx as _},
+    mantle::{GenesisTime, transactions::Distribution},
     sdp::{Locator, ServiceType},
 };
 use lb_key_management_system_service::keys::ZkKey;
@@ -11,11 +11,11 @@ use lb_key_management_system_service::keys::ZkKey;
 use crate::{
     blend::{DEFAULT_BLEND_LISTENING_HOST, keys_from_id, listening_address},
     consensus::{
-        BaseConsensusMaterial, ProviderInfo, SdpFundingConfig,
+        BLEND_DECLARATION_AMOUNT, BaseConsensusMaterial, ProviderInfo, SdpFundingConfig,
         create_base_consensus_material_with_additional_wallet_outputs_and_sdp_funding_config,
-        create_genesis_block, create_genesis_block_with_declarations,
+        create_genesis_block_with_declarations,
     },
-    funding::{fund_wallets, refresh_service_note},
+    funding::{fill_leader_stake, fund_wallets, refresh_service_note},
 };
 
 /// The network's initial state and the secrets needed by its participants.
@@ -62,8 +62,8 @@ pub fn prepare_network(
             reserved_wallet_outputs.max(wallets.len()),
             sdp_funding,
         );
-    let genesis = create_genesis_block(&consensus.allocations, test_context, genesis_time);
-    let mut transfer = genesis.genesis_tx().distribution();
+    let mut transfer = Distribution::try_from(consensus.allocations.clone())
+        .expect("the allocations fit the genesis transfer outputs");
     let leader_keys = consensus
         .regular_note_keys
         .iter()
@@ -74,19 +74,13 @@ pub fn prepare_network(
         .iter()
         .map(|note| note.pk)
         .collect::<Vec<_>>();
-    fund_wallets(
-        &mut transfer,
-        &leader_keys,
-        &funding_keys,
-        wallets,
-        sdp_funding,
-    );
+    fund_wallets(&mut transfer, &funding_keys, wallets, sdp_funding);
 
-    for note in consensus
-        .blend_notes
-        .iter_mut()
-        .chain(&mut consensus.sdp_notes)
-    {
+    let declared = BLEND_DECLARATION_AMOUNT
+        * u64::try_from(blend_core_nodes).expect("the provider count fits in u64");
+    fill_leader_stake(&mut transfer, &leader_keys, declared);
+
+    for note in &mut consensus.sdp_notes {
         refresh_service_note(note, &transfer);
     }
     consensus.allocations = transfer.as_slice().to_vec();
@@ -94,9 +88,8 @@ pub fn prepare_network(
     let providers = ids
         .iter()
         .zip(blend_ports)
-        .enumerate()
         .take(blend_core_nodes)
-        .map(|(i, (id, port))| {
+        .map(|(id, port)| {
             let (provider_sk, zk_sk) = keys_from_id(id);
             ProviderInfo {
                 service_type: ServiceType::BlendNetwork,
@@ -106,7 +99,7 @@ pub fn prepare_network(
                     DEFAULT_BLEND_LISTENING_HOST,
                     *port,
                 )),
-                note: consensus.blend_notes[i].clone(),
+                amount: BLEND_DECLARATION_AMOUNT,
             }
         })
         .collect();
@@ -118,5 +111,91 @@ pub fn prepare_network(
         blend_ports: blend_ports.to_vec(),
         consensus,
         genesis,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_core::mantle::{
+        OpRef,
+        traits::{GenesisTx as _, MantleTx as _},
+    };
+    use lb_ledger::GENESIS_STAKE_SUPPLY;
+
+    use super::*;
+
+    fn genesis_supply(network: &PreparedNetwork) -> u128 {
+        let tx = network.genesis.genesis_tx();
+        let distributed = tx
+            .distribution()
+            .iter()
+            .map(|allocation| u128::from(allocation.value))
+            .sum::<u128>();
+        let declared = tx
+            .op_refs()
+            .into_iter()
+            .filter_map(|op| match op {
+                OpRef::SDPDeclare(declaration) => Some(u128::from(declaration.amount)),
+                _ => None,
+            })
+            .sum::<u128>();
+        distributed + declared
+    }
+
+    fn prepare(wallets: &[(ZkKey, u64)]) -> PreparedNetwork {
+        prepare_network(
+            &[[1; 32], [2; 32], [3; 32]],
+            &[3000, 3001, 3002],
+            2,
+            0,
+            wallets,
+            SdpFundingConfig::default(),
+            None,
+            GenesisTime::new(1000),
+        )
+    }
+
+    // A test chain follows the supply rule of Mantle Ledger Initialization.
+    #[test]
+    fn a_prepared_network_holds_the_genesis_supply() {
+        assert_eq!(
+            genesis_supply(&prepare(&[])),
+            u128::from(GENESIS_STAKE_SUPPLY)
+        );
+    }
+
+    #[test]
+    fn a_prepared_network_with_wallets_holds_the_genesis_supply() {
+        let wallets = [(ZkKey::from(num_bigint::BigUint::from(9u8)), 1_000)];
+        assert_eq!(
+            genesis_supply(&prepare(&wallets)),
+            u128::from(GENESIS_STAKE_SUPPLY)
+        );
+    }
+
+    // The leaders hold the stake, for the lottery to elect one of them.
+    #[test]
+    fn the_leaders_hold_what_the_other_outputs_leave() {
+        let network = prepare(&[]);
+        let distribution = network.genesis.genesis_tx().distribution();
+        let leader_values = network
+            .consensus
+            .regular_note_keys
+            .iter()
+            .map(|key| {
+                distribution
+                    .iter()
+                    .find(|allocation| allocation.public_key == key.to_public_key())
+                    .unwrap()
+                    .value
+            })
+            .collect::<Vec<_>>();
+        let share = GENESIS_STAKE_SUPPLY / 3;
+        assert!(
+            leader_values
+                .iter()
+                .all(|value| value.abs_diff(share) < share / 1000),
+            "{leader_values:?}"
+        );
     }
 }

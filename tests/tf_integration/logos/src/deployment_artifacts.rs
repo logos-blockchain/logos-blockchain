@@ -14,7 +14,9 @@ use crate::{
     NodePlan,
     config::{
         deployment_settings_for_topology,
-        node_configs::consensus::{ProviderInfo, create_genesis_block_with_declarations},
+        node_configs::consensus::{
+            BLEND_DECLARATION_AMOUNT, ProviderInfo, create_genesis_block_with_declarations,
+        },
     },
     internal::DeploymentPlan,
 };
@@ -130,7 +132,7 @@ fn collect_runtime_blend_providers(
             provider_sk: provider_sk.clone(),
             zk_sk: zk_sk.clone(),
             locator,
-            note: node.general.consensus_config.blend_note.clone(),
+            amount: BLEND_DECLARATION_AMOUNT,
         });
     }
 

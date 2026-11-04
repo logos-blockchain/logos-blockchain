@@ -85,8 +85,8 @@ fn shared_inputs(
 
 #[cfg(test)]
 mod tests {
+    use lb_config::{consensus::BLEND_DECLARATION_AMOUNT, funding::GENESIS_STAKE_SUPPLY};
     use lb_core::mantle::{
-        notes::derive_note_nullifier,
         ops::OpRef,
         traits::{GenesisTx as _, MantleTx as _},
         transactions::UNITS_PER_LGO,
@@ -123,36 +123,45 @@ mod tests {
                 .value,
             wallet.value
         );
-        for key in &network.consensus.regular_note_keys {
-            assert_eq!(
+        // The leaders hold the stake the other outputs and the declarations leave.
+        let leader_stake = network
+            .consensus
+            .regular_note_keys
+            .iter()
+            .map(|key| {
                 transfer
                     .iter()
                     .find(|note| note.public_key == key.to_public_key())
                     .unwrap()
-                    .value,
-                2_500_000 * UNITS_PER_LGO
-            );
-        }
+                    .value
+            })
+            .sum::<u64>();
+        let others = transfer
+            .iter()
+            .map(|note| note.value)
+            .sum::<u64>()
+            .checked_sub(leader_stake)
+            .unwrap();
+        assert_eq!(
+            leader_stake + others + 2 * BLEND_DECLARATION_AMOUNT,
+            GENESIS_STAKE_SUPPLY
+        );
         let declarations = network
             .genesis
             .genesis_tx()
             .op_refs()
             .into_iter()
             .filter_map(|op| match op {
-                OpRef::SDPDeclare(declaration) => {
-                    Some((declaration.id(), declaration.inputs.as_slice()[0]))
-                }
+                OpRef::SDPDeclare(declaration) => Some(declaration.clone()),
                 _ => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(declarations.len(), 2);
-        for (i, (_, nullifier)) in declarations.iter().enumerate() {
-            let blend_note = &network.consensus.blend_notes[i];
-            assert_eq!(
-                *nullifier,
-                derive_note_nullifier(&blend_note.note.commitment(), blend_note.sk.as_fr())
-            );
-        }
+        assert!(
+            declarations
+                .iter()
+                .all(|declaration| declaration.inputs.is_empty())
+        );
 
         let plan = build_plan(prepared).unwrap();
         assert_eq!(
@@ -187,7 +196,7 @@ mod tests {
                     .declaration
                     .as_ref()
                     .map(DeclarationConfig::id),
-                Some(declarations[i].0)
+                Some(declarations[i].id())
             );
             let wallet_key = Key::Zk(wallet.secret_key.clone());
             let wallet_key_id = lb_config::kms::key_id_for_preload_backend(&wallet_key);

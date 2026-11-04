@@ -4,7 +4,9 @@ use futures::StreamExt as _;
 use lb_common_http_client::ProcessedBlockEvent;
 use lb_core::mantle::transactions::UNITS_PER_LGO;
 use lb_groth16::fr_to_bytes;
-use lb_http_api_common::bodies::wallet::balance::WalletBalanceResponseBody;
+use lb_http_api_common::bodies::wallet::{
+    balance::WalletBalanceResponseBody, transfer_funds::WalletTransferFundsRequestBody,
+};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::config::{RunConfig, deployment::era::ruleset::v1::cryptarchia::EpochConfig};
 use lb_testing_framework::{
@@ -28,13 +30,25 @@ const NODE_COUNT: usize = 1;
 /// header carries; the leader's wallet adopts it.
 #[tokio::test]
 async fn leader_rewards_reach_the_leader_wallet() {
-    let (_base, nodes, _leader_funding_pk) =
+    let (_base, nodes, leader_funding_pk) =
         setup_test_nodes("leader_rewards_reach_the_leader_wallet").await;
     let node = &nodes[0];
     let mut block_stream = node.client.blocks_stream().await.unwrap();
     let mut leader_keys = HashSet::new();
     collect_reward_keys(&mut block_stream, &mut leader_keys, 1).await;
     let before = total_balance(&node.client, &leader_keys).await;
+    // The genesis total stake is above its target, so the reserve releases nothing
+    // and the block reward is what the pooled fees pay: a transaction funds it.
+    node.client
+        .transfer_funds(WalletTransferFundsRequestBody {
+            tip: None,
+            change_public_key: leader_funding_pk,
+            funding_public_keys: vec![leader_funding_pk],
+            recipient_public_key: leader_funding_pk,
+            amount: 1,
+        })
+        .await
+        .expect("the transfer should be submitted");
     collect_reward_keys(&mut block_stream, &mut leader_keys, 5).await;
     wait_for_total_balance_above(&node.client, &leader_keys, before, Duration::from_mins(1)).await;
 }

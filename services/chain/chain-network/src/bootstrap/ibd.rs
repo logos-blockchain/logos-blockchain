@@ -370,7 +370,7 @@ mod tests {
     };
     use lb_cryptarchia_engine::{EpochConfig, Era, Slot, UncleSlots};
     use lb_ledger::{
-        ConsensusExcludedKeys, LedgerState,
+        LedgerState,
         config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
@@ -952,7 +952,7 @@ mod tests {
         let ledger_config = ledger_config();
         lb_chain_service::Cryptarchia::from_genesis(
             [GENESIS_ID; 32].into(),
-            LedgerState::from_notes(empty(), &ledger_config, 0, &ConsensusExcludedKeys::empty()),
+            LedgerState::from_notes(empty(), &ledger_config, 0),
             single_era(ledger_config),
             lb_cryptarchia_engine::State::Bootstrapping,
         )

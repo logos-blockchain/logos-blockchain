@@ -49,7 +49,7 @@ use lb_mmr::MerklePath;
 use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
 use logos_blockchain_ledger::{
-    Config, ConsensusExcludedKeys, LedgerState,
+    Config, LedgerState,
     config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
@@ -207,12 +207,7 @@ static TX_POOL: LazyLock<TxPool> = LazyLock::new(|| {
     }
     let root = mmr.frontier_root();
 
-    let genesis = LedgerState::from_notes(
-        notes.iter().copied(),
-        &config,
-        0,
-        &ConsensusExcludedKeys::empty(),
-    );
+    let genesis = LedgerState::from_notes(notes.iter().copied(), &config, 0);
     assert_eq!(
         genesis
             .latest_note_sets()

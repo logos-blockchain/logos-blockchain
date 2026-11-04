@@ -21,7 +21,7 @@ use lb_core::{
             transfer::TransferError,
         },
         programs::Programs,
-        transactions::{GenesisDeclarations, hash::TxHashView, states::Verified},
+        transactions::{GenesisDeclarations, states::Verified},
     },
 };
 use lb_cryptarchia_engine::Slot;
@@ -80,9 +80,7 @@ impl LedgerState {
     pub fn from_genesis_tx(
         signed_operation_inscriptions: [SignedOperation<InscriptionOp, Verified, GenesisMode>; 2],
         signed_operation_declarations: GenesisDeclarations,
-        tx_hash_view: &TxHashView,
         config: &Config,
-        pow_reward_pool: PowReward,
         note_sets: NoteSets,
         epoch_state: &EpochState,
     ) -> Result<(Self, NoteSets, Vec<TxEvent>), Error> {
@@ -95,7 +93,6 @@ impl LedgerState {
             &config.sdp_config,
             note_sets,
             epoch_state,
-            tx_hash_view,
             signed_operation_declarations,
         )?;
         tx_events.extend(events);
@@ -104,7 +101,10 @@ impl LedgerState {
             Self {
                 channels,
                 sdp,
-                pow: pow::PowState::from_reward_pool_and_config(pow_reward_pool, config),
+                pow: pow::PowState::from_reward_pool_and_config(
+                    pow::POW_REWARD_POOL_GENESIS,
+                    config,
+                ),
                 programs: Programs::new(),
             },
             note_sets,

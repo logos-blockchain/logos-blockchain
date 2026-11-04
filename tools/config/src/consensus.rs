@@ -4,9 +4,9 @@ use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
-        ConsensusExcludedKeys, GenesisParameters, GenesisTime, Note,
+        GenesisParameters, GenesisTime, Note,
         note_set::CommitmentMmr,
-        notes::derive_note_nullifier,
+        notes::InputNullifiers,
         ops::channel::{
             ChannelId, MsgId,
             inscribe::{Inscription, InscriptionOp, MiniBlocks},
@@ -21,7 +21,7 @@ use lb_key_management_system_service::keys::{
 };
 use num_bigint::BigUint;
 
-use crate::unique::unique_test_context;
+use crate::{funding::fill_leader_stake, unique::unique_test_context};
 
 pub const SHORT_PROLONGED_BOOTSTRAP_PERIOD: Duration = Duration::from_secs(1);
 
@@ -29,12 +29,12 @@ pub const EMPTY_CHANNEL_ID: [u8; 32] = [0; 32];
 pub const EMPTY_ED25519_PUBLIC_KEY: [u8; 32] = [0; 32];
 
 const LEADER_KEY_PREFIX: &[u8] = b"ld";
-const BLEND_KEY_PREFIX: &[u8] = b"bn";
 const SDP_KEY_PREFIX: &[u8] = b"sdp";
 const KEY_MATERIAL_LEN: usize = 16;
 
 const REGULAR_NOTE_VALUE: u64 = 100_000 * UNITS_PER_LGO;
-const BLEND_NOTE_VALUE: u64 = 1;
+/// The amount each Blend provider of a test chain declares at genesis.
+pub const BLEND_DECLARATION_AMOUNT: u64 = 1;
 /// Funds SDP declare/activity transaction fees at non-zero gas prices; an
 /// activity transaction costs roughly 400-1000 LGO at genesis prices.
 const DEFAULT_SDP_FUNDING_VALUE_PER_NODE: u64 = 10_000 * UNITS_PER_LGO;
@@ -84,7 +84,8 @@ pub struct ProviderInfo {
     pub provider_sk: Ed25519Key,
     pub zk_sk: ZkKey,
     pub locator: Locator,
-    pub note: ServiceNote,
+    /// The amount the provider declares. A genesis declaration consumes no note.
+    pub amount: u64,
 }
 
 impl ProviderInfo {
@@ -104,7 +105,6 @@ impl ProviderInfo {
 #[derive(Clone, Debug)]
 pub struct GeneralConsensusConfig {
     pub known_key: ZkKey,
-    pub blend_note: ServiceNote,
     pub funding_sk: ZkKey,
     pub funding_pk: ZkPublicKey,
     pub other_keys: Vec<ZkKey>,
@@ -123,7 +123,6 @@ pub struct ServiceNote {
 #[derive(Clone)]
 pub struct BaseConsensusMaterial {
     pub regular_note_keys: Vec<ZkKey>,
-    pub blend_notes: Vec<ServiceNote>,
     pub sdp_notes: Vec<ServiceNote>,
     pub allocations: Vec<GenesisAllocation>,
 }
@@ -138,9 +137,7 @@ fn select_sdp_funding_notes_per_node(
         "SDP funding allocation requires at least one node"
     );
 
-    let fixed_node_outputs = node_count
-        .checked_mul(2)
-        .expect("node count overflow while calculating genesis outputs");
+    let fixed_node_outputs = node_count;
     let required_outputs = fixed_node_outputs
         .checked_add(additional_wallet_outputs)
         .expect("genesis output count overflow while calculating SDP funding capacity");
@@ -184,9 +181,6 @@ fn select_sdp_funding_notes_per_node(
     selected_sdp_notes_per_node
 }
 
-/// The balance the `PoW` reward pool of a test chain starts with.
-const GENESIS_POW_REWARD_POOL: u64 = 1_000_000_000;
-
 fn inscription_for_current_test(
     test_context: Option<&str>,
     genesis_time: GenesisTime,
@@ -200,8 +194,6 @@ fn inscription_for_current_test(
                 chain_id,
                 start_time: genesis_time,
                 epoch_nonce: Fr::ZERO,
-                pow_reward_pool: GENESIS_POW_REWARD_POOL,
-                consensus_excluded_keys: ConsensusExcludedKeys::empty(),
             }
             .encode_to_vec(),
         ),
@@ -292,7 +284,15 @@ pub fn create_consensus_configs_with_additional_wallet_outputs_and_sdp_funding_c
             additional_wallet_outputs,
             sdp_funding_config,
         );
-    let genesis_block = create_genesis_block(&material.allocations, test_context, genesis_time);
+    let mut allocations = Distribution::try_from(material.allocations.clone())
+        .expect("the allocations fit the genesis transfer outputs");
+    let leader_keys = material
+        .regular_note_keys
+        .iter()
+        .map(ZkKey::to_public_key)
+        .collect::<Vec<_>>();
+    fill_leader_stake(&mut allocations, &leader_keys, 0);
+    let genesis_block = create_genesis_block(allocations.as_slice(), test_context, genesis_time);
 
     (
         configs_from_material(&material, prolonged_bootstrap_period),
@@ -310,7 +310,6 @@ pub(crate) fn configs_from_material(
         .enumerate()
         .map(|(i, key)| GeneralConsensusConfig {
             known_key: key.clone(),
-            blend_note: material.blend_notes[i].clone(),
             funding_sk: material.sdp_notes[i].sk.clone(),
             funding_pk: material.sdp_notes[i].pk,
             other_keys: Vec::new(),
@@ -343,12 +342,10 @@ pub fn create_base_consensus_material_with_additional_wallet_outputs_and_sdp_fun
     sdp_funding_config: SdpFundingConfig,
 ) -> BaseConsensusMaterial {
     let mut regular_note_keys = Vec::new();
-    let mut blend_notes = Vec::new();
     let mut sdp_notes = Vec::new();
     let allocations = create_allocations(
         ids,
         &mut regular_note_keys,
-        &mut blend_notes,
         &mut sdp_notes,
         additional_wallet_outputs,
         sdp_funding_config,
@@ -356,7 +353,6 @@ pub fn create_base_consensus_material_with_additional_wallet_outputs_and_sdp_fun
 
     BaseConsensusMaterial {
         regular_note_keys,
-        blend_notes,
         sdp_notes,
         allocations,
     }
@@ -365,7 +361,6 @@ pub fn create_base_consensus_material_with_additional_wallet_outputs_and_sdp_fun
 fn create_allocations(
     ids: &[[u8; 32]],
     regular_note_keys: &mut Vec<ZkKey>,
-    blend_notes: &mut Vec<ServiceNote>,
     sdp_notes: &mut Vec<ServiceNote>,
     additional_wallet_outputs: usize,
     sdp_funding_config: SdpFundingConfig,
@@ -408,22 +403,6 @@ fn create_allocations(
         });
         output_index += 1;
 
-        let sk_blend_data = derive_key_material(BLEND_KEY_PREFIX, &id);
-        let sk_blend = ZkKey::from(BigUint::from_bytes_le(&sk_blend_data));
-        let pk_blend = sk_blend.to_public_key();
-        let allocation = GenesisAllocation {
-            value: BLEND_NOTE_VALUE,
-            public_key: pk_blend,
-        };
-        blend_notes.push(ServiceNote {
-            pk: pk_blend,
-            sk: sk_blend,
-            note: allocation.note(output_index),
-            output_index,
-        });
-        allocations.push(allocation);
-        output_index += 1;
-
         let sk_sdp_data = derive_key_material(SDP_KEY_PREFIX, &id);
         let sk_sdp = ZkKey::from(BigUint::from_bytes_le(&sk_sdp_data));
         let pk_sdp = sk_sdp.to_public_key();
@@ -460,31 +439,15 @@ pub fn create_genesis_block_with_declarations(
 
     let declarations = providers
         .iter()
-        .map(|provider| {
-            let index = provider.note.output_index;
-            let allocation = allocations[index];
-            assert_eq!(
-                allocation.public_key, provider.note.pk,
-                "provider note must be the genesis allocation at its index"
-            );
-            DeclarationMessage {
-                service_type: provider.service_type,
-                locators: provider.locator.clone().into(),
-                provider_id: provider.provider_id(),
-                zk_id: provider.zk_id(),
-                inputs: [derive_note_nullifier(
-                    &allocation.note(index).commitment(),
-                    provider.note.sk.as_fr(),
-                )]
-                .into(),
-                commitment_merkle_root: CommitmentMmr::new().frontier_root(),
-                amount: allocation.value,
-            }
+        .map(|provider| DeclarationMessage {
+            service_type: provider.service_type,
+            locators: provider.locator.clone().into(),
+            provider_id: provider.provider_id(),
+            zk_id: provider.zk_id(),
+            inputs: InputNullifiers::default(),
+            commitment_merkle_root: CommitmentMmr::new().frontier_root(),
+            amount: provider.amount,
         })
-        .collect::<Vec<_>>();
-    let stake_keys = providers
-        .into_iter()
-        .map(|provider| provider.note.sk)
         .collect::<Vec<_>>();
 
     let genesis_builder = GenesisBlockBuilder::new()
@@ -499,7 +462,7 @@ pub fn create_genesis_block_with_declarations(
     genesis_builder
         .add_declarations(declarations)
         .expect("declarations must fit in the genesis transaction")
-        .build_proven(&stake_keys)
+        .build()
         .expect("Genesis block should build properly")
 }
 
@@ -572,8 +535,8 @@ mod tests {
             );
 
         let outputs = sdp_outputs(&material);
-        assert_eq!(outputs.len(), ids.len() * 3);
-        for provider_outputs in outputs.chunks(3) {
+        assert_eq!(outputs.len(), ids.len() * 4);
+        for provider_outputs in outputs.chunks(4) {
             assert_eq!(
                 provider_outputs.iter().map(|note| note.value).sum::<u64>(),
                 10_000_000

@@ -78,9 +78,6 @@ pub mod aged_notes {
     /// empty `notes` means this node cannot win a slot at `tip`: either it
     /// owns no notes, or none of them have aged into the current epoch's
     /// snapshot yet.
-    ///
-    /// The set is reported unfiltered. The leader service additionally skips
-    /// the UTXOs of the keys in `consensus_excluded_keys`.
     #[derive(Serialize, Deserialize)]
     pub struct LeaderAgedNotesResponseBody {
         pub tip: HeaderId,

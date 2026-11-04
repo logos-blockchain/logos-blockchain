@@ -562,7 +562,6 @@ fn plan_local_node_config(
         .first()
         .ok_or_else(|| io::Error::other("generated topology must include at least one node"))?;
 
-    let base_consensus = &base_node.general.consensus_config;
     let base_time = &base_node.general.time_config;
 
     if let Some(node) = descriptors.nodes().get(index) {
@@ -616,7 +615,6 @@ fn plan_local_node_config(
             network_port,
             initial_peers,
             blend_port,
-            base_consensus,
             base_time,
             descriptors.config.test_context.as_deref(),
             descriptors.config.genesis_time(),

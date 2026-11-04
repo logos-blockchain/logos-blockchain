@@ -81,7 +81,6 @@ cryptarchia:
       BN: { inactivity_period: 10, epoch: 0 }
     min_stake: { threshold: 100, timestamp: 0 }
   gossipsub_protocol: /cryptarchia/test
-  consensus_excluded_keys: [excluded-key]
   genesis_block:
     header:
       version: 1

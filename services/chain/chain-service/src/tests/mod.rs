@@ -46,7 +46,7 @@ use lb_cryptarchia_sync::HeaderId;
 use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
 use lb_key_management_system_keys::keys::{UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey};
 use lb_ledger::{
-    ConsensusExcludedKeys, LedgerState,
+    GENESIS_STAKE_SUPPLY, LedgerState,
     config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
@@ -84,7 +84,7 @@ fn cryptarchia_switch_to_online() {
     let genesis_id: HeaderId = [0; 32].into();
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes([note], &config, 0, &ConsensusExcludedKeys::empty()),
+        LedgerState::from_notes([note], &config, 0),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     );
@@ -162,7 +162,7 @@ async fn get_block_ids_from_memory_and_storage() {
     let (secret_key, note) = note();
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes([note], &config, 0, &ConsensusExcludedKeys::empty()),
+        LedgerState::from_notes([note], &config, 0),
         single_era(config),
         lb_cryptarchia_engine::State::Online,
     );
@@ -681,7 +681,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
     let paths = commitment_paths(&genesis_notes);
     let genesis = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes(genesis_notes, &config, 0, &ConsensusExcludedKeys::empty()),
+        LedgerState::from_notes(genesis_notes, &config, 0),
         single_era(config),
         lb_cryptarchia_engine::State::Online,
     );
@@ -777,7 +777,7 @@ fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
     let genesis_id: HeaderId = [0; 32].into();
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes([note], &config, 0, &ConsensusExcludedKeys::empty()),
+        LedgerState::from_notes([note], &config, 0),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     );
@@ -946,7 +946,7 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedOps<Preverified, St
     let (secret_key, note) = note();
     let cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes([note], &config, 0, &ConsensusExcludedKeys::empty()),
+        LedgerState::from_notes([note], &config, 0),
         single_era(config),
         lb_cryptarchia_engine::State::Online,
     );
@@ -1282,19 +1282,29 @@ pub fn genesis_cryptarchia_on(note: Note, era_schedule: Arc<EraScheduledConfig>)
     let genesis_config = era_schedule.genesis().parameters.clone();
     Cryptarchia::from_genesis(
         GENESIS_ID.into(),
-        LedgerState::from_notes([note], &genesis_config, 0, &ConsensusExcludedKeys::empty()),
+        LedgerState::from_notes([note], &genesis_config, 0),
         era_schedule,
         lb_cryptarchia_engine::State::Bootstrapping,
     )
 }
 
-/// A genesis block distributing the value of each of `notes` to its key.
+/// A genesis block distributing the value of each of `notes` to its key and what
+/// the supply rule of Mantle Ledger Initialization leaves to another one.
 pub fn genesis_block_with(notes: &[Note]) -> GenesisBlock {
+    let distributed = notes.iter().map(|note| note.value).sum::<u64>();
     GenesisBlockBuilder::new()
-        .try_add_notes(notes.iter().map(|note| GenesisAllocation {
-            value: note.value,
-            public_key: note.public_key,
-        }))
+        .try_add_notes(
+            notes
+                .iter()
+                .map(|note| GenesisAllocation {
+                    value: note.value,
+                    public_key: note.public_key,
+                })
+                .chain([GenesisAllocation {
+                    value: GENESIS_STAKE_SUPPLY - distributed,
+                    public_key: ZkPublicKey::new(Fr::from(1u64)),
+                }]),
+        )
         .unwrap()
         .set_inscription(InscriptionOp {
             channel_id: NULL_CHANNEL_ID,
@@ -1303,8 +1313,6 @@ pub fn genesis_block_with(notes: &[Note]) -> GenesisBlock {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
                     start_time: GenesisTime::new(0),
                     epoch_nonce: Fr::ZERO,
-                    pow_reward_pool: 0,
-                    consensus_excluded_keys: ConsensusExcludedKeys::empty(),
                 }
                 .encode_to_vec(),
             ),

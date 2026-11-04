@@ -24,10 +24,7 @@ use lb_core::{
                 declare::SDPDeclareGenesisValidationContext,
             },
         },
-        transactions::{
-            hash::TxHashView,
-            states::{Preverified, Verified},
-        },
+        transactions::states::{Preverified, Verified},
     },
     sdp::{
         ActivityMetadata, Declaration, DeclarationId, MinStake, ProviderId, ServiceParameters,
@@ -351,7 +348,6 @@ impl SdpLedger {
         config: &Config,
         mut note_sets: NoteSets,
         epoch_state: &EpochState,
-        tx_hash_view: &TxHashView,
         declarations: impl IntoIterator<Item = SignedOperation<SDPDeclareOp, Preverified, GenesisMode>>,
     ) -> Result<(Self, NoteSets, Vec<TxEvent>), Error> {
         let mut sdp = Self::new(epoch_state.epoch())
@@ -368,8 +364,6 @@ impl SdpLedger {
 
             let verified_declaration = declaration
                 .into_verified(&SDPDeclareGenesisValidationContext {
-                    note_sets: &note_sets,
-                    tx_hash_view,
                     declarations: service_state.declarations(),
                     provider_index: service_state.provider_index(),
                     min_stake: &config.min_stake,
@@ -775,7 +769,7 @@ mod tests {
                 op_proof::samples::SampleProof as _,
                 sdp::{SDPDeclareVerificationContext, SDPWithdrawValidationContext},
             },
-            transactions::states::Unverified,
+            transactions::{hash::TxHashView, states::Unverified},
         },
         sdp::{Locator, Nonce, SNAPSHOT_FINALIZATION_DELAY},
     };

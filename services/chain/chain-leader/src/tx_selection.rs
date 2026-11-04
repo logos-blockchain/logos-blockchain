@@ -183,7 +183,6 @@ mod tests {
     };
     use lb_groth16::{Fr, test_utils::three_input_setup};
     use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
-    use lb_ledger::ConsensusExcludedKeys;
 
     use super::*;
     use crate::{leadership, txs_for_block};
@@ -271,12 +270,7 @@ mod tests {
         let eras = leadership::single_era(config.clone());
         let funding_key = ZkKey::zero();
         let funding_notes = funding_notes(&funding_key, CANDIDATE_COUNT);
-        let ledger_state = LedgerState::from_notes(
-            funding_notes.iter().copied(),
-            &config,
-            0,
-            &ConsensusExcludedKeys::empty(),
-        );
+        let ledger_state = LedgerState::from_notes(funding_notes.iter().copied(), &config, 0);
         let commitment_root = ledger_state
             .latest_note_sets()
             .get(LEDGER_SET)
