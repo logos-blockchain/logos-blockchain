@@ -55,7 +55,8 @@ use crate::{
 
 pub type FfiClaimableVouchersResult = FfiStatusResult<ClaimableVouchers>;
 
-type WalletService = NodeWalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>;
+pub(crate) type WalletService =
+    NodeWalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>;
 
 /// Resolved tip plus the `(note ID, value)` pairs for a wallet address.
 type WalletNotesData = (lb_core::header::HeaderId, Vec<(CoreNoteId, Value)>);
