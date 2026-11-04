@@ -4,7 +4,7 @@ use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
-        ConsensusExcludedKeys, GenesisParameters, GenesisTime, Note,
+        GenesisParameters, GenesisTime, Note,
         note_set::CommitmentMmr,
         notes::InputNullifiers,
         ops::channel::{
@@ -181,9 +181,6 @@ fn select_sdp_funding_notes_per_node(
     selected_sdp_notes_per_node
 }
 
-/// The balance the `PoW` reward pool of a test chain starts with.
-const GENESIS_POW_REWARD_POOL: u64 = 1_000_000_000;
-
 fn inscription_for_current_test(
     test_context: Option<&str>,
     genesis_time: GenesisTime,
@@ -197,8 +194,6 @@ fn inscription_for_current_test(
                 chain_id,
                 start_time: genesis_time,
                 epoch_nonce: Fr::ZERO,
-                pow_reward_pool: GENESIS_POW_REWARD_POOL,
-                consensus_excluded_keys: ConsensusExcludedKeys::empty(),
             }
             .encode_to_vec(),
         ),

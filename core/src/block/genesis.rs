@@ -1339,7 +1339,7 @@ mod tests {
     use crate::{
         header::HeaderId,
         mantle::{
-            ConsensusExcludedKeys, GenesisParameters, GenesisTime,
+            GenesisParameters, GenesisTime,
             ledger::verification_mode::GenesisMode,
             notes::{NoteCommitment, NoteNullifier},
             ops::{
@@ -1361,8 +1361,6 @@ mod tests {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
                     start_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
-                    pow_reward_pool: 0,
-                    consensus_excluded_keys: ConsensusExcludedKeys::empty(),
                 }
                 .encode_to_vec(),
             ),
@@ -1380,8 +1378,6 @@ mod tests {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
                     start_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
-                    pow_reward_pool: 0,
-                    consensus_excluded_keys: ConsensusExcludedKeys::empty(),
                 }
                 .encode_to_vec(),
             ),

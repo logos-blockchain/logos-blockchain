@@ -3,13 +3,10 @@ use lb_config::consensus::{EMPTY_CHANNEL_ID, EMPTY_ED25519_PUBLIC_KEY};
 use lb_core::{
     crypto::ZkDigest,
     mantle::{
-        ConsensusExcludedKeys, GenesisParameters, GenesisTime,
-        ops::{
-            channel::{
-                ChannelId, MsgId,
-                inscribe::{InscriptionOp, MiniBlocks},
-            },
-            pow::PowReward,
+        GenesisParameters, GenesisTime,
+        ops::channel::{
+            ChannelId, MsgId,
+            inscribe::{InscriptionOp, MiniBlocks},
         },
         transactions::genesis_tx::ChainId,
     },
@@ -27,15 +24,12 @@ pub struct InscribeParams {
     pub genesis_time: OffsetDateTime,
     #[serde_as(as = "Vec<Hex>")]
     pub entropy_sources: Vec<FrBytes>,
-    /// The balance the `PoW` reward pool starts with.
-    pub pow_reward_pool: PowReward,
 }
 
 pub fn inscribe<D: ZkDigest>(
     chain_id: ChainId,
     genesis_time: OffsetDateTime,
     entropy_sources: impl IntoIterator<Item = FrBytes>,
-    pow_reward_pool: PowReward,
 ) -> InscriptionOp {
     let mut hasher = D::new();
 
@@ -57,8 +51,6 @@ pub fn inscribe<D: ZkDigest>(
         chain_id,
         start_time: genesis_time,
         epoch_nonce: genesis_nonce_fr,
-        pow_reward_pool,
-        consensus_excluded_keys: ConsensusExcludedKeys::empty(),
     };
 
     InscriptionOp {

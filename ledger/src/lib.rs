@@ -576,11 +576,7 @@ impl LedgerState {
         tx: impl GenesisTx,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), LedgerError<Id>> {
-        let GenesisParameters {
-            epoch_nonce,
-            pow_reward_pool,
-            ..
-        } = tx.genesis_parameters();
+        let GenesisParameters { epoch_nonce, .. } = tx.genesis_parameters();
         let distribution = tx.distribution();
         let GenesisOps {
             transfer,
@@ -600,7 +596,6 @@ impl LedgerState {
             [inscription, distribution_inscription],
             declarations,
             config,
-            pow_reward_pool,
             cryptarchia_ledger.latest_note_sets().clone(),
             cryptarchia_ledger.epoch_state(),
         )?;
@@ -1716,8 +1711,6 @@ mod tests {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
                     start_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
-                    pow_reward_pool: 0,
-                    consensus_excluded_keys: lb_core::mantle::ConsensusExcludedKeys::empty(),
                 }
                 .encode_to_vec(),
             ),
@@ -1870,6 +1863,18 @@ mod tests {
         );
     }
 
+    // Mantle Ledger Initialization: the pool starts at POW_REWARD_POOL_GENESIS, five
+    // thousandths of the maximum supply, whatever the inscription holds.
+    #[test]
+    fn genesis_seeds_the_pow_reward_pool_with_five_thousandths_of_the_maximum_supply() {
+        let config = config();
+        let (tx, _, _) = genesis_with_a_declaration();
+        let (state, _) = LedgerState::from_genesis_tx::<HeaderId>(tx, &config).unwrap();
+        assert_eq!(
+            state.mantle_ledger().pow,
+            mantle::pow::PowState::from_reward_pool_and_config(50_000_000_000_000_000, &config)
+        );
+    }
     #[test]
     fn genesis_initializes_the_block_reward_stocks() {
         let (tx, _, _) = genesis_with_a_declaration();

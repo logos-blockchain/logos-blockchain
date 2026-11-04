@@ -1235,8 +1235,6 @@ pub fn genesis_block_with(notes: &[Note]) -> GenesisBlock {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
                     start_time: GenesisTime::new(0),
                     epoch_nonce: Fr::ZERO,
-                    pow_reward_pool: 0,
-                    consensus_excluded_keys: lb_core::mantle::ConsensusExcludedKeys::empty(),
                 }
                 .encode_to_vec(),
             ),

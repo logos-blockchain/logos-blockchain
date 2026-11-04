@@ -200,9 +200,9 @@ struct DistributeArgs {
 
 #[derive(Parser, Debug)]
 struct InscribeArgs {
-    /// YAML file containing genesis parameters (`chain_id`, `genesis_time`,
-    /// `entropy_sources` and `pow_reward_pool`). `entropy_sources` should be a
-    /// list of hex-encoded 32-byte strings.
+    /// YAML file containing genesis parameters (`chain_id`, `genesis_time` and
+    /// `entropy_sources`). `entropy_sources` should be a list of hex-encoded
+    /// 32-byte strings.
     #[arg(long, value_name = "FILE")]
     params: PathBuf,
 
@@ -241,7 +241,6 @@ fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
         inscribe_params.chain_id,
         inscribe_params.genesis_time,
         inscribe_params.entropy_sources,
-        inscribe_params.pow_reward_pool,
     );
 
     let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
@@ -509,7 +508,6 @@ fn run_inscribe(args: &InscribeArgs) -> Result<()> {
         params.chain_id,
         params.genesis_time,
         params.entropy_sources,
-        params.pow_reward_pool,
     );
 
     let op_value = struct_to_yaml_value(&op)?;

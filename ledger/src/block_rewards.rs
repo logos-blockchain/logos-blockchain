@@ -2,6 +2,8 @@ use lb_core::mantle::Value;
 
 /// T, the blocks of the moving average.
 pub const POOLED_FEES_WINDOW: usize = 120;
+/// `S_cap`, the maximum token supply.
+pub const MAX_SUPPLY: Value = 10_000_000_000_000_000_000;
 /// `B_0`, the rewards reserve at genesis.
 pub const REWARDS_RESERVE_GENESIS: Value = 1_000_000_000_000_000_000;
 /// Denominator of `A_t`.

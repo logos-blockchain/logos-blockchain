@@ -1,6 +1,6 @@
 use core::fmt::{self, Display, Formatter};
 
-use lb_binary_codec::canonical::{BTreeSet, BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::bounded::{BoundedString, BoundedVec, UpperBoundedVec};
@@ -15,7 +15,6 @@ use crate::{
         ops::{
             Op, OpRef, SignedOp, SignedOperation,
             channel::{ChannelId, MsgId, NULL_CHANNEL_ID, inscribe::InscriptionOp},
-            pow::PowReward,
             sdp::SDPDeclareOp,
             transfer::TransferOp,
         },
@@ -499,18 +498,12 @@ impl TryFrom<OffsetDateTime> for GenesisTime {
     }
 }
 
-/// The keys whose notes never take part in consensus: no leadership proof is
-/// made with them, and they count towards no total stake.
-pub type ConsensusExcludedKeys = BTreeSet<ZkPublicKey>;
-
 /// The parameters of a chain, encoded as an inscription in its genesis block.
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
 pub struct GenesisParameters {
     pub chain_id: ChainId,
     pub start_time: GenesisTime,
     pub epoch_nonce: Fr,
-    pub pow_reward_pool: PowReward,
-    pub consensus_excluded_keys: ConsensusExcludedKeys,
 }
 
 #[cfg(test)]
@@ -557,8 +550,6 @@ mod tests {
             chain_id: "test".to_owned().try_into().unwrap(),
             start_time: GenesisTime::new(1000),
             epoch_nonce: Fr::ZERO,
-            pow_reward_pool: 0,
-            consensus_excluded_keys: ConsensusExcludedKeys::empty(),
         }
     }
 
@@ -920,6 +911,26 @@ mod tests {
         ));
     }
 
+    // The example of Cryptarchia Parameters in the genesis spec: the inscription
+    // decodes to exactly the three parameters.
+    #[test]
+    fn genesis_parameters_decode_the_spec_example() {
+        let inscription = hex::decode(
+            "186c6f676f732d626c6f636b636861696e2d6d61696e6e6574030f5c69abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567800",
+        )
+        .unwrap();
+        let parameters = GenesisParameters::decode_all(&inscription, &()).unwrap();
+
+        assert_eq!(
+            parameters.chain_id,
+            ChainId::try_from("logos-blockchain-mainnet".to_owned()).unwrap()
+        );
+        assert_eq!(parameters.start_time, GenesisTime::new(1_767_640_835));
+        assert_eq!(
+            hex::encode(parameters.encode_to_vec()),
+            hex::encode(inscription)
+        );
+    }
     #[test]
     fn test_genesis_tx_genesis_parameters() {
         let param = genesis_parameters();
