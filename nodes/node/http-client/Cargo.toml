@@ -31,3 +31,7 @@ serde_json                    = { workspace = true }
 thiserror                     = { workspace = true }
 tokio-util                    = { workspace = true }
 url                           = { workspace = true }
+
+
+[dev-dependencies]
+tokio = { features = ["macros", "rt"], workspace = true }
