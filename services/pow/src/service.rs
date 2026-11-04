@@ -2049,7 +2049,7 @@ mod tests {
             }
         }
         tx.clone()
-            .preverify(u32::MAX)
+            .preverify()
             .expect("built tx should pass stateless structural verification");
     }
 

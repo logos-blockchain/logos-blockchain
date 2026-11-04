@@ -327,7 +327,7 @@ fn build_wallet_transaction(
     let op_proofs = OpProofs::from([OpProof::ZkSig(signature)]);
     SignedOps::from_parts(tx, op_proofs)
         .map_err(|err| format!("failed to build signed transaction: {err}"))?
-        .preverify(u32::MAX)
+        .preverify()
         .map_err(|err| format!("failed to build signed transaction: {err}").into())
 }
 

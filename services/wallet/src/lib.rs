@@ -1164,7 +1164,7 @@ where
 
         let signed_mantle_tx = SignedOps::from_parts(mantle_tx, op_proofs)
             .expect("SignedOps should be valid with the provided proofs.")
-            .preverify(u32::MAX)
+            .preverify()
             .expect("Preverification should not fail.");
 
         Ok(signed_mantle_tx)

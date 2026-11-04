@@ -29,7 +29,7 @@ pub(super) fn sign_prepared_wallet_transaction(
         OpProofs::try_from(leading_op_proofs_vec)?
     };
 
-    let signed_tx = SignedOps::from_parts(mantle_tx, op_proofs)?.preverify(u32::MAX)?;
+    let signed_tx = SignedOps::from_parts(mantle_tx, op_proofs)?.preverify()?;
     let mandatory_fee_at_preparation = signed_tx
         .op_refs()
         .total_gas_cost(&context.gas_context)?

@@ -1148,7 +1148,7 @@ mod tests {
         let ops_proofs = OpProofs::new_unchecked(ops_proofs);
         SignedOps::from_parts(ops, ops_proofs)
             .unwrap()
-            .preverify(u32::MAX)
+            .preverify()
             .expect("Test transaction should have valid signatures")
     }
 
@@ -1282,7 +1282,7 @@ mod tests {
         output_note.value = utxo.note.value - fees.into_inner();
 
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk])
-            .preverify(u32::MAX)
+            .preverify()
             .unwrap();
         let output_utxo = if let OpRef::Transfer(transfer_op) = tx.op_refs().get(0).unwrap() {
             transfer_op.outputs.utxo_by_index(0, transfer_op).unwrap()
@@ -2673,7 +2673,7 @@ mod tests {
         let fees = tx.op_refs().total_gas_cost(&gas_context).unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk])
-            .preverify(u32::MAX)
+            .preverify()
             .unwrap();
 
         let result = ledger
@@ -2765,7 +2765,7 @@ mod tests {
             vec![output_note],
             std::slice::from_ref(&sk),
         )
-        .preverify(u32::MAX)
+        .preverify()
         .unwrap();
 
         let result = ledger
@@ -2784,7 +2784,7 @@ mod tests {
             vec![output_note],
             std::slice::from_ref(&sk),
         )
-        .preverify(u32::MAX)
+        .preverify()
         .unwrap();
 
         let result = ledger.try_apply_block_contents::<_, HeaderId>(&eras, std::iter::once(tx));
@@ -2824,7 +2824,7 @@ mod tests {
         // exact balance is irrelevant.
         let sk = ZkKey::from(BigUint::from(0u8));
         let tx = create_tx(vec![utxo.id()], vec![], std::slice::from_ref(&sk))
-            .preverify(u32::MAX)
+            .preverify()
             .unwrap();
 
         // The tx must consume a non-zero amount of storage gas for the check to
@@ -3121,7 +3121,7 @@ mod tests {
             let op_proofs = OpProofs::from([OpProof::None(NoOpProof)]);
             SignedOps::from_parts(mantle_tx, op_proofs)
                 .unwrap()
-                .preverify(u32::MAX)
+                .preverify()
                 .expect("claim op with OpProof::None should pass preverification")
         }
 

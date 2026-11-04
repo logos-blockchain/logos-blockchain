@@ -155,11 +155,7 @@ fn bench_sign_c_mantle_tx_new_verify_ops_proofs_single_proof(bencher: Bencher, s
         })
         .bench_values(|(tx, op_sig): (Ops, Ed25519Signature)| {
             let op_proofs = OpProofs::from([OpProof::Ed25519Sig(op_sig)]);
-            black_box(
-                SignedOps::from_parts(tx, op_proofs)
-                    .unwrap()
-                    .preverify(u32::MAX),
-            )
+            black_box(SignedOps::from_parts(tx, op_proofs).unwrap().preverify())
         });
 }
 
@@ -179,11 +175,7 @@ fn bench_sign_d_fully_empty(bencher: Bencher, size: usize) {
         .bench_values(|(tx, tx_hash): (Ops, TxHash)| {
             let op_sig = signing_key.sign_payload(tx_hash.as_signing_bytes());
             let op_proofs = OpProofs::from([OpProof::Ed25519Sig(op_sig)]);
-            black_box(
-                SignedOps::from_parts(tx, op_proofs)
-                    .unwrap()
-                    .preverify(u32::MAX),
-            )
+            black_box(SignedOps::from_parts(tx, op_proofs).unwrap().preverify())
         });
 }
 

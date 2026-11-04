@@ -229,7 +229,7 @@ mod tests {
         .unwrap();
         let transaction = SignedOps::<Unverified, StandardMode>::from_parts(ops, proofs)
             .unwrap()
-            .preverify(u32::MAX)
+            .preverify()
             .unwrap();
 
         (funding_utxos, transaction)

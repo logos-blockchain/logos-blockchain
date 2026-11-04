@@ -252,7 +252,7 @@ fn build_tx(utxo: Utxo, key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
 
     SignedOps::from_parts(ops, op_proofs)
         .expect("transaction should build")
-        .preverify(u32::MAX)
+        .preverify()
         .expect("transaction should preverify")
 }
 

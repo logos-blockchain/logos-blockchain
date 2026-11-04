@@ -124,7 +124,6 @@ impl InscriptionOp {
 
 pub struct InscriptionPreverificationContext<'a> {
     pub tx_hash_view: &'a TxHashView,
-    pub max_inscription_size: u32,
 }
 
 pub struct InscriptionValidationContext<'a> {
@@ -154,12 +153,6 @@ impl PreverifiableOperation<StandardMode>
         // within the `.verify()` implementation.
         if self.operation().signer.is_weak() {
             return Err(Error::InvalidSigner);
-        }
-
-        let size = self.operation().inscription.len();
-        let max = context.max_inscription_size as usize;
-        if size > max {
-            return Err(Error::InscriptionTooLarge { size, max });
         }
 
         // Check the signature
@@ -297,7 +290,6 @@ mod tests {
         SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
             .into_preverified(&InscriptionPreverificationContext {
                 tx_hash_view: &tx_hash_view,
-                max_inscription_size: u32::MAX,
             })
             .expect("the sample signer signed this transaction hash")
     }
@@ -354,14 +346,12 @@ mod tests {
         assert_eq!(
             signed_operation.preverify(&InscriptionPreverificationContext {
                 tx_hash_view: &signed_view,
-                max_inscription_size: u32::MAX,
             }),
             Ok(())
         );
         assert_eq!(
             signed_operation.preverify(&InscriptionPreverificationContext {
                 tx_hash_view: &other_view,
-                max_inscription_size: u32::MAX,
             }),
             Err(Error::InvalidSignature)
         );
@@ -379,33 +369,8 @@ mod tests {
         assert_eq!(
             signed_operation.preverify(&InscriptionPreverificationContext {
                 tx_hash_view: &tx_hash_view,
-                max_inscription_size: u32::MAX,
             }),
             Err(Error::InvalidSignature)
-        );
-    }
-
-    #[test]
-    fn preverify_holds_an_inscription_to_the_era_limit() {
-        let tx_hash_view = TxHashView::from(TxHash::from([9u8; 32]));
-        let operation = InscriptionOp::sample();
-        let size = operation.inscription.len();
-        let proof =
-            Ed25519Key::from_bytes(&[15; 32]).sign_payload(tx_hash_view.as_bytes().as_ref());
-        let signed_operation =
-            SignedOperation::<_, Unverified, StandardMode>::new(operation, proof);
-        let context = |max_inscription_size| InscriptionPreverificationContext {
-            tx_hash_view: &tx_hash_view,
-            max_inscription_size,
-        };
-
-        assert_eq!(signed_operation.preverify(&context(size as u32)), Ok(()));
-        assert_eq!(
-            signed_operation.preverify(&context(size as u32 - 1)),
-            Err(Error::InscriptionTooLarge {
-                size,
-                max: size - 1,
-            })
         );
     }
 

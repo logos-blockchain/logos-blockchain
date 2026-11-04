@@ -830,7 +830,7 @@ fn transfer_tx_with_fake_sig(utxo: Utxo, fake_key: &ZkKey) -> SignedOps<Preverif
     output_note.value = utxo.note.value - fees.into_inner();
 
     transfer_tx(utxo, output_note, fake_key)
-        .preverify(u32::MAX)
+        .preverify()
         .expect("a fake signature is only caught by the stateful checks")
 }
 
@@ -852,7 +852,7 @@ fn burn_tx(utxo: Utxo, key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
     )]);
     SignedOps::from_parts(ops, op_proofs)
         .unwrap()
-        .preverify(u32::MAX)
+        .preverify()
         .unwrap()
 }
 

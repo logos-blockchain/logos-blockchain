@@ -1493,7 +1493,7 @@ pub(crate) fn channel_deposit_sync(
                     format!("Failed to assemble signed tx: {error:?}"),
                 )
             })?
-            .preverify(u32::MAX)
+            .preverify()
             .map_err(|error| {
                 OperationStatus::error(
                     OperationStatusCode::DynError,
@@ -1826,7 +1826,7 @@ pub unsafe extern "C" fn submit_signed_transaction(
                     ));
                 }
             };
-        match signed_tx.preverify(u32::MAX) {
+        match signed_tx.preverify() {
             Ok(preverified_tx) => preverified_tx,
             Err(error) => {
                 return FfiSubmitTransactionResult::err(OperationStatus::error(
