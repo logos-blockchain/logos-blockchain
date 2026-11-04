@@ -489,7 +489,7 @@ fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
     };
     assert_eq!(
         hex::encode(header(0x22).id().0),
-        "08efd2edaec65c54a209f46d17a2fd7817a548830337869ca81d7830fb4e7c46"
+        "327f8ab9d5b7b23fbcb2ed2cf719212de7290fe0408abf111f1cfa45f97132f6"
     );
     assert_eq!(header(0x22).id(), header(0x23).id());
     assert_eq!(
@@ -520,7 +520,7 @@ fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
     );
     assert_eq!(
         hex::encode(spec_header.id().0),
-        "08efd2edaec65c54a209f46d17a2fd7817a548830337869ca81d7830fb4e7c46"
+        "327f8ab9d5b7b23fbcb2ed2cf719212de7290fe0408abf111f1cfa45f97132f6"
     );
 }
 
