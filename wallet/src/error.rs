@@ -29,7 +29,7 @@ pub enum WalletError {
     MissingOpening { op_index: usize },
     #[error("Operation {op_index} spends a note the wallet has no path for")]
     MissingInputPath { op_index: usize },
-    #[error("Operation {op_index} references a root the wallet is not at")]
+    #[error("Operation {op_index} references a root the wallet holds no state of")]
     UnknownRoot { op_index: usize },
     #[error("Operation {op_index} names a nullifier its opening does not derive")]
     NullifierMismatch { op_index: usize },

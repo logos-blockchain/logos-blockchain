@@ -942,7 +942,7 @@ where
 
         // The other Operations are left for the caller to prove
         let witness = op_witness_at(
-            &wallet.wallet_state_at(tip)?,
+            &wallet.spend_states(tip)?,
             wallet.known_notes(),
             &ops,
             &openings,
@@ -954,7 +954,8 @@ where
         Ok((ops, Some(OpProof::ZkTransfer(proof))))
     }
 
-    // The ZkTransfer witnesses of `ops`, against the wallet's paths at `tip`.
+    // The ZkTransfer witnesses of `ops`, from the wallet's states at and below
+    // `tip`.
     fn witnesses_at(
         ops: &Ops,
         openings: &BTreeMap<usize, ZkTransferOpening>,
@@ -963,7 +964,7 @@ where
         wallet: &Wallet,
     ) -> Result<Vec<OpWitness>, WalletServiceError> {
         Ok(op_witnesses(
-            &wallet.wallet_state_at(tip)?,
+            &wallet.spend_states(tip)?,
             wallet.known_notes(),
             ops,
             openings,
