@@ -7,6 +7,9 @@ use serde::Serialize;
 pub type AgedNotePathAndSelectors = [(Fr, bool); NOTE_SET_TREE_DEPTH];
 // set leaf in the eligible tree, from the leaf level up
 pub type AgedSetPathAndSelectors = [(Fr, bool); NOTE_SET_TREE_DEPTH];
+// low leaf of the note nullifier in the frozen IMT of its set, from the leaf
+// level up
+pub type AgedLowLeafPathAndSelectors = [(Fr, bool); NOTE_SET_TREE_DEPTH];
 
 #[derive(Clone)]
 pub struct PoQWalletInputs {
@@ -15,7 +18,10 @@ pub struct PoQWalletInputs {
     pol_note_value: Groth16Input,
     pol_note_nonce: Groth16Input,
     pol_commitment_aged_path_and_selectors: [(Groth16Input, Groth16Input); NOTE_SET_TREE_DEPTH],
-    pol_nullifier_root_aged: Groth16Input,
+    pol_low_leaf_nullifier: Groth16Input,
+    pol_low_leaf_next_nullifier: Groth16Input,
+    pol_low_leaf_next_index: Groth16Input,
+    pol_low_leaf_path_and_selectors: [(Groth16Input, Groth16Input); NOTE_SET_TREE_DEPTH],
     pol_set_aged_path_and_selectors: [(Groth16Input, Groth16Input); NOTE_SET_TREE_DEPTH],
 }
 
@@ -24,7 +30,10 @@ pub struct PoQWalletInputsData {
     pub note_value: u64,
     pub note_nonce: Fr,
     pub commitment_aged_path_and_selectors: AgedNotePathAndSelectors,
-    pub nullifier_root_aged: Fr,
+    pub low_leaf_aged_nullifier: Fr,
+    pub low_leaf_aged_next_nullifier: Fr,
+    pub low_leaf_aged_next_index: u64,
+    pub low_leaf_aged_path_and_selectors: AgedLowLeafPathAndSelectors,
     pub set_aged_path_and_selectors: AgedSetPathAndSelectors,
     pub pol_secret_key: Fr,
 }
@@ -42,8 +51,16 @@ pub struct PoQWalletInputsJson {
     commitment_aged_path: Vec<Groth16InputDeser>,
     #[serde(rename = "pol_cm_aged_selectors")]
     commitment_aged_selectors: Vec<Groth16InputDeser>,
-    #[serde(rename = "pol_nf_root_aged")]
-    nullifier_root_aged: Groth16InputDeser,
+    #[serde(rename = "pol_low_leaf_nf")]
+    low_leaf_nullifier: Groth16InputDeser,
+    #[serde(rename = "pol_low_leaf_next_nf")]
+    low_leaf_next_nullifier: Groth16InputDeser,
+    #[serde(rename = "pol_low_leaf_next_index")]
+    low_leaf_next_index: Groth16InputDeser,
+    #[serde(rename = "pol_low_leaf_path")]
+    low_leaf_path: Vec<Groth16InputDeser>,
+    #[serde(rename = "pol_low_leaf_selectors")]
+    low_leaf_selectors: Vec<Groth16InputDeser>,
     #[serde(rename = "pol_set_aged_path")]
     set_aged_path: Vec<Groth16InputDeser>,
     #[serde(rename = "pol_set_selectors")]
@@ -59,7 +76,10 @@ impl From<PoQWalletInputs> for PoQWalletInputsJson {
             pol_note_value,
             pol_note_nonce,
             pol_commitment_aged_path_and_selectors,
-            pol_nullifier_root_aged,
+            pol_low_leaf_nullifier,
+            pol_low_leaf_next_nullifier,
+            pol_low_leaf_next_index,
+            pol_low_leaf_path_and_selectors,
             pol_set_aged_path_and_selectors,
         }: PoQWalletInputs,
     ) -> Self {
@@ -75,7 +95,17 @@ impl From<PoQWalletInputs> for PoQWalletInputsJson {
                 .iter()
                 .map(|(_, selector)| selector.into())
                 .collect(),
-            nullifier_root_aged: (&pol_nullifier_root_aged).into(),
+            low_leaf_nullifier: (&pol_low_leaf_nullifier).into(),
+            low_leaf_next_nullifier: (&pol_low_leaf_next_nullifier).into(),
+            low_leaf_next_index: (&pol_low_leaf_next_index).into(),
+            low_leaf_path: pol_low_leaf_path_and_selectors
+                .iter()
+                .map(|(path, _)| path.into())
+                .collect(),
+            low_leaf_selectors: pol_low_leaf_path_and_selectors
+                .iter()
+                .map(|(_, selector)| selector.into())
+                .collect(),
             set_aged_path: pol_set_aged_path_and_selectors
                 .iter()
                 .map(|(path, _)| path.into())
@@ -96,7 +126,10 @@ impl From<PoQWalletInputsData> for PoQWalletInputs {
             note_value,
             note_nonce,
             commitment_aged_path_and_selectors,
-            nullifier_root_aged,
+            low_leaf_aged_nullifier,
+            low_leaf_aged_next_nullifier,
+            low_leaf_aged_next_index,
+            low_leaf_aged_path_and_selectors,
             set_aged_path_and_selectors,
             pol_secret_key,
         }: PoQWalletInputsData,
@@ -114,7 +147,19 @@ impl From<PoQWalletInputsData> for PoQWalletInputs {
                     )
                 },
             ),
-            pol_nullifier_root_aged: nullifier_root_aged.into(),
+            pol_low_leaf_nullifier: low_leaf_aged_nullifier.into(),
+            pol_low_leaf_next_nullifier: low_leaf_aged_next_nullifier.into(),
+            pol_low_leaf_next_index: Groth16Input::new(Fr::from(BigUint::from(
+                low_leaf_aged_next_index,
+            ))),
+            pol_low_leaf_path_and_selectors: low_leaf_aged_path_and_selectors.map(
+                |(hash, selector)| {
+                    (
+                        hash.into(),
+                        Groth16Input::new(if selector { Fr::ONE } else { Fr::ZERO }),
+                    )
+                },
+            ),
             pol_set_aged_path_and_selectors: set_aged_path_and_selectors.map(|(hash, selector)| {
                 (
                     hash.into(),

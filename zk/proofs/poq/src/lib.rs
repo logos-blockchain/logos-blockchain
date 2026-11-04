@@ -27,7 +27,8 @@ pub use lb_pol::NOTE_SET_TREE_DEPTH;
 pub use pow_inputs::{PoQPowInputs, PoQPowInputsData};
 use tracing::error;
 pub use wallet_inputs::{
-    AgedNotePathAndSelectors, AgedSetPathAndSelectors, PoQWalletInputs, PoQWalletInputsData,
+    AgedLowLeafPathAndSelectors, AgedNotePathAndSelectors, AgedSetPathAndSelectors,
+    PoQWalletInputs, PoQWalletInputsData,
 };
 
 use crate::inputs::PoQVerifierInputJson;
