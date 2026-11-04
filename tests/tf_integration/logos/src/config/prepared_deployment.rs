@@ -86,7 +86,6 @@ fn shared_inputs(
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        notes::derive_note_nullifier,
         ops::OpRef,
         traits::{GenesisTx as _, MantleTx as _},
         transactions::UNITS_PER_LGO,
@@ -139,20 +138,16 @@ mod tests {
             .op_refs()
             .into_iter()
             .filter_map(|op| match op {
-                OpRef::SDPDeclare(declaration) => {
-                    Some((declaration.id(), declaration.inputs.as_slice()[0]))
-                }
+                OpRef::SDPDeclare(declaration) => Some(declaration.clone()),
                 _ => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(declarations.len(), 2);
-        for (i, (_, nullifier)) in declarations.iter().enumerate() {
-            let blend_note = &network.consensus.blend_notes[i];
-            assert_eq!(
-                *nullifier,
-                derive_note_nullifier(&blend_note.note.commitment(), blend_note.sk.as_fr())
-            );
-        }
+        assert!(
+            declarations
+                .iter()
+                .all(|declaration| declaration.inputs.is_empty())
+        );
 
         let plan = build_plan(prepared).unwrap();
         assert_eq!(
@@ -187,7 +182,7 @@ mod tests {
                     .declaration
                     .as_ref()
                     .map(DeclarationConfig::id),
-                Some(declarations[i].0)
+                Some(declarations[i].id())
             );
             let wallet_key = Key::Zk(wallet.secret_key.clone());
             let wallet_key_id = lb_config::kms::key_id_for_preload_backend(&wallet_key);

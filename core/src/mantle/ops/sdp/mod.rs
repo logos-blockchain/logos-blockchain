@@ -61,6 +61,8 @@ pub enum SdpError {
         nonce_sequence: u32,
         declaration_sequence: u32,
     },
+    #[error("A genesis SDP declaration must have no inputs")]
+    GenesisDeclarationWithInputs,
     #[error(transparent)]
     NoteSet(#[from] NoteSetError),
     #[error(transparent)]

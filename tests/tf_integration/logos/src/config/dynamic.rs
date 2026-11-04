@@ -28,19 +28,16 @@ pub enum DynamicConfigBuildError {
     Tracing,
 }
 
-#[expect(clippy::too_many_arguments, reason = "need all args")]
 pub fn create_node_config_for_node(
     id: [u8; 32],
     network_port: u16,
     initial_peers: Vec<Multiaddr>,
     blend_port: u16,
-    base_consensus: &GeneralConsensusConfig,
     time_config: &GeneralTimeConfig,
     test_context: Option<&str>,
     genesis_time: GenesisTime,
 ) -> Result<Config, DynamicConfigBuildError> {
-    let consensus_config =
-        build_consensus_config_for_node(id, base_consensus, test_context, genesis_time)?;
+    let consensus_config = build_consensus_config_for_node(id, test_context, genesis_time)?;
 
     let blend_config = node_configs::blend::create_blend_configs(&[id], &[blend_port])
         .into_iter()
@@ -81,7 +78,6 @@ pub fn create_node_config_for_node(
 
 fn build_consensus_config_for_node(
     id: [u8; 32],
-    base: &GeneralConsensusConfig,
     test_context: Option<&str>,
     genesis_time: GenesisTime,
 ) -> Result<GeneralConsensusConfig, DynamicConfigBuildError> {
@@ -91,10 +87,7 @@ fn build_consensus_config_for_node(
         test_context,
         genesis_time,
     );
-    let mut config = configs.pop().ok_or(DynamicConfigBuildError::Consensus)?;
-    config.blend_note.clone_from(&base.blend_note);
-
-    Ok(config)
+    configs.pop().ok_or(DynamicConfigBuildError::Consensus)
 }
 
 fn build_kms_config_for_node(
@@ -113,10 +106,6 @@ fn build_kms_config_for_node(
                 (
                     blend_conf.core.zk.secret_key_kms_id.clone(),
                     Key::Zk(secret_zk_key.clone()),
-                ),
-                (
-                    key_id_for_preload_backend(&Key::Zk(consensus_config.blend_note.sk.clone())),
-                    Key::Zk(consensus_config.blend_note.sk.clone()),
                 ),
                 (
                     key_id_for_preload_backend(&Key::Zk(consensus_config.known_key.clone())),

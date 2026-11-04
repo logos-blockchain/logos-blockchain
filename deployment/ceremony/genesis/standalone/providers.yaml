@@ -3,3 +3,4 @@
   locators:
     - /ip4/127.0.0.1/udp/3400/quic-v1
   service_type: BN
+  amount: 1000000000

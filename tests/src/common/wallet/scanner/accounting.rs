@@ -57,10 +57,6 @@ impl ScannerAccounting {
                 accounting.add_known_note(note_set, *note);
             }
         }
-        // The genesis declarations spend their ledger notes.
-        accounting
-            .known_notes
-            .retain(|_, known| !genesis.spent.contains(&known.nullifier));
         accounting.state = WalletState::from_genesis(
             &accounting.known_notes,
             &genesis.notes,

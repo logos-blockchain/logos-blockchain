@@ -43,7 +43,7 @@ use lb_core::{
         traits::{GenesisTx, PreverifiedMantleTransaction, StorageSize, genesis::GenesisOps},
         transactions::{
             GasPrices,
-            hash::{TxHash, TxHashView},
+            hash::TxHash,
             states::Verified,
             tx_list::ops::{OpsContext, OpsGasContext},
         },
@@ -586,7 +586,6 @@ impl LedgerState {
         } = tx.genesis_parameters();
         let total_stake =
             CryptarchiaLedger::genesis_total_stake(&tx.distribution(), &consensus_excluded_keys)?;
-        let tx_hash_view = TxHashView::from(tx.hash());
         let GenesisOps {
             transfer,
             inscription,
@@ -598,7 +597,6 @@ impl LedgerState {
         let (mantle_ledger, note_sets, events) = MantleLedger::from_genesis_tx(
             [inscription, distribution_inscription],
             declarations,
-            &tx_hash_view,
             config,
             pow_reward_pool,
             cryptarchia_ledger.latest_note_sets().clone(),
@@ -1022,9 +1020,10 @@ mod tests {
                 transfer::{TransferError, TransferOp, test_utils::prove_transfer},
             },
             programs::{ProgramVerificationKey, RegisteredProgram, derive_program_id},
-            traits::{GenesisTx as _, Hashable as _},
+            traits::Hashable as _,
             transactions::{
                 Distribution, GenesisAllocation, GenesisTx, OpProofs, Ops,
+                hash::TxHashView,
                 states::{Preverified, Unverified},
             },
         },
@@ -1793,23 +1792,14 @@ mod tests {
         }
     }
 
-    // Nine distributed notes, the first one staked by a Blend declaration.
+    // Nine distributed notes and a Blend declaration, which consumes none of them.
     fn genesis_with_a_declaration() -> (GenesisTx, [GenesisAllocation; 9], SDPDeclareOp) {
-        let stake_key = ZkKey::new(Fr::from(1u64));
         let allocations: [GenesisAllocation; 9] = core::array::from_fn(|i| GenesisAllocation {
             value: 1_000 * (i as u64 + 1),
-            public_key: if i == 0 {
-                stake_key.to_public_key()
-            } else {
-                ZkPublicKey::new(Fr::from(100 + i as u64))
-            },
+            public_key: ZkPublicKey::new(Fr::from(100 + i as u64)),
         });
         let declaration = SDPDeclareOp {
-            inputs: [derive_note_nullifier(
-                &allocations[0].note(0).commitment(),
-                stake_key.as_fr(),
-            )]
-            .into(),
+            inputs: InputNullifiers::default(),
             commitment_merkle_root: CommitmentMmr::new().frontier_root(),
             amount: 1_000,
             ..SDPDeclareOp::sample()
@@ -1818,7 +1808,7 @@ mod tests {
             .add_notes(allocations)
             .set_inscription(cryptarchia_inscription())
             .add_declaration(declaration.clone())
-            .build_proven(&[stake_key])
+            .build()
             .unwrap();
         (block.genesis_tx().clone(), allocations, declaration)
     }
@@ -1838,7 +1828,12 @@ mod tests {
             })
             .frontier_root();
         assert_eq!(ledger_set.commitment_root(), ledger_root);
-        assert!(ledger_set.contains_nullifier(&declaration.inputs.as_slice()[0]));
+        // The declaration consumed no note, so the nullifier tree still holds its
+        // single sentinel leaf.
+        assert_eq!(
+            ledger_set.nullifier_root(),
+            NoteSets::new().get(LEDGER_SET).unwrap().nullifier_root()
+        );
         // The buffer is closed: a block 1 transaction sees the recorded root alone.
         assert_eq!(
             ledger_set.tx_commitment_root(&ledger_root, 1),
@@ -1943,22 +1938,36 @@ mod tests {
         );
     }
 
+    // Genesis Validation Exemptions 1: the placeholder ZkTransfer and signature of
+    // a declaration are not verified.
     #[test]
-    fn genesis_rejects_a_declaration_whose_zk_transfer_does_not_verify() {
-        let (proven, _, declaration) = genesis_with_a_declaration();
-        let allocations = proven.distribution();
-        let unproven = GenesisBlockBuilder::new()
-            .try_add_notes(allocations.iter().copied())
-            .unwrap()
-            .set_inscription(cryptarchia_inscription())
-            .add_declaration(declaration)
-            .build()
-            .unwrap();
+    fn genesis_accepts_a_declaration_with_placeholder_proofs() {
+        let (tx, _, declaration) = genesis_with_a_declaration();
+        let (state, _) = LedgerState::from_genesis_tx::<HeaderId>(tx, &config()).unwrap();
+        assert!(
+            state
+                .mantle_ledger()
+                .sdp_ledger()
+                .get_declaration(&declaration.id())
+                .is_some()
+        );
+    }
+
+    // Bedrock Services Initialization: beyond their proofs and their inputs, the
+    // declarations carry no exemption.
+    #[test]
+    fn genesis_rejects_a_declaration_below_the_minimum_stake() {
+        let (tx, _, declaration) = genesis_with_a_declaration();
+        let mut config = config();
+        config.sdp_config.min_stake.threshold = declaration.amount + 1;
         assert_eq!(
-            LedgerState::from_genesis_tx::<HeaderId>(unproven.genesis_tx().clone(), &config())
-                .err(),
+            LedgerState::from_genesis_tx::<HeaderId>(tx, &config).err(),
             Some(LedgerError::Mantle(mantle::Error::Sdp(
-                SdpError::InvalidZkTransfer.into()
+                SdpError::AmountBelowMinStake {
+                    amount: declaration.amount,
+                    threshold: declaration.amount + 1,
+                }
+                .into()
             )))
         );
     }

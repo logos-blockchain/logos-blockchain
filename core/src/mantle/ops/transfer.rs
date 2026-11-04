@@ -254,7 +254,7 @@ pub fn transfer_witness(
 }
 
 // Proves a ZkTransfer from note openings and their commitment MMR paths, used
-// by the genesis builder and tests. Each input is a note, its secret key and
+// by tests. Each input is a note, its secret key and
 // its path in the commitment MMR.
 #[must_use]
 pub fn prove_transfer(

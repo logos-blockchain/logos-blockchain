@@ -867,7 +867,7 @@ impl LedgerState {
         }
 
         // Mantle Ledger Initialization: the Transfer appends its outputs to the empty
-        // ledger set and to the buffer the genesis declarations are proven against.
+        // ledger set.
         let state = Self::from_commitments([], total_stake, config, epoch_nonce);
         let (note_sets, _) = transfer
             .clone()
@@ -2337,7 +2337,6 @@ pub mod tests {
         let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
         assert_eq!(ledger_set.commitment_root(), expected);
         assert_eq!(state.epoch_state().total_stake(), 3_000);
-        // The outputs are buffered for the genesis declarations.
         assert_eq!(
             ledger_set.tx_commitment_root(&CommitmentMmr::new().frontier_root(), 0),
             Ok(expected)

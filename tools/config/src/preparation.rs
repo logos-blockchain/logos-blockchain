@@ -11,7 +11,7 @@ use lb_key_management_system_service::keys::ZkKey;
 use crate::{
     blend::{DEFAULT_BLEND_LISTENING_HOST, keys_from_id, listening_address},
     consensus::{
-        BaseConsensusMaterial, ProviderInfo, SdpFundingConfig,
+        BLEND_DECLARATION_AMOUNT, BaseConsensusMaterial, ProviderInfo, SdpFundingConfig,
         create_base_consensus_material_with_additional_wallet_outputs_and_sdp_funding_config,
         create_genesis_block, create_genesis_block_with_declarations,
     },
@@ -82,11 +82,7 @@ pub fn prepare_network(
         sdp_funding,
     );
 
-    for note in consensus
-        .blend_notes
-        .iter_mut()
-        .chain(&mut consensus.sdp_notes)
-    {
+    for note in &mut consensus.sdp_notes {
         refresh_service_note(note, &transfer);
     }
     consensus.allocations = transfer.as_slice().to_vec();
@@ -94,9 +90,8 @@ pub fn prepare_network(
     let providers = ids
         .iter()
         .zip(blend_ports)
-        .enumerate()
         .take(blend_core_nodes)
-        .map(|(i, (id, port))| {
+        .map(|(id, port)| {
             let (provider_sk, zk_sk) = keys_from_id(id);
             ProviderInfo {
                 service_type: ServiceType::BlendNetwork,
@@ -106,7 +101,7 @@ pub fn prepare_network(
                     DEFAULT_BLEND_LISTENING_HOST,
                     *port,
                 )),
-                note: consensus.blend_notes[i].clone(),
+                amount: BLEND_DECLARATION_AMOUNT,
             }
         })
         .collect();

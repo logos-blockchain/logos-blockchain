@@ -1,6 +1,5 @@
 use core::fmt::Debug;
 use std::{
-    collections::HashMap,
     fs,
     io::{self, Write as _},
     path::{Path, PathBuf},
@@ -17,16 +16,14 @@ use lb_core::{
         transactions::GenesisAllocation,
     },
 };
-use lb_key_management_system_keys::keys::{ZkKey, ZkPublicKey};
 use lb_node::config::deployment::DeploymentSettings;
-use lb_sdp_service::DeclarationConfig;
 use lb_utils::yaml::{
     INCLUDE_TAG, OnUnknownKeys, deserialize_value_at_path, deserialize_value_from_reader,
 };
 use logos_blockchain_tools::{
     apply_dotted_kv,
     genesis::{
-        distribution::{self, ConsensusExcludedKey, StakeHolderInfo},
+        distribution::{self, ConsensusExcludedKey, ProviderInfo, StakeHolderInfo},
         inscription::{self, InscribeParams},
     },
     overwrite_yaml, set_at_path,
@@ -85,7 +82,8 @@ pub struct CeremonyArgs {
     #[arg(long, value_name = "FILE")]
     pub stake_holders: PathBuf,
 
-    /// Provider definitions for SDP declarations.
+    /// Provider definitions for SDP declarations, each with the amount it
+    /// declares.
     #[arg(long, value_name = "FILE")]
     pub providers: PathBuf,
 
@@ -93,11 +91,6 @@ pub struct CeremonyArgs {
     /// genesis parameters.
     #[arg(long, value_name = "FILE")]
     pub consensus_excluded_keys: PathBuf,
-
-    /// Secret stake keys proving the genesis declarations: a YAML map from
-    /// each provider's `zk_id` to the secret key of its stakeholder note.
-    #[arg(long, value_name = "FILE")]
-    pub stake_keys: PathBuf,
 
     /// The genesis template: the parameters of era zero. The ceremony
     /// generates the rest of the deployment config from it. Without it, the
@@ -168,15 +161,10 @@ struct BlockArgs {
 
     /// YAML file containing the list of `SDPDeclareOps`.
     /// Each entry must have `service_type`, `locators`, `provider_id`,
-    /// `zk_id`, `inputs`, `commitment_merkle_root` and `amount` fields.
+    /// `zk_id`, `inputs` (empty), `commitment_merkle_root` and `amount` fields.
     /// At least one declaration is required.
     #[arg(long, value_name = "FILE")]
     declarations: PathBuf,
-
-    /// YAML map from each declaration's `zk_id` to the secret key of the
-    /// genesis note it spends.
-    #[arg(long, value_name = "FILE")]
-    stake_keys: PathBuf,
 
     /// Existing deployment config YAML to embed the genesis block into.
     /// When provided, the block is written into `genesis_block`
@@ -199,18 +187,14 @@ struct DistributeArgs {
     #[arg(long, value_name = "FILE")]
     stake_holders: PathBuf,
 
-    /// YAML file containing provider info.
+    /// YAML file containing provider info, each entry with the amount it
+    /// declares.
     #[arg(long, value_name = "FILE")]
     providers: PathBuf,
 
     /// YAML file containing consensus-excluded key info.
     #[arg(long, value_name = "FILE")]
     consensus_excluded_keys: PathBuf,
-
-    /// YAML map from each provider's `zk_id` to the secret key of its
-    /// stakeholder note.
-    #[arg(long, value_name = "FILE")]
-    stake_keys: PathBuf,
 
     /// Write notes output to FILE instead of stdout.
     #[arg(long, short, value_name = "FILE")]
@@ -277,13 +261,11 @@ fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
     );
 
     let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
-    let providers: Vec<DeclarationConfig> = load_yaml_file(&args.providers)?;
+    let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
     let excluded_key: ConsensusExcludedKey = load_yaml_file(&args.consensus_excluded_keys)?;
-    let stake_keys: HashMap<ZkPublicKey, ZkKey> = load_yaml_file(&args.stake_keys)?;
-    let (notes, declarations, keys) =
-        distribution::distribute(stakeholders, providers, &excluded_key, &stake_keys)
-            .map_err(|e| anyhow::anyhow!(e))
-            .context("Failed to calculate distribution during ceremony")?;
+    let (notes, declarations) = distribution::distribute(stakeholders, providers, &excluded_key)
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("Failed to calculate distribution during ceremony")?;
 
     let mut config_value = load_genesis_template(args.template.as_ref())?;
     for raw in &args.overrides {
@@ -296,7 +278,7 @@ fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
     if declarations.is_empty() {
         bail!("Ceremony failed: distribution resulted in zero declarations");
     }
-    let genesis_block = build_genesis_block(notes, inscription_op, declarations, &keys)?;
+    let genesis_block = build_genesis_block(notes, inscription_op, declarations)?;
 
     set_at_path(
         &mut config_value,
@@ -454,7 +436,6 @@ fn run_block(args: &BlockArgs) -> Result<()> {
     let notes: Vec<GenesisAllocation> = load_yaml_file(&args.notes)?;
     let inscription: InscriptionOp = load_yaml_file(&args.inscription)?;
     let declarations: Vec<SDPDeclareOp> = load_yaml_file(&args.declarations)?;
-    let stake_keys: HashMap<ZkPublicKey, ZkKey> = load_yaml_file(&args.stake_keys)?;
 
     if notes.is_empty() {
         bail!("notes file must contain at least one Note");
@@ -463,16 +444,7 @@ fn run_block(args: &BlockArgs) -> Result<()> {
         bail!("declarations file must contain at least one SDPDeclareOp");
     }
 
-    let keys = declarations
-        .iter()
-        .map(|declaration| {
-            stake_keys
-                .get(&declaration.zk_id)
-                .cloned()
-                .with_context(|| format!("no stake key for declaration {:?}", declaration.zk_id))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let genesis_block = build_genesis_block(notes, inscription, declarations, &keys)?;
+    let genesis_block = build_genesis_block(notes, inscription, declarations)?;
 
     let result = match args.embed_in {
         Some(ref embed_path) => {
@@ -497,7 +469,6 @@ fn build_genesis_block(
     notes: Vec<GenesisAllocation>,
     inscription: InscriptionOp,
     declarations: Vec<SDPDeclareOp>,
-    stake_keys: &[ZkKey],
 ) -> Result<GenesisBlock> {
     let mut notes_iter = notes.into_iter();
     let mut decls_iter = declarations.into_iter();
@@ -522,9 +493,7 @@ fn build_genesis_block(
         builder = builder.add_declaration(decl)?;
     }
 
-    builder
-        .build_proven(stake_keys)
-        .context("failed to build genesis block")
+    builder.build().context("failed to build genesis block")
 }
 
 // ── distribute implementation
@@ -532,15 +501,12 @@ fn build_genesis_block(
 
 fn run_distribute(args: &DistributeArgs) -> Result<()> {
     let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
-    let providers: Vec<DeclarationConfig> = load_yaml_file(&args.providers)?;
+    let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
     let excluded_key: ConsensusExcludedKey = load_yaml_file(&args.consensus_excluded_keys)?;
-    let stake_keys: HashMap<ZkPublicKey, ZkKey> = load_yaml_file(&args.stake_keys)?;
 
-    // The stake keys stay secret: `block` reads them from their own file.
-    let (notes, declarations, _keys) =
-        distribution::distribute(stakeholders, providers, &excluded_key, &stake_keys)
-            .map_err(|e| anyhow::anyhow!(e))
-            .context("Failed to calculate distribution")?;
+    let (notes, declarations) = distribution::distribute(stakeholders, providers, &excluded_key)
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("Failed to calculate distribution")?;
 
     let notes_value = struct_to_yaml_value(&notes)?;
     let declarations_value = struct_to_yaml_value(&declarations)?;

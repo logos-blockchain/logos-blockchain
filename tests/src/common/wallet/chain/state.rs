@@ -4,10 +4,7 @@ use std::{
 };
 
 use lb_core::mantle::{
-    Note,
-    notes::{NoteCommitment, NoteNullifier},
-    traits::GenesisTx as _,
-    transactions::GenesisTx,
+    Note, notes::NoteCommitment, traits::GenesisTx as _, transactions::GenesisTx,
 };
 use lb_key_management_system_service::keys::{UnsecuredZkKey, ZkPublicKey};
 use lb_wallet::OwnedNote;
@@ -68,13 +65,11 @@ pub enum TrackedWalletKeysError {
 }
 
 // The notes a genesis block creates: its distribution in the ledger set, the
-// service notes of its declarations in the SDP set, and the nullifiers the
-// declarations spend.
+// service notes of its declarations in the SDP set.
 #[derive(Debug, Clone, Default)]
 pub struct GenesisNotes {
     pub notes: Vec<Note>,
     pub service_notes: Vec<Note>,
-    pub spent: Vec<NoteNullifier>,
 }
 
 impl GenesisNotes {
@@ -90,10 +85,6 @@ impl GenesisNotes {
             service_notes: genesis_tx
                 .sdp_declarations()
                 .map(|declaration| declaration.operation().service_note())
-                .collect(),
-            spent: genesis_tx
-                .sdp_declarations()
-                .flat_map(|declaration| declaration.operation().inputs.iter().copied())
                 .collect(),
         }
     }

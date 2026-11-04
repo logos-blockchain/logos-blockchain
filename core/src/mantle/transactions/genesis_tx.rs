@@ -89,6 +89,8 @@ pub enum Error {
     DistributionLength { published: usize, outputs: usize },
     #[error("Transfer output {index} is not the commitment of the published note")]
     DistributionMismatch { index: usize },
+    #[error("Genesis declaration at operation {index} has inputs")]
+    DeclarationWithInputs { index: usize },
 }
 
 impl GenesisTx {
@@ -118,6 +120,16 @@ impl GenesisTx {
 
                 if !unsupported_ops.is_empty() {
                     return Err(Error::UnsupportedGenesisOp(unsupported_ops));
+                }
+
+                // Genesis Validation Exemptions 3: the declarations must have no inputs.
+                for (index, op) in rest.iter().enumerate() {
+                    if matches!(op, OpRef::SDPDeclare(declaration) if !declaration.inputs.is_empty())
+                    {
+                        return Err(Error::DeclarationWithInputs {
+                            index: index + GENESIS_REQUIRED_OPS,
+                        });
+                    }
                 }
 
                 (genesis_parameters, distribution)
@@ -514,7 +526,7 @@ mod tests {
         mantle::{
             Note, OpProof,
             note_set::CommitmentMmr,
-            notes::{InputNullifiers, NoteNullifier, OutputCommitments, derive_note_nullifier},
+            notes::{InputNullifiers, NoteNullifier, OutputCommitments},
             ops::{
                 ChannelInscribeProof, StepProof, ZkTransferProof,
                 channel::inscribe::{ChannelStep, Inscription, MiniBlock, MiniBlocks, Step},
@@ -557,7 +569,7 @@ mod tests {
     ) -> SDPDeclareOp {
         SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
-            inputs: [derive_note_nullifier(&note_to_use.commitment(), &Fr::ZERO)].into(),
+            inputs: InputNullifiers::default(),
             commitment_merkle_root: Fr::ZERO,
             amount: note_to_use.value,
             zk_id: ZkPublicKey::new(BigUint::from(zk_id_value).into()),
@@ -947,6 +959,33 @@ mod tests {
         assert_eq!(GenesisTx::from_tx(tx), Err(Error::UnexpectedInput));
     }
 
+    // Genesis Validation Exemptions 3: the declarations must have no inputs.
+    #[test]
+    fn from_tx_rejects_a_declaration_with_inputs() {
+        let verifying_key = Ed25519PublicKey::from_bytes(&[1; 32]).unwrap();
+        let with_inputs = SDPDeclareOp {
+            inputs: [NoteNullifier(Fr::ONE)].into(),
+            ..sdp_declare_op(create_test_note(1000, 0), 1, verifying_key)
+        };
+        let without_inputs = SDPDeclareOp {
+            inputs: InputNullifiers::default(),
+            ..sdp_declare_op(create_test_note(1000, 0), 0, verifying_key)
+        };
+        let c = parameters_op();
+        let d = distribution_op(&c, &allocations());
+        let ops = vec![
+            Op::ChannelInscribe(c),
+            Op::ChannelInscribe(d),
+            Op::SDPDeclare(without_inputs),
+            Op::SDPDeclare(with_inputs),
+        ];
+        let ops_proofs = ops.iter().map(Op::sample_proof).collect::<Vec<_>>();
+
+        assert_eq!(
+            GenesisTx::from_tx(create_trusted_tx(ops, ops_proofs)),
+            Err(Error::DeclarationWithInputs { index: 4 })
+        );
+    }
     #[test]
     fn into_genesis_ops_splits_the_transfer_the_inscription_and_the_declarations() {
         let verifying_key = Ed25519PublicKey::from_bytes(&[1; 32]).unwrap();

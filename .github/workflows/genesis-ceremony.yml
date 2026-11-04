@@ -27,21 +27,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
 
-      # The genesis declarations are proven with the secret key of each
-      # provider's stakeholder note. GENESIS_STAKE_KEYS is a YAML map from
-      # provider zk_id to that secret key, covering the providers of every
-      # deployment; it only lives in a temporary file of this job.
-      - name: Write stake keys
-        env:
-          GENESIS_STAKE_KEYS: ${{ secrets.GENESIS_STAKE_KEYS }}
-        run: |
-          if [ -z "$GENESIS_STAKE_KEYS" ]; then
-            echo "Error: the GENESIS_STAKE_KEYS secret is not set."
-            exit 1
-          fi
-          umask 077
-          printf '%s\n' "$GENESIS_STAKE_KEYS" > "$RUNNER_TEMP/stake_keys.yaml"
-
       - name: Run Ceremony
         run: |
           cargo run --locked --bin logos-blockchain-tools-genesis -- ceremony \
@@ -49,7 +34,6 @@ jobs:
             --stake-holders deployment/ceremony/genesis/$LB_TARGET_ENV/stakeholders.yaml \
             --providers deployment/ceremony/genesis/$LB_TARGET_ENV/providers.yaml \
             --consensus-excluded-keys deployment/ceremony/genesis/$LB_TARGET_ENV/consensus_excluded_keys.yaml \
-            --stake-keys "$RUNNER_TEMP/stake_keys.yaml" \
             --template deployment/ceremony/genesis/$LB_TARGET_ENV/deployment-template.yaml \
             --output nodes/node/binary/src/config/deployment/settings.yaml
 
@@ -77,7 +61,3 @@ jobs:
             echo "The changes have been pushed directly to the current branch." >> $GITHUB_STEP_SUMMARY
             echo "[View Commit on GitHub]($COMMIT_URL)" >> $GITHUB_STEP_SUMMARY
           fi
-
-      - name: Remove stake keys
-        if: always()
-        run: rm -f "$RUNNER_TEMP/stake_keys.yaml"
