@@ -18,7 +18,7 @@ use lb_core::{
             ChannelInscribeProof, StepProof,
             channel::{
                 MsgId,
-                inscribe::{ChannelSteps, Inscription, InscriptionOp, Step},
+                inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step},
                 program_step::{Payment, ProgramOutputs, ProgramStep},
             },
         },
@@ -325,7 +325,7 @@ fn inscription(payload: usize) -> Op {
         inscription: Inscription::try_new(vec![0xa5; payload]).expect("the payload fits"),
         parent: MsgId::root(),
         signer: fixture.channel_key.public_key().into_unverified(),
-        steps: ChannelSteps::default(),
+        mini_blocks: MiniBlocks::default(),
     })
 }
 
@@ -437,13 +437,12 @@ fn applied_program_spend() -> DeferredZkProgramSpend {
         .channel_state(&fixture.channel)
         .expect("the channel exists")
         .tip_message;
-    let steps: ChannelSteps = [Step::Program(ProgramStep {
+    let steps: MiniBlocks = [MiniBlock::from([Step::Program(ProgramStep {
         program_id: fixture.program,
         payments: [Payment {
             inputs: [nullifiers(1, 0x9a)[0]].into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: root,
-            buffered: 0,
             paid_value: 5,
             intent: Fr::ONE,
         }]
@@ -453,10 +452,11 @@ fn applied_program_spend() -> DeferredZkProgramSpend {
         program_outputs: ProgramOutputs::default(),
         commitment_merkle_root: root,
         spend_notes_hash: Fr::ZERO,
-    })]
+    })])]
     .into();
     let step_proofs = steps
         .iter()
+        .flat_map(|mini_block| mini_block.iter())
         .map(|step| StepProof::sample_for(step.proof_shape()))
         .collect();
     let ops = Ops::new_unchecked(vec![Op::ChannelInscribe(InscriptionOp {
@@ -464,7 +464,7 @@ fn applied_program_spend() -> DeferredZkProgramSpend {
         inscription: [1].into(),
         parent: tip,
         signer: fixture.channel_key.public_key().into_unverified(),
-        steps,
+        mini_blocks: steps,
     })]);
     let signature = fixture
         .channel_key

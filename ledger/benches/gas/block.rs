@@ -26,7 +26,7 @@ use lb_core::{
             StepProof,
             channel::{
                 ChannelId, MsgId,
-                inscribe::{ChannelStep, ChannelSteps, InscriptionOp, Step},
+                inscribe::{ChannelStep, InscriptionOp, MiniBlock, MiniBlocks, Step},
                 withdraw::{ChannelWithdrawOp, WITHDRAW_DELAY},
             },
             sdp::SDPWithdrawOp,
@@ -412,7 +412,7 @@ static CHANNELS_STATE: LazyLock<LedgerState> = LazyLock::new(|| {
                 inscription: [0].into(),
                 parent: MsgId::root(),
                 signer: fixture.channel_key.public_key().into_unverified(),
-                steps: ChannelSteps::default(),
+                mini_blocks: MiniBlocks::default(),
             })
         })
         .collect();
@@ -455,12 +455,11 @@ fn note_sets_shape(changed: usize) -> BlockShape {
                 inscription: [1].into(),
                 parent: channel_state.tip_message,
                 signer: fixture.channel_key.public_key().into_unverified(),
-                steps: [Step::User(ChannelStep {
+                mini_blocks: [MiniBlock::from([Step::User(ChannelStep {
                     inputs: nullifiers(1, salt).try_into().expect("one input"),
                     outputs: commitments(1, salt).try_into().expect("one output"),
                     commitment_merkle_root: root,
-                    buffered: 0,
-                })]
+                })])]
                 .into(),
             };
             encode_inscription(op, &[StepProof::User(zk_transfer(index))])
@@ -501,10 +500,7 @@ fn mixed() -> BlockShape {
     for index in 0..USER_INSCRIPTIONS + PROGRAM_INSCRIPTIONS {
         let salt = 700 + index as u64;
         let (step, proof) = if index < USER_INSCRIPTIONS {
-            (
-                user_step(1, 1, 0, salt),
-                StepProof::User(zk_transfer(index)),
-            )
+            (user_step(1, 1, salt), StepProof::User(zk_transfer(index)))
         } else {
             program_step(program, salt)
         };

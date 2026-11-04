@@ -13,7 +13,7 @@ use lb_core::{
                 VerifiedChannelKeys,
                 config::ChannelConfigOp,
                 deposit::{DepositOp, Metadata},
-                inscribe::{ChannelSteps, InscriptionOp},
+                inscribe::{InscriptionOp, MiniBlocks},
             },
         },
         transactions::{OpProofs, Ops},
@@ -174,7 +174,7 @@ fn extract_finalized_items_interleaves_deposit_then_inscription_in_same_tx() {
         signer: Ed25519Key::from_bytes(&[0; 32])
             .public_key()
             .into_unverified(),
-        steps: ChannelSteps::default(),
+        mini_blocks: MiniBlocks::default(),
     };
 
     let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(dep), Op::ChannelInscribe(inscribe)]);
@@ -410,7 +410,7 @@ fn dummy_pending_tx(seed: u8) -> SignedOps<Unverified, StandardMode> {
         signer: Ed25519Key::from_bytes(&[seed; 32])
             .public_key()
             .into_unverified(),
-        steps: ChannelSteps::default(),
+        mini_blocks: MiniBlocks::default(),
     })]);
     let op_proofs = OpProofs::from([OpProof::ChannelInscribe(
         ChannelInscribeProof::without_steps(Ed25519Signature::zero()),

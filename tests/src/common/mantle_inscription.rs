@@ -6,7 +6,7 @@ use lb_core::mantle::{
         ChannelInscribeProof, Op,
         channel::{
             ChannelId, MsgId,
-            inscribe::{ChannelSteps, Inscription, InscriptionOp},
+            inscribe::{Inscription, InscriptionOp, MiniBlocks},
         },
     },
     transactions::{
@@ -39,7 +39,7 @@ pub fn build_inscription_tx_builder(
             inscription,
             parent: parent.unwrap_or_else(MsgId::root),
             signer: signing_key.public_key().into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         }))
         .expect("inscription test builder should fit op bounds");
 

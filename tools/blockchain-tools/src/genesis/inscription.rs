@@ -7,7 +7,7 @@ use lb_core::{
         ops::{
             channel::{
                 ChannelId, MsgId,
-                inscribe::{ChannelSteps, InscriptionOp},
+                inscribe::{InscriptionOp, MiniBlocks},
             },
             pow::PowReward,
         },
@@ -71,6 +71,6 @@ pub fn inscribe<D: ZkDigest>(
         parent: MsgId::root(),
         signer: UnverifiedEd25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY)
             .expect("Constant EMPTY_ED25519_PUBLIC_KEY should be valid"),
-        steps: ChannelSteps::default(),
+        mini_blocks: MiniBlocks::default(),
     }
 }

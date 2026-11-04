@@ -18,7 +18,7 @@ pub(super) async fn build_funded_custom_tx(
             inscription: payload.clone(),
             parent,
             signer,
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         };
         parent = op.id();
         tx_builder = tx_builder

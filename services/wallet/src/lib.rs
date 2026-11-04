@@ -1781,7 +1781,7 @@ const fn op_proof(
     signature: Option<Ed25519Signature>,
 ) -> Result<OpProof, WalletServiceError> {
     match (op, zk_proof, signature) {
-        (OpRef::ChannelInscribe(inscription), _, _) if !inscription.steps.is_empty() => {
+        (OpRef::ChannelInscribe(inscription), _, _) if !inscription.mini_blocks.is_empty() => {
             Err(WalletServiceError::UnsupportedSteps)
         }
         (OpRef::ChannelInscribe(_), None, Some(signature)) => Ok(OpProof::ChannelInscribe(

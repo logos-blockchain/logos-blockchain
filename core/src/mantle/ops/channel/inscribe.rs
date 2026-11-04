@@ -14,7 +14,7 @@ use lb_poseidon2::Digest as _;
 use lb_program_spend::{
     ZkProgramSpendInputsError, ZkProgramSpendPublic, ZkProgramSpendVerifierInput,
 };
-use lb_utils::bounded::UpperBoundedVec;
+use lb_utils::bounded::{NonEmptyBoundedVec, UpperBoundedVec};
 use lb_zktransfer::{MAX_INPUTS, MAX_OUTPUTS, ZkTransferInputsError, ZkTransferVerifierInput};
 use serde::{Deserialize, Serialize};
 
@@ -89,7 +89,12 @@ static CHANNEL_STEP_V1: LazyLock<Fr> = LazyLock::new(|| {
 });
 
 pub const MAX_CHANNEL_STEPS: usize = u16::MAX as usize; // StepCount = UINT16
-pub type ChannelSteps = UpperBoundedVec<Step, MAX_CHANNEL_STEPS>;
+pub const MAX_MINI_BLOCKS: usize = u16::MAX as usize; // MiniBlockCount = UINT16
+// The user steps and payments of a mini-block are proven against their recent
+// root extended with the buffer of the channel note set as it stands when the
+// mini-block starts.
+pub type MiniBlock = NonEmptyBoundedVec<Step, MAX_CHANNEL_STEPS>;
+pub type MiniBlocks = UpperBoundedVec<MiniBlock, MAX_MINI_BLOCKS>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ChannelStep {
@@ -97,7 +102,6 @@ pub struct ChannelStep {
     pub outputs: OutputCommitments,
     #[serde(with = "serde_fr")]
     pub commitment_merkle_root: Fr,
-    pub buffered: u16,
 }
 
 pub const USER_STEP_KIND: u8 = 0x00;
@@ -214,7 +218,7 @@ pub struct InscriptionOp {
     // give us compile-time guarantees about the validity of such a key.
     pub signer: UnverifiedEd25519PublicKey,
     /// Moves of channel notes, in the order they apply
-    pub steps: ChannelSteps,
+    pub mini_blocks: MiniBlocks,
 }
 
 impl InscriptionOp {
@@ -223,6 +227,23 @@ impl InscriptionOp {
         let mut hasher = Hasher::new();
         hasher.update(self.encode().as_ref());
         MsgId(hasher.finalize().into())
+    }
+
+    /// The steps of the inscription, in the order they apply.
+    pub fn steps(&self) -> impl Iterator<Item = &Step> {
+        self.mini_blocks
+            .iter()
+            .flat_map(|mini_block| mini_block.iter())
+    }
+
+    /// The steps of the inscription, each with whether it starts a mini-block.
+    pub fn steps_with_mini_block_starts(&self) -> impl Iterator<Item = (bool, &Step)> {
+        self.mini_blocks.iter().flat_map(|mini_block| {
+            mini_block
+                .iter()
+                .enumerate()
+                .map(|(position, step)| (position == 0, step))
+        })
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -235,7 +256,7 @@ impl InscriptionOp {
             signer: Ed25519Key::from_bytes(&[15; 32])
                 .public_key()
                 .into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         }
     }
 
@@ -244,15 +265,14 @@ impl InscriptionOp {
     pub fn sample_with_step() -> Self {
         Self {
             // The steps of the spec vector.
-            steps: [
+            mini_blocks: [MiniBlock::from([
                 Step::User(ChannelStep {
                     inputs: [crate::mantle::notes::NoteNullifier(Fr::from(0x23u64))].into(),
                     outputs: [crate::mantle::notes::NoteCommitment(Fr::from(0x24u64))].into(),
                     commitment_merkle_root: Fr::from(0x25u64),
-                    buffered: 0x46,
                 }),
                 Step::Program(ProgramStep::sample()),
-            ]
+            ])]
             .into(),
             ..Self::sample()
         }
@@ -298,7 +318,7 @@ impl OpGasCalculator<MainnetGasProfile> for InscriptionOp {
     // each payment as a spend.
     fn execution_gas(&self, _context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
         let mut gas = Self::GAS_COST.checked_add(EXECUTION_SIGNATURE_GAS)?;
-        for step in self.steps.iter() {
+        for step in self.steps() {
             match step {
                 Step::User(step) => {
                     gas = gas
@@ -349,17 +369,22 @@ impl PreverifiableOperation<StandardMode>
             .map_err(|_error| Error::InvalidSignature)?;
 
         // One ZkTransfer per step
-        let steps = &self.operation().steps;
-        if self.proof().step_proofs.len() != steps.len() {
+        let steps = self.operation().steps().count();
+        if self.proof().step_proofs.len() != steps {
             return Err(Error::StepProofCount {
-                steps: steps.len(),
+                steps,
                 proofs: self.proof().step_proofs.len(),
             });
         }
 
         // Ensure each step proof is of the kind of its step, and the ZkTransfer circuit
         // fits the inputs and the outputs of each user step
-        for (index, (step, proof)) in steps.iter().zip(&self.proof().step_proofs).enumerate() {
+        for (index, (step, proof)) in self
+            .operation()
+            .steps()
+            .zip(&self.proof().step_proofs)
+            .enumerate()
+        {
             match (step, proof) {
                 (Step::User(step), StepProof::User(_)) => {
                     if step.inputs.len() > MAX_INPUTS {
@@ -496,7 +521,7 @@ impl VerifiableOperation<StandardMode>
 
         // The signature is cheap and checked by `preverify`, only the step proofs
         // are deferred.
-        if operation.steps.is_empty() {
+        if operation.mini_blocks.is_empty() {
             return Ok(InscriptionDeferredProofs::default());
         }
         let mut note_set = note_set.ok_or(Error::NoNoteSet {
@@ -507,12 +532,17 @@ impl VerifiableOperation<StandardMode>
         let mut deferred = InscriptionDeferredProofs::default();
         // The message of the program spends and the third input of the program proofs
         let op_id_fr = Fr::from_le_bytes_mod_order(&operation.op_id());
-        for (index, (step, proof)) in operation
-            .steps
-            .iter()
+        // The number of commitments of the buffer the user steps and payments of the
+        // current mini-block cover.
+        let mut covered = 0;
+        for (index, ((starts_mini_block, step), proof)) in operation
+            .steps_with_mini_block_starts()
             .zip(&self.proof().step_proofs)
             .enumerate()
         {
+            if starts_mini_block {
+                covered = note_set.tx_commitment_buffer_len();
+            }
             match (step, proof) {
                 (Step::User(step), StepProof::User(proof)) => {
                     note_set.assert_spendable(
@@ -525,12 +555,10 @@ impl VerifiableOperation<StandardMode>
                             return Err(Error::StepDoubleSpend(*note_nullifier));
                         }
                     }
-                    // `buffered <= len(tx_commitment_buffer)` is checked by
-                    // `cached_step_commitment_root`
                     let tx_commitment_root = note_set.cached_step_commitment_root(
                         tx_roots,
                         &step.commitment_merkle_root,
-                        usize::from(step.buffered),
+                        covered,
                         context.block_number,
                     )?;
                     let nullifiers: Vec<Fr> =
@@ -569,7 +597,7 @@ impl VerifiableOperation<StandardMode>
                         let tx_commitment_root = note_set.cached_step_commitment_root(
                             tx_roots,
                             &payment.commitment_merkle_root,
-                            usize::from(payment.buffered),
+                            covered,
                             context.block_number,
                         )?;
                         let nullifiers: Vec<Fr> =
@@ -641,7 +669,7 @@ impl VerifiableOperation<StandardMode>
                 }
                 _ => return Err(Error::StepProofKind { step: index }),
             }
-            // The next steps can cover the outputs of this one with their buffered
+            // The next program spends and the next mini-blocks cover the outputs of this step
             note_set = note_set.buffer_outputs(step.outputs().as_slice());
         }
         Ok(deferred)
@@ -683,7 +711,7 @@ impl<Mode: VerificationMode> ExecutableOperation
             })?;
 
         // Apply the steps to the channel note set, in order
-        if !operation.steps.is_empty() {
+        if !operation.mini_blocks.is_empty() {
             let index = channel.note_set.ok_or(Error::NoNoteSet {
                 channel_id: operation.channel_id,
             })?;
@@ -692,7 +720,7 @@ impl<Mode: VerificationMode> ExecutableOperation
                 .get(index)
                 .expect("the note set of a channel exists")
                 .clone();
-            for step in operation.steps.iter() {
+            for step in operation.steps() {
                 let inputs = match step {
                     Step::User(step) => &step.inputs,
                     // The payments of a program step apply before its program spend
@@ -795,7 +823,7 @@ mod tests {
             inscription: b"genesis".into(),
             parent: MsgId([0u8; 32]),
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         }
     }
 
@@ -1189,14 +1217,10 @@ mod tests {
             inputs: [NoteNullifier(Fr::from(1u64))].into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: Fr::ZERO,
-            buffered: 0,
         };
         // 182 + steps * (178 + 1770 + 725), one input, no output, nothing buffered
         for (steps, expected) in [(0usize, 182u64), (1, 2_855), (3, 8_201)] {
-            let operation = InscriptionOp {
-                steps: ChannelSteps::try_from(vec![Step::User(step.clone()); steps]).unwrap(),
-                ..InscriptionOp::sample()
-            };
+            let operation = with_steps(vec![Step::User(step.clone()); steps]);
             for threshold in [0, 3] {
                 assert_eq!(
                     operation.execution_gas(&FixedThresholds(threshold)),
@@ -1208,7 +1232,7 @@ mod tests {
 
     #[test]
     fn inscription_op_execution_gas_charges_each_program_step() {
-        let user = Step::User(step(&[nullifier(1)], &[], Fr::ZERO, 0));
+        let user = Step::User(step(&[nullifier(1)], &[], Fr::ZERO));
         let program = |payments: usize| {
             Step::Program(ProgramStep {
                 payments: vec![Payment::sample(); payments].try_into().unwrap(),
@@ -1230,10 +1254,7 @@ mod tests {
             // 11_995 + (6_525 + 3 * 2_769 + 2_519)
             (vec![program(1), program(3)], 29_346),
         ] {
-            let operation = InscriptionOp {
-                steps: steps.try_into().unwrap(),
-                ..InscriptionOp::sample()
-            };
+            let operation = with_steps(steps);
             assert_eq!(
                 operation.execution_gas(&FixedThresholds(3)),
                 Ok(Gas::new(expected))
@@ -1243,19 +1264,10 @@ mod tests {
 
     #[test]
     fn inscription_program_step_counts_its_payment_buffer() {
-        let payment = Payment {
-            buffered: 0,
-            ..Payment::sample()
-        };
-        let operation = InscriptionOp {
-            steps: vec![Step::Program(ProgramStep {
-                payments: vec![payment].try_into().unwrap(),
-                ..ProgramStep::sample()
-            })]
-            .try_into()
-            .unwrap(),
-            ..InscriptionOp::sample()
-        };
+        let operation = with_steps(vec![Step::Program(ProgramStep {
+            payments: vec![Payment::sample()].try_into().unwrap(),
+            ..ProgramStep::sample()
+        })]);
         // 182 + (54 + 6320 + 151) + the payment (250 + 1770 + 725 + 24) + the spend
         // of the step (1770 + 725 + 24)
         assert_eq!(
@@ -1276,19 +1288,31 @@ mod tests {
         inputs: &[NoteNullifier],
         outputs: &[NoteCommitment],
         commitment_merkle_root: Fr,
-        buffered: u16,
     ) -> ChannelStep {
         ChannelStep {
             inputs: InputNullifiers::try_from_iter(inputs.iter().copied()).unwrap(),
             outputs: OutputCommitments::try_from_iter(outputs.iter().copied()).unwrap(),
             commitment_merkle_root,
-            buffered,
         }
     }
 
+    // The steps in a single mini-block, none for no step.
     fn with_steps(steps: Vec<Step>) -> InscriptionOp {
+        if steps.is_empty() {
+            return with_mini_blocks(vec![]);
+        }
+        with_mini_blocks(vec![steps])
+    }
+
+    fn with_mini_blocks(mini_blocks: Vec<Vec<Step>>) -> InscriptionOp {
         InscriptionOp {
-            steps: ChannelSteps::try_from(steps).unwrap(),
+            mini_blocks: MiniBlocks::try_from(
+                mini_blocks
+                    .into_iter()
+                    .map(|steps| MiniBlock::try_from(steps).unwrap())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap(),
             ..InscriptionOp::sample()
         }
     }
@@ -1360,8 +1384,7 @@ mod tests {
                 &step(
                     &[nullifier(0x23)],
                     &[commitment(0x24), commitment(0x25)],
-                    Fr::ZERO,
-                    0
+                    Fr::ZERO
                 )
             ),
             ZkHasher::digest(&[
@@ -1377,22 +1400,19 @@ mod tests {
         assert_ne!(
             step_msg(
                 &channel,
-                &step(&[nullifier(1), nullifier(2)], &[], Fr::ZERO, 0)
+                &step(&[nullifier(1), nullifier(2)], &[], Fr::ZERO)
             ),
-            step_msg(
-                &channel,
-                &step(&[nullifier(1)], &[commitment(2)], Fr::ZERO, 0)
-            )
+            step_msg(&channel, &step(&[nullifier(1)], &[commitment(2)], Fr::ZERO))
         );
         assert_eq!(
-            step_msg(&channel, &step(&[nullifier(1)], &[], Fr::ZERO, 0)),
-            step_msg(&channel, &step(&[nullifier(1)], &[], Fr::ONE, 7))
+            step_msg(&channel, &step(&[nullifier(1)], &[], Fr::ZERO)),
+            step_msg(&channel, &step(&[nullifier(1)], &[], Fr::ONE))
         );
         assert_ne!(
-            step_msg(&channel, &step(&[nullifier(1)], &[], Fr::ZERO, 0)),
+            step_msg(&channel, &step(&[nullifier(1)], &[], Fr::ZERO)),
             step_msg(
                 &ChannelId::from([0x23u8; 32]),
-                &step(&[nullifier(1)], &[], Fr::ZERO, 0)
+                &step(&[nullifier(1)], &[], Fr::ZERO)
             )
         );
     }
@@ -1404,7 +1424,6 @@ mod tests {
                 &[nullifier(2)],
                 &[commitment(3)],
                 root(),
-                0,
             ))]),
             vec![],
         );
@@ -1423,7 +1442,7 @@ mod tests {
     fn preverify_rejects_a_step_with_more_than_eight_outputs() {
         let outputs: Vec<NoteCommitment> = (1..=9).map(commitment).collect();
         let signed_operation = signed(
-            with_steps(vec![Step::User(step(&[nullifier(2)], &outputs, root(), 0))]),
+            with_steps(vec![Step::User(step(&[nullifier(2)], &outputs, root()))]),
             vec![StepProof::User(ZkTransferProof::sample())],
         );
         assert_eq!(
@@ -1444,7 +1463,6 @@ mod tests {
                 &[nullifier(2)],
                 &[commitment(3)],
                 root(),
-                0,
             ))])
         };
         let deferred = signed(operation, vec![StepProof::User(ZkTransferProof::sample())])
@@ -1471,8 +1489,8 @@ mod tests {
     fn verify_defers_one_balanced_transfer_per_step_bound_to_its_step_msg() {
         let (channels, note_sets) = state();
         let steps = vec![
-            step(&[nullifier(2)], &[commitment(3)], root(), 0),
-            step(&[nullifier(4)], &[commitment(5)], root(), 0),
+            step(&[nullifier(2)], &[commitment(3)], root()),
+            step(&[nullifier(4)], &[commitment(5)], root()),
         ];
         let deferred = verify_steps(
             steps.iter().cloned().map(Step::User).collect(),
@@ -1496,8 +1514,8 @@ mod tests {
     }
 
     #[test]
-    fn verify_extends_each_step_root_with_its_buffered_prefix() {
-        let (channels, note_sets) = state();
+    fn verify_extends_each_step_root_with_the_buffer_before_its_mini_block() {
+        let (_, note_sets) = state();
         // An earlier Operation of the transaction deposited commitment(7) into the
         // channel.
         let set = note_sets
@@ -1506,45 +1524,54 @@ mod tests {
             .clone()
             .buffer_outputs(&[commitment(7)]);
         let note_sets = note_sets.update(2, set);
-        let first = Step::User(step(&[nullifier(2)], &[commitment(3)], root(), 0));
-        let second = Step::User(step(&[nullifier(4)], &[commitment(5)], root(), 2));
-        let deferred = verify_steps(vec![first.clone(), second], &channels, &note_sets).unwrap();
-        let extended = CommitmentMmr::new()
-            .push(commitment(1))
-            .unwrap()
-            .push(commitment(7))
-            .unwrap()
-            .push(commitment(3))
-            .unwrap()
-            .frontier_root();
+        let mini_blocks = vec![
+            vec![
+                Step::User(step(&[nullifier(2)], &[commitment(3)], root())),
+                Step::User(step(&[nullifier(4)], &[commitment(5)], root())),
+            ],
+            vec![Step::User(step(&[nullifier(6)], &[commitment(8)], root()))],
+        ];
+        let deferred = verify_operation(
+            with_mini_blocks(mini_blocks.clone()),
+            sample_proofs(&mini_blocks.concat()),
+            &note_sets,
+        )
+        .unwrap();
+        let extended = |commitments: &[u64]| {
+            commitments
+                .iter()
+                .fold(
+                    CommitmentMmr::new().push(commitment(1)).unwrap(),
+                    |mmr, n| mmr.push(commitment(*n)).unwrap(),
+                )
+                .frontier_root()
+        };
+        // The steps of a mini-block cover the same buffer, whatever their order.
+        for index in 0..2 {
+            assert_eq!(
+                deferred.zk_transfers[index]
+                    .inputs()
+                    .tx_commitment_root
+                    .into_inner(),
+                extended(&[7])
+            );
+        }
         assert_eq!(
-            deferred.zk_transfers[0]
+            deferred.zk_transfers[2]
                 .inputs()
                 .tx_commitment_root
                 .into_inner(),
-            root()
+            extended(&[7, 3, 5])
         );
+    }
+
+    #[test]
+    fn an_empty_mini_block_does_not_decode() {
+        // One mini-block of no step
+        assert!(MiniBlocks::decode(&[1, 0, 0, 0], &()).is_err());
         assert_eq!(
-            deferred.zk_transfers[1]
-                .inputs()
-                .tx_commitment_root
-                .into_inner(),
-            extended
-        );
-        assert_eq!(
-            verify_steps(
-                vec![
-                    first,
-                    Step::User(step(&[nullifier(4)], &[commitment(5)], root(), 3))
-                ],
-                &channels,
-                &note_sets
-            )
-            .unwrap_err(),
-            Error::NoteSet(NoteSetError::BufferedTooLarge {
-                buffered: 3,
-                len: 2
-            })
+            MiniBlocks::decode(&[0, 0], &()).unwrap().1,
+            MiniBlocks::default()
         );
     }
 
@@ -1552,8 +1579,8 @@ mod tests {
     fn verify_rejects_a_note_consumed_by_an_earlier_step() {
         let (channels, note_sets) = state();
         let steps = vec![
-            Step::User(step(&[nullifier(2)], &[commitment(3)], root(), 0)),
-            Step::User(step(&[nullifier(2)], &[commitment(4)], root(), 0)),
+            Step::User(step(&[nullifier(2)], &[commitment(3)], root())),
+            Step::User(step(&[nullifier(2)], &[commitment(4)], root())),
         ];
         assert_eq!(
             verify_steps(steps, &channels, &note_sets).unwrap_err(),
@@ -1573,12 +1600,7 @@ mod tests {
         let note_sets = note_sets.update(2, set);
         assert_eq!(
             verify_steps(
-                vec![Step::User(step(
-                    &[nullifier(2)],
-                    &[commitment(3)],
-                    root(),
-                    0
-                ))],
+                vec![Step::User(step(&[nullifier(2)], &[commitment(3)], root()))],
                 &channels,
                 &note_sets
             )
@@ -1591,8 +1613,8 @@ mod tests {
     fn execute_spends_adds_and_buffers_every_step_in_order() {
         let (channels, note_sets) = state();
         let operation = with_steps(vec![
-            Step::User(step(&[nullifier(2)], &[commitment(3)], root(), 0)),
-            Step::User(step(&[nullifier(4)], &[commitment(5)], root(), 1)),
+            Step::User(step(&[nullifier(2)], &[commitment(3)], root())),
+            Step::User(step(&[nullifier(4)], &[commitment(5)], root())),
         ]);
         let signed_operation: SignedOperation<_, _, StandardMode> = signed(
             operation,
@@ -1646,7 +1668,6 @@ mod tests {
             &[derive_note_nullifier(&input.commitment(), &secret_key)],
             &[output.commitment()],
             mmr.frontier_root(),
-            0,
         );
         let proof = prove_transfer(
             &[(input, secret_key, path)],
@@ -1691,7 +1712,7 @@ mod tests {
             Step::decode(&program.encode(), &()).unwrap(),
             (&[][..], program)
         );
-        let user = Step::User(step(&[nullifier(2)], &[commitment(3)], Fr::ZERO, 0));
+        let user = Step::User(step(&[nullifier(2)], &[commitment(3)], Fr::ZERO));
         assert_eq!(user.encode()[0], USER_STEP_KIND);
         let mut bytes = user.encode();
         bytes[0] = 0x02;
@@ -1719,14 +1740,12 @@ mod tests {
         inputs: &[NoteNullifier],
         outputs: &[NoteCommitment],
         commitment_merkle_root: Fr,
-        buffered: u16,
         paid_value: u64,
     ) -> Payment {
         Payment {
             inputs: InputNullifiers::try_from_iter(inputs.iter().copied()).unwrap(),
             outputs: OutputCommitments::try_from_iter(outputs.iter().copied()).unwrap(),
             commitment_merkle_root,
-            buffered,
             paid_value,
             intent: Fr::from(paid_value),
         }
@@ -1800,8 +1819,8 @@ mod tests {
         let (_, note_sets) = state();
         let step = program_step(
             vec![
-                payment(&[nullifier(2)], &[commitment(3)], root(), 0, 5),
-                payment(&[nullifier(4)], &[], root(), 0, 7),
+                payment(&[nullifier(2)], &[commitment(3)], root(), 5),
+                payment(&[nullifier(4)], &[], root(), 7),
             ],
             &[],
             &[commitment(8), commitment(9)],
@@ -1844,7 +1863,8 @@ mod tests {
     }
 
     #[test]
-    fn verify_extends_payment_roots_with_buffered_and_the_spend_root_with_the_whole_buffer() {
+    fn verify_extends_payment_roots_like_their_mini_block_and_the_spend_root_with_the_whole_buffer()
+    {
         let (_, note_sets) = state();
         // An earlier Operation of the transaction deposited commitment(7) into the
         // channel.
@@ -1856,18 +1876,22 @@ mod tests {
         let note_sets = note_sets.update(2, set);
         let program = Step::Program(program_step(
             vec![
-                payment(&[nullifier(2)], &[commitment(3)], root(), 0, 5),
-                payment(&[nullifier(4)], &[commitment(5)], root(), 2, 7),
+                payment(&[nullifier(2)], &[commitment(3)], root(), 5),
+                payment(&[nullifier(4)], &[commitment(5)], root(), 7),
             ],
             &[nullifier(6)],
             &[commitment(8)],
             0b0,
             root(),
         ));
-        let user = Step::User(step(&[nullifier(9)], &[commitment(10)], root(), 4));
-        let steps = vec![program, user];
-        let deferred =
-            verify_operation(with_steps(steps.clone()), sample_proofs(&steps), &note_sets).unwrap();
+        let user = Step::User(step(&[nullifier(9)], &[commitment(10)], root()));
+        let mini_blocks = vec![vec![program], vec![user]];
+        let deferred = verify_operation(
+            with_mini_blocks(mini_blocks.clone()),
+            sample_proofs(&mini_blocks.concat()),
+            &note_sets,
+        )
+        .unwrap();
 
         let extended = |commitments: &[u64]| {
             commitments
@@ -1883,14 +1907,14 @@ mod tests {
                 .inputs()
                 .tx_commitment_root
                 .into_inner(),
-            root()
+            extended(&[7])
         );
         assert_eq!(
             deferred.zk_transfers[1]
                 .inputs()
                 .tx_commitment_root
                 .into_inner(),
-            extended(&[7, 3])
+            extended(&[7])
         );
         assert_eq!(
             deferred.program_spends[0]
@@ -1927,7 +1951,7 @@ mod tests {
     fn verify_rejects_a_note_consumed_by_a_payment_and_the_spend() {
         let (_, note_sets) = state();
         let step: Step = program_step(
-            vec![payment(&[nullifier(2)], &[], root(), 0, 5)],
+            vec![payment(&[nullifier(2)], &[], root(), 5)],
             &[nullifier(2)],
             &[commitment(8)],
             0,
@@ -1950,8 +1974,8 @@ mod tests {
         let (_, note_sets) = state();
         let step: Step = program_step(
             vec![
-                payment(&[nullifier(2)], &[], root(), 0, u64::MAX),
-                payment(&[nullifier(4)], &[], root(), 0, 1),
+                payment(&[nullifier(2)], &[], root(), u64::MAX),
+                payment(&[nullifier(4)], &[], root(), 1),
             ],
             &[],
             &[],
@@ -1986,7 +2010,7 @@ mod tests {
             data: Fr::from(4u64),
         };
         let step = program_step(
-            vec![payment(&[nullifier(2)], &[], root(), 0, 5)],
+            vec![payment(&[nullifier(2)], &[], root(), 5)],
             &[],
             &[commitment(9), note.commitment()],
             0b10,
@@ -2073,15 +2097,15 @@ mod tests {
         let (channels, note_sets) = state();
         let program = Step::Program(program_step(
             vec![
-                payment(&[nullifier(2)], &[commitment(3)], root(), 0, 5),
-                payment(&[nullifier(4)], &[commitment(5)], root(), 0, 7),
+                payment(&[nullifier(2)], &[commitment(3)], root(), 5),
+                payment(&[nullifier(4)], &[commitment(5)], root(), 7),
             ],
             &[nullifier(6)],
             &[commitment(8)],
             0,
             root(),
         ));
-        let user = Step::User(step(&[nullifier(9)], &[commitment(10)], root(), 0));
+        let user = Step::User(step(&[nullifier(9)], &[commitment(10)], root()));
         let steps = vec![program, user];
         let signed_operation: SignedOperation<_, _, StandardMode> =
             signed(with_steps(steps.clone()), sample_proofs(&steps)).into_state_trusted();
@@ -2147,7 +2171,6 @@ mod tests {
             inputs: [derive_note_nullifier(&user_note.commitment(), &secret_key)].into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: root,
-            buffered: 0,
             paid_value: 1_000,
             intent: Fr::from(9u64),
         };

@@ -44,7 +44,7 @@ use lb_core::{
                 ChannelId, MsgId, VerifiedChannelKeys,
                 config::ChannelConfigOp,
                 deposit::{DepositOp, Metadata},
-                inscribe::{ChannelStep, ChannelSteps, Inscription, InscriptionOp, Step},
+                inscribe::{ChannelStep, Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step},
                 program_step::{Payment, ProgramOutputs, ProgramStep},
                 withdraw::ChannelWithdrawOp,
             },
@@ -331,24 +331,44 @@ fn transfers() -> Vec<OpShape> {
 
 /// A user step of the fixture channel, spending `inputs` and creating
 /// `outputs` fresh notes against the current root of its set.
-pub fn user_step(inputs: usize, outputs: usize, buffered: u16, salt: u64) -> Step {
+pub fn user_step(inputs: usize, outputs: usize, salt: u64) -> Step {
     Step::User(ChannelStep {
         inputs: fresh_nullifiers(inputs, salt),
         outputs: fresh_commitments(outputs, salt),
         commitment_merkle_root: channel_root(),
-        buffered,
     })
 }
 
-/// An inscription on the fixture channel after `parent`.
+/// An inscription on the fixture channel after `parent`, its steps in a single
+/// mini-block.
 pub fn inscription(parent: MsgId, steps: Vec<Step>, payload: usize) -> InscriptionOp {
+    let mini_blocks = if steps.is_empty() {
+        vec![]
+    } else {
+        vec![steps]
+    };
+    inscription_of_mini_blocks(parent, mini_blocks, payload)
+}
+
+/// An inscription on the fixture channel after `parent`.
+pub fn inscription_of_mini_blocks(
+    parent: MsgId,
+    mini_blocks: Vec<Vec<Step>>,
+    payload: usize,
+) -> InscriptionOp {
     let fixture = filled_state();
     InscriptionOp {
         channel_id: fixture.channel,
         inscription: Inscription::try_from(vec![0xa5; payload]).expect("the payload fits"),
         parent,
         signer: fixture.channel_key.public_key().into_unverified(),
-        steps: ChannelSteps::try_from(steps).expect("the steps fit"),
+        mini_blocks: MiniBlocks::try_from(
+            mini_blocks
+                .into_iter()
+                .map(|steps| MiniBlock::try_from(steps).expect("a mini-block has a step"))
+                .collect::<Vec<_>>(),
+        )
+        .expect("the mini-blocks fit"),
     }
 }
 
@@ -364,13 +384,18 @@ pub fn channel_tip() -> MsgId {
         .tip_message
 }
 
-fn user_inscription_shape(steps: Vec<Step>, buffered: u16, payload: usize) -> OpShape {
-    let user_steps = steps.len();
-    let outputs: usize = steps.iter().map(|step| step.outputs().len()).sum();
+// `buffered` is the number of commitments the last mini-block covers.
+fn user_inscription_shape(mini_blocks: Vec<Vec<Step>>, buffered: u16, payload: usize) -> OpShape {
+    let user_steps = mini_blocks.iter().map(Vec::len).sum::<usize>();
+    let outputs: usize = mini_blocks
+        .iter()
+        .flatten()
+        .map(|step| step.outputs().len())
+        .sum();
     let step_proofs: Vec<StepProof> = (0..user_steps)
         .map(|index| StepProof::User(zk_transfer(index)))
         .collect();
-    let op = inscription(channel_tip(), steps, payload);
+    let op = inscription_of_mini_blocks(channel_tip(), mini_blocks, payload);
     OpShape::on_fixture(
         "op/inscribe",
         vec![
@@ -392,18 +417,34 @@ fn user_inscription_shape(steps: Vec<Step>, buffered: u16, payload: usize) -> Op
 fn inscriptions() -> Vec<OpShape> {
     let mut shapes = Vec::new();
     for user_steps in [0, 1, 2, 4, 8] {
-        let steps = (0..user_steps)
-            .map(|index| user_step(1, 1, 0, 100 + index))
+        let steps: Vec<Step> = (0..user_steps)
+            .map(|index| user_step(1, 1, 100 + index))
             .collect();
-        shapes.push(user_inscription_shape(steps, 0, 0));
+        let mini_blocks = if steps.is_empty() {
+            vec![]
+        } else {
+            vec![steps]
+        };
+        shapes.push(user_inscription_shape(mini_blocks, 0, 0));
     }
-    for buffered in [0, 1, 4, 8] {
-        let steps = vec![user_step(1, 8, 0, 200), user_step(1, 1, buffered, 201)];
-        shapes.push(user_inscription_shape(steps, buffered, 0));
+    shapes.push(user_inscription_shape(
+        vec![vec![user_step(1, 8, 200), user_step(1, 1, 201)]],
+        0,
+        0,
+    ));
+    for buffered in [1u16, 4, 8] {
+        shapes.push(user_inscription_shape(
+            vec![
+                vec![user_step(1, usize::from(buffered), 200)],
+                vec![user_step(1, 1, 201)],
+            ],
+            buffered,
+            0,
+        ));
     }
     for payload in [256, 1024, 4096, 16_384] {
         shapes.push(user_inscription_shape(
-            vec![user_step(1, 1, 0, 300)],
+            vec![vec![user_step(1, 1, 300)]],
             0,
             payload,
         ));
@@ -431,7 +472,6 @@ pub fn program_step(shape: ProgramShape, salt: u64) -> (Step, StepProof) {
             inputs: fresh_nullifiers(1, salt * 64 + index as u64),
             outputs: fresh_commitments(1, salt * 64 + index as u64),
             commitment_merkle_root: root,
-            buffered: 0,
             paid_value: 1,
             intent: Fr::from(index as u64),
         })

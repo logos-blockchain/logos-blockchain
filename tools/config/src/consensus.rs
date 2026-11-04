@@ -9,7 +9,7 @@ use lb_core::{
         notes::derive_note_nullifier,
         ops::channel::{
             ChannelId, MsgId,
-            inscribe::{ChannelSteps, Inscription, InscriptionOp},
+            inscribe::{Inscription, InscriptionOp, MiniBlocks},
         },
         transactions::{Distribution, GenesisAllocation, UNITS_PER_LGO},
     },
@@ -207,7 +207,7 @@ fn inscription_for_current_test(
         ),
         parent: MsgId::root(),
         signer: UnverifiedEd25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY).unwrap(),
-        steps: ChannelSteps::default(),
+        mini_blocks: MiniBlocks::default(),
     }
 }
 

@@ -20,7 +20,7 @@ use lb_core::{
             ChannelInscribeProof, NoOpProof,
             channel::{
                 ChannelId, MsgId,
-                inscribe::{ChannelSteps, InscriptionOp},
+                inscribe::{InscriptionOp, MiniBlocks},
             },
             program::ProgramRegisterOp,
         },
@@ -157,7 +157,7 @@ fn build() -> Fixture {
         inscription: [0].into(),
         parent: MsgId::root(),
         signer: channel_key.public_key().into_unverified(),
-        steps: ChannelSteps::default(),
+        mini_blocks: MiniBlocks::default(),
     });
     let key = program_key();
     let program = derive_program_id(&key);

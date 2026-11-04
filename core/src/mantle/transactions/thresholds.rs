@@ -155,23 +155,22 @@ impl<C: ChannelSource> TxGasState<C> {
                         .insert(operation.channel_id, 1);
                     self.change(set);
                 }
-                if operation.steps.iter().any(moves_notes) {
+                if operation.steps().any(moves_notes) {
                     self.change(set);
                 }
-                for step in operation.steps.iter() {
+                // The buffer the user steps and payments of the mini-block cover
+                let mut covered = 0;
+                for (starts_mini_block, step) in operation.steps_with_mini_block_starts() {
+                    if starts_mini_block {
+                        covered = self.buffered(&set);
+                    }
                     match step {
-                        Step::User(step) => self.extend_root(
-                            set,
-                            step.commitment_merkle_root,
-                            usize::from(step.buffered),
-                        ),
+                        Step::User(step) => {
+                            self.extend_root(set, step.commitment_merkle_root, covered);
+                        }
                         Step::Program(step) => {
                             for payment in step.payments.iter() {
-                                self.extend_root(
-                                    set,
-                                    payment.commitment_merkle_root,
-                                    usize::from(payment.buffered),
-                                );
+                                self.extend_root(set, payment.commitment_merkle_root, covered);
                                 self.buffer(set, payment.outputs.as_slice().len());
                             }
                             // Its spend covers the whole buffer, its payments included.
@@ -229,7 +228,7 @@ mod tests {
             channel::{
                 config::ChannelConfigOp,
                 deposit::DepositOp,
-                inscribe::{ChannelStep, InscriptionOp},
+                inscribe::{ChannelStep, InscriptionOp, MiniBlock, MiniBlocks},
                 program_step::{Payment, Payments, ProgramOutputs, ProgramStep},
                 withdraw::ChannelWithdrawOp,
             },
@@ -248,38 +247,55 @@ mod tests {
         OpsGasContext::new([(channel, threshold)].into(), GasPrices::new(0, 0))
     }
 
-    fn user_step(root: u64, buffered: u16) -> Step {
+    fn user_step(root: u64, nullifier: u64, outputs: u64) -> Step {
         Step::User(ChannelStep {
-            inputs: [NoteNullifier(Fr::from(u64::from(buffered) + 1))].into(),
-            outputs: OutputCommitments::default(),
+            inputs: [NoteNullifier(Fr::from(nullifier))].into(),
+            outputs: OutputCommitments::try_from_iter((0..outputs).map(|output| {
+                crate::mantle::notes::NoteCommitment(Fr::from(100 + nullifier + output))
+            }))
+            .unwrap(),
             commitment_merkle_root: Fr::from(root),
-            buffered,
         })
     }
 
-    fn inscription_of(steps: Vec<Step>) -> Op {
+    fn inscription_of(mini_blocks: Vec<Vec<Step>>) -> Op {
         Op::ChannelInscribe(InscriptionOp {
-            steps: steps.try_into().unwrap(),
+            mini_blocks: MiniBlocks::try_from(
+                mini_blocks
+                    .into_iter()
+                    .map(|steps| MiniBlock::try_from(steps).unwrap())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap(),
             ..InscriptionOp::sample()
         })
     }
 
     #[test]
-    fn steps_sharing_their_root_and_buffered_pay_one_extension() {
+    fn steps_of_a_mini_block_sharing_their_root_pay_one_extension() {
         let context = empty();
         let mut state = TxGasState::new(&context);
         state.apply(
-            inscription_of(vec![user_step(7, 4), user_step(7, 4), user_step(7, 4)]).by_ref(),
+            inscription_of(vec![
+                vec![user_step(1, 1, 4)],
+                vec![user_step(7, 2, 0), user_step(7, 3, 0), user_step(7, 4, 0)],
+            ])
+            .by_ref(),
         );
         assert_eq!(state.root_extensions_gas(), root_gas(4));
     }
 
     #[test]
-    fn steps_differing_by_root_or_buffered_pay_one_extension_each() {
+    fn steps_differing_by_root_or_mini_block_pay_one_extension_each() {
         let context = empty();
         let mut state = TxGasState::new(&context);
         state.apply(
-            inscription_of(vec![user_step(7, 4), user_step(8, 4), user_step(7, 5)]).by_ref(),
+            inscription_of(vec![
+                vec![user_step(1, 1, 4)],
+                vec![user_step(7, 2, 1), user_step(8, 3, 0)],
+                vec![user_step(7, 4, 0)],
+            ])
+            .by_ref(),
         );
         let expected = root_gas(4)
             .unwrap()
@@ -291,11 +307,31 @@ mod tests {
     }
 
     #[test]
-    fn steps_over_notes_of_earlier_blocks_extend_no_root() {
+    fn steps_of_a_first_mini_block_over_nothing_buffered_extend_no_root() {
         let context = empty();
         let mut state = TxGasState::new(&context);
-        state.apply(inscription_of(vec![user_step(7, 0), user_step(8, 0)]).by_ref());
+        state.apply(inscription_of(vec![vec![user_step(7, 1, 1), user_step(8, 2, 1)]]).by_ref());
         assert_eq!(state.root_extensions_gas(), Ok(Gas::new(0)));
+    }
+
+    #[test]
+    fn a_first_mini_block_covers_the_buffer_of_the_earlier_operations() {
+        let context = empty();
+        let mut state = TxGasState::new(&context);
+        let inscription = InscriptionOp::sample();
+        let deposit = Op::ChannelDeposit(DepositOp {
+            channel_id: inscription.channel_id,
+            ..DepositOp::sample()
+        });
+        state.apply(deposit.by_ref());
+        let deposited = state.buffered(&NoteSetKey::Channel(inscription.channel_id));
+        assert!(deposited > 0);
+        let before = state.root_extensions_gas().unwrap();
+        state.apply(inscription_of(vec![vec![user_step(7, 1, 0)]]).by_ref());
+        assert_eq!(
+            state.root_extensions_gas(),
+            Ok(before.checked_add(root_gas(deposited).unwrap()).unwrap())
+        );
     }
 
     #[test]
@@ -355,8 +391,7 @@ mod tests {
         let inscription = InscriptionOp::sample_with_step();
         let set = NoteSetKey::Channel(inscription.channel_id);
         let expected: usize = inscription
-            .steps
-            .iter()
+            .steps()
             .map(|step| {
                 let payments = match step {
                     Step::Program(step) => step
@@ -437,7 +472,7 @@ mod tests {
 
     fn inscription_with(steps: Vec<Step>) -> InscriptionOp {
         InscriptionOp {
-            steps: steps.try_into().expect("the steps fit"),
+            mini_blocks: [MiniBlock::try_from(steps).expect("a mini-block has a step")].into(),
             ..InscriptionOp::sample()
         }
     }
@@ -466,7 +501,6 @@ mod tests {
             inputs: [NoteNullifier(Fr::from(0x23u64))].into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: Fr::from(0x25u64),
-            buffered: 0,
         };
         let inscription = inscription_with(vec![Step::User(step)]);
         let context = existing(inscription.channel_id, 1);
