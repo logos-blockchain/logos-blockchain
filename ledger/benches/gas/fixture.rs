@@ -38,8 +38,8 @@ use lb_utils::math::{NonNegativeRatio, PositiveF64};
 use logos_blockchain_ledger::{
     Config, LedgerState,
     config::{
-        BlendPoWConfig, ConsensusExcludedKeys, EraScheduledConfig, ModulusShift, PoWConfig,
-        RewardPoWConfig, config_for_slot,
+        BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig,
+        config_for_slot,
     },
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
@@ -144,13 +144,8 @@ fn build() -> Fixture {
     let channel = ChannelId::from([1u8; 32]);
     let channel_key = Ed25519Key::from_bytes(&[7u8; 32]);
     let genesis_note = notes::Note::new(1, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
-    let state = LedgerState::from_notes(
-        [genesis_note],
-        parameters(&config),
-        1_000_000_000,
-        &ConsensusExcludedKeys::empty(),
-    )
-    .with_gas_prices(&GasPrices::new(0, 0));
+    let state = LedgerState::from_notes([genesis_note], parameters(&config), 1_000_000_000)
+        .with_gas_prices(&GasPrices::new(0, 0));
 
     let create_channel = Op::ChannelInscribe(InscriptionOp {
         channel_id: channel,

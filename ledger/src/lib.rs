@@ -1633,12 +1633,7 @@ mod tests {
     fn a_nullifier_spent_by_an_earlier_transaction_of_the_block_is_rejected() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let mut state = LedgerState::from_notes(
-            [note()],
-            &test_config,
-            GENESIS_POW_REWARD_POOL,
-            &ConsensusExcludedKeys::empty(),
-        );
+        let mut state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
         update_ledger_prices(&mut state, 1, 1);
         let root = ledger_root(&state);
         let gas_context = OpsGasContext::from_channels(&Channels::new(), state.get_gas_prices());
@@ -3391,12 +3386,7 @@ mod tests {
     fn wallet_estimate_matches_the_ledger_charge() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let mut state = LedgerState::from_notes(
-            [note()],
-            &test_config,
-            GENESIS_POW_REWARD_POOL,
-            &ConsensusExcludedKeys::empty(),
-        );
+        let mut state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
         update_ledger_prices(&mut state, 1, 1);
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([1u8; 32]);
