@@ -678,16 +678,15 @@ impl LedgerState {
 
     pub fn genesis_total_stake<Id>(
         distribution: &Distribution,
-        consensus_excluded_keys: &ConsensusExcludedKeys,
+        declared_amounts: impl IntoIterator<Item = Value>,
     ) -> Result<Value, LedgerError<Id>> {
-        // Initial Epoch State item 3: D is the distributed tokens, excluding the
-        // consensus excluded keys.
+        // Initial Epoch State item 3: D is the total tokens distributed at genesis, the
+        // amounts of the SDP_DECLARE Operations included.
         distribution
             .iter()
-            .filter(|allocation| !consensus_excluded_keys.contains(&allocation.public_key))
-            .try_fold(0, |sum: Value, allocation| {
-                sum.checked_add(allocation.value)
-            })
+            .map(|allocation| allocation.value)
+            .chain(declared_amounts)
+            .try_fold(0, |sum: Value, value| sum.checked_add(value))
             .map(|stake| stake.max(1)) // TODO: Change total_stake to NonZeroU64: https://github.com/logos-blockchain/logos-blockchain/issues/2166
             .ok_or(LedgerError::BalanceOverflow)
     }

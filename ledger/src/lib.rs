@@ -581,17 +581,21 @@ impl LedgerState {
         let GenesisParameters {
             epoch_nonce,
             pow_reward_pool,
-            consensus_excluded_keys,
             ..
         } = tx.genesis_parameters();
-        let total_stake =
-            CryptarchiaLedger::genesis_total_stake(&tx.distribution(), &consensus_excluded_keys)?;
+        let distribution = tx.distribution();
         let GenesisOps {
             transfer,
             inscription,
             distribution_inscription,
             declarations,
         } = tx.into_genesis_ops();
+        let total_stake = CryptarchiaLedger::genesis_total_stake(
+            &distribution,
+            declarations
+                .iter()
+                .map(|declaration| declaration.operation().amount),
+        )?;
         let cryptarchia_ledger =
             CryptarchiaLedger::from_genesis_tx(&transfer, total_stake, config, epoch_nonce)?;
         let (mantle_ledger, note_sets, events) = MantleLedger::from_genesis_tx(
@@ -1894,14 +1898,20 @@ mod tests {
     }
 
     #[test]
-    fn genesis_total_stake_is_the_published_distribution() {
+    fn genesis_total_stake_is_the_distribution_and_the_declared_amounts() {
         let config = config();
-        let (tx, allocations, _) = genesis_with_a_declaration();
+        let (tx, allocations, declaration) = genesis_with_a_declaration();
         let (state, _) = LedgerState::from_genesis_tx::<HeaderId>(tx, &config).unwrap();
         let distributed: Value = allocations.iter().map(|allocation| allocation.value).sum();
-        assert_eq!(distributed, 45_000);
-        assert_eq!(state.epoch_state().total_stake(), distributed);
-        assert_eq!(state.next_epoch_state().total_stake(), distributed);
+        // Initial Epoch State item 3: D counts the amounts of the declarations.
+        assert_eq!(
+            state.epoch_state().total_stake(),
+            distributed + declaration.amount
+        );
+        assert_eq!(
+            state.next_epoch_state().total_stake(),
+            distributed + declaration.amount
+        );
 
         let overflowing = Distribution::from([
             GenesisAllocation {
@@ -1914,9 +1924,16 @@ mod tests {
             },
         ]);
         assert_eq!(
+            CryptarchiaLedger::genesis_total_stake::<HeaderId>(&overflowing, []),
+            Err(LedgerError::BalanceOverflow)
+        );
+        assert_eq!(
             CryptarchiaLedger::genesis_total_stake::<HeaderId>(
-                &overflowing,
-                &ConsensusExcludedKeys::empty()
+                &Distribution::from([GenesisAllocation {
+                    value: u64::MAX,
+                    public_key: ZkPublicKey::new(Fr::from(1u64)),
+                }]),
+                [1]
             ),
             Err(LedgerError::BalanceOverflow)
         );
