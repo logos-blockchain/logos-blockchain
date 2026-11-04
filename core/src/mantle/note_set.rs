@@ -72,7 +72,15 @@ type TxRootKey = (Fr, usize, PrefixId);
 // The extended MMRs computed during the current Mantle Transaction, shared by
 // its Operations; not state, so emptied with every transaction and block.
 #[derive(Clone, Default)]
-pub struct TxRoots(Arc<Mutex<HashMap<TxRootKey, CommitmentMmr>>>);
+pub struct TxRoots(Arc<Mutex<HashMap<TxRootKey, ExtendedMmr>>>);
+
+// An extended MMR and, once a proof named it, its root. A checkpoint on the way
+// to another prefix has none.
+#[derive(Clone)]
+struct ExtendedMmr {
+    mmr: CommitmentMmr,
+    root: Option<Fr>,
+}
 
 impl fmt::Debug for TxRoots {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -273,10 +281,13 @@ impl NoteSet {
             (*commitment_merkle_root, base.len(), prefix_id)
         };
         let mut cache = tx_roots.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(root) = cache.get(&key(buffered)).and_then(|extended| extended.root) {
+            return Ok(root);
+        }
         let mut start = buffered;
         let mut mmr = loop {
-            if let Some(mmr) = cache.get(&key(start)) {
-                break mmr.clone();
+            if let Some(extended) = cache.get(&key(start)) {
+                break extended.mmr.clone();
             }
             if start == 0 {
                 break base.clone();
@@ -288,12 +299,25 @@ impl NoteSet {
                 .push(self.tx_commitment_buffer[len - 1])
                 .map_err(|_| NoteSetError::MmrFull)?;
             if len % PREFIX_CHECKPOINT == 0 {
-                cache.insert(key(len), mmr.clone());
+                cache.insert(
+                    key(len),
+                    ExtendedMmr {
+                        mmr: mmr.clone(),
+                        root: None,
+                    },
+                );
             }
         }
-        cache.insert(key(buffered), mmr.clone());
+        let root = mmr.frontier_root();
+        cache.insert(
+            key(buffered),
+            ExtendedMmr {
+                mmr,
+                root: Some(root),
+            },
+        );
         drop(cache);
-        Ok(mmr.frontier_root())
+        Ok(root)
     }
 
     #[must_use]
@@ -445,6 +469,8 @@ pub struct NoteSets {
     eligible: EligibleTree,
     // sets touched in the current block
     changed: HashTrieSetSync<NoteSetIndex>,
+    // sets whose buffer the current transaction appended to
+    tx_appended: HashTrieSetSync<NoteSetIndex>,
     tx_roots: TxRoots,
 }
 
@@ -461,6 +487,7 @@ impl NoteSets {
             sets: VectorSync::new_sync(),
             eligible: EligibleTree::new(),
             changed: HashTrieSetSync::new_sync(),
+            tx_appended: HashTrieSetSync::new_sync(),
             tx_roots: TxRoots::default(),
         };
         let (sets, ledger) = sets.push_empty();
@@ -477,13 +504,12 @@ impl NoteSets {
     #[must_use]
     pub fn update(mut self, index: NoteSetIndex, set: NoteSet) -> Self {
         let position = usize::try_from(index).expect("note set index fits in usize");
-        // Gas prices the end of block work only for a set whose notes moved, and
-        // `start_transaction` clears the buffer of the sets marked here.
-        if !set.block_nullifiers.is_empty()
-            || !set.block_commitments.is_empty()
-            || !set.tx_commitment_buffer.is_empty()
-        {
+        // Gas prices the end of block work only for a set whose notes moved.
+        if !set.block_nullifiers.is_empty() || !set.block_commitments.is_empty() {
             self.changed.insert_mut(index);
+        }
+        if !set.tx_commitment_buffer.is_empty() {
+            self.tx_appended.insert_mut(index);
         }
         assert!(self.sets.set_mut(position, set), "note set {index} exists");
         self
@@ -503,13 +529,14 @@ impl NoteSets {
 
     #[must_use]
     pub fn start_transaction(mut self) -> Self {
-        for index in &self.changed {
+        for index in &self.tx_appended {
             let position = usize::try_from(*index).expect("note set index fits in usize");
             let mut set = self.sets[position].clone();
             set.tx_commitment_buffer = VectorSync::new_sync();
             set.tx_commitment_prefix_ids = VectorSync::new_sync();
             self.sets.set_mut(position, set);
         }
+        self.tx_appended = HashTrieSetSync::new_sync();
         self.tx_roots = TxRoots::default();
         self
     }
@@ -532,6 +559,7 @@ impl NoteSets {
             self.sets.set_mut(position, set);
         }
         self.changed = HashTrieSetSync::new_sync();
+        self.tx_appended = HashTrieSetSync::new_sync();
         self.tx_roots = TxRoots::default();
         self
     }
@@ -599,6 +627,7 @@ impl<'de> Deserialize<'de> for NoteSets {
             sets,
             eligible,
             changed: HashTrieSetSync::new_sync(),
+            tx_appended: HashTrieSetSync::new_sync(),
             tx_roots: TxRoots::default(),
         })
     }
@@ -825,6 +854,35 @@ mod test {
 
         let moved = set.execute_adding(&[commitment(1)]).unwrap();
         assert!(sets.update(index, moved).changed.contains(&index));
+    }
+
+    #[test]
+    fn a_root_named_twice_is_computed_once_and_only_appended_sets_reset() {
+        let (sets, channel) = NoteSets::new().push_empty();
+        let set = sets
+            .get(LEDGER_SET)
+            .unwrap()
+            .clone()
+            .buffer_outputs(&[commitment(1)]);
+        let referenced = set.commitment_root();
+        let sets = sets.update(LEDGER_SET, set);
+        assert!(!sets.tx_appended.contains(&channel));
+
+        let set = sets.get(LEDGER_SET).unwrap();
+        let root = set
+            .cached_step_commitment_root(sets.tx_roots(), &referenced, 1, 1)
+            .unwrap();
+        assert!(
+            sets.tx_roots()
+                .0
+                .lock()
+                .unwrap()
+                .values()
+                .any(|extended| extended.root == Some(root))
+        );
+
+        let sets = sets.start_transaction();
+        assert!(sets.tx_appended.is_empty());
     }
 
     #[test]
