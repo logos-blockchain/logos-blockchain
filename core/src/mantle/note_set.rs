@@ -856,7 +856,7 @@ mod test {
     }
 
     #[test]
-    fn update_records_the_appended_set_and_the_extended_root() {
+    fn update_does_not_record_a_set_not_appended_to_and_records_the_extended_root() {
         let (sets, channel) = NoteSets::new().push_empty();
         let set = sets
             .get(LEDGER_SET)

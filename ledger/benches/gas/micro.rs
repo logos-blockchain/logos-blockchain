@@ -33,6 +33,7 @@ use lb_groth16::{
     test_utils::{three_input_prove, three_input_setup},
 };
 use lb_pol::PolVerifierInput;
+use lb_utils::bounded::Bounded;
 use lb_zktransfer::ZkTransferVerifierInput;
 use rand::{Rng as _, SeedableRng as _, rngs::StdRng};
 
@@ -456,7 +457,7 @@ fn applied_program_spend() -> DeferredZkProgramSpend {
     .into();
     let step_proofs = mini_blocks
         .iter()
-        .flat_map(|mini_block| mini_block.iter())
+        .flat_map(Bounded::iter)
         .map(|step| StepProof::sample_for(step.proof_shape()))
         .collect();
     let ops = Ops::new_unchecked(vec![Op::ChannelInscribe(InscriptionOp {

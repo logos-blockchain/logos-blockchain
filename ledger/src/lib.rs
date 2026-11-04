@@ -3380,10 +3380,6 @@ mod tests {
     // the Transfer after it, a Deposit, an inscription creating its channel
     // with a user step of `buffered = 1` and a program step with a payment.
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "One transaction mixing every priced shape"
-    )]
     fn wallet_estimate_matches_the_ledger_charge() {
         let test_config = config();
         let eras = single_era(test_config.clone());
