@@ -79,7 +79,7 @@ pub fn apply_wallet_genesis_overrides(
     fill_leader_stake(&mut transfer_op, &leader_keys, declared);
 
     let genesis_block =
-        create_genesis_block_with_declarations(transfer_op, providers, test_context, genesis_time);
+        create_genesis_block_with_declarations(transfer_op, &providers, test_context, genesis_time);
 
     let sdp_configs = create_sdp_configs(genesis_block.genesis_tx(), general_configs.len());
     for (general, sdp_config) in general_configs.iter_mut().zip(sdp_configs) {

@@ -91,7 +91,7 @@ fn deployment_settings(
     let transfer_op = genesis_block.genesis_tx().distribution();
     let genesis_block = create_genesis_block_with_declarations(
         transfer_op,
-        providers,
+        &providers,
         topology.config.test_context.as_deref(),
         topology.config().genesis_time(),
     );

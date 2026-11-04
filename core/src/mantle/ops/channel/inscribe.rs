@@ -14,7 +14,7 @@ use lb_poseidon2::Digest as _;
 use lb_program_spend::{
     ZkProgramSpendInputsError, ZkProgramSpendPublic, ZkProgramSpendVerifierInput,
 };
-use lb_utils::bounded::{NonEmptyBoundedVec, UpperBoundedVec};
+use lb_utils::bounded::{Bounded, NonEmptyBoundedVec, UpperBoundedVec};
 use lb_zktransfer::{MAX_INPUTS, MAX_OUTPUTS, ZkTransferInputsError, ZkTransferVerifierInput};
 use serde::{Deserialize, Serialize};
 
@@ -232,9 +232,7 @@ impl InscriptionOp {
 
     /// The steps of the inscription, in the order they apply.
     pub fn steps(&self) -> impl Iterator<Item = &Step> {
-        self.mini_blocks
-            .iter()
-            .flat_map(|mini_block| mini_block.iter())
+        self.mini_blocks.iter().flat_map(Bounded::iter)
     }
 
     /// The steps of the inscription, each with whether it starts a mini-block.

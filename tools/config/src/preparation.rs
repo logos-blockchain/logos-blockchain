@@ -85,7 +85,7 @@ pub fn prepare_network(
     }
     consensus.allocations = transfer.as_slice().to_vec();
 
-    let providers = ids
+    let providers: Vec<_> = ids
         .iter()
         .zip(blend_ports)
         .take(blend_core_nodes)
@@ -104,7 +104,7 @@ pub fn prepare_network(
         })
         .collect();
     let genesis =
-        create_genesis_block_with_declarations(transfer, providers, test_context, genesis_time);
+        create_genesis_block_with_declarations(transfer, &providers, test_context, genesis_time);
 
     PreparedNetwork {
         ids: ids.to_vec(),
