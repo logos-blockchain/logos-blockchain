@@ -20,7 +20,10 @@ use lb_chain_service::{
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    block::{Block, BlockTransactions, Proposal, verify_header_alone, verify_header_signature},
+    block::{
+        Block, BlockLimits, BlockTransactions, Proposal, verify_header_alone,
+        verify_header_signature,
+    },
     header::HeaderId,
     mantle::{
         ledger::verification_mode::StandardMode,
@@ -157,9 +160,9 @@ pub struct ChainNetworkEraSettings {
     /// apart, which sets how often the tip poll runs and how far the local tip
     /// may lag before it polls.
     pub slot_activation_coeff: NonNegativeRatio,
-    /// The most bytes the transactions of the era's blocks may take: what a
-    /// block rebuilt from a proposal of the era is held to.
-    pub max_transactions_size: u32,
+    /// The most uncles, transactions and transaction bytes a block of the era
+    /// may hold: what a block rebuilt from a proposal of the era is held to.
+    pub block_limits: BlockLimits,
 }
 
 #[expect(clippy::allow_attributes_without_reason)]
@@ -688,13 +691,9 @@ where
         }
 
         let reconstruct_started_at = Instant::now();
-        let max_transactions_size = era_schedule
-            .at_slot(block_slot)
-            .parameters
-            .max_transactions_size;
         let block = match reconstruct_block_from_proposal(
             proposal,
-            max_transactions_size,
+            era_schedule.at_slot(block_slot).parameters.block_limits,
             relays.mempool_adapter(),
         )
         .await
@@ -1205,12 +1204,14 @@ where
 ///
 /// The caller must have validated the header first: this walks the mempool once
 /// per reference, so an unauthenticated proposal has to be discarded before it
-/// gets here. The proposal's uncle headers were decoded under the maximum of
-/// the era of its slot, which the rebuilt block keeps, and its transactions
-/// are held to the `max_transactions_size` bytes that era allows them.
+/// gets here. The block is held to `block_limits`, those of the era of the
+/// proposal's slot: the proposal's uncle headers were decoded under them, which
+/// the rebuilt block keeps, and its transactions are held to them here. The
+/// data of their Operations was decoded under the era that admitted them, so
+/// the ledger holds that to the block's era when it applies the block.
 async fn reconstruct_block_from_proposal<Item>(
     proposal: Proposal,
-    max_transactions_size: u32,
+    block_limits: BlockLimits,
     mempool: &impl MempoolAdapterTrait<Item>,
 ) -> Result<Block<Item>, Error>
 where
@@ -1224,11 +1225,10 @@ where
     Block::reconstruct(
         proposal.header().clone(),
         proposal.uncle_headers().clone(),
-        // As many transactions as the proposal references, which were decoded
-        // under the maximum of the era of its slot.
-        BlockTransactions::new_unchecked(transactions),
+        BlockTransactions::try_new(transactions, block_limits.max_transactions)
+            .map_err(|_| Error::NoMatchingReconstruction)?,
         *proposal.signature(),
-        max_transactions_size,
+        block_limits.max_transactions_size,
     )
     .map_err(|_| Error::NoMatchingReconstruction)
 }

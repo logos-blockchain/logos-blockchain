@@ -78,7 +78,7 @@ impl ServiceConfig {
                 let EraRuleset::V1(parameters) = &era.parameters.ruleset;
                 lb_chain_network_service::ChainNetworkEraSettings {
                     slot_activation_coeff: parameters.cryptarchia.slot_activation_coeff.get(),
-                    max_transactions_size: parameters.cryptarchia.max_transactions_size,
+                    block_limits: parameters.cryptarchia.block_limits(),
                 }
             }),
         }

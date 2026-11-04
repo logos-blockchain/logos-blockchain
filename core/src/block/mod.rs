@@ -66,7 +66,7 @@ pub enum HeaderError {
     GenesisSlot,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryEncode)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, BinaryEncode)]
 pub struct Proposal {
     pub header: Header,
     pub uncle_headers: UncleHeaders,
@@ -103,7 +103,7 @@ impl BinaryDecode for Proposal {
 pub type BlockTransactionReferences = UpperRuntimeBoundedVec<TxHashPrefix, u16>;
 
 /// References to transactions that are included in a block proposal.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryEncode)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, BinaryEncode)]
 pub struct References {
     /// Bounded hashes of the transactions that are included in the block
     /// proposal.
@@ -810,54 +810,6 @@ mod tests {
         assert_eq!(
             proposal.mempool_transactions().len(),
             usize::from(TEST_MAX_TRANSACTIONS)
-        );
-    }
-
-    #[test]
-    fn proposal_deserialization_rejects_excess_transaction_references() {
-        #[derive(Serialize)]
-        struct LegacyReferences {
-            mempool_transactions: Vec<TxHashPrefix>,
-        }
-
-        #[derive(Serialize)]
-        struct LegacyProposal {
-            header: Header,
-            uncle_headers: UncleHeaders,
-            references: LegacyReferences,
-            signature: Ed25519Signature,
-        }
-
-        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
-        let proposal = Block::create(
-            [0u8; 32].into(),
-            Slot::from(42u64),
-            UncleHeaders::empty(),
-            create_proof(),
-            BlockTransactions::<Ops>::empty(),
-            TEST_MAX_TRANSACTIONS_SIZE,
-            &signing_key,
-        )
-        .unwrap()
-        .to_proposal();
-        let legacy = LegacyProposal {
-            header: proposal.header.clone(),
-            uncle_headers: proposal.uncle_headers.clone(),
-            references: LegacyReferences {
-                // Serde reads a proposal without an era, under the largest
-                // maximum a `u16` gives.
-                mempool_transactions: vec![TxHashPrefix::default(); usize::from(u16::MAX) + 1],
-            },
-            signature: *proposal.signature(),
-        };
-        let bytes = bincode::serialize(&legacy).unwrap();
-
-        let error = <Proposal as lb_binary_codec::bincode::DeserializeOp>::from_bytes(&bytes)
-            .expect_err("proposal with too many transaction references must be rejected");
-
-        assert!(
-            error.to_string().contains("exceeds maximum"),
-            "unexpected deserialization error: {error}"
         );
     }
 

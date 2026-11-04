@@ -107,6 +107,12 @@ pub enum LedgerError<Id> {
     TooMuchTransactionExecutionGas { gas: Gas, limit: Gas },
     #[error("The execution gas of the block ({gas:?}) exceeds the maximum limit ({limit:?})")]
     TooMuchExecutionGas { gas: Gas, limit: Gas },
+    #[error("The block holds more transactions than the {max} its era allows")]
+    TooManyTransactions { max: u16 },
+    #[error("The block's transactions take {size} bytes, more than the {max} its era allows")]
+    TransactionsTooLarge { size: usize, max: u32 },
+    #[error("An Operation carries {size} bytes of data, more than the {max} its era allows")]
+    OpDataTooLarge { size: usize, max: u32 },
     #[error("Storage fees aren't equal to the storage fee of the current epoch")]
     InvalidStoragePrice,
     #[error("Verification error: {0}")]
@@ -486,6 +492,11 @@ impl LedgerState {
 
     /// Applies all transactions in a block and finalizes block-wide
     /// accounting, under the era of the block's slot.
+    ///
+    /// Every block comes through here, so this is what holds all of them to
+    /// the limits of their era: decoding only sees the ones that arrive whole,
+    /// and a block rebuilt from a proposal or built by a leader takes its
+    /// transactions from the mempool, decoded under the era that admitted them.
     pub fn try_apply_block_contents<Tx, Id>(
         mut self,
         eras: &EraScheduledConfig,
@@ -498,8 +509,21 @@ impl LedgerState {
         let mut gas_and_fees = GasAndFees::default();
         let mut tx_events = Vec::new();
         let mut deferred_proofs = DeferredProofs::new();
+        let mut transactions_size = 0usize;
 
-        for tx in txs {
+        for (index, tx) in txs.enumerate() {
+            if index >= usize::from(config.max_transactions) {
+                return Err(LedgerError::TooManyTransactions {
+                    max: config.max_transactions,
+                });
+            }
+            transactions_size = transactions_size.saturating_add(tx.storage_size());
+            if transactions_size > config.max_transactions_size as usize {
+                return Err(LedgerError::TransactionsTooLarge {
+                    size: transactions_size,
+                    max: config.max_transactions_size,
+                });
+            }
             let (next_state, tx_gas_and_fees, events, deferred) =
                 self.try_apply_transaction::<_, Id>(eras, &tx)?;
             gas_and_fees = gas_and_fees.checked_add::<Id>(
@@ -741,6 +765,7 @@ impl LedgerState {
     ) -> Result<(Self, Balance, Vec<TxEvent>), LedgerError<Id>> {
         match signed_op {
             SignedOp::ChannelInscribe(signed_operation) => {
+                check_op_data_size(signed_operation.operation().inscription.len(), config)?;
                 let (result, events) = self.mantle_ledger.try_apply_channel_inscription(
                     signed_operation,
                     self.cryptarchia_ledger.slot,
@@ -756,6 +781,7 @@ impl LedgerState {
                 tx_events.extend(events);
             }
             SignedOp::ChannelDeposit(signed_operation) => {
+                check_op_data_size(signed_operation.operation().metadata.len(), config)?;
                 let channels = self.mantle_ledger.channels();
                 let utxos = self.cryptarchia_ledger.latest_utxos();
 
@@ -971,6 +997,16 @@ impl LedgerState {
             .pow
             .update_difficulty(claims_in_block, &config.pow_config.reward);
     }
+}
+
+/// Refuses `size` bytes of data in an Operation if the era of `config` allows
+/// fewer.
+const fn check_op_data_size<Id>(size: usize, config: &Config) -> Result<(), LedgerError<Id>> {
+    let max = config.max_op_data_size;
+    if size > max as usize {
+        return Err(LedgerError::OpDataTooLarge { size, max });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1357,6 +1393,123 @@ mod tests {
                 .contains_key(&channel_id)
         );
         assert_eq!(events, []);
+    }
+
+    #[test]
+    fn a_block_is_held_to_the_transaction_limits_of_its_era() {
+        let (signing_key, verifying_key) = create_test_keys();
+        let tx = create_signed_tx(
+            Op::ChannelInscribe(InscriptionOp {
+                channel_id: ChannelId::from([2; 32]),
+                inscription: Inscription::new_unchecked(vec![1, 2, 3, 4]),
+                parent: MsgId::root(),
+                signer: verifying_key.into_unverified(),
+            }),
+            &Key::Ed25519(signing_key),
+        );
+        let size = tx.storage_size();
+        let apply_under = |test_config: Config| {
+            LedgerState::from_utxos(
+                [utxo()],
+                &test_config,
+                GENESIS_POW_REWARD_POOL,
+                &ConsensusExcludedKeys::empty(),
+            )
+            .try_apply_block_contents::<_, HeaderId>(
+                &single_era(test_config),
+                std::iter::once(tx.clone()),
+            )
+            .err()
+        };
+
+        assert_eq!(
+            apply_under(Config {
+                max_transactions: 0,
+                ..config()
+            }),
+            Some(LedgerError::TooManyTransactions { max: 0 })
+        );
+        assert_eq!(
+            apply_under(Config {
+                max_transactions_size: size as u32 - 1,
+                ..config()
+            }),
+            Some(LedgerError::TransactionsTooLarge {
+                size,
+                max: size as u32 - 1,
+            })
+        );
+    }
+
+    /// A block rebuilt from a proposal takes its transactions from the mempool,
+    /// which decoded them under the era that admitted them, so applying them is
+    /// what holds their data to the era of the block.
+    #[test]
+    fn operation_data_is_held_to_the_limit_of_the_era_of_the_block() {
+        let test_config = Config {
+            max_op_data_size: 4,
+            ..config()
+        };
+        let eras = single_era(test_config.clone());
+        let (sk, utxo) = utxo_with_sk();
+        let state = LedgerState::from_utxos(
+            [utxo],
+            &test_config,
+            GENESIS_POW_REWARD_POOL,
+            &ConsensusExcludedKeys::empty(),
+        );
+        let (signing_key, verifying_key) = create_test_keys();
+        let channel_id = ChannelId::from([4; 32]);
+        // Inscribes the 4 bytes the era allows.
+        let state = create_channel(
+            state,
+            &eras,
+            channel_id,
+            &signing_key,
+            verifying_key.into_unverified(),
+        );
+        let refused = Some(LedgerError::OpDataTooLarge { size: 5, max: 4 });
+
+        let inscription = create_signed_tx(
+            Op::ChannelInscribe(InscriptionOp {
+                channel_id: ChannelId::from([5; 32]),
+                inscription: Inscription::new_unchecked(vec![1; 5]),
+                parent: MsgId::root(),
+                signer: verifying_key.into_unverified(),
+            }),
+            &Key::Ed25519(signing_key),
+        );
+        assert_eq!(
+            state
+                .clone()
+                .try_apply_tx_operations::<_, HeaderId>(&eras, inscription)
+                .err(),
+            refused
+        );
+
+        let key = Key::Zk(sk);
+        let deposit = |metadata_size| {
+            create_multi_signed_tx(
+                vec![Op::ChannelDeposit(DepositOp {
+                    channel_id,
+                    inputs: BoundedInputs::from(utxo.id()).into(),
+                    metadata: Metadata::new_unchecked(vec![5; metadata_size]),
+                })],
+                vec![&key],
+            )
+        };
+        assert!(
+            state
+                .clone()
+                .try_apply_tx_operations::<_, HeaderId>(&eras, deposit(4))
+                .is_ok()
+        );
+        assert_eq!(
+            state
+                .try_apply_tx_operations::<_, HeaderId>(&eras, deposit(5))
+                .err(),
+            refused
+        );
     }
 
     #[test]
