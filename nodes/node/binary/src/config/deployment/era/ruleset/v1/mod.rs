@@ -30,7 +30,10 @@ impl Parameters {
     pub(super) fn validate(&self, previous: Option<&Self>) -> Result<(), InvalidDeployment> {
         self.cryptarchia
             .validate(previous.map(|previous| &previous.cryptarchia))?;
-        self.blend.validate(&self.time.slot_duration())
+        self.blend.validate(
+            self.cryptarchia.slots_per_epoch(),
+            &self.time.slot_duration(),
+        )
     }
 
     #[must_use]
@@ -123,6 +126,12 @@ mod tests {
             parameters.cryptarchia.gas_profile.sdp_active = Gas::from(max_gas_per_block);
         })
         .unwrap();
+        // 6,000 rounds shared by 2 nodes, 349 blending operations per message:
+        // 1,047,000 of the 1,048,575 a `Quota` holds.
+        validate(|parameters| {
+            parameters.blend.common.num_blend_layers = NonZero::new(349).unwrap();
+        })
+        .unwrap();
         // At a peering degree of 4, `⌊2V/3⌋` reaches 5.
         validate(|parameters| {
             parameters.blend.core.target_peering_degree = NonZero::new(4).unwrap();
@@ -134,6 +143,18 @@ mod tests {
         parameters_with(30, 20, 6)
             .validate(Some(&parameters_with(10, 20, 6)))
             .unwrap();
+    }
+
+    #[test]
+    fn a_core_quota_past_the_poq_circuit_is_refused() {
+        // 6,000 rounds shared by 2 nodes, 350 blending operations per message.
+        let reason = rejection(|parameters| {
+            parameters.blend.common.num_blend_layers = NonZero::new(350).unwrap();
+        });
+        assert!(
+            reason.contains("value 1050000 does not fit in 20 bits"),
+            "{reason}"
+        );
     }
 
     #[test]

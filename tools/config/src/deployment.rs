@@ -14,8 +14,8 @@ use lb_node::config::deployment::{
         v1::{
             blend::{
                 CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
-                CoverTrafficSettings, MessageDelayerSettings, MinimumNetworkSize,
-                SchedulerSettings, Settings as BlendDeploymentSettings,
+                CoverReplicationFactor, CoverTrafficSettings, MessageDelayerSettings,
+                MinimumNetworkSize, SchedulerSettings, Settings as BlendDeploymentSettings,
             },
             cryptarchia::{
                 BlockRewardsConfig, EpochConfig, MaxGasPerBlock, ServiceParameters,
@@ -46,6 +46,7 @@ const NUM_BLEND_LAYERS: u64 = 3;
 const DATA_REPLICATION_FACTOR: u64 = 0;
 
 const COVER_MESSAGE_FREQUENCY_PER_ROUND: f64 = 1.0;
+const COVER_REPLICATION_FACTOR: CoverReplicationFactor = CoverReplicationFactor::new(0).unwrap();
 const MAXIMUM_RELEASE_DELAY_IN_ROUNDS: u64 = 3;
 const ACTIVITY_THRESHOLD_SENSITIVITY: u64 = 1;
 
@@ -176,6 +177,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                                 COVER_MESSAGE_FREQUENCY_PER_ROUND,
                             )
                             .expect("Message frequency per round must be positive."),
+                            replication_factor: COVER_REPLICATION_FACTOR,
                         },
                         delayer: MessageDelayerSettings {
                             maximum_release_delay_in_rounds: NonZeroU64::try_from(

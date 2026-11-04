@@ -1026,6 +1026,7 @@ fn ledger_config_with_uncles(
                 blend: rewards::blend::RewardsParameters {
                     rounds_per_epoch: epoch_length.try_into().unwrap(),
                     message_frequency_per_round: 1.0.try_into().unwrap(),
+                    cover_replication_factor: 0,
                     num_blend_layers: 3.try_into().unwrap(),
                     minimum_network_size: 1.try_into().unwrap(),
                     data_replication_factor: 0,

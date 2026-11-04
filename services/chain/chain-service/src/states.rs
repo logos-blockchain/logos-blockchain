@@ -241,6 +241,7 @@ mod tests {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
                         message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        cover_replication_factor: 0,
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
@@ -475,6 +476,7 @@ mod tests {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
                         message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        cover_replication_factor: 0,
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,

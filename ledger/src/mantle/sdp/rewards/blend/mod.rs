@@ -233,6 +233,7 @@ where
 pub struct RewardsParameters {
     pub rounds_per_epoch: NonZeroU64,
     pub message_frequency_per_round: PositiveF64,
+    pub cover_replication_factor: u64,
     pub num_blend_layers: NonZeroU64,
     pub data_replication_factor: u64,
     pub minimum_network_size: NonZeroU64,
@@ -248,8 +249,10 @@ impl RewardsParameters {
             self.rounds_per_epoch,
             self.message_frequency_per_round,
             self.num_blend_layers,
+            self.cover_replication_factor,
             num_core_nodes as usize,
-        );
+        )
+        .expect("The deployment checks that the Core Quota fits the `PoQ` circuit.");
         Ok((
             core_quota,
             BlendingTokenEvaluation::new(
@@ -327,6 +330,7 @@ mod tests {
         RewardsParameters {
             rounds_per_epoch: rounds_per_epoch.try_into().unwrap(),
             message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+            cover_replication_factor: 0,
             num_blend_layers: NonZeroU64::new(3).unwrap(),
             minimum_network_size: minimum_network_size.try_into().unwrap(),
             data_replication_factor: 0,

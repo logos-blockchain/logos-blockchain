@@ -300,6 +300,7 @@ fn config() -> Config {
                 blend: rewards::blend::RewardsParameters {
                     rounds_per_epoch: epoch_length.try_into().unwrap(),
                     message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                    cover_replication_factor: 0,
                     num_blend_layers: NonZero::new(3).unwrap(),
                     minimum_network_size: NonZero::new(1).unwrap(),
                     data_replication_factor: 0,
