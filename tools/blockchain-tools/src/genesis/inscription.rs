@@ -36,7 +36,6 @@ pub fn inscribe<D: ZkDigest>(
     genesis_time: OffsetDateTime,
     entropy_sources: impl IntoIterator<Item = FrBytes>,
     pow_reward_pool: PowReward,
-    consensus_excluded_keys: ConsensusExcludedKeys,
 ) -> InscriptionOp {
     let mut hasher = D::new();
 
@@ -59,7 +58,7 @@ pub fn inscribe<D: ZkDigest>(
         start_time: genesis_time,
         epoch_nonce: genesis_nonce_fr,
         pow_reward_pool,
-        consensus_excluded_keys,
+        consensus_excluded_keys: ConsensusExcludedKeys::empty(),
     };
 
     InscriptionOp {

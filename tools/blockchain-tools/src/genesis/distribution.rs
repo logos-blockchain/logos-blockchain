@@ -28,14 +28,6 @@ pub struct ProviderInfo {
     pub amount: NoteValue,
 }
 
-/// `ConsensusExcludedKey` is used to register a consensus-excluded key with
-/// its value.
-#[derive(Clone, Debug, Deserialize)]
-pub struct ConsensusExcludedKey {
-    pub zk_id: ZkPublicKey,
-    pub funds: NoteValue,
-}
-
 #[derive(Error, Debug)]
 pub enum DistributionError {
     #[error("Provider {0:?} declared twice for service {1:?}")]
@@ -48,7 +40,6 @@ pub enum DistributionError {
 pub fn distribute<S, P>(
     stake_holders: S,
     providers: P,
-    excluded_key: &ConsensusExcludedKey,
 ) -> Result<(Vec<GenesisAllocation>, Vec<SDPDeclareOp>), DistributionError>
 where
     S: IntoIterator<Item = StakeHolderInfo>,
@@ -60,10 +51,6 @@ where
             value: stake_holder.stake,
             public_key: stake_holder.zk_id,
         })
-        .chain([GenesisAllocation {
-            value: excluded_key.funds,
-            public_key: excluded_key.zk_id,
-        }])
         .collect();
     let mut declarations = Vec::new();
     let mut declared = HashSet::new();
@@ -115,13 +102,6 @@ mod tests {
         }
     }
 
-    fn excluded_key() -> ConsensusExcludedKey {
-        ConsensusExcludedKey {
-            zk_id: mock_zk_pk(3),
-            funds: 100_000,
-        }
-    }
-
     #[test]
     fn declarations_consume_no_note_and_declare_their_amount() {
         let zk_id_1 = mock_zk_pk(1);
@@ -137,14 +117,10 @@ mod tests {
             },
         ];
 
-        let (allocations, declarations) = distribute(
-            stake_holders,
-            vec![provider(mock_zk_pk(9), 500)],
-            &excluded_key(),
-        )
-        .unwrap();
+        let (allocations, declarations) =
+            distribute(stake_holders, vec![provider(mock_zk_pk(9), 500)]).unwrap();
 
-        assert_eq!(allocations.len(), 3);
+        assert_eq!(allocations.len(), 2);
         assert_eq!(
             allocations[0],
             GenesisAllocation {
@@ -153,7 +129,6 @@ mod tests {
             }
         );
         assert_eq!(allocations[1].public_key, zk_id_2);
-        assert_eq!(allocations[2].public_key, mock_zk_pk(3));
 
         assert_eq!(declarations.len(), 1);
         assert_eq!(declarations[0].zk_id, mock_zk_pk(9));
@@ -168,11 +143,7 @@ mod tests {
     #[test]
     fn a_provider_declared_twice_for_a_service_is_rejected() {
         let zk_id = mock_zk_pk(1);
-        let result = distribute(
-            Vec::new(),
-            vec![provider(zk_id, 500), provider(zk_id, 500)],
-            &excluded_key(),
-        );
+        let result = distribute(Vec::new(), vec![provider(zk_id, 500), provider(zk_id, 500)]);
 
         assert!(matches!(
             result,

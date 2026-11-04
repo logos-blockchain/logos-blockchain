@@ -11,7 +11,6 @@ use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     crypto::ZkHasher,
     mantle::{
-        ConsensusExcludedKeys,
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp},
         transactions::GenesisAllocation,
     },
@@ -23,7 +22,7 @@ use lb_utils::yaml::{
 use logos_blockchain_tools::{
     apply_dotted_kv,
     genesis::{
-        distribution::{self, ConsensusExcludedKey, ProviderInfo, StakeHolderInfo},
+        distribution::{self, ProviderInfo, StakeHolderInfo},
         inscription::{self, InscribeParams},
     },
     overwrite_yaml, set_at_path,
@@ -86,11 +85,6 @@ pub struct CeremonyArgs {
     /// declares.
     #[arg(long, value_name = "FILE")]
     pub providers: PathBuf,
-
-    /// Consensus-excluded key definition, for the stake distribution and the
-    /// genesis parameters.
-    #[arg(long, value_name = "FILE")]
-    pub consensus_excluded_keys: PathBuf,
 
     /// The genesis template: the parameters of era zero. The ceremony
     /// generates the rest of the deployment config from it. Without it, the
@@ -192,10 +186,6 @@ struct DistributeArgs {
     #[arg(long, value_name = "FILE")]
     providers: PathBuf,
 
-    /// YAML file containing consensus-excluded key info.
-    #[arg(long, value_name = "FILE")]
-    consensus_excluded_keys: PathBuf,
-
     /// Write notes output to FILE instead of stdout.
     #[arg(long, short, value_name = "FILE")]
     notes_output: Option<PathBuf>,
@@ -215,10 +205,6 @@ struct InscribeArgs {
     /// list of hex-encoded 32-byte strings.
     #[arg(long, value_name = "FILE")]
     params: PathBuf,
-
-    /// YAML file containing the consensus-excluded key info.
-    #[arg(long, value_name = "FILE")]
-    consensus_excluded_keys: PathBuf,
 
     /// Write the serialized `InscriptionOp` to FILE instead of stdout.
     #[arg(long, short, value_name = "FILE")]
@@ -250,20 +236,17 @@ const ERA_FILES_DIR: &str = "era/schedule";
 // ─────────────────────────────────────────────────────
 
 fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
-    let excluded_key: ConsensusExcludedKey = load_yaml_file(&args.consensus_excluded_keys)?;
     let inscribe_params: InscribeParams = load_yaml_file(&args.inscription_params)?;
     let inscription_op = inscription::inscribe::<ZkHasher>(
         inscribe_params.chain_id,
         inscribe_params.genesis_time,
         inscribe_params.entropy_sources,
         inscribe_params.pow_reward_pool,
-        ConsensusExcludedKeys::from(excluded_key.zk_id),
     );
 
     let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
     let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
-    let excluded_key: ConsensusExcludedKey = load_yaml_file(&args.consensus_excluded_keys)?;
-    let (notes, declarations) = distribution::distribute(stakeholders, providers, &excluded_key)
+    let (notes, declarations) = distribution::distribute(stakeholders, providers)
         .map_err(|e| anyhow::anyhow!(e))
         .context("Failed to calculate distribution during ceremony")?;
 
@@ -502,9 +485,8 @@ fn build_genesis_block(
 fn run_distribute(args: &DistributeArgs) -> Result<()> {
     let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
     let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
-    let excluded_key: ConsensusExcludedKey = load_yaml_file(&args.consensus_excluded_keys)?;
 
-    let (notes, declarations) = distribution::distribute(stakeholders, providers, &excluded_key)
+    let (notes, declarations) = distribution::distribute(stakeholders, providers)
         .map_err(|e| anyhow::anyhow!(e))
         .context("Failed to calculate distribution")?;
 
@@ -522,14 +504,12 @@ fn run_distribute(args: &DistributeArgs) -> Result<()> {
 
 fn run_inscribe(args: &InscribeArgs) -> Result<()> {
     let params: InscribeParams = load_yaml_file(&args.params)?;
-    let excluded_key: ConsensusExcludedKey = load_yaml_file(&args.consensus_excluded_keys)?;
 
     let op = inscription::inscribe::<ZkHasher>(
         params.chain_id,
         params.genesis_time,
         params.entropy_sources,
         params.pow_reward_pool,
-        ConsensusExcludedKeys::from(excluded_key.zk_id),
     );
 
     let op_value = struct_to_yaml_value(&op)?;

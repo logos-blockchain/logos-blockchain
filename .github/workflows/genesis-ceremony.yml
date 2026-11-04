@@ -33,7 +33,6 @@ jobs:
             --inscription-params deployment/ceremony/genesis/$LB_TARGET_ENV/inscribe.yaml \
             --stake-holders deployment/ceremony/genesis/$LB_TARGET_ENV/stakeholders.yaml \
             --providers deployment/ceremony/genesis/$LB_TARGET_ENV/providers.yaml \
-            --consensus-excluded-keys deployment/ceremony/genesis/$LB_TARGET_ENV/consensus_excluded_keys.yaml \
             --template deployment/ceremony/genesis/$LB_TARGET_ENV/deployment-template.yaml \
             --output nodes/node/binary/src/config/deployment/settings.yaml
 
