@@ -145,6 +145,14 @@ impl Header {
         + ContentId::CANONICAL_ENCODED_SIZE
         + Groth16LeaderProof::CANONICAL_ENCODED_SIZE;
 
+    /// Reads the slot of the encoded header `input` opens with, leaving the
+    /// rest undecoded. The version is not checked, [`Header::decode`] does it.
+    pub fn peek_slot(input: &[u8]) -> Result<Slot, DecodeError> {
+        let (input, _bedrock_version) = u8::decode(input, &())?;
+        let (input, _parent_block) = HeaderId::decode(input, &())?;
+        Slot::peek_decode(input, &())
+    }
+
     #[must_use]
     pub const fn parent(&self) -> HeaderId {
         self.parent_block
@@ -578,6 +586,18 @@ fn header_with_a_version_byte_other_than_one_is_rejected() {
             "version {version:#04x}"
         );
     }
+}
+
+#[test]
+fn peek_slot_reads_the_slot_after_the_version_and_the_parent() {
+    use lb_binary_codec::canonical::CodecExamples as _;
+
+    let header = Header::fixtures().into_iter().next().unwrap().value;
+    assert_eq!(header.slot(), Slot::from(42u64));
+    let bytes = header.encode_to_vec();
+
+    assert_eq!(Header::peek_slot(&bytes), Ok(Slot::from(42u64)));
+    assert!(Header::peek_slot(&bytes[..33]).is_err());
 }
 
 /// Body-root / `HeaderId` test-vector generator.
