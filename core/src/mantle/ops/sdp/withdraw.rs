@@ -500,11 +500,15 @@ mod tests {
     #[test]
     fn verify_builds_the_public_inputs_a_real_proof_satisfies() {
         let secret_key = Fr::from(3u64);
+        let zk_id_secret_key = Fr::from(5u64);
         let message = DeclarationMessage {
-            zk_id: ZkKey::new(secret_key).to_public_key(),
+            zk_id: ZkKey::new(zk_id_secret_key).to_public_key(),
+            note_pk: ZkKey::new(secret_key).to_public_key(),
             ..DeclarationMessage::sample()
         };
         let service_note = message.service_note();
+        assert_eq!(service_note.public_key, message.note_pk);
+        assert_ne!(service_note.public_key, message.zk_id);
         let (mmr, path) = CommitmentMmr::new()
             .push_with_paths(service_note.commitment(), &mut [])
             .unwrap();
@@ -541,6 +545,37 @@ mod tests {
             &preverified(
                 withdrawal(6),
                 ZkTransferProof::new(proof),
+                &provider_key(),
+                &tx_hash_view(),
+            ),
+            &declaration,
+            &NoteSets::new(),
+        )
+        .unwrap();
+        assert!(!lb_zktransfer::verify(deferred.proof(), deferred.inputs()).unwrap());
+
+        // The zk_id secret only opens a note under the zk_id, whose commitment
+        // is not the one the declaration holds.
+        let zk_id_note = notes::Note::new(service_note.value, service_note.nonce, message.zk_id);
+        let (zk_id_mmr, zk_id_path) = CommitmentMmr::new()
+            .push_with_paths(zk_id_note.commitment(), &mut [])
+            .unwrap();
+        let zk_id_proof = prove_transfer(
+            &[(zk_id_note, zk_id_secret_key, zk_id_path)],
+            &[output],
+            zk_id_mmr.frontier_root(),
+            *tx_hash_view().as_fr(),
+        );
+        let deferred = verify_withdrawal(
+            &preverified(
+                SDPWithdrawOp {
+                    service_note_nullifier: derive_note_nullifier(
+                        &zk_id_note.commitment(),
+                        &zk_id_secret_key,
+                    ),
+                    ..withdrawal(5)
+                },
+                ZkTransferProof::new(zk_id_proof),
                 &provider_key(),
                 &tx_hash_view(),
             ),

@@ -3,6 +3,7 @@ use lb_core::{
         SignedOps,
         gas::{GasCost, GasOverflow},
         ledger::verification_mode::StandardMode,
+        notes::NoteCommitment,
         transactions::{MantleTxBuilder, TxBuilderError, states::Preverified},
     },
     sdp::{ActiveMessage, Nonce},
@@ -19,6 +20,11 @@ use crate::{DeclarationRequest, RuntimeDeclaration};
 pub enum SdpWalletError {
     #[error(transparent)]
     WalletApi(DynError),
+    #[error(
+        "The wallet does not hold the service note {0:?}: it is spent, or it is under a key the \
+         wallet does not know, and then only the holder of that key can prove the withdrawal"
+    )]
+    ServiceNoteNotHeld(NoteCommitment),
     #[error("Transaction fee exceeded the configured max fee. tx_fee={tx_fee} > max_fee={max_fee}")]
     TxFeeExceedsMaxFee { max_fee: GasCost, tx_fee: GasCost },
     #[error(transparent)]

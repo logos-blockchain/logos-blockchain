@@ -8,6 +8,7 @@ pub mod withdraw;
 use std::fmt::{Display, Formatter};
 
 use lb_binary_codec::{bincode::BoundedSerializeOp, canonical::BinaryCodec};
+use lb_groth16::{Fr, fr_from_mod_bytes};
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnverifiedEd25519PublicKey};
 use lb_utils::bounded::NonEmptyBoundedVec;
 
@@ -30,6 +31,18 @@ pub struct ChannelId([u8; 32]);
 serde_bytes_newtype!(ChannelId, 32);
 
 pub const NULL_CHANNEL_ID: ChannelId = ChannelId([0; 32]);
+
+impl ChannelId {
+    /// The two elements a message holds the channel ID as, low first:
+    /// `channel_lo`, its low 16 bytes, and `channel_hi`, its high 16 bytes,
+    /// each little-endian and below the field size. A channel ID is 32 free
+    /// bytes, larger than the field, so a single reduced element would give
+    /// channels `x` and `x + p` the same message.
+    fn field_elements(&self) -> [Fr; 2] {
+        let (channel_lo, channel_hi) = self.0.split_at(16);
+        [fr_from_mod_bytes(channel_lo), fr_from_mod_bytes(channel_hi)]
+    }
+}
 
 impl BoundedSerializeOp for ChannelId {
     type Bytes = [u8; 32];

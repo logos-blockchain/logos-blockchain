@@ -155,7 +155,8 @@ struct BlockArgs {
 
     /// YAML file containing the list of `SDPDeclareOps`.
     /// Each entry must have `service_type`, `locators`, `provider_id`,
-    /// `zk_id`, `inputs` (empty), `commitment_merkle_root` and `amount` fields.
+    /// `zk_id`, `note_pk`, `inputs` (empty), `commitment_merkle_root` and
+    /// `amount` fields.
     /// At least one declaration is required.
     #[arg(long, value_name = "FILE")]
     declarations: PathBuf,

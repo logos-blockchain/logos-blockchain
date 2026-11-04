@@ -1403,6 +1403,7 @@ mod tests {
             commitment_merkle_root: Fr::ZERO,
             amount: 0,
             zk_id: ZkPublicKey::from(BigUint::from(u64::from(id) + 1)),
+            note_pk: ZkPublicKey::from(BigUint::from(u64::from(id) + 1)),
             provider_id: ProviderId(Ed25519PublicKey::from_bytes(&[1; 32]).unwrap()),
             locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
         }

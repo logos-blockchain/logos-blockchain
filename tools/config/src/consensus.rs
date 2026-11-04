@@ -445,6 +445,7 @@ pub fn create_genesis_block_with_declarations(
             locators: provider.locator.clone().into(),
             provider_id: provider.provider_id(),
             zk_id: provider.zk_id(),
+            note_pk: provider.zk_id(),
             inputs: InputNullifiers::default(),
             commitment_merkle_root: CommitmentMmr::new().frontier_root(),
             amount: provider.amount,

@@ -23,6 +23,8 @@ pub struct StakeHolderInfo {
 pub struct ProviderInfo {
     pub provider_id: ProviderId,
     pub zk_id: ZkPublicKey,
+    /// The key the service note of the declaration is created under.
+    pub note_pk: ZkPublicKey,
     pub locators: Locators,
     pub service_type: ServiceType,
     pub amount: NoteValue,
@@ -67,6 +69,7 @@ where
             locators: provider.locators,
             provider_id: provider.provider_id,
             zk_id: provider.zk_id,
+            note_pk: provider.note_pk,
             inputs: InputNullifiers::default(),
             commitment_merkle_root: CommitmentMmr::new().frontier_root(),
             amount: provider.amount,
@@ -96,6 +99,7 @@ mod tests {
         ProviderInfo {
             provider_id: mock_provider_id(10),
             zk_id,
+            note_pk: zk_id,
             locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
             service_type: ServiceType::BlendNetwork,
             amount,
@@ -159,6 +163,7 @@ mod tests {
         let without_amount = "\
 provider_id: aa70aafc48536ae13168ed4845981a40cbd2dc1c38df88d04c46250e9ad65ce0
 zk_id: 852efb444db8c3c811625850df39425f43aeffc69571192c0be9f72523256e0a
+note_pk: 852efb444db8c3c811625850df39425f43aeffc69571192c0be9f72523256e0a
 locators:
   - /ip4/127.0.0.1/udp/3400/quic-v1
 service_type: BN

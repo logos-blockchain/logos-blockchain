@@ -687,6 +687,9 @@ pub struct DeclarationMessage {
     pub locators: Locators,
     pub provider_id: ProviderId,
     pub zk_id: ZkPublicKey,
+    /// The key the service note is created under. It only builds the
+    /// commitment: the declaration does not prove knowledge of its secret.
+    pub note_pk: ZkPublicKey,
     pub inputs: InputNullifiers,
     #[serde(with = "serde_fr")]
     pub commitment_merkle_root: Fr,
@@ -699,14 +702,14 @@ impl DeclarationMessage {
         DeclarationId::derive(self.service_type, self.zk_id)
     }
 
-    // The service note of SDP_DECLARE Execution step 2, owned by the zk_id.
+    // The service note of SDP_DECLARE Execution step 2, under the note_pk.
     #[must_use]
     pub fn service_note(&self) -> Note {
         let op_id = self.op_id();
         Note::new(
             self.amount,
-            derive_note_nonce(&op_id, 0, self.amount, &self.zk_id),
-            self.zk_id,
+            derive_note_nonce(&op_id, 0, self.amount, &self.note_pk),
+            self.note_pk,
         )
     }
 
@@ -735,6 +738,7 @@ impl DeclarationMessage {
                 .into(),
             provider_id: ProviderId(Ed25519Key::from_bytes(&[24; 32]).public_key()),
             zk_id: ZkPublicKey::from(Fr::from(25u64)),
+            note_pk: ZkPublicKey::from(Fr::from(48u64)),
             inputs: [NoteNullifier(Fr::from(26u64))].into(),
             commitment_merkle_root: Fr::from(44u64),
             amount: 45,
@@ -930,6 +934,7 @@ mod tests {
                 .unwrap(),
             provider_id: Ed25519Key::from_bytes(&[0; _]).public_key().into(),
             zk_id: ZkPublicKey::zero(),
+            note_pk: ZkPublicKey::zero(),
             inputs: InputNullifiers::default(),
             commitment_merkle_root: Fr::ZERO,
             amount: 0,
@@ -956,6 +961,7 @@ mod tests {
             locators: locators.try_into().unwrap(),
             provider_id: Ed25519Key::from_bytes(&[1; _]).public_key().into(),
             zk_id: ZkPublicKey::new(Fr::from(3u64)),
+            note_pk: ZkPublicKey::new(Fr::from(3u64)),
             inputs: InputNullifiers::default(),
             commitment_merkle_root: Fr::ZERO,
             amount: 1,

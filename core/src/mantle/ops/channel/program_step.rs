@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use bitvec::{array::BitArray, order::Lsb0};
 use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
-use lb_groth16::{Fr, fr_from_bytes, fr_from_mod_bytes, serde::serde_fr};
+use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_poseidon2::Digest as _;
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
@@ -223,9 +223,9 @@ impl BinaryDecode for ProgramStep {
 // The message the ZkTransfer of a payment is bound to.
 #[must_use]
 pub fn payment_msg(channel_id: &ChannelId, program_id: &ProgramId, payment: &Payment) -> Fr {
-    let mut elements = Vec::with_capacity(6 + payment.inputs.len() + payment.outputs.len());
+    let mut elements = Vec::with_capacity(7 + payment.inputs.len() + payment.outputs.len());
     elements.push(*PROGRAM_PAYMENT_V1);
-    elements.push(fr_from_mod_bytes(&channel_id.0));
+    elements.extend(channel_id.field_elements());
     elements.push(*program_id);
     elements.push(payment.intent);
     elements.push(Fr::from(payment.inputs.len() as u64));
@@ -333,7 +333,7 @@ pub mod test_utils {
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::{AdditiveGroup as _, Field as _};
+    use lb_groth16::{AdditiveGroup as _, Field as _, fr_from_mod_bytes};
 
     use super::*;
 
@@ -347,7 +347,8 @@ mod tests {
             payment_msg(&channel, &program, &payment),
             ZkHasher::digest(&[
                 dst,
-                fr_from_mod_bytes(&[0x33u8; 32]),
+                fr_from_mod_bytes(&[0x33u8; 16]),
+                fr_from_mod_bytes(&[0x33u8; 16]),
                 program,
                 Fr::from(0x39u64),
                 Fr::ONE,
