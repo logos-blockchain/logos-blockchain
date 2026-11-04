@@ -1146,7 +1146,9 @@ mod tests {
             .minimum_gas_cost::<MainnetGasProfile>(&context)
             .unwrap()
             .into_inner();
-        assert_eq!(855, fee);
+        // The cost with a change note, 2773: 236 bytes at a storage price of 1, and
+        // 12 + 1770 + 725 + 24 + 236 * 27 // 1000 = 2537 Execution Gas at a price of 1.
+        assert_eq!(2773, fee);
         assert_eq!(i128::from(fee), funded_tx_builder.net_balance());
         assert_eq!(
             0,
@@ -1197,8 +1199,8 @@ mod tests {
             .minimum_gas_cost::<MainnetGasProfile>(&context)
             .unwrap()
             .into_inner();
-        assert_eq!(mandatory_fee_without_change, 823);
-        assert_eq!(mandatory_fee, 855);
+        assert_eq!(mandatory_fee_without_change, 2716);
+        assert_eq!(mandatory_fee, 2773);
         let priority_fee_amount = (mandatory_fee * priority_fee_percent).div_ceil(100);
         assert_eq!(
             i128::from(mandatory_fee + priority_fee_amount),
@@ -1446,7 +1448,9 @@ mod tests {
             .minimum_gas_cost::<MainnetGasProfile>(&context)
             .unwrap()
             .into_inner();
-        assert_eq!(823, cost_without_change);
+        // 204 bytes at a storage price of 1, and 12 + 1770 + 725 + 204 * 27 // 1000 = 2512
+        // Execution Gas at a price of 1.
+        assert_eq!(2716, cost_without_change);
 
         // We can fund the tx if the note value is exactly the gas cost without change
         // note
@@ -1465,7 +1469,7 @@ mod tests {
             .minimum_gas_cost::<MainnetGasProfile>(&context)
             .unwrap()
             .into_inner();
-        assert_eq!(855, cost_with_change);
+        assert_eq!(2773, cost_with_change);
 
         for value in cost_without_change + 1..=cost_with_change {
             // this region of note values will fail to fund the tx.
