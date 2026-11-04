@@ -312,8 +312,8 @@ async fn next_epoch_tick(
 }
 
 /// Fetches the [`SlotContext`] for `slot` from the tip: the tip header, the
-/// slot's epoch state, and the wallet's eligible leader UTXOs. Returns `None` if
-/// any lookup fails.
+/// slot's epoch state, and the wallet's eligible leader UTXOs. Returns `None`
+/// if any lookup fails.
 pub async fn fetch_slot_context<CryptarchiaService, Wallet, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     wallet_api: &WalletApi<Wallet, RuntimeServiceId>,

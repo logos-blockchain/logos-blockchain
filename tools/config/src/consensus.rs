@@ -84,7 +84,8 @@ pub struct ProviderInfo {
     pub provider_sk: Ed25519Key,
     pub zk_sk: ZkKey,
     pub locator: Locator,
-    /// The amount the provider declares. A genesis declaration consumes no note.
+    /// The amount the provider declares. A genesis declaration consumes no
+    /// note.
     pub amount: u64,
 }
 

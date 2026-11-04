@@ -115,7 +115,8 @@ impl DeploymentSettings {
     }
 
     /// The ledger state this deployment's chain starts from: its genesis block
-    /// applied under the genesis era's parameters, or why the ledger rejects it.
+    /// applied under the genesis era's parameters, or why the ledger rejects
+    /// it.
     pub fn genesis_ledger_state(&self) -> Result<LedgerState, LedgerError<HeaderId>> {
         let config = ledger_config_for_era(self.eras.genesis().parameters);
         LedgerState::from_genesis_tx(self.genesis_block.genesis_tx().clone(), &config)

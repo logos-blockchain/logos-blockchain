@@ -1031,8 +1031,9 @@ fn is_at_or_before_lib(block_slot: Slot, lib_slot: Slot) -> bool {
 ///   bad copy, discarded without a verdict against the block ID, which does not
 ///   cover these proofs. The genuine block shares the ID.
 ///
-/// A body failing rule 4 does not reach this point: `Block::reconstruct` rejects
-/// it when the block is decoded or rebuilt from a proposal, before any apply.
+/// A body failing rule 4 does not reach this point: `Block::reconstruct`
+/// rejects it when the block is decoded or rebuilt from a proposal, before any
+/// apply.
 ///
 /// Other apply errors (e.g. validation failures surfaced as
 /// `ApiError::Unexpected`) are treated as terminal for the orphan pipeline.

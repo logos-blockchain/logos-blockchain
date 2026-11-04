@@ -1903,9 +1903,9 @@ mod tests {
         );
     }
 
-    /// SDP Epoch Finalization: ascending `service`, then ascending `declare_id`.
-    /// Only one service exists outside `lb_core`'s own tests, so the service is
-    /// any ordered key here.
+    /// SDP Epoch Finalization: ascending `service`, then ascending
+    /// `declare_id`. Only one service exists outside `lb_core`'s own tests,
+    /// so the service is any ordered key here.
     #[test]
     fn released_declarations_sort_by_service_then_declaration_id() {
         let entry = |service: u8, id: u8| {

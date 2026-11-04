@@ -875,7 +875,7 @@ fn a_copy_failing_an_operation_proof_leaves_the_genuine_block_applicable() {
 /// Block Proposal Validation: an unauthenticated proposal is discarded from its
 /// header alone, leaving the chain untouched.
 #[test]
-fn proposal_header_check_runs_before_the_mempool_scan() {
+fn proposal_header_check_classifies_without_touching_the_chain() {
     let config = ledger_config(NonZero::<u32>::new(1).unwrap());
     let genesis_id: HeaderId = [0; 32].into();
     let (secret_key, note) = note();
@@ -930,8 +930,10 @@ fn proposal_header_check_runs_before_the_mempool_scan() {
         Err(crate::api::ApiError::ParentMissing { parent, .. }) if parent == unknown_parent
     ));
 
+    // The forged header reaches this error only if the wallclock check runs
+    // before the proof.
     assert!(matches!(
-        check(header, Slot::genesis()),
+        check(&forged, Slot::genesis()),
         Err(crate::api::ApiError::FutureBlock { block_slot, current_slot })
             if block_slot == slot && current_slot == Slot::genesis()
     ));
@@ -1353,8 +1355,8 @@ pub fn genesis_cryptarchia_on(note: Note, era_schedule: Arc<EraScheduledConfig>)
     )
 }
 
-/// A genesis block distributing the value of each of `notes` to its key and what
-/// the supply rule of Mantle Ledger Initialization leaves to another one.
+/// A genesis block distributing the value of each of `notes` to its key and
+/// what the supply rule of Mantle Ledger Initialization leaves to another one.
 pub fn genesis_block_with(notes: &[Note]) -> GenesisBlock {
     let distributed = notes.iter().map(|note| note.value).sum::<u64>();
     GenesisBlockBuilder::new()
