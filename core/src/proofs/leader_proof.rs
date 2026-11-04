@@ -74,12 +74,18 @@ impl BinaryDecode for Groth16LeaderProof {
         (): &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
         let (rest, proof_bytes) = <[u8; COMPRESSED_PROOF_SIZE]>::decode(input, &())?;
+        let proof = lb_pol::PoLProof::try_from_bytes(&proof_bytes).map_err(|error| {
+            DecodeError::InvalidValue {
+                type_name: "PoLProof",
+                message: error.to_string().into(),
+            }
+        })?;
         let (rest, entropy_contribution) = Fr::decode(rest, &())?;
         let (rest, reward_key) = ZkPublicKey::decode(rest, &())?;
         Ok((
             rest,
             Self {
-                proof: lb_pol::PoLProof::from_bytes(&proof_bytes),
+                proof,
                 entropy_contribution,
                 reward_key,
             },
@@ -423,7 +429,7 @@ mod proof_serde {
     {
         let proof_array =
             lb_utils::serde::deserialize_bytes_array::<{ COMPRESSED_PROOF_SIZE }, D>(deserializer)?;
-        Ok(lb_pol::PoLProof::from_bytes(&proof_array))
+        lb_pol::PoLProof::try_from_bytes(&proof_array).map_err(serde::de::Error::custom)
     }
 }
 
@@ -512,6 +518,21 @@ mod tests {
     use rand::RngCore as _;
 
     use super::*;
+
+    #[test]
+    fn a_proof_flagging_the_point_at_infinity_does_not_decode() {
+        let mut bytes = Groth16LeaderProof::from_parts(
+            lb_pol::PoLProof::from_bytes(&[0u8; 128]),
+            Fr::from(1u64),
+            ZkPublicKey::new(Fr::from(1u64)),
+        )
+        .encode_to_vec();
+        bytes[31] |= 0x40;
+        assert!(matches!(
+            Groth16LeaderProof::decode(&bytes, &()),
+            Err(DecodeError::InvalidValue { .. })
+        ));
+    }
     use crate::mantle::{
         note_set::{CommitmentMmr, LEDGER_SET, NoteSet},
         notes::{NoteCommitment, derive_note_nullifier},

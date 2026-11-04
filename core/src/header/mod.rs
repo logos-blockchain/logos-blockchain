@@ -637,7 +637,19 @@ mod body_root_test_vectors {
             ContentId([byte; 32]),
             Slot::from(u64::from(byte)),
             Groth16LeaderProof::from_parts(
-                lb_pol::PoLProof::from_bytes(&[byte; 128]),
+                // `[1]G1`, `[1]G2`, `[1]G1`, real points whose flags are clear.
+                lb_pol::PoLProof::try_from_bytes(
+                    &hex::decode(concat!(
+                        "0100000000000000000000000000000000000000000000000000000000000000",
+                        "edf692d95cbdde46ddda5ef7d422436779445c5e66006a42761e1f12efde0018",
+                        "c212f3aeb785e49712e7a9353349aaf1255dfb31b7bf60723a480d9293938e19",
+                        "0100000000000000000000000000000000000000000000000000000000000000",
+                    ))
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+                )
+                .unwrap(),
                 Fr::from(u64::from(byte)),
                 ZkPublicKey::new(Fr::from(u64::from(byte))),
             ),
@@ -795,7 +807,7 @@ mod body_root_test_vectors {
             UncleHeaders::try_new(vec![uncle(0x66), uncle(0x77)], VECTOR_MAX_UNCLES).unwrap();
         assert_eq!(
             hex::encode(crate::block::body_root(&uncles, &txs).0),
-            "1582693d4f4a89537e2410fa0522555f72b0272615043353f64ed55fc7ca6437"
+            "fc8011020e0a7165dde5824e6d53835b2083d9e72d4f44982a5674b21c4603b0"
         );
     }
 }
