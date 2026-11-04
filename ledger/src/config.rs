@@ -11,8 +11,6 @@ use lb_time::era::EpochLength;
 /// of its slot, and each epoch is settled under the config of its era.
 pub type EraScheduledConfig = EraSchedule<Config>;
 
-pub use lb_core::mantle::ConsensusExcludedKeys;
-
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Config {
     pub epoch_config: lb_cryptarchia_engine::EpochConfig,

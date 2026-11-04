@@ -19,7 +19,7 @@ use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_service::{api::KmsServiceApi, backend::preload::KeyId};
 use lb_ledger::{
-    ConsensusExcludedKeys, EpochState,
+    EpochState,
     config::{EraScheduledConfig, config_for_epoch},
 };
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
@@ -189,7 +189,6 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
     kms: KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
     time_relay: OutboundRelay<TimeServiceMessage>,
     era_schedule: Arc<EraScheduledConfig>,
-    consensus_excluded_keys: ConsensusExcludedKeys,
     epoch_handoff_sender: mpsc::Sender<WinningPolEpochSlots>,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -224,13 +223,7 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
     // when the tick stream ends (which ends the loop).
     let mut current_slot_tick = slot_timer.next().await;
     while let Some(SlotTick { slot, epoch, .. }) = current_slot_tick {
-        let Some(slot_context) = fetch_slot_context(
-            &cryptarchia_api,
-            &wallet_api,
-            &consensus_excluded_keys,
-            slot,
-        )
-        .await
+        let Some(slot_context) = fetch_slot_context(&cryptarchia_api, &wallet_api, slot).await
         else {
             tracing::debug!(target: LOG_TARGET, "Could not fetch slot context for slot {slot:?}; retrying on the next tick.");
             current_slot_tick = slot_timer.next().await;
@@ -319,12 +312,11 @@ async fn next_epoch_tick(
 }
 
 /// Fetches the [`SlotContext`] for `slot` from the tip: the tip header, the
-/// slot's epoch state, and the wallet's eligible leader UTXOs (with the
-/// consensus-excluded UTXOs filtered out). Returns `None` if any lookup fails.
+/// slot's epoch state, and the wallet's eligible leader UTXOs. Returns `None` if
+/// any lookup fails.
 pub async fn fetch_slot_context<CryptarchiaService, Wallet, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     wallet_api: &WalletApi<Wallet, RuntimeServiceId>,
-    consensus_excluded_keys: &ConsensusExcludedKeys,
     slot: Slot,
 ) -> Option<SlotContext>
 where
@@ -349,15 +341,10 @@ where
         .get_leader_aged_notes(Some(wallet_tip), epoch_state.epoch)
         .await
         .ok()?;
-    let eligible = eligible_utxos
-        .response
-        .into_iter()
-        .filter(|note| !consensus_excluded_keys.contains(&note.note.note.public_key))
-        .collect();
     Some(SlotContext {
         wallet_tip,
         epoch_state,
-        eligible_aged: eligible,
+        eligible_aged: eligible_utxos.response,
         source: PolEpochStateSource {
             tip_id: source_tip_id,
             tip_slot: source_tip_slot,
@@ -542,10 +529,9 @@ mod pol_tests {
         let (_, aged_path) = CommitmentMmr::new()
             .push_with_paths(note.commitment(), &mut [])
             .unwrap();
-        let note_sets =
-            LedgerState::from_notes([note], &config, 0, &ConsensusExcludedKeys::empty())
-                .latest_note_sets()
-                .clone();
+        let note_sets = LedgerState::from_notes([note], &config, 0)
+            .latest_note_sets()
+            .clone();
 
         let total_stake = note.value;
         let (lottery_0, lottery_1) = config

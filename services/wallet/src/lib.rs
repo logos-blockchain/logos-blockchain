@@ -253,9 +253,6 @@ pub struct LeaderAgedNoteInfo {
 /// public key is one the wallet holds a key for. An empty `notes` means this
 /// node cannot win a slot at that tip: either it owns no notes, or none of
 /// them have aged into the current epoch's snapshot yet.
-///
-/// The set is reported unfiltered. The leader service additionally skips the
-/// UTXOs of the keys in `consensus_excluded_keys`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeaderAgedNotesInfo {
     pub notes: Vec<LeaderAgedNoteInfo>,

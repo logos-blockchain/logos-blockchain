@@ -25,9 +25,6 @@ pub struct LeaderAgedNote {
 /// key is one the wallet holds a key for. `len == 0` means this node cannot
 /// win a slot at `tip`: either it owns no notes, or none have aged into the
 /// current epoch's snapshot yet.
-///
-/// The set is reported unfiltered. The leader service additionally skips the
-/// UTXOs of the keys in `consensus_excluded_keys`.
 #[repr(C)]
 pub struct LeaderAgedNotes {
     pub tip: HeaderId,

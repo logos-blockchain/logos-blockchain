@@ -35,7 +35,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::api::KmsServiceApi;
-use lb_ledger::{ConsensusExcludedKeys, EpochState, LedgerState, config::EraScheduledConfig};
+use lb_ledger::{EpochState, LedgerState, config::EraScheduledConfig};
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
@@ -201,7 +201,6 @@ impl Debug for LeaderMsg {
 pub struct LeaderSettings {
     /// The ledger config of every era.
     pub era_schedule: Arc<EraScheduledConfig>,
-    pub consensus_excluded_keys: ConsensusExcludedKeys,
     pub wallet_config: LeaderWalletConfig,
 }
 
@@ -423,11 +422,7 @@ where
                 .expect("Failed to estabilish connection with ChainNetwork"),
         );
 
-        let LeaderSettings {
-            era_schedule,
-            consensus_excluded_keys,
-            ..
-        } = self
+        let LeaderSettings { era_schedule, .. } = self
             .service_resources_handle
             .settings_handle
             .notifier()
@@ -479,7 +474,7 @@ where
                             current_era = era;
                         }
                         let Some(SlotContext { wallet_tip, epoch_state, eligible_aged, .. }) =
-                            fetch_slot_context(&cryptarchia_api, &wallet_api, &consensus_excluded_keys, slot).await
+                            fetch_slot_context(&cryptarchia_api, &wallet_api, slot).await
                         else {
                             error!(target: LOG_TARGET, "Failed to fetch epoch context for slot {slot:?}");
                             continue;
@@ -560,7 +555,7 @@ where
                     }
 
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
-                        Self::handle_inbound_message(msg, &cryptarchia_api, &wallet_api, &kms_api, relays.time_relay(), &era_schedule, &consensus_excluded_keys);
+                        Self::handle_inbound_message(msg, &cryptarchia_api, &wallet_api, &kms_api, relays.time_relay(), &era_schedule);
                     }
                 }
             }
@@ -800,7 +795,6 @@ where
         kms: &KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
         time_relay: &OutboundRelay<TimeServiceMessage>,
         era_schedule: &Arc<EraScheduledConfig>,
-        consensus_excluded_keys: &ConsensusExcludedKeys,
     ) {
         match msg {
             LeaderMsg::PotentialWinningPolEpochSlotStreamSubscribe { sender } => {
@@ -817,7 +811,6 @@ where
                         (*kms).clone(),
                         (*time_relay).clone(),
                         Arc::clone(era_schedule),
-                        consensus_excluded_keys.clone(),
                         epoch_handoff_sender,
                     ),
                 );
