@@ -300,24 +300,27 @@ pub fn spend_notes_hash(
     inputs: &[SpendInputFields; MAX_INPUTS],
     outputs: &[SpendOutputFields; MAX_OUTPUTS],
 ) -> Fr {
-    // The fields the prover used, the public key of an inactive input included.
+    // Each field is multiplied by its flag, so an inactive input or output reads
+    // as 0 and a spend has a single hash.
     let inputs = inputs.iter().flat_map(|input| {
+        let flag = Fr::from(input.active);
         [
-            Fr::from(input.active),
-            Fr::from(input.value),
-            input.nonce,
-            *input.public_key.as_fr(),
-            input.data,
+            flag,
+            flag * Fr::from(input.value),
+            flag * input.nonce,
+            flag * *input.public_key.as_fr(),
+            flag * input.data,
         ]
     });
     let outputs = outputs.iter().flat_map(|output| {
+        let flag = Fr::from(output.active);
         [
-            Fr::from(output.active),
-            Fr::from(output.value),
-            output.nonce,
-            *output.public_key.as_fr(),
-            output.program,
-            output.data,
+            flag,
+            flag * Fr::from(output.value),
+            flag * output.nonce,
+            flag * *output.public_key.as_fr(),
+            flag * output.program,
+            flag * output.data,
         ]
     });
     ZkHasher::digest(
@@ -333,7 +336,10 @@ mod tests {
     use lb_groth16::test_utils::{generator_multiples_key, three_input_prove, three_input_setup};
 
     use super::*;
-    use crate::mantle::{fixtures::programs::placeholder_key, notes::derive_note_nullifier};
+    use crate::mantle::{
+        fixtures::programs::placeholder_key,
+        notes::{NoteNullifier, derive_note_nullifier, derive_program_output_nonce},
+    };
 
     fn test_key() -> (
         ProgramVerificationKey,
@@ -465,6 +471,17 @@ mod tests {
                 data: output.data,
             };
             assert_eq!(public.outputs[j].into_inner(), note.commitment().0);
+            if data.chain.inputs_active[0] && data.chain.outputs_active[j] {
+                assert_eq!(
+                    note.nonce,
+                    derive_program_output_nonce(
+                        &NoteNullifier(public.inputs[0].into_inner()),
+                        j,
+                        note.value,
+                        &note.public_key
+                    )
+                );
+            }
             SpendOutputFields {
                 active: data.chain.outputs_active[j],
                 ..SpendOutputFields::of(&note)

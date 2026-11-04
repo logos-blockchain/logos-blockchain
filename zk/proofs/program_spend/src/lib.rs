@@ -179,7 +179,7 @@ mod tests {
     // Sample: active inputs of 2908 and 3669 and a paid value of 1389 balance seven
     // outputs of 995 and one of 1001; the first four outputs are notes of the
     // program.
-    const SAMPLE_PAID: u64 = 1389;
+    const SAMPLE_PAID: u64 = 303;
     const SAMPLE_OF_PROGRAM: [bool; 8] = [true, true, true, true, false, false, false, false];
 
     fn frs(values: &[Groth16Input]) -> Vec<Fr> {

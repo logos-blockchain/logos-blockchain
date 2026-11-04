@@ -101,6 +101,25 @@ pub fn derive_note_nullifier(commitment: &NoteCommitment, secret_key: &Fr) -> No
     NoteNullifier(ZkHasher::digest(&[*NOTE_NF_V1, commitment.0, *secret_key]))
 }
 
+/// The nonce the `ZkProgramSpend` enforces on the output `output_index` of a
+/// step consuming a note of its program, derived from the nullifier of its
+/// first input.
+#[must_use]
+pub fn derive_program_output_nonce(
+    first_input: &NoteNullifier,
+    output_index: usize,
+    value: Value,
+    public_key: &ZkPublicKey,
+) -> Fr {
+    ZkHasher::digest(&[
+        *NOTE_NONCE_V1,
+        first_input.0,
+        Fr::from(output_index as u64),
+        Fr::from(value),
+        *public_key.as_fr(),
+    ])
+}
+
 #[must_use]
 pub fn derive_note_nonce(
     op_id: &Hash,
