@@ -1117,7 +1117,7 @@ where
             response: funded_tx_builder,
         } = wallet
             .fund_tx(
-                // the split is proven against the root of this tip
+                // the split is proven from the wallet's states at and below this tip
                 Some(split_tip),
                 tx_builder,
                 req.change_public_key,

@@ -12,6 +12,7 @@ use lb_core::{
         },
     },
 };
+use lb_groth16::Fr;
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, secured_key::SecuredKey};
 use lb_utils::bounded::BoundedError;
 use lb_wallet::{KnownNote, OwnedNote, WalletBalance};
@@ -238,6 +239,19 @@ where
                 note_set,
                 resp_tx,
             })
+            .await?;
+        Ok(rx.await??)
+    }
+
+    /// The ledger set root for a transaction built on `tip` that creates the
+    /// notes it spends. See [`lb_wallet::Wallet::spend_root`].
+    pub async fn spend_root(
+        &self,
+        tip: Option<HeaderId>,
+    ) -> Result<TipResponse<Fr>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::SpendRoot { tip, resp_tx })
             .await?;
         Ok(rx.await??)
     }

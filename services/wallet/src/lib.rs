@@ -217,6 +217,10 @@ pub enum WalletMsg {
         block_id: Option<HeaderId>,
         resp_tx: Sender<Result<OpsContext, WalletServiceError>>,
     },
+    SpendRoot {
+        tip: Option<HeaderId>,
+        resp_tx: Sender<Result<TipResponse<Fr>, WalletServiceError>>,
+    },
 }
 
 // The built Operations and the proof of their funding Transfer.
@@ -307,6 +311,7 @@ impl WalletMsg {
             | Self::OwnedNote { tip, .. }
             | Self::GetLeaderAgedNotes { tip, .. }
             | Self::GetLeaderAgedNotesInfo { tip, .. }
+            | Self::SpendRoot { tip, .. }
             | Self::GetTxContext { block_id: tip, .. } => *tip,
             Self::SignTxWithEd25519 { .. }
             | Self::GenerateRewardKey { .. }
@@ -854,6 +859,23 @@ where
             }
             WalletMsg::GetTxContext { block_id, resp_tx } => {
                 Self::get_tx_context(block_id, resp_tx, cryptarchia).await;
+            }
+            WalletMsg::SpendRoot { tip, resp_tx } => {
+                let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
+                    Ok(tip) => tip,
+                    Err(err) => {
+                        Self::send_err(resp_tx, err);
+                        return;
+                    }
+                };
+                let response = state
+                    .wallet()
+                    .spend_root(tip, &[])
+                    .map(|response| TipResponse { tip, response })
+                    .map_err(WalletServiceError::from);
+                if resp_tx.send(response).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to SpendRoot");
+                }
             }
         }
     }
