@@ -688,6 +688,7 @@ pub fn declaration_of(
             .into(),
         provider_id: ProviderId(key.public_key()),
         zk_id,
+        note_pk: zk_id,
         inputs: fresh_nullifiers(1, salt),
         commitment_merkle_root,
         amount: 1,
