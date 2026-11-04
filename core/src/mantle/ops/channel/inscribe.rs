@@ -1566,6 +1566,83 @@ mod tests {
     }
 
     #[test]
+    fn a_second_inscription_of_the_transaction_covers_the_first_in_its_first_mini_block() {
+        let (_, note_sets) = state();
+        // The first inscription of the transaction added commitment(3) to the buffer.
+        let set = note_sets
+            .get(2)
+            .unwrap()
+            .clone()
+            .buffer_outputs(&[commitment(3)]);
+        let note_sets = note_sets.update(2, set);
+        let steps = vec![Step::User(step(&[nullifier(4)], &[], root()))];
+        let deferred =
+            verify_operation(with_steps(steps.clone()), sample_proofs(&steps), &note_sets).unwrap();
+        assert_eq!(
+            deferred.zk_transfers[0]
+                .inputs()
+                .tx_commitment_root
+                .into_inner(),
+            CommitmentMmr::new()
+                .push(commitment(1))
+                .unwrap()
+                .push(commitment(3))
+                .unwrap()
+                .frontier_root()
+        );
+    }
+
+    #[test]
+    fn program_steps_of_a_mini_block_chain_their_spends_and_keep_their_payment_root() {
+        let (_, note_sets) = state();
+        let first = Step::Program(program_step(
+            vec![payment(&[nullifier(2)], &[commitment(3)], root(), 5)],
+            &[],
+            &[commitment(4)],
+            0b0,
+            root(),
+        ));
+        let second = Step::Program(program_step(
+            vec![payment(&[nullifier(5)], &[commitment(6)], root(), 7)],
+            &[nullifier(7)],
+            &[commitment(8)],
+            0b0,
+            root(),
+        ));
+        let steps = vec![first, second];
+        let deferred =
+            verify_operation(with_steps(steps.clone()), sample_proofs(&steps), &note_sets).unwrap();
+        let extended = |commitments: &[u64]| {
+            commitments
+                .iter()
+                .fold(
+                    CommitmentMmr::new().push(commitment(1)).unwrap(),
+                    |mmr, n| mmr.push(commitment(*n)).unwrap(),
+                )
+                .frontier_root()
+        };
+        // Both payments cover what precedes the mini-block, here nothing.
+        for transfer in &deferred.zk_transfers {
+            assert_eq!(transfer.inputs().tx_commitment_root.into_inner(), root());
+        }
+        // Each spend covers the whole buffer at its position.
+        assert_eq!(
+            deferred.program_spends[0]
+                .inputs()
+                .tx_commitment_root
+                .into_inner(),
+            extended(&[3])
+        );
+        assert_eq!(
+            deferred.program_spends[1]
+                .inputs()
+                .tx_commitment_root
+                .into_inner(),
+            extended(&[3, 4, 6])
+        );
+    }
+
+    #[test]
     fn an_empty_mini_block_does_not_decode() {
         // One mini-block of no step
         assert!(MiniBlocks::decode(&[1, 0, 0, 0], &()).is_err());
