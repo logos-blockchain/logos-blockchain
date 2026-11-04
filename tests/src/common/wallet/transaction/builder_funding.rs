@@ -302,7 +302,7 @@ mod tests {
         notes::NoteNullifier,
         ops::channel::{
             ChannelId, MsgId,
-            inscribe::{ChannelSteps, Inscription, InscriptionOp},
+            inscribe::{Inscription, InscriptionOp, MiniBlocks},
         },
         transactions::{GasPrices, tx_list::ops::OpsGasContext},
     };
@@ -324,7 +324,7 @@ mod tests {
                 inscription: Inscription::new_unchecked(vec![0xab; 1024]),
                 parent: MsgId::root(),
                 signer: signing_key.public_key().into_unverified(),
-                steps: ChannelSteps::default(),
+                mini_blocks: MiniBlocks::default(),
             }))
             .expect("inscription test builder should fit op bounds");
         assert_eq!(

@@ -1505,7 +1505,7 @@ impl TxState {
 mod tests {
     use lb_core::mantle::{
         Op,
-        ops::channel::inscribe::{ChannelSteps, InscriptionOp},
+        ops::channel::inscribe::{InscriptionOp, MiniBlocks},
         transactions::Ops,
     };
     use lb_key_management_system_service::keys::Ed25519PublicKey;
@@ -1528,7 +1528,7 @@ mod tests {
             inscription: [data].into(),
             parent,
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         })]);
         SignedOps::from_ops_with_sample_proofs(mantle_tx)
     }
@@ -1669,7 +1669,7 @@ mod tests {
             inscription: [data].into(),
             parent,
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         };
         let config = ChannelConfigOp::new(
             [0u8; 32].into(),

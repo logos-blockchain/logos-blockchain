@@ -728,7 +728,7 @@ mod tests {
 
     use lb_core::mantle::{
         Op, SignedOps,
-        ops::channel::inscribe::{ChannelSteps, InscriptionOp},
+        ops::channel::inscribe::{InscriptionOp, MiniBlocks},
         transactions::Ops,
     };
     use lb_key_management_system_service::keys::{Ed25519Key, UnverifiedEd25519PublicKey};
@@ -784,7 +784,7 @@ mod tests {
                 inscription: payload.try_into().unwrap(),
                 parent: MsgId::root(),
                 signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
-                steps: ChannelSteps::default(),
+                mini_blocks: MiniBlocks::default(),
             },
         )]));
         let inscription = channel_inscriptions(&tx, channel_id).remove(0);

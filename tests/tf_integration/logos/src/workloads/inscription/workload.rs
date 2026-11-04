@@ -13,7 +13,7 @@ use lb_core::mantle::{
         ChannelInscribeProof, Op, OpProof,
         channel::{
             ChannelId, MsgId,
-            inscribe::{ChannelSteps, Inscription, InscriptionOp},
+            inscribe::{Inscription, InscriptionOp, MiniBlocks},
         },
     },
     traits::Hashable as _,
@@ -367,7 +367,7 @@ fn build_inscription_transaction(
         inscription: build_payload(channel, payload_bytes),
         parent: channel.parent,
         signer: channel.signing_key.public_key().into_unverified(),
-        steps: ChannelSteps::default(),
+        mini_blocks: MiniBlocks::default(),
     };
     let msg_id = op.id();
 

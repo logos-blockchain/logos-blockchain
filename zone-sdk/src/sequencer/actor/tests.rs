@@ -12,7 +12,7 @@ use lb_core::{
                 MsgId, UnverifiedChannelKeys, VerifiedChannelKeys,
                 config::ChannelConfigOp,
                 deposit::DepositOp,
-                inscribe::{ChannelSteps, Inscription, InscriptionOp},
+                inscribe::{Inscription, InscriptionOp, MiniBlocks},
             },
         },
         transactions::{OpProofs, Ops, states::Unverified},
@@ -960,7 +960,7 @@ async fn publish_after_bundle_chains_on_the_bundle_inscription_tip() {
         inscription: b"bundle".to_vec().try_into().unwrap(),
         parent: MsgId::root(),
         signer: sequencer_key.public_key().into_unverified(),
-        steps: ChannelSteps::default(),
+        mini_blocks: MiniBlocks::default(),
     };
     let config = ChannelConfigOp::new(
         channel_id,
@@ -1123,7 +1123,7 @@ fn track_pending_tx_classifies_plain_inscription_with_none_withdraws() {
         signer: Ed25519Key::from_bytes(&[0; 32])
             .public_key()
             .into_unverified(),
-        steps: ChannelSteps::default(),
+        mini_blocks: MiniBlocks::default(),
     };
     let mantle_tx = Ops::from([Op::ChannelInscribe(inscribe_op)]);
     let tx_hash = mantle_tx.hash();
@@ -1151,7 +1151,7 @@ fn track_pending_tx_falls_back_to_other_when_no_inscribe_for_channel() {
         signer: Ed25519Key::from_bytes(&[0; 32])
             .public_key()
             .into_unverified(),
-        steps: ChannelSteps::default(),
+        mini_blocks: MiniBlocks::default(),
     };
     let mantle_tx = Ops::from([Op::ChannelInscribe(inscribe_op)]);
     let tx_hash = mantle_tx.hash();
@@ -1188,7 +1188,7 @@ async fn cold_start_backfills_genesis_slot() {
         parent: MsgId::root(),
         inscription: Inscription::new_unchecked(Vec::new()),
         signer: sequencer_key.public_key().into_unverified(),
-        steps: ChannelSteps::default(),
+        mini_blocks: MiniBlocks::default(),
     };
     let expected_msg_id = inscribe.id();
     let genesis_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(inscribe)]);
@@ -1594,7 +1594,7 @@ async fn stream_gap_surfaces_backfilled_inscriptions_as_adopted() {
         parent: MsgId::root(),
         inscription: Inscription::new_unchecked(b"a".to_vec()),
         signer: sequencer_key.public_key().into_unverified(),
-        steps: ChannelSteps::default(),
+        mini_blocks: MiniBlocks::default(),
     };
     let a_id = a.id();
     let y = InscriptionOp {
@@ -1602,7 +1602,7 @@ async fn stream_gap_surfaces_backfilled_inscriptions_as_adopted() {
         parent: a_id,
         inscription: Inscription::new_unchecked(b"y".to_vec()),
         signer: sequencer_key.public_key().into_unverified(),
-        steps: ChannelSteps::default(),
+        mini_blocks: MiniBlocks::default(),
     };
     let y_id = y.id();
 

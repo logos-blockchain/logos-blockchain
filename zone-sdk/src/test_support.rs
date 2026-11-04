@@ -28,7 +28,7 @@ use lb_core::{
             channel::{
                 ChannelId, MsgId, UnverifiedChannelKeys,
                 deposit::DepositOp,
-                inscribe::{ChannelSteps, Inscription, InscriptionOp},
+                inscribe::{Inscription, InscriptionOp, MiniBlocks},
             },
         },
         traits::Hashable as _,
@@ -451,7 +451,7 @@ pub fn inscribe_op(channel_id: ChannelId, parent: MsgId, payload: &[u8]) -> Insc
         signer: Ed25519Key::from_bytes(&[0u8; 32])
             .public_key()
             .into_unverified(),
-        steps: ChannelSteps::default(),
+        mini_blocks: MiniBlocks::default(),
     }
 }
 

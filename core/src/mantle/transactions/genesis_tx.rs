@@ -197,7 +197,7 @@ fn valid_genesis_inscription(inscription: &InscriptionOp) -> Result<GenesisParam
         ))));
     }
 
-    if !inscription.steps.is_empty() {
+    if !inscription.mini_blocks.is_empty() {
         return Err(Error::InvalidInscription(Box::new(Op::ChannelInscribe(
             inscription.clone(),
         ))));
@@ -218,7 +218,7 @@ fn valid_distribution_inscription(
     if inscription.channel_id != NULL_CHANNEL_ID
         || inscription.signer.as_bytes() != &[0; 32]
         || inscription.parent != parameters.id()
-        || !inscription.steps.is_empty()
+        || !inscription.mini_blocks.is_empty()
     {
         return Err(Error::InvalidInscription(Box::new(Op::ChannelInscribe(
             inscription.clone(),
@@ -517,7 +517,7 @@ mod tests {
             notes::{InputNullifiers, NoteNullifier, OutputCommitments, derive_note_nullifier},
             ops::{
                 ChannelInscribeProof, StepProof, ZkTransferProof,
-                channel::inscribe::{ChannelStep, ChannelSteps, Inscription, Step},
+                channel::inscribe::{ChannelStep, Inscription, MiniBlock, MiniBlocks, Step},
                 op_proof::samples::SampleProof as _,
             },
             transactions::{OpProofs, Ops},
@@ -536,7 +536,7 @@ mod tests {
             inscription: Inscription::new_unchecked(genesis_parameters.encode_to_vec()),
             parent,
             signer,
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         }
     }
 
@@ -623,7 +623,7 @@ mod tests {
             ),
             parent: parameters.id(),
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         }
     }
 
@@ -1108,10 +1108,9 @@ mod tests {
             inputs: [NoteNullifier(Fr::ONE)].into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: Fr::ZERO,
-            buffered: 0,
         };
         let with_step = InscriptionOp {
-            steps: [Step::User(step)].into(),
+            mini_blocks: [MiniBlock::from([Step::User(step)])].into(),
             ..parameters_op()
         };
         let tx = create_trusted_tx(

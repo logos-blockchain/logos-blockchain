@@ -10,7 +10,7 @@ use lb_core::{
             channel::{
                 ChannelId, ChannelKeyIndex, MsgId, VerifiedChannelKeys,
                 config::ChannelConfigOp,
-                inscribe::{ChannelSteps, Inscription, InscriptionOp},
+                inscribe::{Inscription, InscriptionOp, MiniBlocks},
             },
         },
         traits::{Hashable as _, MantleTx},
@@ -147,7 +147,7 @@ where
         inscription,
         parent,
         signer,
-        steps: ChannelSteps::default(),
+        mini_blocks: MiniBlocks::default(),
     };
     let msg_id = inscribe_op.id();
 
@@ -323,7 +323,7 @@ pub(super) fn prepare_tx(
         inscription,
         parent,
         signer: signing_key.public_key().into_unverified(),
-        steps: ChannelSteps::default(),
+        mini_blocks: MiniBlocks::default(),
     };
     let msg_id = inscription_op.id();
     // TODO: Return `Error` in case there's too many ops already.

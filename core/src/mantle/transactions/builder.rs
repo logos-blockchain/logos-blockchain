@@ -399,7 +399,7 @@ mod tests {
         ops::channel::{
             ChannelId,
             deposit::DepositOp,
-            inscribe::{ChannelSteps, InscriptionOp},
+            inscribe::{InscriptionOp, MiniBlocks},
             withdraw::ChannelWithdrawOp,
         },
         transactions::{GasPrices, tx_list::ops::OpsGasContext},
@@ -425,7 +425,7 @@ mod tests {
                 signer: Ed25519Key::from_bytes(&[0; 32])
                     .public_key()
                     .into_unverified(),
-                steps: ChannelSteps::default(),
+                mini_blocks: MiniBlocks::default(),
             }))
             .unwrap()
             .extend_funding_inputs(Fr::from(5u64), [funding_note(50, 1, 3)])
@@ -453,7 +453,7 @@ mod tests {
             signer: Ed25519Key::from_bytes(&[0; 32])
                 .public_key()
                 .into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         };
 
         // Init a tx builder
@@ -547,7 +547,7 @@ mod tests {
                 signer: Ed25519Key::from_bytes(&[0; 32])
                     .public_key()
                     .into_unverified(),
-                steps: ChannelSteps::default(),
+                mini_blocks: MiniBlocks::default(),
             }))
             .unwrap()
             .push_op(Op::ChannelDeposit(DepositOp {

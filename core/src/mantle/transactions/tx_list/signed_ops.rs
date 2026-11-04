@@ -422,7 +422,7 @@ pub mod test_utils {
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         ops::channel::{
             MsgId, UnverifiedChannelKeys,
-            inscribe::{ChannelSteps, InscriptionOp},
+            inscribe::{InscriptionOp, MiniBlocks},
         },
         transactions::Ops,
     };
@@ -439,7 +439,7 @@ pub mod test_utils {
             inscription: [1, 2, 3].into(),
             parent: [0; 32].into(),
             signer: signing_key.public_key().into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         }
     }
 
@@ -495,7 +495,7 @@ mod tests {
                 ChannelId, MsgId,
                 config::ChannelConfigOp,
                 deposit::DepositOp,
-                inscribe::{InscriptionOp, Step},
+                inscribe::{InscriptionOp, MiniBlock, Step},
                 program_step::{Payments, ProgramOutputs, ProgramStep},
                 withdraw::ChannelWithdrawOp,
             },
@@ -1033,7 +1033,7 @@ mod tests {
             spend_notes_hash: Fr::ZERO,
         };
         let ops = Ops::from([Op::ChannelInscribe(InscriptionOp {
-            steps: [Step::Program(step)].into(),
+            mini_blocks: [MiniBlock::from([Step::Program(step)])].into(),
             ..InscriptionOp::sample()
         })]);
         let signature =

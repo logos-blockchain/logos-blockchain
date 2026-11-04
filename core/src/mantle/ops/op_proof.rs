@@ -33,11 +33,10 @@ impl OpProof {
     /// Helper to decode an `OpProof` for a given `Op`
     pub fn decode_for_op<'i>(input: &'i [u8], op: &Op) -> Result<(&'i [u8], Self), DecodeError> {
         match op {
-            Op::ChannelInscribe(op) => ChannelInscribeProof::decode(
-                input,
-                &op.steps.iter().map(Step::proof_shape).collect(),
-            )
-            .map(|(rest, proof)| (rest, proof.into())),
+            Op::ChannelInscribe(op) => {
+                ChannelInscribeProof::decode(input, &op.steps().map(Step::proof_shape).collect())
+                    .map(|(rest, proof)| (rest, proof.into()))
+            }
             Op::ChannelConfig(op) => decode_proof_for(op, input),
             Op::ChannelDeposit(op) => decode_proof_for(op, input),
             Op::ChannelWithdraw(op) => decode_proof_for(op, input),

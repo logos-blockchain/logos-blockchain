@@ -13,7 +13,7 @@ use lb_core::{
             channel::{
                 ChannelId, MsgId,
                 deposit::Metadata,
-                inscribe::{ChannelSteps, Inscription, InscriptionOp},
+                inscribe::{Inscription, InscriptionOp, MiniBlocks},
             },
         },
         traits::Hashable as _,
@@ -219,7 +219,7 @@ async fn create_channel(
                 .expect("inscription payload should fit"),
             parent: MsgId::root(),
             signer: signing_key.public_key().into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         }))
         .expect("inscription op should fit");
     let WalletFundResponseBody {
