@@ -36,13 +36,16 @@ pub struct OpWitness {
     pub signers: Vec<ZkPublicKey>,
 }
 
-// A note set's commitment MMR as the transaction extends it, with the
-// commitments the wallet can spend and their paths.
+// A note set's commitment MMR at a root the transaction names, as the
+// transaction extends it, with the inputs of an Operation and their paths.
 type SetBuffer = (CommitmentMmr, Vec<NoteCommitment>, Vec<MerklePath>);
+
+// The commitments the previous Operations of the transaction append, by set.
+type Appended = HashMap<NoteSetIndex, Vec<NoteCommitment>>;
 
 #[derive(Clone, Copy)]
 enum Spend<'a> {
-    // inputs of `note_set` proven against its current root
+    // inputs of `note_set` proven against a root of the set
     InSet {
         note_set: NoteSetIndex,
         nullifiers: &'a [NoteNullifier],
@@ -56,22 +59,25 @@ enum Spend<'a> {
 type Effects<'a> = (Option<Spend<'a>>, Vec<(NoteSetIndex, NoteCommitment)>);
 
 // The witnesses of the Operations of `ops` that carry a ZkTransfer, each
-// proven against its set as the Operations before it extended it.
+// proven against the root it names as the Operations before it extended it.
+// `states` are the states of the wallet that hold those roots, its tip first
+// (see `Wallet::spend_states`): the notes are spent from the tip, the root and
+// the paths come from the state of the root.
 pub fn op_witnesses(
-    state: &WalletState,
+    states: &[WalletState],
     known: &KnownNotes,
     ops: &Ops,
     openings: &BTreeMap<usize, ZkTransferOpening>,
     context: &WitnessContext,
     msg: Fr,
 ) -> Result<Vec<OpWitness>, WalletError> {
-    witnesses_of(state, known, ops, openings, context, msg, |_| true)
+    witnesses_of(states, known, ops, openings, context, msg, |_| true)
 }
 
 // The witness of the Operation at `op_index` alone: the other Operations only
 // extend the buffers, so they need no opening.
 pub fn op_witness_at(
-    state: &WalletState,
+    states: &[WalletState],
     known: &KnownNotes,
     ops: &Ops,
     openings: &BTreeMap<usize, ZkTransferOpening>,
@@ -79,7 +85,7 @@ pub fn op_witness_at(
     msg: Fr,
     op_index: usize,
 ) -> Result<OpWitness, WalletError> {
-    witnesses_of(state, known, ops, openings, context, msg, |index| {
+    witnesses_of(states, known, ops, openings, context, msg, |index| {
         index == op_index
     })?
     .pop()
@@ -87,7 +93,7 @@ pub fn op_witness_at(
 }
 
 fn witnesses_of(
-    state: &WalletState,
+    states: &[WalletState],
     known: &KnownNotes,
     ops: &Ops,
     openings: &BTreeMap<usize, ZkTransferOpening>,
@@ -95,7 +101,7 @@ fn witnesses_of(
     msg: Fr,
     witnessed: impl Fn(usize) -> bool,
 ) -> Result<Vec<OpWitness>, WalletError> {
-    let mut buffers = HashMap::new();
+    let mut appended = Appended::new();
     let mut witnesses = Vec::new();
     for (op_index, op) in ops.iter().enumerate() {
         let (spend, appends) = op_effects(op_index, op, openings, context)?;
@@ -104,21 +110,11 @@ fn witnesses_of(
                 .get(&op_index)
                 .ok_or(WalletError::MissingOpening { op_index })?;
             witnesses.push(op_witness(
-                state,
-                known,
-                &mut buffers,
-                op_index,
-                opening,
-                spend,
-                msg,
+                states, known, &appended, op_index, opening, spend, msg,
             )?);
         }
         for (note_set, commitment) in appends {
-            let (mmr, commitments, paths) = set_buffer(&mut buffers, state, note_set);
-            let (next, path) = push(mmr, commitment, paths, note_set)?;
-            *mmr = next;
-            commitments.push(commitment);
-            paths.push(path);
+            appended.entry(note_set).or_default().push(commitment);
         }
     }
     Ok(witnesses)
@@ -221,31 +217,43 @@ fn op_effects<'a>(
 }
 
 fn op_witness(
-    state: &WalletState,
+    states: &[WalletState],
     known: &KnownNotes,
-    buffers: &mut HashMap<NoteSetIndex, SetBuffer>,
+    appended: &Appended,
     op_index: usize,
     opening: &ZkTransferOpening,
     spend: Spend,
     msg: Fr,
 ) -> Result<OpWitness, WalletError> {
+    let [tip, ..] = states else {
+        return Err(WalletError::UnknownRoot { op_index });
+    };
     let (tx_commitment_root, inputs) = match spend {
         Spend::InSet {
             note_set,
             nullifiers,
             commitment_merkle_root,
         } => {
-            // the wallet only proves against its own tip
-            if state
-                .commitments
-                .get(&note_set)
-                .map(CommitmentMmr::frontier_root)
-                != Some(commitment_merkle_root)
-            {
-                return Err(WalletError::UnknownRoot { op_index });
-            }
-            let (mmr, commitments, paths) = &*set_buffer(buffers, state, note_set);
-            let inputs = input_paths(state, known, op_index, opening, nullifiers, |commitment| {
+            // A root that stayed the same over several blocks: the youngest of
+            // them has spent what the others have.
+            let state = states
+                .iter()
+                .find(|state| {
+                    state
+                        .commitments
+                        .get(&note_set)
+                        .map(CommitmentMmr::frontier_root)
+                        == Some(commitment_merkle_root)
+                })
+                .ok_or(WalletError::UnknownRoot { op_index })?;
+            let (mmr, commitments, paths) = set_buffer(
+                tip,
+                state,
+                note_set,
+                appended.get(&note_set).map_or(&[], Vec::as_slice),
+                opening,
+            )?;
+            let inputs = input_paths(tip, known, op_index, opening, nullifiers, |commitment| {
                 commitments
                     .iter()
                     .position(|buffered| buffered == commitment)
@@ -260,7 +268,7 @@ fn op_witness(
             let service_commitment = service.commitment();
             let (mmr, path) = push(&CommitmentMmr::new(), service_commitment, &mut [], SDP_SET)?;
             let inputs = input_paths(
-                state,
+                tip,
                 known,
                 op_index,
                 opening,
@@ -302,28 +310,43 @@ fn channel_note_set(
         .ok_or(WalletError::UnknownChannel(*channel_id))
 }
 
-fn set_buffer<'a>(
-    buffers: &'a mut HashMap<NoteSetIndex, SetBuffer>,
+// The MMR of `note_set` at `state` extended by `appended`, with the inputs of
+// `opening` it holds: the ones still unspent at `tip` that `state` owns, then
+// the ones `appended` creates.
+fn set_buffer(
+    tip: &WalletState,
     state: &WalletState,
     note_set: NoteSetIndex,
-) -> &'a mut SetBuffer {
-    buffers.entry(note_set).or_insert_with(|| {
-        let (commitments, paths) = state
-            .notes
-            .iter()
-            .filter(|(_, owned)| owned.note_set == note_set)
-            .map(|(commitment, owned)| (*commitment, owned.path.clone()))
-            .unzip();
-        (
-            state
-                .commitments
-                .get(&note_set)
-                .cloned()
-                .unwrap_or_default(),
-            commitments,
-            paths,
-        )
-    })
+    appended: &[NoteCommitment],
+    opening: &ZkTransferOpening,
+) -> Result<SetBuffer, WalletError> {
+    let inputs = opening
+        .inputs
+        .iter()
+        .map(Note::commitment)
+        .collect::<Vec<_>>();
+    let (mut commitments, mut paths): (Vec<_>, Vec<_>) = inputs
+        .iter()
+        .filter(|commitment| tip.notes.contains_key(commitment))
+        .filter_map(|commitment| {
+            let owned = state.notes.get(commitment)?;
+            (owned.note_set == note_set).then(|| (*commitment, owned.path.clone()))
+        })
+        .unzip();
+    let mut mmr = state
+        .commitments
+        .get(&note_set)
+        .cloned()
+        .unwrap_or_default();
+    for commitment in appended {
+        let (next, path) = push(&mmr, *commitment, &mut paths, note_set)?;
+        mmr = next;
+        if inputs.contains(commitment) {
+            commitments.push(*commitment);
+            paths.push(path);
+        }
+    }
+    Ok((mmr, commitments, paths))
 }
 
 fn push(
@@ -464,7 +487,7 @@ mod tests {
         ]);
 
         let witnesses = op_witnesses(
-            &state,
+            core::slice::from_ref(&state),
             &known,
             &ops,
             &openings,
@@ -540,7 +563,7 @@ mod tests {
         )]);
 
         let witness = op_witness_at(
-            &state,
+            core::slice::from_ref(&state),
             &known,
             &ops,
             &openings,
@@ -561,7 +584,7 @@ mod tests {
         );
         assert_eq!(
             op_witnesses(
-                &state,
+                core::slice::from_ref(&state),
                 &known,
                 &ops,
                 &openings,

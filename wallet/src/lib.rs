@@ -38,6 +38,14 @@ use tracing::info;
 
 const LOG_TARGET: &str = wallet::CORE;
 
+/// How many blocks below its tip the wallet looks for the root a spend names.
+///
+/// Every block changes the root of the ledger set, so a root at the tip exists
+/// only on that fork and a spend naming it dies with the tip block. Consensus
+/// accepts any recent root of the chain, and this depth stays well inside its
+/// window while being out of reach of the usual forks.
+pub const SPEND_ROOT_DEPTH: usize = 30;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnedNote {
     pub note: Note,
@@ -279,7 +287,8 @@ impl WalletState {
         // Get the ledger notes owned by the provided PKs, excluding the ones
         // the tx already consumes and the ones excluded by the caller (e.g.
         // reserved for in flight txs). Service and channel notes are in
-        // other sets.
+        // other sets. The funding names the root of this state: `Wallet::fund_tx`
+        // moves it below the tip once the notes are chosen.
         let excluded = tx_builder
             .nullifiers_consumed()
             .chain(excluded.iter().copied())
@@ -538,6 +547,8 @@ pub struct Wallet<KeyId> {
     known_keys: HashMap<ZkPublicKey, KeyId>,
     known_notes: KnownNotes,
     wallet_states: BTreeMap<HeaderId, WalletState>,
+    // the parent of each applied block
+    parents: HashMap<HeaderId, HeaderId>,
 }
 
 impl<KeyId> Wallet<KeyId> {
@@ -569,6 +580,7 @@ impl<KeyId> Wallet<KeyId> {
             known_keys,
             known_notes,
             wallet_states: [(genesis, wallet_state)].into(),
+            parents: HashMap::new(),
         })
     }
 
@@ -601,6 +613,7 @@ impl<KeyId> Wallet<KeyId> {
             known_keys,
             known_notes,
             wallet_states: [(lib, wallet_state)].into(),
+            parents: HashMap::new(),
         }
     }
 
@@ -641,6 +654,7 @@ impl<KeyId> Wallet<KeyId> {
             .wallet_state_at(block.parent)?
             .apply_block(&self.known_notes, block)?;
         self.wallet_states.insert(block.id, block_wallet_state);
+        self.parents.insert(block.id, block.parent);
         Ok(())
     }
 
@@ -667,7 +681,7 @@ impl<KeyId> Wallet<KeyId> {
         excluded: &HashSet<NoteNullifier>,
         priority_fee_percent: u64,
     ) -> Result<MantleTxBuilder, WalletError> {
-        self.wallet_state_at(tip)?.fund_tx::<G>(
+        let funded = self.wallet_state_at(tip)?.fund_tx::<G>(
             tx_builder,
             change_pk,
             change_nonce,
@@ -675,7 +689,52 @@ impl<KeyId> Wallet<KeyId> {
             context,
             excluded,
             priority_fee_percent,
-        )
+        )?;
+        if funded.funding_inputs().len() == tx_builder.funding_inputs().len() {
+            return Ok(funded);
+        }
+        let inputs = funded
+            .funding_inputs()
+            .iter()
+            .map(|funding| funding.note.commitment())
+            .collect::<Vec<_>>();
+        let root = self.spend_root(tip, &inputs)?;
+        Ok(funded.extend_funding_inputs(root, [])?)
+    }
+
+    // A Transfer giving `owner` a note of exactly `value` and the rest back to
+    // `change_pk`, from the notes of the wallet at `tip`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "thin passthrough to `WalletState::exact_note_split` plus the tip"
+    )]
+    pub fn exact_note_split(
+        &self,
+        tip: HeaderId,
+        value: Value,
+        owner: ZkPublicKey,
+        nonce: Fr,
+        change_pk: ZkPublicKey,
+        change_nonce: Fr,
+        pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
+        excluded: &HashSet<NoteNullifier>,
+    ) -> Result<(TransferOp, ZkTransferOpening), WalletError> {
+        let (mut split, opening) = self.wallet_state_at(tip)?.exact_note_split(
+            value,
+            owner,
+            nonce,
+            change_pk,
+            change_nonce,
+            pks,
+            excluded,
+        )?;
+        let inputs = opening
+            .inputs
+            .iter()
+            .map(Note::commitment)
+            .collect::<Vec<_>>();
+        split.commitment_merkle_root = self.spend_root(tip, &inputs)?;
+        Ok((split, opening))
     }
 
     pub fn wallet_state_at(&self, tip: HeaderId) -> Result<WalletState, WalletError> {
@@ -683,6 +742,37 @@ impl<KeyId> Wallet<KeyId> {
             .get(&tip)
             .cloned()
             .ok_or(WalletError::UnknownBlock(tip))
+    }
+
+    /// The states a spend from `tip` can name a root of, `tip` first, down to
+    /// the block [`SPEND_ROOT_DEPTH`] below it or the LIB if that is shallower:
+    /// states below the LIB are pruned, and the LIB cannot fork.
+    pub fn spend_states(&self, tip: HeaderId) -> Result<Vec<WalletState>, WalletError> {
+        let mut states = vec![self.wallet_state_at(tip)?];
+        let mut block = tip;
+        while states.len() <= SPEND_ROOT_DEPTH {
+            let Some((parent, state)) = self
+                .parents
+                .get(&block)
+                .and_then(|parent| Some((*parent, self.wallet_states.get(parent)?)))
+            else {
+                break;
+            };
+            states.push(state.clone());
+            block = parent;
+        }
+        Ok(states)
+    }
+
+    // The ledger set root a spend of `inputs` from `tip` names: the oldest of
+    // the spend states holding them all, so a young note stays spendable.
+    fn spend_root(&self, tip: HeaderId, inputs: &[NoteCommitment]) -> Result<Fr, WalletError> {
+        let states = self.spend_states(tip)?;
+        let holding = states
+            .iter()
+            .take_while(|state| inputs.iter().all(|input| state.notes.contains_key(input)))
+            .last();
+        Ok(holding.unwrap_or(&states[0]).ledger_root())
     }
 
     /// Prune wallet states for blocks that have been pruned from the chain.
@@ -694,6 +784,7 @@ impl<KeyId> Wallet<KeyId> {
         let mut removed_count = 0;
 
         for block_id in pruned_blocks {
+            self.parents.remove(&block_id);
             if self.wallet_states.remove(&block_id).is_some() {
                 removed_count += 1;
             }
@@ -759,7 +850,10 @@ mod tests {
     use lb_groth16::{AdditiveGroup as _, Field as _};
 
     use super::*;
-    use crate::test_utils::{known, nullifier, pk};
+    use crate::{
+        test_utils::{known, nullifier, pk},
+        transaction::{WitnessContext, op_witnesses},
+    };
 
     fn commitment(v: u64) -> NoteCommitment {
         NoteCommitment(Fr::from(v))
@@ -1114,6 +1208,175 @@ mod tests {
         };
         WalletState::from_genesis(&known, &in_set(LEDGER_SET), &in_set(SDP_SET), Epoch::new(0))
             .unwrap()
+    }
+
+    fn block_id(id: u8) -> HeaderId {
+        HeaderId::from([id; 32])
+    }
+
+    fn ledger_root_at(wallet: &Wallet<u8>, id: u8) -> Fr {
+        wallet.wallet_state_at(block_id(id)).unwrap().ledger_root()
+    }
+
+    // A wallet of `genesis` on a chain of `len` blocks, each appending one
+    // commitment, or the commitment of a note of `younger` at its block.
+    fn wallet_on_chain(
+        known: KnownNotes,
+        genesis: &[Note],
+        younger: &[(u8, Note)],
+        len: u8,
+    ) -> Wallet<u8> {
+        let mut wallet = Wallet::from_genesis([], known, block_id(0), genesis, &[]).unwrap();
+        for id in 1..=len {
+            let appended_note = younger
+                .iter()
+                .find(|(at, _)| *at == id)
+                .map_or_else(|| commitment(id.into()), |(_, note)| note.commitment());
+            wallet
+                .apply_block(&block(
+                    id,
+                    id - 1,
+                    0,
+                    vec![appended(LEDGER_SET, vec![appended_note])],
+                ))
+                .unwrap();
+        }
+        wallet
+    }
+
+    #[test]
+    fn a_spend_survives_a_fork_of_its_tip_block() {
+        let alice = pk(1);
+        let note = Note::new(5000, Fr::from(1u64), alice);
+        let known = known(&[(note, LEDGER_SET, nullifier(1))]);
+        let mut wallet = wallet_on_chain(known.clone(), &[note], &[], 40);
+        let context = context(GasPrices::new(1, 1));
+        let fund = |wallet: &Wallet<u8>, tip: u8| {
+            wallet
+                .fund_tx::<MainnetGasProfile>(
+                    block_id(tip),
+                    &MantleTxBuilder::new(),
+                    alice,
+                    Fr::from(3u64),
+                    [alice],
+                    &context,
+                    &HashSet::new(),
+                    0,
+                )
+                .unwrap()
+        };
+
+        let funded = fund(&wallet, 40);
+        let root = funding_transfer(funded.clone()).commitment_merkle_root;
+        assert_eq!(root, ledger_root_at(&wallet, 10));
+
+        // Block 40 loses to a sibling, whose chain never held the root of block 40.
+        wallet
+            .apply_block(&block(
+                41,
+                39,
+                0,
+                vec![appended(LEDGER_SET, vec![commitment(99)])],
+            ))
+            .unwrap();
+        let openings = funded.openings();
+        let ops = funded.build().unwrap();
+        let witnesses = op_witnesses(
+            &wallet.spend_states(block_id(41)).unwrap(),
+            &known,
+            &ops,
+            &openings,
+            &WitnessContext::default(),
+            Fr::from(77u64),
+        )
+        .unwrap();
+        assert_eq!(witnesses[0].witness.chain.tx_commitment_root, root);
+        let path_at_root = wallet.wallet_state_at(block_id(10)).unwrap().notes[&note.commitment()]
+            .path
+            .clone();
+        assert!(path_at_root.verify::<ZkHasher>(note.commitment().0, root));
+        assert_eq!(
+            witnesses[0].witness.wallet.inputs[0].path_and_selectors[0].0,
+            path_at_root.siblings()[0]
+        );
+
+        // Nothing below the LIB is held, and the LIB cannot fork.
+        wallet.prune_states((0..20).map(block_id));
+        assert_eq!(
+            funding_transfer(fund(&wallet, 40)).commitment_merkle_root,
+            ledger_root_at(&wallet, 20)
+        );
+    }
+
+    #[test]
+    fn a_note_younger_than_the_depth_is_spent_against_the_oldest_root_holding_it() {
+        let alice = pk(1);
+        let old = Note::new(100, Fr::from(1u64), alice);
+        let young = Note::new(5000, Fr::from(2u64), alice);
+        let known_notes = known(&[
+            (old, LEDGER_SET, nullifier(1)),
+            (young, LEDGER_SET, nullifier(2)),
+        ]);
+        let wallet = wallet_on_chain(known_notes.clone(), &[old], &[(38, young)], 40);
+        let context = context(GasPrices::new(1, 1));
+        let tip = block_id(40);
+
+        // A split of the old note and the funding by the young one name two roots
+        // in one transaction.
+        let exact = Note::new(100, Fr::from(5u64), alice);
+        let (split, opening) = wallet
+            .exact_note_split(
+                tip,
+                100,
+                alice,
+                exact.nonce,
+                alice,
+                Fr::from(6u64),
+                [alice],
+                &HashSet::new(),
+            )
+            .unwrap();
+        assert_eq!(split.commitment_merkle_root, ledger_root_at(&wallet, 10));
+        let funded = wallet
+            .fund_tx::<MainnetGasProfile>(
+                tip,
+                &MantleTxBuilder::new()
+                    .push_op_with_opening(Op::Transfer(split), opening)
+                    .unwrap(),
+                alice,
+                Fr::from(3u64),
+                [alice],
+                &context,
+                &HashSet::new(),
+                0,
+            )
+            .unwrap();
+        assert_eq!(
+            funding_transfer(funded.clone()).commitment_merkle_root,
+            ledger_root_at(&wallet, 38)
+        );
+
+        let openings = funded.openings();
+        let ops = funded.build().unwrap();
+        let witnesses = op_witnesses(
+            &wallet.spend_states(tip).unwrap(),
+            &known_notes,
+            &ops,
+            &openings,
+            &WitnessContext::default(),
+            Fr::from(77u64),
+        )
+        .unwrap();
+        let extended = wallet.wallet_state_at(block_id(38)).unwrap().commitments[&LEDGER_SET]
+            .push(exact.commitment())
+            .unwrap();
+        assert_eq!(
+            witnesses
+                .iter()
+                .map(|witness| witness.witness.chain.tx_commitment_root)
+                .collect::<Vec<_>>(),
+            vec![ledger_root_at(&wallet, 10), extended.frontier_root()]
+        );
     }
 
     #[test]

@@ -2218,7 +2218,14 @@ mod tests {
             channel_note_sets: HashMap::new(),
             pow_epoch_reward: reward_value,
         };
-        op_witnesses(&state, &known, ops, openings, &context, ops.hash().to_fr())
+        op_witnesses(
+            &[state],
+            &known,
+            ops,
+            openings,
+            &context,
+            ops.hash().to_fr(),
+        )
     }
 
     /// Signs `tx_builder` as the wallet does: the witnesses its transfers get
