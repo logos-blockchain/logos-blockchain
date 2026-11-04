@@ -1,7 +1,7 @@
-use std::{collections::HashSet, mem};
+use std::{collections::HashMap, mem};
 
 use futures::Stream;
-use lb_binary_codec::bincode::{self, DeserializeOp as _, SerializeOp as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_log_targets::mempool;
 use lb_network_service::{
     backends::libp2p::{Command, Libp2p, Message, PubSubCommand, TopicHash},
@@ -9,29 +9,11 @@ use lb_network_service::{
 };
 use lb_time::{Era, era::EraSchedule};
 use overwatch::services::relay::OutboundRelay;
-use serde::{Serialize, de::DeserializeOwned};
 use tokio_stream::StreamExt as _;
 
 use crate::network::NetworkAdapter;
 
 const LOG_TARGET: &str = mempool::network::LIBP2P;
-
-/// The largest gossip message carrying a transaction of at most
-/// `max_transaction_size` bytes.
-///
-/// Direct transaction gossip carries canonical bytes in a configured-bincode
-/// byte envelope, so the transaction limit leaves one bincode `u64` length
-/// prefix of overhead.
-/// This is the application payload limit, not the Gossipsub protobuf limit.
-#[must_use]
-pub const fn max_transaction_gossip_bincode_payload_size(max_transaction_size: usize) -> usize {
-    max_transaction_size + bincode::BINCODE_LENGTH_PREFIX_SIZE
-}
-
-#[must_use]
-const fn transaction_gossip_size_is_valid(size: usize, max_transaction_size: usize) -> bool {
-    size <= max_transaction_gossip_bincode_payload_size(max_transaction_size)
-}
 
 #[derive(Clone)]
 pub struct Libp2pAdapter<Item, Key, RuntimeServiceId> {
@@ -67,7 +49,7 @@ impl<Item, Key, RuntimeServiceId> Libp2pAdapter<Item, Key, RuntimeServiceId> {
 impl<Item, Key, RuntimeServiceId> NetworkAdapter<RuntimeServiceId>
     for Libp2pAdapter<Item, Key, RuntimeServiceId>
 where
-    Item: DeserializeOwned + Serialize + Send + Sync + 'static + Clone,
+    Item: BinaryEncode + BinaryDecode<Context = u32> + Send + Sync + 'static + Clone,
     Key: Clone + Send + Sync + 'static,
 {
     type Backend = Libp2p;
@@ -167,13 +149,19 @@ where
         // Gossipsub only hands over the messages of the topics the node is
         // subscribed to: the topic of the adapter's current era, and the topic
         // of the era before during its transition period. So the stream keeps
-        // the messages of every era's topic, and follows the adapter from era
-        // to era, without requiring any actions from consumers on era changes.
-        let topic_hashes: HashSet<TopicHash> = self
+        // the messages of every era's topic, each decoded under the limit of
+        // that era, and follows the adapter from era to era, without requiring
+        // any actions from consumers on era changes.
+        let max_op_data_sizes: HashMap<TopicHash, u32> = self
             .settings
             .era_schedule
             .iter()
-            .map(|era| TopicHash::from_raw(era.parameters.topic.clone()))
+            .map(|era| {
+                (
+                    TopicHash::from_raw(era.parameters.topic.clone()),
+                    era.parameters.max_op_data_size,
+                )
+            })
             .collect();
         let id = self.settings.id;
         let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -184,8 +172,8 @@ where
 
         let stream = receiver.await.unwrap();
         Box::new(Box::pin(stream.filter_map(move |message| match message {
-            Ok(Message { data, topic, .. }) if topic_hashes.contains(&topic) => {
-                match Item::from_bytes(&data) {
+            Ok(Message { data, topic, .. }) => {
+                match Item::decode_all(&data, max_op_data_sizes.get(&topic)?) {
                     Ok(item) => Some((id(&item), item)),
                     Err(e) => {
                         tracing::debug!(target: LOG_TARGET, "Unrecognized message: {e}");
@@ -193,14 +181,12 @@ where
                     }
                 }
             }
-            _ => None,
+            Err(_) => None,
         })))
     }
 
     async fn send(&self, item: Item) {
-        let serialized = item
-            .to_bytes()
-            .expect("Item should be able to be serialized");
+        let size = item.encoded_length();
         let max_transaction_size = self
             .settings
             .era_schedule
@@ -208,11 +194,11 @@ where
             .expect("The adapter is only ever in a scheduled era.")
             .parameters
             .max_transaction_size;
-        if !transaction_gossip_size_is_valid(serialized.len(), max_transaction_size) {
+        if size > max_transaction_size {
             tracing::debug!(
                 target: LOG_TARGET,
-                size = serialized.len(),
-                maximum = max_transaction_gossip_bincode_payload_size(max_transaction_size),
+                size,
+                maximum = max_transaction_size,
                 "Not broadcasting an oversized transaction"
             );
             return;
@@ -223,7 +209,7 @@ where
                 .send(NetworkMsg::Process(Command::PubSub(
                     PubSubCommand::Broadcast {
                         topic: self.current_era_topic.clone(),
-                        message: serialized.to_vec().into_boxed_slice(),
+                        message: item.encode(),
                     },
                 )))
                 .await
@@ -249,47 +235,7 @@ pub struct EraSettings {
     pub topic: String,
     /// The most bytes a transaction may take: larger ones are not gossiped.
     pub max_transaction_size: usize,
-}
-
-#[cfg(test)]
-mod tests {
-    use lb_core::mantle::{
-        ledger::verification_mode::StandardMode,
-        traits::StorageSize as _,
-        transactions::{
-            SignedOps,
-            states::{Preverified, Unverified},
-        },
-    };
-
-    use super::*;
-
-    #[test]
-    fn transaction_gossipsub_bound_accounts_for_the_bincode_envelope() {
-        let transaction =
-            SignedOps::<Unverified, StandardMode>::sample().into_preverified_trusted_standard();
-        let bytes =
-            <SignedOps<Preverified, StandardMode> as bincode::SerializeOp>::to_bytes(&transaction)
-                .unwrap();
-
-        assert_eq!(
-            bytes.len(),
-            max_transaction_gossip_bincode_payload_size(transaction.storage_size())
-        );
-    }
-
-    #[test]
-    fn transaction_gossip_guard_rejects_one_byte_over_the_bound() {
-        let max_transaction_size = 2 * 1024 * 1024;
-        let bound = max_transaction_gossip_bincode_payload_size(max_transaction_size);
-
-        assert!(transaction_gossip_size_is_valid(
-            bound,
-            max_transaction_size
-        ));
-        assert!(!transaction_gossip_size_is_valid(
-            bound + 1,
-            max_transaction_size
-        ));
-    }
+    /// The most bytes of data an Operation may carry in the era: what the
+    /// transactions of its topic are decoded under.
+    pub max_op_data_size: u32,
 }

@@ -46,6 +46,7 @@ impl ServiceConfig {
                         topic: ProtocolScope::Fork(era.parameters.fork_digest)
                             .to_string_with_name("mempool"),
                         max_transaction_size: parameters.cryptarchia.max_transactions_size as usize,
+                        max_op_data_size: parameters.cryptarchia.max_op_data_size(),
                     }
                 }),
             },

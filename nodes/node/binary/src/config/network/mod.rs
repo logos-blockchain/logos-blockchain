@@ -10,7 +10,6 @@ use lb_network_service::{
     backends::libp2p::config::{Libp2pConfig, Libp2pEraConfig},
     config::NetworkConfig,
 };
-use lb_tx_service::network::adapters::libp2p::max_transaction_gossip_bincode_payload_size;
 use libp2p::gossipsub::{IdentTopic, TopicHash};
 
 use crate::config::{
@@ -128,10 +127,7 @@ fn max_data_size_by_topic(
 ) -> HashMap<TopicHash, usize> {
     let mut limits: HashMap<TopicHash, usize> = HashMap::new();
     for (topic, required) in [
-        (
-            transaction_topic,
-            max_transaction_gossip_bincode_payload_size(max_transaction_size),
-        ),
+        (transaction_topic, max_transaction_size),
         (proposal_topic, max_proposal_size),
     ] {
         let topic = IdentTopic::new(topic).hash();
@@ -155,7 +151,7 @@ mod tests {
         identity::{self, ed25519},
     };
 
-    use super::{max_data_size_by_topic, max_transaction_gossip_bincode_payload_size};
+    use super::max_data_size_by_topic;
 
     /// The most bytes a transaction of the tests' era may take.
     const MAX_TRANSACTION_SIZE: usize = 2 * 1024 * 1024;
@@ -178,10 +174,7 @@ mod tests {
 
         assert_eq!(
             limits.get(&topic_hash),
-            Some(
-                &max_transaction_gossip_bincode_payload_size(MAX_TRANSACTION_SIZE)
-                    .max(max_proposal_size())
-            )
+            Some(&MAX_TRANSACTION_SIZE.max(max_proposal_size()))
         );
     }
 
@@ -193,7 +186,7 @@ mod tests {
         let limits = [
             (
                 "/logos-blockchain-standalone-local/mempool/1.0.0",
-                max_transaction_gossip_bincode_payload_size(MAX_TRANSACTION_SIZE),
+                MAX_TRANSACTION_SIZE,
             ),
             (
                 "/logos-blockchain-standalone-local/cryptarchia/1.0.0",

@@ -9,10 +9,10 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _, stream};
-use lb_binary_codec::bincode::{Error as CodecError, SerializeOp};
+use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_blend_service::{
     api::{ApiError as BlendApiError, BlendServiceApi, BlendServiceData},
-    message::{DataPayload, TransactionNotBlendable},
+    message::DataPayload,
 };
 use lb_chain_service::{
     ProcessedBlockEvent, Slot,
@@ -104,10 +104,6 @@ pub enum PoWError {
     Sign(#[from] ZkSignError),
     #[error("signing task failed: {0}")]
     SignTask(#[from] JoinError),
-    #[error("failed to encode transaction: {0}")]
-    Encode(#[from] CodecError),
-    #[error("transaction cannot be carried by the blend network: {0}")]
-    NotBlendable(#[from] TransactionNotBlendable),
     #[error("failed to publish to the blend network: {0}")]
     Publish(#[from] BlendApiError),
     #[error("failed to query the chain service: {0}")]
@@ -1670,9 +1666,7 @@ fn claim_tx_size(claims: usize) -> Result<u64, PoWError> {
         .build(ForkDigest::new([0; 32]))?;
     let ops_proofs = claim_ops_proofs(claims, std::iter::repeat_n(signature, groups))?;
 
-    Ok(SerializeOp::bytes_size(
-        &SignedOps::<_, StandardMode>::from_parts(ops, ops_proofs)?,
-    )?)
+    Ok(SignedOps::<_, StandardMode>::from_parts(ops, ops_proofs)?.encoded_length() as u64)
 }
 
 /// Size, in bytes, of a transaction that claims a single reward: the smallest
@@ -1921,7 +1915,7 @@ where
     BlendService::NodeId: Send,
     RuntimeServiceId: Sync,
 {
-    let payload = DataPayload::try_from_transaction(&signed_tx)?;
+    let payload = DataPayload::from_transaction(&signed_tx);
     blend_api.publish(payload).await?;
     Ok(())
 }
@@ -1954,7 +1948,7 @@ mod tests {
         sync::{Arc, LazyLock},
     };
 
-    use lb_binary_codec::bincode::SerializeOp as _;
+    use lb_binary_codec::canonical::BinaryEncode as _;
     use lb_chain_service::Slot;
     use lb_core::{
         era::ForkDigest,
@@ -2030,7 +2024,7 @@ mod tests {
     /// the ledger's stateless `preverify`), and the Blend payload body it is
     /// published in.
     fn assert_within_tx_limits(tx: &SignedOps<Unverified, StandardMode>) {
-        let size = tx.to_bytes().expect("built tx should serialize").len();
+        let size = tx.encoded_length();
         assert!(
             size <= PAYLOAD_BODY_SIZE,
             "tx of {size} bytes exceeds the {PAYLOAD_BODY_SIZE} a Blend payload carries"
@@ -2500,7 +2494,7 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(
-                tx.to_bytes().unwrap().len() as u64,
+                tx.encoded_length() as u64,
                 claim_tx_size(claims).unwrap(),
                 "probe disagrees with a signed tx at {claims} claim(s)"
             );
