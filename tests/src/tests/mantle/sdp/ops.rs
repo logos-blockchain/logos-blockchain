@@ -88,6 +88,7 @@ async fn sdp_ops_e2e() {
         locators: locator.into(),
         provider_id,
         zk_id: genesis_declaration.zk_id,
+        note_pk: genesis_declaration.zk_id,
         amount: min_stake,
     };
     let declaration_id = declaration.id();

@@ -823,6 +823,7 @@ mod tests {
             locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
             provider_id: ProviderId(signing_key.public_key()),
             zk_id: zk_key.to_public_key(),
+            note_pk: zk_key.to_public_key(),
             inputs: [derive_note_nullifier(&input.commitment(), input_sk)].into(),
             commitment_merkle_root: NoteSet::empty().commitment_root(),
             amount: input.value,

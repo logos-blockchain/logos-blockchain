@@ -382,6 +382,8 @@ where
         provider_id: ProviderId(non_ephemeral_signing_key_public),
         service_type: ServiceType::BlendNetwork,
         zk_id,
+        // The Blend key is one the node holds, so its wallet can withdraw.
+        note_pk: zk_id,
         amount,
     };
     sdp_service_api.post_declaration(sdp_declaration).await

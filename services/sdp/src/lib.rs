@@ -87,6 +87,9 @@ pub struct DeclarationRequest {
     pub locators: Locators,
     pub provider_id: ProviderId,
     pub zk_id: ZkPublicKey,
+    // The key of the service note. The node can only withdraw the declaration
+    // when its wallet holds this key.
+    pub note_pk: ZkPublicKey,
     pub amount: Value,
 }
 
@@ -1157,6 +1160,7 @@ mod tests {
             locators: Locator::from_str("/ip4/1.1.1.1/udp/3000").unwrap().into(),
             provider_id: ProviderId(Ed25519PublicKey::from_bytes(&[10; 32]).unwrap()),
             zk_id: ZkPublicKey::new(Fr::from(2u64)),
+            note_pk: ZkPublicKey::new(Fr::from(3u64)),
             amount: 1_000,
         };
         let config = DeclarationConfig::from(&request);

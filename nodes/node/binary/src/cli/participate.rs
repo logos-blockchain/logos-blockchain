@@ -27,6 +27,7 @@ struct ParticipationData {
 struct BlendParticipationData {
     provider_id: Ed25519PublicKey,
     zk_id: ZkPublicKey,
+    note_pk: ZkPublicKey,
     locators: Locators,
     service_type: ServiceType,
     declaration_id: DeclarationId,
@@ -98,6 +99,7 @@ fn build_blend_data(
         locators: locators.clone(),
         provider_id: ProviderId(provider_id),
         zk_id: blend_key.to_public_key(),
+        note_pk: blend_key.to_public_key(),
         amount: 0,
     }
     .id();
@@ -105,6 +107,7 @@ fn build_blend_data(
     Ok(Some(BlendParticipationData {
         provider_id,
         zk_id: blend_key.to_public_key(),
+        note_pk: blend_key.to_public_key(),
         locators,
         service_type: ServiceType::BlendNetwork,
         declaration_id,

@@ -73,6 +73,7 @@ where
                 locators: declaration.locators,
                 provider_id: declaration.provider_id,
                 zk_id: declaration.zk_id,
+                note_pk: declaration.note_pk,
                 inputs: [exact.nullifier].into(),
                 commitment_merkle_root,
                 amount: declaration.amount,
@@ -130,7 +131,7 @@ where
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?
             .response
-            .ok_or_else(|| SdpWalletError::WalletApi("the service note is not owned".into()))?;
+            .ok_or(SdpWalletError::ServiceNoteNotHeld(declaration.service_note))?;
         let output = Note::new(
             service_note.note.value,
             fr_from_mod_bytes(&rand::random::<[u8; 32]>()),

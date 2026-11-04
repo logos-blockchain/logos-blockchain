@@ -313,6 +313,7 @@ mod tests {
                 .public_key()
                 .into(),
             zk_id: ZkKey::from(BigUint::from(zk_sk)).to_public_key(),
+            note_pk: ZkKey::from(BigUint::from(zk_sk)).to_public_key(),
             inputs: [nullifier(2)].into(),
             commitment_merkle_root: root(),
             amount: 10_000,
@@ -658,12 +659,13 @@ mod tests {
         fn execute_spends_the_inputs_and_adds_the_service_note() {
             let operation = SDPDeclareOp::sample();
             let op_id: [u8; 32] =
-                hex::decode("eee94894496fe11261d5f649f414c586c852436ba4c6c3fdb60294894a3dc19c")
+                hex::decode("07cad981e914c28fb8d090e67627b05347314ad27090a7212cd3437ba66db105")
                     .unwrap()
                     .try_into()
                     .unwrap();
-            let zk_id = ZkPublicKey::from(Fr::from(25u64));
-            let expected = notes::Note::new(45, derive_note_nonce(&op_id, 0, 45, &zk_id), zk_id);
+            let note_pk = ZkPublicKey::from(Fr::from(48u64));
+            let expected =
+                notes::Note::new(45, derive_note_nonce(&op_id, 0, 45, &note_pk), note_pk);
             assert_eq!(operation.service_note(), expected);
 
             let (context, events) = verified(operation.clone())

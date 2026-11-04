@@ -1354,6 +1354,7 @@ pub mod tests {
             locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
             provider_id: signing_key.public_key().into(),
             zk_id: zk_key.to_public_key(),
+            note_pk: zk_key.to_public_key(),
             inputs: [derive_note_nullifier(
                 &sdp_utxo.commitment(),
                 &sdp_secret_key,
