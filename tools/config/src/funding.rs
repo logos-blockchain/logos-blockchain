@@ -36,9 +36,10 @@ pub fn fund_wallets(
 }
 
 /// Gives the notes of the leaders, evenly, what the other outputs and the
-/// `declared` amounts leave of [`GENESIS_STAKE_SUPPLY`], so that the block
-/// follows the supply rule of Mantle Ledger Initialization and the lottery
-/// elects them.
+/// `declared` amounts leave of [`GENESIS_STAKE_SUPPLY`].
+///
+/// The block then follows the supply rule of Mantle Ledger Initialization and
+/// the lottery elects the leaders.
 pub fn fill_leader_stake(transfer: &mut Distribution, leader_keys: &[ZkPublicKey], declared: u64) {
     let others = transfer
         .iter()

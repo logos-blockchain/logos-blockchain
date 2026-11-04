@@ -36,13 +36,14 @@ const INFINITY_FLAG: u8 = 1 << 6;
 
 fn coordinate_limbs(coordinate: &[u8]) -> BigInt<4> {
     let mut limbs = [0u64; 4];
-    for (limb, bytes) in limbs.iter_mut().zip(coordinate.chunks_exact(8)) {
-        *limb = u64::from_le_bytes(bytes.try_into().expect("a chunk holds 8 bytes"));
+    let (chunks, _) = coordinate.as_chunks::<8>();
+    for (limb, bytes) in limbs.iter_mut().zip(chunks) {
+        *limb = u64::from_le_bytes(*bytes);
     }
     BigInt::new(limbs)
 }
 
-pub(crate) fn flagged_coordinate_is_canonical(coordinate: &[u8]) -> bool {
+pub fn flagged_coordinate_is_canonical(coordinate: &[u8]) -> bool {
     let last_byte = coordinate[COORDINATE_SIZE - 1];
     if last_byte & INFINITY_FLAG != 0 {
         return false;
@@ -52,7 +53,7 @@ pub(crate) fn flagged_coordinate_is_canonical(coordinate: &[u8]) -> bool {
     limbs < Fq::MODULUS
 }
 
-pub(crate) fn g2_coordinates_are_canonical(point: &[u8]) -> bool {
+pub fn g2_coordinates_are_canonical(point: &[u8]) -> bool {
     let (c0, c1) = point.split_at(COORDINATE_SIZE);
     coordinate_limbs(c0) < Fq::MODULUS && flagged_coordinate_is_canonical(c1)
 }
@@ -280,10 +281,10 @@ mod tests {
     #[test]
     fn the_point_at_infinity_is_rejected_at_every_position() {
         let compressed = CompressedProof::<Bn254>::try_from(&generators()).unwrap();
-        let mut pi_a = compressed.clone();
+        let mut pi_a = compressed;
         pi_a.pi_a.as_mut_slice().fill(0);
         pi_a.pi_a.as_mut_slice()[31] = 1 << 6;
-        let mut pi_b = compressed.clone();
+        let mut pi_b = compressed;
         pi_b.pi_b.as_mut_slice().fill(0);
         pi_b.pi_b.as_mut_slice()[63] = 1 << 6;
         let mut pi_c = compressed;
@@ -297,7 +298,7 @@ mod tests {
     #[test]
     fn the_point_at_infinity_is_rejected_whatever_its_coordinate_and_with_both_flags() {
         let compressed = CompressedProof::<Bn254>::try_from(&generators()).unwrap();
-        let mut any_coordinate = compressed.clone();
+        let mut any_coordinate = compressed;
         any_coordinate.pi_a.as_mut_slice().fill(0);
         any_coordinate.pi_a.as_mut_slice()[0] = 5;
         any_coordinate.pi_a.as_mut_slice()[31] = 1 << 6;

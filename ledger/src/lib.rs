@@ -97,8 +97,10 @@ fn add_excess<Id>(balance: Balance, excess_value: Value) -> Result<Balance, Ledg
 }
 
 /// What the published distribution and the `SDP_DECLARE` Operations of a
-/// genesis block hold together: the maximum supply minus the pow reward pool
-/// and the rewards reserve (Mantle Ledger Initialization in the genesis spec).
+/// genesis block hold together.
+///
+/// It is the maximum supply minus the pow reward pool and the rewards reserve
+/// (Mantle Ledger Initialization in the genesis spec).
 pub const GENESIS_STAKE_SUPPLY: Value =
     MAX_SUPPLY - POW_REWARD_POOL_GENESIS - REWARDS_RESERVE_GENESIS;
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -2017,9 +2019,9 @@ mod tests {
     }
 
     // A genesis transaction holding these notes and a Blend declaration.
-    fn genesis_tx_of(allocations: [GenesisAllocation; 9], declaration: SDPDeclareOp) -> GenesisTx {
+    fn genesis_tx_of(allocations: &[GenesisAllocation; 9], declaration: SDPDeclareOp) -> GenesisTx {
         GenesisBlockBuilder::new()
-            .add_notes(allocations)
+            .add_notes(*allocations)
             .set_inscription(cryptarchia_inscription())
             .add_declaration(declaration)
             .build()
@@ -2046,7 +2048,7 @@ mod tests {
             public_key: ZkPublicKey::new(Fr::from(100 + i as u64)),
         });
         (
-            genesis_tx_of(allocations, declaration.clone()),
+            genesis_tx_of(&allocations, declaration.clone()),
             allocations,
             declaration,
         )
@@ -2191,7 +2193,7 @@ mod tests {
         short[8].value -= 1;
         assert_eq!(
             LedgerState::from_genesis_tx::<HeaderId>(
-                genesis_tx_of(short, declaration.clone()),
+                genesis_tx_of(&short, declaration.clone()),
                 &config()
             )
             .err(),
@@ -2204,7 +2206,7 @@ mod tests {
         };
         assert_eq!(
             LedgerState::from_genesis_tx::<HeaderId>(
-                genesis_tx_of(allocations, over_declared),
+                genesis_tx_of(&allocations, over_declared),
                 &config()
             )
             .err(),
@@ -3812,7 +3814,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::too_many_lines, reason = "Test function")]
     fn test_multiple_operations_in_transaction() {
         // Create channel 1 by posting an inscription
         // Create channel 2 by posting an inscription

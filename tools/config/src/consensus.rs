@@ -432,7 +432,7 @@ fn create_allocations(
 #[must_use]
 pub fn create_genesis_block_with_declarations(
     allocations: Distribution,
-    providers: Vec<ProviderInfo>,
+    providers: &[ProviderInfo],
     test_context: Option<&str>,
     genesis_time: GenesisTime,
 ) -> GenesisBlock {

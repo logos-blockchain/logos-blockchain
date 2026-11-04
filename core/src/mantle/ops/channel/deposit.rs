@@ -269,7 +269,7 @@ mod test {
     fn decoder_accepts_metadata_at_the_limit() {
         let bytes = deposit_bytes(1_835_008, 1_835_008);
         let (rest, op) = DepositOp::decode(&bytes, &()).unwrap();
-        assert!(rest.is_empty());
+        assert_eq!(rest, [0u8; 0]);
         assert_eq!(op.metadata.len(), 1_835_008);
     }
 
