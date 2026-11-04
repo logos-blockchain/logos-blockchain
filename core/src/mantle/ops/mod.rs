@@ -47,11 +47,12 @@ pub(crate) static OPERATION_ID_V1: LazyLock<Vec<u8>> =
 ///   asserted to equal `OpId::op_id`.
 ///
 /// - [`generate_mantle_tx_hash_test_vectors`]: for an empty transaction and for
-///   a transaction holding one of every operation, the `encoding` (the
-///   canonical transaction encoding, i.e. `MantleTx::encode`, which is an
-///   op-count byte followed by each `opcode || op_payload`) and the resulting
-///   `tx_hash = Blake2b-256(b"MANTLE_TXHASH_V1" || encoding)`. The emitted hash
-///   is asserted to equal `MantleTx::hash`.
+///   a transaction holding one of every operation, both under the test fork
+///   digest `0x11…11`, the `encoding` (the canonical transaction encoding, i.e.
+///   `MantleTx::encode`, which is the fork digest, an op-count byte, then each
+///   `opcode || op_payload`) and the resulting `tx_hash =
+///   Blake2b-256(b"MANTLE_TXHASH_V1" || encoding)`. The emitted hash is
+///   asserted to equal `MantleTx::hash`.
 ///
 /// All deterministic inputs are fixed, so the vectors are stable across runs.
 /// The tests are `#[ignore]`d so they are skipped by `cargo test
@@ -68,11 +69,11 @@ mod mantle_test_vectors {
         mantle::{
             fixtures::ops::op_values::{
                 ALL_OPS_COLUMN_HEX, CHANNEL_CONFIG, CHANNEL_TRANSFER, CHANNEL_WITHDRAW,
-                CLAIM_POW_REWARD, DEPOSIT, INSCRIPTION, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE,
-                SDP_WITHDRAW, SDP_WITHDRAW_PAYLOAD_HEX, TRANSFER,
+                CLAIM_POW_REWARD, DEPOSIT, FORK_DIGEST, FORK_DIGEST_HEX, INSCRIPTION, LEADER_CLAIM,
+                SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, SDP_WITHDRAW_PAYLOAD_HEX, TRANSFER,
             },
             traits::Hashable as _,
-            transactions::tx_list::Ops,
+            transactions::{TxList, tx_list::Ops},
         },
         sdp::{DeclarationId, Nonce, WithdrawMessage},
     };
@@ -113,27 +114,34 @@ mod mantle_test_vectors {
             "e6d384d4b0efa9e934c08953d225752b91b202f0d085f67e9905343fe74808fa"
         );
 
-        let all_ops = Ops::from([
-            Op::Transfer(TRANSFER.clone()),
-            Op::ChannelConfig(CHANNEL_CONFIG.clone()),
-            Op::ChannelInscribe(INSCRIPTION.clone()),
-            Op::ChannelDeposit(DEPOSIT.clone()),
-            Op::ChannelWithdraw(CHANNEL_WITHDRAW.clone()),
-            Op::ChannelTransfer(CHANNEL_TRANSFER.clone()),
-            Op::SDPDeclare(SDP_DECLARE.clone()),
-            Op::SDPWithdraw(*SDP_WITHDRAW),
-            Op::SDPActive(SDP_ACTIVE.clone()),
-            Op::LeaderClaim(LEADER_CLAIM.clone()),
-            Op::ClaimPowReward(CLAIM_POW_REWARD.clone()),
-        ]);
+        let all_ops = Ops::new(
+            FORK_DIGEST,
+            [
+                Op::Transfer(TRANSFER.clone()),
+                Op::ChannelConfig(CHANNEL_CONFIG.clone()),
+                Op::ChannelInscribe(INSCRIPTION.clone()),
+                Op::ChannelDeposit(DEPOSIT.clone()),
+                Op::ChannelWithdraw(CHANNEL_WITHDRAW.clone()),
+                Op::ChannelTransfer(CHANNEL_TRANSFER.clone()),
+                Op::SDPDeclare(SDP_DECLARE.clone()),
+                Op::SDPWithdraw(*SDP_WITHDRAW),
+                Op::SDPActive(SDP_ACTIVE.clone()),
+                Op::LeaderClaim(LEADER_CLAIM.clone()),
+                Op::ClaimPowReward(CLAIM_POW_REWARD.clone()),
+            ],
+        );
         let transaction_encoding = all_ops.encode();
         let transaction_hash = tx_hash_from_payload(&transaction_encoding);
-        assert_eq!(transaction_encoding[0], 0x0b);
-        assert_eq!(hex::encode(&transaction_encoding), ALL_OPS_COLUMN_HEX);
+        // The fork digest, then the operation column, which opens with the
+        // number of operations.
+        let (fork_digest, column) = transaction_encoding.split_at(FORK_DIGEST.encoded_length());
+        assert_eq!(hex::encode(fork_digest), FORK_DIGEST_HEX);
+        assert_eq!(column[0], 0x0b);
+        assert_eq!(hex::encode(column), ALL_OPS_COLUMN_HEX);
         assert_eq!(all_ops.hash().0, transaction_hash);
         assert_eq!(
             hex::encode(transaction_hash),
-            "bd35e8f71e9005df1ba36ad320b57a8db408cf148c1c80f59e76cff9caae40ca"
+            "2d489b91556418db14b646788808065e2562993785e50c9d6449fe8261e8521b"
         );
     }
 
@@ -169,7 +177,8 @@ mod mantle_test_vectors {
         let encoding = current_ops.encode();
         let hash = current_ops.hash().0;
 
-        assert_eq!(encoding[0], 0x0b);
+        // The number of operations follows the fork digest.
+        assert_eq!(encoding[FORK_DIGEST.encoded_length()], 0x0b);
         assert!(matches!(
             current_ops.as_slice(),
             [
@@ -189,7 +198,7 @@ mod mantle_test_vectors {
         assert_eq!(hash, tx_hash_from_payload(&encoding));
         assert_eq!(
             hex::encode(hash),
-            "35f957f9a2688d0e0d8d4c0762c6921f814a4a7243d05e31532ba7ae7a58c910"
+            "d76eb0a6915f9189165ffb5a03d6efc1115f2067176c9b8ea5f3da2c8915785d"
         );
     }
 
@@ -250,7 +259,10 @@ mod mantle_test_vectors {
     fn generate_mantle_tx_hash_test_vectors() {
         println!();
         // Empty transaction (zero operations).
-        print_tx_vector("empty (0 ops)", &Ops::new_unchecked(vec![]));
+        print_tx_vector(
+            "empty (0 ops)",
+            &Ops::new(FORK_DIGEST, TxList::new_unchecked(vec![])),
+        );
 
         // Transaction holding one of every operation.
         print_tx_vector("one of each operation (11 ops)", &Ops::sample());

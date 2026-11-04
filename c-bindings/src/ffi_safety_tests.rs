@@ -46,7 +46,7 @@ use crate::{
     LogosBlockchainNode, OperationStatus, OperationStatusCode,
     api::{
         blend::{blend_info, blend_join_as_core_node},
-        chain::get_chain_id,
+        chain::{get_chain_id, get_fork_digest},
         channel::get_channel_state,
         config::{GenerateConfigArgs, generate_user_config, participate},
         cryptarchia::{free_cryptarchia_info, get_block_events, get_cryptarchia_info},
@@ -210,6 +210,7 @@ mod no_node {
 
         unsafe {
             assert_eq!(code(get_chain_id(node)), np);
+            assert_eq!(code(get_fork_digest(node)), np);
             assert_eq!(code(leader_claim(node)), np);
             assert_eq!(code(get_network_info(node)), np);
             assert_eq!(code(get_channel_state(node, id.as_ptr())), np);
@@ -761,6 +762,10 @@ mod with_node {
             // ---- plain getters ----
             assert_eq!(
                 string_result("get_chain_id", get_chain_id(node)),
+                OperationStatusCode::Ok
+            );
+            assert_eq!(
+                string_result("get_fork_digest", get_fork_digest(node)),
                 OperationStatusCode::Ok
             );
 

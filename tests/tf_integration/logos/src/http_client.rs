@@ -7,6 +7,7 @@ use futures::Stream;
 use lb_blend_service::message::NetworkInfo as BlendNetworkInfo;
 use lb_chain_service::ChainServiceInfo;
 use lb_core::{
+    era::ForkDigest,
     header::HeaderId,
     mantle::{
         NoteId, SignedOps,
@@ -82,6 +83,16 @@ impl NodeHttpClient {
         self.with_timeout(
             "Chain ID request",
             self.http_client.chain_id(self.base_url.clone()),
+        )
+        .await
+    }
+
+    /// The fork digest of the era the node's clock is in, which a
+    /// transaction signed now carries.
+    pub async fn chain_fork(&self) -> Result<ForkDigest, Error> {
+        self.with_timeout(
+            "Chain fork request",
+            self.http_client.chain_fork(self.base_url.clone()),
         )
         .await
     }

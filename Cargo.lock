@@ -4426,6 +4426,7 @@ version = "0.0.0"
 dependencies = [
  "cbindgen",
  "futures",
+ "hex",
  "logos-blockchain-api-service",
  "logos-blockchain-blend-service",
  "logos-blockchain-c-macros",
@@ -5670,6 +5671,7 @@ dependencies = [
  "logos-blockchain-services-utils",
  "logos-blockchain-storage-service",
  "logos-blockchain-time",
+ "logos-blockchain-time-service",
  "logos-blockchain-utils",
  "logos-blockchain-wallet",
  "overwatch",

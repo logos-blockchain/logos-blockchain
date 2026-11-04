@@ -6,7 +6,7 @@ use lb_core::mantle::{
     NoteId, Op, OpProof, OpRef, SignedOps, TxHash,
     gas::{MainnetGasProfile, TxGasCalculator as _},
     traits::Hashable as _,
-    transactions::{MantleTxBuilder, OpProofs, Ops, tx_list::ops::OpsContext},
+    transactions::{OpProofs, Ops, tx_list::ops::OpsContext},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
 
@@ -16,14 +16,13 @@ use crate::common::wallet::WalletReservedInputs;
 pub(super) type WalletTransferSigners = HashMap<NoteId, ZkKey>;
 
 pub(super) fn sign_prepared_wallet_transaction(
-    funded_builder: MantleTxBuilder,
+    mantle_tx: Ops,
     context: &OpsContext,
     tx_hash: TxHash,
     transfer_proofs: OpProofs,
     reserved_inputs: WalletReservedInputs,
     leading_op_proofs: OpProofs,
 ) -> Result<SignedWalletTransaction, WalletTransactionError> {
-    let mantle_tx = funded_builder.build()?;
     let op_proofs = {
         let mut leading_op_proofs_vec = leading_op_proofs.into_inner().into_inner();
         leading_op_proofs_vec.extend(transfer_proofs);

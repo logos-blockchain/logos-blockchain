@@ -9,9 +9,12 @@ use std::{
 use async_trait::async_trait;
 use futures::Stream;
 use indexmap::{IndexMap, IndexSet};
-use lb_core::mantle::{
-    traits::{Hashable, MantleTx},
-    transactions::hash::PrefixedKey,
+use lb_core::{
+    era::AcceptedForkDigests,
+    mantle::{
+        traits::{Hashable, MantleTx},
+        transactions::hash::PrefixedKey,
+    },
 };
 use lb_cryptarchia_engine::Slot;
 use lb_log_targets::mempool;
@@ -44,15 +47,9 @@ pub struct MempoolSettings {
     /// Eviction of transactions carrying an expired `PoW` reward claim, with
     /// the settings of every era. `None` disables it.
     pub pow_claim: Option<EraSchedule<PowClaimEvictionSettings>>,
-}
-
-impl Default for MempoolSettings {
-    fn default() -> Self {
-        Self {
-            tx_ttl: Some(DEFAULT_TX_TTL),
-            pow_claim: None,
-        }
-    }
+    /// The fork digests each era accepts: a transaction is admitted only if
+    /// the era in force accepts the one it carries.
+    pub accepted_fork_digests: EraSchedule<AcceptedForkDigests>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -126,6 +123,8 @@ where
     included_in_canonical: HashMap<ItemKey<Item>, IncludedItem>,
     last_item_timestamp: u64,
     evictor: Evictor<Item, BlockId>,
+    accepted_fork_digests: EraSchedule<AcceptedForkDigests>,
+    era_in_force: Era,
     storage_adapter: Storage,
     _phantom: std::marker::PhantomData<(BlockId, Item, RuntimeServiceId)>,
 }
@@ -177,7 +176,7 @@ where
     type BlockId = BlockId;
     type Storage = Storage;
 
-    fn new(settings: Self::Settings, _: Era, storage: Self::Storage) -> Self {
+    fn new(settings: Self::Settings, current_era: Era, storage: Self::Storage) -> Self {
         Self {
             pending_items: IndexMap::new(),
             by_prefix: HashMap::new(),
@@ -185,12 +184,15 @@ where
             included_in_canonical: HashMap::new(),
             last_item_timestamp: 0,
             evictor: Evictor::new(&settings),
+            accepted_fork_digests: settings.accepted_fork_digests,
+            era_in_force: current_era,
             storage_adapter: storage,
             _phantom: std::marker::PhantomData,
         }
     }
 
     async fn rotate_era(&mut self, era: Era) {
+        self.era_in_force = era;
         self.storage_adapter.rotate_era(era).await;
     }
 
@@ -213,6 +215,15 @@ where
 
         let timestamp = current_timestamp_millis();
         let item = item.into();
+
+        let fork_digest = item.fork_digest();
+        let accepted = self
+            .accepted_fork_digests
+            .get(self.era_in_force)
+            .is_some_and(|era| era.parameters.accepts(&fork_digest));
+        if !accepted {
+            return Err(MempoolError::UnacceptedForkDigest(fork_digest));
+        }
 
         // By the time a transaction arrives the chain may already be past the
         // point where a block could include it; such a transaction is refused
@@ -436,7 +447,7 @@ where
 
     fn recover(
         settings: <Self as MemPool>::Settings,
-        _: Era,
+        current_era: Era,
         state: Self::RecoveryState,
         storage: <Self as MemPool>::Storage,
     ) -> Self {
@@ -466,6 +477,8 @@ where
             included_in_canonical: state.included_in_canonical,
             last_item_timestamp: state.last_item_timestamp,
             evictor: Evictor::new(&settings),
+            accepted_fork_digests: settings.accepted_fork_digests,
+            era_in_force: current_era,
             storage_adapter: storage,
             _phantom: std::marker::PhantomData,
         }

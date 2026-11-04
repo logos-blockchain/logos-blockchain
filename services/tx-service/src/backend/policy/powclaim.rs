@@ -228,6 +228,7 @@ mod tests {
     use core::{num::NonZero, time::Duration};
 
     use lb_core::{
+        era::ForkDigest,
         header::HeaderId,
         mantle::{
             Op,
@@ -239,6 +240,8 @@ mod tests {
     use time::OffsetDateTime;
 
     use super::*;
+
+    const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
 
     type Policy = PowClaimPolicy<TxHash, HeaderId>;
 
@@ -307,7 +310,7 @@ mod tests {
     fn claim_is_evicted_once_its_window_and_grace_pass() {
         let anchor = [1u8; 32];
         let mut policy = policy();
-        let tx = Ops::from([claim(anchor)]);
+        let tx = Ops::new(FORK_DIGEST, [claim(anchor)]);
         let key = add(&mut policy, &tx, &known(&[(anchor, 100)]));
 
         // Rejected by the ledger from slot 111, evicted once the grace passes.
@@ -320,7 +323,7 @@ mod tests {
     fn claim_past_its_deadline_is_expired_on_arrival() {
         let anchor = [1u8; 32];
         let policy = policy();
-        let tx = Ops::from([claim(anchor)]);
+        let tx = Ops::new(FORK_DIGEST, [claim(anchor)]);
         let block_slots = known(&[(anchor, 100)]);
         let expired_at = |slot| {
             EvictionPolicy::<Ops, HeaderId>::is_expired(
@@ -358,7 +361,7 @@ mod tests {
 
         let anchor = [1u8; 32];
         let mut policy = Policy::new(schedule(&[7]));
-        let tx = Ops::from([claim(anchor)]);
+        let tx = Ops::new(FORK_DIGEST, [claim(anchor)]);
         let key = add(&mut policy, &tx, &known(&[(anchor, 100)]));
 
         // Window closes after 107, grace runs to 121, eviction from 122.
@@ -374,12 +377,12 @@ mod tests {
         let mut policy = Policy::new(schedule(&[10, 20]));
         let early_key = add(
             &mut policy,
-            &Ops::from([claim(early)]),
+            &Ops::new(FORK_DIGEST, [claim(early)]),
             &known(&[(early, 50)]),
         );
         let late_key = add(
             &mut policy,
-            &Ops::from([claim(late)]),
+            &Ops::new(FORK_DIGEST, [claim(late)]),
             &known(&[(late, 150)]),
         );
 
@@ -396,7 +399,7 @@ mod tests {
     fn nothing_is_selected_before_the_first_block() {
         let anchor = [1u8; 32];
         let mut policy = policy();
-        let tx = Ops::from([claim(anchor)]);
+        let tx = Ops::new(FORK_DIGEST, [claim(anchor)]);
         add(&mut policy, &tx, &known(&[(anchor, 0)]));
 
         assert_eq!(
@@ -408,7 +411,7 @@ mod tests {
     #[test]
     fn transaction_without_claims_is_ignored() {
         let mut policy = policy();
-        let tx = Ops::from([Op::ChannelInscribe(InscriptionOp::sample())]);
+        let tx = Ops::new(FORK_DIGEST, [Op::ChannelInscribe(InscriptionOp::sample())]);
         add(&mut policy, &tx, &known(&[]));
 
         assert_eq!(policy.tracked(), 0);
@@ -420,7 +423,7 @@ mod tests {
         let early = [1u8; 32];
         let late = [2u8; 32];
         let mut policy = policy();
-        let tx = Ops::from([claim(late), claim(early)]);
+        let tx = Ops::new(FORK_DIGEST, [claim(late), claim(early)]);
         let key = add(&mut policy, &tx, &known(&[(early, 100), (late, 200)]));
 
         assert_eq!(select(&policy, 131), vec![key]);
@@ -431,7 +434,7 @@ mod tests {
     fn unknown_anchor_waits_for_its_block() {
         let anchor = [1u8; 32];
         let mut policy = policy();
-        let tx = Ops::from([claim(anchor)]);
+        let tx = Ops::new(FORK_DIGEST, [claim(anchor)]);
         let key = add(&mut policy, &tx, &known(&[]));
 
         assert_eq!(select(&policy, u64::MAX), NONE);
@@ -453,7 +456,7 @@ mod tests {
         let known_anchor = [1u8; 32];
         let unknown_anchor = [2u8; 32];
         let mut policy = policy();
-        let tx = Ops::from([claim(known_anchor), claim(unknown_anchor)]);
+        let tx = Ops::new(FORK_DIGEST, [claim(known_anchor), claim(unknown_anchor)]);
         let key = add(&mut policy, &tx, &known(&[(known_anchor, 200)]));
 
         EvictionPolicy::<Ops, HeaderId>::on_processed_block(
@@ -485,8 +488,8 @@ mod tests {
         let known_anchor = [1u8; 32];
         let unknown_anchor = [2u8; 32];
         let mut policy = policy();
-        let tracked = Ops::from([claim(known_anchor)]);
-        let parked = Ops::from([claim(unknown_anchor)]);
+        let tracked = Ops::new(FORK_DIGEST, [claim(known_anchor)]);
+        let parked = Ops::new(FORK_DIGEST, [claim(unknown_anchor)]);
         let tracked_key = add(&mut policy, &tracked, &known(&[(known_anchor, 100)]));
         let parked_key = add(&mut policy, &parked, &known(&[]));
         assert_eq!(policy.tracked(), 2);
