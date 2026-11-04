@@ -467,7 +467,7 @@ impl Eq for RecentRoots {}
 pub struct NoteSets {
     sets: VectorSync<NoteSet>,
     eligible: EligibleTree,
-    // sets touched in the current block
+    // sets whose notes moved in the current block
     changed: HashTrieSetSync<NoteSetIndex>,
     // sets whose buffer the current transaction appended to
     tx_appended: HashTrieSetSync<NoteSetIndex>,
@@ -548,6 +548,8 @@ impl NoteSets {
 
     #[must_use]
     pub fn end_block(mut self, block: BlockNumber) -> Self {
+        // Every buffer write reaching `update` is paired with `execute_adding`, so a
+        // changed set covers every non-empty buffer.
         for index in &self.changed {
             let position = usize::try_from(*index).expect("note set index fits in usize");
             // `record_commitment_root` computes the commitment root of the set once.
@@ -572,9 +574,6 @@ impl NoteSets {
             .into_iter()
             .filter_map(|index| {
                 let set = self.get(index)?;
-                if set.block_nullifiers.is_empty() && set.block_commitments.is_empty() {
-                    return None;
-                }
                 Some(NoteSetUpdate {
                     note_set: index,
                     nullifiers: set.block_nullifiers.iter().copied().collect(),

@@ -212,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn program_register_op_execution_gas_is_6843() {
+    fn program_register_op_execution_gas_is_6839() {
         assert_eq!(
             ProgramRegisterOp::sample().execution_gas(&FixedThresholds(3)),
             Ok(Gas::new(6_839))

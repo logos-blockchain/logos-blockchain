@@ -629,7 +629,9 @@ fn pol_case(rng: &mut StdRng) -> Case {
 
 /// The nullifiers a block spends are hashed into the IMT once, at its end,
 /// each dirty node of the tree once: the cost per nullifier falls as the
-/// nullifiers of a block share their paths.
+/// nullifiers of a block share their paths. Every case adds one commitment, so
+/// the set is changed without any nullifier and the cases differ only by the
+/// nullifiers.
 fn end_block_nullifier_cases() -> Vec<Case> {
     let mut cases = Vec::new();
     for spent in [0, 1, 2, 4, 16, 64, 256] {
@@ -639,7 +641,9 @@ fn end_block_nullifier_cases() -> Vec<Case> {
             .expect("the ledger set exists")
             .clone()
             .execute_spending(&nullifiers(spent, 0xf1))
-            .expect("fresh nullifiers are absent");
+            .expect("fresh nullifiers are absent")
+            .execute_adding(&commitments(1, 0xf1))
+            .expect("the commitment MMR has room");
         let changed = sets.update(LEDGER_SET, changed_set);
         cases.push(case(
             "micro/end_block_nullifiers",
