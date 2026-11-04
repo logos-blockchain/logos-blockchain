@@ -97,6 +97,11 @@ tests validate:
 | `.github/workflows/genesis-ceremony.yml` (devnet / testnet) | `deployment/ceremony/genesis/<env>/*` | `nodes/node/binary/src/config/deployment/settings.yaml` and the era files it includes, `era/schedule/<era number>.yaml` next to it |
 | `scripts/standalone-genesis-ceremony.sh` (local) | `deployment/ceremony/genesis/standalone/*` | `nodes/node/standalone-deployment-config.yaml` and the era file it includes, `era/schedule/0.yaml` next to it |
 
+The stakes of `stakeholders.yaml` and the amounts of `providers.yaml` must sum to
+8950000000000000000 lepta: with the 50000000000000000 of the pow reward pool and
+the 1000000000000000000 of the rewards reserve, this is the maximum supply. The
+ceremony and the node reject a genesis block that does not.
+
 ### Eras
 
 A deployment schedules its eras under `eras`, each keyed by the epoch it
