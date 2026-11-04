@@ -477,8 +477,15 @@ impl NoteSets {
     #[must_use]
     pub fn update(mut self, index: NoteSetIndex, set: NoteSet) -> Self {
         let position = usize::try_from(index).expect("note set index fits in usize");
+        // Gas prices the end of block work only for a set whose notes moved, and
+        // `start_transaction` clears the buffer of the sets marked here.
+        if !set.block_nullifiers.is_empty()
+            || !set.block_commitments.is_empty()
+            || !set.tx_commitment_buffer.is_empty()
+        {
+            self.changed.insert_mut(index);
+        }
         assert!(self.sets.set_mut(position, set), "note set {index} exists");
-        self.changed.insert_mut(index);
         self
     }
 
@@ -806,6 +813,18 @@ mod test {
                 len: 2
             })
         );
+    }
+
+    #[test]
+    fn only_an_update_moving_notes_gets_the_end_of_block_work_gas_prices() {
+        let (sets, index) = NoteSets::new().push_empty();
+        let set = sets.get(index).unwrap().clone();
+
+        let empty = set.clone().execute_adding(&[]).unwrap().buffer_outputs(&[]);
+        assert!(!sets.clone().update(index, empty).changed.contains(&index));
+
+        let moved = set.execute_adding(&[commitment(1)]).unwrap();
+        assert!(sets.update(index, moved).changed.contains(&index));
     }
 
     #[test]
