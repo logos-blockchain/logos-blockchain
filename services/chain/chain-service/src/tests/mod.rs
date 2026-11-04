@@ -25,7 +25,7 @@ use lb_core::{
             ZkTransferProof,
             channel::{
                 MsgId, NULL_CHANNEL_ID,
-                inscribe::{ChannelSteps, Inscription, InscriptionOp},
+                inscribe::{Inscription, InscriptionOp, MiniBlocks},
             },
             transfer::{TransferOp, prove_transfer},
         },
@@ -1242,7 +1242,7 @@ pub fn genesis_block_with(notes: &[Note]) -> GenesisBlock {
             ),
             parent: MsgId::root(),
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         })
         .build()
         .unwrap()

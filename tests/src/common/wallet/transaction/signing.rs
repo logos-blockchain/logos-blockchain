@@ -193,7 +193,7 @@ pub(super) fn build_leading_inscription_proofs(
 mod tests {
     use lb_core::mantle::ops::channel::{
         ChannelId, MsgId,
-        inscribe::{ChannelSteps, Inscription, InscriptionOp},
+        inscribe::{Inscription, InscriptionOp, MiniBlocks},
     };
 
     use super::*;
@@ -207,7 +207,7 @@ mod tests {
                 .expect("small fixed-width payload"),
             parent: MsgId::root(),
             signer: signing_key.public_key().into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         };
         let tx_hash = TxHash::default();
         let proofs = build_leading_inscription_proofs(

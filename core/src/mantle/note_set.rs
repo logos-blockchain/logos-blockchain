@@ -199,6 +199,11 @@ impl NoteSet {
         )
     }
 
+    #[must_use]
+    pub fn tx_commitment_buffer_len(&self) -> usize {
+        self.tx_commitment_buffer.len()
+    }
+
     pub fn step_commitment_root(
         &self,
         commitment_merkle_root: &Fr,

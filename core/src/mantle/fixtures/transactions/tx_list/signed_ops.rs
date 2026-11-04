@@ -23,7 +23,7 @@ use crate::mantle::{
         ChannelInscribeProof, NoOpProof, SignedOp, SignedOperation, StepProof, ZkTransferProof,
         channel::{
             ChannelId, MsgId,
-            inscribe::{ChannelSteps, Inscription, InscriptionOp},
+            inscribe::{Inscription, InscriptionOp, MiniBlocks},
         },
         transfer::TransferOp,
     },
@@ -81,7 +81,7 @@ fn two_ops<State: VerificationState, Mode: VerificationMode>() -> SignedOps<Stat
             inscription: Inscription::default(),
             parent: MsgId::root(),
             signer: UnverifiedEd25519PublicKey::from_bytes(&[1u8; 32]).unwrap(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         },
         ChannelInscribeProof::without_steps(Ed25519Signature::from_bytes(&[0xBBu8; 64])),
     );

@@ -185,8 +185,7 @@ impl Op {
             // One step proof per step, so a `SignedOps` sample decodes.
             Self::ChannelInscribe(op) => OpProof::ChannelInscribe(ChannelInscribeProof::new(
                 Ed25519Signature::sample(),
-                op.steps
-                    .iter()
+                op.steps()
                     .map(|step| StepProof::sample_for(step.proof_shape()))
                     .collect(),
             )),

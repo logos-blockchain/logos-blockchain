@@ -35,7 +35,6 @@ pub struct Payment {
     pub outputs: OutputCommitments,
     #[serde(with = "serde_fr")]
     pub commitment_merkle_root: Fr,
-    pub buffered: u16,
     // The excess of the ZkTransfer, paid to the program.
     pub paid_value: Value,
     #[serde(with = "serde_fr")]
@@ -50,7 +49,6 @@ impl Payment {
             inputs: [crate::mantle::notes::NoteNullifier(Fr::from(0x35u64))].into(),
             outputs: [NoteCommitment(Fr::from(0x36u64))].into(),
             commitment_merkle_root: Fr::from(0x37u64),
-            buffered: 0x47,
             paid_value: 0x38,
             intent: Fr::from(0x39u64),
         }
@@ -366,7 +364,7 @@ mod tests {
     #[test]
     fn payment_msg_commits_to_the_program_the_intent_and_the_notes() {
         let dst = fr_from_bytes(b"PROGRAM_PAYMENT_V1").unwrap();
-        let payment = Payment::sample(); // nullifier 0x35, commitment 0x36, root 0x37, buffered 0x47, paid 0x38, intent 0x39
+        let payment = Payment::sample(); // nullifier 0x35, commitment 0x36, root 0x37, paid 0x38, intent 0x39
         let program = Fr::from(0x34u64);
         let channel = ChannelId::from([0x33u8; 32]);
         assert_eq!(
@@ -382,10 +380,9 @@ mod tests {
                 Fr::from(0x36u64)
             ])
         );
-        // the root, the buffered count and the paid value are not part of the message
+        // the root and the paid value are not part of the message
         let moved = Payment {
             commitment_merkle_root: Fr::ONE,
-            buffered: 0,
             paid_value: 1,
             ..payment.clone()
         };

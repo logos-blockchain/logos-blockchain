@@ -19,7 +19,7 @@ use lb_core::mantle::{
         ChannelInscribeProof,
         channel::{
             ChannelId, MsgId,
-            inscribe::{ChannelSteps, Inscription, InscriptionOp},
+            inscribe::{Inscription, InscriptionOp, MiniBlocks},
         },
     },
     traits::Hashable as _,

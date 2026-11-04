@@ -1008,7 +1008,9 @@ mod tests {
                     ChannelId, MsgId, NULL_CHANNEL_ID,
                     config::ChannelConfigOp,
                     deposit::{DepositOp, Metadata},
-                    inscribe::{ChannelStep, ChannelSteps, Inscription, InscriptionOp, Step},
+                    inscribe::{
+                        ChannelStep, Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step,
+                    },
                     program_step::{Payment, ProgramOutputs, ProgramStep},
                     withdraw::{
                         ChannelWithdrawOp, PendingWithdrawal, PendingWithdrawals, WITHDRAW_DELAY,
@@ -1787,7 +1789,7 @@ mod tests {
             ),
             parent: MsgId::root(),
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         }
     }
 
@@ -2024,7 +2026,7 @@ mod tests {
                 inscription: [1, 2, 3, 4].into(),
                 parent: MsgId::root(),
                 signer: verifying_key,
-                steps: ChannelSteps::default(),
+                mini_blocks: MiniBlocks::default(),
             }),
             &Key::Ed25519(signing_key.clone()),
         );
@@ -2225,7 +2227,7 @@ mod tests {
             inscription: [1, 2, 3, 4].into(),
             parent: MsgId::root(),
             signer: verifying_key.into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         };
 
         let tx = create_signed_tx(Op::ChannelInscribe(inscribe_op), &Key::Ed25519(signing_key));
@@ -2381,7 +2383,7 @@ mod tests {
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
             signer: verifying_key.into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         };
         let mut tip = first_inscribe.id();
         let first_tx = create_signed_tx(
@@ -2412,7 +2414,7 @@ mod tests {
                 inscription: [byte].into(),
                 parent: tip,
                 signer: verifying_key.into_unverified(),
-                steps: ChannelSteps::default(),
+                mini_blocks: MiniBlocks::default(),
             };
             tip = inscribe.id();
             let tx = create_signed_tx(
@@ -2527,7 +2529,7 @@ mod tests {
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
             signer: verifying_key.into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         };
         let first_tx = create_signed_tx(
             Op::ChannelInscribe(first_inscribe.clone()),
@@ -2560,7 +2562,7 @@ mod tests {
             inscription: [4, 5, 6].into(),
             parent: first_inscribe.id(),
             signer: verifying_key.into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         };
         let second_tx = create_signed_tx(
             Op::ChannelInscribe(second_inscribe.clone()),
@@ -2677,23 +2679,17 @@ mod tests {
             .unwrap()
     }
 
-    fn one_step(
-        input: u64,
-        output: u64,
-        commitment_merkle_root: Fr,
-        buffered: u16,
-    ) -> ChannelSteps {
-        [Step::User(ChannelStep {
+    fn one_step(input: u64, output: u64, commitment_merkle_root: Fr) -> MiniBlocks {
+        [MiniBlock::from([Step::User(ChannelStep {
             inputs: [NoteNullifier(Fr::from(input))].into(),
             outputs: [NoteCommitment(Fr::from(output))].into(),
             commitment_merkle_root,
-            buffered,
-        })]
+        })])]
         .into()
     }
 
     #[test]
-    fn deposit_then_step_in_one_transaction_covers_the_deposit_with_buffered() {
+    fn deposit_then_step_in_one_transaction_covers_the_deposit() {
         let test_config = config();
         let eras = single_era(test_config.clone());
         let state = LedgerState::from_notes(
@@ -2731,7 +2727,7 @@ mod tests {
             inscription: [1].into(),
             parent: channel.tip_message,
             signer: verifying_key.into_unverified(),
-            steps: one_step(11, 12, channel_root, 1),
+            mini_blocks: one_step(11, 12, channel_root),
         };
 
         let (state, _, _, _, deferred) = state
@@ -2796,12 +2792,12 @@ mod tests {
             inscription: [1].into(),
             parent: channel.tip_message,
             signer: verifying_key.into_unverified(),
-            steps: one_step(11, 12, channel_root, 0),
+            mini_blocks: one_step(11, 12, channel_root),
         };
         let second = InscriptionOp {
             parent: first.id(),
             inscription: [2].into(),
-            steps: one_step(11, 13, channel_root, 0),
+            mini_blocks: one_step(11, 13, channel_root),
             ..first
         };
 
@@ -2841,8 +2837,7 @@ mod tests {
                     OpProof::ChannelInscribe(ChannelInscribeProof::new(
                         signing_key.sign_payload(tx_hash.as_signing_bytes()),
                         inscribe
-                            .steps
-                            .iter()
+                            .steps()
                             .map(|step| StepProof::sample_for(step.proof_shape()))
                             .collect(),
                     ))
@@ -2868,15 +2863,13 @@ mod tests {
         nullifier: u64,
         output: u64,
         commitment_merkle_root: Fr,
-        buffered: u16,
-    ) -> ChannelSteps {
-        [Step::Program(ProgramStep {
+    ) -> MiniBlocks {
+        [MiniBlock::from([Step::Program(ProgramStep {
             program_id,
             payments: [Payment {
                 inputs: [NoteNullifier(Fr::from(nullifier))].into(),
                 outputs: OutputCommitments::default(),
                 commitment_merkle_root,
-                buffered,
                 paid_value: 5,
                 intent: Fr::ONE,
             }]
@@ -2886,7 +2879,7 @@ mod tests {
             program_outputs: ProgramOutputs::default(),
             commitment_merkle_root,
             spend_notes_hash: Fr::ZERO,
-        })]
+        })])]
         .into()
     }
 
@@ -2922,7 +2915,7 @@ mod tests {
             inscription: [1].into(),
             parent: channel.tip_message,
             signer: verifying_key.into_unverified(),
-            steps: program_steps(derive_program_id(&key), 11, 12, channel_root, 0),
+            mini_blocks: program_steps(derive_program_id(&key), 11, 12, channel_root),
         };
 
         let (state, _, execution_gas, _, deferred) = state
@@ -2991,12 +2984,11 @@ mod tests {
             inscription: [1].into(),
             parent: channel.tip_message,
             signer: verifying_key.into_unverified(),
-            steps: program_steps(
+            mini_blocks: program_steps(
                 derive_program_id(&test_program_key()),
                 11,
                 12,
                 channel_root,
-                0,
             ),
         };
 
@@ -3016,7 +3008,7 @@ mod tests {
     }
 
     #[test]
-    fn a_payment_covers_a_deposit_of_the_same_transaction_with_buffered() {
+    fn a_payment_covers_a_deposit_of_the_same_transaction() {
         let test_config = config();
         let eras = single_era(test_config.clone());
         let state = LedgerState::from_notes(
@@ -3055,7 +3047,7 @@ mod tests {
             inscription: [1].into(),
             parent: channel.tip_message,
             signer: verifying_key.into_unverified(),
-            steps: program_steps(derive_program_id(&key), 11, 12, channel_root, 1),
+            mini_blocks: program_steps(derive_program_id(&key), 11, 12, channel_root),
         };
 
         let (_, _, _, _, deferred) = state
@@ -3237,7 +3229,7 @@ mod tests {
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
             signer: verifying_key.into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         };
         let config_op = ChannelConfigOp::new(
             channel_id,
@@ -3305,7 +3297,7 @@ mod tests {
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
             signer: verifying_key.into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         };
 
         let first_tx = create_signed_tx(
@@ -3324,7 +3316,7 @@ mod tests {
             inscription: [4, 5, 6].into(),
             parent: wrong_parent,
             signer: verifying_key.into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         };
 
         let second_tx = create_signed_tx(
@@ -3350,7 +3342,7 @@ mod tests {
             inscription: [7, 8, 9].into(),
             parent: MsgId::from([1; 32]), // non-root parent
             signer: verifying_key.into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         };
 
         let empty_tx = create_signed_tx(
@@ -3389,7 +3381,7 @@ mod tests {
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
             signer: verifying_key.into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         };
 
         let correct_parent = first_inscribe.id();
@@ -3408,7 +3400,7 @@ mod tests {
             inscription: [4, 5, 6].into(),
             parent: correct_parent,
             signer: unauthorized_verifying_key.into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         };
 
         let second_tx = create_signed_tx(
@@ -3455,7 +3447,7 @@ mod tests {
             inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
             signer: vk1.into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         };
 
         let inscribe_op2 = InscriptionOp {
@@ -3463,7 +3455,7 @@ mod tests {
             inscription: [4, 5, 6].into(),
             parent: MsgId::root(),
             signer: vk2.into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         };
 
         let config_op = ChannelConfigOp::new(
@@ -3481,7 +3473,7 @@ mod tests {
             inscription: [7, 8, 9].into(),
             parent: inscribe_op1.id(),
             signer: vk3.into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         };
 
         let ops = vec![

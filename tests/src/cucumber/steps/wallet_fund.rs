@@ -13,7 +13,7 @@ use lb_core::mantle::{
         ChannelInscribeProof,
         channel::{
             ChannelId, MsgId,
-            inscribe::{ChannelSteps, Inscription, InscriptionOp},
+            inscribe::{Inscription, InscriptionOp, MiniBlocks},
         },
     },
     traits::Hashable as _,
@@ -450,7 +450,7 @@ async fn step_fund_inscription_transaction(
         inscription,
         parent: MsgId::root(),
         signer: signing_key.public_key().into_unverified(),
-        steps: ChannelSteps::default(),
+        mini_blocks: MiniBlocks::default(),
     };
 
     let tx_builder = MantleTxBuilder::new()

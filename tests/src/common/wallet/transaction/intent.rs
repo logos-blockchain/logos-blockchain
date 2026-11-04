@@ -106,7 +106,7 @@ fn transfer_output_total(tx_builder: &MantleTxBuilder) -> Result<u64, WalletTran
 mod tests {
     use lb_core::mantle::ops::channel::{
         ChannelId, MsgId,
-        inscribe::{ChannelSteps, Inscription},
+        inscribe::{Inscription, MiniBlocks},
     };
 
     use super::*;
@@ -134,7 +134,7 @@ mod tests {
                 .expect("small fixed-width payload"),
             parent: MsgId::root(),
             signer: signing_key.public_key().into_unverified(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         };
         let intent = WalletTransactionIntent::transfer(&[(ZkPublicKey::zero(), 10)])
             .expect("transfer intent")

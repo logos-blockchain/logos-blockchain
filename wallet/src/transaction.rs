@@ -189,7 +189,7 @@ fn op_effects<'a>(
             );
             (None, vec![(LEDGER_SET, reward.commitment())])
         }
-        Op::ChannelInscribe(inscription) if !inscription.steps.is_empty() => {
+        Op::ChannelInscribe(inscription) if !inscription.mini_blocks.is_empty() => {
             if openings.contains_key(&op_index) {
                 return Err(WalletError::UnsupportedSteps { op_index });
             }
@@ -197,8 +197,7 @@ fn op_effects<'a>(
             (
                 None,
                 inscription
-                    .steps
-                    .iter()
+                    .steps()
                     // The change of the payments of a program step comes before its outputs
                     .flat_map(|step| {
                         let payments = match step {

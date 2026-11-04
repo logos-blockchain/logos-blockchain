@@ -18,7 +18,7 @@ use crate::{
             ChannelInscribeProof, ZkAndEd25519Proof, ZkTransferProof,
             channel::{
                 NULL_CHANNEL_ID,
-                inscribe::{ChannelSteps, Inscription, InscriptionOp},
+                inscribe::{Inscription, InscriptionOp, MiniBlocks},
             },
             sdp::SDPDeclareOp,
             transfer::{TransferOp, prove_transfer},
@@ -925,7 +925,7 @@ fn genesis_ops(
             .expect("a distribution of 255 notes fits an inscription"),
         parent: inscription.id(),
         signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("the null key is 32 bytes"),
-        steps: ChannelSteps::default(),
+        mini_blocks: MiniBlocks::default(),
     };
     let ops: Vec<Op> = [
         Op::Transfer(transfer),
@@ -1479,7 +1479,7 @@ mod tests {
             ),
             parent: MsgId::root(),
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         }
     }
 
@@ -1498,7 +1498,7 @@ mod tests {
             ),
             parent: MsgId::root(),
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
-            steps: ChannelSteps::default(),
+            mini_blocks: MiniBlocks::default(),
         }
     }
 
@@ -1554,7 +1554,7 @@ mod tests {
                 inscription: Inscription::new_unchecked(Distribution::from(notes).encode_to_vec()),
                 parent: valid_inscription().id(),
                 signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
-                steps: ChannelSteps::default(),
+                mini_blocks: MiniBlocks::default(),
             }),
         ];
         ops.extend(extra_ops);
