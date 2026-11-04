@@ -52,6 +52,10 @@ pub async fn stream_blocks_range(
 
 // The events of a block's execution, which report what its note sets inserted
 // and appended.
+#[expect(
+    clippy::literal_string_with_formatting_args,
+    reason = "The placeholder of the route, filled by this replacement."
+)]
 pub async fn block_events(client: &NodeHttpClient, id: HeaderId) -> Result<Events, ScannerError> {
     let path = BLOCK_EVENTS
         .trim_start_matches('/')
