@@ -1,7 +1,7 @@
 use std::num::NonZeroU64;
 
 use ark_ff::Zero as _;
-use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_cryptarchia_engine::{EraSchedule, Slot};
 use lb_groth16::{Fr, fr_from_mod_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -34,7 +34,19 @@ pub type PowSlotWindows = EraSchedule<NonZeroU64>;
 
 /// Nullifier of a spent `PoW` solution, recorded on claim to prevent the same
 /// solution from being claimed twice.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Hash,
+    Serialize,
+    Deserialize,
+    BinaryEncode,
+    BinaryDecode,
+)]
 pub struct PowNullifier(#[serde(with = "serde_fr")] ZkHash);
 
 impl PowNullifier {
@@ -79,7 +91,7 @@ impl From<PowNullifier> for ZkHash {
 /// deriving a [`PuzzleTicket`] from `epoch_nonce`, `block_hash` and
 /// `public_key` (see [`Self::get_puzzle_ticket`]) and checking that ticket
 /// against the current reward difficulty during validation.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct ClaimPowRewardOp {
     /// Epoch nonce the puzzle was solved against; must match the current or
     /// previous epoch nonce.

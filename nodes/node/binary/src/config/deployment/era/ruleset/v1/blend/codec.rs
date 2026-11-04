@@ -10,49 +10,8 @@ use super::{
     SchedulerSettings, Settings,
 };
 
-impl BinaryEncode for Settings {
-    fn encoded_length(&self) -> usize {
-        let Self { common, core } = self;
-        common.encoded_length() + core.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self { common, core } = self;
-        common.encode_into(out);
-        core.encode_into(out);
-    }
-}
-
-impl BinaryEncode for CommonSettings {
-    fn encoded_length(&self) -> usize {
-        let Self {
-            num_blend_layers,
-            minimum_network_size,
-            network_absorption_in_rounds,
-            data_replication_factor,
-        } = self;
-
-        num_blend_layers.encoded_length()
-            + minimum_network_size.encoded_length()
-            + network_absorption_in_rounds.encoded_length()
-            + data_replication_factor.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self {
-            num_blend_layers,
-            minimum_network_size,
-            network_absorption_in_rounds,
-            data_replication_factor,
-        } = self;
-        num_blend_layers.encode_into(out);
-        minimum_network_size.encode_into(out);
-        network_absorption_in_rounds.encode_into(out);
-        data_replication_factor.encode_into(out);
-    }
-}
-
-// A minimum network size: the size it wraps.
+// A minimum network size: the size it wraps. Hand-written because `#[nutype]`
+// refuses a `#[derive]` on its type.
 impl BinaryEncode for MinimumNetworkSize {
     fn encoded_length(&self) -> usize {
         self.into_inner().encoded_length()
@@ -60,95 +19,6 @@ impl BinaryEncode for MinimumNetworkSize {
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.into_inner().encode_into(out);
-    }
-}
-
-impl BinaryEncode for CoreSettings {
-    fn encoded_length(&self) -> usize {
-        let Self {
-            scheduler,
-            target_peering_degree,
-            verification_rate_per_second,
-            edge_node_send_deadline_in_rounds,
-            core_handshake_deadline_in_rounds,
-            expected_deliveries_per_observation_window,
-            activity_threshold_sensitivity,
-        } = self;
-
-        scheduler.encoded_length()
-            + target_peering_degree.encoded_length()
-            + verification_rate_per_second.encoded_length()
-            + edge_node_send_deadline_in_rounds.encoded_length()
-            + core_handshake_deadline_in_rounds.encoded_length()
-            + expected_deliveries_per_observation_window.encoded_length()
-            + activity_threshold_sensitivity.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self {
-            scheduler,
-            target_peering_degree,
-            verification_rate_per_second,
-            edge_node_send_deadline_in_rounds,
-            core_handshake_deadline_in_rounds,
-            expected_deliveries_per_observation_window,
-            activity_threshold_sensitivity,
-        } = self;
-        scheduler.encode_into(out);
-        target_peering_degree.encode_into(out);
-        verification_rate_per_second.encode_into(out);
-        edge_node_send_deadline_in_rounds.encode_into(out);
-        core_handshake_deadline_in_rounds.encode_into(out);
-        expected_deliveries_per_observation_window.encode_into(out);
-        activity_threshold_sensitivity.encode_into(out);
-    }
-}
-
-impl BinaryEncode for SchedulerSettings {
-    fn encoded_length(&self) -> usize {
-        let Self { cover, delayer } = self;
-
-        cover.encoded_length() + delayer.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self { cover, delayer } = self;
-        cover.encode_into(out);
-        delayer.encode_into(out);
-    }
-}
-
-impl BinaryEncode for CoverTrafficSettings {
-    fn encoded_length(&self) -> usize {
-        let Self {
-            message_frequency_per_round,
-        } = self;
-
-        message_frequency_per_round.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self {
-            message_frequency_per_round,
-        } = self;
-        message_frequency_per_round.encode_into(out);
-    }
-}
-
-impl BinaryEncode for MessageDelayerSettings {
-    fn encoded_length(&self) -> usize {
-        let Self {
-            maximum_release_delay_in_rounds,
-        } = self;
-
-        maximum_release_delay_in_rounds.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self {
-            maximum_release_delay_in_rounds,
-        } = self;
-        maximum_release_delay_in_rounds.encode_into(out);
     }
 }
 

@@ -12,7 +12,7 @@ use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
 use lb_binary_codec::{
     bincode::{self, BoundedSerializeOp, DeserializeOp as _, SerializeOp as _},
-    canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
+    canonical::{BinaryDecode, BinaryEncode, DecodeError},
 };
 #[cfg(any(test, feature = "test-utils"))]
 use lb_blend_proofs::{
@@ -40,7 +40,9 @@ use crate::{
 
 pub type StakeThreshold = u64;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode,
+)]
 pub struct MinStake {
     pub threshold: StakeThreshold,
     pub timestamp: BlockNumber,
@@ -63,7 +65,7 @@ pub type NumberOfEpochs = Epoch;
 /// Otherwise, the declaration may be excluded from the active set before
 /// the [`Declaration::active`] value (refreshed by an activity message)
 /// is reflected in the next snapshot.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryEncode)]
 #[serde(try_from = "NumberOfEpochs")]
 pub struct InactivityPeriod(NumberOfEpochs);
 
@@ -79,17 +81,6 @@ impl InactivityPeriod {
     #[must_use]
     pub const fn into_inner(self) -> NumberOfEpochs {
         self.0
-    }
-}
-
-// An inactivity period: the number of epochs it wraps.
-impl BinaryEncode for InactivityPeriod {
-    fn encoded_length(&self) -> usize {
-        self.0.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.0.encode_into(out);
     }
 }
 
@@ -455,7 +446,9 @@ impl Nonce {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode,
+)]
 pub struct ProviderId(pub Ed25519PublicKey);
 
 impl AsRef<[u8; 32]> for ProviderId {
@@ -495,7 +488,7 @@ impl Ord for ProviderId {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, BinaryCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, BinaryEncode, BinaryDecode)]
 pub struct DeclarationId(pub [u8; 32]);
 serde_bytes_newtype!(DeclarationId, 32);
 display_hex_bytes_newtype!(DeclarationId);
@@ -648,7 +641,7 @@ impl TryFrom<Declarations> for Bytes {
 pub const MAX_DECLARATION_LOCATOR_COUNT: usize = 8;
 pub type Locators = NonEmptyBoundedOrderedSet<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct DeclarationMessage {
     pub service_type: ServiceType,
     pub locators: Locators,
@@ -693,14 +686,16 @@ impl DeclarationMessage {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode,
+)]
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,
 }
 
 // ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct ActiveMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,

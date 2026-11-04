@@ -12,7 +12,7 @@ use core::{
 
 use lb_binary_codec::{
     bincode::{self, BoundedSerializeOp},
-    canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
+    canonical::{BinaryDecode, BinaryEncode, DecodeError},
 };
 
 #[derive(
@@ -27,7 +27,8 @@ use lb_binary_codec::{
     Ord,
     serde::Serialize,
     serde::Deserialize,
-    BinaryCodec,
+    BinaryEncode,
+    BinaryDecode,
 )]
 pub struct Slot(u64);
 

@@ -7,7 +7,7 @@ use crate::Error;
 
 /// The length of the unpadded portion of a payload body, at most the size the
 /// body is padded to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryEncode)]
 #[serde(transparent)]
 struct PayloadBodyLen(u16);
 
@@ -26,16 +26,6 @@ impl PayloadBodyLen {
 impl From<PayloadBodyLen> for usize {
     fn from(value: PayloadBodyLen) -> Self {
         Self::from(value.0)
-    }
-}
-
-impl BinaryEncode for PayloadBodyLen {
-    fn encoded_length(&self) -> usize {
-        self.0.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.0.encode_into(out);
     }
 }
 
@@ -314,7 +304,7 @@ pub fn payload_encoded_size(body_size: u16) -> usize {
 
 /// A payload that is fully decapsulated.
 /// This must be encapsulated when being sent to the blend network.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryEncode)]
 pub struct Payload {
     payload_type: PayloadType,
     body: PaddedPayloadBody,
@@ -337,20 +327,6 @@ impl Payload {
 
     pub fn into_components(self) -> (PayloadType, Vec<u8>) {
         (self.payload_type(), self.body().to_vec())
-    }
-}
-
-impl BinaryEncode for Payload {
-    fn encoded_length(&self) -> usize {
-        self.payload_type
-            .encoded_length()
-            .checked_add(self.body.encoded_length())
-            .unwrap()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.payload_type.encode_into(out);
-        self.body.encode_into(out);
     }
 }
 

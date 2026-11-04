@@ -170,7 +170,10 @@ pub struct PoWConfig {
 /// There is deliberately no `Default`: every value must be supplied by the
 /// deployment configuration. A `rate_num` of `0` disables claiming entirely;
 /// the shipped deployments enable it.
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+///
+/// A node's era digest commits to these fields through their derived encoding,
+/// in declaration order.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq, BinaryEncode)]
 // Validate the deployment-controlled invariants on deserialization, so an
 // invalid config is rejected at load time (see [`RewardPoWConfig::validate`])
 // instead of panicking later while processing consensus state.
@@ -407,62 +410,6 @@ impl RewardPoWConfig {
         let share = u128::from(collected_fees).strict_mul(u128::from(self.pow_share))
             / NonZeroU128::from(self.share_den);
         Value::try_from(share).expect("share cannot exceed collected_fees")
-    }
-}
-
-// The reward parameters: every field in declaration order. A node's era digest
-// commits to them through this encoding.
-impl BinaryEncode for RewardPoWConfig {
-    fn encoded_length(&self) -> usize {
-        // We destructure (in declaration order) so we know we are not forgetting to
-        // encode new fields.
-        let Self {
-            minimum_difficulty,
-            ema_smoothing_factor,
-            ema_smoothing_precision,
-            target_claims_per_block,
-            rate_num,
-            rate_den,
-            target_claim_per_block,
-            pow_share,
-            share_den,
-            slot_window,
-        } = self;
-        minimum_difficulty.encoded_length()
-            + ema_smoothing_factor.encoded_length()
-            + ema_smoothing_precision.encoded_length()
-            + target_claims_per_block.encoded_length()
-            + rate_num.encoded_length()
-            + rate_den.encoded_length()
-            + target_claim_per_block.encoded_length()
-            + pow_share.encoded_length()
-            + share_den.encoded_length()
-            + slot_window.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self {
-            minimum_difficulty,
-            ema_smoothing_factor,
-            ema_smoothing_precision,
-            target_claims_per_block,
-            rate_num,
-            rate_den,
-            target_claim_per_block,
-            pow_share,
-            share_den,
-            slot_window,
-        } = self;
-        minimum_difficulty.encode_into(out);
-        ema_smoothing_factor.encode_into(out);
-        ema_smoothing_precision.encode_into(out);
-        target_claims_per_block.encode_into(out);
-        rate_num.encode_into(out);
-        rate_den.encode_into(out);
-        target_claim_per_block.encode_into(out);
-        pow_share.encode_into(out);
-        share_den.encode_into(out);
-        slot_window.encode_into(out);
     }
 }
 

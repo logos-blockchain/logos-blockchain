@@ -7,7 +7,7 @@ use core::fmt::Debug;
 
 use lb_binary_codec::{
     bincode::SerializeOp as _,
-    canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError, length_prefix_len},
+    canonical::{BinaryDecode, BinaryEncode, DecodeError, length_prefix_len},
 };
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
@@ -63,42 +63,12 @@ pub enum HeaderError {
     GenesisSlot,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryEncode)]
 pub struct Proposal {
     pub header: Header,
     pub uncle_headers: UncleHeaders,
     pub references: References,
     pub signature: Ed25519Signature,
-}
-
-impl BinaryEncode for Proposal {
-    fn encoded_length(&self) -> usize {
-        let Self {
-            header,
-            uncle_headers,
-            references,
-            signature,
-        } = self;
-
-        header.encoded_length()
-            + uncle_headers.encoded_length()
-            + references.encoded_length()
-            + signature.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self {
-            header,
-            uncle_headers,
-            references,
-            signature,
-        } = self;
-
-        header.encode_into(out);
-        uncle_headers.encode_into(out);
-        references.encode_into(out);
-        signature.encode_into(out);
-    }
 }
 
 impl BinaryDecode for Proposal {
@@ -129,7 +99,7 @@ impl BinaryDecode for Proposal {
 pub type BlockTransactionReferences = UpperBoundedVec<TxHashPrefix, MAX_BLOCK_TRANSACTIONS>;
 
 /// References to transactions that are included in a block proposal.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct References {
     /// Bounded hashes of the transactions that are included in the block
     /// proposal.

@@ -23,7 +23,7 @@ use crate::{
     reward::BlendingToken,
 };
 
-#[derive(Educe, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[derive(Educe, Clone, PartialEq, Eq, Serialize, Deserialize, Hash, BinaryEncode)]
 #[educe(Debug)]
 /// An encapsulated message whose public header signature has been verified.
 pub struct EncapsulatedMessageWithVerifiedSignature {
@@ -97,20 +97,6 @@ impl EncapsulatedMessageWithVerifiedSignature {
     }
 }
 
-impl BinaryEncode for EncapsulatedMessageWithVerifiedSignature {
-    fn encoded_length(&self) -> usize {
-        self.public_header_with_verified_signature
-            .encoded_length()
-            .checked_add(self.encapsulated_part.encoded_length())
-            .unwrap()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.public_header_with_verified_signature.encode_into(out);
-        self.encapsulated_part.encode_into(out);
-    }
-}
-
 impl From<EncapsulatedMessageWithVerifiedSignature> for EncapsulatedMessage {
     fn from(value: EncapsulatedMessageWithVerifiedSignature) -> Self {
         Self::from_components(
@@ -130,7 +116,7 @@ pub struct RequiredProofOfSelectionVerificationInputs {
 }
 
 /// An encapsulated message whose public header has been verified.
-#[derive(Educe, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[derive(Educe, Clone, PartialEq, Eq, Serialize, Deserialize, Hash, BinaryEncode)]
 #[educe(Debug)]
 pub struct EncapsulatedMessageWithVerifiedPublicHeader {
     validated_public_header: VerifiedPublicHeader,
@@ -315,20 +301,6 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
     #[cfg(any(feature = "unsafe-test-functions", test))]
     pub const fn public_header_mut(&mut self) -> &mut VerifiedPublicHeader {
         &mut self.validated_public_header
-    }
-}
-
-impl BinaryEncode for EncapsulatedMessageWithVerifiedPublicHeader {
-    fn encoded_length(&self) -> usize {
-        self.validated_public_header
-            .encoded_length()
-            .checked_add(self.encapsulated_part.encoded_length())
-            .unwrap()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.validated_public_header.encode_into(out);
-        self.encapsulated_part.encode_into(out);
     }
 }
 

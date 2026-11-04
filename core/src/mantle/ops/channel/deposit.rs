@@ -1,4 +1,4 @@
-use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 #[cfg(any(test, feature = "test-utils"))]
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
@@ -30,7 +30,7 @@ use crate::{
 pub const MAX_METADATA_SIZE: usize = u32::MAX as usize;
 pub type Metadata = UpperBoundedVec<u8, { MAX_METADATA_SIZE }>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct DepositOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,

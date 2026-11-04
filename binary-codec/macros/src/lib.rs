@@ -1,20 +1,22 @@
 //! Procedural macros for the unified binary codec
 //! (`BinaryEncode`/`BinaryDecode`, crate `lb-binary-codec`).
 //!
-//! - [`macro@BinaryCodec`] — `#[derive(BinaryCodec)]` for named or tuple
-//!   structs. Generates *only* the codec: `BinaryEncode` (field-order
-//!   concatenation, with a summed `encoded_length`) and `BinaryDecode` (decode
-//!   each field in order with a `()` context, then `Self { .. }` / `Self(..)`).
-//!   The decode is infallible positional construction, so a newtype needing a
-//!   fallible `try_from` keeps a hand-written impl. The well-known fixture is
-//!   supplied separately by [`codec_fixtures!`]; because both codec traits
-//!   require `CodecExamples`, a derived type that lacks a `codec_fixtures!`
-//!   does not compile.
+//! - [`macro@BinaryEncode`] — `#[derive(BinaryEncode)]` for named or tuple
+//!   structs. Generates *only* the encoder: field-order concatenation, with a
+//!   summed `encoded_length`.
+//! - [`macro@BinaryDecode`] — `#[derive(BinaryDecode)]` for named or tuple
+//!   structs. Generates *only* the decoder: decode each field in order with a
+//!   `()` context, then `Self { .. }` / `Self(..)`. The decode is infallible
+//!   positional construction, so a type needing a fallible `try_from` or a
+//!   non-`()` context keeps a hand-written `BinaryDecode`, and can still derive
+//!   `BinaryEncode`.
 //! - [`codec_fixtures!`] — the single source of fixtures. Emits the sealed
 //!   `CodecExamples` impl and a `#[cfg(test)]` round-trip test for any codec
 //!   (derived, hand-written, primitive, or foreign). For codecs whose
 //!   `BinaryDecode::Context` is not `()`, pass `context = <expr>` so the
-//!   generated test can build a context.
+//!   generated test can build a context. Because both codec traits require
+//!   `CodecExamples`, a derived type that lacks a `codec_fixtures!` does not
+//!   compile.
 //!
 //! Generated code refers to the codec crate by the absolute path
 //! `::lb_binary_codec::canonical::…`, so the macros expand correctly in any
@@ -30,45 +32,37 @@ use syn::{
     parse_macro_input,
 };
 
-/// Derive `BinaryEncode` + `BinaryDecode` for a named or tuple struct with an
-/// infallible positional decode and a `()` decode context.
+/// Derive `BinaryEncode` for a named or tuple struct: its fields in declaration
+/// order, each through its own `BinaryEncode`.
 ///
-/// Both codec traits require `CodecExamples`, so a derived type must also
-/// pin its well-known fixture with [`codec_fixtures!`] or it will not
-/// compile.
-#[proc_macro_derive(BinaryCodec)]
-pub fn derive_binary_codec(input: TokenStream) -> TokenStream {
+/// `BinaryEncode` requires `CodecExamples`, so a derived type must also pin its
+/// well-known fixture with [`codec_fixtures!`] or it will not compile.
+#[proc_macro_derive(BinaryEncode)]
+pub fn derive_binary_encode(input: TokenStream) -> TokenStream {
     let parsed_input = parse_macro_input!(input as DeriveInput);
-    match expand_derive(&parsed_input) {
+    match expand_encode(&parsed_input) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
 }
 
-fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
-    let ident = &input.ident;
-
-    if !input.generics.params.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &input.generics,
-            "`#[derive(BinaryCodec)]` does not yet support generic types; use a \
-             hand-written impl plus `codec_fixtures!`",
-        ));
+/// Derive `BinaryDecode` for a named or tuple struct with an infallible
+/// positional decode and a `()` decode context.
+///
+/// `BinaryDecode` requires `CodecExamples`, so a derived type must also pin its
+/// well-known fixture with [`codec_fixtures!`] or it will not compile.
+#[proc_macro_derive(BinaryDecode)]
+pub fn derive_binary_decode(input: TokenStream) -> TokenStream {
+    let parsed_input = parse_macro_input!(input as DeriveInput);
+    match expand_decode(&parsed_input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
     }
+}
 
-    let Data::Struct(data) = &input.data else {
-        return Err(syn::Error::new_spanned(
-            ident,
-            "`#[derive(BinaryCodec)]` can only be derived for structs (for now)",
-        ));
-    };
-
-    let FieldLayout {
-        field_types,
-        encode_accessors,
-        decode_bindings,
-        constructor,
-    } = field_layout(ident, &data.fields)?;
+fn expand_encode(input: &DeriveInput) -> syn::Result<TokenStream2> {
+    let ident = &input.ident;
+    let encode_accessors = field_layout(input, "BinaryEncode")?.encode_accessors;
 
     Ok(quote! {
         #[automatically_derived]
@@ -81,7 +75,19 @@ fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 #( ::lb_binary_codec::canonical::BinaryEncode::encode_into(&#encode_accessors, out); )*
             }
         }
+    })
+}
 
+fn expand_decode(input: &DeriveInput) -> syn::Result<TokenStream2> {
+    let ident = &input.ident;
+    let FieldLayout {
+        field_types,
+        decode_bindings,
+        constructor,
+        ..
+    } = field_layout(input, "BinaryDecode")?;
+
+    Ok(quote! {
         #[automatically_derived]
         impl ::lb_binary_codec::canonical::BinaryDecode for #ident {
             type Context = ();
@@ -100,7 +106,7 @@ fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
     })
 }
 
-/// The per-field tokens the codec impls need: each field's type, the
+/// The per-field tokens the codec derives need: each field's type, the
 /// `self.<field>` accessor `encode` reads, the binding `decode` introduces, and
 /// how to rebuild `Self` from those bindings.
 struct FieldLayout<'a> {
@@ -110,12 +116,31 @@ struct FieldLayout<'a> {
     constructor: TokenStream2,
 }
 
-/// Compute the [`FieldLayout`] for a struct. Handles named structs
-/// (`Self { a, b }`) and tuple structs (`Self(a, b)`) alike; the decode is
-/// always the infallible positional form, so a newtype that needs a fallible
-/// `try_from` stays on `codec_fixtures!` for now.
-fn field_layout<'a>(ident: &Ident, fields: &'a Fields) -> syn::Result<FieldLayout<'a>> {
-    Ok(match fields {
+/// Compute the [`FieldLayout`] for the struct `derive` is applied to. Handles
+/// named structs (`Self { a, b }`) and tuple structs (`Self(a, b)`) alike; the
+/// decode is always the infallible positional form, so a newtype that needs a
+/// fallible `try_from` hand-writes its `BinaryDecode`.
+fn field_layout<'a>(input: &'a DeriveInput, derive: &str) -> syn::Result<FieldLayout<'a>> {
+    let ident = &input.ident;
+
+    if !input.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &input.generics,
+            format!(
+                "`#[derive({derive})]` does not yet support generic types; use a hand-written \
+                 impl plus `codec_fixtures!`"
+            ),
+        ));
+    }
+
+    let Data::Struct(data) = &input.data else {
+        return Err(syn::Error::new_spanned(
+            ident,
+            format!("`#[derive({derive})]` can only be derived for structs (for now)"),
+        ));
+    };
+
+    Ok(match &data.fields {
         Fields::Named(named) => {
             let decode_bindings: Vec<Ident> = named
                 .named
@@ -148,7 +173,7 @@ fn field_layout<'a>(ident: &Ident, fields: &'a Fields) -> syn::Result<FieldLayou
         Fields::Unit => {
             return Err(syn::Error::new_spanned(
                 ident,
-                "`#[derive(BinaryCodec)]` cannot be derived for unit structs",
+                format!("`#[derive({derive})]` cannot be derived for unit structs"),
             ));
         }
     })

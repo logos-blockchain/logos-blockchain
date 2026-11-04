@@ -1,12 +1,12 @@
-//! Smoke test for `#[derive(BinaryCodec)]`, kept in-crate so the
-//! `::lb_binary_codec::canonical::` paths emitted by the derive resolve via
-//! the umbrella serialization crate.
+//! Smoke test for `#[derive(BinaryEncode)]` and `#[derive(BinaryDecode)]`, kept
+//! in-crate so the `::lb_binary_codec::canonical::` paths emitted by the
+//! derives resolve via the umbrella serialization crate.
 
 use lb_utils::bounded::BoundedOrderedSet;
 
-use crate::canonical::{BinaryCodec, BinaryDecode as _, BinaryEncode as _, codec_fixtures};
+use crate::canonical::{BinaryDecode, BinaryEncode, DecodeError, codec_fixtures};
 
-#[derive(Debug, PartialEq, Eq, BinaryCodec)]
+#[derive(Debug, PartialEq, Eq, BinaryEncode, BinaryDecode)]
 struct Named {
     a: u8,
     b: u16,
@@ -14,7 +14,7 @@ struct Named {
 
 codec_fixtures!(Named, Self { a: 0x07, b: 0x0201 } => "070102");
 
-#[derive(Debug, PartialEq, Eq, BinaryCodec)]
+#[derive(Debug, PartialEq, Eq, BinaryEncode, BinaryDecode)]
 struct Tuple(u8, u32);
 
 codec_fixtures!(Tuple, Self(0xAB, 0x0403_0201) => "ab01020304");
@@ -45,7 +45,7 @@ fn derived_tuple_struct_round_trips() {
 
 /// An ordered set field derives like any other field: it encodes in its own
 /// order, `7` before `0`, between its neighbours.
-#[derive(Debug, PartialEq, Eq, BinaryCodec)]
+#[derive(Debug, PartialEq, Eq, BinaryEncode, BinaryDecode)]
 struct WithOrderedSet {
     tags: BoundedOrderedSet<u8, 0, 4>,
     count: u16,
@@ -58,3 +58,32 @@ codec_fixtures!(
         count: 0x0201,
     } => "0207000102"
 );
+
+/// Deriving only the encoder leaves the decoder to the type, which here needs a
+/// context the derive does not support.
+#[derive(Debug, PartialEq, Eq, BinaryEncode)]
+struct Capped(u8);
+
+impl BinaryDecode for Capped {
+    /// The largest value decoding accepts.
+    type Context = u8;
+
+    fn decode<'input>(
+        input: &'input [u8],
+        max: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, value) = u8::decode(input, &())?;
+        if value > *max {
+            return Err(DecodeError::invalid_value::<Self>("above the maximum"));
+        }
+        Ok((rest, Self(value)))
+    }
+}
+
+codec_fixtures!(Capped, context = 0x10, Self(0x0A) => "0a");
+
+/// Deriving only the decoder needs no encoder at all.
+#[derive(Debug, PartialEq, Eq, BinaryDecode)]
+struct DecodeOnly(u8, u16);
+
+codec_fixtures!(DecodeOnly, decode_only, Self(0x07, 0x0201) => "070102");

@@ -152,7 +152,7 @@ impl BinaryDecode for ProofOfSelection {
 }
 
 /// A verified Proof of Selection.
-#[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, BinaryEncode)]
 pub struct VerifiedProofOfSelection(ProofOfSelection);
 
 impl VerifiedProofOfSelection {
@@ -202,16 +202,6 @@ impl AsRef<ProofOfSelection> for VerifiedProofOfSelection {
 impl PartialEq<ProofOfSelection> for VerifiedProofOfSelection {
     fn eq(&self, other: &ProofOfSelection) -> bool {
         self.0 == *other
-    }
-}
-
-impl BinaryEncode for VerifiedProofOfSelection {
-    fn encoded_length(&self) -> usize {
-        self.0.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.0.encode_into(out);
     }
 }
 

@@ -3,6 +3,7 @@ use core::{
     ops::Deref,
 };
 
+use lb_binary_codec::canonical::BinaryEncode;
 use lb_chain_service::Epoch;
 use lb_core::{
     block::Proposal,
@@ -23,7 +24,7 @@ use crate::config::deployment::{InvalidDeployment, ensure};
 
 pub(crate) mod codec;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, BinaryEncode)]
 pub struct Settings {
     pub epoch_config: EpochConfig,
     pub security_param: NonZeroU32,
@@ -146,7 +147,7 @@ impl Settings {
 /// Below 1, so that the lottery's `ln(1 - f)` is finite, and at least the
 /// inverse of the precision the total stake inference measures it with, so that
 /// the expected density it divides by is not zero.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, BinaryEncode)]
 #[serde(try_from = "NonNegativeRatio", into = "NonNegativeRatio")]
 pub struct SlotActivationCoeff(NonNegativeRatio);
 
@@ -193,7 +194,7 @@ impl From<SlotActivationCoeff> for NonNegativeRatio {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryEncode)]
 pub struct EpochConfig {
     // The stake distribution is always taken at the beginning of the previous epoch.
     // This parameters controls how many slots to wait for it to be stabilized
@@ -210,7 +211,7 @@ pub struct EpochConfig {
 // The same as `lb_ledger::mantle::sdp::Config`, minus the
 // `service_rewards_params` values, which are taken from the Blend deployment
 // config instead.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, BinaryEncode)]
 pub struct SdpConfig {
     /// The parameters of each service type, at the position of the byte the
     /// type encodes as, which is the order [`ServiceType`] declares them in.
@@ -228,20 +229,20 @@ impl SdpConfig {
 }
 
 // The same as `lb_core::sdp::ServiceParameters`.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, BinaryEncode)]
 pub struct ServiceParameters {
     pub inactivity_period: InactivityPeriod,
     pub epoch: Epoch,
 }
 
 // The same as `lb_ledger::config::PoWConfig`.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, BinaryEncode)]
 pub struct PoWConfig {
     pub blend: BlendPoWConfig,
     pub reward: RewardPoWConfig,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, BinaryEncode)]
 pub struct BlendPoWConfig {
     pub base_difficulty: ModulusShift,
     pub target_transactions_per_block: NonZeroU64,

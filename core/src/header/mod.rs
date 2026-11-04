@@ -3,7 +3,7 @@ use core::fmt::{self, Debug, Formatter};
 use blake2::Digest as _;
 use lb_binary_codec::{
     bincode::{BoundedSerializeOp, SerializeOp as _},
-    canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
+    canonical::{BinaryDecode, BinaryEncode, DecodeError},
 };
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::fr_to_bytes;
@@ -24,7 +24,7 @@ pub const HEADER_BINCODE_SIZE: usize = <Slot as BoundedSerializeOp>::MAX_ENCODED
     + <ContentId as BoundedSerializeOp>::MAX_ENCODED_SIZE
     + <Groth16LeaderProof as BoundedSerializeOp>::MAX_ENCODED_SIZE;
 
-#[derive(Clone, Eq, PartialEq, Copy, Hash, PartialOrd, Ord, BinaryCodec)]
+#[derive(Clone, Eq, PartialEq, Copy, Hash, PartialOrd, Ord, BinaryEncode, BinaryDecode)]
 pub struct HeaderId([u8; 32]);
 
 impl HeaderId {
@@ -38,7 +38,7 @@ impl Debug for HeaderId {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Copy, Hash, BinaryCodec)]
+#[derive(Clone, Eq, PartialEq, Copy, Hash, BinaryEncode, BinaryDecode)]
 pub struct ContentId([u8; 32]);
 
 impl ContentId {

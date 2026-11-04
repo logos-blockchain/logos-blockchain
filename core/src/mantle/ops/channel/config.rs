@@ -38,7 +38,7 @@ use crate::{
 /// and the configuration threshold does not exceed the number of accredited
 /// keys, which also keeps the key set non-empty. [`Self::new`] checks this, and
 /// so do the canonical decoding and the serde deserialization.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, BinaryEncode)]
 pub struct ChannelConfigOp {
     channel: ChannelId,
     parent: MsgId,
@@ -181,48 +181,8 @@ impl<'de> Deserialize<'de> for ChannelConfigOp {
     }
 }
 
-// The fields in order, as `#[derive(BinaryCodec)]` would encode them. Decoding
-// goes through `ChannelConfigOp::new`, so it rejects what `new` rejects.
-impl BinaryEncode for ChannelConfigOp {
-    fn encoded_length(&self) -> usize {
-        let Self {
-            channel,
-            parent,
-            keys,
-            posting_timeframe,
-            posting_timeout,
-            configuration_threshold,
-            transfer_threshold,
-        } = self;
-        channel.encoded_length()
-            + parent.encoded_length()
-            + keys.encoded_length()
-            + posting_timeframe.encoded_length()
-            + posting_timeout.encoded_length()
-            + configuration_threshold.encoded_length()
-            + transfer_threshold.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self {
-            channel,
-            parent,
-            keys,
-            posting_timeframe,
-            posting_timeout,
-            configuration_threshold,
-            transfer_threshold,
-        } = self;
-        channel.encode_into(out);
-        parent.encode_into(out);
-        keys.encode_into(out);
-        posting_timeframe.encode_into(out);
-        posting_timeout.encode_into(out);
-        configuration_threshold.encode_into(out);
-        transfer_threshold.encode_into(out);
-    }
-}
-
+// Decoding goes through `ChannelConfigOp::new`, so it rejects what `new`
+// rejects.
 impl BinaryDecode for ChannelConfigOp {
     type Context = ();
 

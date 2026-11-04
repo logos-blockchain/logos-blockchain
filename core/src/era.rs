@@ -10,7 +10,7 @@
 use core::fmt::{self, Debug, Formatter};
 
 use blake2::Digest as _;
-use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode, codec_fixtures};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, codec_fixtures};
 use lb_time::Epoch;
 pub use lb_time::Era;
 
@@ -21,7 +21,7 @@ use crate::{
 };
 
 /// The digest of an era: of the epoch it starts at, and of its parameters.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, BinaryCodec)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, BinaryEncode, BinaryDecode)]
 pub struct EraDigest([u8; 32]);
 
 const ERA_DIGEST_V1: &[u8] = b"ERA_DIGEST_V1";
@@ -66,7 +66,7 @@ codec_fixtures!(EraDigest, Self([0x11u8; 32]) => "111111111111111111111111111111
 
 /// The digest of a fork: the chain of eras a chain has activated since its
 /// genesis.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, BinaryCodec)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, BinaryEncode, BinaryDecode)]
 pub struct ForkDigest([u8; 32]);
 
 const FORK_DIGEST_V1: &[u8] = b"FORK_DIGEST_V1";

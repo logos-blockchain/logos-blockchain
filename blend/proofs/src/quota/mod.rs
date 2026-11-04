@@ -148,7 +148,7 @@ impl BinaryDecode for ProofOfQuota {
 }
 
 /// A verified Proof of Quota.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, BinaryEncode)]
 pub struct VerifiedProofOfQuota(ProofOfQuota);
 
 impl VerifiedProofOfQuota {
@@ -231,16 +231,6 @@ impl AsRef<ProofOfQuota> for VerifiedProofOfQuota {
 impl PartialEq<ProofOfQuota> for VerifiedProofOfQuota {
     fn eq(&self, other: &ProofOfQuota) -> bool {
         self.0 == *other
-    }
-}
-
-impl BinaryEncode for VerifiedProofOfQuota {
-    fn encoded_length(&self) -> usize {
-        self.0.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.0.encode_into(out);
     }
 }
 

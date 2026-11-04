@@ -40,6 +40,9 @@ pub type MessageIdentifier = ZkHash;
 
 /// An unverified encapsulated message that is received from a peer.
 #[derive(Educe, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+// Encoding (and sending) of unverified messages should not be done outside of
+// tests, so this impl is only available in tests.
+#[cfg_attr(test, derive(BinaryEncode))]
 #[educe(Debug)]
 pub struct EncapsulatedMessage {
     /// A public header that is not encapsulated.
@@ -122,23 +125,6 @@ impl EncapsulatedMessage {
     }
 }
 
-// Encoding (and sending) of unverified messages should not be done outside of
-// tests, so this impl is only available in tests.
-#[cfg(test)]
-impl BinaryEncode for EncapsulatedMessage {
-    fn encoded_length(&self) -> usize {
-        self.public_header
-            .encoded_length()
-            .checked_add(self.encapsulated_part.encoded_length())
-            .unwrap()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.public_header.encode_into(out);
-        self.encapsulated_part.encode_into(out);
-    }
-}
-
 impl BinaryDecode for EncapsulatedMessage {
     type Context = MessageLayout;
 
@@ -161,7 +147,7 @@ impl BinaryDecode for EncapsulatedMessage {
 /// Part of the message that should be encapsulated.
 // TODO: Consider having `InitializedPart` that just finished the initialization step and doesn't
 // have `decapsulate` method.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, BinaryEncode)]
 pub struct EncapsulatedPart {
     private_header: EncapsulatedPrivateHeader,
     payload: EncapsulatedPayload,
@@ -294,20 +280,6 @@ impl EncapsulatedPart {
     /// Signs the encapsulated part using the provided key.
     pub(crate) fn sign(&self, key: &UnsecuredEd25519Key) -> Ed25519Signature {
         key.sign_payload(&signing_body(&self.private_header, &self.payload))
-    }
-}
-
-impl BinaryEncode for EncapsulatedPart {
-    fn encoded_length(&self) -> usize {
-        self.private_header
-            .encoded_length()
-            .checked_add(self.payload.encoded_length())
-            .unwrap()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.private_header.encode_into(out);
-        self.payload.encode_into(out);
     }
 }
 

@@ -113,7 +113,12 @@ impl BinaryDecode for PublicHeader {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+// The verified public-header variants are never decoded from the wire (a peer's
+// bytes always decode into an unverified `PublicHeader`); they only need to
+// encode, and all three variants produce identical bytes. Deriving only
+// `BinaryEncode` for them means a verified message can be serialized directly,
+// with no conversion/copy through `PublicHeader`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, BinaryEncode)]
 pub struct PublicHeaderWithVerifiedSignature {
     signing_pubkey: Ed25519PublicKey,
     proof_of_quota: ProofOfQuota,
@@ -181,24 +186,7 @@ impl PublicHeaderWithVerifiedSignature {
     }
 }
 
-// The verified public-header variants are never decoded from the wire (a peer's
-// bytes always decode into an unverified `PublicHeader`); they only need to
-// encode, and all three variants produce identical bytes. Implementing only
-// `BinaryEncode` for them means a verified message can be serialized directly,
-// with no conversion/copy through `PublicHeader`.
-impl BinaryEncode for PublicHeaderWithVerifiedSignature {
-    fn encoded_length(&self) -> usize {
-        PUBLIC_HEADER_ENCODED_SIZE
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.signing_pubkey.encode_into(out);
-        self.proof_of_quota.encode_into(out);
-        self.signature.encode_into(out);
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, BinaryEncode)]
 pub struct VerifiedPublicHeader {
     signing_pubkey: Ed25519PublicKey,
     proof_of_quota: VerifiedProofOfQuota,
@@ -280,18 +268,6 @@ impl VerifiedPublicHeader {
         self,
     ) -> (Ed25519PublicKey, VerifiedProofOfQuota, Ed25519Signature) {
         (self.signing_pubkey, self.proof_of_quota, self.signature)
-    }
-}
-
-impl BinaryEncode for VerifiedPublicHeader {
-    fn encoded_length(&self) -> usize {
-        PUBLIC_HEADER_ENCODED_SIZE
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.signing_pubkey.encode_into(out);
-        self.proof_of_quota.as_ref().encode_into(out);
-        self.signature.encode_into(out);
     }
 }
 

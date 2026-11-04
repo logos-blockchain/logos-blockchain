@@ -1,6 +1,6 @@
 use core::fmt::{self, Display, Formatter};
 
-use lb_binary_codec::canonical::{BTreeSet, BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BTreeSet, BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::bounded::{BoundedString, BoundedVec, UpperBoundedVec};
@@ -361,7 +361,7 @@ impl BinaryDecode for ChainId {
 
 /// Time at which the chain should start. u32 suffices: we only need the
 /// positive half of the i64 Unix timestamp.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, BinaryCodec)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, BinaryEncode, BinaryDecode)]
 pub struct GenesisTime(u32);
 
 impl GenesisTime {
@@ -398,7 +398,7 @@ impl TryFrom<OffsetDateTime> for GenesisTime {
 pub type ConsensusExcludedKeys = BTreeSet<ZkPublicKey>;
 
 /// The parameters of a chain, encoded as an inscription in its genesis block.
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryEncode, BinaryDecode)]
 pub struct GenesisParameters {
     pub chain_id: ChainId,
     pub start_time: GenesisTime,
