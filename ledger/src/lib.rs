@@ -3244,11 +3244,11 @@ mod tests {
         );
         // The registration, the inscription with its signature, then the program
         // step (54 + 6320, no opening) with its payment of one input and no output
-        // (250 + 1770 + 725) and its spend of one output (1770 + 24), nothing
+        // (267 + 1770 + 725) and its spend of one output (1770 + 24), nothing
         // buffered in the channel.
         assert_eq!(
             execution_gas,
-            Gas::new(6_839 + (21 + 161) + (54 + 6_320) + (250 + 1_770 + 725) + (1_770 + 24))
+            Gas::new(6_839 + (21 + 161) + (54 + 6_320) + (267 + 1_770 + 725) + (1_770 + 24))
         );
     }
 
@@ -3470,7 +3470,7 @@ mod tests {
         // 2 * 23 + 725 + 24), the registration, the creating inscription, the
         // Deposit with its root extended over the 3 buffered (6 + 1770 + 879 +
         // 3 * 23 + 725 + 24) and the inscription of the user step buffering 1
-        // (178 + 1770 + 879 + 23 + 725 + 24) and the program step with its
+        // (195 + 1770 + 879 + 23 + 725 + 24) and the program step with its
         // payment, its spend extended over the 2 buffered of the channel.
         assert_eq!(
             operations_gas,
@@ -3481,9 +3481,9 @@ mod tests {
                     + (21 + 161)
                     + (6 + 1_770 + 879 + 69 + 725 + 24)
                     + (21 + 161)
-                    + (178 + 1_770 + 879 + 23 + 725 + 24)
+                    + (195 + 1_770 + 879 + 23 + 725 + 24)
                     + (54 + 6_320)
-                    + (250 + 1_770 + 725)
+                    + (267 + 1_770 + 725)
                     + (1_770 + 879 + 46 + 24)
             )
         );
