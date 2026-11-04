@@ -46,7 +46,7 @@ use lb_cryptarchia_sync::HeaderId;
 use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
 use lb_key_management_system_keys::keys::{UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey};
 use lb_ledger::{
-    LedgerState,
+    GENESIS_STAKE_SUPPLY, LedgerState,
     config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
@@ -1220,13 +1220,23 @@ pub fn genesis_cryptarchia_on(note: Note, era_schedule: Arc<EraScheduledConfig>)
     )
 }
 
-/// A genesis block distributing the value of each of `notes` to its key.
+/// A genesis block distributing the value of each of `notes` to its key and what
+/// the supply rule of Mantle Ledger Initialization leaves to another one.
 pub fn genesis_block_with(notes: &[Note]) -> GenesisBlock {
+    let distributed = notes.iter().map(|note| note.value).sum::<u64>();
     GenesisBlockBuilder::new()
-        .try_add_notes(notes.iter().map(|note| GenesisAllocation {
-            value: note.value,
-            public_key: note.public_key,
-        }))
+        .try_add_notes(
+            notes
+                .iter()
+                .map(|note| GenesisAllocation {
+                    value: note.value,
+                    public_key: note.public_key,
+                })
+                .chain([GenesisAllocation {
+                    value: GENESIS_STAKE_SUPPLY - distributed,
+                    public_key: ZkPublicKey::new(Fr::from(1u64)),
+                }]),
+        )
         .unwrap()
         .set_inscription(InscriptionOp {
             channel_id: NULL_CHANNEL_ID,

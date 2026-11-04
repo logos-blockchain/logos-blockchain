@@ -128,7 +128,7 @@ impl ServiceConfig {
 }
 
 /// The ledger config of an era.
-fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
+pub(crate) fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
     let EraRuleset::V1(parameters) = &era.ruleset;
     let deployment = &parameters.cryptarchia;
     let blend_rewards_params = parameters.blend_reward_params();

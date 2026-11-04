@@ -1,5 +1,8 @@
-pub use lb_config::funding::leader_stake_amount;
-use lb_config::{consensus::SdpFundingConfig, funding::fund_wallets, sdp::create_sdp_configs};
+use lb_config::{
+    consensus::SdpFundingConfig,
+    funding::{fill_leader_stake, fund_wallets},
+    sdp::create_sdp_configs,
+};
 use lb_core::{
     block::genesis::GenesisBlock,
     mantle::{GenesisTime, traits::GenesisTx as _},
@@ -51,7 +54,6 @@ pub fn apply_wallet_genesis_overrides(
     let mut transfer_op = genesis_block.genesis_tx().distribution();
     fund_wallets(
         &mut transfer_op,
-        &leader_keys,
         &funding_keys,
         wallet_accounts,
         sdp_funding_config,
@@ -72,6 +74,9 @@ pub fn apply_wallet_genesis_overrides(
             amount: BLEND_DECLARATION_AMOUNT,
         });
     }
+
+    let declared = providers.iter().map(|provider| provider.amount).sum();
+    fill_leader_stake(&mut transfer_op, &leader_keys, declared);
 
     let genesis_block =
         create_genesis_block_with_declarations(transfer_op, providers, test_context, genesis_time);

@@ -21,7 +21,7 @@ use lb_key_management_system_service::keys::{
 };
 use num_bigint::BigUint;
 
-use crate::unique::unique_test_context;
+use crate::{funding::fill_leader_stake, unique::unique_test_context};
 
 pub const SHORT_PROLONGED_BOOTSTRAP_PERIOD: Duration = Duration::from_secs(1);
 
@@ -284,7 +284,15 @@ pub fn create_consensus_configs_with_additional_wallet_outputs_and_sdp_funding_c
             additional_wallet_outputs,
             sdp_funding_config,
         );
-    let genesis_block = create_genesis_block(&material.allocations, test_context, genesis_time);
+    let mut allocations = Distribution::try_from(material.allocations.clone())
+        .expect("the allocations fit the genesis transfer outputs");
+    let leader_keys = material
+        .regular_note_keys
+        .iter()
+        .map(ZkKey::to_public_key)
+        .collect::<Vec<_>>();
+    fill_leader_stake(&mut allocations, &leader_keys, 0);
+    let genesis_block = create_genesis_block(allocations.as_slice(), test_context, genesis_time);
 
     (
         configs_from_material(&material, prolonged_bootstrap_period),

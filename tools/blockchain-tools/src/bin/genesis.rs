@@ -540,12 +540,17 @@ fn struct_to_yaml_value<T: serde::Serialize>(value: &T) -> Result<Value> {
 
 fn ensure_valid_deployment_settings(value: &Value) -> Result<()> {
     let yaml = serde_yaml::to_string(value)?;
+    let settings = deserialize_value_from_reader::<DeploymentSettings, _>(
+        yaml.as_bytes(),
+        OnUnknownKeys::Fail,
+    )
+    .context("generated config is not a valid DeploymentSettings value")?;
+    // The node rejects a genesis block the ledger does not accept, so it is
+    // reported here rather than when a node starts.
     drop(
-        deserialize_value_from_reader::<DeploymentSettings, _>(
-            yaml.as_bytes(),
-            OnUnknownKeys::Fail,
-        )
-        .context("generated config is not a valid DeploymentSettings value")?,
+        settings
+            .genesis_ledger_state()
+            .map_err(|error| anyhow::anyhow!("the ledger rejects the genesis block: {error}"))?,
     );
     Ok(())
 }

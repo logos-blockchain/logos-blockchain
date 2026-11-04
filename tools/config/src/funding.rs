@@ -1,21 +1,20 @@
 use std::collections::{HashMap, HashSet};
 
-use lb_core::mantle::transactions::{Distribution, GenesisAllocation, UNITS_PER_LGO};
+use lb_core::mantle::transactions::{Distribution, GenesisAllocation};
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
+pub use lb_ledger::GENESIS_STAKE_SUPPLY;
 
 use crate::consensus::{GENESIS_TRANSFER_OUTPUT_LIMIT, SdpFundingConfig, ServiceNote};
 
-/// Adds scenario wallets and adjusts leader stake and SDP funding before
-/// genesis is signed. This operates on protocol data, without native node
-/// configuration.
+/// Adds scenario wallets and adjusts SDP funding before genesis is signed. This
+/// operates on protocol data, without native node configuration.
 pub fn fund_wallets(
     transfer: &mut Distribution,
-    leader_keys: &[ZkPublicKey],
     funding_keys: &[ZkPublicKey],
     wallets: &[(ZkKey, u64)],
     sdp_funding: SdpFundingConfig,
 ) {
-    if wallets.is_empty() || leader_keys.is_empty() {
+    if wallets.is_empty() {
         return;
     }
 
@@ -26,14 +25,6 @@ pub fn fund_wallets(
         wallets.len(),
         sdp_funding,
     );
-    let total = wallets.iter().map(|(_, value)| *value).sum();
-    let stake = leader_stake_amount(total, leader_keys.len());
-
-    for output in transfer.iter_mut() {
-        if leader_keys.contains(&output.public_key) {
-            output.value = stake;
-        }
-    }
     for (key, value) in wallets {
         transfer
             .try_push(GenesisAllocation {
@@ -41,6 +32,34 @@ pub fn fund_wallets(
                 public_key: key.to_public_key(),
             })
             .expect("wallet account outputs must fit transfer output bounds");
+    }
+}
+
+/// Gives the notes of the leaders, evenly, what the other outputs and the
+/// `declared` amounts leave of [`GENESIS_STAKE_SUPPLY`], so that the block follows
+/// the supply rule of Mantle Ledger Initialization and the lottery elects them.
+pub fn fill_leader_stake(transfer: &mut Distribution, leader_keys: &[ZkPublicKey], declared: u64) {
+    let others = transfer
+        .iter()
+        .filter(|output| !leader_keys.contains(&output.public_key))
+        .map(|output| output.value)
+        .try_fold(declared, u64::checked_add)
+        .expect("the outputs of a test genesis do not overflow");
+    let stake = GENESIS_STAKE_SUPPLY
+        .checked_sub(others)
+        .expect("the outputs of a test genesis fit in the supply");
+    let leaders = transfer
+        .iter()
+        .filter(|output| leader_keys.contains(&output.public_key))
+        .count();
+    assert!(leaders > 0, "a test genesis needs a leader note");
+    let leaders = u64::try_from(leaders).expect("the leader count fits in u64");
+    let mut remainder = stake % leaders;
+    for output in transfer.iter_mut() {
+        if leader_keys.contains(&output.public_key) {
+            output.value = stake / leaders + u64::from(remainder > 0);
+            remainder = remainder.saturating_sub(1);
+        }
     }
 }
 
@@ -54,20 +73,6 @@ pub fn refresh_service_note(note: &mut ServiceNote, transfer: &Distribution) {
         .expect("service note must be present in genesis");
     note.output_index = index;
     note.note = output.note(index);
-}
-
-#[must_use]
-pub fn leader_stake_amount(total_wallet_funds: u64, n_participants: usize) -> u64 {
-    if total_wallet_funds == 0 {
-        return 100_000 * UNITS_PER_LGO;
-    }
-
-    let n = n_participants.max(1) as u64;
-    let scaled = total_wallet_funds
-        .saturating_mul(10)
-        .saturating_div(n)
-        .max(1);
-    scaled.max(100_000 * UNITS_PER_LGO)
 }
 
 fn fit_sdp_funding_outputs_to_genesis_capacity(
