@@ -452,6 +452,17 @@ where
                     error!(target: LOG_TARGET, "Could not send ledger state through channel");
                 });
             }
+            Query::VerifyProposalHeader {
+                header,
+                reply_channel,
+            } => {
+                let result = self
+                    .cryptarchia
+                    .verify_proposal_header(&header, self.current_slot);
+                reply_channel.send(result).unwrap_or_else(|_| {
+                    error!(target: LOG_TARGET, "Could not send proposal header check through channel");
+                });
+            }
             Query::GetLedgerConfigAtSlot {
                 slot,
                 reply_channel,

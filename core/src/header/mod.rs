@@ -145,6 +145,14 @@ impl Header {
         + ContentId::CANONICAL_ENCODED_SIZE
         + Groth16LeaderProof::CANONICAL_ENCODED_SIZE;
 
+    /// Reads the slot of the encoded header `input` opens with, leaving the
+    /// rest undecoded. The version is not checked, [`Header::decode`] does it.
+    pub fn peek_slot(input: &[u8]) -> Result<Slot, DecodeError> {
+        let (input, _bedrock_version) = u8::decode(input, &())?;
+        let (input, _parent_block) = HeaderId::decode(input, &())?;
+        Slot::peek_decode(input, &())
+    }
+
     #[must_use]
     pub const fn parent(&self) -> HeaderId {
         self.parent_block
@@ -470,7 +478,7 @@ fn pol_msg_hashes_the_header_fields_under_its_dst() {
 #[test]
 fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
     let body_root = ContentId(
-        hex::decode("72a9cabe648f47ad51817c338dea39851b47dd9ae12b753d675d19f350293cfc")
+        hex::decode("3cebbd1570bb1b279683247781389cd3781e8c89bfcf7d158cdbf019856df399")
             .unwrap()
             .try_into()
             .unwrap(),
@@ -489,7 +497,7 @@ fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
     };
     assert_eq!(
         hex::encode(header(0x22).id().0),
-        "327f8ab9d5b7b23fbcb2ed2cf719212de7290fe0408abf111f1cfa45f97132f6"
+        "1616a4d15dbff70df3a9300f07e50c0b94beb93d48fbf8de604b1113a4931b36"
     );
     assert_eq!(header(0x22).id(), header(0x23).id());
     assert_eq!(
@@ -506,7 +514,7 @@ fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
     let spec_header = Header::new(
         HeaderId([0x11; 32]),
         ContentId(
-            hex::decode("72a9cabe648f47ad51817c338dea39851b47dd9ae12b753d675d19f350293cfc")
+            hex::decode("3cebbd1570bb1b279683247781389cd3781e8c89bfcf7d158cdbf019856df399")
                 .unwrap()
                 .try_into()
                 .unwrap(),
@@ -520,7 +528,7 @@ fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
     );
     assert_eq!(
         hex::encode(spec_header.id().0),
-        "327f8ab9d5b7b23fbcb2ed2cf719212de7290fe0408abf111f1cfa45f97132f6"
+        "1616a4d15dbff70df3a9300f07e50c0b94beb93d48fbf8de604b1113a4931b36"
     );
 }
 
@@ -580,6 +588,18 @@ fn header_with_a_version_byte_other_than_one_is_rejected() {
     }
 }
 
+#[test]
+fn peek_slot_reads_the_slot_after_the_version_and_the_parent() {
+    use lb_binary_codec::canonical::CodecExamples as _;
+
+    let header = Header::fixtures().into_iter().next().unwrap().value;
+    assert_eq!(header.slot(), Slot::from(42u64));
+    let bytes = header.encode_to_vec();
+
+    assert_eq!(Header::peek_slot(&bytes), Ok(Slot::from(42u64)));
+    assert!(Header::peek_slot(&bytes[..33]).is_err());
+}
+
 /// Body-root / `HeaderId` test-vector generator.
 ///
 /// This module does not assert library behaviour: it *emits* reference test
@@ -637,7 +657,19 @@ mod body_root_test_vectors {
             ContentId([byte; 32]),
             Slot::from(u64::from(byte)),
             Groth16LeaderProof::from_parts(
-                lb_pol::PoLProof::from_bytes(&[byte; 128]),
+                // `[1]G1`, `[1]G2`, `[1]G1`, real points whose flags are clear.
+                lb_pol::PoLProof::try_from_bytes(
+                    &hex::decode(concat!(
+                        "0100000000000000000000000000000000000000000000000000000000000000",
+                        "edf692d95cbdde46ddda5ef7d422436779445c5e66006a42761e1f12efde0018",
+                        "c212f3aeb785e49712e7a9353349aaf1255dfb31b7bf60723a480d9293938e19",
+                        "0100000000000000000000000000000000000000000000000000000000000000",
+                    ))
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+                )
+                .unwrap(),
                 Fr::from(u64::from(byte)),
                 ZkPublicKey::new(Fr::from(u64::from(byte))),
             ),
@@ -785,17 +817,17 @@ mod body_root_test_vectors {
             .collect();
         assert_eq!(
             hex::encode(merkle::calculate_transactions_root(&txs)),
-            "9d3b282848ee7a43e7efd53e9b9399436e27095c1add30929cdd842bca553115"
+            "ee422c66354dd700253ac5a0c79e684335584e936b2a23da78a4789be9143b6d"
         );
         assert_eq!(
             hex::encode(crate::block::body_root(&UncleHeaders::empty(), &txs).0),
-            "72a9cabe648f47ad51817c338dea39851b47dd9ae12b753d675d19f350293cfc"
+            "3cebbd1570bb1b279683247781389cd3781e8c89bfcf7d158cdbf019856df399"
         );
         let uncles =
             UncleHeaders::try_new(vec![uncle(0x66), uncle(0x77)], VECTOR_MAX_UNCLES).unwrap();
         assert_eq!(
             hex::encode(crate::block::body_root(&uncles, &txs).0),
-            "1582693d4f4a89537e2410fa0522555f72b0272615043353f64ed55fc7ca6437"
+            "d68f55316a63ee2787e275801bb15375e324a2e46bca527997bb7b3f91f87758"
         );
     }
 }

@@ -8,7 +8,7 @@ use futures::{Stream, TryStreamExt as _};
 use lb_core::{
     block::{Block, UncleHeaders, genesis::GenesisBlock},
     events::Events,
-    header::HeaderId,
+    header::{Header, HeaderId},
     sdp::{Declaration, DeclarationId},
 };
 use lb_cryptarchia_engine::Slot;
@@ -256,6 +256,33 @@ where
         rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetLedgerState"))
         })
+    }
+
+    /// Check a proposal header against the chain, leaving the chain untouched.
+    pub async fn verify_proposal_header(&self, header: Header) -> Result<(), ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        let header_id = header.id();
+        self.relay
+            .send(
+                Query::VerifyProposalHeader {
+                    header: Box::new(header),
+                    reply_channel,
+                }
+                .into(),
+            )
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending VerifyProposalHeader"))
+            })?;
+
+        rx.await
+            .map_err(|relay_error| {
+                ApiError::CommsFailure(format!(
+                    "{relay_error} while receiving VerifyProposalHeader"
+                ))
+            })?
+            .map_err(|err| apply_block_api_error(err, header_id))
     }
 
     /// The ledger config of the era of `slot`.

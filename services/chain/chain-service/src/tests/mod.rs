@@ -13,7 +13,7 @@ use lb_core::{
         genesis::{GenesisBlock, GenesisBlockBuilder},
     },
     crypto::ZkHasher,
-    header::{Header, pol_msg},
+    header::{ContentId, Header, pol_msg},
     mantle::{
         GenesisParameters, GenesisTime, Note, Op, OpProof, SignedOps, Value,
         channel::Channels,
@@ -870,6 +870,71 @@ fn a_copy_failing_an_operation_proof_leaves_the_genuine_block_applicable() {
         .try_apply_block(block, slot)
         .expect("the genuine block must still apply");
     assert_eq!(cryptarchia.tip(), id);
+}
+
+/// Block Proposal Validation: an unauthenticated proposal is discarded from its
+/// header alone, leaving the chain untouched.
+#[test]
+fn proposal_header_check_runs_before_the_mempool_scan() {
+    let config = ledger_config(NonZero::<u32>::new(1).unwrap());
+    let genesis_id: HeaderId = [0; 32].into();
+    let (secret_key, note) = note();
+    let cryptarchia = Cryptarchia::from_genesis(
+        genesis_id,
+        LedgerState::from_notes([note], &config, 0),
+        single_era(config),
+        lb_cryptarchia_engine::State::Bootstrapping,
+    );
+    let (block, _) = try_build_block(
+        &cryptarchia,
+        genesis_id,
+        &note,
+        secret_key,
+        Slot::new(1),
+        UncleHeaders::empty(),
+    )
+    .expect("should find a winning slot");
+    let header = block.header();
+    let slot = header.slot();
+    let check = |header: &Header, current_slot: Slot| {
+        cryptarchia
+            .verify_proposal_header(header, current_slot)
+            .map_err(|err| crate::api::apply_block_api_error(err, header.id()))
+    };
+
+    check(header, slot).expect("the genuine header must pass");
+    assert_eq!(cryptarchia.tip(), genesis_id);
+
+    // The `msg` of the proof covers the body root, so this header fails on the
+    // proof alone: its parent and slot are those of the genuine one.
+    let forged = Header::new(
+        genesis_id,
+        ContentId::from([1; 32]),
+        slot,
+        header.leader_proof().clone(),
+    );
+    assert!(matches!(
+        check(&forged, slot),
+        Err(crate::api::ApiError::InvalidLeaderProof(id)) if id == forged.id()
+    ));
+
+    let unknown_parent: HeaderId = [1; 32].into();
+    let orphan = Header::new(
+        unknown_parent,
+        *header.body_root(),
+        slot,
+        header.leader_proof().clone(),
+    );
+    assert!(matches!(
+        check(&orphan, slot),
+        Err(crate::api::ApiError::ParentMissing { parent, .. }) if parent == unknown_parent
+    ));
+
+    assert!(matches!(
+        check(header, Slot::genesis()),
+        Err(crate::api::ApiError::FutureBlock { block_slot, current_slot })
+            if block_slot == slot && current_slot == Slot::genesis()
+    ));
 }
 
 /// Creates a transfer tx with a fake sig.

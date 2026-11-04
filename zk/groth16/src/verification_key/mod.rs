@@ -8,7 +8,7 @@ use generic_array::{GenericArray, typenum::Unsigned as _};
 
 use crate::{
     from_json_error::FromJsonError,
-    proof::CompressSize,
+    proof::{CompressSize, flagged_coordinate_is_canonical, g2_coordinates_are_canonical},
     protocol::Protocol,
     utils::{StringifiedG1, StringifiedG2},
 };
@@ -177,6 +177,25 @@ impl CompressedVerificationKey<ark_bn254::Bn254> {
         .collect()
     }
 
+    /// [`CompressedProof::check_encoding`](crate::CompressedProof::check_encoding)
+    /// on every point of the key. Whether the points are on their curve and in
+    /// their subgroup is left to [`VerificationKey::try_from`].
+    pub fn check_encoding(&self) -> Result<(), SerializationError> {
+        let valid = flagged_coordinate_is_canonical(&self.alpha_1)
+            && [&self.beta_2, &self.gamma_2, &self.delta_2]
+                .into_iter()
+                .all(|point| g2_coordinates_are_canonical(point))
+            && self
+                .ic
+                .iter()
+                .all(|point| flagged_coordinate_is_canonical(point));
+        if valid {
+            Ok(())
+        } else {
+            Err(SerializationError::InvalidData)
+        }
+    }
+
     #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         let g1 = <ark_bn254::Bn254 as CompressSize>::G1CompressedSize::to_usize();
@@ -308,8 +327,9 @@ impl<E: Pairing> AsRef<ark_groth16::PreparedVerifyingKey<E>> for PreparedVerific
 
 #[cfg(test)]
 mod tests {
-    use ark_bn254::{Fr, G1Affine, G2Affine};
+    use ark_bn254::{Fq, Fr, G1Affine, G2Affine};
     use ark_ec::AffineRepr as _;
+    use ark_ff::{BigInteger as _, PrimeField as _};
 
     use crate::{
         CompressedGroth16VerificationKey, Groth16VerificationKey, groth16_verify,
@@ -338,10 +358,32 @@ mod tests {
         assert_eq!(
             round_trip(&Groth16VerificationKey {
                 gamma_2: off_subgroup_g2(),
-                ..key
+                ..key.clone()
             }),
             None
         );
+
+        let bytes = CompressedGroth16VerificationKey::try_from(&key)
+            .unwrap()
+            .to_bytes();
+        let check = |bytes: &[u8]| {
+            CompressedGroth16VerificationKey::from_bytes(bytes)
+                .unwrap()
+                .check_encoding()
+        };
+        assert!(check(&bytes).is_ok());
+        let modulus = Fq::MODULUS.to_bytes_le();
+        for start in (0..bytes.len()).step_by(32) {
+            let mut at_modulus = bytes.clone();
+            at_modulus[start..start + 32].copy_from_slice(&modulus);
+            assert!(check(&at_modulus).is_err(), "modulus at {start}");
+        }
+        // The last byte of alpha, beta, gamma, delta and the ic points.
+        for last_byte in [31, 95, 159, 223, 255, 287, 319, 351] {
+            let mut flagged = bytes.clone();
+            flagged[last_byte] |= 1 << 6;
+            assert!(check(&flagged).is_err(), "bit 6 at {last_byte}");
+        }
     }
 
     #[test]

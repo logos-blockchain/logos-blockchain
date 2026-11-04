@@ -6,7 +6,7 @@ use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream};
 use lb_binary_codec::canonical::{BinaryDecode, DecodeError};
 use lb_core::{
     block::{Block, Proposal},
-    header::HeaderId,
+    header::{Header, HeaderId},
     mantle::{
         TxHash,
         ledger::verification_mode::StandardMode,
@@ -14,7 +14,7 @@ use lb_core::{
         transactions::states::Preverified,
     },
 };
-use lb_cryptarchia_engine::{Era, EraSchedule, Slot};
+use lb_cryptarchia_engine::{Era, EraSchedule};
 use lb_cryptarchia_sync::TipResponse;
 use lb_log_targets::chain;
 use lb_network_service::{
@@ -83,18 +83,18 @@ pub struct LibP2pAdapterEraSettings {
     pub max_uncles: u8,
 }
 
-/// Decodes a proposal under the uncle maximum of the era of its slot, which its
-/// encoding opens with.
+/// Decodes a proposal under the uncle maximum of the era of the slot of its
+/// header, which its encoding opens with.
 fn decode_proposal(
     bytes: &[u8],
     era_schedule: &EraSchedule<LibP2pAdapterEraSettings>,
 ) -> Result<Proposal, DecodeError> {
-    let slot = Slot::peek_decode(bytes, &())?;
+    let slot = Header::peek_slot(bytes)?;
     Proposal::decode_all(bytes, &era_schedule.at_slot(slot).parameters.max_uncles)
 }
 
-/// Decodes a synced block under the uncle maximum of the era of its slot, which
-/// its encoding opens with.
+/// Decodes a synced block under the uncle maximum of the era of the slot of its
+/// header, which its encoding opens with.
 fn decode_block<Tx>(
     bytes: &[u8],
     era_schedule: &EraSchedule<LibP2pAdapterEraSettings>,
@@ -102,7 +102,7 @@ fn decode_block<Tx>(
 where
     Tx: BinaryDecode<Context = ()> + Hashable<Hash = TxHash> + StorageSize,
 {
-    let slot = Slot::peek_decode(bytes, &())?;
+    let slot = Header::peek_slot(bytes)?;
     Block::decode_all(
         bytes,
         &(era_schedule.at_slot(slot).parameters.max_uncles, ()),

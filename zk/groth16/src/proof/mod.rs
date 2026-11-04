@@ -42,7 +42,7 @@ fn coordinate_limbs(coordinate: &[u8]) -> BigInt<4> {
     BigInt::new(limbs)
 }
 
-fn flagged_coordinate_is_canonical(coordinate: &[u8]) -> bool {
+pub fn flagged_coordinate_is_canonical(coordinate: &[u8]) -> bool {
     let last_byte = coordinate[COORDINATE_SIZE - 1];
     if last_byte & INFINITY_FLAG != 0 {
         return false;
@@ -50,6 +50,11 @@ fn flagged_coordinate_is_canonical(coordinate: &[u8]) -> bool {
     let mut limbs = coordinate_limbs(coordinate);
     limbs.0[3] &= !(u64::from(FLAGS) << 56);
     limbs < Fq::MODULUS
+}
+
+pub fn g2_coordinates_are_canonical(point: &[u8]) -> bool {
+    let (c0, c1) = point.split_at(COORDINATE_SIZE);
+    coordinate_limbs(c0) < Fq::MODULUS && flagged_coordinate_is_canonical(c1)
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -111,10 +116,8 @@ impl CompressedProof<Bn254> {
     /// their curve and in their subgroup is left to [`Proof::try_from`], where
     /// the proof is verified and the points decompressed.
     pub fn check_encoding(&self) -> Result<(), SerializationError> {
-        let (c0, c1) = self.pi_b.split_at(COORDINATE_SIZE);
         let valid = flagged_coordinate_is_canonical(&self.pi_a)
-            && coordinate_limbs(c0) < Fq::MODULUS
-            && flagged_coordinate_is_canonical(c1)
+            && g2_coordinates_are_canonical(&self.pi_b)
             && flagged_coordinate_is_canonical(&self.pi_c);
         if valid {
             Ok(())
