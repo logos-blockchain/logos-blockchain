@@ -3327,10 +3327,10 @@ mod tests {
             parent: first.id(),
             signer,
         };
-        let custom = SignedOps::from_ops_with_sample_proofs(Ops::from([
-            Op::ChannelInscribe(first),
-            Op::ChannelInscribe(second),
-        ]));
+        let custom = SignedOps::from_ops_with_sample_proofs(Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelInscribe(first), Op::ChannelInscribe(second)],
+        ));
         let custom_hash = custom.hash();
         state.submit_other(custom, channel_id).unwrap();
         assert_eq!(
