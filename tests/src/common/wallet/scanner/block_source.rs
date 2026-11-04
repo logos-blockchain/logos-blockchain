@@ -55,7 +55,7 @@ pub async fn stream_blocks_range(
 pub async fn block_events(client: &NodeHttpClient, id: HeaderId) -> Result<Events, ScannerError> {
     let path = BLOCK_EVENTS
         .trim_start_matches('/')
-        .replace(":id", &id.to_string());
+        .replace("{id}", &id.to_string());
     let url = client
         .base_url()
         .join(&path)
