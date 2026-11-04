@@ -4,7 +4,7 @@ mod test_utils;
 
 use std::collections::HashMap;
 
-use lb_binary_codec::bincode::SerializeOp as _;
+use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_core::{
     crypto::{Digest, Hash, Hasher},
     mantle::{
@@ -74,7 +74,8 @@ pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
     #[must_use]
     fn add_income(&self, income: Value) -> Self;
 
-    // The income earned and not yet settled by an epoch transition.
+    // The income earned in the current epoch, which `blend_rewards_pending` also
+    // holds.
     fn pending_income(&self) -> Value;
 }
 
@@ -104,15 +105,13 @@ pub enum Error {
 /// Creates a deterministic transaction hash for reward distribution.
 ///
 /// The hash is computed from the service type and the epoch number, ensuring
-/// all nodes produce identical transaction hashes for reward notes.
+/// all nodes produce identical transaction hashes for reward notes. Service
+/// Reward Distribution: `hash(ServiceType || epoch_number)`, with `ServiceType`
+/// its canonical one-byte discriminant.
 fn create_reward_op_id(epoch: Epoch, service_type: ServiceType) -> Hash {
     let mut hasher = Hasher::default();
     let epoch_u8 = epoch.into_inner().to_le_bytes().to_vec();
-    let service_type_u8 = service_type
-        .to_bytes()
-        .expect("conversion to bytes should succeed")
-        .to_vec();
-    <Hasher as Digest>::update(&mut hasher, &service_type_u8);
+    <Hasher as Digest>::update(&mut hasher, service_type.encode_to_vec());
     <Hasher as Digest>::update(&mut hasher, &epoch_u8);
 
     hasher.finalize().into()
@@ -155,6 +154,20 @@ mod tests {
     use lb_groth16::Fr;
 
     use super::*;
+
+    /// Service Reward Distribution: the `op_id` is `hash(ServiceType ||
+    /// epoch_number)`, the one-byte discriminant of the service, then the 4
+    /// bytes of the epoch.
+    #[test]
+    fn reward_op_id_hashes_the_one_byte_service_type_and_the_four_byte_epoch() {
+        let mut hasher = Hasher::default();
+        <Hasher as Digest>::update(&mut hasher, [0x00, 0x07, 0x00, 0x00, 0x00]);
+        let expected: Hash = hasher.finalize().into();
+        assert_eq!(
+            create_reward_op_id(Epoch::new(7), ServiceType::BlendNetwork),
+            expected
+        );
+    }
 
     #[test]
     fn reward_notes_take_the_derived_nonce_in_zk_id_order() {

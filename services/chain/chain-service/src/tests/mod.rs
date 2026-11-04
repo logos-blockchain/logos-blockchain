@@ -809,6 +809,69 @@ fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
     assert_eq!(cryptarchia.tip(), genesis_id, "tip should not advance");
 }
 
+/// Block Header Validation: a copy of a block failing an Operation proof shares
+/// the ID of the genuine block, which stays applicable.
+#[test]
+fn a_copy_failing_an_operation_proof_leaves_the_genuine_block_applicable() {
+    let config = ledger_config(NonZero::<u32>::new(1).unwrap());
+    let genesis_id: HeaderId = [0; 32].into();
+    let (secret_key, leader_note) = note();
+    let (funding_key, funding_note) = note();
+    let genesis_notes = [leader_note, funding_note];
+    let paths = commitment_paths(&genesis_notes);
+    let mut cryptarchia = Cryptarchia::from_genesis(
+        genesis_id,
+        LedgerState::from_notes(genesis_notes, &config, 0, &ConsensusExcludedKeys::empty()),
+        single_era(config),
+        lb_cryptarchia_engine::State::Bootstrapping,
+    );
+
+    let (block, _) = try_build_block_with_transactions(
+        &cryptarchia,
+        genesis_id,
+        &leader_note,
+        secret_key,
+        &paths[0],
+        Slot::new(1),
+        UncleHeaders::empty(),
+        BlockTransactions::from([burn_tx(&funding_note, funding_key, &paths[1])]),
+    )
+    .expect("should find a winning slot");
+    let id = block.header().id();
+    let slot = block.header().slot();
+
+    let tampered_proof = OpProofs::from([OpProof::ZkTransfer(ZkTransferProof::new(
+        CompressedGroth16Proof::from_bytes(&[0u8; 128]),
+    ))]);
+    let copy: Block<SignedOps<Preverified, StandardMode>> = Block::reconstruct(
+        block.header().clone(),
+        UncleHeaders::empty(),
+        BlockTransactions::from([SignedOps::from_parts(
+            burn_ops(&funding_note, funding_key, &paths[1]),
+            tampered_proof,
+        )
+        .unwrap()
+        .preverify()
+        .unwrap()]),
+    )
+    .expect("the body root does not cover the Operation proofs");
+    assert_eq!(copy.header().id(), id);
+
+    let Err(err) = cryptarchia.try_apply_block(copy, slot) else {
+        panic!("expected the copy to be rejected");
+    };
+    assert!(matches!(
+        crate::api::apply_block_api_error(err, id),
+        crate::api::ApiError::InvalidOperationProof(block_id) if block_id == id
+    ));
+    assert_eq!(cryptarchia.tip(), genesis_id);
+
+    cryptarchia
+        .try_apply_block(block, slot)
+        .expect("the genuine block must still apply");
+    assert_eq!(cryptarchia.tip(), id);
+}
+
 /// Creates a transfer tx with a fake sig.
 fn transfer_tx_with_fake_sig(
     note: &Note,
@@ -827,16 +890,21 @@ fn transfer_tx_with_fake_sig(
         .expect("a fake signature is only caught by the stateful checks")
 }
 
+/// The Operations of a tx spending `note` with no outputs.
+fn burn_ops(note: &Note, secret_key: Fr, path: &MerklePath) -> Ops {
+    Ops::from([Op::Transfer(TransferOp::new(
+        [derive_note_nullifier(&note.commitment(), &secret_key)].into(),
+        OutputCommitments::default(),
+        path.root::<ZkHasher>(note.commitment().0),
+        note.value,
+    ))])
+}
+
 /// Creates a tx spending `note` with no outputs, so its whole value pays the
 /// fee.
 fn burn_tx(note: &Note, secret_key: Fr, path: &MerklePath) -> SignedOps<Preverified, StandardMode> {
     let root = path.root::<ZkHasher>(note.commitment().0);
-    let ops = Ops::from([Op::Transfer(TransferOp::new(
-        [derive_note_nullifier(&note.commitment(), &secret_key)].into(),
-        OutputCommitments::default(),
-        root,
-        note.value,
-    ))]);
+    let ops = burn_ops(note, secret_key, path);
     let op_proofs = OpProofs::from([OpProof::ZkTransfer(ZkTransferProof::new(prove_transfer(
         &[(*note, secret_key, path.clone())],
         &[],

@@ -55,7 +55,9 @@ macro_rules! compressed_proof {
                 (): &Self::Context,
             ) -> Result<(&'input [u8], Self), DecodeError> {
                 let (rest, bytes) = <[u8; COMPRESSED_PROOF_SIZE]>::decode(input, &())?;
-                Ok((rest, Self(CompressedGroth16Proof::from_bytes(&bytes))))
+                let proof = CompressedGroth16Proof::try_from_bytes(&bytes)
+                    .map_err(|error| DecodeError::invalid_value::<Self>(error.to_string()))?;
+                Ok((rest, Self(proof)))
             }
         }
 
@@ -295,6 +297,26 @@ impl BinaryDecode for StepProof {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Mantle Transaction Encoding: the decoder of a `Groth16Proof` rejects the
+    /// infinity flag and a coordinate not less than the modulus, whatever the
+    /// proof is for.
+    #[test]
+    fn program_proofs_reject_the_infinity_flag_and_an_oversized_coordinate() {
+        let mut infinity = [0u8; COMPRESSED_PROOF_SIZE];
+        infinity[31] = 1 << 6;
+        let oversized = [0xFFu8; COMPRESSED_PROOF_SIZE];
+        for bytes in [infinity, oversized] {
+            assert!(matches!(
+                ZkProgramSpendProof::decode(&bytes, &()),
+                Err(DecodeError::InvalidValue { .. })
+            ));
+            assert!(matches!(
+                ProgramProof::decode(&bytes, &()),
+                Err(DecodeError::InvalidValue { .. })
+            ));
+        }
+    }
 
     #[test]
     fn program_step_proof_reads_its_shape_from_the_step() {

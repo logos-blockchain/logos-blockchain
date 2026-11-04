@@ -330,7 +330,7 @@ pub fn spend_notes_hash(
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::test_utils::{three_input_prove, three_input_setup};
+    use lb_groth16::test_utils::{generator_multiples_key, three_input_prove, three_input_setup};
 
     use super::*;
     use crate::mantle::{fixtures::programs::placeholder_key, notes::derive_note_nullifier};
@@ -341,6 +341,19 @@ mod tests {
     ) {
         let (key, proving_key) = three_input_setup(1);
         (ProgramVerificationKey::try_from(&key).unwrap(), proving_key)
+    }
+
+    /// The "Program Id" vector of Mantle: a key of real points, each a multiple
+    /// of the generator of its group. The `ProgramId` is little-endian.
+    #[test]
+    fn program_id_matches_the_vector_of_the_specification() {
+        let key =
+            ProgramVerificationKey::try_from(&generator_multiples_key(1, [2, 3, 4], &[5, 6, 7, 8]))
+                .unwrap();
+        assert_eq!(
+            hex::encode(lb_groth16::fr_to_bytes(&derive_program_id(&key))),
+            "33b431d9ebbada5bb9243a0b78fec6cd54034e0bf0bc8e9db776775c2b658705"
+        );
     }
 
     #[test]

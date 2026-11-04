@@ -323,8 +323,10 @@ impl LedgerState {
             eras,
         )?;
 
-        cryptarchia_ledger = cryptarchia_ledger
-            .pay_service_rewards::<Id>(&effect.reward_notes, effect.settled_rewards)?;
+        if last_epoch_state.epoch() < cryptarchia_ledger.epoch_state().epoch() {
+            cryptarchia_ledger =
+                cryptarchia_ledger.pay_service_rewards::<Id>(&effect.reward_notes)?;
+        }
 
         // SDP Epoch Finalization: the outputs of the removed withdrawals enter the
         // ledger note set.
@@ -1284,6 +1286,161 @@ mod tests {
         );
     }
 
+    /// The maximum release of a block, the stake being far below target.
+    const MAX_RELEASE: Value = 95_129_375_951;
+    /// The Blend share of [`MAX_RELEASE`].
+    const BLEND_SHARE: Value = 57_077_625_571;
+
+    fn expected_reserve(blocks: Value, returned: Value) -> Value {
+        1_000_000_000_000_000_000 - blocks * MAX_RELEASE + returned
+    }
+
+    /// Block Rewards, Deterministic Implementation: below the minimum network
+    /// size no note is paid, so the Blend share of an epoch waits through the
+    /// next epoch and returns to the reserve at the first block of the epoch
+    /// after next, never to the pool. A jump over several epochs is a single
+    /// first block.
+    #[test]
+    fn undistributed_blend_share_returns_to_the_reserve_at_the_epoch_after_next() {
+        let leader = note();
+        let config = config();
+        let epoch_length = config.epoch_length();
+        let (mut ledger, genesis) = ledger(&[leader], config);
+        let stocks = |ledger: &Ledger<HeaderId>, id: &HeaderId| {
+            let rewards = &ledger.states[id].cryptarchia_ledger.block_rewards;
+            (
+                rewards.rewards_reserve(),
+                rewards.rewards_pool(),
+                rewards.blend_rewards_closed(),
+                rewards.blend_rewards_pending(),
+            )
+        };
+
+        // Epoch 0 earns one share and epoch 1 finds nothing to settle.
+        let h_0 = update_ledger(&mut ledger, genesis, 1u64, leader).unwrap();
+        assert_eq!(
+            stocks(&ledger, &h_0),
+            (expected_reserve(1, 0), 0, 0, BLEND_SHARE)
+        );
+        let h_1 = update_ledger(&mut ledger, h_0, epoch_length, leader).unwrap();
+        assert_eq!(
+            stocks(&ledger, &h_1),
+            (expected_reserve(2, 0), 0, BLEND_SHARE, BLEND_SHARE)
+        );
+
+        // The first block of epoch 2 returns the share of epoch 0.
+        let h_2 = update_ledger(&mut ledger, h_1, 2 * epoch_length, leader).unwrap();
+        assert_eq!(
+            stocks(&ledger, &h_2),
+            (
+                expected_reserve(3, BLEND_SHARE),
+                0,
+                BLEND_SHARE,
+                BLEND_SHARE
+            )
+        );
+
+        // A later block of epoch 2 settles nothing.
+        let h_3 = update_ledger(&mut ledger, h_2, 2 * epoch_length + 1, leader).unwrap();
+        assert_eq!(
+            stocks(&ledger, &h_3),
+            (
+                expected_reserve(4, BLEND_SHARE),
+                0,
+                BLEND_SHARE,
+                2 * BLEND_SHARE
+            )
+        );
+
+        // The jump to epoch 5 returns the share of epoch 1 only: the two shares of
+        // epoch 2 wait for the next first block.
+        let h_5 = update_ledger(&mut ledger, h_3, 5 * epoch_length, leader).unwrap();
+        assert_eq!(
+            stocks(&ledger, &h_5),
+            (
+                expected_reserve(5, 2 * BLEND_SHARE),
+                0,
+                2 * BLEND_SHARE,
+                BLEND_SHARE
+            )
+        );
+        let h_6 = update_ledger(&mut ledger, h_5, 6 * epoch_length, leader).unwrap();
+        assert_eq!(
+            stocks(&ledger, &h_6),
+            (
+                expected_reserve(6, 4 * BLEND_SHARE),
+                0,
+                BLEND_SHARE,
+                BLEND_SHARE
+            )
+        );
+    }
+
+    /// Service Reward Distribution: the notes of epoch N are paid at the first
+    /// block of epoch N+2 from the Blend share of epoch N, and the remainder of
+    /// the division returns to the reserve.
+    #[test]
+    fn blend_reward_notes_are_paid_from_the_share_of_their_epoch() {
+        let leader_utxo = note();
+        let (sdp_utxo_key, sdp_utxo) = note_with_sk();
+        let config = config();
+        let epoch_length = config.epoch_length();
+        let (mut ledger, genesis) = ledger(&[leader_utxo, sdp_utxo], config);
+
+        // Declared at epoch 3, so in the snapshot of epoch 5, and active for epoch 5
+        // during epoch 6.
+        let h_1 = update_ledger(&mut ledger, genesis, epoch_length, leader_utxo).unwrap();
+        let h_2 = update_ledger(&mut ledger, h_1, 2 * epoch_length, leader_utxo).unwrap();
+        let (h_3, declare, zk_key) = apply_and_add_utxo_and_declaration(
+            &mut ledger,
+            h_2,
+            3 * epoch_length,
+            leader_utxo,
+            note(),
+            (sdp_utxo_key, sdp_utxo),
+        );
+        let h_4 = update_ledger(&mut ledger, h_3, 4 * epoch_length, leader_utxo).unwrap();
+        let h_5 = update_ledger(&mut ledger, h_4, 5 * epoch_length, leader_utxo).unwrap();
+        let epoch5 = ledger.states[&h_5].cryptarchia_ledger.epoch_state.clone();
+        let h_6 = apply_and_add_utxo_and_activity(
+            &mut ledger,
+            h_5,
+            6 * epoch_length,
+            &epoch5,
+            leader_utxo,
+            note(),
+            declare.id(),
+            &zk_key,
+            Nonce::new(Epoch::new(3), 1),
+        );
+        let reserve_of = |ledger: &Ledger<HeaderId>, id: &HeaderId| {
+            ledger.states[id]
+                .cryptarchia_ledger
+                .block_rewards
+                .rewards_reserve()
+        };
+        // The shares of epochs 1 to 4 returned, none of them paid.
+        assert_eq!(
+            reserve_of(&ledger, &h_6),
+            expected_reserve(6, 4 * BLEND_SHARE)
+        );
+
+        // One provider, base and premium: floor(BLEND_SHARE / 2) * 2, the remainder
+        // 1 returning to the reserve.
+        let h_7 = update_ledger(&mut ledger, h_6, 7 * epoch_length, leader_utxo).unwrap();
+        assert_eq!(
+            reserve_of(&ledger, &h_7),
+            expected_reserve(7, 4 * BLEND_SHARE + 1)
+        );
+        assert_eq!(
+            ledger.states[&h_7]
+                .cryptarchia_ledger
+                .block_rewards
+                .rewards_pool(),
+            0
+        );
+    }
+
     #[test]
     fn each_transaction_starts_with_empty_buffers() {
         let test_config = config();
@@ -1934,6 +2091,7 @@ mod tests {
         let block_rewards = &state.cryptarchia_ledger.block_rewards;
         assert_eq!(block_rewards.rewards_reserve(), 1_000_000_000_000_000_000);
         assert_eq!(block_rewards.rewards_pool(), 0);
+        assert_eq!(block_rewards.blend_rewards_closed(), 0);
         assert_eq!(block_rewards.blend_rewards_pending(), 0);
         assert!(
             block_rewards

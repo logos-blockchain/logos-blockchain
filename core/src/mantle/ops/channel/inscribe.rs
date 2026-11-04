@@ -18,9 +18,9 @@ use lb_utils::bounded::{NonEmptyBoundedVec, UpperBoundedVec};
 use lb_zktransfer::{MAX_INPUTS, MAX_OUTPUTS, ZkTransferInputsError, ZkTransferVerifierInput};
 use serde::{Deserialize, Serialize};
 
-use super::{ChannelId, MsgId};
+use super::{ChannelId, MAX_OPERATION_DATA_SIZE, MsgId};
 use crate::{
-    block::{BlockNumber, MAX_BLOCK_TRANSACTIONS_SIZE},
+    block::BlockNumber,
     crypto::{Digest as _, Hasher, ZkHasher},
     events::TxEvent,
     mantle::{
@@ -56,9 +56,8 @@ use crate::{
 };
 
 /// The maximum number of bytes that can be inscribed in a single inscription
-/// operation. This is derived from the maximum block transactions size,
-/// allowing for some overhead.
-pub const MAX_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 7 / 8;
+/// operation.
+pub const MAX_BYTES: usize = MAX_OPERATION_DATA_SIZE;
 pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
 
 mod serde_inscription {

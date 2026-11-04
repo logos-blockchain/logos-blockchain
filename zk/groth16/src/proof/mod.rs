@@ -2,8 +2,9 @@ pub mod deserialize;
 
 use core::fmt::{self, Debug, Formatter};
 
-use ark_bn254::Bn254;
+use ark_bn254::{Bn254, Fq};
 use ark_ec::{AffineRepr as _, pairing::Pairing};
+use ark_ff::{BigInt, PrimeField as _};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize as _, SerializationError};
 use generic_array::{ArrayLength, GenericArray, typenum::Unsigned as _};
 
@@ -27,6 +28,29 @@ pub trait CompressSize: Pairing {
 }
 
 pub const COMPRESSED_PROOF_SIZE: usize = 128;
+
+const COORDINATE_SIZE: usize = 32;
+/// The flags of a compressed point, the two top bits of its last byte.
+const FLAGS: u8 = 0b11 << 6;
+const INFINITY_FLAG: u8 = 1 << 6;
+
+fn coordinate_limbs(coordinate: &[u8]) -> BigInt<4> {
+    let mut limbs = [0u64; 4];
+    for (limb, bytes) in limbs.iter_mut().zip(coordinate.chunks_exact(8)) {
+        *limb = u64::from_le_bytes(bytes.try_into().expect("a chunk holds 8 bytes"));
+    }
+    BigInt::new(limbs)
+}
+
+fn flagged_coordinate_is_canonical(coordinate: &[u8]) -> bool {
+    let last_byte = coordinate[COORDINATE_SIZE - 1];
+    if last_byte & INFINITY_FLAG != 0 {
+        return false;
+    }
+    let mut limbs = coordinate_limbs(coordinate);
+    limbs.0[3] &= !(u64::from(FLAGS) << 56);
+    limbs < Fq::MODULUS
+}
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CompressedProof<E: CompressSize> {
@@ -79,6 +103,31 @@ impl CompressedProof<Bn254> {
         bytes[g1 + g2..].copy_from_slice(&self.pi_c);
 
         bytes
+    }
+
+    /// Mantle Transaction Encoding: a decoder rejects a point with bit 6 set and
+    /// a coordinate not less than the modulus of the base field. This reads the
+    /// bytes alone, four comparisons of 256 bits. Whether the points are on
+    /// their curve and in their subgroup is left to [`Proof::try_from`], where
+    /// the proof is verified and the points decompressed.
+    pub fn check_encoding(&self) -> Result<(), SerializationError> {
+        let (c0, c1) = self.pi_b.split_at(COORDINATE_SIZE);
+        let valid = flagged_coordinate_is_canonical(&self.pi_a)
+            && coordinate_limbs(c0) < Fq::MODULUS
+            && flagged_coordinate_is_canonical(c1)
+            && flagged_coordinate_is_canonical(&self.pi_c);
+        if valid {
+            Ok(())
+        } else {
+            Err(SerializationError::InvalidData)
+        }
+    }
+
+    /// [`Self::from_bytes`], rejecting what [`Self::check_encoding`] rejects.
+    pub fn try_from_bytes(bytes: &[u8; COMPRESSED_PROOF_SIZE]) -> Result<Self, SerializationError> {
+        let proof = Self::from_bytes(bytes);
+        proof.check_encoding()?;
+        Ok(proof)
     }
 
     /// Type-level length bound: accepts exactly G1 + G2 + G1 bytes.
@@ -176,6 +225,7 @@ impl<E: Pairing + CompressSize> TryFrom<&CompressedProof<E>> for Proof<E> {
 #[cfg(test)]
 mod tests {
     use ark_bn254::{G1Affine, G2Affine};
+    use ark_ff::BigInteger as _;
 
     use super::*;
 
@@ -185,6 +235,78 @@ mod tests {
             pi_b: G2Affine::generator(),
             pi_c: G1Affine::generator(),
         }
+    }
+
+    /// The generators of the two groups in the format of Mantle Transaction
+    /// Encoding: `x` little-endian, `c0` then `c1`, the two `y` being the smaller
+    /// of their pair, so the flags are clear.
+    #[test]
+    fn the_generators_compress_to_the_coordinates_of_the_format() {
+        let compressed = CompressedProof::<Bn254>::try_from(&generators()).unwrap();
+        assert_eq!(
+            hex::encode(compressed.to_bytes()),
+            concat!(
+                "0100000000000000000000000000000000000000000000000000000000000000",
+                "edf692d95cbdde46ddda5ef7d422436779445c5e66006a42761e1f12efde0018",
+                "c212f3aeb785e49712e7a9353349aaf1255dfb31b7bf60723a480d9293938e19",
+                "0100000000000000000000000000000000000000000000000000000000000000",
+            )
+        );
+    }
+
+    #[test]
+    fn a_real_proof_passes_the_encoding_check() {
+        let compressed = CompressedProof::<Bn254>::try_from(&generators()).unwrap();
+        assert_eq!(
+            CompressedProof::<Bn254>::try_from_bytes(&compressed.to_bytes()).unwrap(),
+            compressed
+        );
+    }
+
+    /// Every encoding the check rejects, decompression rejects as well, so the
+    /// check only moves the rejection to the decoder.
+    #[test]
+    fn the_encoding_check_rejects_only_what_decompression_rejects() {
+        let modulus: [u8; 32] = Fq::MODULUS.to_bytes_le().try_into().unwrap();
+        let real = CompressedProof::<Bn254>::try_from(&generators())
+            .unwrap()
+            .to_bytes();
+        for start in [0, 32, 64, 96] {
+            let mut bytes = real;
+            bytes[start..start + 32].copy_from_slice(&modulus);
+            let proof = CompressedProof::<Bn254>::from_bytes(&bytes);
+            assert!(proof.check_encoding().is_err(), "modulus at {start}");
+            assert!(
+                Proof::<Bn254>::try_from(&proof).is_err(),
+                "modulus at {start}"
+            );
+        }
+        for last_byte in [31, 95, 127] {
+            let mut bytes = real;
+            bytes[last_byte] |= INFINITY_FLAG;
+            let proof = CompressedProof::<Bn254>::from_bytes(&bytes);
+            assert!(proof.check_encoding().is_err(), "bit 6 at {last_byte}");
+            assert!(
+                Proof::<Bn254>::try_from(&proof).is_err(),
+                "bit 6 at {last_byte}"
+            );
+        }
+    }
+
+    /// Decompression remains the check of the curve: a coordinate in range with
+    /// no point on the curve is decoded, and fails where the proof is verified.
+    #[test]
+    fn a_coordinate_with_no_point_passes_the_encoding_check_only() {
+        let no_point = (1u64..)
+            .map(Fq::from)
+            .find(|x| G1Affine::get_point_from_x_unchecked(*x, false).is_none())
+            .unwrap();
+        let mut bytes = CompressedProof::<Bn254>::try_from(&generators())
+            .unwrap()
+            .to_bytes();
+        bytes[..32].copy_from_slice(&no_point.into_bigint().to_bytes_le());
+        let proof = CompressedProof::<Bn254>::try_from_bytes(&bytes).unwrap();
+        assert!(Proof::<Bn254>::try_from(&proof).is_err());
     }
 
     #[test]

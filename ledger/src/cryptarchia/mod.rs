@@ -731,21 +731,20 @@ impl LedgerState {
         ))
     }
 
+    /// Block Execution step 1, at the first block of an epoch: the service
+    /// rewards enter the ledger note set and are debited from
+    /// `blend_rewards_closed`, what they do not use returns to
+    /// `rewards_reserve`, and `blend_rewards_pending` moves into
+    /// `blend_rewards_closed`.
     pub fn pay_service_rewards<Id>(
         self,
         reward_notes: &[notes::Note],
-        settled: Value,
     ) -> Result<Self, LedgerError<Id>> {
-        if reward_notes.is_empty() && settled == 0 {
-            return Ok(self);
-        }
         let paid = reward_notes
             .iter()
             .try_fold(0, |paid: Value, note| paid.checked_add(note.value))
             .ok_or(BlockRewardsError::OutOfRange)?;
-        let block_rewards = self.block_rewards.settle_blend_rewards(settled, paid)?;
-        // Block Execution step 1: the service rewards enter the ledger note set and the
-        // Blend share they settle leaves blend_rewards_pending.
+        let block_rewards = self.block_rewards.settle_blend_rewards(paid)?;
         let commitments: Vec<_> = reward_notes.iter().map(notes::Note::commitment).collect();
         let ledger_set = self
             .note_sets
@@ -2147,9 +2146,12 @@ pub mod tests {
             ZkPublicKey::new(Fr::from(4u64)),
         );
 
-        let state = state
-            .pay_service_rewards::<()>(&[reward], 57_077_625_571)
-            .unwrap();
+        // The share of the epoch closes at the first block of the next one, and pays
+        // the notes at the first block of the one after.
+        let state = state.pay_service_rewards::<()>(&[]).unwrap();
+        assert_eq!(state.block_rewards.blend_rewards_closed(), 57_077_625_571);
+        let reserve = state.block_rewards.rewards_reserve();
+        let state = state.pay_service_rewards::<()>(&[reward]).unwrap();
 
         let expected = CommitmentMmr::new()
             .push(genesis_note.commitment())
@@ -2168,7 +2170,9 @@ pub mod tests {
             expected
         );
         assert_eq!(state.block_rewards.blend_rewards_pending(), 0);
-        assert_eq!(state.block_rewards.rewards_pool(), 77_625_571);
+        assert_eq!(state.block_rewards.blend_rewards_closed(), 0);
+        assert_eq!(state.block_rewards.rewards_pool(), 0);
+        assert_eq!(state.block_rewards.rewards_reserve(), reserve + 77_625_571);
     }
 
     #[test]
