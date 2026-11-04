@@ -26,7 +26,7 @@ use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
     block::{Block, UncleHeaders, genesis::GenesisBlock},
     events::Events,
-    header::HeaderId,
+    header::{Header, HeaderId},
     mantle::{
         TxHash,
         gas::MainnetGasProfile,
@@ -190,6 +190,11 @@ pub enum Query {
     GetLedgerState {
         block_id: HeaderId,
         reply_channel: oneshot::Sender<Option<LedgerState>>,
+    },
+    /// Checks a proposal header against the chain, leaving the chain untouched.
+    VerifyProposalHeader {
+        header: Box<Header>,
+        reply_channel: oneshot::Sender<Result<(), Error>>,
     },
     /// Returns the ledger config of the era of `slot`.
     GetLedgerConfigAtSlot {
@@ -559,6 +564,42 @@ impl Cryptarchia {
             newly_canonical_blocks: outcome.newly_canonical_blocks,
             events,
         })
+    }
+
+    /// Checks a proposal header against the chain, leaving the chain untouched:
+    /// it is new, not from a future slot, its slot follows its parent's and its
+    /// proof of leadership holds against the state of its parent.
+    pub(crate) fn verify_proposal_header(
+        &self,
+        header: &Header,
+        current_slot: Slot,
+    ) -> Result<(), Error> {
+        let id = header.id();
+        let parent = header.parent();
+        let slot = header.slot();
+
+        if self.ledger.state(&id).is_some() {
+            return Err(Error::AlreadyApplied(id));
+        }
+
+        if slot > current_slot {
+            return Err(Error::FutureBlock {
+                block_slot: slot,
+                current_slot,
+            });
+        }
+
+        let parent_state = self
+            .ledger
+            .state(&parent)
+            .ok_or_else(|| Error::ParentMissing {
+                parent,
+                info: Box::new(self.info()),
+            })?;
+
+        parent_state
+            .verify_proof_of_leadership(slot, header, self.ledger.era_schedule())
+            .map_err(Error::Ledger)
     }
 
     fn epoch_state_for_slot(&self, slot: Slot) -> Result<EpochState, Error> {

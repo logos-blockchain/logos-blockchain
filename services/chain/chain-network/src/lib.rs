@@ -672,6 +672,26 @@ where
             return;
         }
 
+        // A proposal slightly ahead of the wallclock waits for it, as at apply.
+        if let Err(err) = retry_future_block_apply_with_delay(
+            block_id,
+            FUTURE_BLOCK_MAX_RETRIES,
+            FUTURE_BLOCK_RETRY_DELAY,
+            async || {
+                relays
+                    .cryptarchia()
+                    .verify_proposal_header(proposal.header().clone())
+                    .await
+                    .map_err(Error::from)
+            },
+        )
+        .await
+        {
+            metrics::consensus_observe_apply_block_err(&err);
+            Self::handle_proposal_processing_error(err, block_id, orphan_downloader);
+            return;
+        }
+
         let reconstruct_started_at = Instant::now();
         let block = match reconstruct_block_from_proposal(proposal, relays.mempool_adapter()).await
         {
@@ -739,7 +759,7 @@ where
             err => {
                 error!(
                     target: LOG_TARGET, %err, ?block_id,
-                    "Error processing reconstructed block",
+                    "Error processing block from proposal",
                 );
                 if !is_recoverable_apply_error(&err) {
                     orphan_downloader.insert_rejected_block(block_id);
@@ -934,8 +954,9 @@ enum DoNotProcessBlock {
 /// If the proposal header is invalid, cache the block ID as rejected in the
 /// orphan downloader, so that we don't waste time downloading the block later.
 ///
-/// The proof of leadership, which the block ID does not commit to, is checked
-/// when the block is applied (see `is_recoverable_apply_error`).
+/// The proof of leadership, which the block ID does not commit to, needs the
+/// state of the parent: it is checked next, by the chain service, with no
+/// verdict against the block ID (see `is_recoverable_apply_error`).
 fn verify_proposal_and_cache_rejected<NetAdapter, RuntimeServiceId>(
     proposal: &Proposal,
     orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
