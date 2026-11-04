@@ -2658,6 +2658,7 @@ mod continuous_workload_reservation_tests {
             group.applied_height = u64::from(height);
             group.target_height = Some(group.applied_height);
             group.applied_tip = Some(block_id(height));
+            group.target_tip = group.applied_tip;
             world
                 .scanner
                 .state
