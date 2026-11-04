@@ -253,9 +253,6 @@ pub struct LeaderAgedNoteInfo {
 /// public key is one the wallet holds a key for. An empty `notes` means this
 /// node cannot win a slot at that tip: either it owns no notes, or none of
 /// them have aged into the current epoch's snapshot yet.
-///
-/// The set is reported unfiltered. The leader service additionally skips the
-/// UTXOs of the keys in `consensus_excluded_keys`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeaderAgedNotesInfo {
     pub notes: Vec<LeaderAgedNoteInfo>,
@@ -1376,16 +1373,10 @@ where
             .enumerate()
             .map(|(index, allocation)| allocation.note(index))
             .collect::<Vec<_>>();
-        let declarations = genesis_tx.clone().into_genesis_ops().declarations;
-        let service_notes = declarations
-            .iter()
+        let service_notes = genesis_tx
+            .sdp_declarations()
             .map(|declaration| declaration.operation().service_note())
             .collect::<Vec<_>>();
-        // The genesis declarations spend their ledger notes.
-        let spent = declarations
-            .iter()
-            .flat_map(|declaration| declaration.operation().inputs.iter().copied())
-            .collect::<Vec<NoteNullifier>>();
 
         let key_ids = settings
             .known_keys
@@ -1399,10 +1390,7 @@ where
             .chain(service_notes.iter().map(|note| (SDP_SET, note)))
         {
             if let Some(key_id) = key_ids.get(&note.public_key) {
-                let known_note = Self::known_note(kms, (*key_id).clone(), *note, note_set).await?;
-                if !spent.contains(&known_note.nullifier) {
-                    known_notes.push(known_note);
-                }
+                known_notes.push(Self::known_note(kms, (*key_id).clone(), *note, note_set).await?);
             }
         }
 

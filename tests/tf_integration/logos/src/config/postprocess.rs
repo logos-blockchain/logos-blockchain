@@ -1,7 +1,6 @@
-pub use lb_config::funding::leader_stake_amount;
 use lb_config::{
     consensus::SdpFundingConfig,
-    funding::{fund_wallets, refresh_service_note},
+    funding::{fill_leader_stake, fund_wallets},
     sdp::create_sdp_configs,
 };
 use lb_core::{
@@ -15,7 +14,9 @@ use super::{
     Config,
     node_configs::{
         blend::GeneralBlendConfig,
-        consensus::{ProviderInfo, create_genesis_block_with_declarations},
+        consensus::{
+            BLEND_DECLARATION_AMOUNT, ProviderInfo, create_genesis_block_with_declarations,
+        },
     },
 };
 
@@ -53,15 +54,10 @@ pub fn apply_wallet_genesis_overrides(
     let mut transfer_op = genesis_block.genesis_tx().distribution();
     fund_wallets(
         &mut transfer_op,
-        &leader_keys,
         &funding_keys,
         wallet_accounts,
         sdp_funding_config,
     );
-
-    for general in general_configs.iter_mut() {
-        refresh_service_note(&mut general.consensus_config.blend_note, &transfer_op);
-    }
 
     let blend_configs = general_configs
         .iter()
@@ -69,17 +65,18 @@ pub fn apply_wallet_genesis_overrides(
         .collect::<Vec<GeneralBlendConfig>>();
 
     let mut providers = Vec::with_capacity(blend_configs.len());
-    for (idx, (blend_conf, private_key, secret_zk_key)) in
-        blend_configs.iter().enumerate().take(n_blend_core_nodes)
-    {
+    for (blend_conf, private_key, secret_zk_key) in blend_configs.iter().take(n_blend_core_nodes) {
         providers.push(ProviderInfo {
             service_type: ServiceType::BlendNetwork,
             provider_sk: private_key.clone(),
             zk_sk: secret_zk_key.clone(),
             locator: Locator::new_unchecked(blend_conf.core.backend.listening_address.clone()),
-            note: general_configs[idx].consensus_config.blend_note.clone(),
+            amount: BLEND_DECLARATION_AMOUNT,
         });
     }
+
+    let declared = providers.iter().map(|provider| provider.amount).sum();
+    fill_leader_stake(&mut transfer_op, &leader_keys, declared);
 
     let genesis_block =
         create_genesis_block_with_declarations(transfer_op, providers, test_context, genesis_time);
@@ -100,7 +97,6 @@ pub fn apply_wallet_genesis_overrides(
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        notes::derive_note_nullifier,
         ops::OpRef,
         traits::{GenesisTx as _, MantleTx as _},
     };
@@ -148,22 +144,12 @@ mod tests {
                 .iter()
                 .filter(|note| note.public_key == consensus.funding_pk)
                 .collect::<Vec<_>>();
-            assert_eq!(outputs.len(), 123);
+            assert_eq!(outputs.len(), 124);
             assert_eq!(
                 outputs.iter().map(|note| note.value).sum::<u64>(),
                 funding.total_value_per_node
             );
-            let blend_allocation = transfer[consensus.blend_note.output_index];
-            assert_eq!(blend_allocation.public_key, consensus.blend_note.pk);
-            assert_eq!(
-                declarations[i].inputs.as_slice(),
-                [derive_note_nullifier(
-                    &blend_allocation
-                        .note(consensus.blend_note.output_index)
-                        .commitment(),
-                    consensus.blend_note.sk.as_fr(),
-                )]
-            );
+            assert!(declarations[i].inputs.is_empty());
             assert_eq!(
                 node.general
                     .sdp_config

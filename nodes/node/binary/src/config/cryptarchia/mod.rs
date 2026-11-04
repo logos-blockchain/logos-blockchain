@@ -3,9 +3,7 @@ use std::sync::Arc;
 use lb_chain_network_service::network::adapters::libp2p::{
     LibP2pAdapterEraSettings, LibP2pAdapterSettings,
 };
-use lb_core::{
-    block::genesis::GenesisBlock, mantle::traits::GenesisTx as _, sdp::ServiceParameters,
-};
+use lb_core::{block::genesis::GenesisBlock, sdp::ServiceParameters};
 use lb_cryptarchia_engine::{EpochConfig, EraSchedule};
 use lb_ledger::mantle::sdp::ServiceRewardsParameters;
 use lb_libp2p::{PeerId, protocol_name::ProtocolScope};
@@ -82,9 +80,8 @@ impl ServiceConfig {
         }
     }
 
-    /// The settings of the chain service and the leader: the user's, the
-    /// ledger config of every era of `eras`, which both share, and for the
-    /// leader the consensus-excluded keys of `genesis_block`.
+    /// The settings of the chain service and the leader: the user's, and the
+    /// ledger config of every era of `eras`, which both share.
     #[must_use]
     pub fn into_cryptarchia_services_settings(
         self,
@@ -121,10 +118,6 @@ impl ServiceConfig {
         };
         let chain_leader_settings = lb_chain_leader_service::LeaderSettings {
             era_schedule,
-            consensus_excluded_keys: genesis_block
-                .genesis_tx()
-                .genesis_parameters()
-                .consensus_excluded_keys,
             wallet_config: lb_chain_leader_service::LeaderWalletConfig {
                 funding_pk: user.leader.wallet.funding_pk,
                 max_tx_fee: user.leader.wallet.max_tx_fee,
@@ -135,7 +128,7 @@ impl ServiceConfig {
 }
 
 /// The ledger config of an era.
-fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
+pub(crate) fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
     let EraRuleset::V1(parameters) = &era.ruleset;
     let deployment = &parameters.cryptarchia;
     let blend_rewards_params = parameters.blend_reward_params();

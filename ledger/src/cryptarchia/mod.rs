@@ -39,10 +39,7 @@ use lb_log_targets::ledger;
 
 use crate::{
     block_rewards::{BlockRewards, BlockRewardsError},
-    config::{
-        ConsensusExcludedKeys, EraScheduledConfig, config_for_epoch, nonce_snapshot,
-        stake_distribution_snapshot,
-    },
+    config::{EraScheduledConfig, config_for_epoch, nonce_snapshot, stake_distribution_snapshot},
     cryptarchia::{
         block_density::BlockDensity,
         stake::{PRECISION, StakeInference},
@@ -678,16 +675,15 @@ impl LedgerState {
 
     pub fn genesis_total_stake<Id>(
         distribution: &Distribution,
-        consensus_excluded_keys: &ConsensusExcludedKeys,
+        declared_amounts: impl IntoIterator<Item = Value>,
     ) -> Result<Value, LedgerError<Id>> {
-        // Initial Epoch State item 3: D is the distributed tokens, excluding the
-        // consensus excluded keys.
+        // Initial Epoch State item 3: D is the total tokens distributed at genesis, the
+        // amounts of the SDP_DECLARE Operations included.
         distribution
             .iter()
-            .filter(|allocation| !consensus_excluded_keys.contains(&allocation.public_key))
-            .try_fold(0, |sum: Value, allocation| {
-                sum.checked_add(allocation.value)
-            })
+            .map(|allocation| allocation.value)
+            .chain(declared_amounts)
+            .try_fold(0, |sum: Value, value| sum.checked_add(value))
             .map(|stake| stake.max(1)) // TODO: Change total_stake to NonZeroU64: https://github.com/logos-blockchain/logos-blockchain/issues/2166
             .ok_or(LedgerError::BalanceOverflow)
     }
@@ -731,21 +727,20 @@ impl LedgerState {
         ))
     }
 
+    /// Block Execution step 1, at the first block of an epoch: the service
+    /// rewards enter the ledger note set and are debited from
+    /// `blend_rewards_closed`, what they do not use returns to
+    /// `rewards_reserve`, and `blend_rewards_pending` moves into
+    /// `blend_rewards_closed`.
     pub fn pay_service_rewards<Id>(
         self,
         reward_notes: &[notes::Note],
-        settled: Value,
     ) -> Result<Self, LedgerError<Id>> {
-        if reward_notes.is_empty() && settled == 0 {
-            return Ok(self);
-        }
         let paid = reward_notes
             .iter()
             .try_fold(0, |paid: Value, note| paid.checked_add(note.value))
             .ok_or(BlockRewardsError::OutOfRange)?;
-        let block_rewards = self.block_rewards.settle_blend_rewards(settled, paid)?;
-        // Block Execution step 1: the service rewards enter the ledger note set and the
-        // Blend share they settle leaves blend_rewards_pending.
+        let block_rewards = self.block_rewards.settle_blend_rewards(paid)?;
         let commitments: Vec<_> = reward_notes.iter().map(notes::Note::commitment).collect();
         let ledger_set = self
             .note_sets
@@ -881,7 +876,7 @@ impl LedgerState {
         }
 
         // Mantle Ledger Initialization: the Transfer appends its outputs to the empty
-        // ledger set and to the buffer the genesis declarations are proven against.
+        // ledger set.
         let state = Self::from_commitments([], total_stake, config, epoch_nonce);
         let (note_sets, _) = transfer
             .clone()
@@ -893,16 +888,10 @@ impl LedgerState {
     pub fn from_notes(
         notes: impl IntoIterator<Item = notes::Note>,
         config: &Config,
-        consensus_excluded_keys: &ConsensusExcludedKeys,
         nonce: Fr,
     ) -> Self {
         let notes = notes.into_iter().collect::<Vec<_>>();
-        let total_stake = notes
-            .iter()
-            .filter(|note| !consensus_excluded_keys.contains(&note.public_key))
-            .map(|note| note.value)
-            .sum::<Value>()
-            .max(1); // TODO: Change total_stake to NonZeroU64: https://github.com/logos-blockchain/logos-blockchain/issues/2166
+        let total_stake = notes.iter().map(|note| note.value).sum::<Value>().max(1); // TODO: Change total_stake to NonZeroU64: https://github.com/logos-blockchain/logos-blockchain/issues/2166
         Self::from_commitments(
             notes.iter().map(notes::Note::commitment),
             total_stake,
@@ -1303,12 +1292,7 @@ pub mod tests {
 
     #[must_use]
     pub fn genesis_state(utxos: &[notes::Note]) -> LedgerState {
-        LedgerState::from_notes(
-            utxos.iter().copied(),
-            &config(),
-            &ConsensusExcludedKeys::empty(),
-            Fr::ZERO,
-        )
+        LedgerState::from_notes(utxos.iter().copied(), &config(), Fr::ZERO)
     }
 
     fn full_ledger_state(cryptarchia_ledger: LedgerState, config: &Config) -> crate::LedgerState {
@@ -2072,8 +2056,7 @@ pub mod tests {
             notes::Note::new(100, Fr::from(1u64), public_key),
             notes::Note::new(200, Fr::from(2u64), public_key),
         ];
-        let state =
-            LedgerState::from_notes(notes, &config(), &ConsensusExcludedKeys::empty(), Fr::ZERO);
+        let state = LedgerState::from_notes(notes, &config(), Fr::ZERO);
         let expected = CommitmentMmr::new()
             .push(notes[0].commitment())
             .unwrap()
@@ -2100,12 +2083,7 @@ pub mod tests {
     fn distribute_block_reward_appends_the_leader_note_and_updates_the_reward_state() {
         let genesis_note =
             notes::Note::new(10_000, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
-        let state = LedgerState::from_notes(
-            [genesis_note],
-            &config(),
-            &ConsensusExcludedKeys::empty(),
-            Fr::ZERO,
-        );
+        let state = LedgerState::from_notes([genesis_note], &config(), Fr::ZERO);
         let reward_key = ZkPublicKey::new(Fr::from(0x4444u64));
 
         let (state, blend_share, _) = state
@@ -2145,12 +2123,7 @@ pub mod tests {
     fn service_reward_notes_enter_the_ledger_set_and_settle_the_blend_share() {
         let genesis_note =
             notes::Note::new(10_000, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
-        let state = LedgerState::from_notes(
-            [genesis_note],
-            &config(),
-            &ConsensusExcludedKeys::empty(),
-            Fr::ZERO,
-        );
+        let state = LedgerState::from_notes([genesis_note], &config(), Fr::ZERO);
         let (state, blend_share, _) = state
             .distribute_block_reward::<()>(0, 0, ZkPublicKey::zero())
             .unwrap();
@@ -2161,9 +2134,12 @@ pub mod tests {
             ZkPublicKey::new(Fr::from(4u64)),
         );
 
-        let state = state
-            .pay_service_rewards::<()>(&[reward], 57_077_625_571)
-            .unwrap();
+        // The share of the epoch closes at the first block of the next one, and pays
+        // the notes at the first block of the one after.
+        let state = state.pay_service_rewards::<()>(&[]).unwrap();
+        assert_eq!(state.block_rewards.blend_rewards_closed(), 57_077_625_571);
+        let reserve = state.block_rewards.rewards_reserve();
+        let state = state.pay_service_rewards::<()>(&[reward]).unwrap();
 
         let expected = CommitmentMmr::new()
             .push(genesis_note.commitment())
@@ -2182,7 +2158,9 @@ pub mod tests {
             expected
         );
         assert_eq!(state.block_rewards.blend_rewards_pending(), 0);
-        assert_eq!(state.block_rewards.rewards_pool(), 77_625_571);
+        assert_eq!(state.block_rewards.blend_rewards_closed(), 0);
+        assert_eq!(state.block_rewards.rewards_pool(), 0);
+        assert_eq!(state.block_rewards.rewards_reserve(), reserve + 77_625_571);
     }
 
     #[test]
@@ -2289,12 +2267,7 @@ pub mod tests {
     fn try_apply_transfer_spends_adds_and_returns_the_excess() {
         let genesis_note =
             notes::Note::new(10_000, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
-        let state = LedgerState::from_notes(
-            [genesis_note],
-            &config(),
-            &ConsensusExcludedKeys::empty(),
-            Fr::ZERO,
-        );
+        let state = LedgerState::from_notes([genesis_note], &config(), Fr::ZERO);
         let root = state
             .latest_note_sets()
             .get(LEDGER_SET)
@@ -2351,7 +2324,6 @@ pub mod tests {
         let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
         assert_eq!(ledger_set.commitment_root(), expected);
         assert_eq!(state.epoch_state().total_stake(), 3_000);
-        // The outputs are buffered for the genesis declarations.
         assert_eq!(
             ledger_set.tx_commitment_root(&CommitmentMmr::new().frontier_root(), 0),
             Ok(expected)
@@ -2773,8 +2745,7 @@ pub mod tests {
     #[test]
     fn test_execution_market_update() {
         // Create a base ledger first
-        let mut ledger =
-            LedgerState::from_notes([], &config(), &ConsensusExcludedKeys::empty(), Fr::ZERO);
+        let mut ledger = LedgerState::from_notes([], &config(), Fr::ZERO);
 
         // 1) G_avg = (1_700_000 + 9*1_586_845)/10 = 1_598_160
         // price = ceil(10_000 * (11_107_915 + 1_598_160) / 12_694_760) = 10_009

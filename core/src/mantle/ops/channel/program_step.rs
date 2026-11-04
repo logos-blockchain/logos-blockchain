@@ -3,17 +3,16 @@ use std::sync::LazyLock;
 use bitvec::{array::BitArray, order::Lsb0};
 use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::{Fr, fr_from_bytes, fr_from_mod_bytes, serde::serde_fr};
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
-use super::{ChannelId, MsgId};
+use super::ChannelId;
 use crate::{
-    crypto::{Digest as _, Hash, Hasher, ZkHasher},
+    crypto::ZkHasher,
     mantle::{
         Value,
-        notes::{InputNullifiers, NoteCommitment, OutputCommitments, ProgramId, derive_note_nonce},
+        notes::{InputNullifiers, NoteCommitment, OutputCommitments, ProgramId},
     },
 };
 
@@ -254,29 +253,6 @@ pub fn payments_hash(step: &ProgramStep) -> Fr {
     ZkHasher::digest(&elements)
 }
 
-// The `op_id` of the inscription cannot serve, since it covers the output
-// commitments and thus their nonces. The channel keeps the first inscriptions
-// of channels, whose parent is ZERO, apart. No program can enforce this
-// derivation.
-#[must_use]
-pub fn recommended_program_output_nonce(
-    channel_id: &ChannelId,
-    parent: &MsgId,
-    step_index: usize,
-    output_index: usize,
-    value: Value,
-    public_key: &ZkPublicKey,
-) -> Fr {
-    let anchor: Hash =
-        Hasher::digest([channel_id.as_ref().as_slice(), parent.as_ref().as_slice()].concat())
-            .into();
-    let output_number = step_index
-        .checked_mul(8)
-        .and_then(|number| number.checked_add(output_index))
-        .expect("the output number of a step fits a usize");
-    derive_note_nonce(&anchor, output_number, value, public_key)
-}
-
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils {
     use lb_groth16::Fr;
@@ -443,31 +419,5 @@ mod tests {
             ProgramStep::decode(&nine.encode(), &()),
             Err(DecodeError::InvalidValue { .. })
         ));
-    }
-
-    #[test]
-    fn recommended_nonce_hashes_the_channel_and_parent_and_counts_eight_outputs_per_step() {
-        let public_key = ZkPublicKey::new(Fr::from(3u64));
-        let anchor: Hash = Hasher::digest([[1u8; 32], [2u8; 32]].concat()).into();
-        let nonce = recommended_program_output_nonce(
-            &ChannelId::from([1u8; 32]),
-            &MsgId::from([2u8; 32]),
-            2,
-            5,
-            40,
-            &public_key,
-        );
-        assert_eq!(nonce, derive_note_nonce(&anchor, 21, 40, &public_key));
-        assert_ne!(
-            nonce,
-            recommended_program_output_nonce(
-                &ChannelId::from([3u8; 32]),
-                &MsgId::from([2u8; 32]),
-                2,
-                5,
-                40,
-                &public_key
-            )
-        );
     }
 }

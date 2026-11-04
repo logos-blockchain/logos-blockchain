@@ -24,10 +24,7 @@ use lb_core::{
                 declare::SDPDeclareGenesisValidationContext,
             },
         },
-        transactions::{
-            hash::TxHashView,
-            states::{Preverified, Verified},
-        },
+        transactions::states::{Preverified, Verified},
     },
     sdp::{
         ActivityMetadata, Declaration, DeclarationId, MinStake, ProviderId, ServiceParameters,
@@ -44,6 +41,15 @@ use crate::{EpochState, mantle::sdp::rewards::blend};
 const LOG_TARGET: &str = ledger::mantle::SDP;
 
 type Released = Vec<(DeclarationId, OutputCommitments)>;
+
+/// SDP Epoch Finalization appends the released notes in ascending order of
+/// `service`, then in ascending lexicographic order of the 32 bytes of the
+/// declaration id.
+fn sort_released<S: Ord>(released: &mut [(S, DeclarationId, OutputCommitments)]) {
+    released.sort_by(|(service_a, id_a, _), (service_b, id_b, _)| {
+        service_a.cmp(service_b).then_with(|| id_a.cmp(id_b))
+    });
+}
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 enum Service {
@@ -342,7 +348,6 @@ impl SdpLedger {
         config: &Config,
         mut note_sets: NoteSets,
         epoch_state: &EpochState,
-        tx_hash_view: &TxHashView,
         declarations: impl IntoIterator<Item = SignedOperation<SDPDeclareOp, Preverified, GenesisMode>>,
     ) -> Result<(Self, NoteSets, Vec<TxEvent>), Error> {
         let mut sdp = Self::new(epoch_state.epoch())
@@ -359,8 +364,6 @@ impl SdpLedger {
 
             let verified_declaration = declaration
                 .into_verified(&SDPDeclareGenesisValidationContext {
-                    note_sets: &note_sets,
-                    tx_hash_view,
                     declarations: service_state.declarations(),
                     provider_index: service_state.provider_index(),
                     min_stake: &config.min_stake,
@@ -435,7 +438,6 @@ impl SdpLedger {
         last_epoch_state: &EpochState,
         epoch_state: &EpochState,
     ) -> Result<(Self, HeaderEffect), Error> {
-        let income_before = self.pending_rewards_income();
         let mut all_reward_notes = Vec::new();
         let mut all_released = Vec::new();
         let mut all_events = Vec::new();
@@ -457,32 +459,28 @@ impl SdpLedger {
                         &config.service_rewards_params,
                     );
                 all_reward_notes.extend(reward_notes);
-                all_released.extend(released);
+                all_released.extend(
+                    released
+                        .into_iter()
+                        .map(|(declaration_id, outputs)| (*service, declaration_id, outputs)),
+                );
                 all_events.extend(events);
                 Ok::<_, Error>((*service, new_state))
             })
             .collect::<Result<_, _>>()?;
-        // SDP Epoch Finalization appends the released notes in ascending order of the
-        // declaration id bytes, across services.
-        all_released.sort_by_key(|(declaration_id, _)| *declaration_id);
+        sort_released(&mut all_released);
 
         let ledger = Self {
             epoch: epoch_state.epoch(),
             services,
         };
-        // Service Reward Distribution debits the whole income of the settled epochs
-        // from blend_rewards_pending, paid or not.
-        let settled_rewards = income_before
-            .checked_sub(ledger.pending_rewards_income())
-            .expect("an epoch transition settles income and never adds any");
         Ok((
             ledger,
             HeaderEffect {
                 reward_notes: all_reward_notes,
-                settled_rewards,
                 released_outputs: all_released
                     .iter()
-                    .flat_map(|(_, outputs)| outputs.iter().copied())
+                    .flat_map(|(_, _, outputs)| outputs.iter().copied())
                     .collect(),
                 events: all_events,
             },
@@ -751,8 +749,6 @@ impl SdpLedger {
 pub struct HeaderEffect {
     // per service, ascending zk_id
     pub reward_notes: Vec<Note>,
-    // income the epoch transition settled
-    pub settled_rewards: Value,
     // ascending declaration id order
     pub released_outputs: Vec<NoteCommitment>,
     pub events: Vec<HeaderEvent>,
@@ -773,7 +769,7 @@ mod tests {
                 op_proof::samples::SampleProof as _,
                 sdp::{SDPDeclareVerificationContext, SDPWithdrawValidationContext},
             },
-            transactions::states::Unverified,
+            transactions::{hash::TxHashView, states::Unverified},
         },
         sdp::{Locator, Nonce, SNAPSHOT_FINALIZATION_DELAY},
     };
@@ -1358,7 +1354,7 @@ mod tests {
             .unwrap();
 
         // Advance to epoch 5: SDP rewards are distributed
-        assert_eq!(ledger.pending_rewards_income(), income);
+        assert_eq!(ledger.pending_rewards_income(), 0);
         let epoch5 = next_epoch_state(5.into(), &ledger, &config);
         let (_, effect) = ledger
             .try_apply_header(&config, &config, &epoch4, &epoch5)
@@ -1381,7 +1377,6 @@ mod tests {
             received[0].value, income,
             "single-provider reward must equal the full accrued income",
         );
-        assert_eq!(effect.settled_rewards, income);
 
         // `SdpRewardDistributed` events must mirror the reward notes one-to-one
         // so wallets can credit provider keys off the header events alone.
@@ -1905,6 +1900,28 @@ mod tests {
             declarations
                 .iter()
                 .all(|declaration| ledger.get_declaration(&declaration.id()).is_none())
+        );
+    }
+
+    /// SDP Epoch Finalization: ascending `service`, then ascending `declare_id`.
+    /// Only one service exists outside `lb_core`'s own tests, so the service is
+    /// any ordered key here.
+    #[test]
+    fn released_declarations_sort_by_service_then_declaration_id() {
+        let entry = |service: u8, id: u8| {
+            (
+                service,
+                DeclarationId([id; 32]),
+                OutputCommitments::default(),
+            )
+        };
+        let mut released = vec![entry(1, 1), entry(0, 3), entry(1, 2), entry(0, 2)];
+
+        sort_released(&mut released);
+
+        assert_eq!(
+            released,
+            vec![entry(0, 2), entry(0, 3), entry(1, 1), entry(1, 2)]
         );
     }
 

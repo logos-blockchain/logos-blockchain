@@ -23,7 +23,10 @@ use crate::{
         },
         note_set::{LEDGER_SET, NoteSetError, NoteSetIndex, NoteSets},
         notes::{InputNullifiers, OutputCommitments},
-        ops::{OpId, SignedOperation, ZkTransferProof, channel::ChannelId},
+        ops::{
+            OpId, SignedOperation, ZkTransferProof,
+            channel::{ChannelId, MAX_OPERATION_DATA_SIZE},
+        },
         transactions::{
             hash::{TxHash, TxHashView},
             states::{Preverified, Unverified, Verified},
@@ -31,7 +34,7 @@ use crate::{
     },
 };
 
-pub const MAX_METADATA_SIZE: usize = u32::MAX as usize;
+pub const MAX_METADATA_SIZE: usize = MAX_OPERATION_DATA_SIZE;
 pub type Metadata = UpperBoundedVec<u8, { MAX_METADATA_SIZE }>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
@@ -233,6 +236,7 @@ impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<DepositOp, 
 
 #[cfg(test)]
 mod test {
+    use lb_binary_codec::canonical::{BinaryDecode as _, DecodeError};
     use lb_cryptarchia_engine::Slot;
     use lb_groth16::AdditiveGroup as _;
     use lb_key_management_system_keys::keys::Ed25519Key;
@@ -246,6 +250,36 @@ mod test {
             op_proof::samples::SampleProof as _,
         },
     };
+
+    /// A deposit whose metadata declares `declared` bytes and carries
+    /// `carried`, encoded by hand after the fields before it.
+    fn deposit_bytes(declared: u32, carried: usize) -> Vec<u8> {
+        let mut bytes = DepositOp {
+            metadata: Metadata::empty(),
+            ..DepositOp::sample()
+        }
+        .encode_to_vec();
+        bytes.truncate(bytes.len() - 4);
+        bytes.extend_from_slice(&declared.to_le_bytes());
+        bytes.resize(bytes.len() + carried, 0xAB);
+        bytes
+    }
+
+    #[test]
+    fn decoder_accepts_metadata_at_the_limit() {
+        let bytes = deposit_bytes(1_835_008, 1_835_008);
+        let (rest, op) = DepositOp::decode(&bytes, &()).unwrap();
+        assert!(rest.is_empty());
+        assert_eq!(op.metadata.len(), 1_835_008);
+    }
+
+    #[test]
+    fn decoder_rejects_a_declared_metadata_length_above_the_limit() {
+        assert!(matches!(
+            DepositOp::decode(&deposit_bytes(1_835_009, 0), &()),
+            Err(DecodeError::LengthOutOfBounds { .. })
+        ));
+    }
 
     #[test]
     fn deposit_op_execution_gas_does_not_scale_with_the_threshold() {

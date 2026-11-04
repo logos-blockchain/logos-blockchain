@@ -189,15 +189,11 @@ where
             Self::WithoutTargetEpoch {
                 current_epoch_tracker,
                 ..
-            } => current_epoch_tracker.epoch_income(),
-            Self::WithTargetEpoch {
-                target_epoch_state,
+            }
+            | Self::WithTargetEpoch {
                 current_epoch_tracker,
                 ..
-            } => target_epoch_state
-                .epoch_income()
-                .checked_add(current_epoch_tracker.epoch_income())
-                .expect("the Blend income of two epochs fits in a Value"),
+            } => current_epoch_tracker.epoch_income(),
         }
     }
 }
@@ -702,8 +698,10 @@ mod tests {
     /// E->E+1, the rewards state transitions from `WithTargetEpoch` to
     /// `WithoutTargetEpoch`.
     /// Rewards for epoch E-1 (proven during epoch E) are still
-    /// distributed, but income accumulated during epoch E is forfeited
-    /// because no eligible validator set can be formed for it.
+    /// distributed, but no note pays the income accumulated during epoch E
+    /// because no eligible validator set can be formed for it: it stays in
+    /// `blend_rewards_closed` until the next epoch returns it to
+    /// `rewards_reserve`.
     #[test]
     fn test_blend_network_shrinking() {
         let provider1 = create_provider_id(1);
@@ -743,8 +741,8 @@ mod tests {
         assert!(matches!(rewards_tracker, Rewards::WithTargetEpoch { .. }));
 
         // During epoch 1: provider1 submits a proof for target epoch 0,
-        // and additional income accumulates (funds future target epoch 1,
-        // even though it will be forfeited because of minimum network size).
+        // and additional income accumulates (for future target epoch 1,
+        // which no note will pay because of minimum network size).
         let rewards_tracker = rewards_tracker
             .update_active(
                 provider1,
@@ -758,7 +756,7 @@ mod tests {
             .unwrap();
         let epoch1_income: Value = 500;
         let rewards_tracker = rewards_tracker.add_income(epoch1_income);
-        assert_eq!(rewards_tracker.pending_income(), 1500);
+        assert_eq!(rewards_tracker.pending_income(), epoch1_income);
 
         // Transition 1 → 2: WithTargetEpoch → WithoutTargetEpoch
         // because epoch 1 snapshot has only 1 provider.
@@ -769,7 +767,6 @@ mod tests {
             rewards_tracker,
             Rewards::WithoutTargetEpoch { .. }
         ));
-        // The forfeited `epoch1_income` is settled with the paid epoch.
         assert_eq!(rewards_tracker.pending_income(), 0);
 
         // Rewards for epoch0 activities must be distributed.
@@ -957,7 +954,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pending_income_holds_the_income_not_yet_settled() {
+    fn test_pending_income_holds_the_income_of_the_current_epoch() {
         let provider1 = create_provider_id(1);
         let config = create_service_parameters();
         let params = create_blend_rewards_params(86_400, 1);
@@ -971,6 +968,7 @@ mod tests {
         let (rewards_tracker, rewards) =
             rewards_tracker.update_epoch(&epoch0, &epoch1, &config, &params, &params);
         assert_eq!(rewards, []);
+        assert_eq!(rewards_tracker.pending_income(), 0);
         let rewards_tracker = rewards_tracker
             .update_active(
                 provider1,
@@ -983,18 +981,18 @@ mod tests {
             )
             .unwrap()
             .add_income(7);
-        assert_eq!(rewards_tracker.pending_income(), 1008);
+        assert_eq!(rewards_tracker.pending_income(), 7);
 
         let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
         let (rewards_tracker, rewards) =
             rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params, &params);
         // One provider, base and premium: floor(1001 / 2) * 2 = 1000; the remainder 1
-        // is settled, not paid.
+        // is not paid.
         assert_eq!(
             rewards.iter().map(|note| note.value).collect::<Vec<_>>(),
             vec![1000]
         );
-        assert_eq!(rewards_tracker.pending_income(), 7);
+        assert_eq!(rewards_tracker.pending_income(), 0);
     }
 
     /// Any activity message with a Hamming distance larger than the activity

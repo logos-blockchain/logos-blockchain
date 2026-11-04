@@ -11,8 +11,6 @@ use lb_time::era::EpochLength;
 /// of its slot, and each epoch is settled under the config of its era.
 pub type EraScheduledConfig = EraSchedule<Config>;
 
-pub use lb_core::mantle::ConsensusExcludedKeys;
-
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Config {
     pub epoch_config: lb_cryptarchia_engine::EpochConfig,
@@ -159,7 +157,7 @@ pub struct PoWConfig {
 ///
 /// Covers the reward-difficulty (`d_reward`) EMA controller, the per-epoch
 /// payout rate, and the claim acceptance window. The pool the payout draws on
-/// starts with the genesis parameters' `pow_reward_pool`.
+/// starts with `POW_REWARD_POOL_GENESIS`.
 /// There is deliberately no `Default`: every value must be supplied by the
 /// deployment configuration. A `rate_num` of `0` disables claiming entirely;
 /// the shipped deployments enable it.

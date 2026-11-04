@@ -53,10 +53,36 @@ pub enum ApiError {
     AlreadyApplied(HeaderId),
     #[error("Invalid proof of leadership in block {0}")]
     InvalidLeaderProof(HeaderId),
+    #[error("Invalid Operation proof in block {0}")]
+    InvalidOperationProof(HeaderId),
     #[error("Failed to establish connection to chain-service: {0}")]
     CommsFailure(String),
     #[error("Unexpected Error: {0}")]
     Unexpected(String),
+}
+
+pub(crate) fn apply_block_api_error(err: crate::Error, id: HeaderId) -> ApiError {
+    match err {
+        crate::Error::ParentMissing { parent, info } => ApiError::ParentMissing { parent, info },
+        crate::Error::FutureBlock {
+            block_slot,
+            current_slot,
+        } => ApiError::FutureBlock {
+            block_slot,
+            current_slot,
+        },
+        crate::Error::AlreadyApplied(block_id) => ApiError::AlreadyApplied(block_id),
+        crate::Error::Ledger(lb_ledger::LedgerError::InvalidProof) => {
+            ApiError::InvalidLeaderProof(id)
+        }
+        crate::Error::BatchDeferredProofVerification(_) => ApiError::InvalidOperationProof(id),
+        crate::Error::Ledger(lb_ledger::LedgerError::VerificationError(err))
+            if err.is_operation_proof_failure() =>
+        {
+            ApiError::InvalidOperationProof(id)
+        }
+        err => ApiError::Unexpected(format!("Failure while applying block: {err:?}")),
+    }
 }
 
 pub struct CryptarchiaServiceApi<Cryptarchia>
@@ -461,23 +487,7 @@ where
             .map_err(|relay_error| {
                 ApiError::CommsFailure(format!("{relay_error} while receiving ApplyBlock resp"))
             })?
-            .map_err(|err| match err {
-                crate::Error::ParentMissing { parent, info } => {
-                    ApiError::ParentMissing { parent, info }
-                }
-                crate::Error::FutureBlock {
-                    block_slot,
-                    current_slot,
-                } => ApiError::FutureBlock {
-                    block_slot,
-                    current_slot,
-                },
-                crate::Error::AlreadyApplied(block_id) => ApiError::AlreadyApplied(block_id),
-                crate::Error::Ledger(lb_ledger::LedgerError::InvalidProof) => {
-                    ApiError::InvalidLeaderProof(id)
-                }
-                err => ApiError::Unexpected(format!("Failure while applying block: {err:?}")),
-            })
+            .map_err(|err| apply_block_api_error(err, id))
     }
 
     /// Forward a chain sync event to the chain service.

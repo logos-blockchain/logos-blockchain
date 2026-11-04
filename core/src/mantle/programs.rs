@@ -300,24 +300,27 @@ pub fn spend_notes_hash(
     inputs: &[SpendInputFields; MAX_INPUTS],
     outputs: &[SpendOutputFields; MAX_OUTPUTS],
 ) -> Fr {
-    // The fields the prover used, the public key of an inactive input included.
+    // Each field is multiplied by its flag, so an inactive input or output reads
+    // as 0 and a spend has a single hash.
     let inputs = inputs.iter().flat_map(|input| {
+        let flag = Fr::from(input.active);
         [
-            Fr::from(input.active),
-            Fr::from(input.value),
-            input.nonce,
-            *input.public_key.as_fr(),
-            input.data,
+            flag,
+            flag * Fr::from(input.value),
+            flag * input.nonce,
+            flag * *input.public_key.as_fr(),
+            flag * input.data,
         ]
     });
     let outputs = outputs.iter().flat_map(|output| {
+        let flag = Fr::from(output.active);
         [
-            Fr::from(output.active),
-            Fr::from(output.value),
-            output.nonce,
-            *output.public_key.as_fr(),
-            output.program,
-            output.data,
+            flag,
+            flag * Fr::from(output.value),
+            flag * output.nonce,
+            flag * *output.public_key.as_fr(),
+            flag * output.program,
+            flag * output.data,
         ]
     });
     ZkHasher::digest(
@@ -330,10 +333,13 @@ pub fn spend_notes_hash(
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::test_utils::{three_input_prove, three_input_setup};
+    use lb_groth16::test_utils::{generator_multiples_key, three_input_prove, three_input_setup};
 
     use super::*;
-    use crate::mantle::{fixtures::programs::placeholder_key, notes::derive_note_nullifier};
+    use crate::mantle::{
+        fixtures::programs::placeholder_key,
+        notes::{NoteNullifier, derive_note_nullifier, derive_program_output_nonce},
+    };
 
     fn test_key() -> (
         ProgramVerificationKey,
@@ -341,6 +347,19 @@ mod tests {
     ) {
         let (key, proving_key) = three_input_setup(1);
         (ProgramVerificationKey::try_from(&key).unwrap(), proving_key)
+    }
+
+    /// The "Program Id" vector of Mantle: a key of real points, each a multiple
+    /// of the generator of its group. The `ProgramId` is little-endian.
+    #[test]
+    fn program_id_matches_the_vector_of_the_specification() {
+        let key =
+            ProgramVerificationKey::try_from(&generator_multiples_key(1, [2, 3, 4], &[5, 6, 7, 8]))
+                .unwrap();
+        assert_eq!(
+            hex::encode(lb_groth16::fr_to_bytes(&derive_program_id(&key))),
+            "33b431d9ebbada5bb9243a0b78fec6cd54034e0bf0bc8e9db776775c2b658705"
+        );
     }
 
     #[test]
@@ -452,6 +471,17 @@ mod tests {
                 data: output.data,
             };
             assert_eq!(public.outputs[j].into_inner(), note.commitment().0);
+            if data.chain.inputs_active[0] && data.chain.outputs_active[j] {
+                assert_eq!(
+                    note.nonce,
+                    derive_program_output_nonce(
+                        &NoteNullifier(public.inputs[0].into_inner()),
+                        j,
+                        note.value,
+                        &note.public_key
+                    )
+                );
+            }
             SpendOutputFields {
                 active: data.chain.outputs_active[j],
                 ..SpendOutputFields::of(&note)

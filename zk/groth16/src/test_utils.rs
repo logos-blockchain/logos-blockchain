@@ -1,4 +1,5 @@
-use ark_bn254::{Bn254, Fq, Fq2, Fr, G2Affine};
+use ark_bn254::{Bn254, Fq, Fq2, Fr, G1Affine, G2Affine};
+use ark_ec::{AffineRepr as _, CurveGroup as _};
 use ark_ff::AdditiveGroup as _;
 use ark_groth16::{Groth16, ProvingKey, r1cs_to_qap::LibsnarkReduction};
 use ark_relations::{
@@ -62,6 +63,24 @@ pub fn three_input_prove(
         pi_a: proof.a,
         pi_b: proof.b,
         pi_c: proof.c,
+    }
+}
+
+// A key whose points are the given multiples of the generators of their groups.
+#[must_use]
+pub fn generator_multiples_key(
+    alpha: u64,
+    [beta, gamma, delta]: [u64; 3],
+    ic: &[u64],
+) -> Groth16VerificationKey {
+    let g1 = |n: u64| (G1Affine::generator() * Fr::from(n)).into_affine();
+    let g2 = |n: u64| (G2Affine::generator() * Fr::from(n)).into_affine();
+    Groth16VerificationKey {
+        alpha_1: g1(alpha),
+        beta_2: g2(beta),
+        gamma_2: g2(gamma),
+        delta_2: g2(delta),
+        ic: ic.iter().copied().map(g1).collect(),
     }
 }
 

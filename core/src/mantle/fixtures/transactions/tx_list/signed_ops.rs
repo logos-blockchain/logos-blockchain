@@ -55,11 +55,11 @@ const TWO_OPS_HEX: &str = concat!(
     "0000000000000000000000000000000000000000000000000000000000000000", // parent
     "0101010101010101010101010101010101010101010101010101010101010101", // signer
     "0000",                                                             // no steps
-    // Proof 0: ZkTransferProof, for op 0.
-    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    // Proof 0: ZkTransferProof, for op 0: [1]G1, [1]G2 (c0, c1), [1]G1.
+    "0100000000000000000000000000000000000000000000000000000000000000",
+    "edf692d95cbdde46ddda5ef7d422436779445c5e66006a42761e1f12efde0018",
+    "c212f3aeb785e49712e7a9353349aaf1255dfb31b7bf60723a480d9293938e19",
+    "0100000000000000000000000000000000000000000000000000000000000000",
     // Proof 1: Ed25519Signature, for op 1.
     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -73,7 +73,17 @@ fn two_ops<State: VerificationState, Mode: VerificationMode>() -> SignedOps<Stat
             Fr::ZERO,
             0,
         ),
-        ZkTransferProof::new(CompressedGroth16Proof::from_bytes(&[0xAAu8; 128])),
+        ZkTransferProof::new(CompressedGroth16Proof::from_bytes(
+            &hex::decode(concat!(
+                "0100000000000000000000000000000000000000000000000000000000000000",
+                "edf692d95cbdde46ddda5ef7d422436779445c5e66006a42761e1f12efde0018",
+                "c212f3aeb785e49712e7a9353349aaf1255dfb31b7bf60723a480d9293938e19",
+                "0100000000000000000000000000000000000000000000000000000000000000",
+            ))
+            .expect("the fixture proof is hex")
+            .try_into()
+            .expect("the fixture proof holds 128 bytes"),
+        )),
     );
     let inscription = SignedOperation::<InscriptionOp, Unverified, Mode>::new(
         InscriptionOp {

@@ -37,6 +37,13 @@ pub struct PolWalletInputsData {
     pub commitment_aged_path: [Fr; NOTE_SET_TREE_DEPTH],
     pub commitment_aged_selectors: [bool; NOTE_SET_TREE_DEPTH],
     pub nullifier_root_aged: Fr,
+    // the low leaf of the note nullifier in the frozen IMT of its set, which the
+    // PoQ leader branch proves and the PoL does not read
+    pub low_leaf_aged_nullifier: Fr,
+    pub low_leaf_aged_next_nullifier: Fr,
+    pub low_leaf_aged_next_index: u64,
+    pub low_leaf_aged_path: [Fr; NOTE_SET_TREE_DEPTH],
+    pub low_leaf_aged_selectors: [bool; NOTE_SET_TREE_DEPTH],
     pub set_aged_path: [Fr; NOTE_SET_TREE_DEPTH],
     pub low_leaf_nullifier: Fr,
     pub low_leaf_next_nullifier: Fr,
@@ -134,6 +141,7 @@ impl From<PolWalletInputsData> for PolWalletInputs {
             commitment_root_latest,
             set_latest_path,
             secret_key,
+            ..
         }: PolWalletInputsData,
     ) -> Self {
         Self {

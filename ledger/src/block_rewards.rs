@@ -2,6 +2,8 @@ use lb_core::mantle::Value;
 
 /// T, the blocks of the moving average.
 pub const POOLED_FEES_WINDOW: usize = 120;
+/// `S_cap`, the maximum token supply.
+pub const MAX_SUPPLY: Value = 10_000_000_000_000_000_000;
 /// `B_0`, the rewards reserve at genesis.
 pub const REWARDS_RESERVE_GENESIS: Value = 1_000_000_000_000_000_000;
 /// Denominator of `A_t`.
@@ -27,12 +29,15 @@ pub struct BlockRewardShares {
     pub blend: Value,
 }
 
-/// The reserve, the pool, the pending Blend share and the window of Block
-/// Rewards, in units of `10^-9` LGO.
+/// The reserve, the pool, the closed and pending Blend shares and the window of
+/// Block Rewards, in units of `10^-9` LGO.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BlockRewards {
     rewards_reserve: Value,
     rewards_pool: Value,
+    /// The Blend share of the last closed epoch.
+    blend_rewards_closed: Value,
+    /// The Blend share of the current epoch.
     blend_rewards_pending: Value,
     #[serde(with = "serde_arrays")]
     pooled_fees_window: [Value; POOLED_FEES_WINDOW],
@@ -44,6 +49,7 @@ impl BlockRewards {
         Self {
             rewards_reserve: REWARDS_RESERVE_GENESIS,
             rewards_pool: 0,
+            blend_rewards_closed: 0,
             blend_rewards_pending: 0,
             pooled_fees_window: [0; POOLED_FEES_WINDOW],
         }
@@ -84,6 +90,7 @@ impl BlockRewards {
             Self {
                 rewards_reserve,
                 rewards_pool,
+                blend_rewards_closed: self.blend_rewards_closed,
                 blend_rewards_pending,
                 pooled_fees_window,
             },
@@ -91,24 +98,20 @@ impl BlockRewards {
         ))
     }
 
-    pub fn settle_blend_rewards(
-        self,
-        settled: Value,
-        paid: Value,
-    ) -> Result<Self, BlockRewardsError> {
-        // The Blend reward of the settled epochs leaves the pending share, what the
-        // notes do not use returns to the pool.
-        let blend_rewards_pending = self
-            .blend_rewards_pending
-            .checked_sub(settled)
-            .ok_or(BlockRewardsError::OutOfRange)?;
-        let rewards_pool = settled
+    /// The Blend settlement of the first block of an epoch, Deterministic
+    /// Implementation: the reward notes are paid from `blend_rewards_closed`,
+    /// what they do not use returns to `rewards_reserve`, then
+    /// `blend_rewards_pending` moves into `blend_rewards_closed`.
+    pub fn settle_blend_rewards(self, paid: Value) -> Result<Self, BlockRewardsError> {
+        let rewards_reserve = self
+            .blend_rewards_closed
             .checked_sub(paid)
-            .and_then(|unused| self.rewards_pool.checked_add(unused))
+            .and_then(|unused| self.rewards_reserve.checked_add(unused))
             .ok_or(BlockRewardsError::OutOfRange)?;
         Ok(Self {
-            rewards_pool,
-            blend_rewards_pending,
+            rewards_reserve,
+            blend_rewards_closed: self.blend_rewards_pending,
+            blend_rewards_pending: 0,
             ..self
         })
     }
@@ -121,6 +124,11 @@ impl BlockRewards {
     #[must_use]
     pub const fn rewards_pool(&self) -> Value {
         self.rewards_pool
+    }
+
+    #[must_use]
+    pub const fn blend_rewards_closed(&self) -> Value {
+        self.blend_rewards_closed
     }
 
     #[must_use]
@@ -284,11 +292,12 @@ mod tests {
             state.pooled_fees_window(),
             &window_with_last(1_000_000_000_000)
         );
-        // reserve + pool + pending + what the leader took = B_0 + the fees routed to
-        // the pool
+        // reserve + pool + closed + pending + what the leader took = B_0 + the fees
+        // routed to the pool
         assert_eq!(
             u128::from(state.rewards_reserve())
                 + u128::from(state.rewards_pool())
+                + u128::from(state.blend_rewards_closed())
                 + u128::from(state.blend_rewards_pending())
                 + u128::from(shares.leader),
             u128::from(REWARDS_RESERVE_GENESIS) + 1_000_000_000_000
@@ -296,24 +305,16 @@ mod tests {
     }
 
     #[test]
-    fn settle_blend_rewards_returns_what_the_notes_do_not_use_to_the_pool() {
+    fn settling_an_epoch_closes_the_pending_share_and_pays_nothing_from_it() {
         let (state, _) = BlockRewards::genesis()
             .distribute_block_reward(1_000_000_000_000, STAKE_AT_TARGET)
             .unwrap();
-        let settled = state
-            .clone()
-            .settle_blend_rewards(9_562_000_000, 9_000_000_000)
-            .unwrap();
-        assert_eq!(settled.blend_rewards_pending(), 0);
-        assert_eq!(settled.rewards_pool(), 992_958_666_667);
-        assert_eq!(settled.rewards_reserve(), state.rewards_reserve());
-        assert_eq!(
-            state.clone().settle_blend_rewards(9_562_000_001, 0),
-            Err(BlockRewardsError::OutOfRange)
-        );
-        assert_eq!(
-            state.settle_blend_rewards(1, 2),
-            Err(BlockRewardsError::OutOfRange)
-        );
+        assert_eq!(state.blend_rewards_closed(), 0);
+
+        let closed = state.clone().settle_blend_rewards(0).unwrap();
+        assert_eq!(closed.blend_rewards_pending(), 0);
+        assert_eq!(closed.blend_rewards_closed(), 9_562_000_000);
+        assert_eq!(closed.rewards_reserve(), state.rewards_reserve());
+        assert_eq!(closed.rewards_pool(), state.rewards_pool());
     }
 }

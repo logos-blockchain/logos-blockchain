@@ -172,7 +172,7 @@ mod tests {
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_ledger::{
-        ConsensusExcludedKeys, Intent,
+        Intent,
         config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
@@ -561,7 +561,6 @@ mod tests {
                 },
             },
             0,
-            &ConsensusExcludedKeys::empty(),
         )
     }
 }

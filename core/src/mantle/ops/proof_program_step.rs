@@ -55,7 +55,9 @@ macro_rules! compressed_proof {
                 (): &Self::Context,
             ) -> Result<(&'input [u8], Self), DecodeError> {
                 let (rest, bytes) = <[u8; COMPRESSED_PROOF_SIZE]>::decode(input, &())?;
-                Ok((rest, Self(CompressedGroth16Proof::from_bytes(&bytes))))
+                let proof = CompressedGroth16Proof::try_from_bytes(&bytes)
+                    .map_err(|error| DecodeError::invalid_value::<Self>(error.to_string()))?;
+                Ok((rest, Self(proof)))
             }
         }
 

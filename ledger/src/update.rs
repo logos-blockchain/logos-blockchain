@@ -55,21 +55,13 @@ mod tests {
     use lb_zktransfer::ZkTransferVerifierInput;
 
     use super::*;
-    use crate::{
-        ConsensusExcludedKeys,
-        cryptarchia::tests::{GENESIS_POW_REWARD_POOL, config, note},
-    };
+    use crate::cryptarchia::tests::{GENESIS_POW_REWARD_POOL, config, note};
 
     const ID: [u8; 32] = [1; 32];
 
     #[test]
     fn verify_batch_proofs_carries_the_update_through() {
-        let state = LedgerState::from_notes(
-            [note()],
-            &config(),
-            GENESIS_POW_REWARD_POOL,
-            &ConsensusExcludedKeys::empty(),
-        );
+        let state = LedgerState::from_notes([note()], &config(), GENESIS_POW_REWARD_POOL);
         let utxos_root = state.latest_note_sets().eligible_root();
         let update = PreparedUpdate::new(
             ID,
@@ -88,12 +80,7 @@ mod tests {
     fn verify_batch_proofs_rejects_invalid_deferred_proof() {
         let update = PreparedUpdate::new(
             ID,
-            LedgerState::from_notes(
-                [note()],
-                &config(),
-                GENESIS_POW_REWARD_POOL,
-                &ConsensusExcludedKeys::empty(),
-            ),
+            LedgerState::from_notes([note()], &config(), GENESIS_POW_REWARD_POOL),
             Events::new(),
             std::iter::once(invalid_zk_transfer()).collect(),
         );

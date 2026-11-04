@@ -2,8 +2,8 @@ use std::fmt::{Debug, Formatter};
 
 use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_cryptarchia_engine::Slot;
-use lb_groth16::{CompressedGroth16Proof, Fr};
-use lb_key_management_system_keys::keys::{Ed25519Signature, UnverifiedEd25519PublicKey, ZkKey};
+use lb_groth16::CompressedGroth16Proof;
+use lb_key_management_system_keys::keys::{Ed25519Signature, UnverifiedEd25519PublicKey};
 use lb_utils::bounded::{BoundedError, UpperBoundedVec};
 use serde::{Deserialize, Serialize};
 
@@ -13,7 +13,7 @@ use crate::{
     mantle::{
         Op, OpProof,
         note_set::CommitmentMmr,
-        notes::{InputNullifiers, OutputCommitments, derive_note_nullifier},
+        notes::{InputNullifiers, OutputCommitments},
         ops::{
             ChannelInscribeProof, ZkAndEd25519Proof, ZkTransferProof,
             channel::{
@@ -21,13 +21,11 @@ use crate::{
                 inscribe::{Inscription, InscriptionOp, MiniBlocks},
             },
             sdp::SDPDeclareOp,
-            transfer::{TransferOp, prove_transfer},
+            transfer::TransferOp,
         },
-        traits::Hashable as _,
         transactions::{
             Distribution, GENESIS_REQUIRED_OPS, GenesisAllocation, GenesisTx,
             MAX_GENESIS_DECLARATIONS, OpProofs, Ops, SignedOps, VerificationError, genesis_tx,
-            hash::TxHashView,
         },
     },
 };
@@ -54,14 +52,6 @@ pub enum Error {
     TooManyNotes { actual: usize, max: usize },
     #[error("Index {index} is out of bounds for length {len}")]
     IndexOutOfBounds { index: usize, len: usize },
-    #[error("{keys} stake keys for {declarations} declarations")]
-    DeclarationKeys { declarations: usize, keys: usize },
-    #[error(
-        "Declaration {declaration} consumes a note that is not a genesis output of its stake key"
-    )]
-    UnknownDeclarationInput { declaration: usize },
-    #[error("Declaration {declaration} stakes an amount other than the value of its notes")]
-    DeclarationAmount { declaration: usize },
 }
 
 /// Convenience [`Result`](core::result::Result) alias for genesis block
@@ -944,22 +934,18 @@ fn genesis_ops(
     })
 }
 
-// One placeholder proof per Operation, the given ZkTransfer for each
-// declaration.
-fn genesis_block(
-    ops: Ops,
-    declaration_proofs: impl IntoIterator<Item = ZkTransferProof>,
-) -> Result<GenesisBlock> {
+// Genesis Validation Exemptions 1: no proof is verified at Genesis, the
+// `op_proofs` list holds one placeholder per Operation.
+fn genesis_block(ops: Ops) -> Result<GenesisBlock> {
+    let placeholder_zk = ZkTransferProof::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
     let mut ops_proofs = OpProofs::from([
-        OpProof::ZkTransfer(ZkTransferProof::new(CompressedGroth16Proof::from_bytes(
-            &[0u8; 128],
-        ))),
+        OpProof::ZkTransfer(placeholder_zk),
         OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(Ed25519Signature::zero())),
         OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(Ed25519Signature::zero())),
     ]);
-    for zk_proof in declaration_proofs {
+    for _declaration in GENESIS_REQUIRED_OPS..ops.len() {
         let proof = ZkAndEd25519Proof {
-            zk_proof,
+            zk_proof: placeholder_zk,
             ed25519_sig: Ed25519Signature::zero(),
         };
         ops_proofs
@@ -968,68 +954,6 @@ fn genesis_block(
     }
     let signed_tx = SignedOps::from_parts_trusted(ops, ops_proofs)?;
     Ok(GenesisBlock::genesis(GenesisTx::from_tx(signed_tx)?))
-}
-
-// Proves the ZkTransfer of each declaration with its stake key against the
-// empty commitment root extended with the genesis outputs, the only
-// commitments the transaction adds to the ledger set before the declarations.
-fn prove_declarations(
-    notes: &Distribution,
-    declarations: &GenesisSDPDeclareOps,
-    stake_keys: &[ZkKey],
-    msg: Fr,
-) -> Result<Vec<ZkTransferProof>> {
-    let commitments: Vec<_> = notes
-        .iter()
-        .enumerate()
-        .map(|(index, note)| note.note(index).commitment())
-        .collect();
-    let mut mmr = CommitmentMmr::new();
-    let mut paths = Vec::with_capacity(commitments.len());
-    for commitment in &commitments {
-        let (next, path) = mmr
-            .push_with_paths(*commitment, &mut paths)
-            .expect("the genesis notes fit the commitment MMR");
-        mmr = next;
-        paths.push(path);
-    }
-    let tx_commitment_root = mmr.frontier_root();
-    declarations
-        .iter()
-        .zip(stake_keys)
-        .enumerate()
-        .map(|(declaration, (op, stake_key))| {
-            let openings = op
-                .inputs
-                .iter()
-                .map(|nullifier| {
-                    let index = commitments
-                        .iter()
-                        .position(|commitment| {
-                            derive_note_nullifier(commitment, stake_key.as_fr()) == *nullifier
-                        })
-                        .ok_or(Error::UnknownDeclarationInput { declaration })?;
-                    Ok((
-                        notes[index].note(index),
-                        *stake_key.as_fr(),
-                        paths[index].clone(),
-                    ))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let staked = openings
-                .iter()
-                .try_fold(0u64, |sum, (note, _, _)| sum.checked_add(note.value));
-            if staked != Some(op.amount) {
-                return Err(Error::DeclarationAmount { declaration });
-            }
-            Ok(ZkTransferProof::new(prove_transfer(
-                &openings,
-                &[],
-                tx_commitment_root,
-                msg,
-            )))
-        })
-        .collect()
 }
 
 // ── WithNotesAndDeclarations
@@ -1390,41 +1314,7 @@ impl GenesisBlockBuilder<WithAll> {
                 },
         } = self;
         // Order is important to keep here
-        let declaration_proofs = std::iter::repeat_n(
-            ZkTransferProof::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
-            sdp_declarations.len(),
-        );
-        genesis_block(
-            genesis_ops(&notes, inscription, sdp_declarations)?,
-            declaration_proofs,
-        )
-    }
-
-    /// Like [`Self::build`], but proves the `ZkTransfer` of each declaration
-    /// with the stake key at the same position in `stake_keys`.
-    pub fn build_proven(self, stake_keys: &[ZkKey]) -> Result<GenesisBlock> {
-        let Self {
-            state:
-                WithAll {
-                    notes,
-                    inscription,
-                    sdp_declarations,
-                },
-        } = self;
-        if stake_keys.len() != sdp_declarations.len() {
-            return Err(Error::DeclarationKeys {
-                declarations: sdp_declarations.len(),
-                keys: stake_keys.len(),
-            });
-        }
-        let ops = genesis_ops(&notes, inscription, sdp_declarations.clone())?;
-        let proofs = prove_declarations(
-            &notes,
-            &sdp_declarations,
-            stake_keys,
-            *TxHashView::from(ops.hash()).as_fr(),
-        )?;
-        genesis_block(ops, proofs)
+        genesis_block(genesis_ops(&notes, inscription, sdp_declarations)?)
     }
 }
 
@@ -1441,18 +1331,17 @@ impl GenesisBlockBuilder<WithGenesisTx> {
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::AdditiveGroup as _;
+    use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
-    use lb_zktransfer::ZkTransferVerifierInput;
     use num_bigint::BigUint;
 
     use super::*;
     use crate::{
         header::HeaderId,
         mantle::{
-            ConsensusExcludedKeys, GenesisParameters, GenesisTime,
+            GenesisParameters, GenesisTime,
             ledger::verification_mode::GenesisMode,
-            notes::{NoteCommitment, NoteNullifier},
+            notes::NoteCommitment,
             ops::{
                 OpRef,
                 channel::{ChannelId, MsgId},
@@ -1472,8 +1361,6 @@ mod tests {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
                     start_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
-                    pow_reward_pool: 0,
-                    consensus_excluded_keys: ConsensusExcludedKeys::empty(),
                 }
                 .encode_to_vec(),
             ),
@@ -1491,8 +1378,6 @@ mod tests {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
                     start_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
-                    pow_reward_pool: 0,
-                    consensus_excluded_keys: ConsensusExcludedKeys::empty(),
                 }
                 .encode_to_vec(),
             ),
@@ -1514,7 +1399,7 @@ mod tests {
         // zero Ed25519 key since not all 32-byte arrays are valid curve points.
         SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
-            inputs: [NoteNullifier(Fr::from(u64::from(id)))].into(),
+            inputs: InputNullifiers::default(),
             commitment_merkle_root: Fr::ZERO,
             amount: 0,
             zk_id: ZkPublicKey::from(BigUint::from(u64::from(id) + 1)),
@@ -2010,72 +1895,6 @@ mod tests {
             CommitmentMmr::new().frontier_root()
         );
         assert_eq!(transfer.excess_value, 0);
-    }
-
-    #[test]
-    fn build_proven_proves_each_declaration_against_the_distributed_notes() {
-        let stake_key = ZkKey::new(Fr::from(1u64));
-        let notes = [
-            GenesisAllocation {
-                value: 1_000,
-                public_key: stake_key.to_public_key(),
-            },
-            make_note(2_000),
-        ];
-        let nullifier = derive_note_nullifier(&notes[0].note(0).commitment(), stake_key.as_fr());
-        let declaration = SDPDeclareOp {
-            inputs: [nullifier].into(),
-            commitment_merkle_root: CommitmentMmr::new().frontier_root(),
-            amount: 1_000,
-            ..make_sdp_decl(0)
-        };
-        let builder = |declaration: SDPDeclareOp| {
-            GenesisBlockBuilder::new()
-                .add_notes(notes)
-                .set_inscription(valid_inscription())
-                .add_declaration(declaration)
-        };
-
-        let block = builder(declaration.clone())
-            .build_proven(std::slice::from_ref(&stake_key))
-            .unwrap();
-        let tx = block.genesis_tx();
-        let tx_commitment_root = CommitmentMmr::new()
-            .push(notes[0].note(0).commitment())
-            .unwrap()
-            .push(notes[1].note(1).commitment())
-            .unwrap()
-            .frontier_root();
-        let public = ZkTransferVerifierInput::new(
-            &[nullifier.0],
-            &[],
-            1_000,
-            tx_commitment_root,
-            *TxHashView::from(tx.hash()).as_fr(),
-        )
-        .unwrap();
-        let proof = tx.sdp_declarations().next().unwrap().proof();
-        assert!(lb_zktransfer::verify(proof.zk_proof.as_proof(), &public).unwrap());
-
-        assert!(matches!(
-            builder(SDPDeclareOp {
-                amount: 999,
-                ..declaration.clone()
-            })
-            .build_proven(std::slice::from_ref(&stake_key)),
-            Err(Error::DeclarationAmount { declaration: 0 })
-        ));
-        assert!(matches!(
-            builder(declaration.clone()).build_proven(&[ZkKey::new(Fr::from(2u64))]),
-            Err(Error::UnknownDeclarationInput { declaration: 0 })
-        ));
-        assert!(matches!(
-            builder(declaration).build_proven(&[]),
-            Err(Error::DeclarationKeys {
-                declarations: 1,
-                keys: 0
-            })
-        ));
     }
 
     #[test]

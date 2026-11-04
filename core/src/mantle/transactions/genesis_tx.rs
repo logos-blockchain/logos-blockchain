@@ -1,6 +1,6 @@
 use core::fmt::{self, Display, Formatter};
 
-use lb_binary_codec::canonical::{BTreeSet, BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::bounded::{BoundedString, BoundedVec, UpperBoundedVec};
@@ -15,7 +15,6 @@ use crate::{
         ops::{
             Op, OpRef, SignedOp, SignedOperation,
             channel::{ChannelId, MsgId, NULL_CHANNEL_ID, inscribe::InscriptionOp},
-            pow::PowReward,
             sdp::SDPDeclareOp,
             transfer::TransferOp,
         },
@@ -89,6 +88,8 @@ pub enum Error {
     DistributionLength { published: usize, outputs: usize },
     #[error("Transfer output {index} is not the commitment of the published note")]
     DistributionMismatch { index: usize },
+    #[error("Genesis declaration at operation {index} has inputs")]
+    DeclarationWithInputs { index: usize },
 }
 
 impl GenesisTx {
@@ -118,6 +119,16 @@ impl GenesisTx {
 
                 if !unsupported_ops.is_empty() {
                     return Err(Error::UnsupportedGenesisOp(unsupported_ops));
+                }
+
+                // Genesis Validation Exemptions 3: the declarations must have no inputs.
+                for (index, op) in rest.iter().enumerate() {
+                    if matches!(op, OpRef::SDPDeclare(declaration) if !declaration.inputs.is_empty())
+                    {
+                        return Err(Error::DeclarationWithInputs {
+                            index: index + GENESIS_REQUIRED_OPS,
+                        });
+                    }
                 }
 
                 (genesis_parameters, distribution)
@@ -487,18 +498,12 @@ impl TryFrom<OffsetDateTime> for GenesisTime {
     }
 }
 
-/// The keys whose notes never take part in consensus: no leadership proof is
-/// made with them, and they count towards no total stake.
-pub type ConsensusExcludedKeys = BTreeSet<ZkPublicKey>;
-
 /// The parameters of a chain, encoded as an inscription in its genesis block.
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
 pub struct GenesisParameters {
     pub chain_id: ChainId,
     pub start_time: GenesisTime,
     pub epoch_nonce: Fr,
-    pub pow_reward_pool: PowReward,
-    pub consensus_excluded_keys: ConsensusExcludedKeys,
 }
 
 #[cfg(test)]
@@ -514,7 +519,7 @@ mod tests {
         mantle::{
             Note, OpProof,
             note_set::CommitmentMmr,
-            notes::{InputNullifiers, NoteNullifier, OutputCommitments, derive_note_nullifier},
+            notes::{InputNullifiers, NoteNullifier, OutputCommitments},
             ops::{
                 ChannelInscribeProof, StepProof, ZkTransferProof,
                 channel::inscribe::{ChannelStep, Inscription, MiniBlock, MiniBlocks, Step},
@@ -545,8 +550,6 @@ mod tests {
             chain_id: "test".to_owned().try_into().unwrap(),
             start_time: GenesisTime::new(1000),
             epoch_nonce: Fr::ZERO,
-            pow_reward_pool: 0,
-            consensus_excluded_keys: ConsensusExcludedKeys::empty(),
         }
     }
 
@@ -557,7 +560,7 @@ mod tests {
     ) -> SDPDeclareOp {
         SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
-            inputs: [derive_note_nullifier(&note_to_use.commitment(), &Fr::ZERO)].into(),
+            inputs: InputNullifiers::default(),
             commitment_merkle_root: Fr::ZERO,
             amount: note_to_use.value,
             zk_id: ZkPublicKey::new(BigUint::from(zk_id_value).into()),
@@ -908,6 +911,26 @@ mod tests {
         ));
     }
 
+    // The example of Cryptarchia Parameters in the genesis spec: the inscription
+    // decodes to exactly the three parameters.
+    #[test]
+    fn genesis_parameters_decode_the_spec_example() {
+        let inscription = hex::decode(
+            "186c6f676f732d626c6f636b636861696e2d6d61696e6e6574030f5c69abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567800",
+        )
+        .unwrap();
+        let parameters = GenesisParameters::decode_all(&inscription, &()).unwrap();
+
+        assert_eq!(
+            parameters.chain_id,
+            ChainId::try_from("logos-blockchain-mainnet".to_owned()).unwrap()
+        );
+        assert_eq!(parameters.start_time, GenesisTime::new(1_767_640_835));
+        assert_eq!(
+            hex::encode(parameters.encode_to_vec()),
+            hex::encode(inscription)
+        );
+    }
     #[test]
     fn test_genesis_tx_genesis_parameters() {
         let param = genesis_parameters();
@@ -947,6 +970,33 @@ mod tests {
         assert_eq!(GenesisTx::from_tx(tx), Err(Error::UnexpectedInput));
     }
 
+    // Genesis Validation Exemptions 3: the declarations must have no inputs.
+    #[test]
+    fn from_tx_rejects_a_declaration_with_inputs() {
+        let verifying_key = Ed25519PublicKey::from_bytes(&[1; 32]).unwrap();
+        let with_inputs = SDPDeclareOp {
+            inputs: [NoteNullifier(Fr::ONE)].into(),
+            ..sdp_declare_op(create_test_note(1000, 0), 1, verifying_key)
+        };
+        let without_inputs = SDPDeclareOp {
+            inputs: InputNullifiers::default(),
+            ..sdp_declare_op(create_test_note(1000, 0), 0, verifying_key)
+        };
+        let c = parameters_op();
+        let d = distribution_op(&c, &allocations());
+        let ops = vec![
+            Op::ChannelInscribe(c),
+            Op::ChannelInscribe(d),
+            Op::SDPDeclare(without_inputs),
+            Op::SDPDeclare(with_inputs),
+        ];
+        let ops_proofs = ops.iter().map(Op::sample_proof).collect::<Vec<_>>();
+
+        assert_eq!(
+            GenesisTx::from_tx(create_trusted_tx(ops, ops_proofs)),
+            Err(Error::DeclarationWithInputs { index: 4 })
+        );
+    }
     #[test]
     fn into_genesis_ops_splits_the_transfer_the_inscription_and_the_declarations() {
         let verifying_key = Ed25519PublicKey::from_bytes(&[1; 32]).unwrap();

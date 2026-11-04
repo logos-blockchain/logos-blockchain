@@ -128,8 +128,6 @@ pub struct SDPDeclareVerificationContext<'a> {
 }
 
 pub struct SDPDeclareGenesisValidationContext<'a> {
-    pub note_sets: &'a NoteSets,
-    pub tx_hash_view: &'a TxHashView,
     pub declarations: &'a Declarations,
     pub provider_index: &'a ProviderIndex,
     pub min_stake: &'a MinStake,
@@ -234,19 +232,6 @@ impl VerifiableOperation<StandardMode>
     }
 }
 
-// TODO: Collapse into generic over Mode
-impl PreverifiableOperation<GenesisMode>
-    for SignedOperation<SDPDeclareOp, Unverified, GenesisMode>
-{
-    type Context<'a> = SDPDeclarePreverificationContext<'a>;
-    type Error = SdpError;
-
-    fn preverify(&self, context: &Self::Context<'_>) -> Result<(), Self::Error> {
-        self.operation()
-            .preverify(context.tx_hash_view, &self.proof().ed25519_sig)
-    }
-}
-
 impl VerifiableOperation<GenesisMode> for SignedOperation<SDPDeclareOp, Preverified, GenesisMode> {
     type DeferredProof = ();
     type Context<'a> = SDPDeclareGenesisValidationContext<'a>;
@@ -262,34 +247,11 @@ impl VerifiableOperation<GenesisMode> for SignedOperation<SDPDeclareOp, Preverif
             context.min_stake,
         )?;
 
-        let ledger = context
-            .note_sets
-            .get(LEDGER_SET)
-            .expect("the ledger note set always exists");
-        ledger.assert_spendable(
-            operation.inputs.as_slice(),
-            &operation.commitment_merkle_root,
-            0,
-        )?;
-
-        // Genesis Validation Exemptions 1: the ZkTransfer of a declaration is verified
-        // as at any other time, against the empty root extended with the
-        // outputs of the genesis Transfer.
-        let tx_commitment_root = ledger.tx_commitment_root(&operation.commitment_merkle_root, 0)?;
-        let nullifiers: Vec<Fr> = operation
-            .inputs
-            .iter()
-            .map(|nullifier| nullifier.0)
-            .collect();
-        let public = ZkTransferVerifierInput::new(
-            &nullifiers,
-            &[],
-            operation.amount,
-            tx_commitment_root,
-            *context.tx_hash_view.as_fr(),
-        )?;
-        if !lb_zktransfer::verify(self.proof().zk_proof.as_proof(), &public).unwrap_or(false) {
-            return Err(SdpError::InvalidZkTransfer);
+        // Genesis Validation Exemptions 1 and 3: a declaration must have no inputs, so
+        // there is no spendability to check, and neither its ZkTransfer nor its
+        // signature is verified.
+        if !operation.inputs.is_empty() {
+            return Err(SdpError::GenesisDeclarationWithInputs);
         }
 
         Ok(())
@@ -760,175 +722,108 @@ mod tests {
         use lb_key_management_system_keys::keys::Ed25519Signature;
 
         use super::*;
-        use crate::mantle::ops::transfer::prove_transfer;
 
-        fn tx_hash_view() -> TxHashView {
-            TxHashView::from(TxHash::from([9u8; 32]))
+        fn genesis_declaration() -> SDPDeclareOp {
+            SDPDeclareOp {
+                inputs: notes::InputNullifiers::default(),
+                commitment_merkle_root: CommitmentMmr::new().frontier_root(),
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/3000")
+            }
         }
 
-        fn genesis_preverified(
+        fn genesis_verify(
             operation: SDPDeclareOp,
-            tx_hash_view: &TxHashView,
-        ) -> SignedOperation<SDPDeclareOp, Preverified, GenesisMode> {
-            let ed25519_sig =
-                Ed25519Key::from_bytes(&[1; 32]).sign_payload(tx_hash_view.as_bytes().as_ref());
-
+            declarations: &Declarations,
+            provider_index: &ProviderIndex,
+            threshold: StakeThreshold,
+        ) -> Result<(), SdpError> {
             SignedOperation::<_, Unverified, GenesisMode>::new(
                 operation,
-                ZkAndEd25519Proof::new(ZkTransferProof::sample(), ed25519_sig),
+                ZkAndEd25519Proof {
+                    zk_proof: ZkTransferProof::sample(),
+                    ed25519_sig: Ed25519Signature::zero(),
+                },
             )
-            .into_preverified(&SDPDeclarePreverificationContext { tx_hash_view })
-            .expect("the provider key signed this transaction hash")
+            .into_state_trusted::<Preverified>()
+            .verify(&SDPDeclareGenesisValidationContext {
+                declarations,
+                provider_index,
+                min_stake: &MinStake {
+                    threshold,
+                    timestamp: 0,
+                },
+            })
         }
 
+        // Genesis Validation Exemptions 1 and 3: no input, and a placeholder
+        // ZkTransfer and signature that nothing verifies.
         #[test]
-        fn genesis_verify_rejects_an_unknown_root() {
-            let operation = SDPDeclareOp {
-                commitment_merkle_root: Fr::from(5u64),
-                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/3000")
-            };
-
-            let tx_hash_view = TxHashView::from(TxHash::from([11u8; 32]));
-            let signed_operation = genesis_preverified(operation, &tx_hash_view);
-
+        fn genesis_verify_accepts_a_declaration_without_inputs_or_valid_proofs() {
             assert_eq!(
-                signed_operation
-                    .verify(&SDPDeclareGenesisValidationContext {
-                        note_sets: &note_sets(),
-                        tx_hash_view: &tx_hash_view,
-                        declarations: &Declarations::new_sync(),
-                        provider_index: &ProviderIndex::new_sync(),
-                        min_stake: &MinStake {
-                            threshold: 0,
-                            timestamp: 0,
-                        },
-                    })
-                    .unwrap_err(),
-                SdpError::NoteSet(NoteSetError::UnknownRoot(Fr::from(5u64)))
-            );
-        }
-
-        #[test]
-        fn genesis_preverify_rejects_a_signature_over_another_transaction() {
-            let signing_key = Ed25519Key::from_bytes(&[1; 32]);
-            let signed_view = TxHashView::from(TxHash::from([11u8; 32]));
-            let other_view = TxHashView::from(TxHash::from([12u8; 32]));
-
-            let signed_operation = SignedOperation::<_, Unverified, GenesisMode>::new(
-                declare_op(1, 1, "/ip4/1.1.1.1/udp/3000"),
-                ZkAndEd25519Proof::new(
-                    ZkTransferProof::sample(),
-                    signing_key.sign_payload(signed_view.as_bytes().as_ref()),
+                genesis_verify(
+                    genesis_declaration(),
+                    &Declarations::new_sync(),
+                    &ProviderIndex::new_sync(),
+                    0
                 ),
-            );
-
-            assert_eq!(
-                signed_operation.preverify(&SDPDeclarePreverificationContext {
-                    tx_hash_view: &signed_view
-                }),
                 Ok(())
             );
-            assert_eq!(
-                signed_operation.preverify(&SDPDeclarePreverificationContext {
-                    tx_hash_view: &other_view
-                }),
-                Err(SdpError::InvalidEddsaSignature)
-            );
         }
 
+        // Genesis Validation Exemptions 3: a nullifier given at Genesis could not be
+        // tied to a note.
         #[test]
-        fn genesis_verify_rejects_a_placeholder_proof() {
-            let operation = declare_op(1, 1, "/ip4/1.1.1.1/udp/3000");
-
-            let tx_hash_view = TxHashView::from(TxHash::from([11u8; 32]));
-            let signed_operation = genesis_preverified(operation, &tx_hash_view);
-
-            assert_eq!(
-                signed_operation.verify(&SDPDeclareGenesisValidationContext {
-                    note_sets: &note_sets(),
-                    tx_hash_view: &tx_hash_view,
-                    declarations: &Declarations::new_sync(),
-                    provider_index: &ProviderIndex::new_sync(),
-                    min_stake: &MinStake {
-                        threshold: 0,
-                        timestamp: 0,
-                    },
-                }),
-                Err(SdpError::InvalidZkTransfer)
-            );
-        }
-
-        #[test]
-        fn genesis_verify_checks_the_zk_transfer_against_the_empty_root_extended_with_the_buffer() {
-            let secret_key = Fr::from(1u64);
-            // Outputs 0 and 1 of the genesis Transfer.
-            let staked = notes::Note::new(1_000, Fr::ZERO, ZkKey::new(secret_key).to_public_key());
-            let other = notes::Note::new(500, Fr::ONE, ZkPublicKey::new(Fr::from(9u64)));
-            let outputs = [staked.commitment(), other.commitment()];
-            let (mmr, staked_path) = CommitmentMmr::new()
-                .push_with_paths(outputs[0], &mut [])
-                .unwrap();
-            let mut paths = vec![staked_path];
-            let (mmr, _) = mmr.push_with_paths(outputs[1], &mut paths).unwrap();
-
-            let ledger = NoteSet::empty()
-                .execute_adding(&outputs)
-                .unwrap()
-                .buffer_outputs(&outputs);
-            let buffered = NoteSets::new().update(LEDGER_SET, ledger);
-            let unbuffered = NoteSets::new().update(
-                LEDGER_SET,
-                NoteSet::empty().execute_adding(&outputs).unwrap(),
-            );
-
-            let nullifier = derive_note_nullifier(&staked.commitment(), &secret_key);
-            let proof = prove_transfer(
-                &[(staked, secret_key, paths[0].clone())],
-                &[],
-                mmr.frontier_root(),
-                *tx_hash_view().as_fr(),
-            );
-            let declaration = SDPDeclareOp {
-                inputs: [nullifier].into(),
-                commitment_merkle_root: CommitmentMmr::new().frontier_root(),
-                amount: 1_000,
-                ..SDPDeclareOp::sample()
+        fn genesis_verify_rejects_a_declaration_with_inputs() {
+            let operation = SDPDeclareOp {
+                inputs: [nullifier(2)].into(),
+                ..genesis_declaration()
             };
-            let verify = |operation: SDPDeclareOp, note_sets: &NoteSets| {
-                SignedOperation::<_, Unverified, GenesisMode>::new(
+            assert_eq!(
+                genesis_verify(
                     operation,
-                    ZkAndEd25519Proof {
-                        zk_proof: ZkTransferProof::new(proof),
-                        ed25519_sig: Ed25519Signature::zero(),
-                    },
-                )
-                .into_state_trusted::<Preverified>()
-                .verify(&SDPDeclareGenesisValidationContext {
-                    note_sets,
-                    tx_hash_view: &tx_hash_view(),
-                    declarations: &Declarations::new_sync(),
-                    provider_index: &ProviderIndex::new_sync(),
-                    min_stake: &MinStake {
-                        threshold: 0,
-                        timestamp: 0,
-                    },
-                })
-            };
+                    &Declarations::new_sync(),
+                    &ProviderIndex::new_sync(),
+                    0
+                ),
+                Err(SdpError::GenesisDeclarationWithInputs)
+            );
+        }
 
-            assert_eq!(verify(declaration.clone(), &buffered), Ok(()));
+        #[test]
+        fn genesis_execution_spends_nothing_and_adds_the_service_note() {
+            let operation = genesis_declaration();
+            let (context, events) = SignedOperation::<_, Unverified, GenesisMode>::new(
+                operation.clone(),
+                <SDPDeclareOp as ProvableOperation>::Proof::sample(),
+            )
+            .into_state_trusted::<Verified>()
+            .execute(SDPDeclareExecutionContext {
+                note_sets: NoteSets::new(),
+                epoch: Epoch::new(0),
+                declarations: Declarations::new_sync(),
+                provider_index: ProviderIndex::new_sync(),
+            })
+            .expect("a genesis declaration consumes no note");
+
+            assert_eq!(events, []);
             assert_eq!(
-                verify(declaration.clone(), &unbuffered),
-                Err(SdpError::InvalidZkTransfer)
+                context.note_sets.get(LEDGER_SET).unwrap().nullifier_root(),
+                NoteSets::new().get(LEDGER_SET).unwrap().nullifier_root()
             );
             assert_eq!(
-                verify(
-                    SDPDeclareOp {
-                        amount: 999,
-                        ..declaration
-                    },
-                    &buffered
-                ),
-                Err(SdpError::InvalidZkTransfer)
+                context.note_sets.get(SDP_SET).unwrap().commitment_root(),
+                CommitmentMmr::new()
+                    .push(operation.service_note().commitment())
+                    .unwrap()
+                    .frontier_root()
+            );
+            assert_eq!(
+                context
+                    .declarations
+                    .get(&operation.id())
+                    .unwrap()
+                    .service_note,
+                operation.service_note().commitment()
             );
         }
     }
