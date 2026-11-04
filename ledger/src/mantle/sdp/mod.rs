@@ -435,7 +435,6 @@ impl SdpLedger {
         last_epoch_state: &EpochState,
         epoch_state: &EpochState,
     ) -> Result<(Self, HeaderEffect), Error> {
-        let income_before = self.pending_rewards_income();
         let mut all_reward_notes = Vec::new();
         let mut all_released = Vec::new();
         let mut all_events = Vec::new();
@@ -470,16 +469,10 @@ impl SdpLedger {
             epoch: epoch_state.epoch(),
             services,
         };
-        // Service Reward Distribution debits the whole income of the settled epochs
-        // from blend_rewards_pending, paid or not.
-        let settled_rewards = income_before
-            .checked_sub(ledger.pending_rewards_income())
-            .expect("an epoch transition settles income and never adds any");
         Ok((
             ledger,
             HeaderEffect {
                 reward_notes: all_reward_notes,
-                settled_rewards,
                 released_outputs: all_released
                     .iter()
                     .flat_map(|(_, outputs)| outputs.iter().copied())
@@ -751,8 +744,6 @@ impl SdpLedger {
 pub struct HeaderEffect {
     // per service, ascending zk_id
     pub reward_notes: Vec<Note>,
-    // income the epoch transition settled
-    pub settled_rewards: Value,
     // ascending declaration id order
     pub released_outputs: Vec<NoteCommitment>,
     pub events: Vec<HeaderEvent>,
@@ -1358,7 +1349,7 @@ mod tests {
             .unwrap();
 
         // Advance to epoch 5: SDP rewards are distributed
-        assert_eq!(ledger.pending_rewards_income(), income);
+        assert_eq!(ledger.pending_rewards_income(), 0);
         let epoch5 = next_epoch_state(5.into(), &ledger, &config);
         let (_, effect) = ledger
             .try_apply_header(&config, &config, &epoch4, &epoch5)
@@ -1381,7 +1372,6 @@ mod tests {
             received[0].value, income,
             "single-provider reward must equal the full accrued income",
         );
-        assert_eq!(effect.settled_rewards, income);
 
         // `SdpRewardDistributed` events must mirror the reward notes one-to-one
         // so wallets can credit provider keys off the header events alone.
