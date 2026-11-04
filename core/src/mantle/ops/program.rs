@@ -26,7 +26,7 @@ impl ProgramRegisterOp {
     #[must_use]
     pub fn sample() -> Self {
         Self {
-            verification_key: crate::mantle::fixtures::programs::placeholder_key(),
+            verification_key: crate::mantle::fixtures::programs::sample_key(),
         }
     }
 }
@@ -65,14 +65,7 @@ impl PreverifiableOperation<StandardMode>
     type Error = ProgramRegisterError;
 
     fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
-        // Every point on its curve, in its prime order subgroup and not the point
-        // at infinity, since an invalid point would make the proofs of the program
-        // unsound.
-        self.operation()
-            .verification_key
-            .to_groth16()
-            .map(drop)
-            .map_err(Into::into)
+        Ok(())
     }
 }
 
@@ -84,7 +77,14 @@ impl VerifiableOperation<StandardMode>
     type Error = ProgramRegisterError;
 
     fn verify(&self, _context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
-        Ok(())
+        // Every point on its curve, in its prime order subgroup and not the point
+        // at infinity, since an invalid point would make the proofs of the program
+        // unsound.
+        self.operation()
+            .verification_key
+            .to_groth16()
+            .map(drop)
+            .map_err(Into::into)
     }
 }
 
@@ -106,56 +106,77 @@ impl ExecutableOperation for SignedOperation<ProgramRegisterOp, Verified, Standa
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::canonical::BinaryDecode as _;
     use lb_groth16::{
         Groth16VerificationKey,
         test_utils::{off_subgroup_g2, three_input_setup},
     };
 
     use super::*;
-    use crate::mantle::{gas::test_utils::FixedThresholds, programs::derive_program_id};
+    use crate::mantle::{
+        VerificationError, gas::test_utils::FixedThresholds, programs::derive_program_id,
+    };
 
     fn valid_key() -> ProgramVerificationKey {
         ProgramVerificationKey::try_from(&three_input_setup(1).0).unwrap()
     }
 
-    fn preverify(verification_key: &ProgramVerificationKey) -> Result<(), ProgramRegisterError> {
+    fn verify(verification_key: &ProgramVerificationKey) -> Result<(), ProgramRegisterError> {
         SignedOperation::<_, Unverified, StandardMode>::new(
             ProgramRegisterOp {
                 verification_key: verification_key.clone(),
             },
             NoOpProof,
         )
-        .preverify(&())
+        .into_preverified(&())
+        .expect("preverify does not read the key")
+        .verify(&())
     }
 
     #[test]
-    fn preverify_checks_every_point_of_the_key() {
-        let invalid = Err(ProgramRegisterError::InvalidKey(
-            ProgramKeyError::InvalidPoint,
-        ));
-        assert_eq!(
-            preverify(&ProgramRegisterOp::sample().verification_key),
-            invalid
-        );
+    fn verify_checks_every_point_of_the_key() {
+        let invalid = ProgramRegisterError::InvalidKey(ProgramKeyError::InvalidPoint);
         let key = three_input_setup(1).0;
         let program_key =
             |key: &Groth16VerificationKey| ProgramVerificationKey::try_from(key).unwrap();
+        let bytes = program_key(&key).to_bytes();
+
+        let off_subgroup = program_key(&Groth16VerificationKey {
+            gamma_2: off_subgroup_g2(),
+            ..key.clone()
+        });
+        // No flag and a coordinate below q, yet no point has x = 0: 3 is not a
+        // square modulo q.
+        let mut off_curve = bytes;
+        off_curve[..32].fill(0);
+        for decodable in [off_subgroup.to_bytes(), off_curve] {
+            let decoded = ProgramVerificationKey::decode_all(&decodable, &()).unwrap();
+            assert_eq!(verify(&decoded), Err(invalid.clone()));
+        }
         assert_eq!(
-            preverify(&program_key(&Groth16VerificationKey {
-                gamma_2: off_subgroup_g2(),
-                ..key.clone()
-            })),
-            invalid
-        );
-        assert_eq!(
-            preverify(&program_key(&Groth16VerificationKey {
+            verify(&program_key(&Groth16VerificationKey {
                 // The point at infinity.
                 delta_2: <_>::default(),
                 ..key.clone()
             })),
-            invalid
+            Err(invalid.clone())
         );
-        assert_eq!(preverify(&program_key(&key)), Ok(()));
+        assert_eq!(verify(&program_key(&key)), Ok(()));
+        assert!(
+            !VerificationError::from(invalid).is_operation_proof_failure(),
+            "an invalid key condemns the block and not one copy of it"
+        );
+
+        let mut flagged = bytes;
+        flagged[31] |= 0x40;
+        assert!(ProgramVerificationKey::decode_all(&flagged, &()).is_err());
+        assert!(
+            serde_json::from_str::<ProgramVerificationKey>(&format!(
+                "\"{}\"",
+                hex::encode(flagged)
+            ))
+            .is_err()
+        );
     }
 
     #[test]

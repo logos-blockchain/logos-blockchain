@@ -58,12 +58,14 @@ impl ProgramVerificationKey {
             .expect("a program key encodes to its size")
     }
 
-    #[must_use]
-    pub fn from_bytes(bytes: &[u8; PROGRAM_KEY_SIZE]) -> Self {
-        Self(
-            CompressedGroth16VerificationKey::from_bytes(bytes)
-                .expect("a program key size holds 4 ic points"),
-        )
+    /// Reads the bytes alone: whether the points are valid is left to
+    /// [`Self::to_groth16`], called when a `PROGRAM_REGISTER` is verified.
+    pub fn try_from_bytes(bytes: &[u8; PROGRAM_KEY_SIZE]) -> Result<Self, ProgramKeyError> {
+        let key = CompressedGroth16VerificationKey::from_bytes(bytes)
+            .expect("a program key size holds 4 ic points");
+        key.check_encoding()
+            .map_err(|_| ProgramKeyError::NonCanonicalPoint)?;
+        Ok(Self(key))
     }
 }
 
@@ -85,7 +87,9 @@ impl BinaryDecode for ProgramVerificationKey {
         (): &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
         let (rest, bytes) = <[u8; PROGRAM_KEY_SIZE]>::decode(input, &())?;
-        Ok((rest, Self::from_bytes(&bytes)))
+        let key = Self::try_from_bytes(&bytes)
+            .map_err(|error| DecodeError::invalid_value::<Self>(error.to_string()))?;
+        Ok((rest, key))
     }
 }
 
@@ -99,7 +103,7 @@ impl<'de> Deserialize<'de> for ProgramVerificationKey {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let bytes =
             lb_utils::serde::deserialize_bytes_array_or_seq::<PROGRAM_KEY_SIZE, _>(deserializer)?;
-        Ok(Self::from_bytes(&bytes))
+        Self::try_from_bytes(&bytes).map_err(D::Error::custom)
     }
 }
 
@@ -120,6 +124,8 @@ pub enum ProgramKeyError {
     IcCount(usize),
     #[error("a program key point is not in its prime order subgroup or is the point at infinity")]
     InvalidPoint,
+    #[error("a program key point has bit 6 set or a coordinate not less than the modulus")]
+    NonCanonicalPoint,
 }
 
 #[must_use]
@@ -337,7 +343,7 @@ mod tests {
 
     use super::*;
     use crate::mantle::{
-        fixtures::programs::placeholder_key,
+        fixtures::programs::sample_key,
         notes::{NoteNullifier, derive_note_nullifier, derive_program_output_nonce},
     };
 
@@ -356,6 +362,7 @@ mod tests {
         let key =
             ProgramVerificationKey::try_from(&generator_multiples_key(1, [2, 3, 4], &[5, 6, 7, 8]))
                 .unwrap();
+        assert_eq!(sample_key(), key);
         assert_eq!(
             hex::encode(lb_groth16::fr_to_bytes(&derive_program_id(&key))),
             "33b431d9ebbada5bb9243a0b78fec6cd54034e0bf0bc8e9db776775c2b658705"
@@ -364,21 +371,15 @@ mod tests {
 
     #[test]
     fn program_key_encodes_to_352_bytes_and_derives_its_id_from_them() {
-        let key = placeholder_key();
+        let key = sample_key();
         let bytes = key.encode();
         assert_eq!(bytes.len(), PROGRAM_KEY_SIZE);
-        assert_eq!(&bytes[31..33], &[0x3e, 0x3f]);
-        assert_eq!(&bytes[351..], &[0x45]);
         let mut preimage = b"PROGRAM_ID_V1".to_vec();
         preimage.extend(&bytes);
         let digest: [u8; 32] = Hasher::digest(&preimage).into();
         assert_eq!(
             derive_program_id(&key),
             Fr::from_le_bytes_mod_order(&digest)
-        );
-        assert_eq!(
-            hex::encode(lb_groth16::fr_to_bytes(&derive_program_id(&key))),
-            "bbab28f22350a8f00af6626fffce83a95dd1df91744b085eaf86ccaae0214c25"
         );
     }
 
@@ -391,7 +392,9 @@ mod tests {
             &key.to_groth16().unwrap().alpha_beta()
         );
         assert_eq!(
-            RegisteredProgram::new(placeholder_key()),
+            RegisteredProgram::new(
+                ProgramVerificationKey::try_from_bytes(&[0; PROGRAM_KEY_SIZE]).unwrap()
+            ),
             Err(ProgramKeyError::InvalidPoint)
         );
         let mut at_infinity = three_input_setup(1).0;

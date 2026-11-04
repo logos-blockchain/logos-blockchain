@@ -518,6 +518,10 @@ mod tests {
     use rand::RngCore as _;
 
     use super::*;
+    use crate::mantle::{
+        note_set::{CommitmentMmr, LEDGER_SET, NoteSet},
+        notes::{NoteCommitment, derive_note_nullifier},
+    };
 
     #[test]
     fn a_proof_flagging_the_point_at_infinity_does_not_decode() {
@@ -533,10 +537,6 @@ mod tests {
             Err(DecodeError::InvalidValue { .. })
         ));
     }
-    use crate::mantle::{
-        note_set::{CommitmentMmr, LEDGER_SET, NoteSet},
-        notes::{NoteCommitment, derive_note_nullifier},
-    };
 
     /// Compute the Hoeffding sample size:
     ///     n >= (1 / (2 * eps^2)) * ln(2/alpha)
