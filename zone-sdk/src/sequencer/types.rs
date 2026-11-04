@@ -39,6 +39,7 @@ const DEFAULT_MAX_PENDING_PUBLISH_DEPTH: usize = 100;
 /// Long enough that a merely slow tx is not rebuilt: a valid tx the node
 /// holds lands within a few blocks, so one unmined this long is stuck.
 const DEFAULT_STALE_REFUND_SLOTS: u64 = 30;
+const DEFAULT_BACKFILL_BATCH_SLOTS: u64 = 100;
 
 /// Inscription identifier.
 pub type InscriptionId = TxHash;
@@ -415,6 +416,10 @@ pub struct SequencerConfig {
     /// LIB slots a pending tx may stay unmined before it is re-funded or
     /// orphaned; `0` disables.
     pub stale_refund_slots: u64,
+    /// Slots of finalized history each backfill request reads. A chain whose
+    /// slots follow the wall clock can hold long stretches without blocks,
+    /// which a wider batch crosses in fewer requests.
+    pub backfill_batch_slots: u64,
     /// Fund transactions from the node's wallet before signing.
     pub funding: FundingConfig,
 }
@@ -430,6 +435,7 @@ impl SequencerConfig {
             min_slots_remaining_in_turn: 1,
             max_pending_publish_depth: DEFAULT_MAX_PENDING_PUBLISH_DEPTH,
             stale_refund_slots: DEFAULT_STALE_REFUND_SLOTS,
+            backfill_batch_slots: DEFAULT_BACKFILL_BATCH_SLOTS,
             funding,
         }
     }
