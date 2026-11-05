@@ -4895,7 +4895,6 @@ dependencies = [
  "serde_yaml",
  "subtle",
  "thiserror 2.0.21",
- "tokio",
  "tracing",
  "utoipa",
  "x25519-dalek",
