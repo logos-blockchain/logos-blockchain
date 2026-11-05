@@ -352,7 +352,7 @@ where
         let mut readmitted = Vec::with_capacity(reorged.len());
         for TxInBlock { tx: item, slot } in reorged {
             let key = item.hash();
-            // A tx older than the TTL is not admitted again.
+            // A tx whose age reached the TTL is not admitted again.
             let admitted_at = self
                 .removed_items
                 .get(&key)
@@ -676,8 +676,8 @@ where
         u64::try_from(start.unix_timestamp_nanos() / 1_000_000).ok()
     }
 
-    /// Whether an item admitted at `admitted_at` is older than the TTL of the
-    /// era in force at `now`.
+    /// Whether an item admitted at `admitted_at` reached the TTL of the era in
+    /// force at `now`.
     fn is_expired(&self, admitted_at: AdmissionTime, now: u64) -> bool {
         TtlSettings::of_era(&self.settings.ttl, self.era_in_force).is_expired(admitted_at, now)
     }
