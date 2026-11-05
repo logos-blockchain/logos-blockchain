@@ -43,8 +43,8 @@ use lb_core::{
     sdp::{MinStake, ServiceParameters, ServiceType},
 };
 use lb_cryptarchia_engine::EpochConfig;
-use lb_groth16::Fr;
-use lb_key_management_system_keys::keys::{ZkKey, ZkPublicKey};
+use lb_groth16::{AdditiveGroup as _, Fr};
+use lb_key_management_system_keys::keys::ZkKey;
 use lb_mmr::MerklePath;
 use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
@@ -267,12 +267,19 @@ fn apply(
     state: &LedgerState,
     txs: impl Iterator<Item = SignedOps<Preverified, StandardMode>>,
 ) -> (LedgerState, DeferredProofs) {
-    let (state, _, _, deferred) = state
+    let (state, gas_and_fees, _, deferred) = state
         .clone()
-        .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
+        .try_apply_block_transactions::<_, HeaderId, MainnetGasProfile>(&TX_POOL.eras, txs)
+        .expect("block should apply");
+    let reward_value = state
+        .leader_reward::<HeaderId>(&gas_and_fees, &TX_POOL.eras)
+        .expect("block should apply");
+    let (state, _) = state
+        .try_finish_block::<HeaderId>(
             &TX_POOL.eras,
-            ZkPublicKey::zero(),
-            txs,
+            &gas_and_fees,
+            notes::NoteCommitment(Fr::ZERO),
+            reward_value,
         )
         .expect("block should apply");
     (state, deferred)

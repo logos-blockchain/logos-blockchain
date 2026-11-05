@@ -32,7 +32,7 @@ use lb_core::{
         gas::{Gas, GasCost, GasOverflow, GasProfile},
         ledger::verification_mode::StandardMode,
         note_set::{LEDGER_SET, NoteSetError, NoteSets},
-        notes,
+        notes::{self, NoteCommitment},
         ops::{
             SignedOp,
             channel::{deposit::DepositExecutionContext, withdraw::WithdrawExecutionContext},
@@ -52,7 +52,6 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Slot, UncleSlots};
 use lb_groth16::{AdditiveGroup as _, Fr};
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_log_targets::{diagnostic::BLEND_REACHABILITY, ledger};
 use mantle::LedgerState as MantleLedger;
 use rpds::HashTrieMapSync;
@@ -133,6 +132,8 @@ pub enum LedgerError<Id> {
     NoteSet(#[from] NoteSetError),
     #[error(transparent)]
     BlockRewards(#[from] BlockRewardsError),
+    #[error("The header carries the reward value {header}, the block computes {computed}")]
+    WrongRewardValue { header: Value, computed: Value },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -276,7 +277,8 @@ impl LedgerState {
         let (mut state, tx_events, block_events, deferred_proofs) = state
             .try_apply_block_contents::<_, _, Profile>(
                 eras,
-                *proof.reward_key(),
+                proof.reward_commitment(),
+                proof.reward_value(),
                 txs.inspect(|_| txs_in_block = txs_in_block.saturating_add(1)),
             )?;
         state.mantle_ledger.pow.record_block_txs(txs_in_block);
@@ -413,21 +415,17 @@ impl LedgerState {
         mut self,
         total_fee_burned: GasCost,
         total_fee_tip: GasCost,
-        reward_key: ZkPublicKey,
         reward_config: &RewardPoWConfig,
-    ) -> Result<(Self, notes::Note), LedgerError<Id>> {
+    ) -> Result<(Self, Value), LedgerError<Id>> {
         // Divert the PoW share of the collected fees to the PoW reward pool
         // before the rest is pooled for block rewards. See the proof of work
         // specification: <https://lip.logos.co/blockchain/raw/proof-of-work.html>
         let pow_refill = GasCost::from(reward_config.pow_fee_share(total_fee_burned.into_inner()));
         let pooled_fees = total_fee_burned.checked_sub(pow_refill)?;
 
-        let (cryptarchia_ledger, blend_share, leader_note) =
-            self.cryptarchia_ledger.distribute_block_reward(
-                pooled_fees.into_inner(),
-                total_fee_tip.into_inner(),
-                reward_key,
-            )?;
+        let (cryptarchia_ledger, blend_share, leader_reward) = self
+            .cryptarchia_ledger
+            .distribute_block_reward(pooled_fees.into_inner(), total_fee_tip.into_inner())?;
         self.cryptarchia_ledger = cryptarchia_ledger;
 
         self.mantle_ledger.sdp.add_blend_income(blend_share);
@@ -436,7 +434,23 @@ impl LedgerState {
             .add_reward_refill_rewards(pow_refill.into_inner())
             .map_err(mantle::Error::from)?;
 
-        Ok((self, leader_note))
+        Ok((self, leader_reward))
+    }
+
+    /// The leader reward of a block under construction: `self` is the state
+    /// with its header and transactions applied, whose fees are `gas_and_fees`.
+    pub fn leader_reward<Id>(
+        &self,
+        gas_and_fees: &GasAndFees,
+        eras: &EraScheduledConfig,
+    ) -> Result<Value, LedgerError<Id>> {
+        let config = config_for_slot(eras, self.slot());
+        let (_, leader_reward) = self.clone().compute_block_rewards(
+            gas_and_fees.fee_burned,
+            gas_and_fees.fee_tip,
+            &config.pow_config.reward,
+        )?;
+        Ok(leader_reward)
     }
 
     /// For each block received, execution base fees and average execution
@@ -519,11 +533,29 @@ impl LedgerState {
     /// accounting, under the era of the block's slot.
     #[expect(clippy::type_complexity, reason = "the block outcome tuple")]
     pub fn try_apply_block_contents<Tx, Id, Profile: GasProfile>(
-        mut self,
+        self,
         eras: &EraScheduledConfig,
-        reward_key: ZkPublicKey,
+        reward_commitment: NoteCommitment,
+        reward_value: Value,
         txs: impl Iterator<Item = Tx>,
     ) -> Result<(Self, Vec<TxEvent>, Vec<BlockEvent>, DeferredProofs), LedgerError<Id>>
+    where
+        Tx: PreverifiedMantleTransaction + StorageSize + Clone,
+    {
+        let (state, gas_and_fees, tx_events, deferred_proofs) =
+            self.try_apply_block_transactions::<_, Id, Profile>(eras, txs)?;
+        let (state, block_events) =
+            state.try_finish_block(eras, &gas_and_fees, reward_commitment, reward_value)?;
+        Ok((state, tx_events, block_events, deferred_proofs))
+    }
+
+    /// Applies all transactions in a block, with block-wide accounting left
+    /// for [`Self::try_finish_block`].
+    pub fn try_apply_block_transactions<Tx, Id, Profile: GasProfile>(
+        mut self,
+        eras: &EraScheduledConfig,
+        txs: impl Iterator<Item = Tx>,
+    ) -> Result<(Self, GasAndFees, Vec<TxEvent>, DeferredProofs), LedgerError<Id>>
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
     {
@@ -539,29 +571,54 @@ impl LedgerState {
             tx_events.extend(events);
             deferred_proofs.extend(deferred);
         }
+        Ok((self, gas_and_fees, tx_events, deferred_proofs))
+    }
 
+    /// Finalizes the accounting of a block whose transactions are applied and
+    /// cost `gas_and_fees`, paying the leader the note its header names.
+    pub fn try_finish_block<Id>(
+        mut self,
+        eras: &EraScheduledConfig,
+        gas_and_fees: &GasAndFees,
+        reward_commitment: NoteCommitment,
+        reward_value: Value,
+    ) -> Result<(Self, Vec<BlockEvent>), LedgerError<Id>> {
         // Compute Block rewards and give tips
         let config = config_for_slot(eras, self.slot());
-        let leader_note;
-        (self, leader_note) = self.compute_block_rewards(
+        let leader_reward;
+        (self, leader_reward) = self.compute_block_rewards(
             gas_and_fees.fee_burned,
             gas_and_fees.fee_tip,
-            reward_key,
             &config.pow_config.reward,
         )?;
+        // Leader Reward Validation. The block ID covers the value and, through the
+        // body root every block has confirmed by now, the transactions, so this
+        // failure condemns the block and not one copy of it.
+        if reward_value != leader_reward {
+            return Err(LedgerError::WrongRewardValue {
+                header: reward_value,
+                computed: leader_reward,
+            });
+        }
+        self.cryptarchia_ledger = self
+            .cryptarchia_ledger
+            .append_leader_reward(reward_commitment)?;
         let (cryptarchia_ledger, updates) = self
             .cryptarchia_ledger
             .end_block_with_updates(self.block_number);
         self.cryptarchia_ledger = cryptarchia_ledger;
-        let block_events = std::iter::once(BlockEvent::LeaderRewardPaid { note: leader_note })
-            .chain(updates.into_iter().map(BlockEvent::NoteSetUpdated))
-            .collect();
+        let block_events = std::iter::once(BlockEvent::LeaderRewardPaid {
+            commitment: reward_commitment,
+            value: reward_value,
+        })
+        .chain(updates.into_iter().map(BlockEvent::NoteSetUpdated))
+        .collect();
         // Update Execution market state
         self = self.update_execution_market(gas_and_fees.execution_gas);
         // Accumulate storage gas consumed so the storage market can update the
         // price at the next epoch rotation.
         self = self.add_storage_gas_consumed(gas_and_fees.storage_gas)?;
-        Ok((self, tx_events, block_events, deferred_proofs))
+        Ok((self, block_events))
     }
 
     pub fn from_notes(
@@ -1014,8 +1071,8 @@ mod tests {
             gas::{MainnetGasProfile, TxGasCalculator as _},
             note_set::{CommitmentMmr, LEDGER_SET, NoteSet, NoteSetUpdate, SDP_SET},
             notes::{
-                InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments,
-                derive_note_nonce, derive_note_nullifier,
+                InputNullifiers, NoteNullifier, OutputCommitments, derive_note_nonce,
+                derive_note_nullifier,
             },
             ops::{
                 ChannelInscribeProof, OpId as _, SignedOperation, StepProof, ZkAndEd25519Proof,
@@ -1093,6 +1150,25 @@ mod tests {
         SignedOps::from_parts(mantle_tx, ops_proofs).unwrap()
     }
 
+    // Applies the contents of a block whose header carries the reward they compute.
+    #[expect(clippy::type_complexity, reason = "the block outcome tuple")]
+    fn apply_contents<const N: usize>(
+        state: LedgerState,
+        eras: &EraScheduledConfig,
+        txs: [SignedOps<Preverified, StandardMode>; N],
+    ) -> Result<(LedgerState, Vec<TxEvent>, Vec<BlockEvent>, DeferredProofs), LedgerError<HeaderId>>
+    {
+        let (state, gas_and_fees, tx_events, deferred_proofs) = state
+            .try_apply_block_transactions::<_, HeaderId, MainnetGasProfile>(
+                eras,
+                txs.into_iter(),
+            )?;
+        let reward_value = state.leader_reward(&gas_and_fees, eras)?;
+        let (state, block_events) =
+            state.try_finish_block(eras, &gas_and_fees, NoteCommitment(Fr::ZERO), reward_value)?;
+        Ok((state, tx_events, block_events, deferred_proofs))
+    }
+
     fn ledger_root(state: &LedgerState) -> Fr {
         state
             .latest_note_sets()
@@ -1137,10 +1213,12 @@ mod tests {
             .note_sets
             .update(LEDGER_SET, ledger_set);
 
+        let reward_commitment = NoteCommitment(Fr::from(0x4444u64));
         let (state, _, _, _) = state
             .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
                 &eras,
-                ZkPublicKey::zero(),
+                reward_commitment,
+                38_051_750_380,
                 std::iter::empty::<SignedOps<Preverified, StandardMode>>(),
             )
             .unwrap();
@@ -1161,12 +1239,7 @@ mod tests {
             .update(
                 LEDGER_SET,
                 NoteSet::empty()
-                    .execute_adding(&[
-                        genesis_note.commitment(),
-                        added,
-                        notes::Note::new(38_051_750_380, Fr::ZERO, ZkPublicKey::zero())
-                            .commitment(),
-                    ])
+                    .execute_adding(&[genesis_note.commitment(), added, reward_commitment])
                     .unwrap(),
             )
             .end_block(5);
@@ -1185,21 +1258,21 @@ mod tests {
         let mut state =
             LedgerState::from_notes([genesis_note], &test_config, GENESIS_POW_REWARD_POOL);
         state.block_number = 1;
-        let reward_key = ZkPublicKey::new(Fr::from(0x4444u64));
+        let reward_commitment = NoteCommitment(Fr::from(0x4444u64));
 
         let (state, events, _, _) = state
             .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
                 &eras,
-                reward_key,
+                reward_commitment,
+                38_051_750_380,
                 std::iter::empty::<SignedOps<Preverified, StandardMode>>(),
             )
             .unwrap();
 
-        let leader_note = notes::Note::new(38_051_750_380, Fr::ZERO, reward_key);
         let expected = CommitmentMmr::new()
             .push(genesis_note.commitment())
             .unwrap()
-            .push(leader_note.commitment())
+            .push(reward_commitment)
             .unwrap()
             .frontier_root();
         let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
@@ -1218,6 +1291,28 @@ mod tests {
     }
 
     #[test]
+    fn a_reward_value_differing_from_the_computed_reward_fails_the_block() {
+        let test_config = config();
+        let eras = single_era(test_config.clone());
+        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+
+        let result = state.try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
+            &eras,
+            NoteCommitment(Fr::from(0x4444u64)),
+            38_051_750_381,
+            std::iter::empty::<SignedOps<Preverified, StandardMode>>(),
+        );
+
+        assert_eq!(
+            result.err(),
+            Some(LedgerError::WrongRewardValue {
+                header: 38_051_750_381,
+                computed: 38_051_750_380,
+            })
+        );
+    }
+
+    #[test]
     fn block_contents_report_the_leader_note_and_the_note_set_updates() {
         let test_config = config();
         let eras = single_era(test_config.clone());
@@ -1226,27 +1321,30 @@ mod tests {
         let mut state =
             LedgerState::from_notes([genesis_note], &test_config, GENESIS_POW_REWARD_POOL);
         state.block_number = 1;
-        let reward_key = ZkPublicKey::new(Fr::from(0x4444u64));
+        let reward_commitment = NoteCommitment(Fr::from(0x4444u64));
 
+        // The empty block reference: stake 10_000, the maximum release, no tips.
         let (_, tx_events, block_events, _) = state
             .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
                 &eras,
-                reward_key,
+                reward_commitment,
+                38_051_750_380,
                 std::iter::empty::<SignedOps<Preverified, StandardMode>>(),
             )
             .unwrap();
 
-        // The empty block reference: stake 10_000, the maximum release, no tips.
-        let leader_note = notes::Note::new(38_051_750_380, Fr::ZERO, reward_key);
         assert_eq!(tx_events, []);
         assert_eq!(
             block_events,
             vec![
-                BlockEvent::LeaderRewardPaid { note: leader_note },
+                BlockEvent::LeaderRewardPaid {
+                    commitment: reward_commitment,
+                    value: 38_051_750_380,
+                },
                 BlockEvent::NoteSetUpdated(NoteSetUpdate {
                     note_set: LEDGER_SET,
                     nullifiers: vec![],
-                    commitments: vec![leader_note.commitment()],
+                    commitments: vec![reward_commitment],
                 }),
             ]
         );
@@ -1258,13 +1356,7 @@ mod tests {
         let eras = single_era(test_config.clone());
         let mut state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
         for _ in 0..2 {
-            (state, _, _, _) = state
-                .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
-                    &eras,
-                    ZkPublicKey::zero(),
-                    std::iter::empty::<SignedOps<Preverified, StandardMode>>(),
-                )
-                .unwrap();
+            (state, _, _, _) = apply_contents(state, &eras, []).unwrap();
         }
         assert_eq!(
             state
@@ -1816,10 +1908,8 @@ mod tests {
         state.cryptarchia_ledger = state.cryptarchia_ledger.clone().update_note_sets(note_sets);
         let ledger_set_before = state.latest_note_sets().get(LEDGER_SET).unwrap().clone();
 
-        // Every block also pays its leader the maximum release share, the stake being
-        // far below target.
-        let leader_note =
-            notes::Note::new(38_051_750_380, Fr::ZERO, ZkPublicKey::zero()).commitment();
+        // Every block also pays its leader, under the commitment its header names.
+        let leader_note = NoteCommitment(Fr::ZERO);
         let h_2 = update_ledger(&mut ledger, h_1, 2 * epoch_length, leader_utxo).unwrap();
         let h_3 = update_ledger(&mut ledger, h_2, 3 * epoch_length, leader_utxo).unwrap();
         assert_eq!(
@@ -2338,11 +2428,20 @@ mod tests {
         .unwrap()
         .preverify()
         .unwrap();
-        let leader_proof = generate_proof(
+        let mut leader_proof = generate_proof(
             &ledger.state(&genesis_id).unwrap().cryptarchia_ledger,
             &note(),
             Slot::from(1u64),
         );
+        leader_proof.reward_value = cryptarchia::tests::computed_reward_value(
+            &ledger,
+            genesis_id,
+            Slot::from(1u64),
+            &leader_proof,
+            &UncleSlots::default(),
+            [tx.clone()],
+        )
+        .unwrap();
 
         let new_id = [1; 32];
         let update = ledger
@@ -2376,7 +2475,7 @@ mod tests {
             ledger_set.commitment_root(),
             mmr.push(output.commitment())
                 .unwrap()
-                .push(notes::Note::new(38_051_750_380, Fr::ZERO, ZkPublicKey::zero()).commitment())
+                .push(NoteCommitment(Fr::ZERO))
                 .unwrap()
                 .frontier_root()
         );
@@ -3746,27 +3845,14 @@ mod tests {
         .preverify()
         .unwrap();
 
-        let result = ledger
-            .clone()
-            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
-                &eras,
-                ZkPublicKey::zero(),
-                std::iter::once(tx.clone()),
-            );
+        let result = apply_contents(ledger.clone(), &eras, [tx.clone()]);
         // The `unwrap` should succeed because the user pays at least the base fee of
         // 2705
         let _apply_result = result.unwrap();
 
         ledger.cryptarchia_ledger = ledger.cryptarchia_ledger.set_execution_base_fee(10.into());
 
-        let err = ledger
-            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
-                &eras,
-                ZkPublicKey::zero(),
-                std::iter::once(tx),
-            )
-            .err()
-            .unwrap();
+        let err = apply_contents(ledger, &eras, [tx]).err().unwrap();
         // The transaction should be rejected because the price indicated for execution
         // doesn't cover the base fee that cost 27 050
         assert_eq!(err, LedgerError::InsufficientBalance);
@@ -3787,6 +3873,7 @@ mod tests {
         );
         update_ledger_prices(&mut ledger, 1, 1);
         let ledger_set_before = ledger.latest_note_sets().get(LEDGER_SET).unwrap().clone();
+        let reward_commitment = NoteCommitment(Fr::from(0x4444u64));
         let gas_context = OpsGasContext::from_channels(&Channels::new(), ledger.get_gas_prices());
         let fees = tx
             .op_refs()
@@ -3805,7 +3892,8 @@ mod tests {
             .clone()
             .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
                 &eras,
-                ZkPublicKey::zero(),
+                reward_commitment,
+                38_051_750_380,
                 std::iter::once(tx),
             );
         // The `unwrap` should succeed because the user pays at least the base fee of
@@ -3826,34 +3914,21 @@ mod tests {
 
         let result = ledger.try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
             &eras,
-            ZkPublicKey::zero(),
+            reward_commitment,
+            38_051_751_380,
             std::iter::once(tx),
         );
         // The `unwrap` should succeed because the user pays at least the base fee of
         // 823
         let (priority_fee_ledger, events, _, _) = result.unwrap();
 
-        // Stake 10_000 is far below target, so the block reward is the maximum release
-        // whatever the fees; the leader note carries two fifths of it plus the tips.
-        let with_leader_note = |value: Value| {
-            ledger_set_before
-                .clone()
-                .execute_adding(&[
-                    NoteCommitment(Fr::from(2u64)),
-                    notes::Note::new(value, Fr::ZERO, ZkPublicKey::zero()).commitment(),
-                ])
-                .unwrap()
-                .commitment_root()
-        };
-        assert_eq!(
-            ledger_root(&no_priority_fee_ledger),
-            with_leader_note(38_051_750_380)
-        );
-        assert_eq!(
-            ledger_root(&priority_fee_ledger),
-            with_leader_note(38_051_751_380)
-        );
         assert_eq!(events, []);
+        let expected_root = ledger_set_before
+            .execute_adding(&[NoteCommitment(Fr::from(2u64)), reward_commitment])
+            .unwrap()
+            .commitment_root();
+        assert_eq!(ledger_root(&no_priority_fee_ledger), expected_root);
+        assert_eq!(ledger_root(&priority_fee_ledger), expected_root);
     }
 
     #[test]
@@ -3876,13 +3951,7 @@ mod tests {
         let storage_gas = Gas::new(tx.storage_size() as u64);
         assert!(storage_gas.into_inner() > 0);
 
-        let (applied, _, _, _) = ledger
-            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
-                &eras,
-                ZkPublicKey::zero(),
-                std::iter::once(tx),
-            )
-            .unwrap();
+        let (applied, _, _, _) = apply_contents(ledger, &eras, [tx]).unwrap();
 
         // Storage gas consumed by the tx should be accumulated in the ledger
         assert_eq!(
@@ -4438,7 +4507,6 @@ mod tests {
                 .compute_block_rewards::<HeaderId>(
                     1_000.into(),
                     0.into(),
-                    ZkPublicKey::zero(),
                     &config.pow_config.reward,
                 )
                 .expect("reward computation should succeed");
@@ -4468,7 +4536,6 @@ mod tests {
                 .compute_block_rewards::<HeaderId>(
                     1_000.into(),
                     0.into(),
-                    ZkPublicKey::zero(),
                     &config.pow_config.reward,
                 )
                 .expect("reward computation should succeed");
