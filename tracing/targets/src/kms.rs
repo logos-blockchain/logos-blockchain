@@ -12,7 +12,6 @@ log_targets! {
         ED25519,
         ZK_LEADER,
         ZK_NULLIFIER,
-        ZK_REWARD_NONCE,
         ZK_VOUCHER,
     },
 }

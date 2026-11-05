@@ -27,7 +27,7 @@ use lb_core::{
         },
     },
 };
-use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_cryptarchia_engine::Epoch;
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_log_targets::wallet;
@@ -50,11 +50,6 @@ const LOG_TARGET: &str = wallet::CORE;
 /// root yet, so it stays pending until it is.
 pub const SPEND_ROOT_DEPTH: usize = 4;
 
-/// The index, under the voucher master key, of the one key of the leader
-/// rewards: a wallet recovering from its seed derives it without any stored
-/// record. The fresh keys of the mining runs count from 0.
-pub const LEADER_REWARD_KEY_INDEX: u64 = u64::MAX;
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnedNote {
     pub note: Note,
@@ -74,30 +69,12 @@ pub struct KnownNote {
 
 pub type KnownNotes = HashMap<NoteCommitment, KnownNote>;
 
-/// What a header makes public of the leader reward note of its block.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LeaderReward {
-    pub slot: Slot,
-    pub commitment: NoteCommitment,
-    pub value: Value,
-}
-
-impl LeaderReward {
-    /// The reward note, if it opens to `public_key` under `nonce`.
-    #[must_use]
-    pub fn opening(&self, public_key: ZkPublicKey, nonce: Fr) -> Option<Note> {
-        let note = Note::new(self.value, nonce, public_key);
-        (note.commitment() == self.commitment).then_some(note)
-    }
-}
-
 /// A lightweight projection of a `Block<Tx>` carrying only what the wallet
 /// needs to follow the note sets the block changed.
 pub struct WalletBlock {
     pub id: HeaderId,
     pub parent: HeaderId,
     pub epoch: Epoch,
-    pub leader_reward: LeaderReward,
     pub updates: Vec<NoteSetUpdate>,
     // openings the block reveals, adopted only once registered as known notes
     pub revealed: Vec<(NoteSetIndex, Note)>,
@@ -113,11 +90,6 @@ impl WalletBlock {
             id: block.header().id(),
             parent: block.header().parent(),
             epoch,
-            leader_reward: LeaderReward {
-                slot: block.header().slot(),
-                commitment: block.header().leader_proof().reward_commitment(),
-                value: block.header().leader_proof().reward_value(),
-            },
             updates: events
                 .iter()
                 .filter_map(|event| match event {
@@ -135,7 +107,7 @@ impl WalletBlock {
 
 // The openings a block reveals: the PoW and Blend reward notes from the events,
 // then the service note of each SDP_DECLARE. The leader reward note stays
-// hidden, its leader finds it through `LeaderReward::opening`.
+// hidden: its leader knows the opening from proposing the block.
 #[must_use]
 pub fn revealed_notes<'a>(
     events: &Events,
@@ -844,13 +816,11 @@ mod tests {
         mantle::{
             Op,
             gas::MainnetGasProfile,
-            notes::derive_reward_nonce,
             ops::{channel::inscribe::InscriptionOp, pow::PowNullifier, sdp::SDPDeclareOp},
             transactions::{GasPrices, tx_list::ops::OpsGasContext},
         },
     };
     use lb_groth16::{AdditiveGroup as _, Field as _};
-    use lb_key_management_system_keys::keys::ZkKey;
 
     use super::*;
     use crate::{
@@ -867,11 +837,6 @@ mod tests {
             id: HeaderId::from([id; 32]),
             parent: HeaderId::from([parent; 32]),
             epoch: Epoch::new(epoch),
-            leader_reward: LeaderReward {
-                slot: Slot::from(0u64),
-                commitment: NoteCommitment(Fr::ZERO),
-                value: 0,
-            },
             updates,
             revealed: vec![],
         }
@@ -1101,25 +1066,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(opening.inputs, vec![large]);
-    }
-
-    #[test]
-    fn leader_reward_opens_to_the_key_and_nonce_of_its_leader() {
-        let secret_key = Fr::from(7u64);
-        let public_key = ZkKey::new(secret_key).to_public_key();
-        let slot = Slot::from(42u64);
-        let nonce = derive_reward_nonce(&secret_key, slot.into());
-        let note = Note::new(10, nonce, public_key);
-        let reward = LeaderReward {
-            slot,
-            commitment: note.commitment(),
-            value: note.value,
-        };
-
-        assert_eq!(reward.opening(public_key, nonce), Some(note));
-        assert_eq!(reward.opening(pk(1), nonce), None);
-        let other_slot = derive_reward_nonce(&secret_key, 43);
-        assert_eq!(reward.opening(public_key, other_slot), None);
     }
 
     #[test]

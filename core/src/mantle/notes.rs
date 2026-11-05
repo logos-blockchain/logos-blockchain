@@ -23,10 +23,6 @@ static NOTE_NF_V1: LazyLock<Fr> = LazyLock::new(|| {
     fr_from_bytes(b"NOTE_NF_V1").expect("BigUint should load from constant string")
 });
 
-static LEADER_REWARD_NONCE_V1: LazyLock<Fr> = LazyLock::new(|| {
-    fr_from_bytes(b"LEADER_REWARD_NONCE_V1").expect("BigUint should load from constant string")
-});
-
 static NOTE_NONCE_V1: LazyLock<Fr> = LazyLock::new(|| {
     fr_from_bytes(b"NOTE_NONCE_V1").expect("BigUint should load from constant string")
 });
@@ -105,15 +101,6 @@ pub fn derive_note_nullifier(commitment: &NoteCommitment, secret_key: &Fr) -> No
     NoteNullifier(ZkHasher::digest(&[*NOTE_NF_V1, commitment.0, *secret_key]))
 }
 
-/// The nonce the wallet standard recommends for a leader reward note.
-///
-/// Only the holder of the secret key of the reward key can compute it, and a
-/// slot holds at most one block of a chain.
-#[must_use]
-pub fn derive_reward_nonce(secret_key: &Fr, slot: u64) -> Fr {
-    ZkHasher::digest(&[*LEADER_REWARD_NONCE_V1, *secret_key, Fr::from(slot)])
-}
-
 /// The nonce the `ZkProgramSpend` enforces on the output `output_index` of a
 /// step consuming a note of its program, derived from the nullifier of its
 /// first input.
@@ -155,18 +142,6 @@ mod test {
     use lb_key_management_system_keys::keys::ZkKey;
 
     use super::*;
-
-    #[test]
-    fn reward_nonce_hashes_the_secret_key_and_the_slot_under_its_dst() {
-        assert_eq!(
-            derive_reward_nonce(&Fr::from(7u64), 42),
-            ZkHasher::digest(&[
-                fr_from_bytes_unchecked(b"LEADER_REWARD_NONCE_V1"),
-                Fr::from(7u64),
-                Fr::from(42u64),
-            ])
-        );
-    }
 
     #[test]
     fn test_user_note_commitment_has_zero_program_and_data() {

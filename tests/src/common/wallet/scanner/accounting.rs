@@ -11,9 +11,7 @@ use lb_core::{
     },
 };
 use lb_key_management_system_service::keys::{UnsecuredZkKey, ZkPublicKey};
-use lb_wallet::{
-    KnownNote, KnownNotes, LeaderReward, WalletBlock, WalletError, WalletState, revealed_notes,
-};
+use lb_wallet::{KnownNote, KnownNotes, WalletBlock, WalletError, WalletState, revealed_notes};
 use thiserror::Error;
 
 use crate::common::wallet::{
@@ -144,11 +142,6 @@ impl ScannerAccounting {
                 // The test wallets do not lead, so their aged paths are not
                 // rotated.
                 epoch: self.state.epoch,
-                leader_reward: LeaderReward {
-                    slot: block.header.slot,
-                    commitment: block.header.proof_of_leadership.reward_commitment(),
-                    value: block.header.proof_of_leadership.reward_value(),
-                },
                 updates,
                 revealed,
             },

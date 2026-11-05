@@ -25,7 +25,7 @@ use lb_core::{
     },
     header::HeaderId,
     mantle::{
-        Note, OpRef, SignedOps,
+        OpRef, SignedOps,
         ledger::verification_mode::StandardMode,
         traits::{Hashable, MantleTx, SignedMantleTx, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
@@ -34,7 +34,7 @@ use lb_core::{
     sdp::blend::PolEpochState,
 };
 use lb_cryptarchia_engine::Slot;
-use lb_key_management_system_service::api::KmsServiceApi;
+use lb_key_management_system_service::{api::KmsServiceApi, keys::ZkPublicKey};
 use lb_ledger::{EpochState, LedgerState, config::EraScheduledConfig};
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_services_utils::wait_until_services_are_ready;
@@ -422,7 +422,10 @@ where
                 .expect("Failed to estabilish connection with ChainNetwork"),
         );
 
-        let LeaderSettings { era_schedule, .. } = self
+        let LeaderSettings {
+            era_schedule,
+            wallet_config,
+        } = self
             .service_resources_handle
             .settings_handle
             .notifier()
@@ -517,6 +520,7 @@ where
                                 &relays,
                                 tip_state,
                                 &era_schedule,
+                                wallet_config.funding_pk,
                             ))
                             .await
                             {
@@ -652,7 +656,8 @@ where
             winning,
             epoch_state,
             wallet_api,
-            kms
+            kms,
+            reward_public_key
         )
     )]
     #[expect(clippy::too_many_arguments, reason = "Need all args")]
@@ -672,6 +677,7 @@ where
         >,
         mut ledger_state: LedgerState,
         era_schedule: &EraScheduledConfig,
+        reward_public_key: ZkPublicKey,
     ) -> Result<Block<Mempool::Item>, Error> {
         let txs_stream = relays
             .mempool_adapter()
@@ -728,8 +734,9 @@ where
         // The PoL proves the reward note of the block, whose value is the reward
         // of the transactions the block ends up holding.
         let reward_value = block_leader_reward(header_state, txs.as_slice(), era_schedule)?;
-        let (reward_public_key, reward_nonce) = wallet_api.leader_reward_opening(slot).await?;
-        let reward = Note::new(reward_value, reward_nonce, reward_public_key);
+        let reward = wallet_api
+            .new_leader_reward(reward_value, reward_public_key)
+            .await?;
         let wallet_inputs = lb_pol::PolWalletInputsData {
             reward_public_key: *reward.public_key.as_fr(),
             reward_nonce: reward.nonce,

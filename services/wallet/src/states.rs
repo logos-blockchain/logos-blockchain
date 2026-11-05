@@ -1,13 +1,14 @@
 use std::{
     borrow::Borrow,
     collections::{HashMap, HashSet},
+    time::Duration,
 };
 
 use lb_core::{
     header::HeaderId,
     mantle::{
         GasProfile, Note, Value,
-        notes::NoteNullifier,
+        notes::{NoteCommitment, NoteNullifier},
         ops::transfer::TransferOp,
         transactions::{MantleTxBuilder, builder::ZkTransferOpening, tx_list::ops::OpsContext},
     },
@@ -16,13 +17,16 @@ use lb_groth16::Fr;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_log_targets::wallet;
 use lb_wallet::{KnownNote, KnownNotes, WalletBlock, WalletError, WalletState};
-use overwatch::services::state::StateUpdater;
+use overwatch::{DynError, services::state::StateUpdater};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 use crate::{KeyId, WalletServiceError, WalletServiceSettings};
 
 pub type Wallet = lb_wallet::Wallet<KeyId>;
+
+/// How often the persisted state is read while a note is on its way to it.
+const NOTE_PERSISTENCE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Notes handed out as funding for transactions that have been built but not
 /// yet observed on chain. Ephemeral: rebuilt empty on restart; entries are
@@ -121,6 +125,31 @@ impl RecoveryState {
     }
 }
 
+/// Returns once the persisted state, as `load` reads it, knows the note of
+/// `commitment`. The state operator persists the states in order and a later
+/// state knows the notes of an earlier one, so the note stays persisted from
+/// then on.
+pub async fn wait_until_note_persisted<LoadFuture>(
+    load: impl Fn() -> LoadFuture + Send + Sync,
+    commitment: NoteCommitment,
+    timeout: Duration,
+) -> Result<(), WalletServiceError>
+where
+    LoadFuture: Future<Output = Result<Option<RecoveryState>, DynError>> + Send,
+{
+    tokio::time::timeout(timeout, async {
+        loop {
+            let persisted = load().await.map_err(WalletServiceError::PersistedState)?;
+            if persisted.is_some_and(|state| state.known_notes.contains_key(&commitment)) {
+                return Ok(());
+            }
+            tokio::time::sleep(NOTE_PERSISTENCE_POLL_INTERVAL).await;
+        }
+    })
+    .await
+    .map_err(|_| WalletServiceError::NoteNotPersisted(commitment))?
+}
+
 impl overwatch::services::state::ServiceState for RecoveryState {
     type Settings = WalletServiceSettings;
     type Error = WalletServiceError;
@@ -137,8 +166,6 @@ impl overwatch::services::state::ServiceState for RecoveryState {
 /// Provides operations on the states that must be synced to [`RecoveryState`].
 pub struct ServiceState<'u> {
     next_reward_key_index: u64,
-    // the one key of the leader rewards, derived again at start
-    leader_reward_key: ZkPublicKey,
     wallet: Wallet,
     lib: HeaderId,
     updater: &'u StateUpdater<Option<RecoveryState>>,
@@ -152,7 +179,6 @@ impl<'u> ServiceState<'u> {
         state: RecoveryState,
         lib: HeaderId,
         wallet_state: WalletState,
-        leader_reward_key: ZkPublicKey,
         settings: &WalletServiceSettings,
         updater: &'u StateUpdater<Option<RecoveryState>>,
     ) -> Self {
@@ -163,18 +189,10 @@ impl<'u> ServiceState<'u> {
         } = state;
         let wallet =
             Wallet::from_lib_wallet_state(known_keys(settings), known_notes, lib, wallet_state);
-        Self::with_wallet(
-            wallet,
-            lib,
-            next_reward_key_index,
-            leader_reward_key,
-            settings,
-            updater,
-        )
+        Self::with_wallet(wallet, lib, next_reward_key_index, settings, updater)
     }
 
     // A fresh wallet follows the note sets from the genesis block.
-    #[expect(clippy::too_many_arguments, reason = "all needed")]
     pub fn from_genesis(
         state: RecoveryState,
         settings: &WalletServiceSettings,
@@ -182,7 +200,6 @@ impl<'u> ServiceState<'u> {
         genesis_notes: &[Note],
         genesis_service_notes: &[Note],
         genesis_known_notes: impl IntoIterator<Item = KnownNote>,
-        leader_reward_key: ZkPublicKey,
         updater: &'u StateUpdater<Option<RecoveryState>>,
     ) -> Result<Self, WalletError> {
         let RecoveryState {
@@ -206,7 +223,6 @@ impl<'u> ServiceState<'u> {
             wallet,
             genesis,
             next_reward_key_index,
-            leader_reward_key,
             settings,
             updater,
         ))
@@ -216,13 +232,11 @@ impl<'u> ServiceState<'u> {
         wallet: Wallet,
         lib: HeaderId,
         next_reward_key_index: u64,
-        leader_reward_key: ZkPublicKey,
         settings: &WalletServiceSettings,
         updater: &'u StateUpdater<Option<RecoveryState>>,
     ) -> Self {
         Self {
             next_reward_key_index,
-            leader_reward_key,
             wallet,
             lib,
             updater,
@@ -233,10 +247,6 @@ impl<'u> ServiceState<'u> {
 
     pub const fn lib(&self) -> HeaderId {
         self.lib
-    }
-
-    pub const fn leader_reward_key(&self) -> ZkPublicKey {
-        self.leader_reward_key
     }
 
     // the number of reward keys derived so far
@@ -396,6 +406,7 @@ fn known_keys(settings: &WalletServiceSettings) -> impl Iterator<Item = (ZkPubli
 #[cfg(test)]
 mod tests {
     use core::num::NonZero;
+    use std::{collections::VecDeque, sync::Mutex};
 
     use lb_core::mantle::note_set::LEDGER_SET;
     use lb_groth16::Field as _;
@@ -407,8 +418,6 @@ mod tests {
 
     /// A schedule of one era, with epochs of 100 slots and a `k` of 5.
     fn era_schedule() -> ServiceEraSchedule {
-        use std::time::Duration;
-
         use lb_time::era::{EraEntriesAfterGenesis, EraSchedule, EraTiming};
         use time::OffsetDateTime;
 
@@ -446,6 +455,56 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
         assert_eq!(decoded.known_notes, state.known_notes);
         assert_eq!(decoded.next_reward_key_index, 4);
+    }
+
+    #[tokio::test]
+    async fn a_note_counts_as_persisted_once_the_persisted_state_knows_it() {
+        let note = KnownNote {
+            note: Note::new(10, Fr::ONE, ZkPublicKey::new(Fr::from(2u64))),
+            note_set: LEDGER_SET,
+            nullifier: NoteNullifier(Fr::from(3u64)),
+        };
+        let commitment = note.note.commitment();
+        let without_note = RecoveryState {
+            lib_wallet_state: None,
+            known_notes: HashMap::new(),
+            next_reward_key_index: 0,
+        };
+        let with_note = RecoveryState {
+            known_notes: HashMap::from([(commitment, note)]),
+            ..without_note.clone()
+        };
+
+        let reads = Mutex::new(VecDeque::from([
+            None,
+            Some(without_note.clone()),
+            Some(with_note),
+        ]));
+        wait_until_note_persisted(
+            || {
+                let read = reads.lock().unwrap().pop_front().flatten();
+                async move { Ok(read) }
+            },
+            commitment,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert!(reads.lock().unwrap().is_empty());
+
+        let never = wait_until_note_persisted(
+            || {
+                let read = Some(without_note.clone());
+                async move { Ok(read) }
+            },
+            commitment,
+            Duration::from_millis(50),
+        )
+        .await;
+        assert!(matches!(
+            never,
+            Err(WalletServiceError::NoteNotPersisted(unpersisted)) if unpersisted == commitment
+        ));
     }
 
     #[test]
@@ -523,17 +582,9 @@ mod tests {
         let (sender, _receiver) = tokio::sync::watch::channel(None);
         let updater = StateUpdater::new(Arc::new(sender));
 
-        let mut state = ServiceState::from_genesis(
-            recovery,
-            &settings,
-            genesis,
-            &[],
-            &[],
-            [],
-            ZkPublicKey::zero(),
-            &updater,
-        )
-        .unwrap();
+        let mut state =
+            ServiceState::from_genesis(recovery, &settings, genesis, &[], &[], [], &updater)
+                .unwrap();
 
         // The first post-online LibUpdate delivers a new_lib the wallet never
         // applied (the silent bootstrap->online LIB jump outran the wallet).

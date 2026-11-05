@@ -8,6 +8,7 @@ pub struct LeaderWalletConfig {
     pub max_tx_fee: GasCost,
 
     // The key to use for paying transaction fees for LEADER_CLAIM.
-    // Change notes will be returned to this same funding pk.
+    // Change notes will be returned to this same funding pk, and the leader
+    // rewards are paid to it.
     pub funding_pk: ZkPublicKey,
 }

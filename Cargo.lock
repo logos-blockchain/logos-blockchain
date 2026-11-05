@@ -5442,7 +5442,6 @@ dependencies = [
  "logos-blockchain-log-targets",
  "logos-blockchain-mmr",
  "logos-blockchain-node",
- "logos-blockchain-poseidon2",
  "logos-blockchain-pow-service",
  "logos-blockchain-sdp-service",
  "logos-blockchain-storage-service",

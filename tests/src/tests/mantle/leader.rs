@@ -1,24 +1,17 @@
-use std::{
-    num::NonZero,
-    path::PathBuf,
-    sync::{Arc, OnceLock},
-    time::Duration,
-};
+use std::{num::NonZero, path::PathBuf, time::Duration};
 
-use lb_core::{crypto::ZkHasher, mantle::transactions::UNITS_PER_LGO};
-use lb_groth16::{Fr, fr_to_bytes};
+use lb_core::mantle::transactions::UNITS_PER_LGO;
+use lb_groth16::fr_to_bytes;
 use lb_http_api_common::bodies::wallet::{
     balance::WalletBalanceResponseBody, transfer_funds::WalletTransferFundsRequestBody,
 };
-use lb_key_management_system_service::keys::{Key, ZkKey, ZkPublicKey};
+use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::config::{RunConfig, deployment::era::ruleset::v1::cryptarchia::EpochConfig};
-use lb_poseidon2::Digest as _;
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig as TfTopologyConfig,
     configs::wallet::{WalletAccount, WalletConfig},
 };
 use lb_utils::math::NonNegativeRatio;
-use lb_wallet::LEADER_REWARD_KEY_INDEX;
 use logos_blockchain_tests::{
     common::manual_cluster::{
         LocalManualClusterHarnessBase, ManualNodeLayout, api_url,
@@ -32,62 +25,81 @@ use tokio::time::{sleep, timeout};
 const NODE_COUNT: usize = 1;
 
 /// The leader reward is a note of each block, whose key the header hides; the
-/// leader's wallet finds it under its reward key and adopts it.
+/// leader records it under its funding key and its wallet adopts it, also
+/// across a restart.
 #[tokio::test]
 async fn leader_rewards_reach_the_leader_wallet() {
-    let (_base, nodes, leader_funding_pk, reward_key) =
+    let (base, nodes, leader_funding_pk, payer_pk) =
         setup_test_nodes("leader_rewards_reach_the_leader_wallet").await;
     let node = &nodes[0];
-    let before = balance(&node.client, reward_key).await;
+    let before = wallet_balance(&node.client, leader_funding_pk)
+        .await
+        .balance;
     // The genesis total stake is above its target, so the reserve releases nothing
-    // and the block reward is what the pooled fees pay: a transaction funds it.
+    // and the block reward is what the pooled fees pay: a transaction funds it,
+    // from another key so the fee does not come out of the balance it should grow.
     node.client
         .transfer_funds(WalletTransferFundsRequestBody {
             tip: None,
-            change_public_key: leader_funding_pk,
-            funding_public_keys: vec![leader_funding_pk],
-            recipient_public_key: leader_funding_pk,
+            change_public_key: payer_pk,
+            funding_public_keys: vec![payer_pk],
+            recipient_public_key: payer_pk,
             amount: 1,
         })
         .await
         .expect("the transfer should be submitted");
-    wait_for_balance_above(&node.client, reward_key, before, Duration::from_mins(3)).await;
+    wait_for_balance_above(
+        &node.client,
+        leader_funding_pk,
+        before,
+        Duration::from_mins(3),
+    )
+    .await;
+
+    // The notes of the blocks above the LIB are not in the state the wallet
+    // restarts from: it adopts them again from the openings it persisted.
+    let held = wallet_balance(&node.client, leader_funding_pk).await.notes;
+    let cluster = base.cluster();
+    cluster
+        .restart_node(&node.name)
+        .await
+        .expect("the node should restart");
+    cluster
+        .wait_node_ready(&node.name)
+        .await
+        .expect("the node should become ready after its restart");
+    let client = cluster
+        .node_client(&node.name)
+        .expect("the client of the node should be available after its restart");
+    timeout(Duration::from_mins(1), async {
+        loop {
+            let notes = wallet_balance(&client, leader_funding_pk).await.notes;
+            if held.keys().all(|commitment| notes.contains_key(commitment)) {
+                return;
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .expect("the wallet should hold its reward notes again after the restart");
 }
 
-// The key the wallet of a node pays its leader rewards to.
-fn leader_reward_key(config: &RunConfig) -> ZkPublicKey {
-    let master_key_id = &config.user.wallet.voucher_master_key_id;
-    let Some(Key::Zk(master_key)) = config.user.kms.backend.keys.get(master_key_id) else {
-        panic!("the voucher master key is a ZK key of the KMS");
-    };
-    ZkKey::new(ZkHasher::digest(&[
-        *master_key.as_fr(),
-        Fr::from(LEADER_REWARD_KEY_INDEX),
-    ]))
-    .to_public_key()
-}
-
-async fn balance(node: &NodeHttpClient, pk: ZkPublicKey) -> u64 {
+async fn wallet_balance(node: &NodeHttpClient, pk: ZkPublicKey) -> WalletBalanceResponseBody {
     let pk_hex = hex::encode(fr_to_bytes(&pk.into()));
     let response = reqwest::Client::new()
         .get(api_url(node, &format!("wallet/{pk_hex}/balance")))
         .send()
         .await
         .expect("balance request should not fail");
-    // A key whose reward note the wallet has not adopted yet is not found.
-    if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return 0;
-    }
     assert!(
         response.status().is_success(),
         "balance request should succeed, got status: {}",
         response.status()
     );
-    let balance: WalletBalanceResponseBody = response
+    response
         .json()
         .await
-        .expect("balance response should be valid JSON");
-    balance.balance
+        .expect("balance response should be valid JSON")
 }
 
 async fn wait_for_balance_above(
@@ -97,7 +109,7 @@ async fn wait_for_balance_above(
     duration: Duration,
 ) {
     timeout(duration, async {
-        while balance(node, pk).await <= before {
+        while wallet_balance(node, pk).await.balance <= before {
             sleep(Duration::from_millis(500)).await;
         }
     })
@@ -132,9 +144,7 @@ async fn setup_test_nodes(
     ZkPublicKey,
     ZkPublicKey,
 ) {
-    let (wallet_config, leader_funding_pk) = leader_funding_wallet_config();
-    let reward_key = Arc::new(OnceLock::new());
-    let node_reward_key = Arc::clone(&reward_key);
+    let (wallet_config, leader_funding_pk, payer_pk) = leader_funding_wallet_config();
     let (base, nodes) = start_local_manual_cluster_with_layout(
         "leader-claim",
         "mantle-leader",
@@ -146,24 +156,21 @@ async fn setup_test_nodes(
         .with_wallet_config(wallet_config),
         NODE_COUNT,
         ManualNodeLayout::SelectNodeSeed(0),
-        move |config| {
-            node_reward_key.get_or_init(|| leader_reward_key(&config));
-            Ok::<_, DynError>(test_config(config, leader_funding_pk))
-        },
+        move |config| Ok::<_, DynError>(test_config(config, leader_funding_pk)),
         Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     )
     .await;
 
-    let reward_key = *reward_key
-        .get()
-        .expect("the node of the test has a configuration");
-    (base, nodes, leader_funding_pk, reward_key)
+    (base, nodes, leader_funding_pk, payer_pk)
 }
 
-fn leader_funding_wallet_config() -> (WalletConfig, ZkPublicKey) {
+fn leader_funding_wallet_config() -> (WalletConfig, ZkPublicKey, ZkPublicKey) {
     let account = WalletAccount::deterministic(42, 100_000 * UNITS_PER_LGO, false)
         .expect("leader funding account should be valid");
     let funding_pk = account.public_key();
+    let payer = WalletAccount::deterministic(43, 100_000 * UNITS_PER_LGO, false)
+        .expect("payer account should be valid");
+    let payer_pk = payer.public_key();
     let accounts = (0..3)
         .map(|idx| {
             WalletAccount::new(
@@ -174,7 +181,8 @@ fn leader_funding_wallet_config() -> (WalletConfig, ZkPublicKey) {
             )
             .expect("leader funding account should be valid")
         })
+        .chain([payer])
         .collect();
 
-    (WalletConfig::new(accounts), funding_pk)
+    (WalletConfig::new(accounts), funding_pk, payer_pk)
 }
