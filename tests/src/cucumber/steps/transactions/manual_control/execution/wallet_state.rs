@@ -231,6 +231,7 @@ fn select_utxos_covering(mut utxos: Vec<Utxo>, value: u64) -> Result<Vec<Utxo>, 
 
     Err(StepError::WalletError(WalletError::InsufficientFunds {
         available,
+        required: value,
     }))
 }
 

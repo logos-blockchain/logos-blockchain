@@ -415,7 +415,9 @@ pub(super) async fn execute_send(
         )
         .await;
 
-        if let Err(StepError::WalletError(WalletError::InsufficientFunds { available })) = result {
+        if let Err(StepError::WalletError(WalletError::InsufficientFunds { available, .. })) =
+            result
+        {
             return Err(StepError::FundsDeficit {
                 available,
                 num_utxos_required: number_of_transactions - i,

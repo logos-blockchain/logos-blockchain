@@ -218,7 +218,10 @@ impl WalletSelectedInputs {
             }
         }
 
-        Err(WalletError::InsufficientFunds { available })
+        Err(WalletError::InsufficientFunds {
+            available,
+            required: target,
+        })
     }
 
     /// Require every provided UTXO while verifying the target is covered.
@@ -230,7 +233,10 @@ impl WalletSelectedInputs {
             .iter()
             .fold(0u64, |sum, utxo| sum.saturating_add(utxo.note.value));
         if total < target {
-            return Err(WalletError::InsufficientFunds { available: total });
+            return Err(WalletError::InsufficientFunds {
+                available: total,
+                required: target,
+            });
         }
 
         Ok(Self {
@@ -357,13 +363,17 @@ impl WalletFundingPlan {
             }
         }
 
+        let available = self
+            .base_inputs
+            .iter()
+            .chain(self.ordered_utxos.iter())
+            .map(|utxo| utxo.note.value)
+            .sum::<u64>();
+        // The evaluator does not report its target, so only a lower bound is
+        // known: more than every candidate input provides.
         Err(WalletError::InsufficientFunds {
-            available: self
-                .base_inputs
-                .iter()
-                .chain(self.ordered_utxos.iter())
-                .map(|utxo| utxo.note.value)
-                .sum(),
+            available,
+            required: available.saturating_add(1),
         }
         .into())
     }
