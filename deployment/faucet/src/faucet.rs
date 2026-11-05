@@ -1,9 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    hash::Hash,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, hash::Hash, sync::Arc, time::Duration};
 
 use lb_common_http_client::CommonHttpClient;
 use lb_http_api_common::bodies::wallet::{
@@ -11,6 +6,7 @@ use lb_http_api_common::bodies::wallet::{
     transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_wallet::SPEND_ROOT_DEPTH;
 use reqwest::Url;
 use tokio::sync::mpsc;
 
@@ -20,6 +16,10 @@ const CONFIRMATION_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// How long the worker waits for a submitted drip to appear at the tip before
 /// taking it as dropped. Generous compared to expected block times.
 const CONFIRMATION_TIMEOUT: Duration = Duration::from_mins(2);
+/// How many blocks below the tip a drip must be to count as confirmed, or at
+/// the LIB if that is shallower: the wallet spends the change note the next
+/// drip needs from that depth on.
+const CONFIRMATION_DEPTH: usize = SPEND_ROOT_DEPTH;
 /// Pause between transfer attempts for the same drip request that has not been
 /// submitted yet, so transient node errors are not retried in a tight loop.
 const RETRY_DELAY: Duration = Duration::from_secs(5);
@@ -28,8 +28,8 @@ const RETRY_DELAY: Duration = Duration::from_secs(5);
 /// `MAX_TRANSFER_ATTEMPTS * RETRY_DELAY` plus the time the requests take. Once
 /// one is, each attempt waits for confirmation until the balance has been back
 /// at its value before the drip for `CONFIRMATION_TIMEOUT`, so a drip seen at
-/// the tip holds the queue for as long as the wallet reports its change as
-/// pending.
+/// the tip holds the queue for as long as it stays there short of the
+/// confirmation depth.
 const MAX_TRANSFER_ATTEMPTS: u32 = 5;
 
 pub struct Faucet {
@@ -57,6 +57,36 @@ impl Faucet {
             .get_wallet_balance(self.base_url.clone(), self.faucet_pk, None)
             .await
             .map_err(|e| format!("Failed to fetch faucet balance: {e}"))
+    }
+
+    /// The faucet balance `CONFIRMATION_DEPTH` blocks below the tip, or at the
+    /// LIB if that is shallower.
+    async fn confirmed_balance(&self) -> Result<u64, String> {
+        let info = self
+            .http_client
+            .consensus_info(self.base_url.clone())
+            .await
+            .map_err(|e| format!("Failed to fetch the chain tip: {e}"))?
+            .cryptarchia_info;
+        let mut block = info.tip;
+        for _ in 0..CONFIRMATION_DEPTH {
+            if block == info.lib {
+                break;
+            }
+            block = self
+                .http_client
+                .get_block_by_id(self.base_url.clone(), block)
+                .await
+                .map_err(|e| format!("Failed to fetch block {block}: {e}"))?
+                .ok_or_else(|| format!("Block {block} is not on the node"))?
+                .header
+                .parent_block;
+        }
+        self.http_client
+            .get_wallet_balance(self.base_url.clone(), self.faucet_pk, Some(block))
+            .await
+            .map(|info| info.balance)
+            .map_err(|e| format!("Failed to fetch faucet balance at {block}: {e}"))
     }
 
     /// Transfers to `recipient_pk` from the notes of `wallet`, at its tip.
@@ -90,18 +120,20 @@ impl Faucet {
             .map_err(|e| format!("Faucet transfer failed: {e}"))
     }
 
-    /// Waits until the faucet balance differs from `balance_before` and the
-    /// wallet can spend every note of the faucet again, change included: the
-    /// next drip spends it, and the wallet's spend depth keeps it from being
-    /// lost to a usual fork. Returns false if the balance at the tip has been
-    /// `balance_before` for `CONFIRMATION_TIMEOUT`.
+    /// Waits until the faucet balance differs from `balance_before` at the
+    /// confirmation depth, which signals that the submitted drip is unlikely to
+    /// be lost to a fork and the change note is spendable again. Returns false
+    /// if the balance at the tip has been `balance_before` for
+    /// `CONFIRMATION_TIMEOUT`.
     async fn wait_for_confirmation(&self, balance_before: u64) -> bool {
         let mut deadline = tokio::time::Instant::now() + CONFIRMATION_TIMEOUT;
         while tokio::time::Instant::now() < deadline {
             if let Ok(wallet) = self.wallet_at_tip().await
                 && wallet.balance != balance_before
             {
-                if drip_confirmed(wallet.balance, balance_before, &wallet.pending_notes) {
+                if let Ok(balance) = self.confirmed_balance().await
+                    && balance != balance_before
+                {
                     return true;
                 }
                 deadline = tokio::time::Instant::now() + CONFIRMATION_TIMEOUT;
@@ -189,22 +221,9 @@ fn conflicts_with_first_attempt<Note: Eq + Hash>(
     funded_first_attempt.len() == 1 && funded_first_attempt == held_now
 }
 
-/// Whether a drip that left the faucet at `balance_before` has landed, with
-/// nothing of the faucet still pending.
-fn drip_confirmed<Note>(balance: u64, balance_before: u64, pending_notes: &HashSet<Note>) -> bool {
-    balance != balance_before && pending_notes.is_empty()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_drip_is_confirmed_once_its_change_is_no_longer_pending() {
-        let change = HashSet::from(["c"]);
-        assert!(!drip_confirmed(49, 100, &change));
-        assert!(drip_confirmed(49, 100, &HashSet::<&str>::new()));
-    }
 
     #[test]
     fn only_the_single_note_of_the_first_attempt_conflicts_with_it() {
