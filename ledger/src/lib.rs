@@ -4224,12 +4224,7 @@ mod tests {
             reward_config.pow_share = 10;
             reward_config.share_den = NonZeroU64::new(100).unwrap();
             (state, _) = state
-                .compute_block_rewards::<HeaderId>(
-                    10.into(),
-                    0.into(),
-                    ZkPublicKey::zero(),
-                    &reward_config,
-                )
+                .compute_block_rewards::<HeaderId>(10.into(), 0.into(), &reward_config)
                 .expect("reward computation should succeed");
             assert_eq!(state.mantle_ledger.pow.reward_pool(), epoch_reward);
             assert_eq!(state.mantle_ledger.pow.epoch_reward(), epoch_reward);
