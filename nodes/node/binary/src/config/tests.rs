@@ -176,6 +176,8 @@ fn a_leader_funding_key_the_wallet_does_not_track_is_refused() {
     config.wallet.known_keys.clear();
     let error = check_leader_funding_key(&config).unwrap_err().to_string();
     assert!(error.contains("wallet.known_keys"), "{error}");
+    // in the hex encoding the config and the CLI use
+    assert!(error.contains(&"0".repeat(64)), "{error}");
 }
 
 /// Environment variables applied on top of the YAML config must reach the

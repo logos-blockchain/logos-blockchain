@@ -10,8 +10,8 @@ use crate::{
     UserConfig,
     cli::InitArgs,
     config::{
-        keystore::Keystore, update_api, update_blend, update_cryptarchia, update_network,
-        update_sdp, update_state, update_tracing,
+        check_leader_funding_key, keystore::Keystore, update_api, update_blend, update_cryptarchia,
+        update_network, update_sdp, update_state, update_tracing,
     },
 };
 
@@ -45,6 +45,7 @@ pub fn run(mut args: InitArgs) -> Result<()> {
     let mut config = defaults.clone();
     let output = args.output.clone();
     apply(&mut config, args)?;
+    check_leader_funding_key(&config)?;
 
     let overrides = changed_values(
         &serde_yaml::to_value(&defaults)?,
