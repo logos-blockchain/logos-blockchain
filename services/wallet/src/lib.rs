@@ -1284,6 +1284,7 @@ where
     // A new leader reward note under `public_key`, with a private random nonce.
     // Nothing on chain opens the note, so it is returned only once the persisted
     // state knows it: a crash after its block is published cannot lose the reward.
+    // A note of value 0 holds nothing to lose, so the wallet does not track it.
     async fn new_leader_reward(
         value: Value,
         public_key: ZkPublicKey,
@@ -1292,6 +1293,9 @@ where
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<Note, WalletServiceError> {
         let note = Note::new(value, random_nonce(), public_key);
+        if value == 0 {
+            return Ok(note);
+        }
         Self::import_note(note, LEDGER_SET, state, kms).await?;
         let key = recovery_key(WalletServiceSettings::RECOVERY_KEY_SUFFIX);
         wait_until_note_persisted(
