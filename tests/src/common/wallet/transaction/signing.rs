@@ -88,8 +88,7 @@ pub fn transfer_proofs_for_funded_wallet_tx(
     signing_keys: &HashMap<ZkPublicKey, UnsecuredZkKey>,
 ) -> Result<BTreeMap<usize, ZkTransferProof>, WalletTransactionError> {
     let tx_hash = tx.hash();
-    let tip = core::slice::from_ref(state);
-    op_witnesses(tip, known, tx, openings, witness_context, tx_hash.to_fr())?
+    op_witnesses(state, known, tx, openings, witness_context, tx_hash.to_fr())?
         .into_iter()
         .map(|witness| -> Result<_, WalletTransactionError> {
             let keys = witness

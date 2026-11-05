@@ -30,7 +30,8 @@ use logos_blockchain_tests::{
         chain::wait_for_transactions_inclusion,
         manual_cluster::{
             LocalManualClusterHarnessBase, build_local_manual_cluster, read_manual_node_logs,
-            wait_for_height as wait_for_manual_cluster_height, wait_for_tip_slot,
+            wait_for_height as wait_for_manual_cluster_height, wait_for_spend_depth,
+            wait_for_tip_slot,
         },
     },
     cucumber::defaults::E2E_ARTIFACTS_DIR,
@@ -111,7 +112,8 @@ async fn sdp_ops_e2e() {
         .expect("declaration should appear after submission");
     assert_eq!(declaration_created.provider_id, provider_id);
 
-    // Submit an withdraw tx immediately.
+    // Submit a withdraw tx as soon as the change of the declaration can fund it.
+    wait_for_spend_depth(&node0, inclusion_timeout).await;
     withdraw_and_wait_for_removal(&node0, declaration_id, inclusion_timeout, slots_per_epoch).await;
 }
 

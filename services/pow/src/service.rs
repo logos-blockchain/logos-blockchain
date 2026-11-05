@@ -2250,14 +2250,7 @@ mod tests {
             channel_note_sets: HashMap::new(),
             pow_epoch_reward: reward_value,
         };
-        op_witnesses(
-            &[state],
-            &known,
-            ops,
-            openings,
-            &context,
-            ops.hash().to_fr(),
-        )
+        op_witnesses(&state, &known, ops, openings, &context, ops.hash().to_fr())
     }
 
     /// Signs `tx_builder` as the wallet does: the witnesses its transfers get
@@ -2736,7 +2729,7 @@ mod tests {
             wallet.apply_block(&block(id, id - 1, id.into())).unwrap();
         }
         let tip = HeaderId::from([40; 32]);
-        let spend_root = wallet.spend_root(tip, &[]).unwrap();
+        let spend_root = wallet.spend_root(tip).unwrap();
 
         // The wallet of the claim, which hands back the transaction to sign.
         let (msg_sender, mut msg_receiver) = mpsc::channel(1);
@@ -2775,7 +2768,7 @@ mod tests {
         let tx_builder = wallet_service.await.unwrap();
 
         // Block 40 loses to its sibling: the claim is still provable, against the
-        // state of block 10 extended by its own reward note.
+        // state of block 36 extended by its own reward note.
         wallet.apply_block(&block(41, 39, 99)).unwrap();
         let openings = tx_builder.openings();
         let ops = tx_builder.build().unwrap();
@@ -2785,7 +2778,7 @@ mod tests {
             .map(|note| (note.commitment(), known_note(*note)))
             .collect();
         let witnesses = op_witnesses(
-            &wallet.spend_states(HeaderId::from([41; 32])).unwrap(),
+            &wallet.spend_state(tip).unwrap(),
             &known,
             &ops,
             &openings,
@@ -2797,7 +2790,7 @@ mod tests {
         )
         .unwrap();
         let extended = wallet
-            .wallet_state_at(HeaderId::from([10; 32]))
+            .wallet_state_at(HeaderId::from([36; 32]))
             .unwrap()
             .commitments[&LEDGER_SET]
             .push(reward_note(&claims[0], REWARD).commitment())

@@ -34,7 +34,7 @@ use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_tests::{
     common::manual_cluster::{
         ManualNodeLayout, api_url, get_wallet_balance, start_local_manual_cluster_with_layout,
-        wait_for_nodes_height,
+        wait_for_nodes_height, wait_for_spend_depth,
     },
     cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
@@ -104,7 +104,8 @@ async fn channel_deposit() {
     let channel_id = create_channel(&validator.client, &mut block_stream, funding_pk).await;
 
     // The deposit is funded from the inscription's change, so the wallet has
-    // to apply the block including the inscription first.
+    // to apply the block including the inscription first, and that block has
+    // to get deep enough for the change to be spent.
     let balance_before = timeout(Duration::from_mins(1), async {
         loop {
             let balance = get_wallet_balance(&validator.client, funding_pk).await;
@@ -116,6 +117,7 @@ async fn channel_deposit() {
     })
     .await
     .expect("timed out waiting for the wallet to apply the inscription");
+    wait_for_spend_depth(&validator.client, Duration::from_mins(2)).await;
 
     let deposit_metadata: Metadata = format!("Mint {deposit_amount} to Alice in Zone")
         .into_bytes()
