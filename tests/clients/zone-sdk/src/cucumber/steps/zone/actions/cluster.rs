@@ -57,6 +57,15 @@ fn apply_zone_timing_defaults(world: &mut ZoneWorld, step: &str) -> StepResult {
     );
     world.node.set_prolonged_bootstrap_period(Duration::ZERO);
 
+    // The uncle window has to stay inside the finalization window, at most
+    // 0.6 k blocks: a node whose LIB passed the parent of an uncle rejects the
+    // block referencing it, and two nodes doing so split the chain for good.
+    set_deployment_config_override(
+        &mut world.node,
+        step,
+        "eras.0.cryptarchia.uncle_reference_window_in_block",
+        "3",
+    )?;
     set_deployment_config_override(
         &mut world.node,
         step,
