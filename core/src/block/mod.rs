@@ -464,9 +464,9 @@ mod tests {
             1000,
             Fr::from(11u64),
             Fr::ZERO,
+            &crate::mantle::Note::new(0, Fr::ZERO, ZkPublicKey::zero()),
         );
-        Groth16LeaderProof::prove(private_inputs, ZkPublicKey::zero())
-            .expect("Proof generation should succeed")
+        Groth16LeaderProof::prove(private_inputs).expect("Proof generation should succeed")
     }
 
     fn create_tx(count: usize) -> Vec<Ops> {
@@ -783,7 +783,7 @@ mod tests {
         assert_eq!(proposal.encoded_length(), max_size);
         assert_eq!(proposal.encode().len(), max_size);
         // Under 4 uncles, the size Blend pads every payload to.
-        assert_eq!(max_size, 17_712);
+        assert_eq!(max_size, 17_752);
     }
 
     #[test]
@@ -792,14 +792,14 @@ mod tests {
             UncleHeaders::max_encoded_size(TEST_MAX_UNCLES),
             1 + usize::from(TEST_MAX_UNCLES) * Header::CANONICAL_ENCODED_SIZE
         );
-        // 265 byte header, 4 uncle headers, 1024 references.
+        // 273 byte header, 4 uncle headers, 1024 references.
         assert_eq!(
             Proposal::max_encoded_size(TEST_MAX_UNCLES),
-            265 + 1 + 4 * 265 + 16_386
+            273 + 1 + 4 * 273 + 16_386
         );
-        assert_eq!(Groth16LeaderProof::CANONICAL_ENCODED_SIZE, 192);
-        assert_eq!(Header::CANONICAL_ENCODED_SIZE, 265);
-        assert_eq!(Proposal::max_encoded_size(TEST_MAX_UNCLES), 17_712);
+        assert_eq!(Groth16LeaderProof::CANONICAL_ENCODED_SIZE, 200);
+        assert_eq!(Header::CANONICAL_ENCODED_SIZE, 273);
+        assert_eq!(Proposal::max_encoded_size(TEST_MAX_UNCLES), 17_752);
     }
 
     #[test]

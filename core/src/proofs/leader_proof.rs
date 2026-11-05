@@ -18,8 +18,9 @@ use tracing::error;
 use crate::{
     crypto::ZkHasher,
     mantle::{
+        Value,
         note_set::{NoteSetIndex, NoteSets},
-        notes::{self, NoteNullifier},
+        notes::{self, NoteCommitment, NoteNullifier},
     },
 };
 
@@ -31,11 +32,12 @@ pub struct Groth16LeaderProof {
     proof: lb_pol::PoLProof,
     #[serde(with = "serde_fr")]
     entropy_contribution: Fr,
-    reward_key: ZkPublicKey,
+    reward_commitment: NoteCommitment,
+    reward_value: Value,
 }
 
 const GROTH16_LEADER_PROOF_BINCODE_SIZE: usize =
-    COMPRESSED_PROOF_SIZE + FR_BYTES_SIZE + FR_BYTES_SIZE;
+    COMPRESSED_PROOF_SIZE + FR_BYTES_SIZE + FR_BYTES_SIZE + size_of::<Value>();
 
 impl BoundedSerializeOp for Groth16LeaderProof {
     type Bytes = [u8; GROTH16_LEADER_PROOF_BINCODE_SIZE];
@@ -49,7 +51,8 @@ impl Debug for Groth16LeaderProof {
                 &format_args!("{} bytes", size_of::<lb_pol::PoLProof>()),
             )
             .field("entropy_contribution", &self.entropy_contribution)
-            .field("reward_key", &self.reward_key)
+            .field("reward_commitment", &self.reward_commitment)
+            .field("reward_value", &self.reward_value)
             .finish()
     }
 }
@@ -62,7 +65,8 @@ impl BinaryEncode for Groth16LeaderProof {
     fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.proof.to_bytes());
         self.entropy_contribution.encode_into(out);
-        self.reward_key.encode_into(out);
+        self.reward_commitment.encode_into(out);
+        self.reward_value.encode_into(out);
     }
 }
 
@@ -81,13 +85,15 @@ impl BinaryDecode for Groth16LeaderProof {
             }
         })?;
         let (rest, entropy_contribution) = Fr::decode(rest, &())?;
-        let (rest, reward_key) = ZkPublicKey::decode(rest, &())?;
+        let (rest, reward_commitment) = NoteCommitment::decode(rest, &())?;
+        let (rest, reward_value) = Value::decode(rest, &())?;
         Ok((
             rest,
             Self {
                 proof,
                 entropy_contribution,
-                reward_key,
+                reward_commitment,
+                reward_value,
             },
         ))
     }
@@ -101,17 +107,21 @@ pub enum Error {
 
 impl Groth16LeaderProof {
     /// The fixed-size canonical representation of a proof of leadership.
-    pub const CANONICAL_ENCODED_SIZE: usize = COMPRESSED_PROOF_SIZE + FR_BYTES_SIZE + FR_BYTES_SIZE;
+    pub const CANONICAL_ENCODED_SIZE: usize =
+        COMPRESSED_PROOF_SIZE + FR_BYTES_SIZE + FR_BYTES_SIZE + size_of::<Value>();
 
-    pub fn prove(witness: LeaderPrivate, reward_key: ZkPublicKey) -> Result<Self, Error> {
+    pub fn prove(witness: LeaderPrivate) -> Result<Self, Error> {
         let start_t = std::time::Instant::now();
-        let (proof, entropy_contribution) = Self::generate_proof(witness)?;
+        let reward_value = witness.input.chain.reward_value;
+        let (proof, verif_inputs) =
+            lb_pol::prove(witness.input.into()).map_err(Error::PoLProofFailed)?;
         tracing::debug!(target: LOG_TARGET, "groth16 prover time: {:.2?}", start_t.elapsed(),);
 
         Ok(Self {
             proof,
-            entropy_contribution,
-            reward_key,
+            entropy_contribution: verif_inputs.entropy_contribution.into_inner(),
+            reward_commitment: NoteCommitment(verif_inputs.reward_commitment.into_inner()),
+            reward_value,
         })
     }
 
@@ -120,14 +130,9 @@ impl Groth16LeaderProof {
         Self {
             proof: lb_pol::PoLProof::from_bytes(&[0u8; 128]),
             entropy_contribution: Fr::ZERO,
-            reward_key: ZkPublicKey::zero(),
+            reward_commitment: NoteCommitment(Fr::ZERO),
+            reward_value: 0,
         }
-    }
-
-    fn generate_proof(private: LeaderPrivate) -> Result<(lb_pol::PoLProof, Fr), Error> {
-        let (proof, verif_inputs) =
-            lb_pol::prove(private.input.into()).map_err(Error::PoLProofFailed)?;
-        Ok((proof, verif_inputs.entropy_contribution.into_inner()))
     }
 
     #[must_use]
@@ -145,12 +150,14 @@ impl Groth16LeaderProof {
     pub(crate) const fn from_parts(
         proof: lb_pol::PoLProof,
         entropy_contribution: Fr,
-        reward_key: ZkPublicKey,
+        reward_commitment: NoteCommitment,
+        reward_value: Value,
     ) -> Self {
         Self {
             proof,
             entropy_contribution,
-            reward_key,
+            reward_commitment,
+            reward_value,
         }
     }
 }
@@ -164,7 +171,11 @@ pub trait LeaderProof {
     /// Get the entropy used in the proof.
     fn entropy(&self) -> Fr;
 
-    fn reward_key(&self) -> &ZkPublicKey;
+    /// The commitment of the note paying the leader reward of the block.
+    fn reward_commitment(&self) -> NoteCommitment;
+
+    /// The value of that note, which must be the computed leader reward.
+    fn reward_value(&self) -> Value;
 }
 
 #[expect(
@@ -178,6 +189,7 @@ impl Groth16LeaderProof {
             &self.proof,
             &lb_pol::PolVerifierInput::new(
                 self.entropy(),
+                self.reward_commitment.0,
                 public_inputs.slot,
                 public_inputs.epoch_nonce,
                 public_inputs.aged_root,
@@ -185,6 +197,7 @@ impl Groth16LeaderProof {
                 public_inputs.lottery_0,
                 public_inputs.lottery_1,
                 msg,
+                self.reward_value,
             ),
         )
         .unwrap_or_else(|e| {
@@ -198,7 +211,8 @@ impl Groth16LeaderProof {
         let expected_genesis = Self::genesis();
         self.proof == expected_genesis.proof
             && self.entropy_contribution == expected_genesis.entropy_contribution
-            && self.reward_key == expected_genesis.reward_key
+            && self.reward_commitment == expected_genesis.reward_commitment
+            && self.reward_value == expected_genesis.reward_value
     }
 
     #[must_use]
@@ -207,8 +221,13 @@ impl Groth16LeaderProof {
     }
 
     #[must_use]
-    pub const fn reward_key(&self) -> &ZkPublicKey {
-        &self.reward_key
+    pub const fn reward_commitment(&self) -> NoteCommitment {
+        self.reward_commitment
+    }
+
+    #[must_use]
+    pub const fn reward_value(&self) -> Value {
+        self.reward_value
     }
 }
 
@@ -288,7 +307,12 @@ pub struct LeaderPrivate {
 
 impl LeaderPrivate {
     #[must_use]
-    pub const fn new(public: LeaderPublic, wallet: lb_pol::PolWalletInputsData, msg: Fr) -> Self {
+    pub const fn new(
+        public: LeaderPublic,
+        wallet: lb_pol::PolWalletInputsData,
+        msg: Fr,
+        reward_value: Value,
+    ) -> Self {
         let chain = lb_pol::PolChainInputsData {
             slot_number: public.slot,
             epoch_nonce: public.epoch_nonce,
@@ -297,6 +321,7 @@ impl LeaderPrivate {
             eligible_aged: public.aged_root,
             eligible_latest: public.latest_root,
             msg,
+            reward_value,
         };
         let input = lb_pol::PolWitnessInputsData::from_chain_and_wallet_data(chain, wallet);
         Self { input }
@@ -336,7 +361,9 @@ fn nodes_and_selectors(
     )
 }
 
-// The wallet half of a PoL witness, secret key left 0 for the KMS to fill.
+// The wallet half of a PoL witness. The secret key is left 0 for the KMS to
+// fill, the key and the nonce of the reward note for the proposer to set once
+// the block is built.
 pub fn pol_wallet_inputs(
     note: &notes::Note,
     note_set: NoteSetIndex,
@@ -407,6 +434,8 @@ pub fn pol_wallet_inputs(
         commitment_root_latest: latest_set.commitment_root(),
         set_latest_path,
         secret_key: Fr::ZERO,
+        reward_public_key: Fr::ZERO,
+        reward_nonce: Fr::ZERO,
     })
 }
 
@@ -451,6 +480,7 @@ pub mod test_utils {
         value: u64,
         nonce: Fr,
         msg: Fr,
+        reward: &Note,
     ) -> (LeaderPublic, LeaderPrivate) {
         let public_key = UnsecuredZkKey::new(secret_key).to_public_key();
         let note = Note::new(value, nonce, public_key);
@@ -493,6 +523,8 @@ pub mod test_utils {
 
         let wallet = lb_pol::PolWalletInputsData {
             secret_key,
+            reward_public_key: *reward.public_key.as_fr(),
+            reward_nonce: reward.nonce,
             ..pol_wallet_inputs(
                 &note,
                 LEDGER_SET,
@@ -503,7 +535,10 @@ pub mod test_utils {
             )
             .expect("the note is in the ledger set and unspent")
         };
-        (public, LeaderPrivate::new(public, wallet, msg))
+        (
+            public,
+            LeaderPrivate::new(public, wallet, msg, reward.value),
+        )
     }
 }
 
@@ -520,7 +555,7 @@ mod tests {
     use super::*;
     use crate::mantle::{
         note_set::{CommitmentMmr, LEDGER_SET, NoteSet},
-        notes::{NoteCommitment, derive_note_nullifier},
+        notes::derive_note_nullifier,
     };
 
     #[test]
@@ -528,7 +563,8 @@ mod tests {
         let mut bytes = Groth16LeaderProof::from_parts(
             lb_pol::PoLProof::from_bytes(&[0u8; 128]),
             Fr::from(1u64),
-            ZkPublicKey::new(Fr::from(1u64)),
+            NoteCommitment(Fr::from(1u64)),
+            1,
         )
         .encode_to_vec();
         bytes[31] |= 0x40;
@@ -638,10 +674,14 @@ mod tests {
     #[test]
     fn test_prove_and_verify_with_note_set_witness() {
         let msg = Fr::from(99u64);
+        let reward = notes::Note::new(500, Fr::from(13u64), ZkPublicKey::new(Fr::from(17u64)));
         let (public, private) =
-            test_utils::note_set_leader_inputs(Fr::from(7u64), 1000, Fr::from(11u64), msg);
-        let proof = Groth16LeaderProof::prove(private, ZkPublicKey::zero()).unwrap();
+            test_utils::note_set_leader_inputs(Fr::from(7u64), 1000, Fr::from(11u64), msg, &reward);
+        let proof = Groth16LeaderProof::prove(private).unwrap();
         assert!(proof.verify(&public, msg));
+        // The circuit derives the commitment of the node's note, under its value.
+        assert_eq!(proof.reward_commitment(), reward.commitment());
+        assert_eq!(proof.reward_value(), 500);
 
         let wrong_latest = LeaderPublic {
             latest_root: Fr::ONE,
