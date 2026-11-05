@@ -38,13 +38,17 @@ use tracing::info;
 
 const LOG_TARGET: &str = wallet::CORE;
 
-/// How many blocks below its tip the wallet looks for the root a spend names.
+/// How many blocks below its tip a wallet names the root of a spend.
 ///
 /// Every block changes the root of the ledger set, so a root at the tip exists
 /// only on that fork and a spend naming it dies with the tip block. Consensus
 /// accepts any recent root of the chain, and this depth stays well inside its
 /// window while being out of reach of the usual forks.
-pub const SPEND_ROOT_DEPTH: usize = 30;
+///
+/// The depth is the same for every spend, because a younger root would reveal
+/// how old the spent note is. A note younger than this depth is not under the
+/// root yet, so it stays pending until it is.
+pub const SPEND_ROOT_DEPTH: usize = 4;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnedNote {
@@ -196,6 +200,7 @@ impl WalletState {
         Some(WalletBalance {
             balance: notes.values().sum(),
             notes,
+            pending: HashSet::new(),
         })
     }
 
@@ -287,8 +292,7 @@ impl WalletState {
         // Get the ledger notes owned by the provided PKs, excluding the ones
         // the tx already consumes and the ones excluded by the caller (e.g.
         // reserved for in flight txs). Service and channel notes are in
-        // other sets. The funding names the root of this state: `Wallet::fund_tx`
-        // moves it below the tip once the notes are chosen.
+        // other sets. The funding names the root of this state.
         let excluded = tx_builder
             .nullifiers_consumed()
             .chain(excluded.iter().copied())
@@ -663,7 +667,17 @@ impl<KeyId> Wallet<KeyId> {
         tip: HeaderId,
         pk: ZkPublicKey,
     ) -> Result<Option<WalletBalance>, WalletError> {
-        Ok(self.wallet_state_at(tip)?.balance(pk))
+        let Some(mut balance) = self.wallet_state_at(tip)?.balance(pk) else {
+            return Ok(None);
+        };
+        let spendable = self.spend_state(tip)?.notes;
+        balance.pending = balance
+            .notes
+            .keys()
+            .filter(|commitment| !spendable.contains_key(commitment))
+            .copied()
+            .collect();
+        Ok(Some(balance))
     }
 
     #[expect(
@@ -681,7 +695,7 @@ impl<KeyId> Wallet<KeyId> {
         excluded: &HashSet<NoteNullifier>,
         priority_fee_percent: u64,
     ) -> Result<MantleTxBuilder, WalletError> {
-        let funded = self.wallet_state_at(tip)?.fund_tx::<G>(
+        self.spend_state(tip)?.fund_tx::<G>(
             tx_builder,
             change_pk,
             change_nonce,
@@ -689,52 +703,7 @@ impl<KeyId> Wallet<KeyId> {
             context,
             excluded,
             priority_fee_percent,
-        )?;
-        if funded.funding_inputs().len() == tx_builder.funding_inputs().len() {
-            return Ok(funded);
-        }
-        let inputs = funded
-            .funding_inputs()
-            .iter()
-            .map(|funding| funding.note.commitment())
-            .collect::<Vec<_>>();
-        let root = self.spend_root(tip, &inputs)?;
-        Ok(funded.extend_funding_inputs(root, [])?)
-    }
-
-    // A Transfer giving `owner` a note of exactly `value` and the rest back to
-    // `change_pk`, from the notes of the wallet at `tip`.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "thin passthrough to `WalletState::exact_note_split` plus the tip"
-    )]
-    pub fn exact_note_split(
-        &self,
-        tip: HeaderId,
-        value: Value,
-        owner: ZkPublicKey,
-        nonce: Fr,
-        change_pk: ZkPublicKey,
-        change_nonce: Fr,
-        pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
-        excluded: &HashSet<NoteNullifier>,
-    ) -> Result<(TransferOp, ZkTransferOpening), WalletError> {
-        let (mut split, opening) = self.wallet_state_at(tip)?.exact_note_split(
-            value,
-            owner,
-            nonce,
-            change_pk,
-            change_nonce,
-            pks,
-            excluded,
-        )?;
-        let inputs = opening
-            .inputs
-            .iter()
-            .map(Note::commitment)
-            .collect::<Vec<_>>();
-        split.commitment_merkle_root = self.spend_root(tip, &inputs)?;
-        Ok((split, opening))
+        )
     }
 
     pub fn wallet_state_at(&self, tip: HeaderId) -> Result<WalletState, WalletError> {
@@ -744,37 +713,37 @@ impl<KeyId> Wallet<KeyId> {
             .ok_or(WalletError::UnknownBlock(tip))
     }
 
-    /// The states a spend from `tip` can name a root of, `tip` first, down to
-    /// the block [`SPEND_ROOT_DEPTH`] below it or the LIB if that is shallower:
-    /// states below the LIB are pruned, and the LIB cannot fork.
-    pub fn spend_states(&self, tip: HeaderId) -> Result<Vec<WalletState>, WalletError> {
-        let mut states = vec![self.wallet_state_at(tip)?];
+    /// The state every spend from `tip` is built and proven against: the block
+    /// [`SPEND_ROOT_DEPTH`] below `tip`, or the LIB if that is shallower since
+    /// states below the LIB are pruned and the LIB cannot fork. It holds the
+    /// notes of that block still unspent at `tip`.
+    pub fn spend_state(&self, tip: HeaderId) -> Result<WalletState, WalletError> {
+        let mut state = self.wallet_state_at(tip)?;
+        let unspent = state.notes.clone();
         let mut block = tip;
-        while states.len() <= SPEND_ROOT_DEPTH {
-            let Some((parent, state)) = self
+        for _ in 0..SPEND_ROOT_DEPTH {
+            let Some((parent, parent_state)) = self
                 .parents
                 .get(&block)
                 .and_then(|parent| Some((*parent, self.wallet_states.get(parent)?)))
             else {
                 break;
             };
-            states.push(state.clone());
+            state = parent_state.clone();
             block = parent;
         }
-        Ok(states)
+        state.notes = state
+            .notes
+            .iter()
+            .filter(|(commitment, _)| unspent.contains_key(commitment))
+            .map(|(commitment, owned)| (*commitment, owned.clone()))
+            .collect();
+        Ok(state)
     }
 
-    /// The ledger set root a spend of `inputs` from `tip` names: the oldest of
-    /// the spend states holding them all, so a young note stays spendable. A
-    /// transaction that creates the notes it spends passes none: every state
-    /// holds them once extended by the transaction, so it gets the oldest.
-    pub fn spend_root(&self, tip: HeaderId, inputs: &[NoteCommitment]) -> Result<Fr, WalletError> {
-        let states = self.spend_states(tip)?;
-        let holding = states
-            .iter()
-            .take_while(|state| inputs.iter().all(|input| state.notes.contains_key(input)))
-            .last();
-        Ok(holding.unwrap_or(&states[0]).ledger_root())
+    /// The ledger set root every spend from `tip` names.
+    pub fn spend_root(&self, tip: HeaderId) -> Result<Fr, WalletError> {
+        Ok(self.spend_state(tip)?.ledger_root())
     }
 
     /// Prune wallet states for blocks that have been pruned from the chain.
@@ -807,6 +776,8 @@ impl<KeyId> Wallet<KeyId> {
 pub struct WalletBalance {
     pub balance: Value,
     pub notes: HashMap<NoteCommitment, Value>,
+    // the ones of `notes` no spend from this tip can use yet
+    pub pending: HashSet<NoteCommitment>,
 }
 
 #[cfg(test)]
@@ -919,7 +890,8 @@ mod tests {
             state.balance(pk(1)),
             Some(WalletBalance {
                 balance: 100,
-                notes: HashMap::from([(owned.commitment(), 100)])
+                notes: HashMap::from([(owned.commitment(), 100)]),
+                pending: HashSet::new(),
             })
         );
     }
@@ -1270,9 +1242,9 @@ mod tests {
 
         let funded = fund(&wallet, 40);
         let root = funding_transfer(funded.clone()).commitment_merkle_root;
-        assert_eq!(root, ledger_root_at(&wallet, 10));
+        assert_eq!(root, ledger_root_at(&wallet, 36));
 
-        // Block 40 loses to a sibling, whose chain never held the root of block 40.
+        // Block 40 loses to a sibling, which the block of the root is an ancestor of.
         wallet
             .apply_block(&block(
                 41,
@@ -1284,7 +1256,7 @@ mod tests {
         let openings = funded.openings();
         let ops = funded.build().unwrap();
         let witnesses = op_witnesses(
-            &wallet.spend_states(block_id(41)).unwrap(),
+            &wallet.spend_state(block_id(40)).unwrap(),
             &known,
             &ops,
             &openings,
@@ -1293,7 +1265,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(witnesses[0].witness.chain.tx_commitment_root, root);
-        let path_at_root = wallet.wallet_state_at(block_id(10)).unwrap().notes[&note.commitment()]
+        let path_at_root = wallet.wallet_state_at(block_id(36)).unwrap().notes[&note.commitment()]
             .path
             .clone();
         assert!(path_at_root.verify::<ZkHasher>(note.commitment().0, root));
@@ -1303,48 +1275,54 @@ mod tests {
         );
 
         // Nothing below the LIB is held, and the LIB cannot fork.
-        wallet.prune_states((0..20).map(block_id));
+        wallet.prune_states((0..38).map(block_id));
         assert_eq!(
             funding_transfer(fund(&wallet, 40)).commitment_merkle_root,
-            ledger_root_at(&wallet, 20)
+            ledger_root_at(&wallet, 38)
         );
     }
 
     #[test]
-    fn a_note_younger_than_the_depth_is_spent_against_the_oldest_root_holding_it() {
+    fn a_note_spent_above_the_root_is_not_spendable() {
         let alice = pk(1);
-        let old = Note::new(100, Fr::from(1u64), alice);
-        let young = Note::new(50_000, Fr::from(2u64), alice);
-        let known_notes = known(&[
-            (old, LEDGER_SET, nullifier(1)),
-            (young, LEDGER_SET, nullifier(2)),
-        ]);
-        let wallet = wallet_on_chain(known_notes.clone(), &[old], &[(38, young)], 40);
-        let context = context(GasPrices::new(1, 1));
-        let tip = block_id(40);
+        let note = Note::new(50_000, Fr::from(1u64), alice);
+        let known = known(&[(note, LEDGER_SET, nullifier(1))]);
+        let mut wallet = wallet_on_chain(known, &[note], &[], 40);
+        let spend = NoteSetUpdate {
+            note_set: LEDGER_SET,
+            nullifiers: vec![nullifier(1)],
+            commitments: vec![],
+        };
+        wallet.apply_block(&block(41, 40, 0, vec![spend])).unwrap();
 
-        // A split of the old note and the funding by the young one name two roots
-        // in one transaction.
-        let exact = Note::new(100, Fr::from(5u64), alice);
-        let (split, opening) = wallet
-            .exact_note_split(
-                tip,
-                100,
-                alice,
-                exact.nonce,
-                alice,
-                Fr::from(6u64),
-                [alice],
-                &HashSet::new(),
-            )
-            .unwrap();
-        assert_eq!(split.commitment_merkle_root, ledger_root_at(&wallet, 10));
-        let funded = wallet
-            .fund_tx::<MainnetGasProfile>(
-                tip,
-                &MantleTxBuilder::new()
-                    .push_op_with_opening(Op::Transfer(split), opening)
-                    .unwrap(),
+        assert_eq!(
+            wallet
+                .fund_tx::<MainnetGasProfile>(
+                    block_id(41),
+                    &MantleTxBuilder::new(),
+                    alice,
+                    Fr::from(3u64),
+                    [alice],
+                    &context(GasPrices::new(1, 1)),
+                    &HashSet::new(),
+                    0,
+                )
+                .unwrap_err(),
+            WalletError::InsufficientFunds { available: 0 }
+        );
+    }
+
+    #[test]
+    fn a_note_is_spendable_once_it_is_four_blocks_below_the_tip() {
+        let alice = pk(1);
+        let note = Note::new(50_000, Fr::from(2u64), alice);
+        let known_notes = known(&[(note, LEDGER_SET, nullifier(2))]);
+        let wallet = wallet_on_chain(known_notes, &[], &[(37, note)], 41);
+        let context = context(GasPrices::new(1, 1));
+        let fund = |tip: u8| {
+            wallet.fund_tx::<MainnetGasProfile>(
+                block_id(tip),
+                &MantleTxBuilder::new(),
                 alice,
                 Fr::from(3u64),
                 [alice],
@@ -1352,32 +1330,33 @@ mod tests {
                 &HashSet::new(),
                 0,
             )
-            .unwrap();
+        };
+
         assert_eq!(
-            funding_transfer(funded.clone()).commitment_merkle_root,
-            ledger_root_at(&wallet, 38)
+            fund(40).unwrap_err(),
+            WalletError::InsufficientFunds { available: 0 }
         );
 
-        let openings = funded.openings();
-        let ops = funded.build().unwrap();
-        let witnesses = op_witnesses(
-            &wallet.spend_states(tip).unwrap(),
-            &known_notes,
-            &ops,
-            &openings,
-            &WitnessContext::default(),
-            Fr::from(77u64),
-        )
-        .unwrap();
-        let extended = wallet.wallet_state_at(block_id(38)).unwrap().commitments[&LEDGER_SET]
-            .push(exact.commitment())
-            .unwrap();
         assert_eq!(
-            witnesses
-                .iter()
-                .map(|witness| witness.witness.chain.tx_commitment_root)
-                .collect::<Vec<_>>(),
-            vec![ledger_root_at(&wallet, 10), extended.frontier_root()]
+            wallet
+                .balance(block_id(40), alice)
+                .unwrap()
+                .unwrap()
+                .pending,
+            HashSet::from([note.commitment()])
+        );
+
+        assert_eq!(
+            funding_transfer(fund(41).unwrap()).commitment_merkle_root,
+            ledger_root_at(&wallet, 37)
+        );
+        assert_eq!(
+            wallet
+                .balance(block_id(41), alice)
+                .unwrap()
+                .unwrap()
+                .pending,
+            HashSet::new()
         );
     }
 

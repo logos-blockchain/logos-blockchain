@@ -1117,7 +1117,7 @@ where
             response: funded_tx_builder,
         } = wallet
             .fund_tx(
-                // the split is proven from the wallet's states at and below this tip
+                // the split names the spend root of this tip
                 Some(split_tip),
                 tx_builder,
                 req.change_public_key,
@@ -1930,6 +1930,7 @@ pub mod wallet {
                 tip,
                 balance: balance.balance,
                 notes: balance.notes,
+                pending_notes: balance.pending,
                 address,
             }
             .into_response(),

@@ -15,6 +15,7 @@ use lb_testing_framework::{
     unregister_system_monitor_output_file,
 };
 use lb_utils::math::NonNegativeRatio;
+use lb_wallet::SPEND_ROOT_DEPTH;
 use reqwest::Url;
 use tempfile::TempDir;
 use testing_framework_core::scenario::{DynError, PeerSelection, StartNodeOptions, StartedNode};
@@ -282,6 +283,20 @@ pub async fn wait_for_height(
         }
     })
     .await
+}
+
+/// Waits until a note of the current tip of `client` is deep enough for its
+/// wallet to spend.
+pub async fn wait_for_spend_depth(client: &NodeHttpClient, duration: Duration) {
+    let height = client
+        .consensus_info()
+        .await
+        .expect("consensus info request should not fail")
+        .cryptarchia_info
+        .height;
+    wait_for_height(client, height + SPEND_ROOT_DEPTH as u64, duration)
+        .await
+        .expect("a note of the tip should reach the spend depth");
 }
 
 pub async fn wait_for_nodes_height(

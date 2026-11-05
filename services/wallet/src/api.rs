@@ -243,8 +243,8 @@ where
         Ok(rx.await??)
     }
 
-    /// The ledger set root for a transaction built on `tip` that creates the
-    /// notes it spends. See [`lb_wallet::Wallet::spend_root`].
+    /// The ledger set root every spend from `tip` names. See
+    /// [`lb_wallet::Wallet::spend_root`].
     pub async fn spend_root(
         &self,
         tip: Option<HeaderId>,
