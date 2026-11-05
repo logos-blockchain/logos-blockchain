@@ -63,7 +63,7 @@ cryptarchia:
       rate_den: 10
       target_claim_per_block: 1
       # `pow_share / share_den` of the fees each block collects is
-      # diverted to the pow reward pool at the epoch boundary.
+      # credited to the pow reward pool by that block.
       pow_share: 10
       share_den: 100
       # Acceptance window in slots; must match the mining service. Ten

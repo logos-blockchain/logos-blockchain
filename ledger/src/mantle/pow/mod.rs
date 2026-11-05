@@ -481,7 +481,7 @@ mod tests {
         state.credit_reward_pool(500).unwrap();
         let same_epoch = epoch_state(3);
 
-        let unchanged = state.apply_header(&same_epoch, &same_epoch, &ledger_config());
+        let unchanged = state.apply_header(&same_epoch, &same_epoch, &test_pool_config());
 
         assert_eq!(unchanged, state);
         assert_eq!(unchanged.reward_pool(), POW_REWARD_POOL_GENESIS + 500);
@@ -495,7 +495,7 @@ mod tests {
         let later = epoch_state(5);
 
         // `next_epoch` behind `previous_epoch`, e.g. a stale/reorged branch.
-        let unchanged = state.apply_header(&later, &earlier, &ledger_config());
+        let unchanged = state.apply_header(&later, &earlier, &test_pool_config());
 
         assert_eq!(unchanged, state);
     }
@@ -676,7 +676,7 @@ mod tests {
     #[test]
     fn epoch_reward_tapers_as_claims_drain_the_pool() {
         // Spec §5.6: sigma_e is recomputed at each boundary from the pool as
-        // claims left it, so a drained pool pays a smaller per-claim reward
+        // claims and credits left it, so a drained pool pays a smaller per-claim reward
         // in the next epoch, tapering to zero (the safety cutoff's input).
         let mut state = pow_state();
         state.credit_reward_pool(1_000).unwrap();
