@@ -6,6 +6,10 @@ use crate::{LOG_TARGET, core::dispatcher::PayloadDispatcher, message::DataPayloa
 mod failure_detection;
 
 #[cfg(test)]
+#[path = "../../tests/20261103T091908-9df8dc/3/stale_release_round.rs"]
+mod proof_20261103t091908_9df8dc_3;
+
+#[cfg(test)]
 pub mod test_utils;
 
 /// The payloads whose deadline has just passed, from a sender that is watching

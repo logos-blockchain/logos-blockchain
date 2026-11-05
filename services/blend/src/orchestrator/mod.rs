@@ -10,6 +10,10 @@
 mod instance;
 mod on_demand;
 
+#[cfg(test)]
+#[path = "../../tests/20261103T091908-9df8dc/1/edge_mode_switch.rs"]
+mod proof_20261103t091908_9df8dc_1;
+
 use lb_log_targets::blend;
 use overwatch::services::relay::OutboundRelayError;
 
