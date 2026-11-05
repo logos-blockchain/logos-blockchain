@@ -37,7 +37,7 @@ const BALANCE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// 3. Submit two concurrent drip requests for different recipients.
 /// 4. Verify both are accepted and an immediate repeat request is rejected with
 ///    the cooldown status.
-/// 5. Verify both recipients are credited on chain, one drip per block, and the
+/// 5. Verify both recipients are credited on chain, one drip at a time, and the
 ///    faucet balance decreases by two drips plus bounded gas fees.
 #[tokio::test]
 #[serial]

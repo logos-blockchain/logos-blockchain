@@ -92,7 +92,7 @@ Either key can be used.
 
 Visit the [devnet faucet][devnet-faucet] or [testnet faucet][testnet-faucet], paste your wallet key into the **Destination Public Key (Hex)** field, and click **Request Funds**. (Questions? Reach the Logos Blockchain team on [Discord][testnet-discord-public].)
 
-A word of caution - do not _powerclick_ your way through as only one request can be made per block! So if you want to receive funds more than once, wait until your balance increases before requesting new funds.
+A word of caution - do not _powerclick_ your way through as a key can request funds only once per cooldown period! So if you want to receive funds more than once, wait until your balance increases before requesting new funds.
 
 **3. 💸 Confirm your balance**
 

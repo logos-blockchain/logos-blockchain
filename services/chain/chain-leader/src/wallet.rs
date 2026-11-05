@@ -4,11 +4,11 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LeaderWalletConfig {
-    // Hard cap on the transaction fee for LEADER_CLAIM.
+    // Cap on a transaction fee of the leader. The leader submits no transaction,
+    // so nothing reads it.
     pub max_tx_fee: GasCost,
 
-    // The key to use for paying transaction fees for LEADER_CLAIM.
-    // Change notes will be returned to this same funding pk, and the leader
-    // rewards are paid to it.
+    // The key the leader rewards are paid to. The service refuses to start unless
+    // the wallet tracks it.
     pub funding_pk: ZkPublicKey,
 }
