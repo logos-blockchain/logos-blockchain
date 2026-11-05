@@ -23,7 +23,7 @@ use super::{
 };
 use crate::{
     common::wallet::{
-        TrackedWallets, WalletId,
+        TrackedWallets,
         scanner::{error::ScannerError, state::ForkGroupScannerState},
     },
     cucumber::{
@@ -203,8 +203,8 @@ fn scanner_group_needs_catch_up(group: &ForkGroupScannerState) -> bool {
         || group
             .target_height
             .is_none_or(|target_height| group.applied_height < target_height)
-        // Notes are proven against the root of the applied tip, which a fork
-        // at the same height leaves off the source's chain.
+        // A wallet reads the notes of the applied tip, which a fork at the
+        // same height leaves off the source's chain.
         || group.applied_tip != group.target_tip
 }
 
@@ -296,7 +296,7 @@ async fn run_group_scanner(config: ForkGroupScannerConfig, shutdown_requested: A
             &source_node_names,
             applied_height,
             applied_tip.to_string(),
-            accounting.wallet_utxos(),
+            &accounting,
         )
     {
         warn!(
@@ -378,7 +378,7 @@ async fn run_group_scanner(config: ForkGroupScannerConfig, shutdown_requested: A
                             &source_node_names,
                             applied_height,
                             applied_tip.to_string(),
-                            accounting.wallet_utxos(),
+                            &accounting,
                         )
                     {
                         warn!(
@@ -608,7 +608,6 @@ async fn scan_group_once(
             ),
         );
 
-        let wallet_utxos = accounting.wallet_utxos();
         if *applied_height >= best_node.height
             || (*applied_height).saturating_sub(last_publish_height) >= config.range_batch_size
         {
@@ -617,7 +616,7 @@ async fn scan_group_once(
                 &best_node.same_tip_nodes,
                 *applied_height,
                 block.header.id.to_string(),
-                wallet_utxos,
+                accounting,
             )
             .map_err(|error| ScannerError::Logical(error.to_string()))?;
             last_publish_height = *applied_height;
@@ -671,7 +670,7 @@ async fn scan_group_once(
                 &best_node.same_tip_nodes,
                 *applied_height,
                 best_node.tip.clone(),
-                accounting.wallet_utxos(),
+                accounting,
             )?;
         }
     }
@@ -789,7 +788,7 @@ fn publish_genesis_wallet_state_if_needed(
         &best_node.same_tip_nodes,
         *applied_height,
         best_node.tip.clone(),
-        accounting.wallet_utxos(),
+        accounting,
     )?;
     push_checkpoint(
         checkpoints,
@@ -985,17 +984,24 @@ fn publish_wallet_state(
     source_node_names: &[String],
     height: u64,
     header_id: String,
-    wallet_utxos: impl IntoIterator<Item = (WalletId, Vec<lb_wallet::OwnedNote>)>,
+    accounting: &ScannerAccounting,
 ) -> Result<(), StepError> {
-    let wallet_utxos = wallet_utxos.into_iter().collect::<Vec<_>>();
+    let wallet_utxos = accounting.wallet_utxos();
+    let spendable_utxos = accounting.spendable_utxos();
     let mut wallets = wallets.lock().map_err(|_| StepError::LogicalError {
         message: "wallet scanner wallet state lock is poisoned".to_owned(),
     })?;
     for source_node_name in source_node_names {
         wallets.record_header_height(source_node_name, &header_id, height);
     }
-    wallets.record_observed_wallets_utxos(header_id, wallet_utxos.iter().cloned());
+    wallets.record_observed_wallets_utxos(
+        header_id,
+        wallet_utxos
+            .iter()
+            .map(|(wallet_id, utxos)| (wallet_id.clone(), utxos.clone())),
+    );
     wallets.replace_current_wallets_utxos(wallet_utxos);
+    wallets.replace_spendable_wallets_utxos(spendable_utxos);
     drop(wallets);
     Ok(())
 }

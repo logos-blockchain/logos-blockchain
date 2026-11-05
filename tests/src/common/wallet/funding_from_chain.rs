@@ -120,8 +120,8 @@ async fn fund_and_sign(
         gas_context: OpsGasContext::new(HashMap::new(), GasPrices::default()),
     };
 
-    let funded_builder = accounting
-        .wallet_state()
+    let spend_state = accounting.spend_state();
+    let funded_builder = spend_state
         .fund_tx::<MainnetGasProfile>(
             tx_builder,
             funding_account.public_key(),
@@ -150,7 +150,7 @@ async fn fund_and_sign(
     // Every op that spends is proven from the wallet's witnesses, the leading
     // op's proof included.
     let mut zk_proofs = transfer_proofs_for_funded_wallet_tx(
-        accounting.wallet_state(),
+        &spend_state,
         accounting.known_notes(),
         &mantle_tx,
         &openings,
