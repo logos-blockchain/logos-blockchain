@@ -1,10 +1,14 @@
-use std::{collections::BTreeMap, hash::Hash, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    hash::Hash,
+    time::Duration,
+};
 
 use indexmap::IndexMap;
 use lb_core::mantle::traits::Hashable;
 
 use crate::backend::{
-    AdmissionTime,
+    AdmissionTime, IncludedItem,
     policy::{BlockSlots, EvictionPolicy, PolicyClock},
 };
 
@@ -92,7 +96,7 @@ where
     ) {
     }
 
-    fn on_remove(&mut self, _key: &Tx::Hash) {}
+    fn on_release(&mut self, _key: &Tx::Hash) {}
 
     fn select_retirements(
         &self,
@@ -106,6 +110,7 @@ where
         &self,
         clock: &PolicyClock,
         retired_txs: &BTreeMap<Tx::Hash, AdmissionTime>,
+        _included_txs: &HashMap<Tx::Hash, IncludedItem>,
     ) -> Vec<Tx::Hash> {
         self.due_for_release(retired_txs, clock.now_millis)
     }
