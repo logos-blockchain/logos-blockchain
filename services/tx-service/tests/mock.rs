@@ -11,7 +11,7 @@ use futures::{Stream, StreamExt as _, stream};
 use indexmap::IndexMap;
 use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_core::{
-    block::MAX_BLOCK_TRANSACTIONS_SIZE,
+    block::{MAX_BLOCK_TRANSACTIONS_SIZE, TxInBlock},
     era::{AcceptedForkDigests, ForkDigest},
     header::HeaderId,
     mantle::{
@@ -443,6 +443,7 @@ fn ttl_settings(tx_ttl: Duration) -> MempoolSettings {
         tx_ttl: Some(tx_ttl),
         pow_claim: None,
         accepted_fork_digests: accepted_fork_digests(),
+        era_timing: None,
     }
 }
 
@@ -476,6 +477,7 @@ fn pow_claim_settings() -> MempoolSettings {
             slot_window: NonZeroU64::new(TEST_SLOT_WINDOW).expect("non-zero"),
         })),
         accepted_fork_digests: accepted_fork_digests(),
+        era_timing: None,
     }
 }
 
@@ -576,6 +578,7 @@ async fn expired_tx_is_not_evicted_when_ttl_is_disabled() {
         tx_ttl: None,
         pow_claim: None,
         accepted_fork_digests: accepted_fork_digests(),
+        era_timing: None,
     })
     .await;
     let tx_id = tx.hash();
@@ -935,7 +938,13 @@ async fn reorged_tx_returns_to_pending() {
         .await;
 
     let readmitted = pool
-        .on_canonical_chain_updated(HashMap::new(), vec![tx.clone()])
+        .on_canonical_chain_updated(
+            HashMap::new(),
+            vec![TxInBlock {
+                tx: tx.clone(),
+                slot: Slot::from(10u64),
+            }],
+        )
         .await;
 
     assert_eq!(readmitted, vec![tx]);
@@ -963,7 +972,13 @@ async fn reorged_tx_already_pending_is_not_readmitted() {
         .expect("tx should be added");
 
     let readmitted = pool
-        .on_canonical_chain_updated(HashMap::new(), vec![tx])
+        .on_canonical_chain_updated(
+            HashMap::new(),
+            vec![TxInBlock {
+                tx,
+                slot: Slot::from(10u64),
+            }],
+        )
         .await;
 
     assert_eq!(readmitted, vec![]);
@@ -990,7 +1005,13 @@ async fn reorged_tx_not_admitted_again_moves_to_removed_items() {
     processed_block(&mut pool, 131).await;
 
     let readmitted = pool
-        .on_canonical_chain_updated(HashMap::new(), vec![claim])
+        .on_canonical_chain_updated(
+            HashMap::new(),
+            vec![TxInBlock {
+                tx: claim,
+                slot: Slot::from(10u64),
+            }],
+        )
         .await;
 
     assert_eq!(readmitted, vec![]);
@@ -1150,6 +1171,77 @@ async fn removed_tx_is_not_released_by_age_without_ttl() {
     assert_eq!(keys_with_prefix(&pool, old.hash()), vec![old.hash()]);
 }
 
+/// A reorged tx older than the TTL is not admitted again. It stays retained,
+/// so it still resolves until its release age.
+#[tokio::test]
+async fn reorged_tx_older_than_ttl_is_not_readmitted() {
+    let tx = tx("old");
+    let tx_id = tx.hash();
+    let mut pool = pool_with_admission_times(
+        ttl_settings(TEST_TX_TTL),
+        InMemoryStorageAdapter::default(),
+        &[(&tx, minutes_ago(65))],
+    )
+    .await;
+    pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
+        .await;
+
+    let readmitted = pool
+        .on_canonical_chain_updated(
+            HashMap::new(),
+            vec![TxInBlock {
+                tx,
+                slot: Slot::from(10u64),
+            }],
+        )
+        .await;
+
+    assert_eq!(readmitted, vec![]);
+    assert_eq!(pool.status(&[tx_id]), vec![Status::Unknown]);
+    assert!(pool.save().removed_items.contains_key(&tx_id));
+    assert_eq!(keys_with_prefix(&pool, tx_id), vec![tx_id]);
+}
+
+/// A reorged tx the pool never held is dated by the start of the slot of the
+/// block carrying it, so one from a block older than the TTL is not admitted.
+#[tokio::test]
+async fn never_held_reorged_tx_is_dated_by_its_block_slot() {
+    let (old, recent) = (tx("old"), tx("recent"));
+    let mut pool = InMemoryPool::new(
+        MempoolSettings {
+            era_timing: Some(era_schedule()),
+            ..ttl_settings(TEST_TX_TTL)
+        },
+        Era::genesis(),
+        InMemoryStorageAdapter::default(),
+    );
+    // `era_schedule` starts at the Unix epoch with one-second slots.
+    let current_slot = Slot::from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be after the unix epoch")
+            .as_secs(),
+    );
+
+    let readmitted = pool
+        .on_canonical_chain_updated(
+            HashMap::new(),
+            vec![
+                TxInBlock {
+                    tx: old,
+                    slot: Slot::from(10u64),
+                },
+                TxInBlock {
+                    tx: recent.clone(),
+                    slot: current_slot,
+                },
+            ],
+        )
+        .await;
+
+    assert_eq!(readmitted, vec![recent]);
+}
+
 /// A retired tx admitted again keeps its first admission time, and so its
 /// position among the pending txs.
 #[tokio::test]
@@ -1189,8 +1281,14 @@ async fn reorged_tx_keeps_its_admission_time() {
     pool.on_canonical_chain_updated(HashMap::from([(first.hash(), Slot::from(10u64))]), vec![])
         .await;
 
-    pool.on_canonical_chain_updated(HashMap::new(), vec![first.clone()])
-        .await;
+    pool.on_canonical_chain_updated(
+        HashMap::new(),
+        vec![TxInBlock {
+            tx: first.clone(),
+            slot: Slot::from(10u64),
+        }],
+    )
+    .await;
 
     assert_eq!(
         pool.save().pending_items,
@@ -1214,8 +1312,14 @@ async fn removed_tx_keeps_its_admission_time_through_inclusion_and_reorg() {
     pool.on_canonical_chain_updated(HashMap::from([(first.hash(), Slot::from(10u64))]), vec![])
         .await;
 
-    pool.on_canonical_chain_updated(HashMap::new(), vec![first.clone()])
-        .await;
+    pool.on_canonical_chain_updated(
+        HashMap::new(),
+        vec![TxInBlock {
+            tx: first.clone(),
+            slot: Slot::from(10u64),
+        }],
+    )
+    .await;
 
     assert_eq!(
         pool.save().pending_items,
@@ -1301,6 +1405,7 @@ fn no_eviction_settings() -> MempoolSettings {
         tx_ttl: None,
         pow_claim: None,
         accepted_fork_digests: accepted_fork_digests(),
+        era_timing: None,
     }
 }
 
