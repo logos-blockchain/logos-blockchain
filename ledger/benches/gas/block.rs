@@ -16,7 +16,7 @@ use lb_binary_codec::canonical::BinaryDecode as _;
 use lb_core::{
     events::{BlockEvent, HeaderEvent, TxEvent},
     mantle::{
-        Op, OpProof, SignedOps,
+        Op, OpProof, SignedOps, Value,
         batch::{DeferredProof, DeferredProofs},
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
@@ -37,7 +37,6 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
 use lb_groth16::Fr;
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use logos_blockchain_ledger::{LedgerState, config::EraScheduledConfig};
 
 use crate::{
@@ -77,9 +76,9 @@ impl BlockShape {
             txs,
             verify,
         } = self;
-        if let Err(error) = execute(state.clone(), &config, &txs) {
-            panic!("{name} {dims:?}: {error}");
-        }
+        let reward_value = leader_reward_of(&state, &config, &txs)
+            .and_then(|value| execute_paying(state.clone(), &config, value, &txs).map(|_| value))
+            .unwrap_or_else(|error| panic!("{name} {dims:?}: {error}"));
         Case {
             name,
             dims,
@@ -88,7 +87,8 @@ impl BlockShape {
                     || (state.clone(), txs.clone()),
                     |(state, txs)| {
                         let (state, tx_events, block_events, proofs) =
-                            execute(state, &config, &txs).expect("the block applies");
+                            execute_paying(state, &config, reward_value, &txs)
+                                .expect("the block applies");
                         let (proofs, verified) = if verify {
                             (None, verify_each(proofs))
                         } else {
@@ -183,7 +183,7 @@ impl HeaderShape {
 
 /// The proof of leadership of the measured blocks, which every check accepts.
 pub fn leadership() -> AcceptedLeadership {
-    AcceptedLeadership(reward_key())
+    AcceptedLeadership(reward_commitment())
 }
 
 /// Applies the header of a block at `slot` led by `leader`.
@@ -218,34 +218,68 @@ fn after_header(state: LedgerState, config: &EraScheduledConfig, slot: Slot) -> 
         .0
 }
 
-// The key the leader of the measured blocks is paid to.
-fn reward_key() -> ZkPublicKey {
-    ZkPublicKey::new(Fr::from(3u64))
+// The commitment of the note the leader of the measured blocks is paid.
+fn reward_commitment() -> NoteCommitment {
+    NoteCommitment(Fr::from(3u64))
 }
 
-/// Decodes and preverifies every transaction of `txs`, then applies them as
-/// the contents of one block.
-pub fn execute(
-    state: LedgerState,
-    config: &EraScheduledConfig,
-    txs: &[Vec<u8>],
-) -> Result<AppliedBlock, String> {
-    let txs = txs
-        .iter()
+fn preverified(txs: &[Vec<u8>]) -> Result<Vec<SignedOps<Preverified, StandardMode>>, String> {
+    txs.iter()
         .map(|bytes| {
             SignedOps::<Unverified, StandardMode>::decode_all(bytes, &())
                 .map_err(|error| format!("decode: {error}"))?
                 .preverify()
                 .map_err(|error| format!("preverify: {error}"))
         })
-        .collect::<Result<Vec<SignedOps<Preverified, StandardMode>>, String>>()?;
+        .collect()
+}
+
+// The leader reward a block of `txs` computes on `state`, which its header
+// carries and the setup of a measure works out outside the count.
+fn leader_reward_of(
+    state: &LedgerState,
+    config: &EraScheduledConfig,
+    txs: &[Vec<u8>],
+) -> Result<Value, String> {
+    let (state, gas_and_fees, _, _) = state
+        .clone()
+        .try_apply_block_transactions::<_, HeaderId, MainnetGasProfile>(
+            config,
+            preverified(txs)?.into_iter(),
+        )
+        .map_err(|error| format!("apply: {error}"))?;
+    state
+        .leader_reward::<HeaderId>(&gas_and_fees, config)
+        .map_err(|error| format!("reward: {error}"))
+}
+
+/// Decodes and preverifies every transaction of `txs`, then applies them as
+/// the contents of one block, whose header carries `reward_value`.
+pub fn execute_paying(
+    state: LedgerState,
+    config: &EraScheduledConfig,
+    reward_value: Value,
+    txs: &[Vec<u8>],
+) -> Result<AppliedBlock, String> {
+    let txs = preverified(txs)?;
     state
         .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
             config,
-            reward_key(),
+            reward_commitment(),
+            reward_value,
             txs.into_iter(),
         )
         .map_err(|error| format!("apply: {error}"))
+}
+
+/// [`execute_paying`] with the leader reward the block computes.
+pub fn execute(
+    state: LedgerState,
+    config: &EraScheduledConfig,
+    txs: &[Vec<u8>],
+) -> Result<AppliedBlock, String> {
+    let reward_value = leader_reward_of(&state, config, txs)?;
+    execute_paying(state, config, reward_value, txs)
 }
 
 pub fn block_cases() -> Vec<Case> {
@@ -416,16 +450,26 @@ static CHANNELS_STATE: LazyLock<LedgerState> = LazyLock::new(|| {
             })
         })
         .collect();
-    let (state, ..) = fixture
+    let (state, gas_and_fees, ..) = fixture
         .state
         .clone()
-        .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
+        .try_apply_block_transactions::<_, HeaderId, MainnetGasProfile>(
             &fixture.config,
-            reward_key(),
             std::iter::once(signed(creations, &fixture.channel_key)),
         )
         .expect("the channels are created");
+    let reward_value = state
+        .leader_reward::<HeaderId>(&gas_and_fees, &fixture.config)
+        .expect("the block pays its leader");
     state
+        .try_finish_block::<HeaderId>(
+            &fixture.config,
+            &gas_and_fees,
+            reward_commitment(),
+            reward_value,
+        )
+        .expect("the channels are created")
+        .0
 });
 
 fn channel(index: usize) -> ChannelId {

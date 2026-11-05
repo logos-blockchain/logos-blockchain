@@ -611,6 +611,7 @@ fn pol_case(rng: &mut StdRng) -> Case {
     let proof = compressed(&PROOFS[3]);
     let inputs = PolVerifierInput {
         entropy_contribution: random_input(rng),
+        reward_commitment: random_input(rng),
         slot_number: random_input(rng),
         epoch_nonce: random_input(rng),
         lottery_0: random_input(rng),
@@ -618,6 +619,7 @@ fn pol_case(rng: &mut StdRng) -> Case {
         eligible_aged: random_input(rng),
         eligible_latest: random_input(rng),
         msg: random_input(rng),
+        reward_value: random_input(rng),
     };
     drop(lb_pol::verify(&proof, &inputs));
     case(

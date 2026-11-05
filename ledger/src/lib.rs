@@ -1744,14 +1744,12 @@ mod tests {
         let other = transfer_tx(vec![spend(2, 12, root, fees)]);
 
         assert_eq!(
-            state
-                .clone()
-                .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
-                    &eras,
-                    ZkPublicKey::zero(),
-                    [first.clone(), other.clone(), second.clone()].into_iter(),
-                )
-                .err(),
+            apply_contents(
+                state.clone(),
+                &eras,
+                [first.clone(), other.clone(), second.clone()],
+            )
+            .err(),
             Some(LedgerError::VerificationError(
                 VerificationError::TransferVerificationError(TransferError::NoteSet(
                     NoteSetError::AlreadySpent(NoteNullifier(Fr::ONE))
@@ -1760,24 +1758,12 @@ mod tests {
         );
 
         // In the next block the nullifier is still spent, the other one too.
-        let (state, _, _, _) = state
-            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
-                &eras,
-                ZkPublicKey::zero(),
-                [first, other].into_iter(),
-            )
-            .unwrap();
+        let (state, _, _, _) = apply_contents(state, &eras, [first, other]).unwrap();
         let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
         assert!(ledger_set.contains_nullifier(&NoteNullifier(Fr::ONE)));
         assert!(ledger_set.contains_nullifier(&NoteNullifier(Fr::from(2u64))));
         assert_eq!(
-            state
-                .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
-                    &eras,
-                    ZkPublicKey::zero(),
-                    std::iter::once(second),
-                )
-                .err(),
+            apply_contents(state, &eras, [second]).err(),
             Some(LedgerError::VerificationError(
                 VerificationError::TransferVerificationError(TransferError::NoteSet(
                     NoteSetError::AlreadySpent(NoteNullifier(Fr::ONE))

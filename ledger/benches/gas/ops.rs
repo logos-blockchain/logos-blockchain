@@ -30,7 +30,7 @@ use lb_core::{
     blend::core_quota,
     events::TxEvent,
     mantle::{
-        Note, Op, OpProof, SignedOps,
+        Note, Op, OpProof, SignedOps, Value,
         batch::DeferredProofs,
         channel::{SlotTimeframe, SlotTimeout},
         gas::MainnetGasProfile,
@@ -872,8 +872,9 @@ fn program_register() -> OpShape {
 
 /// A leadership proof every check accepts, for the headers the setups apply and
 /// the measured headers: the verification of a proof of leadership is measured
-/// by `micro/pol_verify`.
-pub struct AcceptedLeadership(pub ZkPublicKey);
+/// by `micro/pol_verify`. It holds the commitment of the reward note; the value
+/// of the note is read by the block contents, which take it on their own.
+pub struct AcceptedLeadership(pub NoteCommitment);
 
 impl LeaderProof for AcceptedLeadership {
     fn verify(&self, _public_inputs: &LeaderPublic) -> bool {
@@ -888,8 +889,12 @@ impl LeaderProof for AcceptedLeadership {
         Fr::from(0u64)
     }
 
-    fn reward_key(&self) -> &ZkPublicKey {
-        &self.0
+    fn reward_commitment(&self) -> NoteCommitment {
+        self.0
+    }
+
+    fn reward_value(&self) -> Value {
+        0
     }
 }
 
@@ -901,7 +906,7 @@ pub fn next_epoch(
     epoch: u64,
     txs: &[Vec<u8>],
 ) -> LedgerState {
-    let leader = AcceptedLeadership(ZkPublicKey::new(Fr::from(3u64)));
+    let leader = crate::block::leadership();
     let (state, _) = state
         .try_apply_header::<_, HeaderId>(
             Slot::from(epoch * crate::fixture::parameters(config).epoch_length()),
