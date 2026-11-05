@@ -23,6 +23,7 @@ mod length_prefix;
 mod math;
 mod numbers;
 mod option;
+mod runtime_bounded_vec;
 
 #[cfg(test)]
 mod tests;
@@ -34,6 +35,16 @@ pub use fixtures::{
     assert_codec_fixtures_encode_only, assert_codec_fixtures_with, decode_fixture_hex,
 };
 pub use lb_binary_codec_macros::{BinaryCodec, codec_fixtures};
+pub use length_prefix::length_prefix_len;
+
+/// Largest `MAX` for which an element type that decodes without consuming input
+/// is still supported.
+///
+/// Such an element makes the decode loop independent of the input, so `MAX` is
+/// the only thing bounding it — repeating it is harmless exactly when `MAX` is
+/// small enough that a hostile length prefix buys nothing. Above this, the
+/// combination is refused rather than iterated.
+const ZERO_LENGTH_ELEMENT_MAX: usize = 1024;
 
 /// Sealed marker that gates [`CodecExamples`] to the blessed macro path.
 ///
@@ -89,6 +100,11 @@ pub trait BinaryDecode: CodecExamples + Sized {
         context: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError>;
 
+    fn peek_decode(input: &[u8], context: &Self::Context) -> Result<Self, DecodeError> {
+        let (_, value) = Self::decode(input, context)?;
+        Ok(value)
+    }
+
     fn decode_all(input: &[u8], context: &Self::Context) -> Result<Self, DecodeError> {
         let (rest, value) = Self::decode(input, context)?;
         if !rest.is_empty() {
@@ -103,6 +119,10 @@ pub trait BinaryDecode: CodecExamples + Sized {
 pub trait BinaryDecodeExt: BinaryDecode<Context = ()> {
     fn decode(input: &[u8]) -> Result<(&[u8], Self), DecodeError> {
         <Self as BinaryDecode>::decode(input, &())
+    }
+
+    fn peek_decode(input: &[u8]) -> Result<Self, DecodeError> {
+        <Self as BinaryDecode>::peek_decode(input, &())
     }
 
     fn decode_all(input: &[u8]) -> Result<Self, DecodeError> {

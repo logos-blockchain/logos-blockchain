@@ -4,7 +4,7 @@ use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
-        CryptarchiaParameter, GenesisTime, Note, NoteId, OpProof, Utxo,
+        ConsensusExcludedKeys, GenesisParameters, GenesisTime, Note, NoteId, OpProof, Utxo,
         ops::{
             Op, OpId as _, ZkAndEd25519Proof,
             channel::{
@@ -13,7 +13,7 @@ use lb_core::{
             },
             transfer::TransferOp,
         },
-        transactions::{GenesisTx, OpProofs, Ops},
+        transactions::{GenesisTx, OpProofs, Ops, TxList},
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
@@ -188,6 +188,9 @@ fn select_sdp_funding_notes_per_node(
     selected_sdp_notes_per_node
 }
 
+/// The balance the `PoW` reward pool of a test chain starts with.
+const GENESIS_POW_REWARD_POOL: u64 = 1_000_000_000;
+
 fn inscription_for_current_test(
     test_context: Option<&str>,
     genesis_time: GenesisTime,
@@ -197,10 +200,12 @@ fn inscription_for_current_test(
     InscriptionOp {
         channel_id: ChannelId::from(EMPTY_CHANNEL_ID),
         inscription: Inscription::new_unchecked(
-            CryptarchiaParameter {
+            GenesisParameters {
                 chain_id,
-                genesis_time,
+                start_time: genesis_time,
                 epoch_nonce: Fr::ZERO,
+                pow_reward_pool: GENESIS_POW_REWARD_POOL,
+                consensus_excluded_keys: ConsensusExcludedKeys::empty(),
             }
             .encode_to_vec(),
         ),
@@ -482,7 +487,7 @@ pub fn create_genesis_block_with_declarations(
         ops.push(Op::SDPDeclare(declaration));
     }
 
-    let mantle_tx = Ops::new_unchecked(ops);
+    let mantle_tx = Ops::new(GenesisTx::FORK_DIGEST, TxList::new_unchecked(ops));
     let mantle_tx_hash = mantle_tx.hash();
     let mut ops_proofs = OpProofs::from([
         OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(

@@ -14,7 +14,7 @@ use lb_blend_membership::Membership;
 use lb_blend_message::{
     deserialize_encapsulated_message,
     encap::{
-        ProofsVerifier as ProofsVerifierTrait, encapsulated_message_encoded_size,
+        MessageLayout, ProofsVerifier as ProofsVerifierTrait, encapsulated_message_encoded_size,
         validated::EncapsulatedMessageWithVerifiedPublicHeader,
     },
 };
@@ -102,7 +102,7 @@ pub struct Behaviour<ProofsVerifier> {
     round_clock: RoundClock,
     protocol_name: StreamProtocol,
     minimum_network_size: NonZeroUsize,
-    num_blend_layers: NonZeroU64,
+    message_layout: MessageLayout,
 }
 
 impl<ProofsVerifier> Behaviour<ProofsVerifier> {
@@ -131,14 +131,18 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             round_clock,
             protocol_name,
             minimum_network_size: common_config.minimum_network_size,
-            num_blend_layers: common_config.num_blend_layers,
+            message_layout: common_config.message_layout,
         }
     }
 
+    /// Starts a new epoch, under the settings of the era it opens, if it opens
+    /// one (see [`Self::enter_era`]).
     pub(crate) fn start_new_epoch(
         &mut self,
         new_epoch_info: (Membership<PeerId>, Epoch),
         new_proofs_verifier: ProofsVerifier,
+        // TODO: Move to its own type which makes this easier to read.
+        new_era: Option<((&CommonConfig, &Config), Option<RoundClock>, StreamProtocol)>,
     ) {
         self.current_membership = new_epoch_info.0;
         self.current_epoch = new_epoch_info.1;
@@ -149,6 +153,49 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         for conn in &peers {
             self.close_substream(*conn);
         }
+        if let Some((new_era_config, new_era_round_clock, new_era_protocol_name)) = new_era {
+            self.enter_era(new_era_config, new_era_protocol_name, new_era_round_clock);
+        }
+    }
+
+    fn enter_era(
+        &mut self,
+        (new_era_common_config, new_era_edge_config): (&CommonConfig, &Config),
+        new_era_protocol_name: StreamProtocol,
+        new_era_round_clock: Option<RoundClock>,
+    ) {
+        #[expect(
+            clippy::unneeded_field_pattern,
+            reason = "We want to explicitly destructure here so every time we add a new field we need to decide what to do with it on new eras."
+        )]
+        let Self {
+            accept_share,
+            connection_timeout,
+            max_incoming_connections,
+            message_layout,
+            minimum_network_size,
+            protocol_name,
+            round_clock,
+            current_epoch: _,
+            current_membership: _,
+            events: _,
+            pending_poq_verifications: _,
+            proofs_verifier: _,
+            upgraded_edge_peers: _,
+            waker: _,
+        } = self;
+        if let Some(new_era_round_clock) = new_era_round_clock {
+            *round_clock = new_era_round_clock;
+        }
+        *connection_timeout = new_era_edge_config.connection_timeout;
+        *max_incoming_connections = new_era_edge_config.max_incoming_connections;
+        *accept_share = RoundShare::new(
+            new_era_edge_config.accepted_connections_per_round,
+            round_clock.current_round(),
+        );
+        *protocol_name = new_era_protocol_name;
+        *minimum_network_size = new_era_common_config.minimum_network_size;
+        *message_layout = new_era_common_config.message_layout;
     }
 
     fn try_wake(&mut self) {
@@ -212,7 +259,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         ProofsVerifier: ProofsVerifierTrait + Send + Sync + 'static,
     {
         let Ok(deserialized_encapsulated_message) =
-            deserialize_encapsulated_message(serialized_message, &self.num_blend_layers)
+            deserialize_encapsulated_message(serialized_message, &self.message_layout)
         else {
             tracing::trace!(target: LOG_TARGET, "Failed to deserialize received message. Ignoring...");
             return;
@@ -309,7 +356,7 @@ where
         Ok(Either::Left(ConnectionHandler::new(
             self.connection_timeout,
             self.protocol_name.clone(),
-            encapsulated_message_encoded_size(self.num_blend_layers),
+            encapsulated_message_encoded_size(self.message_layout),
         )))
     }
 

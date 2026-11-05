@@ -434,7 +434,7 @@ mod tests {
         let json = serde_json::from_str::<TestSet>(r#"[1,1,1,1,1,"malformed"]"#).unwrap_err();
         assert!(
             json.to_string()
-                .contains("Item count 5 exceeds static maximum of 4"),
+                .contains("Item count 5 exceeds maximum of 4"),
             "unexpected error: {json}"
         );
 
@@ -444,7 +444,7 @@ mod tests {
         assert!(
             binary
                 .to_string()
-                .contains("Item count 5 exceeds static maximum of 4"),
+                .contains("Item count 5 exceeds maximum of 4"),
             "unexpected error: {binary}"
         );
     }

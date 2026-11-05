@@ -33,6 +33,7 @@ tracing                          = { workspace = true }
 chacha20poly1305 = { features = ["alloc", "rand_core"], workspace = true }
 clap             = { features = ["derive", "env", "help", "std"], workspace = true }
 hex              = { workspace = true }
+lb-core          = { features = ["test-utils"], workspace = true }
 lb-groth16       = { workspace = true }
 tempfile         = { workspace = true }
 tokio            = { features = ["io-util", "net"], workspace = true }

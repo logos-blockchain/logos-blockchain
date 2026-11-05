@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, collections::HashMap, iter::once};
+use std::{cmp::Ordering, collections::HashMap, iter::once, num::NonZeroU64};
 
 use lb_blend_message::{
     encap::ProofsVerifier as ProofsVerifierTrait,
@@ -15,7 +15,7 @@ use tracing::debug;
 
 use crate::mantle::sdp::rewards::{
     Error,
-    blend::{LOG_TARGET, RewardsParameters, current_epoch::CurrentEpochState},
+    blend::{LOG_TARGET, current_epoch::CurrentEpochState},
     distribute_rewards,
 };
 
@@ -27,6 +27,8 @@ pub struct TargetEpochState<ProofsVerifier> {
     epoch: Epoch,
     /// The providers in the target epoch (their public keys and indices).
     providers: HashTrieMapSync<ProviderId, (ZkPublicKey, u64)>,
+    /// The minimum network size of the era the target epoch belongs to.
+    minimum_network_size: NonZeroU64,
     /// Parameters for evaluating activity proofs in the target epoch
     token_evaluation: BlendingTokenEvaluation,
     /// Verifier for `PoQ` and `PoSel` in the target epoch.
@@ -39,6 +41,7 @@ impl<ProofsVerifier> TargetEpochState<ProofsVerifier> {
     pub const fn new(
         epoch: Epoch,
         providers: HashTrieMapSync<ProviderId, (ZkPublicKey, u64)>,
+        minimum_network_size: NonZeroU64,
         token_evaluation: BlendingTokenEvaluation,
         proof_verifier: ProofsVerifier,
         epoch_income: Value,
@@ -46,6 +49,7 @@ impl<ProofsVerifier> TargetEpochState<ProofsVerifier> {
         Self {
             epoch,
             providers,
+            minimum_network_size,
             token_evaluation,
             proof_verifier,
             epoch_income,
@@ -81,7 +85,6 @@ where
         provider_id: &ProviderId,
         proof: &lb_core::sdp::blend::ActivityProof,
         current_epoch_state: &CurrentEpochState,
-        settings: &RewardsParameters,
     ) -> Result<(ZkPublicKey, HammingDistance), Error> {
         if proof.epoch != self.epoch {
             return Err(Error::InvalidEpoch {
@@ -92,7 +95,7 @@ where
 
         let num_providers = self.num_providers();
         assert!(
-            num_providers >= settings.minimum_network_size.get(),
+            num_providers >= self.minimum_network_size.get(),
             "number of providers must be >= minimum_network_size"
         );
         let &(zk_id, index) = self

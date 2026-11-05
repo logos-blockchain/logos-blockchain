@@ -97,7 +97,7 @@ impl LogosSql {
     ///
     /// Returns an error if no Tokio runtime is active, the local state cannot
     /// be opened, or the replication task stops before becoming ready.
-    /// Read-only startup also rejects state with pending publications.
+    /// Read-only startup also rejects state with pending local publications.
     pub async fn start(config: LogosSqlConfig) -> Result<Self, Error> {
         tokio::runtime::Handle::try_current().map_err(|_| Error::RuntimeUnavailable)?;
 
@@ -112,19 +112,7 @@ impl LogosSql {
         let node = NodeHttpClient::new(CommonHttpClient::new(None), config.node_url);
 
         let read_only = config.writer.is_none();
-        let writer = if let Some(writer) = config.writer {
-            writer
-        } else {
-            if db.has_pending_writes()?
-                || checkpoint
-                    .as_ref()
-                    .is_some_and(|cp| !cp.pending_txs.is_empty())
-            {
-                return Err(Error::InvalidLocalState(
-                    "read-only startup cannot resume pending publications",
-                ));
-            }
-
+        let writer = config.writer.unwrap_or_else(|| {
             // ZoneSDK's observer setup still requires a key and funding config.
             // Use a fresh key and inert funding; the runtime blocks publication.
             WriterConfig {
@@ -137,7 +125,7 @@ impl LogosSql {
                     priority_fee_percent: 0,
                 },
             }
-        };
+        });
 
         let sequencer = ZoneSequencer::init(
             config.channel_id,

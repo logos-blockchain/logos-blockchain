@@ -127,7 +127,7 @@ pub async fn try_submit_invalid_transaction(
         .inspect_err(|e| {
             warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
-    let signed_tx = create_stateless_invalid_transaction();
+    let signed_tx = create_stateless_invalid_transaction(world.fork_digest_in_force().await?);
     let tx_hash = signed_tx.hash();
 
     world.remember_submitted_transaction(transaction_alias.clone(), tx_hash);

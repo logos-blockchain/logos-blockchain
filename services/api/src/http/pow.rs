@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display};
 use lb_core::mantle::transactions::hash::TxHash;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_pow_service::{
-    ClaimableRewardsInfo, PoWStatus,
+    AutoClaimSettings, ClaimableRewardsInfo, PoWMiningSettings, PoWStatus,
     api::{PoWServiceApi, PoWServiceData},
 };
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
@@ -126,4 +126,32 @@ pub struct PoWClaimRequestBody {
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct PoWClaimResponseBody {
     pub tx_hash: Option<TxHash>,
+}
+
+pub async fn set_mining_settings<PoW, RuntimeServiceId>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+    settings: PoWMiningSettings,
+) -> Result<(), DynError>
+where
+    PoW: PoWServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
+{
+    PoWServiceApi::<PoW, RuntimeServiceId>::new(handle.relay().await?)
+        .set_mining_settings(settings)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_auto_claim_settings<PoW, RuntimeServiceId>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+    settings: AutoClaimSettings,
+) -> Result<(), DynError>
+where
+    PoW: PoWServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
+{
+    PoWServiceApi::<PoW, RuntimeServiceId>::new(handle.relay().await?)
+        .set_auto_claim_settings(settings)
+        .await?;
+    Ok(())
 }

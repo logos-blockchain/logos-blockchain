@@ -85,20 +85,19 @@ Feature: Mempool diagnostics
   Scenario Outline: Mempool loading independent transactions parameter_set=<parameter_set>
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 1           | 110000000 |
-      | 2             | 1           | 110000000 |
-      | 3             | 1           | 110000000 |
-      | 4             | 1           | 110000000 |
-      | 5             | 1           | 110000000 |
-      | 6             | 1           | 110000000 |
-      | 7             | 1           | 110000000 |
-      | 8             | 1           | 110000000 |
-      | 9             | 1           | 110000000 |
-      | 10            | 1           | 110000000 |
-    And I have a cluster with capacity of 10 nodes
+      | 1             | 1           | 110000000    |
+      | 2             | 1           | 110000000    |
+      | 3             | 1           | 110000000    |
+      | 4             | 1           | 110000000    |
+      | 5             | 1           | 110000000    |
+      | 6             | 1           | 110000000    |
+      | 7             | 1           | 110000000    |
+      | 8             | 1           | 110000000    |
+      | 9             | 1           | 110000000    |
+      | 10            | 1           | 110000000    |
+    And I have a cluster with capacity of 12 nodes
     And no nodes are declared as blend providers
     And the cluster uses diagnostic parameter set "<parameter_set>"
-    And I have deployment config override "cryptarchia.epoch_config.epoch_period_nonce_buffer" as "<nonce_buffer>"
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_01A  |              |
@@ -111,39 +110,40 @@ Feature: Mempool diagnostics
       | NODE_8    | 8             | WALLET_08A  | NODE_7       |
       | NODE_9    | 9             | WALLET_09A  | NODE_8       |
       | NODE_10   | 10            | WALLET_10A  | NODE_9       |
+    And I start peer node "NODE_11" connected to node "NODE_10"
+    And I start peer node "NODE_12" connected to node "NODE_11"
     And I log diagnostic identities
     When all nodes have at least 2 blocks and converged to within 0 blocks in 300 seconds
-    When I split available funds in each user wallet into <transactions_per_wallet> approximately equal outputs with 4 epochs fee headroom
+    When I split available funds in each user wallet into <transactions_per_wallet> approximately equal outputs
     And I verify each wallet has minimum <transactions_per_wallet> outputs "available" in 300 seconds
     And I record mempool pending counts for "independent" workload at "before_load"
-    When I perform <rounds> independent next-wallet rounds with <transactions_per_wallet> transactions per wallet at 1 LGO each and 4 epochs fee headroom
+    When I perform <rounds> independent next-wallet rounds with <transactions_per_wallet> transactions per wallet at 1 LGO each and <epochs_headroom> epochs fee headroom
     And I record mempool pending counts for "independent" workload at "after_load"
     And I observe the "independent" mempool drain for <drain_epochs> epochs
     Then I stop all nodes
 
     Examples:
-      | parameter_set          | transactions_per_wallet | rounds | nonce_buffer | drain_epochs |
-      | fast_repro             | 10                      | 3      | 1            | 2            |
-      | testnet_representative | 250                     | 31     | 3            | 2            |
+      | parameter_set          | transactions_per_wallet | rounds | epochs_headroom | drain_epochs |
+      | fast_repro             | 10                      | 3      | 1               | 2            |
+      | testnet_representative | 250                     | 31     | 3               | 2            |
 
   @mempool_diagnostic @local_transactions
   Scenario Outline: Mempool loading dependent transactions parameter_set=<parameter_set>
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 1           | 110000000 |
-      | 2             | 1           | 110000000 |
-      | 3             | 1           | 110000000 |
-      | 4             | 1           | 110000000 |
-      | 5             | 1           | 110000000 |
-      | 6             | 1           | 110000000 |
-      | 7             | 1           | 110000000 |
-      | 8             | 1           | 110000000 |
-      | 9             | 1           | 110000000 |
-      | 10            | 1           | 110000000 |
-    And I have a cluster with capacity of 10 nodes
+      | 1             | 1           | 110000000    |
+      | 2             | 1           | 110000000    |
+      | 3             | 1           | 110000000    |
+      | 4             | 1           | 110000000    |
+      | 5             | 1           | 110000000    |
+      | 6             | 1           | 110000000    |
+      | 7             | 1           | 110000000    |
+      | 8             | 1           | 110000000    |
+      | 9             | 1           | 110000000    |
+      | 10            | 1           | 110000000    |
+    And I have a cluster with capacity of 12 nodes
     And no nodes are declared as blend providers
     And the cluster uses diagnostic parameter set "<parameter_set>"
-    And I have deployment config override "cryptarchia.epoch_config.epoch_period_nonce_buffer" as "<nonce_buffer>"
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_01A  |              |
@@ -156,17 +156,19 @@ Feature: Mempool diagnostics
       | NODE_8    | 8             | WALLET_08A  | NODE_7       |
       | NODE_9    | 9             | WALLET_09A  | NODE_8       |
       | NODE_10   | 10            | WALLET_10A  | NODE_9       |
+    And I start peer node "NODE_11" connected to node "NODE_10"
+    And I start peer node "NODE_12" connected to node "NODE_11"
     And I log diagnostic identities
     When all nodes have at least 2 blocks and converged to within 0 blocks in 300 seconds
-    When I split available funds in each user wallet into <transactions_per_wallet> approximately equal outputs with 4 epochs fee headroom
+    When I split available funds in each user wallet into <transactions_per_wallet> approximately equal outputs
     And I verify each wallet has minimum <transactions_per_wallet> outputs "available" in 300 seconds
     And I record mempool pending counts for "dependent" workload at "before_load"
-    When I perform <rounds> dependent next-wallet rounds with <transactions_per_wallet> transactions per wallet at 1 LGO each and 4 epochs fee headroom
+    When I perform <rounds> dependent next-wallet rounds with <transactions_per_wallet> transactions per wallet at 1 LGO each and <epochs_headroom> epochs fee headroom
     And I record mempool pending counts for "dependent" workload at "after_load"
     And I observe the "dependent" mempool drain for <drain_epochs> epochs
     Then I stop all nodes
 
     Examples:
-      | parameter_set          | transactions_per_wallet | rounds | nonce_buffer | drain_epochs |
-      | fast_repro             | 10                      | 3      | 1            | 2            |
-      | testnet_representative | 250                     | 25     | 3            | 2            |
+      | parameter_set          | transactions_per_wallet | rounds | epochs_headroom | drain_epochs |
+      | fast_repro             | 10                      | 3      | 1               | 2            |
+      | testnet_representative | 250                     | 25     | 3               | 2            |

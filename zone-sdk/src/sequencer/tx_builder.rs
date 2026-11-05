@@ -1,3 +1,5 @@
+use std::num::NonZero;
+
 use lb_core::{
     mantle::{
         SignedOps, TxHash,
@@ -365,15 +367,25 @@ pub(super) async fn build_and_fund_config<Node>(
 where
     Node: adapter::Node + Sync,
 {
-    let config_op = ChannelConfigOp {
-        channel: channel_id,
+    // Reject a config the ledger would reject before funding it.
+    let key_count = keys.len();
+    let non_zero = |threshold: u16, name: &str| {
+        NonZero::new(threshold).ok_or_else(|| Error::Network(format!("{name} must be at least 1")))
+    };
+    let config_op = ChannelConfigOp::new(
+        channel_id,
         parent,
         keys,
         posting_timeframe,
         posting_timeout,
-        configuration_threshold,
-        transfer_threshold,
-    };
+        non_zero(configuration_threshold, "configuration_threshold")?,
+        non_zero(transfer_threshold, "transfer_threshold")?,
+    )
+    .map_err(|_| {
+        Error::Network(format!(
+            "configuration_threshold {configuration_threshold} exceeds the {key_count} accredited keys"
+        ))
+    })?;
 
     let (config_tx, transfer_proof, _) =
         fund_ops(node, funding, vec![Op::ChannelConfig(config_op)]).await?;
@@ -485,12 +497,13 @@ mod tests {
     use lb_core::mantle::{
         ledger::{BoundedInputs, NoteId},
         ops::{OpProofRef, channel::withdraw::ChannelWithdrawOp},
+        transactions::TxList,
     };
     use lb_groth16::Fr;
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::test_support::{MockNode, funding_config, inscribe_op};
+    use crate::test_support::{FORK_DIGEST, MockNode, funding_config, inscribe_op};
 
     #[tokio::test]
     async fn funding_path_passes_priority_fee_as_a_percentage() {
@@ -693,7 +706,9 @@ mod tests {
                 inputs: BoundedInputs::from(NoteId::from(Fr::from(1u64))).into(),
             }),
         ];
-        Ops::try_from(ops).expect("ops fit")
+        TxList::try_from(ops)
+            .map(|ops| Ops::new(FORK_DIGEST, ops))
+            .expect("ops fit")
     }
 
     #[test]

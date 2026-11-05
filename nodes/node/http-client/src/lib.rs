@@ -1,29 +1,30 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 pub use lb_chain_broadcast_service::BlockInfo;
 pub use lb_chain_service::{ChainServiceInfo, CryptarchiaInfo, PhaseTag, Slot, State};
 use lb_core::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
+    era::ForkDigest,
     header::{ContentId, HeaderId},
     mantle::{
         SignedOps, channel::ChannelState, ledger::verification_mode::StandardMode,
         ops::channel::ChannelId, transactions::states::Unverified,
     },
     proofs::leader_proof::Groth16LeaderProof,
-    sdp::DeclarationMessage,
+    sdp::{Declaration, DeclarationId, DeclarationMessage, ServiceType},
 };
 pub use lb_core::{
     events::{Event, Events, TxEventPayload},
     mantle::transactions::genesis_tx::ChainId,
 };
 use lb_groth16::fr_to_bytes;
-pub use lb_http_api_common::TimeInfo;
+pub use lb_http_api_common::{EraTiming, TimeInfo};
 use lb_http_api_common::{
     MAX_BLOCKS_STREAM_BLOCKS, MAX_BLOCKS_STREAM_CHUNK_SIZE,
     bodies::{
         blend::JoinBlendRequestBody,
-        chain::ChainIdResponseBody,
+        chain::{ChainForkResponseBody, ChainIdResponseBody},
         mantle::GasPricesResponseBody,
         wallet::{
             aged_notes::LeaderAgedNotesResponseBody,
@@ -35,9 +36,10 @@ use lb_http_api_common::{
     },
     paths::{
         BLEND_DISPERSE_TRANSACTION, BLEND_JOIN_NETWORK, BLEND_PENDING_TRANSACTIONS, BLOCK_EVENTS,
-        BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHAIN_ID, CHANNEL,
+        BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHAIN_FORK, CHAIN_ID, CHANNEL,
         CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_AGED_NOTES, LEADER_CLAIM_VOUCHERS,
-        MANTLE_GAS_PRICES, MEMPOOL_ADD_TX, NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
+        MANTLE_GAS_PRICES, MANTLE_SDP_FINALIZED_DECLARATION, MANTLE_SDP_FINALIZED_DECLARATIONS,
+        MEMPOOL_ADD_TX, NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
         wallet::{BALANCE, FUND, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
@@ -241,9 +243,13 @@ impl CommonHttpClient {
         base_url: Url,
         id: HeaderId,
     ) -> Result<Option<ApiBlock>, Error> {
+        #[expect(
+            clippy::literal_string_with_formatting_args,
+            reason = "Literal axum route placeholder, not a format argument."
+        )]
         let path = BLOCKS_DETAIL
             .trim_start_matches('/')
-            .replace(":id", &id.to_string());
+            .replace("{id}", &id.to_string());
         let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
 
         let mut request = self.client.get(request_url);
@@ -273,9 +279,13 @@ impl CommonHttpClient {
         base_url: Url,
         id: HeaderId,
     ) -> Result<Option<Events>, Error> {
+        #[expect(
+            clippy::literal_string_with_formatting_args,
+            reason = "Literal axum route placeholder, not a format argument."
+        )]
         let path = BLOCK_EVENTS
             .trim_start_matches('/')
-            .replace(":id", &id.to_string());
+            .replace("{id}", &id.to_string());
         let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
 
         let mut request = self.client.get(request_url);
@@ -289,6 +299,71 @@ impl CommonHttpClient {
 
         match status {
             StatusCode::OK => serde_json::from_str::<Events>(&body)
+                .map(Some)
+                .map_err(|e| Error::Server(format!("Failed to parse response: {e}"))),
+            StatusCode::NOT_FOUND => Ok(None),
+            StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server(body)),
+            _ => Err(Error::Server(format!(
+                "Unexpected response [{status}]: {body}",
+            ))),
+        }
+    }
+
+    /// Get one declaration from finalized (LIB) SDP state.
+    pub async fn get_finalized_sdp_declaration(
+        &self,
+        base_url: Url,
+        declaration_id: DeclarationId,
+    ) -> Result<Option<Declaration>, Error> {
+        let path = MANTLE_SDP_FINALIZED_DECLARATION
+            .trim_start_matches('/')
+            .replace(":declaration_id", &declaration_id.to_string());
+        let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
+
+        let mut request = self.client.get(request_url);
+        if let Some(basic_auth) = &self.basic_auth {
+            request = request.basic_auth(&basic_auth.username, basic_auth.password.as_deref());
+        }
+
+        let response = request.send().await.map_err(Error::Request)?;
+        let status = response.status();
+        let body = response.text().await.map_err(Error::Request)?;
+
+        match status {
+            StatusCode::OK => serde_json::from_str::<Declaration>(&body)
+                .map(Some)
+                .map_err(|e| Error::Server(format!("Failed to parse response: {e}"))),
+            StatusCode::NOT_FOUND => Ok(None),
+            StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server(body)),
+            _ => Err(Error::Server(format!(
+                "Unexpected response [{status}]: {body}",
+            ))),
+        }
+    }
+
+    /// Get every declaration for a service from finalized (LIB) SDP state.
+    pub async fn get_finalized_sdp_declarations(
+        &self,
+        base_url: Url,
+        service_type: ServiceType,
+    ) -> Result<Option<HashMap<DeclarationId, Declaration>>, Error> {
+        let service_discriminant = u8::from(service_type);
+        let path = MANTLE_SDP_FINALIZED_DECLARATIONS
+            .trim_start_matches('/')
+            .replace(":service_type", &service_discriminant.to_string());
+        let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
+
+        let mut request = self.client.get(request_url);
+        if let Some(basic_auth) = &self.basic_auth {
+            request = request.basic_auth(&basic_auth.username, basic_auth.password.as_deref());
+        }
+
+        let response = request.send().await.map_err(Error::Request)?;
+        let status = response.status();
+        let body = response.text().await.map_err(Error::Request)?;
+
+        match status {
+            StatusCode::OK => serde_json::from_str::<HashMap<DeclarationId, Declaration>>(&body)
                 .map(Some)
                 .map_err(|e| Error::Server(format!("Failed to parse response: {e}"))),
             StatusCode::NOT_FOUND => Ok(None),
@@ -379,6 +454,15 @@ impl CommonHttpClient {
             .map(|body| body.chain_id)
     }
 
+    pub async fn chain_fork(&self, base_url: Url) -> Result<ForkDigest, Error> {
+        let request_url = base_url
+            .join(CHAIN_FORK.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.get::<(), ChainForkResponseBody>(request_url, None)
+            .await
+            .map(|body| body.fork_digest)
+    }
+
     /// Get consensus info (tip, height, etc.)
     pub async fn consensus_info(&self, base_url: Url) -> Result<ChainServiceInfo, Error> {
         let request_url = base_url
@@ -424,7 +508,7 @@ impl CommonHttpClient {
     ) -> Result<Option<ChannelState>, Error> {
         let path = CHANNEL
             .trim_start_matches('/')
-            .replace(":id", &hex::encode(channel_id.as_ref()));
+            .replace("{id}", &hex::encode(channel_id.as_ref()));
         let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
 
         let mut request = self.client.get(request_url);
@@ -635,7 +719,7 @@ impl CommonHttpClient {
     ) -> Result<WalletBalanceResponseBody, Error> {
         let key_id = hex::encode(fr_to_bytes(zk_pk.as_fr()));
         let mut request_url = base_url
-            .join(&BALANCE.replace(":public_key", &key_id))
+            .join(&BALANCE.replace("{public_key}", &key_id))
             .map_err(Error::Url)?;
 
         if let Some(t) = tip {

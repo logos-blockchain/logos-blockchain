@@ -1,5 +1,17 @@
+use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use lb_libp2p::ed25519;
-use libp2p::{PeerId, identity::DecodingError};
+use libp2p::{
+    PeerId,
+    identity::{DecodingError, Keypair},
+};
+
+/// The libp2p identity of the node holding `non_ephemeral_signing_key`.
+#[must_use]
+pub(crate) fn keypair(non_ephemeral_signing_key: &UnsecuredEd25519Key) -> Keypair {
+    let mut secret_key_bytes = *non_ephemeral_signing_key.as_bytes();
+    Keypair::ed25519_from_bytes(&mut secret_key_bytes)
+        .expect("Cryptographic secret key should be a valid Ed25519 private key.")
+}
 
 impl super::TryFrom for PeerId {
     type Error = DecodingError;

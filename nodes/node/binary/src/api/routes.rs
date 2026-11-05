@@ -29,6 +29,7 @@ macro_rules! api_routes {
             get lb_http_api_common::paths::MANTLE_METRICS => crate::api::handlers::mantle_metrics, mantle_metrics::<MempoolStorageAdapter, RuntimeServiceId>;
             post lb_http_api_common::paths::MANTLE_STATUS => crate::api::handlers::mantle_status, mantle_status::<MempoolStorageAdapter, RuntimeServiceId>;
             get lb_http_api_common::paths::CHAIN_ID => crate::api::handlers::chain_id, chain_id;
+            get lb_http_api_common::paths::CHAIN_FORK => crate::api::handlers::chain_fork, chain_fork::<RuntimeServiceId>;
             get lb_http_api_common::paths::CRYPTARCHIA_INFO => crate::api::handlers::cryptarchia_info, cryptarchia_info::<RuntimeServiceId>;
             get lb_http_api_common::paths::TIME_INFO => crate::api::handlers::time_info, time_info::<RuntimeServiceId>;
             get lb_http_api_common::paths::CRYPTARCHIA_HEADERS => crate::api::handlers::cryptarchia_headers, cryptarchia_headers::<RuntimeServiceId>;
@@ -49,6 +50,8 @@ macro_rules! api_routes {
             post lb_http_api_common::paths::SDP_POST_SET_DECLARATION_ID => crate::api::handlers::post_set_declaration_id, post_set_declaration_id::<SdpMempool, SdpWallet, Cryptarchia<RuntimeServiceId>, SdpStateStorage, RuntimeServiceId>;
             get lb_http_api_common::paths::MANTLE_SDP_DECLARATIONS => crate::api::handlers::get_sdp_declarations, get_sdp_declarations::<RuntimeServiceId>;
             get lb_http_api_common::paths::MANTLE_SDP_SNAPSHOT => crate::api::handlers::get_sdp_snapshot, get_sdp_snapshot::<RuntimeServiceId>;
+            get lb_http_api_common::paths::MANTLE_SDP_FINALIZED_DECLARATION => crate::api::handlers::get_finalized_sdp_declaration, get_finalized_sdp_declaration::<RuntimeServiceId>;
+            get lb_http_api_common::paths::MANTLE_SDP_FINALIZED_DECLARATIONS => crate::api::handlers::get_finalized_sdp_declarations, get_finalized_sdp_declarations::<RuntimeServiceId>;
             post lb_http_api_common::paths::LEADER_CLAIM => crate::api::handlers::leader_claim, leader_claim::<ChainLeader, RuntimeServiceId>;
             put lb_http_api_common::paths::POW_START_MINING => crate::api::handlers::pow_start_mining, pow_start_mining::<PoWService, RuntimeServiceId>;
             put lb_http_api_common::paths::POW_STOP_MINING => crate::api::handlers::pow_stop_mining, pow_stop_mining::<PoWService, RuntimeServiceId>;

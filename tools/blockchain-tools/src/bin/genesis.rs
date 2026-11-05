@@ -11,13 +11,15 @@ use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     crypto::ZkHasher,
     mantle::{
-        Note,
+        ConsensusExcludedKeys, Note,
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp},
     },
 };
 use lb_node::config::deployment::DeploymentSettings;
 use lb_sdp_service::DeclarationConfig;
-use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
+use lb_utils::yaml::{
+    INCLUDE_TAG, OnUnknownKeys, deserialize_value_at_path, deserialize_value_from_reader,
+};
 use logos_blockchain_tools::{
     apply_dotted_kv,
     genesis::{
@@ -26,7 +28,10 @@ use logos_blockchain_tools::{
     },
     overwrite_yaml, set_at_path,
 };
-use serde_yaml::Value;
+use serde_yaml::{
+    Value,
+    value::{Tag, TaggedValue},
+};
 
 // ── CLI definition
 // ────────────────────────────────────────────────────────────
@@ -81,13 +86,14 @@ pub struct CeremonyArgs {
     #[arg(long, value_name = "FILE")]
     pub providers: PathBuf,
 
-    /// Consensus-excluded key definition for stake distribution.
+    /// Consensus-excluded key definition, for the stake distribution and the
+    /// genesis parameters.
     #[arg(long, value_name = "FILE")]
     pub consensus_excluded_keys: PathBuf,
 
-    /// The genesis template: the parameters of era zero. The ceremony
-    /// generates the rest of the deployment config from it. Without it, the
-    /// default deployment's era zero is used.
+    /// The genesis template: era zero's ruleset and its parameters. The
+    /// ceremony generates the rest of the deployment config from it.
+    /// Without it, the default deployment's era zero is used.
     #[arg(long, value_name = "FILE")]
     pub template: Option<PathBuf>,
 
@@ -96,7 +102,8 @@ pub struct CeremonyArgs {
     #[arg(long = "override", value_name = "KEY=VALUE|FILE", num_args = 1)]
     pub overrides: Vec<String>,
 
-    /// Write the final deployment config to FILE instead of stdout.
+    /// Write the final deployment config to FILE instead of stdout, with each
+    /// era in its own file, `era/schedule/<era number>.yaml` next to it.
     #[arg(long, short, value_name = "FILE")]
     pub output: Option<PathBuf>,
 }
@@ -201,12 +208,15 @@ struct DistributeArgs {
 
 #[derive(Parser, Debug)]
 struct InscribeArgs {
-    /// YAML file containing genesis parameters (`chain_id`, `genesis_time`, and
-    /// `entropy_sources`). `entropy_sources` should be a list of hex-encoded
-    /// 32-byte strings.
-
+    /// YAML file containing genesis parameters (`chain_id`, `genesis_time`,
+    /// `entropy_sources` and `pow_reward_pool`). `entropy_sources` should be a
+    /// list of hex-encoded 32-byte strings.
     #[arg(long, value_name = "FILE")]
     params: PathBuf,
+
+    /// YAML file containing the consensus-excluded key info.
+    #[arg(long, value_name = "FILE")]
+    consensus_excluded_keys: PathBuf,
 
     /// Write the serialized `InscriptionOp` to FILE instead of stdout.
     #[arg(long, short, value_name = "FILE")]
@@ -229,25 +239,27 @@ fn main() -> Result<()> {
 
 /// Where a deployment config keeps its genesis block.
 const GENESIS_BLOCK_PATH: &str = "genesis_block";
-
-/// Where a deployment config keeps the consensus-excluded keys of the era
-/// starting at genesis, which is the era a genesis ceremony configures.
-const GENESIS_ERA_CONSENSUS_EXCLUDED_KEYS_PATH: &str = "eras.0.cryptarchia.consensus_excluded_keys";
+/// Where a deployment config keeps its eras.
+const ERAS_PATH: &str = "eras";
+/// The directory, next to a deployment config, of the era files it includes.
+const ERA_FILES_DIR: &str = "era/schedule";
 
 // ── ceremony implementation
 // ─────────────────────────────────────────────────────
 
 fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
+    let excluded_key: ConsensusExcludedKey = load_yaml_file(&args.consensus_excluded_keys)?;
     let inscribe_params: InscribeParams = load_yaml_file(&args.inscription_params)?;
     let inscription_op = inscription::inscribe::<ZkHasher>(
         inscribe_params.chain_id,
         inscribe_params.genesis_time,
         inscribe_params.entropy_sources,
+        inscribe_params.pow_reward_pool,
+        ConsensusExcludedKeys::from(excluded_key.zk_id),
     );
 
     let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
     let providers: Vec<DeclarationConfig> = load_yaml_file(&args.providers)?;
-    let excluded_key: ConsensusExcludedKey = load_yaml_file(&args.consensus_excluded_keys)?;
     let (transfer_op, declarations) =
         distribution::distribute(stakeholders, providers, &excluded_key)
             .map_err(|e| anyhow::anyhow!(e))
@@ -273,16 +285,70 @@ fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
         struct_to_yaml_value(&genesis_block)?,
     )
     .map_err(|e| anyhow::anyhow!(e))?;
-    set_at_path(
-        &mut config_value,
-        GENESIS_ERA_CONSENSUS_EXCLUDED_KEYS_PATH,
-        struct_to_yaml_value(&[excluded_key.zk_id])?,
-    )
-    .map_err(|e| anyhow::anyhow!(e))?;
 
     ensure_valid_deployment_settings(&config_value)?;
 
+    if let Some(output) = args.output.as_deref() {
+        split_eras_into_files(&mut config_value, output)?;
+    }
+
     write_yaml(&config_value, args.output.as_deref())
+}
+
+/// Moves each era of `config` to its own file, `era/schedule/<era number>.yaml`
+/// next to `output`, and includes it in its place.
+fn split_eras_into_files(config: &mut Value, output: &Path) -> Result<()> {
+    let eras = config
+        .get_mut(ERAS_PATH)
+        .and_then(Value::as_mapping_mut)
+        .context("the deployment config has no eras")?;
+    let era_files_dir = output
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join(ERA_FILES_DIR);
+    fs::create_dir_all(&era_files_dir)
+        .with_context(|| format!("cannot create '{}'", era_files_dir.display()))?;
+    // The config holds a whole schedule, so the era files of an earlier one,
+    // which the node's build would otherwise embed, go first.
+    for entry in fs::read_dir(&era_files_dir)
+        .with_context(|| format!("cannot read '{}'", era_files_dir.display()))?
+    {
+        let path = entry
+            .with_context(|| format!("cannot read '{}'", era_files_dir.display()))?
+            .path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "yaml" || extension == "yml")
+        {
+            fs::remove_file(&path)
+                .with_context(|| format!("cannot remove '{}'", path.display()))?;
+        }
+    }
+    let eras_by_first_epoch = {
+        // Eras are numbered in the order they start, whatever order the config
+        // lists them in, so they are collected and sorted by starting epoch (globally
+        // unique).
+        let mut unordered_eras_by_first_epoch = eras
+            .iter_mut()
+            .map(|(first_epoch, era)| {
+                let first_epoch = first_epoch
+                    .as_u64()
+                    .context("an era is keyed by the epoch it starts at")?;
+                Ok((first_epoch, era))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        unordered_eras_by_first_epoch.sort_by_key(|(first_epoch, _)| *first_epoch);
+        unordered_eras_by_first_epoch
+    };
+    for (era_number, (_, era)) in eras_by_first_epoch.into_iter().enumerate() {
+        let era_file = format!("{era_number}.yaml");
+        write_yaml(era, Some(&era_files_dir.join(&era_file)))?;
+        *era = Value::Tagged(Box::new(TaggedValue {
+            tag: Tag::new(INCLUDE_TAG),
+            value: Value::from(format!("{ERA_FILES_DIR}/{era_file}")),
+        }));
+    }
+    Ok(())
 }
 
 // ── config implementation
@@ -303,21 +369,21 @@ fn run_config(args: &ConfigArgs) -> Result<()> {
 /// Load a deployment config as a raw YAML value.
 ///
 /// If `path` is `None`, returns the default config as a YAML value. Otherwise,
-/// loads the YAML file at `path` and returns it as a `Value`.
+/// loads the YAML file at `path`, with the files it includes in place, and
+/// returns it as a `Value`.
 fn load_base_config(path: Option<&PathBuf>) -> Result<Value> {
     let Some(path) = path else {
         let default_config = DeploymentSettings::default();
         return struct_to_yaml_value(&default_config);
     };
 
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("cannot read config file '{}'", path.display()))?;
-    serde_yaml::from_str(&content)
-        .with_context(|| format!("cannot parse YAML from '{}'", path.display()))
+    deserialize_value_at_path(path, OnUnknownKeys::Fail)
+        .with_context(|| format!("cannot load config file '{}'", path.display()))
 }
 
 /// Load a genesis template, and assemble from it the deployment config the
-/// ceremony completes: the template's era definition becomes era zero.
+/// ceremony completes: the template's ruleset (`!V1`), with its parameters,
+/// becomes era zero.
 ///
 /// If `path` is `None`, returns the default deployment config, whose genesis
 /// block the ceremony replaces.
@@ -330,12 +396,15 @@ fn load_genesis_template(path: Option<&PathBuf>) -> Result<Value> {
         .with_context(|| format!("cannot read genesis template '{}'", path.display()))?;
     let template: Value = serde_yaml::from_str(&content)
         .with_context(|| format!("cannot parse YAML from '{}'", path.display()))?;
-    let Value::Mapping(era) = template else {
-        bail!("genesis template '{}' is not a mapping", path.display());
-    };
+    if !matches!(&template, Value::Tagged(era) if era.value.is_mapping()) {
+        bail!(
+            "genesis template '{}' is not a mapping tagged with its version",
+            path.display()
+        );
+    }
 
     let mut eras = serde_yaml::Mapping::new();
-    eras.insert(Value::from(0u64), Value::Mapping(era));
+    eras.insert(Value::from(0u64), template);
     let mut config = serde_yaml::Mapping::new();
     config.insert(Value::from("eras"), Value::Mapping(eras));
     Ok(Value::Mapping(config))
@@ -454,11 +523,14 @@ fn run_distribute(args: &DistributeArgs) -> Result<()> {
 
 fn run_inscribe(args: &InscribeArgs) -> Result<()> {
     let params: InscribeParams = load_yaml_file(&args.params)?;
+    let excluded_key: ConsensusExcludedKey = load_yaml_file(&args.consensus_excluded_keys)?;
 
     let op = inscription::inscribe::<ZkHasher>(
         params.chain_id,
         params.genesis_time,
         params.entropy_sources,
+        params.pow_reward_pool,
+        ConsensusExcludedKeys::from(excluded_key.zk_id),
     );
 
     let op_value = struct_to_yaml_value(&op)?;

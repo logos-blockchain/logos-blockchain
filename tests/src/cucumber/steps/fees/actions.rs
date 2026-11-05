@@ -59,11 +59,13 @@ pub async fn prepare_self_transfer_with_tip(
     let client = world.resolve_node_http_client(node_name)?;
     let prices = live_gas_prices(&client, step).await?;
 
+    let fork_digest = world.fork_digest_in_force().await?;
     let signed_tx = fee_spec::self_transfer_paying_fee_at(
         &world.chain.genesis_block_utxos,
         &account,
         &prices,
         tip,
+        fork_digest,
     );
 
     fee_spec::check_size_prediction(&signed_tx, &prices).map_err(|message| {

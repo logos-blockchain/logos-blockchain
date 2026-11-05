@@ -2,10 +2,14 @@ use core::{
     pin::Pin,
     task::{Context, Poll},
 };
+use std::collections::VecDeque;
 
 use futures::{
     Stream, StreamExt as _,
-    stream::{BufferUnordered as BufferUnorderedStream, Buffered as BufferedStream},
+    stream::{
+        BufferUnordered as BufferUnorderedStream, Buffered as BufferedStream, Fuse,
+        FusedStream as _,
+    },
     task::noop_waker_ref,
 };
 
@@ -57,8 +61,13 @@ where
     }
 }
 
-/// A stream wrapper that eagerly pre-polls the wrapped stream so that
-/// buffered futures begin executing before the first consumer poll.
+/// A stream wrapper that pre-polls the wrapped stream once, so that buffered
+/// futures can begin executing before the first consumer poll.
+///
+/// The pre-poll uses a no-op waker, so it only gets as far as the wrapped
+/// stream and its futures go without being woken. Work they hand off to run on
+/// its own, like a spawned task, carries on; a source or future that waits on a
+/// wakeup stays where it is until the consumer polls.
 ///
 /// `BufferLogic` picks the adapter, and with it the order in which outputs are
 /// yielded: see [`Buffered`] and [`BufferedUnordered`].
@@ -77,15 +86,15 @@ where
     BufferLogic: BufferType<WrappedStream>,
 {
     /// Creates a new `Buffered` stream that wraps the given `wrapped_stream`
-    /// and buffers up to `buffer_size` futures, kicking off their computation
-    /// eagerly before the first consumer poll.
+    /// and buffers up to `buffer_size` futures, pre-polling it once: see
+    /// [`Buffered`] for how far that gets.
     pub fn new(wrapped_stream: WrappedStream, buffer_size: usize) -> Self {
         let mut stream = Box::pin(BufferLogic::buffer_stream(wrapped_stream, buffer_size));
-        // Pre-poll once to kick off eager computation. `Poll::Pending` means
-        // futures are now in-flight with their wakers registered; `Poll::Ready`
-        // means an item arrived immediately and is saved so it isn't lost.
-        // A no-op waker is sufficient here: we only need to drive the internal
-        // buffer forward once; real wakers are registered on subsequent consumer polls.
+        // Pre-poll once, pulling in what the wrapped stream has ready and
+        // polling those futures once. `Poll::Ready` means an item arrived
+        // immediately and is saved so it isn't lost. The waker is a no-op, so
+        // whatever returned `Poll::Pending` is not polled again until the
+        // consumer polls, with a real waker.
         let mut cx = Context::from_waker(noop_waker_ref());
         let peeked = match stream.as_mut().poll_next(&mut cx) {
             Poll::Ready(item) => item,
@@ -120,6 +129,92 @@ pub type BufferedOrdered<WrappedStream> = Buffered<WrappedStream, Ordered>;
 /// [`Unordered`].
 pub type BufferedUnordered<WrappedStream> = Buffered<WrappedStream, Unordered>;
 
+/// The number of bytes an item takes up in a [`ReadAhead`] buffer.
+pub trait BufferedBytes {
+    fn buffered_bytes(&self) -> usize;
+}
+
+/// Errors are counted as empty: they carry no payload worth bounding.
+impl<T: AsRef<[u8]>, E> BufferedBytes for Result<T, E> {
+    fn buffered_bytes(&self) -> usize {
+        self.as_ref().map_or(0, |bytes| bytes.as_ref().len())
+    }
+}
+
+/// A stream wrapper that reads ahead of its consumer.
+///
+/// Each poll takes every item the wrapped stream has ready, up to
+/// `BUFFER_BYTES` of payload and `MAX_ITEMS` items (and always at least one
+/// item, however large), and yields the oldest one. The item bound keeps
+/// items with little or no payload from piling up under the byte bound. The
+/// wrapped stream is only polled from the consumer's polls, so no work happens
+/// elsewhere. For a stream over a transport that keeps receiving between polls,
+/// this lets the sender go at network speed while the consumer is still busy
+/// with earlier items.
+pub struct ReadAhead<WrappedStream, const BUFFER_BYTES: usize, const MAX_ITEMS: usize>
+where
+    WrappedStream: Stream,
+{
+    stream: Fuse<WrappedStream>,
+    buffer: VecDeque<WrappedStream::Item>,
+    buffered_bytes: usize,
+}
+
+impl<WrappedStream, const BUFFER_BYTES: usize, const MAX_ITEMS: usize>
+    ReadAhead<WrappedStream, BUFFER_BYTES, MAX_ITEMS>
+where
+    WrappedStream: Stream,
+{
+    pub fn new(wrapped_stream: WrappedStream) -> Self {
+        Self {
+            stream: wrapped_stream.fuse(),
+            buffer: VecDeque::new(),
+            buffered_bytes: 0,
+        }
+    }
+}
+
+// Buffered items are only ever moved, never pinned, so they don't need to be
+// `Unpin` themselves.
+impl<WrappedStream, const BUFFER_BYTES: usize, const MAX_ITEMS: usize> Unpin
+    for ReadAhead<WrappedStream, BUFFER_BYTES, MAX_ITEMS>
+where
+    WrappedStream: Stream + Unpin,
+{
+}
+
+impl<WrappedStream, const BUFFER_BYTES: usize, const MAX_ITEMS: usize> Stream
+    for ReadAhead<WrappedStream, BUFFER_BYTES, MAX_ITEMS>
+where
+    WrappedStream: Stream<Item: BufferedBytes> + Unpin,
+{
+    type Item = WrappedStream::Item;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        while this.buffer.is_empty()
+            || (this.buffered_bytes < BUFFER_BYTES && this.buffer.len() < MAX_ITEMS)
+        {
+            match this.stream.poll_next_unpin(cx) {
+                Poll::Ready(Some(item)) => {
+                    this.buffered_bytes += item.buffered_bytes();
+                    this.buffer.push_back(item);
+                }
+                Poll::Ready(None) | Poll::Pending => break,
+            }
+        }
+
+        match this.buffer.pop_front() {
+            Some(item) => {
+                this.buffered_bytes -= item.buffered_bytes();
+                Poll::Ready(Some(item))
+            }
+            None if this.stream.is_terminated() => Poll::Ready(None),
+            None => Poll::Pending,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use core::{
@@ -134,7 +229,7 @@ mod tests {
         time::{sleep, timeout},
     };
 
-    use crate::tokio::stream::{BufferedOrdered, BufferedUnordered};
+    use crate::tokio::stream::{BufferedOrdered, BufferedUnordered, ReadAhead};
 
     const BUFFER_SIZE: usize = 5;
 
@@ -298,5 +393,81 @@ mod tests {
         sender_b.send('b').unwrap();
         assert_eq!(next_or_fail(&mut buffered).await, Some('b'));
         assert_eq!(next_or_fail(&mut buffered).await, None);
+    }
+
+    type Chunk = Result<Vec<u8>, ()>;
+
+    /// A source of `count` ready chunks of `size` bytes that counts, in
+    /// `pulled`, how many have been taken from it.
+    fn counting_chunks(
+        count: usize,
+        size: usize,
+        pulled: Arc<AtomicUsize>,
+    ) -> impl Stream<Item = Chunk> + Unpin {
+        stream::iter((0..count).map(move |i| Ok(vec![u8::try_from(i).unwrap(); size]))).inspect(
+            move |_| {
+                pulled.fetch_add(1, Ordering::SeqCst);
+            },
+        )
+    }
+
+    /// One poll drains every ready item until the buffer reaches its byte
+    /// bound.
+    #[tokio::test]
+    async fn read_ahead_drains_ready_items_up_to_buffer_bytes() {
+        let pulled = Arc::new(AtomicUsize::new(0));
+        let mut read_ahead =
+            ReadAhead::<_, 25, 1024>::new(counting_chunks(10, 10, Arc::clone(&pulled)));
+
+        assert_eq!(next_or_fail(&mut read_ahead).await, Some(Ok(vec![0; 10])));
+        // 10 + 10 bytes is under the bound, so a third chunk was read too.
+        assert_eq!(pulled.load(Ordering::SeqCst), 3);
+
+        assert_eq!(next_or_fail(&mut read_ahead).await, Some(Ok(vec![1; 10])));
+        // 2 chunks left buffered (20 bytes), so one more was read.
+        assert_eq!(pulled.load(Ordering::SeqCst), 4);
+    }
+
+    /// An item larger than the whole buffer is still read and yielded.
+    #[tokio::test]
+    async fn read_ahead_yields_items_larger_than_buffer_bytes() {
+        let pulled = Arc::new(AtomicUsize::new(0));
+        let mut read_ahead =
+            ReadAhead::<_, 5, 1024>::new(counting_chunks(2, 10, Arc::clone(&pulled)));
+
+        assert_eq!(next_or_fail(&mut read_ahead).await, Some(Ok(vec![0; 10])));
+        assert_eq!(pulled.load(Ordering::SeqCst), 1);
+        assert_eq!(next_or_fail(&mut read_ahead).await, Some(Ok(vec![1; 10])));
+        assert_eq!(next_or_fail(&mut read_ahead).await, None);
+    }
+
+    /// Items with no payload don't count towards the byte bound, so the item
+    /// bound is what stops them from piling up.
+    #[tokio::test]
+    async fn read_ahead_bounds_items_without_payload() {
+        let pulled = Arc::new(AtomicUsize::new(0));
+        let mut read_ahead =
+            ReadAhead::<_, 1024, 4>::new(counting_chunks(100, 0, Arc::clone(&pulled)));
+
+        assert_eq!(next_or_fail(&mut read_ahead).await, Some(Ok(vec![])));
+        assert_eq!(pulled.load(Ordering::SeqCst), 4);
+
+        // 3 left buffered, so one more is read to get back to the bound.
+        assert_eq!(next_or_fail(&mut read_ahead).await, Some(Ok(vec![])));
+        assert_eq!(pulled.load(Ordering::SeqCst), 5);
+    }
+
+    /// Items, errors included, come out in source order, and the stream ends
+    /// once both the source and the buffer are empty.
+    #[tokio::test]
+    async fn read_ahead_keeps_source_order_and_ends() {
+        let source: Vec<Chunk> = vec![Ok(vec![1]), Err(()), Ok(vec![2, 2])];
+        let read_ahead = ReadAhead::<_, 1024, 1024>::new(stream::iter(source.clone()));
+
+        let items = timeout(Duration::from_secs(5), read_ahead.collect::<Vec<_>>())
+            .await
+            .expect("Stream should end once the source ends.");
+
+        assert_eq!(items, source);
     }
 }

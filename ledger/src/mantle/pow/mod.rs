@@ -2,13 +2,13 @@ pub(crate) mod blend_difficulty;
 mod difficulty;
 pub(crate) mod tx_density;
 
-use std::num::NonZeroU64;
-
 use lb_core::{
     crypto::Hash,
     mantle::{
         Value,
-        ops::pow::{ClaimPoWRewardExecutionContext, PowNullifier, PowReward, PowTarget},
+        ops::pow::{
+            ClaimPoWRewardExecutionContext, PowNullifier, PowReward, PowSlotWindows, PowTarget,
+        },
     },
 };
 use lb_cryptarchia_engine::Slot;
@@ -50,14 +50,15 @@ pub struct RewardPowState {
     /// Rewards collected during the current epoch, added to the
     /// `reward_pool` at the next epoch boundary.
     refill_rewards: PowReward,
-    /// Spent `PoW` solutions, retained only for the acceptance
-    /// Values are the **claimed** slot used to trim after the validation window
-    /// expires.
+    /// Spent `PoW` solutions, retained only for the acceptance window.
+    /// Values are the slot of the block the claim anchored to, used to trim
+    /// them once the window of that block's era expires: from then on the
+    /// window check rejects any reuse.
     nullifiers: HashTrieMapSync<PowNullifier, Slot>,
     /// Slots of recently seen blocks by hash, retained for the
-    /// window-of-acceptance check and pruned as they age out of the
-    /// configured acceptance window
-    /// ([`slot_window`](crate::config::RewardPoWConfig::slot_window)). Keyed
+    /// window-of-acceptance check and pruned once the acceptance window
+    /// ([`slot_window`](crate::config::RewardPoWConfig::slot_window)) of the
+    /// era of each block closes. Keyed
     /// by the wire-format block hash — the same
     /// value a `ClaimPowRewardOp` anchors to — so consensus state stays
     /// independent of the node's header-id type.
@@ -77,16 +78,17 @@ pub struct BlendPowState {
 }
 
 impl PowState {
-    /// Create the genesis `PoW` state from `config`: pool and per-claim reward
-    /// seeded from the genesis endowment, difficulty taken straight from the
-    /// configured exponent, and no claims or seen blocks yet.
+    /// Create the genesis `PoW` state: the pool seeded with `pow_reward_pool`,
+    /// the per-claim reward derived from it as at every refill, so that claims
+    /// pay from the first epoch, difficulty taken straight from the configured
+    /// exponent, and no claims or seen blocks yet.
     #[must_use]
-    pub fn from_reward_config(config: &RewardPoWConfig) -> Self {
+    pub fn from_reward_pool_and_config(pow_reward_pool: PowReward, config: &Config) -> Self {
         Self {
             reward: RewardPowState {
-                reward_pool: config.reward_pool_genesis,
-                epoch_reward: config.epoch_reward_genesis,
-                reward_difficulty: PowTarget::from(config.minimum_difficulty),
+                reward_pool: pow_reward_pool,
+                epoch_reward: compute_epoch_pow_reward(pow_reward_pool, config),
+                reward_difficulty: PowTarget::from(config.pow_config.reward.minimum_difficulty),
                 refill_rewards: 0,
                 nullifiers: HashTrieMapSync::new_sync(),
                 block_slots: HashTrieMapSync::new_sync(),
@@ -173,29 +175,35 @@ impl PowState {
         self.reward.block_slots.insert_mut(block_hash, slot);
     }
 
-    /// Drop seen blocks that have aged out of the acceptance window: the
-    /// window check rejects them regardless, so they no longer need to be
-    /// retained (§5.1.1).
-    pub(crate) fn prune_seen_block_slots(&mut self, current: Slot, slot_window: NonZeroU64) {
-        let cutoff = current.saturating_sub(Slot::from(slot_window.get()));
+    /// Drop seen blocks that have aged out of the acceptance window of their
+    /// era: the window check rejects them regardless, so they no longer need
+    /// to be retained (§5.1.1).
+    pub(crate) fn prune_seen_block_slots(&mut self, current: Slot, slot_windows: &PowSlotWindows) {
         self.reward.block_slots = self
             .reward
             .block_slots
             .into_iter()
-            .filter_map(|(&hash, &slot)| (slot >= cutoff).then_some((hash, slot)))
+            .filter_map(|(&hash, &slot)| {
+                is_within_slot_window(slot, current, slot_windows).then_some((hash, slot))
+            })
             .collect();
     }
 
-    /// Drop seen nullifiers that have aged out of the acceptance window: the
-    /// window check rejects them regardless, so they no longer need to be
-    /// retained (§5.1.1).
-    pub(crate) fn prune_nullifiers_by_slots(&mut self, current: Slot, slot_window: NonZeroU64) {
-        let cutoff = current.saturating_sub(Slot::from(slot_window.get()));
+    /// Drop seen nullifiers whose anchor block has aged out of the acceptance
+    /// window of its era: the window check rejects any reuse regardless, so
+    /// they no longer need to be retained (§5.1.1).
+    pub(crate) fn prune_nullifiers_by_slots(
+        &mut self,
+        current: Slot,
+        slot_windows: &PowSlotWindows,
+    ) {
         self.reward.nullifiers = self
             .reward
             .nullifiers
             .into_iter()
-            .filter_map(|(&nullifier, &slot)| (slot >= cutoff).then_some((nullifier, slot)))
+            .filter_map(|(&nullifier, &slot)| {
+                is_within_slot_window(slot, current, slot_windows).then_some((nullifier, slot))
+            })
             .collect();
     }
 
@@ -258,25 +266,59 @@ pub fn compute_epoch_pow_reward(pow_reward_pool: PowReward, config: &Config) -> 
     PowReward::try_from(reward).unwrap_or(PowReward::MAX)
 }
 
+/// Whether a claim anchored to a block at `anchor_slot` may still be judged
+/// inside the acceptance window of the block's era at `current`, as the
+/// window check counts it: `current - anchor_slot <= slot_window`.
+fn is_within_slot_window(anchor_slot: Slot, current: Slot, slot_windows: &PowSlotWindows) -> bool {
+    let slot_window = slot_windows.at_slot(anchor_slot).parameters;
+    current.saturating_sub(anchor_slot) <= Slot::from(slot_window.get())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("PoW reward pool overflow")]
 pub struct PowRewardPoolOverflow;
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{num::NonZeroU64, sync::Arc};
 
     use lb_core::{
         mantle::{ledger::Utxos, transactions::hash::TxHash},
         sdp::Declarations,
     };
+    use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{AdditiveGroup as _, Field as _, Fr, fr_to_bytes};
     use num_bigint::BigUint;
 
     use super::*;
-    use crate::{UtxoTree, config::ModulusShift};
+    use crate::{
+        UtxoTree,
+        config::{ModulusShift, pow_slot_windows},
+        test_utils::schedule,
+    };
 
     const SLOT_WINDOW: NonZeroU64 = NonZeroU64::new(100).expect("100 is not 0");
+
+    /// The windows of a single era, of [`SLOT_WINDOW`].
+    fn single_era_slot_windows() -> PowSlotWindows {
+        pow_slot_windows(&schedule(ledger_config(), []))
+    }
+
+    /// The windows of two eras, `genesis_window` then, from epoch 1 on,
+    /// `later_window`, and the first slot of the later era.
+    fn two_era_slot_windows(genesis_window: u64, later_window: u64) -> (PowSlotWindows, u64) {
+        let with_window = |slot_window| {
+            let mut config = ledger_config();
+            config.pow_config.reward.slot_window = NonZeroU64::new(slot_window).unwrap();
+            config
+        };
+        let eras = schedule(
+            with_window(genesis_window),
+            [(1, with_window(later_window))],
+        );
+        let later_era_start = eras.starting_slot_for_epoch(Epoch::new(1)).into_inner();
+        (pow_slot_windows(&eras), later_era_start)
+    }
 
     fn epoch_state(epoch: u32) -> EpochState {
         EpochState {
@@ -294,14 +336,11 @@ mod tests {
     /// Genesis endowment values used by [`reward_config`], pinned here so the
     /// assertions read against a fixed number.
     const POW_REWARD_POOL_GENESIS: PowReward = 1_000_000_000;
-    const POW_EPOCH_REWARD_POOL_GENESIS: PowReward = 1_000_000;
 
     /// A reward config with claiming disabled (`rate_num = 0`), standing in for
     /// a real deployment config in tests that don't exercise the payout rate.
     fn reward_config() -> RewardPoWConfig {
         RewardPoWConfig {
-            reward_pool_genesis: POW_REWARD_POOL_GENESIS,
-            epoch_reward_genesis: POW_EPOCH_REWARD_POOL_GENESIS,
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).expect("10 is non-zero"),
@@ -315,9 +354,9 @@ mod tests {
         }
     }
 
-    /// Genesis `PoW` state built from [`reward_config`].
+    /// Genesis `PoW` state built from [`ledger_config`].
     fn pow_state() -> PowState {
-        PowState::from_reward_config(&reward_config())
+        PowState::from_reward_pool_and_config(POW_REWARD_POOL_GENESIS, &ledger_config())
     }
 
     /// A ledger config carrying [`reward_config`]. Its consensus schedule
@@ -347,9 +386,11 @@ mod tests {
 
     #[test]
     fn new_state_starts_with_genesis_values() {
-        let state = pow_state();
+        let state =
+            PowState::from_reward_pool_and_config(POW_REWARD_POOL_GENESIS, &test_pool_config());
         assert_eq!(state.reward_pool(), POW_REWARD_POOL_GENESIS);
-        assert_eq!(state.epoch_reward(), POW_EPOCH_REWARD_POOL_GENESIS);
+        // The per-claim reward the pool pays at its payout rate of `1/100`.
+        assert_eq!(state.epoch_reward(), POW_REWARD_POOL_GENESIS / 100);
         // The genesis difficulty is exactly the configured exponent, not a
         // value derived from it. Asserting only that it is non-zero would not
         // notice a target off by orders of magnitude, which is what deriving
@@ -613,19 +654,20 @@ mod tests {
     #[test]
     fn seen_block_slots_are_pruned_once_they_age_out_of_the_window() {
         let mut state = pow_state();
+        let slot_windows = single_era_slot_windows();
 
         // Block A at slot 5, then block B exactly SLOT_WINDOW later: A sits
         // right on the cutoff (`current - WINDOW`) and must survive, since
         // the window check still accepts a gap equal to the window.
         state.add_seen_block_slots(BLOCK_A, Slot::from(5u64));
         state.add_seen_block_slots(BLOCK_B, Slot::from(5 + SLOT_WINDOW.get()));
-        state.prune_seen_block_slots(Slot::from(5 + SLOT_WINDOW.get()), SLOT_WINDOW);
+        state.prune_seen_block_slots(Slot::from(5 + SLOT_WINDOW.get()), &slot_windows);
         assert!(state.block_slots().contains_key(&BLOCK_A));
         assert!(state.block_slots().contains_key(&BLOCK_B));
 
         // One slot further, A is strictly older than the window and is
         // pruned; B remains.
-        state.prune_seen_block_slots(Slot::from(5 + SLOT_WINDOW.get() + 1), SLOT_WINDOW);
+        state.prune_seen_block_slots(Slot::from(5 + SLOT_WINDOW.get() + 1), &slot_windows);
         assert!(!state.block_slots().contains_key(&BLOCK_A));
         assert!(state.block_slots().contains_key(&BLOCK_B));
     }
@@ -633,8 +675,9 @@ mod tests {
     #[test]
     fn nullifiers_are_pruned_once_they_age_out_of_the_window() {
         // Spent solutions are retained only for `SLOT_WINDOW`: once their
-        // claim slot ages out, the window check rejects any reuse anyway, so
+        // anchor slot ages out, the window check rejects any reuse anyway, so
         // the nullifier can be dropped (§5.1.1).
+        let slot_windows = single_era_slot_windows();
         let old_nullifier = PowNullifier::from(Fr::ONE);
         let recent_nullifier = PowNullifier::from(Fr::from(2u64));
         let nullifiers = HashTrieMapSync::new_sync()
@@ -650,17 +693,65 @@ mod tests {
             block_slots: HashTrieMapSync::new_sync(),
         });
 
-        // A claim slot exactly `SLOT_WINDOW` back sits on the cutoff and must
+        // An anchor slot exactly `SLOT_WINDOW` back sits on the cutoff and must
         // survive, matching the inclusive window check.
-        state.prune_nullifiers_by_slots(Slot::from(5 + SLOT_WINDOW.get()), SLOT_WINDOW);
+        state.prune_nullifiers_by_slots(Slot::from(5 + SLOT_WINDOW.get()), &slot_windows);
         assert!(state.nullifiers().contains_key(&old_nullifier));
         assert!(state.nullifiers().contains_key(&recent_nullifier));
 
         // One slot further, the old nullifier is strictly outside the window
         // and is dropped; the recent one remains.
-        state.prune_nullifiers_by_slots(Slot::from(5 + SLOT_WINDOW.get() + 1), SLOT_WINDOW);
+        state.prune_nullifiers_by_slots(Slot::from(5 + SLOT_WINDOW.get() + 1), &slot_windows);
         assert!(!state.nullifiers().contains_key(&old_nullifier));
         assert!(state.nullifiers().contains_key(&recent_nullifier));
+    }
+
+    #[test]
+    fn seen_block_slots_are_pruned_by_the_window_of_their_era() {
+        // Era 0 keeps its blocks for 50 slots, era 1 for 10.
+        let (slot_windows, era_1_start) = two_era_slot_windows(50, 10);
+        let era_0_block = era_1_start - 1;
+        let mut state = pow_state();
+        state.add_seen_block_slots(BLOCK_A, Slot::from(era_0_block));
+        state.add_seen_block_slots(BLOCK_B, Slot::from(era_1_start));
+
+        // The block of era 1 goes once 10 slots old, while the older block of
+        // era 0 stays: the window of a later era does not cut it short.
+        state.prune_seen_block_slots(Slot::from(era_1_start + 11), &slot_windows);
+        assert!(state.block_slots().contains_key(&BLOCK_A));
+        assert!(!state.block_slots().contains_key(&BLOCK_B));
+
+        // It goes once 50 slots old.
+        state.prune_seen_block_slots(Slot::from(era_0_block + 50), &slot_windows);
+        assert!(state.block_slots().contains_key(&BLOCK_A));
+        state.prune_seen_block_slots(Slot::from(era_0_block + 51), &slot_windows);
+        assert!(!state.block_slots().contains_key(&BLOCK_A));
+    }
+
+    #[test]
+    fn nullifiers_are_kept_for_the_window_of_the_era_of_their_anchor_block() {
+        // Era 0 has a window of 50, era 1 one of 10. A claim anchored to the
+        // last block of era 0 can be made again for 50 slots, even when it was
+        // claimed in era 1, so its nullifier must outlive era 1's window.
+        let (slot_windows, era_1_start) = two_era_slot_windows(50, 10);
+        let anchor = era_1_start - 1;
+        let nullifier = PowNullifier::from(Fr::ONE);
+        let mut state = pow_state();
+        state.update_from_claim_execution_result(&ClaimPoWRewardExecutionContext {
+            reward_pool: state.reward_pool(),
+            epoch_reward: 0,
+            nullifiers: HashTrieMapSync::new_sync().insert(nullifier, Slot::from(anchor)),
+            tx_hash: TxHash::from([7u8; 32]),
+            utxos: Utxos::new(),
+            block_slots: HashTrieMapSync::new_sync(),
+        });
+
+        state.prune_nullifiers_by_slots(Slot::from(era_1_start + 11), &slot_windows);
+        assert!(state.nullifiers().contains_key(&nullifier));
+        state.prune_nullifiers_by_slots(Slot::from(anchor + 50), &slot_windows);
+        assert!(state.nullifiers().contains_key(&nullifier));
+        state.prune_nullifiers_by_slots(Slot::from(anchor + 51), &slot_windows);
+        assert!(!state.nullifiers().contains_key(&nullifier));
     }
 
     #[test]

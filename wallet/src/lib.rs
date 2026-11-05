@@ -540,7 +540,7 @@ where
     txs.map_ref(move |tx| {
         let mut events_by_op = events_by_tx.remove(&tx.hash()).unwrap_or_default();
 
-        let ops = tx.op_refs().into_inner().filter_map_ref(|op_ref| {
+        let ops = tx.op_refs().inner().filter_map_ref(|op_ref| {
             let event = op_id_ref(op_ref).and_then(|id| events_by_op.remove(&id));
             transform_op(op_ref, event)
         });
@@ -874,6 +874,7 @@ mod tests {
 
     use lb_core::{
         crypto::ZkDigest as _,
+        era::{AcceptedForkDigests, ForkDigest},
         mantle::{
             Note, Op, OpProof, SignedOps,
             channel::Channels,
@@ -884,7 +885,7 @@ mod tests {
                 deposit::Metadata,
                 inscribe::{Inscription, InscriptionOp},
             },
-            transactions::{GasPrices, OpProofs, Ops, tx_list::ops::OpsGasContext},
+            transactions::{GasPrices, OpProofs, Ops, TxList, tx_list::ops::OpsGasContext},
         },
         proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
         sdp::{MinStake, ServiceParameters, ServiceType},
@@ -895,7 +896,8 @@ mod tests {
         Ed25519Key, Ed25519Signature, UnsecuredZkKey, ZkSignature,
     };
     use lb_ledger::{
-        config::{BlendPoWConfig, ConsensusExcludedKeys, ModulusShift, PoWConfig, RewardPoWConfig},
+        ConsensusExcludedKeys,
+        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_pol::LotteryConstants;
@@ -905,6 +907,8 @@ mod tests {
     use rpds::HashTrieSetSync;
 
     use super::*;
+
+    const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
 
     fn pk(v: u64) -> ZkPublicKey {
         ZkPublicKey::from(BigUint::from(v))
@@ -941,6 +945,8 @@ mod tests {
                 Utxo::new(tx_hash(0), 2, Note::new(4, alice)),
             ],
             &ledger_config(),
+            0,
+            &ConsensusExcludedKeys::empty(),
         );
 
         let wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
@@ -997,7 +1003,7 @@ mod tests {
         let (voucher_cm, voucher_nf) = voucher(1, 0);
         let mut state = WalletState::from_ledger(
             &HashMap::<ZkPublicKey, u64>::new(),
-            &LedgerState::from_utxos([], &ledger_config()),
+            &LedgerState::from_utxos([], &ledger_config(), 0, &ConsensusExcludedKeys::empty()),
         );
         state.vouchers = MerkleMountainRange::new().push(voucher_cm).unwrap();
         state.voucher_paths = rpds::HashTrieMapSync::new_sync()
@@ -1050,7 +1056,8 @@ mod tests {
 
         let genesis = HeaderId::from([0; 32]);
 
-        let genesis_ledger = LedgerState::from_utxos([], &ledger_config());
+        let genesis_ledger =
+            LedgerState::from_utxos([], &ledger_config(), 0, &ConsensusExcludedKeys::empty());
 
         let (v1_cm, v1_nf) = voucher(1, 0);
         let (v2_cm, v2_nf) = voucher(1, 1);
@@ -1211,7 +1218,8 @@ mod tests {
         let alice = pk(1);
         let bob = pk(2);
         let genesis = HeaderId::from([0; 32]);
-        let genesis_ledger = LedgerState::from_utxos([], &ledger_config());
+        let genesis_ledger =
+            LedgerState::from_utxos([], &ledger_config(), 0, &ConsensusExcludedKeys::empty());
         let (v_cm, _v_nf) = voucher(1, 0);
 
         let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
@@ -1272,7 +1280,8 @@ mod tests {
         let alice = pk(1);
         let bob = pk(2);
         let genesis = HeaderId::from([0; 32]);
-        let genesis_ledger = LedgerState::from_utxos([], &ledger_config());
+        let genesis_ledger =
+            LedgerState::from_utxos([], &ledger_config(), 0, &ConsensusExcludedKeys::empty());
         let (v_cm, _v_nf) = voucher(1, 0);
 
         let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
@@ -1368,7 +1377,8 @@ mod tests {
         let alice = pk(1);
         let bob = pk(2);
         let genesis = HeaderId::from([0; 32]);
-        let ledger = LedgerState::from_utxos([], &ledger_config());
+        let ledger =
+            LedgerState::from_utxos([], &ledger_config(), 0, &ConsensusExcludedKeys::empty());
         let (voucher_cm, _voucher_nf) = voucher(1, 0);
 
         // A wallet that only knows alice's key.
@@ -1414,7 +1424,12 @@ mod tests {
         let alice = pk(1);
         let utxo1 = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
         let utxo2 = Utxo::new(tx_hash(0), 1, Note::new(5000, alice));
-        let ledger_state = LedgerState::from_utxos([utxo1, utxo2], &ledger_config());
+        let ledger_state = LedgerState::from_utxos(
+            [utxo1, utxo2],
+            &ledger_config(),
+            0,
+            &ConsensusExcludedKeys::empty(),
+        );
 
         let mut wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
@@ -1433,13 +1448,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            794,
+            826,
             funded_tx_builder
                 .minimum_gas_cost::<Gas>(&context)
                 .unwrap()
                 .into_inner()
         );
-        assert_eq!(794, funded_tx_builder.net_balance());
+        assert_eq!(826, funded_tx_builder.net_balance());
         assert_eq!(
             0,
             funded_tx_builder
@@ -1447,7 +1462,7 @@ mod tests {
                 .unwrap()
         );
 
-        let funded_tx = funded_tx_builder.build().unwrap();
+        let funded_tx = funded_tx_builder.build(FORK_DIGEST).unwrap();
 
         if let Some(Op::Transfer(transfer_op)) = funded_tx.last() {
             // ensure alices utxo was used to pay the fee
@@ -1456,7 +1471,7 @@ mod tests {
             assert_eq!(
                 transfer_op.outputs,
                 Outputs::new([Note {
-                    value: 4206,
+                    value: 4174,
                     pk: alice,
                 }])
             );
@@ -1469,7 +1484,8 @@ mod tests {
     fn test_fund_tx_with_priority_fee_percentage() {
         let alice = pk(1);
         let utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
-        let ledger_state = LedgerState::from_utxos([utxo], &ledger_config());
+        let ledger_state =
+            LedgerState::from_utxos([utxo], &ledger_config(), 0, &ConsensusExcludedKeys::empty());
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
 
@@ -1504,8 +1520,8 @@ mod tests {
             .minimum_gas_cost::<Gas>(&context)
             .unwrap()
             .into_inner();
-        assert_eq!(mandatory_fee_without_change, 754);
-        assert_eq!(mandatory_fee, 794);
+        assert_eq!(mandatory_fee_without_change, 786);
+        assert_eq!(mandatory_fee, 826);
         let priority_fee_amount = (mandatory_fee * priority_fee_percent).div_ceil(100);
         assert_eq!(
             i128::from(mandatory_fee + priority_fee_amount),
@@ -1519,7 +1535,7 @@ mod tests {
         );
 
         // The change output shrank by the mandatory fee and percentage tip.
-        let funded_tx = funded_tx_builder.build().unwrap();
+        let funded_tx = funded_tx_builder.build(FORK_DIGEST).unwrap();
         if let Some(Op::Transfer(transfer_op)) = funded_tx.last() {
             assert_eq!(
                 transfer_op.outputs,
@@ -1538,7 +1554,8 @@ mod tests {
         let alice = pk(1);
         // The wallet has a spendable note available...
         let utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
-        let ledger_state = LedgerState::from_utxos([utxo], &ledger_config());
+        let ledger_state =
+            LedgerState::from_utxos([utxo], &ledger_config(), 0, &ConsensusExcludedKeys::empty());
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
 
@@ -1571,7 +1588,7 @@ mod tests {
         assert_eq!(0, funded_tx_builder.net_balance());
 
         // The empty transfer is dropped, so the built tx carries no transfer op.
-        let funded_tx = funded_tx_builder.build().unwrap();
+        let funded_tx = funded_tx_builder.build(FORK_DIGEST).unwrap();
         assert!(
             !funded_tx.iter().any(|op| matches!(op, Op::Transfer(_))),
             "a fee-less transaction must not contain a transfer op"
@@ -1589,6 +1606,8 @@ mod tests {
                 Utxo::new(tx_hash(0), 3, Note::new(100, alice)),
             ],
             &ledger_config(),
+            0,
+            &ConsensusExcludedKeys::empty(),
         );
 
         let context = OpsContext {
@@ -1627,7 +1646,8 @@ mod tests {
     #[test]
     fn test_fund_tx_zero_funds() {
         let alice = pk(1);
-        let ledger_state = LedgerState::from_utxos([], &ledger_config());
+        let ledger_state =
+            LedgerState::from_utxos([], &ledger_config(), 0, &ConsensusExcludedKeys::empty());
 
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
@@ -1654,7 +1674,8 @@ mod tests {
     fn test_fund_tx_all_service_notes() {
         let alice = pk(1);
         let utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
-        let ledger_state = LedgerState::from_utxos([utxo], &ledger_config());
+        let ledger_state =
+            LedgerState::from_utxos([utxo], &ledger_config(), 0, &ConsensusExcludedKeys::empty());
 
         let mut wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
@@ -1686,6 +1707,8 @@ mod tests {
         let ledger_state = LedgerState::from_utxos(
             [Utxo::new(tx_hash(0), 0, Note::new(1_000_000, bob))],
             &ledger_config(),
+            0,
+            &ConsensusExcludedKeys::empty(),
         );
 
         let wallet_state =
@@ -1726,7 +1749,7 @@ mod tests {
 
         // Determine gas cost without change note
         assert_eq!(
-            754,
+            786,
             tx_builder
                 .clone()
                 .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
@@ -1741,15 +1764,17 @@ mod tests {
         let wallet_state = WalletState::from_ledger(
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(754, alice))],
+                [Utxo::new(tx_hash(0), 0, Note::new(786, alice))],
                 &ledger_config(),
+                0,
+                &ConsensusExcludedKeys::empty(),
             ),
         );
 
         let funded_tx_wo_change = wallet_state
             .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
             .unwrap()
-            .build()
+            .build(FORK_DIGEST)
             .unwrap(); // successfully funded the tx
 
         // verify that no change output was used.
@@ -1761,7 +1786,7 @@ mod tests {
 
         // Determine gas cost with change note
         assert_eq!(
-            794,
+            826,
             tx_builder
                 .clone()
                 .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
@@ -1773,7 +1798,7 @@ mod tests {
                 .into_inner()
         );
 
-        for value in 755..=794 {
+        for value in 787..=826 {
             // this region of note values will fail to fund the tx.
             // We can fund the tx if the note value is exactly the gas cost without change
             // note
@@ -1782,6 +1807,8 @@ mod tests {
                 &LedgerState::from_utxos(
                     [Utxo::new(tx_hash(0), 0, Note::new(value, alice))],
                     &ledger_config(),
+                    0,
+                    &ConsensusExcludedKeys::empty(),
                 ),
             );
 
@@ -1804,15 +1831,17 @@ mod tests {
         let wallet_state = WalletState::from_ledger(
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(795, alice))],
+                [Utxo::new(tx_hash(0), 0, Note::new(827, alice))],
                 &ledger_config(),
+                0,
+                &ConsensusExcludedKeys::empty(),
             ),
         );
 
         let funded_tx_wo_change = wallet_state
             .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
             .unwrap()
-            .build()
+            .build(FORK_DIGEST)
             .unwrap(); // successfully funded the tx
 
         // verify that indeed a change output was used.
@@ -1827,8 +1856,6 @@ mod tests {
     /// deployment config in tests.
     fn disabled_reward_config() -> RewardPoWConfig {
         RewardPoWConfig {
-            reward_pool_genesis: 1_000_000_000,
-            epoch_reward_genesis: 1_000_000,
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
@@ -1853,7 +1880,8 @@ mod tests {
             NonZero::new(1).unwrap(),
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
-            NonZero::new(12).unwrap(),
+            12,
+            4,
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
@@ -1886,7 +1914,6 @@ mod tests {
                     timestamp: 0,
                 },
             },
-            consensus_excluded_keys: ConsensusExcludedKeys::empty(),
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -1897,6 +1924,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
         }
     }
 
@@ -1950,7 +1978,12 @@ mod tests {
 
         // Seed the wallet with a 100 NMO note owned by alice.
         let alice_utxo = Utxo::new(tx_hash(0), 0, Note::new(100, alice));
-        let genesis_ledger = LedgerState::from_utxos([alice_utxo], &ledger_config());
+        let genesis_ledger = LedgerState::from_utxos(
+            [alice_utxo],
+            &ledger_config(),
+            0,
+            &ConsensusExcludedKeys::empty(),
+        );
         let (v_cm, _) = voucher(1, 0);
         let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
             [(alice, 1)],
@@ -2026,7 +2059,12 @@ mod tests {
         // Seed the wallet with 100 NMO note with `pk1` and mark it as a
         // channel note via a prior `ChannelDeposit`.
         let pk1_utxo = Utxo::new(tx_hash(0), 0, Note::new(100, pk1));
-        let genesis_ledger = LedgerState::from_utxos([pk1_utxo], &ledger_config());
+        let genesis_ledger = LedgerState::from_utxos(
+            [pk1_utxo],
+            &ledger_config(),
+            0,
+            &ConsensusExcludedKeys::empty(),
+        );
         let (v_cm_1, _) = voucher(1, 0);
         let (v_cm_2, _) = voucher(1, 1);
         let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
@@ -2113,7 +2151,12 @@ mod tests {
         let genesis = HeaderId::from([0; 32]);
 
         let alice_utxo = Utxo::new(tx_hash(0), 0, Note::new(100, alice));
-        let genesis_ledger = LedgerState::from_utxos([alice_utxo], &ledger_config());
+        let genesis_ledger = LedgerState::from_utxos(
+            [alice_utxo],
+            &ledger_config(),
+            0,
+            &ConsensusExcludedKeys::empty(),
+        );
         let (v_cm_1, _) = voucher(1, 0);
         let (v_cm_2, _) = voucher(1, 1);
         let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
@@ -2184,7 +2227,12 @@ mod tests {
 
         // Seed Alice with a 100 NMO note and deposit it into a channel.
         let alice_utxo = Utxo::new(tx_hash(0), 0, Note::new(100, alice));
-        let genesis_ledger = LedgerState::from_utxos([alice_utxo], &ledger_config());
+        let genesis_ledger = LedgerState::from_utxos(
+            [alice_utxo],
+            &ledger_config(),
+            0,
+            &ConsensusExcludedKeys::empty(),
+        );
         let (v_cm_1, _) = voucher(1, 0);
         let (v_cm_2, _) = voucher(1, 1);
         let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
@@ -2335,7 +2383,9 @@ mod tests {
     }
 
     fn signed_test_tx(ops: Vec<Op>) -> SignedOps<Preverified, StandardMode> {
-        let ops = Ops::try_from(ops).expect("test operations should fit");
+        let ops = TxList::try_from(ops)
+            .map(|ops| Ops::new(FORK_DIGEST, ops))
+            .expect("test operations should fit");
         let proofs = ops
             .iter()
             .map(|op| match op {

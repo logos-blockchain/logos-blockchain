@@ -60,8 +60,8 @@ fn apply_zone_timing_defaults(world: &mut ZoneWorld, step: &str) -> StepResult {
     set_deployment_config_override(
         &mut world.node,
         step,
-        "eras.0.time.slot_duration",
-        "seconds(1)",
+        "eras.0.time.slot_duration_in_seconds",
+        "1",
     )?;
     set_deployment_config_override(
         &mut world.node,

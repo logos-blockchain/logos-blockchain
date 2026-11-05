@@ -1,3 +1,8 @@
+use core::{num::NonZero, time::Duration};
+use std::collections::BTreeMap;
+
+use time::UtcDateTime;
+
 pub mod bodies;
 pub mod metrics;
 pub mod paths;
@@ -13,11 +18,48 @@ compile_error!(
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct TimeInfo {
-    pub slot_duration_ms: u64,
-    pub genesis_time_unix_ms: i64,
+    /// When the chain started, i.e. the start of its genesis era, in RFC 3339.
+    #[serde(with = "rfc3339_utc")]
+    #[schema(value_type = String, format = DateTime)]
+    pub genesis_time: UtcDateTime,
     pub current_slot: u64,
     pub current_epoch: u32,
-    pub slots_per_epoch: u64,
+    /// The chain's eras, keyed by the epoch each starts at: the first at
+    /// genesis, epoch 0. The index of each item in iteration order represents
+    /// the era number.
+    pub era_timings: BTreeMap<u32, EraTiming>,
+}
+
+#[serde_with::serde_as]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, utoipa::ToSchema)]
+pub struct EraTiming {
+    #[serde(rename = "slot_duration_ms")]
+    #[serde_as(as = "serde_with::DurationMilliSeconds<u64>")]
+    #[schema(value_type = u64)]
+    pub slot_duration: Duration,
+    #[schema(value_type = u64)]
+    pub slots_per_epoch: NonZero<u64>,
+}
+
+/// A UTC date-time in RFC 3339, which `time` only provides for an
+/// `OffsetDateTime`.
+mod rfc3339_utc {
+    use serde::{Deserializer, Serializer};
+    use time::{OffsetDateTime, UtcDateTime};
+
+    pub fn serialize<S>(datetime: &UtcDateTime, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        time::serde::rfc3339::serialize(&OffsetDateTime::from(*datetime), serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<UtcDateTime, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        time::serde::rfc3339::deserialize(deserializer).map(OffsetDateTime::to_utc)
+    }
 }
 
 /// This maximum blocks stream chunk size is a happy medium between performance

@@ -12,8 +12,9 @@ Feature: PoW mining
   # configured.
   #
   # Two deployment tweaks make mining observable in a short test:
-  #   * `rate_num = 1` enables the reward payout (the shipped configs disable it
-  #     with `rate_num = 0`).
+  #   * A nonzero `rate_num` enables the reward payout (the shipped configs
+  #     disable it with `rate_num = 0`), paying from the pool the genesis
+  #     block seeds, 1 000 000 000 on test chains.
   #   * `minimum_difficulty = 1` starts `d_reward` at `p / 2`, half the scalar
   #     field, so a winning ticket is trivial to find from the first block.
   #     (The exponent inverts: a *larger* n means a *smaller* target, i.e.
@@ -30,16 +31,17 @@ Feature: PoW mining
     And I have a cluster with capacity of 3 nodes
     And the first 2 nodes are declared as blend providers
     And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
-    And I have deployment config override "eras.0.time.slot_duration" as "seconds(1)"
+    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "2"
-    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_num" as "1"
-    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.epoch_reward_genesis" as "1000000"
     # Fund the pool for exactly one claim (pool == per-claim reward): with the
     # difficulty eased to the field maximum the miner finds tickets extremely
     # fast, and the claim is capped to `reward_pool / reward` tickets — so a
-    # single-ticket cap keeps the reward-claim transaction small and fast.
-    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.reward_pool_genesis" as "1000000"
+    # single-ticket cap keeps the reward-claim transaction small and fast. The
+    # per-claim reward is `pool * rate_num / (rate_den * target_claim_per_block
+    # * N_b)`, with `N_b` = 200 expected blocks per epoch here (`k` = 20,
+    # `f` = 1/2), so a `rate_num` of 200 pays out the whole pool in one claim.
+    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_num" as "200"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.minimum_difficulty" as "1"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.ema_smoothing_factor" as "1"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.ema_smoothing_precision" as "1000000000000000000"
@@ -74,7 +76,7 @@ Feature: PoW mining
     Then I stop all nodes
 
   # The two scenarios above deliberately fund the pool for a single claim
-  # (`reward_pool_genesis == epoch_reward_genesis`), which keeps every claim
+  # (the per-claim reward is the whole pool), which keeps every claim
   # transaction to one op and makes them fast — but it also means the batching
   # caps are never reached. This one funds the pool for many claims and lets a
   # backlog of tickets build up first, so the batch is capped by the node's own
@@ -90,14 +92,17 @@ Feature: PoW mining
     And I have a cluster with capacity of 3 nodes
     And the first 2 nodes are declared as blend providers
     And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
-    And I have deployment config override "eras.0.time.slot_duration" as "seconds(1)"
+    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "2"
-    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_num" as "1"
-    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.epoch_reward_genesis" as "1000000"
     # Funds 1000 claims, so `reward_pool / reward` no longer caps the batch and
-    # the node's own per-transaction limits decide how many tickets it takes.
-    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.reward_pool_genesis" as "1000000000"
+    # the node's own per-transaction limits decide how many tickets it takes:
+    # the per-claim reward is `pool * rate_num / (rate_den *
+    # target_claim_per_block * N_b)`, with `N_b` = 200 expected blocks per epoch
+    # here (`k` = 20, `f` = 1/2), so a `rate_den` of 5 pays a thousandth of the
+    # pool per claim.
+    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_num" as "1"
+    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_den" as "5"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.minimum_difficulty" as "1"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.ema_smoothing_factor" as "1"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.ema_smoothing_precision" as "1000000000000000000"
@@ -136,12 +141,11 @@ Feature: PoW mining
     And I have a cluster with capacity of 3 nodes
     And the first 2 nodes are declared as blend providers
     And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
-    And I have deployment config override "eras.0.time.slot_duration" as "seconds(1)"
+    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "2"
-    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_num" as "1"
-    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.epoch_reward_genesis" as "1000000"
-    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.reward_pool_genesis" as "1000000"
+    # One claim pays out the whole pool, as in the first scenario.
+    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_num" as "200"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.minimum_difficulty" as "1"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.ema_smoothing_factor" as "1"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.ema_smoothing_precision" as "1000000000000000000"

@@ -8,14 +8,15 @@ use lb_core::{
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
 use lb_libp2p::{Multiaddr, Protocol};
-use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use serde::Serialize;
 
 use super::ParticipateArgs;
 use crate::{
     UserConfig,
-    cli::config::keystore::{KeyTitle, Keystore},
-    config::network::serde::nat,
+    config::{
+        keystore::{KeyTitle, Keystore},
+        network::serde::nat,
+    },
 };
 
 #[derive(Serialize)]
@@ -35,10 +36,8 @@ struct BlendParticipationData {
 }
 
 pub fn run(args: &ParticipateArgs) -> Result<()> {
-    let user_config = deserialize_value_at_path::<UserConfig>(&args.config, OnUnknownKeys::Warn)?;
-
-    let keystore_yaml = std::fs::read_to_string(&args.keystore)?;
-    let keystore: Keystore = serde_yaml::from_str(&keystore_yaml)?;
+    let user_config = UserConfig::load(&args.config)?;
+    let keystore = Keystore::load(&user_config.kms.keystore_path(&args.config))?;
 
     let (_, stake_key) = keystore.get_zk(KeyTitle::STAKE)?;
     let (_, leader_funding_key) = keystore.get_zk(KeyTitle::LEADER_FUNDING)?;

@@ -20,6 +20,9 @@ lb-core             = { workspace = true }
 lb-cryptarchia-sync = { workspace = true }
 lb-libp2p           = { workspace = true }
 lb-log-targets      = { workspace = true }
+lb-services-utils   = { workspace = true }
+lb-time             = { workspace = true }
+lb-time-service     = { workspace = true }
 lb-tracing          = { workspace = true }
 lb-utils            = { features = ["tokio"], workspace = true }
 overwatch           = { workspace = true }
@@ -35,9 +38,9 @@ utoipa              = { features = ["macros"], optional = true, workspace = true
 chrono                  = { features = ["now"], workspace = true }
 lb-utils                = { workspace = true }
 testing-framework-tools = { workspace = true }
+time                    = { workspace = true }
 tracing-subscriber      = { features = ["env-filter", "fmt", "std"], workspace = true }
 
 [features]
-default          = []
 openapi          = ["dep:utoipa"]
 tokio-task-names = ["lb-utils/tokio-task-names"]

@@ -166,13 +166,14 @@ mod tests {
     };
 
     use lb_core::{
+        era::{AcceptedForkDigests, ForkDigest},
         mantle::{Note, Utxo},
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_ledger::{
-        Intent,
-        config::{BlendPoWConfig, ConsensusExcludedKeys, ModulusShift, PoWConfig, RewardPoWConfig},
+        ConsensusExcludedKeys, Intent,
+        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
@@ -481,8 +482,6 @@ mod tests {
 
     fn disabled_reward_config() -> RewardPoWConfig {
         RewardPoWConfig {
-            reward_pool_genesis: 1_000_000_000,
-            epoch_reward_genesis: 1_000_000,
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
@@ -509,7 +508,8 @@ mod tests {
             NonZero::new(2).unwrap(),
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().unwrap(),
-            NonZero::new(12).unwrap(),
+            12,
+            4,
         );
         let epoch_config = lb_cryptarchia_engine::EpochConfig {
             epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
@@ -549,7 +549,6 @@ mod tests {
                         timestamp: 0,
                     },
                 },
-                consensus_excluded_keys: ConsensusExcludedKeys::empty(),
                 pow_config: PoWConfig {
                     reward: disabled_reward_config(),
                     blend: BlendPoWConfig {
@@ -560,7 +559,10 @@ mod tests {
                         target_transactions_per_block: 1.try_into().unwrap(),
                     },
                 },
+                accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
             },
+            0,
+            &ConsensusExcludedKeys::empty(),
         )
     }
 }

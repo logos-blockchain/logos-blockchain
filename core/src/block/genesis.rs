@@ -18,7 +18,7 @@ use crate::{
         },
         transactions::{
             GENESIS_REQUIRED_OPS, GenesisTx, MAX_GENESIS_DECLARATIONS, OpProofs, Ops, SignedOps,
-            VerificationError, genesis_tx,
+            TxList, VerificationError, genesis_tx,
         },
     },
 };
@@ -1248,7 +1248,8 @@ impl GenesisBlockBuilder<WithAll> {
         .chain(sdp_declarations.into_iter().map(Op::SDPDeclare))
         .collect();
         let n = ops.len();
-        let Ok(capped_ops) = Ops::try_from(ops) else {
+        let Ok(capped_ops) = TxList::try_from(ops).map(|ops| Ops::new(GenesisTx::FORK_DIGEST, ops))
+        else {
             // This should never happen because the builder doesn't allow more
             // ops than can fit in a genesis tx, but we have to handle the error
             // just in case.
@@ -1301,7 +1302,7 @@ mod tests {
         block::SignedHeader,
         header::HeaderId,
         mantle::{
-            CryptarchiaParameter, GenesisTime, NoteId,
+            ConsensusExcludedKeys, GenesisParameters, GenesisTime, NoteId,
             ledger::verification_mode::GenesisMode,
             ops::{
                 OpRef,
@@ -1318,10 +1319,12 @@ mod tests {
         InscriptionOp {
             channel_id: ChannelId::from([0; 32]),
             inscription: Inscription::new_unchecked(
-                CryptarchiaParameter {
+                GenesisParameters {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
-                    genesis_time: GenesisTime::new(1000),
+                    start_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
+                    pow_reward_pool: 0,
+                    consensus_excluded_keys: ConsensusExcludedKeys::empty(),
                 }
                 .encode_to_vec(),
             ),
@@ -1334,10 +1337,12 @@ mod tests {
         InscriptionOp {
             channel_id: ChannelId::from([1; 32]), // non-zero — invalid
             inscription: Inscription::new_unchecked(
-                CryptarchiaParameter {
+                GenesisParameters {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
-                    genesis_time: GenesisTime::new(1000),
+                    start_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
+                    pow_reward_pool: 0,
+                    consensus_excluded_keys: ConsensusExcludedKeys::empty(),
                 }
                 .encode_to_vec(),
             ),
@@ -1401,7 +1406,11 @@ mod tests {
             .collect::<Vec<_>>();
         let ops_proofs = OpProofs::new_unchecked(proofs_vec);
 
-        SignedOps::from_parts_trusted(Ops::new_unchecked(ops), ops_proofs).unwrap()
+        SignedOps::from_parts_trusted(
+            Ops::new(GenesisTx::FORK_DIGEST, TxList::new_unchecked(ops)),
+            ops_proofs,
+        )
+        .unwrap()
     }
 
     fn make_genesis_tx(extra_ops: Vec<Op>) -> GenesisTx {

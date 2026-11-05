@@ -67,26 +67,24 @@ async fn start_silent_cluster(
 fn config(mut config: RunConfig) -> RunConfig {
     config
         .deployment
-        .genesis_era_parameters_mut()
-        .time
-        .slot_duration = Duration::from_secs(1);
+        .update_genesis_era_parameters(|parameters| {
+            parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
+            parameters.cryptarchia.security_param = 5.try_into().unwrap();
+            // The widest uncle reference window k allows, ⌊0.6k⌋.
+            parameters.cryptarchia.uncle_reference_window_in_block = 3;
+            // Fast block production to speed up the test
+            parameters.cryptarchia.slot_activation_coeff =
+                NonNegativeRatio::new(1, 2.try_into().unwrap())
+                    .try_into()
+                    .unwrap();
+        })
+        .expect("The changed deployment must be valid.");
     config
         .user
         .cryptarchia
         .service
         .bootstrap
         .prolonged_bootstrap_period = Duration::ZERO;
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .security_param = 5.try_into().unwrap();
-    // Fast block production to speed up the test
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .slot_activation_coeff = NonNegativeRatio::new(1, 2.try_into().unwrap());
     // Aggressive watchdog to speed up the test
     config
         .user

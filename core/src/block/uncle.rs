@@ -1,7 +1,7 @@
-use lb_binary_codec::canonical::BinaryCodec;
-use lb_cryptarchia_engine::{MAX_UNCLES, Slot, UncleSlots};
+use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
+use lb_cryptarchia_engine::UncleSlots;
 use lb_key_management_system_keys::keys::Ed25519Signature;
-use lb_utils::bounded::UpperBoundedVec;
+use lb_utils::bounded::{BoundedError, UpperRuntimeBoundedVec};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -9,32 +9,38 @@ use crate::{
     header::{Header, HeaderId},
 };
 
-/// Signed headers of the uncles referenced by a block.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
-pub struct UncleHeaders(UpperBoundedVec<SignedHeader, MAX_UNCLES>);
+/// Signed headers of the uncles referenced by a block, at most as many as the
+/// era of the block allows.
+///
+/// The count is checked against the era's maximum, a `u8` like every era's
+/// maximum, when the headers are built or decoded. Serde reads them without
+/// an era, under the largest maximum allowed by the type used for length
+/// prefix.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct UncleHeaders(UpperRuntimeBoundedVec<SignedHeader, u8>);
 
 impl UncleHeaders {
-    /// The maximum canonical representation of the bounded uncle list.
-    pub const MAX_CANONICAL_ENCODED_SIZE: usize =
-        1 + MAX_UNCLES * SignedHeader::CANONICAL_ENCODED_SIZE;
-
+    /// The largest canonical encoding of the uncles of a block whose era
+    /// allows `max_uncles`.
     #[must_use]
-    pub fn new(headers: impl Into<UpperBoundedVec<SignedHeader, MAX_UNCLES>>) -> Self {
-        Self(headers.into())
+    pub fn max_encoded_size(max_uncles: u8) -> usize {
+        size_of::<u8>() + usize::from(max_uncles) * SignedHeader::CANONICAL_ENCODED_SIZE
+    }
+
+    /// The uncles of a block whose era allows `max_uncles`.
+    pub fn try_new(headers: Vec<SignedHeader>, max_uncles: u8) -> Result<Self, BoundedError> {
+        UpperRuntimeBoundedVec::try_new(headers, max_uncles).map(Self)
     }
 
     #[must_use]
     pub const fn empty() -> Self {
-        Self(UpperBoundedVec::empty())
+        Self(UpperRuntimeBoundedVec::empty())
     }
 
     /// The slots the carried headers occupy.
     #[must_use]
     pub fn slots(&self) -> UncleSlots {
-        let slots: Vec<Slot> = self.0.iter().map(|uncle| uncle.header.slot()).collect();
-        slots
-            .try_into()
-            .expect("one slot per header, so the same bound holds")
+        self.0.map_ref(|uncle| uncle.header.slot())
     }
 
     pub fn ids(&self) -> impl Iterator<Item = HeaderId> {
@@ -57,6 +63,30 @@ impl UncleHeaders {
 
     pub fn iter(&self) -> impl Iterator<Item = &SignedHeader> {
         self.0.iter()
+    }
+}
+
+impl BinaryEncode for UncleHeaders {
+    fn encoded_length(&self) -> usize {
+        self.0.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.0.encode_into(out);
+    }
+}
+
+impl BinaryDecode for UncleHeaders {
+    /// The most uncles the era of the block allows, which decoding holds the
+    /// count to.
+    type Context = u8;
+
+    fn decode<'input>(
+        input: &'input [u8],
+        max_uncles: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, headers) = UpperRuntimeBoundedVec::decode(input, &(*max_uncles, ()))?;
+        Ok((rest, Self(headers)))
     }
 }
 

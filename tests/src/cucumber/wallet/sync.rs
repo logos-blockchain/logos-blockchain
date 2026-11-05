@@ -318,6 +318,39 @@ pub async fn wait_wallet_send_ready<S: BuildHasher + Sync>(
     available_utxos: &mut WalletUtxos,
     used_input_note_ids: &HashSet<NoteId, S>,
 ) -> Result<BestNodeInfo, StepError> {
+    wait_wallet_send_ready_with_callback(
+        world,
+        step,
+        wallet_name,
+        timeout_seconds,
+        required_available,
+        readiness,
+        available_utxos,
+        used_input_note_ids,
+        |_| Ok(()),
+    )
+    .await
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Wallet readiness preserves the existing selection context and adds a per-poll maintenance hook"
+)]
+pub(crate) async fn wait_wallet_send_ready_with_callback<S, F>(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallet_name: &str,
+    timeout_seconds: u64,
+    required_available: u64,
+    readiness: WalletSendReadiness,
+    available_utxos: &mut WalletUtxos,
+    used_input_note_ids: &HashSet<NoteId, S>,
+    mut before_poll: F,
+) -> Result<BestNodeInfo, StepError>
+where
+    S: BuildHasher + Sync,
+    F: FnMut(&mut CucumberWorld) -> Result<(), StepError>,
+{
     let start = tokio::time::Instant::now();
 
     let mut last_available_value = 0u64;
@@ -329,6 +362,8 @@ pub async fn wait_wallet_send_ready<S: BuildHasher + Sync>(
     let mut last_msg = String::new();
 
     while start.elapsed() < Duration::from_secs(timeout_seconds) {
+        before_poll(world)?;
+
         // Ensure we have a converged majority before proceeding
         let best_node_info = get_best_node_info(world, wallet_name, Some(&mut last_msg)).await?;
         let fresh_wallet_state = current_wallet_state(world, step, wallet_name).await?;
