@@ -7,8 +7,8 @@ use std::{
 
 use futures::StreamExt as _;
 use lb_core::{
-    block::{Block, BlockTransactions, SignedHeader, UncleHeaders},
-    era::ForkDigest,
+    block::{Block, BlockTransactions, SignedHeader, TxInBlock, UncleHeaders},
+    era::{AcceptedForkDigests, ForkDigest},
     mantle::{
         Note, Op, OpProof, SignedOps, Utxo,
         channel::Channels,
@@ -649,6 +649,11 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     assert!(lib_rx.try_recv().is_err());
 }
 
+/// `tx`, carried by a block at `slot`.
+const fn tx_in_block<Tx>(tx: Tx, slot: Slot) -> TxInBlock<Tx> {
+    TxInBlock { tx, slot }
+}
+
 /// A fork switch reports the transactions of every block that entered the
 /// canonical chain, and reorgs only the transactions of the displaced blocks
 /// that the adopted branch does not carry.
@@ -764,7 +769,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         outcome.newly_canonical_txs,
         HashMap::from([(tx1.hash(), f1_slot), (tx2.hash(), f2_slot)])
     );
-    assert_eq!(outcome.reorged_txs, vec![tx3]);
+    assert_eq!(outcome.reorged_txs, vec![tx_in_block(tx3, b1_slot)]);
     assert_eq!(cryptarchia.tip(), f2.header().id());
 }
 
@@ -821,13 +826,19 @@ fn transfer_tx_with_fake_sig(utxo: Utxo, fake_key: &ZkKey) -> SignedOps<Preverif
         .expect("a fake signature is only caught by the stateful checks")
 }
 
+/// The fork digest the transactions of these tests carry.
+const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
+
 /// Creates a tx spending `utxo` with no outputs, so its whole value pays the
 /// fee.
 fn burn_tx(utxo: Utxo, key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
-    let ops = Ops::from([Op::Transfer(TransferOp::new(
-        BoundedInputs::from(utxo.id()).into(),
-        Outputs::new([]),
-    ))]);
+    let ops = Ops::new(
+        FORK_DIGEST,
+        [Op::Transfer(TransferOp::new(
+            BoundedInputs::from(utxo.id()).into(),
+            Outputs::new([]),
+        ))],
+    );
     let op_proofs = OpProofs::from([OpProof::ZkSig(
         ZkKey::multi_sign(std::slice::from_ref(key), &ops.hash().to_fr()).unwrap(),
     )]);
@@ -842,7 +853,7 @@ fn transfer_tx(utxo: Utxo, output_note: Note, key: &ZkKey) -> SignedOps<Unverifi
         BoundedInputs::from(utxo.id()).into(),
         Outputs::new([output_note]),
     );
-    let ops = Ops::from([Op::Transfer(transfer_op)]);
+    let ops = Ops::new(FORK_DIGEST, [Op::Transfer(transfer_op)]);
     let op_proofs = OpProofs::from([OpProof::ZkSig(
         ZkKey::multi_sign(std::slice::from_ref(key), &ops.hash().to_fr()).unwrap(),
     )]);
@@ -1032,6 +1043,7 @@ fn ledger_config_with_uncles(
             },
             reward: disabled_reward_config(),
         },
+        accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
     }
 }
 

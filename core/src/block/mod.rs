@@ -476,6 +476,13 @@ impl<Tx> Block<Tx> {
     }
 }
 
+/// A transaction carried by a block, with the slot of that block.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TxInBlock<Tx> {
+    pub tx: Tx,
+    pub slot: Slot,
+}
+
 /// Validates the header using only the content within the header.
 ///
 /// This does not check `body_root` because it commits to a body this function
@@ -527,10 +534,11 @@ mod tests {
     use crate::{
         crypto::ZkHasher,
         mantle::{
+            fixtures::ops::op_values::FORK_DIGEST,
             ledger::{Note, Utxo},
             ops::leader_claim::VoucherCm,
             traits::hashable,
-            transactions::Ops,
+            transactions::{Ops, TxList},
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };
@@ -598,7 +606,7 @@ mod tests {
     }
 
     fn create_tx(count: usize) -> Vec<Ops> {
-        iter::repeat_with(|| Ops::new_unchecked(vec![]))
+        iter::repeat_with(|| Ops::new(FORK_DIGEST, TxList::new_unchecked(vec![])))
             .take(count)
             .collect()
     }

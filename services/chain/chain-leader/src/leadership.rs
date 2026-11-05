@@ -277,9 +277,9 @@ pub struct SlotContext {
 /// (from the current slot for the ongoing epoch — so a mid-epoch start wastes
 /// no work — and in full for each later epoch). The stream is lazy: no slot is
 /// scanned until the subscriber drives it, and the subscriber decides how far
-/// ahead to pre-compute (e.g. via the `Buffered` adapter), so the whole epoch
-/// is never materialized here. This task only produces the cheap per-epoch
-/// handoffs; it exits when the subscriber drops its stream.
+/// ahead to pre-compute, so the whole epoch is never materialized here. This
+/// task only produces the cheap per-epoch handoffs; it exits when the
+/// subscriber drops its stream.
 #[expect(
     clippy::cognitive_complexity,
     reason = "TODO: address this in a dedicated refactor"
@@ -475,8 +475,8 @@ where
 /// driven, performs the KMS lottery check for that slot and — on a win — builds
 /// the leadership private inputs, resolving to `Some(LeaderPrivate)` for a
 /// winning slot or `None` otherwise. The consumer drives the futures (and
-/// decides how far ahead to pre-compute, e.g. via the `Buffered` adapter), so
-/// the whole epoch is never materialized at once.
+/// decides how far ahead to pre-compute), so the whole epoch is never
+/// materialized at once.
 ///
 /// The winning check uses the aged UTXO tree (`epoch_state.utxos`), since the
 /// leadership quota proof only attests that a note was aged at the end of the
@@ -570,6 +570,7 @@ mod pol_tests {
     use std::{fmt::Formatter, num::NonZero, slice};
 
     use lb_core::{
+        era::{AcceptedForkDigests, ForkDigest},
         mantle::{
             ledger::{Inputs, Note, Outputs},
             ops::{leader_claim::VoucherCm, transfer::TransferOp},
@@ -870,6 +871,7 @@ mod pol_tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
         }
     }
 

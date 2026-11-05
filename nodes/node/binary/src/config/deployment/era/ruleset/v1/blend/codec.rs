@@ -71,7 +71,7 @@ impl BinaryEncode for CoreSettings {
             verification_rate_per_second,
             edge_node_send_deadline_in_rounds,
             core_handshake_deadline_in_rounds,
-            cover_messages_per_observation_window,
+            expected_deliveries_per_observation_window,
             activity_threshold_sensitivity,
         } = self;
 
@@ -80,7 +80,7 @@ impl BinaryEncode for CoreSettings {
             + verification_rate_per_second.encoded_length()
             + edge_node_send_deadline_in_rounds.encoded_length()
             + core_handshake_deadline_in_rounds.encoded_length()
-            + cover_messages_per_observation_window.encoded_length()
+            + expected_deliveries_per_observation_window.encoded_length()
             + activity_threshold_sensitivity.encoded_length()
     }
 
@@ -91,7 +91,7 @@ impl BinaryEncode for CoreSettings {
             verification_rate_per_second,
             edge_node_send_deadline_in_rounds,
             core_handshake_deadline_in_rounds,
-            cover_messages_per_observation_window,
+            expected_deliveries_per_observation_window,
             activity_threshold_sensitivity,
         } = self;
         scheduler.encode_into(out);
@@ -99,7 +99,7 @@ impl BinaryEncode for CoreSettings {
         verification_rate_per_second.encode_into(out);
         edge_node_send_deadline_in_rounds.encode_into(out);
         core_handshake_deadline_in_rounds.encode_into(out);
-        cover_messages_per_observation_window.encode_into(out);
+        expected_deliveries_per_observation_window.encode_into(out);
         activity_threshold_sensitivity.encode_into(out);
     }
 }
@@ -179,7 +179,7 @@ fn fixture_core_settings() -> CoreSettings {
         verification_rate_per_second: NonZeroU32::new(8).unwrap(),
         edge_node_send_deadline_in_rounds: NonZeroU64::new(9).unwrap(),
         core_handshake_deadline_in_rounds: NonZeroU128::new(10).unwrap(),
-        cover_messages_per_observation_window: NonZeroU64::new(11).unwrap(),
+        expected_deliveries_per_observation_window: NonZeroU64::new(11).unwrap(),
         activity_threshold_sensitivity: 12,
     }
 }

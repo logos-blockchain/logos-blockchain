@@ -6,13 +6,11 @@ use core::hash::Hash;
 use std::{collections::HashMap, pin::Pin};
 
 use futures::Stream;
-use lb_core::mantle::transactions::hash::PrefixedKey;
+use lb_core::{block::TxInBlock, era::ForkDigest, mantle::transactions::hash::PrefixedKey};
 use lb_cryptarchia_engine::Slot;
 use lb_time::Era;
 pub use policy::{EvictableTx, EvictionPolicy, PowClaimEvictionSettings};
-pub use pool::{
-    DEFAULT_TX_TTL, IncludedItem, Mempool, MempoolSettings, PoolRecoveryState, RemovedItem,
-};
+pub use pool::{DEFAULT_TX_TTL, IncludedItem, Mempool, MempoolSettings, PoolRecoveryState};
 use serde::{Deserialize, Serialize};
 
 /// Admission time of a transaction, as a Unix timestamp in milliseconds.
@@ -26,6 +24,8 @@ pub enum MempoolError {
     ItemTooLarge { size: usize, max: usize },
     #[error("Item can no longer be included in a block")]
     Expired,
+    #[error("The era in force does not accept the fork digest {0}")]
+    UnacceptedForkDigest(ForkDigest),
     #[error("Storage operation failed: {0}")]
     StorageError(String),
     #[error(transparent)]
@@ -90,14 +90,16 @@ pub trait MemPool {
     ///   retired, and remain available for reference resolution until that
     ///   block becomes immutable.
     /// - `reorged`: items carried by the blocks that left the canonical chain
-    ///   and not by the blocks now in it. They are no longer retained as
-    ///   included, and are admitted again. Empty when the chain only grows.
+    ///   and not by the blocks now in it, each with the slot of the block
+    ///   carrying it. They are no longer retained as included, and are admitted
+    ///   again unless they are older than the TTL. Empty when the chain only
+    ///   grows.
     ///
-    /// Returns the reorged items admitted again, for the caller to broadcast.
+    /// Returns the reorged items admitted again.
     async fn on_canonical_chain_updated(
         &mut self,
         entered: HashMap<Self::Key, Slot>,
-        reorged: Vec<Self::Item>,
+        reorged: Vec<TxInBlock<Self::Item>>,
     ) -> Vec<Self::Item>;
 
     /// The chain processed block `block_id` at `slot`, and its latest
@@ -122,6 +124,8 @@ pub enum Status {
     Unknown,
     /// Pending status
     Pending,
+    /// Retired, but still held and resolvable until it is released.
+    Retained,
 }
 
 /// Trait for mempools that can be recovered from saved state

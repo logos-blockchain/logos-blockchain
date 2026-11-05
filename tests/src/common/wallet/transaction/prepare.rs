@@ -2,11 +2,14 @@
 
 use std::collections::HashMap;
 
-use lb_core::mantle::{
-    NoteId, Op, Utxo,
-    ops::OpRef,
-    traits::{Hashable as _, MantleTx},
-    transactions::{MantleTxBuilder, hash::TxHash, tx_list::ops::OpsContext},
+use lb_core::{
+    era::ForkDigest,
+    mantle::{
+        NoteId, Utxo,
+        ops::OpRef,
+        traits::{Hashable as _, MantleTx},
+        transactions::{Ops, hash::TxHash, tx_list::ops::OpsContext},
+    },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 
@@ -25,10 +28,9 @@ use crate::common::wallet::{WalletFundingResources, WalletFundingSource, WalletR
 /// Keeping this separate lets tests reserve inputs cheaply, then finalize
 /// expensive proof/signing work concurrently.
 pub struct PreparedWalletTransactionWorkItem {
-    funded_builder: MantleTxBuilder,
+    mantle_tx: Ops,
     context: OpsContext,
     tx_hash: TxHash,
-    ops: Vec<Op>,
     transfer_signers: WalletTransferSigners,
     leading_inscription_signers: Vec<Ed25519Key>,
     reserved_inputs: WalletReservedInputs,
@@ -41,20 +43,24 @@ impl PreparedWalletTransactionWorkItem {
     }
 }
 
-/// Prepare and immediately finalize a wallet transaction.
+/// Prepare and immediately finalize a wallet transaction, signed under
+/// `fork_digest`.
 pub fn prepare_wallet_transaction(
     intent: WalletTransactionIntent,
     resources: WalletFundingResources,
     priority_fee_percent: u64,
+    fork_digest: ForkDigest,
 ) -> Result<PreparedWalletTransaction, WalletTransactionError> {
     finalize_prepared_wallet_transaction(prepare_wallet_transaction_work_item(
         intent,
         resources,
         priority_fee_percent,
+        fork_digest,
     )?)
 }
 
-/// Fund a transaction and compute the inputs that must be reserved.
+/// Fund a transaction, to be signed under `fork_digest`, and compute the inputs
+/// that must be reserved.
 ///
 /// The returned work item has enough information to prevent duplicate input
 /// selection before transfer proofs are built.
@@ -62,6 +68,7 @@ pub fn prepare_wallet_transaction_work_item(
     intent: WalletTransactionIntent,
     resources: WalletFundingResources,
     priority_fee_percent: u64,
+    fork_digest: ForkDigest,
 ) -> Result<PreparedWalletTransactionWorkItem, WalletTransactionError> {
     let sender_pk = resources.sender().owner_public_key();
     let fee_sponsor_pk = resources.fee_sponsor().map(WalletFundingSource::public_key);
@@ -70,7 +77,7 @@ pub fn prepare_wallet_transaction_work_item(
 
     let (funded_builder, context, leading_inscription_signers) =
         fund_wallet_transaction(intent, resources, priority_fee_percent)?;
-    let mantle_tx = funded_builder.clone().build()?;
+    let mantle_tx = funded_builder.build(fork_digest)?;
     let tx_hash = mantle_tx.hash();
     let funding_inputs = funding_inputs_from_transfers(&mantle_tx, &input_utxos_by_note_id)?;
     let reserved_inputs = wallet_reserved_inputs_from_inputs(
@@ -79,12 +86,10 @@ pub fn prepare_wallet_transaction_work_item(
         fee_sponsor_pk.unwrap_or(sender_pk),
     );
 
-    let ops = mantle_tx.into_inner().into();
     Ok(PreparedWalletTransactionWorkItem {
-        funded_builder,
+        mantle_tx,
         context,
         tx_hash,
-        ops,
         transfer_signers,
         leading_inscription_signers,
         reserved_inputs,
@@ -96,20 +101,19 @@ pub fn finalize_prepared_wallet_transaction(
     work_item: PreparedWalletTransactionWorkItem,
 ) -> Result<PreparedWalletTransaction, WalletTransactionError> {
     let PreparedWalletTransactionWorkItem {
-        funded_builder,
+        mantle_tx,
         context,
         tx_hash,
-        ops,
         transfer_signers,
         leading_inscription_signers,
         reserved_inputs,
     } = work_item;
-    let transfer_proofs = build_transfer_proofs(&ops, &tx_hash, &transfer_signers)?;
+    let transfer_proofs = build_transfer_proofs(&mantle_tx, &tx_hash, &transfer_signers)?;
     let leading_op_proofs =
-        build_leading_inscription_proofs(&ops, &tx_hash, &leading_inscription_signers)?;
+        build_leading_inscription_proofs(&mantle_tx, &tx_hash, &leading_inscription_signers)?;
 
     Ok(PreparedWalletTransaction::new(
-        funded_builder,
+        mantle_tx,
         context,
         tx_hash,
         transfer_proofs,

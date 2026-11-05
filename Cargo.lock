@@ -4154,6 +4154,7 @@ dependencies = [
  "logos-blockchain-storage-service",
  "logos-blockchain-time-service",
  "logos-blockchain-tx-service",
+ "logos-blockchain-wallet-service",
  "overwatch",
  "serde",
  "thiserror 2.0.21",
@@ -4426,6 +4427,7 @@ version = "0.0.0"
 dependencies = [
  "cbindgen",
  "futures",
+ "hex",
  "logos-blockchain-api-service",
  "logos-blockchain-blend-service",
  "logos-blockchain-c-macros",
@@ -5672,6 +5674,7 @@ dependencies = [
  "logos-blockchain-services-utils",
  "logos-blockchain-storage-service",
  "logos-blockchain-time",
+ "logos-blockchain-time-service",
  "logos-blockchain-utils",
  "logos-blockchain-wallet",
  "overwatch",
@@ -5709,8 +5712,10 @@ name = "logos-blockchain-zone-sdk"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "blockchain-test-logos",
  "futures",
  "hex",
+ "logos-blockchain-binary-codec",
  "logos-blockchain-common-http-client",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
@@ -5724,6 +5729,8 @@ dependencies = [
  "rpds",
  "serde",
  "serde_json",
+ "testing-framework-app",
+ "testing-framework-core",
  "thiserror 2.0.21",
  "time",
  "tokio",

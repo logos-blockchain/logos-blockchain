@@ -2,12 +2,15 @@
 
 use std::collections::HashMap;
 
-use lb_core::mantle::{
-    Note, Op,
-    ops::channel::inscribe::InscriptionOp,
-    transactions::{
-        GasPrices, MantleTxBuilder,
-        tx_list::ops::{OpsContext, OpsGasContext},
+use lb_core::{
+    era::ForkDigest,
+    mantle::{
+        Note, Op,
+        ops::channel::inscribe::InscriptionOp,
+        transactions::{
+            GasPrices, MantleTxBuilder,
+            tx_list::ops::{OpsContext, OpsGasContext},
+        },
     },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
@@ -89,7 +92,8 @@ impl WalletTransactionIntent {
 }
 
 fn transfer_output_total(tx_builder: &MantleTxBuilder) -> Result<u64, WalletTransactionError> {
-    let ops = tx_builder.clone().build()?;
+    // No fork digest changes the outputs, so any builds the transaction here.
+    let ops = tx_builder.clone().build(ForkDigest::new([0; 32]))?;
     ops.iter()
         .filter_map(|op| match op {
             Op::Transfer(transfer) => Some(transfer),
@@ -114,7 +118,9 @@ mod tests {
         let intent = WalletTransactionIntent::transfer(&[(ZkPublicKey::zero(), 10)])
             .expect("plain transfer intent");
         let (builder, _, sender_output_total, inscription_signers) = intent.into_parts();
-        let ops = builder.build().expect("transfer builder");
+        let ops = builder
+            .build(ForkDigest::new([0; 32]))
+            .expect("transfer builder");
 
         assert_eq!(sender_output_total, 10);
         assert_eq!(inscription_signers, Vec::new());
@@ -137,7 +143,9 @@ mod tests {
             .with_leading_inscription(inscription, signing_key)
             .expect("hybrid intent");
         let (builder, _, _, inscription_signers) = intent.into_parts();
-        let ops = builder.build().expect("hybrid builder");
+        let ops = builder
+            .build(ForkDigest::new([0; 32]))
+            .expect("hybrid builder");
 
         assert_eq!(ops.len(), 2);
         assert!(matches!(ops.iter().next(), Some(Op::ChannelInscribe(_))));

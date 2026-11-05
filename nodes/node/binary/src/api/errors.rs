@@ -3,7 +3,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use http::StatusCode;
-use lb_api_service::http::DynError;
+use lb_api_service::http::{DynError, blend::JoinError};
 use serde::Serialize;
 
 #[derive(Debug, thiserror::Error)]
@@ -27,6 +27,17 @@ impl ApiError {
 
     pub fn internal_message(message: impl Into<String>) -> Self {
         Self::Internal(DynError::from(message.into()))
+    }
+}
+
+impl From<JoinError> for ApiError {
+    fn from(error: JoinError) -> Self {
+        match error {
+            JoinError::Internal(error) => Self::Internal(error),
+            error @ (JoinError::KeyNotInWallet(_) | JoinError::NoServiceNote { .. }) => {
+                Self::NotFound(error.to_string())
+            }
+        }
     }
 }
 

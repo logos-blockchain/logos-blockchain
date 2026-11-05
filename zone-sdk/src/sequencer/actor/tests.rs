@@ -16,7 +16,7 @@ use lb_core::{
                 withdraw::ChannelWithdrawOp,
             },
         },
-        transactions::{OpProofs, Ops, states::Unverified},
+        transactions::{OpProofs, Ops, TxList, states::Unverified},
     },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
@@ -35,8 +35,8 @@ use super::{
     *,
 };
 use crate::test_support::{
-    MockNode, StreamEnd, StreamScript, api_block, funding_config, header_id, inscribe_op,
-    live_event, scripts, single_key_channel_state, unverified_tx_with_ops,
+    FORK_DIGEST, MockNode, StreamEnd, StreamScript, api_block, funding_config, header_id,
+    inscribe_op, live_event, scripts, single_key_channel_state, unverified_tx_with_ops,
 };
 
 #[must_use]
@@ -81,7 +81,7 @@ async fn prepare_submit_deposit_and_inscription() {
     let (tx, msg_id, inscription_sig) = sequencer
         .handle()
         .prepare_tx(
-            [Op::ChannelDeposit(deposit_op.clone())].into(),
+            Ops::new(FORK_DIGEST, [Op::ChannelDeposit(deposit_op.clone())]),
             b"Mint 10 to Alice".into(),
         )
         .unwrap();
@@ -137,7 +137,10 @@ async fn submit_signed_tx_refuses_a_parent_with_a_pending_child() {
 
     let (tx, msg_id, inscription_sig) = sequencer
         .handle()
-        .prepare_tx(Ops::new_unchecked(Vec::new()), b"prepared first".into())
+        .prepare_tx(
+            Ops::new(FORK_DIGEST, TxList::new_unchecked(Vec::new())),
+            b"prepared first".into(),
+        )
         .unwrap();
     let signed_tx =
         SignedOps::from_parts(tx, OpProofs::from([OpProof::Ed25519Sig(inscription_sig)]))
@@ -1155,10 +1158,13 @@ fn track_pending_tx_classifies_atomic_bundle_with_withdraws() {
             .public_key()
             .into_unverified(),
     };
-    let mantle_tx = Ops::from([
-        Op::ChannelWithdraw(withdraw_op.clone()),
-        Op::ChannelInscribe(inscribe_op),
-    ]);
+    let mantle_tx = Ops::new(
+        FORK_DIGEST,
+        [
+            Op::ChannelWithdraw(withdraw_op.clone()),
+            Op::ChannelInscribe(inscribe_op),
+        ],
+    );
     let tx_hash = mantle_tx.hash();
     let signed_tx = SignedOps::from_ops_with_sample_proofs(mantle_tx);
 
@@ -1191,7 +1197,7 @@ fn track_pending_tx_classifies_plain_inscription_with_none_withdraws() {
             .public_key()
             .into_unverified(),
     };
-    let mantle_tx = Ops::from([Op::ChannelInscribe(inscribe_op)]);
+    let mantle_tx = Ops::new(FORK_DIGEST, [Op::ChannelInscribe(inscribe_op)]);
     let tx_hash = mantle_tx.hash();
     let signed_tx = SignedOps::from_ops_with_sample_proofs(mantle_tx);
 
@@ -1218,7 +1224,7 @@ fn track_pending_tx_falls_back_to_other_when_no_inscribe_for_channel() {
             .public_key()
             .into_unverified(),
     };
-    let mantle_tx = Ops::from([Op::ChannelInscribe(inscribe_op)]);
+    let mantle_tx = Ops::new(FORK_DIGEST, [Op::ChannelInscribe(inscribe_op)]);
     let tx_hash = mantle_tx.hash();
     let signed_tx = SignedOps::from_ops_with_sample_proofs(mantle_tx);
 
@@ -1441,6 +1447,83 @@ async fn cold_start_backfill_finalizes_configs_with_their_keys() {
         "the removal, with the one key left"
     );
     assert_eq!(configs[1].config.keys().len(), 1);
+}
+
+/// Cold start over finalized history that is empty but for a block at
+/// genesis and one deep in, as on a chain whose slots follow the wall clock.
+/// A wide `backfill_batch_slots` replays both inscriptions in a few node reads.
+#[tokio::test]
+async fn cold_start_backfill_reads_configured_batch_slots() {
+    const LIB_SLOT: u64 = 1_000_000;
+    const BATCH_SLOTS: u64 = 10_000;
+
+    let channel_id = ChannelId::from([7; 32]);
+    let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+
+    let genesis_inscribe = inscribe_op(channel_id, MsgId::root(), b"genesis");
+    let deep_inscribe = inscribe_op(channel_id, genesis_inscribe.id(), b"deep");
+    let genesis_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(genesis_inscribe.clone())]);
+    let deep_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(deep_inscribe.clone())]);
+
+    let genesis_block = api_block(1, 0, 0, vec![genesis_tx]);
+    let deep_block = api_block(2, 1, LIB_SLOT - 1_234, vec![deep_tx]);
+    let lib_block = api_block(3, 2, LIB_SLOT, Vec::new());
+    let live_block = api_block(4, 3, LIB_SLOT + 1, Vec::new());
+
+    let (calls_tx, mut calls_rx) = mpsc::unbounded_channel();
+    let node = MockNode {
+        lib: lib_block.header.id,
+        lib_slot: lib_block.header.slot,
+        tip: lib_block.header.id,
+        scripts: scripts(vec![StreamScript {
+            events: vec![ProcessedBlockEvent {
+                block: live_block.clone(),
+                tip: live_block.header.id,
+                tip_slot: live_block.header.slot,
+                lib: lib_block.header.id,
+                lib_slot: lib_block.header.slot,
+            }],
+            then: StreamEnd::Hang,
+        }]),
+        immutable: vec![genesis_block, deep_block, lib_block.clone()],
+        immutable_blocks_calls: Some(calls_tx),
+        ..MockNode::default()
+    };
+    let config = SequencerConfig {
+        backfill_batch_slots: BATCH_SLOTS,
+        ..SequencerConfig::new(funding_config())
+    };
+    let mut sequencer =
+        ZoneSequencer::init_with_config(channel_id, sequencer_key, node, config, None);
+
+    let mut inscriptions = Vec::new();
+    loop {
+        match sequencer.next_event().await {
+            Event::Ready => break,
+            Event::BlocksProcessed { finalized, .. } => {
+                inscriptions.extend(finalized.iter().flat_map(|tx| &tx.ops).filter_map(
+                    |op| match op {
+                        FinalizedOp::Inscription(info) => Some(info.this_msg),
+                        _ => None,
+                    },
+                ));
+            }
+            Event::TurnNotification { .. } => {}
+        }
+    }
+
+    assert_eq!(
+        inscriptions,
+        vec![genesis_inscribe.id(), deep_inscribe.id()]
+    );
+    assert_eq!(sequencer.lib_slot, lib_block.header.slot);
+
+    let mut reads = 0u64;
+    while calls_rx.try_recv().is_ok() {
+        reads += 1;
+    }
+    // Slots `0..=LIB_SLOT`, `BATCH_SLOTS + 1` per batch (inclusive at both ends).
+    assert_eq!(reads, (LIB_SLOT + 1).div_ceil(BATCH_SLOTS + 1));
 }
 
 /// The one finalized tx with `tx_hash` carries a single root inscription
@@ -2126,7 +2209,7 @@ async fn submit_atomic_bundle_rejects_a_bundle_prepared_by_another_sequencer() {
 
     let sign_payload = vec![0xab; 32];
     let bundle_by = |preparer: &Ed25519Key| PreparedAtomicBundle {
-        tx: Ops::new_unchecked(Vec::new()),
+        tx: Ops::new(FORK_DIGEST, TxList::new_unchecked(Vec::new())),
         transfer_proof: None,
         pre_fund: MantleTxBuilder::new(),
         inscribe_sig: preparer.sign_payload(&sign_payload),

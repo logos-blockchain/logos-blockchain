@@ -2,11 +2,22 @@ use std::fmt::{Debug, Display};
 
 use lb_binary_codec::bincode::{DeserializeOp, SerializeOp};
 use lb_blend_service::message::{DataPayload, NetworkInfo, ProxyServiceMessage, ServiceMessage};
-use lb_core::mantle::Value;
+use lb_chain_service::api::CryptarchiaServiceApi;
+use lb_core::{
+    mantle::{NoteId, Value},
+    sdp::{Locator, ServiceType},
+};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_network_service::backends::libp2p::PeerId;
+use lb_sdp_service::SdpSubmission;
+use lb_wallet_service::{
+    TipResponse,
+    api::{WalletApi, WalletServiceData},
+};
 use overwatch::services::{AsServiceId, ServiceData};
 use tokio::sync::oneshot;
+
+use crate::http::{DynError, consensus::Cryptarchia};
 
 pub async fn blend_info<BlendService, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
@@ -105,11 +116,105 @@ pub fn select_service_note<Id: Copy>(
     Err(ServiceNoteError::InsufficientTotal { total, threshold })
 }
 
-pub async fn blend_join_network<BlendService, RuntimeServiceId>(
+#[derive(Debug, thiserror::Error)]
+pub enum JoinError {
+    #[error("wallet does not hold blend ZK key {0:?}")]
+    KeyNotInWallet(ZkPublicKey),
+    #[error("blend ZK key {zk_id:?}: {error}")]
+    NoServiceNote {
+        zk_id: ZkPublicKey,
+        error: ServiceNoteError,
+    },
+    #[error(transparent)]
+    Internal(#[from] DynError),
+}
+
+/// Joins the Blend network as a core node, with `service_note_id` as the
+/// collateral or, when `None`, the smallest unlocked note held by this node's
+/// blend ZK key that meets the minimum stake.
+pub async fn blend_join_network<BlendService, WalletService, RuntimeServiceId>(
     handle: &overwatch::overwatch::OverwatchHandle<RuntimeServiceId>,
-    locator: lb_core::sdp::Locator,
-    service_note_id: lb_core::mantle::NoteId,
-) -> Result<lb_sdp_service::SdpSubmission, overwatch::DynError>
+    locator: Locator,
+    service_note_id: Option<NoteId>,
+) -> Result<SdpSubmission, JoinError>
+where
+    BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
+    WalletService: WalletServiceData,
+    RuntimeServiceId: AsServiceId<BlendService>
+        + AsServiceId<WalletService>
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + Debug
+        + Send
+        + Sync
+        + Display
+        + 'static,
+{
+    let service_note_id = match service_note_id {
+        Some(note_id) => note_id,
+        None => held_service_note::<BlendService, WalletService, RuntimeServiceId>(handle).await?,
+    };
+    Ok(join_as_core::<BlendService, RuntimeServiceId>(handle, locator, service_note_id).await?)
+}
+
+async fn held_service_note<BlendService, WalletService, RuntimeServiceId>(
+    handle: &overwatch::overwatch::OverwatchHandle<RuntimeServiceId>,
+) -> Result<NoteId, JoinError>
+where
+    BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
+    WalletService: WalletServiceData,
+    RuntimeServiceId: AsServiceId<BlendService>
+        + AsServiceId<WalletService>
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + Debug
+        + Send
+        + Sync
+        + Display
+        + 'static,
+{
+    let zk_id = blend_zk_id::<BlendService, RuntimeServiceId>(handle).await?;
+
+    let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+        handle
+            .relay::<WalletService>()
+            .await
+            .map_err(DynError::from)?,
+    );
+    let TipResponse { tip, response } = wallet
+        .get_balance(None, zk_id)
+        .await
+        .map_err(DynError::from)?;
+    let balance = response.ok_or(JoinError::KeyNotInWallet(zk_id))?;
+
+    let chain =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
+    let ledger = chain
+        .get_ledger_state(tip)
+        .await
+        .map_err(DynError::from)?
+        .ok_or_else(|| DynError::from(format!("no ledger state at tip {tip:?}")))?;
+    let threshold = chain
+        .get_ledger_config(ledger.slot())
+        .await
+        .map_err(DynError::from)?
+        .sdp_config
+        .min_stake
+        .threshold;
+    let locked = ledger.mantle_ledger().service_notes();
+
+    let notes: Vec<_> = balance.notes.into_iter().collect();
+    select_service_note(
+        &notes,
+        |note_id| locked.is_used_for_service(&note_id, &ServiceType::BlendNetwork),
+        threshold,
+    )
+    .map_err(|error| JoinError::NoServiceNote { zk_id, error })
+}
+
+async fn join_as_core<BlendService, RuntimeServiceId>(
+    handle: &overwatch::overwatch::OverwatchHandle<RuntimeServiceId>,
+    locator: Locator,
+    service_note_id: NoteId,
+) -> Result<SdpSubmission, DynError>
 where
     BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
     RuntimeServiceId: AsServiceId<BlendService> + Debug + Sync + Display + 'static,

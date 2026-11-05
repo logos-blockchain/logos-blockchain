@@ -2,12 +2,15 @@
 
 use std::{cmp::Ordering, collections::HashSet};
 
-use lb_core::mantle::{
-    Note, Op, Utxo,
-    gas::MainnetGasProfile,
-    ledger::{Inputs, Outputs},
-    ops::transfer::TransferOp,
-    transactions::{MantleTxBuilder, tx_list::ops::OpsContext},
+use lb_core::{
+    era::ForkDigest,
+    mantle::{
+        Note, Op, Utxo,
+        gas::MainnetGasProfile,
+        ledger::{Inputs, Outputs},
+        ops::transfer::TransferOp,
+        transactions::{MantleTxBuilder, tx_list::ops::OpsContext},
+    },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, MAX_ZK_SIGNING_KEYS, ZkPublicKey};
 use lb_mmr::MerkleMountainRange;
@@ -434,17 +437,21 @@ fn with_transfer_input_chunks(
 }
 
 fn pending_transfer_output_sum(tx_builder: &MantleTxBuilder) -> u128 {
-    tx_builder.clone().build().map_or_else(
-        |_| 0,
-        |tx| match tx.last() {
-            Some(Op::Transfer(transfer)) => transfer
-                .outputs
-                .iter()
-                .map(|note| u128::from(note.value))
-                .sum(),
-            _ => 0,
-        },
-    )
+    // No fork digest changes the outputs, so any builds the transaction here.
+    tx_builder
+        .clone()
+        .build(ForkDigest::new([0; 32]))
+        .map_or_else(
+            |_| 0,
+            |tx| match tx.last() {
+                Some(Op::Transfer(transfer)) => transfer
+                    .outputs
+                    .iter()
+                    .map(|note| u128::from(note.value))
+                    .sum(),
+                _ => 0,
+            },
+        )
 }
 
 fn funding_delta_for_chunked_builder(
@@ -532,7 +539,9 @@ mod tests {
             0
         );
 
-        let funded_tx = funded_builder.build().expect("funded builder should build");
+        let funded_tx = funded_builder
+            .build(ForkDigest::new([0x11; 32]))
+            .expect("funded builder should build");
         let Some(Op::Transfer(transfer)) = funded_tx.iter().last() else {
             panic!("wallet funding should leave a transfer op at the end");
         };

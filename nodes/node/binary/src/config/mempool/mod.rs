@@ -2,6 +2,7 @@ use lb_core::mantle::{traits::Hashable as _, transactions::hash::TxHash};
 use lb_cryptarchia_engine::time::EraSchedule;
 use lb_libp2p::protocol_name::ProtocolScope;
 use lb_services_utils::overwatch::RecoveryData;
+use lb_time::era::{EpochLength as _, EraTiming, SlotDuration as _};
 use lb_tx_service::{
     TxMempoolSettings,
     backend::{MempoolSettings, PowClaimEvictionSettings},
@@ -27,7 +28,8 @@ pub struct ServiceConfig {
 impl ServiceConfig {
     /// The settings of the mempool: the user's, and in each era of `eras` the
     /// era's acceptance window for `PoW` reward claims, so the mempool and the
-    /// ledger agree on when a claim expires, and the era's transaction topic.
+    /// ledger agree on when a claim expires, the fork digests it admits, the
+    /// era's slot timing, and the era's transaction topic.
     #[must_use]
     pub fn into_mempool_service_settings(
         self,
@@ -49,6 +51,11 @@ impl ServiceConfig {
                     PowClaimEvictionSettings {
                         slot_window: parameters.cryptarchia.pow_config.reward.slot_window,
                     }
+                })),
+                accepted_fork_digests: eras.map(|era| era.parameters.accepted_fork_digests.clone()),
+                era_timing: Some(eras.map(|era| EraTiming {
+                    slot_duration: era.parameters.slot_duration(),
+                    epoch_length: era.parameters.epoch_length(),
                 })),
             },
             seen_items_subscription_channel_size: self
