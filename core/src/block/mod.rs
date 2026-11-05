@@ -63,36 +63,13 @@ pub enum HeaderError {
     GenesisSlot,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryEncode)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct Proposal {
     pub header: Header,
+    #[context]
     pub uncle_headers: UncleHeaders,
     pub references: References,
     pub signature: Ed25519Signature,
-}
-
-impl BinaryDecode for Proposal {
-    /// The most uncles the era of the proposal's slot allows.
-    type Context = u8;
-
-    fn decode<'input>(
-        input: &'input [u8],
-        max_uncles: &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, header) = Header::decode(input, &())?;
-        let (input, uncle_headers) = UncleHeaders::decode(input, max_uncles)?;
-        let (input, references) = References::decode(input, &())?;
-        let (input, signature) = Ed25519Signature::decode(input, &())?;
-        Ok((
-            input,
-            Self {
-                header,
-                uncle_headers,
-                references,
-                signature,
-            },
-        ))
-    }
 }
 
 /// Transaction-hash prefixes referenced by a block proposal.

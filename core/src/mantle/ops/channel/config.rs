@@ -1,10 +1,10 @@
 use std::{num::NonZero, sync::Arc};
 
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_cryptarchia_engine::Slot;
 #[cfg(any(test, feature = "test-utils"))]
 use lb_key_management_system_keys::keys::Ed25519Key;
-use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, MsgId};
 use crate::{
@@ -38,7 +38,9 @@ use crate::{
 /// and the configuration threshold does not exceed the number of accredited
 /// keys, which also keeps the key set non-empty. [`Self::new`] checks this, and
 /// so do the canonical decoding and the serde deserialization.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, BinaryEncode)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
+#[serde(try_from = "ChannelConfigFields")]
+#[decode(try_from = "ChannelConfigFields")]
 pub struct ChannelConfigOp {
     channel: ChannelId,
     parent: MsgId,
@@ -143,23 +145,29 @@ impl ChannelConfigOp {
     }
 }
 
-// Deserializes the fields as `#[derive(Deserialize)]` would, then builds the
-// configuration with `ChannelConfigOp::new`, so it rejects what `new` rejects.
-impl<'de> Deserialize<'de> for ChannelConfigOp {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename = "ChannelConfigOp")]
-        struct Fields {
-            channel: ChannelId,
-            parent: MsgId,
-            keys: VerifiedChannelKeys,
-            posting_timeframe: SlotTimeframe,
-            posting_timeout: SlotTimeout,
-            configuration_threshold: NonZero<u16>,
-            transfer_threshold: NonZero<u16>,
-        }
+/// The fields of a [`ChannelConfigOp`] as they are read. Deserializing and
+/// decoding both build the configuration from them with
+/// [`ChannelConfigOp::new`], so both reject what it rejects.
+///
+/// Public only because the codec of [`ChannelConfigOp`] names it: its fields
+/// keep it from being built outside this crate.
+#[derive(Debug, Eq, PartialEq, Deserialize, BinaryDecode)]
+#[serde(rename = "ChannelConfigOp")]
+pub struct ChannelConfigFields {
+    pub(crate) channel: ChannelId,
+    pub(crate) parent: MsgId,
+    pub(crate) keys: VerifiedChannelKeys,
+    pub(crate) posting_timeframe: SlotTimeframe,
+    pub(crate) posting_timeout: SlotTimeout,
+    pub(crate) configuration_threshold: NonZero<u16>,
+    pub(crate) transfer_threshold: NonZero<u16>,
+}
 
-        let Fields {
+impl TryFrom<ChannelConfigFields> for ChannelConfigOp {
+    type Error = Error;
+
+    fn try_from(
+        ChannelConfigFields {
             channel,
             parent,
             keys,
@@ -167,7 +175,8 @@ impl<'de> Deserialize<'de> for ChannelConfigOp {
             posting_timeout,
             configuration_threshold,
             transfer_threshold,
-        } = Fields::deserialize(deserializer)?;
+        }: ChannelConfigFields,
+    ) -> Result<Self, Self::Error> {
         Self::new(
             channel,
             parent,
@@ -177,39 +186,6 @@ impl<'de> Deserialize<'de> for ChannelConfigOp {
             configuration_threshold,
             transfer_threshold,
         )
-        .map_err(D::Error::custom)
-    }
-}
-
-// Decoding goes through `ChannelConfigOp::new`, so it rejects what `new`
-// rejects.
-impl BinaryDecode for ChannelConfigOp {
-    type Context = ();
-
-    fn decode<'input>(
-        input: &'input [u8],
-        (): &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, channel) = ChannelId::decode(input, &())?;
-        let (input, parent) = MsgId::decode(input, &())?;
-        let (input, keys) = VerifiedChannelKeys::decode(input, &())?;
-        let (input, posting_timeframe) = SlotTimeframe::decode(input, &())?;
-        let (input, posting_timeout) = SlotTimeout::decode(input, &())?;
-        let (input, configuration_threshold) = NonZero::<u16>::decode(input, &())?;
-        let (input, transfer_threshold) = NonZero::<u16>::decode(input, &())?;
-        let operation = Self::new(
-            channel,
-            parent,
-            keys,
-            posting_timeframe,
-            posting_timeout,
-            configuration_threshold,
-            transfer_threshold,
-        )
-        .map_err(|_| {
-            DecodeError::invalid_value::<Self>("configuration threshold above the key count")
-        })?;
-        Ok((input, operation))
     }
 }
 
@@ -376,7 +352,10 @@ impl<Mode: VerificationMode> ExecutableOperation
 
 #[cfg(test)]
 mod tests {
-    use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
+    use lb_binary_codec::{
+        bincode::{DeserializeOp as _, SerializeOp as _},
+        canonical::DecodeError,
+    };
 
     use super::*;
     use crate::mantle::{

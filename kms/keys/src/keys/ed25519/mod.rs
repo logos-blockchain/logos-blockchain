@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 
 use bytes::Bytes;
 use ed25519_dalek::SigningKey;
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::BinaryEncode;
 use rand_core::CryptoRngCore;
 use serde::Deserialize;
 use zeroize::ZeroizeOnDrop;
@@ -111,20 +111,6 @@ impl BinaryEncode for UnverifiedPublicKey {
     }
 }
 
-impl BinaryDecode for UnverifiedPublicKey {
-    type Context = ();
-
-    fn decode<'input>(
-        input: &'input [u8],
-        (): &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (rest, inner) = <[u8; _]>::decode(input, &())?;
-        let key = Self::from_bytes(&inner)
-            .map_err(|_| DecodeError::invalid_value::<Self>("not a valid Ed25519 public key"))?;
-        Ok((rest, key))
-    }
-}
-
 impl BinaryEncode for PublicKey {
     fn encoded_length(&self) -> usize {
         self.as_unverified().encoded_length()
@@ -132,23 +118,6 @@ impl BinaryEncode for PublicKey {
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.as_unverified().encode_into(out);
-    }
-}
-
-impl BinaryDecode for PublicKey {
-    type Context = <UnverifiedPublicKey as BinaryDecode>::Context;
-
-    fn decode<'input>(
-        input: &'input [u8],
-        context: &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (rest, unverified_public_key) = UnverifiedPublicKey::decode(input, context)?;
-        Ok((
-            rest,
-            Self::try_from(unverified_public_key).map_err(|_| {
-                DecodeError::invalid_value::<Self>("Not a valid Ed25519 public key.")
-            })?,
-        ))
     }
 }
 

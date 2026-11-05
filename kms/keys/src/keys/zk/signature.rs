@@ -4,7 +4,7 @@ use generic_array::{
 };
 use lb_binary_codec::{
     bincode::BoundedSerializeOp,
-    canonical::{BinaryDecode, BinaryEncode, DecodeError},
+    canonical::{BinaryDecode, BinaryEncode},
 };
 use lb_groth16::COMPRESSED_PROOF_SIZE;
 use lb_zksign::ZkSignProof;
@@ -21,8 +21,9 @@ struct SignatureSerde {
     pi_c: GenericArray<u8, U32>,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, BinaryDecode)]
 #[serde(transparent)]
+#[decode(from = "[u8; COMPRESSED_PROOF_SIZE]")]
 pub struct Signature(#[serde(with = "SignatureSerde")] ZkSignProof);
 
 impl Signature {
@@ -50,15 +51,9 @@ impl BinaryEncode for Signature {
     }
 }
 
-impl BinaryDecode for Signature {
-    type Context = ();
-
-    fn decode<'input>(
-        input: &'input [u8],
-        (): &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (rest, inner) = <[u8; _]>::decode(input, &())?;
-        Ok((rest, Self::new(ZkSignProof::from_bytes(&inner))))
+impl From<[u8; COMPRESSED_PROOF_SIZE]> for Signature {
+    fn from(bytes: [u8; COMPRESSED_PROOF_SIZE]) -> Self {
+        Self::new(ZkSignProof::from_bytes(&bytes))
     }
 }
 

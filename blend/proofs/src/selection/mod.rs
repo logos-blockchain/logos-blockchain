@@ -1,7 +1,7 @@
 use core::fmt::Debug;
 use std::sync::LazyLock;
 
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_blend_crypto::pseudo_random_sized_bytes;
 use lb_groth16::{fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes};
 use num_bigint::BigUint;
@@ -41,7 +41,8 @@ pub enum Error {
 }
 
 /// A Proof of Selection as described in the Blend spec: <https://lip.logos.co/blockchain/raw/blend-protocol.html#proof-of-selection>.
-#[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, BinaryDecode)]
+#[decode(try_from = "[u8; PROOF_OF_SELECTION_SIZE]")]
 pub struct ProofOfSelection {
     #[serde(with = "lb_groth16::serde::serde_fr")]
     selection_randomness: ZkHash,
@@ -134,20 +135,6 @@ impl BinaryEncode for ProofOfSelection {
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&<[u8; _]>::from(self));
-    }
-}
-
-impl BinaryDecode for ProofOfSelection {
-    type Context = ();
-
-    fn decode<'input>(
-        input: &'input [u8],
-        (): &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (rest, value) = <[u8; _]>::decode(input, &())?;
-        let proof = Self::try_from(value)
-            .map_err(|_| DecodeError::invalid_value::<Self>("not a valid proof of selection"))?;
-        Ok((rest, proof))
     }
 }
 

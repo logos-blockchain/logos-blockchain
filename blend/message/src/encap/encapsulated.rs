@@ -39,7 +39,7 @@ const LOG_TARGET: &str = blend::message::ROOT;
 pub type MessageIdentifier = ZkHash;
 
 /// An unverified encapsulated message that is received from a peer.
-#[derive(Educe, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Educe, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, BinaryDecode)]
 // Encoding (and sending) of unverified messages should not be done outside of
 // tests, so this impl is only available in tests.
 #[cfg_attr(test, derive(BinaryEncode))]
@@ -49,6 +49,7 @@ pub struct EncapsulatedMessage {
     public_header: PublicHeader,
     /// Encapsulated parts
     #[educe(Debug(ignore))] // too long
+    #[context]
     encapsulated_part: EncapsulatedPart,
 }
 
@@ -122,25 +123,6 @@ impl EncapsulatedMessage {
     #[must_use]
     pub const fn public_header_mut(&mut self) -> &mut PublicHeader {
         &mut self.public_header
-    }
-}
-
-impl BinaryDecode for EncapsulatedMessage {
-    type Context = MessageLayout;
-
-    fn decode<'input>(
-        input: &'input [u8],
-        context: &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, public_header) = PublicHeader::decode(input, &())?;
-        let (input, encapsulated_part) = EncapsulatedPart::decode(input, context)?;
-        Ok((
-            input,
-            Self {
-                public_header,
-                encapsulated_part,
-            },
-        ))
     }
 }
 

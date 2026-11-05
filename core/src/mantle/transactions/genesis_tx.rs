@@ -1,6 +1,6 @@
 use core::fmt::{self, Display, Formatter};
 
-use lb_binary_codec::canonical::{BTreeSet, BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BTreeSet, BinaryDecode, BinaryEncode};
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::bounded::{BoundedString, BoundedVec, UpperBoundedVec};
@@ -256,8 +256,11 @@ type ChainIdBoundedVec = BoundedVec<u8, 1, MAX_CHAIN_ID_SIZE>;
 /// the UTF-8 and domain rules live on [`ChainId`] below.
 type ChainIdBoundedString = BoundedString<1, MAX_CHAIN_ID_SIZE>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, BinaryDecode,
+)]
 #[serde(transparent)]
+#[decode(try_from = "ChainIdBoundedVec")]
 pub struct ChainId(ChainIdBoundedString);
 
 impl ChainId {
@@ -345,20 +348,6 @@ impl BinaryEncode for ChainId {
     }
 }
 
-impl BinaryDecode for ChainId {
-    type Context = ();
-
-    fn decode<'input>(
-        input: &'input [u8],
-        (): &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (rest, value) = ChainIdBoundedVec::decode(input, &())?;
-        let chain_id = Self::try_from(value)
-            .map_err(|_| DecodeError::invalid_value::<Self>("invalid chain id bytes"))?;
-        Ok((rest, chain_id))
-    }
-}
-
 /// Time at which the chain should start. u32 suffices: we only need the
 /// positive half of the i64 Unix timestamp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, BinaryEncode, BinaryDecode)]
@@ -409,6 +398,7 @@ pub struct GenesisParameters {
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::canonical::DecodeError;
     use lb_groth16::AdditiveGroup as _;
     use lb_key_management_system_keys::keys::{
         Ed25519PublicKey, Ed25519Signature, UnverifiedEd25519PublicKey, ZkKey,
