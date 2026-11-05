@@ -1219,7 +1219,7 @@ pub fn utxo() -> (ZkKey, Utxo) {
 
 pub fn spawn_storage_service(mut rx: mpsc::Receiver<StorageMsg>) -> (JoinHandle<()>, TempDir) {
     let db_dir = TempDir::new().unwrap();
-    let mut backend = RocksBackend::new(RocksBackendSettings {
+    let backend = RocksBackend::new(RocksBackendSettings {
         db_path: db_dir.path().join("db"),
         read_only: false,
         column_family: None,
@@ -1228,7 +1228,7 @@ pub fn spawn_storage_service(mut rx: mpsc::Receiver<StorageMsg>) -> (JoinHandle<
 
     let handle = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            StorageService::<TestRuntimeServiceId>::handle_storage_message(msg, &mut backend).await;
+            StorageService::<TestRuntimeServiceId>::handle_storage_message(msg, &backend);
         }
     });
 
