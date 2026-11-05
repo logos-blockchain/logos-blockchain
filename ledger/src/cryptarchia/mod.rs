@@ -1113,13 +1113,11 @@ pub mod tests {
         let state = state
             .update_epoch_state::<HeaderId>(slot.into(), sdp, pow, eras)
             .unwrap();
-        *pow = pow
-            .try_apply_header(
-                &previous_epoch_state,
-                state.epoch_state(),
-                config_for_epoch(eras, state.epoch_state().epoch),
-            )
-            .unwrap();
+        *pow = pow.apply_header(
+            &previous_epoch_state,
+            state.epoch_state(),
+            config_for_epoch(eras, state.epoch_state().epoch),
+        );
         pow.record_block_txs(txs_in_block);
         state
     }
