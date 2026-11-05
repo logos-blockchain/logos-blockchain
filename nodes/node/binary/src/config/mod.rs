@@ -7,6 +7,7 @@ use clap::{Parser, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
 use lb_core::sdp::ProviderId;
 use lb_groth16::fr_from_bytes;
+use lb_http_api_common::settings::{CorsOrigin, HostName};
 use lb_key_management_system_service::{
     backend::preload::KeyId,
     keys::{Key, UnsecuredZkKey, ZkPublicKey},
@@ -385,7 +386,10 @@ pub struct ApiArgs {
     pub addr: Option<SocketAddr>,
 
     #[clap(long = "http-cors-origin", env = "HTTP_CORS_ORIGIN")]
-    pub cors_origins: Option<Vec<String>>,
+    pub cors_origins: Option<Vec<CorsOrigin>>,
+
+    #[clap(long = "http-allowed-host", env = "HTTP_ALLOWED_HOST")]
+    pub allowed_hosts: Option<Vec<HostName>>,
 }
 
 #[derive(Parser, Debug, Default, Clone)]
@@ -603,7 +607,11 @@ pub const fn update_sdp(sdp: &mut SdpConfig, sdp_args: SdpArgs) {
 }
 
 pub fn update_api(api: &mut ApiConfig, args: ApiArgs) {
-    let ApiArgs { addr, cors_origins } = args;
+    let ApiArgs {
+        addr,
+        cors_origins,
+        allowed_hosts,
+    } = args;
 
     if let Some(addr) = addr {
         api.backend.listen_address = addr;
@@ -611,6 +619,10 @@ pub fn update_api(api: &mut ApiConfig, args: ApiArgs) {
 
     if let Some(cors) = cors_origins {
         api.backend.cors_origins = cors;
+    }
+
+    if let Some(hosts) = allowed_hosts {
+        api.backend.allowed_hosts = hosts;
     }
 }
 

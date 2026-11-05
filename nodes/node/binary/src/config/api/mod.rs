@@ -24,6 +24,7 @@ impl ServiceConfig {
                 fork_digests: self.fork_digests.clone(),
                 address: self.user.backend.listen_address,
                 cors_origins: self.user.backend.cors_origins.clone(),
+                allowed_hosts: self.user.backend.allowed_hosts.clone(),
                 timeout: self.user.backend.timeout,
                 max_body_size: self.user.backend.max_body_size as usize,
                 max_concurrent_requests: self.user.backend.max_concurrent_requests as usize,

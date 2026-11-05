@@ -11,6 +11,8 @@ pub enum ApiError {
     #[error("{0}")]
     BadRequest(String),
     #[error("{0}")]
+    Forbidden(String),
+    #[error("{0}")]
     NotFound(String),
     #[error("Not found")]
     NotFoundEmpty,
@@ -64,6 +66,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         match self {
             Self::BadRequest(message) => error_response(StatusCode::BAD_REQUEST, message),
+            Self::Forbidden(message) => error_response(StatusCode::FORBIDDEN, message),
             Self::NotFound(message) => error_response(StatusCode::NOT_FOUND, message),
             error @ Self::NotFoundEmpty => error_response(StatusCode::NOT_FOUND, error.to_string()),
             error @ Self::InternalServerError => {
@@ -157,6 +160,10 @@ mod tests {
             (
                 ApiError::BadRequest("bad request".into()),
                 StatusCode::BAD_REQUEST,
+            ),
+            (
+                ApiError::Forbidden("forbidden".into()),
+                StatusCode::FORBIDDEN,
             ),
             (
                 ApiError::NotFound("not found".into()),
