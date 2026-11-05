@@ -608,8 +608,10 @@ pub fn check_leader_funding_key(user_config: &UserConfig) -> Result<()> {
     {
         return Ok(());
     }
+    let funding_pk = serde_yaml::to_string(&funding_pk)?;
+    let funding_pk = funding_pk.trim();
     Err(eyre!(
-        "the leader funding key {funding_pk:?} (`cryptarchia.leader.wallet.funding_pk`, \
+        "the leader funding key {funding_pk} (`cryptarchia.leader.wallet.funding_pk`, \
          `--cryptarchia-funding-pk` or `CRYPTARCHIA_FUNDING_PK`) is not in `wallet.known_keys`: \
          leader rewards are paid to it, and the node would lose every slot it wins"
     ))

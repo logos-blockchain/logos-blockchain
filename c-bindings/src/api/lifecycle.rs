@@ -4,7 +4,7 @@ use lb_c_macros::panic_to_error;
 use lb_node::{
     UserConfig,
     cli::build_run_config_from_env,
-    config::{RunConfig, deployment::DeploymentSettings},
+    config::{RunConfig, check_leader_funding_key, deployment::DeploymentSettings},
     get_services_to_start, run_node_from_config,
 };
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
@@ -97,6 +97,12 @@ unsafe fn initialize_lb_node(
     custom_deployment_path: *const c_char,
 ) -> StatusResult<LogosBlockchainNode> {
     let run_config = unsafe { resolve_run_config(config_path, custom_deployment_path) }?;
+    check_leader_funding_key(&run_config.user).map_err(|e| {
+        OperationStatus::error(
+            OperationStatusCode::InitializationError,
+            format!("Could not start the node: {e}"),
+        )
+    })?;
 
     // Captured before the run config is consumed, so the node handle can answer
     // for its chain without querying a service for a value that cannot change.

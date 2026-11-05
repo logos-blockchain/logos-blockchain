@@ -280,7 +280,13 @@ pub struct GetPeerIdArgs {
 
 /// Applies CLI overrides from `args` to `user_config` and returns a
 /// `RunConfig` ready to start the node.
-pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<RunConfig> {
+pub fn build_run_config(user_config: UserConfig, args: CliArgs) -> Result<RunConfig> {
+    let run_config = apply_cli_args(user_config, args)?;
+    check_leader_funding_key(&run_config.user)?;
+    Ok(run_config)
+}
+
+fn apply_cli_args(mut user_config: UserConfig, args: CliArgs) -> Result<RunConfig> {
     let CliArgs {
         log: log_args,
         api: api_args,
@@ -300,7 +306,6 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
     update_api(&mut user_config.api, api_args);
     update_state(&mut user_config.state, state_args);
     apply_default_log_filter(&mut user_config.tracing);
-    check_leader_funding_key(&user_config)?;
 
     let deployment_settings = match deployment_args.custom_deployment_path {
         None => DeploymentSettings::default(),
@@ -321,14 +326,16 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
 /// flattened into [`CliArgs`] carries `#[clap(env = "...")]` attributes, so
 /// parsing an argv containing only the program name populates them purely from
 /// their environment variables (leaving `command`/`config` unset). The
-/// resulting overrides are then folded onto `user_config` via
-/// [`build_run_config`], guaranteeing the bindings stay in lockstep with the
-/// binary's supported env vars.
+/// resulting overrides are then folded onto `user_config` the way
+/// [`build_run_config`] does, guaranteeing the bindings stay in lockstep with
+/// the binary's supported env vars. An embedder starting a node calls
+/// [`check_leader_funding_key`] on the result; a query reading the deployment
+/// has no use for that key.
 ///
 /// `try_parse_from` (rather than `parse_from`) is used so an invalid env value
 /// returns an error instead of terminating the host process — required in an
 /// FFI context.
 pub fn build_run_config_from_env(user_config: UserConfig) -> Result<RunConfig> {
     let cli_args = CliArgs::try_parse_from(["lb-node"])?;
-    build_run_config(user_config, cli_args)
+    apply_cli_args(user_config, cli_args)
 }
