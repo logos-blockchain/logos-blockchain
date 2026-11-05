@@ -10,9 +10,7 @@ use lb_core::{era::ForkDigest, mantle::transactions::hash::PrefixedKey};
 use lb_cryptarchia_engine::Slot;
 use lb_time::Era;
 pub use policy::{EvictableTx, EvictionPolicy, PowClaimEvictionSettings};
-pub use pool::{
-    DEFAULT_TX_TTL, IncludedItem, Mempool, MempoolSettings, PoolRecoveryState, RemovedItem,
-};
+pub use pool::{DEFAULT_TX_TTL, IncludedItem, Mempool, MempoolSettings, PoolRecoveryState};
 use serde::{Deserialize, Serialize};
 
 /// Admission time of a transaction, as a Unix timestamp in milliseconds.
