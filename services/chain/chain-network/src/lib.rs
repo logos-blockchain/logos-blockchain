@@ -78,10 +78,6 @@ use crate::{
 const SERVICE_ID: &str = "ChainNetwork";
 
 pub(crate) const LOG_TARGET: &str = chain::network::ROOT;
-/// How many slots ahead of this service's slot ticks a proposal may be and
-/// still be handed to chain-service, which judges it against its own clock.
-/// It covers a tick that has not been processed yet.
-const MAX_FUTURE_SLOTS: u64 = 1;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -360,7 +356,6 @@ where
             time_service_api.subscribe_to_epoch_slots().await?;
         let mut era_transition_ends = time_service_api.subscribe_to_era_transition_ends().await?;
         let mut current_era = current_slot_tick.era;
-        let mut current_slot = current_slot_tick.slot;
 
         let mut network_adapter =
             NetAdapter::new(network_config, current_era, relays.network_relay().clone()).await;
@@ -382,7 +377,6 @@ where
             tokio::select! {
                 result = &mut initial_block_download_task => break result,
                 Some(tick) = slot_ticks.next() => {
-                    current_slot = tick.slot;
                     if tick.era > current_era {
                         current_era = tick.era;
                         network_adapter.rotate_era(current_era).await;
@@ -473,7 +467,6 @@ where
                         self.note_received_proposal(&proposal);
                         self.handle_incoming_proposal(
                             proposal,
-                            current_slot,
                             orphan_downloader.as_mut().get_mut(),
                             &relays,
                         )
@@ -537,7 +530,6 @@ where
                     }
 
                     Some(tick) = slot_ticks.next() => {
-                        current_slot = tick.slot;
                         if tick.era > current_era {
                             current_era = tick.era;
                             network_adapter.rotate_era(current_era).await;
@@ -651,7 +643,6 @@ where
     async fn handle_incoming_proposal(
         &self,
         proposal: Proposal,
-        current_slot: Slot,
         orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
         relays: &ChainNetworkRelays<
             Cryptarchia,
@@ -666,18 +657,6 @@ where
         let block_id = proposal.header().id();
         let block_slot = proposal.header().slot();
         metrics::consensus_proposals_received_total("network");
-
-        // Before any other work: nothing else about such a proposal has been
-        // checked yet. Dropping it is safe, since a valid block is fetched
-        // again once a descendant arrives and reports its parent missing.
-        if block_slot.into_inner() > current_slot.into_inner().saturating_add(MAX_FUTURE_SLOTS) {
-            metrics::consensus_proposals_ignored_total("too_far_in_future", "network");
-            debug!(
-                target: LOG_TARGET, ?block_id, ?block_slot, ?current_slot,
-                "Ignoring proposal too far in the future",
-            );
-            return;
-        }
 
         match should_process_block(relays.cryptarchia(), block_id, block_slot).await {
             Ok(()) => {}
