@@ -33,7 +33,8 @@ pub enum WalletOutputState {
     OnChain,
     /// UTXOs that are currently reserved by pending transactions.
     Reserved,
-    /// UTXOs that are not encumbered and are available for new transactions.
+    /// UTXOs deep enough to spend that are not encumbered, so available for new
+    /// transactions.
     Available,
 }
 
@@ -42,6 +43,7 @@ pub enum WalletOutputState {
 pub struct WalletStateView {
     wallet_id: WalletId,
     on_chain_utxos: Vec<OwnedNote>,
+    spendable_utxos: Vec<OwnedNote>,
     reserved_utxos: Vec<OwnedNote>,
     available_utxos: Vec<OwnedNote>,
 }
@@ -51,13 +53,15 @@ impl WalletStateView {
     pub fn new(
         wallet_id: impl Into<WalletId>,
         on_chain_utxos: Vec<OwnedNote>,
+        spendable_utxos: Vec<OwnedNote>,
         reserved_utxos: Vec<OwnedNote>,
     ) -> Self {
-        let available_utxos = available_utxos(&on_chain_utxos, &reserved_utxos);
+        let available_utxos = available_utxos(&spendable_utxos, &reserved_utxos);
 
         Self {
             wallet_id: wallet_id.into(),
             on_chain_utxos,
+            spendable_utxos,
             reserved_utxos,
             available_utxos,
         }
@@ -88,18 +92,23 @@ impl WalletStateView {
     }
 
     #[must_use]
+    pub fn into_on_chain_and_spendable_utxos(self) -> (Vec<OwnedNote>, Vec<OwnedNote>) {
+        (self.on_chain_utxos, self.spendable_utxos)
+    }
+
+    #[must_use]
     pub fn into_available_utxos(self) -> Vec<OwnedNote> {
         self.available_utxos
     }
 }
 
-fn available_utxos(on_chain_utxos: &[OwnedNote], reserved_utxos: &[OwnedNote]) -> Vec<OwnedNote> {
+fn available_utxos(spendable_utxos: &[OwnedNote], reserved_utxos: &[OwnedNote]) -> Vec<OwnedNote> {
     let reserved_note_ids = reserved_utxos
         .iter()
         .map(|utxo| utxo.nullifier)
         .collect::<HashSet<_>>();
 
-    on_chain_utxos
+    spendable_utxos
         .iter()
         .filter(|utxo| !reserved_note_ids.contains(&utxo.nullifier))
         .cloned()
@@ -114,6 +123,8 @@ fn available_utxos(on_chain_utxos: &[OwnedNote], reserved_utxos: &[OwnedNote]) -
 #[derive(Debug)]
 pub struct TrackedWallet {
     utxos_by_note: HashMap<NoteNullifier, OwnedNote>,
+    // the ones of them a spend can use, proven to the root it names
+    spendable_utxos: Vec<OwnedNote>,
     pending_state: PendingWalletState,
 }
 
@@ -123,16 +134,27 @@ impl TrackedWallet {
     pub fn new() -> Self {
         Self {
             utxos_by_note: HashMap::new(),
+            spendable_utxos: Vec::new(),
             pending_state: PendingWalletState::default(),
         }
     }
 
+    /// Replaces the on-chain notes, all of them spendable until
+    /// [`Self::replace_spendable_utxos`] says otherwise.
     pub fn replace_on_chain_utxos(&mut self, utxos: impl IntoIterator<Item = OwnedNote>) {
+        self.spendable_utxos = utxos.into_iter().collect();
         self.utxos_by_note.clear();
-        self.utxos_by_note
-            .extend(utxos.into_iter().map(|utxo| (utxo.nullifier, utxo)));
+        self.utxos_by_note.extend(
+            self.spendable_utxos
+                .iter()
+                .map(|utxo| (utxo.nullifier, utxo.clone())),
+        );
         self.pending_state
             .retain_reserved_note_ids(&self.utxos_by_note.keys().copied().collect());
+    }
+
+    pub fn replace_spendable_utxos(&mut self, utxos: Vec<OwnedNote>) {
+        self.spendable_utxos = utxos;
     }
 
     pub fn reserve_utxos(&mut self, reserved_utxos: Vec<OwnedNote>) {
@@ -165,7 +187,12 @@ impl TrackedWallet {
             .cloned()
             .collect();
 
-        WalletStateView::new(wallet_id, self.on_chain_utxos(), reserved_utxos)
+        WalletStateView::new(
+            wallet_id,
+            self.on_chain_utxos(),
+            self.spendable_utxos.clone(),
+            reserved_utxos,
+        )
     }
 
     pub fn clear_pending_state(&mut self) {
@@ -204,6 +231,7 @@ impl TrackedWallet {
     #[must_use]
     pub fn from_state(state: TrackedWalletState) -> Self {
         Self {
+            spendable_utxos: state.on_chain_utxos.clone(),
             utxos_by_note: state
                 .on_chain_utxos
                 .into_iter()

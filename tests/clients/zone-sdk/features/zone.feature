@@ -655,8 +655,9 @@ Feature: Zone SDK
       | NODE_4    | 4             | WALLET_4A   |              | SEQ_B      |
     When node "NODE_1" is at height 2 in 240 seconds
     # Starve the funding wallet to two distinct notes so the reused note is
-    # deterministic (largest-first selection picks 9000 for both publishes)
-    And I drain all node "NODE_1" wallets into "WALLET_1A"
+    # deterministic (largest-first selection picks 9000 for both publishes).
+    # The stake NODE_1 leads alone with stays on its other key
+    And I drain wallet "NODE_1_WALLET_FUNDING" into "WALLET_1A"
     And wallet "WALLET_1A" has 14000 or more LGO in 240 seconds
     And wallet "WALLET_1A" sends 1 notes of 9000 LGO to node "NODE_1" funding wallet as "TOPUP_A"
     And wallet "WALLET_1A" sends 1 notes of 8000 LGO to node "NODE_1" funding wallet as "TOPUP_B"
@@ -673,15 +674,16 @@ Feature: Zone SDK
       | MSG_1 | message 1 |
     And zone message "MSG_1" from sequencer "SEQ_A" is included on node "NODE_1" in 240 seconds
     # NODE_1 down wipes its wallet reservations; NODE_4 out-builds it blind
-    When I stop node "NODE_1"
+    When I record node "NODE_1" height as "ISOLATED_HEIGHT"
+    And I stop node "NODE_1"
     And I restart node "NODE_4"
-    And node "NODE_4" alone reaches height 14 in 300 seconds
+    Then node "NODE_4" reaches 4 blocks beyond recorded height "ISOLATED_HEIGHT" in 300 seconds
     # NODE_1 rejoins, adopts NODE_4's longer branch and re-admits the orphaned
     # MSG_1 to its mempool; SEQ_A reconnects. The next publish double-hands
     # MSG_1's note if it is funded before MSG_1 is mined again
     When I restart node "NODE_1"
-    And node "NODE_1" is at height 14 in 240 seconds
-    And sequencer "SEQ_A" submits the following zone messages without waiting for inclusion:
+    Then node "NODE_1" reaches 4 blocks beyond recorded height "ISOLATED_HEIGHT" in 240 seconds
+    When sequencer "SEQ_A" submits the following zone messages without waiting for inclusion:
       | alias | data      |
       | MSG_2 | message 2 |
     # The rebuild must work from a restored checkpoint too: the funding
