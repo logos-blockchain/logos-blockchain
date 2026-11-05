@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use lb_common_http_client::CommonHttpClient;
+use lb_common_http_client::{CommonHttpClient, Error as HttpError};
 use lb_http_api_common::bodies::wallet::{
     balance::WalletBalanceResponseBody,
     transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
@@ -38,6 +38,25 @@ const RETRY_DELAY: Duration = Duration::from_secs(5);
 /// confirmation depth.
 const MAX_TRANSFER_ATTEMPTS: u32 = 5;
 
+/// A transfer that did not report success.
+pub struct TransferFailure {
+    reason: String,
+    /// The node may have accepted the transaction all the same.
+    may_be_submitted: bool,
+}
+
+/// Whether a transfer failing with `error` may still have reached the mempool:
+/// the node's answer was lost or did not come from the handler, as with a
+/// timeout. A refused connection never reached it, and an internal server
+/// error is the handler refusing the transfer.
+fn may_be_submitted(error: &HttpError) -> bool {
+    match error {
+        HttpError::Request(error) => !error.is_connect(),
+        HttpError::UnexpectedResponse(_) => true,
+        HttpError::Server(_) | HttpError::Client(_) | HttpError::Url(_) => false,
+    }
+}
+
 pub struct Faucet {
     faucet_pk: ZkPublicKey,
     drip_amount: u64,
@@ -69,11 +88,16 @@ impl Faucet {
     /// held back by notes no spend can use yet. Those become spendable as
     /// the chain grows, so waiting uses up none of the transfer attempts.
     async fn wallet_past_pending_notes(&self) -> Result<WalletBalanceResponseBody, String> {
+        let mut told = false;
         loop {
             let wallet = self.wallet_at_tip().await?;
             if !pending_notes_hold_the_drip(&wallet.notes, &wallet.pending_notes, self.drip_amount)
             {
                 return Ok(wallet);
+            }
+            if !told {
+                eprintln!("Waiting for pending notes to become spendable before the next drip");
+                told = true;
             }
             tokio::time::sleep(CONFIRMATION_POLL_INTERVAL).await;
         }
@@ -114,14 +138,17 @@ impl Faucet {
         &self,
         recipient_pk: ZkPublicKey,
         wallet: &WalletBalanceResponseBody,
-    ) -> Result<WalletTransferFundsResponseBody, String> {
+    ) -> Result<WalletTransferFundsResponseBody, TransferFailure> {
         let current_balance = wallet.balance;
 
         let amount_to_send = std::cmp::min(current_balance, self.drip_amount);
         if amount_to_send == 0 {
-            return Err(format!(
-                "Balance too low to drip (Current: {current_balance}, ask for direct transfter in discord)"
-            ));
+            return Err(TransferFailure {
+                reason: format!(
+                    "Balance too low to drip (Current: {current_balance}, ask for direct transfter in discord)"
+                ),
+                may_be_submitted: false,
+            });
         }
 
         println!("Dripping {amount_to_send} units to {recipient_pk:?}");
@@ -137,7 +164,10 @@ impl Faucet {
         self.http_client
             .transfer_funds(self.base_url.clone(), body)
             .await
-            .map_err(|e| format!("Faucet transfer failed: {e}"))
+            .map_err(|e| TransferFailure {
+                may_be_submitted: may_be_submitted(&e),
+                reason: format!("Faucet transfer failed: {e}"),
+            })
     }
 
     /// Waits until the faucet balance differs from `balance_before` at the
@@ -180,7 +210,8 @@ pub async fn run_worker(faucet: Arc<Faucet>, mut requests: mpsc::Receiver<ZkPubl
 /// Submits the drip until it is confirmed. A submitted drip that does not show
 /// up may have been dropped from the mempools, for example when the note it
 /// spends was lost to a fork, so it is submitted again, as long as that cannot
-/// pay the recipient twice.
+/// pay the recipient twice. A transfer whose answer was lost counts as
+/// submitted, since it may land.
 async fn drip_with_retries(faucet: &Faucet, recipient_pk: ZkPublicKey) {
     let mut first_attempt = None;
     for attempt in 1..=MAX_TRANSFER_ATTEMPTS {
@@ -188,10 +219,14 @@ async fn drip_with_retries(faucet: &Faucet, recipient_pk: ZkPublicKey) {
             Ok(wallet) => {
                 first_attempt.get_or_insert(wallet);
             }
-            Err(e) => {
+            Err(failed) => {
                 eprintln!(
-                    "Drip attempt {attempt}/{MAX_TRANSFER_ATTEMPTS} failed for {recipient_pk:?}: {e}"
+                    "Drip attempt {attempt}/{MAX_TRANSFER_ATTEMPTS} failed for {recipient_pk:?}: {}",
+                    failed.reason
                 );
+                if let Some(wallet) = failed.maybe_submitted_from {
+                    first_attempt.get_or_insert(*wallet);
+                }
             }
         }
         // A failed attempt may be a note still reserved for the first one, whose
@@ -208,13 +243,29 @@ async fn drip_with_retries(faucet: &Faucet, recipient_pk: ZkPublicKey) {
     eprintln!("Dropping drip request for {recipient_pk:?} after {MAX_TRANSFER_ATTEMPTS} attempts");
 }
 
+/// An attempt at a drip that did not report success.
+struct FailedAttempt {
+    reason: String,
+    /// The notes it was funded from, if its transaction may land all the same.
+    maybe_submitted_from: Option<Box<WalletBalanceResponseBody>>,
+}
+
+impl From<String> for FailedAttempt {
+    fn from(reason: String) -> Self {
+        Self {
+            reason,
+            maybe_submitted_from: None,
+        }
+    }
+}
+
 /// Submits the drip from the notes at the tip, and returns them. The transfer
 /// is funded at that tip, so that the notes checked are the ones it spends.
 async fn submit_drip(
     faucet: &Faucet,
     recipient_pk: ZkPublicKey,
     first_attempt: Option<&WalletBalanceResponseBody>,
-) -> Result<WalletBalanceResponseBody, String> {
+) -> Result<WalletBalanceResponseBody, FailedAttempt> {
     let wallet = match first_attempt {
         Some(_) => faucet.wallet_at_tip().await?,
         None => faucet.wallet_past_pending_notes().await?,
@@ -222,9 +273,19 @@ async fn submit_drip(
     if let Some(first) = first_attempt
         && !conflicts_with_first_attempt(&first.notes, &wallet.notes)
     {
-        return Err("the first attempt can still land next to a new one".to_owned());
+        return Err("the first attempt can still land next to a new one"
+            .to_owned()
+            .into());
     }
-    let response = faucet.transfer_to_pk(recipient_pk, &wallet).await?;
+    let response = match faucet.transfer_to_pk(recipient_pk, &wallet).await {
+        Ok(response) => response,
+        Err(failure) => {
+            return Err(FailedAttempt {
+                reason: failure.reason,
+                maybe_submitted_from: failure.may_be_submitted.then(|| Box::new(wallet)),
+            });
+        }
+    };
     println!(
         "Drip submitted for {recipient_pk:?}, hash: {:?}, note: {:?}",
         response.hash, response.recipient_note
@@ -263,6 +324,16 @@ fn pending_notes_hold_the_drip<Note: Eq + Hash>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_an_answer_from_the_handler_settles_a_transfer_as_not_submitted() {
+        assert!(!may_be_submitted(&HttpError::Server("refused".to_owned())));
+        // such as the 408 of the node's timeout, while the handler may have
+        // added the transaction to the mempool
+        assert!(may_be_submitted(&HttpError::UnexpectedResponse(
+            "[408]".to_owned()
+        )));
+    }
 
     #[test]
     fn a_drip_waits_only_for_pending_notes_that_hold_it() {
