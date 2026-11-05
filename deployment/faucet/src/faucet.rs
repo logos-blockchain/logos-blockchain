@@ -1,4 +1,9 @@
-use std::{collections::HashMap, hash::Hash, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
+    sync::Arc,
+    time::Duration,
+};
 
 use lb_common_http_client::CommonHttpClient;
 use lb_http_api_common::bodies::wallet::{
@@ -25,8 +30,9 @@ const CONFIRMATION_DEPTH: usize = SPEND_ROOT_DEPTH;
 const RETRY_DELAY: Duration = Duration::from_secs(5);
 /// Transfer attempts per drip request before it is dropped. Until an attempt is
 /// submitted, one failing request stalls the queue for at most
-/// `MAX_TRANSFER_ATTEMPTS * RETRY_DELAY` plus the time the requests take. Once
-/// one is, each attempt waits for confirmation until the balance has been back
+/// `MAX_TRANSFER_ATTEMPTS * RETRY_DELAY` plus the time the requests take, on top
+/// of the wait for the notes that can fund it to become spendable. Once one is,
+/// each attempt waits for confirmation until the balance has been back
 /// at its value before the drip for `CONFIRMATION_TIMEOUT`, so a drip seen at
 /// the tip holds the queue for as long as it stays there short of the
 /// confirmation depth.
@@ -57,6 +63,20 @@ impl Faucet {
             .get_wallet_balance(self.base_url.clone(), self.faucet_pk, None)
             .await
             .map_err(|e| format!("Failed to fetch faucet balance: {e}"))
+    }
+
+    /// The notes of the faucet at the tip, once the drip they can pay is not held
+    /// back by notes no spend can use yet. Those become spendable as the chain
+    /// grows, so waiting uses up none of the transfer attempts.
+    async fn wallet_past_pending_notes(&self) -> Result<WalletBalanceResponseBody, String> {
+        loop {
+            let wallet = self.wallet_at_tip().await?;
+            if !pending_notes_hold_the_drip(&wallet.notes, &wallet.pending_notes, self.drip_amount)
+            {
+                return Ok(wallet);
+            }
+            tokio::time::sleep(CONFIRMATION_POLL_INTERVAL).await;
+        }
     }
 
     /// The faucet balance `CONFIRMATION_DEPTH` blocks below the tip, or at the
@@ -195,7 +215,10 @@ async fn submit_drip(
     recipient_pk: ZkPublicKey,
     first_attempt: Option<&WalletBalanceResponseBody>,
 ) -> Result<WalletBalanceResponseBody, String> {
-    let wallet = faucet.wallet_at_tip().await?;
+    let wallet = match first_attempt {
+        Some(_) => faucet.wallet_at_tip().await?,
+        None => faucet.wallet_past_pending_notes().await?,
+    };
     if let Some(first) = first_attempt
         && !conflicts_with_first_attempt(&first.notes, &wallet.notes)
     {
@@ -221,9 +244,36 @@ fn conflicts_with_first_attempt<Note: Eq + Hash>(
     funded_first_attempt.len() == 1 && funded_first_attempt == held_now
 }
 
+/// Whether the spendable notes fall short of the drip `notes` can pay, so that
+/// the rest of it sits in `pending`.
+fn pending_notes_hold_the_drip<Note: Eq + Hash>(
+    notes: &HashMap<Note, u64>,
+    pending: &HashSet<Note>,
+    drip_amount: u64,
+) -> bool {
+    let total: u64 = notes.values().sum();
+    let spendable: u64 = notes
+        .iter()
+        .filter(|(note, _)| !pending.contains(*note))
+        .map(|(_, value)| value)
+        .sum();
+    spendable < total.min(drip_amount)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_drip_waits_only_for_pending_notes_that_hold_it() {
+        let notes = HashMap::from([("spendable", 40), ("young", 100)]);
+        let pending = HashSet::from(["young"]);
+        assert!(pending_notes_hold_the_drip(&notes, &pending, 50));
+        // what is spendable pays the drip, whatever else is pending
+        assert!(!pending_notes_hold_the_drip(&notes, &pending, 40));
+        // nothing is pending: waiting would change nothing, however short the funds
+        assert!(!pending_notes_hold_the_drip(&notes, &HashSet::new(), 500));
+    }
 
     #[test]
     fn only_the_single_note_of_the_first_attempt_conflicts_with_it() {
