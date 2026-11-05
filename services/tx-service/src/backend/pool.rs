@@ -571,7 +571,14 @@ where
 
 impl<BlockId, Item, Storage, RuntimeServiceId> Mempool<BlockId, Item, Storage, RuntimeServiceId>
 where
-    Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de> + MantleTx,
+    Item: Clone
+        + Send
+        + Sync
+        + 'static
+        + Serialize
+        + for<'de> Deserialize<'de>
+        + MantleTx
+        + StorageSize,
     ItemKey<Item>: Ord + PrefixedKey<Prefix: Eq + Hash + Send + Sync>,
     BlockId: Hash
         + Eq
