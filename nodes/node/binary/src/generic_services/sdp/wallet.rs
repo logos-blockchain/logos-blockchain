@@ -90,7 +90,7 @@ where
         } = self
             .api
             .fund_tx(
-                // the split is proven from the wallet's states at and below this tip
+                // the split names the spend root of this tip
                 Some(split_tip),
                 tx_builder,
                 config.funding_pk,

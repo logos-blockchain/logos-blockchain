@@ -1,5 +1,5 @@
 pub mod balance {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     use axum::{
         http::StatusCode,
@@ -21,6 +21,9 @@ pub mod balance {
         pub tip: HeaderId,
         pub balance: Value,
         pub notes: HashMap<NoteCommitment, Value>,
+        /// The ones of `notes` no spend from `tip` can use yet. They count in
+        /// `balance`.
+        pub pending_notes: HashSet<NoteCommitment>,
         pub address: ZkPublicKey,
     }
 

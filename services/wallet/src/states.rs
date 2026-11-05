@@ -337,7 +337,7 @@ impl<'u> ServiceState<'u> {
     // an in flight transaction spends.
     #[expect(
         clippy::too_many_arguments,
-        reason = "thin passthrough to `Wallet::exact_note_split` plus the reservations"
+        reason = "thin passthrough to `WalletState::exact_note_split` plus the reservations"
     )]
     pub fn exact_note_split(
         &self,
@@ -353,8 +353,7 @@ impl<'u> ServiceState<'u> {
             .nullifiers_consumed()
             .chain(self.pending_notes.nullifiers())
             .collect::<HashSet<_>>();
-        self.wallet.exact_note_split(
-            tip,
+        self.wallet.spend_state(tip)?.exact_note_split(
             value,
             owner,
             nonce,
