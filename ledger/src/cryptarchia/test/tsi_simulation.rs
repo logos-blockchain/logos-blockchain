@@ -42,10 +42,11 @@ use num_bigint::BigUint;
 use rand::{Rng as _, SeedableRng as _, rngs::StdRng};
 
 use crate::{
-    Config, Ledger, WINDOW_SIZE,
+    Config, Ledger,
     cryptarchia::{
         EpochState, LedgerState, UtxoTree,
         block_density::BlockDensity,
+        empty_fee_window,
         tests::{GENESIS_POW_REWARD_POOL, config, generate_proof},
     },
     mantle::sdp::SdpLedger,
@@ -231,7 +232,7 @@ fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
         },
         block_density: BlockDensity::from_genesis_config(config),
         epoch_state,
-        fee_window: [0.into(); WINDOW_SIZE],
+        fee_window: empty_fee_window(config.block_rewards.fee_window_size()),
         average_execution_gas: 0.into(),
         execution_base_fee: GENESIS_EXECUTION_GAS_PRICE,
         storage_gas_ema: 0.into(),

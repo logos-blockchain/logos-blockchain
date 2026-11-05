@@ -4,12 +4,13 @@ mod stake;
 mod test;
 
 use std::{
-    num::{NonZeroU32, NonZeroU128},
+    num::{NonZeroU16, NonZeroU32, NonZeroU128, NonZeroUsize},
     sync::{Arc, LazyLock},
 };
 
 use educe::Educe;
 use lb_core::{
+    block::BlockNumber,
     crypto::{ZkDigest, ZkHasher},
     events::TxEvent,
     mantle::{
@@ -25,7 +26,10 @@ use lb_core::{
 use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
 use lb_groth16::{Fr, fr_from_bytes};
 use lb_log_targets::ledger;
-use lb_utils::math::{NonNegativeRatio, ProperFraction};
+use lb_utils::{
+    bounded::RuntimeArray,
+    math::{NonNegativeRatio, ProperFraction},
+};
 use lb_utxotree::MerklePath;
 
 /// The precision the total stake inference scales the slot activation
@@ -51,7 +55,16 @@ const LOG_TARGET: &str = ledger::cryptarchia::ROOT;
 
 pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
 use super::{Balance, Config, LedgerError, mantle};
-use crate::WINDOW_SIZE;
+
+/// The fees pooled in the latest blocks, each at its block number modulo the
+/// window's length.
+type FeeWindow = RuntimeArray<GasCost, u16>;
+
+/// A fee window of `size` blocks with no fees pooled.
+fn empty_fee_window(size: NonZeroU16) -> FeeWindow {
+    let fees = vec![GasCost::from(0); NonZeroUsize::from(size).get()];
+    FeeWindow::try_new(fees, size.get()).expect("The window holds exactly `size` items, at least 1")
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EpochState {
@@ -221,9 +234,9 @@ pub struct LedgerState {
     pub epoch_state: EpochState,
     #[educe(PartialEq(ignore))]
     block_density: BlockDensity,
-    // rolling fee window of 120 blocks, used to derive block rewards
-    #[serde(with = "serde_arrays")]
-    fee_window: [GasCost; WINDOW_SIZE],
+    // rolling fee window of the era's `fee_window_size` blocks, used to derive
+    // block rewards
+    fee_window: FeeWindow,
     // Smoothed Average Execution Gas used up to the last block
     average_execution_gas: Gas,
     // Execution Base Fee that are burned and minimum required to pay.
@@ -630,12 +643,32 @@ impl LedgerState {
         }
     }
 
-    pub const fn update_fee_window(&mut self, index: usize, total_fee: GasCost) {
+    /// Resizes the fee window to `size` blocks for block `block_number`, whose
+    /// era sets another size than the previous block's. The fees of the latest
+    /// blocks move to their positions in the new window: a shorter window drops
+    /// the oldest, and a longer one starts its other positions empty, as at
+    /// genesis.
+    pub(crate) fn resize_fee_window(&mut self, size: NonZeroU16, block_number: BlockNumber) {
+        let old_size = self.fee_window.len();
+        let new_size = NonZeroUsize::from(size).get();
+        if old_size == new_size {
+            return;
+        }
+        let mut fee_window = empty_fee_window(size);
+        let oldest_kept = block_number.saturating_sub(old_size.min(new_size) as BlockNumber);
+        for block in oldest_kept..block_number {
+            let block = block as usize;
+            fee_window[block % new_size] = self.fee_window[block % old_size];
+        }
+        self.fee_window = fee_window;
+    }
+
+    pub fn update_fee_window(&mut self, index: usize, total_fee: GasCost) {
         self.fee_window[index] = total_fee;
     }
 
     #[must_use]
-    pub const fn get_fee_from_index(&self, index: usize) -> GasCost {
+    pub fn get_fee_from_index(&self, index: usize) -> GasCost {
         self.fee_window[index]
     }
 
@@ -809,7 +842,7 @@ impl LedgerState {
                 active_declarations: Arc::new(Declarations::default()),
             },
             block_density,
-            fee_window: [0.into(); 120],
+            fee_window: empty_fee_window(config.block_rewards.fee_window_size()),
             average_execution_gas: 0.into(),
             execution_base_fee: GENESIS_EXECUTION_GAS_PRICE,
             storage_gas_ema: 0.into(),
@@ -1166,6 +1199,7 @@ pub mod tests {
             block_rewards: crate::config::BlockRewardsConfig::new(
                 3_000_000_000,
                 120_000_000.try_into().unwrap(),
+                120.try_into().unwrap(),
                 10_512,
                 NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
                 ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
@@ -1270,7 +1304,7 @@ pub mod tests {
             slot,
             next_epoch_state,
             epoch_state,
-            fee_window: [0.into(); 120],
+            fee_window: empty_fee_window(config.block_rewards.fee_window_size()),
             average_execution_gas: 0.into(),
             block_density,
             execution_base_fee: GENESIS_EXECUTION_GAS_PRICE,
@@ -2799,5 +2833,53 @@ pub mod tests {
         assert_eq!(rotated.storage_gas_ema, 450.into());
         // The counter resets for the new epoch.
         assert_eq!(rotated.storage_gas_consumed_in_epoch, 0.into());
+    }
+
+    /// A state whose fee window of `size` blocks has seen the blocks up to
+    /// `last_block`, each pooling its number as its fee.
+    fn state_with_fee_window(size: u16, last_block: BlockNumber) -> LedgerState {
+        let mut state = genesis_state(&[utxo()]);
+        state.fee_window = empty_fee_window(NonZeroU16::new(size).unwrap());
+        for block in 1..=last_block {
+            state.update_fee_window(block as usize % usize::from(size), GasCost::from(block));
+        }
+        state
+    }
+
+    fn pooled_fees(state: &LedgerState) -> Vec<u64> {
+        state
+            .fee_window
+            .iter()
+            .map(|fee| fee.into_inner())
+            .collect()
+    }
+
+    #[test]
+    fn a_shorter_fee_window_keeps_the_latest_fees() {
+        let mut state = state_with_fee_window(4, 9);
+        assert_eq!(pooled_fees(&state), [8, 9, 6, 7]);
+
+        state.resize_fee_window(NonZeroU16::new(3).unwrap(), 10);
+
+        assert_eq!(pooled_fees(&state), [9, 7, 8]);
+    }
+
+    #[test]
+    fn a_longer_fee_window_keeps_every_fee_and_starts_the_rest_empty() {
+        let mut state = state_with_fee_window(3, 9);
+        assert_eq!(pooled_fees(&state), [9, 7, 8]);
+
+        state.resize_fee_window(NonZeroU16::new(5).unwrap(), 10);
+
+        assert_eq!(pooled_fees(&state), [0, 0, 7, 8, 9]);
+    }
+
+    #[test]
+    fn a_fee_window_resized_early_stops_at_the_genesis_block() {
+        let mut state = state_with_fee_window(4, 1);
+
+        state.resize_fee_window(NonZeroU16::new(3).unwrap(), 2);
+
+        assert_eq!(pooled_fees(&state), [0, 1, 0]);
     }
 }
