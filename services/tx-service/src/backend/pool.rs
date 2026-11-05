@@ -401,6 +401,10 @@ where
             .map(|key| {
                 if self.pending_items.contains_key(key) {
                     Status::Pending
+                } else if self.removed_items.contains_key(key)
+                    || self.included_in_canonical.contains_key(key)
+                {
+                    Status::Retained
                 } else {
                     Status::Unknown
                 }

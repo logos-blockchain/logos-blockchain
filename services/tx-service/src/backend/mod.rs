@@ -124,6 +124,8 @@ pub enum Status {
     Unknown,
     /// Pending status
     Pending,
+    /// Retired, but still held and resolvable until it is released.
+    Retained,
 }
 
 /// Trait for mempools that can be recovered from saved state

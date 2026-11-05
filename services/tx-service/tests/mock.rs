@@ -545,7 +545,7 @@ async fn expired_tx_is_evicted_on_next_sweep() {
     pool.remove(&[]).await;
 
     assert_eq!(pool.pending_item_count(), 1);
-    assert_eq!(pool.status(&[old_tx_id]), vec![Status::Unknown]);
+    assert_eq!(pool.status(&[old_tx_id]), vec![Status::Retained]);
     assert_eq!(pool.status(&[fresh_tx_id]), vec![Status::Pending]);
     // An evicted tx still resolves during its grace period.
     assert_eq!(
@@ -707,7 +707,7 @@ async fn removed_items_are_not_pending_but_still_fetchable() {
     pool.remove(&[tx_id]).await;
 
     assert_eq!(pool.pending_item_count(), 0);
-    assert_eq!(pool.status(&[tx_id]), vec![Status::Unknown]);
+    assert_eq!(pool.status(&[tx_id]), vec![Status::Retained]);
 
     let pending_after_remove = pool
         .view([0; 32].into())
@@ -747,7 +747,7 @@ async fn removed_items_remain_fetchable_after_recovery() {
         InMemoryPool::recover(default_settings(), Era::genesis(), saved_state, storage);
 
     assert_eq!(recovered_pool.pending_item_count(), 0);
-    assert_eq!(recovered_pool.status(&[tx_id]), vec![Status::Unknown]);
+    assert_eq!(recovered_pool.status(&[tx_id]), vec![Status::Retained]);
     assert_eq!(
         recovered_pool
             .keys_by_prefix(&tx_id.key_prefix())
@@ -899,7 +899,7 @@ async fn included_tx_resolves_until_its_block_is_immutable() {
     pool.on_canonical_chain_updated(HashMap::from([(tx_id, Slot::from(10u64))]), vec![])
         .await;
 
-    assert_eq!(pool.status(&[tx_id]), vec![Status::Unknown]);
+    assert_eq!(pool.status(&[tx_id]), vec![Status::Retained]);
     assert!(pool.save().included_in_canonical.contains_key(&tx_id));
     assert_eq!(keys_with_prefix(&pool, tx_id), vec![tx_id]);
 
@@ -1043,7 +1043,7 @@ async fn included_tx_is_a_duplicate_at_admission() {
         .expect_err("an included tx must be a duplicate");
 
     assert!(matches!(error, MempoolError::ExistingItem));
-    assert_eq!(pool.status(&[tx_id]), vec![Status::Unknown]);
+    assert_eq!(pool.status(&[tx_id]), vec![Status::Retained]);
     assert!(pool.save().included_in_canonical.contains_key(&tx_id));
 }
 
@@ -1196,7 +1196,7 @@ async fn reorged_tx_older_than_ttl_is_not_readmitted() {
         .await;
 
     assert_eq!(readmitted, vec![]);
-    assert_eq!(pool.status(&[tx_id]), vec![Status::Unknown]);
+    assert_eq!(pool.status(&[tx_id]), vec![Status::Retained]);
     assert!(pool.save().removed_items.contains_key(&tx_id));
     assert_eq!(keys_with_prefix(&pool, tx_id), vec![tx_id]);
 }
@@ -1344,7 +1344,7 @@ async fn readmission_does_not_reset_tx_ttl() {
 
     // Trigger the eviction. The tx is evicted.
     processed_block(&mut pool, 1).await;
-    assert_eq!(pool.status(&[tx_id]), vec![Status::Unknown]);
+    assert_eq!(pool.status(&[tx_id]), vec![Status::Retained]);
 
     // Reinsert the same tx with in grace period.
     // It's admitted, but with its original admission time.
@@ -1359,7 +1359,7 @@ async fn readmission_does_not_reset_tx_ttl() {
     // On the next eviction sweep, it is evicted again right away
     // because by its original admission time it is still older than TTL.
     processed_block(&mut pool, 2).await;
-    assert_eq!(pool.status(&[tx_id]), vec![Status::Unknown]);
+    assert_eq!(pool.status(&[tx_id]), vec![Status::Retained]);
 }
 
 /// The admission time of a retired tx survives recovery.
