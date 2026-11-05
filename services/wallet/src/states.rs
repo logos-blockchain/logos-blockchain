@@ -315,13 +315,15 @@ impl<'u> ServiceState<'u> {
     /// already reserved for in-flight transactions. `priority_fee_percent`
     /// reserves that percentage of the final mandatory fee, including both
     /// execution and storage cost. Only the unused reserve becomes an
-    /// effective priority tip, and the percentage is not capped at 100.
+    /// effective priority tip, and the percentage is not capped at 100. A
+    /// funding that fails releases the notes `tx_builder` spends, such as a
+    /// split reserved for it, since no transaction will spend them.
     #[expect(
         clippy::too_many_arguments,
         reason = "thin passthrough to `Wallet::fund_tx` plus the reservations"
     )]
     pub fn fund_tx<G: GasProfile>(
-        &self,
+        &mut self,
         tip: HeaderId,
         tx_builder: &MantleTxBuilder,
         change_pk: ZkPublicKey,
@@ -330,7 +332,7 @@ impl<'u> ServiceState<'u> {
         context: &OpsContext,
         priority_fee_percent: u64,
     ) -> Result<MantleTxBuilder, WalletError> {
-        self.wallet.fund_tx::<G>(
+        let funded = self.wallet.fund_tx::<G>(
             tip,
             tx_builder,
             change_pk,
@@ -339,7 +341,11 @@ impl<'u> ServiceState<'u> {
             context,
             &self.pending_notes.nullifiers(),
             priority_fee_percent,
-        )
+        );
+        if funded.is_err() {
+            self.release_pending_notes(tx_builder.nullifiers_consumed());
+        }
+        funded
     }
 
     // A Transfer giving `owner` a note of exactly `value` and the rest back to
@@ -540,6 +546,67 @@ mod tests {
         pending_notes.release([nullifier]);
 
         assert!(pending_notes.nullifiers().is_empty());
+    }
+
+    #[test]
+    fn a_failed_funding_releases_the_notes_of_its_builder_alone() {
+        use std::sync::Arc;
+
+        use lb_core::mantle::{
+            Op,
+            gas::MainnetGasProfile,
+            transactions::{GasPrices, tx_list::ops::OpsGasContext},
+        };
+        use lb_services_utils::overwatch::RecoveryData;
+
+        let settings = WalletServiceSettings {
+            known_keys: HashMap::new(),
+            voucher_master_key_id: "voucher-master".into(),
+            recovery_data: RecoveryData::default(),
+            pending_note_expiry_blocks: 10,
+            era_schedule: era_schedule(),
+        };
+        let recovery = RecoveryState {
+            lib_wallet_state: None,
+            known_notes: HashMap::new(),
+            next_reward_key_index: 0,
+        };
+        let genesis = HeaderId::from([0; 32]);
+        let (sender, _receiver) = tokio::sync::watch::channel(None);
+        let updater = StateUpdater::new(Arc::new(sender));
+        let mut state =
+            ServiceState::from_genesis(recovery, &settings, genesis, &[], &[], [], &updater)
+                .unwrap();
+
+        let split_input = NoteNullifier(Fr::ONE);
+        let in_flight = NoteNullifier(Fr::from(2u64));
+        state.reserve_pending_notes([split_input, in_flight]);
+        let tx_builder = MantleTxBuilder::new()
+            .push_op(Op::Transfer(TransferOp::new(
+                [split_input].into(),
+                [NoteCommitment(Fr::ONE)].into(),
+                Fr::ONE,
+                0,
+            )))
+            .unwrap();
+        let funding_pk = ZkPublicKey::new(Fr::ONE);
+        let context = OpsContext {
+            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(1, 1)),
+        };
+
+        state
+            .fund_tx::<MainnetGasProfile>(
+                genesis,
+                &tx_builder,
+                funding_pk,
+                Fr::ONE,
+                [funding_pk],
+                &context,
+                0,
+            )
+            .unwrap_err();
+
+        assert_eq!(state.pending_notes.nullifiers(), HashSet::from([in_flight]));
     }
 
     /// Regression test for the wallet-service crash seen the first time a

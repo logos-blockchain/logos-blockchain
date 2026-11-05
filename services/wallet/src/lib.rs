@@ -668,6 +668,7 @@ where
                 if let Err(err) =
                     Self::add_change_note(&funded, change_pk, change_nonce, state, kms).await
                 {
+                    state.release_pending_notes(funded.nullifiers_consumed());
                     Self::send_err(resp_tx, err);
                     return;
                 }
