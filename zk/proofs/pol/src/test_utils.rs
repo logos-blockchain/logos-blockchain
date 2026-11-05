@@ -44,6 +44,7 @@ pub fn sample_witness_data() -> PolWitnessInputsData {
         eligible_aged: fr(&json["eligible_aged"]),
         eligible_latest: fr(&json["eligible_latest"]),
         msg: fr(&json["msg"]),
+        reward_value: u64_value(&json["reward_value"]),
     };
     let wallet = PolWalletInputsData {
         note_value: u64_value(&json["value"]),
@@ -66,6 +67,8 @@ pub fn sample_witness_data() -> PolWitnessInputsData {
         commitment_root_latest: fr(&json["cm_root_latest"]),
         set_latest_path: path(&json["set_latest_path"]),
         secret_key: fr(&json["sk"]),
+        reward_public_key: fr(&json["reward_public_key"]),
+        reward_nonce: fr(&json["reward_nonce"]),
     };
     PolWitnessInputsData::from_chain_and_wallet_data(chain, wallet)
 }

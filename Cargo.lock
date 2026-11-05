@@ -4611,7 +4611,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-build"
 version = "0.6.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.6.1#d671a52b83949f85b834a637c581b9b2bf95c76b"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?branch=tl%2Fleader_reward_commitment#573b2629eb0b01894095ebfea6892d3c7351727a"
 dependencies = [
  "dirs",
  "fd-lock",
@@ -4623,7 +4623,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-common"
 version = "0.6.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.6.1#d671a52b83949f85b834a637c581b9b2bf95c76b"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?branch=tl%2Fleader_reward_commitment#573b2629eb0b01894095ebfea6892d3c7351727a"
 dependencies = [
  "logos-blockchain-circuits-types",
 ]
@@ -4631,7 +4631,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-pol-sys"
 version = "0.6.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.6.1#d671a52b83949f85b834a637c581b9b2bf95c76b"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?branch=tl%2Fleader_reward_commitment#573b2629eb0b01894095ebfea6892d3c7351727a"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4641,7 +4641,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-poq-sys"
 version = "0.6.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.6.1#d671a52b83949f85b834a637c581b9b2bf95c76b"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?branch=tl%2Fleader_reward_commitment#573b2629eb0b01894095ebfea6892d3c7351727a"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4651,7 +4651,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-program-spend-sys"
 version = "0.6.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.6.1#d671a52b83949f85b834a637c581b9b2bf95c76b"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?branch=tl%2Fleader_reward_commitment#573b2629eb0b01894095ebfea6892d3c7351727a"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4668,7 +4668,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-transfer-sys"
 version = "0.6.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.6.1#d671a52b83949f85b834a637c581b9b2bf95c76b"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?branch=tl%2Fleader_reward_commitment#573b2629eb0b01894095ebfea6892d3c7351727a"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4678,7 +4678,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-types"
 version = "0.6.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.6.1#d671a52b83949f85b834a637c581b9b2bf95c76b"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?branch=tl%2Fleader_reward_commitment#573b2629eb0b01894095ebfea6892d3c7351727a"
 dependencies = [
  "bytes",
  "libc",
@@ -5442,6 +5442,7 @@ dependencies = [
  "logos-blockchain-log-targets",
  "logos-blockchain-mmr",
  "logos-blockchain-node",
+ "logos-blockchain-poseidon2",
  "logos-blockchain-pow-service",
  "logos-blockchain-sdp-service",
  "logos-blockchain-storage-service",
