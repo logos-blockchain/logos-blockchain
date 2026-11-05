@@ -335,7 +335,8 @@ mod tests {
 
         let block_txs = txs_for_block(stream::iter(selection.selected_txs)).await;
         assert_eq!(block_txs.len(), CANDIDATE_COUNT - 1);
-        // A block truncated by the block limits pays the reward of what it holds.
+        // A block holding a prefix of the selection, cut by hand here, pays the
+        // reward of what it holds.
         let selected_reward =
             block_leader_reward(ledger_state.clone(), block_txs.as_slice(), &eras)
                 .expect("the selection must run");

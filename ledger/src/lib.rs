@@ -1296,20 +1296,24 @@ mod tests {
         let eras = single_era(test_config.clone());
         let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
 
-        let result = state.try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
-            &eras,
-            NoteCommitment(Fr::from(0x4444u64)),
-            38_051_750_381,
-            std::iter::empty::<SignedOps<Preverified, StandardMode>>(),
-        );
+        for header in [38_051_750_381, 38_051_750_379] {
+            let result = state
+                .clone()
+                .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
+                    &eras,
+                    NoteCommitment(Fr::from(0x4444u64)),
+                    header,
+                    std::iter::empty::<SignedOps<Preverified, StandardMode>>(),
+                );
 
-        assert_eq!(
-            result.err(),
-            Some(LedgerError::WrongRewardValue {
-                header: 38_051_750_381,
-                computed: 38_051_750_380,
-            })
-        );
+            assert_eq!(
+                result.err(),
+                Some(LedgerError::WrongRewardValue {
+                    header,
+                    computed: 38_051_750_380,
+                })
+            );
+        }
     }
 
     #[test]

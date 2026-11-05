@@ -638,7 +638,7 @@ mod tests {
 
     /// `N` blocks extending `parent`, each at the first slot from `start_slot`
     /// that the key wins, so all at the same slot: they differ only in their
-    /// (randomly generated) reward keys. `parent` must be the tip, since
+    /// (randomly generated) reward commitments. `parent` must be the tip, since
     /// blocks are built against its state.
     fn siblings<const N: usize>(
         cryptarchia: &Cryptarchia,

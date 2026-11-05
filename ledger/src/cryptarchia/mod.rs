@@ -2107,7 +2107,7 @@ pub mod tests {
     }
 
     #[test]
-    fn distribute_block_reward_appends_the_leader_note_and_updates_the_reward_state() {
+    fn distribute_then_append_leader_reward_updates_the_note_set_and_the_reward_state() {
         let genesis_note =
             notes::Note::new(10_000, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
         let state = LedgerState::from_notes([genesis_note], &config(), Fr::ZERO);

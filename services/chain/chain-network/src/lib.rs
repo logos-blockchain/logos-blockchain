@@ -1490,9 +1490,10 @@ mod tests {
 
     /// The block ID covers the reward value and, through the body root every
     /// applied block has confirmed, the transactions the reward is computed
-    /// from.
+    /// from. The chain service reports this failure as `Unexpected`, which the
+    /// callers of `is_recoverable_apply_error` cache as rejected.
     #[test]
-    fn wrong_reward_value_is_cached_by_orphan_downloader() {
+    fn wrong_reward_value_reported_as_unexpected_is_not_recoverable() {
         assert!(!is_recoverable_apply_error(&Error::Cryptarchia(
             lb_chain_service::api::ApiError::Unexpected(
                 lb_ledger::LedgerError::<HeaderId>::WrongRewardValue {

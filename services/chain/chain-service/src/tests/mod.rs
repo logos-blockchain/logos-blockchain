@@ -24,7 +24,8 @@ use lb_core::{
         ops::{
             ZkTransferProof,
             channel::{
-                MsgId, NULL_CHANNEL_ID,
+                ChannelId, MsgId, NULL_CHANNEL_ID,
+                config::ChannelConfigOp,
                 inscribe::{Inscription, InscriptionOp, MiniBlocks},
             },
             transfer::{TransferOp, prove_transfer},
@@ -36,16 +37,21 @@ use lb_core::{
             tx_list::ops::OpsGasContext,
         },
     },
-    proofs::leader_proof::{
-        Groth16LeaderProof, LeaderPrivate, LeaderProof, LeaderPublic, check_winning,
-        pol_wallet_inputs,
+    proofs::{
+        channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
+        leader_proof::{
+            Groth16LeaderProof, LeaderPrivate, LeaderProof, LeaderPublic, check_winning,
+            pol_wallet_inputs,
+        },
     },
     sdp::ServiceParameters,
 };
 use lb_cryptarchia_engine::{EpochConfig, EraSchedule, Slot, UncleSlots};
 use lb_cryptarchia_sync::HeaderId;
 use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
-use lb_key_management_system_keys::keys::{UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey};
+use lb_key_management_system_keys::keys::{
+    Ed25519Key, UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey,
+};
 use lb_ledger::{
     GENESIS_STAKE_SUPPLY, LedgerState,
     config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
@@ -873,6 +879,112 @@ fn a_copy_failing_an_operation_proof_leaves_the_genuine_block_applicable() {
     assert_eq!(cryptarchia.tip(), id);
 }
 
+/// The length of a channel configuration proof enters the storage fee, and so
+/// the reward the block ID covers, so a relayer must not be able to lengthen
+/// it. A copy with one genuine signature too many fails as a bad copy, before
+/// the reward is compared, and the genuine block stays applicable.
+#[test]
+fn a_copy_with_one_signature_too_many_leaves_the_genuine_block_applicable() {
+    let config = ledger_config(NonZero::<u32>::new(1).unwrap());
+    let genesis_id: HeaderId = [0; 32].into();
+    let (secret_key, leader_note) = note();
+    let (create_key, create_note) = note();
+    let (update_key, update_note) = note();
+    let genesis_notes = [leader_note, create_note, update_note];
+    let paths = commitment_paths(&genesis_notes);
+    let mut cryptarchia = Cryptarchia::from_genesis(
+        genesis_id,
+        LedgerState::from_notes(genesis_notes, &config, 0),
+        single_era(config),
+        lb_cryptarchia_engine::State::Bootstrapping,
+    );
+
+    // Two keys accredited and a threshold of one, so that a second signature
+    // passes every check but the count.
+    let channel_keys = [
+        Ed25519Key::from_bytes(&[1; 32]),
+        Ed25519Key::from_bytes(&[2; 32]),
+    ];
+    let config_op = |parent| {
+        ChannelConfigOp::new(
+            ChannelId::from([3; 32]),
+            parent,
+            [channel_keys[0].public_key(), channel_keys[1].public_key()].into(),
+            0.into(),
+            0.into(),
+            NonZero::<u16>::MIN,
+        )
+        .unwrap()
+    };
+
+    let create_op = config_op(MsgId::root());
+    let (parent, _) = try_build_block_with_transactions(
+        &cryptarchia,
+        genesis_id,
+        &leader_note,
+        secret_key,
+        &paths[0],
+        Slot::new(1),
+        UncleHeaders::empty(),
+        BlockTransactions::from([channel_config_tx(
+            &create_note,
+            create_key,
+            &paths[1],
+            create_op.clone(),
+            &[],
+        )]),
+    )
+    .expect("should find a winning slot");
+    let parent_id = parent.header().id();
+    let parent_slot = parent.header().slot();
+    cryptarchia.try_apply_block(parent, parent_slot).unwrap();
+
+    let update_tx = |signers: &[&Ed25519Key]| {
+        channel_config_tx(
+            &update_note,
+            update_key,
+            &paths[2],
+            config_op(create_op.id()),
+            signers,
+        )
+    };
+    let (block, _) = try_build_block_with_transactions(
+        &cryptarchia,
+        parent_id,
+        &leader_note,
+        secret_key,
+        &paths[0],
+        parent_slot.strict_add(1.into()),
+        UncleHeaders::empty(),
+        BlockTransactions::from([update_tx(&[&channel_keys[0]])]),
+    )
+    .expect("should find a winning slot");
+    let id = block.header().id();
+    let slot = block.header().slot();
+
+    let copy: Block<SignedOps<Preverified, StandardMode>> = Block::reconstruct(
+        block.header().clone(),
+        UncleHeaders::empty(),
+        BlockTransactions::from([update_tx(&[&channel_keys[0], &channel_keys[1]])]),
+    )
+    .expect("the body root does not cover the Operation proofs");
+    assert_eq!(copy.header().id(), id);
+
+    let Err(err) = cryptarchia.try_apply_block(copy, slot) else {
+        panic!("expected the copy to be rejected");
+    };
+    assert!(matches!(
+        crate::api::apply_block_api_error(err, id),
+        crate::api::ApiError::InvalidOperationProof(block_id) if block_id == id
+    ));
+    assert_eq!(cryptarchia.tip(), parent_id);
+
+    cryptarchia
+        .try_apply_block(block, slot)
+        .expect("the genuine block must still apply");
+    assert_eq!(cryptarchia.tip(), id);
+}
+
 /// Block Proposal Validation: an unauthenticated proposal is discarded from its
 /// header alone, leaving the chain untouched.
 #[test]
@@ -958,14 +1070,54 @@ fn transfer_tx_with_fake_sig(
         .expect("a fake signature is only caught by the stateful checks")
 }
 
-/// The Operations of a tx spending `note` with no outputs.
-fn burn_ops(note: &Note, secret_key: Fr, path: &MerklePath) -> Ops {
-    Ops::from([Op::Transfer(TransferOp::new(
+/// The Operation spending `note` with no outputs.
+fn burn_op(note: &Note, secret_key: Fr, path: &MerklePath) -> Op {
+    Op::Transfer(TransferOp::new(
         [derive_note_nullifier(&note.commitment(), &secret_key)].into(),
         OutputCommitments::default(),
         path.root::<ZkHasher>(note.commitment().0),
         note.value,
-    ))])
+    ))
+}
+
+/// The Operations of a tx spending `note` with no outputs.
+fn burn_ops(note: &Note, secret_key: Fr, path: &MerklePath) -> Ops {
+    Ops::from([burn_op(note, secret_key, path)])
+}
+
+/// Creates a tx spending `note` to pay for `config_op`, signed by `signers`
+/// with the channel key indexes of their positions.
+fn channel_config_tx(
+    note: &Note,
+    secret_key: Fr,
+    path: &MerklePath,
+    config_op: ChannelConfigOp,
+    signers: &[&Ed25519Key],
+) -> SignedOps<Preverified, StandardMode> {
+    let ops = Ops::from([
+        burn_op(note, secret_key, path),
+        Op::ChannelConfig(config_op),
+    ]);
+    let tx_hash = ops.hash();
+    let signatures = IndexedSignatures::try_from_iter(
+        (0..)
+            .zip(signers)
+            .map(|(index, key)| (index, key.sign_payload(tx_hash.as_signing_bytes()))),
+    )
+    .unwrap();
+    let op_proofs = OpProofs::from([
+        OpProof::ZkTransfer(ZkTransferProof::new(prove_transfer(
+            &[(*note, secret_key, path.clone())],
+            &[],
+            path.root::<ZkHasher>(note.commitment().0),
+            tx_hash.to_fr(),
+        ))),
+        OpProof::ChannelMultiSigProof(ChannelMultiSigProof::new(signatures)),
+    ]);
+    SignedOps::from_parts(ops, op_proofs)
+        .unwrap()
+        .preverify()
+        .unwrap()
 }
 
 /// Creates a tx spending `note` with no outputs, so its whole value pays the
@@ -1241,7 +1393,7 @@ pub fn try_build_block(
     secret_key: Fr,
     start_slot: Slot,
     uncle_headers: UncleHeaders,
-    // The block's reward key is returned in place of the leader's signing key.
+    // The reward key of the block is returned with it: its header does not show it.
 ) -> Option<(Block<SignedOps<Preverified, StandardMode>>, ZkPublicKey)> {
     // The aged path of the note of a one note genesis.
     let (_, aged_path) = CommitmentMmr::new()
@@ -1270,7 +1422,7 @@ pub fn try_build_block_with_transactions(
     start_slot: Slot,
     uncle_headers: UncleHeaders,
     transactions: BlockTransactions<SignedOps<Preverified, StandardMode>>,
-    // The block's reward key is returned in place of the leader's signing key.
+    // The reward key of the block is returned with it: its header does not show it.
 ) -> Option<(Block<SignedOps<Preverified, StandardMode>>, ZkPublicKey)> {
     build_block_paying(
         cryptarchia,
@@ -1367,7 +1519,8 @@ fn build_block_paying(
             continue;
         }
 
-        // A fresh reward key, so that two forks won at one slot get distinct IDs.
+        // A fresh reward note, so that two forks won at one slot get distinct
+        // reward commitments, and so distinct IDs.
         let reward_key = ZkPublicKey::new(Fr::from(thread_rng().next_u64()));
         let reward = Note::new(
             computed_reward_value(
@@ -1441,7 +1594,7 @@ pub fn chain_with_fork_on(
     let mut cryptarchia = genesis_cryptarchia_on(note, era_schedule);
 
     // Both extend the genesis, and the same key wins the same slot, so the
-    // two blocks differ only in their (randomly generated) reward keys.
+    // two blocks differ only in their (randomly generated) reward commitments.
     let (u1, u1_key) = try_build_block(
         &cryptarchia,
         genesis_id,
