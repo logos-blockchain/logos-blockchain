@@ -28,7 +28,7 @@ impl TtlPolicy {
         Self { settings }
     }
 
-    /// Keys in `pending_txs` whose age exceeds the TTL of the era in force.
+    /// Keys in `pending_txs` whose age reached the TTL of the era in force.
     ///
     /// `pending_txs` is admission-ordered with non-decreasing timestamps, so
     /// expired keys are always at the front and the scan stops at the first
@@ -42,14 +42,11 @@ impl TtlPolicy {
     where
         Key: Hash + Eq + Clone,
     {
-        let now = clock.now_millis;
-        let ttl_millis = TtlSettings::of_era(&self.settings, clock.era)
-            .tx_ttl
-            .as_millis() as u64;
+        let settings = TtlSettings::of_era(&self.settings, clock.era);
 
         pending_txs
             .iter()
-            .take_while(|(_, admitted_at)| now.saturating_sub(**admitted_at) >= ttl_millis)
+            .take_while(|(_, admitted_at)| settings.is_expired(**admitted_at, clock.now_millis))
             .map(|(key, _)| key.clone())
             .collect()
     }
@@ -67,13 +64,11 @@ impl TtlPolicy {
     where
         Key: Clone,
     {
-        let now = clock.now_millis;
         let settings = TtlSettings::of_era(&self.settings, clock.era);
-        let release_age_millis = (settings.tx_ttl + settings.retirement_grace).as_millis() as u64;
 
         retired_txs
             .iter()
-            .filter(|(_, admitted_at)| now.saturating_sub(**admitted_at) >= release_age_millis)
+            .filter(|(_, admitted_at)| settings.is_due_for_release(**admitted_at, clock.now_millis))
             .map(|(key, _)| key.clone())
             .collect()
     }
@@ -105,11 +100,19 @@ impl TtlSettings {
             .parameters
     }
 
-    /// Whether a transaction admitted at `admitted_at` is older than the TTL
-    /// at `now_millis`.
+    /// Whether a transaction admitted at `admitted_at` reached the TTL at
+    /// `now_millis`.
     #[must_use]
-    pub const fn is_expired(&self, admitted_at: AdmissionTime, now_millis: u64) -> bool {
-        now_millis.saturating_sub(admitted_at) > self.tx_ttl.as_millis() as u64
+    pub fn is_expired(&self, admitted_at: AdmissionTime, now_millis: u64) -> bool {
+        u128::from(now_millis.saturating_sub(admitted_at)) >= self.tx_ttl.as_millis()
+    }
+
+    /// Whether a retired transaction admitted at `admitted_at` reached the TTL
+    /// plus the retirement grace at `now_millis`.
+    #[must_use]
+    pub fn is_due_for_release(&self, admitted_at: AdmissionTime, now_millis: u64) -> bool {
+        u128::from(now_millis.saturating_sub(admitted_at))
+            >= (self.tx_ttl + self.retirement_grace).as_millis()
     }
 }
 
@@ -189,6 +192,21 @@ mod tests {
         let era_1 = clock(35 * MINUTE, Era::new(1));
         assert_eq!(policy.due_for_release(&retired, &genesis), Vec::<u8>::new());
         assert_eq!(policy.due_for_release(&retired, &era_1), vec![1]);
+    }
+
+    /// A transaction expires once its age reaches the TTL, and is due for
+    /// release once it reaches the TTL plus the grace, not only past them.
+    #[test]
+    fn expiry_and_release_start_when_the_age_reaches_them() {
+        let settings = TtlSettings {
+            tx_ttl: Duration::from_mins(30),
+            retirement_grace: Duration::from_mins(5),
+        };
+
+        assert!(!settings.is_expired(0, 30 * MINUTE - 1));
+        assert!(settings.is_expired(0, 30 * MINUTE));
+        assert!(!settings.is_due_for_release(0, 35 * MINUTE - 1));
+        assert!(settings.is_due_for_release(0, 35 * MINUTE));
     }
 
     /// A schedule of 100-slot epochs whose era `i`, from epoch `i`, has the
