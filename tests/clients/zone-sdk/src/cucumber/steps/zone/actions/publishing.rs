@@ -98,8 +98,11 @@ pub(in super::super) async fn publish_zone_messages_concurrently(
             .collect::<Vec<_>>();
 
         async move {
+            let deadline = PublishDeadline::from_now(Duration::from_mins(3));
             for payload in payloads {
-                handle.publish(payload).await.map_err(|error| {
+                publish_message_with_retry(&handle, &payload, deadline)
+                    .await
+                    .map_err(|error| {
                     StepError::LogicalError {
                         message: format!(
                             "Zone concurrent publish failed for sequencer '{sequencer_alias}': {error}"
