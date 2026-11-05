@@ -96,3 +96,6 @@ cryptarchia:
     claim_pow_reward: 1
 time:
   slot_duration_in_seconds: 1
+mempool:
+  transaction_ttl_in_seconds: 3600
+  retirement_grace_in_seconds: 600

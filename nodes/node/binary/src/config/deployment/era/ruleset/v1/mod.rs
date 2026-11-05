@@ -7,12 +7,13 @@ use crate::config::deployment::InvalidDeployment;
 
 pub mod blend;
 pub mod cryptarchia;
+pub mod mempool;
 pub mod time;
 
 use self::{
     blend::Settings as BlendDeploymentSettings,
     cryptarchia::Settings as CryptarchiaDeploymentSettings,
-    time::Settings as TimeDeploymentSettings,
+    mempool::Settings as MempoolDeploymentSettings, time::Settings as TimeDeploymentSettings,
 };
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -20,6 +21,7 @@ pub struct Parameters {
     pub blend: BlendDeploymentSettings,
     pub cryptarchia: CryptarchiaDeploymentSettings,
     pub time: TimeDeploymentSettings,
+    pub mempool: MempoolDeploymentSettings,
 }
 
 impl Parameters {

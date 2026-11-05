@@ -9,10 +9,8 @@ use futures::Stream;
 use lb_core::{block::TxInBlock, era::ForkDigest, mantle::transactions::hash::PrefixedKey};
 use lb_cryptarchia_engine::Slot;
 use lb_time::Era;
-pub use policy::{EvictableTx, EvictionPolicy, PowClaimEvictionSettings};
-pub use pool::{
-    AdmissionLimits, DEFAULT_TX_TTL, IncludedItem, Mempool, MempoolSettings, PoolRecoveryState,
-};
+pub use policy::{EvictableTx, EvictionPolicy, PowClaimEvictionSettings, TtlSettings};
+pub use pool::{AdmissionLimits, IncludedItem, Mempool, MempoolSettings, PoolRecoveryState};
 use serde::{Deserialize, Serialize};
 
 /// Admission time of a transaction, as a Unix timestamp in milliseconds.

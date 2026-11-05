@@ -21,6 +21,7 @@ use lb_node::config::deployment::{
                 BlockRewardsConfig, EpochConfig, MaxGasPerBlock, ServiceParameters,
                 Settings as CryptarchiaDeploymentSettings,
             },
+            mempool::Settings as MempoolDeploymentSettings,
             time::Settings as TimeDeploymentSettings,
         },
     },
@@ -128,6 +129,8 @@ const BLOCK_REWARDS: BlockRewardsConfig = BlockRewardsConfig::new(
     ProperFraction::new(6, NonZeroU32::new(10).unwrap()).unwrap(),
 )
 .unwrap();
+const TRANSACTION_TTL_IN_SECONDS: u64 = 60 * 60;
+const RETIREMENT_GRACE_IN_SECONDS: u64 = 10 * 60;
 
 #[must_use]
 #[expect(
@@ -266,6 +269,10 @@ pub fn e2e_deployment_settings_with_genesis_block(
             time: TimeDeploymentSettings {
                 slot_duration_in_seconds: NonZero::new(slot_duration_in_secs)
                     .expect("The slot duration cannot be zero seconds."),
+            },
+            mempool: MempoolDeploymentSettings {
+                transaction_ttl_in_seconds: NonZero::new(TRANSACTION_TTL_IN_SECONDS).unwrap(),
+                retirement_grace_in_seconds: NonZero::new(RETIREMENT_GRACE_IN_SECONDS).unwrap(),
             },
         })),
         GenesisBlock::genesis(genesis_tx.clone()),
