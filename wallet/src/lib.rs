@@ -1366,7 +1366,7 @@ mod tests {
     fn a_note_younger_than_the_depth_is_spent_against_the_oldest_root_holding_it() {
         let alice = pk(1);
         let old = Note::new(100, Fr::from(1u64), alice);
-        let young = Note::new(5000, Fr::from(2u64), alice);
+        let young = Note::new(50_000, Fr::from(2u64), alice);
         let known_notes = known(&[
             (old, LEDGER_SET, nullifier(1)),
             (young, LEDGER_SET, nullifier(2)),
