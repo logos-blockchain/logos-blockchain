@@ -4,6 +4,7 @@ use core::{
     time::Duration,
 };
 
+use lb_binary_codec::canonical::BinaryEncode;
 use lb_blend_service::settings::EraTimingSettings;
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_utils::math::PositiveF64;
@@ -24,7 +25,7 @@ pub(crate) mod codec;
 const TARGET_PEERING_DEGREE: RangeInclusive<u32> = 3..=5;
 
 /// Deployment-specific Blend settings.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, BinaryEncode)]
 pub struct Settings {
     pub common: CommonSettings,
     pub core: CoreSettings,
@@ -219,7 +220,7 @@ impl Settings {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, BinaryEncode)]
 pub struct CommonSettings {
     /// `ß_c`: expected number of blending operations for each locally generated
     /// message.
@@ -246,7 +247,7 @@ impl From<MinimumNetworkSize> for NonZeroU64 {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, BinaryEncode)]
 pub struct CoreSettings {
     pub scheduler: SchedulerSettings,
     /// `Φ_CC`: the peering degree a core node maintains with other core nodes.
@@ -269,19 +270,19 @@ pub struct CoreSettings {
     pub activity_threshold_sensitivity: u64,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, BinaryEncode)]
 pub struct SchedulerSettings {
     pub cover: CoverTrafficSettings,
     pub delayer: MessageDelayerSettings,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, BinaryEncode)]
 pub struct CoverTrafficSettings {
     /// `F_c`: frequency at which cover messages are generated per round.
     pub message_frequency_per_round: PositiveF64,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, BinaryEncode)]
 pub struct MessageDelayerSettings {
     /// ∆max: maximal delay time between two release rounds.
     pub maximum_release_delay_in_rounds: NonZeroU64,
