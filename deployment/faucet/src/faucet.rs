@@ -46,9 +46,9 @@ pub struct TransferFailure {
 }
 
 /// Whether a transfer failing with `error` may still have reached the mempool:
-/// the node's answer was lost or did not come from the handler, as with a
-/// timeout. A refused connection never reached it, and an internal server
-/// error is the handler refusing the transfer.
+/// the node's answer was lost, or is not one the transfer handler gives, as
+/// with a timeout. A refused connection never reached it, and an internal
+/// server error is the handler refusing the transfer.
 fn may_be_submitted(error: &HttpError) -> bool {
     match error {
         HttpError::Request(error) => !error.is_connect(),

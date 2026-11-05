@@ -94,8 +94,8 @@ pub struct ProcessedBlockEvent {
 pub enum Error {
     #[error("Internal server error: {0}")]
     Server(String),
-    /// The answer came from somewhere other than the handler of the request,
-    /// or could not be read, so the request may have taken effect.
+    /// A status other than success or an internal server error, or a success
+    /// whose body could not be read.
     #[error("Unexpected response: {0}")]
     UnexpectedResponse(String),
     #[error("Failed to execute request: {0}")]
