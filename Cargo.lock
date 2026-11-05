@@ -4938,6 +4938,7 @@ dependencies = [
  "logos-blockchain-key-management-system-operators",
  "logos-blockchain-log-targets",
  "logos-blockchain-tracing",
+ "logos-blockchain-utils",
  "num-bigint",
  "overwatch",
  "rand 0.8.8",
