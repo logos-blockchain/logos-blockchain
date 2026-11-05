@@ -66,14 +66,11 @@ const INTEGER_DURATIONS: &[(&[&str], &str, &str, u64)] = &[
     ),
 ];
 
-/// 0.3.2 defaults that are not the current ones, as 0.3.2 wrote them: the
-/// mempool `tx_ttl` went from 9h to 1h, and a `null` kademlia `caching` was
-/// libp2p's default, which `cache_size` now defaults to. The upgrade test fails
-/// on any other 0.3.2 default left in the upgraded config.
-const STALE_DEFAULTS: &[(&[&str], &str, &str)] = &[
-    (&["mempool"], "tx_ttl", "'32400.000000000'"),
-    (KADEMLIA, "caching", "null"),
-];
+/// 0.3.2 defaults that are not the current ones, as 0.3.2 wrote them: a `null`
+/// kademlia `caching` was libp2p's default, which `cache_size` now defaults
+/// to. The upgrade test fails on any other 0.3.2 default left in the upgraded
+/// config.
+const STALE_DEFAULTS: &[(&[&str], &str, &str)] = &[(KADEMLIA, "caching", "null")];
 
 /// 0.3.2 `caching: {type: Disabled} | {type: Enabled, config: {max_peers}}`,
 /// now `cache_size: null | <max_peers>`.
@@ -100,6 +97,10 @@ pub fn migrate(config: &mut Value) -> Result<()> {
         {
             section.remove(*key);
         }
+    }
+    if let Some(mempool) = mapping_at(config, &["mempool"]) {
+        // Dropped rather than kept: the transaction TTL is an era parameter.
+        mempool.remove("tx_ttl");
     }
     if let Some(metrics) = mapping_at(config, &["tracing", "metrics"]) {
         // Dropped rather than translated: 0.3.2 wrote its `false` default into

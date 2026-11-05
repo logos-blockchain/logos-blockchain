@@ -54,8 +54,8 @@ use lb_utils::noop_service::NoService;
 use logos_blockchain_tx_service::{
     MempoolMsg, TxMempoolSettings,
     backend::{
-        AdmissionTime, DEFAULT_TX_TTL, MemPool as _, Mempool, MempoolError, MempoolSettings,
-        PoolRecoveryState, PowClaimEvictionSettings, RecoverableMempool as _, Status,
+        AdmissionTime, MemPool as _, Mempool, MempoolError, MempoolSettings, PoolRecoveryState,
+        PowClaimEvictionSettings, RecoverableMempool as _, Status, TtlSettings,
     },
     network::adapters::mock::{MOCK_TX_CONTENT_TOPIC, MockAdapter, mock_message},
     storage::{BlockSlotLookup, MempoolStorageAdapter, adapters::rocksdb::RocksStorageAdapter},
@@ -432,19 +432,35 @@ fn test_mock_pool_recovery_state() {
     );
 }
 
-/// The default expiry, no claim eviction, and every era accepting the fork
-/// digest of the tests' transactions.
+const TEST_TX_TTL: Duration = Duration::from_hours(1);
+
+const TEST_RETIREMENT_GRACE: Duration = Duration::from_mins(10);
+
+/// A TTL longer than any test runs, for the tests no tx may expire in.
+const NO_EXPIRY: Duration = Duration::from_millis(u64::MAX / 4);
+
+/// An expiry after an hour, no claim eviction, and every era accepting the
+/// fork digest of the tests' transactions.
 fn default_settings() -> MempoolSettings {
-    ttl_settings(DEFAULT_TX_TTL)
+    ttl_settings(TEST_TX_TTL)
 }
 
 fn ttl_settings(tx_ttl: Duration) -> MempoolSettings {
     MempoolSettings {
-        tx_ttl: Some(tx_ttl),
+        ttl: ttl_schedule(tx_ttl),
         pow_claim: None,
         accepted_fork_digests: accepted_fork_digests(),
         era_timing: None,
     }
+}
+
+/// Every era of the tests retires a tx at `tx_ttl` and releases it
+/// `TEST_RETIREMENT_GRACE` later.
+fn ttl_schedule(tx_ttl: Duration) -> EraSchedule<TtlSettings> {
+    era_schedule().map(|_| TtlSettings {
+        tx_ttl,
+        retirement_grace: TEST_RETIREMENT_GRACE,
+    })
 }
 
 /// Every era of the tests accepts the fork digest their transactions carry.
@@ -467,42 +483,18 @@ fn era_schedule() -> EraSchedule<EraTiming> {
 
 const TEST_SLOT_WINDOW: u64 = 10;
 
-/// Settings with only `PoW` claim eviction enabled, so the TTL cannot
-/// interfere. With a window of 10 and the grace of twice that, a claim
+/// Settings with `PoW` claim eviction and a TTL no test reaches, so the TTL
+/// cannot interfere. With a window of 10 and the grace of twice that, a claim
 /// anchored at slot 100 is accepted through slot 110 and evicted from 131.
 fn pow_claim_settings() -> MempoolSettings {
     MempoolSettings {
-        tx_ttl: None,
+        ttl: ttl_schedule(NO_EXPIRY),
         pow_claim: Some(era_schedule().map(|_| PowClaimEvictionSettings {
             slot_window: NonZeroU64::new(TEST_SLOT_WINDOW).expect("non-zero"),
         })),
         accepted_fork_digests: accepted_fork_digests(),
         era_timing: None,
     }
-}
-
-const TEST_TX_TTL: Duration = Duration::from_hours(1);
-
-/// Build a pool holding one pending tx whose admission timestamp is backdated
-/// to the unix epoch, so it is expired for any reasonable TTL.
-async fn pool_with_backdated_tx(settings: MempoolSettings) -> (InMemoryPool, Ops) {
-    let storage = InMemoryStorageAdapter::default();
-    let mut pool = InMemoryPool::new(settings.clone(), Era::genesis(), storage.clone());
-
-    let tx = sample_removed_tx();
-    let tx_id = tx.hash();
-
-    pool.add_item(tx_id, tx.clone())
-        .await
-        .expect("tx should be added");
-
-    let mut saved_state = pool.save();
-    saved_state.pending_items.insert(tx_id, 0);
-
-    (
-        Mempool::recover(settings, Era::genesis(), saved_state, storage).await,
-        tx,
-    )
 }
 
 #[tokio::test]
@@ -574,25 +566,6 @@ async fn expired_tx_is_evicted_on_next_sweep() {
 }
 
 #[tokio::test]
-async fn expired_tx_is_not_evicted_when_ttl_is_disabled() {
-    let (mut pool, tx) = pool_with_backdated_tx(MempoolSettings {
-        tx_ttl: None,
-        pow_claim: None,
-        accepted_fork_digests: accepted_fork_digests(),
-        era_timing: None,
-    })
-    .await;
-    let tx_id = tx.hash();
-
-    for _ in 0..10 {
-        pool.remove(&[]).await;
-    }
-
-    assert_eq!(pool.pending_item_count(), 1);
-    assert_eq!(pool.status(&[tx_id]), vec![Status::Pending]);
-}
-
-#[tokio::test]
 async fn a_tx_whose_fork_digest_the_era_in_force_does_not_accept_is_refused() {
     let mut pool = InMemoryPool::new(
         default_settings(),
@@ -627,17 +600,20 @@ async fn the_pool_admits_the_fork_digests_of_the_era_it_rotates_to() {
         timing,
         EraEntriesAfterGenesis::try_from_iter([(NonZero::new(1).unwrap(), timing)]).unwrap(),
     )
-    .unwrap()
-    .map(|era| {
-        if era.era == Era::genesis() {
-            AcceptedForkDigests::new(vec![FORK_DIGEST])
-        } else {
-            AcceptedForkDigests::new(vec![FORK_DIGEST, next_fork])
-        }
-    });
+    .unwrap();
     let mut pool = InMemoryPool::new(
         MempoolSettings {
-            accepted_fork_digests: two_eras,
+            ttl: two_eras.map(|_| TtlSettings {
+                tx_ttl: TEST_TX_TTL,
+                retirement_grace: TEST_RETIREMENT_GRACE,
+            }),
+            accepted_fork_digests: two_eras.map(|era| {
+                if era.era == Era::genesis() {
+                    AcceptedForkDigests::new(vec![FORK_DIGEST])
+                } else {
+                    AcceptedForkDigests::new(vec![FORK_DIGEST, next_fork])
+                }
+            }),
             ..default_settings()
         },
         Era::genesis(),
@@ -1155,24 +1131,6 @@ async fn removed_tx_is_released_by_its_age_since_admission() {
     assert_eq!(keys_with_prefix(&pool, recent.hash()), vec![recent.hash()]);
 }
 
-/// Without a TTL, a retired tx is never released by its age.
-#[tokio::test]
-async fn removed_tx_is_not_released_by_age_without_ttl() {
-    let old = tx("old");
-    let mut pool = pool_with_admission_times(
-        no_eviction_settings(),
-        InMemoryStorageAdapter::default(),
-        &[(&old, minutes_ago(71))],
-    )
-    .await;
-    pool.remove(&[old.hash()]).await;
-
-    // Trigger pruning removed items by calling `remove`
-    pool.remove(&[]).await;
-
-    assert_eq!(keys_with_prefix(&pool, old.hash()), vec![old.hash()]);
-}
-
 /// A reorged tx older than the TTL is not admitted again. It stays retained,
 /// so it still resolves until its release age.
 #[tokio::test]
@@ -1404,7 +1362,7 @@ fn minutes_ago(minutes: u64) -> AdmissionTime {
 /// Settings with no eviction, so only the tests' own operations retire txs.
 fn no_eviction_settings() -> MempoolSettings {
     MempoolSettings {
-        tx_ttl: None,
+        ttl: ttl_schedule(NO_EXPIRY),
         pow_claim: None,
         accepted_fork_digests: accepted_fork_digests(),
         era_timing: None,

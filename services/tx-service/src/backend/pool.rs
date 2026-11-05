@@ -3,7 +3,7 @@ use std::{
     fmt::Debug,
     hash::Hash,
     pin::Pin,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -30,7 +30,7 @@ use crate::{
     backend::{
         AdmissionTime, MemPool, MempoolError, RecoverableMempool,
         evictor::Evictor,
-        policy::{BlockSlots, EvictableTx as _, PowClaimEvictionSettings},
+        policy::{BlockSlots, EvictableTx as _, PowClaimEvictionSettings, TtlSettings},
     },
     metrics,
     storage::{BlockSlotLookup, MempoolStorageAdapter},
@@ -38,15 +38,12 @@ use crate::{
 
 const LOG_TARGET: &str = mempool::POOL;
 
-/// Default time a pending transaction may stay in the pool before eviction.
-pub const DEFAULT_TX_TTL: Duration = Duration::from_hours(1);
-
 /// Settings for the [`Mempool`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MempoolSettings {
-    /// How long a pending transaction is allowed to stay in the pool before
-    /// it is evicted. `None` disables expiry-based eviction.
-    pub tx_ttl: Option<Duration>,
+    /// The TTL and the retirement grace of every era: expiry and release
+    /// follow those of the era in force.
+    pub ttl: EraSchedule<TtlSettings>,
     /// Eviction of transactions carrying an expired `PoW` reward claim, with
     /// the settings of every era. `None` disables it.
     pub pow_claim: Option<EraSchedule<PowClaimEvictionSettings>>,
@@ -228,7 +225,10 @@ where
         // point where a block could include it; such a transaction is refused
         // rather than admitted and evicted on the next sweep.
         let block_slots = self.resolve_claim_anchors(&item).await;
-        if self.evictor.is_expired(&item, timestamp, &block_slots) {
+        if self
+            .evictor
+            .is_expired(&item, timestamp, self.era_in_force, &block_slots)
+        {
             return Err(MempoolError::Expired);
         }
 
@@ -242,7 +242,8 @@ where
         let removed_item = self.removed_items.remove(&key);
         let admitted_at = removed_item.unwrap_or(timestamp);
         self.index_by_prefix(&key);
-        self.evictor.on_add(&key, &item, timestamp, &block_slots);
+        self.evictor
+            .on_add(&key, &item, timestamp, self.era_in_force, &block_slots);
         let index = self.insert_pending(key, admitted_at);
         self.last_item_timestamp = timestamp;
         tracing::debug!(
@@ -299,8 +300,11 @@ where
         // they double as a trigger for eviction alongside processed-block
         // notifications.
         self.retire(
-            self.evictor
-                .select_retirements(current_timestamp_millis(), &self.pending_items),
+            self.evictor.select_retirements(
+                current_timestamp_millis(),
+                self.era_in_force,
+                &self.pending_items,
+            ),
             "evicted",
         );
         self.release_retained().await;
@@ -379,7 +383,8 @@ where
 
         let now = current_timestamp_millis();
         self.retire(
-            self.evictor.select_retirements(now, &self.pending_items),
+            self.evictor
+                .select_retirements(now, self.era_in_force, &self.pending_items),
             "evicted",
         );
         self.release_retained().await;
@@ -589,7 +594,8 @@ where
         let now = current_timestamp_millis();
         for item in items {
             let block_slots = self.resolve_claim_anchors(&item).await;
-            self.evictor.on_add(&item.hash(), &item, now, &block_slots);
+            self.evictor
+                .on_add(&item.hash(), &item, now, self.era_in_force, &block_slots);
         }
     }
 
@@ -625,6 +631,7 @@ where
     async fn release_retained(&mut self) {
         let releases = self.evictor.select_releases(
             current_timestamp_millis(),
+            self.era_in_force,
             &self.removed_items,
             &self.included_in_canonical,
         );
@@ -669,12 +676,10 @@ where
         u64::try_from(start.unix_timestamp_nanos() / 1_000_000).ok()
     }
 
-    /// Whether an item admitted at `admitted_at` is older than the TTL at
-    /// `now`. Never, if expiry is disabled.
+    /// Whether an item admitted at `admitted_at` is older than the TTL of the
+    /// era in force at `now`.
     fn is_expired(&self, admitted_at: AdmissionTime, now: u64) -> bool {
-        self.settings
-            .tx_ttl
-            .is_some_and(|tx_ttl| now.saturating_sub(admitted_at) > tx_ttl.as_millis() as u64)
+        TtlSettings::of_era(&self.settings.ttl, self.era_in_force).is_expired(admitted_at, now)
     }
 
     /// Insert `key` into [`Self::pending_items`] at the position its
