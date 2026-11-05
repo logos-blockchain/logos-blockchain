@@ -8,7 +8,6 @@ pub struct LeaderWalletConfig {
     // so nothing reads it.
     pub max_tx_fee: GasCost,
 
-    // The key the leader rewards are paid to. The service refuses to start unless
-    // the wallet tracks it.
+    // The key the leader rewards are paid to, which the wallet tracks.
     pub funding_pk: ZkPublicKey,
 }

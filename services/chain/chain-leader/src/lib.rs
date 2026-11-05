@@ -167,12 +167,6 @@ pub enum Error {
     Proof(#[from] LeaderProofError),
     #[error("Proof generation task failed: {0}")]
     ProofTask(#[from] JoinError),
-    #[error(
-        "the leader funding key {0:?} (`cryptarchia.leader.wallet.funding_pk` or \
-         `--cryptarchia-funding-pk`) is not tracked by the wallet (add it to \
-         `wallet.known_keys`): leader rewards are paid to it, and every won slot would be lost"
-    )]
-    UntrackedFundingKey(ZkPublicKey),
 }
 
 impl From<WalletApiError> for Error {
@@ -443,13 +437,6 @@ where
                 .relay::<Wallet>()
                 .await?,
         );
-
-        // A reward note under a key the wallet does not track cannot be recorded,
-        // so the node would lose every slot it wins. Refuse to start instead.
-        check_funding_key_tracked(
-            &wallet_api.get_known_addresses().await?,
-            wallet_config.funding_pk,
-        )?;
 
         let kms_api = KmsServiceApi::<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>::new(
             self.service_resources_handle
@@ -897,18 +884,8 @@ where
     selected_txs
 }
 
-fn check_funding_key_tracked(known: &[ZkPublicKey], funding_pk: ZkPublicKey) -> Result<(), Error> {
-    if known.contains(&funding_pk) {
-        Ok(())
-    } else {
-        Err(Error::UntrackedFundingKey(funding_pk))
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use lb_groth16::Fr;
-
     use super::*;
 
     #[derive(Clone)]
@@ -920,18 +897,6 @@ mod tests {
         fn storage_size(&self) -> usize {
             self.size
         }
-    }
-
-    #[test]
-    fn a_funding_key_the_wallet_does_not_track_is_refused() {
-        let funding_pk = ZkPublicKey::new(Fr::from(1u64));
-        let other = ZkPublicKey::new(Fr::from(2u64));
-
-        assert!(check_funding_key_tracked(&[other, funding_pk], funding_pk).is_ok());
-        assert!(matches!(
-            check_funding_key_tracked(&[other], funding_pk),
-            Err(Error::UntrackedFundingKey(pk)) if pk == funding_pk
-        ));
     }
 
     #[tokio::test]

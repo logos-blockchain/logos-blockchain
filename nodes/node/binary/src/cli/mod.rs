@@ -20,8 +20,8 @@ use crate::{
         ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, LogArgs,
         NetworkArgs, RunConfig, SdpArgs, StateArgs, UserConfig, api::serde::AxumBackendSettings,
         apply_default_log_filter, blend::serde::core::BackendConfig as BlendCoreConfig,
-        network::serde::SwarmConfig, update_api, update_blend, update_cryptarchia, update_network,
-        update_sdp, update_state, update_tracing,
+        check_leader_funding_key, network::serde::SwarmConfig, update_api, update_blend,
+        update_cryptarchia, update_network, update_sdp, update_state, update_tracing,
     },
 };
 
@@ -300,6 +300,7 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
     update_api(&mut user_config.api, api_args);
     update_state(&mut user_config.state, state_args);
     apply_default_log_filter(&mut user_config.tracing);
+    check_leader_funding_key(&user_config)?;
 
     let deployment_settings = match deployment_args.custom_deployment_path {
         None => DeploymentSettings::default(),

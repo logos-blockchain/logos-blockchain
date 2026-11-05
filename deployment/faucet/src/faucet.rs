@@ -30,9 +30,9 @@ const CONFIRMATION_DEPTH: usize = SPEND_ROOT_DEPTH;
 const RETRY_DELAY: Duration = Duration::from_secs(5);
 /// Transfer attempts per drip request before it is dropped. Until an attempt is
 /// submitted, one failing request stalls the queue for at most
-/// `MAX_TRANSFER_ATTEMPTS * RETRY_DELAY` plus the time the requests take, on top
-/// of the wait for the notes that can fund it to become spendable. Once one is,
-/// each attempt waits for confirmation until the balance has been back
+/// `MAX_TRANSFER_ATTEMPTS * RETRY_DELAY` plus the time the requests take, on
+/// top of the wait for the notes that can fund it to become spendable. Once one
+/// is, each attempt waits for confirmation until the balance has been back
 /// at its value before the drip for `CONFIRMATION_TIMEOUT`, so a drip seen at
 /// the tip holds the queue for as long as it stays there short of the
 /// confirmation depth.
@@ -65,9 +65,9 @@ impl Faucet {
             .map_err(|e| format!("Failed to fetch faucet balance: {e}"))
     }
 
-    /// The notes of the faucet at the tip, once the drip they can pay is not held
-    /// back by notes no spend can use yet. Those become spendable as the chain
-    /// grows, so waiting uses up none of the transfer attempts.
+    /// The notes of the faucet at the tip, once the drip they can pay is not
+    /// held back by notes no spend can use yet. Those become spendable as
+    /// the chain grows, so waiting uses up none of the transfer attempts.
     async fn wallet_past_pending_notes(&self) -> Result<WalletBalanceResponseBody, String> {
         loop {
             let wallet = self.wallet_at_tip().await?;

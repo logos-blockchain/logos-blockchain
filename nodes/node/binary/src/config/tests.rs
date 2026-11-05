@@ -20,6 +20,7 @@ use crate::{
             ServiceConfig as BlendServiceConfig,
             serde::{Config as BlendConfig, RequiredValues as BlendRequiredValues},
         },
+        check_leader_funding_key,
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaRequiredValues,
         },
@@ -145,7 +146,7 @@ fn parse_config_path() {
 
 /// Builds a minimal, valid [`UserConfig`] for override tests.
 fn minimal_user_config() -> UserConfig {
-    UserConfig::with_required_values(ConfigRequiredValues {
+    let mut config = UserConfig::with_required_values(ConfigRequiredValues {
         blend: BlendConfig::with_required_values(BlendRequiredValues {
             non_ephemeral_signing_key_id: "non_ephemeral_signing_key_id".into(),
             secret_key_kms_id: "secret_key_kms_id".into(),
@@ -159,7 +160,22 @@ fn minimal_user_config() -> UserConfig {
         wallet: WalletConfig::with_required_values(WalletRequiredValues {
             voucher_master_key_id: "voucher_master_key_id".into(),
         }),
-    })
+    });
+    config
+        .wallet
+        .known_keys
+        .insert("funding_key_id".into(), ZkPublicKey::zero());
+    config
+}
+
+#[test]
+fn a_leader_funding_key_the_wallet_does_not_track_is_refused() {
+    let mut config = minimal_user_config();
+    assert!(check_leader_funding_key(&config).is_ok());
+
+    config.wallet.known_keys.clear();
+    let error = check_leader_funding_key(&config).unwrap_err().to_string();
+    assert!(error.contains("wallet.known_keys"), "{error}");
 }
 
 /// Environment variables applied on top of the YAML config must reach the
