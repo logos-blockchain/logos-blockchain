@@ -420,8 +420,8 @@ impl LedgerState {
         // Divert the PoW share of the collected fees to the PoW reward pool
         // before the rest is pooled for block rewards. See the proof of work
         // specification: <https://lip.logos.co/blockchain/raw/proof-of-work.html>
-        let pow_refill = GasCost::from(reward_config.pow_fee_share(total_fee_burned.into_inner()));
-        let pooled_fees = total_fee_burned.checked_sub(pow_refill)?;
+        let pow_share = GasCost::from(reward_config.pow_fee_share(total_fee_burned.into_inner()));
+        let pooled_fees = total_fee_burned.checked_sub(pow_share)?;
 
         let (cryptarchia_ledger, blend_share, leader_reward) = self
             .cryptarchia_ledger
@@ -431,7 +431,7 @@ impl LedgerState {
         self.mantle_ledger.sdp.add_blend_income(blend_share);
         self.mantle_ledger
             .pow
-            .add_reward_refill_rewards(pow_refill.into_inner())
+            .credit_reward_pool(pow_share.into_inner())
             .map_err(mantle::Error::from)?;
 
         Ok((self, leader_reward))
@@ -4012,16 +4012,11 @@ mod tests {
         fn pow_ledger_state(reward_difficulty: u64) -> (LedgerState, Config) {
             let config = config();
             let mut state = LedgerState::from_notes([note()], &config, GENESIS_POW_REWARD_POOL);
+            state.mantle_ledger.pow.credit_reward_pool(1_000).unwrap();
             state
                 .mantle_ledger
                 .pow
-                .add_reward_refill_rewards(1_000)
-                .unwrap();
-            state
-                .mantle_ledger
-                .pow
-                .add_rewards_to_pool(&test_pool_config())
-                .unwrap();
+                .update_epoch_reward(&test_pool_config());
             state
                 .mantle_ledger
                 .pow
@@ -4144,11 +4139,7 @@ mod tests {
             let config = config();
             let mut state = LedgerState::from_notes([note()], &config, GENESIS_POW_REWARD_POOL);
             // The default reward config disables claiming (`rate_num = 0`).
-            state
-                .mantle_ledger
-                .pow
-                .add_rewards_to_pool(&config)
-                .unwrap();
+            state.mantle_ledger.pow.update_epoch_reward(&config);
             assert_eq!(state.mantle_ledger.pow.epoch_reward(), 0);
 
             let err = state
@@ -4204,6 +4195,53 @@ mod tests {
                 .pow
                 .add_seen_block_slots(claim_op().block_hash, Slot::from(0u64));
             (state, config)
+        }
+
+        #[test]
+        fn a_drained_pool_pays_again_once_a_block_credits_it() {
+            // The reward per claim stays fixed for the epoch, and the fee share
+            // each block credits brings a drained pool back within it.
+            let (mut state, config) = claim_accepting_state();
+            let epoch_reward = state.mantle_ledger.pow.epoch_reward();
+            state.mantle_ledger.pow.set_reward_pool(epoch_reward - 1);
+
+            let err = state
+                .clone()
+                .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(
+                    &single_era(config.clone()),
+                    claim_tx(),
+                )
+                .err()
+                .expect("claim should fail validation");
+            assert!(matches!(
+                err,
+                LedgerError::VerificationError(VerificationError::ClaimPowRewardError(
+                    ClaimPowRewardError::InsufficientPoolBalance { .. }
+                ))
+            ));
+
+            let mut reward_config = config.pow_config.reward.clone();
+            reward_config.pow_share = 10;
+            reward_config.share_den = NonZeroU64::new(100).unwrap();
+            (state, _) = state
+                .compute_block_rewards::<HeaderId>(
+                    10.into(),
+                    0.into(),
+                    ZkPublicKey::zero(),
+                    &reward_config,
+                )
+                .expect("reward computation should succeed");
+            assert_eq!(state.mantle_ledger.pow.reward_pool(), epoch_reward);
+            assert_eq!(state.mantle_ledger.pow.epoch_reward(), epoch_reward);
+
+            let (state, _balance, _, _, deferred_proofs) = state
+                .try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(
+                    &single_era(config),
+                    claim_tx(),
+                )
+                .expect("claim should validate and execute");
+            deferred_proofs.verify().unwrap();
+            assert_eq!(state.mantle_ledger.pow.reward_pool(), 0);
         }
 
         #[test]
@@ -4498,9 +4536,9 @@ mod tests {
         }
 
         #[test]
-        fn block_fees_refill_the_pow_pool_by_the_configured_share() {
-            // A tenth of the collected fees is diverted to the PoW refill and
-            // the rest is pooled for block rewards.
+        fn block_fees_credit_the_pow_pool_by_the_configured_share() {
+            // A tenth of the collected fees goes to the PoW pool in the block
+            // and the rest is pooled for block rewards.
             let mut config = config();
             config.pow_config.reward.pow_share = 10;
             config.pow_config.reward.share_den = NonZeroU64::new(100).unwrap();
@@ -4520,18 +4558,13 @@ mod tests {
                 state.cryptarchia_ledger.block_rewards.pooled_fees_window()[POOLED_FEES_WINDOW - 1],
                 900
             );
-            state
-                .mantle_ledger
-                .pow
-                .add_rewards_to_pool(&test_pool_config())
-                .unwrap();
             assert_eq!(state.mantle_ledger.pow.reward_pool(), pool_before + 100);
         }
 
         #[test]
-        fn block_fees_do_not_refill_the_pow_pool_while_the_share_is_zero() {
+        fn block_fees_do_not_credit_the_pow_pool_while_the_share_is_zero() {
             // With `pow_share = 0` every collected fee is pooled for block
-            // rewards and nothing accrues to the PoW refill.
+            // rewards and nothing goes to the PoW pool.
             let config = config();
             let mut state = LedgerState::from_notes([note()], &config, GENESIS_POW_REWARD_POOL);
             let pool_before = state.mantle_ledger.pow.reward_pool();
@@ -4548,11 +4581,6 @@ mod tests {
                 state.cryptarchia_ledger.block_rewards.pooled_fees_window()[POOLED_FEES_WINDOW - 1],
                 1_000
             );
-            state
-                .mantle_ledger
-                .pow
-                .add_rewards_to_pool(&test_pool_config())
-                .unwrap();
             assert_eq!(state.mantle_ledger.pow.reward_pool(), pool_before);
         }
     }

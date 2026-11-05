@@ -198,7 +198,7 @@ pub struct RewardPoWConfig {
     /// [`Config::expected_blocks_per_epoch`].
     pub target_claim_per_block: NonZeroU64,
     /// `POW_SHARE`: numerator of the share of each block's collected fees
-    /// diverted to the `PoW` reward pool. `0` disables refilling.
+    /// diverted to the `PoW` reward pool. `0` disables the credit.
     /// Must not exceed [`Self::share_den`].
     pub pow_share: u64,
     /// `SHARE_DEN`: denominator of the share of each block's collected fees

@@ -162,9 +162,7 @@ impl LedgerState {
             epoch_state,
         )?;
         self.sdp = new_sdp;
-        self.pow = self
-            .pow
-            .try_apply_header(last_epoch_state, epoch_state, config)?;
+        self.pow = self.pow.apply_header(last_epoch_state, epoch_state, config);
         Ok((self, effect))
     }
 
