@@ -50,7 +50,7 @@ use crate::{
     cryptarchia::{
         EpochState, LedgerState,
         block_density::BlockDensity,
-        tests::{GENESIS_POW_REWARD_POOL, config, generate_proof},
+        tests::{GENESIS_POW_REWARD_POOL, computed_reward_value, config, generate_proof},
     },
     mantle::sdp::SdpLedger,
     test_utils::single_era,
@@ -375,7 +375,9 @@ fn apply_block_to_ledger(
         )
         .expect("epoch state update");
     let id = block_id(parent, slot);
-    let proof = generate_proof(&parent_state, &utxo, slot);
+    let mut proof = generate_proof(&parent_state, &utxo, slot);
+    proof.reward_value = computed_reward_value(ledger, parent, slot, &proof, uncle_slots, [])
+        .expect("the reward of the block");
     let update = ledger
         .prepare_update::<_, _, MainnetGasProfile>(
             id,

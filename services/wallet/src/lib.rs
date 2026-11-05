@@ -55,7 +55,10 @@ use lb_services_utils::{
     overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings},
     wait_until_services_are_ready,
 };
-use lb_storage_service::{api::StorageApi, recovery::StorageRecoveryBackend};
+use lb_storage_service::{
+    api::StorageApi,
+    recovery::{StorageRecoveryBackend, recovery_key},
+};
 use lb_time::era::{EpochLength, EraSchedule};
 use lb_utils::bounded::BoundedError;
 use lb_wallet::{
@@ -75,12 +78,16 @@ use tokio::{
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{debug, error, info, trace, warn};
 
-use crate::states::{RecoveryState, ServiceState, Wallet};
+use crate::states::{RecoveryState, ServiceState, Wallet, wait_until_note_persisted};
 
 type KmsBackend = PreloadKMSBackend;
 type KeyId = <KmsBackend as KMSBackend>::KeyId;
 
 const LOG_TARGET: &str = wallet::SERVICE;
+
+/// How long a leader reward note may take to reach the persisted state before
+/// its block is given up.
+const LEADER_REWARD_PERSISTENCE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletServiceError {
@@ -122,6 +129,12 @@ pub enum WalletServiceError {
 
     #[error("The wallet holds no key for {0:?}")]
     UnknownKey(ZkPublicKey),
+
+    #[error("The note {0:?} did not reach the persisted state of the wallet")]
+    NoteNotPersisted(NoteCommitment),
+
+    #[error("Failed to read the persisted state of the wallet: {0}")]
+    PersistedState(DynError),
 
     #[error("blocking task failed: {0}")]
     TaskJoin(#[from] JoinError),
@@ -204,6 +217,12 @@ pub enum WalletMsg {
     },
     GenerateRewardKey {
         resp_tx: Sender<Result<ZkPublicKey, WalletServiceError>>,
+    },
+    // A leader reward note under a private random nonce, returned once persisted.
+    NewLeaderReward {
+        value: Value,
+        public_key: ZkPublicKey,
+        resp_tx: Sender<Result<Note, WalletServiceError>>,
     },
     ImportNote {
         note: Note,
@@ -315,6 +334,7 @@ impl WalletMsg {
             | Self::GetTxContext { block_id: tip, .. } => *tip,
             Self::SignTxWithEd25519 { .. }
             | Self::GenerateRewardKey { .. }
+            | Self::NewLeaderReward { .. }
             | Self::ImportNote { .. }
             | Self::GetKnownAddresses { .. } => None,
         }
@@ -648,6 +668,7 @@ where
                 if let Err(err) =
                     Self::add_change_note(&funded, change_pk, change_nonce, state, kms).await
                 {
+                    state.release_pending_notes(funded.nullifiers_consumed());
                     Self::send_err(resp_tx, err);
                     return;
                 }
@@ -842,6 +863,16 @@ where
                         .await;
                 if resp_tx.send(result).is_err() {
                     debug!(target: LOG_TARGET, "Failed to respond to GenerateRewardKey");
+                }
+            }
+            WalletMsg::NewLeaderReward {
+                value,
+                public_key,
+                resp_tx,
+            } => {
+                let result = Self::new_leader_reward(value, public_key, state, storage, kms).await;
+                if resp_tx.send(result).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to NewLeaderReward");
                 }
             }
             WalletMsg::ImportNote {
@@ -1248,6 +1279,32 @@ where
         let known_note = Self::known_note(kms, key_id, note, note_set).await?;
         state.add_known_notes([known_note]);
         Ok(known_note)
+    }
+
+    // A new leader reward note under `public_key`, with a private random nonce.
+    // Nothing on chain opens the note, so it is returned only once the persisted
+    // state knows it: a crash after its block is published cannot lose the reward.
+    // A note of value 0 holds nothing to lose, so the wallet does not track it.
+    async fn new_leader_reward(
+        value: Value,
+        public_key: ZkPublicKey,
+        state: &mut ServiceState<'_>,
+        storage: &StorageApi<Tx>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<Note, WalletServiceError> {
+        let note = Note::new(value, random_nonce(), public_key);
+        if value == 0 {
+            return Ok(note);
+        }
+        Self::import_note(note, LEDGER_SET, state, kms).await?;
+        let key = recovery_key(WalletServiceSettings::RECOVERY_KEY_SUFFIX);
+        wait_until_note_persisted(
+            || storage.load::<RecoveryState>(key.clone()),
+            note.commitment(),
+            LEADER_REWARD_PERSISTENCE_TIMEOUT,
+        )
+        .await?;
+        Ok(note)
     }
 
     // Registers the change note `funded` returns to a key of the wallet.

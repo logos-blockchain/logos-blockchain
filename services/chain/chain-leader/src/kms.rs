@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Display};
 
 use lb_core::{
-    mantle::Note,
+    mantle::{Note, Value},
     proofs::leader_proof::{LeaderPrivate, LeaderPublic},
 };
 use lb_groth16::Fr;
@@ -37,6 +37,7 @@ pub trait KmsAdapter<RuntimeServiceId> {
         public_inputs: LeaderPublic,
         wallet: PolWalletInputsData,
         msg: Fr,
+        reward_value: Value,
     ) -> Result<LeaderPrivate, PrivateInputsError>;
 }
 
@@ -80,9 +81,16 @@ where
         public_inputs: LeaderPublic,
         wallet: PolWalletInputsData,
         msg: Fr,
+        reward_value: Value,
     ) -> Result<LeaderPrivate, PrivateInputsError> {
         let (output_tx, output_rx) = oneshot::channel();
-        let operator = BuildPrivateInputsWithLeaderKey::new(output_tx, public_inputs, wallet, msg);
+        let operator = BuildPrivateInputsWithLeaderKey::new(
+            output_tx,
+            public_inputs,
+            wallet,
+            msg,
+            reward_value,
+        );
         Box::pin(self.execute(key_id, KeyOperators::Zk(Box::new(operator))))
             .await
             .map_err(|error| PrivateInputsError::KmsApi(Box::new(error)))?;

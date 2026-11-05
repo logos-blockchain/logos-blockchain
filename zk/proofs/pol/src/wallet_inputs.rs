@@ -25,6 +25,8 @@ pub struct PolWalletInputs {
     commitment_root_latest: Groth16Input,
     set_latest_path: [Groth16Input; NOTE_SET_TREE_DEPTH],
     secret_key: Groth16Input,
+    reward_public_key: Groth16Input,
+    reward_nonce: Groth16Input,
 }
 
 /// Private inputs of the POL cirmcom circuit to be provided by the wallet.
@@ -53,6 +55,9 @@ pub struct PolWalletInputsData {
     pub commitment_root_latest: Fr,
     pub set_latest_path: [Fr; NOTE_SET_TREE_DEPTH],
     pub secret_key: Fr,
+    // the note of the leader reward, the proof derives its commitment
+    pub reward_public_key: Fr,
+    pub reward_nonce: Fr,
 }
 
 #[derive(Serialize)]
@@ -82,6 +87,8 @@ pub struct PolWalletInputsJson {
     set_latest_path: Vec<Groth16InputDeser>,
     #[serde(rename = "sk")]
     secret_key: Groth16InputDeser,
+    reward_public_key: Groth16InputDeser,
+    reward_nonce: Groth16InputDeser,
 }
 impl From<&PolWalletInputs> for PolWalletInputsJson {
     fn from(
@@ -101,6 +108,8 @@ impl From<&PolWalletInputs> for PolWalletInputsJson {
             commitment_root_latest,
             set_latest_path,
             secret_key,
+            reward_public_key,
+            reward_nonce,
         }: &PolWalletInputs,
     ) -> Self {
         Self {
@@ -119,6 +128,8 @@ impl From<&PolWalletInputs> for PolWalletInputsJson {
             commitment_root_latest: commitment_root_latest.into(),
             set_latest_path: set_latest_path.iter().map(Into::into).collect(),
             secret_key: secret_key.into(),
+            reward_public_key: reward_public_key.into(),
+            reward_nonce: reward_nonce.into(),
         }
     }
 }
@@ -141,6 +152,8 @@ impl From<PolWalletInputsData> for PolWalletInputs {
             commitment_root_latest,
             set_latest_path,
             secret_key,
+            reward_public_key,
+            reward_nonce,
             ..
         }: PolWalletInputsData,
     ) -> Self {
@@ -163,6 +176,8 @@ impl From<PolWalletInputsData> for PolWalletInputs {
             commitment_root_latest: commitment_root_latest.into(),
             set_latest_path: set_latest_path.map(Into::into),
             secret_key: secret_key.into(),
+            reward_public_key: reward_public_key.into(),
+            reward_nonce: reward_nonce.into(),
         }
     }
 }

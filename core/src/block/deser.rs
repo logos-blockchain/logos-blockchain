@@ -58,7 +58,8 @@ mod tests {
         const BODY_ROOT: usize = 32;
         const POL_PROOF: usize = 128;
         const ENTROPY_CONTRIBUTION: usize = 32;
-        const REWARD_KEY: usize = 32;
+        const REWARD_COMMITMENT: usize = 32;
+        const REWARD_VALUE: usize = 8;
         const TX_COUNT: usize = 8; // u64 Vec length (genuinely variable)
         // bincode uses 8-byte for a length prefix, unlike the wire codec.
         const UNCLE_HEADERS_COUNT: usize = 8;
@@ -68,7 +69,8 @@ mod tests {
             + UNCLE_HEADERS_COUNT
             + POL_PROOF
             + ENTROPY_CONTRIBUTION
-            + REWARD_KEY
+            + REWARD_COMMITMENT
+            + REWARD_VALUE
             + TX_COUNT;
 
         let block = make_empty_block();

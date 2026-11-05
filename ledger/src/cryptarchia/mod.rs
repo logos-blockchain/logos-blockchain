@@ -33,8 +33,7 @@ use lb_core::{
     sdp::Declarations,
 };
 use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
-use lb_groth16::{AdditiveGroup as _, Fr, fr_from_bytes};
-use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_groth16::{Fr, fr_from_bytes};
 use lb_log_targets::ledger;
 
 use crate::{
@@ -693,13 +692,13 @@ impl LedgerState {
         Self { note_sets, ..self }
     }
 
-    // Block Execution step 4; returns the Blend share of the block reward.
+    // Block Execution step 4; returns the Blend share of the block reward and
+    // the leader reward.
     pub fn distribute_block_reward<Id>(
         self,
         pooled_fees: Value,
         tips: Value,
-        reward_key: ZkPublicKey,
-    ) -> Result<(Self, Value, notes::Note), LedgerError<Id>> {
+    ) -> Result<(Self, Value, Value), LedgerError<Id>> {
         let (block_rewards, shares) = self
             .block_rewards
             .distribute_block_reward(pooled_fees, self.epoch_state.total_stake)?;
@@ -707,24 +706,32 @@ impl LedgerState {
             .leader
             .checked_add(tips)
             .ok_or(BlockRewardsError::OutOfRange)?;
-        // The leader reward of Block Execution step 4, a note with nonce 0 under the
-        // block's reward_key.
-        let leader_note = notes::Note::new(leader_reward, Fr::ZERO, reward_key);
+        Ok((
+            Self {
+                block_rewards,
+                ..self
+            },
+            shares.blend,
+            leader_reward,
+        ))
+    }
+
+    // Block Execution step 4: the commitment of the leader reward note, which
+    // the proof of leadership derives, enters the ledger note set.
+    pub fn append_leader_reward<Id>(
+        self,
+        reward_commitment: NoteCommitment,
+    ) -> Result<Self, LedgerError<Id>> {
         let ledger_set = self
             .note_sets
             .get(LEDGER_SET)
             .expect("the ledger note set always exists")
             .clone()
-            .execute_adding(&[leader_note.commitment()])?;
-        Ok((
-            Self {
-                note_sets: self.note_sets.update(LEDGER_SET, ledger_set),
-                block_rewards,
-                ..self
-            },
-            shares.blend,
-            leader_note,
-        ))
+            .execute_adding(&[reward_commitment])?;
+        Ok(Self {
+            note_sets: self.note_sets.update(LEDGER_SET, ledger_set),
+            ..self
+        })
     }
 
     /// Block Execution step 1, at the first block of an epoch: the service
@@ -1028,8 +1035,8 @@ pub mod tests {
         sdp::{Declaration, DeclarationId, Locator, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::EpochConfig;
-    use lb_groth16::{CompressedGroth16Proof, Field as _, ModulusShift};
-    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey};
+    use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Field as _, ModulusShift};
+    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey};
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
@@ -1069,7 +1076,8 @@ pub mod tests {
 
     pub struct DummyProof {
         pub public: LeaderPublic,
-        pub reward_key: ZkPublicKey,
+        pub reward_commitment: NoteCommitment,
+        pub reward_value: Value,
     }
 
     impl LeaderProof for DummyProof {
@@ -1086,8 +1094,12 @@ pub mod tests {
             Fr::from(0u8)
         }
 
-        fn reward_key(&self) -> &ZkPublicKey {
-            &self.reward_key
+        fn reward_commitment(&self) -> NoteCommitment {
+            self.reward_commitment
+        }
+
+        fn reward_value(&self) -> Value {
+            self.reward_value
         }
     }
 
@@ -1157,7 +1169,9 @@ pub mod tests {
                 ledger.era_schedule(),
             )?;
         let id = make_id(parent, slot, utxo);
-        let proof = generate_proof(&ledger_state, &utxo, slot);
+        let mut proof = generate_proof(&ledger_state, &utxo, slot);
+        proof.reward_value =
+            computed_reward_value(ledger, parent, slot, &proof, &UncleSlots::default(), [])?;
         let update = ledger
             .prepare_update::<_, _, MainnetGasProfile>(
                 id,
@@ -1199,8 +1213,32 @@ pub mod tests {
                 ledger_state.epoch_state.lottery_0,
                 ledger_state.epoch_state.lottery_1,
             ),
-            reward_key: ZkPublicKey::zero(),
+            reward_commitment: NoteCommitment(Fr::ZERO),
+            reward_value: 0,
         }
+    }
+
+    // The reward value of the block of `txs` on `parent`, for its header to carry.
+    pub fn computed_reward_value(
+        ledger: &Ledger<HeaderId>,
+        parent: HeaderId,
+        slot: Slot,
+        proof: &DummyProof,
+        uncle_slots: &UncleSlots,
+        txs: impl IntoIterator<Item = SignedOps<Preverified, StandardMode>>,
+    ) -> Result<Value, LedgerError<HeaderId>> {
+        let eras = ledger.era_schedule();
+        let (state, _) = ledger
+            .state(&parent)
+            .ok_or(LedgerError::ParentNotFound(parent))?
+            .clone()
+            .try_apply_header::<_, HeaderId>(slot, proof, uncle_slots, eras)?;
+        let (state, gas_and_fees, _, _) = state
+            .try_apply_block_transactions::<_, HeaderId, MainnetGasProfile>(
+                eras,
+                txs.into_iter(),
+            )?;
+        state.leader_reward(&gas_and_fees, eras)
     }
 
     #[must_use]
@@ -2017,7 +2055,8 @@ pub mod tests {
                 lottery_0: ledger_state.epoch_state.lottery_0,
                 lottery_1: ledger_state.epoch_state.lottery_1,
             },
-            reward_key: ZkPublicKey::zero(),
+            reward_commitment: NoteCommitment(Fr::ZERO),
+            reward_value: 0,
         };
         let update_err = ledger_state
             .try_apply_proof::<_, ()>(slot, &proof, ledger.era_schedule())
@@ -2041,7 +2080,8 @@ pub mod tests {
                 lottery_0: ledger_state.epoch_state.lottery_0,
                 lottery_1: ledger_state.epoch_state.lottery_1,
             },
-            reward_key: ZkPublicKey::zero(),
+            reward_commitment: NoteCommitment(Fr::ZERO),
+            reward_value: 0,
         };
         let update_err = ledger_state
             .try_apply_proof::<_, ()>(slot, &proof, ledger.era_schedule())
@@ -2081,24 +2121,24 @@ pub mod tests {
     }
 
     #[test]
-    fn distribute_block_reward_appends_the_leader_note_and_updates_the_reward_state() {
+    fn distribute_then_append_leader_reward_updates_the_note_set_and_the_reward_state() {
         let genesis_note =
             notes::Note::new(10_000, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
         let state = LedgerState::from_notes([genesis_note], &config(), Fr::ZERO);
-        let reward_key = ZkPublicKey::new(Fr::from(0x4444u64));
+        let reward_commitment = NoteCommitment(Fr::from(0x4444u64));
 
-        let (state, blend_share, _) = state
-            .distribute_block_reward::<()>(1_000, 7, reward_key)
-            .unwrap();
+        let (state, blend_share, leader_reward) =
+            state.distribute_block_reward::<()>(1_000, 7).unwrap();
+        let state = state.append_leader_reward::<()>(reward_commitment).unwrap();
 
         // Stake 10_000 is far below target, so A_t = 1: no payout, the maximum release
         // 95_129_375_951, two fifths of it plus the tips to the leader.
         assert_eq!(blend_share, 57_077_625_571);
-        let leader_note = notes::Note::new(38_051_750_387, Fr::ZERO, reward_key);
+        assert_eq!(leader_reward, 38_051_750_387);
         let expected = CommitmentMmr::new()
             .push(genesis_note.commitment())
             .unwrap()
-            .push(leader_note.commitment())
+            .push(reward_commitment)
             .unwrap()
             .frontier_root();
         assert_eq!(
@@ -2125,9 +2165,7 @@ pub mod tests {
         let genesis_note =
             notes::Note::new(10_000, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
         let state = LedgerState::from_notes([genesis_note], &config(), Fr::ZERO);
-        let (state, blend_share, _) = state
-            .distribute_block_reward::<()>(0, 0, ZkPublicKey::zero())
-            .unwrap();
+        let (state, blend_share, _) = state.distribute_block_reward::<()>(0, 0).unwrap();
         assert_eq!(blend_share, 57_077_625_571);
         let reward = notes::Note::new(
             57_000_000_000,
@@ -2144,8 +2182,6 @@ pub mod tests {
 
         let expected = CommitmentMmr::new()
             .push(genesis_note.commitment())
-            .unwrap()
-            .push(notes::Note::new(38_051_750_380, Fr::ZERO, ZkPublicKey::zero()).commitment())
             .unwrap()
             .push(reward.commitment())
             .unwrap()

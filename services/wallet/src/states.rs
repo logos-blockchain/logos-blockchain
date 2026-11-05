@@ -1,13 +1,14 @@
 use std::{
     borrow::Borrow,
     collections::{HashMap, HashSet},
+    time::Duration,
 };
 
 use lb_core::{
     header::HeaderId,
     mantle::{
         GasProfile, Note, Value,
-        notes::NoteNullifier,
+        notes::{NoteCommitment, NoteNullifier},
         ops::transfer::TransferOp,
         transactions::{MantleTxBuilder, builder::ZkTransferOpening, tx_list::ops::OpsContext},
     },
@@ -16,13 +17,16 @@ use lb_groth16::Fr;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_log_targets::wallet;
 use lb_wallet::{KnownNote, KnownNotes, WalletBlock, WalletError, WalletState};
-use overwatch::services::state::StateUpdater;
+use overwatch::{DynError, services::state::StateUpdater};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 use crate::{KeyId, WalletServiceError, WalletServiceSettings};
 
 pub type Wallet = lb_wallet::Wallet<KeyId>;
+
+/// How often the persisted state is read while a note is on its way to it.
+const NOTE_PERSISTENCE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Notes handed out as funding for transactions that have been built but not
 /// yet observed on chain. Ephemeral: rebuilt empty on restart; entries are
@@ -119,6 +123,31 @@ impl RecoveryState {
     pub const fn take_lib_wallet_state(&mut self) -> Option<(HeaderId, WalletState)> {
         self.lib_wallet_state.take()
     }
+}
+
+/// Returns once the persisted state, as `load` reads it, knows the note of
+/// `commitment`. The state operator persists the states in order and a later
+/// state knows the notes of an earlier one, so the note stays persisted from
+/// then on.
+pub async fn wait_until_note_persisted<LoadFuture>(
+    load: impl Fn() -> LoadFuture + Send + Sync,
+    commitment: NoteCommitment,
+    timeout: Duration,
+) -> Result<(), WalletServiceError>
+where
+    LoadFuture: Future<Output = Result<Option<RecoveryState>, DynError>> + Send,
+{
+    tokio::time::timeout(timeout, async {
+        loop {
+            let persisted = load().await.map_err(WalletServiceError::PersistedState)?;
+            if persisted.is_some_and(|state| state.known_notes.contains_key(&commitment)) {
+                return Ok(());
+            }
+            tokio::time::sleep(NOTE_PERSISTENCE_POLL_INTERVAL).await;
+        }
+    })
+    .await
+    .map_err(|_| WalletServiceError::NoteNotPersisted(commitment))?
 }
 
 impl overwatch::services::state::ServiceState for RecoveryState {
@@ -286,13 +315,15 @@ impl<'u> ServiceState<'u> {
     /// already reserved for in-flight transactions. `priority_fee_percent`
     /// reserves that percentage of the final mandatory fee, including both
     /// execution and storage cost. Only the unused reserve becomes an
-    /// effective priority tip, and the percentage is not capped at 100.
+    /// effective priority tip, and the percentage is not capped at 100. A
+    /// funding that fails releases the notes `tx_builder` spends, such as a
+    /// split reserved for it, since no transaction will spend them.
     #[expect(
         clippy::too_many_arguments,
         reason = "thin passthrough to `Wallet::fund_tx` plus the reservations"
     )]
     pub fn fund_tx<G: GasProfile>(
-        &self,
+        &mut self,
         tip: HeaderId,
         tx_builder: &MantleTxBuilder,
         change_pk: ZkPublicKey,
@@ -301,7 +332,7 @@ impl<'u> ServiceState<'u> {
         context: &OpsContext,
         priority_fee_percent: u64,
     ) -> Result<MantleTxBuilder, WalletError> {
-        self.wallet.fund_tx::<G>(
+        let funded = self.wallet.fund_tx::<G>(
             tip,
             tx_builder,
             change_pk,
@@ -310,7 +341,11 @@ impl<'u> ServiceState<'u> {
             context,
             &self.pending_notes.nullifiers(),
             priority_fee_percent,
-        )
+        );
+        if funded.is_err() {
+            self.release_pending_notes(tx_builder.nullifiers_consumed());
+        }
+        funded
     }
 
     // A Transfer giving `owner` a note of exactly `value` and the rest back to
@@ -377,6 +412,7 @@ fn known_keys(settings: &WalletServiceSettings) -> impl Iterator<Item = (ZkPubli
 #[cfg(test)]
 mod tests {
     use core::num::NonZero;
+    use std::{collections::VecDeque, sync::Mutex};
 
     use lb_core::mantle::note_set::LEDGER_SET;
     use lb_groth16::Field as _;
@@ -388,8 +424,6 @@ mod tests {
 
     /// A schedule of one era, with epochs of 100 slots and a `k` of 5.
     fn era_schedule() -> ServiceEraSchedule {
-        use std::time::Duration;
-
         use lb_time::era::{EraEntriesAfterGenesis, EraSchedule, EraTiming};
         use time::OffsetDateTime;
 
@@ -429,6 +463,56 @@ mod tests {
         assert_eq!(decoded.next_reward_key_index, 4);
     }
 
+    #[tokio::test]
+    async fn a_note_counts_as_persisted_once_the_persisted_state_knows_it() {
+        let note = KnownNote {
+            note: Note::new(10, Fr::ONE, ZkPublicKey::new(Fr::from(2u64))),
+            note_set: LEDGER_SET,
+            nullifier: NoteNullifier(Fr::from(3u64)),
+        };
+        let commitment = note.note.commitment();
+        let without_note = RecoveryState {
+            lib_wallet_state: None,
+            known_notes: HashMap::new(),
+            next_reward_key_index: 0,
+        };
+        let with_note = RecoveryState {
+            known_notes: HashMap::from([(commitment, note)]),
+            ..without_note.clone()
+        };
+
+        let reads = Mutex::new(VecDeque::from([
+            None,
+            Some(without_note.clone()),
+            Some(with_note),
+        ]));
+        wait_until_note_persisted(
+            || {
+                let read = reads.lock().unwrap().pop_front().flatten();
+                async move { Ok(read) }
+            },
+            commitment,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert!(reads.lock().unwrap().is_empty());
+
+        let never = wait_until_note_persisted(
+            || {
+                let read = Some(without_note.clone());
+                async move { Ok(read) }
+            },
+            commitment,
+            Duration::from_millis(50),
+        )
+        .await;
+        assert!(matches!(
+            never,
+            Err(WalletServiceError::NoteNotPersisted(unpersisted)) if unpersisted == commitment
+        ));
+    }
+
     #[test]
     fn pending_note_does_not_expire_without_lib_progress() {
         let nullifier = NoteNullifier(Fr::ONE);
@@ -462,6 +546,67 @@ mod tests {
         pending_notes.release([nullifier]);
 
         assert!(pending_notes.nullifiers().is_empty());
+    }
+
+    #[test]
+    fn a_failed_funding_releases_the_notes_of_its_builder_alone() {
+        use std::sync::Arc;
+
+        use lb_core::mantle::{
+            Op,
+            gas::MainnetGasProfile,
+            transactions::{GasPrices, tx_list::ops::OpsGasContext},
+        };
+        use lb_services_utils::overwatch::RecoveryData;
+
+        let settings = WalletServiceSettings {
+            known_keys: HashMap::new(),
+            voucher_master_key_id: "voucher-master".into(),
+            recovery_data: RecoveryData::default(),
+            pending_note_expiry_blocks: 10,
+            era_schedule: era_schedule(),
+        };
+        let recovery = RecoveryState {
+            lib_wallet_state: None,
+            known_notes: HashMap::new(),
+            next_reward_key_index: 0,
+        };
+        let genesis = HeaderId::from([0; 32]);
+        let (sender, _receiver) = tokio::sync::watch::channel(None);
+        let updater = StateUpdater::new(Arc::new(sender));
+        let mut state =
+            ServiceState::from_genesis(recovery, &settings, genesis, &[], &[], [], &updater)
+                .unwrap();
+
+        let split_input = NoteNullifier(Fr::ONE);
+        let in_flight = NoteNullifier(Fr::from(2u64));
+        state.reserve_pending_notes([split_input, in_flight]);
+        let tx_builder = MantleTxBuilder::new()
+            .push_op(Op::Transfer(TransferOp::new(
+                [split_input].into(),
+                [NoteCommitment(Fr::ONE)].into(),
+                Fr::ONE,
+                0,
+            )))
+            .unwrap();
+        let funding_pk = ZkPublicKey::new(Fr::ONE);
+        let context = OpsContext {
+            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(1, 1)),
+        };
+
+        state
+            .fund_tx::<MainnetGasProfile>(
+                genesis,
+                &tx_builder,
+                funding_pk,
+                Fr::ONE,
+                [funding_pk],
+                &context,
+                0,
+            )
+            .unwrap_err();
+
+        assert_eq!(state.pending_notes.nullifiers(), HashSet::from([in_flight]));
     }
 
     /// Regression test for the wallet-service crash seen the first time a

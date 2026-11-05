@@ -126,6 +126,11 @@ mod tests {
             1000,
             Fr::from(11u64),
             Fr::ZERO,
+            &lb_core::mantle::Note::new(
+                0,
+                Fr::ZERO,
+                lb_key_management_system_service::keys::ZkPublicKey::zero(),
+            ),
         );
         let PolWitnessInputsData { wallet, chain } = private.input().clone();
         let inputs = leadership_quota_inputs(&private);

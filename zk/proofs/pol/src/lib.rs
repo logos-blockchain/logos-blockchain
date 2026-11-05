@@ -138,14 +138,26 @@ mod tests {
     fn test_full_flow() {
         let data = test_utils::sample_witness_data();
         let msg = data.chain.msg;
+        let reward_value = data.chain.reward_value;
         let (proof, inputs) = prove(data.into()).unwrap();
         assert_eq!(inputs.slot_number.into_inner(), Fr::from(678u64));
         assert_eq!(inputs.msg.into_inner(), msg);
+        assert_eq!(inputs.reward_value.into_inner(), Fr::from(reward_value));
         assert!(verify(&proof, &inputs).unwrap());
         let rebound = PolVerifierInput {
             msg: Groth16Input::new(msg + Fr::ONE),
             ..inputs
         };
         assert!(!verify(&proof, &rebound).unwrap());
+        let other_value = PolVerifierInput {
+            reward_value: Groth16Input::new(Fr::from(reward_value) + Fr::ONE),
+            ..inputs
+        };
+        assert!(!verify(&proof, &other_value).unwrap());
+        let other_commitment = PolVerifierInput {
+            reward_commitment: Groth16Input::new(inputs.reward_commitment.into_inner() + Fr::ONE),
+            ..inputs
+        };
+        assert!(!verify(&proof, &other_commitment).unwrap());
     }
 }

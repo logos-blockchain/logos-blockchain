@@ -9,12 +9,13 @@ pub struct Config {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WalletConfig {
-    // Hard cap on the ransaction fee for LEADER_CLAIM
+    // Cap on a transaction fee of the leader. The leader submits no transaction,
+    // so nothing reads it.
     #[serde(default = "default_max_tx_fee")]
     pub max_tx_fee: GasCost,
 
-    // The key to use for paying transaction fees for LEADER_CLAIM.
-    // Change notes will be returned to this same funding pk.
+    // The key the leader rewards are paid to. It must be in `wallet.known_keys`,
+    // or the node refuses to start.
     pub funding_pk: ZkPublicKey,
 }
 

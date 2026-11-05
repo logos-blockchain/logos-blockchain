@@ -10,14 +10,13 @@ use lb_binary_codec::{
 };
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Fr, fr_to_bytes};
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
 
 mod fixtures;
 
 use crate::{
     crypto::Hasher,
-    mantle::transactions::GenesisTx,
+    mantle::{Value, notes::NoteCommitment, transactions::GenesisTx},
     proofs::leader_proof::{Groth16LeaderProof, LeaderProof, LeaderPublic},
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
@@ -165,7 +164,8 @@ impl Header {
         h.update(self.slot.to_le_bytes());
         h.update(self.body_root.0);
         // The proof is left out, a Groth16 proof can be re-randomized.
-        h.update(fr_to_bytes(self.proof_of_leadership.reward_key().as_fr()));
+        h.update(fr_to_bytes(&self.proof_of_leadership.reward_commitment().0));
+        h.update(self.proof_of_leadership.reward_value().to_le_bytes());
         h.update(fr_to_bytes(&self.proof_of_leadership.entropy()));
     }
 
@@ -182,7 +182,8 @@ impl Header {
             &self.parent_block,
             self.slot,
             &self.body_root,
-            self.proof_of_leadership.reward_key(),
+            &self.proof_of_leadership.reward_commitment(),
+            self.proof_of_leadership.reward_value(),
         )
     }
 
@@ -246,8 +247,12 @@ impl LeaderProof for Header {
         self.proof_of_leadership.entropy()
     }
 
-    fn reward_key(&self) -> &ZkPublicKey {
-        self.proof_of_leadership.reward_key()
+    fn reward_commitment(&self) -> NoteCommitment {
+        self.proof_of_leadership.reward_commitment()
+    }
+
+    fn reward_value(&self) -> Value {
+        self.proof_of_leadership.reward_value()
     }
 }
 
@@ -260,7 +265,8 @@ pub fn pol_msg(
     parent_block: &HeaderId,
     slot: Slot,
     body_root: &ContentId,
-    reward_key: &ZkPublicKey,
+    reward_commitment: &NoteCommitment,
+    reward_value: Value,
 ) -> Fr {
     let mut h = Hasher::new();
     h.update(b"POL_MSG_V1");
@@ -268,7 +274,8 @@ pub fn pol_msg(
     h.update(parent_block.0);
     h.update(slot.to_le_bytes());
     h.update(body_root.0);
-    h.update(fr_to_bytes(reward_key.as_fr()));
+    h.update(fr_to_bytes(&reward_commitment.0));
+    h.update(reward_value.to_le_bytes());
     Fr::from_le_bytes_mod_order(&h.finalize())
 }
 
@@ -442,34 +449,60 @@ fn pol_msg_hashes_the_header_fields_under_its_dst() {
             .try_into()
             .unwrap(),
     );
-    let reward_key = ZkPublicKey::new(Fr::from(0x4444u64));
+    let reward_commitment = NoteCommitment(Fr::from(0x4444u64));
 
     // Digest below p.
     assert_eq!(
-        pol_msg(&parent_block, Slot::from(42u64), &body_root, &reward_key),
+        pol_msg(
+            &parent_block,
+            Slot::from(46u64),
+            &body_root,
+            &reward_commitment,
+            0x6666
+        ),
         Fr::from_str(
-            "5749334279150289623698565865075820845675510690394950232192972695289993830655"
+            "1257913445352186760781801521745335656558978515391203688562859797786293976798"
         )
         .unwrap()
     );
-    // Digest 0x59707beb...a75c8d90 read little endian is above p and wraps.
-    assert_eq!(
-        pol_msg(&parent_block, Slot::from(43u64), &body_root, &reward_key),
-        Fr::from_str(
-            "21606329368332620161583374441374310760876754681324953590626645777046608506967"
-        )
-        .unwrap()
-    );
-    // The reward key is covered.
+    // Digest 0x69353504...6c706f54 read little endian is above p and wraps.
     assert_eq!(
         pol_msg(
             &parent_block,
             Slot::from(42u64),
             &body_root,
-            &ZkPublicKey::new(Fr::from(0x4445u64))
+            &reward_commitment,
+            0x6666
         ),
         Fr::from_str(
-            "17375742548857974003166263505002194344126125145555977468185665333091871788864"
+            "16302932358473993454067199317569404181679737752948030160294528723108679202152"
+        )
+        .unwrap()
+    );
+    // The reward commitment and the reward value are covered.
+    assert_eq!(
+        pol_msg(
+            &parent_block,
+            Slot::from(42u64),
+            &body_root,
+            &NoteCommitment(Fr::from(0x4445u64)),
+            0x6666
+        ),
+        Fr::from_str(
+            "6675858732187783999506042311682083436339216882710970592929130357297914894510"
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        pol_msg(
+            &parent_block,
+            Slot::from(42u64),
+            &body_root,
+            &reward_commitment,
+            0x6667
+        ),
+        Fr::from_str(
+            "19127765436389383361965734721894489407953894745175146900948303423486380591301"
         )
         .unwrap()
     );
@@ -491,13 +524,14 @@ fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
             Groth16LeaderProof::from_parts(
                 lb_pol::PoLProof::from_bytes(&[proof_byte; 128]),
                 Fr::from(0x5555u64),
-                ZkPublicKey::new(Fr::from(0x4444u64)),
+                NoteCommitment(Fr::from(0x4444u64)),
+                0x6666,
             ),
         )
     };
     assert_eq!(
         hex::encode(header(0x22).id().0),
-        "c61755f6ceeb6d9bed130561d9221500b51f30c50631134d5849468f814b53e7"
+        "8e69f9ec7ff67b1e4e6f52d5f9c507e72534a1c386f19d69572875869ddef365"
     );
     assert_eq!(header(0x22).id(), header(0x23).id());
     assert_eq!(
@@ -506,7 +540,8 @@ fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
             &HeaderId([0x11; 32]),
             Slot::from(42u64),
             &body_root,
-            &ZkPublicKey::new(Fr::from(0x4444u64))
+            &NoteCommitment(Fr::from(0x4444u64)),
+            0x6666
         )
     );
 
@@ -523,12 +558,13 @@ fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
         Groth16LeaderProof::from_parts(
             lb_pol::PoLProof::from_bytes(&[0x22; 128]),
             Fr::from(0x5555u64),
-            ZkPublicKey::new(Fr::from(0x4444u64)),
+            NoteCommitment(Fr::from(0x4444u64)),
+            0x6666,
         ),
     );
     assert_eq!(
         hex::encode(spec_header.id().0),
-        "c61755f6ceeb6d9bed130561d9221500b51f30c50631134d5849468f814b53e7"
+        "8e69f9ec7ff67b1e4e6f52d5f9c507e72534a1c386f19d69572875869ddef365"
     );
 }
 
@@ -538,24 +574,43 @@ fn header_proof_verifies_only_against_its_own_pol_msg() {
     let body_root = ContentId([0x22; 32]);
     // The witness helper proves at slot 0.
     let slot = Slot::from(0u64);
-    let reward_key = ZkPublicKey::new(Fr::from(0x44u64));
-    let msg = pol_msg(&parent_block, slot, &body_root, &reward_key);
+    let reward = crate::mantle::Note::new(
+        0x66,
+        Fr::from(0x55u64),
+        lb_key_management_system_keys::keys::ZkPublicKey::new(Fr::from(0x44u64)),
+    );
+    let msg = pol_msg(
+        &parent_block,
+        slot,
+        &body_root,
+        &reward.commitment(),
+        reward.value,
+    );
     let (public, private) = crate::proofs::leader_proof::test_utils::note_set_leader_inputs(
         Fr::from(7u64),
         1000,
         Fr::from(11u64),
         msg,
+        &reward,
     );
-    let proof = Groth16LeaderProof::prove(private, reward_key).unwrap();
+    let proof = Groth16LeaderProof::prove(private).unwrap();
 
     assert!(Header::new(parent_block, body_root, slot, proof.clone()).verify(&public));
     assert!(!Header::new(parent_block, ContentId([0x23; 32]), slot, proof.clone()).verify(&public));
     let redirected = Groth16LeaderProof::from_parts(
         *proof.proof(),
         proof.entropy(),
-        ZkPublicKey::new(Fr::from(0x45u64)),
+        NoteCommitment(Fr::from(0x45u64)),
+        reward.value,
     );
     assert!(!Header::new(parent_block, body_root, slot, redirected).verify(&public));
+    let overpaid = Groth16LeaderProof::from_parts(
+        *proof.proof(),
+        proof.entropy(),
+        reward.commitment(),
+        reward.value + 1,
+    );
+    assert!(!Header::new(parent_block, body_root, slot, overpaid).verify(&public));
 }
 
 #[test]
@@ -627,13 +682,14 @@ fn peek_slot_reads_the_slot_after_the_version_and_the_parent() {
 ///
 /// `body_root = blake2b256( b"BODY_ROOT_V1" || uncle_headers ||
 /// transactions_root )`, where `uncle_headers` is the list encoding: a 1-byte
-/// little-endian element count followed by that many fixed 265-byte entries.
+/// little-endian element count followed by that many fixed 273-byte entries.
 ///
 /// `HeaderId (block_id) = blake2b256( b"BLOCK_ID_V1" || bedrock_version (1B)
-/// ||` `parent_block (32B) || slot_le (8B) || body_root (32B) || reward_key
-/// (32B) ||` `entropy_contribution (32B) )`. The proof is left out, and the
-/// preimage absorbs `reward_key` before `entropy_contribution`, which is not
-/// the header's wire order.
+/// ||` `parent_block (32B) || slot_le (8B) || body_root (32B) ||
+/// reward_commitment (32B) || reward_value_le (8B) ||` `entropy_contribution
+/// (32B) )`. The proof is left out, and the preimage absorbs
+/// `reward_commitment` and `reward_value` before `entropy_contribution`, which
+/// is not the header's wire order.
 ///
 /// The test is `#[ignore]`d so it is skipped by `cargo test --all-features`.
 /// Run it on demand with:
@@ -671,7 +727,8 @@ mod body_root_test_vectors {
                 )
                 .unwrap(),
                 Fr::from(u64::from(byte)),
-                ZkPublicKey::new(Fr::from(u64::from(byte))),
+                NoteCommitment(Fr::from(u64::from(byte))),
+                u64::from(byte),
             ),
         )
     }
@@ -692,7 +749,8 @@ mod body_root_test_vectors {
         );
         println!(
             "block_id   = blake2b256( b\"BLOCK_ID_V1\" || bedrock_version || parent_block || \
-             slot_le || body_root || reward_key || entropy_contribution )"
+             slot_le || body_root || reward_commitment || reward_value_le || \
+             entropy_contribution )"
         );
 
         // 1. Empty block: no transactions.
@@ -763,8 +821,9 @@ mod body_root_test_vectors {
         let slot = Slot::from(42u64);
         let proof = Groth16LeaderProof::from_parts(
             lb_pol::PoLProof::from_bytes(&[0x22u8; 128]),
-            Fr::from(0x5555u64),                   // entropy_contribution
-            ZkPublicKey::new(Fr::from(0x4444u64)), // reward_key
+            Fr::from(0x5555u64),                 // entropy_contribution
+            NoteCommitment(Fr::from(0x4444u64)), // reward_commitment
+            0x6666,                              // reward_value
         );
         let header = Header::new(parent_block, body_root, slot, proof);
         let header_id = header.id();
@@ -779,7 +838,8 @@ mod body_root_test_vectors {
         h.update(parent_block.0);
         h.update(slot.to_le_bytes());
         h.update(body_root.0);
-        h.update(fr_to_bytes(proof.reward_key().as_fr()));
+        h.update(fr_to_bytes(&proof.reward_commitment().0));
+        h.update(proof.reward_value().to_le_bytes());
         h.update(fr_to_bytes(&proof.entropy()));
         let manual: [u8; 32] = h.finalize().into();
         assert_eq!(
@@ -795,16 +855,11 @@ mod body_root_test_vectors {
         println!("{:20}: {}", "slot", u64::from(slot));
         println!("{:20}: {}", "body_root", hex::encode(body_root.0));
         // proof_of_leadership fields (here, the deterministic genesis proof).
-        println!(
-            "{:20}: {}",
-            "reward_key",
-            hex::encode(fr_to_bytes(proof.reward_key().as_fr()))
-        );
-        println!(
-            "{:20}: {}",
-            "entropy_contribution",
-            hex::encode(fr_to_bytes(&proof.entropy()))
-        );
+        let reward_commitment = hex::encode(fr_to_bytes(&proof.reward_commitment().0));
+        println!("{:20}: {reward_commitment}", "reward_commitment");
+        println!("{:20}: {}", "reward_value", proof.reward_value());
+        let entropy_contribution = hex::encode(fr_to_bytes(&proof.entropy()));
+        println!("{:20}: {entropy_contribution}", "entropy_contribution");
         println!("{:20}: {}", "block_id", hex::encode(header_id.0));
         println!("================================================================");
     }
@@ -827,7 +882,7 @@ mod body_root_test_vectors {
             UncleHeaders::try_new(vec![uncle(0x66), uncle(0x77)], VECTOR_MAX_UNCLES).unwrap();
         assert_eq!(
             hex::encode(crate::block::body_root(&uncles, &txs).0),
-            "b94d1ba9e827aae7342452914516826700c5c65b0ccf38069fc1505e50acf4f6"
+            "d4b31fe17f8b46f635128900eeddde786071e44517d9ec78d3987fdf873b2d61"
         );
     }
 }

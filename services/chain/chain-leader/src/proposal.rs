@@ -2,6 +2,8 @@ use lb_core::{
     block::{Block, BlockTransactions, UncleHeaders, body_root},
     header::{HeaderId, pol_msg},
     mantle::{
+        Value,
+        notes::NoteCommitment,
         traits::{Hashable, StorageSize},
         transactions::hash::TxHash,
     },
@@ -9,15 +11,13 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::{AdditiveGroup as _, Fr};
-use lb_key_management_system_service::keys::ZkPublicKey;
 
 use crate::Error;
 
 // The proof of a block whose body is not fixed yet, so it cannot be proven: it
-// only lets the proposer apply the header before selecting the transactions.
-pub struct ProposalHeaderProof {
-    pub reward_key: ZkPublicKey,
-}
+// only lets the proposer apply the header before selecting the transactions,
+// which it runs before the reward of the block is known.
+pub struct ProposalHeaderProof;
 
 impl LeaderProof for ProposalHeaderProof {
     fn verify(&self, _public_inputs: &LeaderPublic) -> bool {
@@ -32,8 +32,12 @@ impl LeaderProof for ProposalHeaderProof {
         Fr::ZERO
     }
 
-    fn reward_key(&self) -> &ZkPublicKey {
-        &self.reward_key
+    fn reward_commitment(&self) -> NoteCommitment {
+        NoteCommitment(Fr::ZERO)
+    }
+
+    fn reward_value(&self) -> Value {
+        0
     }
 }
 
@@ -44,9 +48,16 @@ pub fn block_msg<Tx: Hashable<Hash = TxHash>>(
     slot: Slot,
     uncles: &UncleHeaders,
     txs: &[Tx],
-    reward_key: &ZkPublicKey,
+    reward_commitment: &NoteCommitment,
+    reward_value: Value,
 ) -> Fr {
-    pol_msg(parent, slot, &body_root(uncles, txs), reward_key)
+    pol_msg(
+        parent,
+        slot,
+        &body_root(uncles, txs),
+        reward_commitment,
+        reward_value,
+    )
 }
 
 // Proves the PoL bound to the block and builds the block; blocking.
@@ -56,12 +67,11 @@ pub fn assemble_block<Tx>(
     uncles: UncleHeaders,
     txs: BlockTransactions<Tx>,
     private: LeaderPrivate,
-    reward_key: ZkPublicKey,
 ) -> Result<Block<Tx>, Error>
 where
     Tx: Hashable<Hash = TxHash> + StorageSize,
 {
-    let proof = Groth16LeaderProof::prove(private, reward_key)?;
+    let proof = Groth16LeaderProof::prove(private)?;
     Ok(Block::create(parent, slot, uncles, proof, txs)?)
 }
 
@@ -78,14 +88,14 @@ mod tests {
         },
         proofs::leader_proof::{check_winning, pol_wallet_inputs},
     };
-    use lb_key_management_system_service::keys::UnsecuredZkKey;
+    use lb_key_management_system_service::keys::{UnsecuredZkKey, ZkPublicKey};
     use lb_ledger::LedgerState;
 
     use super::*;
     use crate::leadership::public_inputs_for_slot;
 
     #[test]
-    fn proposed_block_proof_is_bound_to_its_body_and_reward_key() {
+    fn proposed_block_proof_is_bound_to_its_body_and_reward() {
         let config = crate::leadership::test_config();
         let secret_key = Fr::from(7u64);
         let public_key = UnsecuredZkKey::new(secret_key).to_public_key();
@@ -118,40 +128,39 @@ mod tests {
         )
         .unwrap();
         wallet.secret_key = secret_key;
+        let reward = notes::Note::new(
+            0x6666,
+            Fr::from(0x5555u64),
+            ZkPublicKey::new(Fr::from(0x4444u64)),
+        );
+        wallet.reward_public_key = *reward.public_key.as_fr();
+        wallet.reward_nonce = reward.nonce;
 
         let parent = HeaderId::from([1; 32]);
-        let reward_key = ZkPublicKey::new(Fr::from(0x4444u64));
         let txs = BlockTransactions::<SignedOps<Preverified, StandardMode>>::empty();
         let msg = block_msg(
             &parent,
             slot,
             &UncleHeaders::empty(),
             txs.as_slice(),
-            &reward_key,
+            &reward.commitment(),
+            reward.value,
         );
-        let private = LeaderPrivate::new(public, wallet, msg);
-        let block = assemble_block(
-            parent,
-            slot,
-            UncleHeaders::empty(),
-            txs,
-            private.clone(),
-            reward_key,
-        )
-        .unwrap();
+        let private = LeaderPrivate::new(public, wallet.clone(), msg, reward.value);
+        let block = assemble_block(parent, slot, UncleHeaders::empty(), txs, private).unwrap();
 
         assert!(block.header().verify(&public));
         let proof = block.header().leader_proof().clone();
         assert!(!Header::new(parent, ContentId::from([9; 32]), slot, proof).verify(&public));
-        // `Groth16LeaderProof::from_parts` is crate private in core: the same
-        // witness, bound to `reward_key`, is proven under another reward key.
+        // `Groth16LeaderProof::from_parts` is crate private in core: `msg`, bound to
+        // the reward note, is proven under another key of that note.
+        wallet.reward_public_key = Fr::from(5u64);
         let other_key = assemble_block(
             parent,
             slot,
             UncleHeaders::empty(),
             BlockTransactions::<SignedOps<Preverified, StandardMode>>::empty(),
-            private,
-            ZkPublicKey::new(Fr::from(5u64)),
+            LeaderPrivate::new(public, wallet, msg, reward.value),
         )
         .unwrap();
         assert!(!other_key.header().verify(&public));

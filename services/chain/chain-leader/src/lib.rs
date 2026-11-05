@@ -34,7 +34,7 @@ use lb_core::{
     sdp::blend::PolEpochState,
 };
 use lb_cryptarchia_engine::Slot;
-use lb_key_management_system_service::api::KmsServiceApi;
+use lb_key_management_system_service::{api::KmsServiceApi, keys::ZkPublicKey};
 use lb_ledger::{EpochState, LedgerState, config::EraScheduledConfig};
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_services_utils::wait_until_services_are_ready;
@@ -61,7 +61,7 @@ use tokio::{
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Level, debug, error, info, instrument, span, trace};
 use tracing_futures::Instrument as _;
-use tx_selection::{TransactionSelection, select_transactions};
+use tx_selection::{TransactionSelection, block_leader_reward, select_transactions};
 
 pub use crate::wallet::LeaderWalletConfig;
 use crate::{
@@ -422,7 +422,10 @@ where
                 .expect("Failed to estabilish connection with ChainNetwork"),
         );
 
-        let LeaderSettings { era_schedule, .. } = self
+        let LeaderSettings {
+            era_schedule,
+            wallet_config,
+        } = self
             .service_resources_handle
             .settings_handle
             .notifier()
@@ -517,6 +520,7 @@ where
                                 &relays,
                                 tip_state,
                                 &era_schedule,
+                                wallet_config.funding_pk,
                             ))
                             .await
                             {
@@ -652,7 +656,8 @@ where
             winning,
             epoch_state,
             wallet_api,
-            kms
+            kms,
+            reward_public_key
         )
     )]
     #[expect(clippy::too_many_arguments, reason = "Need all args")]
@@ -672,6 +677,7 @@ where
         >,
         mut ledger_state: LedgerState,
         era_schedule: &EraScheduledConfig,
+        reward_public_key: ZkPublicKey,
     ) -> Result<Block<Mempool::Item>, Error> {
         let txs_stream = relays
             .mempool_adapter()
@@ -690,7 +696,6 @@ where
                 UncleHeaders::empty()
             });
 
-        let reward_key = wallet_api.generate_reward_key().await?;
         // The witness proves the note unspent in the note sets of the parent.
         let wallet_inputs =
             leader_wallet_inputs(&winning, epoch_state, ledger_state.latest_note_sets())?;
@@ -701,10 +706,11 @@ where
             .clone()
             .try_apply_header::<ProposalHeaderProof, HeaderId>(
                 slot,
-                &ProposalHeaderProof { reward_key },
+                &ProposalHeaderProof,
                 &uncle_headers.slots(),
                 era_schedule,
             )?;
+        let header_state = ledger_state.clone();
         // Collect all candidate transactions up front so the ones that fail can
         // be retried across multiple rounds.
         let TransactionSelection {
@@ -725,18 +731,38 @@ where
         let valid_tx_stream = stream::iter(selected_txs);
         let txs = txs_for_block(valid_tx_stream).await;
 
+        // The PoL proves the reward note of the block, whose value is the reward
+        // of the transactions the block ends up holding.
+        let reward_value = block_leader_reward(header_state, txs.as_slice(), era_schedule)?;
+        let reward = wallet_api
+            .new_leader_reward(reward_value, reward_public_key)
+            .await?;
+        let wallet_inputs = lb_pol::PolWalletInputsData {
+            reward_public_key: *reward.public_key.as_fr(),
+            reward_nonce: reward.nonce,
+            ..wallet_inputs
+        };
+
         // The PoL is bound to the header by pol_msg, blocks carry no signature.
-        let msg = block_msg(&parent, slot, &uncle_headers, txs.as_slice(), &reward_key);
+        let msg = block_msg(
+            &parent,
+            slot,
+            &uncle_headers,
+            txs.as_slice(),
+            &reward.commitment(),
+            reward.value,
+        );
         let private = kms
             .build_private_inputs(
                 winning.note.key_id.clone(),
                 winning.public_inputs,
                 wallet_inputs,
                 msg,
+                reward.value,
             )
             .await?;
         let block = spawn_blocking("logos/chain/leader-proof-blocking", move || {
-            assemble_block(parent, slot, uncle_headers, txs, private, reward_key)
+            assemble_block(parent, slot, uncle_headers, txs, private)
         })
         .await??;
         debug!(

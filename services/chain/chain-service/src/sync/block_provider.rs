@@ -1045,13 +1045,15 @@ mod tests {
         }
 
         fn make_test_proof() -> lb_core::proofs::leader_proof::Groth16LeaderProof {
-            let (_, private_inputs) =
-                note_set_leader_inputs(Fr::ZERO, 1000, Fr::from(1u64), Fr::ZERO);
-            lb_core::proofs::leader_proof::Groth16LeaderProof::prove(
-                private_inputs,
-                ZkPublicKey::zero(),
-            )
-            .expect("Proof generation should succeed")
+            let (_, private_inputs) = note_set_leader_inputs(
+                Fr::ZERO,
+                1000,
+                Fr::from(1u64),
+                Fr::ZERO,
+                &lb_core::mantle::Note::new(0, Fr::ZERO, ZkPublicKey::zero()),
+            );
+            lb_core::proofs::leader_proof::Groth16LeaderProof::prove(private_inputs)
+                .expect("Proof generation should succeed")
         }
 
         fn new_cryptarchia(

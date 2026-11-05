@@ -105,16 +105,16 @@ impl WalletBlock {
     }
 }
 
-// The openings a block reveals: the leader, PoW and Blend reward notes from
-// the events, then the service note of each SDP_DECLARE.
+// The openings a block reveals: the PoW and Blend reward notes from the events,
+// then the service note of each SDP_DECLARE. The leader reward note stays
+// hidden: its leader knows the opening from proposing the block.
 #[must_use]
 pub fn revealed_notes<'a>(
     events: &Events,
     ops: impl Iterator<Item = OpRef<'a>>,
 ) -> Vec<(NoteSetIndex, Note)> {
     let rewards = events.iter().filter_map(|event| match event {
-        Event::Block(BlockEvent::LeaderRewardPaid { note })
-        | Event::Header(HeaderEvent::SdpRewardDistributed { note, .. })
+        Event::Header(HeaderEvent::SdpRewardDistributed { note, .. })
         | Event::Tx(TxEvent {
             payload: TxEventPayload::PoWRewardClaimed { note, .. },
             ..
@@ -1070,10 +1070,12 @@ mod tests {
 
     #[test]
     fn revealed_notes_come_from_reward_events_and_declarations() {
-        let leader = Note::new(10, Fr::ZERO, pk(1));
         let pow = Note::new(20, Fr::from(3u64), pk(2));
         let events: Events = [
-            Event::from(BlockEvent::LeaderRewardPaid { note: leader }),
+            Event::from(BlockEvent::LeaderRewardPaid {
+                commitment: NoteCommitment(Fr::from(9u64)),
+                value: 10,
+            }),
             Event::from(TxEvent::new(
                 TxHash::from([1; 32]),
                 [2; 32],
@@ -1088,11 +1090,7 @@ mod tests {
         let declaration = SDPDeclareOp::sample();
         assert_eq!(
             revealed_notes(&events, std::iter::once(OpRef::SDPDeclare(&declaration))),
-            vec![
-                (LEDGER_SET, leader),
-                (LEDGER_SET, pow),
-                (SDP_SET, declaration.service_note())
-            ]
+            vec![(LEDGER_SET, pow), (SDP_SET, declaration.service_note())]
         );
     }
 

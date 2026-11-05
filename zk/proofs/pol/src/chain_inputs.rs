@@ -11,6 +11,7 @@ pub struct PolChainInputs {
     eligible_aged: Groth16Input,
     eligible_latest: Groth16Input,
     msg: Groth16Input,
+    reward_value: Groth16Input,
 }
 
 /// Public inputs of the POL cirmcom circuit to be provided by the chain.
@@ -23,6 +24,7 @@ pub struct PolChainInputsData {
     pub eligible_aged: Fr,
     pub eligible_latest: Fr,
     pub msg: Fr,
+    pub reward_value: u64,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -37,6 +39,7 @@ pub struct PolChainInputsJson {
     eligible_aged: Groth16InputDeser,
     eligible_latest: Groth16InputDeser,
     msg: Groth16InputDeser,
+    reward_value: Groth16InputDeser,
 }
 
 impl TryFrom<PolChainInputsJson> for PolChainInputs {
@@ -51,6 +54,7 @@ impl TryFrom<PolChainInputsJson> for PolChainInputs {
             eligible_aged,
             eligible_latest,
             msg,
+            reward_value,
         }: PolChainInputsJson,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -61,6 +65,7 @@ impl TryFrom<PolChainInputsJson> for PolChainInputs {
             eligible_aged: eligible_aged.try_into()?,
             eligible_latest: eligible_latest.try_into()?,
             msg: msg.try_into()?,
+            reward_value: reward_value.try_into()?,
         })
     }
 }
@@ -75,6 +80,7 @@ impl From<&PolChainInputs> for PolChainInputsJson {
             eligible_aged,
             eligible_latest,
             msg,
+            reward_value,
         }: &PolChainInputs,
     ) -> Self {
         Self {
@@ -85,6 +91,7 @@ impl From<&PolChainInputs> for PolChainInputsJson {
             eligible_aged: eligible_aged.into(),
             eligible_latest: eligible_latest.into(),
             msg: msg.into(),
+            reward_value: reward_value.into(),
         }
     }
 }
@@ -99,6 +106,7 @@ impl From<PolChainInputsData> for PolChainInputs {
             eligible_aged,
             eligible_latest,
             msg,
+            reward_value,
         }: PolChainInputsData,
     ) -> Self {
         Self {
@@ -109,6 +117,7 @@ impl From<PolChainInputsData> for PolChainInputs {
             eligible_aged: eligible_aged.into(),
             eligible_latest: eligible_latest.into(),
             msg: msg.into(),
+            reward_value: Groth16Input::new(reward_value.into()),
         }
     }
 }

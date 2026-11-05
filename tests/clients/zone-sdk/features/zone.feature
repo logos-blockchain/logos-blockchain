@@ -608,7 +608,10 @@ Feature: Zone SDK
     When node "NODE_1" is at height 1 in 120 seconds
     And wallet "WALLET_1A" sends 12 notes of 5000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
     And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
-    And I start zone sequencers:
+    # The config below funds at once, from a top-up the wallet spends 4 blocks deep
+    And I record node "NODE_1" height as "TOPUP_HEIGHT"
+    Then node "NODE_1" reaches 4 blocks beyond recorded height "TOPUP_HEIGHT" in 120 seconds
+    When I start zone sequencers:
       | alias | indexer | pending_submit_depth | passive_republish_orphans |
       | SEQ_A | true    | default              | true                      |
     And sequencer "SEQ_A" publishes the following zone messages:
@@ -659,9 +662,12 @@ Feature: Zone SDK
     And wallet "WALLET_1A" sends 1 notes of 8000 LGO to node "NODE_1" funding wallet as "TOPUP_B"
     And transaction "TOPUP_A" is included on node "NODE_1" in 240 seconds
     And transaction "TOPUP_B" is included on node "NODE_1" in 240 seconds
-    And I start zone sequencer "SEQ_A" with indexer
+    # The wallet spends the top-ups 4 blocks deep, on the branch both nodes share
+    And I record node "NODE_1" height as "TOPUP_HEIGHT"
+    Then node "NODE_1" reaches 4 blocks beyond recorded height "TOPUP_HEIGHT" in 120 seconds
+    When I start zone sequencer "SEQ_A" with indexer
     # Isolate NODE_4 before MSG_1 exists so its branch can never carry it
-    When I stop node "NODE_4"
+    And I stop node "NODE_4"
     And sequencer "SEQ_A" submits the following zone messages without waiting for inclusion:
       | alias | data      |
       | MSG_1 | message 1 |

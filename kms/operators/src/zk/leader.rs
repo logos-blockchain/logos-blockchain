@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Formatter};
 
 use lb_core::{
-    mantle::Note,
+    mantle::{Note, Value},
     proofs::leader_proof::{LeaderPrivate, LeaderPublic, check_winning},
 };
 use lb_groth16::Fr;
@@ -72,6 +72,7 @@ pub struct BuildPrivateInputsWithLeaderKey {
     leader_public: LeaderPublic,
     wallet: PolWalletInputsData,
     msg: Fr,
+    reward_value: Value,
 }
 
 impl Debug for BuildPrivateInputsWithLeaderKey {
@@ -87,12 +88,14 @@ impl BuildPrivateInputsWithLeaderKey {
         leader_public: LeaderPublic,
         wallet: PolWalletInputsData,
         msg: Fr,
+        reward_value: Value,
     ) -> Self {
         Self {
             result_channel,
             leader_public,
             wallet,
             msg,
+            reward_value,
         }
     }
 }
@@ -108,13 +111,14 @@ impl SecureKeyOperator for BuildPrivateInputsWithLeaderKey {
             leader_public,
             wallet,
             msg,
+            reward_value,
         } = *self;
         let wallet = PolWalletInputsData {
             secret_key: *key.as_fr(),
             ..wallet
         };
         if result_channel
-            .send(LeaderPrivate::new(leader_public, wallet, msg))
+            .send(LeaderPrivate::new(leader_public, wallet, msg, reward_value))
             .is_err()
         {
             debug!(target: LOG_TARGET, "Failed to send result via channel");
@@ -126,7 +130,7 @@ impl SecureKeyOperator for BuildPrivateInputsWithLeaderKey {
 #[cfg(test)]
 mod tests {
     use lb_groth16::AdditiveGroup as _;
-    use lb_key_management_system_keys::keys::secured_key::SecuredKey as _;
+    use lb_key_management_system_keys::keys::{ZkPublicKey, secured_key::SecuredKey as _};
     use tokio::sync::oneshot;
 
     use super::*;
@@ -138,6 +142,7 @@ mod tests {
             1000,
             Fr::from(11u64),
             Fr::from(5u64),
+            &Note::new(3, Fr::from(13u64), ZkPublicKey::new(Fr::from(17u64))),
         );
         let mut wallet = private.input().wallet.clone();
         wallet.secret_key = Fr::ZERO;
@@ -148,11 +153,13 @@ mod tests {
                 public,
                 wallet,
                 Fr::from(5u64),
+                3,
             ))
             .await
             .unwrap();
         let built = receiver.await.unwrap();
         assert_eq!(built.input().wallet.secret_key, Fr::from(7u64));
         assert_eq!(built.input().chain.msg, Fr::from(5u64));
+        assert_eq!(built.input().chain.reward_value, 3);
     }
 }

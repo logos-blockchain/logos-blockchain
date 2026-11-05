@@ -21,8 +21,9 @@ pub mod balance {
         pub tip: HeaderId,
         pub balance: Value,
         pub notes: HashMap<NoteCommitment, Value>,
-        /// The ones of `notes` no spend from `tip` can use yet. They count in
-        /// `balance`.
+        /// The ones of `notes` younger than the root a spend from `tip` names,
+        /// which no spend can use yet. They count in `balance`. A note reserved
+        /// for an in-flight transaction is not listed.
         pub pending_notes: HashSet<NoteCommitment>,
         pub address: ZkPublicKey,
     }

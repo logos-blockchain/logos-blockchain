@@ -31,7 +31,7 @@ use crate::{
 
 /// The payload body size of the fixtures: the largest block proposal of an era
 /// that allows four uncles.
-const FIXTURE_PAYLOAD_BODY_SIZE: u16 = 17_712;
+const FIXTURE_PAYLOAD_BODY_SIZE: u16 = 17_752;
 
 /// The layout of the fixture messages: one blending header, and bodies of
 /// [`FIXTURE_PAYLOAD_BODY_SIZE`].

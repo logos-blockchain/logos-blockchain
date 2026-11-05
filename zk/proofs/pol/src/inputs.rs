@@ -78,12 +78,13 @@ impl From<PolWitnessInputs> for PolInputsJson {
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct PolVerifierInputJson([Groth16InputDeser; 8]);
+pub struct PolVerifierInputJson([Groth16InputDeser; 10]);
 
 /// Public inputs of the POL verifier circuit as returned by the prover.
 /// These inputs are the ones that need to be fed into the verifier.
 pub struct PolVerifierInput {
     pub entropy_contribution: Groth16Input,
+    pub reward_commitment: Groth16Input,
     pub slot_number: Groth16Input,
     pub epoch_nonce: Groth16Input,
     pub lottery_0: Groth16Input,
@@ -91,6 +92,7 @@ pub struct PolVerifierInput {
     pub eligible_aged: Groth16Input,
     pub eligible_latest: Groth16Input,
     pub msg: Groth16Input,
+    pub reward_value: Groth16Input,
 }
 
 impl TryFrom<PolVerifierInputJson> for PolVerifierInput {
@@ -99,6 +101,7 @@ impl TryFrom<PolVerifierInputJson> for PolVerifierInput {
     fn try_from(value: PolVerifierInputJson) -> Result<Self, Self::Error> {
         let [
             entropy_contribution,
+            reward_commitment,
             slot_number,
             epoch_nonce,
             lottery_0,
@@ -106,9 +109,11 @@ impl TryFrom<PolVerifierInputJson> for PolVerifierInput {
             eligible_aged,
             eligible_latest,
             msg,
+            reward_value,
         ] = value.0;
         Ok(Self {
             entropy_contribution: entropy_contribution.try_into()?,
+            reward_commitment: reward_commitment.try_into()?,
             slot_number: slot_number.try_into()?,
             epoch_nonce: epoch_nonce.try_into()?,
             lottery_0: lottery_0.try_into()?,
@@ -116,15 +121,17 @@ impl TryFrom<PolVerifierInputJson> for PolVerifierInput {
             eligible_aged: eligible_aged.try_into()?,
             eligible_latest: eligible_latest.try_into()?,
             msg: msg.try_into()?,
+            reward_value: reward_value.try_into()?,
         })
     }
 }
 
 impl PolVerifierInput {
     #[must_use]
-    pub const fn to_inputs(&self) -> [Fr; 8] {
+    pub const fn to_inputs(&self) -> [Fr; 10] {
         [
             self.entropy_contribution.into_inner(),
+            self.reward_commitment.into_inner(),
             self.slot_number.into_inner(),
             self.epoch_nonce.into_inner(),
             self.lottery_0.into_inner(),
@@ -132,6 +139,7 @@ impl PolVerifierInput {
             self.eligible_aged.into_inner(),
             self.eligible_latest.into_inner(),
             self.msg.into_inner(),
+            self.reward_value.into_inner(),
         ]
     }
 
@@ -139,6 +147,7 @@ impl PolVerifierInput {
     #[expect(clippy::too_many_arguments, reason = "all needed")]
     pub fn new(
         entropy_contribution: Fr,
+        reward_commitment: Fr,
         slot_number: u64,
         epoch_nonce: Fr,
         eligible_aged: Fr,
@@ -146,9 +155,11 @@ impl PolVerifierInput {
         lottery_0: Fr,
         lottery_1: Fr,
         msg: Fr,
+        reward_value: u64,
     ) -> Self {
         Self {
             entropy_contribution: entropy_contribution.into(),
+            reward_commitment: reward_commitment.into(),
             slot_number: Fr::from(slot_number).into(),
             epoch_nonce: epoch_nonce.into(),
             lottery_0: lottery_0.into(),
@@ -156,6 +167,7 @@ impl PolVerifierInput {
             eligible_aged: eligible_aged.into(),
             eligible_latest: eligible_latest.into(),
             msg: msg.into(),
+            reward_value: Fr::from(reward_value).into(),
         }
     }
 }

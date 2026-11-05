@@ -592,6 +592,29 @@ pub const fn update_cryptarchia(
     }
 }
 
+/// Refuses a leader funding key the wallet does not track.
+///
+/// Leader rewards are paid to that key, and the wallet records a reward note
+/// only under a key it tracks, so a node without it would lose every slot it
+/// wins. Run on the final config, so that it covers the file, the keystore, the
+/// CLI argument and the environment variable alike.
+pub fn check_leader_funding_key(user_config: &UserConfig) -> Result<()> {
+    let funding_pk = user_config.cryptarchia.leader.wallet.funding_pk;
+    if user_config
+        .wallet
+        .known_keys
+        .values()
+        .any(|known_pk| *known_pk == funding_pk)
+    {
+        return Ok(());
+    }
+    Err(eyre!(
+        "the leader funding key {funding_pk:?} (`cryptarchia.leader.wallet.funding_pk`, \
+         `--cryptarchia-funding-pk` or `CRYPTARCHIA_FUNDING_PK`) is not in `wallet.known_keys`: \
+         leader rewards are paid to it, and the node would lose every slot it wins"
+    ))
+}
+
 pub const fn update_sdp(sdp: &mut SdpConfig, sdp_args: SdpArgs) {
     let SdpArgs {
         sdp_funding_pk: funding_pk,

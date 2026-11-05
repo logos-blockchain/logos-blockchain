@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     crypto::Hash,
     mantle::{
+        Value,
         note_set::{NoteSetIndex, NoteSetUpdate},
-        notes::{InputNullifiers, Note, OutputCommitments},
+        notes::{InputNullifiers, Note, NoteCommitment, OutputCommitments},
         ops::{
             channel::{ChannelId, deposit::Metadata},
             pow::PowNullifier,
@@ -147,8 +148,12 @@ pub enum HeaderEvent {
 /// Events emitted once the block contents are executed
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BlockEvent {
-    /// The leader reward note of the block entered the ledger note set.
-    LeaderRewardPaid { note: Note },
+    /// The leader reward note of the block entered the ledger note set. The
+    /// block does not reveal its key or its nonce.
+    LeaderRewardPaid {
+        commitment: NoteCommitment,
+        value: Value,
+    },
     /// What a note set inserted and appended during the block, in execution
     /// order.
     NoteSetUpdated(NoteSetUpdate),
@@ -176,10 +181,7 @@ mod tests {
     use lb_key_management_system_keys::keys::ZkPublicKey;
 
     use super::*;
-    use crate::mantle::{
-        note_set::LEDGER_SET,
-        notes::{NoteCommitment, NoteNullifier},
-    };
+    use crate::mantle::{note_set::LEDGER_SET, notes::NoteNullifier};
 
     /// A `Deposit` payload carrying several notes must survive the events codec
     /// round-trip. The wallet reads these notes off the block-events endpoint,
@@ -247,7 +249,10 @@ mod tests {
             commitments: vec![note.commitment()],
         };
         let events: Events = [
-            Event::from(BlockEvent::LeaderRewardPaid { note }),
+            Event::from(BlockEvent::LeaderRewardPaid {
+                commitment: note.commitment(),
+                value: note.value,
+            }),
             Event::from(BlockEvent::NoteSetUpdated(update.clone())),
         ]
         .into_iter()
@@ -263,7 +268,10 @@ mod tests {
         assert_eq!(
             decoded,
             vec![
-                BlockEvent::LeaderRewardPaid { note },
+                BlockEvent::LeaderRewardPaid {
+                    commitment: note.commitment(),
+                    value: note.value,
+                },
                 BlockEvent::NoteSetUpdated(update)
             ]
         );
