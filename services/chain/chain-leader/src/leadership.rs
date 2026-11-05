@@ -449,7 +449,7 @@ fn epoch_winning_slots_stream<RuntimeServiceId>(
                     }
                 };
                 match kms
-                    .build_private_inputs(note.key_id.clone(), public_inputs, wallet, Fr::ZERO)
+                    .build_private_inputs(note.key_id.clone(), public_inputs, wallet, Fr::ZERO, 0)
                     .await
                 {
                     Ok(leader_private) => return Some(leader_private),
@@ -475,7 +475,7 @@ mod pol_tests {
 
     use lb_core::{
         mantle::{
-            Note,
+            Note, Value,
             note_set::{CommitmentMmr, LEDGER_SET},
             notes::derive_note_nullifier,
         },
@@ -719,12 +719,13 @@ mod pol_tests {
             public_inputs: LeaderPublic,
             wallet: PolWalletInputsData,
             msg: Fr,
+            reward_value: Value,
         ) -> Result<LeaderPrivate, PrivateInputsError> {
             let wallet = PolWalletInputsData {
                 secret_key: Fr::from(0u64),
                 ..wallet
             };
-            Ok(LeaderPrivate::new(public_inputs, wallet, msg))
+            Ok(LeaderPrivate::new(public_inputs, wallet, msg, reward_value))
         }
     }
 

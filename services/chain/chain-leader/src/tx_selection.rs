@@ -1,7 +1,7 @@
 use lb_core::{
     header::HeaderId,
     mantle::{
-        SignedOps,
+        SignedOps, Value,
         batch::DeferredProofs,
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
@@ -70,6 +70,22 @@ pub struct TransactionSelection {
     pub(super) ledger_state: LedgerState,
     pub(super) selected_txs: Vec<SignedOps<Preverified, StandardMode>>,
     pub(super) invalid_tx_hashes: Vec<TxHash>,
+}
+
+/// The leader reward of the block of `txs`, run as Block Execution does on the
+/// state with its header applied. The block may hold fewer transactions than
+/// the selection, which the block limits truncate.
+pub fn block_leader_reward(
+    header_state: LedgerState,
+    txs: &[SignedOps<Preverified, StandardMode>],
+    era_schedule: &EraScheduledConfig,
+) -> Result<Value, lb_ledger::LedgerError<HeaderId>> {
+    let (state, gas_and_fees, _, _) = header_state
+        .try_apply_block_transactions::<_, HeaderId, MainnetGasProfile>(
+            era_schedule,
+            txs.iter().cloned(),
+        )?;
+    state.leader_reward(&gas_and_fees, era_schedule)
 }
 
 #[expect(
@@ -170,7 +186,7 @@ mod tests {
             Note, Op, OpProof,
             gas::TxGasCalculator as _,
             note_set::{CommitmentMmr, LEDGER_SET},
-            notes::{OutputCommitments, derive_note_nullifier},
+            notes::{NoteCommitment, OutputCommitments, derive_note_nullifier},
             ops::{
                 NoOpProof, ZkTransferProof,
                 program::ProgramRegisterOp,
@@ -181,8 +197,8 @@ mod tests {
             transactions::{MAX_OPS_PER_TX, OpProofs, Ops, states::Unverified},
         },
     };
-    use lb_groth16::{Fr, test_utils::three_input_setup};
-    use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
+    use lb_groth16::{AdditiveGroup as _, Fr, test_utils::three_input_setup};
+    use lb_key_management_system_service::keys::ZkKey;
 
     use super::*;
     use crate::{leadership, txs_for_block};
@@ -300,7 +316,8 @@ mod tests {
             .clone()
             .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
                 &eras,
-                ZkPublicKey::zero(),
+                NoteCommitment(Fr::ZERO),
+                0,
                 candidates.iter().cloned(),
             );
         let all_candidates_error = all_candidates_result.err();
@@ -318,11 +335,20 @@ mod tests {
 
         let block_txs = txs_for_block(stream::iter(selection.selected_txs)).await;
         assert_eq!(block_txs.len(), CANDIDATE_COUNT - 1);
+        // A block truncated by the block limits pays the reward of what it holds.
+        let selected_reward =
+            block_leader_reward(ledger_state.clone(), block_txs.as_slice(), &eras)
+                .expect("the selection must run");
+        let block_txs = &block_txs.as_slice()[..CANDIDATE_COUNT - 2];
+        let reward_value = block_leader_reward(ledger_state.clone(), block_txs, &eras)
+            .expect("the selected prefix must run");
+        assert_ne!(reward_value, selected_reward);
         let _apply_result = ledger_state
             .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
                 &eras,
-                ZkPublicKey::zero(),
-                block_txs.into_iter(),
+                NoteCommitment(Fr::ZERO),
+                reward_value,
+                block_txs.iter().cloned(),
             )
             .expect("the selected prefix must pass canonical application");
     }

@@ -25,7 +25,7 @@ use lb_core::{
     },
     header::HeaderId,
     mantle::{
-        OpRef, SignedOps,
+        Note, OpRef, SignedOps,
         ledger::verification_mode::StandardMode,
         traits::{Hashable, MantleTx, SignedMantleTx, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
@@ -61,7 +61,7 @@ use tokio::{
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Level, debug, error, info, instrument, span, trace};
 use tracing_futures::Instrument as _;
-use tx_selection::{TransactionSelection, select_transactions};
+use tx_selection::{TransactionSelection, block_leader_reward, select_transactions};
 
 pub use crate::wallet::LeaderWalletConfig;
 use crate::{
@@ -690,7 +690,6 @@ where
                 UncleHeaders::empty()
             });
 
-        let reward_key = wallet_api.generate_reward_key().await?;
         // The witness proves the note unspent in the note sets of the parent.
         let wallet_inputs =
             leader_wallet_inputs(&winning, epoch_state, ledger_state.latest_note_sets())?;
@@ -701,10 +700,11 @@ where
             .clone()
             .try_apply_header::<ProposalHeaderProof, HeaderId>(
                 slot,
-                &ProposalHeaderProof { reward_key },
+                &ProposalHeaderProof,
                 &uncle_headers.slots(),
                 era_schedule,
             )?;
+        let header_state = ledger_state.clone();
         // Collect all candidate transactions up front so the ones that fail can
         // be retried across multiple rounds.
         let TransactionSelection {
@@ -725,18 +725,37 @@ where
         let valid_tx_stream = stream::iter(selected_txs);
         let txs = txs_for_block(valid_tx_stream).await;
 
+        // The PoL proves the reward note of the block, whose value is the reward
+        // of the transactions the block ends up holding.
+        let reward_value = block_leader_reward(header_state, txs.as_slice(), era_schedule)?;
+        let (reward_public_key, reward_nonce) = wallet_api.leader_reward_opening(slot).await?;
+        let reward = Note::new(reward_value, reward_nonce, reward_public_key);
+        let wallet_inputs = lb_pol::PolWalletInputsData {
+            reward_public_key: *reward.public_key.as_fr(),
+            reward_nonce: reward.nonce,
+            ..wallet_inputs
+        };
+
         // The PoL is bound to the header by pol_msg, blocks carry no signature.
-        let msg = block_msg(&parent, slot, &uncle_headers, txs.as_slice(), &reward_key);
+        let msg = block_msg(
+            &parent,
+            slot,
+            &uncle_headers,
+            txs.as_slice(),
+            &reward.commitment(),
+            reward.value,
+        );
         let private = kms
             .build_private_inputs(
                 winning.note.key_id.clone(),
                 winning.public_inputs,
                 wallet_inputs,
                 msg,
+                reward.value,
             )
             .await?;
         let block = spawn_blocking("logos/chain/leader-proof-blocking", move || {
-            assemble_block(parent, slot, uncle_headers, txs, private, reward_key)
+            assemble_block(parent, slot, uncle_headers, txs, private)
         })
         .await??;
         debug!(

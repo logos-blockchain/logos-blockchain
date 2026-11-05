@@ -137,6 +137,8 @@ impl overwatch::services::state::ServiceState for RecoveryState {
 /// Provides operations on the states that must be synced to [`RecoveryState`].
 pub struct ServiceState<'u> {
     next_reward_key_index: u64,
+    // the one key of the leader rewards, derived again at start
+    leader_reward_key: ZkPublicKey,
     wallet: Wallet,
     lib: HeaderId,
     updater: &'u StateUpdater<Option<RecoveryState>>,
@@ -150,6 +152,7 @@ impl<'u> ServiceState<'u> {
         state: RecoveryState,
         lib: HeaderId,
         wallet_state: WalletState,
+        leader_reward_key: ZkPublicKey,
         settings: &WalletServiceSettings,
         updater: &'u StateUpdater<Option<RecoveryState>>,
     ) -> Self {
@@ -160,10 +163,18 @@ impl<'u> ServiceState<'u> {
         } = state;
         let wallet =
             Wallet::from_lib_wallet_state(known_keys(settings), known_notes, lib, wallet_state);
-        Self::with_wallet(wallet, lib, next_reward_key_index, settings, updater)
+        Self::with_wallet(
+            wallet,
+            lib,
+            next_reward_key_index,
+            leader_reward_key,
+            settings,
+            updater,
+        )
     }
 
     // A fresh wallet follows the note sets from the genesis block.
+    #[expect(clippy::too_many_arguments, reason = "all needed")]
     pub fn from_genesis(
         state: RecoveryState,
         settings: &WalletServiceSettings,
@@ -171,6 +182,7 @@ impl<'u> ServiceState<'u> {
         genesis_notes: &[Note],
         genesis_service_notes: &[Note],
         genesis_known_notes: impl IntoIterator<Item = KnownNote>,
+        leader_reward_key: ZkPublicKey,
         updater: &'u StateUpdater<Option<RecoveryState>>,
     ) -> Result<Self, WalletError> {
         let RecoveryState {
@@ -194,6 +206,7 @@ impl<'u> ServiceState<'u> {
             wallet,
             genesis,
             next_reward_key_index,
+            leader_reward_key,
             settings,
             updater,
         ))
@@ -203,11 +216,13 @@ impl<'u> ServiceState<'u> {
         wallet: Wallet,
         lib: HeaderId,
         next_reward_key_index: u64,
+        leader_reward_key: ZkPublicKey,
         settings: &WalletServiceSettings,
         updater: &'u StateUpdater<Option<RecoveryState>>,
     ) -> Self {
         Self {
             next_reward_key_index,
+            leader_reward_key,
             wallet,
             lib,
             updater,
@@ -218,6 +233,10 @@ impl<'u> ServiceState<'u> {
 
     pub const fn lib(&self) -> HeaderId {
         self.lib
+    }
+
+    pub const fn leader_reward_key(&self) -> ZkPublicKey {
+        self.leader_reward_key
     }
 
     // the number of reward keys derived so far
@@ -505,9 +524,17 @@ mod tests {
         let (sender, _receiver) = tokio::sync::watch::channel(None);
         let updater = StateUpdater::new(Arc::new(sender));
 
-        let mut state =
-            ServiceState::from_genesis(recovery, &settings, genesis, &[], &[], [], &updater)
-                .unwrap();
+        let mut state = ServiceState::from_genesis(
+            recovery,
+            &settings,
+            genesis,
+            &[],
+            &[],
+            [],
+            ZkPublicKey::zero(),
+            &updater,
+        )
+        .unwrap();
 
         // The first post-online LibUpdate delivers a new_lib the wallet never
         // applied (the silent bootstrap->online LIB jump outran the wallet).

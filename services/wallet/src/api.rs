@@ -12,6 +12,7 @@ use lb_core::{
         },
     },
 };
+use lb_cryptarchia_engine::Slot;
 use lb_groth16::Fr;
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, secured_key::SecuredKey};
 use lb_utils::bounded::BoundedError;
@@ -223,6 +224,18 @@ where
         let (resp_tx, rx) = oneshot::channel();
         self.relay
             .send(WalletMsg::GenerateRewardKey { resp_tx })
+            .await?;
+        Ok(rx.await??)
+    }
+
+    // The reward key of the leader and the nonce of its reward note at `slot`.
+    pub async fn leader_reward_opening(
+        &self,
+        slot: Slot,
+    ) -> Result<(ZkPublicKey, Fr), WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::LeaderRewardOpening { slot, resp_tx })
             .await?;
         Ok(rx.await??)
     }

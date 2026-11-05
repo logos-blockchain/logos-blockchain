@@ -37,7 +37,7 @@ use lb_core::{
     },
     sdp::DeclarationId,
 };
-use lb_cryptarchia_engine::Epoch;
+use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::Fr;
 use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
@@ -46,7 +46,9 @@ use lb_key_management_system_service::{
         ED25519_PUBLIC_KEY_SIZE, Ed25519Key, Ed25519PublicKey, Ed25519Signature, Key, KeyOperators,
         PayloadEncoding, SignatureEncoding, ZkKey, ZkPublicKey, secured_key::SecuredKey,
     },
-    operators::zk::{nullifier::DeriveNullifier, voucher::UnsafeVoucherOperator},
+    operators::zk::{
+        nullifier::DeriveNullifier, reward_nonce::DeriveRewardNonce, voucher::UnsafeVoucherOperator,
+    },
 };
 use lb_ledger::LedgerState;
 use lb_log_targets::wallet;
@@ -59,7 +61,8 @@ use lb_storage_service::{api::StorageApi, recovery::StorageRecoveryBackend};
 use lb_time::era::{EpochLength, EraSchedule};
 use lb_utils::bounded::BoundedError;
 use lb_wallet::{
-    KnownNote, OwnedNote, WalletBalance, WalletBlock, WalletError, WalletState,
+    KnownNote, LEADER_REWARD_KEY_INDEX, OwnedNote, WalletBalance, WalletBlock, WalletError,
+    WalletState,
     transaction::{OpWitness, WitnessContext, op_witness_at, op_witnesses},
 };
 use overwatch::{
@@ -205,6 +208,10 @@ pub enum WalletMsg {
     GenerateRewardKey {
         resp_tx: Sender<Result<ZkPublicKey, WalletServiceError>>,
     },
+    LeaderRewardOpening {
+        slot: Slot,
+        resp_tx: Sender<Result<(ZkPublicKey, Fr), WalletServiceError>>,
+    },
     ImportNote {
         note: Note,
         note_set: NoteSetIndex,
@@ -315,6 +322,7 @@ impl WalletMsg {
             | Self::GetTxContext { block_id: tip, .. } => *tip,
             Self::SignTxWithEd25519 { .. }
             | Self::GenerateRewardKey { .. }
+            | Self::LeaderRewardOpening { .. }
             | Self::ImportNote { .. }
             | Self::GetKnownAddresses { .. } => None,
         }
@@ -522,6 +530,11 @@ where
             }
         }
     }
+}
+
+// The key id of a reward key in the KMS.
+fn reward_key_id(public_key: ZkPublicKey) -> KeyId {
+    hex::encode(lb_groth16::fr_to_bytes(public_key.as_fr()))
 }
 
 /// The wallet fell `skipped` items behind one of its chain subscriptions. Only
@@ -842,6 +855,15 @@ where
                         .await;
                 if resp_tx.send(result).is_err() {
                     debug!(target: LOG_TARGET, "Failed to respond to GenerateRewardKey");
+                }
+            }
+            WalletMsg::LeaderRewardOpening { slot, resp_tx } => {
+                let public_key = state.leader_reward_key();
+                let result = Self::reward_nonce_from_kms(kms, public_key, slot)
+                    .await
+                    .map(|nonce| (public_key, nonce));
+                if resp_tx.send(result).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to LeaderRewardOpening");
                 }
             }
             WalletMsg::ImportNote {
@@ -1192,9 +1214,21 @@ where
         index: u64,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<ZkPublicKey, WalletServiceError> {
+        let (pk, key_id) = Self::reward_key_in_kms(master_key_id, index, kms).await?;
+        state.add_known_key(pk, key_id);
+        Ok(pk)
+    }
+
+    // Derives the reward key `index` from the voucher master key and makes it
+    // a key of the KMS.
+    async fn reward_key_in_kms(
+        master_key_id: KeyId,
+        index: u64,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<(ZkPublicKey, KeyId), WalletServiceError> {
         let key = ZkKey::new(Self::derive_voucher_from_kms(kms, master_key_id, index).await?);
         let pk = key.to_public_key();
-        let key_id = hex::encode(lb_groth16::fr_to_bytes(pk.as_fr()));
+        let key_id = reward_key_id(pk);
         // Pinned to keep the futures off the stack: a KMS message can carry a
         // ZkTransfer witness.
         if let Err(error) = Box::pin(kms.register(key_id.clone(), Key::Zk(key))).await {
@@ -1204,8 +1238,28 @@ where
                 .await
                 .map_err(|_| WalletServiceError::KmsApi(error))?;
         }
-        state.add_known_key(pk, key_id);
-        Ok(pk)
+        Ok((pk, key_id))
+    }
+
+    // The nonce of the leader reward note of the block at `slot`.
+    async fn reward_nonce_from_kms(
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        public_key: ZkPublicKey,
+        slot: Slot,
+    ) -> Result<Fr, WalletServiceError> {
+        let (output_tx, output_rx) = oneshot::channel();
+        // Pinned to keep the future off the stack: a KMS message can carry a
+        // ZkTransfer witness.
+        Box::pin(kms.execute(
+            reward_key_id(public_key),
+            KeyOperators::Zk(Box::new(DeriveRewardNonce::new(slot.into(), output_tx))),
+        ))
+        .await
+        .map_err(|error| WalletServiceError::KmsApi(Box::new(error)))?;
+
+        output_rx.await.map_err(|_| {
+            WalletServiceError::KmsApi("KMS API did not respond with the reward nonce".into())
+        })
     }
 
     // The opening of `note` with the nullifier its key derives.
@@ -1343,6 +1397,16 @@ where
             let known_note = Self::known_note(kms, key_id, *note, *note_set).await?;
             state.add_known_notes([known_note]);
         }
+        // The leader reward note stays hidden: the wallet recomputes its commitment
+        // under the nonce it would have chosen, which also finds its rewards when
+        // recovering from the seed.
+        let public_key = state.leader_reward_key();
+        let nonce = Self::reward_nonce_from_kms(kms, public_key, block.leader_reward.slot).await?;
+        if let Some(note) = block.leader_reward.opening(public_key, nonce) {
+            let known_note =
+                Self::known_note(kms, reward_key_id(public_key), note, LEDGER_SET).await?;
+            state.add_known_notes([known_note]);
+        }
         Ok(())
     }
 
@@ -1355,16 +1419,34 @@ where
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<ServiceState<'u>, WalletServiceError> {
+        let (leader_reward_key, leader_reward_key_id) = Self::reward_key_in_kms(
+            settings.voucher_master_key_id.clone(),
+            LEADER_REWARD_KEY_INDEX,
+            kms,
+        )
+        .await?;
         let mut state = match initial_state.take_lib_wallet_state() {
             Some((lib, wallet_state)) => ServiceState::from_lib_wallet_state(
                 initial_state,
                 lib,
                 wallet_state,
+                leader_reward_key,
                 settings,
                 updater,
             ),
-            None => Self::genesis_state(initial_state, settings, updater, cryptarchia, kms).await?,
+            None => {
+                Self::genesis_state(
+                    initial_state,
+                    leader_reward_key,
+                    settings,
+                    updater,
+                    cryptarchia,
+                    kms,
+                )
+                .await?
+            }
         };
+        state.add_known_key(leader_reward_key, leader_reward_key_id);
 
         // The reward keys derived before a restart are registered again.
         for index in 0..state.reward_key_count() {
@@ -1383,6 +1465,7 @@ where
     // of its keys.
     async fn genesis_state<'u>(
         state: RecoveryState,
+        leader_reward_key: ZkPublicKey,
         settings: &WalletServiceSettings,
         updater: &'u StateUpdater<Option<RecoveryState>>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
@@ -1424,6 +1507,7 @@ where
             &notes,
             &service_notes,
             known_notes,
+            leader_reward_key,
             updater,
         )?)
     }

@@ -8,8 +8,9 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     #[serde(default)]
     pub known_keys: HashMap<KeyId, ZkPublicKey>,
-    /// The master key the fresh reward key of each proposed block is derived
-    /// from. The name is kept from the leader vouchers.
+    /// The master key the reward keys are derived from: the one key of the
+    /// leader rewards and the fresh key of each mining run. The name is kept
+    /// from the leader vouchers.
     pub voucher_master_key_id: KeyId,
     #[serde(default = "default_pending_note_expiry_blocks")]
     pub pending_note_expiry_blocks: u64,
