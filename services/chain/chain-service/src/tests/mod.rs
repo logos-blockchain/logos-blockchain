@@ -20,7 +20,7 @@ use lb_core::{
         gas::{MainnetGasProfile, TxGasCalculator as _},
         ledger::verification_mode::StandardMode,
         note_set::{CommitmentMmr, LEDGER_SET},
-        notes::{OutputCommitments, derive_note_nullifier},
+        notes::{NoteCommitment, OutputCommitments, derive_note_nullifier},
         ops::{
             ZkTransferProof,
             channel::{
@@ -37,7 +37,8 @@ use lb_core::{
         },
     },
     proofs::leader_proof::{
-        Groth16LeaderProof, LeaderPrivate, LeaderPublic, check_winning, pol_wallet_inputs,
+        Groth16LeaderProof, LeaderPrivate, LeaderProof, LeaderPublic, check_winning,
+        pol_wallet_inputs,
     },
     sdp::ServiceParameters,
 };
@@ -1192,6 +1193,46 @@ fn ledger_config_with_uncles(
     }
 }
 
+/// A proof of leadership verifies from the header alone, so a block overstating
+/// its reward passes it, and fails once its transactions have run. The error is
+/// not one of a bad copy: the block ID covers the value and the transactions.
+#[test]
+fn a_block_overstating_its_reward_is_condemned_after_a_valid_proof() {
+    let (secret_key, note) = note();
+    let genesis_id = GENESIS_ID.into();
+    let mut cryptarchia =
+        genesis_cryptarchia_on(note, single_era(ledger_config(3.try_into().unwrap())));
+    let (_, aged_path) = CommitmentMmr::new()
+        .push_with_paths(note.commitment(), &mut [])
+        .unwrap();
+    let (block, _) = build_block_paying(
+        &cryptarchia,
+        genesis_id,
+        &note,
+        secret_key,
+        &aged_path,
+        Slot::new(1),
+        UncleHeaders::empty(),
+        BlockTransactions::empty(),
+        1,
+    )
+    .expect("should find a winning slot");
+    let (id, slot) = (block.header().id(), block.header().slot());
+
+    cryptarchia
+        .verify_proposal_header(block.header(), slot)
+        .expect("the proof holds for the value the header carries");
+    let err = cryptarchia.try_apply_block(block, slot).err().unwrap();
+    assert!(matches!(
+        err,
+        Error::Ledger(lb_ledger::LedgerError::WrongRewardValue { .. })
+    ));
+    assert!(matches!(
+        crate::api::apply_block_api_error(err, id),
+        crate::api::ApiError::Unexpected(_)
+    ));
+}
+
 /// Builds a block with no trasaction by grinding through slots
 pub fn try_build_block(
     cryptarchia: &Cryptarchia,
@@ -1231,6 +1272,82 @@ pub fn try_build_block_with_transactions(
     transactions: BlockTransactions<SignedOps<Preverified, StandardMode>>,
     // The block's reward key is returned in place of the leader's signing key.
 ) -> Option<(Block<SignedOps<Preverified, StandardMode>>, ZkPublicKey)> {
+    build_block_paying(
+        cryptarchia,
+        parent,
+        note,
+        secret_key,
+        aged_path,
+        start_slot,
+        uncle_headers,
+        transactions,
+        0,
+    )
+}
+
+// Applies a header before its block is proven.
+struct UnprovenHeader;
+
+impl LeaderProof for UnprovenHeader {
+    fn verify(&self, _public_inputs: &LeaderPublic) -> bool {
+        true
+    }
+
+    fn verify_genesis(&self) -> bool {
+        false
+    }
+
+    fn entropy(&self) -> Fr {
+        Fr::ZERO
+    }
+
+    fn reward_commitment(&self) -> NoteCommitment {
+        NoteCommitment(Fr::ZERO)
+    }
+
+    fn reward_value(&self) -> Value {
+        0
+    }
+}
+
+// The reward of the block, or 0 for a block the test wants invalid before that.
+fn computed_reward_value(
+    cryptarchia: &Cryptarchia,
+    parent: HeaderId,
+    slot: Slot,
+    uncle_headers: &UncleHeaders,
+    transactions: &BlockTransactions<SignedOps<Preverified, StandardMode>>,
+) -> Value {
+    let eras = cryptarchia.ledger.era_schedule();
+    cryptarchia
+        .ledger
+        .state(&parent)
+        .expect("the parent of the block is applied")
+        .clone()
+        .try_apply_header::<_, HeaderId>(slot, &UnprovenHeader, &uncle_headers.slots(), eras)
+        .and_then(|(state, _)| {
+            state.try_apply_block_transactions::<_, HeaderId, MainnetGasProfile>(
+                eras,
+                transactions.iter().cloned(),
+            )
+        })
+        .and_then(|(state, gas_and_fees, _, _)| state.leader_reward(&gas_and_fees, eras))
+        .unwrap_or(0)
+}
+
+/// Builds a block whose header overstates its reward by `excess_reward`.
+#[expect(clippy::too_many_arguments, reason = "a test helper")]
+fn build_block_paying(
+    cryptarchia: &Cryptarchia,
+    parent: HeaderId,
+    note: &Note,
+    secret_key: Fr,
+    aged_path: &MerklePath,
+    start_slot: Slot,
+    uncle_headers: UncleHeaders,
+    transactions: BlockTransactions<SignedOps<Preverified, StandardMode>>,
+    excess_reward: Value,
+) -> Option<(Block<SignedOps<Preverified, StandardMode>>, ZkPublicKey)> {
     let start_slot: u64 = start_slot.into();
     let public_key = ZkKey::new(secret_key).to_public_key();
     let nullifier = derive_note_nullifier(&note.commitment(), &secret_key);
@@ -1252,6 +1369,17 @@ pub fn try_build_block_with_transactions(
 
         // A fresh reward key, so that two forks won at one slot get distinct IDs.
         let reward_key = ZkPublicKey::new(Fr::from(thread_rng().next_u64()));
+        let reward = Note::new(
+            computed_reward_value(
+                cryptarchia,
+                parent,
+                slot.into(),
+                &uncle_headers,
+                &transactions,
+            ) + excess_reward,
+            Fr::from(thread_rng().next_u64()),
+            reward_key,
+        );
         let mut wallet = pol_wallet_inputs(
             note,
             LEDGER_SET,
@@ -1262,14 +1390,17 @@ pub fn try_build_block_with_transactions(
         )
         .unwrap();
         wallet.secret_key = secret_key;
+        wallet.reward_public_key = *reward.public_key.as_fr();
+        wallet.reward_nonce = reward.nonce;
         let msg = pol_msg(
             &parent,
             slot.into(),
             &body_root(&uncle_headers, transactions.as_slice()),
-            &reward_key,
+            &reward.commitment(),
+            reward.value,
         );
         let proof =
-            Groth16LeaderProof::prove(LeaderPrivate::new(public_inputs, wallet, msg), reward_key)
+            Groth16LeaderProof::prove(LeaderPrivate::new(public_inputs, wallet, msg, reward.value))
                 .unwrap();
 
         let block = Block::create(parent, slot.into(), uncle_headers, proof, transactions).unwrap();

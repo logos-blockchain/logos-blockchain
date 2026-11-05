@@ -1033,7 +1033,8 @@ fn is_at_or_before_lib(block_slot: Slot, lib_slot: Slot) -> bool {
 ///
 /// A body failing rule 4 does not reach this point: `Block::reconstruct`
 /// rejects it when the block is decoded or rebuilt from a proposal, before any
-/// apply.
+/// apply. A `reward_value` differing from the computed reward is therefore
+/// terminal: the block ID covers both the value and the confirmed body.
 ///
 /// Other apply errors (e.g. validation failures surfaced as
 /// `ApiError::Unexpected`) are treated as terminal for the orphan pipeline.
@@ -1487,6 +1488,22 @@ mod tests {
         )));
     }
 
+    /// The block ID covers the reward value and, through the body root every
+    /// applied block has confirmed, the transactions the reward is computed
+    /// from.
+    #[test]
+    fn wrong_reward_value_is_cached_by_orphan_downloader() {
+        assert!(!is_recoverable_apply_error(&Error::Cryptarchia(
+            lb_chain_service::api::ApiError::Unexpected(
+                lb_ledger::LedgerError::<HeaderId>::WrongRewardValue {
+                    header: 1,
+                    computed: 2,
+                }
+                .to_string()
+            )
+        )));
+    }
+
     /// A network adapter that the orphan downloader holds but never calls here.
     #[derive(Clone)]
     struct NoopNetworkAdapter;
@@ -1551,8 +1568,13 @@ mod tests {
 
     /// A leader proof of a note set witness, bound to no header
     fn leader_proof() -> Groth16LeaderProof {
-        let (_, private_inputs) = note_set_leader_inputs(Fr::ZERO, 1000, Fr::from(1u64), Fr::ZERO);
-        Groth16LeaderProof::prove(private_inputs, ZkPublicKey::zero())
-            .expect("Proof generation should succeed")
+        let (_, private_inputs) = note_set_leader_inputs(
+            Fr::ZERO,
+            1000,
+            Fr::from(1u64),
+            Fr::ZERO,
+            &lb_core::mantle::Note::new(0, Fr::ZERO, ZkPublicKey::zero()),
+        );
+        Groth16LeaderProof::prove(private_inputs).expect("Proof generation should succeed")
     }
 }

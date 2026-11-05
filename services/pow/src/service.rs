@@ -2725,6 +2725,11 @@ mod tests {
             id: HeaderId::from([id; 32]),
             parent: HeaderId::from([parent; 32]),
             epoch: Epoch::new(0),
+            leader_reward: lb_wallet::LeaderReward {
+                slot: Slot::from(u64::from(id)),
+                commitment: NoteCommitment(Fr::from(0u64)),
+                value: 0,
+            },
             updates: vec![NoteSetUpdate {
                 note_set: LEDGER_SET,
                 nullifiers: vec![],

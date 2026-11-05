@@ -1,19 +1,24 @@
-use std::{collections::HashSet, num::NonZero, path::PathBuf, time::Duration};
+use std::{
+    num::NonZero,
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
-use futures::StreamExt as _;
-use lb_common_http_client::ProcessedBlockEvent;
-use lb_core::mantle::transactions::UNITS_PER_LGO;
-use lb_groth16::fr_to_bytes;
+use lb_core::{crypto::ZkHasher, mantle::transactions::UNITS_PER_LGO};
+use lb_groth16::{Fr, fr_to_bytes};
 use lb_http_api_common::bodies::wallet::{
     balance::WalletBalanceResponseBody, transfer_funds::WalletTransferFundsRequestBody,
 };
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::keys::{Key, ZkKey, ZkPublicKey};
 use lb_node::config::{RunConfig, deployment::era::ruleset::v1::cryptarchia::EpochConfig};
+use lb_poseidon2::Digest as _;
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig as TfTopologyConfig,
     configs::wallet::{WalletAccount, WalletConfig},
 };
 use lb_utils::math::NonNegativeRatio;
+use lb_wallet::LEADER_REWARD_KEY_INDEX;
 use logos_blockchain_tests::{
     common::manual_cluster::{
         LocalManualClusterHarnessBase, ManualNodeLayout, api_url,
@@ -26,17 +31,14 @@ use tokio::time::{sleep, timeout};
 
 const NODE_COUNT: usize = 1;
 
-/// The leader reward is a note of each block, owned by the reward key the
-/// header carries; the leader's wallet adopts it.
+/// The leader reward is a note of each block, whose key the header hides; the
+/// leader's wallet finds it under its reward key and adopts it.
 #[tokio::test]
 async fn leader_rewards_reach_the_leader_wallet() {
-    let (_base, nodes, leader_funding_pk) =
+    let (_base, nodes, leader_funding_pk, reward_key) =
         setup_test_nodes("leader_rewards_reach_the_leader_wallet").await;
     let node = &nodes[0];
-    let mut block_stream = node.client.blocks_stream().await.unwrap();
-    let mut leader_keys = HashSet::new();
-    collect_reward_keys(&mut block_stream, &mut leader_keys, 1).await;
-    let before = total_balance(&node.client, &leader_keys).await;
+    let before = balance(&node.client, reward_key).await;
     // The genesis total stake is above its target, so the reserve releases nothing
     // and the block reward is what the pooled fees pay: a transaction funds it.
     node.client
@@ -49,63 +51,53 @@ async fn leader_rewards_reach_the_leader_wallet() {
         })
         .await
         .expect("the transfer should be submitted");
-    collect_reward_keys(&mut block_stream, &mut leader_keys, 5).await;
-    wait_for_total_balance_above(&node.client, &leader_keys, before, Duration::from_mins(1)).await;
+    wait_for_balance_above(&node.client, reward_key, before, Duration::from_mins(3)).await;
 }
 
-async fn collect_reward_keys(
-    block_stream: &mut (impl futures::Stream<Item = ProcessedBlockEvent> + Unpin),
-    reward_keys: &mut HashSet<ZkPublicKey>,
-    blocks: usize,
-) {
-    timeout(Duration::from_mins(2), async {
-        for _ in 0..blocks {
-            let block = block_stream
-                .next()
-                .await
-                .expect("block stream should not close");
-            reward_keys.insert(*block.block.header.proof_of_leadership.reward_key());
-        }
-    })
-    .await
-    .unwrap_or_else(|_| panic!("the node should produce {blocks} blocks"));
+// The key the wallet of a node pays its leader rewards to.
+fn leader_reward_key(config: &RunConfig) -> ZkPublicKey {
+    let master_key_id = &config.user.wallet.voucher_master_key_id;
+    let Some(Key::Zk(master_key)) = config.user.kms.backend.keys.get(master_key_id) else {
+        panic!("the voucher master key is a ZK key of the KMS");
+    };
+    ZkKey::new(ZkHasher::digest(&[
+        *master_key.as_fr(),
+        Fr::from(LEADER_REWARD_KEY_INDEX),
+    ]))
+    .to_public_key()
 }
 
-async fn total_balance(node: &NodeHttpClient, pks: &HashSet<ZkPublicKey>) -> u64 {
-    let mut total = 0;
-    for pk in pks {
-        let pk_hex = hex::encode(fr_to_bytes(&(*pk).into()));
-        let response = reqwest::Client::new()
-            .get(api_url(node, &format!("wallet/{pk_hex}/balance")))
-            .send()
-            .await
-            .expect("balance request should not fail");
-        // A key whose reward note the wallet has not adopted yet is not found.
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            continue;
-        }
-        assert!(
-            response.status().is_success(),
-            "balance request should succeed, got status: {}",
-            response.status()
-        );
-        let balance: WalletBalanceResponseBody = response
-            .json()
-            .await
-            .expect("balance response should be valid JSON");
-        total += balance.balance;
+async fn balance(node: &NodeHttpClient, pk: ZkPublicKey) -> u64 {
+    let pk_hex = hex::encode(fr_to_bytes(&pk.into()));
+    let response = reqwest::Client::new()
+        .get(api_url(node, &format!("wallet/{pk_hex}/balance")))
+        .send()
+        .await
+        .expect("balance request should not fail");
+    // A key whose reward note the wallet has not adopted yet is not found.
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return 0;
     }
-    total
+    assert!(
+        response.status().is_success(),
+        "balance request should succeed, got status: {}",
+        response.status()
+    );
+    let balance: WalletBalanceResponseBody = response
+        .json()
+        .await
+        .expect("balance response should be valid JSON");
+    balance.balance
 }
 
-async fn wait_for_total_balance_above(
+async fn wait_for_balance_above(
     node: &NodeHttpClient,
-    pks: &HashSet<ZkPublicKey>,
+    pk: ZkPublicKey,
     before: u64,
     duration: Duration,
 ) {
     timeout(duration, async {
-        while total_balance(node, pks).await <= before {
+        while balance(node, pk).await <= before {
             sleep(Duration::from_millis(500)).await;
         }
     })
@@ -138,8 +130,11 @@ async fn setup_test_nodes(
     LocalManualClusterHarnessBase,
     Vec<StartedNode<LbcEnv>>,
     ZkPublicKey,
+    ZkPublicKey,
 ) {
     let (wallet_config, leader_funding_pk) = leader_funding_wallet_config();
+    let reward_key = Arc::new(OnceLock::new());
+    let node_reward_key = Arc::clone(&reward_key);
     let (base, nodes) = start_local_manual_cluster_with_layout(
         "leader-claim",
         "mantle-leader",
@@ -151,12 +146,18 @@ async fn setup_test_nodes(
         .with_wallet_config(wallet_config),
         NODE_COUNT,
         ManualNodeLayout::SelectNodeSeed(0),
-        move |config| Ok::<_, DynError>(test_config(config, leader_funding_pk)),
+        move |config| {
+            node_reward_key.get_or_init(|| leader_reward_key(&config));
+            Ok::<_, DynError>(test_config(config, leader_funding_pk))
+        },
         Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     )
     .await;
 
-    (base, nodes, leader_funding_pk)
+    let reward_key = *reward_key
+        .get()
+        .expect("the node of the test has a configuration");
+    (base, nodes, leader_funding_pk, reward_key)
 }
 
 fn leader_funding_wallet_config() -> (WalletConfig, ZkPublicKey) {
