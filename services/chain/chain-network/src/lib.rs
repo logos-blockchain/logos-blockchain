@@ -316,6 +316,12 @@ where
         )
         .await?;
 
+        notify_mempool_of_highest_block::<_, Mempool>(
+            relays.cryptarchia(),
+            relays.mempool_adapter(),
+        )
+        .await;
+
         let network_adapter = NetAdapter::new(network_config, relays.network_relay().clone()).await;
 
         let initial_block_download = InitialBlockDownload::new(
@@ -964,6 +970,31 @@ const fn is_recoverable_apply_error(err: &Error) -> bool {
                 | ApiError::CommsFailure(_),
         ),
     )
+}
+
+/// Pass the highest slot of the block tree to the mempool service.
+async fn notify_mempool_of_highest_block<Cryptarchia, Mempool>(
+    cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
+    mempool: &MempoolAdapter<Mempool::Item>,
+) where
+    Cryptarchia: CryptarchiaServiceData<Tx: Send>,
+    Mempool:
+        RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
+{
+    // The genesis slot as the LIB releases nothing.
+    match cryptarchia.highest_block().await {
+        Ok((highest_id, highest_slot)) => {
+            if let Err(err) = mempool
+                .notify_processed_block(highest_id, highest_slot, Slot::genesis())
+                .await
+            {
+                error!(target: LOG_TARGET, err, "could not give the mempool the highest block");
+            }
+        }
+        Err(err) => {
+            error!(target: LOG_TARGET, ?err, "could not read the highest block for the mempool");
+        }
+    }
 }
 
 /// Try to add a [`Block`] to [`Cryptarchia`].
