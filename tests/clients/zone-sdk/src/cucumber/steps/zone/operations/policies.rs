@@ -60,6 +60,7 @@ pub fn start_sorted_conflict_policy(
 ) -> PolicyRuntime {
     let policy = SortedConflictPolicy {
         state: SortedConflictState::new(Arc::clone(discarded)),
+        unfunded: BTreeSet::new(),
     };
     to_policy_runtime(runner::spawn(sequencer, policy))
 }
@@ -327,6 +328,10 @@ where
 /// payload is orphaned.
 struct SortedConflictPolicy {
     state: SortedConflictState,
+    /// Payloads whose re-publish failed, retried on the next update: the
+    /// wallet's change stays pending until the block holding it is
+    /// `SPEND_ROOT_DEPTH` deep, so funding can fail for a few blocks.
+    unfunded: BTreeSet<Inscription>,
 }
 
 impl<Node> runner::Policy<Node> for SortedConflictPolicy
@@ -371,6 +376,11 @@ where
             .filter(|payload| !readopted.contains(payload) && !self.state.is_finalized(payload))
             .collect();
         candidates.extend(self.state.discarded_snapshot().await);
+        candidates.extend(
+            std::mem::take(&mut self.unfunded)
+                .into_iter()
+                .filter(|payload| !readopted.contains(payload)),
+        );
 
         for payload in candidates {
             if self.state.is_finalized(&payload) {
@@ -379,6 +389,7 @@ where
             if self.state.preserves_order(&payload) {
                 if let Err(error) = sequencer.handle().publish(payload.clone()).await {
                     warn!(%error, "Failed to re-publish sorted zone payload");
+                    self.unfunded.insert(payload);
                     continue;
                 }
                 self.state.record_published_payload(payload).await;

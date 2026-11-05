@@ -231,12 +231,8 @@ async fn current_wallet_state_views(
     let mut observations = world.with_wallets(|wallets| {
         wallets.current_wallet_states(wallet_keys.wallet_keys().cloned())
     })?;
-    let on_chain_utxos = observations
-        .iter()
-        .map(|(wallet_id, observation)| (wallet_id.clone(), observation.on_chain_utxos().to_vec()))
-        .collect();
 
-    apply_scenario_fee_observations(world, &mut observations, &on_chain_utxos);
+    apply_scenario_fee_observations(world, &mut observations);
 
     Ok(observations)
 }
@@ -332,26 +328,14 @@ fn add_scenario_fee_wallet_keys(
 fn apply_scenario_fee_observations(
     world: &CucumberWorld,
     observations: &mut BTreeMap<WalletId, WalletStateView>,
-    on_chain_utxos: &WalletUtxos,
 ) {
-    let fee_wallet_ids = observations
-        .keys()
-        .filter(|wallet_id| ScenarioFeeState::owns_wallet_name(wallet_id.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    for wallet_id in fee_wallet_ids {
-        let wallet_on_chain_utxos = on_chain_utxos
-            .get(wallet_id.as_str())
-            .cloned()
-            .unwrap_or_default();
-        observations.insert(
-            wallet_id.clone(),
-            world
+    for (wallet_id, observation) in observations.iter_mut() {
+        if ScenarioFeeState::owns_wallet_name(wallet_id.as_str()) {
+            *observation = world
                 .wallet_registry
                 .fee_state
-                .state_observation_for(wallet_id, wallet_on_chain_utxos),
-        );
+                .state_observation_for(wallet_id.clone(), observation.clone());
+        }
     }
 }
 

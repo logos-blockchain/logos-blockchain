@@ -109,13 +109,14 @@ impl ScenarioFeeState {
     pub fn state_observation_for(
         &self,
         wallet_id: impl Into<WalletId>,
-        on_chain_utxos: Vec<OwnedNote>,
+        observation: WalletStateView,
     ) -> WalletStateView {
         let wallet_id = wallet_id.into();
         let group_key = fee_wallet_group_key(wallet_id.as_str()).unwrap_or_default();
         let reserved_utxos = self.reservations.reserved_utxos_for_group(group_key);
+        let (on_chain_utxos, spendable_utxos) = observation.into_on_chain_and_spendable_utxos();
 
-        WalletStateView::new(wallet_id, on_chain_utxos, reserved_utxos)
+        WalletStateView::new(wallet_id, on_chain_utxos, spendable_utxos, reserved_utxos)
     }
 
     #[must_use]

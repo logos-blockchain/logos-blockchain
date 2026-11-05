@@ -243,6 +243,17 @@ impl TrackedWallets {
         }
     }
 
+    pub(crate) fn replace_spendable_wallets_utxos(
+        &mut self,
+        wallet_utxos: impl IntoIterator<Item = (WalletId, Vec<OwnedNote>)>,
+    ) {
+        for (wallet_id, utxos) in wallet_utxos {
+            if let Some(wallet) = self.wallet_mut(wallet_id.as_str()) {
+                wallet.replace_spendable_utxos(utxos);
+            }
+        }
+    }
+
     pub(crate) fn record_header_height(&mut self, node_name: &str, header_id: &str, height: u64) {
         self.chain_state_cache
             .record_header_height(node_name, header_id, height);
@@ -279,7 +290,7 @@ impl TrackedWallets {
 
     fn current_wallet_state(&self, wallet_id: &WalletId) -> WalletStateView {
         self.wallet(wallet_id.as_str()).map_or_else(
-            || WalletStateView::new(wallet_id.clone(), Vec::new(), Vec::new()),
+            || WalletStateView::new(wallet_id.clone(), Vec::new(), Vec::new(), Vec::new()),
             |wallet| wallet.state_view(wallet_id.clone()),
         )
     }
