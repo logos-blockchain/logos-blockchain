@@ -15,6 +15,15 @@ use crate::utils::serde_bytes_newtype;
 
 pub type ChannelKeyIndex = u16;
 
+/// Maximum payload size, in bytes, of a Mantle operation data field
+/// (`MAX_OPERATION_DATA_SIZE` in the Mantle Transaction Encoding spec).
+///
+/// The spec requires this to be exactly `1_835_008` bytes, which is
+/// `MAX_BLOCK_TRANSACTIONS_SIZE * 7 / 8` and leaves room for the rest of a
+/// block's transactions. The bound excludes the length prefix. Channel
+/// inscription data and channel deposit metadata both use this limit.
+pub const MAX_OPERATION_DATA_SIZE: usize = 1_835_008;
+
 pub const CHANNEL_MAX_KEYS: usize = u16::MAX as usize;
 type ChannelKeys<Key> = NonEmptyBoundedVec<Key, CHANNEL_MAX_KEYS>;
 pub type VerifiedChannelKeys = ChannelKeys<Ed25519PublicKey>;
