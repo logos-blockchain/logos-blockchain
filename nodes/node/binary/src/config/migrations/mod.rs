@@ -2,7 +2,7 @@
 //! build.
 //!
 //! A config carries the version of the build that wrote it in its top-level
-//! `version`: the release tag of that build, or `master` for a build without
+//! `version`: the release of that build, or `master` for a build that isn't
 //! one. A config without a `version` predates versioning and is read as 0.3.2.
 //!
 //! Each [`Migration`] rewrites configs older than its `to`, the first release
@@ -39,17 +39,23 @@ pub enum ConfigVersion {
     Master,
 }
 
+/// The workspace version on master, bumped to the release on a release branch.
+const UNRELEASED: ConfigVersion = ConfigVersion::Release(0, 0, 0);
+
 impl ConfigVersion {
     /// The version of this build: the release tag at its commit (`0.4.0`, as
-    /// the release workflow requires; `0.4.0-rc.1` counts as its release), or
-    /// `master` without one. A commit with several tags reports whichever
-    /// `git describe` picks.
+    /// the release workflow requires; `0.4.0-rc.1` counts as its release),
+    /// else the crate version, which release branches bump to the same, else
+    /// `master`. A commit with several tags reports whichever `git describe`
+    /// picks.
     #[must_use]
     pub fn current() -> Self {
-        lb_version::build_version_info()
-            .tag
-            .and_then(|tag| tag.parse().ok())
-            .unwrap_or(Self::Master)
+        let build = lb_version::build_version_info();
+        let tagged = build.tag.and_then(|tag| tag.parse().ok());
+        match tagged.or_else(|| build.version.parse().ok()) {
+            None | Some(UNRELEASED) => Self::Master,
+            Some(version) => version,
+        }
     }
 }
 
