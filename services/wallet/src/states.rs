@@ -317,7 +317,9 @@ impl<'u> ServiceState<'u> {
     /// execution and storage cost. Only the unused reserve becomes an
     /// effective priority tip, and the percentage is not capped at 100. A
     /// funding that fails releases the notes `tx_builder` spends, such as a
-    /// split reserved for it, since no transaction will spend them.
+    /// split reserved for it. A builder funded again while its first funding is
+    /// in flight has its notes released as well, and the ledger rejects the
+    /// conflict if another transaction then spends them.
     #[expect(
         clippy::too_many_arguments,
         reason = "thin passthrough to `Wallet::fund_tx` plus the reservations"
