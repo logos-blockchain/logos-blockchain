@@ -17,7 +17,7 @@ use lb_core::{
 };
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_service::keys::{
-    Ed25519Key, UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey,
+    Ed25519Key, UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey, kdf_public_key,
 };
 use num_bigint::BigUint;
 
@@ -95,8 +95,17 @@ impl ProviderInfo {
         ProviderId(self.provider_sk.public_key())
     }
 
+    // The zk_id is derived from the quota secret key itself, which the Proof of
+    // Quota proves.
     #[must_use]
     pub fn zk_id(&self) -> ZkPublicKey {
+        kdf_public_key(self.zk_sk.as_fr())
+    }
+
+    // The public key of the notes of the same key, so the node withdraws its
+    // service note.
+    #[must_use]
+    pub fn note_pk(&self) -> ZkPublicKey {
         self.zk_sk.to_public_key()
     }
 }
@@ -445,7 +454,7 @@ pub fn create_genesis_block_with_declarations(
             locators: provider.locator.clone().into(),
             provider_id: provider.provider_id(),
             zk_id: provider.zk_id(),
-            note_pk: provider.zk_id(),
+            note_pk: provider.note_pk(),
             inputs: InputNullifiers::default(),
             commitment_merkle_root: CommitmentMmr::new().frontier_root(),
             amount: provider.amount,

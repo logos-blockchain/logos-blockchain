@@ -209,6 +209,8 @@ where
             overwatch_handle.relay::<PreloadKmsService<_>>().await?,
         );
 
+        let zk_id = kms::zk_id(&kms, zk_secret_key_kms_id.clone()).await;
+        // The public key of the notes of the same key, which its wallet spends.
         let PublicKeyEncoding::Zk(zk_public_key) = Box::pin(kms.public_key(zk_secret_key_kms_id))
             .await
             .expect("ZK public key for provided ID should be stored in KMS.")
@@ -324,6 +326,7 @@ where
                                     locator,
                                     amount,
                                     non_ephemeral_signing_key_public,
+                                    zk_id,
                                     zk_public_key,
                                 )
                                 .await
@@ -332,7 +335,7 @@ where
                             });
                         },
                         ProxyServiceMessage::GetZkId { reply } => {
-                            reply.send(zk_public_key).unwrap_or_else(|e| {
+                            reply.send(zk_id).unwrap_or_else(|e| {
                                 debug!(target: LOG_TARGET, "Failed to send GetZkId reply: {e:?}");
                             });
                         },
@@ -369,6 +372,7 @@ async fn submit_blend_sdp_declaration<SdpService>(
     amount: Value,
     non_ephemeral_signing_key_public: Ed25519PublicKey,
     zk_id: ZkPublicKey,
+    note_pk: ZkPublicKey,
 ) -> Result<SdpSubmission, lb_sdp_service::api::Error>
 where
     SdpService: ServiceData<Message = SdpMessage>,
@@ -382,8 +386,9 @@ where
         provider_id: ProviderId(non_ephemeral_signing_key_public),
         service_type: ServiceType::BlendNetwork,
         zk_id,
-        // The Blend key is one the node holds, so its wallet can withdraw.
-        note_pk: zk_id,
+        // The public key of the notes of the Blend key, which the node holds, so
+        // its wallet can withdraw.
+        note_pk,
         amount,
     };
     sdp_service_api.post_declaration(sdp_declaration).await
