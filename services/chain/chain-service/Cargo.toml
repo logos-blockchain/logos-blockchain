@@ -31,7 +31,7 @@ lb-services-utils             = { workspace = true }
 lb-storage-service            = { workspace = true }
 lb-time-service               = { features = ["ntp"], workspace = true }
 lb-tracing                    = { workspace = true }
-lb-utils                      = { workspace = true }
+lb-utils                      = { features = ["tokio"], workspace = true }
 overwatch                     = { workspace = true }
 serde                         = { workspace = true }
 serde_with                    = { workspace = true }
@@ -52,4 +52,5 @@ rand               = { workspace = true }
 tempfile           = { workspace = true }
 
 [features]
-openapi = ["dep:utoipa", "lb-core/openapi", "lb-cryptarchia-engine/openapi"]
+openapi          = ["dep:utoipa", "lb-core/openapi", "lb-cryptarchia-engine/openapi"]
+tokio-task-names = ["lb-utils/tokio-task-names"]

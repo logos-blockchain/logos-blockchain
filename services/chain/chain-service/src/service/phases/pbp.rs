@@ -1,6 +1,6 @@
 use core::fmt::{self, Debug};
 
-use futures::StreamExt as _;
+use futures::{StreamExt as _, future::OptionFuture};
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_core::mantle::{
     ledger::verification_mode::StandardMode,
@@ -76,7 +76,9 @@ where
         let mut pbp_timer = Box::pin(tokio::time::sleep(self.prolonged_bootstrap_period));
         loop {
             tokio::select! {
-                () = pbp_timer.as_mut() => {
+                // Going online changes the chain, which a block under
+                // verification would undo on commit.
+                () = pbp_timer.as_mut(), if self.block_under_verification.is_none() => {
                     return;
                 },
                 Some(msg) = self.inbound_relay.next() => match msg {
@@ -84,13 +86,16 @@ where
                         self.process_query(query).await;
                     }
                     ConsensusMsg::ApplyBlock { block, reply_channel } => {
-                        self.apply_block_and_reply(*block, reply_channel).await;
+                        self.apply_block(*block, reply_channel);
                     }
                     ConsensusMsg::ChainSync(event) => reject_chain_sync_event(event).await,
                     ConsensusMsg::IbdCompleted => {
                         debug!(target: LOG_TARGET, "ignoring IbdCompleted: already in {:?} phase", self.phase);
                     }
                 },
+                Some(verification) = OptionFuture::from(self.block_under_verification.as_mut()) => {
+                    self.finish_block(verification).await;
+                }
                 Some(tick) = self.slot_timer.next() => self.current_slot = tick.slot,
                 _ = self.state_recording_timer.tick() => self.record_recovery_state(),
             }

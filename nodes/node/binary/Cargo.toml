@@ -114,6 +114,7 @@ tokio-console = [
   "lb-blend/tokio-task-names",
   "lb-chain-leader-service/tokio-task-names",
   "lb-chain-network-service/tokio-task-names",
+  "lb-chain-service/tokio-task-names",
   "lb-key-management-system-service/tokio-task-names",
   "lb-network-service/tokio-task-names",
   "lb-storage-service/tokio-task-names",

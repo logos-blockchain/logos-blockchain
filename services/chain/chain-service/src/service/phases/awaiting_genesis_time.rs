@@ -1,5 +1,10 @@
 use core::fmt::{self, Debug};
-use std::{collections::HashSet, pin::Pin, sync::Arc, time::Duration};
+use std::{
+    collections::{HashSet, VecDeque},
+    pin::Pin,
+    sync::Arc,
+    time::Duration,
+};
 
 use futures::StreamExt as _;
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
@@ -105,6 +110,8 @@ where
             state_recording_timer,
             prolonged_bootstrap_period,
             epoch_state_query_sources: crate::service::EpochStateQuerySourceTracker::default(),
+            block_under_verification: None,
+            queued_blocks: VecDeque::new(),
         }
     }
 
