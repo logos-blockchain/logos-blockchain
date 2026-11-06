@@ -61,6 +61,7 @@ use lb_storage_service::{
 };
 use lb_time::era::{EpochLength, EraSchedule};
 use lb_utils::bounded::BoundedError;
+pub use lb_wallet::FEE_MARGIN_PERCENT;
 use lb_wallet::{
     KnownNote, OwnedNote, WalletBalance, WalletBlock, WalletError, WalletState,
     transaction::{OpWitness, WitnessContext, op_witness_at, op_witnesses},

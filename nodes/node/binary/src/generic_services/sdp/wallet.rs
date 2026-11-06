@@ -139,7 +139,7 @@ where
                 tx_builder.clone(),
                 config.funding_pk,
                 vec![config.funding_pk],
-                0,
+                lb_wallet_service::FEE_MARGIN_PERCENT,
             )
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
@@ -208,7 +208,7 @@ where
                 tx_builder.clone(),
                 config.funding_pk,
                 vec![config.funding_pk],
-                0,
+                lb_wallet_service::FEE_MARGIN_PERCENT,
             )
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
@@ -244,7 +244,7 @@ where
                 tx_builder.clone(),
                 config.funding_pk,
                 vec![config.funding_pk],
-                0,
+                lb_wallet_service::FEE_MARGIN_PERCENT,
             )
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;

@@ -662,4 +662,45 @@ mod tests {
             Some(WalletError::InsufficientFunds { available: 400 })
         );
     }
+
+    #[test]
+    fn a_tx_funded_with_the_fee_margin_survives_one_step_of_each_gas_market() {
+        let note = Note::new(10_000_000_000_000, Fr::from(1u64), pk(1));
+        let known = known(&[(note, LEDGER_SET, nullifier(1))]);
+        let state = WalletState::from_genesis(&known, &[note], &[], Epoch::new(0)).unwrap();
+        let builder = MantleTxBuilder::new()
+            .add_ledger_output(Note::new(5, Fr::from(9u64), pk(2)))
+            .unwrap();
+        let context = |execution: u64, storage: u64| OpsContext {
+            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(execution, storage)),
+        };
+        let (execution, storage) = (60_563_532, 753_662_110);
+        let fund = |margin| {
+            state
+                .fund_tx::<MainnetGasProfile>(
+                    &builder,
+                    pk(1),
+                    Fr::from(10u64),
+                    [pk(1)],
+                    &context(execution, storage),
+                    &HashSet::new(),
+                    margin,
+                )
+                .unwrap()
+        };
+        // Both prices one step of 9/8 higher, rounded up as the markets do.
+        let raised = context((execution * 9).div_ceil(8), (storage * 9).div_ceil(8));
+        let still_funded = |funded: &MantleTxBuilder| {
+            funded.net_balance()
+                >= i128::from(
+                    funded
+                        .minimum_gas_cost::<MainnetGasProfile>(&raised)
+                        .unwrap()
+                        .into_inner(),
+                )
+        };
+
+        assert!(!still_funded(&fund(0)));
+        assert!(still_funded(&fund(crate::FEE_MARGIN_PERCENT)));
+    }
 }
