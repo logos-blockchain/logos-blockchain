@@ -95,7 +95,9 @@ mod tests {
         services::{
             AsServiceId, ServiceCore, ServiceData,
             state::{NoOperator, NoState},
-            status::{ServiceStatus, WaitForAllError, WaitForError, WaitPolicy},
+            status::{
+                DependencyObservation, ServiceStatus, WaitForAllError, WaitForError, WaitPolicy,
+            },
         },
     };
     use overwatch_derive::derive_services;
@@ -368,9 +370,7 @@ mod tests {
             .downcast_ref::<WaitForAllError<RuntimeServiceId>>()
             .expect("the Overwatch aggregate error should be preserved");
         assert_eq!(
-            aggregate
-                .failed()
-                .map(overwatch::services::status::DependencyObservation::id),
+            aggregate.failed().map(DependencyObservation::id),
             Some(&<RuntimeServiceId as AsServiceId<FailingService>>::SERVICE_ID)
         );
         let expected = WaitForError::ServiceFailed {
