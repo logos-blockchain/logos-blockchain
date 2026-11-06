@@ -27,8 +27,8 @@ use lb_key_management_system_service::keys::UnverifiedEd25519PublicKey;
 use lb_zone_sdk::{
     node_types::TxHash,
     sequencer::{
-        ChannelNote, Event, FinalizedOp, InscriptionInfo, SequencerCheckpoint, ZoneSequencer,
-        channel_inscriptions,
+        ChannelNote, ChannelUpdateTx, Event, FinalizedOp, InscriptionInfo, SequencerCheckpoint,
+        ZoneSequencer, channel_inscriptions,
     },
 };
 use tokio::time::Instant;
@@ -121,6 +121,38 @@ fn touches_channel(tx: &SignedOps<Unverified, StandardMode>, channel: ChannelId)
 
 /// An own pending inscription: its message, tx hash and funding stamp.
 type Funding = (MsgId, TxHash, Slot);
+
+/// A reported tx with the message and config ids it leaves behind and the
+/// ones it chains on, for `channel`.
+type Lineage = (TxHash, Vec<MsgId>, Vec<MsgId>);
+
+/// The message and config ids `tx` leaves behind for `channel`, and the
+/// ones it chains on, in op order.
+fn lineage_ids(tx: &SignedOps<Unverified, StandardMode>, channel: ChannelId) -> Lineage {
+    let (produced, parents) = tx
+        .op_refs_iter()
+        .filter_map(|op| match op {
+            OpRef::ChannelInscribe(i) if i.channel_id == channel => Some((i.id(), i.parent)),
+            OpRef::ChannelConfig(c) if c.channel() == channel => Some((c.id(), c.parent())),
+            _ => None,
+        })
+        .unzip();
+    (tx.hash(), produced, parents)
+}
+
+/// The lineage of an update entry: the inscription it is typed as, or the
+/// ops of an opaque tx.
+fn update_lineage(entry: &ChannelUpdateTx, channel: ChannelId) -> Lineage {
+    match entry {
+        ChannelUpdateTx::Config(tx) | ChannelUpdateTx::Custom(tx) => lineage_ids(tx, channel),
+        typed => {
+            let (produced, parents) = typed.inscription().map_or_else(Default::default, |info| {
+                (vec![info.this_msg], vec![info.parent_msg])
+            });
+            (typed.tx_hash(), produced, parents)
+        }
+    }
+}
 
 fn by_id(notes: &[ChannelNote]) -> BTreeMap<NoteId, Value> {
     notes.iter().map(|n| (n.note_id, n.value)).collect()
@@ -396,7 +428,7 @@ impl Oracles {
     /// Every deposit an event reports must sit on the branch of the tip the
     /// event named (the node may have moved on since it emitted the event);
     /// every finalized tx is reported once.
-    pub fn observe(&mut self, event: &Event, node: &SimNode, name: &str) {
+    pub fn observe(&mut self, event: &Event, node: &SimNode, channel: ChannelId, name: &str) {
         if let Event::TurnNotification { notification } = event {
             self.claims
                 .push((node.delivered_count(), notification.our_turn_to_write));
@@ -412,6 +444,33 @@ impl Oracles {
             return;
         };
         self.lib = Some(checkpoint.lib);
+        self.check_parent_first(
+            Layer::Chain,
+            "adopted",
+            channel_update
+                .adopted()
+                .iter()
+                .map(|e| update_lineage(e, channel)),
+            name,
+        );
+        self.check_parent_first(
+            Layer::Lineage,
+            "orphaned",
+            channel_update
+                .orphaned()
+                .iter()
+                .map(|e| update_lineage(e, channel)),
+            name,
+        );
+        self.check_parent_first(
+            Layer::Restarts,
+            "checkpoint pending",
+            checkpoint
+                .pending_txs
+                .iter()
+                .map(|(_, tx)| lineage_ids(tx, channel)),
+            name,
+        );
         self.orphaned.extend(
             channel_update
                 .orphaned()
@@ -753,7 +812,79 @@ impl Oracles {
         }
     }
 
+    /// A reported list comes parent first: no entry chains on a message or
+    /// config that a later entry leaves behind.
+    fn check_parent_first(
+        &mut self,
+        layer: Layer,
+        what: &str,
+        entries: impl Iterator<Item = Lineage>,
+        name: &str,
+    ) {
+        let entries: Vec<Lineage> = entries.collect();
+        let producers: HashMap<MsgId, usize> = entries
+            .iter()
+            .enumerate()
+            .flat_map(|(at, (_, produced, _))| produced.iter().map(move |id| (*id, at)))
+            .collect();
+        for (at, (hash, _, parents)) in entries.iter().enumerate() {
+            for parent in parents {
+                if let Some(&producer) = producers.get(parent)
+                    && producer > at
+                {
+                    self.record(
+                        layer,
+                        format!(
+                            "{name}: {what} tx {hash:?} reported before its parent {:?}",
+                            entries[producer].0
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
     fn record(&mut self, layer: Layer, message: String) {
         self.violations.record(layer, message);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn msg(n: u8) -> MsgId {
+        MsgId::from([n; 32])
+    }
+
+    fn tx(n: u8) -> TxHash {
+        TxHash([n; 32])
+    }
+
+    /// A chain reported child first is a violation; parent first is not.
+    #[test]
+    fn parent_first_check_fires_on_a_child_reported_before_its_parent() {
+        let parent: Lineage = (tx(1), vec![msg(1)], vec![MsgId::root()]);
+        let child: Lineage = (tx(2), vec![msg(2)], vec![msg(1)]);
+
+        let mut oracles = Oracles::default();
+        oracles.check_parent_first(
+            Layer::Lineage,
+            "orphaned",
+            vec![parent.clone(), child.clone()].into_iter(),
+            "SEQ",
+        );
+        assert!(oracles.violations().is_empty());
+
+        oracles.check_parent_first(
+            Layer::Lineage,
+            "orphaned",
+            vec![child, parent].into_iter(),
+            "SEQ",
+        );
+        let violations: Vec<_> = oracles.violations().iter().collect();
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].0, Layer::Lineage);
+        assert!(violations[0].1.contains("reported before its parent"));
     }
 }

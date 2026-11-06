@@ -354,6 +354,7 @@ impl Harness {
     pub async fn settle(&mut self) {
         let mut idle_rounds = 0;
         let mut budget = MAX_EVENTS_PER_SETTLE;
+        let channel_id = self.channel_id;
         while idle_rounds < 3 {
             let mut progressed = false;
             for seq in &mut self.seqs {
@@ -365,7 +366,8 @@ impl Harness {
                     log_event(&seq.name, &seq.node, &event);
                     seq.checker.observe(&event);
                     seq.mirror.observe(&event);
-                    seq.oracles.observe(&event, &seq.node, &seq.name);
+                    seq.oracles
+                        .observe(&event, &seq.node, channel_id, &seq.name);
                     seq.policy.on_event(sequencer, &event).await;
                     seq.events.push(event);
                     budget -= 1;
