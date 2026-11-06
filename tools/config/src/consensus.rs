@@ -4,7 +4,7 @@ use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
-        GenesisParameters, GenesisTime, Note,
+        GenesisParameters, GenesisTime,
         note_set::CommitmentMmr,
         notes::InputNullifiers,
         ops::channel::{
@@ -121,12 +121,11 @@ pub struct GeneralConsensusConfig {
     pub prolonged_bootstrap_period: Duration,
 }
 
-// A genesis note by its allocation index, with its opening and secret key.
+// A genesis note by its allocation index, with its secret key.
 #[derive(Clone, Debug)]
 pub struct ServiceNote {
     pub pk: ZkPublicKey,
     pub sk: ZkKey,
-    pub note: Note,
     pub output_index: usize,
 }
 
@@ -426,7 +425,6 @@ fn create_allocations(
                 sdp_notes.push(ServiceNote {
                     pk: pk_sdp,
                     sk: sk_sdp.clone(),
-                    note: allocation.note(output_index),
                     output_index,
                 });
             }

@@ -116,10 +116,7 @@ pub fn prepare_network(
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{
-        OpRef,
-        traits::{GenesisTx as _, MantleTx as _},
-    };
+    use lb_core::mantle::{OpRef, traits::MantleTx as _};
     use lb_ledger::GENESIS_STAKE_SUPPLY;
 
     use super::*;

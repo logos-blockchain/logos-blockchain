@@ -1464,12 +1464,7 @@ where
     ) -> Result<ServiceState<'u>, WalletServiceError> {
         let genesis = cryptarchia.get_genesis_block().await?;
         let genesis_tx = genesis.genesis_tx();
-        let notes = genesis_tx
-            .distribution()
-            .iter()
-            .enumerate()
-            .map(|(index, allocation)| allocation.note(index))
-            .collect::<Vec<_>>();
+        let notes = genesis_tx.initial_notes();
         let service_notes = genesis_tx
             .sdp_declarations()
             .map(|declaration| declaration.operation().service_note())

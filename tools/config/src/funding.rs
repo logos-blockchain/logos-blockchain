@@ -68,13 +68,11 @@ pub fn fill_leader_stake(transfer: &mut Distribution, leader_keys: &[ZkPublicKey
 /// Funding can move outputs. Refresh references before building provider
 /// declarations or handing notes to an adapter.
 pub fn refresh_service_note(note: &mut ServiceNote, transfer: &Distribution) {
-    let (index, output) = transfer
+    let index = transfer
         .iter()
-        .enumerate()
-        .find(|(_, output)| output.public_key == note.pk)
+        .position(|output| output.public_key == note.pk)
         .expect("service note must be present in genesis");
     note.output_index = index;
-    note.note = output.note(index);
 }
 
 fn fit_sdp_funding_outputs_to_genesis_capacity(

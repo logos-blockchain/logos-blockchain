@@ -3,7 +3,6 @@ use cfgsync_adapter::MaterializedArtifacts;
 use cfgsync_artifacts::ArtifactFile;
 use lb_core::{
     block::genesis::GenesisBlock,
-    mantle::traits::GenesisTx as _,
     sdp::{Locator, ServiceType},
 };
 use lb_libp2p::{Multiaddr, Protocol};
@@ -88,7 +87,7 @@ fn deployment_settings(
         hostnames,
         topology.config().blend_core_nodes,
     )?;
-    let transfer_op = genesis_block.genesis_tx().distribution();
+    let transfer_op = genesis_block.genesis_tx().distribution().clone();
     let genesis_block = create_genesis_block_with_declarations(
         transfer_op,
         &providers,

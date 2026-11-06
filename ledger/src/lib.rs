@@ -635,15 +635,14 @@ impl LedgerState {
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), LedgerError<Id>> {
         let GenesisParameters { epoch_nonce, .. } = tx.genesis_parameters();
-        let distribution = tx.distribution();
+        let initial_notes = tx.initial_notes();
         let GenesisOps {
-            transfer,
             inscription,
             distribution_inscription,
             declarations,
         } = tx.into_genesis_ops();
         let total_stake = CryptarchiaLedger::genesis_total_stake(
-            &distribution,
+            initial_notes.iter().map(|note| note.value),
             declarations
                 .iter()
                 .map(|declaration| declaration.operation().amount),
@@ -657,7 +656,7 @@ impl LedgerState {
             });
         }
         let cryptarchia_ledger =
-            CryptarchiaLedger::from_genesis_tx(&transfer, total_stake, config, epoch_nonce)?;
+            CryptarchiaLedger::from_genesis_notes(&initial_notes, total_stake, config, epoch_nonce);
         let (mantle_ledger, note_sets, events) = MantleLedger::from_genesis_tx(
             [inscription, distribution_inscription],
             declarations,
@@ -1100,7 +1099,7 @@ mod tests {
             programs::{ProgramVerificationKey, RegisteredProgram, derive_program_id},
             traits::Hashable as _,
             transactions::{
-                Distribution, GenesisAllocation, GenesisTx, OpProofs, Ops,
+                GenesisAllocation, GenesisTx, OpProofs, Ops,
                 hash::TxHashView,
                 states::{Preverified, Unverified},
             },
@@ -2035,6 +2034,8 @@ mod tests {
     fn genesis_records_the_roots_after_the_whole_transaction() {
         let config = config();
         let (tx, allocations, declaration) = genesis_with_a_declaration();
+        // The initial notes, created from the distribution inscription.
+        let distribution_op_id = tx.distribution_inscription().operation().op_id();
         let (state, _) = LedgerState::from_genesis_tx::<HeaderId>(tx, &config).unwrap();
 
         let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
@@ -2042,7 +2043,8 @@ mod tests {
             .iter()
             .enumerate()
             .fold(CommitmentMmr::new(), |mmr, (index, allocation)| {
-                mmr.push(allocation.note(index).commitment()).unwrap()
+                mmr.push(allocation.note(&distribution_op_id, index).commitment())
+                    .unwrap()
             })
             .frontier_root();
         assert_eq!(ledger_set.commitment_root(), ledger_root);
@@ -2127,28 +2129,12 @@ mod tests {
             distributed + declaration.amount
         );
 
-        let overflowing = Distribution::from([
-            GenesisAllocation {
-                value: u64::MAX,
-                public_key: ZkPublicKey::new(Fr::from(1u64)),
-            },
-            GenesisAllocation {
-                value: 1,
-                public_key: ZkPublicKey::new(Fr::from(2u64)),
-            },
-        ]);
         assert_eq!(
-            CryptarchiaLedger::genesis_total_stake::<HeaderId>(&overflowing, []),
+            CryptarchiaLedger::genesis_total_stake::<HeaderId>([u64::MAX, 1], []),
             Err(LedgerError::BalanceOverflow)
         );
         assert_eq!(
-            CryptarchiaLedger::genesis_total_stake::<HeaderId>(
-                &Distribution::from([GenesisAllocation {
-                    value: u64::MAX,
-                    public_key: ZkPublicKey::new(Fr::from(1u64)),
-                }]),
-                [1]
-            ),
+            CryptarchiaLedger::genesis_total_stake::<HeaderId>([u64::MAX], [1]),
             Err(LedgerError::BalanceOverflow)
         );
     }

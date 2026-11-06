@@ -354,12 +354,7 @@ fn random_nonce() -> Fr {
 fn wallet_utxo_map(
     genesis_tx: &lb_core::mantle::transactions::GenesisTx,
 ) -> HashMap<ZkPublicKey, GenesisNote> {
-    let notes = genesis_tx
-        .distribution()
-        .iter()
-        .enumerate()
-        .map(|(index, allocation)| allocation.note(index))
-        .collect::<Vec<_>>();
+    let notes = genesis_tx.initial_notes();
     let mut mmr = CommitmentMmr::new();
     let mut paths = Vec::with_capacity(notes.len());
     for note in &notes {
