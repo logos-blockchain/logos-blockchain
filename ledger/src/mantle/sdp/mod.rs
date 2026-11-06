@@ -15,9 +15,10 @@ use lb_core::{
             verification_mode::{GenesisMode, StandardMode},
         },
         note_set::NoteSets,
-        notes::{Note, NoteCommitment, OutputCommitments},
+        notes::Note,
         ops::{
             SignedOperation,
+            channel::withdraw::PendingWithdrawals,
             sdp::{
                 SDPActiveExecutionContext, SDPActiveOp, SDPDeclareExecutionContext, SDPDeclareOp,
                 SDPWithdrawExecutionContext, SDPWithdrawOp, SdpError,
@@ -31,7 +32,7 @@ use lb_core::{
         ServiceType,
     },
 };
-use lb_cryptarchia_engine::Epoch;
+use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_log_targets::{diagnostic::BLEND_REACHABILITY, ledger};
 use rewards::{Error as RewardsError, Rewards};
 use tracing::debug;
@@ -39,17 +40,6 @@ use tracing::debug;
 use crate::{EpochState, mantle::sdp::rewards::blend};
 
 const LOG_TARGET: &str = ledger::mantle::SDP;
-
-type Released = Vec<(DeclarationId, OutputCommitments)>;
-
-/// SDP Epoch Finalization appends the released notes in ascending order of
-/// `service`, then in ascending lexicographic order of the 32 bytes of the
-/// declaration id.
-fn sort_released<S: Ord>(released: &mut [(S, DeclarationId, OutputCommitments)]) {
-    released.sort_by(|(service_a, id_a, _), (service_b, id_b, _)| {
-        service_a.cmp(service_b).then_with(|| id_a.cmp(id_b))
-    });
-}
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 enum Service {
@@ -64,22 +54,17 @@ impl Service {
         config: ServiceParameters,
         last_rewards_params: &ServiceRewardsParameters,
         rewards_params: &ServiceRewardsParameters,
-    ) -> (Self, Vec<Note>, Released, Vec<HeaderEvent>) {
+    ) -> (Self, Vec<Note>, Vec<HeaderEvent>) {
         match self {
             Self::BlendNetwork(state) => {
-                let (new_state, reward_notes, released, events) = state.try_apply_header(
+                let (new_state, reward_notes, events) = state.try_apply_header(
                     last_epoch_state,
                     epoch_state,
                     config,
                     &last_rewards_params.blend,
                     &rewards_params.blend,
                 );
-                (
-                    Self::BlendNetwork(new_state),
-                    reward_notes,
-                    released,
-                    events,
-                )
+                (Self::BlendNetwork(new_state), reward_notes, events)
             }
         }
     }
@@ -224,9 +209,8 @@ impl<R: Rewards> ServiceState<R> {
         service_params: ServiceParameters,
         last_rewards_params: &R::Params,
         rewards_params: &R::Params,
-    ) -> (Self, Vec<Note>, Released, Vec<HeaderEvent>) {
+    ) -> (Self, Vec<Note>, Vec<HeaderEvent>) {
         let mut reward_notes = Vec::new();
-        let mut released = Vec::new();
         let mut events = Vec::new();
 
         if last_epoch_state.epoch() < epoch_state.epoch() {
@@ -253,24 +237,18 @@ impl<R: Rewards> ServiceState<R> {
                 }
             }));
 
-            // Remove withdrawn declarations and release their withdrawal outputs.
-            let release_events;
-            (released, release_events) =
-                self.release_and_remove_withdrawn_declarations(epoch_state.epoch());
-            events.extend(release_events);
+            // Remove the withdrawn declarations; the outputs of their withdrawals are
+            // released through the pending withdrawals.
+            events.extend(self.remove_withdrawn_declarations(epoch_state.epoch()));
         }
 
-        (self, reward_notes, released, events)
+        (self, reward_notes, events)
     }
 
     /// For every withdrawn declaration whose `withdraw_at + 1` epoch has been
-    /// reached, release the outputs of its withdrawal and its index, and remove
-    /// it.
-    fn release_and_remove_withdrawn_declarations(
-        &mut self,
-        epoch: Epoch,
-    ) -> (Released, Vec<HeaderEvent>) {
-        let released: Released = self
+    /// reached, release its index and remove it.
+    fn remove_withdrawn_declarations(&mut self, epoch: Epoch) -> Vec<HeaderEvent> {
+        let removed: Vec<DeclarationId> = self
             .declarations
             .iter()
             .filter(|(_, declaration)| {
@@ -278,19 +256,9 @@ impl<R: Rewards> ServiceState<R> {
                     .withdraw_at
                     .is_some_and(|withdraw_at| withdraw_at < epoch)
             })
-            .map(|(id, declaration)| (*id, declaration.withdraw_outputs.clone()))
+            .map(|(id, _)| *id)
             .collect();
-        let events = released
-            .iter()
-            .map(
-                |(declaration_id, outputs)| HeaderEvent::SdpWithdrawalReleased {
-                    service_type: self.service_type,
-                    declaration_id: *declaration_id,
-                    outputs: outputs.clone(),
-                },
-            )
-            .collect();
-        for (id, _) in &released {
+        for id in &removed {
             let provider_id = self
                 .declarations
                 .get(id)
@@ -299,7 +267,13 @@ impl<R: Rewards> ServiceState<R> {
             self.provider_index.remove_mut(&provider_id);
             self.declarations.remove_mut(id);
         }
-        (released, events)
+        removed
+            .into_iter()
+            .map(|declaration_id| HeaderEvent::SdpDeclarationRemoved {
+                service_type: self.service_type,
+                declaration_id,
+            })
+            .collect()
     }
 
     fn add_income(&mut self, income: Value) {
@@ -336,6 +310,12 @@ pub struct SdpLedger {
 }
 
 impl SdpLedger {
+    // The epoch of the state this ledger was last updated to.
+    #[must_use]
+    pub const fn epoch(&self) -> Epoch {
+        self.epoch
+    }
+
     #[must_use]
     pub fn new(epoch: Epoch) -> Self {
         Self {
@@ -439,7 +419,6 @@ impl SdpLedger {
         epoch_state: &EpochState,
     ) -> Result<(Self, HeaderEffect), Error> {
         let mut all_reward_notes = Vec::new();
-        let mut all_released = Vec::new();
         let mut all_events = Vec::new();
 
         let services = self
@@ -450,25 +429,18 @@ impl SdpLedger {
                     .service_params
                     .get(service)
                     .ok_or(Error::EpochParamsNotFound(*service))?;
-                let (new_state, reward_notes, released, events) =
-                    service_state.clone().try_apply_header(
-                        last_epoch_state,
-                        epoch_state,
-                        *service_params,
-                        &last_config.service_rewards_params,
-                        &config.service_rewards_params,
-                    );
-                all_reward_notes.extend(reward_notes);
-                all_released.extend(
-                    released
-                        .into_iter()
-                        .map(|(declaration_id, outputs)| (*service, declaration_id, outputs)),
+                let (new_state, reward_notes, events) = service_state.clone().try_apply_header(
+                    last_epoch_state,
+                    epoch_state,
+                    *service_params,
+                    &last_config.service_rewards_params,
+                    &config.service_rewards_params,
                 );
+                all_reward_notes.extend(reward_notes);
                 all_events.extend(events);
                 Ok::<_, Error>((*service, new_state))
             })
             .collect::<Result<_, _>>()?;
-        sort_released(&mut all_released);
 
         let ledger = Self {
             epoch: epoch_state.epoch(),
@@ -478,10 +450,6 @@ impl SdpLedger {
             ledger,
             HeaderEffect {
                 reward_notes: all_reward_notes,
-                released_outputs: all_released
-                    .iter()
-                    .flat_map(|(_, _, outputs)| outputs.iter().copied())
-                    .collect(),
                 events: all_events,
             },
         ))
@@ -605,9 +573,11 @@ impl SdpLedger {
     pub fn apply_withdrawn_msg(
         mut self,
         note_sets: NoteSets,
+        pending_withdrawals: PendingWithdrawals,
+        release_slot: Slot,
         signed_operation: SignedOperation<SDPWithdrawOp, Verified, StandardMode>,
         config: &Config,
-    ) -> Result<(Self, NoteSets, Vec<TxEvent>), Error> {
+    ) -> Result<(Self, NoteSets, PendingWithdrawals, Vec<TxEvent>), Error> {
         let operation = signed_operation.operation();
 
         let (service, _) = self.get_service(&operation.declaration_id, config)?;
@@ -620,12 +590,14 @@ impl SdpLedger {
                 declarations: service_state.declarations_clone(),
                 note_sets,
                 epoch: self.epoch,
+                pending_withdrawals,
+                release_slot,
             })
             .map_err(|(_signed_operation, error)| error)?;
 
         service_state.update_declarations(result.declarations);
 
-        Ok((self, result.note_sets, events))
+        Ok((self, result.note_sets, result.pending_withdrawals, events))
     }
 
     pub fn add_blend_income(&mut self, income: Value) {
@@ -749,8 +721,6 @@ impl SdpLedger {
 pub struct HeaderEffect {
     // per service, ascending zk_id
     pub reward_notes: Vec<Note>,
-    // ascending declaration id order
-    pub released_outputs: Vec<NoteCommitment>,
     pub events: Vec<HeaderEvent>,
 }
 
@@ -762,8 +732,8 @@ mod tests {
         mantle::{
             TxHash,
             ledger::VerifiableOperation as _,
-            note_set::NoteSet,
-            notes::{NoteNullifier, derive_note_nullifier},
+            note_set::{NoteSet, NoteSetError, SDP_SET},
+            notes::{NoteCommitment, NoteNullifier, derive_note_nullifier},
             ops::{
                 ZkAndEd25519Proof, ZkTransferProof,
                 op_proof::samples::SampleProof as _,
@@ -842,10 +812,9 @@ mod tests {
         }
     }
 
-    fn withdraw_op(declaration_id: DeclarationId, sequence: u32, output: u64) -> SDPWithdrawOp {
+    fn withdraw_op(declaration_id: DeclarationId, output: u64) -> SDPWithdrawOp {
         SDPWithdrawOp {
             declaration_id,
-            nonce: Nonce::new(Epoch::new(0), sequence),
             service_note_nullifier: NoteNullifier(fr_from_bytes_unchecked(&declaration_id.0)),
             outputs: [NoteCommitment(Fr::from(output))].into(),
             excess_value: 0,
@@ -1130,14 +1099,20 @@ mod tests {
             .unwrap();
 
         // Withdraw at epoch 1: `withdrawn = 1 + SNAPSHOT_FINALIZATION_DELAY = 3`.
-        let withdraw_op = withdraw_op(declaration_id, 1, 100);
+        let withdraw_op = withdraw_op(declaration_id, 100);
         let proof = ZkAndEd25519Proof::sample();
         let signed_operation_withdraw =
             SignedOperation::new(withdraw_op, proof).into_state_trusted();
 
         let ledger = ledger
-            .apply_withdrawn_msg(NoteSets::new(), signed_operation_withdraw, &config)
-            .map(|(sdp_ledger, _, _)| sdp_ledger)
+            .apply_withdrawn_msg(
+                NoteSets::new(),
+                PendingWithdrawals::new(),
+                Slot::from(0u64),
+                signed_operation_withdraw,
+                &config,
+            )
+            .map(|(sdp_ledger, _, _, _)| sdp_ledger)
             .unwrap();
         let withdraw_at = ledger
             .get_declaration(&declaration_id)
@@ -1401,8 +1376,8 @@ mod tests {
                 HeaderEvent::SdpRewardDistributed { service_type, note } => {
                     Some((*service_type, *note))
                 }
-                HeaderEvent::SdpWithdrawalReleased { .. }
-                | HeaderEvent::ChannelWithdrawalReleased { .. } => None,
+                HeaderEvent::SdpDeclarationRemoved { .. }
+                | HeaderEvent::WithdrawalReleased { .. } => None,
             })
             .collect();
         assert_eq!(reward_events.len(), effect.reward_notes.len());
@@ -1457,13 +1432,19 @@ mod tests {
         );
 
         // Withdraw A.
-        let accepted_withdraw = withdraw_op(declaration_id_a, 1, 100);
+        let accepted_withdraw = withdraw_op(declaration_id_a, 100);
         let proof_withdraw = ZkAndEd25519Proof::sample();
         let signed_operation_withdraw =
             SignedOperation::new(accepted_withdraw.clone(), proof_withdraw).into_state_trusted();
 
-        let (sdp_ledger, _note_sets, _events) = sdp_ledger
-            .apply_withdrawn_msg(NoteSets::new(), signed_operation_withdraw, &config)
+        let (sdp_ledger, _note_sets, _pending, _events) = sdp_ledger
+            .apply_withdrawn_msg(
+                NoteSets::new(),
+                PendingWithdrawals::new(),
+                Slot::from(0u64),
+                signed_operation_withdraw,
+                &config,
+            )
             .unwrap();
 
         let withdraw_epoch = sdp_ledger
@@ -1558,11 +1539,18 @@ mod tests {
             Some(&declaration_id_a)
         );
 
-        // A withdrawal of the previous lifecycle cannot replay against this one.
+        // A withdrawal of the previous lifecycle cannot replay against this one: it
+        // carries no nonce, but the nullifier it consumed is spent.
         let tx_hash_view = TxHashView::from(TxHash::from([99; 32]));
+        let spent = NoteSets::new().update(
+            SDP_SET,
+            NoteSet::empty()
+                .execute_spending(&[accepted_withdraw.service_note_nullifier])
+                .unwrap(),
+        );
         assert_eq!(
             SignedOperation::<_, Unverified, StandardMode>::new(
-                accepted_withdraw,
+                accepted_withdraw.clone(),
                 ZkAndEd25519Proof::new(
                     ZkTransferProof::sample(),
                     signing_key.sign_payload(tx_hash_view.as_bytes().as_ref()),
@@ -1573,14 +1561,13 @@ mod tests {
             .verify(&SDPWithdrawValidationContext {
                 declaration: redeclared,
                 epoch: sdp_ledger.epoch,
-                note_sets: &NoteSets::new(),
+                note_sets: &spent,
                 tx_hash_view: &tx_hash_view,
             })
             .unwrap_err(),
-            SdpError::InvalidNonceLifecycle {
-                nonce_lifecycle_epoch: Epoch::new(0),
-                declaration_created_epoch: redeclared.created,
-            },
+            SdpError::NoteSet(NoteSetError::AlreadySpent(
+                accepted_withdraw.service_note_nullifier
+            )),
             "a previously accepted withdraw cannot replay after redeclaration"
         );
     }
@@ -1617,14 +1604,20 @@ mod tests {
         assert!(sdp_ledger.get_declaration(&declaration_id).is_some());
 
         // Withdraw the declaration
-        let withdraw_op = withdraw_op(declaration_id, 1, 100);
+        let withdraw_op = withdraw_op(declaration_id, 100);
         let proof_withdraw = ZkAndEd25519Proof::sample();
         let signed_operation_withdraw =
             SignedOperation::new(withdraw_op, proof_withdraw).into_state_trusted();
 
         let sdp_ledger = sdp_ledger
-            .apply_withdrawn_msg(NoteSets::new(), signed_operation_withdraw, &config)
-            .map(|(sdp_ledger, _, _)| sdp_ledger)
+            .apply_withdrawn_msg(
+                NoteSets::new(),
+                PendingWithdrawals::new(),
+                Slot::from(0u64),
+                signed_operation_withdraw,
+                &config,
+            )
+            .map(|(sdp_ledger, _, _, _)| sdp_ledger)
             .unwrap();
 
         let withdraw_epoch = sdp_ledger
@@ -1640,19 +1633,10 @@ mod tests {
         for epoch in 1..=withdraw_epoch.into_inner() {
             let new_epoch_state = next_epoch_state(epoch.into(), &sdp_ledger, &config);
             let events;
-            let released_outputs;
-            (
-                sdp_ledger,
-                HeaderEffect {
-                    events,
-                    released_outputs,
-                    ..
-                },
-            ) = sdp_ledger
+            (sdp_ledger, HeaderEffect { events, .. }) = sdp_ledger
                 .try_apply_header(&config, &config, &last_epoch_state, &new_epoch_state)
                 .unwrap();
-            assert_eq!(count_release_events(events, declaration_id), 0);
-            assert_eq!(released_outputs, []);
+            assert_eq!(count_removal_events(events, declaration_id), 0);
             last_epoch_state = new_epoch_state;
         }
         assert!(
@@ -1668,19 +1652,10 @@ mod tests {
             &config,
         );
         let events;
-        let released_outputs;
-        (
-            sdp_ledger,
-            HeaderEffect {
-                events,
-                released_outputs,
-                ..
-            },
-        ) = sdp_ledger
+        (sdp_ledger, HeaderEffect { events, .. }) = sdp_ledger
             .try_apply_header(&config, &config, &last_epoch_state, &new_epoch_state)
             .unwrap();
-        assert_eq!(count_release_events(events, declaration_id), 1);
-        assert_eq!(released_outputs, vec![NoteCommitment(Fr::from(100u64))]);
+        assert_eq!(count_removal_events(events, declaration_id), 1);
         assert!(
             sdp_ledger.get_declaration(&declaration_id).is_none(),
             "declaration must be removed the epoch after `withdraw_at`"
@@ -1731,13 +1706,19 @@ mod tests {
         (ledger, _) = ledger
             .try_apply_header(&config, &config, &epoch1, &epoch2)
             .unwrap();
-        let withdraw_op = withdraw_op(declaration_id, 1, 100);
+        let withdraw_op = withdraw_op(declaration_id, 100);
         let proof_withdraw = ZkAndEd25519Proof::sample();
         let signed_operation_withdraw =
             SignedOperation::new(withdraw_op, proof_withdraw).into_state_trusted();
         ledger = ledger
-            .apply_withdrawn_msg(NoteSets::new(), signed_operation_withdraw, &config)
-            .map(|(sdp_ledger, _, _)| sdp_ledger)
+            .apply_withdrawn_msg(
+                NoteSets::new(),
+                PendingWithdrawals::new(),
+                Slot::from(0u64),
+                signed_operation_withdraw,
+                &config,
+            )
+            .map(|(sdp_ledger, _, _, _)| sdp_ledger)
             .unwrap();
         let withdraw_at = ledger
             .get_declaration(&declaration_id)
@@ -1763,15 +1744,7 @@ mod tests {
         // removed yet, and its report attesting epoch 3 is accepted.
         let epoch4 = next_epoch_state(4.into(), &ledger, &config);
         let events;
-        let released_outputs;
-        (
-            ledger,
-            HeaderEffect {
-                events,
-                released_outputs,
-                ..
-            },
-        ) = ledger
+        (ledger, HeaderEffect { events, .. }) = ledger
             .try_apply_header(&config, &config, &epoch3, &epoch4)
             .unwrap();
         assert!(!epoch_snapshot_contains(
@@ -1781,11 +1754,10 @@ mod tests {
             &config
         ));
         assert_eq!(
-            count_release_events(events, declaration_id),
+            count_removal_events(events, declaration_id),
             0,
-            "the outputs must not be released at `withdraw_at`"
+            "the declaration must not be removed at `withdraw_at`"
         );
-        assert_eq!(released_outputs, []);
         assert!(ledger.get_declaration(&declaration_id).is_some());
 
         let active_op = SDPActiveOp {
@@ -1829,123 +1801,22 @@ mod tests {
         ));
         assert!(matches!(
             effect.events.last(),
-            Some(HeaderEvent::SdpWithdrawalReleased { .. })
+            Some(HeaderEvent::SdpDeclarationRemoved { .. })
         ));
-        assert_eq!(count_release_events(effect.events, declaration_id), 1);
-        assert_eq!(
-            effect.released_outputs,
-            vec![NoteCommitment(Fr::from(100u64))]
-        );
+        assert_eq!(count_removal_events(effect.events, declaration_id), 1);
         assert!(
             ledger.get_declaration(&declaration_id).is_none(),
             "declaration must be removed the epoch after `withdraw_at`"
         );
     }
 
-    #[test]
-    fn withdrawal_outputs_are_released_in_ascending_declaration_id_order() {
-        let config = setup(ServiceParameters {
-            inactivity_period: 2.try_into().unwrap(),
-            epoch: 0.into(),
-        });
-        let mut last_epoch_state = dummy_epoch_state(0.into());
-        let mut ledger = dummy_sdp_ledger(0.into(), &config);
-        let mut note_sets = NoteSets::new();
-        let mut declarations: Vec<SDPDeclareOp> = (1..=2u8)
-            .map(|seed| {
-                declare_op(
-                    &create_zk_key(u64::from(seed)),
-                    &Ed25519Key::from_bytes(&[seed; 32]),
-                    &note_with_sk(),
-                )
-            })
-            .collect();
-        // Withdraw the larger declaration id first, so that insertion order is not id
-        // order.
-        declarations.sort_by_key(|declaration| std::cmp::Reverse(declaration.id()));
-        for (index, declaration) in declarations.iter().enumerate() {
-            let events;
-            (ledger, note_sets, events) = ledger
-                .try_apply_sdp_declaration(
-                    note_sets,
-                    SignedOperation::new(declaration.clone(), ZkAndEd25519Proof::sample())
-                        .into_state_trusted(),
-                    &config,
-                )
-                .unwrap();
-            assert_eq!(events, []);
-            (ledger, note_sets, _) = ledger
-                .apply_withdrawn_msg(
-                    note_sets,
-                    SignedOperation::new(
-                        withdraw_op(declaration.id(), 1, 100 + index as u64),
-                        ZkAndEd25519Proof::sample(),
-                    )
-                    .into_state_trusted(),
-                    &config,
-                )
-                .unwrap();
-        }
-
-        // Withdrawn at epoch 0: `withdraw_at = 2`, released in the first block of epoch
-        // 3.
-        let mut released = Vec::new();
-        for epoch in 1..=3u32 {
-            let epoch_state = next_epoch_state(epoch.into(), &ledger, &config);
-            let effect;
-            (ledger, effect) = ledger
-                .try_apply_header(&config, &config, &last_epoch_state, &epoch_state)
-                .unwrap();
-            released.push(effect.released_outputs);
-            last_epoch_state = epoch_state;
-        }
-        assert_eq!(
-            released,
-            vec![
-                vec![],
-                vec![],
-                vec![
-                    NoteCommitment(Fr::from(101u64)),
-                    NoteCommitment(Fr::from(100u64))
-                ]
-            ]
-        );
-        assert!(
-            declarations
-                .iter()
-                .all(|declaration| ledger.get_declaration(&declaration.id()).is_none())
-        );
-    }
-
-    /// SDP Epoch Finalization: ascending `service`, then ascending
-    /// `declare_id`. Only one service exists outside `lb_core`'s own tests,
-    /// so the service is any ordered key here.
-    #[test]
-    fn released_declarations_sort_by_service_then_declaration_id() {
-        let entry = |service: u8, id: u8| {
-            (
-                service,
-                DeclarationId([id; 32]),
-                OutputCommitments::default(),
-            )
-        };
-        let mut released = vec![entry(1, 1), entry(0, 3), entry(1, 2), entry(0, 2)];
-
-        sort_released(&mut released);
-
-        assert_eq!(
-            released,
-            vec![entry(0, 2), entry(0, 3), entry(1, 1), entry(1, 2)]
-        );
-    }
-
-    fn count_release_events(events: Vec<HeaderEvent>, declaration_id: DeclarationId) -> usize {
+    fn count_removal_events(events: Vec<HeaderEvent>, declaration_id: DeclarationId) -> usize {
         events
             .into_iter()
             .filter(|event| {
                 matches!(
                     event,
-                    HeaderEvent::SdpWithdrawalReleased { declaration_id: d, .. } if *d == declaration_id
+                    HeaderEvent::SdpDeclarationRemoved { declaration_id: d, .. } if *d == declaration_id
                 )
             })
             .count()

@@ -910,21 +910,11 @@ where
             return;
         };
 
-        let Some(nonce) = next_message_nonce(declaration.nonce) else {
-            error!(target: LOG_TARGET, "SDP nonce sequence exhausted; cannot post withdrawal");
-            metrics::withdrawal_validation_failures_total();
-            Self::reply(
-                Some(reply_channel),
-                Err(DynError::from("Can't bump nonce")),
-                "post withdrawal",
-            );
-            return;
-        };
-
         let tx_builder = MantleTxBuilder::new();
 
+        // A withdrawal carries no nonce: it is valid while no withdrawal is scheduled.
         let signed_tx = match wallet_adapter
-            .withdraw_tx(tx_builder, &declaration, nonce, &self.wallet_config)
+            .withdraw_tx(tx_builder, &declaration, &self.wallet_config)
             .await
         {
             Ok(tx) => tx,

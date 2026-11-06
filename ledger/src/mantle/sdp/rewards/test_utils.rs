@@ -2,10 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use lb_core::{
     crypto::ZkHash,
-    mantle::{
-        note_set::NoteSets,
-        notes::{NoteCommitment, OutputCommitments},
-    },
+    mantle::{note_set::NoteSets, notes::NoteCommitment},
     sdp::{
         Declaration, DeclarationId, Declarations, Locator, ProviderId, ServiceParameters,
         ServiceType,
@@ -32,7 +29,7 @@ pub fn create_epoch_state(
                 service_type,
                 provider_id: *provider_id,
                 service_note: NoteCommitment(Fr::from(i as u64)),
-                withdraw_outputs: OutputCommitments::default(),
+
                 locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
                 zk_id: ZkPublicKey::new(BigUint::from(i as u64).into()),
                 note_pk: ZkPublicKey::new(BigUint::from(i as u64).into()),

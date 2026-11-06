@@ -460,7 +460,6 @@ mod tests {
         let declaration_id = DeclarationId([0xA5; 32]);
         let operation = SDPWithdrawOp {
             declaration_id,
-            nonce: Nonce::new(Epoch::from(0), 1),
             ..SDPWithdrawOp::sample()
         };
         let proof = <SDPWithdrawOp as ProvableOperation>::Proof::sample();

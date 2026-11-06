@@ -6,7 +6,7 @@ use lb_core::{
         notes::NoteNullifier,
         transactions::{MantleTxBuilder, builder::ZkTransferOpening, states::Preverified},
     },
-    sdp::{ActiveMessage, DeclarationMessage, Nonce, WithdrawMessage},
+    sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };
 use lb_groth16::{Fr, fr_from_mod_bytes};
 use lb_sdp_service::{
@@ -164,7 +164,6 @@ where
         &self,
         mut tx_builder: MantleTxBuilder,
         declaration: &RuntimeDeclaration,
-        nonce: Nonce,
         config: &SdpWalletConfig,
     ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError> {
         let service_note = self
@@ -187,7 +186,6 @@ where
         tx_builder = tx_builder.push_op_with_opening(
             Op::SDPWithdraw(WithdrawMessage {
                 declaration_id: declaration.id,
-                nonce,
                 service_note_nullifier: service_note.nullifier,
                 outputs: [output.commitment()].into(),
                 excess_value: 0,

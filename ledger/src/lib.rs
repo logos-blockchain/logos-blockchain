@@ -31,14 +31,14 @@ use lb_core::{
         batch::DeferredProofs,
         gas::{Gas, GasCost, GasOverflow, GasProfile},
         ledger::verification_mode::StandardMode,
-        note_set::{LEDGER_SET, NoteSetError, NoteSets},
+        note_set::{NoteSetError, NoteSets},
         notes::{self, NoteCommitment},
         ops::{
             SignedOp,
             channel::{deposit::DepositExecutionContext, withdraw::WithdrawExecutionContext},
             pow::{ClaimPoWRewardExecutionContext, PowReward},
             program::ProgramRegisterExecutionContext,
-            sdp::{SDPActiveOp, SDPDeclareOp, SdpError},
+            sdp::{SDPActiveOp, SDPDeclareOp},
         },
         traits::{GenesisTx, PreverifiedMantleTransaction, StorageSize, genesis::GenesisOps},
         transactions::{
@@ -50,7 +50,7 @@ use lb_core::{
     },
     proofs::leader_proof,
 };
-use lb_cryptarchia_engine::{Slot, UncleSlots};
+use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_log_targets::{diagnostic::BLEND_REACHABILITY, ledger};
 use mantle::LedgerState as MantleLedger;
@@ -341,31 +341,19 @@ impl LedgerState {
                 cryptarchia_ledger.pay_service_rewards::<Id>(&effect.reward_notes)?;
         }
 
-        // SDP Epoch Finalization: the outputs of the removed withdrawals enter the
-        // ledger note set.
-        if !effect.released_outputs.is_empty() {
-            let ledger_set = cryptarchia_ledger
-                .note_sets
-                .get(LEDGER_SET)
-                .expect("the ledger note set always exists")
-                .clone()
-                .execute_adding(&effect.released_outputs)
-                .map_err(|error| mantle::Error::Sdp(SdpError::NoteSet(error).into()))?;
-            cryptarchia_ledger.note_sets =
-                cryptarchia_ledger.note_sets.update(LEDGER_SET, ledger_set);
-        }
-
-        // Block Execution step 2: the channel withdrawals due at this slot, before the
-        // transactions.
+        // Block Execution step 2: the channel and SDP withdrawals due at this slot,
+        // before the transactions.
         let (cryptarchia_ledger, released) = cryptarchia_ledger.release_withdrawals(slot)?;
         let mut events = effect.events;
-        events.extend(released.into_iter().map(|withdrawal| {
-            HeaderEvent::ChannelWithdrawalReleased {
-                note_set: withdrawal.note_set,
-                inputs: withdrawal.inputs,
-                outputs: withdrawal.outputs,
-            }
-        }));
+        events.extend(
+            released
+                .into_iter()
+                .map(|withdrawal| HeaderEvent::WithdrawalReleased {
+                    note_set: withdrawal.note_set,
+                    inputs: withdrawal.inputs,
+                    outputs: withdrawal.outputs,
+                }),
+        );
 
         Ok((
             Self {
@@ -794,7 +782,7 @@ impl LedgerState {
         result: &MantleLedger,
         config: &Config,
         tx_hash: &TxHash,
-        previous_active_epoch: Option<lb_cryptarchia_engine::Epoch>,
+        previous_active_epoch: Option<Epoch>,
     ) {
         if !tracing::enabled!(tracing::Level::TRACE) {
             return;
@@ -838,6 +826,7 @@ impl LedgerState {
         mut self,
         signed_op: SignedOp<Verified, StandardMode>,
         config: &Config,
+        eras: &EraScheduledConfig,
         tx_hash: &TxHash,
         mut balance: Balance,
         mut tx_events: Vec<TxEvent>,
@@ -925,13 +914,26 @@ impl LedgerState {
             }
             SignedOp::SDPWithdraw(signed_operation) => {
                 let excess_value = signed_operation.operation().excess_value;
-                let (result, note_sets, events) = self.mantle_ledger.try_apply_sdp_withdraw(
-                    signed_operation,
-                    self.cryptarchia_ledger.latest_note_sets().clone(),
-                    config,
-                )?;
+                // The declaration is removed, and the outputs released, at the first slot
+                // of the epoch after its `withdraw_at`.
+                let release_slot = eras.starting_slot_for_epoch(
+                    self.mantle_ledger
+                        .sdp
+                        .epoch()
+                        .strict_add(lb_core::sdp::SNAPSHOT_FINALIZATION_DELAY)
+                        .strict_add(Epoch::new(1)),
+                );
+                let (result, note_sets, pending_withdrawals, events) =
+                    self.mantle_ledger.try_apply_sdp_withdraw(
+                        signed_operation,
+                        self.cryptarchia_ledger.latest_note_sets().clone(),
+                        self.cryptarchia_ledger.pending_withdrawals.clone(),
+                        release_slot,
+                        config,
+                    )?;
                 self.mantle_ledger = result;
                 self.cryptarchia_ledger = self.cryptarchia_ledger.update_note_sets(note_sets);
+                self.cryptarchia_ledger.pending_withdrawals = pending_withdrawals;
                 balance = add_excess(balance, excess_value)?;
                 tx_events.extend(events);
             }
@@ -1041,6 +1043,7 @@ impl LedgerState {
             (self, balance, tx_events) = self.try_apply_op::<_, Profile>(
                 signed_op,
                 config,
+                eras,
                 verified_operations.tx_hash_view().tx_hash(),
                 balance,
                 tx_events,
@@ -1105,7 +1108,6 @@ mod tests {
         proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
         sdp::{ActivityMetadata, DeclarationId, Nonce},
     };
-    use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{CompressedGroth16Proof, Field as _};
     use lb_key_management_system_keys::keys::{
         Ed25519Key, Ed25519PublicKey, Ed25519Signature, UnverifiedEd25519PublicKey, ZkKey,
@@ -1839,14 +1841,19 @@ mod tests {
                 .contains_nullifier(&NoteNullifier(Fr::from(28u64)))
         );
         assert_eq!(ledger_root(&state), root_before);
+        // The outputs wait, with no input, for the removal of the declaration.
         assert_eq!(
             state
-                .mantle_ledger()
-                .sdp_ledger()
-                .get_declaration(&declare.id())
-                .unwrap()
-                .withdraw_outputs,
-            [NoteCommitment(Fr::from(46u64))].into()
+                .cryptarchia_ledger
+                .pending_withdrawals
+                .iter()
+                .map(|pending| (
+                    pending.note_set,
+                    pending.inputs.len(),
+                    pending.outputs.clone()
+                ))
+                .collect::<Vec<_>>(),
+            vec![(SDP_SET, 0, [NoteCommitment(Fr::from(46u64))].into())]
         );
     }
 
@@ -1896,15 +1903,18 @@ mod tests {
                 &config,
             )
             .unwrap();
-        let (mantle_ledger, note_sets, _) = mantle_ledger
+        let (mantle_ledger, note_sets, pending_withdrawals, _) = mantle_ledger
             .try_apply_sdp_withdraw(
                 SignedOperation::new(withdraw, ZkAndEd25519Proof::sample()).into_state_trusted(),
                 note_sets,
+                state.cryptarchia_ledger.pending_withdrawals.clone(),
+                Slot::from(4 * epoch_length),
                 &config,
             )
             .unwrap();
         state.mantle_ledger = mantle_ledger;
         state.cryptarchia_ledger = state.cryptarchia_ledger.clone().update_note_sets(note_sets);
+        state.cryptarchia_ledger.pending_withdrawals = pending_withdrawals;
         let ledger_set_before = state.latest_note_sets().get(LEDGER_SET).unwrap().clone();
 
         // Every block also pays its leader, under the commitment its header names.
@@ -3410,7 +3420,7 @@ mod tests {
         );
         assert!(events.iter().any(|event| matches!(
             event,
-            HeaderEvent::ChannelWithdrawalReleased { note_set, outputs, .. }
+            HeaderEvent::WithdrawalReleased { note_set, outputs, .. }
                 if *note_set == channel_set && *outputs == withdrawal.outputs
         )));
     }
@@ -4429,10 +4439,12 @@ mod tests {
                     .into_state_trusted();
             let tx_hash = TxHash::from([9u8; 32]);
 
+            let eras = single_era(config.clone());
             let (state, _balance, events) = state
                 .try_apply_op::<HeaderId, MainnetGasProfile>(
                     signed_operation.into(),
                     &config,
+                    &eras,
                     &tx_hash,
                     0,
                     Vec::new(),
@@ -4504,12 +4516,14 @@ mod tests {
             let signed_operation =
                 SignedOperation::<_, _, StandardMode>::new(op, NoOpProof).into_state_trusted();
 
+            let eras = single_era(config.clone());
             let tx_hash = TxHash::from([9u8; 32]);
 
             let (state, _, _) = state
                 .try_apply_op::<HeaderId, MainnetGasProfile>(
                     signed_operation.clone().into(),
                     &config,
+                    &eras,
                     &tx_hash,
                     0,
                     Vec::new(),
@@ -4519,6 +4533,7 @@ mod tests {
                 .try_apply_op::<HeaderId, MainnetGasProfile>(
                     signed_operation.into(),
                     &config,
+                    &eras,
                     &tx_hash,
                     0,
                     Vec::new(),

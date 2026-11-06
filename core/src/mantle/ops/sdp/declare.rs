@@ -277,8 +277,7 @@ mod tests {
             ledger::{Declarations, ProviderIndex},
             note_set::{CommitmentMmr, LEDGER_SET, NoteSet, NoteSetError, NoteSets, SDP_SET},
             notes::{
-                self, NoteCommitment, NoteNullifier, OutputCommitments, derive_note_nonce,
-                derive_note_nullifier,
+                self, NoteCommitment, NoteNullifier, derive_note_nonce, derive_note_nullifier,
             },
             ops::{ZkTransferProof, op_proof::samples::SampleProof as _},
         },
@@ -691,7 +690,6 @@ mod tests {
             );
             let declaration = context.declarations.get(&operation.id()).unwrap();
             assert_eq!(declaration.service_note, expected.commitment());
-            assert_eq!(declaration.withdraw_outputs, OutputCommitments::default());
             assert_eq!(declaration.created, Epoch::new(4));
             assert_eq!(events, []);
         }

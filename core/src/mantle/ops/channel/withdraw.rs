@@ -71,8 +71,9 @@ pub struct PendingWithdrawal {
     pub outputs: OutputCommitments,
 }
 
-// Posting order is due order, since every withdrawal of a block has the same
-// due slot and slots grow along a chain.
+// The channel and SDP withdrawals waiting for their due slot, in posting order.
+// An SDP withdrawal is due at the start of an epoch and a channel withdrawal
+// `WITHDRAW_DELAY` slots after its posting, so posting order is not due order.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PendingWithdrawals(rpds::QueueSync<PendingWithdrawal>);
 
@@ -92,16 +93,20 @@ impl PendingWithdrawals {
     }
 
     // Applies, in posting order, every withdrawal due at `block_slot` whose
-    // inputs are unspent, drops the other due ones, keeps the rest.
+    // inputs are unspent, drops the other due ones, keeps the rest. An SDP
+    // withdrawal has no input, so it is always applied.
     pub fn release(
         self,
         mut note_sets: NoteSets,
         block_slot: Slot,
     ) -> Result<(Self, NoteSets, Vec<PendingWithdrawal>), NoteSetError> {
-        let mut queue = self.0;
+        let mut pending = rpds::QueueSync::new_sync();
         let mut released = Vec::new();
-        while let Some(withdrawal) = queue.peek().filter(|w| w.due <= block_slot).cloned() {
-            queue = queue.dequeue().expect("a peeked queue dequeues");
+        for withdrawal in self.0.iter().cloned() {
+            if withdrawal.due > block_slot {
+                pending.enqueue_mut(withdrawal);
+                continue;
+            }
             let set = note_sets
                 .get(withdrawal.note_set)
                 .expect("a withdrawal's note set exists")
@@ -125,7 +130,7 @@ impl PendingWithdrawals {
             note_sets = note_sets.update(LEDGER_SET, ledger);
             released.push(withdrawal);
         }
-        Ok((Self(queue), note_sets, released))
+        Ok((Self(pending), note_sets, released))
     }
 }
 
@@ -264,7 +269,7 @@ mod test {
     use super::*;
     use crate::mantle::{
         gas::test_utils::FixedThresholds,
-        note_set::{CommitmentMmr, NoteSet},
+        note_set::{CommitmentMmr, NoteSet, SDP_SET},
         ops::{
             channel::{NULL_CHANNEL_ID, UnverifiedChannelKeys},
             op_proof::samples::SampleProof as _,
@@ -521,5 +526,26 @@ mod test {
             note_sets.get(LEDGER_SET).unwrap().commitment_root(),
             expected
         );
+    }
+
+    #[test]
+    fn release_applies_an_sdp_withdrawal_with_no_input_behind_a_later_due_one() {
+        let (_, note_sets) = state();
+        // An SDP withdrawal due at the start of a later epoch, posted before a
+        // channel withdrawal due earlier, and one with no input due now.
+        let sdp = |due: u64, output: u64| PendingWithdrawal {
+            due: Slot::from(due),
+            note_set: SDP_SET,
+            inputs: InputNullifiers::default(),
+            outputs: [commitment(output)].into(),
+        };
+        let withdrawals = PendingWithdrawals::new()
+            .push(sdp(200, 40))
+            .push(pending(100, 5, 50))
+            .push(sdp(100, 60));
+        let (withdrawals, _, released) =
+            withdrawals.release(note_sets, Slot::from(100u64)).unwrap();
+        assert_eq!(released, vec![pending(100, 5, 50), sdp(100, 60)]);
+        assert_eq!(withdrawals.iter().collect::<Vec<_>>(), vec![&sdp(200, 40)]);
     }
 }

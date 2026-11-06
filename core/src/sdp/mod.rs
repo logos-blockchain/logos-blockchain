@@ -579,8 +579,6 @@ pub struct Declaration {
     pub service_type: ServiceType,
     pub provider_id: ProviderId,
     pub service_note: NoteCommitment,
-    // empty until the withdrawal
-    pub withdraw_outputs: OutputCommitments,
     pub locators: Locators,
     /// The key the validator proves in the Proof of Quota. It holds no funds.
     pub zk_id: ZkPublicKey,
@@ -623,7 +621,6 @@ impl Declaration {
             service_type: declaration_msg.service_type,
             provider_id: declaration_msg.provider_id,
             service_note: declaration_msg.service_note().commitment(),
-            withdraw_outputs: OutputCommitments::default(),
             locators: declaration_msg.locators.clone(),
             zk_id: declaration_msg.zk_id,
             note_pk: declaration_msg.note_pk,
@@ -761,12 +758,12 @@ impl DeclarationMessage {
     }
 }
 
-// WithdrawMessage = DeclarationId Nonce NoteNullifier Outputs Value, encoded in
-// field order.
+// WithdrawMessage = DeclarationId NoteNullifier Outputs Value, encoded in field
+// order. It carries no nonce: it is valid only while its declaration has no
+// withdrawal scheduled, and its nullifier is consumed once.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
-    pub nonce: Nonce,
     pub service_note_nullifier: NoteNullifier,
     pub outputs: OutputCommitments,
     pub excess_value: Value,
@@ -855,7 +852,7 @@ mod tests {
 
     use super::declaration_id_preimage;
     use crate::{
-        mantle::notes::{InputNullifiers, OutputCommitments},
+        mantle::notes::InputNullifiers,
         sdp::{
             Declaration, DeclarationId, DeclarationMessage, Locator, Locators, Nonce, ProviderId,
             ServiceType,
@@ -966,7 +963,6 @@ mod tests {
             (msg.note_pk, msg.note_stake_pk)
         );
         assert_eq!(declaration.service_note, service_note.commitment());
-        assert_eq!(declaration.withdraw_outputs, OutputCommitments::default());
         assert_eq!(declaration.locators, msg.locators);
         assert_eq!(declaration.zk_id, msg.zk_id);
         assert_eq!(
@@ -1207,7 +1203,6 @@ impl WithdrawMessage {
     pub fn sample() -> Self {
         Self {
             declaration_id: DeclarationId([27u8; 32]),
-            nonce: Nonce::new(Epoch::new(0), 29),
             service_note_nullifier: NoteNullifier(Fr::from(28u64)),
             outputs: [NoteCommitment(Fr::from(46u64))].into(),
             excess_value: 47,

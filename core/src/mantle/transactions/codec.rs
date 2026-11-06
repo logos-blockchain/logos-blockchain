@@ -500,7 +500,6 @@ mod tests {
     fn test_minimum_signed_mantle_tx_size_with_sdp_withdraw() {
         let sdp_withdraw_op = SDPWithdrawOp {
             declaration_id: DeclarationId([0x11; 32]),
-            nonce: Nonce::new(0.into(), 42),
             service_note_nullifier: NoteNullifier(Fr::from(123u64)),
             outputs: [NoteCommitment(Fr::from(124u64))].into(),
             excess_value: 1,

@@ -14,6 +14,7 @@ use lb_core::{
             channel::{
                 config::{ChannelConfigExecutionContext, ChannelConfigOp},
                 inscribe::{InscriptionExecutionContext, InscriptionOp},
+                withdraw::PendingWithdrawals,
             },
             pow::{ClaimPowRewardError, PowReward},
             program::ProgramRegisterError,
@@ -260,15 +261,23 @@ impl LedgerState {
         mut self,
         sdp_withdraw_op: SignedOperation<SDPWithdrawOp, Verified, StandardMode>,
         note_sets: NoteSets,
+        pending_withdrawals: PendingWithdrawals,
+        release_slot: Slot,
         config: &Config,
-    ) -> Result<(Self, NoteSets, Vec<TxEvent>), Error> {
-        let (result, note_sets, events) = self
+    ) -> Result<(Self, NoteSets, PendingWithdrawals, Vec<TxEvent>), Error> {
+        let (result, note_sets, pending_withdrawals, events) = self
             .sdp
-            .apply_withdrawn_msg(note_sets, sdp_withdraw_op, &config.sdp_config)
+            .apply_withdrawn_msg(
+                note_sets,
+                pending_withdrawals,
+                release_slot,
+                sdp_withdraw_op,
+                &config.sdp_config,
+            )
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply SDP withdraw message"),
             )?;
         self.sdp = result;
-        Ok((self, note_sets, events))
+        Ok((self, note_sets, pending_withdrawals, events))
     }
 }
