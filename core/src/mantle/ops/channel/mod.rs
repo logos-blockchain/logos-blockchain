@@ -12,11 +12,16 @@ use lb_groth16::{Fr, fr_from_mod_bytes};
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnverifiedEd25519PublicKey};
 use lb_utils::bounded::NonEmptyBoundedVec;
 
-use crate::utils::serde_bytes_newtype;
+use crate::{
+    crypto::{Digest as _, Hasher},
+    utils::serde_bytes_newtype,
+};
 
-/// `MAX_OPERATION_DATA_SIZE` of Mantle Transaction Encoding: the limit of
-/// `ChannelInscribe.Inscription` and `ChannelDeposit.Metadata`, excluding their
-/// `UINT32` length prefix.
+/// `MAX_OPERATION_DATA_SIZE` of Mantle Transaction Encoding.
+///
+/// It bounds the inscriptions of a `ChannelInscribe`, of its steps and of
+/// their payments together, and `ChannelDeposit.Metadata`, excluding their
+/// `UINT32` length prefixes.
 pub const MAX_OPERATION_DATA_SIZE: usize = 1_835_008;
 
 pub type ChannelKeyIndex = u16;
@@ -42,6 +47,19 @@ impl ChannelId {
         let (channel_lo, channel_hi) = self.0.split_at(16);
         [fr_from_mod_bytes(channel_lo), fr_from_mod_bytes(channel_hi)]
     }
+}
+
+/// The two elements a message holds the inscription of a user step or of a
+/// payment as, low first: `inscription_lo` and `inscription_hi`, the low and
+/// high 16 bytes of its BLAKE2b-256 hash, each little-endian and below the
+/// field size, so that an inscription of any length enters the message.
+fn inscription_field_elements(inscription: &[u8]) -> [Fr; 2] {
+    let hash: [u8; 32] = Hasher::digest(inscription).into();
+    let (inscription_lo, inscription_hi) = hash.split_at(16);
+    [
+        fr_from_mod_bytes(inscription_lo),
+        fr_from_mod_bytes(inscription_hi),
+    ]
 }
 
 impl BoundedSerializeOp for ChannelId {

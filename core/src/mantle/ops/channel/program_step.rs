@@ -7,7 +7,11 @@ use lb_poseidon2::Digest as _;
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
-use super::ChannelId;
+use super::{
+    ChannelId,
+    inscribe::{Inscription, serde_inscription},
+    inscription_field_elements,
+};
 use crate::{
     crypto::ZkHasher,
     mantle::{
@@ -38,6 +42,10 @@ pub struct Payment {
     pub paid_value: Value,
     #[serde(with = "serde_fr")]
     pub intent: Fr,
+    // The zone message of the payment, signed by its holder through
+    // `payment_msg`.
+    #[serde(with = "serde_inscription")]
+    pub inscription: Inscription,
 }
 
 impl Payment {
@@ -50,6 +58,7 @@ impl Payment {
             commitment_merkle_root: Fr::from(0x37u64),
             paid_value: 0x38,
             intent: Fr::from(0x39u64),
+            inscription: b"payment-inscription".into(),
         }
     }
 }
@@ -132,6 +141,10 @@ pub struct ProgramStep {
     pub commitment_merkle_root: Fr,
     #[serde(with = "serde_fr")]
     pub spend_notes_hash: Fr,
+    // The zone message of the step, bound by the `op_id` like the rest of the
+    // step.
+    #[serde(with = "serde_inscription")]
+    pub inscription: Inscription,
 }
 
 impl ProgramStep {
@@ -154,6 +167,7 @@ impl ProgramStep {
             program_outputs: ProgramOutputs::from(0b1),
             commitment_merkle_root: Fr::from(0x3cu64),
             spend_notes_hash: Fr::from(0x3du64),
+            inscription: b"program-step-inscription".into(),
         }
     }
 }
@@ -167,6 +181,7 @@ impl BinaryEncode for ProgramStep {
             + self.program_outputs.encoded_length()
             + self.commitment_merkle_root.encoded_length()
             + self.spend_notes_hash.encoded_length()
+            + self.inscription.encoded_length()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
@@ -177,6 +192,7 @@ impl BinaryEncode for ProgramStep {
         self.program_outputs.encode_into(out);
         self.commitment_merkle_root.encode_into(out);
         self.spend_notes_hash.encode_into(out);
+        self.inscription.encode_into(out);
     }
 }
 
@@ -194,6 +210,7 @@ impl BinaryDecode for ProgramStep {
         let (rest, program_outputs) = ProgramOutputs::decode(rest, &())?;
         let (rest, commitment_merkle_root) = Fr::decode(rest, &())?;
         let (rest, spend_notes_hash) = Fr::decode(rest, &())?;
+        let (rest, inscription) = Inscription::decode(rest, &())?;
         // A step has a single encoding.
         if outputs.len() > lb_program_spend::MAX_OUTPUTS {
             return Err(DecodeError::invalid_value::<Self>(
@@ -215,6 +232,7 @@ impl BinaryDecode for ProgramStep {
                 program_outputs,
                 commitment_merkle_root,
                 spend_notes_hash,
+                inscription,
             },
         ))
     }
@@ -223,9 +241,10 @@ impl BinaryDecode for ProgramStep {
 // The message the ZkTransfer of a payment is bound to.
 #[must_use]
 pub fn payment_msg(channel_id: &ChannelId, program_id: &ProgramId, payment: &Payment) -> Fr {
-    let mut elements = Vec::with_capacity(7 + payment.inputs.len() + payment.outputs.len());
+    let mut elements = Vec::with_capacity(9 + payment.inputs.len() + payment.outputs.len());
     elements.push(*PROGRAM_PAYMENT_V1);
     elements.extend(channel_id.field_elements());
+    elements.extend(inscription_field_elements(&payment.inscription));
     elements.push(*program_id);
     elements.push(payment.intent);
     elements.push(Fr::from(payment.inputs.len() as u64));
@@ -336,19 +355,23 @@ mod tests {
     use lb_groth16::{AdditiveGroup as _, Field as _, fr_from_mod_bytes};
 
     use super::*;
+    use crate::crypto::{Digest as _, Hasher};
 
     #[test]
-    fn payment_msg_commits_to_the_program_the_intent_and_the_notes() {
+    fn payment_msg_commits_to_the_inscription_the_program_the_intent_and_the_notes() {
         let dst = fr_from_bytes(b"PROGRAM_PAYMENT_V1").unwrap();
         let payment = Payment::sample(); // nullifier 0x35, commitment 0x36, root 0x37, paid 0x38, intent 0x39
         let program = Fr::from(0x34u64);
         let channel = ChannelId::from([0x33u8; 32]);
+        let inscription_hash: [u8; 32] = Hasher::digest(b"payment-inscription").into();
         assert_eq!(
             payment_msg(&channel, &program, &payment),
             ZkHasher::digest(&[
                 dst,
                 fr_from_mod_bytes(&[0x33u8; 16]),
                 fr_from_mod_bytes(&[0x33u8; 16]),
+                fr_from_mod_bytes(&inscription_hash[..16]),
+                fr_from_mod_bytes(&inscription_hash[16..]),
                 program,
                 Fr::from(0x39u64),
                 Fr::ONE,
@@ -373,6 +396,14 @@ mod tests {
         );
         assert_ne!(
             payment_msg(&ChannelId::from([0x44u8; 32]), &program, &payment),
+            payment_msg(&channel, &program, &payment)
+        );
+        let reinscribed = Payment {
+            inscription: b"another-inscription".into(),
+            ..payment.clone()
+        };
+        assert_ne!(
+            payment_msg(&channel, &program, &reinscribed),
             payment_msg(&channel, &program, &payment)
         );
     }

@@ -18,7 +18,7 @@ use lb_utils::bounded::{Bounded, NonEmptyBoundedVec, UpperBoundedVec};
 use lb_zktransfer::{MAX_INPUTS, MAX_OUTPUTS, ZkTransferInputsError, ZkTransferVerifierInput};
 use serde::{Deserialize, Serialize};
 
-use super::{ChannelId, MAX_OPERATION_DATA_SIZE, MsgId};
+use super::{ChannelId, MAX_OPERATION_DATA_SIZE, MsgId, inscription_field_elements};
 use crate::{
     block::BlockNumber,
     crypto::{Digest as _, Hasher, ZkHasher},
@@ -56,11 +56,12 @@ use crate::{
 };
 
 /// The maximum number of bytes that can be inscribed in a single inscription
-/// operation.
+/// operation, its inscription and the inscriptions of its steps and payments
+/// together.
 pub const MAX_BYTES: usize = MAX_OPERATION_DATA_SIZE;
 pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
 
-mod serde_inscription {
+pub(super) mod serde_inscription {
     use serde::{Deserializer, Serializer};
 
     use super::{Inscription, MAX_BYTES};
@@ -103,6 +104,9 @@ pub struct ChannelStep {
     pub outputs: OutputCommitments,
     #[serde(with = "serde_fr")]
     pub commitment_merkle_root: Fr,
+    /// The zone message of the step, signed by its holder through `step_msg`
+    #[serde(with = "serde_inscription")]
+    pub inscription: Inscription,
 }
 
 pub const USER_STEP_KIND: u8 = 0x00;
@@ -144,6 +148,22 @@ impl Step {
         match self {
             Self::User(step) => &step.outputs,
             Self::Program(step) => &step.outputs,
+        }
+    }
+
+    /// The bytes of the inscription of the step and of those of its payments.
+    #[must_use]
+    pub fn inscriptions_len(&self) -> usize {
+        match self {
+            Self::User(step) => step.inscription.len(),
+            Self::Program(step) => {
+                step.inscription.len()
+                    + step
+                        .payments
+                        .iter()
+                        .map(|payment| payment.inscription.len())
+                        .sum::<usize>()
+            }
         }
     }
 }
@@ -194,9 +214,10 @@ impl BinaryDecode for Step {
 // The message the ZkTransfer of a step is bound to.
 #[must_use]
 pub fn step_msg(channel_id: &ChannelId, step: &ChannelStep) -> Fr {
-    let mut elements = Vec::with_capacity(5 + step.inputs.len() + step.outputs.len());
+    let mut elements = Vec::with_capacity(7 + step.inputs.len() + step.outputs.len());
     elements.push(*CHANNEL_STEP_V1);
     elements.extend(channel_id.field_elements());
+    elements.extend(inscription_field_elements(&step.inscription));
     elements.push(Fr::from(step.inputs.len() as u64));
     elements.extend(step.inputs.iter().map(|note_nullifier| note_nullifier.0));
     elements.push(Fr::from(step.outputs.len() as u64));
@@ -204,7 +225,7 @@ pub fn step_msg(channel_id: &ChannelId, step: &ChannelStep) -> Fr {
     ZkHasher::digest(&elements)
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain
@@ -222,12 +243,65 @@ pub struct InscriptionOp {
     pub mini_blocks: MiniBlocks,
 }
 
+impl BinaryEncode for InscriptionOp {
+    fn encoded_length(&self) -> usize {
+        self.channel_id.encoded_length()
+            + self.inscription.encoded_length()
+            + self.parent.encoded_length()
+            + self.signer.encoded_length()
+            + self.mini_blocks.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.channel_id.encode_into(out);
+        self.inscription.encode_into(out);
+        self.parent.encode_into(out);
+        self.signer.encode_into(out);
+        self.mini_blocks.encode_into(out);
+    }
+}
+
+impl BinaryDecode for InscriptionOp {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, channel_id) = ChannelId::decode(input, &())?;
+        let (rest, inscription) = Inscription::decode(rest, &())?;
+        let (rest, parent) = MsgId::decode(rest, &())?;
+        let (rest, signer) = UnverifiedEd25519PublicKey::decode(rest, &())?;
+        let (rest, mini_blocks) = MiniBlocks::decode(rest, &())?;
+        let operation = Self {
+            channel_id,
+            inscription,
+            parent,
+            signer,
+            mini_blocks,
+        };
+        if operation.inscriptions_len() > MAX_BYTES {
+            return Err(DecodeError::invalid_value::<Self>(
+                "the inscriptions of an inscribe total more than MAX_OPERATION_DATA_SIZE bytes",
+            ));
+        }
+        Ok((rest, operation))
+    }
+}
+
 impl InscriptionOp {
     #[must_use]
     pub fn id(&self) -> MsgId {
         let mut hasher = Hasher::new();
         hasher.update(self.encode().as_ref());
         MsgId(hasher.finalize().into())
+    }
+
+    /// The bytes of the inscription and of the inscriptions of the steps and
+    /// payments, which count together against `MAX_OPERATION_DATA_SIZE`.
+    #[must_use]
+    pub fn inscriptions_len(&self) -> usize {
+        self.inscription.len() + self.steps().map(Step::inscriptions_len).sum::<usize>()
     }
 
     /// The steps of the inscription, in the order they apply.
@@ -269,6 +343,7 @@ impl InscriptionOp {
                     inputs: [crate::mantle::notes::NoteNullifier(Fr::from(0x23u64))].into(),
                     outputs: [crate::mantle::notes::NoteCommitment(Fr::from(0x24u64))].into(),
                     commitment_merkle_root: Fr::from(0x25u64),
+                    inscription: b"step-inscription".into(),
                 }),
                 Step::Program(ProgramStep::sample()),
             ])]
@@ -342,6 +417,16 @@ impl PreverifiableOperation<StandardMode>
         // within the `.verify()` implementation.
         if self.operation().signer.is_weak() {
             return Err(Error::InvalidSigner);
+        }
+
+        // The inscription and the inscriptions of the steps and payments count
+        // together
+        let inscriptions_len = self.operation().inscriptions_len();
+        if inscriptions_len > MAX_BYTES {
+            return Err(Error::InscriptionsTooLarge {
+                len: inscriptions_len,
+                max: MAX_BYTES,
+            });
         }
 
         // Check the signature
@@ -839,6 +924,57 @@ mod tests {
     }
 
     #[test]
+    fn the_inscriptions_of_an_inscribe_its_steps_and_its_payments_count_together() {
+        let bytes = |len: usize| Inscription::try_from(vec![0u8; len]).unwrap();
+        // One byte in a user step, one in a payment, `program_step_len` in the
+        // program step and the rest of the limit in the inscribe.
+        let inscribed = |program_step_len: usize| {
+            let user = ChannelStep {
+                inscription: bytes(1),
+                ..step(&[nullifier(2)], &[commitment(3)], root())
+            };
+            let program = ProgramStep {
+                payments: [Payment {
+                    inscription: bytes(1),
+                    ..Payment::sample()
+                }]
+                .into(),
+                inscription: bytes(program_step_len),
+                ..ProgramStep::sample()
+            };
+            InscriptionOp {
+                inscription: bytes(MAX_BYTES - 2),
+                ..with_steps(vec![user.into(), program.into()])
+            }
+        };
+
+        let at_the_limit = inscribed(0);
+        assert_eq!(at_the_limit.inscriptions_len(), MAX_BYTES);
+        assert_eq!(
+            InscriptionOp::decode(&at_the_limit.encode(), &())
+                .unwrap()
+                .1,
+            at_the_limit
+        );
+
+        let over = inscribed(1);
+        assert!(matches!(
+            InscriptionOp::decode(&over.encode(), &()),
+            Err(DecodeError::InvalidValue { .. })
+        ));
+        let steps: Vec<Step> = over.steps().cloned().collect();
+        assert_eq!(
+            signed(over, sample_proofs(&steps)).preverify(&InscriptionPreverificationContext {
+                tx_hash_view: &tx_hash_view()
+            }),
+            Err(Error::InscriptionsTooLarge {
+                len: MAX_BYTES + 1,
+                max: MAX_BYTES
+            })
+        );
+    }
+
+    #[test]
     fn json_round_trip() {
         let op = sample();
         let json = serde_json::to_string(&op).unwrap();
@@ -1201,6 +1337,7 @@ mod tests {
             inputs: [NoteNullifier(Fr::from(1u64))].into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: Fr::ZERO,
+            inscription: Inscription::default(),
         };
         for (steps, expected) in [(0usize, 59u64), (1, 678), (3, 1_916)] {
             let operation = with_steps(vec![Step::User(step.clone()); steps]);
@@ -1256,6 +1393,7 @@ mod tests {
             inputs: InputNullifiers::try_from_iter(inputs.iter().copied()).unwrap(),
             outputs: OutputCommitments::try_from_iter(outputs.iter().copied()).unwrap(),
             commitment_merkle_root,
+            inscription: Inscription::default(),
         }
     }
 
@@ -1338,30 +1476,45 @@ mod tests {
     }
 
     #[test]
-    fn step_msg_hashes_the_channel_the_counts_and_the_notes() {
+    fn step_msg_hashes_the_channel_the_inscription_the_counts_and_the_notes() {
         let dst = fr_from_bytes(b"CHANNEL_STEP_V1").unwrap();
         let mut channel_bytes = [0x22u8; 32];
         channel_bytes[16..].fill(0x2a);
         let channel = ChannelId::from(channel_bytes);
+        let inscribed = ChannelStep {
+            inscription: b"step-inscription".into(),
+            ..step(
+                &[nullifier(0x23)],
+                &[commitment(0x24), commitment(0x25)],
+                Fr::ZERO,
+            )
+        };
+        let inscription_hash: [u8; 32] = Hasher::digest(b"step-inscription").into();
         assert_eq!(
-            step_msg(
-                &channel,
-                &step(
-                    &[nullifier(0x23)],
-                    &[commitment(0x24), commitment(0x25)],
-                    Fr::ZERO
-                )
-            ),
+            step_msg(&channel, &inscribed),
             ZkHasher::digest(&[
                 dst,
                 fr_from_mod_bytes(&[0x22u8; 16]),
                 fr_from_mod_bytes(&[0x2au8; 16]),
+                fr_from_mod_bytes(&inscription_hash[..16]),
+                fr_from_mod_bytes(&inscription_hash[16..]),
                 Fr::from(1u64),
                 Fr::from(0x23u64),
                 Fr::from(2u64),
                 Fr::from(0x24u64),
                 Fr::from(0x25u64)
             ])
+        );
+        // a sequencer cannot publish the move with another inscription
+        assert_ne!(
+            step_msg(
+                &channel,
+                &ChannelStep {
+                    inscription: b"another-inscription".into(),
+                    ..inscribed.clone()
+                }
+            ),
+            step_msg(&channel, &inscribed)
         );
         assert_ne!(
             step_msg(
@@ -1811,6 +1964,7 @@ mod tests {
             commitment_merkle_root,
             paid_value,
             intent: Fr::from(paid_value),
+            inscription: Inscription::default(),
         }
     }
 
@@ -1829,6 +1983,7 @@ mod tests {
             program_outputs: ProgramOutputs::from(program_outputs),
             commitment_merkle_root,
             spend_notes_hash: Fr::from(77u64),
+            inscription: Inscription::default(),
         }
     }
 
@@ -2236,6 +2391,7 @@ mod tests {
             commitment_merkle_root: root,
             paid_value: 1_000,
             intent: Fr::from(9u64),
+            inscription: Inscription::default(),
         };
         let payment_proof = prove_transfer(
             &[(user_note, secret_key, path)],
@@ -2261,6 +2417,7 @@ mod tests {
                 &core::array::from_fn(|_| SpendInputFields::inactive()),
                 &outputs,
             ),
+            inscription: Inscription::default(),
         };
         let operation = with_steps(vec![step.clone().into()]);
         let op_id = Fr::from_le_bytes_mod_order(&operation.op_id());

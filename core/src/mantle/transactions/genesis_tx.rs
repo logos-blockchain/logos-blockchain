@@ -1159,6 +1159,7 @@ mod tests {
             inputs: [NoteNullifier(Fr::ONE)].into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: Fr::ZERO,
+            inscription: Inscription::default(),
         };
         let with_step = InscriptionOp {
             mini_blocks: [MiniBlock::from([Step::User(step)])].into(),

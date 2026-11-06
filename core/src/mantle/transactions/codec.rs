@@ -372,6 +372,7 @@ mod tests {
             inputs: [NoteNullifier(Fr::ONE)].into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: Fr::ZERO,
+            inscription: Inscription::default(),
         };
         let ops = Ops::from([Op::ChannelInscribe(InscriptionOp {
             mini_blocks: [inscribe::MiniBlock::from([

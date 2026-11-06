@@ -69,6 +69,8 @@ pub enum Error {
     },
     #[error("Invalid signer")]
     InvalidSigner,
+    #[error("The inscriptions of the inscribe total {len} bytes, more than {max}")]
+    InscriptionsTooLarge { len: usize, max: usize },
     #[error("Invalid signature")]
     InvalidSignature,
     #[error(

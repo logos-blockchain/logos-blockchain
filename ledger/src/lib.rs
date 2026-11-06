@@ -2925,6 +2925,7 @@ mod tests {
             inputs: [NoteNullifier(Fr::from(input))].into(),
             outputs: [NoteCommitment(Fr::from(output))].into(),
             commitment_merkle_root,
+            inscription: Inscription::default(),
         })])]
         .into()
     }
@@ -3103,6 +3104,7 @@ mod tests {
                 commitment_merkle_root,
                 paid_value: 5,
                 intent: Fr::ONE,
+                inscription: Inscription::default(),
             }]
             .into(),
             inputs: InputNullifiers::default(),
@@ -3110,6 +3112,7 @@ mod tests {
             program_outputs: ProgramOutputs::default(),
             commitment_merkle_root,
             spend_notes_hash: Fr::ZERO,
+            inscription: Inscription::default(),
         })])]
         .into()
     }

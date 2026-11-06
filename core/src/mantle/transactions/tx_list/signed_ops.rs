@@ -495,7 +495,7 @@ mod tests {
                 ChannelId, MsgId,
                 config::ChannelConfigOp,
                 deposit::DepositOp,
-                inscribe::{InscriptionOp, MiniBlock, Step},
+                inscribe::{Inscription, InscriptionOp, MiniBlock, Step},
                 program_step::{Payments, ProgramOutputs, ProgramStep},
                 withdraw::ChannelWithdrawOp,
             },
@@ -1031,6 +1031,7 @@ mod tests {
             program_outputs: ProgramOutputs::from(0b1),
             commitment_merkle_root: Fr::ZERO,
             spend_notes_hash: Fr::ZERO,
+            inscription: Inscription::default(),
         };
         let ops = Ops::from([Op::ChannelInscribe(InscriptionOp {
             mini_blocks: [MiniBlock::from([Step::Program(step)])].into(),
