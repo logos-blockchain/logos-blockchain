@@ -174,7 +174,7 @@ impl ScannerAccounting {
         self.tip = id;
         self.held_blocks.push_back(id);
         while self.held_blocks.len() > SPEND_ROOT_DEPTH + 1 {
-            self.wallet.prune_states(self.held_blocks.pop_front());
+            self.wallet.prune_states(id, self.held_blocks.pop_front());
         }
         Ok(())
     }

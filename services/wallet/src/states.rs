@@ -301,7 +301,7 @@ impl<'u> ServiceState<'u> {
         }
 
         self.lib = new_lib;
-        self.wallet.prune_states(pruned_blocks);
+        self.wallet.prune_states(new_lib, pruned_blocks);
         self.pending_notes
             .evict_expired(new_immutable_blocks_count, self.pending_note_expiry_blocks);
         self.update_state();

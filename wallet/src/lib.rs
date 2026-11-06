@@ -723,9 +723,9 @@ impl<KeyId> Wallet<KeyId> {
     }
 
     /// The state every spend from `tip` is built and proven against: the block
-    /// [`SPEND_ROOT_DEPTH`] below `tip`, or the LIB if that is shallower since
-    /// states below the LIB are pruned and the LIB cannot fork. It holds the
-    /// notes of that block still unspent at `tip`.
+    /// [`SPEND_ROOT_DEPTH`] below `tip`, or the deepest block the wallet holds
+    /// a state of if that is shallower, as after a restart from the LIB. It
+    /// holds the notes of that block still unspent at `tip`.
     pub fn spend_state(&self, tip: HeaderId) -> Result<WalletState, WalletError> {
         let mut state = self.wallet_state_at(tip)?;
         let unspent = state.notes.clone();
@@ -758,16 +758,38 @@ impl<KeyId> Wallet<KeyId> {
     /// Prune wallet states for blocks that have been pruned from the chain.
     ///
     /// This removes wallet states for blocks that are no longer part of the
-    /// chain after LIB advancement. Both stale blocks (from abandoned
-    /// forks) and immutable blocks (before the new LIB) are removed.
-    pub fn prune_states(&mut self, pruned_blocks: impl IntoIterator<Item = HeaderId>) {
+    /// chain after LIB advancement: stale blocks (from abandoned forks), and
+    /// immutable blocks (before the new `lib`) but the [`SPEND_ROOT_DEPTH`]
+    /// ones right below it. A spend from a tip near the LIB names the root of
+    /// one of them, so the LIB advancing while the spend is built and proven
+    /// leaves its state in place.
+    pub fn prune_states(
+        &mut self,
+        lib: HeaderId,
+        pruned_blocks: impl IntoIterator<Item = HeaderId>,
+    ) {
+        let kept: Vec<HeaderId> =
+            core::iter::successors(Some(lib), |block| self.parents.get(block).copied())
+                .take(SPEND_ROOT_DEPTH + 1)
+                .collect();
         let mut removed_count = 0;
 
-        for block_id in pruned_blocks {
+        for block_id in pruned_blocks
+            .into_iter()
+            .filter(|block| !kept.contains(block))
+        {
             self.parents.remove(&block_id);
             if self.wallet_states.remove(&block_id).is_some() {
                 removed_count += 1;
             }
+        }
+        // The blocks kept by an earlier LIB, now out of reach of every tip.
+        let mut block = kept.last().copied().unwrap_or(lib);
+        while let Some(parent) = self.parents.remove(&block) {
+            if self.wallet_states.remove(&parent).is_some() {
+                removed_count += 1;
+            }
+            block = parent;
         }
 
         if removed_count > 0 {
@@ -1281,11 +1303,21 @@ mod tests {
             path_at_root.siblings()[0]
         );
 
-        // Nothing below the LIB is held, and the LIB cannot fork.
-        wallet.prune_states((0..38).map(block_id));
+        // The LIB advancing to 38 keeps the states of the blocks right below it, so
+        // a spend from 40 still names the root of 36, and drops the deeper ones.
+        wallet.prune_states(block_id(38), (0..38).map(block_id));
         assert_eq!(
             funding_transfer(fund(&wallet, 40)).commitment_merkle_root,
-            ledger_root_at(&wallet, 38)
+            root
+        );
+        assert!(wallet.wallet_state_at(block_id(34)).is_ok());
+        assert!(wallet.wallet_state_at(block_id(33)).is_err());
+        // They leave once the LIB moves past them.
+        wallet.prune_states(block_id(40), []);
+        assert!(wallet.wallet_state_at(block_id(35)).is_err());
+        assert_eq!(
+            funding_transfer(fund(&wallet, 40)).commitment_merkle_root,
+            root
         );
     }
 
