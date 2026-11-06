@@ -681,7 +681,19 @@ where
             Ok(header) => header,
             Err(e) => {
                 metrics::consensus_observe_proposal_reconstruct_err("network", &e);
-                Self::handle_proposal_processing_error(e, block_id, orphan_downloader);
+                if matches!(
+                    e,
+                    Error::Cryptarchia(lb_chain_service::api::ApiError::InvalidUncles(_))
+                ) {
+                    // Deliberately not recorded against `block_id`. The
+                    // signature does not cover the uncles, and they are not
+                    // bound to the header until the body root is checked
+                    // after reconstruction, so this condemns only the
+                    // received copy, as RFC-495 specifies.
+                    error!(target: LOG_TARGET, %e, ?block_id, "invalid uncles in proposal");
+                } else {
+                    Self::handle_proposal_processing_error(e, block_id, orphan_downloader);
+                }
                 return;
             }
         };

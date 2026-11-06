@@ -56,6 +56,9 @@ pub enum ApiError {
     /// the header, so only the received copy is invalid, not the block.
     #[error("Invalid header signature")]
     InvalidSignature,
+    /// The uncles carried with the header are invalid.
+    #[error("Invalid uncles: {0}")]
+    InvalidUncles(String),
     /// The uncles or transactions carried are not the ones the header commits
     /// to, so only the received copy is invalid, not the block.
     #[error("Invalid block body: {0}")]
@@ -569,6 +572,9 @@ impl From<crate::Error> for ApiError {
             crate::Error::AlreadyApplied(block_id) => Self::AlreadyApplied(block_id),
             crate::Error::InvalidHeader(HeaderVerificationError::InvalidSignature) => {
                 Self::InvalidSignature
+            }
+            crate::Error::InvalidHeader(HeaderVerificationError::InvalidUncles(reason)) => {
+                Self::InvalidUncles(reason)
             }
             crate::Error::InvalidBody(err) => Self::InvalidBody(err.to_string()),
             err => Self::Unexpected(format!("Failure while applying block: {err:?}")),

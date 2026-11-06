@@ -8,7 +8,7 @@ use lb_core::{
 use lb_cryptarchia_engine::Slot;
 use lb_ledger::LedgerError;
 
-use crate::{Cryptarchia, Error};
+use crate::Cryptarchia;
 
 /// The block tree and the ledger of a [`Cryptarchia`], at `current_slot`.
 pub struct HeaderVerificationContext<'c> {
@@ -60,12 +60,6 @@ impl lb_core::header::HeaderVerificationContext for HeaderVerificationContext<'_
     ) -> Result<(), HeaderVerificationError> {
         self.cryptarchia
             .verify_uncles(header, uncle_headers)
-            .map_err(|e| match e {
-                Error::InvalidUncle { uncle, reason } => HeaderVerificationError::InvalidUncle {
-                    uncle,
-                    reason: reason.to_string(),
-                },
-                e => HeaderVerificationError::Other(e.into()),
-            })
+            .map_err(|e| HeaderVerificationError::InvalidUncles(e.to_string()))
     }
 }

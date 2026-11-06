@@ -156,8 +156,9 @@ pub enum Error {
     InvalidSlot { parent: Slot, block: Slot },
     #[error("invalid proof of leadership")]
     InvalidLeaderProof,
-    #[error("invalid uncle {uncle:?}: {reason}")]
-    InvalidUncle { uncle: HeaderId, reason: String },
+    /// The uncles carried with the header break a rule of Uncle Validation.
+    #[error("invalid uncles: {0}")]
+    InvalidUncles(String),
     #[error("other error: {0}")]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
