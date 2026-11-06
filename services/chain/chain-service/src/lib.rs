@@ -16,7 +16,6 @@ use std::{
     fmt::Display,
     pin::Pin,
     sync::Arc,
-    time::Duration,
 };
 
 use educe::Educe;
@@ -774,7 +773,7 @@ where
 
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             BlockBroadcastService<_>,
             StorageService<_>,
             TimeService<_, _>

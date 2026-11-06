@@ -1,7 +1,7 @@
 pub mod api;
 mod states;
 
-use std::{collections::HashMap, num::NonZero, time::Duration};
+use std::{collections::HashMap, num::NonZero};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -470,20 +470,14 @@ where
             ..
         } = self;
 
-        // Wait for services (except Chain) to become ready, with timeout
-        wait_until_services_are_ready!(
-            &service_resources_handle.overwatch_handle,
-            Some(Duration::from_mins(1)),
-            lb_storage_service::StorageService<_>,
-            Kms,
-            TimeService<_, _>
-        )
-        .await?;
-        // Wait for Chain service to become ready, without timeout
+        // Chain readiness can take until block recovery completes.
         wait_until_services_are_ready!(
             &service_resources_handle.overwatch_handle,
             None,
-            Cryptarchia // becomes ready after recoverying blocks
+            lb_storage_service::StorageService<_>,
+            Kms,
+            TimeService<_, _>,
+            Cryptarchia
         )
         .await?;
 

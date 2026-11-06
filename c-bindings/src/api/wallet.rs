@@ -34,7 +34,7 @@ use lb_node::{
     generic_services::{CryptarchiaService, WalletService as NodeWalletService},
 };
 use lb_wallet_service::{ClaimableVouchersInfo, LeaderAgedNotesInfo, TipResponse, api::WalletApi};
-use overwatch::services::status::ServiceStatus;
+use overwatch::services::status::{ServiceStatus, WaitPolicy};
 
 use crate::{
     LogosBlockchainNode,
@@ -290,13 +290,17 @@ pub(crate) fn get_claimable_vouchers_sync(
                 )
             })?;
 
-        if let Err(status) = status_watcher
-            .wait_for(ServiceStatus::Ready, Some(Duration::from_millis(100)))
+        if let Err(wait_error) = status_watcher
+            .wait_with_policy(
+                ServiceStatus::Ready,
+                Some(Duration::from_millis(100)),
+                WaitPolicy::RestartFriendly,
+            )
             .await
         {
             return Err(OperationStatus::error(
                 OperationStatusCode::ServiceError,
-                format!("Wallet service is not ready: {status:?}"),
+                format!("Wallet service readiness wait failed: {wait_error}"),
             ));
         }
 
