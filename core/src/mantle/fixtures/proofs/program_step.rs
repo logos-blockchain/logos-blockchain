@@ -16,7 +16,7 @@ codec_fixtures!(
 );
 codec_fixtures!(
     ProgramStepProof,
-    context = crate::mantle::ops::StepProofShape::Program { payments: 1, program_notes: 1 },
+    context = crate::mantle::ops::StepProofShape::Program { program_notes: 1 },
     PROGRAM_STEP_PROOF.clone() => PROGRAM_STEP_PROOF_HEX,
 );
 codec_fixtures!(

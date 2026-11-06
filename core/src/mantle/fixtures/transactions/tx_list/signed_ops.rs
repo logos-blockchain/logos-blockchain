@@ -109,6 +109,7 @@ fn all_ops_hex() -> String {
         CHANNEL_MULTI_SIG_HEX,
         ED25519_SIG_HEX,
         ZK_TRANSFER_HEX,
+        ZK_TRANSFER_HEX,
         PROGRAM_STEP_PROOF_HEX,
         ZK_TRANSFER_HEX,
         ZK_TRANSFER_HEX,
@@ -135,6 +136,7 @@ fn all_ops<State: VerificationState, Mode: VerificationMode>() -> SignedOps<Stat
             ChannelInscribeProof::new(
                 *ED25519_SIG,
                 vec![
+                    StepProof::User(*ZK_TRANSFER),
                     StepProof::User(*ZK_TRANSFER),
                     StepProof::Program(PROGRAM_STEP_PROOF.clone())
                 ]

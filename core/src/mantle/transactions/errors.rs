@@ -63,7 +63,6 @@ impl VerificationError {
                         | ChannelError::ThresholdUnmet { .. }
                         | ChannelError::StepProofCount { .. }
                         | ChannelError::StepProofKind { .. }
-                        | ChannelError::PaymentProofCount { .. }
                         | ChannelError::ProgramNoteCount { .. }
                         | ChannelError::ProgramNoteOpening { .. }
                 )

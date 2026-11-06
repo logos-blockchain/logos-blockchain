@@ -25,8 +25,8 @@ pub const PROGRAM_KEY_SIZE: usize = 352;
 
 static PROGRAM_ID_V1: LazyLock<Vec<u8>> = LazyLock::new(|| b"PROGRAM_ID_V1".to_vec());
 
-static PROGRAM_SPEND_NOTES_V1: LazyLock<Fr> = LazyLock::new(|| {
-    fr_from_bytes(b"PROGRAM_SPEND_NOTES_V1").expect("BigUint should load from constant string")
+static PROGRAM_STEP_ID_V1: LazyLock<Fr> = LazyLock::new(|| {
+    fr_from_bytes(b"PROGRAM_STEP_ID_V1").expect("BigUint should load from constant string")
 });
 
 // Alpha G1, Beta Gamma Delta G2, 4 IC G1, compressed.
@@ -307,7 +307,7 @@ impl SpendOutputFields {
 }
 
 #[must_use]
-pub fn spend_notes_hash(
+pub fn program_step_id(
     inputs: &[SpendInputFields; MAX_INPUTS],
     outputs: &[SpendOutputFields; MAX_OUTPUTS],
 ) -> Fr {
@@ -337,7 +337,7 @@ pub fn spend_notes_hash(
         ]
     });
     ZkHasher::digest(
-        &core::iter::once(*PROGRAM_SPEND_NOTES_V1)
+        &core::iter::once(*PROGRAM_STEP_ID_V1)
             .chain(inputs)
             .chain(outputs)
             .collect::<Vec<_>>(),
@@ -503,8 +503,8 @@ mod tests {
             }
         });
         assert_eq!(
-            spend_notes_hash(&inputs, &outputs),
-            public.spend_notes_hash.into_inner()
+            program_step_id(&inputs, &outputs),
+            public.program_step_id.into_inner()
         );
     }
 }

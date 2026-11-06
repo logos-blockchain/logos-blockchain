@@ -114,8 +114,6 @@ impl ProgramNoteOpening {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProgramStepProof {
-    // One per payment, in the order of the payments.
-    pub payment_proofs: Vec<ZkTransferProof>,
     pub spend_proof: ZkProgramSpendProof,
     pub program_proof: ProgramProof,
     // The opening of each output of the program, in the order of the outputs.
@@ -125,16 +123,12 @@ pub struct ProgramStepProof {
 impl BinaryEncode for ProgramStepProof {
     fn encoded_length(&self) -> usize {
         StepProofShape::Program {
-            payments: self.payment_proofs.len(),
             program_notes: self.program_notes.len(),
         }
         .encoded_length()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
-        for payment_proof in &self.payment_proofs {
-            payment_proof.encode_into(out);
-        }
         self.spend_proof.encode_into(out);
         self.program_proof.encode_into(out);
         for opening in &self.program_notes {
@@ -144,30 +138,19 @@ impl BinaryEncode for ProgramStepProof {
 }
 
 impl BinaryDecode for ProgramStepProof {
-    // The payments and the program outputs of the step.
+    // The program outputs of the step.
     type Context = StepProofShape;
 
     fn decode<'input>(
         input: &'input [u8],
         context: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let StepProofShape::Program {
-            payments,
-            program_notes,
-        } = *context
-        else {
+        let StepProofShape::Program { program_notes } = *context else {
             return Err(DecodeError::invalid_value::<Self>(
                 "a program step proof needs the shape of a program step",
             ));
         };
-        let mut rest = input;
-        let mut payment_proofs = Vec::with_capacity(payments);
-        for _ in 0..payments {
-            let (next, payment_proof) = ZkTransferProof::decode(rest, &())?;
-            payment_proofs.push(payment_proof);
-            rest = next;
-        }
-        let (rest, spend_proof) = ZkProgramSpendProof::decode(rest, &())?;
+        let (rest, spend_proof) = ZkProgramSpendProof::decode(input, &())?;
         let (mut rest, program_proof) = ProgramProof::decode(rest, &())?;
         let mut openings = Vec::with_capacity(program_notes);
         for _ in 0..program_notes {
@@ -178,7 +161,6 @@ impl BinaryDecode for ProgramStepProof {
         Ok((
             rest,
             Self {
-                payment_proofs,
                 spend_proof,
                 program_proof,
                 program_notes: openings,
@@ -187,14 +169,12 @@ impl BinaryDecode for ProgramStepProof {
     }
 }
 
-// What a step proof holds, given by its step.
+// What a step proof holds, given by its step: a ZkTransfer for a user step or
+// a program deposit, the proofs and openings of a program step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StepProofShape {
     User,
-    Program {
-        payments: usize,
-        program_notes: usize,
-    },
+    Program { program_notes: usize },
 }
 
 impl StepProofShape {
@@ -202,22 +182,13 @@ impl StepProofShape {
     pub const fn encoded_length(self) -> usize {
         match self {
             Self::User => COMPRESSED_PROOF_SIZE,
-            // Cannot overflow for 255 payments and 8 openings.
-            Self::Program {
-                payments,
-                program_notes,
-            } => {
-                let proofs = COMPRESSED_PROOF_SIZE
-                    .checked_mul(
-                        payments
-                            .checked_add(2)
-                            .expect("the proof count of a step fits a usize"),
-                    )
-                    .expect("the proofs of a step fit a usize");
+            // The program spend and the program proof, then the openings; cannot
+            // overflow for 8 openings.
+            Self::Program { program_notes } => {
                 let openings = PROGRAM_NOTE_OPENING_SIZE
                     .checked_mul(program_notes)
                     .expect("the openings of a step fit a usize");
-                proofs
+                (2 * COMPRESSED_PROOF_SIZE)
                     .checked_add(openings)
                     .expect("the proof of a step fits a usize")
             }
@@ -225,7 +196,8 @@ impl StepProofShape {
     }
 }
 
-// A ZkTransfer for a user step, a `ProgramStepProof` for a program step.
+// A ZkTransfer for a user step or a program deposit, a `ProgramStepProof` for
+// a program step.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StepProof {
@@ -243,11 +215,7 @@ impl StepProof {
 
         match shape {
             StepProofShape::User => Self::User(ZkTransferProof::sample()),
-            StepProofShape::Program {
-                payments,
-                program_notes,
-            } => Self::Program(ProgramStepProof {
-                payment_proofs: vec![ZkTransferProof::sample(); payments],
+            StepProofShape::Program { program_notes } => Self::Program(ProgramStepProof {
                 spend_proof: ZkProgramSpendProof::sample(),
                 program_proof: ProgramProof::sample(),
                 program_notes: vec![
@@ -305,41 +273,18 @@ mod tests {
 
     #[test]
     fn program_step_proof_reads_its_shape_from_the_step() {
-        let proof = StepProof::sample_for(StepProofShape::Program {
-            payments: 2,
-            program_notes: 1,
-        });
+        let proof = StepProof::sample_for(StepProofShape::Program { program_notes: 1 });
         let bytes = proof.encode();
-        assert_eq!(bytes.len(), 2 * 128 + 128 + 128 + 136);
+        assert_eq!(bytes.len(), 128 + 128 + 136);
         assert_eq!(
-            StepProofShape::Program {
-                payments: 2,
-                program_notes: 1
-            }
-            .encoded_length(),
+            StepProofShape::Program { program_notes: 1 }.encoded_length(),
             bytes.len()
         );
         assert_eq!(
-            StepProof::decode(
-                &bytes,
-                &StepProofShape::Program {
-                    payments: 2,
-                    program_notes: 1
-                }
-            )
-            .unwrap(),
+            StepProof::decode(&bytes, &StepProofShape::Program { program_notes: 1 }).unwrap(),
             (&[][..], proof)
         );
         assert_eq!(StepProofShape::User.encoded_length(), 128);
-        assert!(
-            StepProof::decode(
-                &bytes,
-                &StepProofShape::Program {
-                    payments: 2,
-                    program_notes: 2
-                }
-            )
-            .is_err()
-        );
+        assert!(StepProof::decode(&bytes, &StepProofShape::Program { program_notes: 2 }).is_err());
     }
 }

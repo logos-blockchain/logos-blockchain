@@ -7,8 +7,12 @@ pub mod withdraw;
 
 use std::fmt::{Display, Formatter};
 
-use lb_binary_codec::{bincode::BoundedSerializeOp, canonical::BinaryCodec};
-use lb_groth16::{Fr, fr_from_mod_bytes};
+use ark_ff::PrimeField as _;
+use lb_binary_codec::{
+    bincode::BoundedSerializeOp,
+    canonical::{BinaryCodec, BinaryEncode},
+};
+use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnverifiedEd25519PublicKey};
 use lb_utils::bounded::NonEmptyBoundedVec;
 
@@ -19,9 +23,9 @@ use crate::{
 
 /// `MAX_OPERATION_DATA_SIZE` of Mantle Transaction Encoding.
 ///
-/// It bounds the inscriptions of a `ChannelInscribe`, of its steps and of
-/// their payments together, and `ChannelDeposit.Metadata`, excluding their
-/// `UINT32` length prefixes.
+/// It bounds the inscriptions of a `ChannelInscribe` and of its steps
+/// together, and `ChannelDeposit.Metadata`, excluding their `UINT32` length
+/// prefixes.
 pub const MAX_OPERATION_DATA_SIZE: usize = 1_835_008;
 
 pub type ChannelKeyIndex = u16;
@@ -37,29 +41,18 @@ serde_bytes_newtype!(ChannelId, 32);
 
 pub const NULL_CHANNEL_ID: ChannelId = ChannelId([0; 32]);
 
-impl ChannelId {
-    /// The two elements a message holds the channel ID as, low first:
-    /// `channel_lo`, its low 16 bytes, and `channel_hi`, its high 16 bytes,
-    /// each little-endian and below the field size. A channel ID is 32 free
-    /// bytes, larger than the field, so a single reduced element would give
-    /// channels `x` and `x + p` the same message.
-    fn field_elements(&self) -> [Fr; 2] {
-        let (channel_lo, channel_hi) = self.0.split_at(16);
-        [fr_from_mod_bytes(channel_lo), fr_from_mod_bytes(channel_hi)]
-    }
-}
-
-/// The two elements a message holds the inscription of a user step or of a
-/// payment as, low first: `inscription_lo` and `inscription_hi`, the low and
-/// high 16 bytes of its BLAKE2b-256 hash, each little-endian and below the
-/// field size, so that an inscription of any length enters the message.
-fn inscription_field_elements(inscription: &[u8]) -> [Fr; 2] {
-    let hash: [u8; 32] = Hasher::digest(inscription).into();
-    let (inscription_lo, inscription_hi) = hash.split_at(16);
-    [
-        fr_from_mod_bytes(inscription_lo),
-        fr_from_mod_bytes(inscription_hi),
-    ]
+/// The identifier a holder binds the `ZkTransfer` of its step to: the
+/// BLAKE2b-256 hash, under `dst`, of the channel and of the encoded step, its
+/// kind byte included, reduced modulo `p` as an `op_id` is. No circuit
+/// recomputes it, so it need not be a `zkhash`.
+fn step_id(dst: &[u8], channel_id: &ChannelId, kind: u8, step: &impl BinaryEncode) -> Fr {
+    let mut hasher = Hasher::new();
+    hasher.update(dst);
+    hasher.update(channel_id.0);
+    hasher.update([kind]);
+    hasher.update(step.encode());
+    let digest: [u8; 32] = hasher.finalize().into();
+    Fr::from_le_bytes_mod_order(&digest)
 }
 
 impl BoundedSerializeOp for ChannelId {

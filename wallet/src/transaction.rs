@@ -193,17 +193,7 @@ fn op_effects<'a>(
                 None,
                 inscription
                     .steps()
-                    // The change of the payments of a program step comes before its outputs
-                    .flat_map(|step| {
-                        let payments = match step {
-                            Step::User(_) => &[][..],
-                            Step::Program(step) => step.payments.as_slice(),
-                        };
-                        payments
-                            .iter()
-                            .flat_map(|payment| payment.outputs.iter())
-                            .chain(step.outputs().iter())
-                    })
+                    .flat_map(Step::created)
                     .map(|commitment| (note_set, *commitment))
                     .collect(),
             )

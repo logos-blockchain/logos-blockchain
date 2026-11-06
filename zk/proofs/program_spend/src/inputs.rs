@@ -104,7 +104,7 @@ pub struct ZkProgramSpendVerifierInputJson(#[serde(with = "BigArray")] [Groth16I
 pub struct ZkProgramSpendVerifierInput {
     pub inputs: [Groth16Input; MAX_INPUTS],
     pub outputs: [Groth16Input; MAX_OUTPUTS],
-    pub spend_notes_hash: Groth16Input,
+    pub program_step_id: Groth16Input,
     pub inputs_active: [Groth16Input; MAX_INPUTS],
     pub outputs_active: [Groth16Input; MAX_OUTPUTS],
     pub outputs_of_program: [Groth16Input; MAX_OUTPUTS],
@@ -123,7 +123,7 @@ pub struct ZkProgramSpendPublic<'a> {
     pub tx_commitment_root: Fr,
     pub program_id: Fr,
     pub paid_value: u64,
-    pub spend_notes_hash: Fr,
+    pub program_step_id: Fr,
     pub msg: Fr,
 }
 
@@ -158,7 +158,7 @@ impl TryFrom<ZkProgramSpendVerifierInputJson> for ZkProgramSpendVerifierInput {
             output_5,
             output_6,
             output_7,
-            spend_notes_hash,
+            program_step_id,
             input_active_0,
             input_active_1,
             input_active_2,
@@ -189,7 +189,7 @@ impl TryFrom<ZkProgramSpendVerifierInputJson> for ZkProgramSpendVerifierInput {
             outputs: [
                 output_0, output_1, output_2, output_3, output_4, output_5, output_6, output_7,
             ],
-            spend_notes_hash,
+            program_step_id,
             inputs_active: [
                 input_active_0,
                 input_active_1,
@@ -231,7 +231,7 @@ impl ZkProgramSpendVerifierInput {
             .inputs
             .iter()
             .chain(&self.outputs)
-            .chain(iter::once(&self.spend_notes_hash))
+            .chain(iter::once(&self.program_step_id))
             .chain(&self.inputs_active)
             .chain(&self.outputs_active)
             .chain(&self.outputs_of_program)
@@ -268,7 +268,7 @@ impl ZkProgramSpendVerifierInput {
         Ok(Self {
             inputs: padded(public.inputs),
             outputs: padded(public.outputs),
-            spend_notes_hash: public.spend_notes_hash.into(),
+            program_step_id: public.program_step_id.into(),
             inputs_active: active_flags(public.inputs.len()),
             outputs_active: active_flags(public.outputs.len()),
             outputs_of_program: padded_flags(public.outputs_of_program),

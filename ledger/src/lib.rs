@@ -1084,7 +1084,7 @@ mod tests {
                     inscribe::{
                         ChannelStep, Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step,
                     },
-                    program_step::{Payment, ProgramOutputs, ProgramStep},
+                    program_step::{ProgramDeposit, ProgramStep},
                     withdraw::{
                         ChannelWithdrawOp, PendingWithdrawal, PendingWithdrawals, WITHDRAW_DELAY,
                     },
@@ -3090,36 +3090,36 @@ mod tests {
     fn test_program_key() -> ProgramVerificationKey {
         ProgramVerificationKey::try_from(&lb_groth16::test_utils::three_input_setup(1).0).unwrap()
     }
-
-    // A program step paying no opened note, so the sample proofs pass
-    // preverification.
+    // A deposit and the program step consuming it, paying no opened note, so the
+    // sample proofs pass preverification.
     fn program_steps(
         program_id: Fr,
         nullifier: u64,
         output: u64,
         commitment_merkle_root: Fr,
     ) -> MiniBlocks {
-        [MiniBlock::from([Step::Program(ProgramStep {
-            program_id,
-            payments: [Payment {
+        [MiniBlock::from([
+            Step::ProgramDeposit(ProgramDeposit {
+                program_id,
                 inputs: [NoteNullifier(Fr::from(nullifier))].into(),
                 outputs: OutputCommitments::default(),
                 commitment_merkle_root,
-                paid_value: 5,
+                value: 5,
                 intent: Fr::ONE,
                 inscription: Inscription::default(),
-            }]
-            .into(),
-            inputs: InputNullifiers::default(),
-            outputs: [NoteCommitment(Fr::from(output))].into(),
-            program_outputs: ProgramOutputs::default(),
-            commitment_merkle_root,
-            spend_notes_hash: Fr::ZERO,
-            inscription: Inscription::default(),
-        })])]
+            }),
+            Step::Program(ProgramStep {
+                program_id,
+                inputs: InputNullifiers::default(),
+                program_outputs: OutputCommitments::default(),
+                outputs: [NoteCommitment(Fr::from(output))].into(),
+                commitment_merkle_root,
+                program_step_id: Fr::ZERO,
+                inscription: Inscription::default(),
+            }),
+        ])]
         .into()
     }
-
     #[test]
     fn a_program_registered_earlier_in_the_transaction_runs_its_step() {
         let test_config = config();
@@ -3235,7 +3235,7 @@ mod tests {
     }
 
     #[test]
-    fn a_payment_covers_a_deposit_of_the_same_transaction() {
+    fn a_program_deposit_covers_a_channel_deposit_of_the_same_transaction() {
         let test_config = config();
         let eras = single_era(test_config.clone());
         let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);

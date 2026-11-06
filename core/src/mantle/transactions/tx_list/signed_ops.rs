@@ -496,7 +496,7 @@ mod tests {
                 config::ChannelConfigOp,
                 deposit::DepositOp,
                 inscribe::{Inscription, InscriptionOp, MiniBlock, Step},
-                program_step::{Payments, ProgramOutputs, ProgramStep},
+                program_step::ProgramStep,
                 withdraw::ChannelWithdrawOp,
             },
             op_proof::samples::SampleProof as _,
@@ -1026,12 +1026,11 @@ mod tests {
         };
         let step = ProgramStep {
             program_id: Fr::from(7u64),
-            payments: Payments::default(),
             inputs: InputNullifiers::default(),
-            outputs: [note.commitment()].into(),
-            program_outputs: ProgramOutputs::from(0b1),
+            program_outputs: [note.commitment()].into(),
+            outputs: OutputCommitments::default(),
             commitment_merkle_root: Fr::ZERO,
-            spend_notes_hash: Fr::ZERO,
+            program_step_id: Fr::ZERO,
             inscription: Inscription::default(),
         };
         let ops = Ops::from([Op::ChannelInscribe(InscriptionOp {
@@ -1051,7 +1050,6 @@ mod tests {
             let proof = ChannelInscribeProof::new(
                 signature,
                 vec![StepProof::Program(ProgramStepProof {
-                    payment_proofs: vec![],
                     spend_proof: ZkProgramSpendProof::sample(),
                     program_proof: ProgramProof::sample(),
                     program_notes: vec![opening],
