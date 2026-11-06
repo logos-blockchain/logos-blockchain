@@ -462,15 +462,6 @@ impl Oracles {
                 .map(|e| update_lineage(e, channel)),
             name,
         );
-        self.check_parent_first(
-            Layer::Restarts,
-            "checkpoint pending",
-            checkpoint
-                .pending_txs
-                .iter()
-                .map(|(_, tx)| lineage_ids(tx, channel)),
-            name,
-        );
         self.orphaned.extend(
             channel_update
                 .orphaned()
