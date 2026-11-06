@@ -185,11 +185,60 @@ impl TargetEpochTracker {
         })
     }
 
+    fn base_reward(
+        &self,
+        epoch_income: Value,
+        premium_providers: &HashTrieSetSync<ProviderId>,
+    ) -> Option<Value> {
+        let shares = self.submitted_proofs.size() as u64 + premium_providers.size() as u64;
+        epoch_income.checked_div(shares)
+    }
+
+    /// What `provider_id` would be paid if the target epoch were finalized
+    /// with the proofs submitted so far.
+    #[must_use]
+    pub fn estimate<ProofsVerifier>(
+        &self,
+        target_epoch_state: &TargetEpochState<ProofsVerifier>,
+        provider_id: &ProviderId,
+    ) -> RewardEstimate {
+        let did_submit_proof = self.submitted_proofs.contains_key(provider_id);
+        let premium_providers = &self.min_hamming_distance.providers;
+        let is_premium = premium_providers.contains(provider_id);
+        let base_reward = self
+            .base_reward(target_epoch_state.epoch_income(), premium_providers)
+            .unwrap_or(0);
+        let estimated_reward = match (did_submit_proof, is_premium) {
+            (false, _) => 0,
+            (true, false) => base_reward,
+            (true, true) => base_reward * 2,
+        };
+
+        let network = Network {
+            size: target_epoch_state.num_providers(),
+            proofs: self.submitted_proofs.size() as u64,
+        };
+
+        RewardEstimate {
+            activity_epoch: target_epoch_state.epoch(),
+            pool: target_epoch_state.epoch_income(),
+            network,
+            did_submit_proof,
+            is_premium,
+            estimated_reward,
+        }
+    }
+
     pub fn finalize<ProofsVerifier>(
         &self,
         target_epoch_state: &TargetEpochState<ProofsVerifier>,
     ) -> (Self, Vec<Utxo>) {
-        if self.submitted_proofs.is_empty() {
+        // Identify premium providers with the minimum Hamming distance
+        let premium_providers = &self.min_hamming_distance.providers;
+
+        let Some(base_reward) =
+            self.base_reward(target_epoch_state.epoch_income(), premium_providers)
+        else {
             debug!(
                 target: LOG_TARGET,
                 target_epoch = %target_epoch_state.epoch(),
@@ -197,14 +246,7 @@ impl TargetEpochTracker {
                 "target epoch tracker finalized with no activity proofs. no rewards to distribute",
             );
             return (Self::new(), vec![]);
-        }
-
-        // Identify premium providers with the minimum Hamming distance
-        let premium_providers = &self.min_hamming_distance.providers;
-
-        // Calculate base reward
-        let base_reward = target_epoch_state.epoch_income()
-            / (self.submitted_proofs.size() as u64 + premium_providers.size() as u64);
+        };
 
         // Calculate reward for each provider
         let mut rewards = HashMap::new();
@@ -237,6 +279,32 @@ impl TargetEpochTracker {
             ),
         )
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Network {
+    /// Number of core nodes in the activity epoch
+    pub size: u64,
+    /// Number of activity proofs submitted
+    pub proofs: u64,
+}
+
+/// A provider's estimated Blend reward for the activity epoch, based on the
+/// proofs submitted so far
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RewardEstimate {
+    /// The epoch the reward is for, when the blending was done
+    pub activity_epoch: Epoch,
+    /// The activity epoch's network
+    pub network: Network,
+    /// Blend income to be split
+    pub pool: Value,
+    /// Whether the provider submitted its activity proof
+    pub did_submit_proof: bool,
+    /// Whether the provider earns the double reward
+    pub is_premium: bool,
+    /// What the provider would be paid
+    pub estimated_reward: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
