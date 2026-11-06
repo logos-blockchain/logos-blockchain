@@ -13,10 +13,6 @@ pub type FfiGetChainIdResult = FfiStatusResult<*mut c_char>;
 
 /// Returns the chain ID of the deployment the given node was started with.
 ///
-/// The chain ID is fixed by the node's deployment settings and never changes
-/// while the node runs, so it is captured on the node handle at startup rather
-/// than queried from a running service.
-///
 /// # Arguments
 ///
 /// - `node`: A pointer to the node returned by
@@ -52,16 +48,7 @@ pub unsafe extern "C" fn get_chain_id(node: *const LogosBlockchainNode) -> FfiGe
         ));
     };
 
-    // Hand the caller its own copy: the node keeps ownership of its own string
-    // for as long as it lives, and the caller frees this one with
-    // `free_cstring`.
-    match CString::new(chain_id.to_bytes()) {
-        Ok(chain_id) => FfiGetChainIdResult::ok(chain_id.into_raw()),
-        Err(error) => FfiGetChainIdResult::err(OperationStatus::error(
-            OperationStatusCode::RuntimeError,
-            format!("Failed to create CString: {error}"),
-        )),
-    }
+    FfiGetChainIdResult::ok(chain_id.into_raw())
 }
 
 /// Result type for [`get_fork_digest`]. On success, `value` is a pointer to a
