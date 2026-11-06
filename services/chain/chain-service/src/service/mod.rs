@@ -4,7 +4,7 @@ pub mod phases;
 
 use core::fmt::Debug;
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     pin::Pin,
     sync::Arc,
     time::Duration,
@@ -31,18 +31,22 @@ use lb_ledger::config::{config_for_slot, stake_distribution_snapshot};
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_network_service::message::ChainSyncEvent;
 use lb_storage_service::api::StorageApi;
+use lb_utils::tokio::task::{CancellableHandle, spawn_blocking};
 use overwatch::{
     DynError,
     services::{relay::InboundRelay, state::StateUpdater},
 };
 use serde::{Serialize, de::DeserializeOwned};
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::{
+    sync::{broadcast, mpsc, oneshot},
+    task::JoinError,
+};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
     AppliedBlock, BlockOrigin, ChainServiceInfo, ConsensusMsg, Cryptarchia,
     CryptarchiaConsensusState, EpochStateQueryResult, Error, LOG_TARGET, LibUpdate,
-    ProcessedBlockEvent, PrunedBlocksInfo, Query, metrics,
+    ProcessedBlockEvent, PrunedBlocksInfo, Query, TryApplyBlockOutcome, metrics,
     notifier::ChainOnlineNotifier,
     relays::{BroadcastRelay, CryptarchiaConsensusRelays},
     sync::block_provider::BlockProvider,
@@ -53,6 +57,20 @@ pub struct ProcessBlockOutcome<Tx> {
     pub reorged_block_ids: Vec<HeaderId>,
     pub reorged_txs: Vec<TxInBlock<Tx>>,
     pub newly_canonical_txs: HashMap<TxHash, Slot>,
+}
+
+/// Where the outcome of applying a block goes.
+type ApplyBlockReply<Tx> = oneshot::Sender<Result<AppliedBlock<Tx>, Error>>;
+
+/// What a block's verification came to, along with who is waiting on the block.
+type BlockVerification<Tx> = (Result<VerifiedBlock<Tx>, Error>, ApplyBlockReply<Tx>);
+
+/// A block that passed verification on a copy of the chain, which holds the
+/// block's changes until it's committed.
+struct VerifiedBlock<Tx> {
+    block: Block<Tx>,
+    candidate: Cryptarchia,
+    applied: TryApplyBlockOutcome,
 }
 
 // Source tips normally leave this map when they pass the LIB. These small
@@ -239,6 +257,10 @@ where
     state_recording_timer: tokio::time::Interval,
     prolonged_bootstrap_period: Duration,
     epoch_state_query_sources: EpochStateQuerySourceTracker,
+    /// The block being verified off the service loop, if any.
+    block_under_verification: Option<CancellableHandle<BlockVerification<Tx>>>,
+    /// The blocks waiting for it.
+    queued_blocks: VecDeque<(Block<Tx>, ApplyBlockReply<Tx>)>,
 }
 
 impl<Phase, Tx> Service<Phase, Tx>
@@ -278,16 +300,60 @@ where
             state_recording_timer: self.state_recording_timer,
             prolonged_bootstrap_period: self.prolonged_bootstrap_period,
             epoch_state_query_sources: self.epoch_state_query_sources,
+            block_under_verification: self.block_under_verification,
+            queued_blocks: self.queued_blocks,
         }
     }
 
-    /// Apply a block to the chain and reply with the result.
-    async fn apply_block_and_reply(
+    /// Apply a block to the chain, once the blocks ahead of it are through, and
+    /// reply with the result.
+    ///
+    /// A block's proofs are verified off the service loop, which goes on
+    /// serving queries and slot ticks meanwhile. They're verified on a copy of
+    /// the chain that replaces it when the block is committed, so blocks go one
+    /// at a time: of two verified side by side, one would be lost.
+    fn apply_block(&mut self, block: Block<Tx>, reply_channel: ApplyBlockReply<Tx>) {
+        self.queued_blocks.push_back((block, reply_channel));
+        self.verify_next_block();
+    }
+
+    fn verify_next_block(&mut self) {
+        if self.block_under_verification.is_some() {
+            return;
+        }
+        let Some((block, reply_channel)) = self.queued_blocks.pop_front() else {
+            return;
+        };
+        let candidate = self.cryptarchia.clone();
+        let current_slot = self.current_slot;
+        self.block_under_verification = Some(
+            spawn_blocking("logos/chain/block-verification-blocking", move || {
+                let verified = verify_block(candidate, block, current_slot, BlockOrigin::Network);
+                (verified, reply_channel)
+            })
+            .into(),
+        );
+    }
+
+    /// Commit the block whose verification is over, and move on to the next.
+    async fn finish_block(&mut self, verification: Result<BlockVerification<Tx>, JoinError>) {
+        self.block_under_verification = None;
+        let (verified, reply_channel) = verification.expect("Block verification should not fail");
+        self.commit_block_and_reply(verified, reply_channel).await;
+        self.verify_next_block();
+    }
+
+    /// Commit a verified block to the chain and reply with the result.
+    async fn commit_block_and_reply(
         &mut self,
-        block: Block<Tx>,
-        reply_channel: oneshot::Sender<Result<AppliedBlock<Tx>, Error>>,
+        verified: Result<VerifiedBlock<Tx>, Error>,
+        reply_channel: ApplyBlockReply<Tx>,
     ) {
-        match self.process_block_and_update_state(block).await {
+        let outcome = match verified {
+            Ok(verified) => self.commit_block_and_update_state(verified).await,
+            Err(e) => Err(e),
+        };
+        match outcome {
             Ok(outcome) => {
                 reply_channel
                     .send(Ok(AppliedBlock {
@@ -309,19 +375,17 @@ where
         }
     }
 
-    /// Process a block and update the service state accordingly.
+    /// Commit a verified block and update the service state accordingly.
     ///
     /// On error, the service state is not mutated.
-    async fn process_block_and_update_state(
+    async fn commit_block_and_update_state(
         &mut self,
-        block: Block<Tx>,
+        verified: VerifiedBlock<Tx>,
     ) -> Result<ProcessBlockOutcome<Tx>, Error> {
         let previous_lib_slot = self.cryptarchia.lib_branch().slot();
-        let outcome = process_block(
+        let outcome = commit_block(
             &mut self.cryptarchia,
-            block,
-            self.current_slot,
-            BlockOrigin::Network,
+            verified,
             &self.relays,
             &self.new_block_subscription_sender,
             &self.lib_subscription_sender,
@@ -891,13 +955,6 @@ fn log_canonical_blend_snapshots<Tx>(cryptarchia: &Cryptarchia, block: &Block<Tx
 ///
 /// A [`Block`] is only added if it's valid.
 /// Otherwise, the [`Cryptarchia`] is unchanged and an error is returned.
-#[expect(clippy::allow_attributes_without_reason)]
-#[instrument(
-    target = LOG_TARGET,
-    level = "debug",
-    skip(cryptarchia, block, relays, new_block_subscription_sender, lib_broadcaster),
-    fields(block_id = %block.header().id(), tx_count = block.transactions_iter().count(), current_slot = ?current_slot)
-)]
 pub async fn process_block<Tx>(
     cryptarchia: &mut Cryptarchia,
     block: Block<Tx>,
@@ -923,13 +980,84 @@ where
         + Unpin
         + 'static,
 {
-    debug!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().id());
-    let header = block.header().clone();
-    let prev_lib = cryptarchia.lib();
+    let verified = verify_block(cryptarchia.clone(), block, current_slot, origin)?;
+    commit_block(
+        cryptarchia,
+        verified,
+        relays,
+        new_block_subscription_sender,
+        lib_broadcaster,
+    )
+    .await
+}
 
-    let mut candidate = cryptarchia.clone();
+/// Apply `block` to `candidate`, a copy of the chain, which is what verifies
+/// the block, proofs included. It's CPU work only, and it can take a while.
+#[expect(clippy::allow_attributes_without_reason)]
+#[instrument(
+    target = LOG_TARGET,
+    level = "debug",
+    skip(candidate, block),
+    fields(block_id = %block.header().id(), tx_count = block.transactions_iter().count(), current_slot = ?current_slot)
+)]
+fn verify_block<Tx>(
+    mut candidate: Cryptarchia,
+    block: Block<Tx>,
+    current_slot: Slot,
+    origin: BlockOrigin,
+) -> Result<VerifiedBlock<Tx>, Error>
+where
+    Tx: PreverifiedMantleTransaction + StorageSize + Clone,
+{
+    debug!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().id());
     let applied =
         candidate.try_apply_block_with_state_retention(block.clone(), current_slot, origin)?;
+    Ok(VerifiedBlock {
+        block,
+        candidate,
+        applied,
+    })
+}
+
+/// Store a verified block and replace `cryptarchia` with the copy the block was
+/// verified on, which has to be a copy of `cryptarchia` as it stands now. On
+/// error, `cryptarchia` is unchanged.
+#[expect(clippy::allow_attributes_without_reason)]
+#[instrument(
+    target = LOG_TARGET,
+    level = "debug",
+    skip_all,
+    fields(block_id = %block.header().id(), tx_count = block.transactions_iter().count())
+)]
+async fn commit_block<Tx>(
+    cryptarchia: &mut Cryptarchia,
+    VerifiedBlock {
+        block,
+        mut candidate,
+        applied,
+    }: VerifiedBlock<Tx>,
+    relays: &CryptarchiaConsensusRelays<Tx>,
+    new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
+    lib_broadcaster: &broadcast::Sender<LibUpdate>,
+) -> Result<ProcessBlockOutcome<Tx>, Error>
+where
+    Tx: PreverifiedMantleTransaction
+        + SignedMantleTx<Preverified, StandardMode>
+        + StorageSize
+        + Debug
+        + Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = u32>
+        + Send
+        + Sync
+        + Unpin
+        + 'static,
+{
+    let header = block.header().clone();
+    let prev_lib = cryptarchia.lib();
     let new_lib = candidate.lib();
 
     let tx_count = block.transactions_iter().count();
@@ -1530,7 +1658,279 @@ fn log_lib_advanced(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::mpsc as std_mpsc;
+
+    use futures::channel::mpsc as slot_tick_channel;
+    use lb_core::mantle::{SignedOps, Utxo};
+    use lb_cryptarchia_engine::{Era, State};
+    use lb_key_management_system_keys::keys::ZkKey;
+    use lb_time_service::SlotTick;
+    use overwatch::services::relay::{OutboundRelay, Relay};
+    use tempfile::TempDir;
+    use tokio::{
+        runtime::{Builder, Runtime},
+        sync::watch,
+        task::JoinHandle,
+        time::{interval, sleep, timeout},
+    };
+
+    use super::{
+        phases::{Following, ProlongedBootstrapPeriod},
+        *,
+    };
+    use crate::{
+        CryptarchiaInfo,
+        sync::config::BlockProviderConfig,
+        tests::{genesis_cryptarchia, spawn_storage_service, try_build_block, utxo},
+    };
+
+    const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
+    /// Long enough for the service to get through what it was sent.
+    const SETTLE_TIME: Duration = Duration::from_millis(100);
+
+    type TestTx = SignedOps<Preverified, StandardMode>;
+    type TestBlock = Block<TestTx>;
+
+    /// A test's end of a running [`Service`].
+    struct ServiceHandle {
+        relay: OutboundRelay<ConsensusMsg<TestTx>>,
+        slot_ticks: slot_tick_channel::Sender<SlotTick>,
+        _storage: (JoinHandle<()>, TempDir),
+    }
+
+    impl ServiceHandle {
+        async fn apply(
+            &self,
+            block: TestBlock,
+        ) -> oneshot::Receiver<Result<AppliedBlock<TestTx>, Error>> {
+            let (reply_channel, reply) = oneshot::channel();
+            assert!(
+                self.relay
+                    .send(ConsensusMsg::ApplyBlock {
+                        block: Box::new(block),
+                        reply_channel,
+                    })
+                    .await
+                    .is_ok()
+            );
+            reply
+        }
+
+        async fn info(&self) -> CryptarchiaInfo {
+            let (reply_channel, reply) = oneshot::channel();
+            assert!(
+                self.relay
+                    .send(Query::Info { reply_channel }.into())
+                    .await
+                    .is_ok()
+            );
+            replied(reply).await.cryptarchia_info
+        }
+
+        fn tick(&mut self, slot: Slot) {
+            self.slot_ticks
+                .try_send(SlotTick {
+                    era: Era::genesis(),
+                    epoch: Epoch::new(0),
+                    slot,
+                })
+                .unwrap();
+        }
+    }
+
+    async fn replied<T>(reply: oneshot::Receiver<T>) -> T {
+        timeout(REPLY_TIMEOUT, reply)
+            .await
+            .expect("the service should reply in time")
+            .unwrap()
+    }
+
+    fn service_in<Phase>(
+        phase: Phase,
+        cryptarchia: Cryptarchia,
+        current_slot: Slot,
+        prolonged_bootstrap_period: Duration,
+    ) -> (Service<Phase, TestTx>, ServiceHandle)
+    where
+        Phase: phases::Phase,
+    {
+        let Relay {
+            inbound_relay,
+            outbound_relay,
+            ..
+        } = Relay::new(16);
+        let (slot_ticks, slot_timer) = slot_tick_channel::channel(16);
+        let (storage_tx, storage_rx) = mpsc::channel(16);
+        let (broadcast_tx, _) = mpsc::channel(16);
+        let (time_tx, _) = mpsc::channel(16);
+        let storage = StorageApi::new(OutboundRelay::new(storage_tx));
+        let service = Service {
+            phase,
+            inbound_relay,
+            state_updater: StateUpdater::new(Arc::new(watch::channel(None).0)),
+            fork_digests: Arc::new(
+                cryptarchia
+                    .ledger
+                    .era_schedule()
+                    .map(|_| ForkDigest::from([0; 32])),
+            ),
+            new_block_subscription_sender: broadcast::channel(16).0,
+            lib_subscription_sender: broadcast::channel(16).0,
+            chain_online_notifier: ChainOnlineNotifier::new(*cryptarchia.consensus.state()),
+            current_slot,
+            storage_blocks_to_remove: HashSet::new(),
+            relays: CryptarchiaConsensusRelays::new(
+                OutboundRelay::new(broadcast_tx),
+                storage.clone(),
+                OutboundRelay::new(time_tx),
+            ),
+            sync_blocks_provider: BlockProvider::new(
+                storage,
+                BlockProviderConfig {
+                    batch_size: 1.try_into().unwrap(),
+                },
+            ),
+            slot_timer: Box::pin(slot_timer),
+            state_recording_timer: interval(Duration::from_hours(1)),
+            prolonged_bootstrap_period,
+            epoch_state_query_sources: EpochStateQuerySourceTracker::default(),
+            block_under_verification: None,
+            queued_blocks: VecDeque::new(),
+            cryptarchia,
+        };
+        let handle = ServiceHandle {
+            relay: outbound_relay,
+            slot_ticks,
+            _storage: spawn_storage_service(storage_rx),
+        };
+        (service, handle)
+    }
+
+    /// Two blocks in a row on top of `chain`.
+    fn two_blocks(chain: &Cryptarchia, utxo: Utxo, key: &ZkKey) -> (TestBlock, TestBlock) {
+        let block_on = |chain: &Cryptarchia, start_slot| {
+            let tip = chain.tip();
+            try_build_block(chain, tip, utxo, key, start_slot, UncleHeaders::empty())
+                .expect("should find a winning slot")
+                .0
+        };
+        let first = block_on(chain, Slot::new(1));
+        let mut chain = chain.clone();
+        chain
+            .try_apply_block(first.clone(), first.header().slot())
+            .unwrap();
+        let second = block_on(&chain, first.header().slot().strict_add(1.into()));
+        (first, second)
+    }
+
+    /// A runtime whose only blocking thread [`hold_block_verification`] can
+    /// take.
+    fn runtime() -> Runtime {
+        Builder::new_current_thread()
+            .enable_time()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap()
+    }
+
+    /// Takes the only blocking thread until the returned sender is dropped, so
+    /// that no block can get verified.
+    fn hold_block_verification() -> std_mpsc::Sender<()> {
+        let (release, held) = std_mpsc::channel();
+        spawn_blocking("test/hold", move || held.recv());
+        release
+    }
+
+    #[test]
+    fn the_service_goes_on_while_a_block_is_verified() {
+        runtime().block_on(async {
+            let (zk_key, utxo) = utxo();
+            let chain = genesis_cryptarchia(utxo);
+            let genesis = chain.tip();
+            let (first, second) = two_blocks(&chain, utxo, &zk_key);
+            let (second_id, second_slot) = (second.header().id(), second.header().slot());
+            let (service, mut handle) =
+                service_in(Following, chain, first.header().slot(), Duration::ZERO);
+            tokio::spawn(service.process_following());
+            let release = hold_block_verification();
+
+            let first_applied = handle.apply(first).await;
+            let second_applied = handle.apply(second).await;
+
+            assert_eq!(handle.info().await.tip, genesis);
+            // The second block would be from the future without this tick.
+            handle.tick(second_slot);
+            sleep(SETTLE_TIME).await;
+
+            drop(release);
+            assert!(replied(first_applied).await.is_ok());
+            // On top of the first: the two went one after the other.
+            assert_eq!(replied(second_applied).await.unwrap().tip, second_id);
+        });
+    }
+
+    #[test]
+    fn a_block_that_fails_verification_lets_the_next_one_through() {
+        runtime().block_on(async {
+            let (zk_key, utxo) = utxo();
+            let chain = genesis_cryptarchia(utxo);
+            let (first, second) = two_blocks(&chain, utxo, &zk_key);
+            let first_id = first.header().id();
+            let (service, handle) =
+                service_in(Following, chain, second.header().slot(), Duration::ZERO);
+            tokio::spawn(service.process_following());
+            let release = hold_block_verification();
+
+            // The parent of the second block is yet to come.
+            let refused = handle.apply(second).await;
+            let applied = handle.apply(first).await;
+
+            drop(release);
+            assert!(matches!(
+                replied(refused).await,
+                Err(Error::ParentMissing { .. })
+            ));
+            assert_eq!(replied(applied).await.unwrap().tip, first_id);
+        });
+    }
+
+    /// Going online changes the chain, and the block would undo that by
+    /// replacing it with the copy it was verified on.
+    #[test]
+    fn going_online_waits_for_the_block_under_verification() {
+        runtime().block_on(async {
+            let (zk_key, utxo) = utxo();
+            let chain = genesis_cryptarchia(utxo);
+            let (block, _) = two_blocks(&chain, utxo, &zk_key);
+            let block_id = block.header().id();
+            let bootstrap_period = Duration::from_millis(50);
+            let (service, handle) = service_in(
+                ProlongedBootstrapPeriod,
+                chain,
+                block.header().slot(),
+                bootstrap_period,
+            );
+            tokio::spawn(async move {
+                service
+                    .process_prolonged_bootstrap_period()
+                    .await
+                    .process_following()
+                    .await;
+            });
+            let release = hold_block_verification();
+
+            let applied = handle.apply(block).await;
+            sleep(bootstrap_period * 4).await;
+            assert_eq!(handle.info().await.state, State::Bootstrapping);
+
+            drop(release);
+            assert!(replied(applied).await.is_ok());
+            sleep(SETTLE_TIME).await;
+            let info = handle.info().await;
+            assert_eq!(info.state, State::Online);
+            assert_eq!(info.tip, block_id);
+        });
+    }
 
     type SdpQueryFixtureStates =
         HashMap<HeaderId, HashMap<ServiceType, HashMap<DeclarationId, &'static str>>>;
