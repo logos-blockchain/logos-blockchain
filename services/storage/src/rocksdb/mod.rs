@@ -4,7 +4,6 @@ mod tests;
 
 use std::{
     collections::{BTreeMap, HashMap},
-    error,
     num::NonZeroUsize,
     ops::RangeInclusive,
     path::PathBuf,
@@ -12,7 +11,6 @@ use std::{
     sync::Arc,
 };
 
-use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures::{Stream, StreamExt as _, stream};
 pub(crate) use handlers::handle_request;
@@ -29,12 +27,6 @@ const IMMUTABLE_BLOCK_PREFIX: &str = "immutable_block/slot/";
 const BLOCK_PARENT_PREFIX: &str = "block_parent/";
 const BLOCK_EVENTS_PREFIX: &str = "block_events/";
 const LOG_TARGET: &str = storage::rocksdb::CHAIN;
-
-/// A stream of `HeaderId`s, used for scanning immutable header IDs. We return a
-/// stream here to allow for efficient pagination of large ranges of immutable
-/// blocks.
-pub type HeaderIdStream =
-    Pin<Box<dyn Stream<Item = Result<HeaderId, Box<dyn error::Error + Send + Sync>>> + Send>>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChainError {
@@ -111,14 +103,14 @@ impl RocksBackend {
 
         Ok(entries)
     }
-    pub async fn get_block(&mut self, header_id: HeaderId) -> Result<Option<Bytes>, ChainError> {
+    pub fn get_block(&self, header_id: HeaderId) -> Result<Option<Bytes>, ChainError> {
         let header_id: [u8; 32] = header_id.into();
         let key = Bytes::copy_from_slice(&header_id);
-        self.load(&key).await.map_err(Into::into)
+        self.load(&key).map_err(Into::into)
     }
 
-    pub async fn store_block_data(
-        &mut self,
+    pub fn store_block_data(
+        &self,
         header_id: HeaderId,
         parent_id: HeaderId,
         block: Bytes,
@@ -140,18 +132,18 @@ impl RocksBackend {
             db.write(batch)?;
             Ok(None)
         });
-        drop(self.execute(db_transaction).await?);
+        drop(self.execute(db_transaction)?);
         Ok(())
     }
 
-    pub async fn remove_block(&mut self, header_id: HeaderId) -> Result<Option<Bytes>, ChainError> {
+    pub fn remove_block(&self, header_id: HeaderId) -> Result<Option<Bytes>, ChainError> {
         let encoded_header_id: [u8; 32] = header_id.into();
         let block_key = Bytes::copy_from_slice(&encoded_header_id);
         let parent_key = key_bytes(BLOCK_PARENT_PREFIX, encoded_header_id);
         let events_key = key_bytes(BLOCK_EVENTS_PREFIX, encoded_header_id);
 
         // Load the block first so we can return it.
-        let val = self.load(&block_key).await?;
+        let val = self.load(&block_key)?;
 
         let db_transaction = self.txn(move |db| {
             let mut batch = WriteBatch::default();
@@ -161,33 +153,26 @@ impl RocksBackend {
             db.write(batch)?;
             Ok(None)
         });
-        drop(self.execute(db_transaction).await?);
+        drop(self.execute(db_transaction)?);
         Ok(val)
     }
 
-    pub async fn get_block_parent(
-        &mut self,
-        header_id: HeaderId,
-    ) -> Result<Option<HeaderId>, ChainError> {
+    pub fn get_block_parent(&self, header_id: HeaderId) -> Result<Option<HeaderId>, ChainError> {
         let header_bytes: [u8; 32] = header_id.into();
         let key = key_bytes(BLOCK_PARENT_PREFIX, header_bytes);
-        self.load(&key)
-            .await?
+        self.load(&key)?
             .map(|bytes| bytes.as_ref().try_into().map_err(Into::into))
             .transpose()
     }
 
-    pub async fn get_block_events(
-        &mut self,
-        header_id: HeaderId,
-    ) -> Result<Option<Bytes>, ChainError> {
+    pub fn get_block_events(&self, header_id: HeaderId) -> Result<Option<Bytes>, ChainError> {
         let header_bytes: [u8; 32] = header_id.into();
         let key = key_bytes(BLOCK_EVENTS_PREFIX, header_bytes);
-        self.load(&key).await.map_err(Into::into)
+        self.load(&key).map_err(Into::into)
     }
 
-    pub async fn store_immutable_block_ids(
-        &mut self,
+    pub fn store_immutable_block_ids(
+        &self,
         ids: BTreeMap<Slot, HeaderId>,
     ) -> Result<(), ChainError> {
         let db_transaction = self.txn(move |db| {
@@ -196,72 +181,58 @@ impl RocksBackend {
             db.write(batch)?;
             Ok(None)
         });
-        drop(self.execute(db_transaction).await?);
+        drop(self.execute(db_transaction)?);
 
         Ok(())
     }
 
-    pub async fn get_immutable_block_id(
-        &mut self,
-        slot: Slot,
-    ) -> Result<Option<HeaderId>, ChainError> {
+    pub fn get_immutable_block_id(&self, slot: Slot) -> Result<Option<HeaderId>, ChainError> {
         // use be_bytes to keep prefix ordering
         let key = key_bytes(IMMUTABLE_BLOCK_PREFIX, slot.to_be_bytes());
-        self.load(&key)
-            .await?
+        self.load(&key)?
             .map(|bytes| bytes.as_ref().try_into().map_err(Into::into))
             .transpose()
     }
 
-    pub async fn scan_immutable_block_ids(
-        &mut self,
+    pub fn scan_immutable_block_ids(
+        &self,
         slot_range: RangeInclusive<Slot>,
         limit: NonZeroUsize,
-    ) -> Result<HeaderIdStream, ChainError> {
+    ) -> Result<Vec<HeaderId>, ChainError> {
         // use be_bytes to keep prefix ordering
         let start_key = slot_range.start().to_be_bytes();
         let end_key = slot_range.end().to_be_bytes();
-        let result = self
-            .load_prefix(
-                IMMUTABLE_BLOCK_PREFIX.as_ref(),
-                Some(&start_key),
-                Some(&end_key),
-                Some(limit),
-            )
-            .await?;
-
-        let mapped = result
-            .into_iter()
-            .map(|bytes| bytes.as_ref().try_into().map_err(Into::into));
-
-        Ok(Box::pin(stream::iter(mapped)))
+        self.load_prefix(
+            IMMUTABLE_BLOCK_PREFIX.as_ref(),
+            Some(&start_key),
+            Some(&end_key),
+            Some(limit),
+        )?
+        .into_iter()
+        .map(|bytes| bytes.as_ref().try_into().map_err(Into::into))
+        .collect()
     }
 
-    pub async fn scan_immutable_block_ids_reverse(
-        &mut self,
+    pub fn scan_immutable_block_ids_reverse(
+        &self,
         slot_range: RangeInclusive<Slot>,
         limit: NonZeroUsize,
-    ) -> Result<HeaderIdStream, ChainError> {
+    ) -> Result<Vec<HeaderId>, ChainError> {
         let start_key = slot_range.start().to_be_bytes();
         let end_key = slot_range.end().to_be_bytes();
-        let result = self
-            .load_prefix_reverse(
-                IMMUTABLE_BLOCK_PREFIX.as_ref(),
-                Some(&start_key),
-                Some(&end_key),
-                Some(limit),
-            )
-            .await?;
-
-        let mapped = result
-            .into_iter()
-            .map(|bytes| bytes.as_ref().try_into().map_err(Into::into));
-
-        Ok(Box::pin(stream::iter(mapped)))
+        self.load_prefix_reverse(
+            IMMUTABLE_BLOCK_PREFIX.as_ref(),
+            Some(&start_key),
+            Some(&end_key),
+            Some(limit),
+        )?
+        .into_iter()
+        .map(|bytes| bytes.as_ref().try_into().map_err(Into::into))
+        .collect()
     }
 
-    pub async fn store_transactions(
-        &mut self,
+    pub fn store_transactions(
+        &self,
         transactions: HashMap<TxHash, Bytes>,
     ) -> Result<(), ChainError> {
         let batch_items: HashMap<Bytes, Bytes> = transactions
@@ -269,9 +240,12 @@ impl RocksBackend {
             .map(|(tx_hash, tx_bytes)| (tx_hash.into(), tx_bytes))
             .collect();
 
-        self.bulk_store(batch_items).await.map_err(Into::into)
+        self.bulk_store(batch_items).map_err(Into::into)
     }
 
+    /// The stream reads when first polled, on the blocking pool rather than on
+    /// the task polling it. All in one go, as mempool views can be large and
+    /// a leader has only a slot to read them.
     pub fn get_transactions(
         &self,
         tx_hashes: Vec<TxHash>,
@@ -280,34 +254,43 @@ impl RocksBackend {
             return Box::pin(stream::empty());
         }
 
-        let stream = stream::iter(tx_hashes).filter_map({
-            let backend = self.clone();
-            move |tx_hash| {
-                let mut backend = backend.clone();
-                async move {
-                    let key: Bytes = tx_hash.into();
-                    match backend.load(&key).await {
-                        Ok(Some(tx)) => Some(tx),
-                        Ok(None) => {
-                            tracing::debug!(target: LOG_TARGET, "Transaction not found: {tx_hash:?}");
-                            None
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                target: LOG_TARGET,
-                                "Database error loading transaction {tx_hash:?}: {e:?}",
-                            );
-                            None
-                        }
-                    }
-                }
-            }
-        });
+        let backend = self.clone();
+        let transactions = async move {
+            spawn_blocking(
+                "logos/storage/rocksdb-get-transactions-blocking",
+                move || backend.load_transactions(&tx_hashes),
+            )
+            .await
+            .expect("Failed to join the blocking task")
+        };
 
-        Box::pin(stream)
+        Box::pin(stream::once(transactions).flat_map(stream::iter))
     }
 
-    pub async fn remove_transactions(&mut self, tx_hashes: &[TxHash]) -> Result<(), ChainError> {
+    fn load_transactions(&self, tx_hashes: &[TxHash]) -> Vec<Bytes> {
+        tx_hashes
+            .iter()
+            .filter_map(|&tx_hash| {
+                let key: Bytes = tx_hash.into();
+                match self.load(&key) {
+                    Ok(Some(tx)) => Some(tx),
+                    Ok(None) => {
+                        tracing::debug!(target: LOG_TARGET, "Transaction not found: {tx_hash:?}");
+                        None
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            target: LOG_TARGET,
+                            "Database error loading transaction {tx_hash:?}: {e:?}",
+                        );
+                        None
+                    }
+                }
+            })
+            .collect()
+    }
+
+    pub fn remove_transactions(&self, tx_hashes: &[TxHash]) -> Result<(), ChainError> {
         let keys: Vec<Bytes> = tx_hashes.iter().map(|&tx_hash| tx_hash.into()).collect();
 
         let db_transaction = self.txn(move |db| {
@@ -319,7 +302,7 @@ impl RocksBackend {
             Ok(None)
         });
 
-        drop(self.execute(db_transaction).await?);
+        drop(self.execute(db_transaction)?);
         Ok(())
     }
 }
@@ -330,7 +313,6 @@ impl core::fmt::Debug for RocksBackend {
     }
 }
 
-#[async_trait]
 impl StorageBackend for RocksBackend {
     type Settings = RocksBackendSettings;
     type Error = Error;
@@ -373,47 +355,35 @@ impl StorageBackend for RocksBackend {
         })
     }
 
-    async fn store(
-        &mut self,
-        key: Bytes,
-        value: Bytes,
-    ) -> Result<(), <Self as StorageBackend>::Error> {
+    fn store(&self, key: Bytes, value: Bytes) -> Result<(), <Self as StorageBackend>::Error> {
         self.rocks.put(key, value)
     }
 
-    async fn bulk_store<I>(&mut self, items: I) -> Result<(), <Self as StorageBackend>::Error>
+    fn bulk_store<I>(&self, items: I) -> Result<(), <Self as StorageBackend>::Error>
     where
-        I: IntoIterator<Item = (Bytes, Bytes)> + Send + 'static,
+        I: IntoIterator<Item = (Bytes, Bytes)>,
     {
-        let rocks_db = Arc::clone(&self.rocks);
+        let mut batch = WriteBatch::default();
+        let mut has_items = false;
 
-        // Use spawn_blocking to avoid blocking the async runtime during the bulk
-        // operation
-        spawn_blocking("logos/storage/rocksdb-bulk-store-blocking", move || {
-            let mut batch = WriteBatch::default();
-            let mut has_items = false;
+        for (key, value) in items {
+            batch.put(key, value);
+            has_items = true;
+        }
 
-            for (key, value) in items {
-                batch.put(key, value);
-                has_items = true;
-            }
+        if !has_items {
+            return Ok(());
+        }
 
-            if !has_items {
-                return Ok(());
-            }
-
-            rocks_db.write(batch)
-        })
-        .await
-        .expect("Failed to join the blocking task")
+        self.rocks.write(batch)
     }
 
-    async fn load(&mut self, key: &[u8]) -> Result<Option<Bytes>, <Self as StorageBackend>::Error> {
+    fn load(&self, key: &[u8]) -> Result<Option<Bytes>, <Self as StorageBackend>::Error> {
         self.rocks.get(key).map(|opt| opt.map(Into::into))
     }
 
-    async fn load_prefix(
-        &mut self,
+    fn load_prefix(
+        &self,
         prefix: &[u8],
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
@@ -477,8 +447,8 @@ impl StorageBackend for RocksBackend {
         Ok(values)
     }
 
-    async fn load_prefix_reverse(
-        &mut self,
+    fn load_prefix_reverse(
+        &self,
         prefix: &[u8],
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
@@ -522,11 +492,8 @@ impl StorageBackend for RocksBackend {
         Ok(values)
     }
 
-    async fn remove(
-        &mut self,
-        key: &[u8],
-    ) -> Result<Option<Bytes>, <Self as StorageBackend>::Error> {
-        let val = self.load(key).await?;
+    fn remove(&self, key: &[u8]) -> Result<Option<Bytes>, <Self as StorageBackend>::Error> {
+        let val = self.load(key)?;
         if val.is_some() {
             self.rocks.delete(key).map(|()| val)
         } else {
@@ -534,8 +501,8 @@ impl StorageBackend for RocksBackend {
         }
     }
 
-    async fn execute(
-        &mut self,
+    fn execute(
+        &self,
         transaction: Self::Transaction,
     ) -> Result<<Self::Transaction as StorageTransaction>::Result, <Self as StorageBackend>::Error>
     {

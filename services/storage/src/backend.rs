@@ -1,6 +1,5 @@
 use std::{error::Error, num::NonZeroUsize};
 
-use async_trait::async_trait;
 use bytes::Bytes;
 pub use lb_binary_codec::bincode::SerdeOp;
 
@@ -11,7 +10,9 @@ pub trait StorageTransaction: Send + Sync {
 }
 
 /// Main storage functionality trait
-#[async_trait]
+///
+/// Backends do their I/O in place, so an async caller has to run them on the
+/// blocking pool.
 pub trait StorageBackend: Sized {
     /// Backend settings
     type Settings: Clone + Send + Sync + 'static;
@@ -22,18 +23,14 @@ pub trait StorageBackend: Sized {
     /// operates over the backend as per the backend specification.
     type Transaction: StorageTransaction;
     fn new(config: Self::Settings) -> Result<Self, <Self as StorageBackend>::Error>;
-    async fn store(
-        &mut self,
-        key: Bytes,
-        value: Bytes,
-    ) -> Result<(), <Self as StorageBackend>::Error>;
-    async fn bulk_store<I>(&mut self, items: I) -> Result<(), <Self as StorageBackend>::Error>
+    fn store(&self, key: Bytes, value: Bytes) -> Result<(), <Self as StorageBackend>::Error>;
+    fn bulk_store<I>(&self, items: I) -> Result<(), <Self as StorageBackend>::Error>
     where
-        I: IntoIterator<Item = (Bytes, Bytes)> + Send + 'static;
-    async fn load(&mut self, key: &[u8]) -> Result<Option<Bytes>, <Self as StorageBackend>::Error>;
+        I: IntoIterator<Item = (Bytes, Bytes)>;
+    fn load(&self, key: &[u8]) -> Result<Option<Bytes>, <Self as StorageBackend>::Error>;
     /// Loads all values whose keys start with the given prefix.
-    async fn load_prefix(
-        &mut self,
+    fn load_prefix(
+        &self,
         prefix: &[u8],
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
@@ -41,20 +38,17 @@ pub trait StorageBackend: Sized {
     ) -> Result<Vec<Bytes>, <Self as StorageBackend>::Error>;
     /// Loads all values whose keys start with the given prefix in reverse
     /// order.
-    async fn load_prefix_reverse(
-        &mut self,
+    fn load_prefix_reverse(
+        &self,
         prefix: &[u8],
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
         limit: Option<NonZeroUsize>,
     ) -> Result<Vec<Bytes>, <Self as StorageBackend>::Error>;
-    async fn remove(
-        &mut self,
-        key: &[u8],
-    ) -> Result<Option<Bytes>, <Self as StorageBackend>::Error>;
+    fn remove(&self, key: &[u8]) -> Result<Option<Bytes>, <Self as StorageBackend>::Error>;
     /// Execute a transaction in the current backend
-    async fn execute(
-        &mut self,
+    fn execute(
+        &self,
         transaction: Self::Transaction,
     ) -> Result<<Self::Transaction as StorageTransaction>::Result, <Self as StorageBackend>::Error>;
 }

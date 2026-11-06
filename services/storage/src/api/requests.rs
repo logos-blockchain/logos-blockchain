@@ -94,6 +94,31 @@ pub enum StorageMsg {
     },
 }
 
+impl StorageMsg {
+    /// Whether the request leaves the database as it found it.
+    pub(crate) const fn is_read(&self) -> bool {
+        match self {
+            Self::Load { .. }
+            | Self::LoadPrefix { .. }
+            | Self::GetBlock { .. }
+            | Self::GetBlockParent { .. }
+            | Self::GetBlockEvents { .. }
+            | Self::GetImmutableBlockId { .. }
+            | Self::ScanImmutableBlockIds { .. }
+            | Self::ScanImmutableBlockIdsReverse { .. }
+            | Self::GetTransactions { .. } => true,
+            Self::Store { .. }
+            | Self::Remove { .. }
+            | Self::Execute { .. }
+            | Self::StoreBlockData { .. }
+            | Self::RemoveBlock { .. }
+            | Self::StoreImmutableBlockIds { .. }
+            | Self::StoreTransactions { .. }
+            | Self::RemoveTransactions { .. } => false,
+        }
+    }
+}
+
 impl Debug for StorageMsg {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {

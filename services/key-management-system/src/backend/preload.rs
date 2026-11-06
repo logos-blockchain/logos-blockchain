@@ -21,6 +21,7 @@ pub enum PreloadBackendError {
     AlreadyRegisteredKeyId(KeyId),
 }
 
+#[derive(Clone)]
 pub struct PreloadKMSBackend {
     keys: HashMap<KeyId, Key>,
 }
@@ -100,13 +101,13 @@ impl KMSBackend for PreloadKMSBackend {
     }
 
     async fn execute(
-        &mut self,
+        &self,
         key_id: &Self::KeyId,
         operator: Self::KeyOperations,
     ) -> Result<(), Self::Error> {
         let key = self
             .keys
-            .get_mut(key_id)
+            .get(key_id)
             .ok_or_else(|| PreloadBackendError::NotRegisteredKeyId(key_id.to_owned()))?;
 
         key.execute(operator)
