@@ -780,7 +780,7 @@ fn config_in_block_does_not_advance_channel_tip() {
 
     // shed_off_branch_pending should drop the stale one but not the live one.
     let shed = state.shed_off_branch_pending(block);
-    let shed_hashes: HashSet<TxHash> = shed.iter().map(PendingTx::tx_hash).collect();
+    let shed_hashes: HashSet<TxHash> = shed.iter().map(Displaced::tx_hash).collect();
     assert!(
         shed_hashes.contains(&pending_stale_hash),
         "pending chained from I1 lost its position to the mined I2"
@@ -1167,9 +1167,15 @@ async fn drive_with(
         .unwrap();
         let s = state.as_mut().unwrap();
         let tip = current_tip.unwrap();
+        // Split by kind: the assertions check each kind's own order.
         let mut shed = s.shed_bundles_with_missing_inputs(tip, channel_id);
-        shed.extend(s.shed_off_branch_pending(tip));
-        let shed_other = s.shed_off_branch_pending_other(tip);
+        let mut shed_other = Vec::new();
+        for entry in s.shed_off_branch_pending(tip) {
+            match entry {
+                Displaced::Own(tx) => shed.push(*tx),
+                Displaced::Other(tx) => shed_other.push(tx),
+            }
+        }
         let common_prefix = common_prefix(s, tip, channel_id, &result.view_before);
         driven.push(Driven {
             result,
