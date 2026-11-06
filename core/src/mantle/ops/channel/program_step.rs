@@ -138,11 +138,12 @@ pub mod test_utils {
     };
 
     // Proves a ZkProgramSpend from note openings and their commitment MMR paths,
-    // as `prove_transfer`. Each input is a note, its secret key and its path in the
-    // commitment MMR; the flags missing past `outputs_of_program` are false.
+    // as `prove_transfer`. Each input is a note of the program, held by `PK0`, and
+    // its path in the commitment MMR; the flags missing past `outputs_of_program`
+    // are false.
     #[must_use]
     pub fn prove_program_spend(
-        inputs: &[(Note, Fr, MerklePath)],
+        inputs: &[(Note, MerklePath)],
         outputs: &[Note],
         outputs_of_program: &[bool],
         tx_commitment_root: Fr,
@@ -155,19 +156,19 @@ pub mod test_utils {
     ) {
         let wallet = ZkProgramSpendWalletInputsData {
             inputs: core::array::from_fn(|i| {
-                inputs.get(i).map_or_else(
-                    ZkProgramSpendInputNoteData::inactive,
-                    |(note, secret_key, path)| ZkProgramSpendInputNoteData {
-                        secret_key: *secret_key,
-                        stake_public_key: *note.stake_public_key.as_fr(),
-                        nonce: note.nonce,
-                        value: note.value,
-                        data: note.data,
-                        path_and_selectors: core::array::from_fn(|h| {
-                            (path.siblings()[h], (path.leaf_index() >> h) & 1 == 1)
-                        }),
-                    },
-                )
+                inputs
+                    .get(i)
+                    .map_or_else(ZkProgramSpendInputNoteData::inactive, |(note, path)| {
+                        ZkProgramSpendInputNoteData {
+                            stake_public_key: *note.stake_public_key.as_fr(),
+                            nonce: note.nonce,
+                            value: note.value,
+                            data: note.data,
+                            path_and_selectors: core::array::from_fn(|h| {
+                                (path.siblings()[h], (path.leaf_index() >> h) & 1 == 1)
+                            }),
+                        }
+                    })
             }),
             outputs: core::array::from_fn(|j| {
                 outputs

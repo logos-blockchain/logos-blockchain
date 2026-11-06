@@ -405,7 +405,7 @@ mod tests {
         let operation = InscriptionOp::sample_with_step();
         let ops = Ops::from([Op::ChannelInscribe(operation.clone())]);
         let proof = Op::ChannelInscribe(operation).sample_proof();
-        assert_eq!(proof.encode().len(), 64 + 128 + (128 + 128 + 128 + 136));
+        assert_eq!(proof.encode().len(), 64 + 128 + 128 + (128 + 128 + 104));
         let signed =
             SignedOps::<Unverified, StandardMode>::from_parts(ops.clone(), OpProofs::from([proof]))
                 .unwrap();

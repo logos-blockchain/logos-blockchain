@@ -176,9 +176,10 @@ mod tests {
     use super::*;
     use crate::test_utils::sample_witness_data;
 
-    // Sample: active inputs of 3145 and 920 and a paid value of 1679 balance eight
-    // outputs of 718; the first four outputs are notes of the program.
-    const SAMPLE_PAID: u64 = 1679;
+    // Sample: active inputs of 2643 and 4744 and a paid value of 2636 balance seven
+    // outputs of 1252 and one of 1259; the first four outputs are notes of the
+    // program.
+    const SAMPLE_PAID: u64 = 2636;
     const SAMPLE_OF_PROGRAM: [bool; 8] = [true, true, true, true, false, false, false, false];
 
     fn frs(values: &[Groth16Input]) -> Vec<Fr> {

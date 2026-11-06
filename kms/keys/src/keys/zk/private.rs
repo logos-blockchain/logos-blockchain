@@ -15,7 +15,7 @@ use crate::keys::{
 };
 
 static KDF: LazyLock<Fr> = LazyLock::new(|| fr_from_bytes_unchecked(b"KDF"));
-static NF_KDF: LazyLock<Fr> = LazyLock::new(|| fr_from_bytes_unchecked(b"NF_KDF"));
+static NF_KDF_V1: LazyLock<Fr> = LazyLock::new(|| fr_from_bytes_unchecked(b"NF_KDF_V1"));
 
 /// A ZK secret key exposing methods to retrieve its inner secret value.
 ///
@@ -82,13 +82,13 @@ impl SecretKey {
             .map_err(|e| KeyError::ZkTransferProve(e.to_string()))
     }
 
-    /// The nullifier key `nf_sk = zkhash(NF_KDF, spending_sk)`, which derives
-    /// the public key and the nullifiers of the notes. A wallet uses it as the
-    /// staking secret key of its notes, so a node handed it leads with them
-    /// without being able to spend them.
+    /// The nullifier key `nf_sk = zkhash(NF_KDF_V1, spending_sk)`, which
+    /// derives the public key and the nullifiers of the notes. A wallet
+    /// uses it as the staking secret key of its notes, so a node handed it
+    /// leads with them without being able to spend them.
     #[must_use]
     pub fn nullifier_key(&self) -> Fr {
-        <Poseidon2Bn254Hasher as Digest>::compress(&[*NF_KDF, self.0])
+        <Poseidon2Bn254Hasher as Digest>::compress(&[*NF_KDF_V1, self.0])
     }
 
     /// The public key `zkhash(KDF, nf_sk)`, derived from the nullifier key.
@@ -115,6 +115,11 @@ impl SecretKey {
 pub fn kdf_public_key(secret: &Fr) -> PublicKey {
     PublicKey::new(<Poseidon2Bn254Hasher as Digest>::compress(&[*KDF, *secret]))
 }
+
+/// `PK0`, the public key of the spending secret key `0`, which holds every
+/// program note: everyone knows its nullifier key `NF_SK0`, so only the proof
+/// of its program moves a program note.
+pub static PK0: LazyLock<PublicKey> = LazyLock::new(|| SecretKey(Fr::ZERO).to_public_key());
 
 impl PartialEq for SecretKey {
     fn eq(&self, other: &Self) -> bool {

@@ -858,7 +858,7 @@ mod tests {
         AdditiveGroup as _, CompressedGroth16Proof, Field as _, Groth16Input,
         test_utils::{three_input_prove, three_input_setup},
     };
-    use lb_key_management_system_keys::keys::{ZkKey, ZkPublicKey};
+    use lb_key_management_system_keys::keys::{PK0, ZkKey, ZkPublicKey};
     use lb_utils::bounded::BoundedError;
 
     use super::*;
@@ -2242,7 +2242,7 @@ mod tests {
         let note = notes::Note {
             value: 10,
             nonce: Fr::from(2u64),
-            public_key: ZkPublicKey::new(Fr::from(3u64)),
+            public_key: *PK0,
             stake_public_key: ZkPublicKey::new(Fr::from(6u64)),
             program: program_id(),
             data: Fr::from(4u64),
@@ -2250,7 +2250,6 @@ mod tests {
         let opening = ProgramNoteOpening {
             value: 10,
             nonce: Fr::from(2u64),
-            public_key: note.public_key,
             stake_public_key: note.stake_public_key,
             data: Fr::from(4u64),
         };
@@ -2402,7 +2401,7 @@ mod tests {
         let program_note = notes::Note {
             value: 1_000,
             nonce: Fr::from(21u64),
-            public_key: ZkKey::new(Fr::ZERO).to_public_key(),
+            public_key: *PK0,
             stake_public_key: ZkKey::new(Fr::from(7u64)).to_public_key(),
             program: program_id(),
             data: Fr::from(5u64),
@@ -2480,7 +2479,6 @@ mod tests {
                 program_notes: vec![ProgramNoteOpening {
                     value: 1_000,
                     nonce: Fr::from(21u64),
-                    public_key: program_note.public_key,
                     stake_public_key: program_note.stake_public_key,
                     data: Fr::from(5u64),
                 }],

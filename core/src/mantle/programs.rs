@@ -347,6 +347,7 @@ pub fn program_step_id(
 #[cfg(test)]
 mod tests {
     use lb_groth16::test_utils::{generator_multiples_key, three_input_prove, three_input_setup};
+    use lb_key_management_system_keys::keys::PK0;
 
     use super::*;
     use crate::mantle::{
@@ -449,8 +450,9 @@ mod tests {
         let (_, public) = lb_program_spend::prove(data.clone().into()).unwrap();
         let inputs = core::array::from_fn(|i| {
             let input = &data.wallet.inputs[i];
-            let key = ZkKey::new(input.secret_key);
-            let public_key = key.to_public_key();
+            // every note of the program is held by PK0
+            let key = ZkKey::new(Fr::ZERO);
+            let public_key = *PK0;
             let stake_public_key = ZkPublicKey::new(input.stake_public_key);
             if data.chain.inputs_active[i] {
                 let note = Note {

@@ -480,7 +480,7 @@ mod tests {
         canonical::BinaryEncode as _,
     };
     use lb_groth16::{AdditiveGroup as _, Fr};
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
+    use lb_key_management_system_keys::keys::{Ed25519Key, PK0, ZkPublicKey};
 
     use crate::mantle::{
         Op, OpProof, SignedOps, VerificationError,
@@ -1019,7 +1019,7 @@ mod tests {
         let note = Note {
             value: 10,
             nonce: Fr::from(2u64),
-            public_key: ZkPublicKey::new(Fr::from(3u64)),
+            public_key: *PK0,
             stake_public_key: ZkPublicKey::new(Fr::from(3u64)),
             program: Fr::from(7u64),
             data: Fr::from(4u64),
@@ -1042,7 +1042,6 @@ mod tests {
         let opening = ProgramNoteOpening {
             value: 10,
             nonce: Fr::from(2u64),
-            public_key: note.public_key,
             stake_public_key: note.stake_public_key,
             data: Fr::from(4u64),
         };

@@ -6,7 +6,6 @@ use crate::{MAX_INPUTS, MAX_OUTPUTS};
 
 #[derive(Clone)]
 pub struct ZkProgramSpendWalletInputs {
-    inputs_spending_sk: [Groth16Input; MAX_INPUTS],
     inputs_stake_pk: [Groth16Input; MAX_INPUTS],
     inputs_nonce: [Groth16Input; MAX_INPUTS],
     inputs_value: [Groth16Input; MAX_INPUTS],
@@ -23,9 +22,6 @@ pub struct ZkProgramSpendWalletInputs {
 
 #[derive(Clone, Debug)]
 pub struct ZkProgramSpendInputNoteData {
-    // The spending secret key, from which the circuit derives the nullifier key
-    // and the public key.
-    pub secret_key: Fr,
     // The staking key of the note, which the circuit does not prove.
     pub stake_public_key: Fr,
     pub nonce: Fr,
@@ -38,7 +34,6 @@ impl ZkProgramSpendInputNoteData {
     #[must_use]
     pub const fn inactive() -> Self {
         Self {
-            secret_key: Fr::ZERO,
             stake_public_key: Fr::ZERO,
             nonce: Fr::ZERO,
             value: 0,
@@ -80,7 +75,6 @@ pub struct ZkProgramSpendWalletInputsData {
 
 #[derive(Serialize)]
 pub struct ZkProgramSpendWalletInputsJson {
-    inputs_spending_sk: [Groth16InputDeser; MAX_INPUTS],
     inputs_stake_pk: [Groth16InputDeser; MAX_INPUTS],
     inputs_nonce: [Groth16InputDeser; MAX_INPUTS],
     inputs_value: [Groth16InputDeser; MAX_INPUTS],
@@ -98,7 +92,6 @@ pub struct ZkProgramSpendWalletInputsJson {
 impl From<&ZkProgramSpendWalletInputs> for ZkProgramSpendWalletInputsJson {
     fn from(
         ZkProgramSpendWalletInputs {
-            inputs_spending_sk,
             inputs_stake_pk,
             inputs_nonce,
             inputs_value,
@@ -113,7 +106,6 @@ impl From<&ZkProgramSpendWalletInputs> for ZkProgramSpendWalletInputsJson {
         }: &ZkProgramSpendWalletInputs,
     ) -> Self {
         Self {
-            inputs_spending_sk: inputs_spending_sk.map(|sk| (&sk).into()),
             inputs_stake_pk: inputs_stake_pk.map(|stake_pk| (&stake_pk).into()),
             inputs_nonce: inputs_nonce.map(|nonce| (&nonce).into()),
             inputs_value: inputs_value.map(|value| (&value).into()),
@@ -141,7 +133,6 @@ impl From<ZkProgramSpendWalletInputsData> for ZkProgramSpendWalletInputs {
         ZkProgramSpendWalletInputsData { inputs, outputs }: ZkProgramSpendWalletInputsData,
     ) -> Self {
         Self {
-            inputs_spending_sk: inputs.each_ref().map(|input| input.secret_key.into()),
             inputs_stake_pk: inputs.each_ref().map(|input| input.stake_public_key.into()),
             inputs_nonce: inputs.each_ref().map(|input| input.nonce.into()),
             inputs_value: inputs.each_ref().map(|input| Fr::from(input.value).into()),

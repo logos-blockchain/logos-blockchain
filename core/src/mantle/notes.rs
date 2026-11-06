@@ -215,7 +215,7 @@ mod test {
             };
             assert_eq!(public.outputs[index].into_inner(), expected);
         }
-        assert_eq!(public.excess_value.into_inner(), Fr::from(50u64));
+        assert_eq!(public.excess_value.into_inner(), Fr::from(52u64));
     }
 
     #[test]
