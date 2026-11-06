@@ -1,13 +1,10 @@
-use crate::{
-    errors::{OperationStatus, free_operation_status},
-    result::FfiResult,
-};
-
 /// Checks if a pointer is null and returns from the calling function with a
 /// null-pointer error status.
 ///
-/// Works with any return type that implements [`FfiReturn`], including
-/// [`FfiResult`], [`OperationStatus`], and `()`.
+/// Works with any return type that implements
+/// [`FfiReturn`](lb_c_common::FfiReturn), including
+/// [`FfiResult`](crate::FfiResult),
+/// [`OperationStatus`](crate::OperationStatus), and `()`.
 ///
 /// # Arguments
 ///
@@ -15,22 +12,17 @@ use crate::{
 #[macro_export]
 macro_rules! return_error_if_null_pointer {
     ($pointer:expr) => {
-        if $pointer.is_null() {
-            return <_ as $crate::macros::FfiReturn>::from_operation_status(
-                $crate::errors::OperationStatus::error(
-                    $crate::errors::OperationStatusCode::NullPointer,
-                    format!("Received a null `{}` pointer.", stringify!($pointer)),
-                ),
-            );
-        }
+        ::lb_c_common::return_error_if_null_pointer!($pointer, $crate::OperationStatus);
     };
 }
 
 /// Unwraps a [`Result`], returning the [`Ok`] value, or converts the error
 /// into the function's return type and returning early.
 ///
-/// Works with any return type that implements [`FfiReturn`], including
-/// [`FfiResult`], [`OperationStatus`], and `()`.
+/// Works with any return type that implements
+/// [`FfiReturn`](lb_c_common::FfiReturn), including
+/// [`FfiResult`](crate::FfiResult),
+/// [`OperationStatus`](crate::OperationStatus), and `()`.
 ///
 /// # Arguments
 ///
@@ -45,35 +37,10 @@ macro_rules! unwrap_or_return_error {
             Ok(value) => value,
             Err(error) => {
                 $on_err(&error);
-                return <_ as $crate::macros::FfiReturn>::from_operation_status(error);
+
+                // SAFETY: Node operations return newly owned error statuses.
+                return unsafe { ::lb_c_common::FfiReturn::from_error(error) };
             }
         }
     };
-}
-
-/// Implemented by FFI return types that can be constructed from an
-/// [`OperationStatus`] error, enabling the `return_error_if_null_pointer!` and
-/// `unwrap_or_return_error!` macros to work across all return types.
-pub trait FfiReturn {
-    fn from_operation_status(status: OperationStatus) -> Self;
-}
-
-impl<Type: Default> FfiReturn for FfiResult<Type, OperationStatus> {
-    fn from_operation_status(status: OperationStatus) -> Self {
-        Self::err(status)
-    }
-}
-
-impl FfiReturn for OperationStatus {
-    fn from_operation_status(status: OperationStatus) -> Self {
-        status
-    }
-}
-
-impl FfiReturn for () {
-    /// There is nowhere to report the error, so it is released: dropping it
-    /// would leak its message.
-    fn from_operation_status(status: OperationStatus) -> Self {
-        unsafe { free_operation_status(status) };
-    }
 }
