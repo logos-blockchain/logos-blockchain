@@ -12,7 +12,7 @@ use crate::{
         batch::DeferredZkTransfer,
         gas::{
             EXECUTION_SIGNATURE_GAS, Gas, GasOverflow, MainnetGasProfile, OpGasCalculator,
-            OpGasContext, OperationGas, spend_gas,
+            OpGasContext, OperationGas, root_gas, spend_gas,
         },
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
@@ -64,16 +64,17 @@ impl OpId for SDPWithdrawOp {
 }
 
 impl OperationGas<MainnetGasProfile> for SDPWithdrawOp {
-    const GAS_COST: Gas = Gas::new(892);
+    const GAS_COST: Gas = Gas::new(0);
 }
 
 impl OpGasCalculator<MainnetGasProfile> for SDPWithdrawOp {
-    // The Operation, plus its signature and the spend of the service note,
-    // whose root is of the note alone.
+    // The Operation, plus its signature, the spend of the service note and the
+    // root of the note alone, the empty MMR extended by one commitment.
     fn execution_gas(&self, _context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
         Self::GAS_COST
             .checked_add(EXECUTION_SIGNATURE_GAS)?
-            .checked_add(spend_gas(1, self.outputs.len())?)
+            .checked_add(spend_gas(1, self.outputs.len())?)?
+            .checked_add(root_gas(1)?)
     }
 }
 
@@ -604,11 +605,12 @@ mod tests {
 
     #[test]
     fn sdp_withdraw_op_execution_gas_does_not_scale_with_the_threshold() {
-        // The service note, 1 output, no buffer: 892 + 161 + 1770 + 725 + 24
+        // The service note and 1 output: 0 + 161 + 1770 + 725 + 24, and the root
+        // of the note alone, 879 + 23
         for threshold in [0, 1, 3] {
             assert_eq!(
                 SDPWithdrawOp::sample().execution_gas(&FixedThresholds(threshold)),
-                Ok(Gas::new(3_572))
+                Ok(Gas::new(3_582))
             );
         }
     }

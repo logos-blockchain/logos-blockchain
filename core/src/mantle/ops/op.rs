@@ -407,8 +407,9 @@ mod tests {
             (Op::ChannelWithdraw(ChannelWithdrawOp::sample()), 2_550),
             // 622 + 161 + 1770 + 725 + 24
             (Op::SDPDeclare(SDPDeclareOp::sample()), 3_302),
-            // 892 + 161 + 1770 + 725 + 24
-            (Op::SDPWithdraw(SDPWithdrawOp::sample()), 3_572),
+            // 0 + 161 + 1770 + 725 + 24, and the root of the service note alone
+            // (879 + 23)
+            (Op::SDPWithdraw(SDPWithdrawOp::sample()), 3_582),
             // 6927 + 161
             (Op::SDPActive(SDPActiveOp::sample()), 7_088),
             (Op::ClaimPowReward(ClaimPowRewardOp::sample()), 592),
