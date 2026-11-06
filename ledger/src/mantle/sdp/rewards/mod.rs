@@ -157,12 +157,11 @@ fn distribute_rewards(
     sorted_rewards
         .into_iter()
         .enumerate()
-        .map(|(output_number, (zk_id, (reward_amount, keys)))| Note {
+        .map(|(output_number, (_, (reward_amount, keys)))| Note {
             stake_public_key: keys.note_stake_pk,
-            // The nonce is still derived with the zk_id the reward is counted for.
             ..Note::new(
                 reward_amount,
-                derive_note_nonce(&op_id, output_number, reward_amount, &zk_id),
+                derive_note_nonce(&op_id, output_number, reward_amount, &keys.note_pk),
                 keys.note_pk,
             )
         })
@@ -209,18 +208,15 @@ mod tests {
             ServiceType::BlendNetwork,
         );
         let op_id = create_reward_op_id(epoch, ServiceType::BlendNetwork);
-        // Under note_pk and note_stake_pk, the nonce derived with the zk_id.
-        let note = |value, output_number, zk_id: &ZkPublicKey, keys: RewardKeys| Note {
+        // Under note_pk and note_stake_pk, the nonce derived over the note_pk.
+        let note = |value, output_number, keys: RewardKeys| Note {
             stake_public_key: keys.note_stake_pk,
             ..Note::new(
                 value,
-                derive_note_nonce(&op_id, output_number, value, zk_id),
+                derive_note_nonce(&op_id, output_number, value, &keys.note_pk),
                 keys.note_pk,
             )
         };
-        assert_eq!(
-            paid,
-            vec![note(10, 0, &low, keys(10)), note(20, 1, &high, keys(20))]
-        );
+        assert_eq!(paid, vec![note(10, 0, keys(10)), note(20, 1, keys(20))]);
     }
 }
