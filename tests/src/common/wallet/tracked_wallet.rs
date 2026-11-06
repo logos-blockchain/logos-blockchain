@@ -135,6 +135,10 @@ impl TrackedWallet {
         self.pending_state.reserve_utxos(reserved_utxos);
     }
 
+    pub fn release_reserved_note_ids(&mut self, note_ids: &HashSet<NoteId>) -> Vec<Utxo> {
+        self.pending_state.release_reserved_note_ids(note_ids)
+    }
+
     pub const fn record_fee_spent(&mut self, fee: u64) {
         self.pending_state.record_spent_fee(fee);
     }
@@ -252,6 +256,21 @@ impl PendingWalletState {
             .retain(|utxo| on_chain_note_ids.contains(&utxo.id()));
         self.reserved_note_ids
             .retain(|note_id| on_chain_note_ids.contains(note_id));
+    }
+
+    fn release_reserved_note_ids(&mut self, note_ids: &HashSet<NoteId>) -> Vec<Utxo> {
+        let mut released = Vec::new();
+        self.reserved_utxos.retain(|utxo| {
+            if note_ids.contains(&utxo.id()) {
+                released.push(*utxo);
+                false
+            } else {
+                true
+            }
+        });
+        self.reserved_note_ids
+            .retain(|note_id| !note_ids.contains(note_id));
+        released
     }
 
     const fn record_spent_fee(&mut self, spent_fee: u64) {

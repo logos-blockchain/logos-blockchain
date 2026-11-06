@@ -48,6 +48,10 @@ use logos_blockchain_blend_message::{
 /// configurations currently use a single layer.
 const NUM_BLEND_LAYERS: usize = 1;
 
+/// The size the payload body is padded to: the largest block proposal of an
+/// era that allows four uncles, so the signed message has its production size.
+const PAYLOAD_BODY_SIZE: u16 = 18_187;
+
 /// Quota advertised by the proof fixture; the proven key index must stay below
 /// it.
 const QUOTA: Quota = Quota::new::<1>();
@@ -143,7 +147,7 @@ static FIXTURE: LazyLock<(EncapsulatedMessage, RealProofsVerifier)> = LazyLock::
     let message: EncapsulatedMessage = EncapsulatedMessageWithVerifiedPublicHeader::try_new(
         &[input],
         PayloadType::BlockProposal,
-        PaddedPayloadBody::try_from(b"public header verification benchmark".to_vec())
+        PaddedPayloadBody::try_new(b"public header verification benchmark", PAYLOAD_BODY_SIZE)
             .expect("body fits in the payload"),
         NUM_BLEND_LAYERS,
     )

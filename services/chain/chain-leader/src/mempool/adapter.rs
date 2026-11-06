@@ -5,6 +5,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{traits::Hashable, transactions::hash::TxHash},
 };
+use lb_cryptarchia_engine::Era;
 use lb_tx_service::MempoolMsg;
 use overwatch::services::relay::OutboundRelay;
 use tokio::sync::oneshot;
@@ -27,6 +28,10 @@ impl<Tx> MempoolAdapterTrait<Tx> for MempoolAdapter<Tx>
 where
     Tx: Hashable<Hash = TxHash> + Send + 'static,
 {
+    async fn rotate_era(&mut self, _: Era) {}
+
+    async fn complete_era_transition(&mut self, _: Era) {}
+
     async fn get_mempool_view(
         &self,
         ancestor_hint: HeaderId,

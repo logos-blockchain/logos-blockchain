@@ -48,7 +48,8 @@ codec_fixtures!(
     0x100f_0e0d_0c0b_0a09_0807_0605_0403_0201u128 => "0102030405060708090a0b0c0d0e0f10"
 );
 
-/// `BinaryEncode` for a non-zero integer: the integer it wraps.
+/// `BinaryEncode`/`BinaryDecode` for a non-zero integer: the integer it wraps.
+/// Decoding a zero fails.
 macro_rules! impl_non_zero {
     ($ty:ty) => {
         impl BinaryEncode for NonZero<$ty> {
@@ -60,6 +61,20 @@ macro_rules! impl_non_zero {
                 self.get().encode_into(out);
             }
         }
+
+        impl BinaryDecode for NonZero<$ty> {
+            type Context = ();
+
+            fn decode<'input>(
+                input: &'input [u8],
+                context: &Self::Context,
+            ) -> Result<(&'input [u8], Self), DecodeError> {
+                let (rest, value) = <$ty>::decode(input, context)?;
+                let value =
+                    Self::new(value).ok_or_else(|| DecodeError::invalid_value::<Self>("zero"))?;
+                Ok((rest, value))
+            }
+        }
     };
 }
 
@@ -69,17 +84,15 @@ impl_non_zero!(u32);
 impl_non_zero!(u64);
 impl_non_zero!(u128);
 
-codec_fixtures!(NonZero<u8>, encode_only, NonZero::<u8>::new(0x07).unwrap() => "07");
-codec_fixtures!(NonZero<u16>, encode_only, NonZero::<u16>::new(0x0201).unwrap() => "0102");
-codec_fixtures!(NonZero<u32>, encode_only, NonZero::<u32>::new(0x0403_0201).unwrap() => "01020304");
+codec_fixtures!(NonZero<u8>, NonZero::<u8>::new(0x07).unwrap() => "07");
+codec_fixtures!(NonZero<u16>, NonZero::<u16>::new(0x0201).unwrap() => "0102");
+codec_fixtures!(NonZero<u32>, NonZero::<u32>::new(0x0403_0201).unwrap() => "01020304");
 codec_fixtures!(
     NonZero<u64>,
-    encode_only,
     NonZero::<u64>::new(0x0807_0605_0403_0201).unwrap() => "0102030405060708"
 );
 codec_fixtures!(
     NonZero<u128>,
-    encode_only,
     NonZero::<u128>::new(1).unwrap() => "01000000000000000000000000000000"
 );
 
@@ -126,3 +139,34 @@ codec_fixtures!(
     Fr,
     Self::from(1u64) => "0100000000000000000000000000000000000000000000000000000000000000"
 );
+
+#[cfg(test)]
+mod tests {
+    use core::num::NonZero;
+
+    use crate::canonical::{BinaryDecodeExt as _, DecodeError};
+
+    #[test]
+    fn non_zero_decode_rejects_a_zero() {
+        assert!(matches!(
+            NonZero::<u16>::decode_all(&0u16.to_le_bytes()),
+            Err(DecodeError::InvalidValue { .. })
+        ));
+        assert!(matches!(
+            NonZero::<u64>::decode_all(&0u64.to_le_bytes()),
+            Err(DecodeError::InvalidValue { .. })
+        ));
+    }
+
+    #[test]
+    fn non_zero_decode_reads_the_integer_it_wraps() {
+        assert_eq!(
+            NonZero::<u16>::decode_all(&u16::MAX.to_le_bytes()),
+            Ok(NonZero::<u16>::MAX)
+        );
+        assert_eq!(
+            NonZero::<u16>::decode(&[1, 0, 0xff]),
+            Ok((&[0xff][..], NonZero::<u16>::MIN))
+        );
+    }
+}

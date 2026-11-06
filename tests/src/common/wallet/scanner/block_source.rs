@@ -1,7 +1,7 @@
 use std::num::NonZero;
 
 use futures::StreamExt as _;
-use lb_common_http_client::ApiBlock;
+use lb_common_http_client::{ApiBlock, Events};
 use lb_http_api_common::queries::{BlockFilter, BlockSortOrder, BlocksStreamQuery};
 use lb_testing_framework::NodeHttpClient;
 
@@ -13,7 +13,7 @@ pub async fn stream_blocks_range(
     client: &NodeHttpClient,
     slot_from: u64,
     slot_to: u64,
-    mut on_block: impl FnMut(ApiBlock) -> Result<(), ScannerError>,
+    mut on_block: impl FnMut(ApiBlock, Events) -> Result<(), ScannerError>,
 ) -> Result<usize, ScannerError> {
     if slot_from > slot_to {
         return Ok(0);
@@ -39,7 +39,12 @@ pub async fn stream_blocks_range(
         }
 
         streamed_blocks += 1;
-        on_block(event.block)?;
+        let block_id = event.block.header.id;
+        let block_events = client
+            .block_events(&block_id)
+            .await?
+            .ok_or(ScannerError::MissingBlockEvents(block_id))?;
+        on_block(event.block, block_events)?;
     }
 
     Ok(streamed_blocks)

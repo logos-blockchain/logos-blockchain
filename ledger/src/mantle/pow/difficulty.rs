@@ -83,8 +83,6 @@ mod tests {
         target_claims_per_block: u64,
     ) -> RewardPoWConfig {
         RewardPoWConfig {
-            reward_pool_genesis: 1_000_000_000,
-            epoch_reward_genesis: 1_000_000,
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: factor,
             ema_smoothing_precision: NonZeroU64::new(precision)

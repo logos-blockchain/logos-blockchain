@@ -1,12 +1,6 @@
-use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
-#[cfg(feature = "test-utils")]
-use lb_groth16::Fr;
-#[cfg(feature = "test-utils")]
-use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature = "test-utils")]
-use crate::mantle::{Note, NoteId};
 use crate::{
     events::TxEvent,
     mantle::{
@@ -35,7 +29,7 @@ use crate::{
 };
 
 // ChannelTransfer = ChannelId Inputs Outputs — plain field-order concat.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct ChannelTransferOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
@@ -50,6 +44,11 @@ impl ChannelTransferOp {
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
+        use lb_groth16::Fr;
+        use lb_key_management_system_keys::keys::ZkPublicKey;
+
+        use crate::mantle::{Note, NoteId};
+
         Self {
             channel_id: ChannelId::from([20u8; 32]),
             inputs: crate::mantle::ledger::BoundedInputs::from(NoteId(Fr::from(21u64))).into(),

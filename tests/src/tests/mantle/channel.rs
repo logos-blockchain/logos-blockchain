@@ -412,19 +412,17 @@ fn channel_deposit_wallet_config(
 fn channel_test_config(mut config: RunConfig) -> RunConfig {
     config
         .deployment
-        .genesis_era_parameters_mut()
-        .time
-        .slot_duration = Duration::from_secs(1);
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .security_param = NonZero::new(3).unwrap();
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .slot_activation_coeff = NonNegativeRatio::new(1, 2.try_into().unwrap());
+        .update_genesis_era_parameters(|parameters| {
+            parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
+            parameters.cryptarchia.security_param = NonZero::new(3).unwrap();
+            parameters.cryptarchia.slot_activation_coeff =
+                NonNegativeRatio::new(1, 2.try_into().unwrap())
+                    .try_into()
+                    .unwrap();
+            // The widest uncle reference window k allows, ⌊0.6k⌋.
+            parameters.cryptarchia.uncle_reference_window_in_block = 1;
+        })
+        .expect("The changed deployment must be valid.");
     config
 }
 

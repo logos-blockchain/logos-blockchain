@@ -5,26 +5,13 @@ use std::{
     marker::PhantomData,
 };
 
-use axum::{
-    Router,
-    http::{
-        HeaderValue,
-        header::{CONTENT_TYPE, USER_AGENT},
-    },
-    routing,
-};
+use axum::{Router, routing};
 use http::StatusCode;
 use lb_api_service::{Backend, http::consensus::Cryptarchia};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_chain_leader_service::api::ChainLeaderServiceData;
 use lb_chain_service::CryptarchiaConsensus;
-use lb_core::{
-    header::HeaderId,
-    mantle::{
-        SignedOps, ledger::verification_mode::StandardMode, traits::Hashable,
-        transactions::states::Preverified,
-    },
-};
+use lb_core::{header::HeaderId, mantle::traits::Hashable};
 use lb_http_api_common::metrics::http_metrics_middleware;
 pub use lb_http_api_common::settings::AxumBackendSettings;
 use lb_sdp_service::{
@@ -32,12 +19,12 @@ use lb_sdp_service::{
     wallet::SdpWalletAdapter,
 };
 use lb_storage_service::StorageService;
+use lb_time_service::backends::NtpTimeBackend;
 use lb_tx_service::{TxMempoolService, backend::Mempool};
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use tokio::net::TcpListener;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::{
-    cors::{Any, CorsLayer},
     limit::RequestBodyLimitLayer,
     timeout::TimeoutLayer,
     trace::{DefaultOnRequest, DefaultOnResponse, TraceLayer},
@@ -48,14 +35,16 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use super::handlers::{
     add_tx, blend_info, blend_pending_transactions, blend_tx, block, block_events,
-    blocks_range_stream, blocks_stream, chain_id, cryptarchia_headers, cryptarchia_info,
-    cryptarchia_lib_stream, dial_peer, get_gas_prices, get_sdp_declarations, get_sdp_snapshot,
+    blocks_range_stream, blocks_stream, chain_fork, chain_id, cryptarchia_headers,
+    cryptarchia_info, cryptarchia_lib_stream, dial_peer, get_finalized_sdp_declaration,
+    get_finalized_sdp_declarations, get_gas_prices, get_sdp_declarations, get_sdp_snapshot,
     immutable_blocks, libp2p_info, mantle_metrics, mantle_status, mempool_view, time_info,
     transaction, version, wallet,
 };
 use crate::{
-    BlendService, PoWService, TracingService, WalletService,
+    BlendService, PoWService, TracingService, ValidatedTx, WalletService,
     api::{
+        browser_access::restrict_browser_access,
         handlers::{
             blend_join_network, channel, channel_deposit, leader_claim, post_activity,
             post_declaration, post_set_declaration_id, post_withdrawal, pow_claim,
@@ -123,8 +112,8 @@ where
     TimeBackend::Settings: Clone + Send + Sync,
     MempoolStorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedOps<Preverified, StandardMode>,
-            Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            Item = ValidatedTx,
+            Key = <ValidatedTx as Hashable>::Hash,
             BlockId = HeaderId,
         > + Send
         + Sync
@@ -147,6 +136,7 @@ where
         + AsServiceId<
             lb_network_service::NetworkService<
                 lb_network_service::backends::libp2p::Libp2p,
+                NtpTimeBackend,
                 RuntimeServiceId,
             >,
         >
@@ -155,17 +145,13 @@ where
         + AsServiceId<
             TxMempoolService<
                 lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
-                    SignedOps<Preverified, StandardMode>,
-                    <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+                    ValidatedTx,
+                    <ValidatedTx as Hashable>::Hash,
                     RuntimeServiceId,
                 >,
-                Mempool<
-                    HeaderId,
-                    SignedOps<Preverified, StandardMode>,
-                    MempoolStorageAdapter,
-                    RuntimeServiceId,
-                >,
+                Mempool<HeaderId, ValidatedTx, MempoolStorageAdapter, RuntimeServiceId>,
                 MempoolStorageAdapter,
+                NtpTimeBackend,
                 RuntimeServiceId,
             >,
         >
@@ -198,20 +184,6 @@ where
     }
 
     async fn serve(self, handle: OverwatchHandle<RuntimeServiceId>) -> Result<(), Self::Error> {
-        let mut builder = CorsLayer::new();
-        if self.settings.cors_origins.is_empty() {
-            builder = builder.allow_origin(Any);
-        }
-
-        for origin in &self.settings.cors_origins {
-            builder = builder.allow_origin(
-                origin
-                    .as_str()
-                    .parse::<HeaderValue>()
-                    .expect("fail to parse origin"),
-            );
-        }
-
         let app = api_routes!(build_router)
             .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()));
 
@@ -220,6 +192,9 @@ where
             // The chain ID is a constant of the deployment, so it rides along
             // as a request extension instead of a service round trip.
             .layer(axum::Extension(self.settings.chain_id.clone()))
+            // Each era's fork digest is a constant of the deployment too; the
+            // era in force comes from the time service.
+            .layer(axum::Extension(self.settings.fork_digests.clone()))
             .layer(axum::middleware::from_fn(http_metrics_middleware))
             .layer(axum::extract::DefaultBodyLimit::max(
                 self.settings.max_body_size,
@@ -238,24 +213,19 @@ where
                     .on_response(DefaultOnResponse::new().level(TracingLevel::TRACE)),
             );
 
-        let cors_layer = builder
-            .allow_headers(vec![CONTENT_TYPE, USER_AGENT])
-            .allow_methods(Any);
-
-        let app = app.layer(cors_layer.clone());
-
         #[cfg(feature = "profiling")]
         let app = {
-            let pprof_routes = lb_http_api_common::pprof::create_pprof_router()
-                .layer(
-                    TraceLayer::new_for_http()
-                        .on_request(DefaultOnRequest::new().level(TracingLevel::TRACE))
-                        .on_response(DefaultOnResponse::new().level(TracingLevel::TRACE)),
-                )
-                .layer(cors_layer);
+            let pprof_routes = lb_http_api_common::pprof::create_pprof_router().layer(
+                TraceLayer::new_for_http()
+                    .on_request(DefaultOnRequest::new().level(TracingLevel::TRACE))
+                    .on_response(DefaultOnResponse::new().level(TracingLevel::TRACE)),
+            );
 
             app.merge(pprof_routes)
         };
+
+        let app =
+            restrict_browser_access(app, self.settings.cors_origins, self.settings.allowed_hosts);
 
         let listener = TcpListener::bind(&self.settings.address)
             .await

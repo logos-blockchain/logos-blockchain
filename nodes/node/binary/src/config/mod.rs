@@ -1,13 +1,13 @@
 use std::{
     net::{IpAddr, SocketAddr, ToSocketAddrs as _},
-    path::PathBuf,
-    time::Duration,
+    path::{Path, PathBuf},
 };
 
 use clap::{Parser, ValueEnum, builder::OsStr};
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Result, bail, eyre};
 use lb_core::sdp::ProviderId;
 use lb_groth16::fr_from_bytes;
+use lb_http_api_common::settings::{CorsOrigin, HostName};
 use lb_key_management_system_service::{
     backend::preload::KeyId,
     keys::{Key, UnsecuredZkKey, ZkPublicKey},
@@ -15,13 +15,12 @@ use lb_key_management_system_service::{
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use lb_tracing::{
     filter::envfilter::{default_envfilter_config, parse_filter_directives},
-    logging::local::{
-        AppenderType, CompressionType, LogFormat, RetentionType, RollingConfig, RotationType,
-        TextKind,
-    },
+    logging::local::{LogFormat, TextKind},
 };
+use lb_utils::yaml::{OnUnknownKeys, deserialize_from_value, deserialize_value_at_path, merge};
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
+use serde_yaml::{Mapping, Value};
 
 pub use crate::config::{
     api::serde::Config as ApiConfig, blend::serde::Config as BlendConfig,
@@ -33,10 +32,15 @@ pub use crate::config::{
     tracing::serde::Config as TracingConfig, wallet::serde::Config as WalletConfig,
 };
 use crate::config::{
+    keystore::Keystore,
+    migrations::{ConfigVersion, VERSION_KEY},
     network::serde::nat,
     tracing::serde::{
         filter::{EnvConfig, Layer},
-        logger::{FileConfig, GelfConfig},
+        logger::{
+            AppenderType, CompressionType, FileConfig, GelfConfig, RetentionType, RollingConfig,
+            default_compression_threshold, default_max_files,
+        },
     },
 };
 
@@ -44,8 +48,10 @@ pub mod api;
 pub mod blend;
 pub mod cryptarchia;
 pub mod deployment;
+pub mod keystore;
 pub mod kms;
 pub mod mempool;
+pub mod migrations;
 pub mod network;
 pub mod pow;
 pub mod sdp;
@@ -60,7 +66,6 @@ mod tests;
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct UserConfig {
-    #[serde(default)]
     pub network: NetworkConfig,
     pub blend: BlendConfig,
     pub cryptarchia: CryptarchiaConfig,
@@ -77,13 +82,48 @@ pub struct UserConfig {
     pub mempool: MempoolConfig,
     pub wallet: WalletConfig,
     /// Optional: an omitted section leaves mining on its defaults and
-    /// auto-claim off.
+    /// auto-claim paying the keystore's `PoWClaim` key, or off without a
+    /// keystore.
     #[serde(default)]
     pub pow: PoWConfig,
     #[serde(default)]
     pub tracing: TracingConfig,
     #[serde(default)]
     pub state: StateConfig,
+}
+
+/// `config` with this build's version as its first key, the way every config
+/// the node writes starts.
+pub(crate) fn with_version(config: Value) -> Value {
+    let mut versioned = Mapping::new();
+    versioned.insert(
+        VERSION_KEY.into(),
+        ConfigVersion::current().to_string().into(),
+    );
+    if let Value::Mapping(config) = config {
+        versioned.extend(config);
+    }
+    Value::Mapping(versioned)
+}
+
+/// The part of `after` that differs from `before`, or `None` when nothing does.
+pub(crate) fn changed_values(before: &Value, after: Value) -> Option<Value> {
+    match (before, after) {
+        (Value::Mapping(before), Value::Mapping(after)) => {
+            let changed: Mapping = after
+                .into_iter()
+                .filter_map(|(key, value)| {
+                    let value = match before.get(&key) {
+                        Some(previous) => changed_values(previous, value)?,
+                        None => value,
+                    };
+                    Some((key, value))
+                })
+                .collect();
+            (!changed.is_empty()).then_some(Value::Mapping(changed))
+        }
+        (before, after) => (*before != after).then_some(after),
+    }
 }
 
 pub struct RequiredValues {
@@ -94,6 +134,88 @@ pub struct RequiredValues {
 }
 
 impl UserConfig {
+    /// Loads the user config at `path`. When the keystore (`keystore.yaml`
+    /// next to it, or `kms.keystore`) exists, the node identity, the key ids,
+    /// `wallet` and `kms` are populated from it and the config only overrides
+    /// them; without one the config has to be complete.
+    ///
+    /// A config of an earlier release is upgraded to the current format: the
+    /// original is kept as `<config>.<version>.bak` and the upgraded config
+    /// written in its place.
+    pub fn load(path: &Path) -> Result<Self> {
+        let mut overrides = match deserialize_value_at_path(path, OnUnknownKeys::Fail)? {
+            Value::Null => Value::Mapping(Mapping::new()),
+            overrides => overrides,
+        };
+        let upgraded_from = migrations::upgrade(&mut overrides)?;
+        let config = Self::load_overrides(path, overrides)?;
+        if let Some(from) = upgraded_from {
+            config.save_upgraded(path, from);
+        }
+        Ok(config)
+    }
+
+    fn load_overrides(path: &Path, overrides: Value) -> Result<Self> {
+        let kms = overrides
+            .get("kms")
+            .cloned()
+            .map_or_else(|| Ok(KmsConfig::default()), serde_yaml::from_value)?;
+        let keystore_path = kms.keystore_path(path);
+
+        let has_keystore = keystore_path.is_file();
+        let mut config = if has_keystore {
+            Keystore::load(&keystore_path)?.config_values()?
+        } else {
+            Value::Mapping(Mapping::new())
+        };
+        merge(&mut config, overrides);
+        deserialize_from_value(config, OnUnknownKeys::Fail).map_err(|error| {
+            if has_keystore {
+                eyre!("{error}")
+            } else {
+                eyre!("{error} (no keystore at {})", keystore_path.display())
+            }
+        })
+    }
+
+    /// Keeps the config at `path`, of version `from`, as `<path>.<from>.bak`
+    /// and writes this config in its place: only what differs from the
+    /// keystore and the defaults, as `config init` writes it, or all of it
+    /// without a keystore. Failing to doesn't stop the node, which already runs
+    /// on the upgraded config; it's retried on the next start.
+    fn save_upgraded(&self, path: &Path, from: ConfigVersion) {
+        let backup = PathBuf::from(format!("{}.{from}.bak", path.display()));
+        match self.write_upgraded(path, &backup) {
+            Ok(()) => eprintln!(
+                "Upgraded the {from} config {} to the {} format; the original is kept at {}.",
+                path.display(),
+                ConfigVersion::current(),
+                backup.display(),
+            ),
+            Err(error) => eprintln!(
+                "Running on an upgraded copy of the {from} config {}, which could not be rewritten: \
+                 {error}",
+                path.display(),
+            ),
+        }
+    }
+
+    fn write_upgraded(&self, path: &Path, backup: &Path) -> Result<()> {
+        if backup.exists() {
+            bail!("{} exists", backup.display());
+        }
+        let config = serde_yaml::to_value(self)?;
+        let sparse = match Self::load_overrides(path, Value::Mapping(Mapping::new())) {
+            Ok(defaults) => {
+                changed_values(&serde_yaml::to_value(defaults)?, config).unwrap_or_default()
+            }
+            Err(_) => config,
+        };
+        std::fs::copy(path, backup)?;
+        std::fs::write(path, serde_yaml::to_string(&with_version(sparse))?)?;
+        Ok(())
+    }
+
     #[must_use]
     pub fn with_required_values(required_values: RequiredValues) -> Self {
         Self {
@@ -114,6 +236,34 @@ impl UserConfig {
             time: TimeConfig::default(),
             tracing: TracingConfig::default(),
         }
+    }
+
+    /// The config as YAML with every secret replaced by `<secret>`: the node
+    /// key, the KMS keys and the OTLP authorization headers.
+    pub fn redacted(&self) -> serde_yaml::Result<Value> {
+        const SECRET_FIELDS: [&str; 2] = ["node_key", "authorization_header"];
+
+        fn redact(value: &mut Value) {
+            match value {
+                Value::Mapping(mapping) => {
+                    for (key, value) in mapping.iter_mut() {
+                        if key.as_str().is_some_and(|key| SECRET_FIELDS.contains(&key)) {
+                            *value = "<secret>".into();
+                        } else {
+                            redact(value);
+                        }
+                    }
+                }
+                Value::Sequence(values) => values.iter_mut().for_each(redact),
+                Value::Tagged(tagged) => redact(&mut tagged.value),
+                _ => {}
+            }
+        }
+
+        let mut config = serde_yaml::to_value(self)?;
+        config["kms"]["backend"]["keys"] = "<secret>".into();
+        redact(&mut config);
+        Ok(config)
     }
 
     pub fn blend_provider_id(&self) -> Result<ProviderId, String> {
@@ -222,11 +372,7 @@ pub struct LogArgs {
     #[clap(long = "log-file-appender", env = "LOG_APPENDER")]
     pub file_appender: Option<LogFileAppenderType>,
 
-    #[clap(
-        long = "log-max-files",
-        env = "LOG_APPENDER_MAX_FILES",
-        required_if_eq("file_appender", LogFileAppenderType::RollingMaxFiles)
-    )]
+    #[clap(long = "log-max-files", env = "LOG_APPENDER_MAX_FILES")]
     pub max_files: Option<usize>,
 
     #[clap(long = "log-format", env = "LOG_FORMAT")]
@@ -327,7 +473,10 @@ pub struct ApiArgs {
     pub addr: Option<SocketAddr>,
 
     #[clap(long = "http-cors-origin", env = "HTTP_CORS_ORIGIN")]
-    pub cors_origins: Option<Vec<String>>,
+    pub cors_origins: Option<Vec<CorsOrigin>>,
+
+    #[clap(long = "http-allowed-host", env = "HTTP_ALLOWED_HOST")]
+    pub allowed_hosts: Option<Vec<HostName>>,
 }
 
 #[derive(Parser, Debug, Default, Clone)]
@@ -374,26 +523,24 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
                 let appender_type = match file_appender {
                     Some(LogFileAppenderType::Simple) | None => AppenderType::Simple,
                     Some(LogFileAppenderType::Rolling) => AppenderType::Rolling(RollingConfig {
-                        rotation: RotationType::Hourly,
                         retention: RetentionType::None,
-                        compression: CompressionType::None,
+                        ..RollingConfig::default()
                     }),
                     Some(LogFileAppenderType::RollingCompressed) => {
                         AppenderType::Rolling(RollingConfig {
-                            rotation: RotationType::Hourly,
                             retention: RetentionType::None,
                             compression: CompressionType::Gzip {
-                                compression_threshold: Duration::from_hours(2),
+                                compression_threshold: default_compression_threshold(),
                             },
+                            ..RollingConfig::default()
                         })
                     }
                     Some(LogFileAppenderType::RollingMaxFiles) => {
                         AppenderType::Rolling(RollingConfig {
-                            rotation: RotationType::Hourly,
                             retention: RetentionType::MaxFiles {
-                                max_files: max_files.expect("Max files should be set"),
+                                max_files: max_files.unwrap_or_else(default_max_files),
                             },
-                            compression: CompressionType::None,
+                            ..RollingConfig::default()
                         })
                     }
                 };
@@ -437,8 +584,6 @@ pub fn update_tracing_level_and_filter(
 
     if let Some(filter) = filter {
         tracing.filter = parse_log_filter_layer(filter)?;
-    } else {
-        apply_default_log_filter(tracing);
     }
 
     Ok(())
@@ -453,7 +598,7 @@ fn parse_log_filter_layer(raw: &str) -> Result<Layer> {
 
 /// Applies the built-in verbose filter policy only when no explicit filter was
 /// configured.
-fn apply_default_log_filter(tracing: &mut TracingConfig) {
+pub fn apply_default_log_filter(tracing: &mut TracingConfig) {
     if !matches!(tracing.filter, Layer::None) {
         return;
     }
@@ -549,7 +694,11 @@ pub const fn update_sdp(sdp: &mut SdpConfig, sdp_args: SdpArgs) {
 }
 
 pub fn update_api(api: &mut ApiConfig, args: ApiArgs) {
-    let ApiArgs { addr, cors_origins } = args;
+    let ApiArgs {
+        addr,
+        cors_origins,
+        allowed_hosts,
+    } = args;
 
     if let Some(addr) = addr {
         api.backend.listen_address = addr;
@@ -557,6 +706,10 @@ pub fn update_api(api: &mut ApiConfig, args: ApiArgs) {
 
     if let Some(cors) = cors_origins {
         api.backend.cors_origins = cors;
+    }
+
+    if let Some(hosts) = allowed_hosts {
+        api.backend.allowed_hosts = hosts;
     }
 }
 

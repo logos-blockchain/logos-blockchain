@@ -6,15 +6,15 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
+    era::ForkDigest,
     mantle::{
         GasProfile, Note, NoteId, Op, Utxo, Value,
         gas::{GasCost, GasOverflow, TxGasCalculator as _},
         ledger::{BoundedUtxos, Inputs, Outputs},
         ops::{OpRef, channel::ChannelId, transfer::TransferOp},
-        traits::MantleTx as _,
         transactions::{
-            Ops,
-            tx_list::ops::{OpsContext, mantle_spec},
+            Ops, TxList,
+            tx_list::ops::{OpsContext, unbuilt_tx},
         },
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
@@ -53,7 +53,8 @@ impl From<(BoundedError, BoundedTag)> for TxBuilderError {
     }
 }
 
-/// Builds an [`Ops`] incrementally.
+/// Builds an [`Ops`] incrementally. The transaction gets its fork digest when
+/// it is built, from whoever signs it.
 ///
 /// The builder is intentionally free of any [`OpsContext`]: gas prices are
 /// tip-dependent, so the context is supplied as a parameter to the fee-aware
@@ -63,8 +64,9 @@ impl From<(BoundedError, BoundedTag)> for TxBuilderError {
 /// HTTP) to be funded against a freshly fetched context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MantleTxBuilder {
-    #[serde(rename = "mantle_tx", with = "mantle_spec")] // Shape as per spec
-    ops: Ops,
+    // The spec's transaction shape, without the fork digest it gets when built.
+    #[serde(rename = "mantle_tx", with = "unbuilt_tx")]
+    ops: TxList<Op>,
     ledger_inputs: BoundedUtxos,
     pending_transfer: TransferOp,
     // Maps a Proof to its Op by the Op Index
@@ -82,7 +84,7 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            ops: Ops::empty(),
+            ops: TxList::empty(),
             ledger_inputs: BoundedUtxos::default(),
             pending_transfer: TransferOp::new(Inputs::empty(), Outputs::empty()),
             channel_multi_sig_proofs: HashMap::new(),
@@ -98,7 +100,6 @@ impl MantleTxBuilder {
     pub fn extend_ops(mut self, ops: impl IntoIterator<Item = Op>) -> Result<Self, TxBuilderError> {
         for op in ops {
             self.ops
-                .0
                 .try_push(op)
                 .map_err(|err| TxBuilderError::from((err, BoundedTag::Ops)))?;
         }
@@ -222,7 +223,7 @@ impl MantleTxBuilder {
         &self,
         context: &OpsContext,
     ) -> Result<GasCost, TxBuilderError> {
-        for op_ref in self.ops.op_refs() {
+        for op_ref in self.ops.iter().map(Op::by_ref) {
             let channel_id = match op_ref {
                 OpRef::ChannelWithdraw(operation) => Some(operation.channel_id),
                 OpRef::ChannelTransfer(operation) => Some(operation.channel_id),
@@ -238,7 +239,9 @@ impl MantleTxBuilder {
             }
         }
 
-        let build = self.clone().build()?;
+        // Every fork digest has the same size, so the one the transaction
+        // will carry does not change its gas: any prices it.
+        let build = self.clone().build(ForkDigest::new([0; 32]))?;
         Ok(build.by_ref().total_gas_cost::<G>(&context.gas_context)?)
     }
 
@@ -298,7 +301,6 @@ impl MantleTxBuilder {
                 };
                 let locked = match op {
                     Op::SDPDeclare(declare) => Some(declare.service_note_id),
-                    Op::SDPWithdraw(withdraw) => Some(withdraw.service_note_id),
                     _ => None,
                 };
                 inputs.into_iter().flatten().copied().chain(locked)
@@ -318,14 +320,15 @@ impl MantleTxBuilder {
 
     // TODO: Change this to a `Result` if genesis tx already contains max number of
     // ops.
-    pub fn build(mut self) -> Result<Ops, TxBuilderError> {
+    /// The transaction, to be signed under the fork digest `fork_digest`,
+    /// with the pending transfer as its last operation.
+    pub fn build(mut self, fork_digest: ForkDigest) -> Result<Ops, TxBuilderError> {
         if !self.pending_transfer.is_empty() {
             self.ops
-                .0
                 .try_push(Op::Transfer(self.pending_transfer))
                 .map_err(|err| TxBuilderError::from((err, BoundedTag::Ops)))?;
         }
-        Ok(self.ops)
+        Ok(Ops::new(fork_digest, self.ops))
     }
 }
 
@@ -337,6 +340,7 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
+            fixtures::ops::op_values::FORK_DIGEST,
             gas::MainnetGasProfile,
             ledger::BoundedInputs,
             ops::{
@@ -350,7 +354,7 @@ mod tests {
             },
             transactions::{GasPrices, tx_list::ops::OpsGasContext},
         },
-        sdp::{DeclarationId, Locator, ProviderId, ServiceType},
+        sdp::{DeclarationId, Locator, Nonce, ProviderId, ServiceType},
     };
 
     #[test]
@@ -379,7 +383,10 @@ mod tests {
 
         assert_eq!(restored.net_balance(), builder.net_balance());
         assert_eq!(restored.ledger_inputs(), builder.ledger_inputs());
-        assert_eq!(restored.build().unwrap(), builder.build().unwrap());
+        assert_eq!(
+            restored.build(FORK_DIGEST).unwrap(),
+            builder.build(FORK_DIGEST).unwrap()
+        );
     }
 
     #[test]
@@ -634,7 +641,6 @@ mod tests {
     fn notes_consumed_or_used_in_service() {
         let deposit_input = NoteId(Fr::from(1u64));
         let declare_service_note = NoteId(Fr::from(2u64));
-        let withdraw_service_note = NoteId(Fr::from(3u64));
         let transfer_input = Utxo::new([0u8; 32], 0, Note::new(50, ZkPublicKey::zero()));
 
         let builder = MantleTxBuilder::new()
@@ -654,8 +660,7 @@ mod tests {
             .unwrap()
             .push_op(Op::SDPWithdraw(SDPWithdrawOp {
                 declaration_id: DeclarationId([0; 32]),
-                service_note_id: withdraw_service_note,
-                nonce: 1,
+                nonce: Nonce::new(0.into(), 1),
             }))
             .unwrap()
             .add_ledger_input(transfer_input)
@@ -671,14 +676,12 @@ mod tests {
             "should contain declare service note"
         );
         assert!(
-            consumed_or_used.contains(&withdraw_service_note),
-            "should contain withdraw service note"
-        );
-        assert!(
             consumed_or_used.contains(&transfer_input.id()),
             "should contain transfer input"
         );
-        assert_eq!(consumed_or_used.len(), 4);
+        // SDP Withdraw no longer carries the service-note ID; it is resolved
+        // from the declaration by validation and wallet signing.
+        assert_eq!(consumed_or_used.len(), 3);
     }
 
     #[test]

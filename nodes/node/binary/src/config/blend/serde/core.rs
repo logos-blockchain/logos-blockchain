@@ -18,8 +18,11 @@ pub struct Config {
 pub struct BackendConfig {
     pub listening_address: Multiaddr,
     pub max_dial_attempts_per_peer: NonZeroU64,
+    // `no_default`: `serde_as` would otherwise default a missing `Option` to
+    // `None` instead of the container's `Default`.
     #[serde_as(
-        as = "Option<lb_utils::bounded_duration::MinimalBoundedDuration<1, lb_utils::bounded_duration::SECOND>>"
+        as = "Option<lb_utils::bounded_duration::MinimalBoundedDuration<1, lb_utils::bounded_duration::SECOND>>",
+        no_default
     )]
     pub peering_degree_check_interval: Option<Duration>,
 }

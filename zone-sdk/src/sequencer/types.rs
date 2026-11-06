@@ -39,6 +39,7 @@ const DEFAULT_MAX_PENDING_PUBLISH_DEPTH: usize = 100;
 /// Long enough that a merely slow tx is not rebuilt: a valid tx the node
 /// holds lands within a few blocks, so one unmined this long is stuck.
 const DEFAULT_STALE_REFUND_SLOTS: u64 = 30;
+const DEFAULT_BACKFILL_BATCH_SLOTS: u64 = 100;
 
 /// Inscription identifier.
 pub type InscriptionId = TxHash;
@@ -415,6 +416,10 @@ pub struct SequencerConfig {
     /// LIB slots a pending tx may stay unmined before it is re-funded or
     /// orphaned; `0` disables.
     pub stale_refund_slots: u64,
+    /// Slots of finalized history each backfill request reads. A chain whose
+    /// slots follow the wall clock can hold long stretches without blocks,
+    /// which a wider batch crosses in fewer requests.
+    pub backfill_batch_slots: u64,
     /// Fund transactions from the node's wallet before signing.
     pub funding: FundingConfig,
 }
@@ -430,6 +435,7 @@ impl SequencerConfig {
             min_slots_remaining_in_turn: 1,
             max_pending_publish_depth: DEFAULT_MAX_PENDING_PUBLISH_DEPTH,
             stale_refund_slots: DEFAULT_STALE_REFUND_SLOTS,
+            backfill_batch_slots: DEFAULT_BACKFILL_BATCH_SLOTS,
             funding,
         }
     }
@@ -669,6 +675,19 @@ pub struct TurnNotification {
     pub current_slot: Option<u64>,
 }
 
+/// Channel config observed in a finalized L1 block, with what it set.
+#[derive(Debug, Clone)]
+pub struct ConfigInfo {
+    /// The transaction hash containing this config.
+    pub tx_hash: TxHash,
+    /// The config this one chains from, on the config lineage.
+    pub parent_msg: MsgId,
+    /// This config's id on the config lineage.
+    pub this_msg: MsgId,
+    /// The config as mined: accredited keys, thresholds, posting rules.
+    pub config: ChannelConfigOp,
+}
+
 /// Channel inscription observed in an L1 block.
 #[derive(Debug, Clone)]
 pub struct InscriptionInfo {
@@ -878,9 +897,10 @@ pub enum FinalizedOp {
     /// inscription+withdraw bundle (the bundling is implicit via the parent
     /// [`FinalizedTx::tx_hash`]).
     Withdraw(WithdrawInfo),
-    /// A config on the channel. `parent_msg`/`this_msg` are config-lineage
-    /// ids, not message-lineage ids, and the payload is empty.
-    Config(InscriptionInfo),
+    /// A config on the channel, with the keys and rules it set.
+    /// `parent_msg`/`this_msg` are config-lineage ids, not message-lineage
+    /// ids.
+    Config(ConfigInfo),
     /// A channel transfer op on the channel: notes re-keyed/re-denominated
     /// under channel authority.
     ChannelTransfer(ChannelTransferInfo),
@@ -888,6 +908,8 @@ pub enum FinalizedOp {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZero;
+
     use lb_core::mantle::{
         Op,
         channel::{SlotTimeframe, SlotTimeout},
@@ -897,12 +919,13 @@ mod tests {
             withdraw::ChannelWithdrawOp,
         },
         traits::Hashable as _,
-        transactions::Ops,
+        transactions::{Ops, TxList},
     };
     use lb_groth16::Fr;
     use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 
     use super::{Error, PreparedChannelConfig, sign_prepared};
+    use crate::test_support::FORK_DIGEST;
 
     /// The signing payload the SDK derives for `ops`.
     fn payload_of(ops: &Ops) -> Vec<u8> {
@@ -910,15 +933,16 @@ mod tests {
     }
 
     fn config_op(keys: Vec<Ed25519PublicKey>) -> ChannelConfigOp {
-        ChannelConfigOp {
-            channel: ChannelId::from([7; 32]),
-            parent: MsgId::root(),
-            keys: VerifiedChannelKeys::new_unchecked(keys),
-            posting_timeframe: SlotTimeframe::from(15),
-            posting_timeout: SlotTimeout::from(3),
-            configuration_threshold: 2,
-            transfer_threshold: 2,
-        }
+        ChannelConfigOp::new(
+            ChannelId::from([7; 32]),
+            MsgId::root(),
+            VerifiedChannelKeys::new_unchecked(keys),
+            SlotTimeframe::from(15),
+            SlotTimeout::from(3),
+            NonZero::<u16>::MIN,
+            NonZero::new(2).unwrap(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -929,7 +953,10 @@ mod tests {
             .collect();
         let op = config_op(new_keys);
         let prepared = PreparedChannelConfig {
-            tx: Ops::new_unchecked(vec![Op::ChannelConfig(op.clone())]),
+            tx: Ops::new(
+                FORK_DIGEST,
+                TxList::new_unchecked(vec![Op::ChannelConfig(op.clone())]),
+            ),
             transfer_proof: None,
             sign_payload: vec![0xab; 32],
             accredited_keys: Vec::new(),
@@ -951,7 +978,10 @@ mod tests {
             .iter()
             .map(|k| k.into_unverified())
             .collect::<Vec<_>>();
-        let tx = Ops::new_unchecked(vec![Op::ChannelConfig(config_op(accredited))]);
+        let tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::ChannelConfig(config_op(accredited))]),
+        );
         let prepared = PreparedChannelConfig {
             sign_payload: payload_of(&tx),
             tx,
@@ -983,7 +1013,10 @@ mod tests {
             channel_id: ChannelId::from([7; 32]),
             inputs: BoundedInputs::from(NoteId::from(Fr::from(1u64))).into(),
         });
-        let tx = Ops::new_unchecked(vec![config.clone(), smuggled.clone()]);
+        let tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![config.clone(), smuggled.clone()]),
+        );
         let prepared = PreparedChannelConfig {
             sign_payload: payload_of(&tx),
             tx,
@@ -1006,7 +1039,10 @@ mod tests {
         let accredited = vec![signer.public_key()];
         let accredited_as_unverified_keys =
             accredited.iter().map(|k| k.into_unverified()).collect();
-        let tx = Ops::new_unchecked(vec![Op::ChannelConfig(config_op(accredited))]);
+        let tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::ChannelConfig(config_op(accredited))]),
+        );
         // Honest-looking ops, but the payload belongs to some other tx.
         let prepared = PreparedChannelConfig {
             tx,

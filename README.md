@@ -67,7 +67,7 @@ cargo build -p logos-blockchain-node --release --features jemalloc
 To start a local standalone instance of a Logos Blockchain network, run:
 
 ```bash
-target/release/logos-blockchain-node --deployment standalone-deployment-config.yaml nodes/node/standalone-node-config.yaml
+target/release/logos-blockchain-node --deployment nodes/node/standalone-deployment-config.yaml nodes/node/standalone-node-config.yaml
 ```
 
 The node stores state in the `state` directory. If you encounter issues on restart, try removing it before starting the node again.

@@ -1,14 +1,8 @@
-use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
-#[cfg(feature = "test-utils")]
-use lb_groth16::Fr;
-#[cfg(feature = "test-utils")]
-use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[cfg(any(test, feature = "test-utils"))]
-use crate::mantle::{Note, NoteId};
 use crate::{
     events::TxEvent,
     mantle::{
@@ -29,7 +23,7 @@ use crate::{
     sdp::service_notes::ServiceNotes,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct TransferOp {
     pub inputs: Inputs,
     pub outputs: Outputs,
@@ -71,6 +65,11 @@ impl TransferOp {
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
+        use lb_groth16::Fr;
+        use lb_key_management_system_keys::keys::ZkPublicKey;
+
+        use crate::mantle::{Note, NoteId};
+
         Self::new(
             ledger::BoundedInputs::try_from_iter([NoteId(Fr::from(1u64)), NoteId(Fr::from(2u64))])
                 .unwrap()

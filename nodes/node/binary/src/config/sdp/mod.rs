@@ -13,7 +13,7 @@ impl ServiceConfig {
     #[must_use]
     pub fn into_sdp_service_settings(self, recovery_data: RecoveryData) -> SdpSettings {
         SdpSettings {
-            declaration: self.user.declaration,
+            declaration: self.user.declaration.map(Into::into),
             wallet_config: SdpWalletConfig {
                 funding_pk: self.user.wallet.funding_pk,
                 max_tx_fee: self.user.wallet.max_tx_fee,

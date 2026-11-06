@@ -2,7 +2,7 @@ use std::{collections::HashSet, slice::IterMut, sync::LazyLock};
 
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
-use lb_binary_codec::canonical::BinaryCodec;
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
@@ -19,7 +19,7 @@ use crate::{
         ledger::verification_mode::VerificationMode,
         ops::{OpId, channel::ChannelId},
     },
-    sdp::{Declaration, DeclarationId, service_notes::ServiceNotes},
+    sdp::{Declaration, DeclarationId, ProviderId, service_notes::ServiceNotes},
 };
 
 // ==============================================================================
@@ -91,6 +91,8 @@ pub trait ExecutableOperation {
 
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;
 pub type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
+/// Per-service provider-to-declaration index used by SDP Declare validation.
+pub type ProviderIndex = rpds::RedBlackTreeMapSync<ProviderId, DeclarationId>;
 
 pub type Value = u64;
 
@@ -132,7 +134,7 @@ pub enum LedgerError {
     Outputs(#[from] OutputsError),
 }
 
-#[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct Outputs(BoundedOutputs);
 
 impl Outputs {
@@ -251,7 +253,7 @@ impl<'output> IntoIterator for &'output Outputs {
     }
 }
 
-#[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct Inputs(BoundedInputs);
 
 impl Inputs {
@@ -435,7 +437,18 @@ impl<'input> IntoIterator for &'input Inputs {
 }
 
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, BinaryCodec,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    BinaryEncode,
+    BinaryDecode,
 )]
 #[serde(transparent)]
 pub struct NoteId(#[serde(with = "serde_fr")] pub Fr);
@@ -474,7 +487,7 @@ impl From<Fr> for NoteId {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, BinaryCodec)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct Note {
     pub value: Value,
     pub pk: ZkPublicKey,

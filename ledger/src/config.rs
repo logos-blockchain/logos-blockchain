@@ -1,23 +1,31 @@
-use core::num::NonZeroU32;
-use std::num::{NonZero, NonZeroU64, NonZeroU128};
+use std::num::{NonZero, NonZeroU32, NonZeroU64, NonZeroU128};
 
-use lb_binary_codec::canonical::{BTreeSet, BinaryEncode, codec_fixtures};
-use lb_core::mantle::{Value, ops::pow::PowReward};
-use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
+use lb_core::{
+    era::AcceptedForkDigests,
+    mantle::{
+        Value,
+        ops::pow::{PowSlotWindows, PowTarget},
+    },
+};
+use lb_cryptarchia_engine::{Epoch, EraSchedule, Slot};
 pub use lb_groth16::ModulusShift;
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_pol::LotteryConstants;
+use lb_time::era::EpochLength;
 
-pub type ConsensusExcludedKeys = BTreeSet<ZkPublicKey>;
+/// The config of every era: each block is applied under the config of the era
+/// of its slot, and each epoch is settled under the config of its era.
+pub type EraScheduledConfig = EraSchedule<Config>;
+
+pub use lb_core::mantle::ConsensusExcludedKeys;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Config {
     pub epoch_config: lb_cryptarchia_engine::EpochConfig,
     pub consensus_config: lb_cryptarchia_engine::Config,
     pub sdp_config: crate::mantle::sdp::Config,
-    #[serde(default)]
-    pub consensus_excluded_keys: ConsensusExcludedKeys,
     pub pow_config: PoWConfig,
+    pub accepted_fork_digests: AcceptedForkDigests,
 }
 
 impl Config {
@@ -65,19 +73,6 @@ impl Config {
         NonZeroU128::new(denominator).expect("product of non-zero values is non-zero")
     }
 
-    /// The slot at which the nonce for a given epoch is snapshotted
-    ///
-    /// If epoch length is 100 slots, and epoch phases are 3/3/4 slots,
-    /// the nonce for epoch 1 will be snapshotted at slot 60, which is the 1st
-    /// slot of the last phase of epoch 0.
-    #[must_use]
-    pub fn nonce_snapshot(&self, epoch: Epoch) -> Slot {
-        let offset = self.nonce_contribution_period();
-        let base =
-            u64::from(epoch.strict_sub(1.into()).into_inner()).strict_mul(self.epoch_length());
-        base.strict_add(offset).into()
-    }
-
     /// The number of slots in Stake Distribution Snapshot + Buffer phases
     #[must_use]
     pub fn nonce_contribution_period(&self) -> u64 {
@@ -91,40 +86,74 @@ impl Config {
         )
     }
 
-    /// The slot at which the total stake for a given epoch is snapshotted
-    ///
-    /// If epoch length is 100 slots, and epoch phases are 3/3/4 slots,
-    /// the total stake for epoch 1 will be snapshotted at slot 60, which is the
-    /// 1st slot of the last phase of epoch 0.
-    #[must_use]
-    pub fn total_stake_snapshot(&self, epoch: Epoch) -> Slot {
-        self.nonce_snapshot(epoch)
-    }
-
     /// The number of slots in Stake Distribution Snapshot + Buffer phases
     #[must_use]
     pub fn total_stake_inference_period(&self) -> u64 {
         self.nonce_contribution_period()
     }
 
-    /// The slot at which the stake distribution for a given epoch is
-    /// snapshotted, i.e., the first slot of the previous epoch.
+    /// The slot at which an epoch that starts at `first_slot` under this config
+    /// snapshots the nonce and the total stake of the next epoch: the first
+    /// slot of its last phase.
+    ///
+    /// If epoch length is 100 slots, and epoch phases are 3/3/4 slots, the
+    /// epoch that starts at slot 100 snapshots them at slot 160.
     #[must_use]
-    pub fn stake_distribution_snapshot(&self, epoch: Epoch) -> Slot {
-        (u64::from(epoch.strict_sub(1.into()).into_inner()) * self.epoch_length()).into()
+    pub fn next_epoch_snapshot(&self, first_slot: Slot) -> Slot {
+        Slot::new(
+            first_slot
+                .into_inner()
+                .strict_add(self.nonce_contribution_period()),
+        )
     }
+}
 
-    #[must_use]
-    pub fn epoch(&self, slot: Slot) -> Epoch {
-        self.epoch_config
-            .epoch(slot, self.consensus_config.base_period_length())
+impl EpochLength for Config {
+    fn epoch_length(&self) -> NonZero<u64> {
+        NonZero::new(self.epoch_config.epoch_length(self.base_period_length()))
+            .expect("an epoch holds at least one slot")
     }
+}
 
-    #[must_use]
-    pub fn last_slot(&self, epoch: Epoch) -> Slot {
-        self.epoch_config
-            .last_slot(epoch, self.consensus_config.base_period_length())
-    }
+/// The config of the era `slot` belongs to.
+#[must_use]
+pub fn config_for_slot(eras: &EraScheduledConfig, slot: Slot) -> &Config {
+    eras.at_slot(slot).parameters
+}
+
+/// The config of the era `epoch` belongs to.
+#[must_use]
+pub fn config_for_epoch(eras: &EraScheduledConfig, epoch: Epoch) -> &Config {
+    eras.at_epoch(epoch).parameters
+}
+
+/// The acceptance window, in slots, of the `PoW` reward claims anchored to the
+/// blocks of each era.
+#[must_use]
+pub fn pow_slot_windows(eras: &EraScheduledConfig) -> PowSlotWindows {
+    eras.map(|era| era.parameters.pow_config.reward.slot_window)
+}
+
+/// The slot at which the nonce for a given epoch is snapshotted
+///
+/// If epoch length is 100 slots, and epoch phases are 3/3/4 slots,
+/// the nonce for epoch 1 will be snapshotted at slot 60, which is the 1st
+/// slot of the last phase of epoch 0.
+#[must_use]
+pub fn nonce_snapshot(eras: &EraScheduledConfig, non_genesis_epoch: NonZeroU32) -> Slot {
+    let previous_epoch = Epoch::new(non_genesis_epoch.get() - 1);
+    config_for_epoch(eras, previous_epoch)
+        .next_epoch_snapshot(eras.starting_slot_for_epoch(previous_epoch))
+}
+
+/// The slot at which the stake distribution for a given epoch is
+/// snapshotted, i.e., the first slot of the previous epoch.
+#[must_use]
+pub fn stake_distribution_snapshot(
+    eras: &EraScheduledConfig,
+    non_genesis_epoch: NonZeroU32,
+) -> Slot {
+    eras.starting_slot_for_epoch(Epoch::new(non_genesis_epoch.get() - 1))
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -135,21 +164,21 @@ pub struct PoWConfig {
 
 /// Deployment-configurable parameters for the token-reward `PoW` role.
 ///
-/// Covers the genesis endowment, the reward-difficulty (`d_reward`) EMA
-/// controller, the per-epoch payout rate, and the claim acceptance window.
+/// Covers the reward-difficulty (`d_reward`) EMA controller, the per-epoch
+/// payout rate, and the claim acceptance window. The pool the payout draws on
+/// starts with the genesis parameters' `pow_reward_pool`.
 /// There is deliberately no `Default`: every value must be supplied by the
 /// deployment configuration. A `rate_num` of `0` disables claiming entirely;
 /// the shipped deployments enable it.
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+///
+/// A node's era digest commits to these fields through their derived encoding,
+/// in declaration order.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq, BinaryEncode)]
 // Validate the deployment-controlled invariants on deserialization, so an
 // invalid config is rejected at load time (see [`RewardPoWConfig::validate`])
 // instead of panicking later while processing consensus state.
 #[serde(try_from = "RewardPoWConfigFields")]
 pub struct RewardPoWConfig {
-    /// `R_PoW` genesis: initial balance of the reward pool.
-    pub reward_pool_genesis: PowReward,
-    /// `sigma_e` genesis: initial per-claim reward.
-    pub epoch_reward_genesis: PowReward,
     /// `d_reward` floor, as the exponent `n` in `p / 2^n` — the same way
     /// [`BlendPoWConfig::base_difficulty`] states the Blend threshold. It is
     /// both the genesis difficulty and the minimum: the retarget controller
@@ -196,8 +225,6 @@ pub struct RewardPoWConfig {
 /// invariants can be checked before a validated [`RewardPoWConfig`] is built.
 #[derive(serde::Deserialize)]
 struct RewardPoWConfigFields {
-    reward_pool_genesis: PowReward,
-    epoch_reward_genesis: PowReward,
     minimum_difficulty: ModulusShift,
     ema_smoothing_factor: u64,
     ema_smoothing_precision: NonZeroU64,
@@ -215,8 +242,6 @@ impl TryFrom<RewardPoWConfigFields> for RewardPoWConfig {
 
     fn try_from(fields: RewardPoWConfigFields) -> Result<Self, Self::Error> {
         let config = Self {
-            reward_pool_genesis: fields.reward_pool_genesis,
-            epoch_reward_genesis: fields.epoch_reward_genesis,
             minimum_difficulty: fields.minimum_difficulty,
             ema_smoothing_factor: fields.ema_smoothing_factor,
             ema_smoothing_precision: fields.ema_smoothing_precision,
@@ -251,6 +276,14 @@ pub enum RewardPoWConfigError {
         pow_share: u64,
         share_den: NonZeroU64,
     },
+    #[error(
+        "reward target cap ({minimum_difficulty}) must be above the reward target floor \
+         ({floor}), or the target can never move"
+    )]
+    TargetCapNotAboveFloor {
+        minimum_difficulty: ModulusShift,
+        floor: NonZeroU64,
+    },
 }
 
 impl RewardPoWConfig {
@@ -262,8 +295,9 @@ impl RewardPoWConfig {
     /// # Errors
     ///
     /// Returns [`RewardPoWConfigError`] if the EMA smoothing factor is not
-    /// below the precision, or the configured part of the payout-rate
-    /// denominator overflows `u64`.
+    /// below the precision, the fee share exceeds its denominator, the reward
+    /// target cap is not above the floor, or the configured part of the
+    /// payout-rate denominator overflows `u64`.
     pub fn validate(&self) -> Result<(), RewardPoWConfigError> {
         if self.ema_smoothing_factor >= self.ema_smoothing_precision.get() {
             return Err(RewardPoWConfigError::EmaSmoothingFactorNotBelowPrecision {
@@ -279,8 +313,16 @@ impl RewardPoWConfig {
             });
         }
 
-        // Only the errors matter here; the computed values are unused.
-        self.checked_reward_target_floor()?;
+        // The retarget clamps between the floor and the cap, the genesis
+        // target: at or below the floor, it would always return the cap.
+        let floor = self.checked_reward_target_floor()?;
+        if PowTarget::from(self.minimum_difficulty) <= PowTarget::from(floor.get()) {
+            return Err(RewardPoWConfigError::TargetCapNotAboveFloor {
+                minimum_difficulty: self.minimum_difficulty,
+                floor,
+            });
+        }
+
         self.checked_claim_rate_scale()?;
         Ok(())
     }
@@ -371,79 +413,13 @@ impl RewardPoWConfig {
     }
 }
 
-// The reward parameters: every field in declaration order. A node's era digest
-// commits to them through this encoding.
-impl BinaryEncode for RewardPoWConfig {
-    fn encoded_length(&self) -> usize {
-        // We destructure (in declaration order) so we know we are not forgetting to
-        // encode new fields.
-        let Self {
-            reward_pool_genesis,
-            epoch_reward_genesis,
-            minimum_difficulty,
-            ema_smoothing_factor,
-            ema_smoothing_precision,
-            target_claims_per_block,
-            rate_num,
-            rate_den,
-            target_claim_per_block,
-            pow_share,
-            share_den,
-            slot_window,
-        } = self;
-        reward_pool_genesis.encoded_length()
-            + epoch_reward_genesis.encoded_length()
-            + minimum_difficulty.encoded_length()
-            + ema_smoothing_factor.encoded_length()
-            + ema_smoothing_precision.encoded_length()
-            + target_claims_per_block.encoded_length()
-            + rate_num.encoded_length()
-            + rate_den.encoded_length()
-            + target_claim_per_block.encoded_length()
-            + pow_share.encoded_length()
-            + share_den.encoded_length()
-            + slot_window.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self {
-            reward_pool_genesis,
-            epoch_reward_genesis,
-            minimum_difficulty,
-            ema_smoothing_factor,
-            ema_smoothing_precision,
-            target_claims_per_block,
-            rate_num,
-            rate_den,
-            target_claim_per_block,
-            pow_share,
-            share_den,
-            slot_window,
-        } = self;
-        reward_pool_genesis.encode_into(out);
-        epoch_reward_genesis.encode_into(out);
-        minimum_difficulty.encode_into(out);
-        ema_smoothing_factor.encode_into(out);
-        ema_smoothing_precision.encode_into(out);
-        target_claims_per_block.encode_into(out);
-        rate_num.encode_into(out);
-        rate_den.encode_into(out);
-        target_claim_per_block.encode_into(out);
-        pow_share.encode_into(out);
-        share_den.encode_into(out);
-        slot_window.encode_into(out);
-    }
-}
-
 /// The encoding of the fixture below, one field per group.
-const REWARD_POW_CONFIG_HEX: &str = "1e00000000000000 1f00000000000000 20000000 2100000000000000 2200000000000000 2300000000000000 2400000000000000 2500000000000000 2600000000000000 2700000000000000 2800000000000000 2900000000000000";
+const REWARD_POW_CONFIG_HEX: &str = "20000000 2100000000000000 2200000000000000 2300000000000000 2400000000000000 2500000000000000 2600000000000000 2700000000000000 2800000000000000 2900000000000000";
 
 codec_fixtures!(
     RewardPoWConfig,
     encode_only,
     RewardPoWConfig {
-        reward_pool_genesis: 30,
-        epoch_reward_genesis: 31,
         minimum_difficulty: ModulusShift::new::<32>(),
         ema_smoothing_factor: 33,
         ema_smoothing_precision: NonZeroU64::new(34).unwrap(),
@@ -490,28 +466,31 @@ impl BlendPoWConfig {
 #[cfg(test)]
 mod tests {
     use std::{
-        num::{NonZero, NonZeroU64, NonZeroU128},
+        num::{NonZero, NonZeroU32, NonZeroU64, NonZeroU128},
         sync::Arc,
     };
 
-    use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
+    use lb_core::{
+        era::AcceptedForkDigests,
+        sdp::{MinStake, ServiceParameters, ServiceType},
+    };
     use lb_cryptarchia_engine::EpochConfig;
     pub use lb_groth16::ModulusShift;
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
     use crate::{
         config::{
-            BlendPoWConfig, ConsensusExcludedKeys, PoWConfig, RewardPoWConfig, RewardPoWConfigError,
+            BlendPoWConfig, PoWConfig, RewardPoWConfig, RewardPoWConfigError, nonce_snapshot,
+            stake_distribution_snapshot,
         },
         mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters},
+        test_utils::{FORK_DIGEST, single_era},
     };
 
     /// A reward config with claiming disabled, standing in for a real
     /// deployment config in tests that don't exercise the reward parameters.
     fn disabled_reward_config() -> RewardPoWConfig {
         RewardPoWConfig {
-            reward_pool_genesis: 1_000_000_000,
-            epoch_reward_genesis: 1_000_000,
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
@@ -596,6 +575,20 @@ mod tests {
     }
 
     #[test]
+    fn reward_config_rejects_target_cap_not_above_floor() {
+        // p / 2^253 is 1, below the floor of 9 that F/P = 9/10 sets.
+        let mut config = disabled_reward_config();
+        config.minimum_difficulty = ModulusShift::new::<253>();
+        assert_eq!(
+            config.validate(),
+            Err(RewardPoWConfigError::TargetCapNotAboveFloor {
+                minimum_difficulty: config.minimum_difficulty,
+                floor: NonZeroU64::new(9).unwrap(),
+            })
+        );
+    }
+
+    #[test]
     fn reward_config_rejects_claim_rate_scale_overflow() {
         // rate_den * target_claim_per_block would exceed u64::MAX.
         let mut config = disabled_reward_config();
@@ -646,7 +639,8 @@ mod tests {
             NonZero::new(5).unwrap(),
             NonNegativeRatio::new(1, 2.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
-            NonZero::new(12).unwrap(),
+            12,
+            4,
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
@@ -679,7 +673,6 @@ mod tests {
                     timestamp: 0,
                 },
             },
-            consensus_excluded_keys: ConsensusExcludedKeys::empty(),
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -690,14 +683,22 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![FORK_DIGEST]),
         };
         assert_eq!(config.epoch_length(), 100);
-        assert_eq!(config.nonce_snapshot(1.into()), 60.into());
-        assert_eq!(config.nonce_snapshot(2.into()), 160.into());
-        assert_eq!(config.total_stake_snapshot(1.into()), 60.into());
-        assert_eq!(config.total_stake_snapshot(2.into()), 160.into());
-        assert_eq!(config.stake_distribution_snapshot(1.into()), 0.into());
-        assert_eq!(config.stake_distribution_snapshot(2.into()), 100.into());
+        let eras = single_era(config);
+        let epoch_1 = NonZeroU32::new(1).unwrap();
+        let epoch_2 = NonZeroU32::new(2).unwrap();
+        assert_eq!(nonce_snapshot(&eras, epoch_1), 60.into());
+        assert_eq!(nonce_snapshot(&eras, epoch_2), 160.into());
+        assert_eq!(
+            stake_distribution_snapshot(&eras, 1.try_into().unwrap()),
+            0.into()
+        );
+        assert_eq!(
+            stake_distribution_snapshot(&eras, 2.try_into().unwrap()),
+            100.into()
+        );
     }
 
     fn epoch_zero_test_config() -> super::Config {
@@ -710,7 +711,8 @@ mod tests {
             NonZero::new(5).unwrap(),
             NonNegativeRatio::new(1, 2.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
-            NonZero::new(12).unwrap(),
+            12,
+            4,
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
         super::Config {
@@ -742,7 +744,6 @@ mod tests {
                     timestamp: 0,
                 },
             },
-            consensus_excluded_keys: ConsensusExcludedKeys::empty(),
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -753,21 +754,8 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![FORK_DIGEST]),
         }
-    }
-
-    #[test]
-    #[should_panic(expected = "attempt to subtract with overflow")]
-    fn stake_distribution_snapshot_panics_at_epoch_zero() {
-        let config = epoch_zero_test_config();
-        let _ = config.stake_distribution_snapshot(0.into());
-    }
-
-    #[test]
-    #[should_panic(expected = "attempt to subtract with overflow")]
-    fn nonce_snapshot_panics_at_epoch_zero() {
-        let config = epoch_zero_test_config();
-        let _ = config.nonce_snapshot(0.into());
     }
 
     #[test]
@@ -809,7 +797,8 @@ mod tests {
             NonZero::new(5).unwrap(),
             NonNegativeRatio::new(1, 2.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
-            NonZero::new(12).unwrap(),
+            12,
+            4,
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
@@ -842,7 +831,6 @@ mod tests {
                     timestamp: 0,
                 },
             },
-            consensus_excluded_keys: ConsensusExcludedKeys::empty(),
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -853,10 +841,12 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![FORK_DIGEST]),
         };
-        assert_eq!(config.epoch(1.into()), 0);
-        assert_eq!(config.epoch(100.into()), 1);
-        assert_eq!(config.epoch(101.into()), 1);
-        assert_eq!(config.epoch(200.into()), 2);
+        let eras = single_era(config);
+        assert_eq!(eras.epoch_for_slot(1.into()), 0);
+        assert_eq!(eras.epoch_for_slot(100.into()), 1);
+        assert_eq!(eras.epoch_for_slot(101.into()), 1);
+        assert_eq!(eras.epoch_for_slot(200.into()), 2);
     }
 }

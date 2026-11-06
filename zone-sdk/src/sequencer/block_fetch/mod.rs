@@ -30,13 +30,13 @@ use super::{
     channel_wallet::note_ops_from_txs,
     state::{ChannelUpdateInfo, PendingBundle, TxState},
     types::{
-        AtomicWithdrawInfo, ChannelTransferInfo, ChannelUpdateTx, DepositInfo, Error, FinalizedOp,
-        FinalizedTx, InscriptionInfo, PendingTx, PinDepositInfo, WithdrawInfo,
+        AtomicWithdrawInfo, ChannelTransferInfo, ChannelUpdateTx, ConfigInfo, DepositInfo, Error,
+        FinalizedOp, FinalizedTx, InscriptionInfo, PendingTx, PinDepositInfo, WithdrawInfo,
     },
 };
 use crate::{
     adapter,
-    adapter::{DepositEvents, DepositOpKey, build_deposit_events},
+    adapter::{DepositEvents, DepositOpKey},
 };
 
 /// Result of processing a block event.
@@ -527,13 +527,15 @@ pub fn channel_configs(
     let tx_hash = tx.op_refs().hash();
     tx.op_refs_iter()
         .filter_map(|op| match op {
-            OpRef::ChannelConfig(config) if config.channel == channel_id => Some(InscriptionInfo {
-                tx_hash,
-                parent_msg: config.parent,
-                this_msg: config.id(),
-                payload: Inscription::new_unchecked(Vec::new()),
-                signer: None,
-            }),
+            OpRef::ChannelConfig(config) if config.channel() == channel_id => {
+                Some(InscriptionInfo {
+                    tx_hash,
+                    parent_msg: config.parent(),
+                    this_msg: config.id(),
+                    payload: Inscription::new_unchecked(Vec::new()),
+                    signer: None,
+                })
+            }
             _ => None,
         })
         .collect()
@@ -677,7 +679,8 @@ pub(super) fn landed_msg_ids(items: &[FinalizedTx]) -> HashSet<MsgId> {
         .iter()
         .flat_map(|tx| tx.ops.iter())
         .filter_map(|op| match op {
-            FinalizedOp::Inscription(i) | FinalizedOp::Config(i) => Some(i.this_msg),
+            FinalizedOp::Inscription(i) => Some(i.this_msg),
+            FinalizedOp::Config(c) => Some(c.this_msg),
             _ => None,
         })
         .collect()
@@ -701,18 +704,7 @@ where
     Ok(apply_finalized_blocks(state, prepared))
 }
 
-/// Fetch the deposit-amount lookup for a single block, gated on whether the
-/// block has any deposit op for our channel.
-///
-/// Per node semantics, a block and its events are atomically visible — so a
-/// block containing a deposit op must yield an event for that op. The
-/// returned `HashMap` is therefore the *complete* `(tx_hash, op_id) → amount`
-/// lookup for every deposit op of our channel in this block.
-///
-/// On any failure (HTTP error, `Ok(None)`, or events missing an entry for
-/// some deposit op) we log at error level and return [`Error::Network`]. The
-/// caller's contract is "either retry, or abandon this block" — never
-/// silently emit a partial result, because that drops real deposits.
+/// [`adapter::fetch_block_deposit_events`], failing with [`Error::Network`].
 async fn fetch_block_deposit_events<Node>(
     node: &Node,
     block_id: HeaderId,
@@ -722,63 +714,13 @@ async fn fetch_block_deposit_events<Node>(
 where
     Node: adapter::Node + Sync,
 {
-    let expected: Vec<DepositOpKey> = transactions
-        .iter()
-        .flat_map(|tx| {
-            let tx_hash = tx.op_refs().hash();
-            tx.op_refs().into_iter().filter_map(move |op| match op {
-                OpRef::ChannelDeposit(d) if d.channel_id == channel_id => Some(DepositOpKey {
-                    tx_hash,
-                    op_id: d.op_id(),
-                }),
-                _ => None,
-            })
-        })
-        .collect();
-
-    if expected.is_empty() {
-        return Ok(DepositEvents::new());
-    }
-
-    let events = match node.block_events(block_id).await {
-        Ok(Some(events)) => events,
-        Ok(None) => {
-            error!(
-                target: TARGET,
-                ?block_id,
-                "Events endpoint returned no body for a block with a channel deposit; \
-                 events should be atomically visible with the block"
-            );
-            return Err(Error::Network(format!(
-                "no events for block {block_id} containing channel deposits"
-            )));
-        }
-        Err(err) => {
-            error!(target: TARGET, ?block_id, ?err, "Failed to fetch events for block");
-            return Err(Error::Network(format!(
+    adapter::fetch_block_deposit_events(node, block_id, transactions, channel_id)
+        .await
+        .map_err(|err| {
+            Error::Network(format!(
                 "failed to fetch events for block {block_id}: {err}"
-            )));
-        }
-    };
-
-    let deposit_events = build_deposit_events(&events);
-    for key in &expected {
-        if !deposit_events.contains_key(key) {
-            error!(
-                target: TARGET,
-                ?block_id,
-                tx_hash = ?key.tx_hash,
-                op_id = ?key.op_id,
-                "Block events missing an entry for a known channel deposit op; \
-                 expected atomic block/events visibility per node semantics"
-            );
-            return Err(Error::Network(format!(
-                "block {block_id} events missing deposit entry for tx {:?} op {:?}",
-                key.tx_hash, key.op_id
-            )));
-        }
-    }
-    Ok(deposit_events)
+            ))
+        })
 }
 
 /// Walks `transactions` and groups channel-relevant ops per Mantle tx,
@@ -822,13 +764,12 @@ fn extract_finalized_items(
                     };
                     ops.push(FinalizedOp::Inscription(info));
                 }
-                OpRef::ChannelConfig(config) if config.channel == channel_id => {
-                    ops.push(FinalizedOp::Config(InscriptionInfo {
+                OpRef::ChannelConfig(config) if config.channel() == channel_id => {
+                    ops.push(FinalizedOp::Config(ConfigInfo {
                         tx_hash,
-                        parent_msg: config.parent,
+                        parent_msg: config.parent(),
                         this_msg: config.id(),
-                        payload: Inscription::new_unchecked(Vec::new()),
-                        signer: None,
+                        config: config.clone(),
                     }));
                 }
                 OpRef::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
@@ -1082,7 +1023,7 @@ pub(super) fn classify_channel_tx(
                 });
                 *block_tip = Some(this_msg);
             }
-            OpRef::ChannelConfig(config) if config.channel == channel_id => {
+            OpRef::ChannelConfig(config) if config.channel() == channel_id => {
                 configs += 1;
                 // Configs sit on the separate config lineage — `this_msg` is a
                 // config id, `parent_msg` its config parent, payload empty.
@@ -1091,7 +1032,7 @@ pub(super) fn classify_channel_tx(
                 // node's single tip.
                 config_entries.push(InscriptionInfo {
                     tx_hash,
-                    parent_msg: config.parent,
+                    parent_msg: config.parent(),
                     this_msg: config.id(),
                     payload: [].into(),
                     signer: None,
@@ -1172,7 +1113,7 @@ pub(super) fn is_pure_config<Mode: VerificationMode>(
     let mut transfers = 0usize;
     for op in tx.op_refs_iter() {
         match op {
-            OpRef::ChannelConfig(config) if config.channel == channel_id => configs += 1,
+            OpRef::ChannelConfig(config) if config.channel() == channel_id => configs += 1,
             OpRef::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => return false,
             OpRef::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => return false,
             OpRef::Transfer(_) => transfers += 1,
@@ -1202,7 +1143,7 @@ fn touches_channel_tip<State: VerificationState, Mode: VerificationMode>(
 ) -> bool {
     tx.op_refs().iter().any(|op| match op {
         OpRef::ChannelInscribe(inscribe) => inscribe.channel_id == channel_id,
-        OpRef::ChannelConfig(set_keys) => set_keys.channel == channel_id,
+        OpRef::ChannelConfig(set_keys) => set_keys.channel() == channel_id,
         _ => false,
     })
 }

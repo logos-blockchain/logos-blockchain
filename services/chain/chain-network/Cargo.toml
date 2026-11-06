@@ -45,8 +45,9 @@ tracing-futures       = { workspace = true }
 lb-core                       = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-network-service            = { workspace = true }
+lb-time                       = { workspace = true }
 lb-utils                      = { workspace = true }
+time                          = { workspace = true }
 
 [features]
-default          = []
 tokio-task-names = ["lb-utils/tokio-task-names"]

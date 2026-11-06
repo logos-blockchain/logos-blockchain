@@ -61,6 +61,24 @@ After running `docker compose up`, the randomly assigned ports can be viewed wit
 docker compose ps 
 ```
 
+### Reaching the node API by name
+
+A node answers to `localhost` and to IP addresses. A client that reaches its API by any other host name gets
+`403 Forbidden` until that name is listed in the node's user config, which is what stops a web page from reaching the
+API through DNS rebinding. In `compose.run.yml` the explorer and the faucet both call node 0 by name, so that node needs:
+
+```yaml
+api:
+  backend:
+    allowed_hosts:
+      - logos-blockchain-node-0
+      - logos_blockchain_node_0
+```
+
+Web pages are refused the same way, unless the node serves them itself: list a page's origin in
+`api.backend.cors_origins`, such as `https://app.example`, for it to use the API. There is no wildcard for either
+setting.
+
 ## Release & deployment file taxonomy
 
 Deployment files fall into three categories by **how often they change**. This
@@ -77,7 +95,7 @@ optional `shared/` dir, so files common to every environment have a natural home
 deployment/ceremony/genesis/
   shared/                         # (optional) inputs common to ALL environments
   <env>/
-    inscribe.yaml                 # TEMPLATE entropy + PER-RELEASE chain_id/genesis_time
+    inscribe.yaml                 # TEMPLATE entropy/PoW reward pool + PER-RELEASE chain_id/genesis_time
     deployment-template.yaml      # PER-TYPE era-zero params (consensus / blend / time)
     stakeholders.yaml             # PER-TYPE genesis stake distribution
     providers.yaml                # PER-TYPE bootstrap providers (id, locators)
@@ -95,15 +113,60 @@ tests validate:
 
 | Trigger | Inputs | Output (committed) |
 | --- | --- | --- |
-| `.github/workflows/genesis-ceremony.yml` (devnet / testnet) | `deployment/ceremony/genesis/<env>/*` | `nodes/node/binary/src/config/deployment/settings.yaml` |
-| `scripts/standalone-genesis-ceremony.sh` (local) | `deployment/ceremony/genesis/standalone/*` | `nodes/node/standalone-deployment-config.yaml` |
+| `.github/workflows/genesis-ceremony.yml` (devnet / testnet) | `deployment/ceremony/genesis/<env>/*` | `nodes/node/binary/src/config/deployment/settings.yaml` and the era files it includes, `era/schedule/<era number>.yaml` next to it |
+| `scripts/standalone-genesis-ceremony.sh` (local) | `deployment/ceremony/genesis/standalone/*` | `nodes/node/standalone-deployment-config.yaml` and the era file it includes, `era/schedule/0.yaml` next to it |
+
+### Eras
+
+A deployment schedules its eras under `eras`, each keyed by the epoch it
+starts at; the first starts at epoch 0. The deployments the ceremony writes,
+the binary's default and the standalone one, keep each era in its own file,
+named after its era number (its place in the schedule, from 0), which the main
+file includes (`settings.yaml` for the default):
+
+```yaml
+eras:
+  0: !include era/schedule/0.yaml
+  40: !include era/schedule/1.yaml
+genesis_block:
+  ...
+```
+
+To schedule an era in the default deployment, add its file to
+`nodes/node/binary/src/config/deployment/era/schedule/`, named after its era
+number, and include it from `settings.yaml` under the epoch it starts at. The
+node's build script embeds every `.yaml` file in `era/schedule/` in the binary,
+and a config test fails when a file there is not included, an include names no
+file there, or an era's file is not named after its era number.
+
+Any deployment file passed with `--deployment` can include era files the same
+way, relative to itself, so they must be shipped next to it:
+`compose.setup.yml` mounts the `era/schedule/` directory and
+`cleanup_node_data.sh` copies it to `/node-data/era/schedule/`, next to
+`/node-data/deployment.yaml`.
+
+The ceremony writes the genesis era only: re-running it replaces a schedule
+with that era alone, and removes the era files of the schedule it replaces.
+
+The node checks every era when it loads a deployment, and refuses to start on
+one it cannot run: values the specifications rule out (a slot activation
+coefficient `f` of 1 or more, an uncle reference window `W` wider than `⌊0.6k⌋`,
+a Blend peering degree outside 3 to 5, ...), values the node cannot compute with
+(`f` below 1/1000, `⌊k/4f⌋` of zero, ...), an era whose `W·f⁻¹` exceeds a fifth of
+the previous era's finalization window `3⌊k/f⌋`, and an era that ends within the
+transition period it opens. `--check-config` runs the same checks.
+
+A release may append eras, or change eras that have not begun, but must not
+change an era a node has already executed. A node refuses to start with a
+deployment that gives the slot of its tip another fork digest than the one the
+tip was applied under: run the release the node ran with, or remove the node's
+state and sync again.
 
 Protocol and gossipsub topic names are not configured: every node derives them
 from its deployment. Blend, chain sync and the cryptarchia and mempool topics are
 named `/logos-blockchain/<fork digest>/<protocol>`, so nodes on different forks
 never talk to each other. Kademlia and identify are named
-`/logos-blockchain/<percent-encoded chain ID>/<protocol>`, so peers of a chain
-still find each other across its forks.
+`/logos-blockchain/<genesis block ID>/<protocol>`, so peers of a chain still find each other across its forks.
 
 ### 1. Template for all deployments (any type)
 Shared blueprints reused by every deployment type; not edited per release.
@@ -112,7 +175,7 @@ Shared blueprints reused by every deployment type; not edited per release.
 - `Dockerfile`, `deployment/Dockerfile`
 - `deployment/cfgsync.yaml`, `deployment/cfgsync/deployment-settings.yaml`
 - `deployment/nginx/*`, `deployment/scripts/*`, `deployment/systemd/*`
-- the `# TEMPLATE` section (`entropy_sources`) of each `deployment/ceremony/genesis/<env>/inscribe.yaml`
+- the `# TEMPLATE` section (`entropy_sources`, `pow_reward_pool`) of each `deployment/ceremony/genesis/<env>/inscribe.yaml`
 
 ### 2. Template for a certain deployment type
 Per-type blueprints; change only when a network type is re-defined.
@@ -130,5 +193,7 @@ Per-type blueprints; change only when a network type is re-defined.
 - The `version` input of the genesis ceremony workflow (named in the ceremony's commit message)
 
 Generated each release (by the ceremony, not hand-edited):
-`nodes/node/binary/src/config/deployment/settings.yaml`,
-`nodes/node/standalone-deployment-config.yaml`.
+`nodes/node/binary/src/config/deployment/settings.yaml` and its genesis era
+file, `nodes/node/binary/src/config/deployment/era/schedule/0.yaml`,
+`nodes/node/standalone-deployment-config.yaml` and its genesis era file,
+`nodes/node/era/schedule/0.yaml`.

@@ -8,6 +8,7 @@ services:
     volumes:
       - node-data:/node-data
       - ./nodes/node/binary/src/config/deployment/settings.yaml:/deployment.yaml
+      - ./nodes/node/binary/src/config/deployment/era/schedule:/eras
       - ./deployment:/etc/logos-blockchain
     entrypoint: /etc/logos-blockchain/scripts/cleanup_node_data.sh
 

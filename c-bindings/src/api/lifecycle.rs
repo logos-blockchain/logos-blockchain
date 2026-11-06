@@ -101,6 +101,12 @@ unsafe fn initialize_lb_node(
     // Captured before the run config is consumed, so the node handle can answer
     // for its chain without querying a service for a value that cannot change.
     let chain_id = run_config.deployment.chain_id();
+    let fork_digests = run_config
+        .deployment
+        .era_schedule()
+        .iter()
+        .map(|era| era.parameters.fork_digest)
+        .collect();
 
     let runtime = Runtime::new().expect("Failed to create Tokio runtime");
     let app = run_node_from_config(run_config, Some(runtime.handle().clone())).map_err(|e| {
@@ -131,7 +137,12 @@ unsafe fn initialize_lb_node(
         Ok(())
     })?;
 
-    Ok(LogosBlockchainNode::new(app, runtime, &chain_id))
+    Ok(LogosBlockchainNode::new(
+        app,
+        runtime,
+        &chain_id,
+        fork_digests,
+    ))
 }
 
 /// Builds the run configuration a node started with these paths would use.
@@ -175,14 +186,12 @@ unsafe fn get_user_config(config_path: *const c_char) -> StatusResult<UserConfig
                 format!("Could not convert the config path to string: {e}"),
             )
         })?;
-    deserialize_value_at_path::<UserConfig>(user_config_path.as_ref(), OnUnknownKeys::Fail).map_err(
-        |e| {
-            OperationStatus::error(
-                OperationStatusCode::InitializationError,
-                format!("Could not parse config file: {e}"),
-            )
-        },
-    )
+    UserConfig::load(user_config_path.as_ref()).map_err(|e| {
+        OperationStatus::error(
+            OperationStatusCode::InitializationError,
+            format!("Could not parse config file: {e}"),
+        )
+    })
 }
 
 /// # Safety
@@ -315,7 +324,6 @@ mod test {
             std::fs::create_dir_all(&log_dir).expect("Failed to create isolated log dir");
 
             let node_config_path = temp_dir.path().join("standalone-node-config.yaml");
-            let deployment_config_path = temp_dir.path().join("standalone-deployment-config.yaml");
 
             let state_dir_path = temp_dir.path().join("state");
             let mut node_config = deserialize_value_at_path::<UserConfig>(
@@ -332,17 +340,15 @@ mod test {
                 .expect("Standalone node config should be written to file");
             std::fs::write(&node_config_path, node_config_yaml)
                 .expect("Failed to write isolated node config");
-            std::fs::copy(
-                STANDALONE_DEPLOYMENT_CONFIG_PATH.as_path(),
-                &deployment_config_path,
-            )
-            .expect("Failed to copy standalone deployment config");
 
             let node_config = CString::new(node_config_path.to_string_lossy().as_bytes())
                 .expect("Node config path should not contain NUL");
-            let deployment_config =
-                CString::new(deployment_config_path.to_string_lossy().as_bytes())
-                    .expect("Deployment config path should not contain NUL");
+            let deployment_config = CString::new(
+                STANDALONE_DEPLOYMENT_CONFIG_PATH
+                    .to_string_lossy()
+                    .as_bytes(),
+            )
+            .expect("Deployment config path should not contain NUL");
 
             Self {
                 _temp_dir: temp_dir,

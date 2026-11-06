@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 use ::serde::{Deserialize, Serialize};
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, VerifyingKey};
 use generic_array::{ArrayLength, GenericArray};
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_groth16::{Bn254, CompressSize, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes};
 use lb_poq::{PoQProof, PoQVerifierInput, PoQWitnessInputs, ProveError, prove, verify};
 use thiserror::Error;
@@ -48,7 +48,8 @@ pub enum Error {
 }
 
 /// A Proof of Quota as described in the Blend spec: <https://lip.logos.co/blockchain/raw/blend-protocol.html#proof-of-quota>.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, BinaryDecode)]
+#[decode(try_from = "[u8; PROOF_OF_QUOTA_SIZE]")]
 pub struct ProofOfQuota {
     #[serde(with = "lb_groth16::serde::serde_fr")]
     key_nullifier: ZkHash,
@@ -133,22 +134,8 @@ impl BinaryEncode for ProofOfQuota {
     }
 }
 
-impl BinaryDecode for ProofOfQuota {
-    type Context = ();
-
-    fn decode<'input>(
-        input: &'input [u8],
-        (): &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (rest, value) = <[u8; _]>::decode(input, &())?;
-        let proof = Self::try_from(value)
-            .map_err(|_| DecodeError::invalid_value::<Self>("not a valid proof of quota"))?;
-        Ok((rest, proof))
-    }
-}
-
 /// A verified Proof of Quota.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, BinaryEncode)]
 pub struct VerifiedProofOfQuota(ProofOfQuota);
 
 impl VerifiedProofOfQuota {
@@ -231,16 +218,6 @@ impl AsRef<ProofOfQuota> for VerifiedProofOfQuota {
 impl PartialEq<ProofOfQuota> for VerifiedProofOfQuota {
     fn eq(&self, other: &ProofOfQuota) -> bool {
         self.0 == *other
-    }
-}
-
-impl BinaryEncode for VerifiedProofOfQuota {
-    fn encoded_length(&self) -> usize {
-        self.0.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.0.encode_into(out);
     }
 }
 

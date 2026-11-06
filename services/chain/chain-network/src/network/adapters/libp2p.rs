@@ -1,32 +1,33 @@
-use std::{collections::HashSet, fmt::Debug, hash::Hash, iter, marker::PhantomData, time::Instant};
+use std::{
+    collections::HashSet, fmt::Debug, hash::Hash, iter, marker::PhantomData, mem, time::Instant,
+};
 
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream};
-use lb_binary_codec::canonical::BinaryDecodeExt as _;
+use lb_binary_codec::canonical::{BinaryDecode, DecodeError};
 use lb_core::{
     block::{Block, Proposal},
     header::HeaderId,
     mantle::{
+        TxHash,
         ledger::verification_mode::StandardMode,
-        traits::{SignedMantleTx, StorageSize},
+        traits::{Hashable, SignedMantleTx, StorageSize},
         transactions::states::Preverified,
     },
 };
-use lb_cryptarchia_sync::GetTipResponse;
+use lb_cryptarchia_engine::{Era, EraSchedule, Slot};
+use lb_cryptarchia_sync::TipResponse;
 use lb_log_targets::chain;
 use lb_network_service::{
-    NetworkService,
     backends::libp2p::{
         ChainSyncCommand, Command, DiscoveryCommand, Libp2p, NetworkCommand, PeerId,
-        PubSubCommand::Subscribe, TopicHash,
+        PubSubCommand::{Subscribe, Unsubscribe},
+        TopicHash,
     },
-    message::{ChainSyncEvent, NetworkMsg},
+    message::{BackendNetworkMsg, ChainSyncEvent, NetworkMsg},
 };
-use overwatch::{
-    DynError,
-    services::{ServiceData, relay::OutboundRelay},
-};
+use overwatch::{DynError, services::relay::OutboundRelay};
 use rand::{seq::IteratorRandom as _, thread_rng};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
 use tokio_stream::{StreamExt as _, wrappers::errors::BroadcastStreamRecvError};
 
@@ -35,8 +36,7 @@ use crate::{
     network::{BoxedStream, NetworkAdapter},
 };
 
-type Relay<T, RuntimeServiceId> =
-    OutboundRelay<<NetworkService<T, RuntimeServiceId> as ServiceData>::Message>;
+type Relay<T, RuntimeServiceId> = OutboundRelay<BackendNetworkMsg<T, RuntimeServiceId>>;
 type BlockStreamItem<Tx> = Result<(HeaderId, Block<Tx>), DynError>;
 type FirstBlockResponse<Tx> = Result<Option<BlockStreamItem<Tx>>, DynError>;
 type BlockDownloadStream<Tx> = BoxedStream<BlockStreamItem<Tx>>;
@@ -48,21 +48,65 @@ pub struct LibP2pAdapter<Tx, RuntimeServiceId>
 where
     Tx: Clone + Eq,
 {
-    network_relay:
-        OutboundRelay<<NetworkService<Libp2p, RuntimeServiceId> as ServiceData>::Message>,
+    network_relay: OutboundRelay<BackendNetworkMsg<Libp2p, RuntimeServiceId>>,
     settings: LibP2pAdapterSettings,
+    /// The era the adapter is in.
+    current_era: Era,
+    /// The topic of the era the adapter is in.
+    current_topic: String,
+    /// The topic of the era before, which the adapter stays subscribed to
+    /// until the end of its transition period.
+    previous_topic: Option<String>,
     _phantom_tx: PhantomData<Tx>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The settings of the libp2p adapter: those it keeps for the whole run, and
+/// those that change from era to era.
+#[derive(Debug, Clone)]
 pub struct LibP2pAdapterSettings {
-    pub topic: String,
     /// The maximum number of connected peers to attempt downloads from
     /// for each target block.
     pub max_connected_peers_to_try_download: usize,
     /// The maximum number of discovered peers to attempt downloads from
     /// for each target block.
     pub max_discovered_peers_to_try_download: usize,
+    pub era_schedule: EraSchedule<LibP2pAdapterEraSettings>,
+}
+
+/// What the libp2p adapter runs with in an era.
+#[derive(Debug, Clone)]
+pub struct LibP2pAdapterEraSettings {
+    /// The topic block proposals are gossiped on.
+    pub topic: String,
+    /// The most uncles a block of the era may reference: the maximum the era's
+    /// proposals and synced blocks are decoded under.
+    pub max_uncles: u8,
+}
+
+/// Decodes a proposal under the uncle maximum of the era of its slot, which its
+/// encoding opens with.
+fn decode_proposal(
+    bytes: &[u8],
+    era_schedule: &EraSchedule<LibP2pAdapterEraSettings>,
+) -> Result<Proposal, DecodeError> {
+    let slot = Slot::peek_decode(bytes, &())?;
+    Proposal::decode_all(bytes, &era_schedule.at_slot(slot).parameters.max_uncles)
+}
+
+/// Decodes a synced block under the uncle maximum of the era of its slot, which
+/// its encoding opens with.
+fn decode_block<Tx>(
+    bytes: &[u8],
+    era_schedule: &EraSchedule<LibP2pAdapterEraSettings>,
+) -> Result<Block<Tx>, DecodeError>
+where
+    Tx: BinaryDecode<Context = ()> + Hashable<Hash = TxHash> + StorageSize,
+{
+    let slot = Slot::peek_decode(bytes, &())?;
+    Block::decode_all(
+        bytes,
+        &(era_schedule.at_slot(slot).parameters.max_uncles, ()),
+    )
 }
 
 impl<Tx, RuntimeServiceId> LibP2pAdapter<Tx, RuntimeServiceId>
@@ -99,6 +143,7 @@ where
     ) -> Result<BlockDownloadStream<Tx>, DynError>
     where
         Tx: SignedMantleTx<Preverified, StandardMode>
+            + BinaryDecode<Context = ()>
             + StorageSize
             + Serialize
             + DeserializeOwned
@@ -135,6 +180,17 @@ where
             .await
         {
             tracing::error!(target: LOG_TARGET, "error subscribing to {topic}: {error}");
+        }
+    }
+
+    async fn unsubscribe(relay: &Relay<Libp2p, RuntimeServiceId>, topic: &str) {
+        if let Err(error) = relay
+            .send(NetworkMsg::Process(Command::PubSub(Unsubscribe(
+                topic.into(),
+            ))))
+            .await
+        {
+            tracing::error!(target: LOG_TARGET, "error unsubscribing from {topic}: {error}");
         }
     }
 
@@ -198,6 +254,7 @@ where
 impl<Tx, RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for LibP2pAdapter<Tx, RuntimeServiceId>
 where
     Tx: SignedMantleTx<Preverified, StandardMode>
+        + BinaryDecode<Context = ()>
         + StorageSize
         + Serialize
         + DeserializeOwned
@@ -213,14 +270,24 @@ where
     type Block = Block<Tx>;
     type Proposal = Proposal;
 
-    async fn new(settings: Self::Settings, network_relay: Relay<Libp2p, RuntimeServiceId>) -> Self {
+    async fn new(
+        settings: Self::Settings,
+        current_era: Era,
+        network_relay: Relay<Libp2p, RuntimeServiceId>,
+    ) -> Self {
+        let topic = settings
+            .era_schedule
+            .get(current_era)
+            .expect("The era the adapter starts in should be scheduled")
+            .parameters
+            .topic
+            .clone();
         let relay = network_relay.clone();
         tracing::debug!(
             target: LOG_TARGET,
-            "Subscribing chain-network adapter to pubsub topic {}",
-            settings.topic
+            "Subscribing chain-network adapter to pubsub topic {topic}"
         );
-        Self::subscribe(&relay, settings.topic.as_str()).await;
+        Self::subscribe(&relay, topic.as_str()).await;
         tracing::trace!(target: LOG_TARGET, "Starting up...");
         // this wait seems to be helpful in some cases since we give the time
         // to the network to establish connections before we start sending messages
@@ -229,8 +296,61 @@ where
         Self {
             network_relay,
             settings,
+            current_era,
+            current_topic: topic,
+            previous_topic: None,
             _phantom_tx: PhantomData,
         }
+    }
+
+    async fn rotate_era(&mut self, era: Era) {
+        let Some(era_settings) = self.settings.era_schedule.get(era) else {
+            tracing::error!(
+                target: LOG_TARGET,
+                "Asked to enter era {}, which is not scheduled",
+                era.into_inner()
+            );
+            return;
+        };
+        self.current_era = era;
+        let new_era_topic = &era_settings.parameters.topic;
+        if new_era_topic == &self.current_topic {
+            return;
+        }
+        tracing::info!(
+            target: LOG_TARGET,
+            "Entered era {}: block proposals are gossiped on {new_era_topic}",
+            era.into_inner()
+        );
+        // A topic of an earlier era still held has had its transition period
+        // end already: only the report of its end went missing.
+        if let Some(lingering_topic) = self.previous_topic.take() {
+            tracing::warn!(
+                target: LOG_TARGET,
+                "The end of the previous era's transition period was never reported: block proposals are no longer received on {lingering_topic}"
+            );
+            Self::unsubscribe(&self.network_relay, &lingering_topic).await;
+        }
+        let previous_topic = mem::replace(&mut self.current_topic, new_era_topic.clone());
+        Self::subscribe(&self.network_relay, &self.current_topic).await;
+        // Proposals broadcast by peers that have not entered the new era yet
+        // still arrive on the previous era's topic, so the adapter stays
+        // subscribed to it until its transition period ends.
+        self.previous_topic = Some(previous_topic);
+    }
+
+    async fn complete_era_transition(&mut self, ended_era: Era) {
+        if self.current_era.checked_sub(1) != Some(ended_era) {
+            return;
+        }
+        let Some(previous_topic) = self.previous_topic.take() else {
+            return;
+        };
+        tracing::info!(
+            target: LOG_TARGET,
+            "Transition period over: block proposals are no longer received on {previous_topic}"
+        );
+        Self::unsubscribe(&self.network_relay, &previous_topic).await;
     }
 
     async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
@@ -242,11 +362,22 @@ where
         {
             return Err(Box::new(error));
         }
-        let topic_hash = TopicHash::from_raw(self.settings.topic.clone());
+        // Gossipsub only hands over the messages of the topics the node is
+        // subscribed to: the topic of the adapter's current era, and the topic
+        // of the era before during its transition period. So the stream keeps
+        // the messages of every era's topic, and follows the adapter from era
+        // to era.
+        let topic_hashes: HashSet<TopicHash> = self
+            .settings
+            .era_schedule
+            .iter()
+            .map(|era| TopicHash::from_raw(era.parameters.topic.clone()))
+            .collect();
+        let era_schedule = self.settings.era_schedule.clone();
         let stream = receiver.await.map_err(Box::new)?;
         Ok(Box::new(stream.filter_map(move |message| match message {
-            Ok(message) if message.topic == topic_hash => {
-                match Proposal::decode_all(&message.data) {
+            Ok(message) if topic_hashes.contains(&message.topic) => {
+                match decode_proposal(&message.data, &era_schedule) {
                     Ok(proposal) => Some(proposal),
                     Err(e) => {
                         tracing::debug!(target: LOG_TARGET, "unrecognized gossipsub message: {e}");
@@ -281,7 +412,7 @@ where
         })))
     }
 
-    async fn request_tip(&self, peer: Self::PeerId) -> Result<GetTipResponse, DynError> {
+    async fn request_tip(&self, peer: Self::PeerId) -> Result<TipResponse, DynError> {
         let started_at = Instant::now();
         tracing::debug!(target: LOG_TARGET, "Requesting chain tip from peer {peer:?}");
         let (reply_sender, receiver) = oneshot::channel();
@@ -303,20 +434,20 @@ where
         metrics::chainsync_observe_request_tip(started_at.elapsed(), response)
     }
 
-    async fn sample_tips(&self, max_peers: usize) -> BoxedStream<GetTipResponse> {
+    async fn sample_tips(&self, max_peers: usize) -> BoxedStream<TipResponse> {
         use futures::stream::StreamExt as FuturesStreamExt;
         let connected_peers = match Self::get_connected_peers(&self.network_relay).await {
             Ok(peers) => peers,
             Err(e) => {
                 tracing::warn!(target: LOG_TARGET, "tip poll: failed to fetch connected peers: {e}");
-                return Box::new(stream::empty::<GetTipResponse>());
+                return Box::new(stream::empty::<TipResponse>());
             }
         };
         let chainsync_peers = match Self::get_chainsync_eligible_peers(&self.network_relay).await {
             Ok(peers) => peers,
             Err(e) => {
                 tracing::warn!(target: LOG_TARGET, "tip poll: failed to fetch chainsync-eligible peers: {e}");
-                return Box::new(stream::empty::<GetTipResponse>());
+                return Box::new(stream::empty::<TipResponse>());
             }
         };
         let connected_peers = connected_peers
@@ -330,7 +461,7 @@ where
 
         if sampled.is_empty() {
             tracing::debug!(target: LOG_TARGET, "tip poll: no connected peers to sample");
-            return Box::new(stream::empty::<GetTipResponse>());
+            return Box::new(stream::empty::<TipResponse>());
         }
         let result_stream = FuturesStreamExt::filter_map(
             stream::iter(
@@ -346,7 +477,7 @@ where
                     )))
                     .await
                 {
-                    tracing::debug!(target: LOG_TARGET, "tip poll: failed to send GetTip to peer {peer:?}: {error}");
+                    tracing::debug!(target: LOG_TARGET, "tip poll: failed to send a tip request to peer {peer:?}: {error}");
                     None
                 } else {
                     match receiver.await.ok() {
@@ -354,7 +485,7 @@ where
                         Some(Err(e)) => {
                             tracing::debug!(
                                 target: LOG_TARGET,
-                                "tip poll: GetTip request to peer {peer:?} failed: {e}"
+                                "tip poll: tip request to peer {peer:?} failed: {e}"
                             );
                             None
                         }
@@ -397,12 +528,16 @@ where
             return Err(Box::new(error));
         }
 
+        let era_schedule = self.settings.era_schedule.clone();
         let stream = receiver.await?;
-        let stream = stream.map_err(|e| Box::new(e) as DynError).map(|result| {
-            let block = result?;
-            let block: Self::Block = Block::try_from(block).map_err(|e| Box::new(e) as DynError)?;
-            Ok((block.header().id(), block))
-        });
+        let stream = stream
+            .map_err(|e| Box::new(e) as DynError)
+            .map(move |result| {
+                let bytes = result?;
+                let block: Self::Block =
+                    decode_block(&bytes, &era_schedule).map_err(|e| Box::new(e) as DynError)?;
+                Ok((block.header().id(), block))
+            });
 
         Ok(Box::new(stream))
     }
@@ -424,7 +559,7 @@ where
         let discovered_peers = Self::get_discovered_peers(&self.network_relay).await?;
 
         // Discovery membership and protocol capability are independent.
-        let peers_to_request = choose_eligible_peers_to_request_download(
+        let peers_to_request = choose_eligible_peers_to_request_blocks(
             &connected_peers,
             &discovered_peers,
             &chainsync_peers,
@@ -485,13 +620,13 @@ where
     }
 }
 
-/// Selects peers to attempt downloads from.
+/// Selects peers to request blocks from.
 ///
 /// Returns at most `max_connected_peers + max_discovered_peers` peers in total:
 /// - at most `max_connected_peers` from the `connected_peers` set
 /// - at most `max_discovered_peers` from the `discovered_peers -
 ///   connected_peers` set
-fn choose_peers_to_request_download<PeerId>(
+fn choose_peers_to_request_blocks<PeerId>(
     connected_peers: &HashSet<PeerId>,
     max_connected_peers: usize,
     discovered_peers: &HashSet<PeerId>,
@@ -517,7 +652,7 @@ where
     discovered_selected.into_iter().chain(connected_selected)
 }
 
-fn choose_eligible_peers_to_request_download<PeerId>(
+fn choose_eligible_peers_to_request_blocks<PeerId>(
     connected_peers: &HashSet<PeerId>,
     discovered_peers: &HashSet<PeerId>,
     eligible_peers: &HashSet<PeerId>,
@@ -536,7 +671,7 @@ where
         .copied()
         .collect::<HashSet<_>>();
 
-    choose_peers_to_request_download(
+    choose_peers_to_request_blocks(
         &connected_peers,
         max_connected_peers,
         &discovered_peers,
@@ -595,7 +730,7 @@ mod tests {
         let discovered = HashSet::from_iter(vec![[3; 32], [4; 32], [5; 32]]);
 
         let result =
-            choose_peers_to_request_download(&connected, 2, &discovered, 2).collect::<Vec<_>>();
+            choose_peers_to_request_blocks(&connected, 2, &discovered, 2).collect::<Vec<_>>();
 
         assert_eq!(result.len(), 4);
         // all discovered peers except `3` must be returned
@@ -621,7 +756,7 @@ mod tests {
 
         // set max=0 for connected peers
         let result =
-            choose_peers_to_request_download(&connected, 0, &discovered, 2).collect::<Vec<_>>();
+            choose_peers_to_request_blocks(&connected, 0, &discovered, 2).collect::<Vec<_>>();
 
         assert_eq!(result.len(), 2);
         // all selected peers must be from the discovered-but-not-connected set
@@ -630,7 +765,7 @@ mod tests {
 
         // set max=0 for discovered peers
         let result =
-            choose_peers_to_request_download(&connected, 2, &discovered, 0).collect::<Vec<_>>();
+            choose_peers_to_request_blocks(&connected, 2, &discovered, 0).collect::<Vec<_>>();
 
         assert_eq!(result.len(), 2);
         // all selected peers must be from the connected set
@@ -650,7 +785,7 @@ mod tests {
 
         // set max=4 larger than # of connected peers
         let result =
-            choose_peers_to_request_download(&connected, 4, &discovered, 0).collect::<Vec<_>>();
+            choose_peers_to_request_blocks(&connected, 4, &discovered, 0).collect::<Vec<_>>();
 
         // all connected peers must be returned
         assert_eq!(result.len(), connected.len());
@@ -660,7 +795,7 @@ mod tests {
 
         // set max=3 larger than # of `discovered - connected` peers
         let result =
-            choose_peers_to_request_download(&connected, 0, &discovered, 3).collect::<Vec<_>>();
+            choose_peers_to_request_blocks(&connected, 0, &discovered, 3).collect::<Vec<_>>();
 
         // all discovered peers except `3` must be returned
         assert_eq!(result.len(), 2);
@@ -675,7 +810,7 @@ mod tests {
         let eligible: HashSet<[i32; 32]> = HashSet::from_iter(vec![[2; 32], [4; 32]]);
 
         let result =
-            choose_eligible_peers_to_request_download(&connected, &discovered, &eligible, 1, 1);
+            choose_eligible_peers_to_request_blocks(&connected, &discovered, &eligible, 1, 1);
 
         assert_eq!(result, vec![[4; 32], [2; 32]]);
     }

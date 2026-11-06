@@ -1,25 +1,25 @@
 use core::fmt::{Debug, Display};
 use std::{
     collections::{HashMap, HashSet},
-    future::ready,
     marker::PhantomData,
     num::{NonZeroU64, NonZeroUsize},
     pin::Pin,
-    sync::{Arc, LazyLock},
+    sync::Arc,
     time::Duration,
 };
 
-use futures::{Stream, StreamExt as _};
+use futures::{Stream, StreamExt as _, stream};
 use lb_binary_codec::bincode::{Error as CodecError, SerializeOp};
 use lb_blend_service::{
     api::{ApiError as BlendApiError, BlendServiceApi, BlendServiceData},
-    message::{DataPayload, MAX_PAYLOAD_BODY_SIZE, TransactionNotBlendable},
+    message::{DataPayload, TransactionNotBlendable},
 };
 use lb_chain_service::{
     ProcessedBlockEvent, Slot,
     api::{ApiError as ChainApiError, CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
+    era::ForkDigest,
     events::{Event, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
@@ -51,7 +51,10 @@ use lb_services_utils::{
     wait_until_services_are_ready,
 };
 use lb_storage_service::{StorageService, recovery::StorageRecoveryBackend};
-use lb_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend};
+use lb_time::era::EraSchedule;
+use lb_time_service::{
+    EpochSlotTickStream, SlotTick, TimeService, TimeServiceMessage, backends::TimeBackend,
+};
 use lb_utils::bounded::BoundedError;
 use lb_wallet_service::api::{WalletApi, WalletApiError, WalletServiceData};
 use lb_zksign::{ZkSignError, ZkSignProof};
@@ -71,7 +74,7 @@ use tokio::{
 };
 use tokio_stream::wrappers::{BroadcastStream, IntervalStream, errors::BroadcastStreamRecvError};
 use tracing::{
-    error,
+    debug, error,
     log::{info, warn},
 };
 
@@ -117,7 +120,7 @@ pub enum PoWError {
     Overwatch(#[from] overwatch::overwatch::Error),
     #[error("failed to reach the time service: {0}")]
     TimeRelay(#[from] OutboundRelayError<TimeServiceMessage>),
-    #[error("the time service dropped the slot-tick subscription response: {0}")]
+    #[error("the time service dropped its response about the slot clock: {0}")]
     SlotTickSubscription(#[from] RecvError),
     #[error(
         "PoW auto-claim targets are not tracked by the wallet (add them to `wallet.known_keys`): \
@@ -128,6 +131,8 @@ pub enum PoWError {
     NoClaimTarget,
     #[error("failed to build signed transaction: {0}")]
     SignedOps(#[from] lb_core::mantle::transactions::tx_list::signed_ops::Error),
+    #[error("failed to build the ticket search thread pool: {0}")]
+    SearchPool(#[from] rayon::ThreadPoolBuildError),
 }
 
 /// Max inputs a single `Transfer` op can carry: its `ZkSig` is a
@@ -183,36 +188,57 @@ pub enum PoWServiceMessage {
         /// Key the claimed rewards are paid to. `None` falls back to the key
         /// auto-claim would pick right now (see [`select_claim_target`]).
         claim_address: Option<ZkPublicKey>,
-        response: oneshot::Sender<Result<Option<TxHash>, PoWError>>,
+        reply_channel: oneshot::Sender<Result<Option<TxHash>, PoWError>>,
     },
     ClaimableRewardsInfo {
-        response: oneshot::Sender<ClaimableRewardsInfo>,
+        reply_channel: oneshot::Sender<ClaimableRewardsInfo>,
     },
     Status {
-        response: oneshot::Sender<PoWStatus>,
+        reply_channel: oneshot::Sender<PoWStatus>,
+    },
+    SetMiningSettings {
+        settings: PoWMiningSettings,
+        reply_channel: oneshot::Sender<Result<(), PoWError>>,
+    },
+    SetAutoClaimSettings {
+        settings: AutoClaimSettings,
+        reply_channel: oneshot::Sender<Result<(), PoWError>>,
     },
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
+pub type ServiceEraSchedule = EraSchedule<PoWEraSettings>;
+
+/// The settings the `PoW` service starts with: what it runs with in every era
+/// of the chain, and the state the runtime recovered for it.
+#[derive(Clone, Debug)]
 pub struct PoWServiceSettings {
     /// Tuning for the CPU-heavy ticket search (thread pool and per-block
     /// concurrency).
-    #[serde(default)]
     pub mining: PoWMiningSettings,
     /// Unattended claiming: which keys to pay and how often to try. Omitting
     /// it leaves auto-claim off, so rewards are only claimed on demand.
-    #[serde(default)]
     pub auto_claim: AutoClaimSettings,
+    pub era_schedule: ServiceEraSchedule,
+    /// Storage-recovery bookkeeping, populated by the runtime on startup.
+    pub recovery_data: RecoveryData,
+}
+
+/// What the `PoW` service runs with in an era.
+#[derive(Clone, Debug)]
+pub struct PoWEraSettings {
     /// Acceptance window, in slots, a mined ticket stays claimable for. Must
     /// match the network's consensus `slot_window` (sourced from the same
     /// deployment configuration); a ticket outside it can never be claimed.
     pub slot_window: NonZeroU64,
     /// Whether the network pays `PoW` rewards (i.e., `rate_num` > 0).
-    /// When it is not, no claim can succeed, so auto-claim is disabled.
+    /// When it is not, no claim can succeed, so auto-claim does not run in the
+    /// era.
     pub rewards_enabled: bool,
-    /// Storage-recovery bookkeeping, populated by the runtime on startup.
-    #[serde(skip)]
-    pub recovery_data: RecoveryData,
+    /// The size of the body of a data payload in the era: the largest
+    /// transaction the network can deliver, so the largest claim transaction.
+    pub max_data_payload_body_size: usize,
+    /// The fork digest of the era, which the claims signed in it carry.
+    pub fork_digest: ForkDigest,
 }
 
 /// One auto-claim destination: a key and the balance we want it to reach.
@@ -290,7 +316,7 @@ const fn default_max_threads() -> Option<NonZeroUsize> {
 /// single worker thread and one attempt in flight per block), so an omitted
 /// `mining` section mines without taking over the host. The non-zero types
 /// make a `0` configuration a deserialization error rather than a silent stall.
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct PoWMiningSettings {
     /// Worker threads in the dedicated ticket-search pool. Defaults to one
     /// thread when omitted; an explicit `null` lets rayon pick its default
@@ -321,17 +347,15 @@ impl Default for PoWMiningSettings {
 /// [`rayon::ThreadPoolBuilder`] never becomes part of the service's async
 /// state. `max_threads == None` lets rayon default to one thread per logical
 /// CPU.
-fn build_search_pool(max_threads: Option<NonZeroUsize>) -> Arc<rayon::ThreadPool> {
+fn build_search_pool(
+    max_threads: Option<NonZeroUsize>,
+) -> Result<Arc<rayon::ThreadPool>, PoWError> {
     let mut builder = rayon::ThreadPoolBuilder::new();
     builder = builder.thread_name(|index| format!("logos/pow/pow-ticket-search-{index}"));
     if let Some(threads) = max_threads {
         builder = builder.num_threads(threads.get());
     }
-    Arc::new(
-        builder
-            .build()
-            .expect("PoW ticket search thread pool should build"),
-    )
+    Ok(Arc::new(builder.build()?))
 }
 
 impl StorageRecoverySettings for PoWServiceSettings {
@@ -477,7 +501,7 @@ where
         // connects — it does not guarantee the peer is serving its inbound
         // queue, so a message sent too early is simply never answered. Startup
         // itself sends two: the auto-claim targets are validated against the
-        // wallet's known keys, and slot pacing subscribes to the time service's
+        // wallet's known keys, and the service subscribes to the time service's
         // slot clock. Blend is awaited on the same grounds, though it is only
         // used later, to publish claim transactions.
         wait_until_services_are_ready!(
@@ -526,16 +550,33 @@ where
         // every claim forever. Refuse to start rather than mis-pay.
         validate_claim_targets(&wallet_api, &settings.auto_claim.targets).await?;
 
+        // Whether claims pay follows the era of the slot the clock is in. The
+        // same slot ticks pace slot-paced auto-claims, so such a claim is
+        // decided under the era of the slot it falls due on. A ticket keeps the
+        // reward window of the era of the epoch it was mined for, which its
+        // claim is verified under.
+        let (current_slot_tick, mut slot_ticks) =
+            get_slot_clock::<TimeBackendType, _>(&service_resources_handle.overwatch_handle)
+                .await?;
+        let mut current_era_settings = settings.era_schedule.at_slot(current_slot_tick.slot);
+        // A claim is published over Blend, which holds it to the payload body
+        // of the era in force, so how many claims a transaction carries follows
+        // the era too. Finding it probes the encoding, so it is found once each time
+        // the service enters an era rather than for every claim.
+        let mut max_claims_in_payload =
+            max_claims_by_payload_size(current_era_settings.parameters.max_data_payload_body_size);
+
         // Dedicated thread pool for the CPU-heavy ticket search, keeping it off
         // Tokio's runtime threads.
-        let pool = build_search_pool(settings.mining.max_threads);
+        let mut search_pool = build_search_pool(settings.mining.max_threads)?;
+        let mut mining_settings = settings.mining.clone();
 
         // Stream of winning PoW tickets, one per solved puzzle.
         let mut winning_tickets = TicketGenerator::new::<Tx, _>(
             cryptarchia_api.clone(),
-            pool,
+            Arc::clone(&search_pool),
             settings.mining.max_tickets_per_block,
-            settings.slot_window,
+            settings.era_schedule.clone(),
         )
         .await?;
 
@@ -551,24 +592,22 @@ where
         // restarted node does not resume mining automatically.
         let mut is_mining = false;
 
-        // Auto-claim arms itself when the network pays rewards and targets are
-        // configured, and disarms once every target has reached its
-        // threshold, stopping mining along with it: with every target funded
-        // there is nothing left to mine for. Like `mining` it is a runtime
-        // flag, so a restart re-arms it and the thresholds are re-evaluated
-        // against fresh balances.
-        let auto_claim = &settings.auto_claim;
-        let mut auto_claiming = settings.rewards_enabled && !auto_claim.targets.is_empty();
+        // Auto-claim arms itself when targets are configured, and disarms once
+        // every target has reached its threshold, stopping mining along with
+        // it: with every target funded there is nothing left to mine for.
+        // Whether a claim pays depends on the era, which is checked when the
+        // claim falls due, so an era that turns rewards on is claimed in
+        // without a restart. Like `mining` it is a runtime flag, so a restart
+        // re-arms it and the thresholds are re-evaluated against fresh
+        // balances.
+        let mut auto_claim_settings = settings.auto_claim;
+        let mut is_auto_claiming = !auto_claim_settings.targets.is_empty();
 
-        // One stream for either pacing, so the run loop has a single arm and
-        // neither kind needs a guard. Slot pacing rides the time service's own
-        // slot clock rather than block arrivals, so it keeps ticking through a
-        // gap in block production.
-        let mut claim_ticks = auto_claim_tick_stream::<TimeBackendType, _>(
-            auto_claim.tick,
-            &service_resources_handle.overwatch_handle,
-        )
-        .await?;
+        // Second pacing runs on its own timer. Slot pacing counts the slot
+        // clock's ticks from the slot it last claimed at, `None` until its
+        // first claim, which falls due on the first slot it sees.
+        let mut claim_ticks = auto_claim_tick_stream(auto_claim_settings.tick);
+        let mut last_slot_paced_claim: Option<Slot> = None;
 
         service_resources_handle.status_updater.notify_ready();
 
@@ -576,6 +615,7 @@ where
             // Every state change happens in this loop, so refreshing here keeps
             // the generator sizing new searches against the current holdings.
             winning_tickets.set_outstanding_tickets(state.outstanding_tickets());
+            let mut claim_due = false;
             tokio::select! {
                 Some(message) = inbound_relay.recv() => {
                     match message {
@@ -592,53 +632,92 @@ where
                             is_mining = false;
                         }
                         PoWServiceMessage::StartAutoClaim => {
-                            if !settings.rewards_enabled {
-                                warn!(target: LOG_TARGET, "PoW auto-claim not started: rewards disabled");
-                            } else if auto_claim.targets.is_empty() {
+                            if auto_claim_settings.targets.is_empty() {
                                 warn!(target: LOG_TARGET, "PoW auto-claim not started: no claim targets configured");
                             } else {
-                                if !auto_claiming {
+                                if !is_auto_claiming {
                                     info!(target: LOG_TARGET, "PoW auto-claim started");
                                 }
-                                auto_claiming = true;
+                                is_auto_claiming = true;
                             }
                         }
                         PoWServiceMessage::StopAutoClaim => {
-                            if auto_claiming {
+                            if is_auto_claiming {
                                 info!(target: LOG_TARGET, "PoW auto-claim stopped");
                             }
-                            auto_claiming = false;
+                            is_auto_claiming = false;
                         }
-                        PoWServiceMessage::Claim { claim_address, response } => {
+                        PoWServiceMessage::Claim { claim_address, reply_channel } => {
                             let result = manual_claim(
                                 &cryptarchia_api,
                                 &blend_api,
                                 &wallet_api,
                                 claim_address,
-                                &auto_claim.targets,
+                                &auto_claim_settings.targets,
                                 &mut state,
-                                settings.slot_window,
+                                &settings.era_schedule,
+                                current_era_settings.parameters.fork_digest,
+                                max_claims_in_payload,
                             )
                             .await
                             .inspect_err(|e| {
                                 error!(target: LOG_TARGET, "Failed to claim PoW rewards: {e}");
                             });
                             state_updater.update(Some(state.clone()));
-                            if response.send(result).is_err() {
-                                error!(target: LOG_TARGET, "Claim response receiver was dropped");
+                            if reply_channel.send(result).is_err() {
+                                error!(target: LOG_TARGET, "Claim reply receiver was dropped");
                             }
                         }
-                        PoWServiceMessage::ClaimableRewardsInfo { response } => {
-                            respond_claimable_rewards(&cryptarchia_api, &mut state, &state_updater, response, settings.slot_window).await;
+                        PoWServiceMessage::ClaimableRewardsInfo { reply_channel } => {
+                            respond_claimable_rewards(&cryptarchia_api, &mut state, &state_updater, reply_channel, &settings.era_schedule).await;
                         }
-                        PoWServiceMessage::Status { response } => {
+                        PoWServiceMessage::Status { reply_channel } => {
                             let status = PoWStatus {
                                 is_mining,
-                                are_rewards_enabled: settings.rewards_enabled,
-                                auto_claim: auto_claim_status(&wallet_api, auto_claim, auto_claiming).await,
+                                are_rewards_enabled: current_era_settings.parameters.rewards_enabled,
+                                auto_claim: auto_claim_status(&wallet_api, &auto_claim_settings, is_auto_claiming).await,
                             };
-                            if response.send(status).is_err() {
-                                error!(target: LOG_TARGET, "Status response receiver was dropped");
+                            if reply_channel.send(status).is_err() {
+                                error!(target: LOG_TARGET, "Status reply receiver was dropped");
+                            }
+                        }
+                        PoWServiceMessage::SetMiningSettings { settings: new_mining_settings, reply_channel } => {
+                            handle_set_mining_settings(
+                                new_mining_settings,
+                                reply_channel,
+                                &mut mining_settings,
+                                &mut search_pool,
+                                &mut winning_tickets,
+                            );
+                        }
+                        PoWServiceMessage::SetAutoClaimSettings { settings: new_settings, reply_channel } => {
+                            let result = apply_auto_claim_settings(
+                                new_settings,
+                                &wallet_api,
+                                &mut auto_claim_settings,
+                                &mut claim_ticks,
+                            )
+                            .await;
+
+                            if let Err(error) = &result {
+                                error!(target: LOG_TARGET, "Refusing the new PoW auto-claim settings: {error}");
+                            } else {
+                                // With no targets left, the next tick would stop mining too, so
+                                // stop auto-claim here.
+                                if auto_claim_settings.targets.is_empty() {
+                                    is_auto_claiming = false;
+                                }
+
+                                info!(
+                                    target: LOG_TARGET,
+                                    "PoW auto-claim settings updated: {} target(s), tick={:?}",
+                                    auto_claim_settings.targets.len(),
+                                    auto_claim_settings.tick
+                                );
+                            }
+
+                            if reply_channel.send(result).is_err() {
+                                error!(target: LOG_TARGET, "SetAutoClaimSettings reply receiver was dropped");
                             }
                         }
                     }
@@ -650,7 +729,7 @@ where
                     // previously stored tickets whose window has since closed.
                     let current_slot = winning_ticket.block_slot;
                     state.ready_to_claim.push(winning_ticket);
-                    prune_expired_tickets(&mut state, current_slot, settings.slot_window);
+                    prune_expired_tickets(&mut state, current_slot, &settings.era_schedule);
                     info!(
                         target: LOG_TARGET,
                         "Mined a winning ticket 💲; total claimable tickets {}",
@@ -661,94 +740,220 @@ where
                 // A block was processed: retire any pending claim whose reward
                 // note it minted (i.e. the claim has settled on chain).
                 Some(processed_block) = processed_blocks.next() => {
-                    retire_settled_claims(&cryptarchia_api, &mut state, &state_updater, processed_block, settings.slot_window).await;
+                    retire_settled_claims(&cryptarchia_api, &mut state, &state_updater, processed_block, &settings.era_schedule).await;
                 }
-                // Auto-claim tick: drain the ready tickets into the neediest
-                // target. Once every target is funded, stop both auto-claim
-                // and mining.
-                Some(()) = claim_ticks.next(), if auto_claiming => {
-                    auto_claiming = run_auto_claim(
-                        &cryptarchia_api,
-                        &blend_api,
-                        &wallet_api,
-                        &auto_claim.targets,
-                        &mut state,
-                        &state_updater,
-                        settings.slot_window,
-                    )
-                    .await;
-                    if !auto_claiming && is_mining {
-                        info!(target: LOG_TARGET, "Every PoW auto-claim target reached its threshold; stopping mining");
-                        is_mining = false;
+                // The clock entered a new slot: whether claims pay follows the
+                // slot's era, and a slot-paced claim falls due once a whole
+                // period has passed since the last one.
+                Some(SlotTick { era, slot, .. }) = slot_ticks.next() => {
+                    if era > current_era_settings.era {
+                        info!(target: LOG_TARGET, "PoW follows era {} from slot {}", era.into_inner(), u64::from(slot));
+                        current_era_settings = settings.era_schedule.at_slot(slot);
+                        max_claims_in_payload = max_claims_by_payload_size(current_era_settings.parameters.max_data_payload_body_size);
                     }
+                    if let AutoClaimTick::Slots(period) = auto_claim_settings.tick
+                        && is_auto_claiming
+                        && last_slot_paced_claim.is_none_or(|last_claim| slot_period_elapsed(last_claim, slot, period))
+                    {
+                        last_slot_paced_claim = Some(slot);
+                        claim_due = true;
+                    }
+                }
+                Some(()) = claim_ticks.next(), if is_auto_claiming => {
+                    claim_due = true;
+                }
+            }
+            // Auto-claim: drain the ready tickets into the neediest target.
+            // Once every target is funded, stop both auto-claim and mining. An
+            // era without rewards pays no claim, so a claim falling due in it
+            // does nothing; its tick is still consumed, so it is not saved up
+            // for a later era.
+            if claim_due && current_era_settings.parameters.rewards_enabled {
+                is_auto_claiming = run_auto_claim(
+                    &cryptarchia_api,
+                    &blend_api,
+                    &wallet_api,
+                    &auto_claim_settings.targets,
+                    &mut state,
+                    &state_updater,
+                    &settings.era_schedule,
+                    current_era_settings.parameters.fork_digest,
+                    max_claims_in_payload,
+                )
+                .await;
+                if !is_auto_claiming && is_mining {
+                    info!(target: LOG_TARGET, "Every PoW auto-claim target reached its threshold; stopping mining");
+                    is_mining = false;
                 }
             }
         }
     }
 }
 
-/// Builds the auto-claim ticker for the configured pacing.
+/// Applies new mining settings and reports the outcome to the requester.
+fn handle_set_mining_settings(
+    new_mining_settings: PoWMiningSettings,
+    reply_channel: oneshot::Sender<Result<(), PoWError>>,
+    mining_settings: &mut PoWMiningSettings,
+    search_pool: &mut Arc<rayon::ThreadPool>,
+    winning_tickets: &mut TicketGenerator,
+) {
+    let result = apply_mining_settings(
+        new_mining_settings,
+        mining_settings,
+        search_pool,
+        winning_tickets,
+    )
+    .inspect_err(
+        |error| error!(target: LOG_TARGET, "Refusing the new PoW mining settings: {error}"),
+    );
+
+    if reply_channel.send(result).is_err() {
+        error!(target: LOG_TARGET, "SetMiningSettings reply receiver was dropped");
+    }
+}
+
+/// Applies new mining settings to a running service.
+fn apply_mining_settings(
+    new_mining_settings: PoWMiningSettings,
+    mining_settings: &mut PoWMiningSettings,
+    search_pool: &mut Arc<rayon::ThreadPool>,
+    winning_tickets: &mut TicketGenerator,
+) -> Result<(), PoWError> {
+    if new_mining_settings == *mining_settings {
+        return Ok(());
+    }
+
+    reconfigure_mining(
+        new_mining_settings,
+        mining_settings,
+        search_pool,
+        winning_tickets,
+    )?;
+
+    info!(
+        target: LOG_TARGET,
+        "PoW mining settings updated: max_threads={:?}, max_tickets_per_block={}",
+        mining_settings.max_threads,
+        mining_settings.max_tickets_per_block
+    );
+
+    Ok(())
+}
+
+/// Switches the search pool, ticket generator and stored settings over to new
+/// mining settings.
+fn reconfigure_mining(
+    new_mining_settings: PoWMiningSettings,
+    mining_settings: &mut PoWMiningSettings,
+    search_pool: &mut Arc<rayon::ThreadPool>,
+    winning_tickets: &mut TicketGenerator,
+) -> Result<(), PoWError> {
+    replace_search_pool_if_resized(
+        new_mining_settings.max_threads,
+        mining_settings.max_threads,
+        search_pool,
+    )?;
+    winning_tickets.reconfigure(
+        Arc::clone(search_pool),
+        new_mining_settings.max_tickets_per_block,
+    );
+    *mining_settings = new_mining_settings;
+
+    Ok(())
+}
+
+/// Replaces the ticket search pool when its thread count changes.
+fn replace_search_pool_if_resized(
+    new_max_threads: Option<NonZeroUsize>,
+    current_max_threads: Option<NonZeroUsize>,
+    search_pool: &mut Arc<rayon::ThreadPool>,
+) -> Result<(), PoWError> {
+    if new_max_threads == current_max_threads {
+        return Ok(());
+    }
+
+    debug!(
+        target: LOG_TARGET,
+        "Rebuilding the ticket search pool: max_threads {current_max_threads:?} -> {new_max_threads:?}"
+    );
+    *search_pool = build_search_pool(new_max_threads)?;
+
+    Ok(())
+}
+
+/// Applies new auto-claim settings to a running service.
+async fn apply_auto_claim_settings<WalletService, RuntimeServiceId>(
+    new_settings: AutoClaimSettings,
+    wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
+    auto_claim: &mut AutoClaimSettings,
+    claim_ticks: &mut Pin<Box<dyn Stream<Item = ()> + Send>>,
+) -> Result<(), PoWError>
+where
+    WalletService: WalletServiceData,
+    RuntimeServiceId: Debug + Sync + Display + AsServiceId<WalletService>,
+{
+    validate_claim_targets(wallet_api, &new_settings.targets).await?;
+
+    if new_settings.tick != auto_claim.tick {
+        debug!(
+            target: LOG_TARGET,
+            "Rebuilding the auto-claim tick stream: tick {:?} -> {:?}",
+            auto_claim.tick,
+            new_settings.tick
+        );
+        *claim_ticks = auto_claim_tick_stream(new_settings.tick);
+    }
+
+    *auto_claim = new_settings;
+
+    Ok(())
+}
+
+/// The ticker of second-paced auto-claims, which never ticks under slot
+/// pacing.
 ///
-/// Both kinds collapse to the same `Stream<Item = ()>` so the run loop needs a
-/// single `select!` arm. Slot pacing subscribes to the time service's slot
-/// clock rather than counting block arrivals: the two agree while the chain is
+/// Slot pacing counts the time service's slot ticks, which the run loop follows
+/// anyway, rather than block arrivals: the two agree while the chain is
 /// producing, but only the clock keeps ticking through a lull, which is when a
 /// backlog of unclaimed tickets is most likely to be sitting around.
-async fn auto_claim_tick_stream<TimeBackendType, RuntimeServiceId>(
-    tick: AutoClaimTick,
+fn auto_claim_tick_stream(tick: AutoClaimTick) -> Pin<Box<dyn Stream<Item = ()> + Send>> {
+    match tick {
+        AutoClaimTick::Seconds(seconds) => Box::pin(
+            IntervalStream::new(tokio::time::interval(Duration::from_secs(seconds.get())))
+                .map(|_| ()),
+        ),
+        AutoClaimTick::Slots(_) => Box::pin(stream::pending()),
+    }
+}
+
+/// The slot the time service's clock is in, and the slots it enters from then
+/// on.
+async fn get_slot_clock<TimeBackendType, RuntimeServiceId>(
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
-) -> Result<Pin<Box<dyn Stream<Item = ()> + Send>>, PoWError>
+) -> Result<(SlotTick, EpochSlotTickStream), PoWError>
 where
     TimeBackendType: TimeBackend + Send + Sync + 'static,
     TimeBackendType::Settings: Send + Sync,
     RuntimeServiceId:
         Debug + Sync + Display + AsServiceId<TimeService<TimeBackendType, RuntimeServiceId>>,
 {
-    match tick {
-        AutoClaimTick::Seconds(seconds) => Ok(Box::pin(
-            IntervalStream::new(tokio::time::interval(Duration::from_secs(seconds.get())))
-                .map(|_| ()),
-        )),
-        AutoClaimTick::Slots(period) => {
-            let time_relay = overwatch_handle
-                .relay::<TimeService<TimeBackendType, RuntimeServiceId>>()
-                .await?;
-            let (sender, receiver) = oneshot::channel();
-            time_relay
-                .send(TimeServiceMessage::Subscribe { sender })
-                .await?;
-            let slot_ticks = receiver.await?;
-
-            // The stream emits every slot, so thin it down to one item per
-            // period. `None` fires on the first slot seen rather than waiting
-            // out a full period from an arbitrary starting point.
-            //
-            // The item is a nested `Option` on purpose: `scan` ends the stream
-            // once its closure resolves to `None`, so a skipped slot has to
-            // yield `Some(None)` to keep the ticker alive. `filter_map` then
-            // drops those inner `None`s, leaving one item per elapsed period.
-            Ok(Box::pin(
-                slot_ticks
-                    .scan(None, move |state, slot_tick| match state {
-                        Some(last_claim)
-                            if slot_period_elapsed(*last_claim, slot_tick.slot, period) =>
-                        {
-                            *state = Some(slot_tick.slot);
-                            ready(Some(Some(())))
-                        }
-                        None => {
-                            *state = Some(slot_tick.slot);
-                            ready(Some(Some(())))
-                        }
-                        _ => {
-                            // non-elapsed periods
-                            ready(Some(None))
-                        }
-                    })
-                    .filter_map(ready),
-            ))
-        }
-    }
+    let time_relay = overwatch_handle
+        .relay::<TimeService<TimeBackendType, RuntimeServiceId>>()
+        .await?;
+    // The stream only yields the ticks after it, so it is subscribed to first:
+    // a tick between the two requests is then seen twice rather than missed.
+    let (sender, receiver) = oneshot::channel();
+    time_relay
+        .send(TimeServiceMessage::SubscribeToEpochSlots { sender })
+        .await?;
+    let slot_ticks = receiver.await?;
+    let (sender, receiver) = oneshot::channel();
+    time_relay
+        .send(TimeServiceMessage::CurrentSlot { sender })
+        .await?;
+    let current_slot_tick = receiver.await?;
+    Ok((current_slot_tick, slot_ticks))
 }
 
 /// Whether `period` slots have passed since the last slot-paced auto-claim.
@@ -901,6 +1106,7 @@ fn neediest_target(
 /// The thresholds are checked on every tick, even with no ticket ready: mining
 /// may be paused on the reward pool while earlier claims settle, and the
 /// balances those claims raise are what should stop it.
+#[expect(clippy::too_many_arguments, reason = "Need all args")]
 async fn run_auto_claim<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
@@ -908,7 +1114,9 @@ async fn run_auto_claim<CryptarchiaService, BlendService, WalletService, Runtime
     targets: &[ClaimTarget],
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
-    slot_window: NonZeroU64,
+    era_schedule: &ServiceEraSchedule,
+    fork_digest: ForkDigest,
+    max_claims_in_payload: usize,
 ) -> bool
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -942,7 +1150,9 @@ where
         claim_address,
         state,
         state_updater,
-        slot_window,
+        era_schedule,
+        fork_digest,
+        max_claims_in_payload,
     )
     .await;
     true
@@ -960,13 +1170,16 @@ where
 /// emitting a burst of transactions the chain then rejects. Drawing down a
 /// local balance stops the loop when the funds are spoken for; the next tick
 /// starts again from whatever the chain actually reports.
+#[expect(clippy::too_many_arguments, reason = "Need all args")]
 async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
     claim_address: ZkPublicKey,
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
-    slot_window: NonZeroU64,
+    era_schedule: &ServiceEraSchedule,
+    fork_digest: ForkDigest,
+    max_claims_in_payload: usize,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
     BlendService: BlendServiceData,
@@ -988,8 +1201,10 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
             blend_api,
             claim_address,
             state,
-            slot_window,
+            era_schedule,
+            fork_digest,
             available_pool,
+            max_claims_in_payload,
         )
         .await
         {
@@ -1025,6 +1240,7 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
 /// Serves a [`PoWServiceMessage::Claim`]: one claim transaction paid to
 /// `claim_address`, or to the target auto-claim would pick when the caller did
 /// not name a key.
+#[expect(clippy::too_many_arguments, reason = "Need all args")]
 async fn manual_claim<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
@@ -1032,7 +1248,9 @@ async fn manual_claim<CryptarchiaService, BlendService, WalletService, RuntimeSe
     claim_address: Option<ZkPublicKey>,
     targets: &[ClaimTarget],
     state: &mut PoWServiceState,
-    slot_window: NonZeroU64,
+    era_schedule: &ServiceEraSchedule,
+    fork_digest: ForkDigest,
+    max_claims_in_payload: usize,
 ) -> Result<Option<TxHash>, PoWError>
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -1059,8 +1277,10 @@ where
         blend_api,
         claim_address,
         state,
-        slot_window,
+        era_schedule,
+        fork_digest,
         available_pool,
+        max_claims_in_payload,
     )
     .await?
     .map(|claim| claim.tx_hash))
@@ -1101,13 +1321,16 @@ struct PublishedClaim {
 ///
 /// On any failure the ready set is left untouched so the tickets can be
 /// retried.
+#[expect(clippy::too_many_arguments, reason = "Need all args")]
 async fn claim_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
     claim_address: ZkPublicKey,
     state: &mut PoWServiceState,
-    slot_window: NonZeroU64,
+    era_schedule: &ServiceEraSchedule,
+    fork_digest: ForkDigest,
     available_pool: Value,
+    max_claims_in_payload: usize,
 ) -> Result<Option<PublishedClaim>, PoWError>
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -1121,7 +1344,7 @@ where
 
     // Drop any tickets whose window has closed before building the batch, so an
     // expired ticket never poisons the tx.
-    prune_expired_tickets(state, info.slot, slot_window);
+    prune_expired_tickets(state, info.slot, era_schedule);
     if state.ready_to_claim.is_empty() {
         return Ok(None);
     }
@@ -1154,8 +1377,15 @@ where
     // caps the batch (op limit / reward pool) and claims a prefix of
     // `tickets` (the canonical ones, in ready order); move exactly those to
     // the pending set.
-    let (signed_tx, claimed_count) =
-        build_reward_claim_tx(claim_address, &ledger_state, available_pool, &tickets).await?;
+    let (signed_tx, claimed_count) = build_reward_claim_tx(
+        claim_address,
+        fork_digest,
+        &ledger_state,
+        available_pool,
+        &tickets,
+        max_claims_in_payload,
+    )
+    .await?;
     // Capture the tx id before publishing consumes the signed tx, so it can be
     // reported back to the caller.
     let tx_hash = signed_tx.hash();
@@ -1193,6 +1423,15 @@ where
     }))
 }
 
+/// The reward window of a ticket anchored to a block at `block_slot`: the
+/// window of the era of the block.
+///
+/// A claim is verified under the era of the block it anchors to, whatever the
+/// era of the block that includes it.
+pub fn reward_window(era_schedule: &ServiceEraSchedule, block_slot: Slot) -> NonZeroU64 {
+    era_schedule.at_slot(block_slot).parameters.slot_window
+}
+
 /// Whether a ticket anchored to a block at `block_slot` is still within its
 /// reward window at `current_slot`: claimable while
 /// `current_slot - block_slot <= slot_window`.
@@ -1202,19 +1441,27 @@ fn is_within_reward_window(block_slot: Slot, current_slot: Slot, slot_window: No
         .is_some_and(|last_claimable_slot| last_claimable_slot >= u64::from(current_slot))
 }
 
-/// Drops tickets whose reward window has closed at `current_slot`.
+/// Drops tickets whose reward window has closed at `current_slot`, each by the
+/// window of its era.
 ///
 /// Once a ticket falls out of the window it can never be claimed, so keeping it
 /// only bloats the state and would poison a claim tx built from the batch. Both
 /// the ready and pending sets are pruned in place.
-fn prune_expired_tickets(state: &mut PoWServiceState, current_slot: Slot, slot_window: NonZeroU64) {
+fn prune_expired_tickets(
+    state: &mut PoWServiceState,
+    current_slot: Slot,
+    era_schedule: &ServiceEraSchedule,
+) {
+    let is_claimable = |ticket: &WinningTicket| {
+        is_within_reward_window(
+            ticket.block_slot,
+            current_slot,
+            reward_window(era_schedule, ticket.block_slot),
+        )
+    };
     let before = state.ready_to_claim.len() + state.pending_to_claim.len();
-    state
-        .ready_to_claim
-        .retain(|ticket| is_within_reward_window(ticket.block_slot, current_slot, slot_window));
-    state
-        .pending_to_claim
-        .retain(|ticket| is_within_reward_window(ticket.block_slot, current_slot, slot_window));
+    state.ready_to_claim.retain(is_claimable);
+    state.pending_to_claim.retain(is_claimable);
     let pruned = before - (state.ready_to_claim.len() + state.pending_to_claim.len());
     if pruned > 0 {
         info!(target: LOG_TARGET, "Pruned {pruned} expired PoW ticket(s)");
@@ -1228,8 +1475,8 @@ async fn respond_claimable_rewards<CryptarchiaService>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
-    response: oneshot::Sender<ClaimableRewardsInfo>,
-    slot_window: NonZeroU64,
+    reply_channel: oneshot::Sender<ClaimableRewardsInfo>,
+    era_schedule: &ServiceEraSchedule,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
 {
@@ -1242,11 +1489,11 @@ async fn respond_claimable_rewards<CryptarchiaService>(
     };
     // Drop expired tickets first, so the report covers only what is still
     // claimable.
-    prune_expired_tickets(state, current_slot, slot_window);
+    prune_expired_tickets(state, current_slot, era_schedule);
     state_updater.update(Some(state.clone()));
-    let claimable = claimable_rewards_info(&state.ready_to_claim, current_slot, slot_window);
-    if response.send(claimable).is_err() {
-        error!(target: LOG_TARGET, "ClaimableRewardsInfo response receiver was dropped");
+    let claimable = claimable_rewards_info(&state.ready_to_claim, current_slot, era_schedule);
+    if reply_channel.send(claimable).is_err() {
+        error!(target: LOG_TARGET, "ClaimableRewardsInfo reply receiver was dropped");
     }
 }
 
@@ -1265,7 +1512,7 @@ async fn retire_settled_claims<CryptarchiaService>(
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     processed_block: Result<ProcessedBlockEvent, BroadcastStreamRecvError>,
-    slot_window: NonZeroU64,
+    era_schedule: &ServiceEraSchedule,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
 {
@@ -1277,15 +1524,14 @@ async fn retire_settled_claims<CryptarchiaService>(
         }
     };
     let before = state.outstanding_tickets();
-    prune_expired_tickets(state, tip_slot, slot_window);
+    prune_expired_tickets(state, tip_slot, era_schedule);
     let expired = before - state.outstanding_tickets();
-    let settled = match prune_settled_pending(cryptarchia_api, state, block_id).await {
-        Ok(settled) => settled,
-        Err(e) => {
-            error!(target: LOG_TARGET, "Failed to check settled PoW claims: {e}");
+    let settled = prune_settled_pending(cryptarchia_api, state, block_id)
+        .await
+        .unwrap_or_else(|error| {
+            error!(target: LOG_TARGET, "Failed to check settled PoW claims: {error}");
             0
-        }
-    };
+        });
     if settled > 0 {
         info!(
             target: LOG_TARGET,
@@ -1339,21 +1585,25 @@ where
     Ok(before - state.pending_to_claim.len())
 }
 
-/// Summarizes how long each ready ticket remains within the reward window.
+/// Summarizes how long each ready ticket remains within its reward window.
 ///
 /// Callers prune expired tickets first (see [`prune_expired_tickets`]), so
-/// every ticket here is assumed to still be within the window: a ticket
+/// every ticket here is assumed to still be within its window: a ticket
 /// anchored to a block at `block_slot` has `block_slot + slot_window -
-/// current_slot` slots of remaining lifetime.
+/// current_slot` slots of remaining lifetime, `slot_window` being the window
+/// of its era.
 fn claimable_rewards_info(
     ready_to_claim: &[WinningTicket],
     current_slot: Slot,
-    slot_window: NonZeroU64,
+    era_schedule: &ServiceEraSchedule,
 ) -> ClaimableRewardsInfo {
     let current = u64::from(current_slot);
     let slots_until_expiry: Vec<Slot> = ready_to_claim
         .iter()
-        .map(|ticket| Slot::new(u64::from(ticket.block_slot) + slot_window.get() - current))
+        .map(|ticket| {
+            let slot_window = reward_window(era_schedule, ticket.block_slot);
+            Slot::new(u64::from(ticket.block_slot) + slot_window.get() - current)
+        })
         .collect();
     ClaimableRewardsInfo {
         claimable_tickets: slots_until_expiry.len(),
@@ -1411,7 +1661,9 @@ fn claim_tx_size(claims: usize) -> Result<u64, PoWError> {
         .collect();
     let transfers = transfer_ops(&note_ids, ZkPublicKey::zero(), &vec![0; groups])?;
 
-    let ops = push_reward_claim_ops(MantleTxBuilder::new(), &probe_claims, transfers)?.build()?;
+    // Every fork digest has the same size, so any sizes the transaction.
+    let ops = push_reward_claim_ops(MantleTxBuilder::new(), &probe_claims, transfers)?
+        .build(ForkDigest::new([0; 32]))?;
     let ops_proofs = claim_ops_proofs(claims, std::iter::repeat_n(signature, groups))?;
 
     Ok(SerializeOp::bytes_size(
@@ -1420,24 +1672,25 @@ fn claim_tx_size(claims: usize) -> Result<u64, PoWError> {
 }
 
 /// Largest claim count whose transaction still fits the body of a Blend
-/// payload, the transport every claim is published over.
+/// payload of `payload_body_size` bytes, the transport every claim is
+/// published over.
 ///
 /// This binds well before [`max_claims_by_ops`] does: 255 ops' worth of claims
 /// serializes to nearly twice what a payload can carry, and a transaction over
-/// the limit is rejected by [`publish_reward_claim`] *after* its (CPU-heavy)
-/// signatures have been produced. Capping the batch here keeps that failure
-/// from ever being reached.
+/// the limit is refused by Blend *after* its (CPU-heavy) signatures have been
+/// produced. Capping the batch here keeps that failure from ever being reached.
 ///
-/// Resolved once, by shrinking a probe batch from the op cap until it fits, so
-/// the limit follows the encoding rather than restating it.
-static MAX_CLAIMS_BY_PAYLOAD_SIZE: LazyLock<usize> = LazyLock::new(|| {
+/// Resolved by shrinking a probe batch from the op cap until it fits, so the
+/// limit follows the encoding rather than restating it. The service resolves
+/// it once per era, when it enters the era.
+fn max_claims_by_payload_size(max_payload_body_size: usize) -> usize {
     (1..=max_claims_by_ops())
         .rev()
         .find(|&claims| {
-            claim_tx_size(claims).is_ok_and(|size| size <= MAX_PAYLOAD_BODY_SIZE as u64)
+            claim_tx_size(claims).is_ok_and(|size| size <= max_payload_body_size as u64)
         })
         .expect("a single-claim tx fits a Blend payload")
-});
+}
 
 /// Builds and signs a single self-funding reward-claim transaction from a batch
 /// of winning tickets.
@@ -1450,27 +1703,32 @@ static MAX_CLAIMS_BY_PAYLOAD_SIZE: LazyLock<usize> = LazyLock::new(|| {
 /// and is signed by those notes' owning keys.
 ///
 /// Only as many claims are taken as `reward_pool` can fund, the per-tx op
-/// limit allows, and a Blend payload can carry. Returns the signed tx together
-/// with the number of tickets (a prefix of `tickets`) it actually claims.
+/// limit allows, and a Blend payload can carry (`max_claims_in_payload`).
+/// Returns the signed tx together with the number of tickets (a prefix of
+/// `tickets`) it actually claims.
 ///
 /// `reward_pool` is passed in rather than read from `ledger_state` so a caller
 /// publishing several transactions back to back can draw down its own running
 /// balance; see [`drain_ready_rewards`].
 async fn build_reward_claim_tx(
     claim_address: ZkPublicKey,
+    fork_digest: ForkDigest,
     ledger_state: &LedgerState,
     reward_pool: Value,
     tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
+    max_claims_in_payload: usize,
 ) -> Result<(SignedOps<Unverified, StandardMode>, usize), PoWError> {
     // The reward value and gas prices are read at `ledger_state`; they must
     // match the state the tx applies against, or the reconstructed UTXOs / fee
     // will be off.
     build_reward_claim_tx_inner(
         claim_address,
+        fork_digest,
         ledger_state.mantle_ledger().pow.epoch_reward(),
         reward_pool,
         ledger_state.get_gas_prices(),
         tickets,
+        max_claims_in_payload,
     )
     .await
 }
@@ -1479,10 +1737,12 @@ async fn build_reward_claim_tx(
 /// full [`LedgerState`]. See [`build_reward_claim_tx`].
 async fn build_reward_claim_tx_inner(
     claim_address: ZkPublicKey,
+    fork_digest: ForkDigest,
     reward_value: Value,
     reward_pool: Value,
     gas_prices: GasPrices,
     tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
+    max_claims_by_payload_size: usize,
 ) -> Result<(SignedOps<Unverified, StandardMode>, usize), PoWError> {
     if reward_value == 0 {
         return Err(PoWError::RewardsDisabled);
@@ -1498,7 +1758,7 @@ async fn build_reward_claim_tx_inner(
         .len()
         .min((reward_pool / reward_value) as usize)
         .min(max_claims_by_ops())
-        .min(*MAX_CLAIMS_BY_PAYLOAD_SIZE);
+        .min(max_claims_by_payload_size);
     if claim_count == 0 {
         return Err(PoWError::RewardPoolExhausted);
     }
@@ -1518,7 +1778,8 @@ async fn build_reward_claim_tx_inner(
     let change_outputs = change_outputs(&note_ids, reward_value, fee)?;
     let transfers = transfer_ops(&note_ids, claim_address, &change_outputs)?;
 
-    let mantle_tx = push_reward_claim_ops(MantleTxBuilder::new(), &claims, transfers)?.build()?;
+    let mantle_tx =
+        push_reward_claim_ops(MantleTxBuilder::new(), &claims, transfers)?.build(fork_digest)?;
 
     // Sign each transfer with the keys owning its input notes (a
     // multi-signature over the whole tx hash). Signing is a ZK proof
@@ -1668,11 +1929,16 @@ fn estimate_reward_claim_fee(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, num::NonZeroU64};
+    use std::{
+        collections::HashMap,
+        num::{NonZeroU64, NonZeroUsize},
+        sync::{Arc, LazyLock},
+    };
 
     use lb_binary_codec::bincode::SerializeOp as _;
     use lb_chain_service::Slot;
     use lb_core::{
+        era::ForkDigest,
         header::HeaderId,
         mantle::{
             Note, NoteId, OpProofRef, OpRef, SignedOps, Utxo,
@@ -1689,18 +1955,28 @@ mod tests {
     use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
 
     use super::{
-        AutoClaimSettings, AutoClaimTick, ClaimTarget, MAX_CLAIMS_BY_PAYLOAD_SIZE,
-        MAX_PAYLOAD_BODY_SIZE, MAX_TRANSFER_INPUTS, PoWError, PoWServiceState,
-        build_reward_claim_tx_inner, change_outputs, claim_tx_size, claimable_rewards_info,
-        estimate_reward_claim_fee, max_claims_by_ops, neediest_target, prune_expired_tickets,
-        push_reward_claim_ops, slot_period_elapsed, transfer_ops,
+        AutoClaimSettings, AutoClaimTick, ClaimTarget, MAX_TRANSFER_INPUTS, PoWError,
+        PoWServiceState, build_reward_claim_tx_inner, build_search_pool, change_outputs,
+        claim_tx_size, claimable_rewards_info, estimate_reward_claim_fee, max_claims_by_ops,
+        max_claims_by_payload_size, neediest_target, prune_expired_tickets, push_reward_claim_ops,
+        replace_search_pool_if_resized, slot_period_elapsed, transfer_ops,
     };
-    use crate::tickets::WinningTicket;
+    use crate::{
+        test_utils::{PAYLOAD_BODY_SIZE, era_schedule},
+        tickets::WinningTicket,
+    };
+
+    const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
 
     const REWARD: u64 = 1_000_000;
     const POOL: u64 = 1_000_000_000;
 
-    const SLOT_WINDOW: NonZeroU64 = NonZeroU64::new(100).expect("100 is not 0");
+    /// The most claims a transaction carries in the eras [`era_schedule`]
+    /// builds, resolved once for every test.
+    static MAX_CLAIMS_BY_PAYLOAD_SIZE: LazyLock<usize> =
+        LazyLock::new(|| max_claims_by_payload_size(PAYLOAD_BODY_SIZE));
+
+    const SLOT_WINDOW: u64 = 100;
     /// A distinct dummy note id, derived like the ones the builder
     /// reconstructs.
     fn note_id(seed: u8) -> NoteId {
@@ -1736,8 +2012,8 @@ mod tests {
     fn assert_within_tx_limits(tx: &SignedOps<Unverified, StandardMode>) {
         let size = tx.to_bytes().expect("built tx should serialize").len();
         assert!(
-            size <= MAX_PAYLOAD_BODY_SIZE,
-            "tx of {size} bytes exceeds the {MAX_PAYLOAD_BODY_SIZE} a Blend payload carries"
+            size <= PAYLOAD_BODY_SIZE,
+            "tx of {size} bytes exceeds the {PAYLOAD_BODY_SIZE} a Blend payload carries"
         );
         let op_refs = tx.op_refs();
         assert!(
@@ -1949,7 +2225,7 @@ mod tests {
 
         let tx = push_reward_claim_ops(MantleTxBuilder::new(), &claims, transfers)
             .unwrap()
-            .build()
+            .build(FORK_DIGEST)
             .unwrap();
         let ops = tx.op_refs();
 
@@ -1984,10 +2260,12 @@ mod tests {
 
         let (tx, claimed) = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
+            FORK_DIGEST,
             REWARD,
             POOL,
             GasPrices::new(1, 1),
             &[(secret_key, claim)],
+            *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
         .await
         .unwrap();
@@ -2014,10 +2292,12 @@ mod tests {
     async fn build_reward_claim_tx_errors_when_rewards_disabled() {
         let result = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
+            FORK_DIGEST,
             0,
             POOL,
             GasPrices::new(1, 1),
             &[ticket()],
+            *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
         .await;
         assert!(matches!(result, Err(PoWError::RewardsDisabled)));
@@ -2028,10 +2308,12 @@ mod tests {
         // Pool below a single reward -> nothing fundable.
         let result = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
+            FORK_DIGEST,
             REWARD,
             REWARD - 1,
             GasPrices::new(1, 1),
             &[ticket()],
+            *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
         .await;
         assert!(matches!(result, Err(PoWError::RewardPoolExhausted)));
@@ -2043,10 +2325,12 @@ mod tests {
         let tickets: Vec<_> = std::iter::repeat_with(ticket).take(5).collect();
         let (tx, claimed) = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
+            FORK_DIGEST,
             REWARD,
             2 * REWARD,
             GasPrices::new(1, 1),
             &tickets,
+            *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
         .await
         .unwrap();
@@ -2076,10 +2360,12 @@ mod tests {
             let tickets = vec![ticket()];
             match build_reward_claim_tx_inner(
                 ZkPublicKey::zero(),
+                FORK_DIGEST,
                 REWARD,
                 available_pool,
                 GasPrices::new(1, 1),
                 &tickets,
+                *MAX_CLAIMS_BY_PAYLOAD_SIZE,
             )
             .await
             {
@@ -2108,10 +2394,12 @@ mod tests {
             let tickets = vec![ticket()];
             let (_, claimed) = build_reward_claim_tx_inner(
                 ZkPublicKey::zero(),
+                FORK_DIGEST,
                 REWARD,
                 stale_pool,
                 GasPrices::new(1, 1),
                 &tickets,
+                *MAX_CLAIMS_BY_PAYLOAD_SIZE,
             )
             .await
             .expect("a stale pool keeps funding claims");
@@ -2132,10 +2420,12 @@ mod tests {
         let tickets: Vec<_> = std::iter::repeat_with(ticket).take(cap + 50).collect();
         let (tx, claimed) = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
+            FORK_DIGEST,
             REWARD,
             POOL, // POOL / REWARD = 1000 > cap, so the pool does not bind
             GasPrices::new(1, 1),
             &tickets,
+            *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
         .await
         .unwrap();
@@ -2172,10 +2462,12 @@ mod tests {
             let tickets: Vec<_> = std::iter::repeat_with(ticket).take(claims).collect();
             let (tx, _) = build_reward_claim_tx_inner(
                 ZkPublicKey::zero(),
+                FORK_DIGEST,
                 REWARD,
                 POOL,
                 GasPrices::new(1, 1),
                 &tickets,
+                *MAX_CLAIMS_BY_PAYLOAD_SIZE,
             )
             .await
             .unwrap();
@@ -2190,8 +2482,8 @@ mod tests {
     #[test]
     fn the_payload_cap_is_the_largest_batch_a_payload_carries() {
         let claims = *MAX_CLAIMS_BY_PAYLOAD_SIZE;
-        assert!(claim_tx_size(claims).unwrap() <= MAX_PAYLOAD_BODY_SIZE as u64);
-        assert!(claim_tx_size(claims + 1).unwrap() > MAX_PAYLOAD_BODY_SIZE as u64);
+        assert!(claim_tx_size(claims).unwrap() <= PAYLOAD_BODY_SIZE as u64);
+        assert!(claim_tx_size(claims + 1).unwrap() > PAYLOAD_BODY_SIZE as u64);
     }
 
     /// A winning ticket anchored to a block at `block_slot`.
@@ -2207,7 +2499,7 @@ mod tests {
 
     #[test]
     fn claimable_rewards_info_is_empty_without_tickets() {
-        let info = claimable_rewards_info(&[], Slot::new(100), SLOT_WINDOW);
+        let info = claimable_rewards_info(&[], Slot::new(100), &era_schedule(&[SLOT_WINDOW]));
         assert_eq!(info.claimable_tickets, 0);
         assert_eq!(info.slots_until_expiry, []);
     }
@@ -2217,7 +2509,7 @@ mod tests {
         // SLOT_WINDOW is 100, so a block at slot S is claimable up to slot S +
         // 100.
         let tickets = [winning_ticket(50), winning_ticket(90)];
-        let info = claimable_rewards_info(&tickets, Slot::new(100), SLOT_WINDOW);
+        let info = claimable_rewards_info(&tickets, Slot::new(100), &era_schedule(&[SLOT_WINDOW]));
         assert_eq!(info.claimable_tickets, 2);
         // (50 + 100) - 100 = 50, (90 + 100) - 100 = 90
         assert_eq!(info.slots_until_expiry, vec![Slot::new(50), Slot::new(90)]);
@@ -2227,7 +2519,11 @@ mod tests {
     fn claimable_rewards_info_includes_the_last_valid_slot() {
         // A block at slot 50 is still claimable at exactly slot 150 (gap ==
         // window).
-        let info = claimable_rewards_info(&[winning_ticket(50)], Slot::new(150), SLOT_WINDOW);
+        let info = claimable_rewards_info(
+            &[winning_ticket(50)],
+            Slot::new(150),
+            &era_schedule(&[SLOT_WINDOW]),
+        );
         assert_eq!(info.claimable_tickets, 1);
         assert_eq!(info.slots_until_expiry, vec![Slot::new(0)]);
     }
@@ -2240,7 +2536,7 @@ mod tests {
             ready_to_claim: vec![winning_ticket(10), winning_ticket(150)],
             pending_to_claim: vec![winning_ticket(20), winning_ticket(180)],
         };
-        prune_expired_tickets(&mut state, Slot::new(200), SLOT_WINDOW);
+        prune_expired_tickets(&mut state, Slot::new(200), &era_schedule(&[SLOT_WINDOW]));
 
         let ready_slots: Vec<u64> = state
             .ready_to_claim
@@ -2264,8 +2560,57 @@ mod tests {
             ready_to_claim: vec![winning_ticket(50)],
             pending_to_claim: vec![],
         };
-        prune_expired_tickets(&mut state, Slot::new(150), SLOT_WINDOW);
+        prune_expired_tickets(&mut state, Slot::new(150), &era_schedule(&[SLOT_WINDOW]));
         assert_eq!(state.ready_to_claim.len(), 1);
+    }
+
+    #[test]
+    fn a_ticket_keeps_the_reward_window_of_its_era() {
+        // Era 0 has a window of 100 slots, and era 1, from slot 100, a window of
+        // 10. At slot 150, a ticket anchored at slot 60, in era 0, is claimable
+        // until slot 160, while one anchored at slot 120, in era 1, expired at
+        // slot 130.
+        let mut state = PoWServiceState {
+            ready_to_claim: vec![winning_ticket(60), winning_ticket(120)],
+            pending_to_claim: vec![],
+        };
+        prune_expired_tickets(&mut state, Slot::new(150), &era_schedule(&[100, 10]));
+
+        let ready_slots: Vec<u64> = state
+            .ready_to_claim
+            .iter()
+            .map(|t| u64::from(t.block_slot))
+            .collect();
+        assert_eq!(ready_slots, vec![60]);
+    }
+
+    #[test]
+    fn pruning_shared_nonce_tickets_uses_each_anchor_era_window() {
+        let schedule = era_schedule(&[10, 100]);
+        for (current, expected) in [
+            (105, vec![95, 101]),
+            (106, vec![101]),
+            (201, vec![101]),
+            (202, vec![]),
+        ] {
+            let mut state = PoWServiceState {
+                ready_to_claim: vec![winning_ticket(95), winning_ticket(101)],
+                pending_to_claim: vec![winning_ticket(95), winning_ticket(101)],
+            };
+            let nonce = state.ready_to_claim[0].claim.epoch_nonce;
+            assert!(
+                state
+                    .ready_to_claim
+                    .iter()
+                    .chain(&state.pending_to_claim)
+                    .all(|ticket| ticket.claim.epoch_nonce == nonce)
+            );
+            prune_expired_tickets(&mut state, Slot::new(current), &schedule);
+            for tickets in [&state.ready_to_claim, &state.pending_to_claim] {
+                let slots: Vec<u64> = tickets.iter().map(|t| u64::from(t.block_slot)).collect();
+                assert_eq!(slots, expected, "at slot {current}");
+            }
+        }
     }
 
     #[test]
@@ -2277,7 +2622,38 @@ mod tests {
             pending_to_claim: vec![winning_ticket(20)],
         };
         assert_eq!(state.outstanding_tickets(), 3);
-        prune_expired_tickets(&mut state, Slot::new(200), SLOT_WINDOW);
+        prune_expired_tickets(&mut state, Slot::new(200), &era_schedule(&[SLOT_WINDOW]));
         assert_eq!(state.outstanding_tickets(), 1);
+    }
+
+    #[test]
+    fn build_search_pool_uses_max_threads() {
+        let pool = build_search_pool(NonZeroUsize::new(2)).unwrap();
+        assert_eq!(pool.current_num_threads(), 2);
+    }
+
+    #[test]
+    fn replace_search_pool_if_resized_keeps_pool_when_max_threads_unchanged() {
+        let max_threads = NonZeroUsize::new(1);
+        let mut search_pool = build_search_pool(max_threads).unwrap();
+        let original_pool = Arc::clone(&search_pool);
+
+        replace_search_pool_if_resized(max_threads, max_threads, &mut search_pool).unwrap();
+
+        assert!(Arc::ptr_eq(&search_pool, &original_pool));
+    }
+
+    #[test]
+    fn replace_search_pool_if_resized_replaces_pool_when_max_threads_changed() {
+        let current_max_threads = NonZeroUsize::new(1);
+        let new_max_threads = NonZeroUsize::new(2);
+        let mut search_pool = build_search_pool(current_max_threads).unwrap();
+        let original_pool = Arc::clone(&search_pool);
+
+        replace_search_pool_if_resized(new_max_threads, current_max_threads, &mut search_pool)
+            .unwrap();
+
+        assert!(!Arc::ptr_eq(&search_pool, &original_pool));
+        assert_eq!(search_pool.current_num_threads(), 2);
     }
 }

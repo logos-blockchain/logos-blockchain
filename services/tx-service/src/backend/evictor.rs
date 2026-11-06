@@ -1,14 +1,15 @@
-use std::hash::Hash;
+use std::{
+    collections::{BTreeMap, HashMap},
+    hash::Hash,
+};
 
 use indexmap::{IndexMap, IndexSet};
 use lb_core::mantle::traits::Hashable;
 use lb_cryptarchia_engine::Slot;
 
 use crate::backend::{
-    policy::{
-        BlockSlots, EvictableTx, EvictionPolicy, PolicyClock, PolicySnapshot, PowClaimPolicy,
-        TtlPolicy,
-    },
+    AdmissionTime, IncludedItem,
+    policy::{BlockSlots, EvictableTx, EvictionPolicy, PolicyClock, PowClaimPolicy, TtlPolicy},
     pool::MempoolSettings,
 };
 
@@ -28,23 +29,15 @@ where
 impl<Tx, BlockId> Evictor<Tx, BlockId>
 where
     Tx: Hashable + EvictableTx + 'static,
-    Tx::Hash: Hash + Eq + Clone + Send + Sync + 'static,
+    Tx::Hash: Hash + Eq + Ord + Clone + Send + Sync + 'static,
     BlockId: Hash + Eq + Clone + From<[u8; 32]> + Send + Sync + 'static,
 {
     #[must_use]
     pub fn new(settings: &MempoolSettings) -> Self {
-        Self::with_ttl(settings, TtlPolicy::new(settings.tx_ttl))
-    }
-
-    #[must_use]
-    pub fn recover(settings: &MempoolSettings, state: IndexMap<Tx::Hash, u64>) -> Self {
-        Self::with_ttl(settings, TtlPolicy::recover(settings.tx_ttl, state))
-    }
-
-    fn with_ttl(settings: &MempoolSettings, ttl: TtlPolicy<Tx::Hash>) -> Self {
-        let mut policies: Vec<Box<dyn EvictionPolicy<Tx, BlockId>>> = vec![Box::new(ttl)];
-        if let Some(pow_claim) = settings.pow_claim {
-            policies.push(Box::new(PowClaimPolicy::new(pow_claim)));
+        let mut policies: Vec<Box<dyn EvictionPolicy<Tx, BlockId>>> =
+            vec![Box::new(TtlPolicy::new(settings.tx_ttl))];
+        if let Some(pow_claim) = &settings.pow_claim {
+            policies.push(Box::new(PowClaimPolicy::new(pow_claim.clone())));
         }
         Self {
             policies,
@@ -82,9 +75,9 @@ where
         }
     }
 
-    pub fn on_remove(&mut self, key: &Tx::Hash) {
+    pub fn on_release(&mut self, key: &Tx::Hash) {
         for policy in &mut self.policies {
-            policy.on_remove(key);
+            policy.on_release(key);
         }
     }
 
@@ -99,29 +92,42 @@ where
     }
 
     /// Keys the pool should stop carrying at wall-clock time `now_millis`,
+    /// among the `pending_txs` keys mapped to their admission timestamp,
     /// according to the enabled policies. The cause stays internal to the
     /// policies; a key wanted by several of them is returned once.
     #[must_use]
-    pub fn select_evictions(&self, now_millis: u64) -> Vec<Tx::Hash> {
+    pub fn select_retirements(
+        &self,
+        now_millis: u64,
+        pending_txs: &IndexMap<Tx::Hash, AdmissionTime>,
+    ) -> Vec<Tx::Hash> {
         let clock = self.clock(now_millis);
         self.policies
             .iter()
-            .flat_map(|policy| policy.select(&clock))
+            .flat_map(|policy| policy.select_retirements(&clock, pending_txs))
             .collect::<IndexSet<_>>()
             .into_iter()
             .collect()
     }
 
-    /// Insertion timestamp of every pending transaction, as the TTL policy
-    /// tracks it. This doubles as the pool's pending set on recovery.
+    /// Retired keys the pool should release at wall-clock time `now_millis`,
+    /// among the `retired_txs` that no canonical block carries, mapped to their
+    /// admission timestamp, and the `included_txs` a canonical block carries,
+    /// according to the enabled policies. A key wanted by several of them is
+    /// returned once.
     #[must_use]
-    pub fn save(&self) -> IndexMap<Tx::Hash, u64> {
+    pub fn select_releases(
+        &self,
+        now_millis: u64,
+        retired_txs: &BTreeMap<Tx::Hash, AdmissionTime>,
+        included_txs: &HashMap<Tx::Hash, IncludedItem>,
+    ) -> Vec<Tx::Hash> {
+        let clock = self.clock(now_millis);
         self.policies
             .iter()
-            .find_map(|policy| match policy.save() {
-                PolicySnapshot::Ttl(inserted) => Some(inserted),
-                PolicySnapshot::Stateless => None,
-            })
-            .unwrap_or_default()
+            .flat_map(|policy| policy.select_releases(&clock, retired_txs, included_txs))
+            .collect::<IndexSet<_>>()
+            .into_iter()
+            .collect()
     }
 }

@@ -1,4 +1,4 @@
-use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 #[cfg(any(test, feature = "test-utils"))]
 use lb_groth16::Fr;
 use serde::{Deserialize, Serialize};
@@ -33,7 +33,7 @@ use crate::{
 };
 
 // ChannelWithdraw = ChannelId Inputs — plain field-order concat.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct ChannelWithdrawOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
