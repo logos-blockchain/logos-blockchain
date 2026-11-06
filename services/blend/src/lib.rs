@@ -387,8 +387,10 @@ where
         service_type: ServiceType::BlendNetwork,
         zk_id,
         // The public key of the notes of the Blend key, which the node holds, so
-        // its wallet can withdraw.
+        // its wallet can withdraw and spend the rewards; it is also the staking
+        // key, the wallet staking with its nullifier key.
         note_pk,
+        note_stake_pk: note_pk,
         amount,
     };
     sdp_service_api.post_declaration(sdp_declaration).await

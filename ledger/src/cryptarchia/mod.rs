@@ -1392,9 +1392,10 @@ pub mod tests {
             locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
             provider_id: signing_key.public_key().into(),
             // The zk_id of the quota secret key, the service note under the
-            // public key of the notes of the same key.
+            // keys of the notes of the same key.
             zk_id: kdf_public_key(zk_key.as_fr()),
             note_pk: zk_key.to_public_key(),
+            note_stake_pk: zk_key.to_public_key(),
             inputs: [derive_note_nullifier(
                 &sdp_utxo.commitment(),
                 &ZkKey::new(sdp_secret_key).nullifier_key(),

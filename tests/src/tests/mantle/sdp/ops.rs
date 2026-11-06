@@ -89,7 +89,9 @@ async fn sdp_ops_e2e() {
         locators: locator.into(),
         provider_id,
         zk_id: genesis_declaration.zk_id,
-        note_pk: genesis_declaration.zk_id,
+        // The keys of the genesis service note, which the node's wallet holds.
+        note_pk: genesis_declaration.note_pk,
+        note_stake_pk: genesis_declaration.note_stake_pk,
         amount: min_stake,
     };
     let declaration_id = declaration.id();

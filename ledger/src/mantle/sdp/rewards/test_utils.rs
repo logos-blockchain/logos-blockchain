@@ -35,6 +35,8 @@ pub fn create_epoch_state(
                 withdraw_outputs: OutputCommitments::default(),
                 locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
                 zk_id: ZkPublicKey::new(BigUint::from(i as u64).into()),
+                note_pk: ZkPublicKey::new(BigUint::from(i as u64).into()),
+                note_stake_pk: ZkPublicKey::new(BigUint::from(i as u64).into()),
                 created: 0.into(),
                 active: 2.into(),
                 withdraw_at: None,

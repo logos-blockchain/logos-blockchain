@@ -28,6 +28,11 @@ use crate::mantle::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "an SDP declaration, with its locators and its two note keys, is the largest \
+              operation; boxing it would change the shape every match on a signed operation reads"
+)]
 pub enum SignedOp<State: VerificationState, Mode: VerificationMode> {
     ChannelInscribe(SignedOperation<InscriptionOp, State, Mode>),
     ChannelConfig(SignedOperation<ChannelConfigOp, State, Mode>),

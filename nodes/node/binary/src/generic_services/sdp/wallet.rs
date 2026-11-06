@@ -108,6 +108,7 @@ where
                     provider_id: declaration.provider_id,
                     zk_id: declaration.zk_id,
                     note_pk: declaration.note_pk,
+                    note_stake_pk: declaration.note_stake_pk,
                     inputs: [exact.nullifier].into(),
                     commitment_merkle_root,
                     amount: declaration.amount,

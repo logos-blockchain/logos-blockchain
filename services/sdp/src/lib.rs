@@ -87,9 +87,10 @@ pub struct DeclarationRequest {
     pub locators: Locators,
     pub provider_id: ProviderId,
     pub zk_id: ZkPublicKey,
-    // The key of the service note. The node can only withdraw the declaration
-    // when its wallet holds this key.
+    // The keys of the service note and of the rewards. The node can only
+    // withdraw the declaration when its wallet holds the `note_pk`.
     pub note_pk: ZkPublicKey,
+    pub note_stake_pk: ZkPublicKey,
     pub amount: Value,
 }
 
@@ -1161,6 +1162,7 @@ mod tests {
             provider_id: ProviderId(Ed25519PublicKey::from_bytes(&[10; 32]).unwrap()),
             zk_id: ZkPublicKey::new(Fr::from(2u64)),
             note_pk: ZkPublicKey::new(Fr::from(3u64)),
+            note_stake_pk: ZkPublicKey::new(Fr::from(4u64)),
             amount: 1_000,
         };
         let config = DeclarationConfig::from(&request);

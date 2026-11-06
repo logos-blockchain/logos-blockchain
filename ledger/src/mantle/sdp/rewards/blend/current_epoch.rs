@@ -21,7 +21,10 @@ use tracing::debug;
 
 use crate::{
     EpochState,
-    mantle::sdp::rewards::blend::{LOG_TARGET, RewardsParameters, target_epoch::TargetEpochState},
+    mantle::sdp::rewards::{
+        RewardKeys,
+        blend::{LOG_TARGET, RewardsParameters, target_epoch::TargetEpochState},
+    },
 };
 
 /// Immutable state of the current epoch.
@@ -154,11 +157,13 @@ impl CurrentEpochTracker {
             };
         }
 
-        let (providers, zk_root) = Self::providers_and_zk_root(
-            maybe_declarations
-                .expect("declaration set must exist since it's larger than minimum network size")
-                .values(),
-        );
+        let declarations = maybe_declarations
+            .expect("declaration set must exist since it's larger than minimum network size");
+        let (providers, zk_root) = Self::providers_and_zk_root(declarations.values());
+        let reward_keys = declarations
+            .values()
+            .map(|declaration| (declaration.provider_id, RewardKeys::from(declaration)))
+            .collect();
 
         let (core_quota, token_evaluation) = target_settings.core_quota_and_token_evaluation(
             providers.size() as u64,
@@ -185,6 +190,7 @@ impl CurrentEpochTracker {
             target_epoch_state: TargetEpochState::new(
                 last_epoch_state.epoch(),
                 providers,
+                reward_keys,
                 target_settings.minimum_network_size,
                 token_evaluation,
                 proof_verifier,

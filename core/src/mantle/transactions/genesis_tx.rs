@@ -565,6 +565,7 @@ mod tests {
             amount: note_to_use.value,
             zk_id: ZkPublicKey::new(BigUint::from(zk_id_value).into()),
             note_pk: ZkPublicKey::new(BigUint::from(zk_id_value).into()),
+            note_stake_pk: ZkPublicKey::new(BigUint::from(zk_id_value).into()),
             provider_id: ProviderId(verifying_key),
             locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
         }

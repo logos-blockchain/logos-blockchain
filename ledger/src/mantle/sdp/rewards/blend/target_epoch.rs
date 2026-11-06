@@ -14,7 +14,7 @@ use rpds::{HashTrieMapSync, HashTrieSetSync};
 use tracing::debug;
 
 use crate::mantle::sdp::rewards::{
-    Error,
+    Error, RewardKeys,
     blend::{LOG_TARGET, current_epoch::CurrentEpochState},
     distribute_rewards,
 };
@@ -27,6 +27,8 @@ pub struct TargetEpochState<ProofsVerifier> {
     epoch: Epoch,
     /// The providers in the target epoch (their public keys and indices).
     providers: HashTrieMapSync<ProviderId, (ZkPublicKey, u64)>,
+    /// The keys the rewards of each provider are created under.
+    reward_keys: HashTrieMapSync<ProviderId, RewardKeys>,
     /// The minimum network size of the era the target epoch belongs to.
     minimum_network_size: NonZeroU64,
     /// Parameters for evaluating activity proofs in the target epoch
@@ -41,6 +43,7 @@ impl<ProofsVerifier> TargetEpochState<ProofsVerifier> {
     pub const fn new(
         epoch: Epoch,
         providers: HashTrieMapSync<ProviderId, (ZkPublicKey, u64)>,
+        reward_keys: HashTrieMapSync<ProviderId, RewardKeys>,
         minimum_network_size: NonZeroU64,
         token_evaluation: BlendingTokenEvaluation,
         proof_verifier: ProofsVerifier,
@@ -49,6 +52,7 @@ impl<ProofsVerifier> TargetEpochState<ProofsVerifier> {
         Self {
             epoch,
             providers,
+            reward_keys,
             minimum_network_size,
             token_evaluation,
             proof_verifier,
@@ -214,7 +218,11 @@ impl TargetEpochTracker {
             } else {
                 base_reward
             };
-            rewards.insert(*zk_id, reward);
+            let keys = *target_epoch_state
+                .reward_keys
+                .get(provider_id)
+                .expect("a provider with a proof is a provider of the target epoch");
+            rewards.insert(*zk_id, (reward, keys));
         }
 
         debug!(

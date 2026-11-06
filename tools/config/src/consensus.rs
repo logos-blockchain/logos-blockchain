@@ -455,6 +455,7 @@ pub fn create_genesis_block_with_declarations(
             provider_id: provider.provider_id(),
             zk_id: provider.zk_id(),
             note_pk: provider.note_pk(),
+            note_stake_pk: provider.note_pk(),
             inputs: InputNullifiers::default(),
             commitment_merkle_root: CommitmentMmr::new().frontier_root(),
             amount: provider.amount,

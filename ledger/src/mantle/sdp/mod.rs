@@ -831,6 +831,7 @@ mod tests {
             provider_id: ProviderId(signing_key.public_key()),
             zk_id: zk_id(zk_key),
             note_pk: zk_key.to_public_key(),
+            note_stake_pk: zk_key.to_public_key(),
             inputs: [derive_note_nullifier(
                 &input.commitment(),
                 &ZkKey::new(*input_sk).nullifier_key(),
@@ -1374,11 +1375,12 @@ mod tests {
 
         // The single provider is both the only submitter and the premium
         // provider (min hamming distance), so they collect the full `income`.
-        let provider_zk_id = zk_id(&zk_key);
+        // The reward goes to the keys of the service note.
+        let provider_note_pk = zk_key.to_public_key();
         let received: Vec<&Note> = effect
             .reward_notes
             .iter()
-            .filter(|note| note.public_key == provider_zk_id)
+            .filter(|note| note.public_key == provider_note_pk)
             .collect();
         assert_eq!(
             received.len(),
@@ -1813,7 +1815,7 @@ mod tests {
         let received: Vec<&Note> = effect
             .reward_notes
             .iter()
-            .filter(|note| note.public_key == zk_id(&zk_key))
+            .filter(|note| note.public_key == zk_key.to_public_key())
             .collect();
         assert_eq!(
             received.len(),
