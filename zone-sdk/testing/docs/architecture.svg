@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 480" width="760" height="480" role="img" aria-label="Real sequencers run against a node the test controls completely" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#8a8f98"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="480" fill="#ffffff"/>
+  <text x="24" y="28" font-size="15" font-weight="600" fill="#1f2328">Real sequencers run against a node the test controls completely</text>
+
+  <g fill="none" stroke="#8a8f98" stroke-width="1.25">
+    <path d="M182 112V128H320V144" marker-end="url(#arrow)"/>
+    <path d="M578 112V128H440V144" marker-end="url(#arrow)"/>
+    <path d="M380 216V248" marker-end="url(#arrow)"/>
+    <path d="M300 216V232H134V248" marker-end="url(#arrow)"/>
+    <path d="M460 216V232H626V248" marker-end="url(#arrow)"/>
+    <path d="M380 320V360" marker-end="url(#arrow)"/>
+    <path d="M300 320V336H134V360" marker-end="url(#arrow)"/>
+    <path d="M460 320V336H626V360" marker-end="url(#arrow)"/>
+    <path d="M270 372H200V320" marker-end="url(#arrow)"/>
+    <path d="M626 432V456H12V284H24" marker-end="url(#arrow)"/>
+    <path d="M244 396H270" marker-end="url(#arrow)"/>
+  </g>
+
+  <g>
+    <rect x="24" y="56" width="316" height="56" rx="8" fill="none" stroke="#8a8f98" stroke-width="1.25"/>
+    <text x="182" y="80" text-anchor="middle" font-weight="600" fill="#1f2328">Stories</text>
+    <text x="182" y="98" text-anchor="middle" font-size="11.5" fill="#59636e">33 stories x 25 chain shapes, plus the pairs tier</text>
+  </g>
+  <g>
+    <rect x="420" y="56" width="316" height="56" rx="8" fill="none" stroke="#8a8f98" stroke-width="1.25"/>
+    <text x="578" y="80" text-anchor="middle" font-weight="600" fill="#1f2328">Property schedules</text>
+    <text x="578" y="98" text-anchor="middle" font-size="11.5" fill="#59636e">16 to 256 random events, drawn one layer at a time</text>
+  </g>
+  <g>
+    <rect x="230" y="144" width="300" height="72" rx="8" fill="#dbe9fb" stroke="#1f6feb" stroke-width="2"/>
+    <text x="380" y="168" text-anchor="middle" font-weight="600" fill="#1f2328">World</text>
+    <text x="380" y="186" text-anchor="middle" font-size="11.5" fill="#59636e">applies one Move or Event per step</text>
+    <text x="380" y="202" text-anchor="middle" font-size="11.5" fill="#59636e">advances the paused tokio clock</text>
+  </g>
+  <g>
+    <rect x="24" y="248" width="220" height="72" rx="8" fill="none" stroke="#8a8f98" stroke-width="1.25"/>
+    <text x="134" y="272" text-anchor="middle" font-weight="600" fill="#1f2328">SimNode + SimLedger</text>
+    <text x="134" y="290" text-anchor="middle" font-size="11.5" fill="#59636e">block tree, mempool, LIB</text>
+    <text x="134" y="306" text-anchor="middle" font-size="11.5" fill="#59636e">funding wallet, 1 or 2 nodes</text>
+  </g>
+  <g>
+    <rect x="270" y="248" width="220" height="72" rx="8" fill="none" stroke="#8a8f98" stroke-width="1.25"/>
+    <text x="380" y="272" text-anchor="middle" font-weight="600" fill="#1f2328">Harness</text>
+    <text x="380" y="290" text-anchor="middle" font-size="11.5" fill="#59636e">polls sequencers until idle</text>
+    <text x="380" y="306" text-anchor="middle" font-size="11.5" fill="#59636e">runs policy and checkers</text>
+  </g>
+  <g>
+    <rect x="516" y="248" width="220" height="72" rx="8" fill="none" stroke="#8a8f98" stroke-width="1.25"/>
+    <text x="626" y="272" text-anchor="middle" font-weight="600" fill="#1f2328">Writers and other zone</text>
+    <text x="626" y="290" text-anchor="middle" font-size="11.5" fill="#59636e">other sequencers' txs mined</text>
+    <text x="626" y="306" text-anchor="middle" font-size="11.5" fill="#59636e">straight into the blocks</text>
+  </g>
+  <g>
+    <rect x="24" y="360" width="220" height="72" rx="8" fill="none" stroke="#8a8f98" stroke-width="1.25"/>
+    <text x="134" y="384" text-anchor="middle" font-weight="600" fill="#1f2328">Reference consumer</text>
+    <text x="134" y="402" text-anchor="middle" font-size="11.5" fill="#59636e">publishes planned payloads</text>
+    <text x="134" y="418" text-anchor="middle" font-size="11.5" fill="#59636e">republishes own orphans</text>
+  </g>
+  <g>
+    <rect x="270" y="360" width="220" height="72" rx="8" fill="#dbe9fb" stroke="#1f6feb" stroke-width="2"/>
+    <text x="380" y="384" text-anchor="middle" font-weight="600" fill="#1f2328">ZoneSequencer x 1 to 3</text>
+    <text x="380" y="402" text-anchor="middle" font-size="11.5" fill="#59636e">the real SDK, unmodified</text>
+    <text x="380" y="418" text-anchor="middle" font-size="11.5" fill="#59636e">public API only</text>
+  </g>
+  <g>
+    <rect x="516" y="360" width="220" height="72" rx="8" fill="none" stroke="#8a8f98" stroke-width="1.25"/>
+    <text x="626" y="384" text-anchor="middle" font-weight="600" fill="#1f2328">Checkers</text>
+    <text x="626" y="402" text-anchor="middle" font-size="11.5" fill="#59636e">Layers, ViewChecker</text>
+    <text x="626" y="418" text-anchor="middle" font-size="11.5" fill="#59636e">Mirror, Oracles</text>
+  </g>
+  <text x="208" y="352" font-size="11.5" fill="#59636e">adapter::Node</text>
+  <text x="380" y="450" text-anchor="middle" font-size="11.5" fill="#59636e">compared with the canonical chain after every settle</text>
+</svg>

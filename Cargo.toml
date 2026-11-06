@@ -104,6 +104,7 @@ members = [
   "zk/proofs/poq",
   "zk/proofs/zksign",
   "zone-sdk",
+  "zone-sdk/testing",
 ]
 resolver = "2"
 
@@ -179,6 +180,7 @@ lb-wallet                          = { default-features = false, package = "logo
 lb-wallet-service                  = { default-features = false, package = "logos-blockchain-wallet-service", path = "./services/wallet" }
 lb-zksign                          = { default-features = false, package = "logos-blockchain-zksign", path = "./zk/proofs/zksign" }
 lb-zone-sdk                        = { default-features = false, package = "logos-blockchain-zone-sdk", path = "./zone-sdk" }
+lb-zone-sdk-testing                = { default-features = false, package = "logos-blockchain-zone-sdk-testing", path = "./zone-sdk/testing" }
 logos-blockchain-tests             = { default-features = false, path = "./tests" }
 logos-blockchain-zone-tests        = { default-features = false, path = "./tests/clients/zone-sdk" }
 logos-sql                          = { default-features = false, path = "./logos_sql" }
