@@ -369,7 +369,9 @@ pub struct PoWServiceState {
     /// [`PoWServiceMessage::Claim`].
     ready_to_claim: Vec<WinningTicket>,
     /// Tickets whose claim transaction has been published but not yet observed
-    /// as settled; retained until their reward window closes.
+    /// as settled; retained until their reward window closes, or made ready
+    /// again when their claim stays unsettled (see
+    /// [`requeue_unsettled_claims`]).
     pending_to_claim: Vec<WinningTicket>,
 }
 
@@ -1375,6 +1377,15 @@ where
         .await?
         .ok_or(PoWError::LedgerStateUnavailable(info.tip))?;
 
+    // Drop the tickets the tip already records as claimed, which a missed
+    // block event left behind: the ledger rejects a claimed ticket, and the
+    // whole tx with it.
+    let claimed = ledger_state.mantle_ledger().pow.nullifiers();
+    prune_claimed_tickets(state, |nullifier| claimed.contains_key(nullifier));
+    if state.ready_to_claim.is_empty() {
+        return Ok(None);
+    }
+
     // Build the tx only from tickets whose anchor block is still on the
     // canonical chain: on chain `accept_claim` requires the block to be in this
     // branch's known-block set (the map below), so a non-canonical claim —
@@ -1533,8 +1544,9 @@ async fn respond_claimable_rewards<CryptarchiaService>(
 }
 
 /// Handles one processed-block event: drops tickets whose reward window closed
-/// at the new tip, retires any pending claim it settled, and persists the state
-/// when it changes.
+/// at the new tip, retires any claim it settled, makes the tickets of claims
+/// that stayed unsettled too long ready again, and persists the state when it
+/// changes.
 ///
 /// Pruning here, rather than only when a new ticket is mined, keeps expired
 /// tickets from counting against the reward pool and stalling the search once
@@ -1574,7 +1586,15 @@ async fn retire_settled_claims<CryptarchiaService>(
             state.pending_to_claim.len()
         );
     }
-    if expired + settled > 0 {
+    let requeued = requeue_unsettled_claims(state);
+    if requeued > 0 {
+        info!(
+            target: LOG_TARGET,
+            "{requeued} PoW claim(s) did not settle within {RESUBMIT_AFTER_BLOCKS} blocks; \
+             ready to claim again"
+        );
+    }
+    if expired + settled + requeued > 0 {
         state_updater.update(Some(state.clone()));
     }
 }
@@ -1584,7 +1604,9 @@ async fn retire_settled_claims<CryptarchiaService>(
 ///
 /// The event carries the spent solution's [`PowNullifier`], which is exactly a
 /// claim's puzzle ticket, so a pending ticket is matched by re-deriving that
-/// nullifier from its claim. Returns the number of tickets retired.
+/// nullifier from its claim. A ticket that [`requeue_unsettled_claims`] made
+/// ready again is retired the same way, since its first claim may still
+/// settle. Returns the number of tickets retired.
 async fn prune_settled_pending<CryptarchiaService>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     state: &mut PoWServiceState,
@@ -1593,7 +1615,7 @@ async fn prune_settled_pending<CryptarchiaService>(
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
 {
-    if state.pending_to_claim.is_empty() {
+    if state.outstanding_tickets() == 0 {
         return Ok(0);
     }
     let Some(events) = cryptarchia_api.get_block_events(block_id).await? else {
@@ -1613,11 +1635,59 @@ where
         return Ok(0);
     }
 
-    let before = state.pending_to_claim.len();
-    state
-        .pending_to_claim
-        .retain(|ticket| !settled.contains(&ticket.claim.get_puzzle_ticket()));
-    Ok(before - state.pending_to_claim.len())
+    let before = state.outstanding_tickets();
+    let unsettled = |ticket: &WinningTicket| !settled.contains(&ticket.claim.get_puzzle_ticket());
+    state.pending_to_claim.retain(unsettled);
+    state.ready_to_claim.retain(unsettled);
+    Ok(before - state.outstanding_tickets())
+}
+
+/// Processed blocks a published claim may stay unsettled before its tickets
+/// are made ready again.
+const RESUBMIT_AFTER_BLOCKS: u64 = 3;
+
+/// Counts one more processed block against every pending ticket, and makes the
+/// tickets whose claim has not settled within [`RESUBMIT_AFTER_BLOCKS`] ready
+/// again, ahead of the others. Their transaction may have been dropped, for
+/// instance when the reward pool was short as a leader tried it, and nothing
+/// else submits it again. A requeued ticket is claimed like any ready one: only
+/// within its reward window, which [`prune_expired_tickets`] enforces, and only
+/// while the reward pool pays it, which the claim run checks against
+/// [`current_reward_pool`], and never once the chain records it as claimed,
+/// which [`prune_claimed_tickets`] checks before a batch is built. Returns the
+/// number of tickets requeued.
+fn requeue_unsettled_claims(state: &mut PoWServiceState) -> usize {
+    let mut requeued = Vec::new();
+    let mut still_pending = Vec::with_capacity(state.pending_to_claim.len());
+    for mut ticket in state.pending_to_claim.drain(..) {
+        ticket.blocks_unsettled = ticket.blocks_unsettled.saturating_add(1);
+        if ticket.blocks_unsettled >= RESUBMIT_AFTER_BLOCKS {
+            ticket.blocks_unsettled = 0;
+            requeued.push(ticket);
+        } else {
+            still_pending.push(ticket);
+        }
+    }
+    state.pending_to_claim = still_pending;
+    let count = requeued.len();
+    state.ready_to_claim.splice(0..0, requeued);
+    count
+}
+
+/// Drops the tickets whose puzzle ticket the chain records as claimed, the
+/// nullifiers `is_claimed` reads from the ledger. It covers a settlement whose
+/// block event was missed, after a restart or a lag, which would otherwise
+/// leave a requeued ticket ready and every batch holding it rejected as
+/// double-claimed. Returns the number of tickets dropped.
+fn prune_claimed_tickets(
+    state: &mut PoWServiceState,
+    is_claimed: impl Fn(&PowNullifier) -> bool,
+) -> usize {
+    let before = state.outstanding_tickets();
+    let unclaimed = |ticket: &WinningTicket| !is_claimed(&ticket.claim.get_puzzle_ticket());
+    state.ready_to_claim.retain(unclaimed);
+    state.pending_to_claim.retain(unclaimed);
+    before - state.outstanding_tickets()
 }
 
 /// Summarizes how long each ready ticket remains within its reward window.
@@ -2122,10 +2192,11 @@ mod tests {
 
     use super::{
         AutoClaimSettings, AutoClaimTick, ClaimTarget, MAX_TRANSFER_INPUTS, PoWError,
-        PoWServiceState, build_reward_claim_tx_inner, build_search_pool, change_outputs,
-        claim_tx_size, claimable_rewards_info, estimate_reward_claim_fee, is_claimable,
-        max_claims_by_ops, max_claims_by_payload_size, neediest_target, prune_expired_tickets,
-        push_reward_claim_ops, replace_search_pool_if_resized, reward_claim_count, reward_note,
+        PoWServiceState, RESUBMIT_AFTER_BLOCKS, build_reward_claim_tx_inner, build_search_pool,
+        change_outputs, claim_tx_size, claimable_rewards_info, estimate_reward_claim_fee,
+        is_claimable, max_claims_by_ops, max_claims_by_payload_size, neediest_target,
+        prune_claimed_tickets, prune_expired_tickets, push_reward_claim_ops,
+        replace_search_pool_if_resized, requeue_unsettled_claims, reward_claim_count, reward_note,
         sign_reward_claims, slot_period_elapsed, transfer_ops, wallet_holds_claim_address,
         without_openings,
     };
@@ -2996,7 +3067,42 @@ mod tests {
             tip: HeaderId::from([0u8; 32]),
             block_slot: Slot::new(block_slot),
             claim: ticket(),
+            blocks_unsettled: 0,
         }
+    }
+
+    #[test]
+    fn an_unsettled_claim_is_ready_again_until_the_chain_records_it() {
+        let mut state = PoWServiceState {
+            ready_to_claim: vec![winning_ticket(2)],
+            pending_to_claim: vec![winning_ticket(1)],
+        };
+        for _ in 1..RESUBMIT_AFTER_BLOCKS {
+            assert_eq!(requeue_unsettled_claims(&mut state), 0);
+        }
+
+        assert_eq!(requeue_unsettled_claims(&mut state), 1);
+        assert_eq!(state.pending_to_claim.len(), 0);
+        // ahead of the ticket already ready, and counting from zero again
+        let ready: Vec<_> = state
+            .ready_to_claim
+            .iter()
+            .map(|ticket| (ticket.block_slot, ticket.blocks_unsettled))
+            .collect();
+        assert_eq!(ready, [(Slot::new(1), 0), (Slot::new(2), 0)]);
+
+        // its first claim settled in a block whose event was missed
+        let settled = state.ready_to_claim[0].claim.get_puzzle_ticket();
+        assert_eq!(
+            prune_claimed_tickets(&mut state, |nullifier| *nullifier == settled),
+            1
+        );
+        let ready: Vec<_> = state
+            .ready_to_claim
+            .iter()
+            .map(|ticket| ticket.block_slot)
+            .collect();
+        assert_eq!(ready, [Slot::new(2)]);
     }
 
     #[test]
