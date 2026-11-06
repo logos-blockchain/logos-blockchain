@@ -110,8 +110,6 @@ pub enum LedgerError<Id> {
     GasOverflow(#[from] GasOverflow),
     #[error("Mantle error: {0}")]
     Mantle(#[from] mantle::Error),
-    #[error("Input note in genesis block: {0:?}")]
-    InputInGenesis(notes::NoteNullifier),
     #[error(
         "The genesis distribution and declarations hold {total}, the maximum supply requires {expected}"
     )]

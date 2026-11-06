@@ -329,16 +329,6 @@ impl InscriptionOp {
         self.mini_blocks.iter().flat_map(Bounded::iter)
     }
 
-    /// The steps of the inscription, each with whether it starts a mini-block.
-    pub fn steps_with_mini_block_starts(&self) -> impl Iterator<Item = (bool, &Step)> {
-        self.mini_blocks.iter().flat_map(|mini_block| {
-            mini_block
-                .iter()
-                .enumerate()
-                .map(|(position, step)| (position == 0, step))
-        })
-    }
-
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {

@@ -24,8 +24,8 @@ use crate::{
 /// `MAX_OPERATION_DATA_SIZE` of Mantle Transaction Encoding.
 ///
 /// It bounds the inscriptions of a `ChannelInscribe` and of its steps
-/// together, and `ChannelDeposit.Metadata`, excluding their `UINT32` length
-/// prefixes.
+/// together, and the inscription of a `ChannelDeposit`, excluding their
+/// `UINT32` length prefixes.
 pub const MAX_OPERATION_DATA_SIZE: usize = 1_835_008;
 
 pub type ChannelKeyIndex = u16;

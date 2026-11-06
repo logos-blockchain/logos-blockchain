@@ -40,12 +40,12 @@ pub const BLEND_DECLARATION_AMOUNT: u64 = 1;
 const DEFAULT_SDP_FUNDING_VALUE_PER_NODE: u64 = 10_000 * UNITS_PER_LGO;
 const DEFAULT_SDP_FUNDING_NOTES_PER_NODE: usize = 1;
 
-/// Test-tool mirror of the genesis transfer-output bound.
+/// Test-tool mirror of the bound of the genesis distribution.
 ///
-/// The bound is the transaction output bound used by `OutputCommitments` in the
-/// release core. Keeping this value in test tooling avoids exporting a
+/// The bound is the note list bound used by `Distribution` in the release
+/// core. Keeping this value in test tooling avoids exporting a
 /// production constant solely for fixture validation.
-pub const GENESIS_TRANSFER_OUTPUT_LIMIT: usize = u8::MAX as usize;
+pub const GENESIS_DISTRIBUTION_LIMIT: usize = u8::MAX as usize;
 
 /// Controls how much SDP funding is allocated to each generated node and how
 /// many outputs are used to hold that funding.
@@ -121,12 +121,11 @@ pub struct GeneralConsensusConfig {
     pub prolonged_bootstrap_period: Duration,
 }
 
-// A genesis note by its allocation index, with its secret key.
+// The key of a genesis service note, with its secret key.
 #[derive(Clone, Debug)]
 pub struct ServiceNote {
     pub pk: ZkPublicKey,
     pub sk: ZkKey,
-    pub output_index: usize,
 }
 
 #[derive(Clone)]
@@ -150,11 +149,11 @@ fn select_sdp_funding_notes_per_node(
     let required_outputs = fixed_node_outputs
         .checked_add(additional_wallet_outputs)
         .expect("genesis output count overflow while calculating SDP funding capacity");
-    let available_for_sdp = GENESIS_TRANSFER_OUTPUT_LIMIT
+    let available_for_sdp = GENESIS_DISTRIBUTION_LIMIT
         .checked_sub(required_outputs)
         .unwrap_or_else(|| {
             panic!(
-                "genesis transfer output capacity exhausted: limit={GENESIS_TRANSFER_OUTPUT_LIMIT}, node_count={node_count}, fixed_node_outputs={fixed_node_outputs}, additional_wallet_outputs={additional_wallet_outputs}",
+                "genesis distribution capacity exhausted: limit={GENESIS_DISTRIBUTION_LIMIT}, node_count={node_count}, fixed_node_outputs={fixed_node_outputs}, additional_wallet_outputs={additional_wallet_outputs}",
             )
         });
     let max_sdp_notes_per_node = available_for_sdp / node_count;
@@ -163,7 +162,7 @@ fn select_sdp_funding_notes_per_node(
 
     assert!(
         selected_sdp_notes_per_node > 0,
-        "genesis transfer output capacity cannot provide one SDP funding note per node: limit={GENESIS_TRANSFER_OUTPUT_LIMIT}, node_count={node_count}, fixed_node_outputs={fixed_node_outputs}, additional_wallet_outputs={additional_wallet_outputs}",
+        "genesis distribution capacity cannot provide one SDP funding note per node: limit={GENESIS_DISTRIBUTION_LIMIT}, node_count={node_count}, fixed_node_outputs={fixed_node_outputs}, additional_wallet_outputs={additional_wallet_outputs}",
     );
 
     let selected_as_u64 = u64::try_from(selected_sdp_notes_per_node)
@@ -178,12 +177,12 @@ fn select_sdp_funding_notes_per_node(
         .expect("genesis output count overflow after SDP funding allocation");
 
     assert!(
-        projected_genesis_outputs <= GENESIS_TRANSFER_OUTPUT_LIMIT,
-        "projected genesis transfer outputs exceed capacity: projected={projected_genesis_outputs}, limit={GENESIS_TRANSFER_OUTPUT_LIMIT}",
+        projected_genesis_outputs <= GENESIS_DISTRIBUTION_LIMIT,
+        "projected genesis distribution exceeds capacity: projected={projected_genesis_outputs}, limit={GENESIS_DISTRIBUTION_LIMIT}",
     );
 
     println!(
-        "SDP funding allocation genesis_transfer_output_limit={GENESIS_TRANSFER_OUTPUT_LIMIT} node_count={node_count} fixed_node_outputs={fixed_node_outputs} additional_wallet_outputs={additional_wallet_outputs} requested_sdp_notes_per_node={} selected_sdp_notes_per_node={selected_sdp_notes_per_node} sdp_note_value={base_sdp_note_value} sdp_value_remainder={sdp_value_remainder} total_sdp_funding_per_node={}",
+        "SDP funding allocation genesis_distribution_limit={GENESIS_DISTRIBUTION_LIMIT} node_count={node_count} fixed_node_outputs={fixed_node_outputs} additional_wallet_outputs={additional_wallet_outputs} requested_sdp_notes_per_node={} selected_sdp_notes_per_node={selected_sdp_notes_per_node} sdp_note_value={base_sdp_note_value} sdp_value_remainder={sdp_value_remainder} total_sdp_funding_per_node={}",
         sdp_funding_config.target_notes_per_node, sdp_funding_config.total_value_per_node,
     );
 
@@ -218,7 +217,7 @@ pub fn create_genesis_block(
     test_context: Option<&str>,
     genesis_time: GenesisTime,
 ) -> GenesisBlock {
-    // Create transfer op with the allocations as outputs
+    // The distribution of the allocations
     let mut outputs = allocations.iter().copied();
     #[expect(
         clippy::option_if_let_else,
@@ -229,7 +228,7 @@ pub fn create_genesis_block(
         for note in outputs {
             genesis_builder = genesis_builder
                 .try_add_note(note)
-                .expect("note count must fit in genesis transfer outputs");
+                .expect("note count must fit in the genesis distribution");
         }
         genesis_builder
     } else {
@@ -294,7 +293,7 @@ pub fn create_consensus_configs_with_additional_wallet_outputs_and_sdp_funding_c
             sdp_funding_config,
         );
     let mut allocations = Distribution::try_from(material.allocations.clone())
-        .expect("the allocations fit the genesis transfer outputs");
+        .expect("the allocations fit the genesis distribution");
     let leader_keys = material
         .regular_note_keys
         .iter()
@@ -399,7 +398,6 @@ fn create_allocations(
             .expect("SDP funding value remainder should fit in usize");
 
     let mut allocations = Vec::new();
-    let mut output_index = 0;
 
     for &id in ids {
         let sk_data = derive_key_material(LEADER_KEY_PREFIX, &id);
@@ -410,7 +408,6 @@ fn create_allocations(
             value: REGULAR_NOTE_VALUE,
             public_key: pk,
         });
-        output_index += 1;
 
         let sk_sdp_data = derive_key_material(SDP_KEY_PREFIX, &id);
         let sk_sdp = ZkKey::from(BigUint::from_bytes_le(&sk_sdp_data));
@@ -425,11 +422,9 @@ fn create_allocations(
                 sdp_notes.push(ServiceNote {
                     pk: pk_sdp,
                     sk: sk_sdp.clone(),
-                    output_index,
                 });
             }
             allocations.push(allocation);
-            output_index += 1;
         }
     }
 
@@ -462,7 +457,7 @@ pub fn create_genesis_block_with_declarations(
 
     let genesis_builder = GenesisBlockBuilder::new()
         .try_add_notes(allocations)
-        .expect("allocations must fit in genesis transfer outputs")
+        .expect("allocations must fit in the genesis distribution")
         .set_inscription(inscription);
     if declarations.is_empty() {
         return genesis_builder
