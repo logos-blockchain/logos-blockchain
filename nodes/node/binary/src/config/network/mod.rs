@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use lb_core::{self, block::Block, header::HeaderId};
+use lb_core::{self, header::HeaderId};
 use lb_cryptarchia_engine::time::EraSchedule;
 use lb_libp2p::{
     ChainSyncSettings, IdentifySettings, KademliaSettings, SwarmConfig, config::CachingSettings,
@@ -10,15 +10,11 @@ use lb_network_service::{
     backends::libp2p::config::{Libp2pConfig, Libp2pEraConfig},
     config::NetworkConfig,
 };
-use lb_tx_service::network::adapters::libp2p::MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE;
 use libp2p::gossipsub::{IdentTopic, TopicHash};
 
-use crate::{
-    ValidatedTx,
-    config::{
-        deployment::{EraDefinition, era::ruleset::EraRuleset},
-        network::serde::Config,
-    },
+use crate::config::{
+    deployment::{EraDefinition, era::ruleset::EraRuleset},
+    network::serde::Config,
 };
 
 pub mod serde;
@@ -106,12 +102,11 @@ impl ServiceConfig {
                     Libp2pEraConfig {
                         fork_digest: era.parameters.fork_digest,
                         chain_sync_protocol_name: fork.to_stream_protocol_with_name("chainsync"),
-                        chain_sync_max_block_size: Block::<ValidatedTx>::max_encoded_size(
-                            parameters.cryptarchia.max_uncles,
-                        ),
+                        chain_sync_max_block_size: parameters.cryptarchia.max_block_size(),
                         max_data_size_by_topic: max_data_size_by_topic(
                             &fork.to_string_with_name("mempool"),
                             &fork.to_string_with_name("cryptarchia"),
+                            parameters.cryptarchia.max_transactions_size as usize,
                             parameters.cryptarchia.max_proposal_size(),
                         ),
                     }
@@ -121,19 +116,18 @@ impl ServiceConfig {
     }
 }
 
-/// The data limits of an era's topics, whose largest block proposal takes
+/// The data limits of an era's topics, whose largest transaction takes
+/// `max_transaction_size` bytes and largest block proposal
 /// `max_proposal_size` bytes.
 fn max_data_size_by_topic(
     transaction_topic: &str,
     proposal_topic: &str,
+    max_transaction_size: usize,
     max_proposal_size: usize,
 ) -> HashMap<TopicHash, usize> {
     let mut limits: HashMap<TopicHash, usize> = HashMap::new();
     for (topic, required) in [
-        (
-            transaction_topic,
-            MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE,
-        ),
+        (transaction_topic, max_transaction_size),
         (proposal_topic, max_proposal_size),
     ] {
         let topic = IdentTopic::new(topic).hash();
@@ -149,7 +143,7 @@ fn max_data_size_by_topic(
 mod tests {
     use std::collections::HashMap;
 
-    use lb_core::block::Proposal;
+    use lb_core::block::{BlockLimits, Proposal};
     use lb_libp2p::{
         PeerId,
         behaviour::gossipsub::configure_topic_size_limits,
@@ -157,22 +151,30 @@ mod tests {
         identity::{self, ed25519},
     };
 
-    use super::{MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE, max_data_size_by_topic};
+    use super::max_data_size_by_topic;
+
+    /// The most bytes a transaction of the tests' era may take.
+    const MAX_TRANSACTION_SIZE: usize = 2 * 1024 * 1024;
 
     /// The largest proposal of an era that allows four uncles.
     fn max_proposal_size() -> usize {
-        Proposal::max_encoded_size(4)
+        Proposal::max_encoded_size(BlockLimits {
+            max_uncles: 4,
+            max_transactions: 1024,
+            max_transactions_size: MAX_TRANSACTION_SIZE as u32,
+        })
     }
 
     #[test]
     fn shared_application_topics_use_the_largest_data_limit() {
         let topic = "/shared/application/topic";
-        let limits = max_data_size_by_topic(topic, topic, max_proposal_size());
+        let limits =
+            max_data_size_by_topic(topic, topic, MAX_TRANSACTION_SIZE, max_proposal_size());
         let topic_hash = gossipsub::IdentTopic::new(topic).hash();
 
         assert_eq!(
             limits.get(&topic_hash),
-            Some(&MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE.max(max_proposal_size()))
+            Some(&MAX_TRANSACTION_SIZE.max(max_proposal_size()))
         );
     }
 
@@ -184,7 +186,7 @@ mod tests {
         let limits = [
             (
                 "/logos-blockchain-standalone-local/mempool/1.0.0",
-                MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE,
+                MAX_TRANSACTION_SIZE,
             ),
             (
                 "/logos-blockchain-standalone-local/cryptarchia/1.0.0",

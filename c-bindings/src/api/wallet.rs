@@ -1235,12 +1235,14 @@ pub unsafe extern "C" fn channel_deposit_with_notes(
     } else {
         unsafe { std::slice::from_raw_parts(arguments.metadata, arguments.metadata_len) }.to_vec()
     };
-    let metadata = unwrap_or_return_error!(Metadata::try_from(metadata_bytes).map_err(|error| {
-        OperationStatus::error(
-            OperationStatusCode::DynError,
-            format!("Invalid metadata: {error:?}"),
-        )
-    }));
+    let metadata = unwrap_or_return_error!(Metadata::try_new(metadata_bytes, u32::MAX).map_err(
+        |error| {
+            OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Invalid metadata: {error:?}"),
+            )
+        }
+    ));
 
     let deposit = DepositOp {
         channel_id,
@@ -1568,12 +1570,14 @@ pub unsafe extern "C" fn channel_deposit(
     } else {
         unsafe { std::slice::from_raw_parts(arguments.metadata, arguments.metadata_len) }.to_vec()
     };
-    let metadata = unwrap_or_return_error!(Metadata::try_from(metadata_bytes).map_err(|error| {
-        OperationStatus::error(
-            OperationStatusCode::DynError,
-            format!("Invalid metadata: {error:?}"),
-        )
-    }));
+    let metadata = unwrap_or_return_error!(Metadata::try_new(metadata_bytes, u32::MAX).map_err(
+        |error| {
+            OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Invalid metadata: {error:?}"),
+            )
+        }
+    ));
 
     let transaction = unwrap_or_return_error!(channel_deposit_sync(
         node,

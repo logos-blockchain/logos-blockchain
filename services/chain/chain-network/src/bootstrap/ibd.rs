@@ -1038,6 +1038,9 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            max_transactions: 1024,
+            max_transactions_size: 2 * 1024 * 1024,
+            max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
             execution_market: lb_ledger::config::ExecutionMarketConfig {
                 max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_193_460).unwrap(),
                 fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())

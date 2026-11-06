@@ -38,7 +38,10 @@ use lb_core::{
     proofs::leader_proof::Groth16LeaderProof,
 };
 use lb_groth16::Fr;
-use lb_http_api_common::bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody};
+use lb_http_api_common::bodies::{
+    mantle::LimitsResponseBody,
+    wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
+};
 use lb_key_management_system_service::keys::Ed25519Key;
 use tokio::sync::{mpsc, watch};
 
@@ -189,6 +192,12 @@ impl adapter::Node for MockNode {
                 state: State::Online,
             },
             phase: PhaseTag::Following,
+        })
+    }
+
+    async fn limits(&self) -> Result<LimitsResponseBody, lb_common_http_client::Error> {
+        Ok(LimitsResponseBody {
+            max_op_data_size: u32::MAX,
         })
     }
 

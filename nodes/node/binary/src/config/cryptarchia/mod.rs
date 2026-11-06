@@ -54,7 +54,8 @@ impl ServiceConfig {
                     LibP2pAdapterEraSettings {
                         topic: ProtocolScope::Fork(era.parameters.fork_digest)
                             .to_string_with_name("cryptarchia"),
-                        max_uncles: parameters.cryptarchia.max_uncles,
+                        block_limits: parameters.cryptarchia.block_limits(),
+                        max_op_data_size: parameters.cryptarchia.max_op_data_size(),
                     }
                 }),
             },
@@ -77,6 +78,7 @@ impl ServiceConfig {
                 let EraRuleset::V1(parameters) = &era.parameters.ruleset;
                 lb_chain_network_service::ChainNetworkEraSettings {
                     slot_activation_coeff: parameters.cryptarchia.slot_activation_coeff.get(),
+                    block_limits: parameters.cryptarchia.block_limits(),
                 }
             }),
         }
@@ -146,6 +148,9 @@ fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
     let blend_rewards_params = parameters.blend_reward_params();
     lb_ledger::Config {
         consensus_config: deployment.consensus_config(),
+        max_transactions: deployment.max_transactions.get(),
+        max_transactions_size: deployment.max_transactions_size,
+        max_op_data_size: deployment.max_op_data_size(),
         epoch_config: EpochConfig {
             epoch_period_nonce_buffer: deployment.epoch_config.epoch_period_nonce_buffer,
             epoch_period_nonce_stabilization: deployment

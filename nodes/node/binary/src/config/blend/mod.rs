@@ -169,6 +169,7 @@ impl ServiceConfig {
                 dispatcher: Libp2pBroadcastSettings {
                     topic: fork.to_string_with_name("cryptarchia"),
                     max_proposal_size: cryptarchia_deployment.max_proposal_size(),
+                    max_op_data_size: cryptarchia_deployment.max_op_data_size(),
                 },
             }
         });

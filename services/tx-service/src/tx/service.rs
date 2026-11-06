@@ -15,11 +15,8 @@ use std::{
 
 use futures::{StreamExt as _, future};
 use lb_core::{
-    block::{MAX_BLOCK_TRANSACTIONS_SIZE, TxInBlock},
-    mantle::{
-        traits::{Hashable, StorageSize},
-        transactions::hash::PrefixedKey,
-    },
+    block::TxInBlock,
+    mantle::{traits::Hashable, transactions::hash::PrefixedKey},
 };
 use lb_cryptarchia_engine::Slot;
 use lb_log_targets::mempool;
@@ -191,7 +188,7 @@ where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
     StorageAdapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     <Pool as RecoverableMempool>::RecoveryState: Debug + Send + Sync,
-    Pool::Item: Hashable<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
+    Pool::Item: Hashable<Hash = Pool::Key> + Clone + Send + 'static,
     Pool::Key: PrefixedKey<Prefix: Send + Sync>,
     Pool::Settings: Clone + Sync + Send,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item, Key = Pool::Key>
@@ -329,7 +326,7 @@ impl<Pool, NetworkAdapter, RecoveryBackend, StorageAdapter, TimeBackend, Runtime
 where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
     StorageAdapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    Pool::Item: Hashable<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
+    Pool::Item: Hashable<Hash = Pool::Key> + Clone + Send + 'static,
     Pool::Key: PrefixedKey<Prefix: Send + Sync>,
     Pool::Settings: Clone,
     NetworkAdapter:
@@ -522,11 +519,6 @@ where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
     {
-        if let Err(error) = Self::validate_item_for_mempool(&item) {
-            Self::handle_add_error(error, reply_channel);
-            return;
-        }
-
         match pool.add_item(key, item.clone()).await {
             Ok(_id) => {
                 Self::notify_about_accepted_item(accepted_items_channel_sender, item.clone());
@@ -660,18 +652,6 @@ where
         }
     }
 
-    fn validate_item_for_mempool(item: &Pool::Item) -> Result<(), MempoolError> {
-        let size = item.storage_size();
-        if size > MAX_BLOCK_TRANSACTIONS_SIZE {
-            return Err(MempoolError::ItemTooLarge {
-                size,
-                max: MAX_BLOCK_TRANSACTIONS_SIZE,
-            });
-        }
-
-        Ok(())
-    }
-
     async fn handle_network_item(
         pool: &mut Pool,
         key: Pool::Key,
@@ -682,14 +662,6 @@ where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
     {
-        if let Err(err) = Self::validate_item_for_mempool(&item) {
-            tracing::debug!(
-                target: LOG_TARGET,
-                "could not add network item to the pool due to: {err}"
-            );
-            return;
-        }
-
         let accepted_item = item.clone();
         if let Err(e) = pool.add_item(key, item).await {
             Self::handle_network_add_error(e);

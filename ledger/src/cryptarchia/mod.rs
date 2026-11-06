@@ -1151,6 +1151,9 @@ pub mod tests {
             },
             // `alpha = 1/2`, `T_tx = 10`, `k = 4`, with a baseline that is a
             // perfect square so the reference load lands on it exactly.
+            max_transactions: 1024,
+            max_transactions_size: 2 * 1024 * 1024,
+            max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
             execution_market: ExecutionMarketConfig {
                 max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
                 fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),

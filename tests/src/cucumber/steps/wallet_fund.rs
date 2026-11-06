@@ -426,15 +426,7 @@ async fn step_fund_inscription_transaction(
     // runs on a fresh chain, so the channel cannot pre-exist.
     let signing_key = Ed25519Key::from_bytes(&[7u8; 32]);
     let channel_id = ChannelId::from(signing_key.public_key().to_bytes());
-    let inscription =
-        Inscription::try_from(b"wallet fund endpoint".to_vec()).map_err(|source| {
-            StepError::LogicalError {
-                message: format!(
-                    "Step `{}` error: failed to build inscription: {source}",
-                    step.value
-                ),
-            }
-        })?;
+    let inscription = Inscription::new_unchecked(b"wallet fund endpoint".to_vec());
     let inscription_op = InscriptionOp {
         channel_id,
         inscription,

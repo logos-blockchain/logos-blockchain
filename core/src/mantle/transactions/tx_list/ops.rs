@@ -1,7 +1,10 @@
 use std::{collections::HashMap, ops::Deref};
 
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
-use lb_utils::bounded::{BoundedError, UpperBoundedVec};
+use lb_utils::{
+    bounded::{BoundedError, UpperBoundedVec},
+    net::MAX_WIRE_MESSAGE_SIZE,
+};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -16,7 +19,6 @@ use crate::mantle::ops::{
     transfer::TransferOp,
 };
 use crate::{
-    block::MAX_BLOCK_TRANSACTIONS_SIZE,
     era::ForkDigest,
     mantle::{
         Op, OpRef, TxHash, Value,
@@ -323,8 +325,9 @@ impl<'de> Deserialize<'de> for Ops {
             MantleTxSerde::<TxList<Op>>::deserialize(deserializer)
                 .map(|MantleTxSerde { fork_digest, ops }| Self { fork_digest, ops })
         } else {
-            let bytes = deserialize_bounded_bytes::<MAX_BLOCK_TRANSACTIONS_SIZE, D>(deserializer)?;
-            let (remaining, tx) = Self::decode(&bytes, &()).map_err(serde::de::Error::custom)?;
+            let bytes = deserialize_bounded_bytes::<MAX_WIRE_MESSAGE_SIZE, D>(deserializer)?;
+            let (remaining, tx) =
+                Self::decode(&bytes, &u32::MAX).map_err(serde::de::Error::custom)?;
             if remaining.is_empty() {
                 Ok(tx)
             } else {
@@ -360,9 +363,9 @@ impl<'de> Deserialize<'de> for TxList<Op> {
         if deserializer.is_human_readable() {
             TxBoundedVec::deserialize(deserializer).map(Self)
         } else {
-            let bytes = deserialize_bounded_bytes::<MAX_BLOCK_TRANSACTIONS_SIZE, D>(deserializer)?;
+            let bytes = deserialize_bounded_bytes::<MAX_WIRE_MESSAGE_SIZE, D>(deserializer)?;
             let (remaining, ops) =
-                TxBoundedVec::decode(&bytes, &()).map_err(serde::de::Error::custom)?;
+                TxBoundedVec::decode(&bytes, &u32::MAX).map_err(serde::de::Error::custom)?;
             if remaining.is_empty() {
                 Ok(Self(ops))
             } else {
@@ -647,7 +650,7 @@ mod tests {
 
     #[test]
     fn deserialize_from_binary_rejects_an_oversized_envelope() {
-        let oversized = vec![0u8; MAX_BLOCK_TRANSACTIONS_SIZE + 1];
+        let oversized = vec![0u8; MAX_WIRE_MESSAGE_SIZE + 1];
         let envelope = bincode::serialize(&oversized).expect("the envelope serializes");
 
         assert!(bincode::deserialize::<Ops>(&envelope).is_err());

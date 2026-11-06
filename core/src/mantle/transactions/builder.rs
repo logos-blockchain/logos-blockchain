@@ -340,7 +340,7 @@ mod tests {
             ops::{
                 channel::{
                     deposit::{DepositOp, Metadata},
-                    inscribe::InscriptionOp,
+                    inscribe::{Inscription, InscriptionOp},
                     withdraw::ChannelWithdrawOp,
                 },
                 leader_claim::LeaderClaimOp,
@@ -359,7 +359,7 @@ mod tests {
         let builder = MantleTxBuilder::new()
             .push_op(Op::ChannelInscribe(InscriptionOp {
                 channel_id: [0; 32].into(),
-                inscription: b"hello".into(),
+                inscription: Inscription::new_unchecked(b"hello".to_vec()),
                 parent: [1; 32].into(),
                 signer: Ed25519Key::from_bytes(&[0; 32])
                     .public_key()
@@ -388,7 +388,7 @@ mod tests {
         // Build an operation
         let op = InscriptionOp {
             channel_id: [0; 32].into(),
-            inscription: b"hello".into(),
+            inscription: Inscription::new_unchecked(b"hello".to_vec()),
             parent: [1; 32].into(),
             signer: Ed25519Key::from_bytes(&[0; 32])
                 .public_key()
@@ -420,7 +420,7 @@ mod tests {
         let op = DepositOp {
             channel_id: [0; 32].into(),
             inputs: BoundedInputs::from(NoteId(Fr::ZERO)).into(),
-            metadata: b"Mint 1 to Alice in Zone".into(),
+            metadata: Metadata::new_unchecked(b"Mint 1 to Alice in Zone".to_vec()),
         };
 
         // Init a tx builder
@@ -583,7 +583,7 @@ mod tests {
         let builder = MantleTxBuilder::new()
             .push_op(Op::ChannelInscribe(InscriptionOp {
                 channel_id,
-                inscription: b"hello".into(),
+                inscription: Inscription::new_unchecked(b"hello".to_vec()),
                 parent: [1; 32].into(),
                 signer: Ed25519Key::from_bytes(&[0; 32])
                     .public_key()
@@ -593,7 +593,7 @@ mod tests {
             .push_op(Op::ChannelDeposit(DepositOp {
                 channel_id,
                 inputs: BoundedInputs::from(NoteId(Fr::ZERO)).into(),
-                metadata: b"Mint 10 to Alice in Zone".into(),
+                metadata: Metadata::new_unchecked(b"Mint 10 to Alice in Zone".to_vec()),
             }))
             .unwrap()
             .push_op(Op::ChannelWithdraw(ChannelWithdrawOp {

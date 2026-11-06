@@ -1099,14 +1099,17 @@ mod tests {
             voucher_cm: v1_cm,
             // Unknown unlocked note that will be ignored.
             header_ops: vec![HeaderOp::Unlock(NoteId::from(Fr::ONE))],
-            txs: [WalletTx {
-                ops: [
-                    WalletOp::Transfer(transfer1.clone()),
-                    WalletOp::Lock(service_note),
-                ]
-                .into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [
+                        WalletOp::Transfer(transfer1.clone()),
+                        WalletOp::Lock(service_note),
+                    ]
+                    .into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
 
         wallet.apply_block(&block_1).unwrap();
@@ -1130,15 +1133,18 @@ mod tests {
             voucher_cm: v2_cm,
             // Unlock the previously locked note
             header_ops: vec![HeaderOp::Unlock(service_note)],
-            txs: [WalletTx {
-                ops: [
-                    WalletOp::Transfer(transfer2.clone()),
-                    // Unknown service note that will be ignored
-                    WalletOp::Lock(NoteId::from(Fr::ONE)),
-                ]
-                .into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [
+                        WalletOp::Transfer(transfer2.clone()),
+                        // Unknown service note that will be ignored
+                        WalletOp::Lock(NoteId::from(Fr::ONE)),
+                    ]
+                    .into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&block_2).unwrap();
         assert_service_notes(&wallet, block_2.id, []);
@@ -1185,14 +1191,17 @@ mod tests {
             epoch: 2.into(),
             voucher_cm: v3_cm,
             header_ops: vec![],
-            txs: [WalletTx {
-                ops: [
-                    WalletOp::ChannelDeposit(deposit),
-                    WalletOp::LeaderClaim(Utxo::new(tx_hash(9), 0, Note::new(38, alice))),
-                ]
-                .into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [
+                        WalletOp::ChannelDeposit(deposit),
+                        WalletOp::LeaderClaim(Utxo::new(tx_hash(9), 0, Note::new(38, alice))),
+                    ]
+                    .into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&block_3).unwrap();
 
@@ -1265,14 +1274,17 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm,
             header_ops: vec![],
-            txs: [WalletTx {
-                ops: [
-                    WalletOp::Transfer(transfer_a),
-                    WalletOp::Transfer(transfer_b),
-                ]
-                .into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [
+                        WalletOp::Transfer(transfer_a),
+                        WalletOp::Transfer(transfer_b),
+                    ]
+                    .into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&block).unwrap();
 
@@ -1323,15 +1335,18 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm,
             header_ops: vec![],
-            txs: [
-                WalletTx {
-                    ops: [WalletOp::Transfer(transfer_a)].into(),
-                },
-                WalletTx {
-                    ops: [WalletOp::Transfer(transfer_b)].into(),
-                },
-            ]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![
+                    WalletTx {
+                        ops: [WalletOp::Transfer(transfer_a)].into(),
+                    },
+                    WalletTx {
+                        ops: [WalletOp::Transfer(transfer_b)].into(),
+                    },
+                ],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&block).unwrap();
 
@@ -1595,7 +1610,7 @@ mod tests {
         tx_builder = tx_builder
             .push_op(Op::ChannelInscribe(InscriptionOp {
                 channel_id: ChannelId::from([0xAA; 32]),
-                inscription: [0xAB; 8].into(),
+                inscription: Inscription::new_unchecked(vec![0xAB; 8]),
                 parent: MsgId::from([0xBB; 32]),
                 signer: signing_key.public_key().into_unverified(),
             }))
@@ -1651,7 +1666,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let inscription = Op::ChannelInscribe(InscriptionOp {
             channel_id: ChannelId::from([0xAA; 32]),
-            inscription: [0xAB; 1000].into(),
+            inscription: Inscription::new_unchecked(vec![0xAB; 1000]),
             parent: MsgId::from([0xBB; 32]),
             signer: signing_key.public_key().into_unverified(),
         });
@@ -1950,6 +1965,9 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            max_transactions: 1024,
+            max_transactions_size: 2 * 1024 * 1024,
+            max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
             execution_market: lb_ledger::config::ExecutionMarketConfig {
                 max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_193_460).unwrap(),
                 fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
@@ -2075,10 +2093,13 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm,
             header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelDeposit(deposit)].into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [WalletOp::ChannelDeposit(deposit)].into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&block).unwrap();
 
@@ -2153,10 +2174,13 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_1,
             header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelDeposit(deposit)].into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [WalletOp::ChannelDeposit(deposit)].into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&deposit_block).unwrap();
 
@@ -2177,10 +2201,13 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_2,
             header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelTransfer(transfer_op)].into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [WalletOp::ChannelTransfer(transfer_op)].into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&transfer_block).unwrap();
 
@@ -2245,10 +2272,13 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_1,
             header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelDeposit(deposit)].into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [WalletOp::ChannelDeposit(deposit)].into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&deposit_block).unwrap();
 
@@ -2269,10 +2299,13 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_2,
             header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelTransfer(transfer_op)].into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [WalletOp::ChannelTransfer(transfer_op)].into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&transfer_block).unwrap();
 
@@ -2321,10 +2354,13 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_1,
             header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelDeposit(deposit)].into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [WalletOp::ChannelDeposit(deposit)].into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&deposit_block).unwrap();
 
@@ -2345,10 +2381,13 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_2,
             header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelWithdraw(withdraw_op)].into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [WalletOp::ChannelWithdraw(withdraw_op)].into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&withdraw_block).unwrap();
 
@@ -2410,11 +2449,15 @@ mod tests {
                 .into_unverified(),
         });
 
-        let source_transactions: BlockTransactions<SignedOps<Preverified, StandardMode>> = [
-            signed_test_tx(vec![transfer, deposit]),
-            signed_test_tx(vec![ignored_inscription]),
-        ]
-        .into();
+        let source_transactions: BlockTransactions<SignedOps<Preverified, StandardMode>> =
+            BlockTransactions::try_new(
+                vec![
+                    signed_test_tx(vec![transfer, deposit]),
+                    signed_test_tx(vec![ignored_inscription]),
+                ],
+                u16::MAX,
+            )
+            .unwrap();
 
         let source_block = Block::create(
             HeaderId::from([0; 32]),
@@ -2422,6 +2465,7 @@ mod tests {
             lb_core::block::UncleHeaders::empty(),
             test_leader_proof(),
             source_transactions,
+            u32::MAX,
             &Ed25519Key::from_bytes(&[0; 32]),
         )
         .expect("test block should be valid");

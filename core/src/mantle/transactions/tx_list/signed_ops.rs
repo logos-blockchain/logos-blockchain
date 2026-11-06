@@ -263,13 +263,15 @@ impl<State: VerificationState, Mode: VerificationMode> BinaryEncode for SignedOp
 }
 
 impl<Mode: VerificationMode> BinaryDecode for SignedOps<Unverified, Mode> {
-    type Context = ();
+    /// The most bytes of data an Operation may carry in the era the transaction
+    /// is decoded under.
+    type Context = u32;
 
     fn decode<'input>(
         input: &'input [u8],
-        _context: &Self::Context,
+        max_op_data_size: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (remaining_input, ops) = Ops::decode(input, &())?;
+        let (remaining_input, ops) = Ops::decode(input, max_op_data_size)?;
         let (remaining_input, proofs) = OpProofs::decode_with_ops(remaining_input, &ops)?;
 
         let signed_ops = Self::from_parts(ops, proofs).map_err(|error| {
@@ -282,14 +284,16 @@ impl<Mode: VerificationMode> BinaryDecode for SignedOps<Unverified, Mode> {
 
 // Decoded unverified, then preverified, as its serde form is.
 impl BinaryDecode for SignedOps<Preverified, StandardMode> {
-    type Context = ();
+    /// The most bytes of data an Operation may carry in the era the transaction
+    /// is decoded under.
+    type Context = u32;
 
     fn decode<'input>(
         input: &'input [u8],
-        (): &Self::Context,
+        max_op_data_size: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
         let (remaining_input, signed_ops) =
-            SignedOps::<Unverified, StandardMode>::decode(input, &())?;
+            SignedOps::<Unverified, StandardMode>::decode(input, max_op_data_size)?;
         let signed_ops = signed_ops.preverify().map_err(|error| {
             DecodeError::custom(format!("Failed to preverify SignedOps: {error}"))
         })?;
@@ -373,7 +377,7 @@ mod mantle_spec {
     //! [fork digest][count][ops...][proofs...]
     //! ```
 
-    use lb_binary_codec::canonical::{BinaryDecodeExt as _, BinaryEncode as _};
+    use lb_binary_codec::canonical::{BinaryDecode as _, BinaryEncode as _};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     use crate::mantle::{
@@ -432,7 +436,7 @@ mod mantle_spec {
                 Self::from_parts(helper.ops, helper.ops_proofs).map_err(serde::de::Error::custom)
             } else {
                 let bytes: Vec<u8> = Deserialize::deserialize(deserializer)?;
-                Self::decode_all(bytes.as_slice()).map_err(serde::de::Error::custom)
+                Self::decode_all(bytes.as_slice(), &u32::MAX).map_err(serde::de::Error::custom)
             }
         }
     }
@@ -465,8 +469,10 @@ pub mod test_utils {
         fixtures::ops::op_values::FORK_DIGEST,
         ledger::{BoundedInputs, Inputs, verification_mode::StandardMode},
         ops::channel::{
-            ChannelId, ChannelKeyIndex, MsgId, UnverifiedChannelKeys, inscribe::InscriptionOp,
-            verification::test_utils::create_channel_multi_sig_proof, withdraw::ChannelWithdrawOp,
+            ChannelId, ChannelKeyIndex, MsgId, UnverifiedChannelKeys,
+            inscribe::{Inscription, InscriptionOp},
+            verification::test_utils::create_channel_multi_sig_proof,
+            withdraw::ChannelWithdrawOp,
         },
         traits::Hashable as _,
         transactions::{OpProofs, Ops, SignedOps, TxList, states::Preverified},
@@ -481,7 +487,7 @@ pub mod test_utils {
     pub fn create_test_inscribe_op(signing_key: &Ed25519Key) -> InscriptionOp {
         InscriptionOp {
             channel_id: [0; 32].into(),
-            inscription: [1, 2, 3].into(),
+            inscription: Inscription::new_unchecked(vec![1, 2, 3]),
             parent: [0; 32].into(),
             signer: signing_key.public_key().into_unverified(),
         }
@@ -566,8 +572,11 @@ mod tests {
         ledger::{BoundedInputs, Outputs, OutputsError, verification_mode::StandardMode},
         ops::{
             channel::{
-                ChannelId, MsgId, config::ChannelConfigOp, deposit::DepositOp,
-                inscribe::InscriptionOp, withdraw::ChannelWithdrawOp,
+                ChannelId, MsgId,
+                config::ChannelConfigOp,
+                deposit::{DepositOp, Metadata},
+                inscribe::InscriptionOp,
+                withdraw::ChannelWithdrawOp,
             },
             transfer::{TransferError, TransferOp},
         },
@@ -618,7 +627,7 @@ mod tests {
         DepositOp {
             channel_id,
             inputs: BoundedInputs::from(NoteId(Fr::from(0u64))).into(),
-            metadata: [].into(),
+            metadata: Metadata::empty(),
         }
     }
 

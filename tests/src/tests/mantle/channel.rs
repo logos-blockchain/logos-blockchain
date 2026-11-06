@@ -9,7 +9,10 @@ use lb_core::{
         NoteId,
         gas::GasCost,
         ledger::BoundedInputs,
-        ops::channel::{ChannelId, deposit::DepositOp},
+        ops::channel::{
+            ChannelId,
+            deposit::{DepositOp, Metadata},
+        },
         traits::Hashable as _,
         transactions::hash::TxHash,
     },
@@ -119,10 +122,9 @@ async fn channel_deposit() {
     let deposit_op = DepositOp {
         channel_id,
         inputs: BoundedInputs::from(note_id).into(),
-        metadata: format!("Mint {deposit_amount} to Alice in Zone")
-            .into_bytes()
-            .try_into()
-            .expect("Metadata too large for deposit op."),
+        metadata: Metadata::new_unchecked(
+            format!("Mint {deposit_amount} to Alice in Zone").into_bytes(),
+        ),
     };
     let body = ChannelDepositRequestBody {
         tip: None,
@@ -442,10 +444,9 @@ async fn submit_channel_deposit(
     let deposit_op = DepositOp {
         channel_id,
         inputs: BoundedInputs::from(note_id).into(),
-        metadata: format!("Mint {deposit_amount} to Alice in Zone")
-            .into_bytes()
-            .try_into()
-            .expect("Metadata too large for deposit op."),
+        metadata: Metadata::new_unchecked(
+            format!("Mint {deposit_amount} to Alice in Zone").into_bytes(),
+        ),
     };
     let body = ChannelDepositRequestBody {
         tip: None,

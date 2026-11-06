@@ -165,8 +165,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[0x42; 32]);
         let operation = InscriptionOp {
             channel_id: ChannelId::from([0x24; 32]),
-            inscription: Inscription::try_from(1u64.to_le_bytes().to_vec())
-                .expect("small fixed-width payload"),
+            inscription: Inscription::new_unchecked(1u64.to_le_bytes().to_vec()),
             parent: MsgId::root(),
             signer: signing_key.public_key().into_unverified(),
         };

@@ -52,6 +52,7 @@ mod tests {
     use core::num::{NonZero, NonZeroU32};
 
     use lb_core::mantle::gas::Gas;
+    use lb_pow_service::single_claim_tx_size;
     use lb_utils::math::NonNegativeRatio;
 
     use super::{Parameters, cryptarchia::SlotActivationCoeff};
@@ -124,6 +125,24 @@ mod tests {
         validate(|parameters| {
             let max_gas_per_block = parameters.cryptarchia.execution_market.max_gas_per_block;
             parameters.cryptarchia.gas_profile.sdp_active = Gas::from(max_gas_per_block);
+        })
+        .unwrap();
+        // 1,803 bytes with 4 uncles, then 16 per transaction: 65,531 bytes.
+        validate(|parameters| {
+            parameters.cryptarchia.max_uncles = 4;
+            parameters.cryptarchia.max_transactions = NonZero::new(3_983).unwrap();
+        })
+        .unwrap();
+        // 1,803 bytes with 4 uncles besides the transactions, in a response
+        // framed by 12 more: 16 MiB.
+        validate(|parameters| {
+            parameters.cryptarchia.max_uncles = 4;
+            parameters.cryptarchia.max_transactions_size = 16_775_401;
+        })
+        .unwrap();
+        // A block may hold a PoW reward claim and nothing more.
+        validate(|parameters| {
+            parameters.cryptarchia.max_transactions_size = single_claim_tx_size() as u32;
         })
         .unwrap();
         // 6,000 rounds shared by 2 nodes, 349 blending operations per message:
@@ -220,6 +239,44 @@ mod tests {
         });
         assert!(
             reason.contains("The execution gas of an SDP activity"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn a_largest_proposal_beyond_a_blend_payload_is_refused() {
+        // 1,803 bytes with 4 uncles, then 16 per transaction: 65,547 bytes.
+        let reason = rejection(|parameters| {
+            parameters.cryptarchia.max_uncles = 4;
+            parameters.cryptarchia.max_transactions = NonZero::new(3_984).unwrap();
+        });
+        assert!(
+            reason.contains("65547 bytes with 4 uncles and 3984 transactions"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn a_largest_block_beyond_a_chain_sync_message_is_refused() {
+        // 1,803 bytes with 4 uncles besides the transactions, in a response
+        // framed by 12 more: 16 MiB and a byte.
+        let reason = rejection(|parameters| {
+            parameters.cryptarchia.max_uncles = 4;
+            parameters.cryptarchia.max_transactions_size = 16_775_402;
+        });
+        assert!(
+            reason.contains("16777205 bytes with 4 uncles and 16775402 bytes of transactions"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn a_block_too_small_for_a_pow_reward_claim_is_refused() {
+        let reason = rejection(|parameters| {
+            parameters.cryptarchia.max_transactions_size = single_claim_tx_size() as u32 - 1;
+        });
+        assert!(
+            reason.contains("A block whose transactions take at most"),
             "{reason}"
         );
     }

@@ -9,10 +9,10 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _, stream};
-use lb_binary_codec::bincode::{Error as CodecError, SerializeOp};
+use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_blend_service::{
     api::{ApiError as BlendApiError, BlendServiceApi, BlendServiceData},
-    message::{DataPayload, TransactionNotBlendable},
+    message::DataPayload,
 };
 use lb_chain_service::{
     ProcessedBlockEvent, Slot,
@@ -104,10 +104,6 @@ pub enum PoWError {
     Sign(#[from] ZkSignError),
     #[error("signing task failed: {0}")]
     SignTask(#[from] JoinError),
-    #[error("failed to encode transaction: {0}")]
-    Encode(#[from] CodecError),
-    #[error("transaction cannot be carried by the blend network: {0}")]
-    NotBlendable(#[from] TransactionNotBlendable),
     #[error("failed to publish to the blend network: {0}")]
     Publish(#[from] BlendApiError),
     #[error("failed to query the chain service: {0}")]
@@ -234,9 +230,10 @@ pub struct PoWEraSettings {
     /// When it is not, no claim can succeed, so auto-claim does not run in the
     /// era.
     pub rewards_enabled: bool,
-    /// The size of the body of a data payload in the era: the largest
-    /// transaction the network can deliver, so the largest claim transaction.
-    pub max_data_payload_body_size: usize,
+    /// The most bytes a claim transaction may take in the era: it is published
+    /// in the body of a Blend data payload and included in a block, so the
+    /// smaller of what the two carry.
+    pub max_claim_tx_size: usize,
     /// The fork digest of the era, which the claims signed in it carry.
     pub fork_digest: ForkDigest,
     /// What the era's Operations cost, which a claim transaction pays for.
@@ -566,7 +563,7 @@ where
         // the era too. Finding it probes the encoding, so it is found once each time
         // the service enters an era rather than for every claim.
         let mut max_claims_in_payload =
-            max_claims_by_payload_size(current_era_settings.parameters.max_data_payload_body_size);
+            max_claims_by_payload_size(current_era_settings.parameters.max_claim_tx_size);
 
         // Dedicated thread pool for the CPU-heavy ticket search, keeping it off
         // Tokio's runtime threads.
@@ -751,7 +748,7 @@ where
                     if era > current_era_settings.era {
                         info!(target: LOG_TARGET, "PoW follows era {} from slot {}", era.into_inner(), u64::from(slot));
                         current_era_settings = settings.era_schedule.at_slot(slot);
-                        max_claims_in_payload = max_claims_by_payload_size(current_era_settings.parameters.max_data_payload_body_size);
+                        max_claims_in_payload = max_claims_by_payload_size(current_era_settings.parameters.max_claim_tx_size);
                     }
                     if let AutoClaimTick::Slots(period) = auto_claim_settings.tick
                         && is_auto_claiming
@@ -1669,9 +1666,15 @@ fn claim_tx_size(claims: usize) -> Result<u64, PoWError> {
         .build(ForkDigest::new([0; 32]))?;
     let ops_proofs = claim_ops_proofs(claims, std::iter::repeat_n(signature, groups))?;
 
-    Ok(SerializeOp::bytes_size(
-        &SignedOps::<_, StandardMode>::from_parts(ops, ops_proofs)?,
-    )?)
+    Ok(SignedOps::<_, StandardMode>::from_parts(ops, ops_proofs)?.encoded_length() as u64)
+}
+
+/// Size, in bytes, of a transaction that claims a single reward: the smallest
+/// claim transaction, which a Blend payload must carry for any claim to be
+/// published.
+#[must_use]
+pub fn single_claim_tx_size() -> u64 {
+    claim_tx_size(1).expect("A transaction of a single claim builds.")
 }
 
 /// Largest claim count whose transaction still fits the body of a Blend
@@ -1692,7 +1695,7 @@ fn max_claims_by_payload_size(max_payload_body_size: usize) -> usize {
         .find(|&claims| {
             claim_tx_size(claims).is_ok_and(|size| size <= max_payload_body_size as u64)
         })
-        .expect("a single-claim tx fits a Blend payload")
+        .expect("the deployment checks that a single-claim tx fits a Blend payload and a block")
 }
 
 /// Builds and signs a single self-funding reward-claim transaction from a batch
@@ -1912,7 +1915,7 @@ where
     BlendService::NodeId: Send,
     RuntimeServiceId: Sync,
 {
-    let payload = DataPayload::try_from_transaction(&signed_tx)?;
+    let payload = DataPayload::from_transaction(&signed_tx);
     blend_api.publish(payload).await?;
     Ok(())
 }
@@ -1945,7 +1948,7 @@ mod tests {
         sync::{Arc, LazyLock},
     };
 
-    use lb_binary_codec::bincode::SerializeOp as _;
+    use lb_binary_codec::canonical::BinaryEncode as _;
     use lb_chain_service::Slot;
     use lb_core::{
         era::ForkDigest,
@@ -2021,7 +2024,7 @@ mod tests {
     /// the ledger's stateless `preverify`), and the Blend payload body it is
     /// published in.
     fn assert_within_tx_limits(tx: &SignedOps<Unverified, StandardMode>) {
-        let size = tx.to_bytes().expect("built tx should serialize").len();
+        let size = tx.encoded_length();
         assert!(
             size <= PAYLOAD_BODY_SIZE,
             "tx of {size} bytes exceeds the {PAYLOAD_BODY_SIZE} a Blend payload carries"
@@ -2491,7 +2494,7 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(
-                tx.to_bytes().unwrap().len() as u64,
+                tx.encoded_length() as u64,
                 claim_tx_size(claims).unwrap(),
                 "probe disagrees with a signed tx at {claims} claim(s)"
             );

@@ -13,6 +13,7 @@ use crate::mantle::{
 
 codec_fixtures!(
     Ops,
+    context = u32::MAX,
     Self::new(FORK_DIGEST, TxList::empty()) => &format!("{FORK_DIGEST_HEX}{EMPTY_COLUMN_HEX}"),
     Self::new(FORK_DIGEST, [Op::Transfer(TRANSFER.clone())])
         => &format!("{FORK_DIGEST_HEX}{TRANSFER_COLUMN_HEX}"),

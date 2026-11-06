@@ -56,7 +56,7 @@ pub fn era_schedule(reward_windows: &[u64]) -> ServiceEraSchedule {
             slot_window: NonZeroU64::new(reward_windows[usize::from(era.era.into_inner())])
                 .unwrap(),
             rewards_enabled: true,
-            max_data_payload_body_size: PAYLOAD_BODY_SIZE,
+            max_claim_tx_size: PAYLOAD_BODY_SIZE,
             fork_digest: ForkDigest::new([0x11; 32]),
             gas_profile: GAS_PROFILE,
         })

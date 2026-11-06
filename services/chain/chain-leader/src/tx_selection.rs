@@ -4,7 +4,7 @@ use lb_core::{
         SignedOps,
         batch::DeferredProofs,
         ledger::verification_mode::StandardMode,
-        traits::Hashable,
+        traits::{Hashable, StorageSize as _},
         transactions::{hash::TxHash, states::Preverified},
     },
 };
@@ -86,6 +86,8 @@ pub fn select_transactions(
     mut pending: Vec<SignedOps<Preverified, StandardMode>>,
     era_schedule: &EraScheduledConfig,
 ) -> TransactionSelection {
+    let max_transactions_size =
+        config_for_slot(era_schedule, ledger_state.slot()).max_transactions_size as usize;
     let mut block_builder = BlockBuilder::new(ledger_state);
     let mut selected_txs = Vec::new();
     let mut invalid_tx_hashes = Vec::new();
@@ -100,6 +102,17 @@ pub fn select_transactions(
         let mut still_pending = Vec::with_capacity(pending.len());
 
         for tx in std::mem::take(&mut pending) {
+            // A transaction admitted under an era that allowed more bytes may
+            // be larger than any block of this one could carry.
+            if tx.storage_size() > max_transactions_size {
+                tracing::trace!(
+                    target: LOG_TARGET,
+                    tx = ?tx.hash(),
+                    "transaction larger than the era allows a block's transactions",
+                );
+                invalid_tx_hashes.push(tx.hash());
+                continue;
+            }
             match block_builder.clone().try_add_transaction(&tx, era_schedule) {
                 Ok((next_block_builder, deferred_proofs)) => match deferred_proofs.verify() {
                     Ok(()) => {
@@ -170,7 +183,6 @@ pub fn select_transactions(
 mod tests {
     use futures::stream;
     use lb_core::{
-        block::MAX_BLOCK_TRANSACTIONS_SIZE,
         era::ForkDigest,
         mantle::{
             Note, Op, OpProof, Utxo,
@@ -223,6 +235,37 @@ mod tests {
         (funding_utxos, transaction)
     }
 
+    #[test]
+    fn a_transaction_larger_than_a_block_of_the_era_carries_is_invalid() {
+        let funding_key = ZkKey::zero();
+        let (funding_utxos, transaction) = transfer_heavy_transaction(0, &funding_key, 1);
+        let size = transaction.storage_size() as u32;
+        let select = |max_transactions_size| {
+            let config = lb_ledger::Config {
+                max_transactions_size,
+                ..leadership::test_config()
+            };
+            let ledger_state = LedgerState::from_utxos(
+                funding_utxos.clone(),
+                &config,
+                0,
+                &ConsensusExcludedKeys::empty(),
+            );
+            select_transactions(
+                ledger_state,
+                vec![transaction.clone()],
+                &leadership::single_era(config),
+            )
+        };
+
+        let fitting = select(size);
+        assert_eq!(fitting.selected_txs.len(), 1);
+        assert_eq!(fitting.invalid_tx_hashes, []);
+        let oversized = select(size - 1);
+        assert_eq!(oversized.selected_txs, []);
+        assert_eq!(oversized.invalid_tx_hashes, [transaction.hash()]);
+    }
+
     #[tokio::test]
     async fn gas_limited_selection_returns_canonically_applicable_prefix() {
         const CANDIDATE_COUNT: usize = 22;
@@ -264,7 +307,7 @@ mod tests {
                 .iter()
                 .map(StorageSize::storage_size)
                 .sum::<usize>()
-                <= MAX_BLOCK_TRANSACTIONS_SIZE
+                <= config.max_transactions_size as usize
         );
         let all_candidates_result = ledger_state
             .clone()
@@ -282,7 +325,13 @@ mod tests {
         assert_eq!(selection.selected_txs.len(), CANDIDATE_COUNT - 1);
         assert_eq!(selection.invalid_tx_hashes, []);
 
-        let block_txs = txs_for_block(stream::iter(selection.selected_txs)).await;
+        let config = config_for_slot(&eras, ledger_state.slot());
+        let block_txs = txs_for_block(
+            stream::iter(selection.selected_txs),
+            config.max_transactions,
+            config.max_transactions_size,
+        )
+        .await;
         assert_eq!(block_txs.len(), CANDIDATE_COUNT - 1);
         let _apply_result = ledger_state
             .try_apply_block_contents::<_, HeaderId>(&eras, block_txs.into_iter())

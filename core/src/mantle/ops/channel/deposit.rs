@@ -1,8 +1,8 @@
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 #[cfg(any(test, feature = "test-utils"))]
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
-use lb_utils::bounded::UpperBoundedVec;
+use lb_utils::bounded::UpperRuntimeBoundedVec;
 use serde::{Deserialize, Serialize};
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -26,14 +26,42 @@ use crate::{
     sdp::service_notes::ServiceNotes,
 };
 
-pub const MAX_METADATA_SIZE: usize = u32::MAX as usize;
-pub type Metadata = UpperBoundedVec<u8, { MAX_METADATA_SIZE }>;
+/// The bytes a deposit attaches, at most as many as the era it is decoded under
+/// allows.
+///
+/// The length is checked against the era's maximum, a `u32`, when the metadata
+/// is built or decoded. Serde reads it without an era, under the largest
+/// maximum of the type.
+pub type Metadata = UpperRuntimeBoundedVec<u8, u32>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode)]
 pub struct DepositOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
     pub metadata: Metadata,
+}
+
+// Every field in declaration order.
+impl BinaryDecode for DepositOp {
+    /// The most bytes the era the deposit is decoded under allows its metadata.
+    type Context = u32;
+
+    fn decode<'input>(
+        input: &'input [u8],
+        max_metadata_size: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, channel_id) = ChannelId::decode(input, &())?;
+        let (input, inputs) = Inputs::decode(input, &())?;
+        let (input, metadata) = Metadata::decode(input, &(*max_metadata_size, ()))?;
+        Ok((
+            input,
+            Self {
+                channel_id,
+                inputs,
+                metadata,
+            },
+        ))
+    }
 }
 
 impl DepositOp {
@@ -59,8 +87,7 @@ impl DepositOp {
         Self {
             channel_id: ChannelId::from([16u8; 32]),
             inputs: crate::mantle::ledger::BoundedInputs::from(NoteId(Fr::from(17u64))).into(),
-            metadata: Metadata::try_from(b"deposit-metadata".to_vec())
-                .expect("Metadata is within bounds."),
+            metadata: Metadata::new_unchecked(b"deposit-metadata".to_vec()),
         }
     }
 }
