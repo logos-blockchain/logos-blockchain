@@ -1,6 +1,6 @@
 use lb_core::{
     block::BlockNumber,
-    crypto::{Hash, ZkHash},
+    crypto::Hash,
     mantle::{
         channel::Channels,
         ledger::{Declarations, ProviderIndex},
@@ -158,14 +158,6 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
 
     fn get_pow_reward_pool(&self) -> PowReward {
         self.ledger_state.pow.reward_pool()
-    }
-
-    fn get_current_epoch_nonce(&self) -> ZkHash {
-        self.cryptarchia_ledger.epoch_state.nonce
-    }
-
-    fn get_previous_epoch_nonce(&self) -> ZkHash {
-        self.cryptarchia_ledger.previous_epoch_nonce
     }
 
     fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot> {

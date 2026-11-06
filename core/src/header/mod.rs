@@ -511,7 +511,7 @@ fn pol_msg_hashes_the_header_fields_under_its_dst() {
 #[test]
 fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
     let body_root = ContentId(
-        hex::decode("01df9369b579282d80fff97dca6bec263343c55680df5ab5f1e8500605466a14")
+        hex::decode("f1675fa1e6280b4819528b4ad56b89441534bf161c26ad81e083ffbf9cfb6910")
             .unwrap()
             .try_into()
             .unwrap(),
@@ -531,7 +531,7 @@ fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
     };
     assert_eq!(
         hex::encode(header(0x22).id().0),
-        "d95c4a6ecd79e3ed2799ba106735c289a5ed66fc07c0bf1eefeda21afd84085c"
+        "093b91ef899a4afba51f2d3674d0bf499320f73de4eb08d955250875b5ed2fba"
     );
     assert_eq!(header(0x22).id(), header(0x23).id());
     assert_eq!(
@@ -549,7 +549,7 @@ fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
     let spec_header = Header::new(
         HeaderId([0x11; 32]),
         ContentId(
-            hex::decode("01df9369b579282d80fff97dca6bec263343c55680df5ab5f1e8500605466a14")
+            hex::decode("f1675fa1e6280b4819528b4ad56b89441534bf161c26ad81e083ffbf9cfb6910")
                 .unwrap()
                 .try_into()
                 .unwrap(),
@@ -564,7 +564,7 @@ fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
     );
     assert_eq!(
         hex::encode(spec_header.id().0),
-        "d95c4a6ecd79e3ed2799ba106735c289a5ed66fc07c0bf1eefeda21afd84085c"
+        "093b91ef899a4afba51f2d3674d0bf499320f73de4eb08d955250875b5ed2fba"
     );
 }
 
@@ -872,17 +872,17 @@ mod body_root_test_vectors {
             .collect();
         assert_eq!(
             hex::encode(merkle::calculate_transactions_root(&txs)),
-            "dd0fce2b369b0ad2aa34dc0c061f1f97bcd2d3f485402be16fa3130ba2a71fa4"
+            "0c8c4739d9a4d699fc793e77903aec603c098edb244849978e73ee14ba034fa1"
         );
         assert_eq!(
             hex::encode(crate::block::body_root(&UncleHeaders::empty(), &txs).0),
-            "01df9369b579282d80fff97dca6bec263343c55680df5ab5f1e8500605466a14"
+            "f1675fa1e6280b4819528b4ad56b89441534bf161c26ad81e083ffbf9cfb6910"
         );
         let uncles =
             UncleHeaders::try_new(vec![uncle(0x66), uncle(0x77)], VECTOR_MAX_UNCLES).unwrap();
         assert_eq!(
             hex::encode(crate::block::body_root(&uncles, &txs).0),
-            "d07689db845e712f76ea25e3543164bce82bb80bf7dfa7222a1de6c442021c03"
+            "15334deeabb803def2e1cacf774af0d7a41b93fb3587895c8f56e88dfe5d4183"
         );
     }
 }

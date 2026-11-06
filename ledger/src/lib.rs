@@ -4037,9 +4037,6 @@ mod tests {
 
         fn claim_op() -> ClaimPowRewardOp {
             ClaimPowRewardOp {
-                // The current epoch's randomness nonce, which for a fresh test
-                // ledger built from genesis is the genesis nonce (`Fr::ZERO`).
-                epoch_nonce: Fr::ZERO,
                 block_hash: [1u8; 32],
                 public_key: ZkPublicKey::new(Fr::from(42u64)),
                 nonce: Fr::ZERO,
@@ -4335,43 +4332,32 @@ mod tests {
             let (mut state, _) = claim_accepting_state();
             state.cryptarchia_ledger.slot = Slot::from(215u64);
             state.cryptarchia_ledger.epoch_state.epoch = 2.into();
-            let apply_claim = |state: &LedgerState, anchor_slot: u64, nonces: (Fr, Fr)| {
+            let apply_claim = |state: &LedgerState, anchor_slot: u64| {
                 let mut state = state.clone();
                 state
                     .mantle_ledger
                     .pow
                     .add_seen_block_slots(claim_op().block_hash, Slot::from(anchor_slot));
-                (
-                    state.cryptarchia_ledger.previous_epoch_nonce,
-                    state.cryptarchia_ledger.epoch_state.nonce,
-                ) = nonces;
                 state.try_apply_tx_operations::<_, HeaderId, MainnetGasProfile>(&eras, claim_tx())
             };
 
-            // Whichever accepted nonce the claim carries.
-            for nonces in [
-                (claim_op().epoch_nonce, Fr::ONE),
-                (Fr::ONE, claim_op().epoch_nonce),
-            ] {
-                // Anchored 55 slots back, in era 0: inside its window.
-                assert!(apply_claim(&state, 160, nonces).is_ok());
-                // Anchored 15 slots back, in era 1: outside its window.
-                assert!(matches!(
-                    apply_claim(&state, 200, nonces).err(),
-                    Some(LedgerError::VerificationError(
-                        VerificationError::ClaimPowRewardError(
-                            ClaimPowRewardError::OutOfWindowSlot { .. }
-                        )
-                    ))
-                ));
-            }
+            // Anchored 55 slots back, in era 0: inside its window.
+            assert!(apply_claim(&state, 160).is_ok());
+            // Anchored 15 slots back, in era 1: outside its window.
+            assert!(matches!(
+                apply_claim(&state, 200).err(),
+                Some(LedgerError::VerificationError(
+                    VerificationError::ClaimPowRewardError(
+                        ClaimPowRewardError::OutOfWindowSlot { .. }
+                    )
+                ))
+            ));
         }
 
         #[test]
-        fn shared_nonce_claim_uses_anchor_era_window_across_short_to_long_transition() {
+        fn a_claim_uses_anchor_era_window_across_short_to_long_transition() {
             // Era 1 starts at slot 100 and grows the reward window from 10 to
-            // 100 slots. Keep both accepted epoch nonces equal to the claim's
-            // nonce so eligibility is determined by the anchor era.
+            // 100 slots: eligibility is determined by the anchor era.
             let mut era_0 = config();
             era_0.pow_config.reward.slot_window = NonZeroU64::new(10).unwrap();
             let mut era_1 = era_0.clone();
@@ -4390,8 +4376,6 @@ mod tests {
                 state.cryptarchia_ledger.slot = Slot::from(current);
                 state.cryptarchia_ledger.epoch_state.epoch =
                     u32::try_from(current / 100).unwrap().into();
-                state.cryptarchia_ledger.epoch_state.nonce = Fr::ZERO;
-                state.cryptarchia_ledger.previous_epoch_nonce = Fr::ZERO;
                 state
                     .mantle_ledger
                     .pow

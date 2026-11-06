@@ -221,12 +221,6 @@ pub struct LedgerState {
     // randomness contribution
     #[serde(with = "lb_groth16::serde::serde_fr")]
     pub nonce: Fr,
-    // Nonce of the epoch preceding `epoch_state`'s, retained so a `PoW` reward
-    // claim mined just before an epoch boundary stays verifiable for the reward
-    // window after the boundary. The current epoch drops out of `epoch_state` on
-    // transition, so it must be carried here explicitly.
-    #[serde(with = "lb_groth16::serde::serde_fr")]
-    pub previous_epoch_nonce: Fr,
     pub slot: Slot,
     // rolling snapshot of the state for the next epoch, used for epoch transitions
     pub next_epoch_state: EpochState,
@@ -364,8 +358,6 @@ impl LedgerState {
                 slot,
                 next_epoch_state,
                 epoch_state,
-                // The epoch we just left becomes the previous epoch.
-                previous_epoch_nonce: self.epoch_state.nonce,
                 block_density,
                 storage_gas_consumed_in_epoch: 0.into(),
                 storage_gas_ema: new_ema,
@@ -456,10 +448,6 @@ impl LedgerState {
                 slot,
                 next_epoch_state,
                 epoch_state,
-                // Every skipped epoch had no block, so the nonce stayed frozen
-                // at `self.nonce` throughout — that is the previous epoch's nonce
-                // (and matches the value used for `epoch_state` above).
-                previous_epoch_nonce: self.nonce,
                 block_density,
                 storage_gas_consumed_in_epoch: 0.into(),
                 storage_gas_ema: new_ema,
@@ -917,9 +905,6 @@ impl LedgerState {
             note_sets: note_sets.clone(),
             pending_withdrawals: PendingWithdrawals::new(),
             nonce,
-            // No epoch precedes genesis; seed with the genesis nonce so an
-            // epoch-0 claim still matches (previous == current is harmless).
-            previous_epoch_nonce: nonce,
             slot,
             next_epoch_state: EpochState {
                 epoch: 1.into(),
@@ -1708,33 +1693,6 @@ pub mod tests {
         );
         // Below the reference load, so admission loosens — up to the clamp.
         assert!(state.epoch_state.blend_pow_difficulty > epoch_1_difficulty);
-    }
-
-    #[test]
-    fn previous_epoch_nonce_is_retained_across_an_epoch_transition() {
-        // A PoW claim mined just before an epoch boundary must stay verifiable
-        // for the reward window after it, which needs the nonce of the epoch we
-        // just left — otherwise dropped when `epoch_state` rolls forward.
-        let config = config();
-        let eras = single_era(config.clone());
-        assert_eq!(config.epoch_length(), 100);
-        let sdp = SdpLedger::new(0.into());
-        let mut pow = pow_state();
-
-        // Genesis (epoch 0). Stamp a distinct nonce on the current epoch so it
-        // is recognisable after the boundary; genesis seeds the previous-epoch
-        // nonce with the current one.
-        let mut state = genesis_state(&[note()]);
-        assert_eq!(state.previous_epoch_nonce, state.nonce);
-        let epoch_0_nonce = Fr::from(0xABCDu64);
-        state.epoch_state.nonce = epoch_0_nonce;
-
-        // Cross into epoch 1.
-        let state = apply_block(state, &mut pow, 100, 0, &sdp, &eras);
-        assert_eq!(state.epoch_state.epoch, 1);
-
-        // The epoch just left is now retained as the previous-epoch nonce.
-        assert_eq!(state.previous_epoch_nonce, epoch_0_nonce);
     }
 
     #[test]

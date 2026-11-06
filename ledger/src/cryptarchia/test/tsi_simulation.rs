@@ -224,7 +224,6 @@ fn genesis_ledger(config: &Config, leader_utxo: Note) -> Ledger<HeaderId> {
         note_sets: NoteSets::new(),
         pending_withdrawals: PendingWithdrawals::new(),
         nonce: Fr::ZERO,
-        previous_epoch_nonce: Fr::ZERO,
         slot: 0.into(),
         next_epoch_state: EpochState {
             epoch: 1.into(),
