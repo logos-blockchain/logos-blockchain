@@ -44,7 +44,9 @@ impl<Tx> BlockWithVerifiedHeader<Tx> {
 
     /// Takes a block read back from this node's storage, which this node
     /// verified before storing it, without verifying it again.
-    // TODO: find a safer way that doesn't expose this as public
+    // TODO: Find a safer way that doesn't expose this as public. It is public
+    // because this type is defined in this crate to be shared by chain-service
+    // and ledger, while only chain-service's recovery should call this.
     #[must_use]
     pub fn from_trusted(block: Block<Tx>) -> Self {
         let Block {
