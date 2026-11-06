@@ -48,7 +48,10 @@ impl<RuntimeServiceId> PolInfoProvider<RuntimeServiceId> for OncePolStreamProvid
                 low_leaf_aged_next_index: 0,
                 low_leaf_aged_path_and_selectors: [(ZkHash::ZERO, false); _],
                 set_aged_path_and_selectors: [(ZkHash::ZERO, false); _],
-                secret_key: ZkHash::ZERO,
+                note_program: ZkHash::ZERO,
+                note_data: ZkHash::ZERO,
+                nullifier_key: ZkHash::ZERO,
+                staking_secret_key: ZkHash::ZERO,
             })),
         }))))
     }
@@ -122,7 +125,10 @@ impl<RuntimeServiceId> PolInfoProvider<RuntimeServiceId> for GatedPolStreamProvi
                     low_leaf_aged_next_index: 0,
                     low_leaf_aged_path_and_selectors: [(ZkHash::ZERO, false); _],
                     set_aged_path_and_selectors: [(ZkHash::ZERO, false); _],
-                    secret_key: ZkHash::ZERO,
+                    note_program: ZkHash::ZERO,
+                    note_data: ZkHash::ZERO,
+                    nullifier_key: ZkHash::ZERO,
+                    staking_secret_key: ZkHash::ZERO,
                 })),
             }
         }))))

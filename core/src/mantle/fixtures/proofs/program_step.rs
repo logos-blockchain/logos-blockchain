@@ -11,12 +11,12 @@ use crate::mantle::ops::{
 
 codec_fixtures!(
     ProgramNoteOpening,
-    ProgramNoteOpening { value: 1, nonce: Fr::from(2u64), public_key: ZkPublicKey::new(Fr::from(3u64)), data: Fr::from(4u64) }
-        => "0100000000000000020000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000",
+    ProgramNoteOpening { value: 1, nonce: Fr::from(2u64), stake_public_key: ZkPublicKey::new(Fr::from(5u64)), data: Fr::from(4u64) }
+        => "0100000000000000020000000000000000000000000000000000000000000000000000000000000005000000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000",
 );
 codec_fixtures!(
     ProgramStepProof,
-    context = crate::mantle::ops::StepProofShape::Program { payments: 1, program_notes: 1 },
+    context = crate::mantle::ops::StepProofShape::Program { program_notes: 1 },
     PROGRAM_STEP_PROOF.clone() => PROGRAM_STEP_PROOF_HEX,
 );
 codec_fixtures!(

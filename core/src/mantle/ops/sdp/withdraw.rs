@@ -1,11 +1,11 @@
 use lb_binary_codec::canonical::BinaryEncode as _;
-use lb_cryptarchia_engine::Epoch;
+use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::Fr;
 use lb_log_targets::mantle;
 use lb_zktransfer::ZkTransferVerifierInput;
 use tracing::debug;
 
-use super::{SDPWithdrawOp, SdpError, validate_declaration_id, validate_nonce};
+use super::{SDPWithdrawOp, SdpError, validate_declaration_id};
 use crate::{
     events::TxEvent,
     mantle::{
@@ -19,8 +19,12 @@ use crate::{
             VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
         },
-        note_set::{CommitmentMmr, NoteSetError, NoteSets, SDP_SET},
-        ops::{OpId, SignedOperation, ZkAndEd25519Proof},
+        note_set::{CommitmentMmr, NoteSets, SDP_SET},
+        notes::InputNullifiers,
+        ops::{
+            OpId, SignedOperation, ZkAndEd25519Proof,
+            channel::withdraw::{PendingWithdrawal, PendingWithdrawals},
+        },
         transactions::{
             hash::TxHashView,
             states::{Preverified, Unverified, Verified},
@@ -42,6 +46,10 @@ pub struct SDPWithdrawExecutionContext {
     pub declarations: Declarations,
     pub note_sets: NoteSets,
     pub epoch: Epoch,
+    pub pending_withdrawals: PendingWithdrawals,
+    // The first slot of epoch `epoch + SNAPSHOT_FINALIZATION_DELAY + 1`, where the
+    // declaration is removed and the outputs of the withdrawal are released.
+    pub release_slot: Slot,
 }
 
 impl ProvableOperation for SDPWithdrawOp {
@@ -109,17 +117,14 @@ impl VerifiableOperation<StandardMode>
             .verify(context.tx_hash_view.as_bytes(), &self.proof().ed25519_sig)
             .map_err(|_| SdpError::InvalidEddsaSignature)?;
 
-        validate_nonce(operation.nonce, declaration)?;
-
-        // Check that the service note is not spent
-        if context
+        // Check that the service note is unspent. The message carries no nonce: it is
+        // valid only while no withdrawal is scheduled, and consumes this nullifier
+        // once.
+        context
             .note_sets
             .get(SDP_SET)
             .expect("the SDP note set always exists")
-            .contains_nullifier(&operation.service_note_nullifier)
-        {
-            return Err(NoteSetError::AlreadySpent(operation.service_note_nullifier).into());
-        }
+            .assert_spendable(&[operation.service_note_nullifier])?;
 
         // The root of an empty MMR to which only the service note of the declaration is
         // appended.
@@ -181,15 +186,18 @@ impl<Mode: VerificationMode> ExecutableOperation
         // epochs ago.
         // The note will be unlocked once the withdrawn epoch set here is reached.
         declaration.withdraw_at = Some(context.epoch.strict_add(sdp::SNAPSHOT_FINALIZATION_DELAY));
-        declaration.nonce = operation.nonce;
-        // Released to the ledger set when the declaration is removed.
-        declaration.withdraw_outputs = operation.outputs.clone();
+        // The outputs wait, with no input, until the declaration is removed.
+        context.pending_withdrawals = context.pending_withdrawals.push(PendingWithdrawal {
+            due: context.release_slot,
+            note_set: SDP_SET,
+            inputs: InputNullifiers::default(),
+            outputs: operation.outputs.clone(),
+        });
 
         debug!(
             target: LOG_TARGET,
             provider_id = ?declaration.provider_id,
             withdraw_at = ?declaration.withdraw_at,
-            nonce = ?declaration.nonce,
             "updated declaration with withdraw message"
         );
 
@@ -208,7 +216,7 @@ mod tests {
         mantle::{
             TxHash,
             gas::test_utils::FixedThresholds,
-            note_set::{LEDGER_SET, NoteSet},
+            note_set::{LEDGER_SET, NoteSet, NoteSetError},
             notes::{
                 self, NoteCommitment, NoteNullifier, OutputCommitments, derive_note_nullifier,
             },
@@ -217,7 +225,7 @@ mod tests {
                 transfer::test_utils::prove_transfer,
             },
         },
-        sdp::{DeclarationMessage, Nonce},
+        sdp::DeclarationMessage,
     };
 
     // The provider of `DeclarationMessage::sample()`.
@@ -345,68 +353,6 @@ mod tests {
     }
 
     #[test]
-    fn verify_rejects_a_nonce_that_does_not_increase() {
-        let operation = SDPWithdrawOp {
-            nonce: Nonce::new(Epoch::new(0), 0),
-            ..operation()
-        };
-
-        assert_eq!(
-            verify_sample(operation, &declaration()).unwrap_err(),
-            SdpError::InvalidNonceSequence {
-                nonce_sequence: 0,
-                declaration_sequence: 0,
-            }
-        );
-    }
-
-    #[test]
-    fn verify_rejects_a_lower_sequence_in_the_same_lifecycle() {
-        let declaration = Declaration {
-            nonce: Nonce::new(Epoch::new(0), 4),
-            ..declaration()
-        };
-        let operation = SDPWithdrawOp {
-            nonce: Nonce::new(Epoch::new(0), 3),
-            ..operation()
-        };
-
-        assert_eq!(
-            verify_sample(operation, &declaration).unwrap_err(),
-            SdpError::InvalidNonceSequence {
-                nonce_sequence: 3,
-                declaration_sequence: 4,
-            }
-        );
-    }
-
-    #[test]
-    fn verify_rejects_a_nonce_from_another_declaration_lifecycle() {
-        let operation = SDPWithdrawOp {
-            nonce: Nonce::new(Epoch::new(1), 1),
-            ..operation()
-        };
-
-        assert_eq!(
-            verify_sample(operation, &declaration()).unwrap_err(),
-            SdpError::InvalidNonceLifecycle {
-                nonce_lifecycle_epoch: Epoch::new(1),
-                declaration_created_epoch: Epoch::new(0),
-            }
-        );
-    }
-
-    #[test]
-    fn verify_accepts_a_sequence_jump_within_the_same_lifecycle() {
-        let operation = SDPWithdrawOp {
-            nonce: Nonce::new(Epoch::new(0), 1_000),
-            ..operation()
-        };
-
-        assert!(verify_sample(operation, &declaration()).is_ok());
-    }
-
-    #[test]
     fn verify_defers_the_zk_transfer_against_the_service_note_root() {
         let declaration = declaration();
         let operation = operation();
@@ -515,8 +461,10 @@ mod tests {
         let output = notes::Note::new(40, Fr::from(12u64), ZkPublicKey::new(Fr::from(2u64)));
         let withdrawal = |excess_value| SDPWithdrawOp {
             declaration_id: message.id(),
-            nonce: Nonce::new(Epoch::new(0), 1),
-            service_note_nullifier: derive_note_nullifier(&service_note.commitment(), &secret_key),
+            service_note_nullifier: derive_note_nullifier(
+                &service_note.commitment(),
+                &ZkKey::new(secret_key).nullifier_key(),
+            ),
             outputs: [output.commitment()].into(),
             excess_value,
         };
@@ -571,7 +519,7 @@ mod tests {
                 SDPWithdrawOp {
                     service_note_nullifier: derive_note_nullifier(
                         &zk_id_note.commitment(),
-                        &zk_id_secret_key,
+                        &ZkKey::new(zk_id_secret_key).nullifier_key(),
                     ),
                     ..withdrawal(5)
                 },
@@ -606,6 +554,8 @@ mod tests {
                 declarations,
                 note_sets: NoteSets::new(),
                 epoch: Epoch::from(4),
+                pending_withdrawals: PendingWithdrawals::new(),
+                release_slot: Slot::from(70u64),
             })
             .expect("the declaration is registered");
 
@@ -614,10 +564,15 @@ mod tests {
             updated.withdraw_at,
             Some(Epoch::from(4).strict_add(sdp::SNAPSHOT_FINALIZATION_DELAY))
         );
-        assert_eq!(updated.nonce, Nonce::new(Epoch::new(0), 29));
+        // The outputs wait, with no input, for the removal of the declaration.
         assert_eq!(
-            updated.withdraw_outputs,
-            [NoteCommitment(Fr::from(46u64))].into()
+            context.pending_withdrawals.iter().collect::<Vec<_>>(),
+            vec![&PendingWithdrawal {
+                due: Slot::from(70u64),
+                note_set: SDP_SET,
+                inputs: InputNullifiers::default(),
+                outputs: [NoteCommitment(Fr::from(46u64))].into(),
+            }]
         );
         assert!(
             context
@@ -626,7 +581,6 @@ mod tests {
                 .unwrap()
                 .contains_nullifier(&NoteNullifier(Fr::from(28u64)))
         );
-        // The outputs wait for the removal of the declaration.
         assert_eq!(
             context.note_sets.get(LEDGER_SET).unwrap().commitment_root(),
             NoteSet::empty().commitment_root()
@@ -643,6 +597,8 @@ mod tests {
             declarations: Declarations::new_sync(),
             note_sets: NoteSets::new(),
             epoch: Epoch::from(4),
+            pending_withdrawals: PendingWithdrawals::new(),
+            release_slot: Slot::from(70u64),
         }));
     }
 

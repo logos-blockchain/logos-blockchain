@@ -34,7 +34,7 @@ use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_tests::{
     common::manual_cluster::{
         ManualNodeLayout, api_url, get_wallet_balance, start_local_manual_cluster_with_layout,
-        wait_for_nodes_height, wait_for_spend_depth,
+        wait_for_nodes_height, wait_for_spendable,
     },
     cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
@@ -117,7 +117,7 @@ async fn channel_deposit() {
     })
     .await
     .expect("timed out waiting for the wallet to apply the inscription");
-    wait_for_spend_depth(&validator.client, Duration::from_mins(2)).await;
+    wait_for_spendable(&validator.client, funding_pk, Duration::from_mins(2)).await;
 
     let deposit_metadata: Metadata = format!("Mint {deposit_amount} to Alice in Zone")
         .into_bytes()
@@ -197,7 +197,19 @@ async fn channel_deposit() {
     assert_eq!(holder_note.value, deposit_amount);
     assert_eq!(holder_note.public_key, funding_pk);
 
-    let balance_after = get_wallet_balance(&validator.client, funding_pk).await;
+    // The wallet applies the block of the deposit after the block stream reports
+    // it.
+    let balance_after = timeout(Duration::from_mins(1), async {
+        loop {
+            let balance = get_wallet_balance(&validator.client, funding_pk).await;
+            if balance != balance_before {
+                return balance;
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for the wallet to apply the deposit");
     let spent = balance_before - balance_after;
     assert!(
         spent >= deposit_amount && spent <= deposit_amount + MAX_CHANNEL_TX_FEE,

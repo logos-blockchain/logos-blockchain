@@ -4,7 +4,7 @@ use rpds::HashTrieMapSync;
 
 use crate::{
     block::BlockNumber,
-    crypto::{Hash, ZkHash},
+    crypto::Hash,
     mantle::{
         VerificationError,
         channel::Channels,
@@ -83,14 +83,6 @@ pub trait OperationVerificationHelper {
     /// `R_PoW`: current balance of the `PoW` reward pool.
     fn get_pow_reward_pool(&self) -> PowReward;
 
-    /// Randomness nonce of the current epoch, against which a claim's
-    /// `epoch_nonce` is matched.
-    fn get_current_epoch_nonce(&self) -> ZkHash;
-
-    /// Randomness nonce of the epoch preceding [`Self::get_epoch`], also
-    /// accepted for claims mined just before an epoch boundary.
-    fn get_previous_epoch_nonce(&self) -> ZkHash;
-
     /// Slots of the blocks a claim may anchor to, keyed by block hash;
     /// used for the window-of-acceptance check.
     fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot>;
@@ -110,7 +102,7 @@ pub mod test_utils {
 
     use crate::{
         block::BlockNumber,
-        crypto::{Hash, ZkHash},
+        crypto::Hash,
         mantle::{
             VerificationError,
             channel::Channels,
@@ -144,8 +136,6 @@ pub mod test_utils {
         pow_nullifiers: HashTrieMapSync<PowNullifier, Slot>,
         epoch_pow_reward: PowReward,
         pow_reward_pool: PowReward,
-        current_epoch_nonce: ZkHash,
-        previous_epoch_nonce: ZkHash,
         blocks_slot: HashTrieMapSync<Hash, Slot>,
         pow_slot_windows: PowSlotWindows,
     }
@@ -174,8 +164,6 @@ pub mod test_utils {
                 pow_nullifiers: HashTrieMapSync::new_sync(),
                 epoch_pow_reward: 0,
                 pow_reward_pool: 0,
-                current_epoch_nonce: ZkHash::default(),
-                previous_epoch_nonce: ZkHash::default(),
                 blocks_slot: HashTrieMapSync::new_sync(),
                 pow_slot_windows: slot_windows(100, []),
             }
@@ -216,13 +204,6 @@ pub mod test_utils {
         #[must_use]
         pub const fn with_epoch(mut self, epoch: Epoch) -> Self {
             self.epoch = epoch;
-            self
-        }
-
-        #[must_use]
-        pub const fn with_epoch_nonces(mut self, previous: ZkHash, current: ZkHash) -> Self {
-            self.previous_epoch_nonce = previous;
-            self.current_epoch_nonce = current;
             self
         }
 
@@ -336,14 +317,6 @@ pub mod test_utils {
 
         fn get_pow_reward_pool(&self) -> PowReward {
             self.pow_reward_pool
-        }
-
-        fn get_current_epoch_nonce(&self) -> ZkHash {
-            self.current_epoch_nonce
-        }
-
-        fn get_previous_epoch_nonce(&self) -> ZkHash {
-            self.previous_epoch_nonce
         }
 
         fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot> {

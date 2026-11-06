@@ -26,14 +26,14 @@ use lb_core::{
             StepProof,
             channel::{
                 ChannelId, MsgId,
-                inscribe::{ChannelStep, InscriptionOp, MiniBlock, MiniBlocks, Step},
+                inscribe::{ChannelStep, Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step},
                 withdraw::{ChannelWithdrawOp, WITHDRAW_DELAY},
             },
             sdp::SDPWithdrawOp,
         },
         transactions::states::{Preverified, Unverified},
     },
-    sdp::{Nonce, SNAPSHOT_FINALIZATION_DELAY},
+    sdp::SNAPSHOT_FINALIZATION_DELAY,
 };
 use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
 use lb_groth16::Fr;
@@ -44,7 +44,7 @@ use crate::{
     fixture::{HeaderId, commitments, filled_state, nullifiers, signed},
     ops::{
         AcceptedLeadership, ProgramShape, channel_tip, deposit_op, encode, encode_inscription,
-        fresh_commitments, fresh_nullifiers, inscription, io_dims, next_epoch, program_step,
+        fresh_commitments, fresh_nullifiers, inscription, io_dims, next_epoch, program_steps,
         root_of, setup_declaration, setup_provider_key, signed_by, transfer_tx, user_step,
         zk_transfer, zk_transfer_series,
     },
@@ -204,9 +204,9 @@ fn released_outputs(events: &[HeaderEvent]) -> Vec<NoteCommitment> {
     events
         .iter()
         .flat_map(|event| match event {
-            HeaderEvent::SdpWithdrawalReleased { outputs, .. }
-            | HeaderEvent::ChannelWithdrawalReleased { outputs, .. } => outputs.as_slice(),
-            HeaderEvent::SdpRewardDistributed { .. } => &[],
+            HeaderEvent::WithdrawalReleased { outputs, .. } => outputs.as_slice(),
+            HeaderEvent::SdpDeclarationRemoved { .. }
+            | HeaderEvent::SdpRewardDistributed { .. } => &[],
         })
         .copied()
         .collect()
@@ -402,18 +402,15 @@ fn sdp_release_header(withdrawals: usize) -> HeaderShape {
         let salt = 0x3_0000 + index as u64;
         let withdraw = SDPWithdrawOp {
             declaration_id: declare.id(),
-            nonce: Nonce::new(Epoch::new(0), 1),
             service_note_nullifier: nullifiers(1, salt)[0],
             outputs: fresh_commitments(1, salt),
             excess_value: 0,
         };
-        released.push((declare.id(), withdraw.outputs.clone()));
+        released.extend(withdraw.outputs.iter().copied());
         let key = setup_provider_key(index);
         txs.push(signed_by(Op::SDPDeclare(declare), &key));
         txs.push(signed_by(Op::SDPWithdraw(withdraw), &key));
     }
-    // The outputs are released in the order of the declaration ids.
-    released.sort_by_key(|(id, _)| *id);
     let (mut state, ..) =
         execute(fixture.state.clone(), config, &txs).expect("the withdrawals apply");
     let release = u64::from(u32::from(SNAPSHOT_FINALIZATION_DELAY)) + 1;
@@ -426,10 +423,7 @@ fn sdp_release_header(withdrawals: usize) -> HeaderShape {
         state,
         config: config.clone(),
         slot: Slot::from(release * crate::fixture::parameters(config).epoch_length()),
-        released: released
-            .iter()
-            .flat_map(|(_, outputs)| outputs.iter().copied())
-            .collect(),
+        released,
     }
 }
 
@@ -503,6 +497,7 @@ fn note_sets_shape(changed: usize) -> BlockShape {
                     inputs: nullifiers(1, salt).try_into().expect("one input"),
                     outputs: commitments(1, salt).try_into().expect("one output"),
                     commitment_merkle_root: root,
+                    inscription: Inscription::default(),
                 })])]
                 .into(),
             };
@@ -525,14 +520,14 @@ const PROGRAM_INSCRIPTIONS: usize = 7;
 const PAYLOAD: usize = 64;
 
 // 40 transfers of two inputs and two outputs, 16 inscriptions of one user
-// step, 7 inscriptions of one program step (one payment, one program input,
-// two outputs, one of them opened), all on the fixture channel one after the
-// other, and one deposit of one input and one output; the block verifies its
-// deferred proofs.
+// step, 7 inscriptions of one program deposit and one program step (one
+// program input, two outputs, one of them opened), all on the fixture channel
+// one after the other, and one deposit of one input and one output; the block
+// verifies its deferred proofs.
 fn mixed() -> BlockShape {
     let fixture = filled_state();
     let program = ProgramShape {
-        payments: 1,
+        deposits: 1,
         inputs: 1,
         outputs: 2,
         openings: 1,
@@ -543,14 +538,17 @@ fn mixed() -> BlockShape {
     let mut parent = channel_tip();
     for index in 0..USER_INSCRIPTIONS + PROGRAM_INSCRIPTIONS {
         let salt = 700 + index as u64;
-        let (step, proof) = if index < USER_INSCRIPTIONS {
-            (user_step(1, 1, salt), StepProof::User(zk_transfer(index)))
+        let (steps, proofs): (Vec<_>, Vec<_>) = if index < USER_INSCRIPTIONS {
+            (
+                vec![user_step(1, 1, salt)],
+                vec![StepProof::User(zk_transfer(index))],
+            )
         } else {
-            program_step(program, salt)
+            program_steps(program, salt).into_iter().unzip()
         };
-        let op = inscription(parent, vec![step], PAYLOAD);
+        let op = inscription(parent, steps, PAYLOAD);
         parent = op.id();
-        txs.push(encode_inscription(op, &[proof]));
+        txs.push(encode_inscription(op, &proofs));
     }
     txs.push(encode(
         vec![Op::ChannelDeposit(deposit_op(1, 1, 800))],
@@ -558,11 +556,11 @@ fn mixed() -> BlockShape {
     ));
     let nullifiers = TRANSFERS * 2
         + USER_INSCRIPTIONS
-        + PROGRAM_INSCRIPTIONS * (program.payments + program.inputs)
+        + PROGRAM_INSCRIPTIONS * (program.deposits + program.inputs)
         + 1;
     let commitments = TRANSFERS * 2
         + USER_INSCRIPTIONS
-        + PROGRAM_INSCRIPTIONS * (program.payments + program.outputs)
+        + PROGRAM_INSCRIPTIONS * (program.deposits + program.outputs)
         + 1;
     let bytes: usize = txs.iter().map(Vec::len).sum();
     BlockShape {
@@ -571,7 +569,10 @@ fn mixed() -> BlockShape {
             ("transfers", TRANSFERS as u64),
             ("user_steps", USER_INSCRIPTIONS as u64),
             ("program_steps", PROGRAM_INSCRIPTIONS as u64),
-            ("payments", (PROGRAM_INSCRIPTIONS * program.payments) as u64),
+            (
+                "program_deposits",
+                (PROGRAM_INSCRIPTIONS * program.deposits) as u64,
+            ),
             ("deposits", 1),
             ("nullifiers", nullifiers as u64),
             ("commitments", commitments as u64),

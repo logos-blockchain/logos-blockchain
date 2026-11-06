@@ -1160,7 +1160,7 @@ where
                 tx_builder.clone(),
                 req.change_public_key,
                 req.funding_public_keys,
-                0,
+                lb_wallet_service::FEE_MARGIN_PERCENT,
             )
             .await?;
 

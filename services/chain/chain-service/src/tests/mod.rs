@@ -13,7 +13,7 @@ use lb_core::{
         genesis::{GenesisBlock, GenesisBlockBuilder},
     },
     crypto::ZkHasher,
-    header::{ContentId, Header, pol_msg},
+    header::{ContentId, Header, block_id, pol_msg},
     mantle::{
         GenesisParameters, GenesisTime, Note, Op, OpProof, SignedOps, Value,
         channel::Channels,
@@ -1073,7 +1073,11 @@ fn transfer_tx_with_fake_sig(
 /// The Operation spending `note` with no outputs.
 fn burn_op(note: &Note, secret_key: Fr, path: &MerklePath) -> Op {
     Op::Transfer(TransferOp::new(
-        [derive_note_nullifier(&note.commitment(), &secret_key)].into(),
+        [derive_note_nullifier(
+            &note.commitment(),
+            &ZkKey::new(secret_key).nullifier_key(),
+        )]
+        .into(),
         OutputCommitments::default(),
         path.root::<ZkHasher>(note.commitment().0),
         note.value,
@@ -1147,7 +1151,11 @@ fn transfer_tx(
     excess_value: Value,
 ) -> SignedOps<Unverified, StandardMode> {
     let transfer_op = TransferOp::new(
-        [derive_note_nullifier(&note.commitment(), key.as_fr())].into(),
+        [derive_note_nullifier(
+            &note.commitment(),
+            &key.nullifier_key(),
+        )]
+        .into(),
         [output_note.commitment()].into(),
         commitment_paths(std::slice::from_ref(note))[0].root::<ZkHasher>(note.commitment().0),
         excess_value,
@@ -1501,8 +1509,8 @@ fn build_block_paying(
     excess_reward: Value,
 ) -> Option<(Block<SignedOps<Preverified, StandardMode>>, ZkPublicKey)> {
     let start_slot: u64 = start_slot.into();
-    let public_key = ZkKey::new(secret_key).to_public_key();
-    let nullifier = derive_note_nullifier(&note.commitment(), &secret_key);
+    let nullifier_key = ZkKey::new(secret_key).nullifier_key();
+    let nullifier = derive_note_nullifier(&note.commitment(), &nullifier_key);
     for slot in start_slot..=(start_slot + 1000) {
         let epoch_state = cryptarchia.epoch_state_for_slot(slot.into()).unwrap();
         let tip_state = cryptarchia.ledger.state(&cryptarchia.tip()).unwrap();
@@ -1515,7 +1523,7 @@ fn build_block_paying(
             epoch_state.lottery_1,
         );
 
-        if !check_winning(note, public_inputs, &public_key, secret_key) {
+        if !check_winning(note, public_inputs, nullifier_key, nullifier_key) {
             continue;
         }
 
@@ -1542,19 +1550,21 @@ fn build_block_paying(
             tip_state.latest_note_sets(),
         )
         .unwrap();
-        wallet.secret_key = secret_key;
+        wallet.nullifier_key = nullifier_key;
+        wallet.staking_secret_key = nullifier_key;
         wallet.reward_public_key = *reward.public_key.as_fr();
         wallet.reward_nonce = reward.nonce;
-        let msg = pol_msg(
+        // The block ID covers the entropy contribution, set before proving.
+        let unbound = LeaderPrivate::new(public_inputs, wallet, Fr::ZERO, reward.value);
+        let id = block_id(
             &parent,
             slot.into(),
             &body_root(&uncle_headers, transactions.as_slice()),
             &reward.commitment(),
             reward.value,
+            &unbound.entropy_contribution(),
         );
-        let proof =
-            Groth16LeaderProof::prove(LeaderPrivate::new(public_inputs, wallet, msg, reward.value))
-                .unwrap();
+        let proof = Groth16LeaderProof::prove(unbound.with_msg(pol_msg(&id))).unwrap();
 
         let block = Block::create(parent, slot.into(), uncle_headers, proof, transactions).unwrap();
         return Some((block, reward_key));

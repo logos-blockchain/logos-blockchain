@@ -49,6 +49,8 @@ pub fn sample_witness_data() -> PolWitnessInputsData {
     let wallet = PolWalletInputsData {
         note_value: u64_value(&json["value"]),
         note_nonce: fr(&json["nonce"]),
+        note_program: fr(&json["program"]),
+        note_data: fr(&json["data"]),
         set_selectors: selectors(&json["set_selectors"]),
         commitment_aged_path: path(&json["cm_aged_path"]),
         commitment_aged_selectors: selectors(&json["cm_aged_selectors"]),
@@ -66,7 +68,8 @@ pub fn sample_witness_data() -> PolWitnessInputsData {
         low_leaf_selectors: selectors(&json["low_leaf_selectors"]),
         commitment_root_latest: fr(&json["cm_root_latest"]),
         set_latest_path: path(&json["set_latest_path"]),
-        secret_key: fr(&json["sk"]),
+        nullifier_key: fr(&json["nf_sk"]),
+        staking_secret_key: fr(&json["staking_sk"]),
         reward_public_key: fr(&json["reward_public_key"]),
         reward_nonce: fr(&json["reward_nonce"]),
     };

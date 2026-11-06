@@ -10,7 +10,7 @@ use zeroize::ZeroizeOnDrop;
 use crate::keys::{errors::KeyError, secured_key::SecuredKey};
 
 mod private;
-pub use self::private::SecretKey as UnsecuredZkKey;
+pub use self::private::{PK0, SecretKey as UnsecuredZkKey, kdf_public_key};
 mod public;
 pub use self::public::PublicKey;
 
@@ -40,6 +40,12 @@ impl ZkKey {
     #[must_use]
     pub const fn as_fr(&self) -> &Fr {
         self.0.as_fr()
+    }
+
+    /// The nullifier key of the notes of this spending secret key.
+    #[must_use]
+    pub fn nullifier_key(&self) -> Fr {
+        self.0.nullifier_key()
     }
 
     #[must_use]
@@ -148,9 +154,37 @@ impl SecuredKey for ZkKey {
 #[cfg(test)]
 mod tests {
     use lb_groth16::{AdditiveGroup as _, Fr};
+    use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
+    use num_bigint::BigUint;
 
-    use super::ZkKey;
+    use super::{PK0, ZkKey, kdf_public_key};
     use crate::keys::{errors::KeyError, secured_key::SecuredKey as _};
+
+    #[test]
+    fn the_public_key_derives_from_the_nullifier_key_the_default_staking_secret_key() {
+        let key = ZkKey::new(Fr::from(7u64));
+        // NF_KDF_V1 as a little-endian integer
+        let nf_kdf = Fr::from(910_114_230_080_953_599_566u128);
+        assert_eq!(
+            key.nullifier_key(),
+            Poseidon2Bn254Hasher::compress(&[nf_kdf, Fr::from(7u64)])
+        );
+        // A wallet stakes with the nullifier key, so its notes have one key.
+        assert_eq!(kdf_public_key(&key.nullifier_key()), key.to_public_key());
+        assert_ne!(kdf_public_key(key.as_fr()), key.to_public_key());
+    }
+
+    #[test]
+    fn program_notes_are_held_by_the_key_of_the_spending_secret_key_0() {
+        // PK0 as the circuits fix it
+        let pk0 = BigUint::parse_bytes(
+            b"972202553888197888567329063379813321440011391652189983173398887118271398762",
+            10,
+        )
+        .unwrap();
+        assert_eq!(*PK0.as_fr(), Fr::from(pk0));
+        assert_eq!(*PK0, ZkKey::new(Fr::ZERO).to_public_key());
+    }
 
     #[test]
     fn sign_multiple_proves_the_transfer_with_one_key_per_active_input() {

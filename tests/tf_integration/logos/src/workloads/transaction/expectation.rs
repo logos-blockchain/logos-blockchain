@@ -224,12 +224,11 @@ fn build_capture_plan(
         .ok_or(TxExpectationError::MissingGenesisBlock)?;
     let wallet_nullifiers = genesis_block
         .genesis_tx()
-        .distribution()
+        .initial_notes()
         .iter()
-        .enumerate()
-        .filter_map(|(index, allocation)| {
-            wallet_keys.get(&allocation.public_key).map(|secret_key| {
-                derive_note_nullifier(&allocation.note(index).commitment(), secret_key.as_fr())
+        .filter_map(|note| {
+            wallet_keys.get(&note.public_key).map(|secret_key| {
+                derive_note_nullifier(&note.commitment(), &secret_key.nullifier_key())
             })
         })
         .collect::<HashSet<_>>();

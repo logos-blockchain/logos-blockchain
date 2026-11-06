@@ -15,7 +15,7 @@ use crate::{
         create_base_consensus_material_with_additional_wallet_outputs_and_sdp_funding_config,
         create_genesis_block_with_declarations,
     },
-    funding::{fill_leader_stake, fund_wallets, refresh_service_note},
+    funding::{fill_leader_stake, fund_wallets},
 };
 
 /// The network's initial state and the secrets needed by its participants.
@@ -63,7 +63,7 @@ pub fn prepare_network(
             sdp_funding,
         );
     let mut transfer = Distribution::try_from(consensus.allocations.clone())
-        .expect("the allocations fit the genesis transfer outputs");
+        .expect("the allocations fit the genesis distribution");
     let leader_keys = consensus
         .regular_note_keys
         .iter()
@@ -80,9 +80,6 @@ pub fn prepare_network(
         * u64::try_from(blend_core_nodes).expect("the provider count fits in u64");
     fill_leader_stake(&mut transfer, &leader_keys, declared);
 
-    for note in &mut consensus.sdp_notes {
-        refresh_service_note(note, &transfer);
-    }
     consensus.allocations = transfer.as_slice().to_vec();
 
     let providers: Vec<_> = ids
@@ -116,10 +113,7 @@ pub fn prepare_network(
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{
-        OpRef,
-        traits::{GenesisTx as _, MantleTx as _},
-    };
+    use lb_core::mantle::{OpRef, traits::MantleTx as _};
     use lb_ledger::GENESIS_STAKE_SUPPLY;
 
     use super::*;

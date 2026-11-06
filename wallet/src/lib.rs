@@ -50,6 +50,15 @@ const LOG_TARGET: &str = wallet::CORE;
 /// root yet, so it stays pending until it is.
 pub const SPEND_ROOT_DEPTH: usize = 4;
 
+/// The priority fee percentage the node funds its own transactions with.
+///
+/// A step of either gas market raises its price by at most 12.5%: the storage
+/// price once per epoch, the execution base fee once per block. A transaction
+/// funded just before such a step is included after it, so 13% of the
+/// mandatory fee keeps it valid for one step of each market at once. The
+/// reserve it does not use is the priority tip of the transaction.
+pub const FEE_MARGIN_PERCENT: u64 = 13;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnedNote {
     pub note: Note,
@@ -714,9 +723,9 @@ impl<KeyId> Wallet<KeyId> {
     }
 
     /// The state every spend from `tip` is built and proven against: the block
-    /// [`SPEND_ROOT_DEPTH`] below `tip`, or the LIB if that is shallower since
-    /// states below the LIB are pruned and the LIB cannot fork. It holds the
-    /// notes of that block still unspent at `tip`.
+    /// [`SPEND_ROOT_DEPTH`] below `tip`, or the deepest block the wallet holds
+    /// a state of if that is shallower, as after a restart from the LIB. It
+    /// holds the notes of that block still unspent at `tip`.
     pub fn spend_state(&self, tip: HeaderId) -> Result<WalletState, WalletError> {
         let mut state = self.wallet_state_at(tip)?;
         let unspent = state.notes.clone();
@@ -746,20 +755,38 @@ impl<KeyId> Wallet<KeyId> {
         Ok(self.spend_state(tip)?.ledger_root())
     }
 
-    /// Prune wallet states for blocks that have been pruned from the chain.
+    /// Prune the wallet states the chain no longer needs once `lib` is its
+    /// LIB.
     ///
-    /// This removes wallet states for blocks that are no longer part of the
-    /// chain after LIB advancement. Both stale blocks (from abandoned
-    /// forks) and immutable blocks (before the new LIB) are removed.
-    pub fn prune_states(&mut self, pruned_blocks: impl IntoIterator<Item = HeaderId>) {
-        let mut removed_count = 0;
-
-        for block_id in pruned_blocks {
-            self.parents.remove(&block_id);
-            if self.wallet_states.remove(&block_id).is_some() {
-                removed_count += 1;
+    /// The wallet keeps the states of `lib`, of its descendants and of the
+    /// [`SPEND_ROOT_DEPTH`] blocks right below it, and drops every other one:
+    /// the blocks of abandoned forks and the older immutable blocks, whatever
+    /// LIB updates were skipped. A spend from a tip near the LIB names the root
+    /// of one of the blocks below it, so the LIB advancing while the spend is
+    /// built and proven leaves its state in place.
+    pub fn prune_states(&mut self, lib: HeaderId) {
+        let mut kept: HashSet<HeaderId> =
+            core::iter::successors(Some(lib), |block| self.parents.get(block).copied())
+                .take(SPEND_ROOT_DEPTH + 1)
+                .collect();
+        let mut children: HashMap<HeaderId, Vec<HeaderId>> = HashMap::new();
+        for (block, parent) in &self.parents {
+            if block != parent {
+                children.entry(*parent).or_default().push(*block);
             }
         }
+        let mut descendants = vec![lib];
+        while let Some(block) = descendants.pop() {
+            for child in children.get(&block).into_iter().flatten() {
+                if kept.insert(*child) {
+                    descendants.push(*child);
+                }
+            }
+        }
+        let held = self.wallet_states.len();
+        self.wallet_states.retain(|block, _| kept.contains(block));
+        self.parents.retain(|block, _| kept.contains(block));
+        let removed_count = held - self.wallet_states.len();
 
         if removed_count > 0 {
             tracing::trace!(
@@ -1272,12 +1299,35 @@ mod tests {
             path_at_root.siblings()[0]
         );
 
-        // Nothing below the LIB is held, and the LIB cannot fork.
-        wallet.prune_states((0..38).map(block_id));
+        // The LIB advancing to 38 keeps the states of the blocks right below it, so
+        // a spend from 40 still names the root of 36, and drops the deeper ones.
+        wallet.prune_states(block_id(38));
         assert_eq!(
             funding_transfer(fund(&wallet, 40)).commitment_merkle_root,
-            ledger_root_at(&wallet, 38)
+            root
         );
+        assert!(wallet.wallet_state_at(block_id(34)).is_ok());
+        assert!(wallet.wallet_state_at(block_id(33)).is_err());
+        // They leave once the LIB moves past them.
+        wallet.prune_states(block_id(40));
+        assert!(wallet.wallet_state_at(block_id(35)).is_err());
+        assert_eq!(
+            funding_transfer(fund(&wallet, 40)).commitment_merkle_root,
+            root
+        );
+    }
+
+    #[test]
+    fn a_lib_jumping_past_the_kept_blocks_drops_them() {
+        let mut wallet = wallet_on_chain(known(&[]), &[], &[], 40);
+        wallet.prune_states(block_id(30));
+        wallet.prune_states(block_id(38));
+        for id in 0..34 {
+            assert!(wallet.wallet_state_at(block_id(id)).is_err());
+        }
+        for id in 34..=40 {
+            assert!(wallet.wallet_state_at(block_id(id)).is_ok());
+        }
     }
 
     #[test]

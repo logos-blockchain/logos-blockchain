@@ -174,12 +174,9 @@ impl NoteSet {
         self.nullifiers.contains(&nullifier.0)
     }
 
-    pub fn assert_spendable(
-        &self,
-        inputs: &[NoteNullifier],
-        commitment_merkle_root: &Fr,
-        block: BlockNumber,
-    ) -> Result<(), NoteSetError> {
+    // The inputs are not empty, distinct and unspent. The root they are proven
+    // against is checked recent by `tx_commitment_root`.
+    pub fn assert_spendable(&self, inputs: &[NoteNullifier]) -> Result<(), NoteSetError> {
         if inputs.is_empty() {
             return Err(NoteSetError::EmptyInputs);
         }
@@ -189,7 +186,6 @@ impl NoteSet {
                 return Err(NoteSetError::DuplicateInput(*input));
             }
         }
-        self.recent_mmr(commitment_merkle_root, block)?;
         for input in inputs {
             if self.contains_nullifier(input) {
                 return Err(NoteSetError::AlreadySpent(*input));
@@ -985,15 +981,12 @@ mod test {
         let old = sets.get(LEDGER_SET).unwrap().commitment_root();
         let sets = add_and_end_block(sets, commitment(1), 1); // `old` last current at block 0
         let set = sets.get(LEDGER_SET).unwrap();
-        assert!(set.assert_spendable(&[nullifier(9)], &old, 1024).is_ok());
+        assert!(set.tx_commitment_root(&old, 1024).is_ok());
         assert_eq!(
-            set.assert_spendable(&[nullifier(9)], &old, 1025),
+            set.tx_commitment_root(&old, 1025),
             Err(NoteSetError::UnknownRoot(old))
         );
-        assert!(
-            set.assert_spendable(&[nullifier(9)], &set.commitment_root(), 5000)
-                .is_ok()
-        ); // untouched set
+        assert!(set.tx_commitment_root(&set.commitment_root(), 5000).is_ok()); // untouched set
     }
 
     #[test]
@@ -1004,9 +997,9 @@ mod test {
         // it.
         let sets = add_and_end_block(NoteSets::new(), commitment(1), 0);
         let set = sets.get(LEDGER_SET).unwrap();
-        assert!(set.assert_spendable(&[nullifier(9)], &empty, 1023).is_ok());
+        assert!(set.tx_commitment_root(&empty, 1023).is_ok());
         assert_eq!(
-            set.assert_spendable(&[nullifier(9)], &empty, 1024),
+            set.tx_commitment_root(&empty, 1024),
             Err(NoteSetError::UnknownRoot(empty))
         );
 
@@ -1020,9 +1013,9 @@ mod test {
             .unwrap();
         let sets = sets.update(channel, channel_set).end_block(10);
         let set = sets.get(channel).unwrap();
-        assert!(set.assert_spendable(&[nullifier(9)], &empty, 1033).is_ok());
+        assert!(set.tx_commitment_root(&empty, 1033).is_ok());
         assert_eq!(
-            set.assert_spendable(&[nullifier(9)], &empty, 1034),
+            set.tx_commitment_root(&empty, 1034),
             Err(NoteSetError::UnknownRoot(empty))
         );
     }
@@ -1030,22 +1023,18 @@ mod test {
     #[test]
     fn test_spendable_rejects_empty_duplicate_spent() {
         let set = NoteSet::empty();
-        let root = set.commitment_root();
+        assert_eq!(set.assert_spendable(&[]), Err(NoteSetError::EmptyInputs));
         assert_eq!(
-            set.assert_spendable(&[], &root, 0),
-            Err(NoteSetError::EmptyInputs)
-        );
-        assert_eq!(
-            set.assert_spendable(&[nullifier(1), nullifier(2), nullifier(1)], &root, 0),
+            set.assert_spendable(&[nullifier(1), nullifier(2), nullifier(1)]),
             Err(NoteSetError::DuplicateInput(nullifier(1)))
         );
         let set = set.execute_spending(&[nullifier(2)]).unwrap();
         assert!(set.contains_nullifier(&nullifier(2)));
         assert_eq!(
-            set.assert_spendable(&[nullifier(1), nullifier(2)], &root, 0),
+            set.assert_spendable(&[nullifier(1), nullifier(2)]),
             Err(NoteSetError::AlreadySpent(nullifier(2)))
         );
-        assert!(set.assert_spendable(&[nullifier(1)], &root, 0).is_ok());
+        assert!(set.assert_spendable(&[nullifier(1)]).is_ok());
     }
 
     #[test]
@@ -1109,7 +1098,7 @@ mod test {
             decoded
                 .get(LEDGER_SET)
                 .unwrap()
-                .assert_spendable(&[nullifier(9)], &old, 1024)
+                .tx_commitment_root(&old, 1024)
                 .is_ok()
         );
 

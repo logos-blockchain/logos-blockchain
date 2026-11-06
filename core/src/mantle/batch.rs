@@ -67,7 +67,7 @@ impl DeferrableProof for DeferredProgramProof {
 // The proofs of the steps of an inscription.
 #[derive(Debug, Default)]
 pub struct InscriptionDeferredProofs {
-    // The ZkTransfers of the user steps and of the payments, in order.
+    // The ZkTransfers of the user steps and of the deposits, in order.
     pub zk_transfers: Vec<DeferredZkTransfer>,
     pub program_spends: Vec<DeferredZkProgramSpend>,
     pub program_proofs: Vec<DeferredProgramProof>,

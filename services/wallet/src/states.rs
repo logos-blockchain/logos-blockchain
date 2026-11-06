@@ -278,12 +278,7 @@ impl<'u> ServiceState<'u> {
         Ok(())
     }
 
-    pub fn advance_lib(
-        &mut self,
-        new_lib: HeaderId,
-        pruned_blocks: impl IntoIterator<Item = HeaderId>,
-        new_immutable_blocks_count: u64,
-    ) {
+    pub fn advance_lib(&mut self, new_lib: HeaderId, new_immutable_blocks_count: u64) {
         // The wallet must already hold a `WalletState` for `new_lib`, otherwise
         // `update_state` cannot persist the recovery state. The service backfills
         // up to `new_lib` before calling us; if it still isn't present (e.g. the
@@ -301,7 +296,7 @@ impl<'u> ServiceState<'u> {
         }
 
         self.lib = new_lib;
-        self.wallet.prune_states(pruned_blocks);
+        self.wallet.prune_states(new_lib);
         self.pending_notes
             .evict_expired(new_immutable_blocks_count, self.pending_note_expiry_blocks);
         self.update_state();
@@ -659,7 +654,7 @@ mod tests {
         // The first post-online LibUpdate delivers a new_lib the wallet never
         // applied (the silent bootstrap->online LIB jump outran the wallet).
         let unseen_lib = HeaderId::from([42; 32]);
-        state.advance_lib(unseen_lib, Vec::<HeaderId>::new(), 1);
+        state.advance_lib(unseen_lib, 1);
 
         // No panic: the advance is skipped and the LIB stays at a block whose
         // WalletState exists.

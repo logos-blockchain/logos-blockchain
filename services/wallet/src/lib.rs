@@ -61,6 +61,7 @@ use lb_storage_service::{
 };
 use lb_time::era::{EpochLength, EraSchedule};
 use lb_utils::bounded::BoundedError;
+pub use lb_wallet::FEE_MARGIN_PERCENT;
 use lb_wallet::{
     KnownNote, OwnedNote, WalletBalance, WalletBlock, WalletError, WalletState,
     transaction::{OpWitness, WitnessContext, op_witness_at, op_witnesses},
@@ -1463,12 +1464,7 @@ where
     ) -> Result<ServiceState<'u>, WalletServiceError> {
         let genesis = cryptarchia.get_genesis_block().await?;
         let genesis_tx = genesis.genesis_tx();
-        let notes = genesis_tx
-            .distribution()
-            .iter()
-            .enumerate()
-            .map(|(index, allocation)| allocation.note(index))
-            .collect::<Vec<_>>();
+        let notes = genesis_tx.initial_notes();
         let service_notes = genesis_tx
             .sdp_declarations()
             .map(|declaration| declaration.operation().service_note())
@@ -1700,11 +1696,7 @@ where
         }
 
         let new_immutable_blocks_count = lib_update.pruned_blocks.immutable_blocks.len() as u64;
-        state.advance_lib(
-            lib_update.new_lib,
-            lib_update.pruned_blocks.all(),
-            new_immutable_blocks_count,
-        );
+        state.advance_lib(lib_update.new_lib, new_immutable_blocks_count);
     }
 
     #[expect(

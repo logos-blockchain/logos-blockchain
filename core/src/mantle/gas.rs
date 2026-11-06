@@ -191,10 +191,9 @@ pub const EXECUTION_NULLIFIER_GAS: Gas = Gas::new(725);
 pub const EXECUTION_COMMITMENT_GAS: Gas = Gas::new(24);
 pub const EXECUTION_SIGNATURE_GAS: Gas = Gas::new(161);
 pub const EXECUTION_USER_STEP_GAS: Gas = Gas::new(195);
-pub const EXECUTION_PAYMENT_GAS: Gas = Gas::new(267);
-pub const EXECUTION_PROGRAM_STEP_GAS: Gas = Gas::new(54);
+pub const EXECUTION_PROGRAM_DEPOSIT_GAS: Gas = Gas::new(267);
+pub const EXECUTION_PROGRAM_STEP_GAS: Gas = Gas::new(6374);
 pub const EXECUTION_OPENING_GAS: Gas = Gas::new(151);
-pub const EXECUTION_PROGRAM_PROOF_GAS: Gas = Gas::new(6320);
 
 /// The Execution Gas of extending a root over `buffered` commitments of the
 /// buffer, which a transaction pays once for each distinct note set, referenced

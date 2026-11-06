@@ -78,13 +78,16 @@ impl PoQWitnessInputs {
             slot: 0,
             note_value: 0,
             note_nonce: Fr::ZERO,
+            note_program: Fr::ZERO,
+            note_data: Fr::ZERO,
             commitment_aged_path_and_selectors: [(Fr::ZERO, false); _],
             low_leaf_aged_nullifier: Fr::ZERO,
             low_leaf_aged_next_nullifier: Fr::ZERO,
             low_leaf_aged_next_index: 0,
             low_leaf_aged_path_and_selectors: [(Fr::ZERO, false); _],
             set_aged_path_and_selectors: [(Fr::ZERO, false); _],
-            pol_secret_key: Fr::ZERO,
+            pol_nullifier_key: Fr::ZERO,
+            pol_staking_secret_key: Fr::ZERO,
         })
     }
 

@@ -1757,7 +1757,6 @@ fn claim_tx_size(claims: usize) -> Result<u64, PoWError> {
             let index = index.to_le_bytes();
             block_hash[..index.len()].copy_from_slice(&index);
             ClaimPowRewardOp {
-                epoch_nonce: *ZkPublicKey::zero().as_fr(),
                 block_hash,
                 public_key: ZkPublicKey::zero(),
                 nonce: Fr::ZERO,
@@ -2248,7 +2247,6 @@ mod tests {
     /// A ticket paying the reward key of mining run `run`.
     fn ticket_of_run(run: u64) -> ClaimPowRewardOp {
         ClaimPowRewardOp {
-            epoch_nonce: *ZkPublicKey::zero().as_fr(),
             block_hash: [0u8; 32],
             public_key: reward_key(run).to_public_key(),
             nonce: Fr::from(rand::random::<u64>()),
@@ -2262,7 +2260,7 @@ mod tests {
             note_set: LEDGER_SET,
             nullifier: derive_note_nullifier(
                 &note.commitment(),
-                secret_key_of(&note.public_key).as_fr(),
+                &secret_key_of(&note.public_key).nullifier_key(),
             ),
         }
     }
@@ -3193,7 +3191,7 @@ mod tests {
     }
 
     #[test]
-    fn pruning_shared_nonce_tickets_uses_each_anchor_era_window() {
+    fn pruning_tickets_uses_each_anchor_era_window() {
         let schedule = era_schedule(&[10, 100]);
         for (current, expected) in [
             (105, vec![95, 101]),
@@ -3205,14 +3203,6 @@ mod tests {
                 ready_to_claim: vec![winning_ticket(95), winning_ticket(101)],
                 pending_to_claim: vec![winning_ticket(95), winning_ticket(101)],
             };
-            let nonce = state.ready_to_claim[0].claim.epoch_nonce;
-            assert!(
-                state
-                    .ready_to_claim
-                    .iter()
-                    .chain(&state.pending_to_claim)
-                    .all(|ticket| ticket.claim.epoch_nonce == nonce)
-            );
             prune_expired_tickets(&mut state, Slot::new(current), &schedule);
             for tickets in [&state.ready_to_claim, &state.pending_to_claim] {
                 let slots: Vec<u64> = tickets.iter().map(|t| u64::from(t.block_slot)).collect();

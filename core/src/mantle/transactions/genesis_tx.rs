@@ -8,15 +8,14 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::{
-    crypto::{Digest as _, Hasher},
+    crypto::{Digest as _, Hash, Hasher},
     mantle::{
         ledger::{Value, verification_mode::GenesisMode},
         notes::{self, MAX_NOTE_LIST_LEN},
         ops::{
-            Op, OpRef, SignedOp, SignedOperation,
+            Op, OpId as _, OpRef, SignedOp, SignedOperation,
             channel::{ChannelId, MsgId, NULL_CHANNEL_ID, inscribe::InscriptionOp},
             sdp::SDPDeclareOp,
-            transfer::TransferOp,
         },
         traits::{GenesisTx as GenesisTxTrait, Hashable, MantleTx, genesis::GenesisOps, hashable},
         transactions::{
@@ -28,17 +27,16 @@ use crate::{
 };
 
 /// The genesis transaction structure is always:
-/// `Transfer` + `ChannelInscribe` (genesis parameters) + `ChannelInscribe`
-/// (distribution) + zero or more `SDPDeclareOp`.
-/// With maximum operations bounded in `Ops`.
-pub const GENESIS_REQUIRED_OPS: usize = 3;
-pub const MAX_GENESIS_DECLARATIONS: usize = MAX_OPS_PER_TX - GENESIS_REQUIRED_OPS; // 252
+/// `ChannelInscribe` (genesis parameters) + `ChannelInscribe` (distribution) +
+/// zero or more `SDPDeclareOp`. With maximum operations bounded in `Ops`.
+pub const GENESIS_REQUIRED_OPS: usize = 2;
+pub const MAX_GENESIS_DECLARATIONS: usize = MAX_OPS_PER_TX - GENESIS_REQUIRED_OPS; // 253
 pub type GenesisDeclarations = UpperBoundedVec<
     SignedOperation<SDPDeclareOp, Preverified, GenesisMode>,
     MAX_GENESIS_DECLARATIONS,
 >;
 
-// A genesis Transfer output as the distribution inscription publishes it.
+// An initial note as the distribution inscription publishes it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct GenesisAllocation {
     pub value: Value,
@@ -46,13 +44,21 @@ pub struct GenesisAllocation {
 }
 
 impl GenesisAllocation {
+    // The initial note at `index` of the distribution inscription of op_id
+    // `distribution_op_id`, its nonce derived as the ledger derives the nonce of
+    // every note it creates. That inscription names the Cryptarchia inscription
+    // as its parent, so no other Operation shares its op_id.
     #[must_use]
-    pub fn note(&self, index: usize) -> notes::Note {
-        notes::Note::new(self.value, Fr::from(index as u64), self.public_key)
+    pub fn note(&self, distribution_op_id: &Hash, index: usize) -> notes::Note {
+        notes::Note::new(
+            self.value,
+            notes::derive_note_nonce(distribution_op_id, index, self.value, &self.public_key),
+            self.public_key,
+        )
     }
 }
 
-// The count is one byte, as for the Transfer outputs.
+// The count is one byte.
 pub type Distribution = UpperBoundedVec<GenesisAllocation, MAX_NOTE_LIST_LEN>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,55 +72,42 @@ pub struct GenesisTx {
 pub enum Error {
     #[error("Genesis transaction must have gas price of zero")]
     InvalidGenesisGasPrice,
-    #[error("Genesis transaction should not have any inputs")]
-    UnexpectedInput,
     #[error("Genesis block cannot contain this op: {0:?}")]
     UnsupportedGenesisOp(Vec<(usize, &'static str)>),
-    #[error(
-        "Genesis transaction must have a transfer and an inscription as the two first operations"
-    )]
-    MissingTransferAndInscription,
+    #[error("Genesis transaction must have the Cryptarchia inscription as its first operation")]
+    MissingInscription,
     #[error("Invalid genesis inscription: {0:?}")]
     InvalidInscription(Box<Op>), // TODO: Consider adding explanation
     #[error("Invalid genesis parameters inscription: {0}")]
     InvalidGenesisParameters(String),
     #[error("Too many operations in genesis transaction: {count}")]
     TooManyOps { count: usize },
-    #[error("Genesis transaction must have the distribution inscription as its third operation")]
+    #[error("Genesis transaction must have the distribution inscription as its second operation")]
     MissingDistributionInscription,
     #[error("Invalid distribution inscription: {0}")]
     InvalidDistribution(String),
-    #[error("The distribution publishes {published} outputs for {outputs} Transfer outputs")]
-    DistributionLength { published: usize, outputs: usize },
-    #[error("Transfer output {index} is not the commitment of the published note")]
-    DistributionMismatch { index: usize },
     #[error("Genesis declaration at operation {index} has inputs")]
     DeclarationWithInputs { index: usize },
 }
 
 impl GenesisTx {
     pub fn from_tx(signed_ops: SignedOps<Preverified, GenesisMode>) -> Result<Self, Error> {
-        // Genesis transactions must contain exactly one transfer as the first op,
-        // one inscription as the second op, and then may contain other SDP declarations
+        // Genesis transactions must contain the Cryptarchia inscription and the
+        // distribution inscription, then may contain SDP declarations
         let (genesis_parameters, distribution) = match signed_ops.op_refs().as_slice() {
             [
-                OpRef::Transfer(transfer),
                 OpRef::ChannelInscribe(inscription),
                 OpRef::ChannelInscribe(distribution),
                 rest @ ..,
             ] => {
-                if !transfer.inputs.is_empty() {
-                    return Err(Error::UnexpectedInput);
-                }
                 let genesis_parameters = valid_genesis_inscription(inscription)?;
-                let distribution =
-                    valid_distribution_inscription(inscription, distribution, transfer)?;
+                let distribution = valid_distribution_inscription(inscription, distribution)?;
 
                 let unsupported_ops = rest
                     .iter()
                     .enumerate()
                     .filter(|(_, op)| !matches!(op, OpRef::SDPDeclare(_)))
-                    .map(|(index, op)| (index + GENESIS_REQUIRED_OPS, op.as_str())) // The offset accounts for the transfer and both inscriptions
+                    .map(|(index, op)| (index + GENESIS_REQUIRED_OPS, op.as_str())) // The offset accounts for both inscriptions
                     .collect::<Vec<_>>();
 
                 if !unsupported_ops.is_empty() {
@@ -133,10 +126,10 @@ impl GenesisTx {
 
                 (genesis_parameters, distribution)
             }
-            [OpRef::Transfer(_), OpRef::ChannelInscribe(_), ..] => {
+            [OpRef::ChannelInscribe(_), ..] => {
                 return Err(Error::MissingDistributionInscription);
             }
-            _ => return Err(Error::MissingTransferAndInscription),
+            _ => return Err(Error::MissingInscription),
         };
 
         Ok(Self {
@@ -147,18 +140,10 @@ impl GenesisTx {
     }
 
     #[must_use]
-    pub fn transfer(&self) -> &SignedOperation<TransferOp, Preverified, GenesisMode> {
-        match self.signed_ops.first() {
-            Some(SignedOp::Transfer(signed_operation)) => signed_operation,
-            _ => unreachable!("GenesisTx always has a valid transfer as first op"),
-        }
-    }
-
-    #[must_use]
     pub fn inscription(&self) -> &SignedOperation<InscriptionOp, Preverified, GenesisMode> {
-        match self.signed_ops.get(1) {
+        match self.signed_ops.first() {
             Some(SignedOp::ChannelInscribe(signed_operation)) => signed_operation,
-            _ => unreachable!("GenesisTx always has a valid inscription as second op"),
+            _ => unreachable!("GenesisTx always has a valid inscription as first op"),
         }
     }
 
@@ -166,10 +151,15 @@ impl GenesisTx {
     pub fn distribution_inscription(
         &self,
     ) -> &SignedOperation<InscriptionOp, Preverified, GenesisMode> {
-        match self.signed_ops.get(2) {
+        match self.signed_ops.get(1) {
             Some(SignedOp::ChannelInscribe(signed_operation)) => signed_operation,
-            _ => unreachable!("GenesisTx always has a valid distribution inscription as third op"),
+            _ => unreachable!("GenesisTx always has a valid distribution inscription as second op"),
         }
+    }
+
+    #[must_use]
+    pub const fn distribution(&self) -> &Distribution {
+        &self.distribution
     }
 
     pub fn sdp_declarations(
@@ -220,11 +210,10 @@ fn valid_genesis_inscription(inscription: &InscriptionOp) -> Result<GenesisParam
 
 // The distribution inscription of Cryptarchia Initialization in the genesis
 // spec: on the null channel, by the null key, chained to the genesis parameters
-// inscription, publishing the value and public key of every Transfer output.
+// inscription, publishing the value and public key of every initial note.
 fn valid_distribution_inscription(
     parameters: &InscriptionOp,
     inscription: &InscriptionOp,
-    transfer: &TransferOp,
 ) -> Result<Distribution, Error> {
     if inscription.channel_id != NULL_CHANNEL_ID
         || inscription.signer.as_bytes() != &[0; 32]
@@ -242,18 +231,6 @@ fn valid_distribution_inscription(
         return Err(Error::InvalidDistribution(
             "Trailing bytes after the distribution".to_owned(),
         ));
-    }
-
-    if distribution.len() != transfer.outputs.len() {
-        return Err(Error::DistributionLength {
-            published: distribution.len(),
-            outputs: transfer.outputs.len(),
-        });
-    }
-    for (index, allocation) in distribution.iter().enumerate() {
-        if transfer.outputs[index] != allocation.note(index).commitment() {
-            return Err(Error::DistributionMismatch { index });
-        }
     }
 
     Ok(distribution)
@@ -284,21 +261,15 @@ impl GenesisTxTrait for GenesisTx {
     fn into_genesis_ops(self) -> GenesisOps {
         let mut signed_ops = self.signed_ops.into_inner().into_inner().into_iter();
 
-        let transfer = match signed_ops.next() {
-            Some(SignedOp::Transfer(signed_operation)) => signed_operation,
-            _ => unreachable!("GenesisTx always has a valid transfer as first op"),
-        }
-        .into_state_trusted();
-
         let inscription = match signed_ops.next() {
             Some(SignedOp::ChannelInscribe(signed_operation)) => signed_operation,
-            _ => unreachable!("GenesisTx always has a valid inscription as second op"),
+            _ => unreachable!("GenesisTx always has a valid inscription as first op"),
         }
         .into_state_trusted();
 
         let distribution_inscription = match signed_ops.next() {
             Some(SignedOp::ChannelInscribe(signed_operation)) => signed_operation,
-            _ => unreachable!("GenesisTx always has a valid distribution inscription as third op"),
+            _ => unreachable!("GenesisTx always has a valid distribution inscription as second op"),
         }
         .into_state_trusted();
 
@@ -316,7 +287,6 @@ impl GenesisTxTrait for GenesisTx {
         };
 
         GenesisOps {
-            transfer,
             inscription,
             distribution_inscription,
             declarations,
@@ -327,8 +297,13 @@ impl GenesisTxTrait for GenesisTx {
         self.genesis_parameters.clone()
     }
 
-    fn distribution(&self) -> Distribution {
-        self.distribution.clone()
+    fn initial_notes(&self) -> Vec<notes::Note> {
+        let distribution_op_id = self.distribution_inscription().operation().op_id();
+        self.distribution
+            .iter()
+            .enumerate()
+            .map(|(index, allocation)| allocation.note(&distribution_op_id, index))
+            .collect()
     }
 }
 
@@ -518,12 +493,10 @@ mod tests {
     use crate::{
         mantle::{
             Note, OpProof,
-            note_set::CommitmentMmr,
             notes::{InputNullifiers, NoteNullifier, OutputCommitments},
             ops::{
                 ChannelInscribeProof, StepProof, ZkTransferProof,
                 channel::inscribe::{ChannelStep, Inscription, MiniBlock, MiniBlocks, Step},
-                op_proof::samples::SampleProof as _,
             },
             transactions::{OpProofs, Ops},
         },
@@ -565,6 +538,7 @@ mod tests {
             amount: note_to_use.value,
             zk_id: ZkPublicKey::new(BigUint::from(zk_id_value).into()),
             note_pk: ZkPublicKey::new(BigUint::from(zk_id_value).into()),
+            note_stake_pk: ZkPublicKey::new(BigUint::from(zk_id_value).into()),
             provider_id: ProviderId(verifying_key),
             locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
         }
@@ -588,21 +562,6 @@ mod tests {
 
     fn allocations() -> [GenesisAllocation; 1] {
         [allocation(1000, 123)]
-    }
-
-    fn transfer_of(allocations: &[GenesisAllocation]) -> TransferOp {
-        TransferOp::new(
-            InputNullifiers::default(),
-            OutputCommitments::try_from_iter(
-                allocations
-                    .iter()
-                    .enumerate()
-                    .map(|(index, allocation)| allocation.note(index).commitment()),
-            )
-            .unwrap(),
-            CommitmentMmr::new().frontier_root(),
-            0,
-        )
     }
 
     fn parameters_op() -> InscriptionOp {
@@ -641,19 +600,8 @@ mod tests {
         ops: Vec<Op>,
         op_proofs_vec: Vec<OpProof>,
     ) -> SignedOps<Preverified, GenesisMode> {
-        let transfer_op = transfer_of(&allocations());
-        create_trusted_tx_with_transfer(transfer_op, ops.into_iter().collect(), op_proofs_vec)
-    }
-
-    fn create_trusted_tx_with_transfer(
-        transfer_op: TransferOp,
-        mut ops: Vec<Op>,
-        op_proofs_vec: Vec<OpProof>,
-    ) -> SignedOps<Preverified, GenesisMode> {
-        let mut new_ops = vec![Op::Transfer(transfer_op)];
-        new_ops.append(&mut ops);
-        let mantle_tx = Ops::new_unchecked(new_ops);
-        let mut op_proofs = OpProofs::from([OpProof::ZkTransfer(ZkTransferProof::sample())]);
+        let mantle_tx = Ops::new_unchecked(ops);
+        let mut op_proofs = OpProofs::new_unchecked(Vec::new());
         for proof in op_proofs_vec {
             op_proofs.try_push(proof).unwrap();
         }
@@ -743,7 +691,7 @@ mod tests {
         // Test cases: (operations, expected_error)
         let test_cases = [
             // no inscription -> error
-            (vec![], Some(Error::MissingTransferAndInscription)),
+            (vec![], Some(Error::MissingInscription)),
             // no distribution inscription -> error
             (
                 vec![Op::ChannelInscribe(c.clone())],
@@ -764,7 +712,7 @@ mod tests {
                     Op::ChannelInscribe(d),
                     Op::ChannelInscribe(c),
                 ],
-                Some(Error::UnsupportedGenesisOp(vec![(3, "ChannelInscribe")])),
+                Some(Error::UnsupportedGenesisOp(vec![(2, "ChannelInscribe")])),
             ),
         ];
 
@@ -796,7 +744,7 @@ mod tests {
             // SDP without inscription
             (
                 vec![Op::SDPDeclare(sdp_declare_op_helper(utxo1, 0))],
-                Some(Error::MissingTransferAndInscription),
+                Some(Error::MissingInscription),
             ),
             // SDP without distribution inscription
             (
@@ -952,25 +900,6 @@ mod tests {
         assert_eq!(genesis_tx.genesis_parameters(), param);
     }
 
-    #[test]
-    fn from_tx_rejects_a_transfer_that_spends_an_input() {
-        let transfer_op = TransferOp {
-            inputs: [NoteNullifier(Fr::ONE)].into(),
-            ..transfer_of(&allocations())
-        };
-        let c = parameters_op();
-        let tx = create_trusted_tx_with_transfer(
-            transfer_op,
-            vec![
-                Op::ChannelInscribe(c.clone()),
-                Op::ChannelInscribe(distribution_op(&c, &allocations())),
-            ],
-            vec![inscription_proof(), inscription_proof()],
-        );
-
-        assert_eq!(GenesisTx::from_tx(tx), Err(Error::UnexpectedInput));
-    }
-
     // Genesis Validation Exemptions 3: the declarations must have no inputs.
     #[test]
     fn from_tx_rejects_a_declaration_with_inputs() {
@@ -995,11 +924,11 @@ mod tests {
 
         assert_eq!(
             GenesisTx::from_tx(create_trusted_tx(ops, ops_proofs)),
-            Err(Error::DeclarationWithInputs { index: 4 })
+            Err(Error::DeclarationWithInputs { index: 3 })
         );
     }
     #[test]
-    fn into_genesis_ops_splits_the_transfer_the_inscription_and_the_declarations() {
+    fn into_genesis_ops_splits_the_inscriptions_and_the_declarations() {
         let verifying_key = Ed25519PublicKey::from_bytes(&[1; 32]).unwrap();
         let utxo = create_test_note(1000, 0);
         let declare_op = sdp_declare_op(utxo, 0, verifying_key);
@@ -1010,9 +939,7 @@ mod tests {
             UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
         );
         let distribution = distribution_op(&inscribe_op, &allocations());
-        let transfer_op = transfer_of(&allocations());
-        let tx = create_trusted_tx_with_transfer(
-            transfer_op.clone(),
+        let tx = create_trusted_tx(
             vec![
                 Op::ChannelInscribe(inscribe_op.clone()),
                 Op::ChannelInscribe(distribution.clone()),
@@ -1035,7 +962,6 @@ mod tests {
             genesis_ops.distribution_inscription.operation(),
             &distribution
         );
-        assert_eq!(genesis_ops.transfer.operation(), &transfer_op);
         assert_eq!(
             genesis_ops
                 .declarations
@@ -1057,30 +983,48 @@ mod tests {
     }
 
     #[test]
-    fn from_tx_reads_the_distribution_and_accepts_more_than_eight_outputs() {
+    fn initial_notes_take_nonces_derived_from_the_distribution_inscription() {
         let allocations: Vec<GenesisAllocation> =
             (1..=9u64).map(|i| allocation(100 * i, i)).collect();
         let cryptarchia = parameters_op();
-        let tx = create_trusted_tx_with_transfer(
-            transfer_of(&allocations),
+        let distribution = distribution_op(&cryptarchia, &allocations);
+        let tx = create_trusted_tx(
             vec![
-                Op::ChannelInscribe(cryptarchia.clone()),
-                Op::ChannelInscribe(distribution_op(&cryptarchia, &allocations)),
+                Op::ChannelInscribe(cryptarchia),
+                Op::ChannelInscribe(distribution.clone()),
             ],
             vec![inscription_proof(), inscription_proof()],
         );
-        let genesis_tx = GenesisTx::from_tx(tx).expect("the distribution matches the outputs");
+        let genesis_tx = GenesisTx::from_tx(tx).expect("the distribution decodes");
         assert_eq!(genesis_tx.distribution().as_slice(), allocations.as_slice());
-        assert_eq!(genesis_tx.transfer().operation().outputs.len(), 9);
+        // More than the eight outputs of a ZkTransfer, each nonce derived as the
+        // ledger derives the nonce of every note it creates.
+        let op_id = distribution.op_id();
+        assert_eq!(
+            genesis_tx.initial_notes(),
+            allocations
+                .iter()
+                .enumerate()
+                .map(|(index, allocation)| Note::new(
+                    allocation.value,
+                    notes::derive_note_nonce(
+                        &op_id,
+                        index,
+                        allocation.value,
+                        &allocation.public_key
+                    ),
+                    allocation.public_key,
+                ))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
-    fn from_tx_rejects_a_distribution_that_does_not_match_the_outputs() {
+    fn from_tx_rejects_a_malformed_distribution_inscription() {
         let allocations = [allocation(1000, 7), allocation(2000, 8)];
         let cryptarchia = parameters_op();
-        let from_tx = |transfer: TransferOp, distribution: InscriptionOp| {
-            GenesisTx::from_tx(create_trusted_tx_with_transfer(
-                transfer,
+        let from_tx = |distribution: InscriptionOp| {
+            GenesisTx::from_tx(create_trusted_tx(
                 vec![
                     Op::ChannelInscribe(cryptarchia.clone()),
                     Op::ChannelInscribe(distribution),
@@ -1090,52 +1034,19 @@ mod tests {
         };
         let matching = || distribution_op(&cryptarchia, &allocations);
 
-        assert!(from_tx(transfer_of(&allocations), matching()).is_ok());
-        assert_eq!(
-            from_tx(
-                transfer_of(&allocations),
-                distribution_op(&cryptarchia, &[allocations[1], allocations[0]])
-            ),
-            Err(Error::DistributionMismatch { index: 0 })
-        );
-        // The nonce of a genesis note is its output index.
-        let nonce_zero = TransferOp {
-            outputs: [
-                allocations[0].note(0).commitment(),
-                Note::new(2000, Fr::ZERO, ZkPublicKey::new(Fr::from(8u64))).commitment(),
-            ]
-            .into(),
-            ..transfer_of(&allocations)
-        };
-        assert_eq!(
-            from_tx(nonce_zero, matching()),
-            Err(Error::DistributionMismatch { index: 1 })
-        );
-        assert_eq!(
-            from_tx(
-                transfer_of(&allocations),
-                distribution_op(&cryptarchia, &allocations[..1])
-            ),
-            Err(Error::DistributionLength {
-                published: 1,
-                outputs: 2
-            })
-        );
+        assert!(from_tx(matching()).is_ok());
         let mut trailing = matching();
         trailing.inscription =
             Inscription::new_unchecked([trailing.inscription.as_slice(), &[0u8]].concat());
         assert!(matches!(
-            from_tx(transfer_of(&allocations), trailing),
+            from_tx(trailing),
             Err(Error::InvalidDistribution(_))
         ));
         let orphan = InscriptionOp {
             parent: MsgId::root(),
             ..matching()
         };
-        assert!(matches!(
-            from_tx(transfer_of(&allocations), orphan),
-            Err(Error::InvalidInscription(_))
-        ));
+        assert!(matches!(from_tx(orphan), Err(Error::InvalidInscription(_))));
     }
 
     #[test]
@@ -1159,6 +1070,7 @@ mod tests {
             inputs: [NoteNullifier(Fr::ONE)].into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: Fr::ZERO,
+            inscription: Inscription::default(),
         };
         let with_step = InscriptionOp {
             mini_blocks: [MiniBlock::from([Step::User(step)])].into(),

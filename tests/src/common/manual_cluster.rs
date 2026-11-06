@@ -299,6 +299,29 @@ pub async fn wait_for_spend_depth(client: &NodeHttpClient, duration: Duration) {
         .expect("a note of the tip should reach the spend depth");
 }
 
+/// Waits until every note of `pk` in the wallet of `client` is deep enough to
+/// spend, on the chain the node follows when it answers: a reorg can move a
+/// note to a later block after the tip got deep enough.
+pub async fn wait_for_spendable(client: &NodeHttpClient, pk: ZkPublicKey, duration: Duration) {
+    let pk_hex = hex::encode(lb_groth16::fr_to_bytes(&pk.into()));
+    let url = api_url(client, &format!("wallet/{pk_hex}/balance"));
+    tokio::time::timeout(duration, async {
+        loop {
+            if let Ok(response) = reqwest::Client::new().get(url.clone()).send().await
+                && response.status().is_success()
+                && let Ok(body) = response.json::<serde_json::Value>().await
+                && body["balance"].as_u64().unwrap_or(0) > 0
+                && body["pending_notes"].as_array().is_some_and(Vec::is_empty)
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .expect("the notes of the key should become spendable");
+}
+
 pub async fn wait_for_nodes_height(
     nodes: &[&NodeHttpClient],
     target_height: u64,

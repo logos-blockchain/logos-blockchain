@@ -88,10 +88,8 @@ mod filled_ledger {
     fn fresh_nullifiers_are_spendable_against_the_current_root() {
         let fixture = filled_state();
         let set = fixture.state.latest_note_sets().get(LEDGER_SET).unwrap();
-        assert!(
-            set.assert_spendable(&nullifiers(4, 0), &set.commitment_root(), 1)
-                .is_ok()
-        );
+        assert!(set.assert_spendable(&nullifiers(4, 0)).is_ok());
+        assert!(set.tx_commitment_root(&set.commitment_root(), 1).is_ok());
     }
 
     // The low leaf of a nullifier of a real note is anywhere in the tree: the

@@ -372,6 +372,7 @@ mod tests {
             inputs: [NoteNullifier(Fr::ONE)].into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: Fr::ZERO,
+            inscription: Inscription::default(),
         };
         let ops = Ops::from([Op::ChannelInscribe(InscriptionOp {
             mini_blocks: [inscribe::MiniBlock::from([
@@ -404,7 +405,7 @@ mod tests {
         let operation = InscriptionOp::sample_with_step();
         let ops = Ops::from([Op::ChannelInscribe(operation.clone())]);
         let proof = Op::ChannelInscribe(operation).sample_proof();
-        assert_eq!(proof.encode().len(), 64 + 128 + (128 + 128 + 128 + 104));
+        assert_eq!(proof.encode().len(), 64 + 128 + 128 + (128 + 128 + 104));
         let signed =
             SignedOps::<Unverified, StandardMode>::from_parts(ops.clone(), OpProofs::from([proof]))
                 .unwrap();
@@ -470,6 +471,7 @@ mod tests {
             provider_id: ProviderId(signing_key.public_key()),
             zk_id: zk_sk.to_public_key(),
             note_pk: zk_sk.to_public_key(),
+            note_stake_pk: zk_sk.to_public_key(),
             inputs: [NoteNullifier(Fr::from(500u64))].into(),
             commitment_merkle_root: Fr::ZERO,
             amount: 500,
@@ -498,7 +500,6 @@ mod tests {
     fn test_minimum_signed_mantle_tx_size_with_sdp_withdraw() {
         let sdp_withdraw_op = SDPWithdrawOp {
             declaration_id: DeclarationId([0x11; 32]),
-            nonce: Nonce::new(0.into(), 42),
             service_note_nullifier: NoteNullifier(Fr::from(123u64)),
             outputs: [NoteCommitment(Fr::from(124u64))].into(),
             excess_value: 1,
@@ -681,6 +682,7 @@ mod tests {
             provider_id: ProviderId(signing_key1.public_key()),
             zk_id: zk_sk.to_public_key(),
             note_pk: zk_sk.to_public_key(),
+            note_stake_pk: zk_sk.to_public_key(),
             inputs: [NoteNullifier(Fr::from(500u64))].into(),
             commitment_merkle_root: Fr::ZERO,
             amount: 500,
@@ -967,6 +969,7 @@ mod tests {
             provider_id: ProviderId(Ed25519Key::from_bytes(&[1; 32]).public_key()),
             zk_id: ZkKey::zero().to_public_key(),
             note_pk: ZkKey::zero().to_public_key(),
+            note_stake_pk: ZkKey::zero().to_public_key(),
             inputs: [NoteNullifier(Fr::from(500u64))].into(),
             commitment_merkle_root: Fr::ZERO,
             amount: 500,

@@ -45,7 +45,7 @@ use lb_core::{
                 config::ChannelConfigOp,
                 deposit::{DepositOp, Metadata},
                 inscribe::{ChannelStep, Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step},
-                program_step::{Payment, ProgramOutputs, ProgramStep},
+                program_step::{ProgramDeposit, ProgramStep},
                 withdraw::ChannelWithdrawOp,
             },
             pow::ClaimPowRewardOp,
@@ -336,6 +336,7 @@ pub fn user_step(inputs: usize, outputs: usize, salt: u64) -> Step {
         inputs: fresh_nullifiers(inputs, salt),
         outputs: fresh_commitments(outputs, salt),
         commitment_merkle_root: channel_root(),
+        inscription: Inscription::default(),
     })
 }
 
@@ -390,7 +391,7 @@ fn user_inscription_shape(mini_blocks: Vec<Vec<Step>>, buffered: u16, payload: u
     let outputs: usize = mini_blocks
         .iter()
         .flatten()
-        .map(|step| step.outputs().len())
+        .map(|step| step.created().count())
         .sum();
     let step_proofs: Vec<StepProof> = (0..user_steps)
         .map(|index| StepProof::User(zk_transfer(index)))
@@ -453,74 +454,79 @@ fn inscriptions() -> Vec<OpShape> {
     shapes
 }
 
-/// The shape of a program step of the fixture program.
+/// The shape of a program step of the fixture program and of the program
+/// deposits it consumes.
 #[derive(Clone, Copy, Debug)]
 pub struct ProgramShape {
-    pub payments: usize,
+    pub deposits: usize,
     pub inputs: usize,
     pub outputs: usize,
     pub openings: usize,
 }
 
-/// A program step of `shape` and its proof: each payment spends one fresh
-/// note and returns one change note; the first `openings` outputs are notes
-/// of the program, derived from their openings.
-pub fn program_step(shape: ProgramShape, salt: u64) -> (Step, StepProof) {
+/// The program deposits of `shape`, then its program step, with their proofs:
+/// each program deposit spends one fresh note and returns one change note;
+/// `openings` of the `outputs` are program outputs, derived from their
+/// openings, and the others user outputs.
+pub fn program_steps(shape: ProgramShape, salt: u64) -> Vec<(Step, StepProof)> {
     let fixture = filled_state();
     let root = channel_root();
-    let payments = (0..shape.payments)
-        .map(|index| Payment {
+    let deposits = (0..shape.deposits).map(|index| {
+        let deposit = ProgramDeposit {
+            program_id: fixture.program,
             inputs: fresh_nullifiers(1, salt * 64 + index as u64),
             outputs: fresh_commitments(1, salt * 64 + index as u64),
             commitment_merkle_root: root,
-            paid_value: 1,
+            value: 1,
             intent: Fr::from(index as u64),
-        })
-        .collect::<Vec<_>>();
+            inscription: Inscription::default(),
+        };
+        (
+            Step::ProgramDeposit(deposit),
+            StepProof::User(zk_transfer(index)),
+        )
+    });
     let openings: Vec<ProgramNoteOpening> = (0..shape.openings)
         .map(|index| ProgramNoteOpening {
             value: 1 + index as u64,
             nonce: Fr::from(salt * 64 + index as u64 + 1),
-            public_key: ZkPublicKey::new(Fr::from(5u64)),
+            stake_public_key: ZkPublicKey::new(Fr::from(5u64)),
             data: Fr::from(index as u64),
         })
         .collect();
-    let program_notes = openings
+    let program_outputs: Vec<NoteCommitment> = openings
         .iter()
-        .map(|opening| opening.note(fixture.program).commitment());
-    let user_notes = commitments(shape.outputs - shape.openings, salt * 64 + 32);
-    let outputs: Vec<NoteCommitment> = program_notes.chain(user_notes).collect();
-    let flags = u8::try_from((1u16 << shape.openings) - 1).expect("at most eight outputs");
+        .map(|opening| opening.note(fixture.program).commitment())
+        .collect();
     let step = ProgramStep {
         program_id: fixture.program,
-        payments: payments.try_into().expect("the payments fit"),
         inputs: fresh_nullifiers(shape.inputs, salt * 64 + 48),
-        outputs: outputs.try_into().expect("the outputs fit"),
-        program_outputs: ProgramOutputs::from(flags),
+        program_outputs: program_outputs.try_into().expect("the program outputs fit"),
+        outputs: fresh_commitments(shape.outputs - shape.openings, salt * 64 + 32),
         commitment_merkle_root: root,
-        spend_notes_hash: Fr::from(7u64),
+        program_step_id: Fr::from(7u64),
+        inscription: Inscription::default(),
     };
     let proof = StepProof::Program(ProgramStepProof {
-        payment_proofs: (0..shape.payments).map(zk_transfer).collect(),
         spend_proof: ZkProgramSpendProof::new(proof(1)),
         program_proof: ProgramProof::new(proof(2)),
         program_notes: openings,
     });
-    (Step::Program(step), proof)
+    deposits.chain([(Step::Program(step), proof)]).collect()
 }
 
-// Four series, one dimension varying at a time from no payment, one program
-// input, one output and no opening; the openings vary at eight outputs, the
-// most a step can open.
+// Four series, one dimension varying at a time from no program deposit, one
+// program input, one output and no opening; the openings vary at eight
+// outputs, the most a step can create.
 fn program_inscriptions() -> Vec<OpShape> {
     let base = ProgramShape {
-        payments: 0,
+        deposits: 0,
         inputs: 1,
         outputs: 1,
         openings: 0,
     };
     let shapes = [0, 1, 2, 4, 8]
-        .map(|payments| ProgramShape { payments, ..base })
+        .map(|deposits| ProgramShape { deposits, ..base })
         .into_iter()
         .chain(
             (0..=4)
@@ -535,19 +541,19 @@ fn program_inscriptions() -> Vec<OpShape> {
         }));
     shapes
         .map(|shape| {
-            let (step, proof) = program_step(shape, 1);
-            let op = inscription(channel_tip(), vec![step], 0);
+            let (steps, proofs): (Vec<_>, Vec<_>) = program_steps(shape, 1).into_iter().unzip();
+            let op = inscription(channel_tip(), steps, 0);
             OpShape::on_fixture(
                 "op/inscribe_program",
                 vec![
-                    ("payments", shape.payments as u64),
+                    ("program_deposits", shape.deposits as u64),
                     ("program_inputs", shape.inputs as u64),
                     ("program_outputs", shape.outputs as u64),
                     ("openings", shape.openings as u64),
                 ],
-                encode_inscription(op, &[proof]),
+                encode_inscription(op, &proofs),
                 Deferred {
-                    zk_transfers: shape.payments,
+                    zk_transfers: shape.deposits,
                     program_spends: 1,
                     program_proofs: 1,
                 },
@@ -689,6 +695,7 @@ pub fn declaration_of(
         provider_id: ProviderId(key.public_key()),
         zk_id,
         note_pk: zk_id,
+        note_stake_pk: zk_id,
         inputs: fresh_nullifiers(1, salt),
         commitment_merkle_root,
         amount: 1,
@@ -799,7 +806,6 @@ fn sdp_withdraw() -> OpShape {
     .expect("the declaration applies");
     let withdraw = SDPWithdrawOp {
         declaration_id: declare.id(),
-        nonce: Nonce::new(Epoch::new(0), 1),
         service_note_nullifier: nullifiers(1, 401)[0],
         outputs: fresh_commitments(1, 401),
         excess_value: 0,
@@ -835,7 +841,6 @@ fn claim_pow() -> OpShape {
     let difficulty = state.mantle_ledger().pow.reward_difficulty();
     let claim = (0u64..1024)
         .map(|nonce| ClaimPowRewardOp {
-            epoch_nonce: *state.epoch_state().nonce(),
             block_hash: ANCHOR,
             public_key: ZkPublicKey::new(Fr::from(0x63u64)),
             nonce: Fr::from(nonce),

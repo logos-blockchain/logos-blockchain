@@ -1,6 +1,6 @@
 use lb_core::{
     block::{Block, BlockTransactions, UncleHeaders, body_root},
-    header::{HeaderId, pol_msg},
+    header::{HeaderId, block_id, pol_msg},
     mantle::{
         Value,
         notes::NoteCommitment,
@@ -41,7 +41,7 @@ impl LeaderProof for ProposalHeaderProof {
     }
 }
 
-// The PoL msg of the header the block gets: pol_msg over its body root.
+// The PoL msg of the header the block gets: its block ID, over its body root.
 #[must_use]
 pub fn block_msg<Tx: Hashable<Hash = TxHash>>(
     parent: &HeaderId,
@@ -50,14 +50,16 @@ pub fn block_msg<Tx: Hashable<Hash = TxHash>>(
     txs: &[Tx],
     reward_commitment: &NoteCommitment,
     reward_value: Value,
+    entropy_contribution: &Fr,
 ) -> Fr {
-    pol_msg(
+    pol_msg(&block_id(
         parent,
         slot,
         &body_root(uncles, txs),
         reward_commitment,
         reward_value,
-    )
+        entropy_contribution,
+    ))
 }
 
 // Proves the PoL bound to the block and builds the block; blocking.
@@ -97,9 +99,9 @@ mod tests {
     #[test]
     fn proposed_block_proof_is_bound_to_its_body_and_reward() {
         let config = crate::leadership::test_config();
-        let secret_key = Fr::from(7u64);
-        let public_key = UnsecuredZkKey::new(secret_key).to_public_key();
-        let note = notes::Note::new(1_000, Fr::from(11u64), public_key);
+        let key = UnsecuredZkKey::new(Fr::from(7u64));
+        let nullifier_key = key.nullifier_key();
+        let note = notes::Note::new(1_000, Fr::from(11u64), key.to_public_key());
         let ledger = LedgerState::from_notes([note], &config, 0);
         let (_, aged_path) = CommitmentMmr::new()
             .push_with_paths(note.commitment(), &mut [])
@@ -116,18 +118,19 @@ mod tests {
                     ),
                 )
             })
-            .find(|(_, public)| check_winning(&note, *public, &public_key, secret_key))
+            .find(|(_, public)| check_winning(&note, *public, nullifier_key, nullifier_key))
             .expect("a single staker wins within 1000 slots");
         let mut wallet = pol_wallet_inputs(
             &note,
             LEDGER_SET,
-            &derive_note_nullifier(&note.commitment(), &secret_key),
+            &derive_note_nullifier(&note.commitment(), &nullifier_key),
             &aged_path,
             &epoch_state.note_sets,
             ledger.latest_note_sets(),
         )
         .unwrap();
-        wallet.secret_key = secret_key;
+        wallet.nullifier_key = nullifier_key;
+        wallet.staking_secret_key = nullifier_key;
         let reward = notes::Note::new(
             0x6666,
             Fr::from(0x5555u64),
@@ -138,6 +141,7 @@ mod tests {
 
         let parent = HeaderId::from([1; 32]);
         let txs = BlockTransactions::<SignedOps<Preverified, StandardMode>>::empty();
+        let unbound = LeaderPrivate::new(public, wallet.clone(), Fr::ZERO, reward.value);
         let msg = block_msg(
             &parent,
             slot,
@@ -145,8 +149,9 @@ mod tests {
             txs.as_slice(),
             &reward.commitment(),
             reward.value,
+            &unbound.entropy_contribution(),
         );
-        let private = LeaderPrivate::new(public, wallet.clone(), msg, reward.value);
+        let private = unbound.with_msg(msg);
         let block = assemble_block(parent, slot, UncleHeaders::empty(), txs, private).unwrap();
 
         assert!(block.header().verify(&public));

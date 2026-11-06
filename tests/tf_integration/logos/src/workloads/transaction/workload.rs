@@ -292,7 +292,10 @@ fn build_wallet_transaction(
     let secret_key = *input.account.secret_key.as_fr();
     let funding = FundingNote {
         note: input.note.note,
-        nullifier: derive_note_nullifier(&input.note.note.commitment(), &secret_key),
+        nullifier: derive_note_nullifier(
+            &input.note.note.commitment(),
+            &input.account.secret_key.nullifier_key(),
+        ),
     };
     let self_transfer = |value| {
         MantleTxBuilder::new()
@@ -351,12 +354,7 @@ fn random_nonce() -> Fr {
 fn wallet_utxo_map(
     genesis_tx: &lb_core::mantle::transactions::GenesisTx,
 ) -> HashMap<ZkPublicKey, GenesisNote> {
-    let notes = genesis_tx
-        .distribution()
-        .iter()
-        .enumerate()
-        .map(|(index, allocation)| allocation.note(index))
-        .collect::<Vec<_>>();
+    let notes = genesis_tx.initial_notes();
     let mut mmr = CommitmentMmr::new();
     let mut paths = Vec::with_capacity(notes.len());
     for note in &notes {

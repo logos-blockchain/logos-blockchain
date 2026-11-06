@@ -16,7 +16,7 @@ use lb_core::{
     mantle::{
         Value,
         gas::{Gas, GasOverflow, GasPrice, GasProfile},
-        ledger::verification_mode::{GenesisMode, StandardMode},
+        ledger::verification_mode::StandardMode,
         note_set::{LEDGER_SET, NoteSetError, NoteSetUpdate, NoteSets},
         notes::{self, NoteCommitment},
         ops::{
@@ -25,9 +25,7 @@ use lb_core::{
             pow::PowTarget,
             transfer::TransferOp,
         },
-        transactions::{
-            Distribution, GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, states::Verified,
-        },
+        transactions::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, states::Verified},
     },
     proofs::leader_proof::{self, LeaderPublic},
     sdp::Declarations,
@@ -221,12 +219,6 @@ pub struct LedgerState {
     // randomness contribution
     #[serde(with = "lb_groth16::serde::serde_fr")]
     pub nonce: Fr,
-    // Nonce of the epoch preceding `epoch_state`'s, retained so a `PoW` reward
-    // claim mined just before an epoch boundary stays verifiable for the reward
-    // window after the boundary. The current epoch drops out of `epoch_state` on
-    // transition, so it must be carried here explicitly.
-    #[serde(with = "lb_groth16::serde::serde_fr")]
-    pub previous_epoch_nonce: Fr,
     pub slot: Slot,
     // rolling snapshot of the state for the next epoch, used for epoch transitions
     pub next_epoch_state: EpochState,
@@ -364,8 +356,6 @@ impl LedgerState {
                 slot,
                 next_epoch_state,
                 epoch_state,
-                // The epoch we just left becomes the previous epoch.
-                previous_epoch_nonce: self.epoch_state.nonce,
                 block_density,
                 storage_gas_consumed_in_epoch: 0.into(),
                 storage_gas_ema: new_ema,
@@ -456,10 +446,6 @@ impl LedgerState {
                 slot,
                 next_epoch_state,
                 epoch_state,
-                // Every skipped epoch had no block, so the nonce stayed frozen
-                // at `self.nonce` throughout — that is the previous epoch's nonce
-                // (and matches the value used for `epoch_state` above).
-                previous_epoch_nonce: self.nonce,
                 block_density,
                 storage_gas_consumed_in_epoch: 0.into(),
                 storage_gas_ema: new_ema,
@@ -673,14 +659,13 @@ impl LedgerState {
     }
 
     pub fn genesis_total_stake<Id>(
-        distribution: &Distribution,
+        distributed: impl IntoIterator<Item = Value>,
         declared_amounts: impl IntoIterator<Item = Value>,
     ) -> Result<Value, LedgerError<Id>> {
         // Initial Epoch State item 3: D is the total tokens distributed at genesis, the
         // amounts of the SDP_DECLARE Operations included.
-        distribution
-            .iter()
-            .map(|allocation| allocation.value)
+        distributed
+            .into_iter()
             .chain(declared_amounts)
             .try_fold(0, |sum: Value, value| sum.checked_add(value))
             .map(|stake| stake.max(1)) // TODO: Change total_stake to NonZeroU64: https://github.com/logos-blockchain/logos-blockchain/issues/2166
@@ -862,34 +847,21 @@ impl LedgerState {
             .clone())
     }
 
-    pub fn from_genesis_tx<Id>(
-        transfer: &SignedOperation<TransferOp, Verified, GenesisMode>,
+    // Mantle Ledger Initialization: the commitments of the initial notes, created
+    // from the distribution inscription, are appended to the empty ledger set.
+    #[must_use]
+    pub fn from_genesis_notes(
+        initial_notes: &[notes::Note],
         total_stake: Value,
         config: &Config,
         epoch_nonce: Fr,
-    ) -> Result<Self, LedgerError<Id>> {
-        let operation = transfer.operation();
-
-        // This transfer has not yet been verified despite the state saying so.
-        // This is its verification.
-        if !operation.inputs.is_empty() {
-            let first_input = operation
-                .inputs
-                .iter()
-                .next()
-                .copied()
-                .expect("is not empty");
-            return Err(LedgerError::InputInGenesis(first_input));
-        }
-
-        // Mantle Ledger Initialization: the Transfer appends its outputs to the empty
-        // ledger set.
-        let state = Self::from_commitments([], total_stake, config, epoch_nonce);
-        let (note_sets, _) = transfer
-            .clone()
-            .execute(state.note_sets.clone())
-            .map_err(|(_signed_operation, error)| mantle::Error::Transfer(error))?;
-        Ok(Self { note_sets, ..state })
+    ) -> Self {
+        Self::from_commitments(
+            initial_notes.iter().map(notes::Note::commitment),
+            total_stake,
+            config,
+            epoch_nonce,
+        )
     }
 
     pub fn from_notes(
@@ -931,9 +903,6 @@ impl LedgerState {
             note_sets: note_sets.clone(),
             pending_withdrawals: PendingWithdrawals::new(),
             nonce,
-            // No epoch precedes genesis; seed with the genesis nonce so an
-            // epoch-0 claim still matches (previous == current is harmless).
-            previous_epoch_nonce: nonce,
             slot,
             next_epoch_state: EpochState {
                 epoch: 1.into(),
@@ -1028,15 +997,17 @@ pub mod tests {
             SignedOps,
             gas::MainnetGasProfile,
             note_set::CommitmentMmr,
-            notes::{InputNullifiers, NoteNullifier, OutputCommitments, derive_note_nullifier},
+            notes::{NoteNullifier, derive_note_nullifier},
             ops::{ZkAndEd25519Proof, ZkTransferProof, sdp::SDPDeclareOp},
-            transactions::states::{Preverified, Unverified},
+            transactions::states::Preverified,
         },
         sdp::{Declaration, DeclarationId, Locator, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::EpochConfig;
-    use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Field as _, ModulusShift};
-    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey};
+    use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, ModulusShift};
+    use lb_key_management_system_keys::keys::{
+        Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, kdf_public_key,
+    };
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
@@ -1403,11 +1374,14 @@ pub mod tests {
             service_type: ServiceType::BlendNetwork,
             locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
             provider_id: signing_key.public_key().into(),
-            zk_id: zk_key.to_public_key(),
+            // The zk_id of the quota secret key, the service note under the
+            // keys of the notes of the same key.
+            zk_id: kdf_public_key(zk_key.as_fr()),
             note_pk: zk_key.to_public_key(),
+            note_stake_pk: zk_key.to_public_key(),
             inputs: [derive_note_nullifier(
                 &sdp_utxo.commitment(),
-                &sdp_secret_key,
+                &ZkKey::new(sdp_secret_key).nullifier_key(),
             )]
             .into(),
             commitment_merkle_root: ledger.states[&id]
@@ -1717,33 +1691,6 @@ pub mod tests {
         );
         // Below the reference load, so admission loosens — up to the clamp.
         assert!(state.epoch_state.blend_pow_difficulty > epoch_1_difficulty);
-    }
-
-    #[test]
-    fn previous_epoch_nonce_is_retained_across_an_epoch_transition() {
-        // A PoW claim mined just before an epoch boundary must stay verifiable
-        // for the reward window after it, which needs the nonce of the epoch we
-        // just left — otherwise dropped when `epoch_state` rolls forward.
-        let config = config();
-        let eras = single_era(config.clone());
-        assert_eq!(config.epoch_length(), 100);
-        let sdp = SdpLedger::new(0.into());
-        let mut pow = pow_state();
-
-        // Genesis (epoch 0). Stamp a distinct nonce on the current epoch so it
-        // is recognisable after the boundary; genesis seeds the previous-epoch
-        // nonce with the current one.
-        let mut state = genesis_state(&[note()]);
-        assert_eq!(state.previous_epoch_nonce, state.nonce);
-        let epoch_0_nonce = Fr::from(0xABCDu64);
-        state.epoch_state.nonce = epoch_0_nonce;
-
-        // Cross into epoch 1.
-        let state = apply_block(state, &mut pow, 100, 0, &sdp, &eras);
-        assert_eq!(state.epoch_state.epoch, 1);
-
-        // The epoch just left is now retained as the previous-epoch nonce.
-        assert_eq!(state.previous_epoch_nonce, epoch_0_nonce);
     }
 
     #[test]
@@ -2335,50 +2282,18 @@ pub mod tests {
     }
 
     #[test]
-    fn genesis_transfer_outputs_enter_the_ledger_set() {
-        let operation = TransferOp::new(
-            InputNullifiers::default(),
-            [
-                NoteCommitment(Fr::from(3u64)),
-                NoteCommitment(Fr::from(4u64)),
-            ]
-            .into(),
-            CommitmentMmr::new().frontier_root(),
-            0,
-        );
-        let transfer = SignedOperation::<_, Unverified, GenesisMode>::new(operation, zero_proof())
-            .into_state_trusted();
-        let state =
-            LedgerState::from_genesis_tx::<()>(&transfer, 3_000, &config(), Fr::ZERO).unwrap();
+    fn genesis_notes_enter_the_ledger_set() {
+        let notes = [note(), note()];
+        let state = LedgerState::from_genesis_notes(&notes, 3_000, &config(), Fr::ZERO);
         let expected = CommitmentMmr::new()
-            .push(NoteCommitment(Fr::from(3u64)))
+            .push(notes[0].commitment())
             .unwrap()
-            .push(NoteCommitment(Fr::from(4u64)))
+            .push(notes[1].commitment())
             .unwrap()
             .frontier_root();
         let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
         assert_eq!(ledger_set.commitment_root(), expected);
         assert_eq!(state.epoch_state().total_stake(), 3_000);
-        assert_eq!(
-            ledger_set.tx_commitment_root(&CommitmentMmr::new().frontier_root(), 0),
-            Ok(expected)
-        );
-    }
-
-    #[test]
-    fn genesis_transfer_with_an_input_is_rejected() {
-        let operation = TransferOp::new(
-            [NoteNullifier(Fr::ONE)].into(),
-            OutputCommitments::default(),
-            Fr::ZERO,
-            0,
-        );
-        let transfer = SignedOperation::<_, Unverified, GenesisMode>::new(operation, zero_proof())
-            .into_state_trusted();
-        assert_eq!(
-            LedgerState::from_genesis_tx::<()>(&transfer, 1, &config(), Fr::ZERO).err(),
-            Some(LedgerError::InputInGenesis(NoteNullifier(Fr::ONE)))
-        );
     }
 
     /// Era 0 runs the test config: k = 1 and f = 1/10, so epochs of 100

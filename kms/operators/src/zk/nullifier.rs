@@ -45,7 +45,7 @@ impl SecureKeyOperator for DeriveNullifier {
             result_channel,
         } = *self;
         if result_channel
-            .send(derive_note_nullifier(&commitment, key.as_fr()))
+            .send(derive_note_nullifier(&commitment, &key.nullifier_key()))
             .is_err()
         {
             debug!(target: LOG_TARGET, "Failed to send result via channel");
@@ -62,7 +62,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn derive_nullifier_hashes_the_commitment_with_the_key() {
+    async fn derive_nullifier_hashes_the_commitment_with_the_nullifier_key() {
         let key = ZkKey::new(Fr::from(7u64));
         let commitment = NoteCommitment(Fr::from(3u64));
         let (sender, receiver) = oneshot::channel();
@@ -71,7 +71,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             receiver.await.unwrap(),
-            derive_note_nullifier(&commitment, &Fr::from(7u64))
+            derive_note_nullifier(&commitment, &key.nullifier_key())
         );
     }
 }

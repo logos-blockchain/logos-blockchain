@@ -4,7 +4,7 @@ use lb_core::mantle::transactions::{Distribution, GenesisAllocation};
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 pub use lb_ledger::GENESIS_STAKE_SUPPLY;
 
-use crate::consensus::{GENESIS_TRANSFER_OUTPUT_LIMIT, SdpFundingConfig, ServiceNote};
+use crate::consensus::{GENESIS_DISTRIBUTION_LIMIT, SdpFundingConfig};
 
 /// Adds scenario wallets and adjusts SDP funding before genesis is signed. This
 /// operates on protocol data, without native node configuration.
@@ -31,7 +31,7 @@ pub fn fund_wallets(
                 value: *value,
                 public_key: key.to_public_key(),
             })
-            .expect("wallet account outputs must fit transfer output bounds");
+            .expect("wallet account outputs must fit the genesis distribution");
     }
 }
 
@@ -65,18 +65,6 @@ pub fn fill_leader_stake(transfer: &mut Distribution, leader_keys: &[ZkPublicKey
     }
 }
 
-/// Funding can move outputs. Refresh references before building provider
-/// declarations or handing notes to an adapter.
-pub fn refresh_service_note(note: &mut ServiceNote, transfer: &Distribution) {
-    let (index, output) = transfer
-        .iter()
-        .enumerate()
-        .find(|(_, output)| output.public_key == note.pk)
-        .expect("service note must be present in genesis");
-    note.output_index = index;
-    note.note = output.note(index);
-}
-
 fn fit_sdp_funding_outputs_to_genesis_capacity(
     transfer_op: &mut Distribution,
     funding_keys: &HashSet<ZkPublicKey>,
@@ -92,11 +80,11 @@ fn fit_sdp_funding_outputs_to_genesis_capacity(
     let required_non_sdp_outputs = non_sdp_outputs
         .checked_add(additional_wallet_outputs)
         .expect("genesis output count overflow while fitting SDP funding outputs");
-    let available_for_sdp = GENESIS_TRANSFER_OUTPUT_LIMIT
+    let available_for_sdp = GENESIS_DISTRIBUTION_LIMIT
         .checked_sub(required_non_sdp_outputs)
         .unwrap_or_else(|| {
             panic!(
-                "genesis transfer output capacity exhausted before SDP funding outputs: limit={GENESIS_TRANSFER_OUTPUT_LIMIT}, non_sdp_outputs={non_sdp_outputs}, additional_wallet_outputs={additional_wallet_outputs}",
+                "genesis distribution capacity exhausted before SDP funding outputs: limit={GENESIS_DISTRIBUTION_LIMIT}, non_sdp_outputs={non_sdp_outputs}, additional_wallet_outputs={additional_wallet_outputs}",
             )
         });
     let max_sdp_notes_per_node = available_for_sdp / n_participants;
@@ -108,7 +96,7 @@ fn fit_sdp_funding_outputs_to_genesis_capacity(
 
     assert!(
         selected_sdp_notes_per_node > 0,
-        "genesis transfer output capacity cannot provide one SDP funding note per node: limit={GENESIS_TRANSFER_OUTPUT_LIMIT}, node_count={n_participants}, non_sdp_outputs={non_sdp_outputs}, additional_wallet_outputs={additional_wallet_outputs}",
+        "genesis distribution capacity cannot provide one SDP funding note per node: limit={GENESIS_DISTRIBUTION_LIMIT}, node_count={n_participants}, non_sdp_outputs={non_sdp_outputs}, additional_wallet_outputs={additional_wallet_outputs}",
     );
     assert!(
         current_sdp_outputs >= required_sdp_outputs,
@@ -139,7 +127,7 @@ fn fit_sdp_funding_outputs_to_genesis_capacity(
             })
             .collect::<Vec<_>>();
         *transfer_op = Distribution::try_from(retained_notes)
-            .expect("trimmed genesis transfer outputs must fit the output bound");
+            .expect("trimmed genesis distribution must fit its bound");
     } else {
         for note in transfer_op.iter_mut() {
             if funding_keys.contains(&note.public_key) {

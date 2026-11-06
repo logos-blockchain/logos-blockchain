@@ -480,7 +480,7 @@ mod tests {
         canonical::BinaryEncode as _,
     };
     use lb_groth16::{AdditiveGroup as _, Fr};
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
+    use lb_key_management_system_keys::keys::{Ed25519Key, PK0, ZkPublicKey};
 
     use crate::mantle::{
         Op, OpProof, SignedOps, VerificationError,
@@ -495,8 +495,8 @@ mod tests {
                 ChannelId, MsgId,
                 config::ChannelConfigOp,
                 deposit::DepositOp,
-                inscribe::{InscriptionOp, MiniBlock, Step},
-                program_step::{Payments, ProgramOutputs, ProgramStep},
+                inscribe::{Inscription, InscriptionOp, MiniBlock, Step},
+                program_step::ProgramStep,
                 withdraw::ChannelWithdrawOp,
             },
             op_proof::samples::SampleProof as _,
@@ -1032,18 +1032,19 @@ mod tests {
         let note = Note {
             value: 10,
             nonce: Fr::from(2u64),
-            public_key: ZkPublicKey::new(Fr::from(3u64)),
+            public_key: *PK0,
+            stake_public_key: ZkPublicKey::new(Fr::from(3u64)),
             program: Fr::from(7u64),
             data: Fr::from(4u64),
         };
         let step = ProgramStep {
             program_id: Fr::from(7u64),
-            payments: Payments::default(),
             inputs: InputNullifiers::default(),
-            outputs: [note.commitment()].into(),
-            program_outputs: ProgramOutputs::from(0b1),
+            program_outputs: [note.commitment()].into(),
+            outputs: OutputCommitments::default(),
             commitment_merkle_root: Fr::ZERO,
-            spend_notes_hash: Fr::ZERO,
+            program_step_id: Fr::ZERO,
+            inscription: Inscription::default(),
         };
         let ops = Ops::from([Op::ChannelInscribe(InscriptionOp {
             mini_blocks: [MiniBlock::from([Step::Program(step)])].into(),
@@ -1054,14 +1055,13 @@ mod tests {
         let opening = ProgramNoteOpening {
             value: 10,
             nonce: Fr::from(2u64),
-            public_key: note.public_key,
+            stake_public_key: note.stake_public_key,
             data: Fr::from(4u64),
         };
         let encoded = |opening: ProgramNoteOpening| {
             let proof = ChannelInscribeProof::new(
                 signature,
                 vec![StepProof::Program(ProgramStepProof {
-                    payment_proofs: vec![],
                     spend_proof: ZkProgramSpendProof::sample(),
                     program_proof: ProgramProof::sample(),
                     program_notes: vec![opening],

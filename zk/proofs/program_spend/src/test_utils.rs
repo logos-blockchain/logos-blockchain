@@ -33,7 +33,7 @@ pub fn sample_witness_data() -> ZkProgramSpendWitnessInputsData {
     let json: Value = serde_json::from_str(SAMPLE_INPUT_JSON).expect("sample is valid JSON");
     let wallet = ZkProgramSpendWalletInputsData {
         inputs: array::from_fn(|i| ZkProgramSpendInputNoteData {
-            secret_key: fr(&json["inputs_sk"][i]),
+            stake_public_key: fr(&json["inputs_stake_pk"][i]),
             nonce: fr(&json["inputs_nonce"][i]),
             value: u64_value(&json["inputs_value"][i]),
             data: fr(&json["inputs_data"][i]),
@@ -46,6 +46,7 @@ pub fn sample_witness_data() -> ZkProgramSpendWitnessInputsData {
         }),
         outputs: array::from_fn(|i| ZkProgramSpendOutputNoteData {
             public_key: fr(&json["outputs_pk"][i]),
+            stake_public_key: fr(&json["outputs_stake_pk"][i]),
             nonce: fr(&json["outputs_nonce"][i]),
             value: u64_value(&json["outputs_value"][i]),
             program: fr(&json["outputs_program"][i]),

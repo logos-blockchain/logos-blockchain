@@ -579,10 +579,13 @@ pub struct Declaration {
     pub service_type: ServiceType,
     pub provider_id: ProviderId,
     pub service_note: NoteCommitment,
-    // empty until the withdrawal
-    pub withdraw_outputs: OutputCommitments,
     pub locators: Locators,
+    /// The key the validator proves in the Proof of Quota. It holds no funds.
     pub zk_id: ZkPublicKey,
+    /// The public key and the staking key of the service note, which the
+    /// rewards of the validator are created under too.
+    pub note_pk: ZkPublicKey,
+    pub note_stake_pk: ZkPublicKey,
     /// The epoch of the block that contained the declaration
     pub created: Epoch,
     /// The latest epoch for which the active message was sent.
@@ -618,9 +621,10 @@ impl Declaration {
             service_type: declaration_msg.service_type,
             provider_id: declaration_msg.provider_id,
             service_note: declaration_msg.service_note().commitment(),
-            withdraw_outputs: OutputCommitments::default(),
             locators: declaration_msg.locators.clone(),
             zk_id: declaration_msg.zk_id,
+            note_pk: declaration_msg.note_pk,
+            note_stake_pk: declaration_msg.note_stake_pk,
             created: epoch,
             active: epoch.strict_add(SNAPSHOT_FINALIZATION_DELAY),
             withdraw_at: None,
@@ -687,9 +691,12 @@ pub struct DeclarationMessage {
     pub locators: Locators,
     pub provider_id: ProviderId,
     pub zk_id: ZkPublicKey,
-    /// The key the service note is created under. It only builds the
-    /// commitment: the declaration does not prove knowledge of its secret.
+    /// The public key and the staking key the service note and the rewards
+    /// of the validator are created under. They only build commitments: the
+    /// declaration does not prove knowledge of their secrets, so both can
+    /// belong to a cold wallet.
     pub note_pk: ZkPublicKey,
+    pub note_stake_pk: ZkPublicKey,
     pub inputs: InputNullifiers,
     #[serde(with = "serde_fr")]
     pub commitment_merkle_root: Fr,
@@ -702,15 +709,19 @@ impl DeclarationMessage {
         DeclarationId::derive(self.service_type, self.zk_id)
     }
 
-    // The service note of SDP_DECLARE Execution step 2, under the note_pk.
+    // The service note of SDP_DECLARE Execution step 2, under the note_pk and the
+    // note_stake_pk.
     #[must_use]
     pub fn service_note(&self) -> Note {
         let op_id = self.op_id();
-        Note::new(
-            self.amount,
-            derive_note_nonce(&op_id, 0, self.amount, &self.note_pk),
-            self.note_pk,
-        )
+        Note {
+            stake_public_key: self.note_stake_pk,
+            ..Note::new(
+                self.amount,
+                derive_note_nonce(&op_id, 0, self.amount, &self.note_pk),
+                self.note_pk,
+            )
+        }
     }
 
     pub(crate) fn preverify(
@@ -739,6 +750,7 @@ impl DeclarationMessage {
             provider_id: ProviderId(Ed25519Key::from_bytes(&[24; 32]).public_key()),
             zk_id: ZkPublicKey::from(Fr::from(25u64)),
             note_pk: ZkPublicKey::from(Fr::from(48u64)),
+            note_stake_pk: ZkPublicKey::from(Fr::from(62u64)),
             inputs: [NoteNullifier(Fr::from(26u64))].into(),
             commitment_merkle_root: Fr::from(44u64),
             amount: 45,
@@ -746,12 +758,12 @@ impl DeclarationMessage {
     }
 }
 
-// WithdrawMessage = DeclarationId Nonce NoteNullifier Outputs Value, encoded in
-// field order.
+// WithdrawMessage = DeclarationId NoteNullifier Outputs Value, encoded in field
+// order. It carries no nonce: it is valid only while its declaration has no
+// withdrawal scheduled, and its nullifier is consumed once.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
-    pub nonce: Nonce,
     pub service_note_nullifier: NoteNullifier,
     pub outputs: OutputCommitments,
     pub excess_value: Value,
@@ -840,7 +852,7 @@ mod tests {
 
     use super::declaration_id_preimage;
     use crate::{
-        mantle::notes::{InputNullifiers, OutputCommitments},
+        mantle::notes::InputNullifiers,
         sdp::{
             Declaration, DeclarationId, DeclarationMessage, Locator, Locators, Nonce, ProviderId,
             ServiceType,
@@ -934,7 +946,8 @@ mod tests {
                 .unwrap(),
             provider_id: Ed25519Key::from_bytes(&[0; _]).public_key().into(),
             zk_id: ZkPublicKey::zero(),
-            note_pk: ZkPublicKey::zero(),
+            note_pk: ZkPublicKey::new(Fr::from(1u64)),
+            note_stake_pk: ZkPublicKey::new(Fr::from(2u64)),
             inputs: InputNullifiers::default(),
             commitment_merkle_root: Fr::ZERO,
             amount: 0,
@@ -943,10 +956,19 @@ mod tests {
         let declaration = Declaration::new(Epoch::new(10), &msg);
         assert_eq!(declaration.service_type, msg.service_type);
         assert_eq!(declaration.provider_id, msg.provider_id);
-        assert_eq!(declaration.service_note, msg.service_note().commitment());
-        assert_eq!(declaration.withdraw_outputs, OutputCommitments::default());
+        // The service note is under the note_pk and the note_stake_pk.
+        let service_note = msg.service_note();
+        assert_eq!(
+            (service_note.public_key, service_note.stake_public_key),
+            (msg.note_pk, msg.note_stake_pk)
+        );
+        assert_eq!(declaration.service_note, service_note.commitment());
         assert_eq!(declaration.locators, msg.locators);
         assert_eq!(declaration.zk_id, msg.zk_id);
+        assert_eq!(
+            (declaration.note_pk, declaration.note_stake_pk),
+            (msg.note_pk, msg.note_stake_pk)
+        );
         assert_eq!(declaration.created, Epoch::new(10));
         assert_eq!(declaration.active, Epoch::new(12)); // created + SNAPSHOT_FINALIZATION_DELAY
         assert_eq!(declaration.withdraw_at, None);
@@ -962,6 +984,7 @@ mod tests {
             provider_id: Ed25519Key::from_bytes(&[1; _]).public_key().into(),
             zk_id: ZkPublicKey::new(Fr::from(3u64)),
             note_pk: ZkPublicKey::new(Fr::from(3u64)),
+            note_stake_pk: ZkPublicKey::new(Fr::from(3u64)),
             inputs: InputNullifiers::default(),
             commitment_merkle_root: Fr::ZERO,
             amount: 1,
@@ -1180,7 +1203,6 @@ impl WithdrawMessage {
     pub fn sample() -> Self {
         Self {
             declaration_id: DeclarationId([27u8; 32]),
-            nonce: Nonce::new(Epoch::new(0), 29),
             service_note_nullifier: NoteNullifier(Fr::from(28u64)),
             outputs: [NoteCommitment(Fr::from(46u64))].into(),
             excess_value: 47,

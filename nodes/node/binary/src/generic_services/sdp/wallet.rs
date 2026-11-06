@@ -6,7 +6,7 @@ use lb_core::{
         notes::NoteNullifier,
         transactions::{MantleTxBuilder, builder::ZkTransferOpening, states::Preverified},
     },
-    sdp::{ActiveMessage, DeclarationMessage, Nonce, WithdrawMessage},
+    sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };
 use lb_groth16::{Fr, fr_from_mod_bytes};
 use lb_sdp_service::{
@@ -108,6 +108,7 @@ where
                     provider_id: declaration.provider_id,
                     zk_id: declaration.zk_id,
                     note_pk: declaration.note_pk,
+                    note_stake_pk: declaration.note_stake_pk,
                     inputs: [exact.nullifier].into(),
                     commitment_merkle_root,
                     amount: declaration.amount,
@@ -138,7 +139,7 @@ where
                 tx_builder.clone(),
                 config.funding_pk,
                 vec![config.funding_pk],
-                0,
+                lb_wallet_service::FEE_MARGIN_PERCENT,
             )
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
@@ -163,7 +164,6 @@ where
         &self,
         mut tx_builder: MantleTxBuilder,
         declaration: &RuntimeDeclaration,
-        nonce: Nonce,
         config: &SdpWalletConfig,
     ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError> {
         let service_note = self
@@ -186,7 +186,6 @@ where
         tx_builder = tx_builder.push_op_with_opening(
             Op::SDPWithdraw(WithdrawMessage {
                 declaration_id: declaration.id,
-                nonce,
                 service_note_nullifier: service_note.nullifier,
                 outputs: [output.commitment()].into(),
                 excess_value: 0,
@@ -207,7 +206,7 @@ where
                 tx_builder.clone(),
                 config.funding_pk,
                 vec![config.funding_pk],
-                0,
+                lb_wallet_service::FEE_MARGIN_PERCENT,
             )
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
@@ -243,7 +242,7 @@ where
                 tx_builder.clone(),
                 config.funding_pk,
                 vec![config.funding_pk],
-                0,
+                lb_wallet_service::FEE_MARGIN_PERCENT,
             )
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;

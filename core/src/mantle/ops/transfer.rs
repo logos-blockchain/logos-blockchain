@@ -151,11 +151,7 @@ impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverifi
             .note_sets
             .get(LEDGER_SET)
             .expect("the ledger note set always exists");
-        ledger.assert_spendable(
-            operation.inputs.as_slice(),
-            &operation.commitment_merkle_root,
-            context.block_number,
-        )?;
+        ledger.assert_spendable(operation.inputs.as_slice())?;
         let tx_commitment_root = ledger.cached_tx_commitment_root(
             context.note_sets.tx_roots(),
             &operation.commitment_merkle_root,
@@ -232,6 +228,7 @@ pub fn transfer_witness(
                 .map_or_else(ZkTransferInputNoteData::inactive, |(note, path)| {
                     ZkTransferInputNoteData {
                         secret_key: Fr::ZERO,
+                        stake_public_key: *note.stake_public_key.as_fr(),
                         nonce: note.nonce,
                         value: note.value,
                         path_and_selectors: core::array::from_fn(|h| {
@@ -246,6 +243,7 @@ pub fn transfer_witness(
                 .map_or_else(ZkTransferOutputNoteData::inactive, |note| {
                     ZkTransferOutputNoteData {
                         public_key: *note.public_key.as_fr(),
+                        stake_public_key: *note.stake_public_key.as_fr(),
                         nonce: note.nonce,
                         value: note.value,
                     }
@@ -526,7 +524,8 @@ mod test {
         let root = sets.get(LEDGER_SET).unwrap().commitment_root();
         assert_eq!(root, mmr.frontier_root());
         let output = Note::new(994, Fr::from(12u64), ZkPublicKey::new(Fr::from(2u64)));
-        let nullifier = derive_note_nullifier(&input.commitment(), &secret_key);
+        let nullifier =
+            derive_note_nullifier(&input.commitment(), &ZkKey::new(secret_key).nullifier_key());
         let proof = prove_transfer(
             &[(input, secret_key, path)],
             &[output],

@@ -25,7 +25,6 @@ use lb_chain_service::{
     ConsensusMsg, EpochState, ProcessedBlockEvent, Slot, api::CryptarchiaServiceApi,
 };
 use lb_core::{
-    crypto::ZkHash,
     header::HeaderId,
     mantle::{
         Value,
@@ -231,7 +230,6 @@ impl TicketGenerator {
 #[derive(Clone, Copy)]
 struct BlockSearch {
     slot: Slot,
-    epoch_nonce: ZkHash,
     difficulty: PowTarget,
     /// The key the winning claims pay.
     reward_key: ZkPublicKey,
@@ -303,7 +301,6 @@ fn new_block_search_stream(
     block_header: HeaderId,
     BlockSearch {
         slot,
-        epoch_nonce,
         difficulty,
         reward_key,
         remaining_winners,
@@ -316,13 +313,7 @@ fn new_block_search_stream(
         reason = "`repeat_with` takes a FnMut not an async closure"
     )]
     let tasks = iter::repeat_with(move || {
-        search_winner_ticket(
-            block_header,
-            epoch_nonce,
-            difficulty,
-            reward_key,
-            Arc::clone(&pool),
-        )
+        search_winner_ticket(block_header, difficulty, reward_key, Arc::clone(&pool))
     });
     let results = stream::iter(tasks).buffer_unordered(max_tickets_per_block.get());
     let winners = tokio_stream::StreamExt::filter_map(results, |maybe_winner| maybe_winner)
@@ -341,7 +332,6 @@ fn new_block_search_stream(
 /// target, otherwise `None`.
 async fn search_winner_ticket(
     block_header: HeaderId,
-    epoch_nonce: ZkHash,
     difficulty: PowTarget,
     reward_key: ZkPublicKey,
     pool: Arc<ThreadPool>,
@@ -356,7 +346,6 @@ async fn search_winner_ticket(
 
         let nonce = fr_from_mod_bytes(&rand::thread_rng().r#gen::<[u8; 32]>());
         let claim = ClaimPowRewardOp {
-            epoch_nonce,
             block_hash: block_header.into(),
             public_key: reward_key,
             nonce,
@@ -429,7 +418,7 @@ impl Stream for TicketGenerator {
             // 2. Otherwise ingest the next processed block.
             match this.processed_block_stream.poll_next_unpin(cx) {
                 Poll::Ready(Some((
-                    epoch_state,
+                    _epoch_state,
                     ledger_state,
                     ProcessedBlockEvent {
                         block_id,
@@ -454,7 +443,6 @@ impl Stream for TicketGenerator {
                     {
                         let search = BlockSearch {
                             slot: block_slot,
-                            epoch_nonce: epoch_state.nonce,
                             difficulty: pow.reward_difficulty(),
                             reward_key,
                             remaining_winners: max_winners,
@@ -535,15 +523,9 @@ mod tests {
         )
     }
 
-    /// The genesis/zero field element, reused as a stand-in epoch nonce.
-    fn zero_fr() -> Fr {
-        *ZkPublicKey::zero().as_fr()
-    }
-
     fn search_at(slot: u64) -> BlockSearch {
         BlockSearch {
             slot: Slot::new(slot),
-            epoch_nonce: zero_fr(),
             difficulty: Fr::ZERO,
             reward_key: ZkPublicKey::zero(),
             remaining_winners: NonZeroUsize::new(2).unwrap(),
@@ -679,14 +661,13 @@ mod tests {
     }
 
     #[test]
-    fn prune_shared_nonce_searches_at_each_anchor_era_boundary() {
+    fn prune_searches_at_each_anchor_era_boundary() {
         let old = HeaderId::from([1u8; 32]);
         let new = HeaderId::from([2u8; 32]);
         let mut streams = StreamMap::new();
         streams.insert(old, pending_stream());
         streams.insert(new, pending_stream());
         let mut inputs = HashMap::from([(old, search_at(95)), (new, search_at(101))]);
-        assert_eq!(inputs[&old].epoch_nonce, inputs[&new].epoch_nonce);
         let schedule = era_schedule(&[10, 100]);
 
         for (current, old_live, new_live) in [
@@ -708,7 +689,6 @@ mod tests {
         // No ticket can be strictly below zero, so this attempt never wins.
         let result = search_winner_ticket(
             HeaderId::from([7u8; 32]),
-            zero_fr(),
             Fr::ZERO,
             ZkPublicKey::zero(),
             test_pool(),
@@ -720,25 +700,17 @@ mod tests {
     #[tokio::test]
     async fn search_winner_ticket_builds_a_valid_winning_claim() {
         let block_header = HeaderId::from([9u8; 32]);
-        let epoch_nonce = zero_fr();
         // Maximum field element: every ticket is below it, so the attempt wins.
         let difficulty = Fr::ZERO - Fr::from(1u64);
 
         let reward_key = ZkPublicKey::new(Fr::from(5u64));
 
-        let claim = search_winner_ticket(
-            block_header,
-            epoch_nonce,
-            difficulty,
-            reward_key,
-            test_pool(),
-        )
-        .await
-        .expect("a win is essentially certain at maximum difficulty");
+        let claim = search_winner_ticket(block_header, difficulty, reward_key, test_pool())
+            .await
+            .expect("a win is essentially certain at maximum difficulty");
 
         // The claim reflects the search inputs and pays the reward key.
         assert_eq!(claim.public_key, reward_key);
-        assert_eq!(claim.epoch_nonce, epoch_nonce);
         assert_eq!(claim.block_hash, <[u8; 32]>::from(block_header));
         // The winning ticket genuinely satisfies the difficulty target.
         assert!(
@@ -776,7 +748,6 @@ mod tests {
         let difficulty = Fr::ZERO - Fr::from(1u64);
         let search = BlockSearch {
             slot: Slot::new(11),
-            epoch_nonce: zero_fr(),
             difficulty,
             reward_key: ZkPublicKey::zero(),
             remaining_winners: NonZeroUsize::new(3).unwrap(),
@@ -814,7 +785,6 @@ mod tests {
     /// A winning ticket paying `public_key`.
     fn ticket(public_key: ZkPublicKey) -> ClaimPowRewardOp {
         ClaimPowRewardOp {
-            epoch_nonce: zero_fr(),
             block_hash: [0u8; 32],
             public_key,
             nonce: Fr::from(rand::random::<u64>()),

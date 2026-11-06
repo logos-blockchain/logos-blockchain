@@ -296,7 +296,11 @@ fn build_tx(
 ) -> SignedOps<Preverified, StandardMode> {
     let output = notes::Note::new(1, output_nonce, note.public_key);
     let transfer_op = TransferOp::new(
-        [derive_note_nullifier(&note.commitment(), &secret_key)].into(),
+        [derive_note_nullifier(
+            &note.commitment(),
+            &ZkKey::new(secret_key).nullifier_key(),
+        )]
+        .into(),
         [output.commitment()].into(),
         root,
         // Most of the tx's value goes as a tip, to withstand gas cost increases.

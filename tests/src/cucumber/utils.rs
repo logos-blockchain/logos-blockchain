@@ -198,12 +198,11 @@ pub(crate) fn user_config_from_node_yaml(path: &Path) -> Result<UserConfig, Step
     Ok(config)
 }
 
-/// Reads a node YAML user config file and extracts the configured Blend core
-/// ZK wallet public key.
-pub fn blend_core_zk_pk_from_node_yaml(path: &Path) -> Result<String, StepError> {
+/// Reads a node YAML user config file and derives the `zk_id` of its Blend core
+/// key, the one its declaration names.
+pub fn blend_core_zk_id_from_node_yaml(path: &Path) -> Result<ZkPublicKey, StepError> {
     let config = user_config_from_node_yaml(path)?;
-    let (zk_key_id, _) = config.blend_zk_key().map_err(StepError::UserConfigError)?;
-    Ok(zk_key_id)
+    config.blend_zk_id().map_err(StepError::UserConfigError)
 }
 
 /// Reads a node YAML user config file and extracts the configured Blend core

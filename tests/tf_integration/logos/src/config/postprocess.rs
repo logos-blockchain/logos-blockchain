@@ -5,7 +5,7 @@ use lb_config::{
 };
 use lb_core::{
     block::genesis::GenesisBlock,
-    mantle::{GenesisTime, traits::GenesisTx as _},
+    mantle::GenesisTime,
     sdp::{Locator, ServiceType},
 };
 use lb_key_management_system_service::keys::{Key, ZkKey};
@@ -51,7 +51,7 @@ pub fn apply_wallet_genesis_overrides(
         .iter()
         .map(|general| general.consensus_config.funding_pk)
         .collect::<Vec<_>>();
-    let mut transfer_op = genesis_block.genesis_tx().distribution();
+    let mut transfer_op = genesis_block.genesis_tx().distribution().clone();
     fund_wallets(
         &mut transfer_op,
         &funding_keys,
@@ -96,10 +96,7 @@ pub fn apply_wallet_genesis_overrides(
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{
-        ops::OpRef,
-        traits::{GenesisTx as _, MantleTx as _},
-    };
+    use lb_core::mantle::{ops::OpRef, traits::MantleTx as _};
     use lb_sdp_service::DeclarationConfig;
 
     use crate::{

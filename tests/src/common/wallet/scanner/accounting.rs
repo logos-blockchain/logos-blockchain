@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap, VecDeque, hash_map::Entry};
+use std::collections::{BTreeSet, HashMap, hash_map::Entry};
 
 use lb_common_http_client::ApiBlock;
 use lb_core::{
@@ -13,8 +13,7 @@ use lb_core::{
 };
 use lb_key_management_system_service::keys::{UnsecuredZkKey, ZkPublicKey};
 use lb_wallet::{
-    KnownNote, KnownNotes, SPEND_ROOT_DEPTH, Wallet, WalletBlock, WalletError, WalletState,
-    revealed_notes,
+    KnownNote, KnownNotes, Wallet, WalletBlock, WalletError, WalletState, revealed_notes,
 };
 use thiserror::Error;
 
@@ -43,9 +42,6 @@ pub struct ScannerAccounting {
     wallet: Wallet<()>,
     // the last block applied to `wallet`
     tip: HeaderId,
-    // the blocks `wallet` holds, oldest first: the tip and those down to the
-    // spend root
-    held_blocks: VecDeque<HeaderId>,
     observed_transaction_hashes: BTreeSet<TxHash>,
 }
 
@@ -120,7 +116,6 @@ impl ScannerAccounting {
                 &[],
             )?,
             tip: HeaderId::from(GENESIS_ID),
-            held_blocks: VecDeque::from([HeaderId::from(GENESIS_ID)]),
             observed_transaction_hashes: BTreeSet::new(),
         })
     }
@@ -172,10 +167,9 @@ impl ScannerAccounting {
             revealed,
         })?;
         self.tip = id;
-        self.held_blocks.push_back(id);
-        while self.held_blocks.len() > SPEND_ROOT_DEPTH + 1 {
-            self.wallet.prune_states(self.held_blocks.pop_front());
-        }
+        // As the tip were the LIB: the wallet holds it and the blocks down to the
+        // spend root.
+        self.wallet.prune_states(id);
         Ok(())
     }
 
@@ -255,7 +249,7 @@ impl ScannerAccounting {
         let Some(secret_key) = self.secret_keys.get(&note.public_key) else {
             return;
         };
-        let nullifier = derive_note_nullifier(&note.commitment(), secret_key.as_fr());
+        let nullifier = derive_note_nullifier(&note.commitment(), &secret_key.nullifier_key());
         self.wallet.add_known_notes([KnownNote {
             note,
             note_set,

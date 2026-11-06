@@ -48,7 +48,7 @@ pub struct BatchVerifiedUpdate<Id> {
 mod tests {
     use lb_core::{
         events::{Event, HeaderEvent},
-        mantle::{batch::DeferredZkTransfer, notes::OutputCommitments},
+        mantle::batch::DeferredZkTransfer,
         sdp::{DeclarationId, ServiceType},
     };
     use lb_groth16::{Field as _, Fr};
@@ -91,10 +91,9 @@ mod tests {
     }
 
     fn header_event() -> Event {
-        HeaderEvent::SdpWithdrawalReleased {
+        HeaderEvent::SdpDeclarationRemoved {
             service_type: ServiceType::BlendNetwork,
             declaration_id: DeclarationId([2; 32]),
-            outputs: OutputCommitments::default(),
         }
         .into()
     }

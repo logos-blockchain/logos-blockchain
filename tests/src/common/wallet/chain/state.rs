@@ -76,12 +76,7 @@ impl GenesisNotes {
     #[must_use]
     pub fn from_genesis_tx(genesis_tx: &GenesisTx) -> Self {
         Self {
-            notes: genesis_tx
-                .distribution()
-                .iter()
-                .enumerate()
-                .map(|(index, allocation)| allocation.note(index))
-                .collect(),
+            notes: genesis_tx.initial_notes(),
             service_notes: genesis_tx
                 .sdp_declarations()
                 .map(|declaration| declaration.operation().service_note())

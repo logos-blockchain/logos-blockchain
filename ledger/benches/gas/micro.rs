@@ -19,7 +19,7 @@ use lb_core::{
             channel::{
                 MsgId,
                 inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step},
-                program_step::{Payment, ProgramOutputs, ProgramStep},
+                program_step::{ProgramDeposit, ProgramStep},
             },
         },
         programs::RegisteredProgram,
@@ -128,7 +128,7 @@ pub fn program_spends(n: usize) -> Vec<DeferredZkProgramSpend> {
             let mut inputs = *PROGRAM_SPEND.inputs();
             inputs.inputs = random_inputs(&mut rng);
             inputs.outputs = random_inputs(&mut rng);
-            inputs.spend_notes_hash = random_input(&mut rng);
+            inputs.program_step_id = random_input(&mut rng);
             inputs.inputs_active = random_inputs(&mut rng);
             inputs.outputs_active = random_inputs(&mut rng);
             inputs.outputs_of_program = random_inputs(&mut rng);
@@ -438,22 +438,26 @@ fn applied_program_spend() -> DeferredZkProgramSpend {
         .channel_state(&fixture.channel)
         .expect("the channel exists")
         .tip_message;
-    let mini_blocks: MiniBlocks = [MiniBlock::from([Step::Program(ProgramStep {
-        program_id: fixture.program,
-        payments: [Payment {
+    let mini_blocks: MiniBlocks = [MiniBlock::from([
+        Step::ProgramDeposit(ProgramDeposit {
+            program_id: fixture.program,
             inputs: [nullifiers(1, 0x9a)[0]].into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: root,
-            paid_value: 5,
+            value: 5,
             intent: Fr::ONE,
-        }]
-        .into(),
-        inputs: InputNullifiers::default(),
-        outputs: [commitments(1, 0x9a)[0]].into(),
-        program_outputs: ProgramOutputs::default(),
-        commitment_merkle_root: root,
-        spend_notes_hash: Fr::ZERO,
-    })])]
+            inscription: Inscription::default(),
+        }),
+        Step::Program(ProgramStep {
+            program_id: fixture.program,
+            inputs: InputNullifiers::default(),
+            program_outputs: OutputCommitments::default(),
+            outputs: [commitments(1, 0x9a)[0]].into(),
+            commitment_merkle_root: root,
+            program_step_id: Fr::ZERO,
+            inscription: Inscription::default(),
+        }),
+    ])]
     .into();
     let step_proofs = mini_blocks
         .iter()

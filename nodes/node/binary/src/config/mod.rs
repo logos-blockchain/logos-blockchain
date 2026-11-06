@@ -9,7 +9,7 @@ use lb_core::sdp::ProviderId;
 use lb_groth16::fr_from_bytes;
 use lb_key_management_system_service::{
     backend::preload::KeyId,
-    keys::{Key, UnsecuredZkKey, ZkPublicKey},
+    keys::{Key, UnsecuredZkKey, ZkPublicKey, kdf_public_key},
 };
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use lb_tracing::{
@@ -200,6 +200,17 @@ impl UserConfig {
             return Err("Blend ZK signing key must be Zk".to_owned());
         };
         Ok((key_id.to_owned(), secret_key.to_public_key()))
+    }
+
+    /// The `zk_id` of the Blend key, `zkhash(KDF, core_sk)`, which the node
+    /// declares and proves in the Proof of Quota. It is not the public key of
+    /// the notes of the key, which `blend_zk_key` gives.
+    pub fn blend_zk_id(&self) -> Result<ZkPublicKey, String> {
+        let key_id = &self.blend.core.zk.secret_key_kms_id;
+        let Some(Key::Zk(secret_key)) = self.kms.backend.keys.get(key_id) else {
+            return Err(format!("Blend ZK key '{key_id}' not found in KMS"));
+        };
+        Ok(kdf_public_key(secret_key.as_fr()))
     }
 }
 

@@ -176,10 +176,10 @@ mod tests {
     use super::*;
     use crate::test_utils::sample_witness_data;
 
-    // Sample: active inputs of 2908 and 3669 and a paid value of 1389 balance seven
-    // outputs of 995 and one of 1001; the first four outputs are notes of the
+    // Sample: active inputs of 2643 and 4744 and a paid value of 2636 balance seven
+    // outputs of 1252 and one of 1259; the first four outputs are notes of the
     // program.
-    const SAMPLE_PAID: u64 = 303;
+    const SAMPLE_PAID: u64 = 2636;
     const SAMPLE_OF_PROGRAM: [bool; 8] = [true, true, true, true, false, false, false, false];
 
     fn frs(values: &[Groth16Input]) -> Vec<Fr> {
@@ -209,7 +209,7 @@ mod tests {
             tx_commitment_root: data.chain.tx_commitment_root,
             program_id: data.chain.program_id,
             paid_value: SAMPLE_PAID,
-            spend_notes_hash: inputs.spend_notes_hash.into_inner(),
+            program_step_id: inputs.program_step_id.into_inner(),
             msg: data.chain.msg,
         })
         .unwrap();
@@ -227,7 +227,7 @@ mod tests {
                 tx_commitment_root: Fr::ZERO,
                 program_id: Fr::ZERO,
                 paid_value: 0,
-                spend_notes_hash: Fr::ZERO,
+                program_step_id: Fr::ZERO,
                 msg: Fr::ZERO,
             })
             .unwrap_err()

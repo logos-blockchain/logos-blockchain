@@ -743,7 +743,16 @@ where
             ..wallet_inputs
         };
 
-        // The PoL is bound to the header by pol_msg, blocks carry no signature.
+        let private = kms
+            .build_private_inputs(
+                winning.note.key_id.clone(),
+                winning.public_inputs,
+                wallet_inputs,
+                reward.value,
+            )
+            .await?;
+        // The PoL is bound to the block ID, blocks carry no signature. The block ID
+        // covers the entropy contribution, set before proving.
         let msg = block_msg(
             &parent,
             slot,
@@ -751,16 +760,9 @@ where
             txs.as_slice(),
             &reward.commitment(),
             reward.value,
+            &private.entropy_contribution(),
         );
-        let private = kms
-            .build_private_inputs(
-                winning.note.key_id.clone(),
-                winning.public_inputs,
-                wallet_inputs,
-                msg,
-                reward.value,
-            )
-            .await?;
+        let private = private.with_msg(msg);
         let block = spawn_blocking("logos/chain/leader-proof-blocking", move || {
             assemble_block(parent, slot, uncle_headers, txs, private)
         })

@@ -6,7 +6,7 @@ use lb_core::{
         notes::NoteCommitment,
         transactions::{MantleTxBuilder, TxBuilderError, states::Preverified},
     },
-    sdp::{ActiveMessage, Nonce},
+    sdp::ActiveMessage,
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use overwatch::{
@@ -69,7 +69,6 @@ pub trait SdpWalletAdapter {
         &self,
         tx_builder: MantleTxBuilder,
         declaration: &RuntimeDeclaration,
-        nonce: Nonce,
         config: &SdpWalletConfig,
     ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError>;
 }

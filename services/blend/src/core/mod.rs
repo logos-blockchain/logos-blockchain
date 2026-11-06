@@ -55,8 +55,7 @@ use lb_chain_service::{Epoch, api::CryptarchiaServiceData};
 use lb_core::sdp::ActivityMetadata;
 use lb_cryptarchia_engine::{Era, EraSchedule};
 use lb_key_management_system_service::{
-    api::KmsServiceApi,
-    keys::{KeyOperators, PublicKeyEncoding},
+    api::KmsServiceApi, keys::KeyOperators,
     operators::ed25519::exfiltrate_secret_key::LeakSecretKeyOperator,
 };
 use lb_log_targets::{blend, diagnostic::BLEND_REACHABILITY};
@@ -360,13 +359,8 @@ where
         }
         .await;
 
-        let PublicKeyEncoding::Zk(zk_public_key) =
-            Box::pin(kms_api.public_key(zk.secret_key_kms_id.clone()))
-                .await
-                .expect("ZK public key for provided ID should be stored in KMS.")
-        else {
-            panic!("Key with specified ID is not a ZK key.");
-        };
+        // The node finds itself in the core membership by its zk_id.
+        let zk_public_key = crate::kms::zk_id(&kms_api, zk.secret_key_kms_id.clone()).await;
 
         // TODO: This will go once we do not need to pass the secret key
         // anymore, i.e., when we have libp2p integration with KMS.

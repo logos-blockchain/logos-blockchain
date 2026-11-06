@@ -87,9 +87,10 @@ pub struct DeclarationRequest {
     pub locators: Locators,
     pub provider_id: ProviderId,
     pub zk_id: ZkPublicKey,
-    // The key of the service note. The node can only withdraw the declaration
-    // when its wallet holds this key.
+    // The keys of the service note and of the rewards. The node can only
+    // withdraw the declaration when its wallet holds the `note_pk`.
     pub note_pk: ZkPublicKey,
+    pub note_stake_pk: ZkPublicKey,
     pub amount: Value,
 }
 
@@ -909,21 +910,11 @@ where
             return;
         };
 
-        let Some(nonce) = next_message_nonce(declaration.nonce) else {
-            error!(target: LOG_TARGET, "SDP nonce sequence exhausted; cannot post withdrawal");
-            metrics::withdrawal_validation_failures_total();
-            Self::reply(
-                Some(reply_channel),
-                Err(DynError::from("Can't bump nonce")),
-                "post withdrawal",
-            );
-            return;
-        };
-
         let tx_builder = MantleTxBuilder::new();
 
+        // A withdrawal carries no nonce: it is valid while no withdrawal is scheduled.
         let signed_tx = match wallet_adapter
-            .withdraw_tx(tx_builder, &declaration, nonce, &self.wallet_config)
+            .withdraw_tx(tx_builder, &declaration, &self.wallet_config)
             .await
         {
             Ok(tx) => tx,
@@ -1161,6 +1152,7 @@ mod tests {
             provider_id: ProviderId(Ed25519PublicKey::from_bytes(&[10; 32]).unwrap()),
             zk_id: ZkPublicKey::new(Fr::from(2u64)),
             note_pk: ZkPublicKey::new(Fr::from(3u64)),
+            note_stake_pk: ZkPublicKey::new(Fr::from(4u64)),
             amount: 1_000,
         };
         let config = DeclarationConfig::from(&request);

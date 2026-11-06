@@ -25,8 +25,8 @@ pub const PROGRAM_KEY_SIZE: usize = 352;
 
 static PROGRAM_ID_V1: LazyLock<Vec<u8>> = LazyLock::new(|| b"PROGRAM_ID_V1".to_vec());
 
-static PROGRAM_SPEND_NOTES_V1: LazyLock<Fr> = LazyLock::new(|| {
-    fr_from_bytes(b"PROGRAM_SPEND_NOTES_V1").expect("BigUint should load from constant string")
+static PROGRAM_STEP_ID_V1: LazyLock<Fr> = LazyLock::new(|| {
+    fr_from_bytes(b"PROGRAM_STEP_ID_V1").expect("BigUint should load from constant string")
 });
 
 // Alpha G1, Beta Gamma Delta G2, 4 IC G1, compressed.
@@ -248,6 +248,7 @@ pub struct SpendInputFields {
     pub value: Value,
     pub nonce: Fr,
     pub public_key: ZkPublicKey,
+    pub stake_public_key: ZkPublicKey,
     pub data: Fr,
 }
 
@@ -257,6 +258,7 @@ pub struct SpendOutputFields {
     pub value: Value,
     pub nonce: Fr,
     pub public_key: ZkPublicKey,
+    pub stake_public_key: ZkPublicKey,
     pub program: ProgramId,
     pub data: Fr,
 }
@@ -270,6 +272,7 @@ impl SpendInputFields {
             value: 0,
             nonce: Fr::ZERO,
             public_key: ZkKey::new(Fr::ZERO).to_public_key(),
+            stake_public_key: ZkPublicKey::zero(),
             data: Fr::ZERO,
         }
     }
@@ -283,6 +286,7 @@ impl SpendOutputFields {
             value: 0,
             nonce: Fr::ZERO,
             public_key: ZkPublicKey::zero(),
+            stake_public_key: ZkPublicKey::zero(),
             program: Fr::ZERO,
             data: Fr::ZERO,
         }
@@ -295,6 +299,7 @@ impl SpendOutputFields {
             value: note.value,
             nonce: note.nonce,
             public_key: note.public_key,
+            stake_public_key: note.stake_public_key,
             program: note.program,
             data: note.data,
         }
@@ -302,7 +307,7 @@ impl SpendOutputFields {
 }
 
 #[must_use]
-pub fn spend_notes_hash(
+pub fn program_step_id(
     inputs: &[SpendInputFields; MAX_INPUTS],
     outputs: &[SpendOutputFields; MAX_OUTPUTS],
 ) -> Fr {
@@ -315,6 +320,7 @@ pub fn spend_notes_hash(
             flag * Fr::from(input.value),
             flag * input.nonce,
             flag * *input.public_key.as_fr(),
+            flag * *input.stake_public_key.as_fr(),
             flag * input.data,
         ]
     });
@@ -325,12 +331,13 @@ pub fn spend_notes_hash(
             flag * Fr::from(output.value),
             flag * output.nonce,
             flag * *output.public_key.as_fr(),
+            flag * *output.stake_public_key.as_fr(),
             flag * output.program,
             flag * output.data,
         ]
     });
     ZkHasher::digest(
-        &core::iter::once(*PROGRAM_SPEND_NOTES_V1)
+        &core::iter::once(*PROGRAM_STEP_ID_V1)
             .chain(inputs)
             .chain(outputs)
             .collect::<Vec<_>>(),
@@ -340,6 +347,7 @@ pub fn spend_notes_hash(
 #[cfg(test)]
 mod tests {
     use lb_groth16::test_utils::{generator_multiples_key, three_input_prove, three_input_setup};
+    use lb_key_management_system_keys::keys::PK0;
 
     use super::*;
     use crate::mantle::{
@@ -442,18 +450,22 @@ mod tests {
         let (_, public) = lb_program_spend::prove(data.clone().into()).unwrap();
         let inputs = core::array::from_fn(|i| {
             let input = &data.wallet.inputs[i];
-            let public_key = ZkKey::new(input.secret_key).to_public_key();
+            // every note of the program is held by PK0
+            let key = ZkKey::new(Fr::ZERO);
+            let public_key = *PK0;
+            let stake_public_key = ZkPublicKey::new(input.stake_public_key);
             if data.chain.inputs_active[i] {
                 let note = Note {
                     value: input.value,
                     nonce: input.nonce,
                     public_key,
+                    stake_public_key,
                     program: data.chain.program_id,
                     data: input.data,
                 };
                 assert_eq!(
                     public.inputs[i].into_inner(),
-                    derive_note_nullifier(&note.commitment(), &input.secret_key).0
+                    derive_note_nullifier(&note.commitment(), &key.nullifier_key()).0
                 );
             }
             SpendInputFields {
@@ -461,6 +473,7 @@ mod tests {
                 value: input.value,
                 nonce: input.nonce,
                 public_key,
+                stake_public_key,
                 data: input.data,
             }
         });
@@ -470,6 +483,7 @@ mod tests {
                 value: output.value,
                 nonce: output.nonce,
                 public_key: ZkPublicKey::new(output.public_key),
+                stake_public_key: ZkPublicKey::new(output.stake_public_key),
                 program: output.program,
                 data: output.data,
             };
@@ -491,8 +505,8 @@ mod tests {
             }
         });
         assert_eq!(
-            spend_notes_hash(&inputs, &outputs),
-            public.spend_notes_hash.into_inner()
+            program_step_id(&inputs, &outputs),
+            public.program_step_id.into_inner()
         );
     }
 }

@@ -124,21 +124,22 @@ pub enum TxEventPayload {
 /// Events emitted while processing a block header
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HeaderEvent {
-    /// The outputs of a withdrawal entered the ledger note set because the
-    /// epoch after its declaration's `withdraw_at` has been reached.
-    SdpWithdrawalReleased {
+    /// A withdrawn declaration was removed because the epoch after its
+    /// `withdraw_at` has been reached. The outputs of its withdrawal are
+    /// released in the same block, as a [`HeaderEvent::WithdrawalReleased`].
+    SdpDeclarationRemoved {
         service_type: ServiceType,
         declaration_id: DeclarationId,
-        outputs: OutputCommitments,
     },
     /// A reward note of a provider entered the ledger note set.
     SdpRewardDistributed {
         service_type: ServiceType,
         note: Note,
     },
-    /// A channel withdrawal reached its due slot with its notes unspent and its
-    /// outputs entered the ledger note set.
-    ChannelWithdrawalReleased {
+    /// A channel or SDP withdrawal reached its due slot with its notes unspent,
+    /// an SDP withdrawal having none, and its outputs entered the ledger note
+    /// set.
+    WithdrawalReleased {
         note_set: NoteSetIndex,
         inputs: InputNullifiers,
         outputs: OutputCommitments,

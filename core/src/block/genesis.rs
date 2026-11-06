@@ -12,8 +12,6 @@ use crate::{
     header::Header,
     mantle::{
         Op, OpProof,
-        note_set::CommitmentMmr,
-        notes::{InputNullifiers, OutputCommitments},
         ops::{
             ChannelInscribeProof, ZkAndEd25519Proof, ZkTransferProof,
             channel::{
@@ -21,7 +19,6 @@ use crate::{
                 inscribe::{Inscription, InscriptionOp, MiniBlocks},
             },
             sdp::SDPDeclareOp,
-            transfer::TransferOp,
         },
         transactions::{
             Distribution, GENESIS_REQUIRED_OPS, GenesisAllocation, GenesisTx,
@@ -888,27 +885,14 @@ where
     Ok(declarations)
 }
 
-// The genesis Transfer, the Cryptarchia and distribution inscriptions and the
-// declarations, in the order the genesis spec fixes.
+// The Cryptarchia and distribution inscriptions and the declarations, in the
+// order the genesis spec fixes. The initial notes are created from the
+// distribution inscription.
 fn genesis_ops(
     notes: &Distribution,
     inscription: InscriptionOp,
     sdp_declarations: GenesisSDPDeclareOps,
 ) -> Result<Ops> {
-    // The genesis notes take their output index as nonce and are proven
-    // against the empty commitment root.
-    let transfer = TransferOp::new(
-        InputNullifiers::default(),
-        OutputCommitments::try_from_iter(
-            notes
-                .iter()
-                .enumerate()
-                .map(|(index, note)| note.note(index).commitment()),
-        )
-        .expect("as many commitments as genesis notes"),
-        CommitmentMmr::new().frontier_root(),
-        0,
-    );
     let distribution = InscriptionOp {
         channel_id: NULL_CHANNEL_ID,
         inscription: Inscription::try_from(notes.encode_to_vec())
@@ -918,7 +902,6 @@ fn genesis_ops(
         mini_blocks: MiniBlocks::default(),
     };
     let ops: Vec<Op> = [
-        Op::Transfer(transfer),
         Op::ChannelInscribe(inscription),
         Op::ChannelInscribe(distribution),
     ]
@@ -939,7 +922,6 @@ fn genesis_ops(
 fn genesis_block(ops: Ops) -> Result<GenesisBlock> {
     let placeholder_zk = ZkTransferProof::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
     let mut ops_proofs = OpProofs::from([
-        OpProof::ZkTransfer(placeholder_zk),
         OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(Ed25519Signature::zero())),
         OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(Ed25519Signature::zero())),
     ]);
@@ -1341,12 +1323,12 @@ mod tests {
         mantle::{
             GenesisParameters, GenesisTime,
             ledger::verification_mode::GenesisMode,
-            notes::NoteCommitment,
+            notes::InputNullifiers,
             ops::{
                 OpRef,
                 channel::{ChannelId, MsgId},
             },
-            traits::{GenesisTx as _, MantleTx as _},
+            traits::MantleTx as _,
             transactions::{MAX_OPS_PER_TX, states::Preverified},
         },
         sdp::{Locator, ProviderId, ServiceType},
@@ -1404,6 +1386,7 @@ mod tests {
             amount: 0,
             zk_id: ZkPublicKey::from(BigUint::from(u64::from(id) + 1)),
             note_pk: ZkPublicKey::from(BigUint::from(u64::from(id) + 1)),
+            note_stake_pk: ZkPublicKey::from(BigUint::from(u64::from(id) + 1)),
             provider_id: ProviderId(Ed25519PublicKey::from_bytes(&[1; 32]).unwrap()),
             locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
         }
@@ -1422,18 +1405,6 @@ mod tests {
     fn make_signed_genesis_tx(extra_ops: Vec<Op>) -> SignedOps<Preverified, GenesisMode> {
         let notes = [make_note(1_000)];
         let mut ops = vec![
-            Op::Transfer(TransferOp::new(
-                InputNullifiers::default(),
-                OutputCommitments::try_from_iter(
-                    notes
-                        .iter()
-                        .enumerate()
-                        .map(|(index, note)| note.note(index).commitment()),
-                )
-                .unwrap(),
-                CommitmentMmr::new().frontier_root(),
-                0,
-            )),
             Op::ChannelInscribe(valid_inscription()),
             Op::ChannelInscribe(InscriptionOp {
                 channel_id: NULL_CHANNEL_ID,
@@ -1451,9 +1422,6 @@ mod tests {
                 Op::ChannelInscribe(_) => OpProof::ChannelInscribe(
                     ChannelInscribeProof::without_steps(Ed25519Signature::zero()),
                 ),
-                Op::Transfer(_) => OpProof::ZkTransfer(ZkTransferProof::new(
-                    CompressedGroth16Proof::from_bytes(&[0u8; 128]),
-                )),
                 Op::SDPDeclare(_) => {
                     let proof = ZkAndEd25519Proof {
                         zk_proof: ZkTransferProof::new(CompressedGroth16Proof::from_bytes(
@@ -1599,7 +1567,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(block.genesis_tx().transfer().operation().outputs.len(), 3);
+        assert_eq!(block.genesis_tx().distribution().len(), 3);
     }
 
     #[test]
@@ -1634,7 +1602,7 @@ mod tests {
             .unwrap();
 
         let genesis_tx = block.genesis_tx();
-        assert_eq!(genesis_tx.transfer().operation().outputs.len(), 3);
+        assert_eq!(genesis_tx.distribution().len(), 3);
         assert_eq!(genesis_tx.sdp_declarations().count(), 2);
     }
 
@@ -1781,7 +1749,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(block.genesis_tx().transfer().operation().outputs.len(), 3);
+        assert_eq!(block.genesis_tx().distribution().len(), 3);
     }
 
     #[test]
@@ -1809,7 +1777,7 @@ mod tests {
             .unwrap();
 
         let genesis_tx = block.genesis_tx();
-        assert_eq!(genesis_tx.transfer().operation().outputs.len(), 3);
+        assert_eq!(genesis_tx.distribution().len(), 3);
         assert_eq!(genesis_tx.sdp_declarations().count(), 3);
     }
 
@@ -1849,7 +1817,7 @@ mod tests {
     // ── op ordering is correct ────────────────────────────────────────────────
 
     #[test]
-    fn ops_are_ordered_transfer_inscription_declarations() {
+    fn ops_are_ordered_inscriptions_declarations() {
         let block = GenesisBlockBuilder::new()
             .add_declaration(make_sdp_decl(0)) // added first, must end up last
             .add_note(make_note(100))
@@ -1859,10 +1827,9 @@ mod tests {
 
         let tx = block.transactions_iter().next().unwrap();
         let tx_ops = tx.op_refs();
-        assert!(matches!(tx_ops[0], OpRef::Transfer(_)));
+        assert!(matches!(tx_ops[0], OpRef::ChannelInscribe(_)));
         assert!(matches!(tx_ops[1], OpRef::ChannelInscribe(_)));
-        assert!(matches!(tx_ops[2], OpRef::ChannelInscribe(_)));
-        assert!(matches!(tx_ops[3], OpRef::SDPDeclare(_)));
+        assert!(matches!(tx_ops[2], OpRef::SDPDeclare(_)));
     }
 
     #[test]
@@ -1884,18 +1851,12 @@ mod tests {
             Distribution::from(notes).encode_to_vec().as_slice()
         );
         assert_eq!(tx.distribution().as_slice(), notes.as_slice());
-        let transfer = tx.transfer().operation();
-        let outputs: Vec<NoteCommitment> = notes
-            .iter()
-            .enumerate()
-            .map(|(index, note)| note.note(index).commitment())
-            .collect();
-        assert_eq!(transfer.outputs.as_slice(), outputs.as_slice());
-        assert_eq!(
-            transfer.commitment_merkle_root,
-            CommitmentMmr::new().frontier_root()
+        // No Transfer: the initial notes are created from the distribution.
+        assert!(
+            tx.op_refs()
+                .iter()
+                .all(|op| !matches!(op, OpRef::Transfer(_)))
         );
-        assert_eq!(transfer.excess_value, 0);
     }
 
     #[test]

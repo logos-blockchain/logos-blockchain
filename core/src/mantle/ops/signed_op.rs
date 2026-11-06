@@ -28,6 +28,11 @@ use crate::mantle::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "an SDP declaration, with its locators and its two note keys, is the largest \
+              operation; boxing it would change the shape every match on a signed operation reads"
+)]
 pub enum SignedOp<State: VerificationState, Mode: VerificationMode> {
     ChannelInscribe(SignedOperation<InscriptionOp, State, Mode>),
     ChannelConfig(SignedOperation<ChannelConfigOp, State, Mode>),
@@ -299,8 +304,6 @@ impl SignedOp<Preverified, StandardMode> {
                     pow_nullifiers: helper.get_pow_nullifiers(),
                     epoch_pow_reward: helper.get_epoch_pow_reward(),
                     epoch_reward_pool: helper.get_pow_reward_pool(),
-                    current_epoch_nonce: helper.get_current_epoch_nonce(),
-                    previous_epoch_nonce: helper.get_previous_epoch_nonce(),
                     blocks_slot: helper.get_blocks_slot(),
                     slot_windows: helper.get_pow_slot_windows(),
                 };
@@ -455,7 +458,6 @@ mod tests {
         let declaration_id = DeclarationId([0xA5; 32]);
         let operation = SDPWithdrawOp {
             declaration_id,
-            nonce: Nonce::new(Epoch::from(0), 1),
             ..SDPWithdrawOp::sample()
         };
         let proof = <SDPWithdrawOp as ProvableOperation>::Proof::sample();

@@ -69,6 +69,8 @@ pub enum Error {
     },
     #[error("Invalid signer")]
     InvalidSigner,
+    #[error("The inscriptions of the inscribe total {len} bytes, more than {max}")]
+    InscriptionsTooLarge { len: usize, max: usize },
     #[error("Invalid signature")]
     InvalidSignature,
     #[error(
@@ -105,23 +107,19 @@ pub enum Error {
     UnknownProgram(ProgramId),
     #[error("The proof of step {step} is not of the kind of the step")]
     StepProofKind { step: usize },
-    #[error("Program outputs of step {step} name an output it does not have")]
-    ProgramOutputsOutOfRange { step: usize },
-    #[error("Step {step} carries {proofs} payment proofs for {payments} payments")]
-    PaymentProofCount {
-        step: usize,
-        payments: usize,
-        proofs: usize,
-    },
+    #[error("A program deposit to program {0:?} is left unconsumed at the end of its mini-block")]
+    UnconsumedDeposit(ProgramId),
+    #[error("Program step {step} consumes a program deposit to program {program_id:?}")]
+    DepositToAnotherProgram { step: usize, program_id: ProgramId },
     #[error("Step {step} carries {openings} openings for {program_outputs} outputs of the program")]
     ProgramNoteCount {
         step: usize,
         openings: usize,
         program_outputs: usize,
     },
-    #[error("The opening of output {output} of step {step} does not match it")]
+    #[error("The opening of program output {output} of step {step} does not match it")]
     ProgramNoteOpening { step: usize, output: usize },
-    #[error("The payments of step {step} overflow")]
+    #[error("The program deposits consumed by step {step} overflow")]
     PaidValueOverflow { step: usize },
     #[error(transparent)]
     ZkProgramSpendInputs(#[from] ZkProgramSpendInputsError),

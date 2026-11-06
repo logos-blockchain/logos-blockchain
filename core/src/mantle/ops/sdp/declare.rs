@@ -199,11 +199,7 @@ impl VerifiableOperation<StandardMode>
             .note_sets
             .get(LEDGER_SET)
             .expect("the ledger note set always exists");
-        ledger.assert_spendable(
-            operation.inputs.as_slice(),
-            &operation.commitment_merkle_root,
-            context.block_number,
-        )?;
+        ledger.assert_spendable(operation.inputs.as_slice())?;
         let tx_commitment_root = ledger.cached_tx_commitment_root(
             context.note_sets.tx_roots(),
             &operation.commitment_merkle_root,
@@ -292,8 +288,7 @@ mod tests {
             ledger::{Declarations, ProviderIndex},
             note_set::{CommitmentMmr, LEDGER_SET, NoteSet, NoteSetError, NoteSets, SDP_SET},
             notes::{
-                self, NoteCommitment, NoteNullifier, OutputCommitments, derive_note_nonce,
-                derive_note_nullifier,
+                self, NoteCommitment, NoteNullifier, derive_note_nonce, derive_note_nullifier,
             },
             ops::{ZkTransferProof, op_proof::samples::SampleProof as _},
         },
@@ -325,6 +320,7 @@ mod tests {
                 .into(),
             zk_id: ZkKey::from(BigUint::from(zk_sk)).to_public_key(),
             note_pk: ZkKey::from(BigUint::from(zk_sk)).to_public_key(),
+            note_stake_pk: ZkKey::from(BigUint::from(zk_sk)).to_public_key(),
             inputs: [nullifier(2)].into(),
             commitment_merkle_root: root(),
             amount: 10_000,
@@ -621,7 +617,8 @@ mod tests {
                 .unwrap();
             let sets = NoteSets::new().update(LEDGER_SET, ledger).end_block(0);
             let root = mmr.frontier_root();
-            let nullifier = derive_note_nullifier(&input.commitment(), &secret_key);
+            let nullifier =
+                derive_note_nullifier(&input.commitment(), &ZkKey::new(secret_key).nullifier_key());
             let proof = crate::mantle::ops::transfer::test_utils::prove_transfer(
                 &[(input, secret_key, path)],
                 &[],
@@ -670,13 +667,15 @@ mod tests {
         fn execute_spends_the_inputs_and_adds_the_service_note() {
             let operation = SDPDeclareOp::sample();
             let op_id: [u8; 32] =
-                hex::decode("07cad981e914c28fb8d090e67627b05347314ad27090a7212cd3437ba66db105")
+                hex::decode("3bde3b9b04ed242ca887f6f8139e317acf9fe0d8a6237f92e048bc0447bc9b64")
                     .unwrap()
                     .try_into()
                     .unwrap();
             let note_pk = ZkPublicKey::from(Fr::from(48u64));
-            let expected =
-                notes::Note::new(45, derive_note_nonce(&op_id, 0, 45, &note_pk), note_pk);
+            let expected = notes::Note {
+                stake_public_key: ZkPublicKey::from(Fr::from(62u64)),
+                ..notes::Note::new(45, derive_note_nonce(&op_id, 0, 45, &note_pk), note_pk)
+            };
             assert_eq!(operation.service_note(), expected);
 
             let (context, events) = verified(operation.clone())
@@ -702,7 +701,6 @@ mod tests {
             );
             let declaration = context.declarations.get(&operation.id()).unwrap();
             assert_eq!(declaration.service_note, expected.commitment());
-            assert_eq!(declaration.withdraw_outputs, OutputCommitments::default());
             assert_eq!(declaration.created, Epoch::new(4));
             assert_eq!(events, []);
         }

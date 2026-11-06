@@ -171,7 +171,7 @@ fn every_header_case_applies_and_releases_its_withdrawals() {
         let mut released = Vec::new();
         for event in &events {
             match event {
-                HeaderEvent::ChannelWithdrawalReleased {
+                HeaderEvent::WithdrawalReleased {
                     note_set,
                     inputs,
                     outputs,
@@ -186,10 +186,8 @@ fn every_header_case_applies_and_releases_its_withdrawals() {
                     );
                     released.extend(outputs.iter().copied());
                 }
-                HeaderEvent::SdpWithdrawalReleased { outputs, .. } => {
-                    released.extend(outputs.iter().copied());
-                }
-                HeaderEvent::SdpRewardDistributed { .. } => {}
+                HeaderEvent::SdpDeclarationRemoved { .. }
+                | HeaderEvent::SdpRewardDistributed { .. } => {}
             }
         }
         assert_eq!(released, shape.released, "{label}");
@@ -342,7 +340,7 @@ fn the_mixed_block_holds_64_transactions_of_its_counted_shape() {
     assert_eq!(deferred.program_spends as u64, dim("program_steps"));
     assert_eq!(
         deferred.zk_transfers as u64,
-        dim("transfers") + dim("user_steps") + dim("payments") + dim("deposits")
+        dim("transfers") + dim("user_steps") + dim("program_deposits") + dim("deposits")
     );
 }
 
