@@ -681,19 +681,7 @@ where
             Ok(header) => header,
             Err(e) => {
                 metrics::consensus_observe_proposal_reconstruct_err("network", &e);
-                if matches!(
-                    e,
-                    Error::Cryptarchia(lb_chain_service::api::ApiError::InvalidUncles(_))
-                ) {
-                    // Deliberately not recorded against `block_id`. The
-                    // signature does not cover the uncles, and they are not
-                    // bound to the header until the body root is checked
-                    // after reconstruction, so this condemns only the
-                    // received copy, as RFC-495 specifies.
-                    error!(target: LOG_TARGET, %e, ?block_id, "invalid uncles in proposal");
-                } else {
-                    Self::handle_proposal_processing_error(e, block_id, orphan_downloader);
-                }
+                Self::handle_proposal_processing_error(e, block_id, orphan_downloader);
                 return;
             }
         };
@@ -1044,9 +1032,9 @@ fn is_at_or_before_lib(block_slot: Slot, lib_slot: Slot) -> bool {
 /// - `CommsFailure`: relay failure has nothing to do with block validity; a
 ///   blanket "reject" here would poison the cache whenever chain-service is
 ///   temporarily unreachable.
-/// - `InvalidSignature` / `InvalidBody`: they condemn only the received copy,
-///   since the block ID commits to neither the signature nor the transactions.
-///   A genuine copy may arrive later.
+/// - `InvalidSignature` / `InvalidUncles` / `InvalidBody`: they condemn only
+///   the received copy, since the block ID commits to none of the signature,
+///   the uncles and the transactions. A genuine copy may arrive later.
 ///
 /// Other apply errors (e.g. validation failures surfaced as
 /// `ApiError::Unexpected`) are treated as terminal for the orphan pipeline.
@@ -1059,6 +1047,7 @@ const fn is_recoverable_apply_error(err: &Error) -> bool {
                 | lb_chain_service::api::ApiError::AlreadyApplied(_)
                 | lb_chain_service::api::ApiError::CommsFailure(_)
                 | lb_chain_service::api::ApiError::InvalidSignature
+                | lb_chain_service::api::ApiError::InvalidUncles(_)
                 | lb_chain_service::api::ApiError::InvalidBody(_),
         ),
     )
@@ -1529,15 +1518,16 @@ mod tests {
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 
-    /// Failures in what the block ID does not commit to (the signature and the
-    /// transactions) condemn only the received copy, so they must not get the
-    /// block ID rejected: a genuine copy may arrive later.
+    /// Failures in what the block ID does not commit to (the signature, the
+    /// uncles and the transactions) condemn only the received copy, so they
+    /// must not get the block ID rejected: a genuine copy may arrive later.
     #[test]
-    fn signature_and_body_failures_do_not_condemn_the_block() {
+    fn signature_uncle_and_body_failures_do_not_condemn_the_block() {
         use lb_chain_service::api::ApiError;
 
         for err in [
             ApiError::InvalidSignature,
+            ApiError::InvalidUncles(String::new()),
             ApiError::InvalidBody(String::new()),
         ] {
             assert!(is_recoverable_apply_error(&Error::Cryptarchia(err)));
