@@ -5,7 +5,7 @@ use lb_services_utils::overwatch::RecoveryData;
 use lb_time::era::{EpochLength as _, EraTiming, SlotDuration as _};
 use lb_tx_service::{
     TxMempoolSettings,
-    backend::{MempoolSettings, PowClaimEvictionSettings},
+    backend::{MempoolSettings, PowClaimEvictionSettings, TtlSettings},
     network::adapters::libp2p::{
         EraSettings as Libp2pNetworkAdapterEraSettings, Settings as Libp2pNetworkAdapterSettings,
     },
@@ -27,9 +27,10 @@ pub struct ServiceConfig {
 
 impl ServiceConfig {
     /// The settings of the mempool: the user's, and in each era of `eras` the
-    /// era's acceptance window for `PoW` reward claims, so the mempool and the
-    /// ledger agree on when a claim expires, the fork digests it admits, the
-    /// era's slot timing, and the era's transaction topic.
+    /// era's transaction TTL and retirement grace, the era's acceptance window
+    /// for `PoW` reward claims, so the mempool and the ledger agree on when a
+    /// claim expires, the fork digests it admits, the era's slot timing, and
+    /// the era's transaction topic.
     #[must_use]
     pub fn into_mempool_service_settings(
         self,
@@ -45,7 +46,13 @@ impl ServiceConfig {
                 }),
             },
             pool: MempoolSettings {
-                tx_ttl: self.user.tx_ttl,
+                ttl: eras.map(|era| {
+                    let EraRuleset::V1(parameters) = &era.parameters.ruleset;
+                    TtlSettings {
+                        tx_ttl: parameters.mempool.transaction_ttl(),
+                        retirement_grace: parameters.mempool.retirement_grace(),
+                    }
+                }),
                 pow_claim: Some(eras.map(|era| {
                     let EraRuleset::V1(parameters) = &era.parameters.ruleset;
                     PowClaimEvictionSettings {
