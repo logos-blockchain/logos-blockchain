@@ -617,6 +617,40 @@ pub fn check_leader_funding_key(user_config: &UserConfig) -> Result<()> {
     ))
 }
 
+/// Refuses a `PoW` auto-claim target that is not a key of the config's wallet.
+///
+/// The wallet reports no balance for a key it does not track, so such a target
+/// would always look furthest below its threshold and absorb every claim. Run
+/// on the final config, like [`check_leader_funding_key`]. A key the wallet
+/// only registers at runtime, such as a reward key, is not in the config and
+/// is refused as well.
+pub fn check_pow_claim_targets(user_config: &UserConfig) -> Result<()> {
+    let untracked = user_config
+        .pow
+        .auto_claim
+        .targets
+        .iter()
+        .map(|target| target.public_key)
+        .filter(|public_key| {
+            !user_config
+                .wallet
+                .known_keys
+                .values()
+                .any(|known_pk| known_pk == public_key)
+        })
+        .map(|public_key| Ok(serde_yaml::to_string(&public_key)?.trim().to_owned()))
+        .collect::<Result<Vec<_>>>()?;
+    if untracked.is_empty() {
+        return Ok(());
+    }
+    Err(eyre!(
+        "the PoW auto-claim targets {} (`pow.auto_claim.targets`) are not in \
+         `wallet.known_keys`: a target must be a wallet key of the config, since the wallet \
+         reports no balance for any other key and such a target would absorb every claim",
+        untracked.join(", ")
+    ))
+}
+
 pub const fn update_sdp(sdp: &mut SdpConfig, sdp_args: SdpArgs) {
     let SdpArgs {
         sdp_funding_pk: funding_pk,

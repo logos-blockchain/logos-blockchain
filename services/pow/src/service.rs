@@ -540,7 +540,7 @@ where
 
         // A target the wallet does not track reports no balance, so its
         // threshold could never be observed as reached and it would absorb
-        // every claim forever. Refuse to start rather than mis-pay.
+        // every claim forever. Stop rather than mis-pay.
         validate_claim_targets(&wallet_api, &settings.auto_claim.targets).await?;
 
         // Whether claims pay follows the era of the slot the clock is in. The
@@ -967,9 +967,9 @@ fn slot_period_elapsed(last_claim_slot: Slot, tip_slot: Slot, period: NonZeroU64
 ///
 /// The wallet only indexes UTXOs for the keys in its `known_keys` setting, so
 /// an unlisted target always reports an empty balance: it would look
-/// permanently furthest below its threshold and swallow every claim. Failing
-/// here aborts node startup, which is the honest outcome for a
-/// misconfiguration that cannot be detected later.
+/// permanently furthest below its threshold and swallow every claim. The node
+/// refuses to start with such a target in its config; failing here stops the
+/// service, or rejects new settings of a running one, rather than mis-pay.
 async fn validate_claim_targets<WalletService, RuntimeServiceId>(
     wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
     targets: &[ClaimTarget],
