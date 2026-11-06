@@ -61,6 +61,24 @@ After running `docker compose up`, the randomly assigned ports can be viewed wit
 docker compose ps 
 ```
 
+### Reaching the node API by name
+
+A node answers to `localhost` and to IP addresses. A client that reaches its API by any other host name gets
+`403 Forbidden` until that name is listed in the node's user config, which is what stops a web page from reaching the
+API through DNS rebinding. In `compose.run.yml` the explorer and the faucet both call node 0 by name, so that node needs:
+
+```yaml
+api:
+  backend:
+    allowed_hosts:
+      - logos-blockchain-node-0
+      - logos_blockchain_node_0
+```
+
+Web pages are refused the same way, unless the node serves them itself: list a page's origin in
+`api.backend.cors_origins`, such as `https://app.example`, for it to use the API. There is no wildcard for either
+setting.
+
 ## Release & deployment file taxonomy
 
 Deployment files fall into three categories by **how often they change**. This
@@ -129,6 +147,20 @@ way, relative to itself, so they must be shipped next to it:
 
 The ceremony writes the genesis era only: re-running it replaces a schedule
 with that era alone, and removes the era files of the schedule it replaces.
+
+The node checks every era when it loads a deployment, and refuses to start on
+one it cannot run: values the specifications rule out (a slot activation
+coefficient `f` of 1 or more, an uncle reference window `W` wider than `⌊0.6k⌋`,
+a Blend peering degree outside 3 to 5, ...), values the node cannot compute with
+(`f` below 1/1000, `⌊k/4f⌋` of zero, ...), an era whose `W·f⁻¹` exceeds a fifth of
+the previous era's finalization window `3⌊k/f⌋`, and an era that ends within the
+transition period it opens. `--check-config` runs the same checks.
+
+A release may append eras, or change eras that have not begun, but must not
+change an era a node has already executed. A node refuses to start with a
+deployment that gives the slot of its tip another fork digest than the one the
+tip was applied under: run the release the node ran with, or remove the node's
+state and sync again.
 
 Protocol and gossipsub topic names are not configured: every node derives them
 from its deployment. Blend, chain sync and the cryptarchia and mempool topics are

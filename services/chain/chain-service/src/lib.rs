@@ -23,7 +23,8 @@ use futures::{Stream, TryStreamExt as _};
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
-    block::{Block, UncleHeaders, genesis::GenesisBlock},
+    block::{Block, TxInBlock, UncleHeaders, genesis::GenesisBlock},
+    era::ForkDigest,
     events::Events,
     header::HeaderId,
     mantle::{
@@ -35,7 +36,7 @@ use lb_core::{
     },
     sdp::{Declaration, DeclarationId},
 };
-use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots};
+use lb_cryptarchia_engine::{Branch, EraSchedule, PrunedBlocks, ReorgedBlocks, UncleSlots};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
 pub use lb_ledger::EpochState;
 use lb_ledger::{LedgerState, config::EraScheduledConfig};
@@ -65,7 +66,7 @@ use tracing_futures::Instrument as _;
 pub use crate::{
     bootstrap::config::{BootstrapConfig, OfflineGracePeriodConfig},
     service::phases::PhaseTag,
-    states::CryptarchiaConsensusState,
+    states::{CryptarchiaConsensusState, TipEra, saved_tip_era},
     sync::config::{BlockProviderConfig, SyncConfig},
     uncle::UncleError,
 };
@@ -175,6 +176,11 @@ pub enum Query {
     },
     LibSubscribe {
         sender: oneshot::Sender<broadcast::Receiver<LibUpdate>>,
+    },
+    /// Returns the ID and slot of the block of the highest slot in the block
+    /// tree.
+    HighestBlock {
+        reply_channel: oneshot::Sender<(HeaderId, Slot)>,
     },
     GetHeaders {
         from_descendant: Option<HeaderId>,
@@ -302,8 +308,9 @@ pub struct AppliedBlock<Tx> {
     /// was not canonical, each mapped to the slot of the block carrying it.
     pub newly_canonical_txs: HashMap<TxHash, Slot>,
     /// Transactions carried by the blocks that left the canonical chain,
-    /// except those also carried by the blocks that entered it.
-    pub reorged_txs: Vec<Tx>,
+    /// except those also carried by the blocks that entered it, each with
+    /// the slot of the block carrying it.
+    pub reorged_txs: Vec<TxInBlock<Tx>>,
     /// The slot of the latest immutable block after applying the block.
     pub lib_slot: Slot,
 }
@@ -447,6 +454,17 @@ impl Cryptarchia {
     #[must_use]
     pub fn lib_branch(&self) -> &Branch<HeaderId> {
         self.consensus.lib_branch()
+    }
+
+    /// The block of the highest slot in the block tree. It is a tip, since a
+    /// block's slot is higher than its parent's.
+    #[must_use]
+    pub fn highest_branch(&self) -> &Branch<HeaderId> {
+        self.consensus
+            .branches()
+            .branches()
+            .max_by_key(|branch| branch.slot())
+            .expect("the block tree has at least one tip")
     }
 
     /// Try to apply a block to the chain.
@@ -634,7 +652,7 @@ impl Cryptarchia {
 
 #[derive(Debug, Clone)]
 pub struct CryptarchiaSettings {
-    pub era_schedule: Arc<EraScheduledConfig>,
+    pub era_schedule: Arc<EraSchedule<(lb_ledger::Config, ForkDigest)>>,
     pub starting_state: StartingState,
     pub bootstrap: BootstrapConfig,
     pub sync: SyncConfig,
@@ -733,6 +751,7 @@ where
         })
     }
 
+    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     async fn run(self) -> Result<(), DynError> {
         let relays: CryptarchiaConsensusRelays<Tx> =
             CryptarchiaConsensusRelays::from_service_resources_handle::<
@@ -763,6 +782,7 @@ where
         .await?;
 
         let (current_slot, slot_timer) = Self::get_slot_timer(&relays).await?;
+        let fork_digests = Arc::new(era_schedule.map(|era| era.parameters.1));
 
         let InitializedCryptarchia {
             cryptarchia,
@@ -771,7 +791,7 @@ where
         } = Self::initialize_cryptarchia(
             &self.state,
             &bootstrap_config,
-            era_schedule,
+            Arc::new(era_schedule.map(|era| era.parameters.0.clone())),
             &relays,
             &self.new_block_subscription_sender,
             &self.lib_subscription_sender,
@@ -793,6 +813,7 @@ where
             persist_recovery_state(
                 &cryptarchia,
                 storage_blocks_to_remove.clone(),
+                &fork_digests,
                 &self.service_resources_handle.state_updater,
             );
         }
@@ -824,6 +845,7 @@ where
             cryptarchia,
             service_resources_handle.inbound_relay,
             service_resources_handle.state_updater,
+            fork_digests,
             new_block_subscription_sender,
             lib_subscription_sender,
             chain_online_notifier,

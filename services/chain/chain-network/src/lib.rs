@@ -335,6 +335,12 @@ where
         )
         .await?;
 
+        notify_mempool_of_highest_block::<_, Mempool>(
+            relays.cryptarchia(),
+            relays.mempool_adapter(),
+        )
+        .await;
+
         // The adapters start in the era of the slot the clock is in, follow
         // the eras its slot ticks enter after it, and drop what they keep of
         // the era before when its transition period ends.
@@ -1082,6 +1088,31 @@ where
     Err(last_err.expect("future block retry loop should capture last FutureBlock error"))
 }
 
+/// Pass the highest slot of the block tree to the mempool service.
+async fn notify_mempool_of_highest_block<Cryptarchia, Mempool>(
+    cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
+    mempool: &MempoolAdapter<Mempool::Item>,
+) where
+    Cryptarchia: CryptarchiaServiceData<Tx: Send>,
+    Mempool:
+        RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
+{
+    // The genesis slot as the LIB releases nothing.
+    match cryptarchia.highest_block().await {
+        Ok((highest_id, highest_slot)) => {
+            if let Err(err) = mempool
+                .notify_processed_block(highest_id, highest_slot, Slot::genesis())
+                .await
+            {
+                error!(target: LOG_TARGET, err, "could not give the mempool the highest block");
+            }
+        }
+        Err(err) => {
+            error!(target: LOG_TARGET, ?err, "could not read the highest block for the mempool");
+        }
+    }
+}
+
 /// Try to add a [`Block`] to [`Cryptarchia`].
 /// A [`Block`] is only added if it's valid
 #[expect(clippy::allow_attributes_without_reason)]
@@ -1224,7 +1255,7 @@ mod tests {
     use futures::stream;
     use lb_binary_codec::canonical::BinaryDecodeExt as _;
     use lb_core::{
-        block::UncleHeaders,
+        block::{TxInBlock, UncleHeaders},
         mantle::{
             traits::Hasher,
             transactions::{Ops, hash::REFERENCE_PREFIX_BYTES},
@@ -1271,7 +1302,7 @@ mod tests {
         async fn notify_canonical_chain_updated(
             &self,
             _entered: HashMap<TxHash, Slot>,
-            _reorged: Vec<HashOnlyTx>,
+            _reorged: Vec<TxInBlock<HashOnlyTx>>,
         ) -> Result<(), DynError> {
             unimplemented!("resolution never changes the canonical chain")
         }

@@ -245,14 +245,18 @@ mod tests {
     use lb_core::mantle::{
         ledger::verification_mode::StandardMode,
         traits::StorageSize as _,
-        transactions::{SignedOps, states::Preverified},
+        transactions::{
+            SignedOps,
+            states::{Preverified, Unverified},
+        },
     };
 
     use super::*;
 
     #[test]
     fn transaction_gossipsub_bound_accounts_for_the_bincode_envelope() {
-        let transaction = SignedOps::<Preverified, StandardMode>::empty();
+        let transaction =
+            SignedOps::<Unverified, StandardMode>::sample().into_preverified_trusted_standard();
         let bytes =
             <SignedOps<Preverified, StandardMode> as bincode::SerializeOp>::to_bytes(&transaction)
                 .unwrap();

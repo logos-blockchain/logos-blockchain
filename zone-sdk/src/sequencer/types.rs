@@ -39,6 +39,7 @@ const DEFAULT_MAX_PENDING_PUBLISH_DEPTH: usize = 100;
 /// Long enough that a merely slow tx is not rebuilt: a valid tx the node
 /// holds lands within a few blocks, so one unmined this long is stuck.
 const DEFAULT_STALE_REFUND_SLOTS: u64 = 30;
+const DEFAULT_BACKFILL_BATCH_SLOTS: u64 = 100;
 
 /// Inscription identifier.
 pub type InscriptionId = TxHash;
@@ -415,6 +416,10 @@ pub struct SequencerConfig {
     /// LIB slots a pending tx may stay unmined before it is re-funded or
     /// orphaned; `0` disables.
     pub stale_refund_slots: u64,
+    /// Slots of finalized history each backfill request reads. A chain whose
+    /// slots follow the wall clock can hold long stretches without blocks,
+    /// which a wider batch crosses in fewer requests.
+    pub backfill_batch_slots: u64,
     /// Fund transactions from the node's wallet before signing.
     pub funding: FundingConfig,
 }
@@ -430,6 +435,7 @@ impl SequencerConfig {
             min_slots_remaining_in_turn: 1,
             max_pending_publish_depth: DEFAULT_MAX_PENDING_PUBLISH_DEPTH,
             stale_refund_slots: DEFAULT_STALE_REFUND_SLOTS,
+            backfill_batch_slots: DEFAULT_BACKFILL_BATCH_SLOTS,
             funding,
         }
     }
@@ -913,12 +919,13 @@ mod tests {
             withdraw::ChannelWithdrawOp,
         },
         traits::Hashable as _,
-        transactions::Ops,
+        transactions::{Ops, TxList},
     };
     use lb_groth16::Fr;
     use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 
     use super::{Error, PreparedChannelConfig, sign_prepared};
+    use crate::test_support::FORK_DIGEST;
 
     /// The signing payload the SDK derives for `ops`.
     fn payload_of(ops: &Ops) -> Vec<u8> {
@@ -946,7 +953,10 @@ mod tests {
             .collect();
         let op = config_op(new_keys);
         let prepared = PreparedChannelConfig {
-            tx: Ops::new_unchecked(vec![Op::ChannelConfig(op.clone())]),
+            tx: Ops::new(
+                FORK_DIGEST,
+                TxList::new_unchecked(vec![Op::ChannelConfig(op.clone())]),
+            ),
             transfer_proof: None,
             sign_payload: vec![0xab; 32],
             accredited_keys: Vec::new(),
@@ -968,7 +978,10 @@ mod tests {
             .iter()
             .map(|k| k.into_unverified())
             .collect::<Vec<_>>();
-        let tx = Ops::new_unchecked(vec![Op::ChannelConfig(config_op(accredited))]);
+        let tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::ChannelConfig(config_op(accredited))]),
+        );
         let prepared = PreparedChannelConfig {
             sign_payload: payload_of(&tx),
             tx,
@@ -1000,7 +1013,10 @@ mod tests {
             channel_id: ChannelId::from([7; 32]),
             inputs: BoundedInputs::from(NoteId::from(Fr::from(1u64))).into(),
         });
-        let tx = Ops::new_unchecked(vec![config.clone(), smuggled.clone()]);
+        let tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![config.clone(), smuggled.clone()]),
+        );
         let prepared = PreparedChannelConfig {
             sign_payload: payload_of(&tx),
             tx,
@@ -1023,7 +1039,10 @@ mod tests {
         let accredited = vec![signer.public_key()];
         let accredited_as_unverified_keys =
             accredited.iter().map(|k| k.into_unverified()).collect();
-        let tx = Ops::new_unchecked(vec![Op::ChannelConfig(config_op(accredited))]);
+        let tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::ChannelConfig(config_op(accredited))]),
+        );
         // Honest-looking ops, but the payload belongs to some other tx.
         let prepared = PreparedChannelConfig {
             tx,

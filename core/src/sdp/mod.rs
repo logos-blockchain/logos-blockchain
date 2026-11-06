@@ -12,7 +12,7 @@ use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
 use lb_binary_codec::{
     bincode::{self, BoundedSerializeOp, DeserializeOp as _, SerializeOp as _},
-    canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
+    canonical::{BinaryDecode, BinaryEncode, DecodeError},
 };
 #[cfg(any(test, feature = "test-utils"))]
 use lb_blend_proofs::{
@@ -29,7 +29,7 @@ use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, Zk
 use lb_utils::bounded::{BoundedVec, NonEmptyBoundedOrderedSet};
 use multiaddr::{Multiaddr, Protocol};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use strum::EnumIter;
+use strum::{EnumCount, EnumIter, FromRepr};
 
 use crate::{
     block::BlockNumber,
@@ -40,7 +40,9 @@ use crate::{
 
 pub type StakeThreshold = u64;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode,
+)]
 pub struct MinStake {
     pub threshold: StakeThreshold,
     pub timestamp: BlockNumber,
@@ -63,7 +65,7 @@ pub type NumberOfEpochs = Epoch;
 /// Otherwise, the declaration may be excluded from the active set before
 /// the [`Declaration::active`] value (refreshed by an activity message)
 /// is reflected in the next snapshot.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryEncode)]
 #[serde(try_from = "NumberOfEpochs")]
 pub struct InactivityPeriod(NumberOfEpochs);
 
@@ -79,17 +81,6 @@ impl InactivityPeriod {
     #[must_use]
     pub const fn into_inner(self) -> NumberOfEpochs {
         self.0
-    }
-}
-
-// An inactivity period: the number of epochs it wraps.
-impl BinaryEncode for InactivityPeriod {
-    fn encoded_length(&self) -> usize {
-        self.0.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.0.encode_into(out);
     }
 }
 
@@ -129,8 +120,11 @@ type BoundedMultiaddrBytes = BoundedVec<u8, 0, MAX_LOCATOR_BYTE_SIZE>;
 /// and peer IDs.
 type BoundedMultiaddr = lb_utils::bounded::multiaddr::BoundedMultiaddr<0, MAX_LOCATOR_BYTE_SIZE>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, BinaryDecode,
+)]
 #[serde(try_from = "Multiaddr")]
+#[decode(try_from = "BoundedMultiaddrBytes")]
 pub struct Locator(BoundedMultiaddr);
 
 #[cfg(feature = "openapi")]
@@ -273,21 +267,24 @@ impl BinaryEncode for Locator {
     }
 }
 
-impl BinaryDecode for Locator {
-    type Context = ();
-
-    fn decode<'input>(
-        input: &'input [u8],
-        (): &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (rest, value) = BoundedMultiaddrBytes::decode(input, &())?;
-        let locator = Self::try_from(value)
-            .map_err(|_| DecodeError::invalid_value::<Self>("Invalid locator bytes"))?;
-        Ok((rest, locator))
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, EnumIter)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    EnumIter,
+    EnumCount,
+    FromRepr,
+    BinaryDecode,
+)]
+#[repr(u8)]
+#[decode(try_from = "u8")]
 pub enum ServiceType {
     #[serde(rename = "BN")]
     BlendNetwork,
@@ -306,81 +303,27 @@ impl AsRef<str> for ServiceType {
     }
 }
 
+impl From<ServiceType> for u8 {
+    fn from(service_type: ServiceType) -> Self {
+        service_type as Self
+    }
+}
+
 impl TryFrom<u8> for ServiceType {
     type Error = ();
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::BlendNetwork),
-            #[cfg(test)]
-            1 => Ok(Self::Test),
-            _ => Err(()),
-        }
-    }
-}
-
-impl AsRef<u8> for ServiceType {
-    fn as_ref(&self) -> &u8 {
-        match self {
-            Self::BlendNetwork => &0,
-            #[cfg(test)]
-            Self::Test => &1,
-        }
-    }
-}
-
-impl PartialOrd for ServiceType {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-/// Service types are ordered by the byte each is encoded as, so a map keyed by
-/// service type iterates in the order of their encodings.
-impl Ord for ServiceType {
-    fn cmp(&self, other: &Self) -> Ordering {
-        <Self as AsRef<u8>>::as_ref(self).cmp(<Self as AsRef<u8>>::as_ref(other))
+        Self::from_repr(value).ok_or(())
     }
 }
 
 impl BinaryEncode for ServiceType {
     fn encoded_length(&self) -> usize {
-        <Self as AsRef<u8>>::as_ref(self).encoded_length()
+        u8::from(*self).encoded_length()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
-        <Self as AsRef<u8>>::as_ref(self).encode_into(out);
-    }
-}
-
-impl BinaryDecode for ServiceType {
-    type Context = ();
-
-    fn decode<'input>(
-        input: &'input [u8],
-        (): &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (rest, value) = u8::decode(input, &())?;
-        let service = Self::try_from(value)
-            .map_err(|()| DecodeError::invalid_value::<Self>("unknown service type"))?;
-        Ok((rest, service))
-    }
-}
-
-#[cfg(test)]
-mod service_type_tests {
-    use strum::IntoEnumIterator as _;
-
-    use crate::sdp::ServiceType;
-
-    #[test]
-    // We make sure the two directions never diverge.
-    fn u8_roundtrip() {
-        for service_type in ServiceType::iter() {
-            let encoded: &u8 = service_type.as_ref();
-            let decoded = ServiceType::try_from(*encoded).expect("valid byte");
-            assert_eq!(service_type, decoded);
-        }
+        u8::from(*self).encode_into(out);
     }
 }
 
@@ -390,7 +333,8 @@ mod service_type_tests {
 /// epoch occupies the high 32 bits and the sequence occupies the low 32 bits.
 /// Since the nonce is encoded in the operation payload, it participates in the
 /// Mantle transaction hash covered by the operation's ZK authorization.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, BinaryDecode)]
+#[decode(from = "u64")]
 pub struct Nonce {
     lifecycle_epoch: Epoch,
     sequence: u32,
@@ -425,15 +369,9 @@ impl BinaryEncode for Nonce {
     }
 }
 
-impl BinaryDecode for Nonce {
-    type Context = ();
-
-    fn decode<'input>(
-        input: &'input [u8],
-        (): &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (rest, packed) = u64::decode(input, &())?;
-        Ok((rest, Self::from_packed_u64(packed)))
+impl From<u64> for Nonce {
+    fn from(packed: u64) -> Self {
+        Self::from_packed_u64(packed)
     }
 }
 
@@ -480,7 +418,9 @@ impl Nonce {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode,
+)]
 pub struct ProviderId(pub Ed25519PublicKey);
 
 impl AsRef<[u8; 32]> for ProviderId {
@@ -520,7 +460,7 @@ impl Ord for ProviderId {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, BinaryCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, BinaryEncode, BinaryDecode)]
 pub struct DeclarationId(pub [u8; 32]);
 serde_bytes_newtype!(DeclarationId, 32);
 display_hex_bytes_newtype!(DeclarationId);
@@ -554,7 +494,7 @@ impl BoundedSerializeOp for DeclarationId {
 
 fn declaration_id_preimage(service_type: ServiceType, zk_id: ZkPublicKey) -> [u8; 33] {
     let mut preimage = [0; 33];
-    preimage[0] = *service_type.as_ref();
+    preimage[0] = u8::from(service_type);
     preimage[1..].copy_from_slice(&fr_to_bytes(zk_id.as_fr()));
     preimage
 }
@@ -673,7 +613,7 @@ impl TryFrom<Declarations> for Bytes {
 pub const MAX_DECLARATION_LOCATOR_COUNT: usize = 8;
 pub type Locators = NonEmptyBoundedOrderedSet<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct DeclarationMessage {
     pub service_type: ServiceType,
     pub locators: Locators,
@@ -718,14 +658,16 @@ impl DeclarationMessage {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode,
+)]
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,
 }
 
 // ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct ActiveMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,

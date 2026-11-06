@@ -1,4 +1,4 @@
-use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -23,7 +23,7 @@ use crate::{
     sdp::service_notes::ServiceNotes,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct TransferOp {
     pub inputs: Inputs,
     pub outputs: Outputs,

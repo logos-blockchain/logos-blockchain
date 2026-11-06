@@ -1,7 +1,7 @@
 use std::num::NonZeroU64;
 
 use ark_ff::Zero as _;
-use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_cryptarchia_engine::{EraSchedule, Slot};
 use lb_groth16::{Fr, fr_from_mod_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -34,7 +34,19 @@ pub type PowSlotWindows = EraSchedule<NonZeroU64>;
 
 /// Nullifier of a spent `PoW` solution, recorded on claim to prevent the same
 /// solution from being claimed twice.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Hash,
+    Serialize,
+    Deserialize,
+    BinaryEncode,
+    BinaryDecode,
+)]
 pub struct PowNullifier(#[serde(with = "serde_fr")] ZkHash);
 
 impl PowNullifier {
@@ -79,7 +91,7 @@ impl From<PowNullifier> for ZkHash {
 /// deriving a [`PuzzleTicket`] from `epoch_nonce`, `block_hash` and
 /// `public_key` (see [`Self::get_puzzle_ticket`]) and checking that ticket
 /// against the current reward difficulty during validation.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct ClaimPowRewardOp {
     /// Epoch nonce the puzzle was solved against; must match the current or
     /// previous epoch nonce.
@@ -679,6 +691,42 @@ mod tests {
 
         assert_eq!(verify(CURRENT_EPOCH), out_of_window);
         assert_eq!(verify(PREVIOUS_EPOCH), out_of_window);
+    }
+
+    #[test]
+    fn verify_shared_nonce_uses_anchor_era_window() {
+        let nullifiers = HashTrieMapSync::new_sync();
+        let mut ctx = accepting_context(&nullifiers);
+        ctx.slot_windows = slot_windows(10, [(10, 100)]);
+        ctx.previous_epoch_nonce = ctx.current_epoch_nonce;
+
+        for (anchor, current, accepted) in [
+            (95, 105, true),
+            (95, 106, false),
+            (101, 105, true),
+            (101, 106, true),
+            (101, 201, true),
+            (101, 202, false),
+        ] {
+            ctx.current_block_slot = Slot::from(current);
+            ctx.blocks_slot
+                .insert_mut(CLAIM_BLOCK_HASH, Slot::from(anchor));
+            let result = SignedOperation::new(claim_op(CURRENT_EPOCH), NoOpProof)
+                .into_preverified(&())
+                .unwrap()
+                .verify(&ctx);
+            if accepted {
+                assert_eq!(result, Ok(()));
+            } else {
+                assert_eq!(
+                    result,
+                    Err(ClaimPowRewardError::OutOfWindowSlot {
+                        slot: Slot::from(anchor),
+                        current_slot: Slot::from(current),
+                    })
+                );
+            }
+        }
     }
 
     #[test]

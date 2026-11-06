@@ -1,5 +1,6 @@
-use lb_core::mantle::transactions::genesis_tx::ChainId;
+use lb_core::{era::ForkDigest, mantle::transactions::genesis_tx::ChainId};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 /// The chain this node runs on.
 ///
@@ -8,4 +9,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize)]
 pub struct ChainIdResponseBody {
     pub chain_id: ChainId,
+}
+
+/// The fork the node's clock is in: the fork digest a transaction signed now
+/// carries.
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct ChainForkResponseBody {
+    pub fork_digest: ForkDigest,
 }

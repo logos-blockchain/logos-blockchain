@@ -1,9 +1,6 @@
 use core::num::{NonZero, NonZeroU32, NonZeroU64, NonZeroU128};
 
-use lb_core::{
-    block::genesis::GenesisBlock,
-    sdp::{NumberOfEpochs, ServiceType},
-};
+use lb_core::{block::genesis::GenesisBlock, sdp::NumberOfEpochs};
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::ModulusShift;
 use lb_node::config::deployment::{
@@ -31,9 +28,9 @@ use crate::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 const BLEND_EDGE_NODE_SEND_DEADLINE_IN_ROUNDS: u64 = 1;
 /// `T_H`: the rounds a core handshake is given to complete.
 const BLEND_CORE_HANDSHAKE_DEADLINE_IN_ROUNDS: u128 = 2;
-/// The cover messages a core connection carries in one observation window,
-/// which sizes the window.
-const BLEND_COVER_MESSAGES_PER_OBSERVATION_WINDOW: u64 = 90;
+/// `λ`: the messages a neighbour is expected to deliver to a node in one
+/// observation window, which sizes the window with the peering degree.
+const BLEND_EXPECTED_DELIVERIES_PER_OBSERVATION_WINDOW: u64 = 60;
 /// `V`: the messages per second the slowest targeted node can verify.
 const BLEND_VERIFICATION_RATE_PER_SECOND: u32 = 156;
 /// `η`: the rounds a message spends crossing the network at one hop.
@@ -119,10 +116,10 @@ pub fn e2e_deployment_settings_with_genesis_block(
                         BLEND_CORE_HANDSHAKE_DEADLINE_IN_ROUNDS,
                     )
                     .expect("`T_H` cannot be zero."),
-                    cover_messages_per_observation_window: NonZeroU64::try_from(
-                        BLEND_COVER_MESSAGES_PER_OBSERVATION_WINDOW,
+                    expected_deliveries_per_observation_window: NonZeroU64::try_from(
+                        BLEND_EXPECTED_DELIVERIES_PER_OBSERVATION_WINDOW,
                     )
-                    .expect("The cover messages per observation window cannot be zero."),
+                    .expect("The expected deliveries per observation window cannot be zero."),
                     scheduler: SchedulerSettings {
                         cover: CoverTrafficSettings {
                             message_frequency_per_round: PositiveF64::try_from(
@@ -147,7 +144,9 @@ pub fn e2e_deployment_settings_with_genesis_block(
                 slot_activation_coeff: NonNegativeRatio::new(
                     SLOT_ACTIVATION_COEFF_NUMERATOR,
                     NonZero::new(SLOT_ACTIVATION_COEFF_DENOMINATOR).unwrap(),
-                ),
+                )
+                .try_into()
+                .expect("The e2e slot activation coefficient is valid."),
                 epoch_config: EpochConfig {
                     epoch_stake_distribution_stabilization: NonZero::new(
                         EPOCH_STAKE_DISTRIBUTION_STABILIZATION,
@@ -160,14 +159,10 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     .unwrap(),
                 },
                 sdp_config: v1::cryptarchia::SdpConfig {
-                    service_params: (
-                        ServiceType::BlendNetwork,
-                        ServiceParameters {
-                            inactivity_period: SDP_INACTIVITY_PERIOD.try_into().unwrap(),
-                            epoch: SDP_EPOCH,
-                        },
-                    )
-                        .into(),
+                    service_params: [ServiceParameters {
+                        inactivity_period: SDP_INACTIVITY_PERIOD.try_into().unwrap(),
+                        epoch: SDP_EPOCH,
+                    }],
                     min_stake: lb_core::sdp::MinStake {
                         threshold: MIN_STAKE_THRESHOLD,
                         timestamp: MIN_STAKE_TIMESTAMP,
@@ -208,4 +203,5 @@ pub fn e2e_deployment_settings_with_genesis_block(
         })),
         GenesisBlock::genesis(genesis_tx.clone()),
     )
+    .expect("The e2e deployment must be valid.")
 }

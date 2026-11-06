@@ -8,7 +8,7 @@ use ::serde::{
 use lb_cryptarchia_engine::Epoch;
 use lb_time::era::EraEntriesAfterGenesis;
 
-use crate::config::deployment::era::ruleset::EraRuleset;
+use crate::config::deployment::{InvalidDeployment, era::ruleset::EraRuleset};
 
 pub mod ruleset;
 
@@ -55,6 +55,21 @@ impl EraDeclarations {
     #[must_use]
     pub const fn eras_after_genesis(&self) -> &EraEntriesAfterGenesis<EraRuleset> {
         &self.eras_after_genesis
+    }
+
+    /// Checks each era's ruleset, alone and against the era before it,
+    /// refusing the first value found invalid, named with its era.
+    pub(super) fn validate(&self) -> Result<(), InvalidDeployment> {
+        let rulesets =
+            iter::once(&self.genesis_era_ruleset).chain(self.eras_after_genesis.values());
+        let mut previous = None;
+        for (era, ruleset) in rulesets.enumerate() {
+            ruleset
+                .validate(previous)
+                .map_err(|reason| InvalidDeployment::new(format!("Era {era}: {reason}")))?;
+            previous = Some(ruleset);
+        }
+        Ok(())
     }
 }
 

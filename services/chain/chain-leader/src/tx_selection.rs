@@ -166,13 +166,14 @@ mod tests {
     use futures::stream;
     use lb_core::{
         block::MAX_BLOCK_TRANSACTIONS_SIZE,
+        era::ForkDigest,
         mantle::{
             Note, Op, OpProof, Utxo,
             gas::TxGasCalculator as _,
             ledger::{Inputs, Outputs},
             ops::transfer::TransferOp,
             traits::StorageSize,
-            transactions::{OpProofs, Ops, states::Unverified},
+            transactions::{OpProofs, Ops, TxList, states::Unverified},
         },
     };
     use lb_key_management_system_service::keys::ZkKey;
@@ -194,12 +195,13 @@ mod tests {
                 Utxo::new(op_id, 0, Note::new(10_000_000, funding_key.to_public_key()))
             })
             .collect::<Vec<_>>();
-        let ops = Ops::try_from_iter(funding_utxos.iter().map(|utxo| {
+        let ops = TxList::try_from_iter(funding_utxos.iter().map(|utxo| {
             Op::Transfer(TransferOp::new(
                 Inputs::try_new(vec![utxo.id()]).unwrap(),
                 Outputs::try_new(Vec::new()).unwrap(),
             ))
         }))
+        .map(|ops| Ops::new(ForkDigest::new([0x11; 32]), ops))
         .unwrap();
         let tx_hash = ops.hash();
         let signature =

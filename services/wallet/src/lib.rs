@@ -13,6 +13,7 @@ use lb_chain_service::{
 };
 use lb_core::{
     block::Block,
+    era::ForkDigest,
     events::Events,
     header::HeaderId,
     mantle::{
@@ -54,6 +55,7 @@ use lb_services_utils::{
 };
 use lb_storage_service::{api::StorageApi, recovery::StorageRecoveryBackend};
 use lb_time::era::{EpochLength, EraSchedule};
+use lb_time_service::{EraEvent, TimeService, api::TimeServiceApi};
 use lb_utils::{bounded::BoundedError, tokio::task::spawn_blocking};
 use lb_wallet::{WalletBalance, WalletBlock, WalletError};
 use overwatch::{
@@ -235,6 +237,8 @@ struct LeaderClaimTx {
 
 struct LeaderClaimTxRequest {
     tip: HeaderId,
+    /// The fork digest the claim is signed under.
+    fork_digest: ForkDigest,
     rewards_root: RewardsRoot,
     reward_amount: Value,
     funding_pk: ZkPublicKey,
@@ -376,6 +380,9 @@ pub type ServiceEraSchedule = EraSchedule<WalletEraSettings>;
 pub struct WalletEraSettings {
     pub epoch_length: NonZero<u64>,
     pub security_param: NonZero<u32>,
+    /// The fork digest of the era, which the transactions the wallet signs in
+    /// it carry.
+    pub fork_digest: ForkDigest,
 }
 
 impl EpochLength for WalletEraSettings {
@@ -397,14 +404,14 @@ impl StorageRecoverySettings for WalletServiceSettings {
     }
 }
 
-pub struct WalletService<Kms, Cryptarchia, Tx, RuntimeServiceId> {
+pub struct WalletService<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     initial_state: RecoveryState,
-    _marker: std::marker::PhantomData<(Kms, Cryptarchia, Tx)>,
+    _marker: std::marker::PhantomData<(Kms, Cryptarchia, Tx, TimeBackend)>,
 }
 
-impl<Kms, Cryptarchia, Tx, RuntimeServiceId> ServiceData
-    for WalletService<Kms, Cryptarchia, Tx, RuntimeServiceId>
+impl<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId> ServiceData
+    for WalletService<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId>
 {
     type Settings = WalletServiceSettings;
     type State = RecoveryState;
@@ -414,8 +421,8 @@ impl<Kms, Cryptarchia, Tx, RuntimeServiceId> ServiceData
 }
 
 #[async_trait]
-impl<Kms, Cryptarchia, Tx, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for WalletService<Kms, Cryptarchia, Tx, RuntimeServiceId>
+impl<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId> ServiceCore<RuntimeServiceId>
+    for WalletService<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId>
 where
     Kms: KmsServiceData<Backend = KmsBackend> + Send + Sync,
     Tx: SignedMantleTx<Preverified, StandardMode>
@@ -429,10 +436,13 @@ where
         + StorageSize
         + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx>,
+    TimeBackend: lb_time_service::backends::TimeBackend + Send + Sync + 'static,
+    TimeBackend::Settings: Clone + Send + Sync + 'static,
     RuntimeServiceId: AsServiceId<Self>
         + AsServiceId<Cryptarchia>
         + AsServiceId<lb_storage_service::StorageService<RuntimeServiceId>>
         + AsServiceId<Kms>
+        + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + std::fmt::Debug
         + std::fmt::Display
         + Send
@@ -456,13 +466,14 @@ where
             ..
         } = self;
 
-        // Wait for Chain service to become ready, without timeout
+        // Chain readiness can take until block recovery completes.
         wait_until_services_are_ready!(
             &service_resources_handle.overwatch_handle,
             None,
             lb_storage_service::StorageService<_>,
             Kms,
-            Cryptarchia // becomes ready after recovering blocks
+            TimeService<_, _>,
+            Cryptarchia
         )
         .await?;
 
@@ -537,13 +548,29 @@ where
         )
         .await?;
 
+        // The transactions the wallet signs carry the fork digest of the era
+        // the clock is in.
+        let (current_era, mut era_ticks) =
+            TimeServiceApi::<TimeService<TimeBackend, RuntimeServiceId>>::new(
+                &service_resources_handle.overwatch_handle,
+            )
+            .await?
+            .subscribe_to_eras()
+            .await?;
+        let mut era_in_force = settings.era_schedule.get(current_era).unwrap();
+
         service_resources_handle.status_updater.notify_ready();
         info!(target: LOG_TARGET, "Wallet service is ready and subscribed to blocks");
 
         loop {
             tokio::select! {
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
-                    Box::pin(Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage, &cryptarchia_api, &kms, &settings.era_schedule)).await;
+                    Box::pin(Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage, &cryptarchia_api, &kms, &settings.era_schedule, era_in_force.parameters.fork_digest)).await;
+                }
+                Some(EraEvent::NewEra { era: new_era, .. }) = era_ticks.next() => {
+                    if new_era > era_in_force.era {
+                        era_in_force = settings.era_schedule.get(new_era).unwrap();
+                    }
                 }
                 // A skipped block shows up as an unknown parent on the next
                 // one and is backfilled from there; the log line is what tells
@@ -568,7 +595,8 @@ fn warn_lagged(stream: &str, skipped: u64) {
     warn!(target: LOG_TARGET, stream, skipped, "Wallet fell behind a chain subscription");
 }
 
-impl<Kms, Cryptarchia, Tx, RuntimeServiceId> WalletService<Kms, Cryptarchia, Tx, RuntimeServiceId>
+impl<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId>
+    WalletService<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId>
 where
     Kms: KmsServiceData<Backend = KmsBackend>,
     Tx: SignedMantleTx<Preverified, StandardMode>
@@ -614,6 +642,10 @@ where
         clippy::cognitive_complexity,
         reason = "TODO: address this in a dedicated refactor"
     )]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "A message reads the wallet's state, its services and the era in force"
+    )]
     async fn handle_wallet_message(
         msg: WalletMsg,
         state: &mut ServiceState<'_>,
@@ -622,6 +654,7 @@ where
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         era_schedule: &ServiceEraSchedule,
+        fork_digest: ForkDigest,
     ) {
         if let Err(err) =
             Self::backfill_if_not_in_sync(msg.tip(), state, storage, cryptarchia, era_schedule)
@@ -712,6 +745,7 @@ where
                 };
                 let request = LeaderClaimTxRequest {
                     tip,
+                    fork_digest,
                     rewards_root,
                     reward_amount,
                     funding_pk,
@@ -778,7 +812,7 @@ where
                 let funded_notes: Vec<NoteId> =
                     tx_builder.notes_consumed_or_used_in_service().collect();
 
-                let resp = Self::sign_tx(tx_builder, tip, ledger, kms, state.wallet())
+                let resp = Self::sign_tx(tx_builder, fork_digest, tip, ledger, kms, state.wallet())
                     .await
                     .map(|signed_tx| TipResponse {
                         tip,
@@ -1056,6 +1090,7 @@ where
 
     async fn sign_tx(
         tx_builder: MantleTxBuilder,
+        fork_digest: ForkDigest,
         tip: HeaderId,
         tip_leader: LedgerState,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
@@ -1064,7 +1099,7 @@ where
         // TODO: Maybe Unverified?
         // Extract input public keys before building the transaction
         let mut channel_multi_sig_proofs = tx_builder.channel_multi_sig_proofs().clone();
-        let mantle_tx = tx_builder.clone().build()?;
+        let mantle_tx = tx_builder.clone().build(fork_digest)?;
         let tx_hash = mantle_tx.hash();
 
         let mut op_proofs = OpProofs::empty();
@@ -1465,7 +1500,15 @@ where
             });
         }
 
-        Self::sign_tx(funded_tx_builder, request.tip, ledger, kms, state.wallet()).await
+        Self::sign_tx(
+            funded_tx_builder,
+            request.fork_digest,
+            request.tip,
+            ledger,
+            kms,
+            state.wallet(),
+        )
+        .await
     }
 
     async fn backfill_if_not_in_sync(
