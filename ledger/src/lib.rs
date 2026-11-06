@@ -1224,15 +1224,14 @@ mod tests {
             .unwrap();
 
         let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
-        let spent = [NoteNullifier(Fr::from(9u64))];
-        assert!(ledger_set.assert_spendable(&spent, &old_root, 1028).is_ok());
+        assert!(ledger_set.tx_commitment_root(&old_root, 1028).is_ok());
         assert_eq!(
-            ledger_set.assert_spendable(&spent, &old_root, 1029),
+            ledger_set.tx_commitment_root(&old_root, 1029),
             Err(NoteSetError::UnknownRoot(old_root))
         );
         assert!(
             ledger_set
-                .assert_spendable(&spent, &ledger_set.commitment_root(), 5000)
+                .tx_commitment_root(&ledger_set.commitment_root(), 5000)
                 .is_ok()
         );
         let expected = NoteSets::new()
@@ -1278,11 +1277,7 @@ mod tests {
         let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
         assert_eq!(ledger_set.commitment_root(), expected);
         // The recorded root of block 1 includes the leader note.
-        assert!(
-            ledger_set
-                .assert_spendable(&[NoteNullifier(Fr::from(9u64))], &expected, 2)
-                .is_ok()
-        );
+        assert!(ledger_set.tx_commitment_root(&expected, 2).is_ok());
         assert_eq!(events, []);
         let block_rewards = &state.cryptarchia_ledger.block_rewards;
         assert_eq!(block_rewards.rewards_reserve(), 999_999_904_870_624_049);

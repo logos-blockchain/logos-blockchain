@@ -184,11 +184,7 @@ impl VerifiableOperation<StandardMode>
             .note_sets
             .get(index)
             .expect("a channel's note set exists");
-        set.assert_spendable(
-            operation.inputs.as_slice(),
-            &operation.commitment_merkle_root,
-            context.block_number,
-        )?;
+        set.assert_spendable(operation.inputs.as_slice())?;
         let tx_commitment_root = set.cached_tx_commitment_root(
             context.note_sets.tx_roots(),
             &operation.commitment_merkle_root,

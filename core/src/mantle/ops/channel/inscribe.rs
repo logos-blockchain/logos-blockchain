@@ -39,7 +39,7 @@ use crate::{
             ChannelInscribeProof, OpId, SignedOperation, StepProof, StepProofShape,
             ZkTransferProof,
             channel::{
-                NULL_CHANNEL_ID, UnverifiedChannelKeys,
+                UnverifiedChannelKeys,
                 program_step::{
                     ProgramDeposit, ProgramStep, program_deposit_id, program_deposits_hash,
                 },
@@ -587,8 +587,9 @@ impl VerifiableOperation<StandardMode>
                 });
             }
 
-            // The set the channel gets at its creation, none for the null channel
-            (operation.channel_id != NULL_CHANNEL_ID).then(NoteSet::empty)
+            // A channel being created holds no note yet, so its inscription carries no
+            // step
+            None
         };
 
         // The signature is cheap and checked by `preverify`, only the step proofs
@@ -621,11 +622,7 @@ impl VerifiableOperation<StandardMode>
                 // The step consumes unspent notes of the channel, which no earlier step
                 // consumed, a program step possibly none.
                 if !matches!(step, Step::Program(_)) || !step.inputs().is_empty() {
-                    note_set.assert_spendable(
-                        step.inputs().as_slice(),
-                        step.commitment_merkle_root(),
-                        context.block_number,
-                    )?;
+                    note_set.assert_spendable(step.inputs().as_slice())?;
                 }
                 for note_nullifier in step.inputs().iter() {
                     if !step_nullifiers.insert(*note_nullifier) {
@@ -872,8 +869,9 @@ mod tests {
             notes::{self, NoteNullifier, derive_note_nullifier},
             ops::{
                 ProgramNoteOpening, ProgramProof, ProgramStepProof, ZkProgramSpendProof,
-                channel::program_step::test_utils::prove_program_spend,
-                op_proof::samples::SampleProof as _, transfer::test_utils::prove_transfer,
+                channel::{NULL_CHANNEL_ID, program_step::test_utils::prove_program_spend},
+                op_proof::samples::SampleProof as _,
+                transfer::test_utils::prove_transfer,
             },
             programs::{
                 ProgramVerificationKey, RegisteredProgram, SpendInputFields, SpendOutputFields,
@@ -1568,33 +1566,32 @@ mod tests {
     }
 
     #[test]
-    fn verify_rejects_steps_on_the_null_channel() {
-        let operation = InscriptionOp {
-            channel_id: NULL_CHANNEL_ID,
-            ..with_steps(vec![Step::User(step(
-                &[nullifier(2)],
-                &[commitment(3)],
-                root(),
-            ))])
-        };
-        let deferred = signed(operation, vec![StepProof::User(ZkTransferProof::sample())])
-            .into_preverified(&InscriptionPreverificationContext {
-                tx_hash_view: &tx_hash_view(),
-            })
-            .unwrap()
-            .verify(&InscriptionValidationContext {
-                channels: &Channels::new(),
-                note_sets: &NoteSets::new(),
-                programs: &Programs::new(),
-                block_slot: Slot::from(0u64),
-                block_number: 1,
-            });
-        assert_eq!(
-            deferred.unwrap_err(),
-            Error::NoNoteSet {
-                channel_id: NULL_CHANNEL_ID
-            }
-        );
+    fn verify_rejects_steps_on_a_channel_being_created_and_on_the_null_channel() {
+        // Neither holds a note: the null channel has no note set, and a channel being
+        // created gets its set only when the inscription executes.
+        for channel_id in [NULL_CHANNEL_ID, ChannelId::from([5u8; 32])] {
+            let operation = InscriptionOp {
+                channel_id,
+                ..with_steps(vec![Step::User(step(
+                    &[nullifier(2)],
+                    &[commitment(3)],
+                    root(),
+                ))])
+            };
+            let deferred = signed(operation, vec![StepProof::User(ZkTransferProof::sample())])
+                .into_preverified(&InscriptionPreverificationContext {
+                    tx_hash_view: &tx_hash_view(),
+                })
+                .unwrap()
+                .verify(&InscriptionValidationContext {
+                    channels: &Channels::new(),
+                    note_sets: &NoteSets::new(),
+                    programs: &Programs::new(),
+                    block_slot: Slot::from(0u64),
+                    block_number: 1,
+                });
+            assert_eq!(deferred.unwrap_err(), Error::NoNoteSet { channel_id });
+        }
     }
 
     #[test]

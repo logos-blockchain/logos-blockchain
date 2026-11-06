@@ -143,11 +143,7 @@ impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverifi
             .note_sets
             .get(LEDGER_SET)
             .expect("the ledger note set always exists");
-        ledger.assert_spendable(
-            operation.inputs.as_slice(),
-            &operation.commitment_merkle_root,
-            context.block_number,
-        )?;
+        ledger.assert_spendable(operation.inputs.as_slice())?;
         let tx_commitment_root = ledger.cached_tx_commitment_root(
             context.note_sets.tx_roots(),
             &operation.commitment_merkle_root,
