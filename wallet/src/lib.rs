@@ -755,42 +755,38 @@ impl<KeyId> Wallet<KeyId> {
         Ok(self.spend_state(tip)?.ledger_root())
     }
 
-    /// Prune wallet states for blocks that have been pruned from the chain.
+    /// Prune the wallet states the chain no longer needs once `lib` is its
+    /// LIB.
     ///
-    /// This removes wallet states for blocks that are no longer part of the
-    /// chain after LIB advancement: stale blocks (from abandoned forks), and
-    /// immutable blocks (before the new `lib`) but the [`SPEND_ROOT_DEPTH`]
-    /// ones right below it. A spend from a tip near the LIB names the root of
-    /// one of them, so the LIB advancing while the spend is built and proven
-    /// leaves its state in place.
-    pub fn prune_states(
-        &mut self,
-        lib: HeaderId,
-        pruned_blocks: impl IntoIterator<Item = HeaderId>,
-    ) {
-        let kept: Vec<HeaderId> =
+    /// The wallet keeps the states of `lib`, of its descendants and of the
+    /// [`SPEND_ROOT_DEPTH`] blocks right below it, and drops every other one:
+    /// the blocks of abandoned forks and the older immutable blocks, whatever
+    /// LIB updates were skipped. A spend from a tip near the LIB names the root
+    /// of one of the blocks below it, so the LIB advancing while the spend is
+    /// built and proven leaves its state in place.
+    pub fn prune_states(&mut self, lib: HeaderId) {
+        let mut kept: HashSet<HeaderId> =
             core::iter::successors(Some(lib), |block| self.parents.get(block).copied())
                 .take(SPEND_ROOT_DEPTH + 1)
                 .collect();
-        let mut removed_count = 0;
-
-        for block_id in pruned_blocks
-            .into_iter()
-            .filter(|block| !kept.contains(block))
-        {
-            self.parents.remove(&block_id);
-            if self.wallet_states.remove(&block_id).is_some() {
-                removed_count += 1;
+        let mut children: HashMap<HeaderId, Vec<HeaderId>> = HashMap::new();
+        for (block, parent) in &self.parents {
+            if block != parent {
+                children.entry(*parent).or_default().push(*block);
             }
         }
-        // The blocks kept by an earlier LIB, now out of reach of every tip.
-        let mut block = kept.last().copied().unwrap_or(lib);
-        while let Some(parent) = self.parents.remove(&block) {
-            if self.wallet_states.remove(&parent).is_some() {
-                removed_count += 1;
+        let mut descendants = vec![lib];
+        while let Some(block) = descendants.pop() {
+            for child in children.get(&block).into_iter().flatten() {
+                if kept.insert(*child) {
+                    descendants.push(*child);
+                }
             }
-            block = parent;
         }
+        let held = self.wallet_states.len();
+        self.wallet_states.retain(|block, _| kept.contains(block));
+        self.parents.retain(|block, _| kept.contains(block));
+        let removed_count = held - self.wallet_states.len();
 
         if removed_count > 0 {
             tracing::trace!(
@@ -1305,7 +1301,7 @@ mod tests {
 
         // The LIB advancing to 38 keeps the states of the blocks right below it, so
         // a spend from 40 still names the root of 36, and drops the deeper ones.
-        wallet.prune_states(block_id(38), (0..38).map(block_id));
+        wallet.prune_states(block_id(38));
         assert_eq!(
             funding_transfer(fund(&wallet, 40)).commitment_merkle_root,
             root
@@ -1313,12 +1309,25 @@ mod tests {
         assert!(wallet.wallet_state_at(block_id(34)).is_ok());
         assert!(wallet.wallet_state_at(block_id(33)).is_err());
         // They leave once the LIB moves past them.
-        wallet.prune_states(block_id(40), []);
+        wallet.prune_states(block_id(40));
         assert!(wallet.wallet_state_at(block_id(35)).is_err());
         assert_eq!(
             funding_transfer(fund(&wallet, 40)).commitment_merkle_root,
             root
         );
+    }
+
+    #[test]
+    fn a_lib_jumping_past_the_kept_blocks_drops_them() {
+        let mut wallet = wallet_on_chain(known(&[]), &[], &[], 40);
+        wallet.prune_states(block_id(30));
+        wallet.prune_states(block_id(38));
+        for id in 0..34 {
+            assert!(wallet.wallet_state_at(block_id(id)).is_err());
+        }
+        for id in 34..=40 {
+            assert!(wallet.wallet_state_at(block_id(id)).is_ok());
+        }
     }
 
     #[test]

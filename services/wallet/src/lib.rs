@@ -1696,11 +1696,7 @@ where
         }
 
         let new_immutable_blocks_count = lib_update.pruned_blocks.immutable_blocks.len() as u64;
-        state.advance_lib(
-            lib_update.new_lib,
-            lib_update.pruned_blocks.all(),
-            new_immutable_blocks_count,
-        );
+        state.advance_lib(lib_update.new_lib, new_immutable_blocks_count);
     }
 
     #[expect(
