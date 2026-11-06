@@ -6,12 +6,13 @@ use std::{
 
 use futures::{Stream, TryStreamExt as _};
 use lb_core::{
-    block::{Block, UncleHeaders},
+    block::{BlockWithVerifiedHeader, UncleHeaders},
     events::Events,
-    header::HeaderId,
+    header::{Header, HeaderId, HeaderVerificationError, VerifiedBlockHeader},
     sdp::{Declaration, DeclarationId},
 };
 use lb_cryptarchia_engine::Slot;
+use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_network_service::message::ChainSyncEvent;
 use overwatch::{
     overwatch::OverwatchHandle,
@@ -51,6 +52,17 @@ pub enum ApiError {
     },
     #[error("Block {0} has already been applied")]
     AlreadyApplied(HeaderId),
+    /// The signature over the header is invalid. The signature is not part of
+    /// the header, so only the received copy is invalid, not the block.
+    #[error("Invalid header signature")]
+    InvalidSignature,
+    /// The uncles carried with the header are invalid.
+    #[error("Invalid uncles: {0}")]
+    InvalidUncles(String),
+    /// The uncles or transactions carried are not the ones the header commits
+    /// to, so only the received copy is invalid, not the block.
+    #[error("Invalid block body: {0}")]
+    InvalidBody(String),
     #[error("Failed to establish connection to chain-service: {0}")]
     CommsFailure(String),
     #[error("Unexpected Error: {0}")]
@@ -437,18 +449,47 @@ where
         })
     }
 
-    /// Apply a block through the chain service,
-    /// and return how the canonical chain changed if successful.
+    /// Verifies a block header through the chain service.
+    pub async fn verify_header(
+        &self,
+        header: Header,
+        uncle_headers: UncleHeaders,
+        signature: Ed25519Signature,
+    ) -> Result<VerifiedBlockHeader, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+        self.relay
+            .send(
+                Query::VerifyHeader {
+                    header: Box::new(header),
+                    uncle_headers: Box::new(uncle_headers),
+                    signature: Box::new(signature),
+                    reply_channel,
+                }
+                .into(),
+            )
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending VerifyHeader"))
+            })?;
+
+        rx.await
+            .map_err(|relay_error| {
+                ApiError::CommsFailure(format!("{relay_error} while receiving VerifyHeader"))
+            })?
+            .map_err(Into::into)
+    }
+
+    /// Apply a block whose header is verified through the chain service, and
+    /// return how the canonical chain changed if successful.
     pub async fn apply_block(
         &self,
-        block: Block<Cryptarchia::Tx>,
+        block: BlockWithVerifiedHeader<Cryptarchia::Tx>,
     ) -> Result<AppliedBlock<Cryptarchia::Tx>, ApiError> {
         let (reply_channel, rx) = oneshot::channel();
 
-        let boxed_block = Box::new(block);
         self.relay
             .send(ConsensusMsg::ApplyBlock {
-                block: boxed_block,
+                block: Box::new(block),
                 reply_channel,
             })
             .await
@@ -458,20 +499,7 @@ where
             .map_err(|relay_error| {
                 ApiError::CommsFailure(format!("{relay_error} while receiving ApplyBlock resp"))
             })?
-            .map_err(|err| match err {
-                crate::Error::ParentMissing { parent, info } => {
-                    ApiError::ParentMissing { parent, info }
-                }
-                crate::Error::FutureBlock {
-                    block_slot,
-                    current_slot,
-                } => ApiError::FutureBlock {
-                    block_slot,
-                    current_slot,
-                },
-                crate::Error::AlreadyApplied(block_id) => ApiError::AlreadyApplied(block_id),
-                err => ApiError::Unexpected(format!("Failure while applying block: {err:?}")),
-            })
+            .map_err(Into::into)
     }
 
     /// Forward a chain sync event to the chain service.
@@ -527,5 +555,29 @@ where
             })?;
 
         Ok(())
+    }
+}
+
+impl From<crate::Error> for ApiError {
+    fn from(err: crate::Error) -> Self {
+        match err {
+            crate::Error::ParentMissing { parent, info } => Self::ParentMissing { parent, info },
+            crate::Error::FutureBlock {
+                block_slot,
+                current_slot,
+            } => Self::FutureBlock {
+                block_slot,
+                current_slot,
+            },
+            crate::Error::AlreadyApplied(block_id) => Self::AlreadyApplied(block_id),
+            crate::Error::InvalidHeader(HeaderVerificationError::InvalidSignature) => {
+                Self::InvalidSignature
+            }
+            crate::Error::InvalidHeader(HeaderVerificationError::InvalidUncles(reason)) => {
+                Self::InvalidUncles(reason)
+            }
+            crate::Error::InvalidBody(err) => Self::InvalidBody(err.to_string()),
+            err => Self::Unexpected(format!("Failure while applying block: {err:?}")),
+        }
     }
 }

@@ -2,6 +2,7 @@ mod deser;
 mod fixtures;
 pub mod genesis;
 mod uncle;
+mod verified;
 
 use core::fmt::Debug;
 
@@ -14,10 +15,11 @@ use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 use lb_utils::bounded::{BoundedError, BoundedVec, UpperBoundedVec};
 use serde::{Deserialize, Serialize};
 pub use uncle::{SignedHeader, UncleHeaders};
+pub use verified::{BlockVerificationError, BlockWithVerifiedHeader};
 
 use crate::{
     crypto::{Digest as _, Hasher},
-    header::{ContentId, Header, HeaderId},
+    header::{ContentId, Header, HeaderId, HeaderVerificationContext, VerifiedBlockHeader},
     mantle::{
         traits::{Hashable, StorageSize},
         transactions::hash::{TxHash, TxHashPrefix},
@@ -131,13 +133,12 @@ where
 
         // Serde reads blocks a node serves through its API, already checked
         // against their era by that node, so it holds them to no era.
-        Self::reconstruct(
+        Ok(Self::reconstruct(
             raw.header,
             raw.uncle_headers,
             raw.transactions,
             raw.signature,
-        )
-        .map_err(serde::de::Error::custom)
+        ))
     }
 }
 
@@ -174,7 +175,8 @@ where
     }
 }
 
-// Decoding checks the block as `reconstruct` does.
+// Decoding only parses the block, as [`Block`] represents a block that is not
+// verified yet.
 impl<Tx> BinaryDecode for Block<Tx>
 where
     Tx: BinaryDecode + Hashable<Hash = TxHash> + StorageSize,
@@ -190,9 +192,10 @@ where
         let (input, uncle_headers) = UncleHeaders::decode(input, max_uncles)?;
         let (input, transactions) = BlockTransactions::<Tx>::decode(input, tx_context)?;
         let (input, signature) = Ed25519Signature::decode(input, &())?;
-        let block = Self::reconstruct(header, uncle_headers, transactions, signature)
-            .map_err(|error| DecodeError::invalid_value::<Self>(error.to_string()))?;
-        Ok((input, block))
+        Ok((
+            input,
+            Self::reconstruct(header, uncle_headers, transactions, signature),
+        ))
     }
 }
 
@@ -288,48 +291,44 @@ impl<Tx> Block<Tx> {
         };
 
         // 6. Size is ok
-        block.validate_total_transactions_size()?;
+        Self::validate_total_transactions_size(&block.transactions)?;
 
         Ok(block)
     }
 
-    pub fn reconstruct(
+    /// Assembles a block from its parts, without checking that they belong
+    /// together. [`BlockWithVerifiedHeader`] is what checks them.
+    #[must_use]
+    pub const fn reconstruct(
         header: Header,
         uncle_headers: UncleHeaders,
         transactions: BlockTransactions<Tx>,
         signature: Ed25519Signature,
-    ) -> Result<Self, Error>
-    where
-        Tx: Hashable<Hash = TxHash> + StorageSize,
-    {
-        let block = Self {
+    ) -> Self {
+        Self {
             header,
             signature,
             uncle_headers,
             transactions,
-        };
-        let block = block.into_verified()?;
-
-        Ok(block)
+        }
     }
 
-    fn into_verified(self) -> Result<Self, Error>
+    /// Verifies the header of this block, and that it commits to the uncles
+    /// and transactions this block carries.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first check the block fails.
+    pub fn verify_header(
+        self,
+        context: &impl HeaderVerificationContext,
+    ) -> Result<BlockWithVerifiedHeader<Tx>, BlockVerificationError>
     where
         Tx: Hashable<Hash = TxHash> + StorageSize,
     {
-        // 1. Checks that need the header alone
-        verify_header_alone(&self.header)?;
-
-        // 2. Size is ok
-        self.validate_total_transactions_size()?;
-
-        // 3. Body root matches the carried uncle headers and transactions
-        self.validate_body_root()?;
-
-        // 4. Signature is valid over the header bytes
-        verify_header_signature(&self.header, &self.signature)?;
-
-        Ok(self)
+        let header =
+            VerifiedBlockHeader::new(self.header, self.uncle_headers, self.signature, context)?;
+        Ok(BlockWithVerifiedHeader::new(header, self.transactions)?)
     }
 
     /// Maximum canonical encoded size of a block whose era allows
@@ -344,13 +343,15 @@ impl<Tx> Block<Tx> {
             + Ed25519Signature::CANONICAL_ENCODED_SIZE
     }
 
-    fn validate_total_transactions_size(&self) -> Result<usize, Error>
+    // TODO: Move this out of `Block` into `block/verified.rs`, since it takes no
+    // `self` and only `BlockWithVerifiedHeader` checks it.
+    pub(crate) fn validate_total_transactions_size(transactions: &[Tx]) -> Result<usize, Error>
     where
         Tx: Hashable<Hash = TxHash> + StorageSize,
     {
         let mut total = 0usize;
 
-        for item in &self.transactions {
+        for item in transactions {
             total = total
                 .checked_add(item.storage_size())
                 .ok_or(Error::ContentTooBig {
@@ -369,11 +370,17 @@ impl<Tx> Block<Tx> {
         Ok(total)
     }
 
-    fn validate_body_root(&self) -> Result<(), Error>
+    // TODO: Move this out of `Block` into `block/verified.rs`, since it takes no
+    // `self` and only `BlockWithVerifiedHeader` checks it.
+    pub(crate) fn validate_body_root(
+        header: &Header,
+        uncle_headers: &UncleHeaders,
+        transactions: &[Tx],
+    ) -> Result<(), Error>
     where
         Tx: Hashable<Hash = TxHash>,
     {
-        if self.header.body_root() != &body_root(&self.uncle_headers, &self.transactions) {
+        if header.body_root() != &body_root(uncle_headers, transactions) {
             return Err(Error::BodyRootMismatch);
         }
 
@@ -437,6 +444,8 @@ pub struct TxInBlock<Tx> {
 ///
 /// This does not check `proof_of_leadership` and the parent header
 /// since they require a ledger state.
+// TODO: move this to `header/verified.rs`, once it is no longer used anywhere
+// except `VerifiedBlockHeader::new`.
 pub fn verify_header_alone(header: &Header) -> Result<(), HeaderError> {
     if header.slot() == Slot::genesis() {
         return Err(HeaderError::GenesisSlot);
@@ -445,6 +454,8 @@ pub fn verify_header_alone(header: &Header) -> Result<(), HeaderError> {
 }
 
 /// Verifies the signature of block header.
+// TODO: move this to `header/verified.rs`, once it is no longer used anywhere
+// except `VerifiedBlockHeader::new`.
 pub fn verify_header_signature(header: &Header, signature: &Ed25519Signature) -> Result<(), Error> {
     let header_bytes = header.to_bytes()?;
     header
@@ -591,7 +602,7 @@ mod tests {
             slot,
             UncleHeaders::empty(),
             proof_of_leadership,
-            transactions.clone(),
+            transactions,
             &valid_signing_key,
         )
         .expect("Valid block should be created");
@@ -599,29 +610,17 @@ mod tests {
         let header = valid_block.header().clone();
         let valid_signature = *valid_block.signature();
 
-        let _reconstructed_block = Block::reconstruct(
-            header.clone(),
-            UncleHeaders::empty(),
-            transactions.clone(),
-            valid_signature,
-        )
-        .expect("Should reconstruct block with valid signature");
+        verify_header_signature(&header, &valid_signature)
+            .expect("The signature of the leader should verify");
 
         let wrong_signing_key = Ed25519Key::from_bytes(&[1u8; 32]);
         let invalid_signature = header
             .sign(&wrong_signing_key)
             .expect("Signing should work");
 
-        let invalid_block_result = Block::reconstruct(
-            header,
-            UncleHeaders::empty(),
-            transactions,
-            invalid_signature,
-        );
-
         assert!(
-            invalid_block_result.is_err(),
-            "Should not reconstruct block with invalid signature"
+            verify_header_signature(&header, &invalid_signature).is_err(),
+            "A signature by another key should not verify"
         );
     }
 
@@ -873,7 +872,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reconstruct_rejects_genesis_slot() {
+    fn test_header_alone_rejects_genesis_slot() {
         let parent_block = [0u8; 32].into();
         let proof = create_proof();
         let key = Ed25519Key::from_bytes(&[0; 32]);
@@ -902,15 +901,11 @@ mod tests {
             .sign(&key)
             .expect("header signing should succeed");
 
-        let err = Block::reconstruct(
-            genesis_header,
-            UncleHeaders::empty(),
-            BlockTransactions::<Ops>::empty(),
-            genesis_signature,
-        )
-        .expect_err("genesis slot must be rejected by reconstruct path");
+        verify_header_signature(&genesis_header, &genesis_signature)
+            .expect("the signature itself is consistent");
+        let err = verify_header_alone(&genesis_header).expect_err("genesis slot must be rejected");
 
-        assert!(matches!(err, Error::Header(HeaderError::GenesisSlot)));
+        assert!(matches!(err, HeaderError::GenesisSlot));
     }
 
     /// The maximum-size proposal of an era matches the era's size bound.
@@ -949,8 +944,8 @@ mod tests {
         )
         .unwrap();
 
-        block_with_uncles(uncles, proof)
-            .into_verified()
+        let block = block_with_uncles(uncles, proof);
+        Block::validate_body_root(&block.header, &block.uncle_headers, &block.transactions)
             .expect("the carried headers are the ones the body root commits to");
     }
 
@@ -963,7 +958,7 @@ mod tests {
         block.uncle_headers = UncleHeaders::empty();
 
         assert!(matches!(
-            block.into_verified(),
+            Block::validate_body_root(&block.header, &block.uncle_headers, &block.transactions),
             Err(Error::BodyRootMismatch)
         ));
     }
@@ -979,7 +974,7 @@ mod tests {
             UncleHeaders::try_new(vec![signed_uncle(2, &proof)], TEST_MAX_UNCLES).unwrap();
 
         assert!(matches!(
-            block.into_verified(),
+            Block::validate_body_root(&block.header, &block.uncle_headers, &block.transactions),
             Err(Error::BodyRootMismatch)
         ));
     }
@@ -996,7 +991,7 @@ mod tests {
         block.uncle_headers = UncleHeaders::try_new(vec![second, first], TEST_MAX_UNCLES).unwrap();
 
         assert!(matches!(
-            block.into_verified(),
+            Block::validate_body_root(&block.header, &block.uncle_headers, &block.transactions),
             Err(Error::BodyRootMismatch)
         ));
     }
@@ -1022,7 +1017,7 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            block.into_verified(),
+            Block::validate_body_root(&block.header, &block.uncle_headers, &block.transactions),
             Err(Error::BodyRootMismatch)
         ));
     }

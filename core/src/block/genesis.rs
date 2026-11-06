@@ -153,8 +153,7 @@ impl<'de> Deserialize<'de> for GenesisBlock {
             uncle_headers: raw.uncle_headers,
             transactions: raw.transactions,
         };
-        block
-            .validate_body_root()
+        Block::validate_body_root(&block.header, &block.uncle_headers, &block.transactions)
             .map_err(serde::de::Error::custom)?;
 
         Ok(Self(block))

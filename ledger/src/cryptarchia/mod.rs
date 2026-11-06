@@ -19,7 +19,7 @@ use lb_core::{
         ops::{SignedOperation, pow::PowTarget, transfer::TransferOp},
         transactions::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, states::Verified},
     },
-    proofs::leader_proof::{self, LeaderPublic},
+    proofs::leader_proof::LeaderPublic,
     sdp::Declarations,
 };
 use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
@@ -512,84 +512,53 @@ impl LedgerState {
         })
     }
 
-    fn try_apply_proof<LeaderProof, Id>(
-        self,
-        slot: Slot,
-        proof: &LeaderProof,
-        eras: &EraScheduledConfig,
-    ) -> Result<Self, LedgerError<Id>>
-    where
-        LeaderProof: leader_proof::LeaderProof,
-    {
+    /// The leader public inputs that a `PoL` for a block at `slot` must verify
+    /// against.
+    fn leader_public_at(&self, slot: Slot, eras: &EraScheduledConfig) -> LeaderPublic {
         assert_eq!(eras.epoch_for_slot(slot), self.epoch_state.epoch);
-        let public_inputs = LeaderPublic::new(
+        LeaderPublic::new(
             self.aged_utxos().root(),
             self.latest_utxos().root(),
             self.epoch_state.nonce,
             slot.into(),
             self.epoch_state.lottery_0,
             self.epoch_state.lottery_1,
-        );
-        if !proof.verify(&public_inputs) {
-            return Err(LedgerError::InvalidProof);
-        }
-
-        Ok(self)
+        )
     }
 
-    pub fn try_apply_header<LeaderProof, Id>(
+    /// Clones and updates the ledger state by applying each component of a
+    /// block header.
+    pub fn try_apply_header<Id>(
         self,
         slot: Slot,
-        proof: &LeaderProof,
+        proof_entropy: &Fr,
         uncle_slots: &UncleSlots,
         sdp: &SdpLedger,
         pow: &PowState,
         eras: &EraScheduledConfig,
-    ) -> Result<Self, LedgerError<Id>>
-    where
-        LeaderProof: leader_proof::LeaderProof,
-    {
+    ) -> Result<Self, LedgerError<Id>> {
         // First, synthesize epoch state for `slot` before update the ledger state.
-        // Then, apply the proof and update the nonce. Finally, mark the occupied
+        // Then, update the nonce. Finally, mark the occupied
         // slots since this function is called for a new block.
         Ok(self
-            .update_epoch_state_and_apply_proof(slot, proof, sdp, pow, eras)?
-            .update_nonce(&proof.entropy(), slot)
+            .update_epoch_state(slot, sdp, pow, eras)?
+            .update_nonce(proof_entropy, slot)
             .mark_occupied_slots(slot, uncle_slots))
     }
 
-    /// Synthesizes the epoch state for `slot` and apply the proof.
-    fn update_epoch_state_and_apply_proof<LeaderProof, Id>(
-        self,
-        slot: Slot,
-        proof: &LeaderProof,
-        sdp: &SdpLedger,
-        pow: &PowState,
-        eras: &EraScheduledConfig,
-    ) -> Result<Self, LedgerError<Id>>
-    where
-        LeaderProof: leader_proof::LeaderProof,
-    {
-        self.update_epoch_state(slot, sdp, pow, eras)?
-            .try_apply_proof(slot, proof, eras)
-    }
-
-    /// Verifies a leadership proof for a block at `slot` whose parent is the
-    /// block this state belongs to, leaving the state untouched.
-    pub fn verify_proof_of_leadership<LeaderProof, Id>(
+    /// Computes the public inputs that a `PoL` for a block at `slot` must be
+    /// verified against, by synthesizing the epoch state for `slot`.
+    pub fn leader_public<Id>(
         &self,
         slot: Slot,
-        proof: &LeaderProof,
         sdp: &SdpLedger,
         pow: &PowState,
         eras: &EraScheduledConfig,
-    ) -> Result<(), LedgerError<Id>>
-    where
-        LeaderProof: leader_proof::LeaderProof,
-    {
-        self.clone()
-            .update_epoch_state_and_apply_proof(slot, proof, sdp, pow, eras)?;
-        Ok(())
+    ) -> Result<LeaderPublic, LedgerError<Id>> {
+        Ok(self
+            .clone()
+            .update_epoch_state(slot, sdp, pow, eras)?
+            .leader_public_at(slot, eras))
     }
 
     pub fn try_apply_transfer<Id, Profile: GasProfile>(
@@ -880,7 +849,6 @@ pub mod tests {
     use std::num::{NonZero, NonZeroU64};
 
     use lb_core::{
-        crypto::{Digest as _, Hasher},
         era::AcceptedForkDigests,
         mantle::{
             Note, Op,
@@ -895,6 +863,7 @@ pub mod tests {
                 states::{Preverified, Unverified},
             },
         },
+        proofs::leader_proof::LeaderProof,
         sdp::{Declaration, DeclarationId, Locator, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::EpochConfig;
@@ -912,7 +881,6 @@ pub mod tests {
     use super::*;
     use crate::{
         Ledger,
-        leader_proof::LeaderProof,
         mantle::{
             pow::tx_density::ClosedEpochLoad,
             sdp::{
@@ -920,7 +888,7 @@ pub mod tests {
                 rewards::{self},
             },
         },
-        test_utils::{FORK_DIGEST, schedule, single_era},
+        test_utils::{FORK_DIGEST, schedule, single_era, verified_header},
     };
 
     type HeaderId = [u8; 32];
@@ -1020,6 +988,8 @@ pub mod tests {
         state
     }
 
+    /// Updates `ledger` with a new block header at `slot` with a dummy `PoL`
+    /// for `utxo`.
     pub fn update_ledger(
         ledger: &mut Ledger<HeaderId>,
         parent: HeaderId,
@@ -1038,31 +1008,28 @@ pub mod tests {
                 &ledger.state(&parent).unwrap().mantle_ledger.pow,
                 ledger.era_schedule(),
             )?;
-        let id = make_id(parent, slot, utxo);
+        // `PoL` must be verified before a header is applied to the ledger.
         let proof = generate_proof(&ledger_state, &utxo, slot);
+        if !proof.verify(&ledger.leader_public(parent, slot)?) {
+            return Err(LedgerError::InvalidProof);
+        }
+        let header = verified_header(
+            parent,
+            slot,
+            &proof,
+            &UncleSlots::default(),
+            &utxo.id().as_bytes(),
+        );
         let update = ledger
-            .prepare_update::<_, _, MainnetGasProfile>(
-                id,
-                parent,
-                slot,
-                &proof,
-                &UncleSlots::default(),
+            .prepare_update::<_, MainnetGasProfile>(
+                &header,
                 std::iter::empty::<SignedOps<Preverified, StandardMode>>(),
             )?
             .verify_batch_proofs()
             .map_err(|_| LedgerError::InvalidProof)?;
 
         ledger.commit_update(update);
-        Ok(id)
-    }
-
-    fn make_id(parent: HeaderId, slot: impl Into<Slot>, utxo: Utxo) -> HeaderId {
-        Hasher::new()
-            .chain_update(parent)
-            .chain_update(slot.into().to_le_bytes())
-            .chain_update(utxo.id().as_bytes())
-            .finalize()
-            .into()
+        Ok(header.header().id().into())
     }
 
     // produce a proof for a note
@@ -1987,11 +1954,7 @@ pub mod tests {
             leader_key: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
             voucher_cm: VoucherCm::default(),
         };
-        let update_err = ledger_state
-            .try_apply_proof::<_, ()>(slot, &proof, ledger.era_schedule())
-            .err();
-
-        assert_eq!(Some(LedgerError::InvalidProof), update_err);
+        assert!(!proof.verify(&ledger_state.leader_public_at(slot, ledger.era_schedule())));
     }
 
     #[test]
@@ -2012,11 +1975,7 @@ pub mod tests {
             leader_key: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
             voucher_cm: VoucherCm::default(),
         };
-        let update_err = ledger_state
-            .try_apply_proof::<_, ()>(slot, &proof, ledger.era_schedule())
-            .err();
-
-        assert_eq!(Some(LedgerError::InvalidProof), update_err);
+        assert!(!proof.verify(&ledger_state.leader_public_at(slot, ledger.era_schedule())));
     }
 
     fn create_tx_with_transfer(
@@ -2455,9 +2414,9 @@ pub mod tests {
         assert_eq!(eras.epoch_for_slot(slot), 0);
         let proof = generate_proof(&genesis_state, &utxo, slot);
         let ledger_state_1 = genesis_state
-            .try_apply_header::<DummyProof, HeaderId>(
+            .try_apply_header::<HeaderId>(
                 slot,
-                &proof,
+                &proof.entropy(),
                 &UncleSlots::default(),
                 &SdpLedger::new(0.into()),
                 &pow_state(),
@@ -2479,14 +2438,21 @@ pub mod tests {
         // Build a proof with the synthesized epoch state
         let proof = generate_proof(&synthesized_ledger_state, &utxo, slot);
 
-        // Apply it to `ledger_state_1`.
-        // Must succeed if epoch state in `ledger_state_1` is jumped
-        // correctly to epoch 2 as the same as `synthesized_ledger_state`.
+        // The proof was built from the epoch 2's state synthesized above, so it is
+        // verified successfully only if `leader_public` synthesizes the same
+        // state when jumping from epoch 0 to epoch 2.
+        assert!(
+            proof.verify(
+                &ledger_state_1
+                    .leader_public::<HeaderId>(slot, &SdpLedger::new(0.into()), &pow_state(), &eras)
+                    .unwrap()
+            )
+        );
         let ledger_state_2 = ledger_state_1
             .clone()
-            .try_apply_header::<DummyProof, HeaderId>(
+            .try_apply_header::<HeaderId>(
                 slot,
-                &proof,
+                &proof.entropy(),
                 &UncleSlots::default(),
                 &SdpLedger::new(0.into()),
                 &pow_state(),

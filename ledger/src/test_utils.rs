@@ -2,8 +2,15 @@
 
 use std::{num::NonZero, time::Duration};
 
-use lb_core::era::ForkDigest;
-use lb_cryptarchia_engine::EraSchedule;
+use lb_core::{
+    block::{SignedHeader, UncleHeaders},
+    crypto::{Digest as _, Hasher},
+    era::ForkDigest,
+    header::{ContentId, Header, HeaderId, VerifiedBlockHeader},
+    proofs::leader_proof::{Groth16LeaderProof, LeaderProof},
+};
+use lb_cryptarchia_engine::{EraSchedule, Slot, UncleSlots};
+use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraTiming};
 use time::OffsetDateTime;
 
@@ -51,4 +58,50 @@ pub fn schedule(
 #[must_use]
 pub fn single_era(config: Config) -> EraScheduledConfig {
     schedule(config, [])
+}
+
+/// Creates [`VerifiedBlockHeader`] by skipping the verifications.
+///
+/// It carries an uncle at each of `uncle_slots`, and `salt` sets its body root,
+/// so that blocks at the same slot on the same parent get different ids.
+#[must_use]
+pub fn verified_header(
+    parent: impl Into<HeaderId>,
+    slot: Slot,
+    proof: &impl LeaderProof,
+    uncle_slots: &UncleSlots,
+    salt: &[u8],
+) -> VerifiedBlockHeader {
+    let parent = parent.into();
+    let body_root: [u8; 32] = Hasher::new()
+        .chain_update(<[u8; 32]>::from(parent))
+        .chain_update(slot.to_le_bytes())
+        .chain_update(salt)
+        .finalize()
+        .into();
+    let signature = Ed25519Signature::from_bytes(&[0; 64]);
+    let uncles = uncle_slots
+        .iter()
+        .map(|uncle_slot| {
+            SignedHeader::new(
+                Header::new(
+                    parent,
+                    ContentId::from([0; 32]),
+                    *uncle_slot,
+                    Groth16LeaderProof::genesis(),
+                ),
+                signature,
+            )
+        })
+        .collect();
+    VerifiedBlockHeader::new_unchecked(
+        Header::new(
+            parent,
+            ContentId::from(body_root),
+            slot,
+            Groth16LeaderProof::dummy(proof.entropy(), *proof.leader_key(), *proof.voucher_cm()),
+        ),
+        signature,
+        UncleHeaders::try_new(uncles, u8::MAX).expect("uncles within the bound"),
+    )
 }

@@ -24,7 +24,6 @@
 use std::{num::NonZero, sync::Arc};
 
 use lb_core::{
-    crypto::{Digest as _, Hasher},
     mantle::{
         Note, SignedOps, Utxo, Value,
         gas::MainnetGasProfile,
@@ -33,6 +32,7 @@ use lb_core::{
             GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, states::Preverified,
         },
     },
+    proofs::leader_proof::LeaderProof as _,
     sdp::Declarations,
 };
 use lb_cryptarchia_engine::{Branch, Cryptarchia, Slot, State, UncleSlots};
@@ -50,7 +50,7 @@ use crate::{
         tests::{GENESIS_POW_REWARD_POOL, config, generate_proof},
     },
     mantle::sdp::SdpLedger,
-    test_utils::single_era,
+    test_utils::{single_era, verified_header},
 };
 
 type HeaderId = [u8; 32];
@@ -251,14 +251,6 @@ fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
     Ledger::new(GENESIS, state, Arc::new(single_era(config.clone())))
 }
 
-fn block_id(parent: HeaderId, slot: Slot) -> HeaderId {
-    Hasher::new()
-        .chain_update(parent)
-        .chain_update(slot.to_le_bytes())
-        .finalize()
-        .into()
-}
-
 /// The total stake that the ledger currently infers, read from the honest tip.
 fn current_estimated_total_stake(
     ledger: &Ledger<HeaderId>,
@@ -374,15 +366,15 @@ fn apply_block_to_ledger(
             ledger.era_schedule(),
         )
         .expect("epoch state update");
-    let id = block_id(parent, slot);
+    // The ledger applies a header without verifying its proof of leadership,
+    // so verify it here as Block Header Verification does.
     let proof = generate_proof(&parent_state, &utxo, slot);
+    assert!(proof.verify(&ledger.leader_public(parent, slot).expect("leader public")));
+    let header = verified_header(parent, slot, &proof, uncle_slots, &[]);
+    let id = header.header().id().into();
     let update = ledger
-        .prepare_update::<_, _, MainnetGasProfile>(
-            id,
-            parent,
-            slot,
-            &proof,
-            uncle_slots,
+        .prepare_update::<_, MainnetGasProfile>(
+            &header,
             std::iter::empty::<SignedOps<Preverified, StandardMode>>(),
         )
         .expect("ledger update")
