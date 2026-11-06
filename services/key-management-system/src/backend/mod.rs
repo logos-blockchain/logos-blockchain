@@ -32,7 +32,7 @@ pub trait KMSBackend {
     ) -> Result<<Self::Key as SecuredKey>::Signature, Self::Error>;
 
     async fn execute(
-        &mut self,
+        &self,
         key_id: &Self::KeyId,
         operator: Self::KeyOperations,
     ) -> Result<(), Self::Error>;
