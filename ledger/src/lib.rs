@@ -26,6 +26,7 @@ use lb_core::{
     crypto::Hash as BlockHash,
     era::ForkDigest,
     events::{Events, HeaderEvent, TxEvent, TxEventPayload},
+    header::{HeaderId, VerifiedBlockHeader},
     mantle::{
         GenesisParameters, NoteId, Utxo, Value, VerificationError,
         batch::DeferredProofs,
@@ -37,7 +38,7 @@ use lb_core::{
                 channel_transfer::ChannelTransferExecutionContext,
                 deposit::DepositExecutionContext, withdraw::WithdrawExecutionContext,
             },
-            leader_claim::LeaderClaimExecutionContext,
+            leader_claim::{LeaderClaimExecutionContext, VoucherCm},
             pow::{ClaimPoWRewardExecutionContext, PowReward},
             sdp::{SDPActiveOp, SDPDeclareOp},
         },
@@ -49,7 +50,7 @@ use lb_core::{
             tx_list::ops::{OpsContext, OpsGasContext},
         },
     },
-    proofs::leader_proof,
+    proofs::leader_proof::{LeaderProof as _, LeaderPublic},
 };
 use lb_cryptarchia_engine::{Slot, UncleSlots};
 use lb_groth16::{AdditiveGroup as _, Fr};
@@ -179,40 +180,31 @@ where
         }
     }
 
-    /// Prepare to add a new [`LedgerState`] by applying the given proof and
-    /// transactions on top of the parent state.
+    /// Prepare to add a new [`LedgerState`] by applying `header` and
+    /// `txs` on top of the parent state.
     ///
     /// On success, a new [`LedgerState`] is returned, which can then be
     /// committed by calling [`Self::commit_update`].
-    pub fn prepare_update<Tx, LeaderProof, Profile>(
+    pub fn prepare_update<Tx, Profile>(
         &self,
-        id: Id,
-        parent_id: Id,
-        slot: Slot,
-        proof: &LeaderProof,
-        uncle_slots: &UncleSlots,
+        header: &VerifiedBlockHeader,
         txs: impl Iterator<Item = Tx>,
     ) -> Result<PreparedUpdate<Id>, LedgerError<Id>>
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
-        LeaderProof: leader_proof::LeaderProof,
         Profile: GasProfile,
-        Id: Into<BlockHash>,
+        Id: Into<BlockHash> + From<HeaderId>,
     {
+        let id = header.header().id().into();
+        let parent = header.header().parent().into();
         let parent_state = self
             .states
-            .get(&parent_id)
-            .ok_or(LedgerError::ParentNotFound(parent_id))?;
+            .get(&parent)
+            .ok_or(LedgerError::ParentNotFound(parent))?;
 
-        let (new_state, events, deferred_proofs) =
-            parent_state.clone().try_update::<_, _, _, Profile>(
-                id,
-                slot,
-                proof,
-                uncle_slots,
-                txs,
-                &self.era_schedule,
-            )?;
+        let (new_state, events, deferred_proofs) = parent_state
+            .clone()
+            .try_update::<_, _, Profile>(id, header, txs, &self.era_schedule)?;
 
         Ok(PreparedUpdate::new(id, new_state, events, deferred_proofs))
     }
@@ -230,6 +222,15 @@ where
     #[must_use]
     pub const fn era_schedule(&self) -> &Arc<EraScheduledConfig> {
         &self.era_schedule
+    }
+
+    /// Returns the public inputs that a `PoL` for a block at `slot` with
+    /// `parent` must be verified against.
+    pub fn leader_public(&self, parent: Id, slot: Slot) -> Result<LeaderPublic, LedgerError<Id>> {
+        self.states
+            .get(&parent)
+            .ok_or(LedgerError::ParentNotFound(parent))?
+            .leader_public(slot, &self.era_schedule)
     }
 
     /// Removes the state stored for the given block id.
@@ -261,22 +262,26 @@ pub struct LedgerState {
 }
 
 impl LedgerState {
-    fn try_update<Tx, LeaderProof, Id, Profile>(
+    fn try_update<Tx, Id, Profile>(
         self,
         block_id: Id,
-        slot: Slot,
-        proof: &LeaderProof,
-        uncle_slots: &UncleSlots,
+        header: &VerifiedBlockHeader,
         txs: impl Iterator<Item = Tx>,
         eras: &EraScheduledConfig,
     ) -> Result<(Self, Events, DeferredProofs), LedgerError<Id>>
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
-        LeaderProof: leader_proof::LeaderProof,
         Profile: GasProfile,
         Id: Into<BlockHash>,
     {
-        let (mut state, header_events) = self.try_apply_header(slot, proof, uncle_slots, eras)?;
+        let slot = header.header().slot();
+        let (mut state, header_events) = self.try_apply_header(
+            slot,
+            &header.leader_proof().entropy(),
+            *header.leader_proof().voucher_cm(),
+            &header.uncle_headers().slots(),
+            eras,
+        )?;
         // Record the applied block among the recently seen blocks `PoW`
         // claims may anchor to. This is the canonical apply path, where the
         // block's id is known — unlike a proposer's direct
@@ -317,34 +322,30 @@ impl LedgerState {
     /// transactions that should be applied before that.
     ///
     /// Returns any [`HeaderEvent`]s emitted while processing the header.
-    pub fn try_apply_header<LeaderProof, Id>(
+    pub fn try_apply_header<Id>(
         self,
         slot: Slot,
-        proof: &LeaderProof,
+        proof_entropy: &Fr,
+        voucher_cm: VoucherCm,
         uncle_slots: &UncleSlots,
         eras: &EraScheduledConfig,
-    ) -> Result<(Self, Vec<HeaderEvent>), LedgerError<Id>>
-    where
-        LeaderProof: leader_proof::LeaderProof,
-    {
+    ) -> Result<(Self, Vec<HeaderEvent>), LedgerError<Id>> {
         let last_epoch_state = self.cryptarchia_ledger.epoch_state().clone();
-        let mut cryptarchia_ledger = self
-            .cryptarchia_ledger
-            .try_apply_header::<LeaderProof, Id>(
-                slot,
-                proof,
-                uncle_slots,
-                // TODO: threading SDP here because EpochState is currently embedded in
-                // CryptarchiaLedger.
-                // In the future, we will pull EpochState up into LedgerState.
-                &self.mantle_ledger.sdp,
-                &self.mantle_ledger.pow,
-                eras,
-            )?;
+        let mut cryptarchia_ledger = self.cryptarchia_ledger.try_apply_header::<Id>(
+            slot,
+            proof_entropy,
+            uncle_slots,
+            // TODO: threading SDP here because EpochState is currently embedded in
+            // CryptarchiaLedger.
+            // In the future, we will pull EpochState up into LedgerState.
+            &self.mantle_ledger.sdp,
+            &self.mantle_ledger.pow,
+            eras,
+        )?;
         let (mantle_ledger, effect) = self.mantle_ledger.try_apply_header(
             &last_epoch_state,
             cryptarchia_ledger.epoch_state(),
-            *proof.voucher_cm(),
+            voucher_cm,
             eras,
         )?;
 
@@ -366,20 +367,15 @@ impl LedgerState {
         ))
     }
 
-    /// Verifies a leadership proof for a block at `slot` whose parent is the
-    /// block this state belongs to, leaving the state untouched.
-    pub fn verify_proof_of_leadership<LeaderProof, Id>(
+    /// Returns the public inputs that a `PoL` for a block at `slot` must be
+    /// verified against.
+    pub fn leader_public<Id>(
         &self,
         slot: Slot,
-        proof: &LeaderProof,
         eras: &EraScheduledConfig,
-    ) -> Result<(), LedgerError<Id>>
-    where
-        LeaderProof: leader_proof::LeaderProof,
-    {
-        self.cryptarchia_ledger.verify_proof_of_leadership(
+    ) -> Result<LeaderPublic, LedgerError<Id>> {
+        self.cryptarchia_ledger.leader_public(
             slot,
-            proof,
             &self.mantle_ledger.sdp,
             &self.mantle_ledger.pow,
             eras,
@@ -1025,7 +1021,7 @@ impl LedgerState {
 mod tests {
     use std::num::NonZero;
 
-    use cryptarchia::tests::{GENESIS_POW_REWARD_POOL, config, generate_proof, utxo};
+    use cryptarchia::tests::{GENESIS_POW_REWARD_POOL, config, utxo};
     use lb_core::{
         events::DepositNote,
         mantle::{
@@ -1074,7 +1070,7 @@ mod tests {
             ledger, update_ledger, utxo_with_sk,
         },
         mantle::{leader::LeaderState, sdp::test_utils::generate_activity_proof},
-        test_utils::{FORK_DIGEST, schedule, single_era},
+        test_utils::{FORK_DIGEST, schedule, single_era, verified_header},
     };
 
     fn create_test_keys() -> (Ed25519Key, Ed25519PublicKey) {
@@ -1337,24 +1333,16 @@ mod tests {
             panic!("first op must be a transfer")
         };
 
-        // Create a dummy proof (using same structure as in cryptarchia tests)
-
-        let proof = generate_proof(
-            &ledger.state(&genesis_id).unwrap().cryptarchia_ledger,
-            &utxo,
+        let header = verified_header(
+            genesis_id,
             Slot::from(1u64),
+            &lb_core::proofs::leader_proof::Groth16LeaderProof::genesis(),
+            &UncleSlots::default(),
+            &[],
         );
-
-        let new_id = [1; 32];
+        let new_id = header.header().id().into();
         let update = ledger
-            .prepare_update::<_, _, MainnetGasProfile>(
-                new_id,
-                genesis_id,
-                Slot::from(1u64),
-                &proof,
-                &UncleSlots::default(),
-                std::iter::once(tx),
-            )
+            .prepare_update::<_, MainnetGasProfile>(&header, std::iter::once(tx))
             .unwrap()
             .verify_batch_proofs()
             .unwrap();

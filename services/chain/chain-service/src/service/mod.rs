@@ -14,7 +14,7 @@ use futures::{Stream, StreamExt as _, future::join_all, stream};
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockInfo};
 use lb_core::{
-    block::{Block, SignedHeader, TxInBlock, UncleHeaders},
+    block::{Block, BlockWithVerifiedHeader, SignedHeader, TxInBlock, UncleHeaders},
     era::ForkDigest,
     header::HeaderId,
     mantle::{
@@ -40,9 +40,9 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
-    AppliedBlock, BlockOrigin, ChainServiceInfo, ConsensusMsg, Cryptarchia,
-    CryptarchiaConsensusState, EpochStateQueryResult, Error, LOG_TARGET, LibUpdate,
-    ProcessedBlockEvent, PrunedBlocksInfo, Query, metrics,
+    AppliedBlock, ChainServiceInfo, ConsensusMsg, Cryptarchia, CryptarchiaConsensusState,
+    EpochStateQueryResult, Error, LOG_TARGET, LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo,
+    Query, metrics,
     notifier::ChainOnlineNotifier,
     relays::{BroadcastRelay, CryptarchiaConsensusRelays},
     sync::block_provider::BlockProvider,
@@ -281,10 +281,11 @@ where
         }
     }
 
-    /// Apply a block to the chain and reply with the result.
+    /// Apply a block whose header is verified to the chain and reply with the
+    /// result.
     async fn apply_block_and_reply(
         &mut self,
-        block: Block<Tx>,
+        block: BlockWithVerifiedHeader<Tx>,
         reply_channel: oneshot::Sender<Result<AppliedBlock<Tx>, Error>>,
     ) {
         match self.process_block_and_update_state(block).await {
@@ -314,14 +315,12 @@ where
     /// On error, the service state is not mutated.
     async fn process_block_and_update_state(
         &mut self,
-        block: Block<Tx>,
+        block: BlockWithVerifiedHeader<Tx>,
     ) -> Result<ProcessBlockOutcome<Tx>, Error> {
         let previous_lib_slot = self.cryptarchia.lib_branch().slot();
         let outcome = process_block(
             &mut self.cryptarchia,
             block,
-            self.current_slot,
-            BlockOrigin::Network,
             &self.relays,
             &self.new_block_subscription_sender,
             &self.lib_subscription_sender,
@@ -538,6 +537,22 @@ where
                 let events = self.relays.storage().get_block_events(&id).await;
                 reply_channel.send(events).unwrap_or_else(|_| {
                     error!(target: LOG_TARGET, "Could not send block events through channel");
+                });
+            }
+            Query::VerifyHeader {
+                header,
+                uncle_headers,
+                signature,
+                reply_channel,
+            } => {
+                let result = self.cryptarchia.verify_header(
+                    *header,
+                    *uncle_headers,
+                    *signature,
+                    self.current_slot,
+                );
+                reply_channel.send(result).unwrap_or_else(|_| {
+                    error!(target: LOG_TARGET, "Could not send header verification result through channel");
                 });
             }
             Query::SelectUncles {
@@ -896,13 +911,11 @@ fn log_canonical_blend_snapshots<Tx>(cryptarchia: &Cryptarchia, block: &Block<Tx
     target = LOG_TARGET,
     level = "debug",
     skip(cryptarchia, block, relays, new_block_subscription_sender, lib_broadcaster),
-    fields(block_id = %block.header().id(), tx_count = block.transactions_iter().count(), current_slot = ?current_slot)
+    fields(block_id = %block.header().header().id(), tx_count = block.transactions_iter().count())
 )]
 pub async fn process_block<Tx>(
     cryptarchia: &mut Cryptarchia,
-    block: Block<Tx>,
-    current_slot: Slot,
-    origin: BlockOrigin,
+    block: BlockWithVerifiedHeader<Tx>,
     relays: &CryptarchiaConsensusRelays<Tx>,
     new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
     lib_broadcaster: &broadcast::Sender<LibUpdate>,
@@ -923,13 +936,13 @@ where
         + Unpin
         + 'static,
 {
-    debug!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().id());
-    let header = block.header().clone();
+    debug!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().header().id());
+    let header = block.header().header().clone();
     let prev_lib = cryptarchia.lib();
 
     let mut candidate = cryptarchia.clone();
-    let applied =
-        candidate.try_apply_block_with_state_retention(block.clone(), current_slot, origin)?;
+    let applied = candidate.try_apply_block_with_state_retention(&block)?;
+    let block = Block::from(block);
     let new_lib = candidate.lib();
 
     let tx_count = block.transactions_iter().count();

@@ -1,5 +1,6 @@
 pub mod api;
 mod bootstrap;
+mod header;
 mod metrics;
 mod notifier;
 mod relays;
@@ -24,10 +25,10 @@ use futures::{Stream, TryStreamExt as _};
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
-    block::{Block, TxInBlock, UncleHeaders, genesis::GenesisBlock},
+    block::{Block, BlockWithVerifiedHeader, TxInBlock, UncleHeaders, genesis::GenesisBlock},
     era::ForkDigest,
     events::Events,
-    header::HeaderId,
+    header::{Header, HeaderId, HeaderVerificationError, VerifiedBlockHeader},
     mantle::{
         TxHash,
         gas::MainnetGasProfile,
@@ -39,6 +40,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Branch, EraSchedule, PrunedBlocks, ReorgedBlocks, UncleSlots};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
+use lb_key_management_system_keys::keys::Ed25519Signature;
 pub use lb_ledger::EpochState;
 use lb_ledger::{LedgerState, config::EraScheduledConfig};
 use lb_log_targets::chain;
@@ -89,6 +91,10 @@ pub(crate) const LOG_TARGET: &str = chain::service::ROOT;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("Invalid block header: {0}")]
+    InvalidHeader(HeaderVerificationError),
+    #[error("Block body does not match its header: {0}")]
+    InvalidBody(lb_core::block::Error),
     #[error("Missing parent while applying block {parent}, {info:?}")]
     ParentMissing {
         parent: HeaderId,
@@ -144,10 +150,10 @@ pub enum ConsensusMsg<Tx> {
     /// Read-only queries and subscriptions.
     /// These are served in every service phase.
     Query(Query),
-    /// Apply a block to the chain,
+    /// Apply a block whose header is verified to the chain,
     /// and return how the canonical chain changed if successful.
     ApplyBlock {
-        block: Box<Block<Tx>>,
+        block: Box<BlockWithVerifiedHeader<Tx>>,
         reply_channel: oneshot::Sender<Result<AppliedBlock<Tx>, Error>>,
     },
     /// Forward chain sync events from the network to chain-service.
@@ -229,6 +235,13 @@ pub enum Query {
     GetBlockEvents {
         id: HeaderId,
         reply_channel: oneshot::Sender<Option<Events>>,
+    },
+    /// Verifies a block header against the block tree and the current slot.
+    VerifyHeader {
+        header: Box<Header>,
+        uncle_headers: Box<UncleHeaders>,
+        signature: Box<Ed25519Signature>,
+        reply_channel: oneshot::Sender<Result<VerifiedBlockHeader, Error>>,
     },
     /// Selects uncles for a new block extending `parent` at `slot`.
     SelectUncles {
@@ -478,8 +491,8 @@ impl Cryptarchia {
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
     {
-        let outcome =
-            self.try_apply_block_with_state_retention(block, current_slot, BlockOrigin::Network)?;
+        let block = self.verify_block(block, current_slot)?;
+        let outcome = self.try_apply_block_with_state_retention(&block)?;
         self.prune_ledger_states(outcome.pruned_blocks.all());
         Ok((
             outcome.pruned_blocks,
@@ -488,18 +501,71 @@ impl Cryptarchia {
         ))
     }
 
+    /// Verifies a block header against the block tree at `current_slot`.
+    pub fn verify_header(
+        &self,
+        header: Header,
+        uncle_headers: UncleHeaders,
+        signature: Ed25519Signature,
+        current_slot: Slot,
+    ) -> Result<VerifiedBlockHeader, Error> {
+        VerifiedBlockHeader::new(
+            header,
+            uncle_headers,
+            signature,
+            &header::HeaderVerificationContext::new(self, current_slot),
+        )
+        .map_err(|err| self.header_verification_error(err))
+    }
+
+    fn header_verification_error(&self, err: HeaderVerificationError) -> Error {
+        match err {
+            HeaderVerificationError::ParentMissing(parent) => Error::ParentMissing {
+                parent,
+                info: Box::new(self.info()),
+            },
+            HeaderVerificationError::FutureBlock {
+                block_slot,
+                current_slot,
+            } => Error::FutureBlock {
+                block_slot,
+                current_slot,
+            },
+            err => Error::InvalidHeader(err),
+        }
+    }
+
+    /// Verifies the header of `block` against the block tree at
+    /// `current_slot`, and that the header commits to what `block` carries.
+    #[cfg(test)]
+    fn verify_block<Tx>(
+        &self,
+        block: Block<Tx>,
+        current_slot: Slot,
+    ) -> Result<BlockWithVerifiedHeader<Tx>, Error>
+    where
+        Tx: StorageSize + lb_core::mantle::traits::Hashable<Hash = TxHash>,
+    {
+        block
+            .verify_header(&header::HeaderVerificationContext::new(self, current_slot))
+            .map_err(|err| match err {
+                lb_core::block::BlockVerificationError::Header(err) => {
+                    self.header_verification_error(err)
+                }
+                lb_core::block::BlockVerificationError::Body(err) => Error::InvalidBody(err),
+            })
+    }
+
     /// Apply a block while retaining pruned ledger states until the caller has
     /// observed any canonical transition represented by the result.
     pub(crate) fn try_apply_block_with_state_retention<Tx>(
         &mut self,
-        block: Block<Tx>,
-        current_slot: Slot,
-        origin: BlockOrigin,
+        block: &BlockWithVerifiedHeader<Tx>,
     ) -> Result<TryApplyBlockOutcome, Error>
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
     {
-        let header = block.header();
+        let header = block.header().header();
         let id = header.id();
         let parent = header.parent();
         let slot = header.slot();
@@ -508,40 +574,16 @@ impl Cryptarchia {
             return Err(Error::AlreadyApplied(id));
         }
 
-        // Whatever the block's origin: a stored block was checked when it was
-        // first applied, but under the eras this node ran with then.
-        self.verify_uncle_count(&block)?;
-
-        if origin == BlockOrigin::Network {
-            // Reject blocks from future slots
-            if slot > current_slot {
-                return Err(Error::FutureBlock {
-                    block_slot: slot,
-                    current_slot,
-                });
-            }
-
-            // A block is valid only if every uncle it carries is valid.
-            self.verify_uncles(&block)?;
-        }
-
-        let block_uncle_headers_slots = block.uncle_headers().slots();
-        let leader_proof = header.leader_proof().clone();
-
-        let transactions = block.into_transactions();
+        let block_uncle_headers_slots = block.header().uncle_headers().slots();
 
         // Apply the block to the ledger, and batch-verify ZK proofs.
         // This ledger update is not finalized yet, and will be committed only after
         // checking if the block is accepted by the consensus engine.
         let update = self
             .ledger
-            .prepare_update::<_, _, MainnetGasProfile>(
-                id,
-                parent,
-                slot,
-                &leader_proof,
-                &block_uncle_headers_slots,
-                transactions.into_iter(),
+            .prepare_update::<_, MainnetGasProfile>(
+                block.header(),
+                block.transactions_iter().cloned(),
             )
             .map_err(|err| match err {
                 lb_ledger::LedgerError::ParentNotFound(parent) => Error::ParentMissing {
@@ -796,7 +838,6 @@ where
             &relays,
             &self.new_block_subscription_sender,
             &self.lib_subscription_sender,
-            current_slot,
         )
         .await
         .expect("The chain can't be recovered from storage. Remove the chain data, and sync from genesis");
@@ -1041,7 +1082,6 @@ where
         relays: &CryptarchiaConsensusRelays<Tx>,
         new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_subscription_sender: &broadcast::Sender<LibUpdate>,
-        current_slot: Slot,
     ) -> Result<InitializedCryptarchia, Error> {
         info!(
             target: LOG_TARGET, tip = ?recovery_state.tip, lib = ?recovery_state.lib, lib_height = recovery_state.lib_block_length, genesis = ?recovery_state.genesis_id,
@@ -1109,9 +1149,8 @@ where
             let block_id = block.header().id();
             let outcome = process_block(
                 &mut cryptarchia,
-                block,
-                current_slot,
-                BlockOrigin::Storage,
+                // This node verified the block before storing it.
+                BlockWithVerifiedHeader::from_trusted(block),
                 relays,
                 new_block_subscription_sender,
                 lib_subscription_sender,
@@ -1178,22 +1217,4 @@ where
             recovery_state.lib_block_uncle_slots.clone(),
         ))
     }
-}
-
-/// Where a block being applied comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlockOrigin {
-    /// A block received from the network, or proposed by this node.
-    Network,
-    /// A block that was already verified and stored by this node, which is
-    /// being replayed during the chain recovery.
-    ///
-    /// The uncle validity rules are skipped for it, since the parent of an
-    /// uncle may be older than LIB, and blocks older than LIB are not
-    /// recovered.
-    ///
-    /// The future-slot check is also skipped, since the current slot returned
-    /// from the time service may be behind the slot at which the block was
-    /// accepted (e.g., before the time service calibrates the clock with NTP).
-    Storage,
 }

@@ -7,8 +7,11 @@ use std::{
 
 use futures::StreamExt as _;
 use lb_core::{
-    block::{Block, BlockTransactions, SignedHeader, TxInBlock, UncleHeaders},
+    block::{
+        Block, BlockTransactions, BlockWithVerifiedHeader, SignedHeader, TxInBlock, UncleHeaders,
+    },
     era::{AcceptedForkDigests, ForkDigest},
+    header::HeaderVerificationError,
     mantle::{
         Note, Op, OpProof, SignedOps, Utxo,
         channel::Channels,
@@ -31,7 +34,7 @@ use lb_core::{
 use lb_cryptarchia_engine::{EpochConfig, EraSchedule, Slot, UncleSlots};
 use lb_cryptarchia_sync::HeaderId;
 use lb_groth16::{AdditiveGroup as _, Fr};
-use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey};
 use lb_ledger::{
     ConsensusExcludedKeys, LedgerState,
     config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
@@ -55,8 +58,8 @@ use tokio::{
 };
 
 use crate::{
-    BlockOrigin, BootstrapConfig, Cryptarchia, CryptarchiaConsensus, CryptarchiaConsensusState,
-    Error, OfflineGracePeriodConfig, TipEra,
+    BootstrapConfig, Cryptarchia, CryptarchiaConsensus, CryptarchiaConsensusState, Error,
+    OfflineGracePeriodConfig, TipEra,
     relays::CryptarchiaConsensusRelays,
     service::{get_block_ids, process_block},
 };
@@ -166,11 +169,10 @@ async fn get_block_ids_from_memory_and_storage() {
             UncleHeaders::empty(),
         )
         .unwrap();
-        process_block(
+        verify_and_process_block(
             &mut cryptarchia,
             block.clone(),
             block.header().slot(),
-            BlockOrigin::Network,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -220,11 +222,10 @@ async fn get_block_ids_from_memory_and_storage() {
             UncleHeaders::empty(),
         )
         .unwrap();
-        process_block(
+        verify_and_process_block(
             &mut cryptarchia,
             block.clone(),
             block.header().slot(),
-            BlockOrigin::Network,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -329,17 +330,9 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
     // Before the restart: `B1` and `B2` are verified and stored.
     let mut stored = genesis_cryptarchia(utxo);
     for block in [b1.clone(), b2] {
-        process_block(
-            &mut stored,
-            block,
-            b2_slot,
-            BlockOrigin::Network,
-            &relays,
-            &new_block_tx,
-            &lib_tx,
-        )
-        .await
-        .expect("the block should be valid before the restart");
+        verify_and_process_block(&mut stored, block, b2_slot, &relays, &new_block_tx, &lib_tx)
+            .await
+            .expect("the block should be valid before the restart");
     }
 
     let recovery_state = CryptarchiaConsensusState {
@@ -373,104 +366,9 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
         &relays,
         &new_block_tx,
         &lib_tx,
-        b2_slot,
     )
     .await;
     let initialized = initialized.expect("the chain should be recovered");
-    assert!(!initialized.fell_back_to_lib);
-    assert_eq!(initialized.cryptarchia.lib(), b1_id);
-    assert_eq!(initialized.cryptarchia.tip(), b2_id);
-}
-
-/// The chain must be recovered successfully from storage even if the current
-/// slot sampled at startup is behind the slot of the stored tip.
-///
-/// Build a chain `G -- B1 -- B2`, and recover it with `LIB = B1`, `tip = B2`
-/// and `current_slot = B2.slot - 1`.
-#[tokio::test(flavor = "multi_thread")]
-async fn recovery_chain_with_tip_ahead_of_current_slot() {
-    type Tx = SignedOps<Preverified, StandardMode>;
-
-    let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
-    let (storage_tx, storage_rx) = mpsc::channel(10);
-    let _storage_svc = spawn_storage_service(storage_rx);
-    let (time_tx, _time_rx) = mpsc::channel(10);
-    let relays = CryptarchiaConsensusRelays::<Tx>::new(
-        OutboundRelay::new(broadcast_tx),
-        StorageApi::new(OutboundRelay::new(storage_tx)),
-        OutboundRelay::new(time_tx),
-    );
-    let (new_block_tx, _new_block_rx) = broadcast::channel(10);
-    let (lib_tx, _lib_rx) = broadcast::channel(10);
-
-    // Before the restart: `B1` and `B2` are verified and stored.
-    let (zk_key, utxo) = utxo();
-    let mut stored = genesis_cryptarchia(utxo);
-    let mut blocks = Vec::new();
-    let mut slot = Slot::genesis().strict_add(1.into());
-    for _ in 0..2 {
-        let (block, _) = try_build_block(
-            &stored,
-            stored.tip(),
-            utxo,
-            &zk_key,
-            slot,
-            UncleHeaders::empty(),
-        )
-        .unwrap();
-        slot = block.header().slot().strict_add(1.into());
-        process_block(
-            &mut stored,
-            block.clone(),
-            block.header().slot(),
-            BlockOrigin::Network,
-            &relays,
-            &new_block_tx,
-            &lib_tx,
-        )
-        .await
-        .unwrap();
-        blocks.push(block);
-    }
-    let (b1, b2) = (&blocks[0], &blocks[1]);
-    let (b1_id, b2_id) = (b1.header().id(), b2.header().id());
-    let current_slot = b2.header().slot().checked_sub(1.into()).unwrap();
-
-    let recovery_state = CryptarchiaConsensusState {
-        tip: b2_id,
-        tip_era: TipEra {
-            slot: b2.header().slot(),
-            fork_digest: ForkDigest::from([0; 32]),
-        },
-        lib: b1_id,
-        lib_ledger_state: stored.ledger.state(&b1_id).unwrap().clone(),
-        lib_block_length: 1,
-        lib_block_slot: b1.header().slot(),
-        lib_block_uncle_slots: UncleSlots::default(),
-        genesis_id: GENESIS_ID.into(),
-        storage_blocks_to_remove: HashSet::new(),
-        last_engine_state: None,
-    };
-    let bootstrap_config = BootstrapConfig {
-        prolonged_bootstrap_period: std::time::Duration::ZERO,
-        force_bootstrap: true,
-        offline_grace_period: OfflineGracePeriodConfig::default(),
-    };
-    let initialized = CryptarchiaConsensus::<
-        Tx,
-        SystemTimeBackend,
-        TestRuntimeServiceId,
-    >::initialize_cryptarchia(
-        &recovery_state,
-        &bootstrap_config,
-        Arc::clone(stored.ledger.era_schedule()),
-        &relays,
-        &new_block_tx,
-        &lib_tx,
-        current_slot,
-    )
-    .await
-    .expect("the chain should be recovered");
     assert!(!initialized.fell_back_to_lib);
     assert_eq!(initialized.cryptarchia.lib(), b1_id);
     assert_eq!(initialized.cryptarchia.tip(), b2_id);
@@ -484,11 +382,7 @@ fn future_block_is_rejected_only_from_network() {
     let block_slot = block.header().slot();
     let current_slot = block_slot.checked_sub(1.into()).unwrap();
 
-    let result = cryptarchia.clone().try_apply_block_with_state_retention(
-        block.clone(),
-        current_slot,
-        BlockOrigin::Network,
-    );
+    let result = cryptarchia.verify_block(block.clone(), current_slot);
     assert!(matches!(
         result,
         Err(Error::FutureBlock { block_slot: s, current_slot: c })
@@ -497,9 +391,74 @@ fn future_block_is_rejected_only_from_network() {
 
     let mut cryptarchia = cryptarchia;
     cryptarchia
-        .try_apply_block_with_state_retention(block.clone(), current_slot, BlockOrigin::Storage)
+        .try_apply_block_with_state_retention(&BlockWithVerifiedHeader::from_trusted(block.clone()))
         .expect("a stored block should be replayed regardless of the current slot");
     assert_eq!(cryptarchia.tip(), block.header().id());
+}
+
+/// A copy of a block whose signature does not verify over its header is
+/// rejected, as is the block ID it carries, which commits to no signature.
+#[test]
+fn tampered_signature_is_rejected() {
+    let (cryptarchia, block) = test_chain_with_next_block();
+    let mut signature = block.signature().to_bytes();
+    signature[0] ^= 1;
+    let tampered = Block::reconstruct(
+        block.header().clone(),
+        block.uncle_headers().clone(),
+        block.transactions().clone(),
+        Ed25519Signature::from_bytes(&signature),
+    );
+
+    let result = cryptarchia.verify_block(tampered, block.header().slot());
+    assert!(matches!(
+        result,
+        Err(Error::InvalidHeader(
+            HeaderVerificationError::InvalidSignature
+        ))
+    ));
+}
+
+/// A block whose parent this node does not have is reported as missing its
+/// parent, so that it can be handled as an orphan.
+#[test]
+fn unknown_parent_is_reported_missing() {
+    let (fork_chain, b1, _, _, zk_key, utxo) = chain_with_fork();
+    let (b2, _) = try_build_block(
+        &fork_chain,
+        b1.header().id(),
+        utxo,
+        &zk_key,
+        b1.header().slot().strict_add(1.into()),
+        UncleHeaders::empty(),
+    )
+    .unwrap();
+
+    let result = genesis_cryptarchia(utxo).verify_block(b2.clone(), b2.header().slot());
+    assert!(matches!(
+        result,
+        Err(Error::ParentMissing { parent, .. }) if parent == b1.header().id()
+    ));
+}
+
+/// A copy of a block carrying other transactions than its header commits to
+/// is rejected, even though its header is valid.
+#[test]
+fn transactions_not_committed_to_are_rejected() {
+    let (cryptarchia, block) = test_chain_with_next_block();
+    let (zk_key, utxo) = utxo();
+    let other = Block::reconstruct(
+        block.header().clone(),
+        block.uncle_headers().clone(),
+        BlockTransactions::<SignedOps<Preverified, StandardMode>>::from([burn_tx(utxo, &zk_key)]),
+        *block.signature(),
+    );
+
+    let result = cryptarchia.verify_block(other, block.header().slot());
+    assert!(matches!(
+        result,
+        Err(Error::InvalidBody(lb_core::block::Error::BodyRootMismatch))
+    ));
 }
 
 /// Header traversal must continue from storage past a recovered LIB, instead of
@@ -539,11 +498,10 @@ async fn get_block_ids_past_recovered_lib() {
         )
         .unwrap();
         slot = block.header().slot().strict_add(1.into());
-        process_block(
+        verify_and_process_block(
             &mut stored,
             block.clone(),
             block.header().slot(),
-            BlockOrigin::Network,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -586,7 +544,6 @@ async fn get_block_ids_past_recovered_lib() {
         &relays,
         &new_block_tx,
         &lib_tx,
-        slot,
     )
     .await
     .expect("the chain should be recovered");
@@ -628,11 +585,10 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     let initial_info = cryptarchia.info();
     let block_slot = block.header().slot();
 
-    let result = process_block(
+    let result = verify_and_process_block(
         &mut cryptarchia,
         block,
         block_slot,
-        BlockOrigin::Network,
         &relays,
         &new_block_tx,
         &lib_tx,
@@ -736,11 +692,10 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
 
     let mut apply = async |block: Block<SignedOps<Preverified, StandardMode>>| {
         let slot = block.header().slot();
-        process_block(
+        verify_and_process_block(
             &mut cryptarchia,
             block,
             slot,
-            BlockOrigin::Network,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -809,6 +764,20 @@ fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
         "ledger state should not be committed"
     );
     assert_eq!(cryptarchia.tip(), genesis_id, "tip should not advance");
+}
+
+/// Verifies `block` at `current_slot`, as a block from the network is, and
+/// processes it.
+async fn verify_and_process_block(
+    cryptarchia: &mut Cryptarchia,
+    block: Block<SignedOps<Preverified, StandardMode>>,
+    current_slot: Slot,
+    relays: &CryptarchiaConsensusRelays<SignedOps<Preverified, StandardMode>>,
+    new_block_tx: &broadcast::Sender<crate::ProcessedBlockEvent>,
+    lib_tx: &broadcast::Sender<crate::LibUpdate>,
+) -> Result<crate::service::ProcessBlockOutcome<SignedOps<Preverified, StandardMode>>, Error> {
+    let block = cryptarchia.verify_block(block, current_slot)?;
+    process_block(cryptarchia, block, relays, new_block_tx, lib_tx).await
 }
 
 /// Creates a transfer tx with a fake sig.
