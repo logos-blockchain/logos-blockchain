@@ -88,6 +88,10 @@ pub trait MemPool {
     /// Retire the items that block building found inapplicable.
     async fn remove(&mut self, items: &[Self::Key]);
 
+    /// Release the retired items that are due for it, which takes their bodies
+    /// out of storage. Returns whether any was released.
+    async fn release_retained(&mut self) -> bool;
+
     /// The canonical chain was updated, either by growing with a new block or
     /// by a reorg.
     ///

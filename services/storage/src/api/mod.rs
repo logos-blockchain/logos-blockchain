@@ -192,9 +192,19 @@ impl<Tx> StorageApi<Tx> {
 }
 
 impl<Tx: Serialize + Hashable<Hash: Into<TxHash>>> StorageApi<Tx> {
-    /// Store an item under its externally supplied transaction hash.
-    pub async fn store_transaction(&self, hash: TxHash, transaction: Tx) -> Result<(), DynError> {
-        let transactions = [(hash, transaction.to_bytes()?)].into();
+    /// Store items under their externally supplied transaction hashes, in one
+    /// write.
+    pub async fn store_keyed_transactions<Transactions>(
+        &self,
+        transactions: Transactions,
+    ) -> Result<(), DynError>
+    where
+        Transactions: IntoIterator<Item = (TxHash, Tx)>,
+    {
+        let transactions = transactions
+            .into_iter()
+            .map(|(hash, transaction)| transaction.to_bytes().map(|bytes| (hash, bytes)))
+            .collect::<Result<_, _>>()?;
         self.relay
             .send(StorageMsg::StoreTransactions { transactions })
             .await?;

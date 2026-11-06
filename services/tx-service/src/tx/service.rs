@@ -9,11 +9,13 @@ use std::{
     fmt::{Debug, Display},
     iter,
     marker::PhantomData,
+    mem,
     pin::Pin,
     time::Duration,
 };
 
 use futures::{StreamExt as _, future};
+use indexmap::IndexSet;
 use lb_core::{
     block::TxInBlock,
     mantle::{traits::Hashable, transactions::hash::PrefixedKey},
@@ -32,10 +34,14 @@ use overwatch::{
     OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData},
 };
-use tokio::sync::{broadcast, oneshot};
+use tokio::{
+    sync::{broadcast, oneshot},
+    time::{MissedTickBehavior, interval},
+};
+use tokio_stream::wrappers::IntervalStream;
 
 use crate::{
-    MempoolMetrics, MempoolMsg, TxsWithCommonPrefix,
+    MempoolMetrics, MempoolMsg, TxsByPrefix,
     backend::{self, MemPool as MemPoolTrait, MempoolError, RecoverableMempool},
     network::NetworkAdapter as NetworkAdapterTrait,
     storage::MempoolStorageAdapter,
@@ -44,16 +50,10 @@ use crate::{
 
 const LOG_TARGET: &str = mempool::SERVICE;
 
-type MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId> =
-    overwatch::services::state::StateUpdater<
-        Option<
-            TxMempoolState<
-                <Pool as RecoverableMempool>::RecoveryState,
-                <Pool as MemPoolTrait>::Settings,
-                <NetworkAdapter as NetworkAdapterTrait<RuntimeServiceId>>::Settings,
-            >,
-        >,
-    >;
+/// How often the pool releases what's due and persists its state, which take a
+/// scan of the retired items and a copy of the pool: too much to do per
+/// transaction.
+const HOUSEKEEPING_INTERVAL: Duration = Duration::from_millis(250);
 
 type TxMempoolRecoveryState<Pool, NetworkAdapter, RuntimeServiceId> = TxMempoolState<
     <Pool as RecoverableMempool>::RecoveryState,
@@ -347,9 +347,15 @@ where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
     {
+        let mut housekeeping_ticks = interval(HOUSEKEEPING_INTERVAL);
+        housekeeping_ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut housekeeping_ticks = IntervalStream::new(housekeeping_ticks);
+        let mut state_changed = false;
+
         loop {
             match next_event(
                 era_events,
+                &mut housekeeping_ticks,
                 &mut self.service_resources_handle.inbound_relay,
                 network_items,
             )
@@ -358,26 +364,27 @@ where
                 Event::Era(era_event) => {
                     Self::handle_era_event(pool, network_adapter, era_event).await;
                 }
+                Event::Housekeeping => {
+                    state_changed |= pool.release_retained().await;
+                    if mem::take(&mut state_changed) {
+                        self.service_resources_handle
+                            .state_updater
+                            .update(Some(<Pool as RecoverableMempool>::save(pool).into()));
+                    }
+                }
                 Event::Inbound(Inbound::Relay(relay_msg)) => {
-                    let state_updater = self.service_resources_handle.state_updater.clone();
                     Self::handle_mempool_message(
                         pool,
                         relay_msg,
                         network_adapter,
-                        state_updater,
                         accepted_items_channel_sender,
                     )
                     .await;
+                    state_changed = true;
                 }
                 Event::Inbound(Inbound::Network(key, item)) => {
-                    Self::handle_network_item(
-                        pool,
-                        key,
-                        item,
-                        &self.service_resources_handle.state_updater,
-                        accepted_items_channel_sender,
-                    )
-                    .await;
+                    Self::handle_network_item(pool, key, item, accepted_items_channel_sender).await;
+                    state_changed = true;
                 }
             }
         }
@@ -406,7 +413,6 @@ where
         pool: &mut Pool,
         message: MempoolMsg<Pool::BlockId, Pool::Item, Pool::Item, Pool::Key>,
         network_adapter: &NetworkAdapter,
-        state_updater: MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
         accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
     ) where
         Pool::Settings: Send + Sync,
@@ -424,7 +430,6 @@ where
                     payload,
                     reply_channel,
                     network_adapter,
-                    state_updater,
                     accepted_items_channel_sender,
                 )
                 .await;
@@ -435,11 +440,11 @@ where
             } => {
                 Self::handle_view_message(pool, ancestor_hint, reply_channel).await;
             }
-            MempoolMsg::GetTransactionsByPrefix {
-                prefix,
+            MempoolMsg::GetTransactionsByPrefixes {
+                prefixes,
                 reply_channel,
             } => {
-                let result = Self::get_transactions_by_prefix(pool, &prefix).await;
+                let result = Self::get_transactions_by_prefixes(pool, &prefixes).await;
 
                 if let Err(_e) = reply_channel.send(result) {
                     tracing::debug!(target: LOG_TARGET, "Failed to send prefix lookup reply");
@@ -447,14 +452,12 @@ where
             }
             MempoolMsg::Remove { ids } => {
                 pool.remove(&ids).await;
-                state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
             }
             MempoolMsg::CanonicalChainUpdated { entered, reorged } => {
                 Self::handle_canonical_chain_updated_message(
                     pool,
                     entered,
                     reorged,
-                    &state_updater,
                     accepted_items_channel_sender,
                 )
                 .await;
@@ -465,7 +468,6 @@ where
                 lib_slot,
             } => {
                 pool.on_processed_block(block_id, slot, lib_slot).await;
-                state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
             }
             MempoolMsg::Metrics { reply_channel } => {
                 Self::handle_metrics_message(pool, reply_channel);
@@ -491,14 +493,12 @@ where
         pool: &mut Pool,
         entered: HashMap<Pool::Key, Slot>,
         reorged: Vec<TxInBlock<Pool::Item>>,
-        state_updater: &MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
         accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
     ) where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
     {
         let readmitted = pool.on_canonical_chain_updated(entered, reorged).await;
-        state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
 
         // Txs admitted again after a reorg are not broadcast: every node
         // re-admits them from its own copy of the displaced blocks.
@@ -513,7 +513,6 @@ where
         item: Pool::Item,
         reply_channel: oneshot::Sender<Result<(), MempoolError>>,
         network_adapter: &NetworkAdapter,
-        state_updater: MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
         accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
     ) where
         Pool::Settings: Send + Sync,
@@ -522,13 +521,7 @@ where
         match pool.add_item(key, item.clone()).await {
             Ok(_id) => {
                 Self::notify_about_accepted_item(accepted_items_channel_sender, item.clone());
-                Self::handle_add_success(
-                    pool,
-                    &state_updater,
-                    network_adapter.clone(),
-                    item,
-                    reply_channel,
-                );
+                Self::handle_add_success(network_adapter.clone(), item, reply_channel);
             }
             Err(MempoolError::ExistingItem) => {
                 // Tx already in pool, but since this came from a local
@@ -588,17 +581,19 @@ where
         }
     }
 
-    /// Every transaction whose hash starts with `prefix`.
+    /// Every transaction whose hash starts with any of `prefixes`.
     ///
     /// The prefix index is consulted first, so the storage round-trip only
-    /// covers keys that actually match. No policy is applied here: what a
-    /// non-unique match means is a consensus question, so it belongs to the
-    /// caller.
-    async fn get_transactions_by_prefix(
+    /// covers keys that actually match. A key has one prefix, so each is looked
+    /// up once.
+    async fn get_transactions_by_prefixes(
         pool: &Pool,
-        prefix: &<Pool::Key as PrefixedKey>::Prefix,
-    ) -> Result<TxsWithCommonPrefix<Pool::Item>, MempoolError> {
-        let keys: Vec<Pool::Key> = pool.keys_by_prefix(prefix).cloned().collect();
+        prefixes: &IndexSet<<Pool::Key as PrefixedKey>::Prefix>,
+    ) -> Result<TxsByPrefix<Pool::Item>, MempoolError> {
+        let keys = prefixes
+            .iter()
+            .flat_map(|prefix| pool.keys_by_prefix(prefix).cloned())
+            .collect::<Vec<_>>();
 
         pool.get_items_by_keys(keys)
             .await
@@ -606,14 +601,10 @@ where
     }
 
     fn handle_add_success(
-        pool: &Pool,
-        state_updater: &MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
         network_adapter: NetworkAdapter,
         item_for_broadcast: Pool::Item,
         reply_channel: oneshot::Sender<Result<(), MempoolError>>,
     ) {
-        state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
-
         Self::broadcast_items(network_adapter, iter::once(item_for_broadcast));
 
         if let Err(e) = reply_channel.send(Ok(())) {
@@ -656,7 +647,6 @@ where
         pool: &mut Pool,
         key: Pool::Key,
         item: Pool::Item,
-        state_updater: &MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
         accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
     ) where
         Pool::Settings: Send + Sync,
@@ -676,8 +666,6 @@ where
             },
             "mempool pending items updated"
         );
-
-        state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
     }
 
     fn handle_network_add_error(error: MempoolError) {
@@ -708,6 +696,8 @@ where
 #[derive(Debug, PartialEq, Eq)]
 enum Event<Msg, Key, Item> {
     Era(EraEvent),
+    /// Time to release what's due and persist the state.
+    Housekeeping,
     Inbound(Inbound<Msg, Key, Item>),
 }
 
@@ -723,14 +713,19 @@ enum Inbound<Msg, Key, Item> {
 /// An era event is returned before any relay message or network item, so as to
 /// switch to a new era before processing them. It is safe to drain era events
 /// first because they are not frequent.
+///
+/// Housekeeping comes next, for the same reason: it ticks too rarely to hold up
+/// inbound, whereas behind inbound it would never run under load.
 async fn next_event<Msg, Key, Item>(
     era_events: &mut (impl futures::Stream<Item = EraEvent> + Unpin + ?Sized),
+    housekeeping_ticks: &mut (impl futures::Stream + Unpin + ?Sized),
     inbound_relay: &mut (impl futures::Stream<Item = Msg> + Unpin + ?Sized),
     network_items: &mut (impl futures::Stream<Item = (Key, Item)> + Unpin + ?Sized),
 ) -> Event<Msg, Key, Item> {
     tokio::select! {
         biased; // to drain `era_events` first
         Some(era_event) = era_events.next() => Event::Era(era_event),
+        Some(_) = housekeeping_ticks.next() => Event::Housekeeping,
         inbound = next_inbound(inbound_relay, network_items) => Event::Inbound(inbound),
     }
 }
@@ -768,12 +763,18 @@ mod tests {
         // Era events must be read before any other inbound events.
         let num_era_events = 10usize;
         let mut era_events = stream::iter((1..=num_era_events as u16).map(new_era));
+        let mut housekeeping_ticks = stream::pending::<()>();
         let mut inbound_relay = stream::iter(["relay"]);
         let mut network_items = stream::iter([(1u8, "network")]);
 
         let mut events = Vec::new();
-        while let Some(event) =
-            next_event(&mut era_events, &mut inbound_relay, &mut network_items).now_or_never()
+        while let Some(event) = next_event(
+            &mut era_events,
+            &mut housekeeping_ticks,
+            &mut inbound_relay,
+            &mut network_items,
+        )
+        .now_or_never()
         {
             events.push(event);
         }
@@ -789,5 +790,27 @@ mod tests {
                 .iter()
                 .all(|event| matches!(event, Event::Inbound(_)))
         );
+    }
+
+    #[tokio::test]
+    async fn housekeeping_comes_after_era_events_and_ahead_of_inbound() {
+        let mut era_events = stream::iter([new_era(1)]);
+        let mut housekeeping_ticks = stream::iter([()]);
+        // Inbound that never lets up, as under load.
+        let mut inbound_relay = stream::repeat("relay");
+        let mut network_items = stream::empty::<(u8, &str)>();
+        let mut next = async || {
+            next_event(
+                &mut era_events,
+                &mut housekeeping_ticks,
+                &mut inbound_relay,
+                &mut network_items,
+            )
+            .await
+        };
+
+        assert!(matches!(next().await, Event::Era(_)));
+        assert_eq!(next().await, Event::Housekeeping);
+        assert_eq!(next().await, Event::Inbound(Inbound::Relay("relay")));
     }
 }
