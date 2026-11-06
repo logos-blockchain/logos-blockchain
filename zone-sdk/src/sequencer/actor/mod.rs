@@ -6,19 +6,14 @@
 use std::collections::HashSet;
 
 use lb_common_http_client::{ProcessedBlockEvent, Slot};
-use lb_core::mantle::{
-    channel::ChannelState, ops::channel::ChannelId, traits::Hashable as _,
-    transactions::hash::TxHash,
-};
+use lb_core::mantle::{channel::ChannelState, ops::channel::ChannelId, transactions::hash::TxHash};
 use tracing::{debug, error, info, warn};
 
 use super::{
     TARGET,
-    block_fetch::{
-        BlockEventResult, classify_shed_other, common_prefix, handle_block_event, orphans_from_shed,
-    },
+    block_fetch::{BlockEventResult, common_prefix, handle_block_event, orphans_from_shed},
     slot_clock::{SlotClock, slot_to_u64},
-    state::{ChannelUpdateInfo, Displaced, RefundCandidate, TxState},
+    state::{ChannelUpdateInfo, RefundCandidate, TxState},
     tx_builder::{fund_builder, sign_own_tx},
     types::{
         ChannelUpdate, ChannelUpdateTx, DepositInfo, Error, Event, FinalizedTx,
@@ -622,9 +617,9 @@ where
             _ => Vec::new(),
         };
         let seen: HashSet<_> = orphaned.iter().map(ChannelUpdateTx::tx_hash).collect();
-        for tx in stale_configs {
-            if !seen.contains(&tx.hash()) {
-                orphaned.push(classify_shed_other(tx, self.channel_id));
+        for tx in orphans_from_shed(stale_configs, self.channel_id) {
+            if !seen.contains(&tx.tx_hash()) {
+                orphaned.push(tx);
             }
         }
 
@@ -735,11 +730,7 @@ where
         let shed = match (self.state.as_mut(), self.current_tip) {
             (Some(s), Some(tip)) => {
                 // Inputs shed first: it drains a dead bundle's children too.
-                let mut shed: Vec<Displaced> = s
-                    .shed_bundles_with_missing_inputs(tip, channel_id)
-                    .into_iter()
-                    .map(|tx| Displaced::Own(Box::new(tx)))
-                    .collect();
+                let mut shed = s.shed_bundles_with_missing_inputs(tip, channel_id);
                 shed.extend(s.shed_off_branch_pending(tip));
                 shed
             }

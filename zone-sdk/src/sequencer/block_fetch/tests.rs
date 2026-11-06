@@ -1168,9 +1168,11 @@ async fn drive_with(
         let s = state.as_mut().unwrap();
         let tip = current_tip.unwrap();
         // Split by kind: the assertions check each kind's own order.
-        let mut shed = s.shed_bundles_with_missing_inputs(tip, channel_id);
+        let mut shed = Vec::new();
         let mut shed_other = Vec::new();
-        for entry in s.shed_off_branch_pending(tip) {
+        let mut displaced = s.shed_bundles_with_missing_inputs(tip, channel_id);
+        displaced.extend(s.shed_off_branch_pending(tip));
+        for entry in displaced {
             match entry {
                 Displaced::Own(tx) => shed.push(*tx),
                 Displaced::Other(tx) => shed_other.push(tx),
