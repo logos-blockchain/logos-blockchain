@@ -12,13 +12,14 @@ use std::{
 
 use backend::{MempoolError, Status};
 use futures::Stream;
+use indexmap::IndexSet;
 use lb_core::{block::TxInBlock, mantle::transactions::hash::PrefixedKey};
 use lb_cryptarchia_engine::Slot;
 use tokio::sync::{broadcast, oneshot::Sender};
 pub use tx::{service::TxMempoolService, settings::TxMempoolSettings};
 
-/// A stream of the transactions whose hash shares one reference prefix.
-pub type TxsWithCommonPrefix<Tx> = Pin<Box<dyn Stream<Item = Tx> + Send>>;
+/// A stream of the transactions some reference prefixes match.
+pub type TxsByPrefix<Tx> = Pin<Box<dyn Stream<Item = Tx> + Send>>;
 
 pub enum MempoolMsg<BlockId, Payload, Item, Key>
 where
@@ -33,13 +34,16 @@ where
         ancestor_hint: BlockId,
         reply_channel: Sender<Pin<Box<dyn Stream<Item = Item> + Send>>>,
     },
-    /// Get a stream of transactions whose hash starts with `prefix`.
+    /// Get a stream of the transactions whose hash starts with any of
+    /// `prefixes`, each one once, for one proposal's references to take a
+    /// single round trip.
     ///
-    /// The consumer is responsible for ensuring an upper bound when consuming
-    /// the stream as per the block compression spec.
-    GetTransactionsByPrefix {
-        prefix: Key::Prefix,
-        reply_channel: Sender<Result<TxsWithCommonPrefix<Item>, MempoolError>>,
+    /// No policy is applied here: what a non-unique match means is a consensus
+    /// question, so it belongs to the consumer, as does telling the matches of
+    /// each prefix apart.
+    GetTransactionsByPrefixes {
+        prefixes: IndexSet<Key::Prefix>,
+        reply_channel: Sender<Result<TxsByPrefix<Item>, MempoolError>>,
     },
     /// Retire the items that block building found inapplicable.
     Remove { ids: Vec<Key> },
@@ -90,10 +94,10 @@ where
             Self::View { ancestor_hint, .. } => {
                 write!(f, "MempoolMsg::View {{ ancestor_hint: {ancestor_hint:?} }}")
             }
-            Self::GetTransactionsByPrefix { prefix, .. } => {
+            Self::GetTransactionsByPrefixes { prefixes, .. } => {
                 write!(
                     f,
-                    "MempoolMsg::GetTransactionsByPrefix{{prefix: {prefix:?}}}"
+                    "MempoolMsg::GetTransactionsByPrefixes{{prefixes: {prefixes:?}}}"
                 )
             }
             Self::Add { payload, .. } => write!(f, "MempoolMsg::Add{{payload: {payload:?}}}"),

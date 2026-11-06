@@ -7,7 +7,7 @@ use lb_core::{
     mantle::transactions::hash::{TxHash, TxHashPrefix},
 };
 use lb_cryptarchia_engine::{Era, Slot};
-use lb_tx_service::TxsWithCommonPrefix;
+use lb_tx_service::TxsByPrefix;
 
 pub mod adapter;
 
@@ -41,14 +41,17 @@ pub trait MempoolAdapter<Tx>: Send + Sync {
         lib_slot: Slot,
     ) -> Result<(), overwatch::DynError>;
 
-    /// The local transactions a single proposal reference could mean.
+    /// The local transactions the references of a proposal could mean, each
+    /// one once.
     ///
     /// A reference is only the leading hash bytes, so in principle several
     /// mempool transactions could answer to it. The stream is unbounded and
     /// unordered: what a non-unique match means is a consensus question, so it
     /// is the caller's to decide.
-    async fn get_transactions_by_prefix(
+    async fn get_transactions_by_prefixes<Prefixes>(
         &self,
-        prefix: TxHashPrefix,
-    ) -> Result<TxsWithCommonPrefix<Tx>, overwatch::DynError>;
+        prefixes: Prefixes,
+    ) -> Result<TxsByPrefix<Tx>, overwatch::DynError>
+    where
+        Prefixes: IntoIterator<Item = TxHashPrefix> + Send;
 }
