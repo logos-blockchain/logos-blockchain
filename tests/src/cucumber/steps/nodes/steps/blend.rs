@@ -7,7 +7,14 @@ use cucumber::gherkin::Table;
 use hex::ToHex as _;
 use tokio::time::interval;
 
-use super::*;
+use super::{
+    BlendDiagnosticEventLogger, BlendReachabilityTransition, CommonHttpClient, CucumberWorld,
+    Duration, Instant, OffsetDateTime, PathBuf, Step, StepError, StepResult, TARGET,
+    USER_CONFIG_FILE, ZkPublicKey, apply_blend_reachability_set, blend_core_locator_from_node_yaml,
+    blend_core_zk_id_from_node_yaml, ensure_all_nodes_agree_on_lib, get_cryptarchia_info_all_nodes,
+    given, info, nodes_converged, restore_all_blend_reachability, set_blend_reachability, sleep,
+    stop_all_nodes, then, wait_for_all_nodes_to_be_synced_to_chain, warn, when,
+};
 
 const BLEND_CHURN_TASK: &str = "epoch-driven Blend provider churn";
 const BLEND_CHURN_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -457,11 +464,8 @@ fn blend_zk_pk_for_node(world: &CucumberWorld, node_name: &str) -> Result<ZkPubl
             message: format!("Node '{node_name}' not found in world state"),
         })?;
 
-    let user_config_path = node_info.runtime_dir.join(USER_CONFIG_FILE);
-    let blend_zk_pk_hex = blend_core_zk_pk_from_node_yaml(&user_config_path)?;
-    let blend_zk_pk = ZkPublicKey::from_bytes(&hex::decode(blend_zk_pk_hex)?)?;
-
-    Ok(blend_zk_pk)
+    // The zk_id the node declares, derived from its Blend key.
+    blend_core_zk_id_from_node_yaml(&node_info.runtime_dir.join(USER_CONFIG_FILE))
 }
 
 /// Wait for the node-local wallet API to expose a funded note for a node key.

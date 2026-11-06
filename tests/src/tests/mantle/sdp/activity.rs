@@ -73,9 +73,10 @@ async fn sdp_blend_activity() {
         declarations.len()
     );
 
-    // Snapshot each provider's wallet initial balance.
-    let provider_zk_ids: Vec<ZkPublicKey> = declarations.values().map(|d| d.zk_id).collect();
-    let initial_balances = collect_provider_balances(&nodes, &provider_zk_ids).await;
+    // Snapshot each provider's wallet initial balance, under the public key of
+    // its service note, which its rewards are paid to.
+    let provider_note_pks: Vec<ZkPublicKey> = declarations.values().map(|d| d.note_pk).collect();
+    let initial_balances = collect_provider_balances(&nodes, &provider_note_pks).await;
 
     // Wait past `inactivity_period` so any activity messages produced by the
     // nodes have to refresh the `active` field on the declarations.
@@ -113,10 +114,10 @@ async fn sdp_blend_activity() {
     }
 
     // At least one provider's wallet balance must have grown.
-    let final_balances = collect_provider_balances(&nodes, &provider_zk_ids).await;
-    let anyone_paid = provider_zk_ids.iter().any(|zk_id| {
-        let before = initial_balances.get(zk_id).copied().unwrap_or(0);
-        let after = final_balances.get(zk_id).copied().unwrap_or(0);
+    let final_balances = collect_provider_balances(&nodes, &provider_note_pks).await;
+    let anyone_paid = provider_note_pks.iter().any(|note_pk| {
+        let before = initial_balances.get(note_pk).copied().unwrap_or(0);
+        let after = final_balances.get(note_pk).copied().unwrap_or(0);
         after > before
     });
     assert!(
@@ -180,7 +181,7 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
     config
 }
 
-/// For each `zk_id`, ask every node for the wallet balance.
+/// For each key, ask every node for the wallet balance.
 async fn collect_provider_balances(
     nodes: &[StartedNode<LbcEnv>],
     zk_ids: &[ZkPublicKey],

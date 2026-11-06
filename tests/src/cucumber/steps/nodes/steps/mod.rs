@@ -6,7 +6,6 @@ use std::{
 };
 
 use cucumber::{gherkin::Step, given, then, when};
-use lb_binary_codec::bincode::DeserializeOp as _;
 use lb_common_http_client::CommonHttpClient;
 use lb_config::kms::key_id_for_preload_backend;
 use lb_core::mantle::GenesisTime;
@@ -56,7 +55,7 @@ use crate::{
             },
         },
         utils::{
-            blend_core_locator_from_node_yaml, blend_core_zk_pk_from_node_yaml,
+            blend_core_locator_from_node_yaml, blend_core_zk_id_from_node_yaml,
             resolve_literal_or_env,
         },
         wallet::snapshot::prepare_wallet_snapshot_restore_if_present,
