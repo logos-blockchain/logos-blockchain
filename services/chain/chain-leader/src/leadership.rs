@@ -850,6 +850,7 @@ mod pol_tests {
                     blend: RewardsParameters {
                         rounds_per_epoch: NonZero::new(10u64).unwrap(),
                         message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        cover_replication_factor: 0,
                         num_blend_layers: NonZero::new(3u64).unwrap(),
                         minimum_network_size: NonZero::new(1u64).unwrap(),
                         data_replication_factor: 0,
@@ -860,6 +861,46 @@ mod pol_tests {
                     threshold: 1,
                     timestamp: 0,
                 },
+            },
+            execution_market: lb_ledger::config::ExecutionMarketConfig {
+                max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                    .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
+                    9,
+                    10.try_into().unwrap(),
+                )
+                .unwrap(),
+            },
+            storage_market: lb_ledger::config::StorageMarketConfig {
+                max_adjustment_factor: lb_utils::math::ProperFraction::new(
+                    1,
+                    8.try_into().unwrap(),
+                )
+                .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
+                    .unwrap(),
+            },
+            block_rewards: lb_ledger::config::BlockRewardsConfig::new(
+                3_000_000_000,
+                120_000_000.try_into().unwrap(),
+                10_512,
+                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            )
+            .unwrap(),
+            gas_profile: lb_core::mantle::gas::GasProfile {
+                transfer: 590.into(),
+                channel_config: 56.into(),
+                channel_inscribe: 56.into(),
+                channel_deposit: 590.into(),
+                channel_withdraw: 56.into(),
+                channel_transfer: 56.into(),
+                sdp_declare: 646.into(),
+                sdp_withdraw: 590.into(),
+                sdp_active: 590.into(),
+                leader_claim: 580.into(),
+                claim_pow_reward: 1.into(),
             },
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {

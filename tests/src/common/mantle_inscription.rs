@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use lb_config::deployment::GAS_PROFILE;
 use lb_core::mantle::{
     OpProof,
     ops::{
@@ -31,6 +32,7 @@ pub fn build_inscription_tx_builder(
                 execution_base_gas_price: GENESIS_EXECUTION_GAS_PRICE,
                 storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
             },
+            GAS_PROFILE,
         ),
         leader_reward_amount: 0,
     };

@@ -89,6 +89,7 @@ mod tests {
         mantle::{
             Note, NoteId, Op, OpProof, Utxo,
             fixtures::ops::op_values::FORK_DIGEST,
+            gas::test_utils::GAS_PROFILE,
             ledger::{
                 BoundedInputs, BoundedOutputs, Inputs, Outputs, verification_mode::StandardMode,
             },
@@ -274,8 +275,12 @@ mod tests {
 
                 let encoded = signed_ops.encode();
 
-                let gas_context =
-                    OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
+                let gas_context = OpsGasContext::new(
+                    HashMap::new(),
+                    HashMap::new(),
+                    GasPrices::new(0, 0),
+                    GAS_PROFILE,
+                );
                 let predicted_size =
                     minimum_signed_transaction_size(&signed_ops.op_refs(), &gas_context);
                 assert_eq!(
@@ -337,7 +342,12 @@ mod tests {
         let mantle_tx = Ops::new(FORK_DIGEST, TxList::new_unchecked(vec![]));
 
         // Predict size
-        let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
+        let gas_context = OpsGasContext::new(
+            HashMap::new(),
+            HashMap::new(),
+            GasPrices::new(0, 0),
+            GAS_PROFILE,
+        );
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get actual size
@@ -365,7 +375,12 @@ mod tests {
         );
 
         // Predict size
-        let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
+        let gas_context = OpsGasContext::new(
+            HashMap::new(),
+            HashMap::new(),
+            GasPrices::new(0, 0),
+            GAS_PROFILE,
+        );
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get actual size
@@ -407,7 +422,12 @@ mod tests {
         );
 
         // Predict size
-        let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
+        let gas_context = OpsGasContext::new(
+            HashMap::new(),
+            HashMap::new(),
+            GasPrices::new(0, 0),
+            GAS_PROFILE,
+        );
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get the actual size.
@@ -456,7 +476,12 @@ mod tests {
         );
 
         // Predict size
-        let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
+        let gas_context = OpsGasContext::new(
+            HashMap::new(),
+            HashMap::new(),
+            GasPrices::new(0, 0),
+            GAS_PROFILE,
+        );
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get actual size
@@ -488,7 +513,12 @@ mod tests {
         let tx_hash = mantle_tx.hash();
 
         // Predict size
-        let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
+        let gas_context = OpsGasContext::new(
+            HashMap::new(),
+            HashMap::new(),
+            GasPrices::new(0, 0),
+            GAS_PROFILE,
+        );
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get actual size
@@ -526,7 +556,12 @@ mod tests {
             TxList::new_unchecked(vec![Op::SDPActive(sdp_active_op)]),
         );
 
-        let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
+        let gas_context = OpsGasContext::new(
+            HashMap::new(),
+            HashMap::new(),
+            GasPrices::new(0, 0),
+            GAS_PROFILE,
+        );
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         let tx_hash = mantle_tx.hash();
@@ -587,7 +622,12 @@ mod tests {
         );
 
         // Predict size
-        let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
+        let gas_context = OpsGasContext::new(
+            HashMap::new(),
+            HashMap::new(),
+            GasPrices::new(0, 0),
+            GAS_PROFILE,
+        );
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         let tx_hash = mantle_tx.hash();
@@ -632,7 +672,12 @@ mod tests {
         );
 
         // Predict size
-        let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
+        let gas_context = OpsGasContext::new(
+            HashMap::new(),
+            HashMap::new(),
+            GasPrices::new(0, 0),
+            GAS_PROFILE,
+        );
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get actual size
@@ -699,7 +744,12 @@ mod tests {
         );
 
         // Predict size
-        let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
+        let gas_context = OpsGasContext::new(
+            HashMap::new(),
+            HashMap::new(),
+            GasPrices::new(0, 0),
+            GAS_PROFILE,
+        );
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get the actual size.
@@ -737,8 +787,12 @@ mod tests {
             TxList::new_unchecked(vec![Op::LeaderClaim(leader_claim_op)]),
         );
 
-        let empty_gas_context =
-            OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
+        let empty_gas_context = OpsGasContext::new(
+            HashMap::new(),
+            HashMap::new(),
+            GasPrices::new(0, 0),
+            GAS_PROFILE,
+        );
         let predicted_size =
             minimum_signed_transaction_size(&mantle_tx.op_refs(), &empty_gas_context);
 

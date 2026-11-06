@@ -102,6 +102,12 @@ impl ServiceConfig {
                             .scheduler
                             .cover
                             .message_frequency_per_round,
+                        replication_factor: deployment
+                            .core
+                            .scheduler
+                            .cover
+                            .replication_factor
+                            .get(),
                     },
                     delayer: EraMessageDelayerSettings {
                         maximum_release_delay_in_rounds: deployment

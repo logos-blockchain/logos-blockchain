@@ -12,7 +12,6 @@ use crate::{
     mantle::{
         batch::DeferredZkSig,
         channel::{Channels, Error},
-        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             ExecutableOperation, Inputs, InputsError, Outputs, PreverifiableOperation,
             ProvableOperation, Utxos, VerifiableOperation,
@@ -89,12 +88,6 @@ impl ProvableOperation for DepositOp {
     type Proof = ZkSignature;
     const CODE: u8 = 0x12;
 }
-
-impl OperationGas<MainnetGasProfile> for DepositOp {
-    const GAS_COST: Gas = Gas::new(590);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for DepositOp {}
 
 impl PreverifiableOperation<StandardMode> for SignedOperation<DepositOp, Unverified, StandardMode> {
     type Context<'a> = ();
@@ -203,7 +196,10 @@ mod test {
         Note, Utxo,
         batch::{Error as BatchError, test_utils::batch_verify},
         channel_notes,
-        gas::test_utils::FixedThresholds,
+        gas::{
+            Gas,
+            test_utils::{FixedThresholds, GAS_PROFILE},
+        },
         ledger::BoundedInputs,
         ops::op_proof::samples::SampleProof as _,
         transactions::tx_list::signed_ops::test_utils::make_channel_state,
@@ -545,7 +541,8 @@ mod test {
     fn deposit_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
             assert_eq!(
-                DepositOp::sample().execution_gas(&FixedThresholds(threshold)),
+                crate::mantle::OpRef::from(&DepositOp::sample())
+                    .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(590))
             );
         }

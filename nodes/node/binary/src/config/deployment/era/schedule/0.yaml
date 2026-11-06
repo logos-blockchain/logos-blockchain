@@ -9,6 +9,7 @@ blend:
     scheduler:
       cover:
         message_frequency_per_round: 1.0
+        replication_factor: 0
       delayer:
         maximum_release_delay_in_rounds: 1
     target_peering_degree: 4
@@ -78,5 +79,52 @@ cryptarchia:
     min_stake:
       threshold: 1
       timestamp: 0
+  # The execution market: the most execution gas a block may consume, G_max,
+  # whose half is the target, the fee adjustment rate φ and the EMA smoothing
+  # factor q.
+  execution_market:
+    max_gas_per_block: 3193460
+    fee_adjustment_rate:
+      numerator: 1
+      denominator: 8
+    ema_smoothing_factor:
+      numerator: 9
+      denominator: 10
+  # The storage market: the max adjustment factor α and the EMA smoothing factor
+  # β.
+  storage_market:
+    max_adjustment_factor:
+      numerator: 1
+      denominator: 8
+    ema_smoothing_factor:
+      numerator: 1
+      denominator: 2
+  # The block rewards: the stake target, the scale of the emission's weight, the
+  # weight of the pooled fees, a block's emission in full, and the Blend nodes'
+  # share of a reward, the leader taking the rest.
+  block_rewards:
+    stake_target: 3000000000
+    emission_factor_scale: 120000000
+    fee_average_numerator: 10512
+    max_emission_per_block:
+      numerator: 62500
+      denominator: 657
+    blend_share:
+      numerator: 6
+      denominator: 10
+  # The execution gas of each Operation; the channel configuration, withdrawal
+  # and transfer cost theirs per key of the channel's threshold.
+  gas_profile:
+    transfer: 590
+    channel_config: 56
+    channel_inscribe: 56
+    channel_deposit: 590
+    channel_withdraw: 56
+    channel_transfer: 56
+    sdp_declare: 646
+    sdp_withdraw: 590
+    sdp_active: 590
+    leader_claim: 580
+    claim_pow_reward: 1
 time:
   slot_duration_in_seconds: 1

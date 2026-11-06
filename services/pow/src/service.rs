@@ -24,7 +24,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, NoteId, Op, OpProof, SignedOps, Utxo, Value,
-        gas::MainnetGasProfile,
+        gas::GasProfile,
         ledger::{Inputs, InputsError, Outputs, verification_mode::StandardMode},
         ops::{
             NoOpProof, OpId as _,
@@ -239,6 +239,8 @@ pub struct PoWEraSettings {
     pub max_data_payload_body_size: usize,
     /// The fork digest of the era, which the claims signed in it carry.
     pub fork_digest: ForkDigest,
+    /// What the era's Operations cost, which a claim transaction pays for.
+    pub gas_profile: GasProfile,
 }
 
 /// One auto-claim destination: a key and the balance we want it to reach.
@@ -656,7 +658,7 @@ where
                                 &auto_claim_settings.targets,
                                 &mut state,
                                 &settings.era_schedule,
-                                current_era_settings.parameters.fork_digest,
+                                current_era_settings.parameters,
                                 max_claims_in_payload,
                             )
                             .await
@@ -777,7 +779,7 @@ where
                     &mut state,
                     &state_updater,
                     &settings.era_schedule,
-                    current_era_settings.parameters.fork_digest,
+                    current_era_settings.parameters,
                     max_claims_in_payload,
                 )
                 .await;
@@ -1115,7 +1117,7 @@ async fn run_auto_claim<CryptarchiaService, BlendService, WalletService, Runtime
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     era_schedule: &ServiceEraSchedule,
-    fork_digest: ForkDigest,
+    era_settings: &PoWEraSettings,
     max_claims_in_payload: usize,
 ) -> bool
 where
@@ -1151,7 +1153,7 @@ where
         state,
         state_updater,
         era_schedule,
-        fork_digest,
+        era_settings,
         max_claims_in_payload,
     )
     .await;
@@ -1178,7 +1180,7 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     era_schedule: &ServiceEraSchedule,
-    fork_digest: ForkDigest,
+    era_settings: &PoWEraSettings,
     max_claims_in_payload: usize,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -1202,7 +1204,7 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
             claim_address,
             state,
             era_schedule,
-            fork_digest,
+            era_settings,
             available_pool,
             max_claims_in_payload,
         )
@@ -1249,7 +1251,7 @@ async fn manual_claim<CryptarchiaService, BlendService, WalletService, RuntimeSe
     targets: &[ClaimTarget],
     state: &mut PoWServiceState,
     era_schedule: &ServiceEraSchedule,
-    fork_digest: ForkDigest,
+    era_settings: &PoWEraSettings,
     max_claims_in_payload: usize,
 ) -> Result<Option<TxHash>, PoWError>
 where
@@ -1278,7 +1280,7 @@ where
         claim_address,
         state,
         era_schedule,
-        fork_digest,
+        era_settings,
         available_pool,
         max_claims_in_payload,
     )
@@ -1328,7 +1330,7 @@ async fn claim_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
     claim_address: ZkPublicKey,
     state: &mut PoWServiceState,
     era_schedule: &ServiceEraSchedule,
-    fork_digest: ForkDigest,
+    era_settings: &PoWEraSettings,
     available_pool: Value,
     max_claims_in_payload: usize,
 ) -> Result<Option<PublishedClaim>, PoWError>
@@ -1379,11 +1381,12 @@ where
     // the pending set.
     let (signed_tx, claimed_count) = build_reward_claim_tx(
         claim_address,
-        fork_digest,
+        era_settings.fork_digest,
         &ledger_state,
         available_pool,
         &tickets,
         max_claims_in_payload,
+        era_settings.gas_profile,
     )
     .await?;
     // Capture the tx id before publishing consumes the signed tx, so it can be
@@ -1717,6 +1720,7 @@ async fn build_reward_claim_tx(
     reward_pool: Value,
     tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
     max_claims_in_payload: usize,
+    gas_profile: GasProfile,
 ) -> Result<(SignedOps<Unverified, StandardMode>, usize), PoWError> {
     // The reward value and gas prices are read at `ledger_state`; they must
     // match the state the tx applies against, or the reconstructed UTXOs / fee
@@ -1727,6 +1731,7 @@ async fn build_reward_claim_tx(
         ledger_state.mantle_ledger().pow.epoch_reward(),
         reward_pool,
         ledger_state.get_gas_prices(),
+        gas_profile,
         tickets,
         max_claims_in_payload,
     )
@@ -1735,12 +1740,17 @@ async fn build_reward_claim_tx(
 
 /// Inner builder over plain reward/gas values, so it can be exercised without a
 /// full [`LedgerState`]. See [`build_reward_claim_tx`].
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Plain values, so tests need no ledger state"
+)]
 async fn build_reward_claim_tx_inner(
     claim_address: ZkPublicKey,
     fork_digest: ForkDigest,
     reward_value: Value,
     reward_pool: Value,
     gas_prices: GasPrices,
+    gas_profile: GasProfile,
     tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
     max_claims_by_payload_size: usize,
 ) -> Result<(SignedOps<Unverified, StandardMode>, usize), PoWError> {
@@ -1748,7 +1758,7 @@ async fn build_reward_claim_tx_inner(
         return Err(PoWError::RewardsDisabled);
     }
     let context = OpsContext {
-        gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), gas_prices),
+        gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), gas_prices, gas_profile),
         leader_reward_amount: 0,
     };
 
@@ -1922,7 +1932,7 @@ fn estimate_reward_claim_fee(
     let num_groups = note_ids.len().div_ceil(MAX_TRANSFER_INPUTS);
     let transfers = transfer_ops(note_ids, claim_address, &vec![0; num_groups])?;
     let fee = push_reward_claim_ops(MantleTxBuilder::new(), claims, transfers)?
-        .minimum_gas_cost::<MainnetGasProfile>(context)?
+        .minimum_gas_cost(context)?
         .into_inner();
     Ok(fee)
 }
@@ -1962,7 +1972,7 @@ mod tests {
         replace_search_pool_if_resized, slot_period_elapsed, transfer_ops,
     };
     use crate::{
-        test_utils::{PAYLOAD_BODY_SIZE, era_schedule},
+        test_utils::{GAS_PROFILE, PAYLOAD_BODY_SIZE, era_schedule},
         tickets::WinningTicket,
     };
 
@@ -2000,6 +2010,7 @@ mod tests {
                 HashMap::default(),
                 HashMap::default(),
                 GasPrices::new(1, 1),
+                GAS_PROFILE,
             ),
             leader_reward_amount: 0,
         }
@@ -2264,6 +2275,7 @@ mod tests {
             REWARD,
             POOL,
             GasPrices::new(1, 1),
+            GAS_PROFILE,
             &[(secret_key, claim)],
             *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
@@ -2296,6 +2308,7 @@ mod tests {
             0,
             POOL,
             GasPrices::new(1, 1),
+            GAS_PROFILE,
             &[ticket()],
             *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
@@ -2312,6 +2325,7 @@ mod tests {
             REWARD,
             REWARD - 1,
             GasPrices::new(1, 1),
+            GAS_PROFILE,
             &[ticket()],
             *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
@@ -2329,6 +2343,7 @@ mod tests {
             REWARD,
             2 * REWARD,
             GasPrices::new(1, 1),
+            GAS_PROFILE,
             &tickets,
             *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
@@ -2364,6 +2379,7 @@ mod tests {
                 REWARD,
                 available_pool,
                 GasPrices::new(1, 1),
+                GAS_PROFILE,
                 &tickets,
                 *MAX_CLAIMS_BY_PAYLOAD_SIZE,
             )
@@ -2398,6 +2414,7 @@ mod tests {
                 REWARD,
                 stale_pool,
                 GasPrices::new(1, 1),
+                GAS_PROFILE,
                 &tickets,
                 *MAX_CLAIMS_BY_PAYLOAD_SIZE,
             )
@@ -2424,6 +2441,7 @@ mod tests {
             REWARD,
             POOL, // POOL / REWARD = 1000 > cap, so the pool does not bind
             GasPrices::new(1, 1),
+            GAS_PROFILE,
             &tickets,
             *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
@@ -2466,6 +2484,7 @@ mod tests {
                 REWARD,
                 POOL,
                 GasPrices::new(1, 1),
+                GAS_PROFILE,
                 &tickets,
                 *MAX_CLAIMS_BY_PAYLOAD_SIZE,
             )

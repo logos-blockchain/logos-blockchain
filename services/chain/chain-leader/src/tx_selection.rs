@@ -3,13 +3,15 @@ use lb_core::{
     mantle::{
         SignedOps,
         batch::DeferredProofs,
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         traits::Hashable,
         transactions::{hash::TxHash, states::Preverified},
     },
 };
-use lb_ledger::{GasAndFees, LedgerState, config::EraScheduledConfig};
+use lb_ledger::{
+    GasAndFees, LedgerState,
+    config::{EraScheduledConfig, config_for_slot},
+};
 
 use crate::LOG_TARGET;
 
@@ -45,10 +47,13 @@ impl BlockBuilder {
             ledger_state,
             gas_and_fees,
         } = self;
+        let max_gas_per_block = config_for_slot(era_schedule, ledger_state.slot())
+            .execution_market
+            .max_gas_per_block;
         let (ledger_state, tx_gas_and_fees, _events, deferred_proofs) =
-            ledger_state
-                .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(era_schedule, tx)?;
-        let gas_and_fees = gas_and_fees.checked_add::<HeaderId>(tx_gas_and_fees)?;
+            ledger_state.try_apply_transaction::<_, HeaderId>(era_schedule, tx)?;
+        let gas_and_fees =
+            gas_and_fees.checked_add::<HeaderId>(tx_gas_and_fees, max_gas_per_block.into())?;
 
         Ok((
             Self {
@@ -242,15 +247,15 @@ mod tests {
             0,
             &ConsensusExcludedKeys::empty(),
         );
-        let gas_context = ledger_state.tx_context().gas_context;
+        let gas_context = ledger_state.tx_context(config.gas_profile).gas_context;
         let individual_gas = candidates[0]
             .op_refs()
-            .execution_gas_consumption::<MainnetGasProfile>(&gas_context)
+            .execution_gas_consumption(&gas_context)
             .unwrap();
         assert!(candidates.iter().all(|candidate| {
             candidate
                 .op_refs()
-                .execution_gas_consumption::<MainnetGasProfile>(&gas_context)
+                .execution_gas_consumption(&gas_context)
                 .unwrap()
                 == individual_gas
         }));
@@ -263,10 +268,7 @@ mod tests {
         );
         let all_candidates_result = ledger_state
             .clone()
-            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
-                &eras,
-                candidates.iter().cloned(),
-            );
+            .try_apply_block_contents::<_, HeaderId>(&eras, candidates.iter().cloned());
         let all_candidates_error = all_candidates_result.err();
         assert!(
             matches!(
@@ -283,10 +285,7 @@ mod tests {
         let block_txs = txs_for_block(stream::iter(selection.selected_txs)).await;
         assert_eq!(block_txs.len(), CANDIDATE_COUNT - 1);
         let _apply_result = ledger_state
-            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
-                &eras,
-                block_txs.into_iter(),
-            )
+            .try_apply_block_contents::<_, HeaderId>(&eras, block_txs.into_iter())
             .expect("the selected prefix must pass canonical application");
     }
 }
