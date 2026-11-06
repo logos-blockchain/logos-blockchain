@@ -117,12 +117,13 @@ pub const GAS_PROFILE: GasProfile = GasProfile {
     leader_claim: Gas::new(580),
     claim_pow_reward: Gas::new(1),
 };
-/// The block rewards: the stake target, the scale of the emission's weight, the
-/// weight of the pooled fees, a block's emission in full, and the Blend nodes'
-/// share.
+/// The block rewards: the stake target, the scale of the emission's weight, how
+/// many blocks' fees are pooled, the weight of those fees, a block's emission
+/// in full, and the Blend nodes' share.
 const BLOCK_REWARDS: BlockRewardsConfig = BlockRewardsConfig::new(
     3_000_000_000,
     NonZeroU64::new(120_000_000).unwrap(),
+    NonZero::new(120).unwrap(),
     10_512,
     NonNegativeRatio::new(62_500, NonZeroU32::new(657).unwrap()),
     ProperFraction::new(6, NonZeroU32::new(10).unwrap()).unwrap(),

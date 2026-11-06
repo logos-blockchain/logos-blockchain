@@ -32,7 +32,6 @@ num-bigint                    = { workspace = true }
 rand                          = { workspace = true }
 rpds                          = { workspace = true }
 serde                         = { features = ["derive"], workspace = true }
-serde_arrays                  = { workspace = true }
 thiserror                     = { workspace = true }
 tracing                       = { workspace = true }
 
@@ -47,6 +46,3 @@ time       = { workspace = true }
 [[bench]]
 harness = false
 name    = "zk_batch"
-
-[package.metadata.cargo-machete]
-ignored = ["serde_arrays"]

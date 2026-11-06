@@ -43,8 +43,8 @@ pub mod ordered_set;
 pub use ordered_set::{BoundedOrderedSet, NonEmptyBoundedOrderedSet, UpperBoundedOrderedSet};
 pub mod runtime;
 pub use runtime::{
-    NonEmptyRuntimeBoundedVec, ResizableRuntimeBounded, ResizableRuntimeBoundedVec, RuntimeBounded,
-    RuntimeBoundedVec, RuntimeMax, UpperRuntimeBoundedVec,
+    NonEmptyRuntimeBoundedVec, ResizableRuntimeBounded, ResizableRuntimeBoundedVec, RuntimeArray,
+    RuntimeBounded, RuntimeBoundedVec, RuntimeMax, UpperRuntimeBoundedVec,
 };
 pub mod string;
 pub use string::BoundedString;

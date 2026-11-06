@@ -596,6 +596,7 @@ mod tests {
                 block_rewards: lb_ledger::config::BlockRewardsConfig::new(
                     3_000_000_000,
                     120_000_000.try_into().unwrap(),
+                    120.try_into().unwrap(),
                     10_512,
                     NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
                     lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),

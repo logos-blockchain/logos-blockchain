@@ -75,6 +75,7 @@ cryptarchia:
   block_rewards:
     stake_target: 3000000000
     emission_factor_scale: 120000000
+    fee_window_size: 120
     fee_average_numerator: 10512
     max_emission_per_block:
       numerator: 62500

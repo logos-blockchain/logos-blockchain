@@ -8,7 +8,8 @@
 //! changes it afterwards, so it does not keep the maximum.
 //! [`ResizableRuntimeBounded`] keeps it, to hold every later growth to it. The
 //! minimum stays static: it says what a collection is (empty or not), not a
-//! limit that changes.
+//! limit that changes. [`RuntimeArray`] is for a length that is exact rather
+//! than a maximum: an array whose length is known only at runtime.
 //!
 //! A maximum is given in an integer type ([`RuntimeMax`]), `u8` for an era's
 //! `max_uncles`. The type bounds every maximum a value can be given, and so
@@ -25,6 +26,8 @@ use serde::{Serialize, Serializer};
 
 use crate::bounded::{BoundedError, BoundedLen};
 
+pub mod array;
+pub use array::RuntimeArray;
 pub mod resizable;
 pub use resizable::{ResizableRuntimeBounded, ResizableRuntimeBoundedVec};
 pub mod vec;

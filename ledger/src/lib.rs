@@ -12,7 +12,7 @@ mod update;
 #[cfg(test)]
 mod test_utils;
 
-use std::{hash::Hash, sync::Arc};
+use std::{hash::Hash, num::NonZeroUsize, sync::Arc};
 
 pub use config::{Config, ConsensusExcludedKeys};
 use cryptarchia::LedgerState as CryptarchiaLedger;
@@ -62,7 +62,6 @@ use crate::{
     update::{BatchVerifiedUpdate, PreparedUpdate},
 };
 
-const WINDOW_SIZE: usize = 120;
 const LOG_TARGET: &str = ledger::ROOT;
 
 // While individual notes are constrained to be `u64`, intermediate calculations
@@ -362,7 +361,7 @@ impl LedgerState {
     }
 
     /// total estimated stake and on the average of fees consumed per block over
-    /// the last `BLOCK_REWARD_WINDOW_SIZE` blocks. See the block rewards
+    /// the last blocks of the era's fee window. See the block rewards
     /// specification: <https://lip.logos.co/blockchain/raw/block-rewards.html>
     fn compute_block_rewards<Id>(
         mut self,
@@ -370,7 +369,12 @@ impl LedgerState {
         total_fee_tip: GasCost,
         config: &Config,
     ) -> Result<Self, LedgerError<Id>> {
-        let window_index = self.block_number as usize % WINDOW_SIZE;
+        // The first block of an era with another window carries the pooled fees
+        // over to it.
+        let window_size = config.block_rewards.fee_window_size();
+        self.cryptarchia_ledger
+            .resize_fee_window(window_size, self.block_number);
+        let window_index = self.block_number as usize % NonZeroUsize::from(window_size);
 
         // Divert the PoW share of the collected fees to the PoW reward pool
         // before the rest is pooled for block rewards. See the proof of work
@@ -3645,6 +3649,47 @@ mod tests {
                 .add_rewards_to_pool(&test_pool_config())
                 .unwrap();
             assert_eq!(state.mantle_ledger.pow.reward_pool(), pool_before + 100);
+        }
+
+        #[test]
+        fn a_block_of_an_era_with_another_fee_window_carries_the_pooled_fees_over() {
+            let config = config();
+            let mut state = LedgerState::from_utxos(
+                [utxo()],
+                &config,
+                GENESIS_POW_REWARD_POOL,
+                &ConsensusExcludedKeys::empty(),
+            );
+            state.block_number = 5;
+            state = state
+                .compute_block_rewards::<HeaderId>(1_000.into(), 0.into(), &config)
+                .expect("reward computation should succeed");
+
+            let mut next_era = config;
+            next_era.block_rewards = config::BlockRewardsConfig::new(
+                3_000_000_000,
+                120_000_000.try_into().unwrap(),
+                4.try_into().unwrap(),
+                10_512,
+                lb_utils::math::NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            )
+            .unwrap();
+            state.block_number = 6;
+            state = state
+                .compute_block_rewards::<HeaderId>(500.into(), 0.into(), &next_era)
+                .expect("reward computation should succeed");
+
+            // Block 5's fee moved to position 1 of 4, next to block 6's.
+            assert_eq!(
+                state.cryptarchia_ledger.get_fee_from_index(1),
+                GasCost::from(1_000)
+            );
+            assert_eq!(
+                state.cryptarchia_ledger.get_fee_from_index(2),
+                GasCost::from(500)
+            );
+            assert_eq!(state.cryptarchia_ledger.get_summed_fees(), 1_500);
         }
 
         #[test]
