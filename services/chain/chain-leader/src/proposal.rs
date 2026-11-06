@@ -1,6 +1,6 @@
 use lb_core::{
     block::{Block, BlockTransactions, UncleHeaders, body_root},
-    header::{HeaderId, pol_msg},
+    header::{HeaderId, block_id, pol_msg},
     mantle::{
         Value,
         notes::NoteCommitment,
@@ -41,7 +41,7 @@ impl LeaderProof for ProposalHeaderProof {
     }
 }
 
-// The PoL msg of the header the block gets: pol_msg over its body root.
+// The PoL msg of the header the block gets: its block ID, over its body root.
 #[must_use]
 pub fn block_msg<Tx: Hashable<Hash = TxHash>>(
     parent: &HeaderId,
@@ -50,14 +50,16 @@ pub fn block_msg<Tx: Hashable<Hash = TxHash>>(
     txs: &[Tx],
     reward_commitment: &NoteCommitment,
     reward_value: Value,
+    entropy_contribution: &Fr,
 ) -> Fr {
-    pol_msg(
+    pol_msg(&block_id(
         parent,
         slot,
         &body_root(uncles, txs),
         reward_commitment,
         reward_value,
-    )
+        entropy_contribution,
+    ))
 }
 
 // Proves the PoL bound to the block and builds the block; blocking.
@@ -139,6 +141,7 @@ mod tests {
 
         let parent = HeaderId::from([1; 32]);
         let txs = BlockTransactions::<SignedOps<Preverified, StandardMode>>::empty();
+        let unbound = LeaderPrivate::new(public, wallet.clone(), Fr::ZERO, reward.value);
         let msg = block_msg(
             &parent,
             slot,
@@ -146,8 +149,9 @@ mod tests {
             txs.as_slice(),
             &reward.commitment(),
             reward.value,
+            &unbound.entropy_contribution(),
         );
-        let private = LeaderPrivate::new(public, wallet.clone(), msg, reward.value);
+        let private = unbound.with_msg(msg);
         let block = assemble_block(parent, slot, UncleHeaders::empty(), txs, private).unwrap();
 
         assert!(block.header().verify(&public));

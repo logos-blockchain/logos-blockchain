@@ -4,7 +4,7 @@ use lb_core::{
     mantle::{Note, Value},
     proofs::leader_proof::{LeaderPrivate, LeaderPublic, check_winning},
 };
-use lb_groth16::Fr;
+use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{
     ZkKey, errors::KeyError, secured_key::SecureKeyOperator,
 };
@@ -73,7 +73,6 @@ pub struct BuildPrivateInputsWithLeaderKey {
     result_channel: tokio::sync::oneshot::Sender<LeaderPrivate>,
     leader_public: LeaderPublic,
     wallet: PolWalletInputsData,
-    msg: Fr,
     reward_value: Value,
 }
 
@@ -89,14 +88,12 @@ impl BuildPrivateInputsWithLeaderKey {
         result_channel: tokio::sync::oneshot::Sender<LeaderPrivate>,
         leader_public: LeaderPublic,
         wallet: PolWalletInputsData,
-        msg: Fr,
         reward_value: Value,
     ) -> Self {
         Self {
             result_channel,
             leader_public,
             wallet,
-            msg,
             reward_value,
         }
     }
@@ -112,7 +109,6 @@ impl SecureKeyOperator for BuildPrivateInputsWithLeaderKey {
             result_channel,
             leader_public,
             wallet,
-            msg,
             reward_value,
         } = *self;
         // The proof never takes the spending secret key: the wallet stakes with
@@ -123,10 +119,10 @@ impl SecureKeyOperator for BuildPrivateInputsWithLeaderKey {
             staking_secret_key: nullifier_key,
             ..wallet
         };
-        if result_channel
-            .send(LeaderPrivate::new(leader_public, wallet, msg, reward_value))
-            .is_err()
-        {
+        // Not bound to a block yet: the proposer binds it with `with_msg` to the
+        // block ID, which covers the entropy contribution of this witness.
+        let private = LeaderPrivate::new(leader_public, wallet, Fr::ZERO, reward_value);
+        if result_channel.send(private).is_err() {
             debug!(target: LOG_TARGET, "Failed to send result via channel");
         }
         Ok(())
@@ -135,7 +131,6 @@ impl SecureKeyOperator for BuildPrivateInputsWithLeaderKey {
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::AdditiveGroup as _;
     use lb_key_management_system_keys::keys::{ZkPublicKey, secured_key::SecuredKey as _};
     use tokio::sync::oneshot;
 
@@ -156,11 +151,7 @@ mod tests {
         let (sender, receiver) = oneshot::channel();
         ZkKey::new(Fr::from(7u64))
             .execute(BuildPrivateInputsWithLeaderKey::new(
-                sender,
-                public,
-                wallet,
-                Fr::from(5u64),
-                3,
+                sender, public, wallet, 3,
             ))
             .await
             .unwrap();
@@ -173,7 +164,6 @@ mod tests {
             ),
             (nullifier_key, nullifier_key)
         );
-        assert_eq!(built.input().chain.msg, Fr::from(5u64));
         assert_eq!(built.input().chain.reward_value, 3);
     }
 }

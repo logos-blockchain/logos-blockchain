@@ -4,7 +4,6 @@ use lb_core::{
     mantle::{Note, Value},
     proofs::leader_proof::{LeaderPrivate, LeaderPublic},
 };
-use lb_groth16::Fr;
 use lb_key_management_system_service::{
     KMSService,
     api::KmsServiceApi,
@@ -36,7 +35,6 @@ pub trait KmsAdapter<RuntimeServiceId> {
         key_id: Self::KeyId,
         public_inputs: LeaderPublic,
         wallet: PolWalletInputsData,
-        msg: Fr,
         reward_value: Value,
     ) -> Result<LeaderPrivate, PrivateInputsError>;
 }
@@ -80,17 +78,11 @@ where
         key_id: Self::KeyId,
         public_inputs: LeaderPublic,
         wallet: PolWalletInputsData,
-        msg: Fr,
         reward_value: Value,
     ) -> Result<LeaderPrivate, PrivateInputsError> {
         let (output_tx, output_rx) = oneshot::channel();
-        let operator = BuildPrivateInputsWithLeaderKey::new(
-            output_tx,
-            public_inputs,
-            wallet,
-            msg,
-            reward_value,
-        );
+        let operator =
+            BuildPrivateInputsWithLeaderKey::new(output_tx, public_inputs, wallet, reward_value);
         Box::pin(self.execute(key_id, KeyOperators::Zk(Box::new(operator))))
             .await
             .map_err(|error| PrivateInputsError::KmsApi(Box::new(error)))?;

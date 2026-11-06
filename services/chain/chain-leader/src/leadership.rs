@@ -16,7 +16,6 @@ use lb_core::{
     sdp::blend::{PolEpochState, PolEpochStateSource},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_service::{api::KmsServiceApi, backend::preload::KeyId};
 use lb_ledger::{
     EpochState,
@@ -449,7 +448,7 @@ fn epoch_winning_slots_stream<RuntimeServiceId>(
                     }
                 };
                 match kms
-                    .build_private_inputs(note.key_id.clone(), public_inputs, wallet, Fr::ZERO, 0)
+                    .build_private_inputs(note.key_id.clone(), public_inputs, wallet, 0)
                     .await
                 {
                     Ok(leader_private) => return Some(leader_private),
@@ -483,6 +482,7 @@ mod pol_tests {
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::EpochConfig;
+    use lb_groth16::Fr;
     use lb_key_management_system_service::keys::{UnsecuredZkKey, ZkKey};
     use lb_ledger::{
         LedgerState,
@@ -718,7 +718,6 @@ mod pol_tests {
             _: Self::KeyId,
             public_inputs: LeaderPublic,
             wallet: PolWalletInputsData,
-            msg: Fr,
             reward_value: Value,
         ) -> Result<LeaderPrivate, PrivateInputsError> {
             let nullifier_key = ZkKey::new(Fr::from(0u64)).nullifier_key();
@@ -727,7 +726,12 @@ mod pol_tests {
                 staking_secret_key: nullifier_key,
                 ..wallet
             };
-            Ok(LeaderPrivate::new(public_inputs, wallet, msg, reward_value))
+            Ok(LeaderPrivate::new(
+                public_inputs,
+                wallet,
+                Fr::from(0u64),
+                reward_value,
+            ))
         }
     }
 

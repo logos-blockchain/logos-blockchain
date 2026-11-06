@@ -335,7 +335,41 @@ impl LeaderPrivate {
     pub const fn input(&self) -> &lb_pol::PolWitnessInputsData {
         &self.input
     }
+
+    /// The entropy contribution the proof outputs,
+    /// `zkhash(NONCE_CONTRIB_V1, slot, commitment, staking_sk)`. The block ID
+    /// covers it and the proof is bound to the block ID, so the leader computes
+    /// it before proving.
+    #[must_use]
+    pub fn entropy_contribution(&self) -> Fr {
+        let wallet = &self.input.wallet;
+        let note = notes::Note {
+            value: wallet.note_value,
+            nonce: wallet.note_nonce,
+            public_key: kdf_public_key(&wallet.nullifier_key),
+            stake_public_key: kdf_public_key(&wallet.staking_secret_key),
+            program: wallet.note_program,
+            data: wallet.note_data,
+        };
+        Poseidon2Bn254Hasher::digest(&[
+            *NONCE_CONTRIB_V1,
+            Fr::from(self.input.chain.slot_number),
+            note.commitment().0,
+            wallet.staking_secret_key,
+        ])
+    }
+
+    /// The witness bound to `msg`, the block ID of the header it proves.
+    #[must_use]
+    pub const fn with_msg(mut self, msg: Fr) -> Self {
+        self.input.chain.msg = msg;
+        self
+    }
 }
+
+static NONCE_CONTRIB_V1: LazyLock<Fr> = LazyLock::new(|| {
+    fr_from_bytes(b"NONCE_CONTRIB_V1").expect("BigUint should load from constant string")
+});
 
 impl From<LeaderPrivate> for lb_pol::PolWitnessInputsData {
     fn from(value: LeaderPrivate) -> Self {
@@ -687,8 +721,12 @@ mod tests {
         let reward = notes::Note::new(500, Fr::from(13u64), ZkPublicKey::new(Fr::from(17u64)));
         let (public, private) =
             test_utils::note_set_leader_inputs(Fr::from(7u64), 1000, Fr::from(11u64), msg, &reward);
+        // The leader computes the entropy contribution before proving, to bind the
+        // proof to the block ID that covers it.
+        let entropy_contribution = private.entropy_contribution();
         let proof = Groth16LeaderProof::prove(private).unwrap();
         assert!(proof.verify(&public, msg));
+        assert_eq!(proof.entropy(), entropy_contribution);
         // The circuit derives the commitment of the node's note, under its value.
         assert_eq!(proof.reward_commitment(), reward.commitment());
         assert_eq!(proof.reward_value(), 500);

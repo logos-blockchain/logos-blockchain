@@ -13,7 +13,7 @@ use lb_core::{
         genesis::{GenesisBlock, GenesisBlockBuilder},
     },
     crypto::ZkHasher,
-    header::{ContentId, Header, pol_msg},
+    header::{ContentId, Header, block_id, pol_msg},
     mantle::{
         GenesisParameters, GenesisTime, Note, Op, OpProof, SignedOps, Value,
         channel::Channels,
@@ -1554,16 +1554,17 @@ fn build_block_paying(
         wallet.staking_secret_key = nullifier_key;
         wallet.reward_public_key = *reward.public_key.as_fr();
         wallet.reward_nonce = reward.nonce;
-        let msg = pol_msg(
+        // The block ID covers the entropy contribution, set before proving.
+        let unbound = LeaderPrivate::new(public_inputs, wallet, Fr::ZERO, reward.value);
+        let id = block_id(
             &parent,
             slot.into(),
             &body_root(&uncle_headers, transactions.as_slice()),
             &reward.commitment(),
             reward.value,
+            &unbound.entropy_contribution(),
         );
-        let proof =
-            Groth16LeaderProof::prove(LeaderPrivate::new(public_inputs, wallet, msg, reward.value))
-                .unwrap();
+        let proof = Groth16LeaderProof::prove(unbound.with_msg(pol_msg(&id))).unwrap();
 
         let block = Block::create(parent, slot.into(), uncle_headers, proof, transactions).unwrap();
         return Some((block, reward_key));

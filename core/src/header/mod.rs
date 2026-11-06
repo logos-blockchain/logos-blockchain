@@ -113,7 +113,7 @@ impl BinaryDecode for Header {
         context: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
         let (input, bedrock_version) = u8::decode(input, context)?;
-        // The block ID and `pol_msg` hash this constant.
+        // The block ID hashes this constant.
         if bedrock_version != BEDROCK_VERSION {
             return Err(DecodeError::invalid_value::<Self>(
                 "unsupported bedrock_version",
@@ -157,34 +157,22 @@ impl Header {
         self.parent_block
     }
 
-    fn update_hasher(&self, h: &mut Hasher) {
-        h.update(b"BLOCK_ID_V1");
-        h.update([BEDROCK_VERSION]);
-        h.update(self.parent_block.0);
-        h.update(self.slot.to_le_bytes());
-        h.update(self.body_root.0);
-        // The proof is left out, a Groth16 proof can be re-randomized.
-        h.update(fr_to_bytes(&self.proof_of_leadership.reward_commitment().0));
-        h.update(self.proof_of_leadership.reward_value().to_le_bytes());
-        h.update(fr_to_bytes(&self.proof_of_leadership.entropy()));
-    }
-
     #[must_use]
     pub fn id(&self) -> HeaderId {
-        let mut h = Hasher::new();
-        self.update_hasher(&mut h);
-        HeaderId(h.finalize().into())
-    }
-
-    #[must_use]
-    pub fn pol_msg(&self) -> Fr {
-        pol_msg(
+        block_id(
             &self.parent_block,
             self.slot,
             &self.body_root,
             &self.proof_of_leadership.reward_commitment(),
             self.proof_of_leadership.reward_value(),
+            &self.proof_of_leadership.entropy(),
         )
+    }
+
+    // The `msg` the proof of leadership of the header is bound to.
+    #[must_use]
+    pub fn pol_msg(&self) -> Fr {
+        pol_msg(&self.id())
     }
 
     #[must_use]
@@ -256,27 +244,38 @@ impl LeaderProof for Header {
     }
 }
 
-// The spec's header `bedrock_version`, absorbed by the block ID and `pol_msg`.
+// The spec's header `bedrock_version`, absorbed by the block ID.
 pub const BEDROCK_VERSION: u8 = 1;
 
-// Every header field except the proof and the entropy contribution.
+// The block ID of a header, from every field but the proof, left out since a
+// Groth16 proof can be re-randomized. A leader computes the entropy
+// contribution and the reward commitment, outputs of its proof, before proving.
 #[must_use]
-pub fn pol_msg(
+pub fn block_id(
     parent_block: &HeaderId,
     slot: Slot,
     body_root: &ContentId,
     reward_commitment: &NoteCommitment,
     reward_value: Value,
-) -> Fr {
+    entropy_contribution: &Fr,
+) -> HeaderId {
     let mut h = Hasher::new();
-    h.update(b"POL_MSG_V1");
+    h.update(b"BLOCK_ID_V1");
     h.update([BEDROCK_VERSION]);
     h.update(parent_block.0);
     h.update(slot.to_le_bytes());
     h.update(body_root.0);
     h.update(fr_to_bytes(&reward_commitment.0));
     h.update(reward_value.to_le_bytes());
-    Fr::from_le_bytes_mod_order(&h.finalize())
+    h.update(fr_to_bytes(entropy_contribution));
+    HeaderId(h.finalize().into())
+}
+
+// The `msg` the proof of leadership of a block is bound to: its block ID
+// reduced modulo p.
+#[must_use]
+pub fn pol_msg(block_id: &HeaderId) -> Fr {
+    Fr::from_le_bytes_mod_order(&block_id.0)
 }
 
 impl From<[u8; 32]> for HeaderId {
@@ -439,76 +438,6 @@ fn test_serde_json_rejects_oversized_hex() {
 }
 
 #[test]
-fn pol_msg_hashes_the_header_fields_under_its_dst() {
-    use std::str::FromStr as _;
-
-    let parent_block = HeaderId([0x11; 32]);
-    let body_root = ContentId(
-        hex::decode("74e48ccd43051016138065265ee8af74cdd43b97c1624dd463da1fb9b345dc3f")
-            .unwrap()
-            .try_into()
-            .unwrap(),
-    );
-    let reward_commitment = NoteCommitment(Fr::from(0x4444u64));
-
-    // Digest below p.
-    assert_eq!(
-        pol_msg(
-            &parent_block,
-            Slot::from(46u64),
-            &body_root,
-            &reward_commitment,
-            0x6666
-        ),
-        Fr::from_str(
-            "1257913445352186760781801521745335656558978515391203688562859797786293976798"
-        )
-        .unwrap()
-    );
-    // Digest 0x69353504...6c706f54 read little endian is above p and wraps.
-    assert_eq!(
-        pol_msg(
-            &parent_block,
-            Slot::from(42u64),
-            &body_root,
-            &reward_commitment,
-            0x6666
-        ),
-        Fr::from_str(
-            "16302932358473993454067199317569404181679737752948030160294528723108679202152"
-        )
-        .unwrap()
-    );
-    // The reward commitment and the reward value are covered.
-    assert_eq!(
-        pol_msg(
-            &parent_block,
-            Slot::from(42u64),
-            &body_root,
-            &NoteCommitment(Fr::from(0x4445u64)),
-            0x6666
-        ),
-        Fr::from_str(
-            "6675858732187783999506042311682083436339216882710970592929130357297914894510"
-        )
-        .unwrap()
-    );
-    assert_eq!(
-        pol_msg(
-            &parent_block,
-            Slot::from(42u64),
-            &body_root,
-            &reward_commitment,
-            0x6667
-        ),
-        Fr::from_str(
-            "19127765436389383361965734721894489407953894745175146900948303423486380591301"
-        )
-        .unwrap()
-    );
-}
-
-#[test]
 fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
     let body_root = ContentId(
         hex::decode("f1675fa1e6280b4819528b4ad56b89441534bf161c26ad81e083ffbf9cfb6910")
@@ -534,15 +463,10 @@ fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
         "093b91ef899a4afba51f2d3674d0bf499320f73de4eb08d955250875b5ed2fba"
     );
     assert_eq!(header(0x22).id(), header(0x23).id());
+    // The proof is bound to the block ID, reduced modulo p.
     assert_eq!(
         header(0x22).pol_msg(),
-        pol_msg(
-            &HeaderId([0x11; 32]),
-            Slot::from(42u64),
-            &body_root,
-            &NoteCommitment(Fr::from(0x4444u64)),
-            0x6666
-        )
+        Fr::from_le_bytes_mod_order(&header(0x22).id().0)
     );
 
     // The current spec vector, over the `body_root` of its empty uncle list.
@@ -579,21 +503,27 @@ fn header_proof_verifies_only_against_its_own_pol_msg() {
         Fr::from(0x55u64),
         lb_key_management_system_keys::keys::ZkPublicKey::new(Fr::from(0x44u64)),
     );
-    let msg = pol_msg(
+    let (public, private) = crate::proofs::leader_proof::test_utils::note_set_leader_inputs(
+        Fr::from(7u64),
+        1000,
+        Fr::from(11u64),
+        <Fr as lb_groth16::AdditiveGroup>::ZERO,
+        &reward,
+    );
+    // The block ID covers the entropy contribution, set before proving.
+    let id = block_id(
         &parent_block,
         slot,
         &body_root,
         &reward.commitment(),
         reward.value,
+        &private.entropy_contribution(),
     );
-    let (public, private) = crate::proofs::leader_proof::test_utils::note_set_leader_inputs(
-        Fr::from(7u64),
-        1000,
-        Fr::from(11u64),
-        msg,
-        &reward,
+    let proof = Groth16LeaderProof::prove(private.with_msg(pol_msg(&id))).unwrap();
+    assert_eq!(
+        Header::new(parent_block, body_root, slot, proof.clone()).id(),
+        id
     );
-    let proof = Groth16LeaderProof::prove(private).unwrap();
 
     assert!(Header::new(parent_block, body_root, slot, proof.clone()).verify(&public));
     assert!(!Header::new(parent_block, ContentId([0x23; 32]), slot, proof.clone()).verify(&public));
