@@ -38,10 +38,11 @@ pub type Metadata = UpperBoundedVec<u8, { MAX_METADATA_SIZE }>;
 pub struct DepositOp {
     pub channel_id: ChannelId,
     pub inputs: InputNullifiers,
+    pub outputs: OutputCommitments,
     #[serde(with = "serde_fr")]
     pub commitment_merkle_root: Fr,
-    pub outputs: OutputCommitments,
     pub excess_value: Value,
+    // The zone message of the channel deposit, the `Inscription` of the encoding.
     pub metadata: Metadata,
 }
 
@@ -52,10 +53,10 @@ impl DepositOp {
         Self {
             channel_id: ChannelId::from([16u8; 32]),
             inputs: [NoteNullifier(Fr::from(0x11u64))].into(),
-            commitment_merkle_root: Fr::from(0x26u64),
             outputs: [NoteCommitment(Fr::from(0x27u64))].into(),
+            commitment_merkle_root: Fr::from(0x26u64),
             excess_value: 0x28,
-            metadata: Metadata::try_from(b"deposit-metadata".to_vec())
+            metadata: Metadata::try_from(b"channel-deposit-inscription".to_vec())
                 .expect("Metadata is within bounds."),
         }
     }

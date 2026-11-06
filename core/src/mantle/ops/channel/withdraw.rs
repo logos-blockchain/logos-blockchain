@@ -30,15 +30,15 @@ use crate::{
     },
 };
 
-// ChannelWithdraw = ChannelId InputNullifiers CommitmentMerkleRoot
-// OutputCommitments, plain field-order concat.
+// ChannelWithdraw = ChannelId InputNullifiers OutputCommitments
+// CommitmentMerkleRoot, plain field-order concat.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
 pub struct ChannelWithdrawOp {
     pub channel_id: ChannelId,
     pub inputs: InputNullifiers,
+    pub outputs: OutputCommitments,
     #[serde(with = "serde_fr")]
     pub commitment_merkle_root: Fr,
-    pub outputs: OutputCommitments,
 }
 
 impl OpId for ChannelWithdrawOp {
@@ -250,8 +250,8 @@ impl ChannelWithdrawOp {
         Self {
             channel_id: ChannelId::from([18u8; 32]),
             inputs: [NoteNullifier(Fr::from(0x13u64))].into(),
-            commitment_merkle_root: Fr::from(0x29u64),
             outputs: [NoteCommitment(Fr::from(0x2au64))].into(),
+            commitment_merkle_root: Fr::from(0x29u64),
         }
     }
 }
