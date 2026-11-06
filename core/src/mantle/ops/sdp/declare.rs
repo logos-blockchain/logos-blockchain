@@ -610,7 +610,8 @@ mod tests {
                 .unwrap();
             let sets = NoteSets::new().update(LEDGER_SET, ledger).end_block(0);
             let root = mmr.frontier_root();
-            let nullifier = derive_note_nullifier(&input.commitment(), &secret_key);
+            let nullifier =
+                derive_note_nullifier(&input.commitment(), &ZkKey::new(secret_key).nullifier_key());
             let proof = crate::mantle::ops::transfer::test_utils::prove_transfer(
                 &[(input, secret_key, path)],
                 &[],

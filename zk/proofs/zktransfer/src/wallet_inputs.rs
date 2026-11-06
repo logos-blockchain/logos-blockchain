@@ -8,19 +8,25 @@ pub type InputPathAndSelectors = [(Fr, bool); TX_COMMITMENT_TREE_DEPTH];
 
 #[derive(Clone)]
 pub struct ZkTransferWalletInputs {
-    inputs_sk: [Groth16Input; MAX_INPUTS],
+    inputs_spending_sk: [Groth16Input; MAX_INPUTS],
+    inputs_stake_pk: [Groth16Input; MAX_INPUTS],
     inputs_nonce: [Groth16Input; MAX_INPUTS],
     inputs_value: [Groth16Input; MAX_INPUTS],
     inputs_path_and_selectors:
         [[(Groth16Input, Groth16Input); TX_COMMITMENT_TREE_DEPTH]; MAX_INPUTS],
     outputs_pk: [Groth16Input; MAX_OUTPUTS],
+    outputs_stake_pk: [Groth16Input; MAX_OUTPUTS],
     outputs_nonce: [Groth16Input; MAX_OUTPUTS],
     outputs_value: [Groth16Input; MAX_OUTPUTS],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkTransferInputNoteData {
+    // The spending secret key, from which the circuit derives the nullifier key
+    // and the public key.
     pub secret_key: Fr,
+    // The staking key of the note, which the circuit does not prove.
+    pub stake_public_key: Fr,
     pub nonce: Fr,
     pub value: u64,
     pub path_and_selectors: InputPathAndSelectors,
@@ -31,6 +37,7 @@ impl ZkTransferInputNoteData {
     pub const fn inactive() -> Self {
         Self {
             secret_key: Fr::ZERO,
+            stake_public_key: Fr::ZERO,
             nonce: Fr::ZERO,
             value: 0,
             path_and_selectors: [(Fr::ZERO, false); TX_COMMITMENT_TREE_DEPTH],
@@ -41,6 +48,7 @@ impl ZkTransferInputNoteData {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkTransferOutputNoteData {
     pub public_key: Fr,
+    pub stake_public_key: Fr,
     pub nonce: Fr,
     pub value: u64,
 }
@@ -50,6 +58,7 @@ impl ZkTransferOutputNoteData {
     pub const fn inactive() -> Self {
         Self {
             public_key: Fr::ZERO,
+            stake_public_key: Fr::ZERO,
             nonce: Fr::ZERO,
             value: 0,
         }
@@ -64,12 +73,14 @@ pub struct ZkTransferWalletInputsData {
 
 #[derive(Serialize)]
 pub struct ZkTransferWalletInputsJson {
-    inputs_sk: [Groth16InputDeser; MAX_INPUTS],
+    inputs_spending_sk: [Groth16InputDeser; MAX_INPUTS],
+    inputs_stake_pk: [Groth16InputDeser; MAX_INPUTS],
     inputs_nonce: [Groth16InputDeser; MAX_INPUTS],
     inputs_value: [Groth16InputDeser; MAX_INPUTS],
     inputs_selectors: Vec<Vec<Groth16InputDeser>>,
     inputs_path: Vec<Vec<Groth16InputDeser>>,
     outputs_pk: [Groth16InputDeser; MAX_OUTPUTS],
+    outputs_stake_pk: [Groth16InputDeser; MAX_OUTPUTS],
     outputs_nonce: [Groth16InputDeser; MAX_OUTPUTS],
     outputs_value: [Groth16InputDeser; MAX_OUTPUTS],
 }
@@ -77,17 +88,20 @@ pub struct ZkTransferWalletInputsJson {
 impl From<&ZkTransferWalletInputs> for ZkTransferWalletInputsJson {
     fn from(
         ZkTransferWalletInputs {
-            inputs_sk,
+            inputs_spending_sk,
+            inputs_stake_pk,
             inputs_nonce,
             inputs_value,
             inputs_path_and_selectors,
             outputs_pk,
+            outputs_stake_pk,
             outputs_nonce,
             outputs_value,
         }: &ZkTransferWalletInputs,
     ) -> Self {
         Self {
-            inputs_sk: inputs_sk.map(|sk| (&sk).into()),
+            inputs_spending_sk: inputs_spending_sk.map(|sk| (&sk).into()),
+            inputs_stake_pk: inputs_stake_pk.map(|stake_pk| (&stake_pk).into()),
             inputs_nonce: inputs_nonce.map(|nonce| (&nonce).into()),
             inputs_value: inputs_value.map(|value| (&value).into()),
             inputs_selectors: inputs_path_and_selectors
@@ -99,6 +113,7 @@ impl From<&ZkTransferWalletInputs> for ZkTransferWalletInputsJson {
                 .map(|path| path.iter().map(|(node, _)| node.into()).collect())
                 .collect(),
             outputs_pk: outputs_pk.map(|pk| (&pk).into()),
+            outputs_stake_pk: outputs_stake_pk.map(|stake_pk| (&stake_pk).into()),
             outputs_nonce: outputs_nonce.map(|nonce| (&nonce).into()),
             outputs_value: outputs_value.map(|value| (&value).into()),
         }
@@ -108,7 +123,8 @@ impl From<&ZkTransferWalletInputs> for ZkTransferWalletInputsJson {
 impl From<ZkTransferWalletInputsData> for ZkTransferWalletInputs {
     fn from(ZkTransferWalletInputsData { inputs, outputs }: ZkTransferWalletInputsData) -> Self {
         Self {
-            inputs_sk: inputs.each_ref().map(|input| input.secret_key.into()),
+            inputs_spending_sk: inputs.each_ref().map(|input| input.secret_key.into()),
+            inputs_stake_pk: inputs.each_ref().map(|input| input.stake_public_key.into()),
             inputs_nonce: inputs.each_ref().map(|input| input.nonce.into()),
             inputs_value: inputs.each_ref().map(|input| Fr::from(input.value).into()),
             inputs_path_and_selectors: inputs.each_ref().map(|input| {
@@ -117,6 +133,7 @@ impl From<ZkTransferWalletInputsData> for ZkTransferWalletInputs {
                     .map(|(node, selector)| (node.into(), Fr::from(selector).into()))
             }),
             outputs_pk: outputs.map(|output| output.public_key.into()),
+            outputs_stake_pk: outputs.map(|output| output.stake_public_key.into()),
             outputs_nonce: outputs.map(|output| output.nonce.into()),
             outputs_value: outputs.map(|output| Fr::from(output.value).into()),
         }

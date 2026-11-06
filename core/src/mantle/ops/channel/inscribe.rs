@@ -1881,7 +1881,10 @@ mod tests {
         let note_sets = note_sets.update(2, set).end_block(1);
         let output = notes::Note::new(1_000, Fr::from(12u64), ZkPublicKey::new(Fr::from(2u64)));
         let step = step(
-            &[derive_note_nullifier(&input.commitment(), &secret_key)],
+            &[derive_note_nullifier(
+                &input.commitment(),
+                &ZkKey::new(secret_key).nullifier_key(),
+            )],
             &[output.commitment()],
             mmr.frontier_root(),
         );
@@ -2213,11 +2216,16 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "each field of the opening, then each shape check of the step"
+    )]
     fn preverify_checks_the_shape_and_the_openings_of_a_program_step() {
         let note = notes::Note {
             value: 10,
             nonce: Fr::from(2u64),
             public_key: ZkPublicKey::new(Fr::from(3u64)),
+            stake_public_key: ZkPublicKey::new(Fr::from(6u64)),
             program: program_id(),
             data: Fr::from(4u64),
         };
@@ -2225,6 +2233,7 @@ mod tests {
             value: 10,
             nonce: Fr::from(2u64),
             public_key: note.public_key,
+            stake_public_key: note.stake_public_key,
             data: Fr::from(4u64),
         };
         let step = program_step(
@@ -2258,6 +2267,20 @@ mod tests {
                     1,
                     vec![ProgramNoteOpening {
                         data: Fr::from(5u64),
+                        ..opening
+                    }]
+                )
+            ),
+            Err(Error::ProgramNoteOpening { step: 0, output: 1 })
+        );
+        // the opening covers the staking key of the note
+        assert_eq!(
+            preverify(
+                step.clone(),
+                proof(
+                    1,
+                    vec![ProgramNoteOpening {
+                        stake_public_key: note.public_key,
                         ..opening
                     }]
                 )
@@ -2377,16 +2400,22 @@ mod tests {
             .unwrap();
         let note_sets = note_sets.update(2, set).end_block(1);
         let (_, proving_key) = three_input_setup(1);
+        // Staked by an operator of key 7.
         let program_note = notes::Note {
             value: 1_000,
             nonce: Fr::from(21u64),
             public_key: ZkKey::new(Fr::ZERO).to_public_key(),
+            stake_public_key: ZkKey::new(Fr::from(7u64)).to_public_key(),
             program: program_id(),
             data: Fr::from(5u64),
         };
 
         let payment = Payment {
-            inputs: [derive_note_nullifier(&user_note.commitment(), &secret_key)].into(),
+            inputs: [derive_note_nullifier(
+                &user_note.commitment(),
+                &ZkKey::new(secret_key).nullifier_key(),
+            )]
+            .into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: root,
             paid_value: 1_000,
@@ -2449,6 +2478,7 @@ mod tests {
                 value: 1_000,
                 nonce: Fr::from(21u64),
                 public_key: program_note.public_key,
+                stake_public_key: program_note.stake_public_key,
                 data: Fr::from(5u64),
             }],
         });

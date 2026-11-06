@@ -309,6 +309,7 @@ pub mod test_utils {
                     ZkProgramSpendInputNoteData::inactive,
                     |(note, secret_key, path)| ZkProgramSpendInputNoteData {
                         secret_key: *secret_key,
+                        stake_public_key: *note.stake_public_key.as_fr(),
                         nonce: note.nonce,
                         value: note.value,
                         data: note.data,
@@ -324,6 +325,7 @@ pub mod test_utils {
                     .map_or_else(ZkProgramSpendOutputNoteData::inactive, |note| {
                         ZkProgramSpendOutputNoteData {
                             public_key: *note.public_key.as_fr(),
+                            stake_public_key: *note.stake_public_key.as_fr(),
                             nonce: note.nonce,
                             value: note.value,
                             program: note.program,

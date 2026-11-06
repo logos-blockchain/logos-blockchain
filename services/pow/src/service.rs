@@ -2262,7 +2262,7 @@ mod tests {
             note_set: LEDGER_SET,
             nullifier: derive_note_nullifier(
                 &note.commitment(),
-                secret_key_of(&note.public_key).as_fr(),
+                &secret_key_of(&note.public_key).nullifier_key(),
             ),
         }
     }

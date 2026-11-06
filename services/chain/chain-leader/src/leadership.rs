@@ -551,7 +551,7 @@ mod pol_tests {
         let owned = OwnedNote {
             note,
             note_set: LEDGER_SET,
-            nullifier: derive_note_nullifier(&note.commitment(), sk.as_fr()),
+            nullifier: derive_note_nullifier(&note.commitment(), &sk.nullifier_key()),
             path: aged_path.clone(),
         };
         (
@@ -704,12 +704,12 @@ mod pol_tests {
             note: &Note,
             leader_public: &LeaderPublic,
         ) -> Result<bool, overwatch::DynError> {
-            let sk = ZkKey::new(Fr::from(0u64));
+            let nullifier_key = ZkKey::new(Fr::from(0u64)).nullifier_key();
             Ok(check_winning(
                 note,
                 *leader_public,
-                &sk.to_public_key(),
-                Fr::from(0u64),
+                nullifier_key,
+                nullifier_key,
             ))
         }
 
@@ -721,8 +721,10 @@ mod pol_tests {
             msg: Fr,
             reward_value: Value,
         ) -> Result<LeaderPrivate, PrivateInputsError> {
+            let nullifier_key = ZkKey::new(Fr::from(0u64)).nullifier_key();
             let wallet = PolWalletInputsData {
-                secret_key: Fr::from(0u64),
+                nullifier_key,
+                staking_secret_key: nullifier_key,
                 ..wallet
             };
             Ok(LeaderPrivate::new(public_inputs, wallet, msg, reward_value))

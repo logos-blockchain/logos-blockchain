@@ -255,7 +255,7 @@ impl ScannerAccounting {
         let Some(secret_key) = self.secret_keys.get(&note.public_key) else {
             return;
         };
-        let nullifier = derive_note_nullifier(&note.commitment(), secret_key.as_fr());
+        let nullifier = derive_note_nullifier(&note.commitment(), &secret_key.nullifier_key());
         self.wallet.add_known_notes([KnownNote {
             note,
             note_set,

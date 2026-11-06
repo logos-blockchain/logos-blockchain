@@ -229,7 +229,10 @@ fn build_capture_plan(
         .enumerate()
         .filter_map(|(index, allocation)| {
             wallet_keys.get(&allocation.public_key).map(|secret_key| {
-                derive_note_nullifier(&allocation.note(index).commitment(), secret_key.as_fr())
+                derive_note_nullifier(
+                    &allocation.note(index).commitment(),
+                    &secret_key.nullifier_key(),
+                )
             })
         })
         .collect::<HashSet<_>>();

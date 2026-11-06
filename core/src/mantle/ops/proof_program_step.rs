@@ -82,8 +82,9 @@ compressed_proof!(ZkProgramSpendProof, lb_program_spend::ZkProgramSpendProof);
 pub struct ProgramProof(CompressedGroth16Proof);
 compressed_proof!(ProgramProof, CompressedGroth16Proof);
 
-// Value (8 bytes), NoteNonce, ZkPublicKey and ProgramNoteData (32 bytes each).
-const PROGRAM_NOTE_OPENING_SIZE: usize = 104;
+// Value (8 bytes), NoteNonce, ZkPublicKey, StakePublicKey and ProgramNoteData
+// (32 bytes each).
+const PROGRAM_NOTE_OPENING_SIZE: usize = 136;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ProgramNoteOpening {
@@ -91,6 +92,8 @@ pub struct ProgramNoteOpening {
     #[serde(with = "serde_fr")]
     pub nonce: Fr,
     pub public_key: ZkPublicKey,
+    // The staking key of the note.
+    pub stake_public_key: ZkPublicKey,
     #[serde(with = "serde_fr")]
     pub data: Fr,
 }
@@ -102,6 +105,7 @@ impl ProgramNoteOpening {
             value: self.value,
             nonce: self.nonce,
             public_key: self.public_key,
+            stake_public_key: self.stake_public_key,
             program,
             data: self.data,
         }
@@ -251,6 +255,7 @@ impl StepProof {
                         value: 0,
                         nonce: Fr::ZERO,
                         public_key: ZkPublicKey::zero(),
+                        stake_public_key: ZkPublicKey::zero(),
                         data: Fr::ZERO,
                     };
                     program_notes
@@ -305,7 +310,7 @@ mod tests {
             program_notes: 1,
         });
         let bytes = proof.encode();
-        assert_eq!(bytes.len(), 2 * 128 + 128 + 128 + 104);
+        assert_eq!(bytes.len(), 2 * 128 + 128 + 128 + 136);
         assert_eq!(
             StepProofShape::Program {
                 payments: 2,

@@ -774,7 +774,9 @@ mod tests {
         sdp::{Locator, Nonce, SNAPSHOT_FINALIZATION_DELAY},
     };
     use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr, fr_from_bytes_unchecked};
-    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey};
+    use lb_key_management_system_keys::keys::{
+        Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, kdf_public_key,
+    };
     use lb_utils::math::PositiveF64;
     use num_bigint::BigUint;
 
@@ -813,6 +815,11 @@ mod tests {
         Ed25519Key::from_bytes(&[0; 32])
     }
 
+    // The zk_id of a quota secret key, which the Proof of Quota proves.
+    fn zk_id(zk_key: &ZkKey) -> ZkPublicKey {
+        kdf_public_key(zk_key.as_fr())
+    }
+
     fn declare_op(
         zk_key: &ZkKey,
         signing_key: &Ed25519Key,
@@ -822,9 +829,13 @@ mod tests {
             service_type: ServiceType::BlendNetwork,
             locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
             provider_id: ProviderId(signing_key.public_key()),
-            zk_id: zk_key.to_public_key(),
+            zk_id: zk_id(zk_key),
             note_pk: zk_key.to_public_key(),
-            inputs: [derive_note_nullifier(&input.commitment(), input_sk)].into(),
+            inputs: [derive_note_nullifier(
+                &input.commitment(),
+                &ZkKey::new(*input_sk).nullifier_key(),
+            )]
+            .into(),
             commitment_merkle_root: NoteSet::empty().commitment_root(),
             amount: input.value,
         }
@@ -1363,7 +1374,7 @@ mod tests {
 
         // The single provider is both the only submitter and the premium
         // provider (min hamming distance), so they collect the full `income`.
-        let provider_zk_id = zk_key.to_public_key();
+        let provider_zk_id = zk_id(&zk_key);
         let received: Vec<&Note> = effect
             .reward_notes
             .iter()
@@ -1802,7 +1813,7 @@ mod tests {
         let received: Vec<&Note> = effect
             .reward_notes
             .iter()
-            .filter(|note| note.public_key == zk_key.to_public_key())
+            .filter(|note| note.public_key == zk_id(&zk_key))
             .collect();
         assert_eq!(
             received.len(),

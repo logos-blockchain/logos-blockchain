@@ -1020,6 +1020,7 @@ mod tests {
             value: 10,
             nonce: Fr::from(2u64),
             public_key: ZkPublicKey::new(Fr::from(3u64)),
+            stake_public_key: ZkPublicKey::new(Fr::from(3u64)),
             program: Fr::from(7u64),
             data: Fr::from(4u64),
         };
@@ -1043,6 +1044,7 @@ mod tests {
             value: 10,
             nonce: Fr::from(2u64),
             public_key: note.public_key,
+            stake_public_key: note.stake_public_key,
             data: Fr::from(4u64),
         };
         let encoded = |opening: ProgramNoteOpening| {

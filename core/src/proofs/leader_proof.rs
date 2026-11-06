@@ -8,7 +8,7 @@ use lb_binary_codec::{
 };
 use lb_dynamic_merkle::{MerkleNode, MerklePath};
 use lb_groth16::{COMPRESSED_PROOF_SIZE, FR_BYTES_SIZE, Fr, fr_from_bytes, serde::serde_fr};
-use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_key_management_system_keys::keys::kdf_public_key;
 use lb_log_targets::proofs;
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 use serde::{Deserialize, Serialize};
@@ -246,17 +246,20 @@ pub struct LeaderPublic {
     pub latest_root: Fr,
 }
 
-/// Check if the given note is owned by the leader and wins the lottery with
-/// the given public inputs.
+/// Check if the given note leads and wins the lottery with the given keys.
+///
+/// The nullifier key derives the public key of the note and the staking secret
+/// key its staking key and the ticket. A program note leads like a user note.
 #[must_use]
 pub fn check_winning(
     note: &notes::Note,
     public_inputs: LeaderPublic,
-    public_key: &ZkPublicKey,
-    secret_key: Fr,
+    nullifier_key: Fr,
+    staking_secret_key: Fr,
 ) -> bool {
-    note.public_key == *public_key
-        && public_inputs.check_winning(note.value, note.commitment().0, secret_key)
+    note.public_key == kdf_public_key(&nullifier_key)
+        && note.stake_public_key == kdf_public_key(&staking_secret_key)
+        && public_inputs.check_winning(note.value, note.commitment().0, staking_secret_key)
 }
 
 impl LeaderPublic {
@@ -279,6 +282,7 @@ impl LeaderPublic {
         }
     }
 
+    // The ticket is derived from the staking secret key of the note.
     #[must_use]
     pub fn check_winning(&self, value: u64, note_id: Fr, sk: Fr) -> bool {
         let threshold =
@@ -361,9 +365,9 @@ fn nodes_and_selectors(
     )
 }
 
-// The wallet half of a PoL witness. The secret key is left 0 for the KMS to
-// fill, the key and the nonce of the reward note for the proposer to set once
-// the block is built.
+// The wallet half of a PoL witness. The nullifier key and the staking secret
+// key are left 0 for the KMS to fill, the key and the nonce of the reward note
+// for the proposer to set once the block is built.
 pub fn pol_wallet_inputs(
     note: &notes::Note,
     note_set: NoteSetIndex,
@@ -416,6 +420,8 @@ pub fn pol_wallet_inputs(
     Ok(lb_pol::PolWalletInputsData {
         note_value: note.value,
         note_nonce: note.nonce,
+        note_program: note.program,
+        note_data: note.data,
         set_selectors,
         commitment_aged_path,
         commitment_aged_selectors,
@@ -433,7 +439,8 @@ pub fn pol_wallet_inputs(
         low_leaf_selectors,
         commitment_root_latest: latest_set.commitment_root(),
         set_latest_path,
-        secret_key: Fr::ZERO,
+        nullifier_key: Fr::ZERO,
+        staking_secret_key: Fr::ZERO,
         reward_public_key: Fr::ZERO,
         reward_nonce: Fr::ZERO,
     })
@@ -482,8 +489,10 @@ pub mod test_utils {
         msg: Fr,
         reward: &Note,
     ) -> (LeaderPublic, LeaderPrivate) {
-        let public_key = UnsecuredZkKey::new(secret_key).to_public_key();
-        let note = Note::new(value, nonce, public_key);
+        // The wallet default: the nullifier key is the staking secret key.
+        let key = UnsecuredZkKey::new(secret_key);
+        let nullifier_key = key.nullifier_key();
+        let note = Note::new(value, nonce, key.to_public_key());
         let commitment = note.commitment();
 
         let (mmr, commitment_path) = CommitmentMmr::new()
@@ -501,7 +510,7 @@ pub mod test_utils {
         let set = sets.get(LEDGER_SET).expect("the ledger set exists");
         assert_eq!(set.commitment_root(), mmr.frontier_root());
 
-        let nullifier = derive_note_nullifier(&commitment, &secret_key);
+        let nullifier = derive_note_nullifier(&commitment, &nullifier_key);
 
         let eligible = sets.eligible_root();
         let (lottery_0, lottery_1) =
@@ -518,11 +527,12 @@ pub mod test_utils {
                     lottery_1,
                 )
             })
-            .find(|public| public.check_winning(value, commitment.0, secret_key))
+            .find(|public| public.check_winning(value, commitment.0, nullifier_key))
             .expect("a winning epoch nonce below 10000");
 
         let wallet = lb_pol::PolWalletInputsData {
-            secret_key,
+            nullifier_key,
+            staking_secret_key: nullifier_key,
             reward_public_key: *reward.public_key.as_fr(),
             reward_nonce: reward.nonce,
             ..pol_wallet_inputs(
@@ -547,7 +557,7 @@ mod tests {
     use std::str::FromStr as _;
 
     use ark_ff::Field as _;
-    use lb_key_management_system_keys::keys::UnsecuredZkKey;
+    use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
     use lb_pol::LotteryConstants;
     use lb_utils::math::NonNegativeRatio;
     use rand::RngCore as _;
@@ -709,10 +719,16 @@ mod tests {
                 NoteSet::empty().execute_adding(&[commitment]).unwrap(),
             )
             .end_block(1);
-        let nullifier = derive_note_nullifier(&commitment, &secret_key);
+        let nullifier = derive_note_nullifier(
+            &commitment,
+            &UnsecuredZkKey::new(secret_key).nullifier_key(),
+        );
 
         let wallet = pol_wallet_inputs(&note, LEDGER_SET, &nullifier, &path, &sets, &sets).unwrap();
-        assert_eq!(wallet.secret_key, Fr::ZERO);
+        assert_eq!(
+            (wallet.nullifier_key, wallet.staking_secret_key),
+            (Fr::ZERO, Fr::ZERO)
+        );
         assert_eq!(
             (wallet.note_value, wallet.note_nonce),
             (1000, Fr::from(11u64))
@@ -763,27 +779,34 @@ mod tests {
     }
 
     #[test]
-    fn check_winning_requires_the_key_of_the_note() {
-        let secret_key = Fr::from(7u64);
-        let public_key = UnsecuredZkKey::new(secret_key).to_public_key();
-        let note = notes::Note::new(1000, Fr::from(11u64), public_key);
-        let public = LeaderPublic::new(
-            Fr::ONE,
-            Fr::ONE,
-            Fr::from(3u64),
-            5,
-            Fr::from(2u64),
-            Fr::ZERO,
-        );
-        assert_eq!(
-            check_winning(&note, public, &public_key, secret_key),
-            public.check_winning(1000, note.commitment().0, secret_key)
-        );
+    fn check_winning_requires_the_nullifier_key_and_the_staking_secret_key_of_the_note() {
+        let key = UnsecuredZkKey::new(Fr::from(7u64));
+        let nullifier_key = key.nullifier_key();
+        let note = notes::Note::new(1000, Fr::from(11u64), key.to_public_key());
+        // A threshold of p - 1000: almost every ticket wins.
+        let public = LeaderPublic::new(Fr::ONE, Fr::ONE, Fr::from(3u64), 5, -Fr::ONE, Fr::ZERO);
+        // The wallet default: the nullifier key is the staking secret key.
+        assert!(check_winning(&note, public, nullifier_key, nullifier_key));
+        // The spending secret key does not lead.
+        assert!(!check_winning(&note, public, *key.as_fr(), *key.as_fr()));
+
+        // A note staked under another key leads with its staking secret key only.
+        let staking_secret_key = Fr::from(9u64);
+        let staked = notes::Note {
+            stake_public_key: kdf_public_key(&staking_secret_key),
+            ..note
+        };
         assert!(!check_winning(
-            &note,
+            &staked,
             public,
-            &ZkPublicKey::new(Fr::ONE),
-            secret_key
+            nullifier_key,
+            nullifier_key
+        ));
+        assert!(check_winning(
+            &staked,
+            public,
+            nullifier_key,
+            staking_secret_key
         ));
     }
 }

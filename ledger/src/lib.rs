@@ -2396,7 +2396,10 @@ mod tests {
             .push_with_paths(genesis_note.commitment(), &mut [])
             .unwrap();
         assert_eq!(mmr.frontier_root(), root);
-        let nullifier = derive_note_nullifier(&genesis_note.commitment(), &secret_key);
+        let nullifier = derive_note_nullifier(
+            &genesis_note.commitment(),
+            &ZkKey::new(secret_key).nullifier_key(),
+        );
 
         // The fee depends on the encoded size only, so a draft with placeholder values
         // prices it.

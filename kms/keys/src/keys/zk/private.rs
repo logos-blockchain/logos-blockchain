@@ -15,8 +15,12 @@ use crate::keys::{
 };
 
 static KDF: LazyLock<Fr> = LazyLock::new(|| fr_from_bytes_unchecked(b"KDF"));
+static NF_KDF: LazyLock<Fr> = LazyLock::new(|| fr_from_bytes_unchecked(b"NF_KDF"));
 
 /// A ZK secret key exposing methods to retrieve its inner secret value.
+///
+/// It is the spending secret key of the notes under its public key: it derives
+/// their nullifier key, which derives their public key and their nullifiers.
 ///
 /// To be used in contexts where a KMS-like key is required, but it's not
 /// possible to go through the KMS roundtrip of executing operators.
@@ -78,9 +82,19 @@ impl SecretKey {
             .map_err(|e| KeyError::ZkTransferProve(e.to_string()))
     }
 
+    /// The nullifier key `nf_sk = zkhash(NF_KDF, spending_sk)`, which derives
+    /// the public key and the nullifiers of the notes. A wallet uses it as the
+    /// staking secret key of its notes, so a node handed it leads with them
+    /// without being able to spend them.
+    #[must_use]
+    pub fn nullifier_key(&self) -> Fr {
+        <Poseidon2Bn254Hasher as Digest>::compress(&[*NF_KDF, self.0])
+    }
+
+    /// The public key `zkhash(KDF, nf_sk)`, derived from the nullifier key.
     #[must_use]
     pub fn to_public_key(&self) -> PublicKey {
-        PublicKey::new(<Poseidon2Bn254Hasher as Digest>::compress(&[*KDF, self.0]))
+        kdf_public_key(&self.nullifier_key())
     }
 
     #[must_use]
@@ -89,6 +103,17 @@ impl SecretKey {
         rng.fill_bytes(&mut bytes);
         Self(fr_from_mod_bytes(&bytes))
     }
+}
+
+/// The key `zkhash(KDF, secret)` of a secret.
+///
+/// It is the public key of a nullifier key, the staking key of a staking
+/// secret key and the `zk_id` of a quota secret key. With the nullifier key as
+/// staking secret key, the default of a wallet, the staking key of a note is
+/// its public key.
+#[must_use]
+pub fn kdf_public_key(secret: &Fr) -> PublicKey {
+    PublicKey::new(<Poseidon2Bn254Hasher as Digest>::compress(&[*KDF, *secret]))
 }
 
 impl PartialEq for SecretKey {

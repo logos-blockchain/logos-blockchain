@@ -286,7 +286,7 @@ fn create_stateful_invalid_transaction() -> SignedOps<Unverified, StandardMode> 
     let transfer_op = TransferOp::new(
         [derive_note_nullifier(
             &input_note.commitment(),
-            secret_key.as_fr(),
+            &secret_key.nullifier_key(),
         )]
         .into(),
         [output_note.commitment()].into(),

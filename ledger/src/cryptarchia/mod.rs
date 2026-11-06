@@ -1022,7 +1022,9 @@ pub mod tests {
     };
     use lb_cryptarchia_engine::EpochConfig;
     use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Field as _, ModulusShift};
-    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey};
+    use lb_key_management_system_keys::keys::{
+        Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, kdf_public_key,
+    };
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
@@ -1389,11 +1391,13 @@ pub mod tests {
             service_type: ServiceType::BlendNetwork,
             locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
             provider_id: signing_key.public_key().into(),
-            zk_id: zk_key.to_public_key(),
+            // The zk_id of the quota secret key, the service note under the
+            // public key of the notes of the same key.
+            zk_id: kdf_public_key(zk_key.as_fr()),
             note_pk: zk_key.to_public_key(),
             inputs: [derive_note_nullifier(
                 &sdp_utxo.commitment(),
-                &sdp_secret_key,
+                &ZkKey::new(sdp_secret_key).nullifier_key(),
             )]
             .into(),
             commitment_merkle_root: ledger.states[&id]

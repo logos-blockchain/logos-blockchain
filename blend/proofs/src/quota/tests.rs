@@ -1,7 +1,7 @@
 use const_hex::FromHex as _;
 use lb_blend_crypto::{ZkHash, merkle::MerkleTree};
 use lb_groth16::{AdditiveGroup as _, Fr, fr_from_bytes_unchecked};
-use lb_key_management_system_keys::keys::UnsecuredZkKey;
+use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey, kdf_public_key};
 
 use crate::{
     quota::{
@@ -135,11 +135,16 @@ struct PoQInputs<const INPUTS: usize> {
     secret_inputs: [ProofOfCoreQuotaInputs; INPUTS],
 }
 
+// The zk_id of a quota secret key, which the core branch proves.
+fn zk_id(core_sk: &UnsecuredZkKey) -> ZkPublicKey {
+    kdf_public_key(core_sk.as_fr())
+}
+
 fn generate_inputs<const INPUTS: usize>() -> PoQInputs<INPUTS> {
     let keys: [_; INPUTS] = (1..=INPUTS as u64)
         .map(|i| {
             let sk = UnsecuredZkKey::new(ZkHash::from(i));
-            let pk = sk.to_public_key();
+            let pk = zk_id(&sk);
             (sk, pk)
         })
         .collect::<Vec<_>>()
@@ -269,7 +274,7 @@ fn poq_interaction_one_hundred_keys() {
 #[test]
 fn same_key_different_indices() {
     let key = UnsecuredZkKey::one();
-    let merkle_tree = MerkleTree::new(vec![key.to_public_key().into_inner()]).unwrap();
+    let merkle_tree = MerkleTree::new(vec![zk_id(&key).into_inner()]).unwrap();
 
     let PoQInputs {
         public_inputs,
@@ -285,9 +290,7 @@ fn same_key_different_indices() {
             signing_key: Ed25519PublicKey::from_bytes(&[10; _]).unwrap(),
         },
         secret_inputs: [ProofOfCoreQuotaInputs {
-            core_path_and_selectors: merkle_tree
-                .get_proof_for_key(key.to_public_key().as_fr())
-                .unwrap(),
+            core_path_and_selectors: merkle_tree.get_proof_for_key(zk_id(&key).as_fr()).unwrap(),
             core_sk: key.into_inner(),
         }],
     };
@@ -328,7 +331,7 @@ fn same_key_different_indices() {
 #[test]
 fn different_keys_same_index() {
     let key = UnsecuredZkKey::one();
-    let merkle_tree = MerkleTree::new(vec![key.to_public_key().into_inner()]).unwrap();
+    let merkle_tree = MerkleTree::new(vec![zk_id(&key).into_inner()]).unwrap();
 
     let PoQInputs {
         public_inputs: public_inputs_key_1,
@@ -344,9 +347,7 @@ fn different_keys_same_index() {
             signing_key: Ed25519PublicKey::from_bytes(&[1; _]).unwrap(),
         },
         secret_inputs: [ProofOfCoreQuotaInputs {
-            core_path_and_selectors: merkle_tree
-                .get_proof_for_key(key.to_public_key().as_fr())
-                .unwrap(),
+            core_path_and_selectors: merkle_tree.get_proof_for_key(zk_id(&key).as_fr()).unwrap(),
             core_sk: key.into_inner(),
         }],
     };

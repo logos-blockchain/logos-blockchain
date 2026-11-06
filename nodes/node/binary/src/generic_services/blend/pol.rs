@@ -80,6 +80,8 @@ pub fn leadership_quota_inputs(leader_private: &LeaderPrivate) -> ProofOfLeaders
             PolWalletInputsData {
                 note_value,
                 note_nonce,
+                note_program,
+                note_data,
                 set_selectors,
                 commitment_aged_path,
                 commitment_aged_selectors,
@@ -89,7 +91,8 @@ pub fn leadership_quota_inputs(leader_private: &LeaderPrivate) -> ProofOfLeaders
                 low_leaf_aged_path,
                 low_leaf_aged_selectors,
                 set_aged_path,
-                secret_key,
+                nullifier_key,
+                staking_secret_key,
                 ..
             },
         chain: PolChainInputsData { slot_number, .. },
@@ -99,6 +102,8 @@ pub fn leadership_quota_inputs(leader_private: &LeaderPrivate) -> ProofOfLeaders
         slot: *slot_number,
         note_value: *note_value,
         note_nonce: *note_nonce,
+        note_program: *note_program,
+        note_data: *note_data,
         commitment_aged_path_and_selectors: core::array::from_fn(|i| {
             (commitment_aged_path[i], commitment_aged_selectors[i])
         }),
@@ -109,7 +114,8 @@ pub fn leadership_quota_inputs(leader_private: &LeaderPrivate) -> ProofOfLeaders
             (low_leaf_aged_path[i], low_leaf_aged_selectors[i])
         }),
         set_aged_path_and_selectors: core::array::from_fn(|i| (set_aged_path[i], set_selectors[i])),
-        secret_key: *secret_key,
+        nullifier_key: *nullifier_key,
+        staking_secret_key: *staking_secret_key,
     }
 }
 
@@ -139,9 +145,16 @@ mod tests {
                 inputs.slot,
                 inputs.note_value,
                 inputs.note_nonce,
-                inputs.secret_key
+                inputs.nullifier_key,
+                inputs.staking_secret_key
             ),
-            (chain.slot_number, 1000, Fr::from(11u64), Fr::from(7u64))
+            (
+                chain.slot_number,
+                1000,
+                Fr::from(11u64),
+                wallet.nullifier_key,
+                wallet.staking_secret_key
+            )
         );
         assert_eq!(
             inputs.low_leaf_aged_nullifier,

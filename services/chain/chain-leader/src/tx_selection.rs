@@ -241,7 +241,7 @@ mod tests {
                     std::iter::once(Op::Transfer(TransferOp::new(
                         [derive_note_nullifier(
                             &note.commitment(),
-                            funding_key.as_fr(),
+                            &funding_key.nullifier_key(),
                         )]
                         .into(),
                         OutputCommitments::default(),

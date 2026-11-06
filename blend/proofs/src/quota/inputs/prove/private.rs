@@ -82,7 +82,7 @@ impl Inputs {
             }
             ProofType::LeadershipQuota(leadership_quota_private_inputs) => {
                 SelectionRandomnessSecretInput::Leadership {
-                    note_secret_key: leadership_quota_private_inputs.secret_key,
+                    note_secret_key: leadership_quota_private_inputs.staking_secret_key,
                     slot_number: leadership_quota_private_inputs.slot,
                 }
             }
@@ -139,13 +139,19 @@ pub struct ProofOfLeadershipQuotaInputs {
     pub slot: u64,
     pub note_value: u64,
     pub note_nonce: ZkHash,
+    // The program and the data of the note, 0 for a user note.
+    pub note_program: ZkHash,
+    pub note_data: ZkHash,
     pub commitment_aged_path_and_selectors: AgedNotePathAndSelectors,
     pub low_leaf_aged_nullifier: ZkHash,
     pub low_leaf_aged_next_nullifier: ZkHash,
     pub low_leaf_aged_next_index: u64,
     pub low_leaf_aged_path_and_selectors: AgedLowLeafPathAndSelectors,
     pub set_aged_path_and_selectors: AgedSetPathAndSelectors,
-    pub secret_key: ZkHash,
+    // The nullifier key derives the public key and the nullifier of the note,
+    // the staking secret key its staking key and the key nullifier.
+    pub nullifier_key: ZkHash,
+    pub staking_secret_key: ZkHash,
 }
 
 impl From<ProofOfLeadershipQuotaInputs> for ProofType {

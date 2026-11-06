@@ -62,6 +62,8 @@ pub struct Note {
     #[serde(with = "serde_fr")]
     pub nonce: Fr,
     pub public_key: ZkPublicKey,
+    // The staking key, whose secret the Proof of Leadership takes.
+    pub stake_public_key: ZkPublicKey,
     #[serde(with = "serde_fr")]
     pub program: ProgramId,
     #[serde(with = "serde_fr")]
@@ -69,13 +71,18 @@ pub struct Note {
 }
 
 impl Note {
-    // A user note: no program governs it and it carries no data.
+    // A user note under one key, its public key being also its staking key: no
+    // program governs it and it carries no data. It is the default of a wallet
+    // and of a transfer output, and the leader reward note, the Genesis notes,
+    // the service notes, the service reward notes and the proof of work claim
+    // notes have their one key as both.
     #[must_use]
     pub const fn new(value: Value, nonce: Fr, public_key: ZkPublicKey) -> Self {
         Self {
             value,
             nonce,
             public_key,
+            stake_public_key: public_key,
             program: Fr::ZERO,
             data: Fr::ZERO,
         }
@@ -90,15 +97,21 @@ impl Note {
             Fr::from(self.value),
             self.nonce,
             *self.public_key.as_fr(),
+            *self.stake_public_key.as_fr(),
             self.program,
             self.data,
         ]))
     }
 }
 
+// The nullifier of a note, from the nullifier key of its holder.
 #[must_use]
-pub fn derive_note_nullifier(commitment: &NoteCommitment, secret_key: &Fr) -> NoteNullifier {
-    NoteNullifier(ZkHasher::digest(&[*NOTE_NF_V1, commitment.0, *secret_key]))
+pub fn derive_note_nullifier(commitment: &NoteCommitment, nullifier_key: &Fr) -> NoteNullifier {
+    NoteNullifier(ZkHasher::digest(&[
+        *NOTE_NF_V1,
+        commitment.0,
+        *nullifier_key,
+    ]))
 }
 
 /// The nonce the `ZkProgramSpend` enforces on the output `output_index` of a
@@ -144,8 +157,9 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_user_note_commitment_has_zero_program_and_data() {
+    fn test_user_note_commitment_has_its_key_as_staking_key_and_zero_program_and_data() {
         let note = Note::new(100, Fr::from(7u64), ZkPublicKey::from(Fr::from(456u64)));
+        assert_eq!(note.stake_public_key, note.public_key);
         assert_eq!(
             note.commitment().0,
             ZkHasher::digest(&[
@@ -153,10 +167,17 @@ mod test {
                 Fr::from(100u64),
                 Fr::from(7u64),
                 Fr::from(456u64),
+                Fr::from(456u64),
                 Fr::ZERO,
                 Fr::ZERO
             ])
         );
+        // the staking key is part of the commitment
+        let restaked = Note {
+            stake_public_key: ZkPublicKey::from(Fr::from(789u64)),
+            ..note
+        };
+        assert_ne!(restaked.commitment(), note.commitment());
     }
 
     #[test]
@@ -165,9 +186,13 @@ mod test {
         let (_, public) = lb_zktransfer::prove(data.clone().into()).unwrap();
         for (index, input) in data.wallet.inputs.iter().enumerate() {
             let expected = if data.chain.inputs_active[index] {
-                let public_key = ZkKey::new(input.secret_key).to_public_key();
-                let commitment = Note::new(input.value, input.nonce, public_key).commitment();
-                derive_note_nullifier(&commitment, &input.secret_key).0
+                let key = ZkKey::new(input.secret_key);
+                let commitment = Note {
+                    stake_public_key: ZkPublicKey::new(input.stake_public_key),
+                    ..Note::new(input.value, input.nonce, key.to_public_key())
+                }
+                .commitment();
+                derive_note_nullifier(&commitment, &key.nullifier_key()).0
             } else {
                 Fr::ZERO
             };
@@ -175,11 +200,14 @@ mod test {
         }
         for (index, output) in data.wallet.outputs.iter().enumerate() {
             let expected = if data.chain.outputs_active[index] {
-                Note::new(
-                    output.value,
-                    output.nonce,
-                    ZkPublicKey::new(output.public_key),
-                )
+                Note {
+                    stake_public_key: ZkPublicKey::new(output.stake_public_key),
+                    ..Note::new(
+                        output.value,
+                        output.nonce,
+                        ZkPublicKey::new(output.public_key),
+                    )
+                }
                 .commitment()
                 .0
             } else {
@@ -187,7 +215,7 @@ mod test {
             };
             assert_eq!(public.outputs[index].into_inner(), expected);
         }
-        assert_eq!(public.excess_value.into_inner(), Fr::from(54u64));
+        assert_eq!(public.excess_value.into_inner(), Fr::from(50u64));
     }
 
     #[test]

@@ -97,9 +97,9 @@ mod tests {
     #[test]
     fn proposed_block_proof_is_bound_to_its_body_and_reward() {
         let config = crate::leadership::test_config();
-        let secret_key = Fr::from(7u64);
-        let public_key = UnsecuredZkKey::new(secret_key).to_public_key();
-        let note = notes::Note::new(1_000, Fr::from(11u64), public_key);
+        let key = UnsecuredZkKey::new(Fr::from(7u64));
+        let nullifier_key = key.nullifier_key();
+        let note = notes::Note::new(1_000, Fr::from(11u64), key.to_public_key());
         let ledger = LedgerState::from_notes([note], &config, 0);
         let (_, aged_path) = CommitmentMmr::new()
             .push_with_paths(note.commitment(), &mut [])
@@ -116,18 +116,19 @@ mod tests {
                     ),
                 )
             })
-            .find(|(_, public)| check_winning(&note, *public, &public_key, secret_key))
+            .find(|(_, public)| check_winning(&note, *public, nullifier_key, nullifier_key))
             .expect("a single staker wins within 1000 slots");
         let mut wallet = pol_wallet_inputs(
             &note,
             LEDGER_SET,
-            &derive_note_nullifier(&note.commitment(), &secret_key),
+            &derive_note_nullifier(&note.commitment(), &nullifier_key),
             &aged_path,
             &epoch_state.note_sets,
             ledger.latest_note_sets(),
         )
         .unwrap();
-        wallet.secret_key = secret_key;
+        wallet.nullifier_key = nullifier_key;
+        wallet.staking_secret_key = nullifier_key;
         let reward = notes::Note::new(
             0x6666,
             Fr::from(0x5555u64),

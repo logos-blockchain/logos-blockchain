@@ -164,7 +164,7 @@ pub fn self_transfer_paying_fee_at(
         .find(|note| note.public_key == account.public_key())
         .copied()
         .expect("account should own a genesis note");
-    let nullifier = derive_note_nullifier(&note.commitment(), &secret_key);
+    let nullifier = derive_note_nullifier(&note.commitment(), &account.secret_key.nullifier_key());
     let known = KnownNotes::from([(
         note.commitment(),
         KnownNote {

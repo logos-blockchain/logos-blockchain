@@ -505,7 +505,10 @@ mod tests {
         let withdrawal = |excess_value| SDPWithdrawOp {
             declaration_id: message.id(),
             nonce: Nonce::new(Epoch::new(0), 1),
-            service_note_nullifier: derive_note_nullifier(&service_note.commitment(), &secret_key),
+            service_note_nullifier: derive_note_nullifier(
+                &service_note.commitment(),
+                &ZkKey::new(secret_key).nullifier_key(),
+            ),
             outputs: [output.commitment()].into(),
             excess_value,
         };
@@ -560,7 +563,7 @@ mod tests {
                 SDPWithdrawOp {
                     service_note_nullifier: derive_note_nullifier(
                         &zk_id_note.commitment(),
-                        &zk_id_secret_key,
+                        &ZkKey::new(zk_id_secret_key).nullifier_key(),
                     ),
                     ..withdrawal(5)
                 },

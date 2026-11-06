@@ -292,7 +292,10 @@ fn build_wallet_transaction(
     let secret_key = *input.account.secret_key.as_fr();
     let funding = FundingNote {
         note: input.note.note,
-        nullifier: derive_note_nullifier(&input.note.note.commitment(), &secret_key),
+        nullifier: derive_note_nullifier(
+            &input.note.note.commitment(),
+            &input.account.secret_key.nullifier_key(),
+        ),
     };
     let self_transfer = |value| {
         MantleTxBuilder::new()

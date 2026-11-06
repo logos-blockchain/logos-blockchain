@@ -248,6 +248,7 @@ pub struct SpendInputFields {
     pub value: Value,
     pub nonce: Fr,
     pub public_key: ZkPublicKey,
+    pub stake_public_key: ZkPublicKey,
     pub data: Fr,
 }
 
@@ -257,6 +258,7 @@ pub struct SpendOutputFields {
     pub value: Value,
     pub nonce: Fr,
     pub public_key: ZkPublicKey,
+    pub stake_public_key: ZkPublicKey,
     pub program: ProgramId,
     pub data: Fr,
 }
@@ -270,6 +272,7 @@ impl SpendInputFields {
             value: 0,
             nonce: Fr::ZERO,
             public_key: ZkKey::new(Fr::ZERO).to_public_key(),
+            stake_public_key: ZkPublicKey::zero(),
             data: Fr::ZERO,
         }
     }
@@ -283,6 +286,7 @@ impl SpendOutputFields {
             value: 0,
             nonce: Fr::ZERO,
             public_key: ZkPublicKey::zero(),
+            stake_public_key: ZkPublicKey::zero(),
             program: Fr::ZERO,
             data: Fr::ZERO,
         }
@@ -295,6 +299,7 @@ impl SpendOutputFields {
             value: note.value,
             nonce: note.nonce,
             public_key: note.public_key,
+            stake_public_key: note.stake_public_key,
             program: note.program,
             data: note.data,
         }
@@ -315,6 +320,7 @@ pub fn spend_notes_hash(
             flag * Fr::from(input.value),
             flag * input.nonce,
             flag * *input.public_key.as_fr(),
+            flag * *input.stake_public_key.as_fr(),
             flag * input.data,
         ]
     });
@@ -325,6 +331,7 @@ pub fn spend_notes_hash(
             flag * Fr::from(output.value),
             flag * output.nonce,
             flag * *output.public_key.as_fr(),
+            flag * *output.stake_public_key.as_fr(),
             flag * output.program,
             flag * output.data,
         ]
@@ -442,18 +449,21 @@ mod tests {
         let (_, public) = lb_program_spend::prove(data.clone().into()).unwrap();
         let inputs = core::array::from_fn(|i| {
             let input = &data.wallet.inputs[i];
-            let public_key = ZkKey::new(input.secret_key).to_public_key();
+            let key = ZkKey::new(input.secret_key);
+            let public_key = key.to_public_key();
+            let stake_public_key = ZkPublicKey::new(input.stake_public_key);
             if data.chain.inputs_active[i] {
                 let note = Note {
                     value: input.value,
                     nonce: input.nonce,
                     public_key,
+                    stake_public_key,
                     program: data.chain.program_id,
                     data: input.data,
                 };
                 assert_eq!(
                     public.inputs[i].into_inner(),
-                    derive_note_nullifier(&note.commitment(), &input.secret_key).0
+                    derive_note_nullifier(&note.commitment(), &key.nullifier_key()).0
                 );
             }
             SpendInputFields {
@@ -461,6 +471,7 @@ mod tests {
                 value: input.value,
                 nonce: input.nonce,
                 public_key,
+                stake_public_key,
                 data: input.data,
             }
         });
@@ -470,6 +481,7 @@ mod tests {
                 value: output.value,
                 nonce: output.nonce,
                 public_key: ZkPublicKey::new(output.public_key),
+                stake_public_key: ZkPublicKey::new(output.stake_public_key),
                 program: output.program,
                 data: output.data,
             };

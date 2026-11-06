@@ -702,7 +702,8 @@ impl DeclarationMessage {
         DeclarationId::derive(self.service_type, self.zk_id)
     }
 
-    // The service note of SDP_DECLARE Execution step 2, under the note_pk.
+    // The service note of SDP_DECLARE Execution step 2, under the note_pk as both
+    // its public key and its staking key.
     #[must_use]
     pub fn service_note(&self) -> Note {
         let op_id = self.op_id();
