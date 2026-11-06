@@ -334,7 +334,13 @@ where
         }
         let mantle_tx_builder = MantleTxBuilder::new().add_ledger_output(note)?;
         let funded_tx_builder = self
-            .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks, 0)
+            .fund_tx(
+                tip,
+                mantle_tx_builder,
+                change_pk,
+                funding_pks,
+                crate::FEE_MARGIN_PERCENT,
+            )
             .await?;
         let TipResponse { tip, response } = self
             .sign_tx(Some(funded_tx_builder.tip), funded_tx_builder.response)
@@ -503,5 +509,31 @@ mod tests {
                 .configuration_threshold(&ChannelId::from([1u8; 32])),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn transfer_funds_is_funded_with_the_fee_margin() {
+        let (msg_sender, mut msg_receiver) = mpsc::channel(1);
+        let margin = tokio::spawn(async move {
+            while let Some(msg) = msg_receiver.recv().await {
+                match msg {
+                    WalletMsg::GetKnownAddresses { resp_tx } => drop(resp_tx.send(Ok(Vec::new()))),
+                    WalletMsg::FundTx {
+                        priority_fee_percent,
+                        ..
+                    } => return priority_fee_percent,
+                    _ => {}
+                }
+            }
+            panic!("the transfer should be funded");
+        });
+
+        let api =
+            WalletApi::<DummyWallet, TestRuntimeServiceId>::new(OutboundRelay::new(msg_sender));
+        let key = ZkPublicKey::new(Fr::from(1u64));
+        // The funding request is answered by no one, so the transfer fails.
+        drop(api.transfer_funds(None, key, vec![key], key, 1).await);
+
+        assert_eq!(margin.await.unwrap(), crate::FEE_MARGIN_PERCENT);
     }
 }
