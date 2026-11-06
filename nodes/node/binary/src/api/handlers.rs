@@ -28,6 +28,7 @@ use lb_core::{
         Note, Op, TxHash,
         channel::ChannelState,
         ledger::verification_mode::StandardMode,
+        notes::NoteNullifier,
         ops::channel::{ChannelId, deposit::DepositOp},
         traits::Hashable,
         transactions::{
@@ -67,7 +68,7 @@ use lb_tx_service::{
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
 };
 use lb_version::BuildVersionInfo;
-use lb_wallet_service::api::{WalletApi, WalletServiceData};
+use lb_wallet_service::api::{WalletApi, WalletServiceData, added_nullifiers};
 use overwatch::{
     overwatch::handle::OverwatchHandle,
     services::{AsServiceId, ServiceData},
@@ -105,6 +106,28 @@ fn validate_max_tx_fee(
         )));
     }
     Ok(())
+}
+
+// Rejects a funded transaction whose fee exceeds `max_tx_fee`, releasing
+// `reserved`, the notes this request reserved for it.
+async fn check_funded_tx_fee<WalletService, RuntimeServiceId>(
+    wallet: &WalletApi<WalletService, RuntimeServiceId>,
+    funded: &MantleTxBuilder,
+    max_tx_fee: lb_core::mantle::gas::GasCost,
+    reserved: Vec<NoteNullifier>,
+) -> Result<(), DynError>
+where
+    WalletService: WalletServiceData,
+    RuntimeServiceId: AsServiceId<WalletService> + Debug + Display + Sync,
+{
+    let checked = funded
+        .tx_fee()
+        .map_err(DynError::from)
+        .and_then(|tx_fee| validate_max_tx_fee(tx_fee, max_tx_fee));
+    if checked.is_err() {
+        wallet.release_pending_notes(reserved).await;
+    }
+    checked
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -1080,38 +1103,53 @@ where
                 req.funding_public_keys.clone(),
             )
             .await?;
-        let commitment_merkle_root = split_root(&split_builder)?;
-        let holder_note = Note::new(
-            req.amount,
-            fr_from_mod_bytes(&rand::random::<[u8; 32]>()),
-            req.holder_public_key,
-        );
-        // the wallet adopts the holder note when it owns the holder key
-        if wallet
-            .get_known_addresses()
-            .await?
-            .contains(&req.holder_public_key)
-            && let Some(note_set) =
-                mantle::channel_state::<RuntimeServiceId>(&handle, req.channel_id)
-                    .await?
-                    .and_then(|channel| channel.note_set)
-        {
-            wallet.import_note(holder_note, note_set).await?;
+        // The wallet holds the notes of the split until the transaction spends
+        // them, so a request that fails before funding releases them.
+        let deposit = async {
+            let commitment_merkle_root = split_root(&split_builder)?;
+            let holder_note = Note::new(
+                req.amount,
+                fr_from_mod_bytes(&rand::random::<[u8; 32]>()),
+                req.holder_public_key,
+            );
+            // the wallet adopts the holder note when it owns the holder key
+            if wallet
+                .get_known_addresses()
+                .await?
+                .contains(&req.holder_public_key)
+                && let Some(note_set) =
+                    mantle::channel_state::<RuntimeServiceId>(&handle, req.channel_id)
+                        .await?
+                        .and_then(|channel| channel.note_set)
+            {
+                wallet.import_note(holder_note, note_set).await?;
+            }
+            let tx_builder = split_builder.clone().push_op_with_opening(
+                Op::ChannelDeposit(DepositOp {
+                    channel_id: req.channel_id,
+                    inputs: [exact.nullifier].into(),
+                    commitment_merkle_root,
+                    outputs: [holder_note.commitment()].into(),
+                    excess_value: 0,
+                    metadata: req.metadata,
+                }),
+                ZkTransferOpening {
+                    inputs: vec![exact.note],
+                    outputs: vec![holder_note],
+                },
+            )?;
+            Ok::<_, DynError>((holder_note, tx_builder))
         }
-        let tx_builder = split_builder.push_op_with_opening(
-            Op::ChannelDeposit(DepositOp {
-                channel_id: req.channel_id,
-                inputs: [exact.nullifier].into(),
-                commitment_merkle_root,
-                outputs: [holder_note.commitment()].into(),
-                excess_value: 0,
-                metadata: req.metadata,
-            }),
-            ZkTransferOpening {
-                inputs: vec![exact.note],
-                outputs: vec![holder_note],
-            },
-        )?;
+        .await;
+        let (holder_note, tx_builder) = match deposit {
+            Ok(deposit) => deposit,
+            Err(error) => {
+                let split_notes = split_builder.nullifiers_consumed().collect();
+                wallet.release_pending_notes(split_notes).await;
+                return Err(error);
+            }
+        };
+        // A funding that fails releases the notes of `tx_builder` in the wallet.
         let lb_wallet_service::TipResponse {
             tip,
             response: funded_tx_builder,
@@ -1119,15 +1157,18 @@ where
             .fund_tx(
                 // the split names the spend root of this tip
                 Some(split_tip),
-                tx_builder,
+                tx_builder.clone(),
                 req.change_public_key,
                 req.funding_public_keys,
                 0,
             )
             .await?;
 
-        let tx_fee = funded_tx_builder.tx_fee()?;
-        validate_max_tx_fee(tx_fee, req.max_tx_fee)?;
+        let reserved = added_nullifiers(&tx_builder, &funded_tx_builder)
+            .into_iter()
+            .chain(split_builder.nullifiers_consumed())
+            .collect();
+        check_funded_tx_fee(&wallet, &funded_tx_builder, req.max_tx_fee, reserved).await?;
 
         let signed_tx = wallet.sign_tx(Some(tip), funded_tx_builder).await?.response;
         let tx_hash = signed_tx.hash();
@@ -2201,15 +2242,17 @@ pub mod wallet {
             } = wallet
                 .fund_tx(
                     req.tip,
-                    req.tx_builder,
+                    req.tx_builder.clone(),
                     req.change_public_key,
                     req.funding_public_keys,
                     req.priority_fee_percent,
                 )
                 .await?;
 
-            let tx_fee = funded_tx_builder.tx_fee()?;
-            validate_max_tx_fee(tx_fee, req.max_tx_fee)?;
+            // The inputs of the caller's own ops may be reserved by another
+            // request, so only the notes the funding added are released.
+            let reserved = added_nullifiers(&req.tx_builder, &funded_tx_builder);
+            check_funded_tx_fee(&wallet, &funded_tx_builder, req.max_tx_fee, reserved).await?;
 
             let (funded_tx, transfer_proof) = wallet
                 .prove_funding(Some(tip), funded_tx_builder)

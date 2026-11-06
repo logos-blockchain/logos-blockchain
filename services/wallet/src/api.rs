@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use lb_chain_service::Epoch;
 use lb_core::{
     header::HeaderId,
@@ -5,7 +7,7 @@ use lb_core::{
         Note, OpProof, SignedOps, Value,
         ledger::verification_mode::StandardMode,
         note_set::{LEDGER_SET, NoteSetIndex},
-        notes::NoteCommitment,
+        notes::{NoteCommitment, NoteNullifier},
         transactions::{
             MantleTxBuilder, Ops, TxBuilderError, hash::TxHash, states::Preverified,
             tx_list::ops::OpsContext,
@@ -84,6 +86,17 @@ where
             _id: std::marker::PhantomData,
         }
     }
+}
+
+/// The notes `after` spends that `before`, the builder it was built from, does
+/// not: the inputs a split or a funding added.
+#[must_use]
+pub fn added_nullifiers(before: &MantleTxBuilder, after: &MantleTxBuilder) -> Vec<NoteNullifier> {
+    let before = before.nullifiers_consumed().collect::<HashSet<_>>();
+    after
+        .nullifiers_consumed()
+        .filter(|nullifier| !before.contains(nullifier))
+        .collect()
 }
 
 impl<Wallet, RuntimeServiceId> WalletApi<Wallet, RuntimeServiceId>
@@ -272,6 +285,26 @@ where
             .send(WalletMsg::SpendRoot { tip, resp_tx })
             .await?;
         Ok(rx.await??)
+    }
+
+    /// Releases the notes of `nullifiers`, which the wallet reserved for a
+    /// split or a funding of a transaction that will not be submitted, so
+    /// that they fund the next request. A caller only releases the notes
+    /// its own request reserved, since a reservation is keyed by the note
+    /// alone. If the release does not reach the wallet, the notes stay
+    /// reserved until their reservation expires.
+    pub async fn release_pending_notes(&self, nullifiers: Vec<NoteNullifier>) {
+        if let Err(err) = self
+            .relay
+            .send(WalletMsg::ReleasePendingNotes { nullifiers })
+            .await
+        {
+            tracing::warn!(
+                target: crate::LOG_TARGET,
+                ?err,
+                "Failed to release the pending notes of a transaction"
+            );
+        }
     }
 
     pub async fn get_tx_context(

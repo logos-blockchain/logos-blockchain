@@ -71,6 +71,10 @@ pub struct WinningTicket {
     pub block_slot: Slot,
     /// The reward-claim operation to publish.
     pub claim: ClaimPowRewardOp,
+    /// Blocks processed since its claim was last published without settling;
+    /// zero while the ticket is ready.
+    #[serde(default)]
+    pub blocks_unsettled: u64,
 }
 
 /// A [`Stream`] of winning Proof-of-Work reward tickets.
@@ -418,6 +422,7 @@ impl Stream for TicketGenerator {
                     tip: this.tip,
                     block_slot,
                     claim,
+                    blocks_unsettled: 0,
                 }));
             }
 

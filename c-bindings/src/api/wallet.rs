@@ -30,7 +30,11 @@ use lb_node::{
         CryptarchiaService, WalletService as NodeWalletService, sdp::wallet::split_root,
     },
 };
-use lb_wallet_service::{LeaderAgedNotesInfo, TipResponse, api::WalletApi};
+use lb_wallet_service::{
+    LeaderAgedNotesInfo, TipResponse,
+    api::{WalletApi, added_nullifiers},
+};
+use overwatch::overwatch::OverwatchHandle;
 use rand::{RngCore as _, rngs::OsRng};
 
 use crate::{
@@ -958,66 +962,54 @@ pub(crate) fn channel_deposit_sync(
                     format!("Failed to split the deposit note: {error}"),
                 )
             })?;
-        let commitment_merkle_root = split_root(&split_builder).map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::RuntimeError,
-                format!("Failed to read the split root: {error}"),
-            )
-        })?;
+        // The wallet holds the notes of the split until the transaction spends
+        // them, so a deposit that fails before signing releases them.
+        let deposit = async {
+            let commitment_merkle_root = split_root(&split_builder).map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::RuntimeError,
+                    format!("Failed to read the split root: {error}"),
+                )
+            })?;
 
-        // 2. The deposit spends the exact note to a note of the holder, which the
-        //    wallet adopts when it owns the holder key.
-        let mut nonce = [0u8; 32];
-        OsRng.fill_bytes(&mut nonce);
-        let holder_note = Note::new(amount, fr_from_mod_bytes(&nonce), holder_public_key);
-        let known_addresses = api.get_known_addresses().await.map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!("Failed to get known addresses: {error}"),
-            )
-        })?;
-        if known_addresses.contains(&holder_public_key)
-            && let Some(note_set) =
-                lb_api_service::http::mantle::channel_state::<RuntimeServiceId>(handle, channel_id)
-                    .await
-                    .map_err(|error| {
-                        OperationStatus::error(
-                            OperationStatusCode::ServiceError,
-                            format!("Failed to get channel state: {error}"),
-                        )
-                    })?
-                    .and_then(|channel| channel.note_set)
-        {
-            api.import_note(holder_note, note_set)
-                .await
+            // 2. The deposit spends the exact note to a note of the holder, which the
+            //    wallet adopts when it owns the holder key.
+            let mut nonce = [0u8; 32];
+            OsRng.fill_bytes(&mut nonce);
+            let holder_note = Note::new(amount, fr_from_mod_bytes(&nonce), holder_public_key);
+            adopt_holder_note(&api, handle, channel_id, holder_note).await?;
+            split_builder
+                .clone()
+                .push_op_with_opening(
+                    Op::ChannelDeposit(DepositOp {
+                        channel_id,
+                        inputs: [exact.nullifier].into(),
+                        commitment_merkle_root,
+                        outputs: [holder_note.commitment()].into(),
+                        excess_value: 0,
+                        metadata,
+                    }),
+                    ZkTransferOpening {
+                        inputs: vec![exact.note],
+                        outputs: vec![holder_note],
+                    },
+                )
                 .map_err(|error| {
                     OperationStatus::error(
                         OperationStatusCode::DynError,
-                        format!("Failed to import the holder note: {error}"),
+                        format!("Failed to push deposit op: {error}"),
                     )
-                })?;
+                })
         }
-        let tx_builder = split_builder
-            .push_op_with_opening(
-                Op::ChannelDeposit(DepositOp {
-                    channel_id,
-                    inputs: [exact.nullifier].into(),
-                    commitment_merkle_root,
-                    outputs: [holder_note.commitment()].into(),
-                    excess_value: 0,
-                    metadata,
-                }),
-                ZkTransferOpening {
-                    inputs: vec![exact.note],
-                    outputs: vec![holder_note],
-                },
-            )
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::DynError,
-                    format!("Failed to push deposit op: {error}"),
-                )
-            })?;
+        .await;
+        let tx_builder = match deposit {
+            Ok(tx_builder) => tx_builder,
+            Err(error) => {
+                api.release_pending_notes(split_builder.nullifiers_consumed().collect())
+                    .await;
+                return Err(error);
+            }
+        };
 
         // 3. Sign against the tip the split is proven at.
         let signed_tx = api
@@ -1040,6 +1032,45 @@ pub(crate) fn channel_deposit_sync(
         }
         Ok(signed_tx)
     })
+}
+
+// The wallet adopts the holder note of a deposit when it owns the holder key.
+async fn adopt_holder_note(
+    api: &WalletApi<WalletService, RuntimeServiceId>,
+    handle: &OverwatchHandle<RuntimeServiceId>,
+    channel_id: ChannelId,
+    holder_note: Note,
+) -> StatusResult<()> {
+    let known_addresses = api.get_known_addresses().await.map_err(|error| {
+        OperationStatus::error(
+            OperationStatusCode::DynError,
+            format!("Failed to get known addresses: {error}"),
+        )
+    })?;
+    if !known_addresses.contains(&holder_note.public_key) {
+        return Ok(());
+    }
+    let note_set =
+        lb_api_service::http::mantle::channel_state::<RuntimeServiceId>(handle, channel_id)
+            .await
+            .map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::ServiceError,
+                    format!("Failed to get channel state: {error}"),
+                )
+            })?
+            .and_then(|channel| channel.note_set);
+    if let Some(note_set) = note_set {
+        api.import_note(holder_note, note_set)
+            .await
+            .map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Failed to import the holder note: {error}"),
+                )
+            })?;
+    }
+    Ok(())
 }
 
 /// Submits an amount-based channel deposit.
@@ -1143,7 +1174,7 @@ pub(crate) fn wallet_fund_tx_sync(
         } = api
             .fund_tx(
                 request.tip,
-                request.tx_builder,
+                request.tx_builder.clone(),
                 request.change_public_key,
                 request.funding_public_keys,
                 request.priority_fee_percent,
@@ -1156,20 +1187,27 @@ pub(crate) fn wallet_fund_tx_sync(
                 )
             })?;
 
-        let tx_fee = funded_tx_builder.tx_fee().map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!("Failed to compute tx fee: {error}"),
-            )
-        })?;
-        if tx_fee > request.max_tx_fee {
-            return Err(OperationStatus::error(
+        let fee_check = match funded_tx_builder.tx_fee() {
+            Ok(tx_fee) if tx_fee > request.max_tx_fee => Err(OperationStatus::error(
                 OperationStatusCode::DynError,
                 format!(
                     "tx_fee({tx_fee}) exceeds max_tx_fee({})",
                     request.max_tx_fee
                 ),
-            ));
+            )),
+            Ok(_) => Ok(()),
+            Err(error) => Err(OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Failed to compute tx fee: {error}"),
+            )),
+        };
+        if let Err(error) = fee_check {
+            // The wallet reserved the notes of the funding, which no
+            // transaction will spend. The inputs of the caller's own ops may be
+            // reserved by another request, so they are kept.
+            api.release_pending_notes(added_nullifiers(&request.tx_builder, &funded_tx_builder))
+                .await;
+            return Err(error);
         }
 
         let (funded_tx, transfer_proof) = api

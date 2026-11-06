@@ -240,6 +240,11 @@ pub enum WalletMsg {
         tip: Option<HeaderId>,
         resp_tx: Sender<Result<TipResponse<Fr>, WalletServiceError>>,
     },
+    // Releases the notes reserved for a funded or split transaction that will
+    // not be submitted, so that they fund the next request.
+    ReleasePendingNotes {
+        nullifiers: Vec<NoteNullifier>,
+    },
 }
 
 // The built Operations and the proof of their funding Transfer.
@@ -336,7 +341,8 @@ impl WalletMsg {
             | Self::GenerateRewardKey { .. }
             | Self::NewLeaderReward { .. }
             | Self::ImportNote { .. }
-            | Self::GetKnownAddresses { .. } => None,
+            | Self::GetKnownAddresses { .. }
+            | Self::ReleasePendingNotes { .. } => None,
         }
     }
 }
@@ -629,9 +635,12 @@ where
                 priority_fee_percent,
                 resp_tx,
             } => {
+                // Like a funding that fails, a request that fails before funding
+                // releases the notes `tx_builder` spends, such as a split.
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
                     Ok(tip) => tip,
                     Err(err) => {
+                        state.release_pending_notes(tx_builder.nullifiers_consumed());
                         Self::send_err(resp_tx, err);
                         return;
                     }
@@ -643,6 +652,7 @@ where
                 let context = match Self::ledger_state_at(tip, cryptarchia).await {
                     Ok(ledger) => ledger.tx_context(),
                     Err(err) => {
+                        state.release_pending_notes(tx_builder.nullifiers_consumed());
                         Self::send_err(resp_tx, err);
                         return;
                     }
@@ -692,9 +702,12 @@ where
                 tx_builder,
                 resp_tx,
             } => {
+                let funded_notes: Vec<NoteNullifier> = tx_builder.nullifiers_consumed().collect();
+
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
                     Ok(tip) => tip,
                     Err(err) => {
+                        state.release_pending_notes(funded_notes);
                         Self::send_err(resp_tx, err);
                         return;
                     }
@@ -703,12 +716,11 @@ where
                 let ledger = match Self::ledger_state_at(tip, cryptarchia).await {
                     Ok(ledger) => ledger,
                     Err(err) => {
+                        state.release_pending_notes(funded_notes);
                         Self::send_err(resp_tx, err);
                         return;
                     }
                 };
-
-                let funded_notes: Vec<NoteNullifier> = tx_builder.nullifiers_consumed().collect();
 
                 let resp = Self::sign_tx(tx_builder, tip, &ledger, kms, state.wallet())
                     .await
@@ -733,9 +745,12 @@ where
                 tx_builder,
                 resp_tx,
             } => {
+                let funded_notes: Vec<NoteNullifier> = tx_builder.nullifiers_consumed().collect();
+
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
                     Ok(tip) => tip,
                     Err(err) => {
+                        state.release_pending_notes(funded_notes);
                         Self::send_err(resp_tx, err);
                         return;
                     }
@@ -744,12 +759,11 @@ where
                 let ledger = match Self::ledger_state_at(tip, cryptarchia).await {
                     Ok(ledger) => ledger,
                     Err(err) => {
+                        state.release_pending_notes(funded_notes);
                         Self::send_err(resp_tx, err);
                         return;
                     }
                 };
-
-                let funded_notes: Vec<NoteNullifier> = tx_builder.nullifiers_consumed().collect();
 
                 let resp = Self::prove_funding(tx_builder, tip, &ledger, kms, state.wallet())
                     .await
@@ -907,6 +921,9 @@ where
                 if resp_tx.send(response).is_err() {
                     debug!(target: LOG_TARGET, "Failed to respond to SpendRoot");
                 }
+            }
+            WalletMsg::ReleasePendingNotes { nullifiers } => {
+                state.release_pending_notes(nullifiers);
             }
         }
     }

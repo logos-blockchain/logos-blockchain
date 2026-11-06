@@ -118,6 +118,10 @@ name = "test_mantle_leader"
 path = "src/tests/mantle/leader.rs"
 
 [[test]]
+name = "test_mantle_pow_claim_targets"
+path = "src/tests/mantle/pow_claim_targets.rs"
+
+[[test]]
 name              = "test_testing_framework_smoke_local"
 path              = "src/tests/testing_framework/smoke_local.rs"
 required-features = ["testing_framework"]

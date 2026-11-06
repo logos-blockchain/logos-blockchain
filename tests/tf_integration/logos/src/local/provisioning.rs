@@ -830,7 +830,6 @@ fn build_cryptarchia_user_config(
         },
         leader: LeaderConfig {
             wallet: leader::WalletConfig {
-                max_tx_fee: mantle::Value::MAX.into(),
                 funding_pk: consensus.funding_pk,
             },
         },

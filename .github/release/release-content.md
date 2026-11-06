@@ -44,6 +44,8 @@ If your node has a known public IP address and you want to disable NAT traversal
 
 This takes a few seconds and produces a `user_config.yaml` file.
 
+Upgrading an existing node: a config that still sets `cryptarchia.leader.wallet.max_tx_fee` must drop that line, as the node no longer accepts it.
+
 ### ▶️ Run Your Node
 
 Run the node:
@@ -74,19 +76,20 @@ For testnet, you can check the [Logos testnet dashboard][testnet-dashboard].
 
 **1. 🔑 Find your wallet key**
 
+The node keeps its keys in `keystore.yaml`, written next to `user_config.yaml`. List their public keys:
+
 ```bash
-grep -A3 known_keys user_config.yaml
+grep -A8 public_keys keystore.yaml
 ```
 
-Copy any of the listed key IDs. For example:
+Copy the `LeaderFunding` key. For example:
 
 ```yaml
-known_keys:
-    af391a0d7v29e5f7ca28281eca974146689f8f1c9b712380c07089dabcb60a8c: ...
-    de3233cec107e6589f83d4f3094caa65c633b5b33601211353779dc01972ca14: ...
+public_keys:
+  BlendSigning: ...
+  LeaderFunding: af391a0d7b29e5f7ca28281eca974146689f8f1c9b712380c07089dabcb60a8c
+  ...
 ```
-
-Either key can be used.
 
 **2. 🚰 Request funds from the faucet**
 
@@ -102,7 +105,7 @@ Wait 1-2 minutes for the transaction to land in a block, then:
 curl -w "\n" http://localhost:8080/wallet/<my_key>/balance
 ```
 
-Replace `<my_key>` with the key ID you funded.
+Replace `<my_key>` with the key you funded.
 
 ---
 
