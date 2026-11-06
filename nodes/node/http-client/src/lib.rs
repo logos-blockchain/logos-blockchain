@@ -218,24 +218,8 @@ impl CommonHttpClient {
         let request_url = base_url
             .join(CRYPTARCHIA_LIB_STREAM.trim_start_matches('/'))
             .map_err(Error::Url)?;
-        let mut request = self.client.get(request_url);
-
-        if let Some(basic_auth) = &self.basic_auth {
-            request = request.basic_auth(&basic_auth.username, basic_auth.password.as_deref());
-        }
-
-        let response = request.send().await.map_err(Error::Request)?;
-        let status = response.status();
-
-        let lib_stream = response.bytes_stream().filter_map(async |item| {
-            let bytes = item.ok()?;
-            serde_json::from_slice::<BlockInfo>(&bytes).ok()
-        });
-        match status {
-            StatusCode::OK => Ok(lib_stream),
-            StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server("Error".to_owned())),
-            _ => Err(Error::Server(format!("Unexpected response [{status}]"))),
-        }
+        let response = self.send_stream_request(request_url).await?;
+        Ok(ndjson_events(response))
     }
 
     pub async fn get_block_by_id(
@@ -560,24 +544,8 @@ impl CommonHttpClient {
         let request_url = base_url
             .join(BLOCKS_STREAM.trim_start_matches('/'))
             .map_err(Error::Url)?;
-        let mut request = self.client.get(request_url);
-
-        if let Some(basic_auth) = &self.basic_auth {
-            request = request.basic_auth(&basic_auth.username, basic_auth.password.as_deref());
-        }
-
-        let response = request.send().await.map_err(Error::Request)?;
-        let status = response.status();
-
-        let blocks_stream = response.bytes_stream().filter_map(async |item| {
-            let bytes = item.ok()?;
-            serde_json::from_slice::<ProcessedBlockEvent>(&bytes).ok()
-        });
-        match status {
-            StatusCode::OK => Ok(blocks_stream),
-            StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server("Error".to_owned())),
-            _ => Err(Error::Server(format!("Unexpected response [{status}]"))),
-        }
+        let response = self.send_stream_request(request_url).await?;
+        Ok(ndjson_events(response))
     }
 
     /// Build the request URL for the `get_blocks_range_stream` method with the
@@ -593,10 +561,9 @@ impl CommonHttpClient {
         Ok(request_url)
     }
 
-    async fn send_blocks_range_stream_request(
-        &self,
-        request_url: Url,
-    ) -> Result<reqwest::Response, Error> {
+    /// Opens a streaming response at `request_url`; a non-OK status is an
+    /// error carrying the response body.
+    async fn send_stream_request(&self, request_url: Url) -> Result<reqwest::Response, Error> {
         let mut request = self.client.get(request_url);
         if let Some(basic_auth) = &self.basic_auth {
             request = request.basic_auth(&basic_auth.username, basic_auth.password.as_deref());
@@ -669,45 +636,8 @@ impl CommonHttpClient {
             params.slot_to,
             params.server_batch_size,
         )?;
-        let response = self.send_blocks_range_stream_request(request_url).await?;
-        Ok(Self::parse_processed_blocks_range_event_stream(response))
-    }
-
-    fn parse_processed_blocks_range_event_stream(
-        response: reqwest::Response,
-    ) -> impl Stream<Item = ProcessedBlockEvent> {
-        // NDJSON event upper bound; margin above max serialized single event line
-        const MAX_NDJSON_LINE_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 3 / 2;
-        const LOG_LINE_PREVIEW_CHARS: usize = 256;
-
-        let byte_stream = response.bytes_stream().map_err(std::io::Error::other);
-        let reader = StreamReader::new(byte_stream);
-        let codec = LinesCodec::new_with_max_length(MAX_NDJSON_LINE_BYTES);
-        let lines = FramedRead::new(reader, codec);
-
-        lines.filter_map(async |line_result| match line_result {
-            Ok(line) => {
-                if line.is_empty() {
-                    return None;
-                }
-
-                match serde_json::from_str::<ProcessedBlockEvent>(&line) {
-                    Ok(event) => Some(event),
-                    Err(err) => {
-                        let preview: String = line.chars().take(LOG_LINE_PREVIEW_CHARS).collect();
-                        warn!(
-                            target: LOG_TARGET,
-                            "blocks stream JSON decode failed: {err}; line_preview={preview:?}"
-                        );
-                        None
-                    }
-                }
-            }
-            Err(err) => {
-                warn!(target: LOG_TARGET, "blocks stream line decode failed: {err}");
-                None
-            }
-        })
+        let response = self.send_stream_request(request_url).await?;
+        Ok(ndjson_events(response))
     }
 
     /// Get the balance for a specific `ZkPublicKey`.
@@ -818,5 +748,96 @@ impl CommonHttpClient {
             .map_err(Error::Url)?;
 
         self.post(request_url, &body).await
+    }
+}
+
+/// NDJSON event upper bound; margin above the largest serialized event, a block
+/// with its transactions.
+const MAX_NDJSON_LINE_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 3 / 2;
+const LOG_LINE_PREVIEW_CHARS: usize = 256;
+
+/// The events of an NDJSON response body, one per line.
+fn ndjson_events<T: DeserializeOwned>(response: reqwest::Response) -> impl Stream<Item = T> {
+    ndjson_lines(response.bytes_stream().map_err(std::io::Error::other))
+}
+
+/// The events of an NDJSON byte stream, one per line, however the bytes are
+/// chunked. A line that fails to decode is logged and skipped.
+fn ndjson_lines<T, B, S>(byte_stream: S) -> impl Stream<Item = T>
+where
+    T: DeserializeOwned,
+    B: tokio_util::bytes::Buf,
+    S: Stream<Item = Result<B, std::io::Error>>,
+{
+    let reader = StreamReader::new(byte_stream);
+    let codec = LinesCodec::new_with_max_length(MAX_NDJSON_LINE_BYTES);
+    let lines = FramedRead::new(reader, codec);
+
+    lines.filter_map(async |line_result| match line_result {
+        Ok(line) => {
+            if line.is_empty() {
+                return None;
+            }
+
+            match serde_json::from_str::<T>(&line) {
+                Ok(event) => Some(event),
+                Err(err) => {
+                    let preview: String = line.chars().take(LOG_LINE_PREVIEW_CHARS).collect();
+                    warn!(
+                        target: LOG_TARGET,
+                        "NDJSON stream JSON decode failed: {err}; line_preview={preview:?}"
+                    );
+                    None
+                }
+            }
+        }
+        Err(err) => {
+            warn!(target: LOG_TARGET, "NDJSON stream line decode failed: {err}");
+            None
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::{StreamExt as _, stream};
+    use serde::Deserialize;
+
+    use super::ndjson_lines;
+
+    #[derive(Debug, Deserialize, PartialEq, Eq)]
+    struct Event {
+        n: u32,
+    }
+
+    /// The events decoded from a body delivered in `chunks`.
+    async fn events(chunks: &'static [&'static [u8]]) -> Vec<u32> {
+        ndjson_lines::<Event, _, _>(stream::iter(
+            chunks.iter().map(|chunk| Ok::<_, std::io::Error>(*chunk)),
+        ))
+        .map(|event| event.n)
+        .collect()
+        .await
+    }
+
+    #[tokio::test]
+    async fn an_event_split_across_chunks_is_decoded() {
+        assert_eq!(events(&[b"{\"n\"", b":1}\n"]).await, [1]);
+    }
+
+    #[tokio::test]
+    async fn events_sharing_a_chunk_are_each_decoded() {
+        assert_eq!(
+            events(&[b"{\"n\":1}\n{\"n\":2}\n{\"n\"", b":3}\n"]).await,
+            [1, 2, 3]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_undecodable_line_is_skipped() {
+        assert_eq!(
+            events(&[b"{\"n\":1}\nnot json\n\n{\"n\":2}\n"]).await,
+            [1, 2]
+        );
     }
 }
