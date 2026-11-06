@@ -3336,13 +3336,13 @@ mod tests {
         let signer = UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap();
         let first = InscriptionOp {
             channel_id,
-            inscription: [2].into(),
+            inscription: Inscription::new_unchecked(vec![2]),
             parent: msg_id(1),
             signer,
         };
         let second = InscriptionOp {
             channel_id,
-            inscription: [3].into(),
+            inscription: Inscription::new_unchecked(vec![3]),
             parent: first.id(),
             signer,
         };
@@ -3404,13 +3404,13 @@ mod tests {
         let signer = UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap();
         let first = InscriptionOp {
             channel_id,
-            inscription: [2].into(),
+            inscription: Inscription::new_unchecked(vec![2]),
             parent: MsgId::root(),
             signer,
         };
         let second = InscriptionOp {
             channel_id,
-            inscription: [3].into(),
+            inscription: Inscription::new_unchecked(vec![3]),
             parent: first.id(),
             signer,
         };
