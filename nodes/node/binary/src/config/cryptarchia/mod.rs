@@ -120,7 +120,6 @@ impl ServiceConfig {
             era_schedule,
             wallet_config: lb_chain_leader_service::LeaderWalletConfig {
                 funding_pk: user.leader.wallet.funding_pk,
-                max_tx_fee: user.leader.wallet.max_tx_fee,
             },
         };
         (chain_service_settings, chain_leader_settings)

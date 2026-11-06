@@ -44,6 +44,8 @@ If your node has a known public IP address and you want to disable NAT traversal
 
 This takes a few seconds and produces a `user_config.yaml` file.
 
+Upgrading an existing node: a config that still sets `cryptarchia.leader.wallet.max_tx_fee` must drop that line, as the node no longer accepts it.
+
 ### ▶️ Run Your Node
 
 Run the node:

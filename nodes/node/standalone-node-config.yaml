@@ -111,7 +111,6 @@ cryptarchia:
       max_discovered_peers_to_try_download: 16
   leader:
     wallet:
-      max_tx_fee: 18446744073709551615
       funding_pk: 39e16b432574571a6bcd8ee36e370589641bd9f35367f6f97a972453c46c3225
 time:
   backend:
