@@ -494,8 +494,7 @@ impl TxState {
     /// on chain, so the entry is done whatever tx hash carried it there.
     /// Returns the retired entries' funding record, so a mined entry that is
     /// our own publish under another hash keeps what a re-fund needs. A
-    /// custom tx is queued for orphan reporting: a consumer holds it whole,
-    /// by hash, and that hash is not the one that landed.
+    /// custom tx is queued for orphan reporting: its consumer holds it by hash.
     pub fn take_landed(&mut self, landed: &HashSet<MsgId>) -> PendingFundingRecord {
         let done: Vec<TxHash> = self
             .pending
@@ -652,10 +651,10 @@ impl TxState {
     }
 
     /// Shed in one walk what this block leaves without a way to land: on a
-    /// lineage change, bundles whose inputs are gone and entries off the
-    /// branch; on a config tip move, the not-yet-mined tail; always, configs
-    /// off the config lineage and entries past the expiry window. One walk
-    /// keeps a parent before its children whichever rule selected each.
+    /// lineage change, bundles whose inputs are gone; on a config tip move,
+    /// the not-yet-mined tail; always, entries off the branch, configs off
+    /// the config lineage and entries past the expiry window. One walk keeps
+    /// a parent before its children whichever rule selected each.
     pub fn shed_block(
         &mut self,
         tip: HeaderId,
@@ -665,10 +664,12 @@ impl TxState {
         window: u64,
     ) -> BlockShed {
         let mut eligible: HashSet<TxHash> = HashSet::new();
+        // On a bare un-mine a deposit usually re-lands; a bundle whose inputs
+        // never return expires instead.
         if lineage_changed {
             eligible.extend(self.dead_input_bundles(tip, channel_id));
-            eligible.extend(self.off_branch_entries(tip));
         }
+        eligible.extend(self.off_branch_entries(tip));
         eligible.extend(self.stale_config_entries(tip));
         let config_tail = if self.config_tip_moved(tip) {
             self.config_tail_entries(tip)
@@ -3148,13 +3149,16 @@ mod tests {
         let channel_id = ChannelId::from([0u8; 32]);
         let mut state = TxState::new(genesis, MsgId::root());
         state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
-        let (local, _, _) = bundle_tx(MsgId::root(), 1);
+        // The mirrored entry sits on the channel tip; the local one chains
+        // on it, so only age can part them.
+        let mirrored = make_dummy_tx_on(MsgId::root(), 2);
+        let mirrored_hash = mirrored.hash();
+        let mirrored_msg = dummy_tx_msg(&mirrored);
+        state.observe_other_tx(mirrored, channel_id);
+        let (local, _, _) = bundle_tx(mirrored_msg, 1);
         let local_hash = local.hash();
         state.submit_other(local, channel_id).unwrap();
         state.stamp_funding(&local_hash, Slot::from(1), None);
-        let mirrored = make_dummy_tx_on(msg_id(50), 2);
-        let mirrored_hash = mirrored.hash();
-        state.observe_other_tx(mirrored, channel_id);
 
         let shed = shed_expired(&mut state, tip, Slot::from(10), 3);
 
