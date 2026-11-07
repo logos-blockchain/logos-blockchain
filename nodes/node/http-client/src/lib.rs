@@ -60,6 +60,68 @@ use tokio_util::{
 
 const LOG_TARGET: &str = http_client::ROOT;
 
+/// Upper bound for one NDJSON event line on the subscription streams: the same
+/// margin `parse_processed_blocks_range_event_stream` uses above the largest
+/// serialized event.
+const MAX_SUBSCRIPTION_LINE_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 3 / 2;
+
+/// Decode an NDJSON byte stream into events, one per line.
+///
+/// `what` names the stream in log lines; `max_line_bytes` bounds a single
+/// event line. A line that does not decode is logged and skipped instead of
+/// being dropped silently.
+///
+/// A line over `max_line_bytes`, or one that is not valid UTF-8, is logged and
+/// ends the stream: `FramedRead` stops after a decoder error.
+fn ndjson_events<T, S, B>(
+    stream: S,
+    max_line_bytes: usize,
+    what: &'static str,
+) -> impl Stream<Item = T>
+where
+    T: DeserializeOwned,
+    S: Stream<Item = Result<B, std::io::Error>>,
+    B: tokio_util::bytes::Buf,
+{
+    // NDJSON: one event per line. Transport chunks are arbitrary, so an event
+    // can be split across chunks and a chunk can carry several events; only
+    // line breaks mark event boundaries.
+    let reader = StreamReader::new(stream);
+    let lines = FramedRead::new(reader, LinesCodec::new_with_max_length(max_line_bytes));
+
+    lines.filter_map(move |line_result| {
+        futures::future::ready(decode_ndjson_line::<T>(line_result, what))
+    })
+}
+
+/// Decode one NDJSON line. Empty lines are skipped; a line that cannot be read
+/// or does not decode is logged (with a preview) and skipped.
+fn decode_ndjson_line<T: DeserializeOwned>(
+    line_result: Result<String, tokio_util::codec::LinesCodecError>,
+    what: &str,
+) -> Option<T> {
+    const LOG_LINE_PREVIEW_CHARS: usize = 256;
+
+    match line_result {
+        Ok(line) if line.is_empty() => None,
+        Ok(line) => match serde_json::from_str::<T>(&line) {
+            Ok(event) => Some(event),
+            Err(err) => {
+                let preview: String = line.chars().take(LOG_LINE_PREVIEW_CHARS).collect();
+                warn!(
+                    target: LOG_TARGET,
+                    "{what} stream JSON decode failed: {err}; line_preview={preview:?}"
+                );
+                None
+            }
+        },
+        Err(err) => {
+            warn!(target: LOG_TARGET, "{what} stream line decode failed: {err}");
+            None
+        }
+    }
+}
+
 /// Client-side header representation matching the server's
 /// `ApiHeaderSerializer`.
 #[derive(Clone, Debug, Deserialize)]
@@ -228,10 +290,11 @@ impl CommonHttpClient {
         let response = request.send().await.map_err(Error::Request)?;
         let status = response.status();
 
-        let lib_stream = response.bytes_stream().filter_map(async |item| {
-            let bytes = item.ok()?;
-            serde_json::from_slice::<BlockInfo>(&bytes).ok()
-        });
+        let lib_stream = ndjson_events::<BlockInfo, _, _>(
+            response.bytes_stream().map_err(std::io::Error::other),
+            MAX_SUBSCRIPTION_LINE_BYTES,
+            "lib",
+        );
         match status {
             StatusCode::OK => Ok(lib_stream),
             StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server("Error".to_owned())),
@@ -578,10 +641,11 @@ impl CommonHttpClient {
         let response = request.send().await.map_err(Error::Request)?;
         let status = response.status();
 
-        let blocks_stream = response.bytes_stream().filter_map(async |item| {
-            let bytes = item.ok()?;
-            serde_json::from_slice::<ProcessedBlockEvent>(&bytes).ok()
-        });
+        let blocks_stream = ndjson_events::<ProcessedBlockEvent, _, _>(
+            response.bytes_stream().map_err(std::io::Error::other),
+            MAX_SUBSCRIPTION_LINE_BYTES,
+            "blocks",
+        );
         match status {
             StatusCode::OK => Ok(blocks_stream),
             StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server("Error".to_owned())),
@@ -696,7 +760,7 @@ impl CommonHttpClient {
         let codec = LinesCodec::new_with_max_length(MAX_NDJSON_LINE_BYTES);
         let lines = FramedRead::new(reader, codec);
 
-        lines.filter_map(async |line_result| match line_result {
+        lines.filter_map(async move |line_result| match line_result {
             Ok(line) => {
                 if line.is_empty() {
                     return None;
@@ -829,5 +893,97 @@ impl CommonHttpClient {
             .map_err(Error::Url)?;
 
         self.post(request_url, &body).await
+    }
+}
+
+#[cfg(test)]
+mod ndjson_tests {
+    use std::io::Cursor;
+
+    use futures::{StreamExt as _, executor::block_on, stream};
+    use serde::Deserialize;
+
+    use super::ndjson_events;
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct Event {
+        n: u32,
+    }
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct Text {
+        s: String,
+    }
+
+    fn chunks(parts: &[&[u8]]) -> Vec<Result<Cursor<Vec<u8>>, std::io::Error>> {
+        parts.iter().map(|p| Ok(Cursor::new(p.to_vec()))).collect()
+    }
+
+    fn decode(parts: &[&[u8]], max_line: usize) -> Vec<Event> {
+        let events = ndjson_events::<Event, _, _>(stream::iter(chunks(parts)), max_line, "test");
+        block_on(events.collect())
+    }
+
+    fn ns(items: &[u32]) -> Vec<Event> {
+        items.iter().map(|&n| Event { n }).collect()
+    }
+
+    #[test]
+    fn an_event_split_across_chunks_is_kept() {
+        let parts: [&[u8]; 2] = [b"{\"n\":1}\n{\"n", b"\":2}\n"];
+        assert_eq!(decode(&parts, 1024), ns(&[1, 2]));
+    }
+
+    #[test]
+    fn a_chunk_with_several_events_yields_all_of_them() {
+        let parts: [&[u8]; 1] = [b"{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n"];
+        assert_eq!(decode(&parts, 1024), ns(&[1, 2, 3]));
+    }
+
+    #[test]
+    fn one_byte_chunks_decode_the_same_as_one_chunk() {
+        let all: &[u8] = b"{\"n\":1}\n{\"n\":22}\n";
+        let singles: Vec<&[u8]> = all.chunks(1).collect();
+        assert_eq!(decode(&singles, 1024), ns(&[1, 22]));
+    }
+
+    #[test]
+    fn a_multibyte_character_cut_by_a_chunk_boundary_is_not_lost() {
+        let line = "{\"s\":\"h\u{e9}llo\"}\n".as_bytes().to_vec();
+        let cut = line.iter().position(|&b| b == 0xC3).unwrap() + 1;
+        let parts: [&[u8]; 2] = [&line[..cut], &line[cut..]];
+        let events = ndjson_events::<Text, _, _>(stream::iter(chunks(&parts)), 1024, "test");
+        let got: Vec<Text> = block_on(events.collect());
+        assert_eq!(
+            got,
+            vec![Text {
+                s: "h\u{e9}llo".to_owned()
+            }]
+        );
+    }
+
+    #[test]
+    fn blank_lines_and_a_bad_line_do_not_stop_the_stream() {
+        let parts: [&[u8]; 1] = [b"{\"n\":1}\n\nnot json\n{\"n\":2}\n"];
+        assert_eq!(decode(&parts, 1024), ns(&[1, 2]));
+    }
+
+    #[test]
+    fn an_unterminated_last_line_is_still_decoded() {
+        let parts: [&[u8]; 1] = [b"{\"n\":1}\n{\"n\":2}"];
+        assert_eq!(decode(&parts, 1024), ns(&[1, 2]));
+    }
+
+    #[test]
+    fn a_line_over_the_limit_ends_the_stream_after_the_events_before_it() {
+        // `FramedRead` yields `None` after a decoder error, so an over-long line
+        // is logged and then ends the stream (the codec is the one
+        // `parse_processed_blocks_range_event_stream` uses).
+        let parts: [&[u8]; 3] = [
+            b"{\"n\":1}\n",
+            b"{\"n\":",
+            b"2222222222222222}\n{\"n\":3}\n",
+        ];
+        assert_eq!(decode(&parts, 16), ns(&[1]));
     }
 }
