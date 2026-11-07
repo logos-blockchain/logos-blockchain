@@ -547,7 +547,9 @@ impl TxState {
 
     /// Own pending inscriptions not mined on `tip`'s branch and funded more
     /// than `window` LIB slots ago that carry their pre-funding ops: what a
-    /// stale-refund rebuilds.
+    /// stale-refund rebuilds. A bundle whose transfer inputs are gone from
+    /// the branch is not among them: re-funding changes nothing about its
+    /// inputs, so it expires instead (see [`Self::shed_expired`]).
     ///
     /// Only entries the node holds or is about to receive qualify: posted
     /// ones, plus the first `first_post_budget` unposted ones along the
@@ -563,12 +565,14 @@ impl TxState {
         lib_slot: Slot,
         window: u64,
         first_post_budget: usize,
+        channel_id: ChannelId,
     ) -> Vec<RefundCandidate> {
         // An unprocessed tip has no safe set: everything would read as unmined.
         if !self.blocks.has_block(&tip) {
             return Vec::new();
         }
         let safe = self.blocks.safe_at(tip);
+        let dead = self.dead_input_bundles(tip, channel_id);
         let next_first_posts: HashSet<TxHash> = self
             .collect_pending_suffix(self.channel_tip_at(tip))
             .into_iter()
@@ -584,6 +588,7 @@ impl TxState {
             .iter()
             .filter(|(hash, p)| {
                 !safe.contains(hash)
+                    && !dead.contains(hash)
                     && (p.posted || next_first_posts.contains(hash))
                     && Self::expired(p.funded_at, lib_slot, window)
             })
@@ -601,18 +606,27 @@ impl TxState {
 
     /// What is not mined on `tip`'s branch, was funded more than `window`
     /// LIB slots ago, and cannot be rebuilt here: own inscriptions without
-    /// pre-funding ops and locally submitted opaque txs. Shed with everything
-    /// chained on them, since the message they chain on will not land.
-    fn expired_entries(&self, tip: HeaderId, lib_slot: Slot, window: u64) -> HashSet<TxHash> {
+    /// pre-funding ops, own bundles whose transfer inputs are gone from the
+    /// branch (re-funding would not bring them back) and locally submitted
+    /// opaque txs. Shed with everything chained on them, since the message
+    /// they chain on will not land.
+    fn expired_entries(
+        &self,
+        tip: HeaderId,
+        lib_slot: Slot,
+        window: u64,
+        channel_id: ChannelId,
+    ) -> HashSet<TxHash> {
         // An unprocessed tip has no safe set: everything would read as unmined.
         if !self.blocks.has_block(&tip) {
             return HashSet::new();
         }
         let safe = self.blocks.safe_at(tip);
+        let dead = self.dead_input_bundles(tip, channel_id);
         self.pending
             .iter()
             .filter(|(hash, p)| {
-                p.pre_fund.is_none()
+                (p.pre_fund.is_none() || dead.contains(hash))
                     && !safe.contains(hash)
                     && Self::expired(p.funded_at, lib_slot, window)
             })
@@ -663,7 +677,7 @@ impl TxState {
         };
         let config_shed = !config_tail.is_empty();
         eligible.extend(config_tail);
-        let expired = self.expired_entries(tip, lib_slot, window);
+        let expired = self.expired_entries(tip, lib_slot, window, channel_id);
         eligible.extend(expired.iter().copied());
         let mut displaced = std::mem::take(&mut self.displaced);
         displaced.extend(self.displace_chains(eligible));
@@ -1220,9 +1234,9 @@ impl TxState {
         view
     }
 
-    /// Pending bundles whose transfer inputs are gone from this branch (e.g.
-    /// their deposit reorged out): they can never land, and take every
-    /// pending entry chaining on them.
+    /// The pending bundles in the suffix from `tip`'s channel tip whose
+    /// transfer inputs are gone from the branch (a deposit reorged out, or
+    /// spent ahead of them): as they are, they cannot land.
     fn dead_input_bundles(&self, tip: HeaderId, channel_id: ChannelId) -> HashSet<TxHash> {
         if self.pending.is_empty() {
             return HashSet::new();
@@ -2505,13 +2519,25 @@ mod tests {
 
         assert!(
             state
-                .refund_candidates(tip, Slot::from(12), 3, usize::MAX)
+                .refund_candidates(
+                    tip,
+                    Slot::from(12),
+                    3,
+                    usize::MAX,
+                    ChannelId::from([0u8; 32])
+                )
                 .is_empty(),
             "inside the window nothing expires"
         );
         assert!(shed_expired(&mut state, tip, Slot::from(12), 3).is_empty());
 
-        let candidates = state.refund_candidates(tip, Slot::from(14), 3, usize::MAX);
+        let candidates = state.refund_candidates(
+            tip,
+            Slot::from(14),
+            3,
+            usize::MAX,
+            ChannelId::from([0u8; 32]),
+        );
         assert_eq!(
             candidates.iter().map(|c| c.tx_hash).collect::<Vec<_>>(),
             vec![funded],
@@ -2550,7 +2576,7 @@ mod tests {
 
         let refunded = |budget| {
             let mut hashes: Vec<TxHash> = state
-                .refund_candidates(tip, Slot::from(100), 3, budget)
+                .refund_candidates(tip, Slot::from(100), 3, budget, ChannelId::from([0u8; 32]))
                 .into_iter()
                 .map(|c| c.tx_hash)
                 .collect();
@@ -2618,9 +2644,16 @@ mod tests {
 
         assert!(
             state
-                .refund_candidates(tip, Slot::from(1_000), 0, usize::MAX)
+                .refund_candidates(
+                    tip,
+                    Slot::from(1_000),
+                    0,
+                    usize::MAX,
+                    ChannelId::from([0u8; 32])
+                )
                 .is_empty()
         );
+        assert!(shed_expired(&mut state, tip, Slot::from(1_000), 0).is_empty());
         assert!(shed_expired(&mut state, tip, Slot::from(1_000), 0).is_empty());
     }
 
@@ -2640,13 +2673,25 @@ mod tests {
 
         assert!(
             state
-                .refund_candidates(a1, Slot::from(100), 3, usize::MAX)
+                .refund_candidates(
+                    a1,
+                    Slot::from(100),
+                    3,
+                    usize::MAX,
+                    ChannelId::from([0u8; 32])
+                )
                 .is_empty(),
             "mined on the branch"
         );
         assert_eq!(
             state
-                .refund_candidates(b1, Slot::from(100), 3, usize::MAX)
+                .refund_candidates(
+                    b1,
+                    Slot::from(100),
+                    3,
+                    usize::MAX,
+                    ChannelId::from([0u8; 32])
+                )
                 .len(),
             1,
             "not mined on this branch"
@@ -2677,7 +2722,13 @@ mod tests {
 
         assert!(
             state
-                .refund_candidates(unseen, Slot::from(100), 3, usize::MAX)
+                .refund_candidates(
+                    unseen,
+                    Slot::from(100),
+                    3,
+                    usize::MAX,
+                    ChannelId::from([0u8; 32])
+                )
                 .is_empty(),
             "the mined entry is not re-funded at an unseen tip"
         );
@@ -3113,6 +3164,115 @@ mod tests {
         );
         assert!(state.is_tracked(&mirrored_hash));
         assert!(!state.is_tracked(&local_hash));
+    }
+
+    /// An own bundle whose transfer input is gone from the branch is not
+    /// re-funded, since a fresh fee note brings no deposit back; it expires
+    /// instead, with the entry chained on it, while a bundle whose inputs
+    /// are present is rebuilt as usual.
+    #[test]
+    fn dead_input_bundle_is_not_re_funded_and_expires_with_its_chain() {
+        use lb_core::mantle::{Note, ops::channel::channel_transfer::ChannelTransferOp};
+        use lb_key_management_system_service::keys::ZkPublicKey;
+
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        let pk = ZkPublicKey::from(lb_groth16::Fr::from(7u64));
+        let present = NoteId::from(lb_groth16::Fr::from(1u64));
+        let missing = NoteId::from(lb_groth16::Fr::from(2u64));
+        // The channel holds `present` below LIB; the tip block layers on it.
+        state.restore_channel_notes(vec![ChannelNote {
+            note_id: present,
+            value: 5,
+            pk,
+            slot: Slot::from(0),
+        }]);
+        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        let bundle = |parent: MsgId, input: NoteId, data: u8| {
+            let inscribe = InscriptionOp {
+                channel_id,
+                inscription: Inscription::new_unchecked(vec![data]),
+                parent,
+                signer: test_signer(),
+            };
+            let msg = inscribe.id();
+            let transfer = ChannelTransferOp {
+                channel_id,
+                inputs: lb_core::mantle::ledger::BoundedInputs::from(input).into(),
+                outputs: Outputs::new([Note::new(5, pk)]),
+            };
+            let tx = SignedOps::from_ops_with_sample_proofs(Ops::new(
+                FORK_DIGEST,
+                [Op::ChannelTransfer(transfer), Op::ChannelInscribe(inscribe)],
+            ));
+            (tx, msg)
+        };
+        let (live, live_msg) = bundle(MsgId::root(), present, 1);
+        let live_hash = live.hash();
+        state
+            .submit_atomic_withdraw(
+                live,
+                MsgId::root(),
+                live_msg,
+                Inscription::new_unchecked(vec![1]),
+                vec![],
+                Outputs::new([]),
+            )
+            .unwrap();
+        state.stamp_funding(&live_hash, Slot::from(10), Some(MantleTxBuilder::new()));
+        let (dead, dead_msg) = bundle(live_msg, missing, 2);
+        let dead_hash = dead.hash();
+        state
+            .submit_atomic_withdraw(
+                dead,
+                live_msg,
+                dead_msg,
+                Inscription::new_unchecked(vec![2]),
+                vec![],
+                Outputs::new([]),
+            )
+            .unwrap();
+        state.stamp_funding(&dead_hash, Slot::from(10), Some(MantleTxBuilder::new()));
+        let (behind, _) = submit_own(&mut state, dead_msg, 3);
+        state.stamp_funding(&behind, Slot::from(10), Some(MantleTxBuilder::new()));
+        for hash in [live_hash, dead_hash, behind] {
+            state.mark_pending_inscription_posted(&hash);
+        }
+
+        // Inside the window nothing moves.
+        assert!(
+            state
+                .refund_candidates(tip, Slot::from(12), 3, usize::MAX, channel_id)
+                .is_empty()
+        );
+        assert!(shed_expired(&mut state, tip, Slot::from(12), 3).is_empty());
+
+        // Past it: the live bundle is rebuilt, the dead one is shed with the
+        // publish behind it and never re-funded.
+        let candidates: Vec<TxHash> = state
+            .refund_candidates(tip, Slot::from(14), 3, usize::MAX, channel_id)
+            .iter()
+            .map(|c| c.tx_hash)
+            .collect();
+        assert!(
+            candidates.contains(&live_hash),
+            "the live bundle is re-funded"
+        );
+        assert!(
+            !candidates.contains(&dead_hash),
+            "the dead bundle is never re-funded"
+        );
+        let shed = shed_expired(&mut state, tip, Slot::from(14), 3);
+        assert_eq!(
+            shed.iter().map(Displaced::tx_hash).collect::<Vec<_>>(),
+            vec![dead_hash, behind]
+        );
+        assert!(
+            matches!(&shed[0], Displaced::Own(tx) if matches!(**tx, PendingTx::AtomicWithdraw(_)))
+        );
+        assert!(state.pending_inscription(&live_hash).is_some());
     }
 
     /// A throwaway inscription author for test fixtures (never asserted on).
