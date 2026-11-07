@@ -13,7 +13,7 @@ use super::{
     TARGET,
     block_fetch::{BlockEventResult, common_prefix, handle_block_event, orphans_from_shed},
     slot_clock::{SlotClock, slot_to_u64},
-    state::{ChannelUpdateInfo, RefundCandidate, TxState},
+    state::{BlockShed, ChannelUpdateInfo, RefundCandidate, TxState},
     tx_builder::{fund_builder, sign_own_tx},
     types::{
         ChannelUpdate, ChannelUpdateTx, DepositInfo, Error, Event, FinalizedTx,
@@ -591,59 +591,51 @@ where
             view_before,
             deposits,
         } = result;
-        let (adopted, mut orphaned) = match channel_update {
-            Some(update) => {
+        let lineage_changed = channel_update.is_some();
+        let (adopted, mut orphaned) = channel_update.map_or_else(
+            || (Vec::new(), Vec::new()),
+            |update| {
                 Self::log_channel_update(&update);
                 let ChannelUpdateInfo {
                     adopted, orphaned, ..
                 } = update;
-                let orphaned = self.shed_orphans(orphaned);
-
-                // Advance the tip to the current valid publish parent (channel
-                // tip + our pending tail), the same value publishing chains on.
-                if let (Some(state), Some(tip)) = (self.state.as_ref(), self.current_tip) {
-                    self.last_msg_id = state.publish_parent(tip);
-                }
-
                 (adopted, orphaned)
-            }
-            None => (Vec::new(), Vec::new()),
+            },
+        );
+        // One shed pass for the block: the lineage diff's entries first, then
+        // whatever the pass removed, in chain order across every rule.
+        let shed = match (self.state.as_mut(), self.current_tip) {
+            (Some(s), Some(tip)) => s.shed_block(
+                tip,
+                self.channel_id,
+                lineage_changed,
+                self.lib_slot,
+                self.config.stale_refund_slots,
+            ),
+            _ => BlockShed::default(),
         };
-
-        // Shed pending configs superseded on the config lineage; the lineage
-        // diff already reports them orphaned.
-        let stale_configs = match (self.state.as_mut(), self.current_tip) {
-            (Some(s), Some(tip)) => s.shed_stale_pending_configs(tip),
-            _ => Vec::new(),
-        };
-        let seen: HashSet<_> = orphaned.iter().map(ChannelUpdateTx::tx_hash).collect();
-        for tx in orphans_from_shed(stale_configs, self.channel_id) {
-            if !seen.contains(&tx.tx_hash()) {
-                orphaned.push(tx);
-            }
-        }
-
-        // Shed the not-on-branch pending tail a config change may have
-        // invalidated. Only never-mined entries are shed, so re-posts form at
-        // most a competing branch that adoption collapses — never a duplicate.
-        let config_shed = match (self.state.as_mut(), self.current_tip) {
-            (Some(s), Some(tip)) => s.shed_pending_inscriptions_on_config(tip),
-            _ => Vec::new(),
-        };
-        let config_shed_any = !config_shed.is_empty();
         let mut seen: HashSet<_> = orphaned.iter().map(ChannelUpdateTx::tx_hash).collect();
-        for tx in orphans_from_shed(config_shed, self.channel_id) {
+        for tx in orphans_from_shed(shed.displaced, self.channel_id) {
             if seen.insert(tx.tx_hash()) {
+                if shed.expired.contains(&tx.tx_hash()) {
+                    warn!(target: TARGET, "Pending tx {} expired unmined; orphaned", hex::encode(tx.tx_hash().0));
+                }
                 orphaned.push(tx);
             }
         }
-        // Reset the chaining pointer to the message tip so re-posts re-home
-        // there. This equals any reorg recovery tip, so the two don't conflict.
-        if config_shed_any && let (Some(s), Some(tip)) = (self.state.as_ref(), self.current_tip) {
-            self.last_msg_id = s.channel_tip_at(tip);
+        // The chaining pointer follows: after a config shed, the message tip,
+        // so re-posts re-home there; otherwise the current publish parent
+        // (channel tip + our pending tail), the same value publishing chains
+        // on. An expiry overrides either, as the pending tail just shrank.
+        if let (Some(state), Some(tip)) = (self.state.as_ref(), self.current_tip) {
+            if !shed.expired.is_empty() {
+                self.last_msg_id = state.publish_parent(tip);
+            } else if shed.config_shed {
+                self.last_msg_id = state.channel_tip_at(tip);
+            } else if lineage_changed {
+                self.last_msg_id = state.publish_parent(tip);
+            }
         }
-
-        self.shed_expired_into(&mut orphaned, &mut seen);
 
         let channel_update = if orphaned.is_empty() {
             ChannelUpdate::Extension { adopted }
@@ -664,30 +656,6 @@ where
         };
 
         (channel_update, deposits, finalized_items)
-    }
-
-    /// Shed into `orphaned` what is not mined on the current branch, was
-    /// funded longer ago than the refund window and cannot be rebuilt here;
-    /// own entries with pre-funding ops wait for the resubmit tick instead.
-    fn shed_expired_into(
-        &mut self,
-        orphaned: &mut Vec<ChannelUpdateTx>,
-        seen: &mut HashSet<TxHash>,
-    ) {
-        let (Some(state), Some(tip)) = (self.state.as_mut(), self.current_tip) else {
-            return;
-        };
-        let expired = state.shed_expired(tip, self.lib_slot, self.config.stale_refund_slots);
-        if expired.is_empty() {
-            return;
-        }
-        self.last_msg_id = state.publish_parent(tip);
-        for tx in orphans_from_shed(expired, self.channel_id) {
-            if seen.insert(tx.tx_hash()) {
-                warn!(target: TARGET, "Pending tx {} expired unmined; orphaned", hex::encode(tx.tx_hash().0));
-                orphaned.push(tx);
-            }
-        }
     }
 
     fn log_channel_update(update: &ChannelUpdateInfo) {
@@ -719,32 +687,6 @@ where
                 hex::encode(tx.tx_hash().0),
             );
         }
-    }
-
-    /// Merge the shed passes into the on-chain `orphaned` delta: bundles
-    /// whose inputs left the branch (with their children), entries whose
-    /// lineage no longer reaches the tip, and opaque txs the same way.
-    /// Deduped by `tx_hash`.
-    fn shed_orphans(&mut self, on_chain: Vec<ChannelUpdateTx>) -> Vec<ChannelUpdateTx> {
-        let channel_id = self.channel_id;
-        let shed = match (self.state.as_mut(), self.current_tip) {
-            (Some(s), Some(tip)) => {
-                // Inputs shed first: it drains a dead bundle's children too.
-                let mut shed = s.shed_bundles_with_missing_inputs(tip, channel_id);
-                shed.extend(s.shed_off_branch_pending(tip));
-                shed
-            }
-            _ => Vec::new(),
-        };
-        let mut orphaned: Vec<ChannelUpdateTx> = orphans_from_shed(shed, channel_id).collect();
-
-        let mut seen: HashSet<_> = orphaned.iter().map(ChannelUpdateTx::tx_hash).collect();
-        for tx in on_chain {
-            if seen.insert(tx.tx_hash()) {
-                orphaned.push(tx);
-            }
-        }
-        orphaned
     }
 }
 

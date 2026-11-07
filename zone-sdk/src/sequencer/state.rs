@@ -223,6 +223,25 @@ impl PendingInscription {
     }
 }
 
+/// The identity of a lineage entry in a
+/// [`ChannelUpdate`](super::ChannelUpdate).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum EntryKey {
+    Msg(MsgId),
+    Tx(TxHash),
+}
+
+/// What a block's shed pass removed, for orphan reporting.
+#[derive(Debug, Default)]
+pub struct BlockShed {
+    /// Every entry removed, a parent before everything chained on it.
+    pub displaced: Vec<Displaced>,
+    /// Whether the config tip moved and the not-yet-mined tail went with it.
+    pub config_shed: bool,
+    /// The entries removed for age, for the caller's log.
+    pub expired: HashSet<TxHash>,
+}
+
 /// A pending entry a shed removed. A shed returns these in chain order: a
 /// parent before everything chained on it, whichever kind each is.
 #[derive(Debug, Clone)]
@@ -474,7 +493,9 @@ impl TxState {
     /// Retire pending entries whose message or config is in `landed`: it is
     /// on chain, so the entry is done whatever tx hash carried it there.
     /// Returns the retired entries' funding record, so a mined entry that is
-    /// our own publish under another hash keeps what a re-fund needs.
+    /// our own publish under another hash keeps what a re-fund needs. A
+    /// custom tx is queued for orphan reporting: a consumer holds it whole,
+    /// by hash, and that hash is not the one that landed.
     pub fn take_landed(&mut self, landed: &HashSet<MsgId>) -> PendingFundingRecord {
         let done: Vec<TxHash> = self
             .pending
@@ -495,7 +516,15 @@ impl TxState {
             } else if let Some(e) = self.pending_other.get(&hash) {
                 record = (None, e.funded_at);
             }
-            self.remove_pending(&hash);
+            let custom = self
+                .pending_other
+                .get(&hash)
+                .is_some_and(|entry| !entry.pure_config);
+            if let Some(signed_tx) = self.remove_pending(&hash)
+                && custom
+            {
+                self.displaced.push(Displaced::Other(signed_tx));
+            }
         }
         record
     }
@@ -570,19 +599,17 @@ impl TxState {
         candidates
     }
 
-    /// Shed what is not mined on `tip`'s branch, was funded more than
-    /// `window` LIB slots ago, and cannot be rebuilt here: own inscriptions
-    /// without pre-funding ops and locally submitted opaque txs, each with
-    /// everything chained on it, since the message they chain on will not
-    /// land. Returned parent-first for orphan reporting.
-    pub fn shed_expired(&mut self, tip: HeaderId, lib_slot: Slot, window: u64) -> Vec<Displaced> {
+    /// What is not mined on `tip`'s branch, was funded more than `window`
+    /// LIB slots ago, and cannot be rebuilt here: own inscriptions without
+    /// pre-funding ops and locally submitted opaque txs. Shed with everything
+    /// chained on them, since the message they chain on will not land.
+    fn expired_entries(&self, tip: HeaderId, lib_slot: Slot, window: u64) -> HashSet<TxHash> {
         // An unprocessed tip has no safe set: everything would read as unmined.
         if !self.blocks.has_block(&tip) {
-            return Vec::new();
+            return HashSet::new();
         }
         let safe = self.blocks.safe_at(tip);
-        let expired: Vec<TxHash> = self
-            .pending
+        self.pending
             .iter()
             .filter(|(hash, p)| {
                 p.pre_fund.is_none()
@@ -598,27 +625,53 @@ impl TxState {
                     })
                     .map(|(hash, _)| *hash),
             )
-            .collect();
-        self.displace_chains(expired)
+            .collect()
     }
 
     /// Remove `entries` and everything pending chained on them, on either
-    /// lineage. Only the chain heads — entries with no ancestor among
-    /// `entries` — are walked: children go with their parent, parent first.
+    /// lineage, returned for orphan reporting: a parent before everything
+    /// chained on it, ties by hash.
     fn displace_chains(&mut self, entries: impl IntoIterator<Item = TxHash>) -> Vec<Displaced> {
-        let entries: HashSet<TxHash> = entries.into_iter().collect();
-        let producers = self.producers();
-        let mut heads: Vec<TxHash> = entries
-            .iter()
-            .filter(|hash| !self.has_ancestor_in(**hash, &entries, &producers))
-            .copied()
-            .collect();
-        heads.sort_unstable_by_key(|hash| hash.0);
         let from = self.displaced.len();
-        for hash in heads {
-            self.displace_chain(hash);
-        }
+        self.displace(entries);
         self.displaced.split_off(from)
+    }
+
+    /// Shed in one walk what this block leaves without a way to land: on a
+    /// lineage change, bundles whose inputs are gone and entries off the
+    /// branch; on a config tip move, the not-yet-mined tail; always, configs
+    /// off the config lineage and entries past the expiry window. One walk
+    /// keeps a parent before its children whichever rule selected each.
+    pub fn shed_block(
+        &mut self,
+        tip: HeaderId,
+        channel_id: ChannelId,
+        lineage_changed: bool,
+        lib_slot: Slot,
+        window: u64,
+    ) -> BlockShed {
+        let mut eligible: HashSet<TxHash> = HashSet::new();
+        if lineage_changed {
+            eligible.extend(self.dead_input_bundles(tip, channel_id));
+            eligible.extend(self.off_branch_entries(tip));
+        }
+        eligible.extend(self.stale_config_entries(tip));
+        let config_tail = if self.config_tip_moved(tip) {
+            self.config_tail_entries(tip)
+        } else {
+            Vec::new()
+        };
+        let config_shed = !config_tail.is_empty();
+        eligible.extend(config_tail);
+        let expired = self.expired_entries(tip, lib_slot, window);
+        eligible.extend(expired.iter().copied());
+        let mut displaced = std::mem::take(&mut self.displaced);
+        displaced.extend(self.displace_chains(eligible));
+        BlockShed {
+            displaced,
+            config_shed,
+            expired,
+        }
     }
 
     /// Every message and config id the pending txs leave behind, by the tx.
@@ -644,31 +697,6 @@ impl TxState {
                 (None, None) => (None, None),
             };
         parent.into_iter().chain(config_parent)
-    }
-
-    /// Whether a tx in `set` is an ancestor of `tx_hash` through the pending
-    /// txs, on either lineage.
-    fn has_ancestor_in(
-        &self,
-        tx_hash: TxHash,
-        set: &HashSet<TxHash>,
-        producers: &HashMap<MsgId, TxHash>,
-    ) -> bool {
-        let mut stack = vec![tx_hash];
-        let mut visited = HashSet::from([tx_hash]);
-        while let Some(current) = stack.pop() {
-            for parent in self.parents_of(current) {
-                if let Some(&producer) = producers.get(&parent)
-                    && visited.insert(producer)
-                {
-                    if set.contains(&producer) {
-                        return true;
-                    }
-                    stack.push(producer);
-                }
-            }
-        }
-        false
     }
 
     /// Swap a re-funded own inscription in under its new hash: same parent,
@@ -733,7 +761,7 @@ impl TxState {
         }
         let (pre_fund, funded_at) = self.take_landed(&HashSet::from([this_msg]));
         if let Some(sibling) = self.pending_child(parent_msg) {
-            self.displace_chain(sibling);
+            self.displace([sibling]);
         }
         self.pending_by_parent.insert(parent_msg, tx_hash);
         self.pending.insert(
@@ -771,11 +799,16 @@ impl TxState {
         self.pending_other.get(&tx_hash)?.last_config
     }
 
-    /// Remove `head` and everything pending chained after it on either
-    /// lineage, queuing them parent-first for orphan reporting.
-    fn displace_chain(&mut self, head: TxHash) {
-        let mut queue = VecDeque::from([head]);
+    /// Remove `entries` and everything pending chained on them, on either
+    /// lineage, queuing them for the shed pass that reports them: an entry
+    /// goes after every parent that goes with it, ties by hash.
+    fn displace(&mut self, entries: impl IntoIterator<Item = TxHash>) {
+        let mut closure: HashSet<TxHash> = HashSet::new();
+        let mut queue: VecDeque<TxHash> = entries.into_iter().collect();
         while let Some(tx_hash) = queue.pop_front() {
+            if !self.is_tracked(&tx_hash) || !closure.insert(tx_hash) {
+                continue;
+            }
             queue.extend(
                 self.pending_tip_of(tx_hash)
                     .and_then(|tip| self.pending_child(tip)),
@@ -784,11 +817,40 @@ impl TxState {
                 self.pending_config_tip_of(tx_hash)
                     .and_then(|tip| self.pending_config_child(tip)),
             );
+        }
+        let producers = self.producers();
+        let mut waiting: HashMap<TxHash, usize> = HashMap::new();
+        let mut children: HashMap<TxHash, Vec<TxHash>> = HashMap::new();
+        for &tx_hash in &closure {
+            for parent in self.parents_of(tx_hash) {
+                if let Some(&producer) = producers.get(&parent)
+                    && producer != tx_hash
+                    && closure.contains(&producer)
+                {
+                    *waiting.entry(tx_hash).or_default() += 1;
+                    children.entry(producer).or_default().push(tx_hash);
+                }
+            }
+        }
+        let mut ready: Vec<TxHash> = closure
+            .iter()
+            .filter(|tx_hash| !waiting.contains_key(tx_hash))
+            .copied()
+            .collect();
+        while let Some(at) = (0..ready.len()).min_by_key(|&at| ready[at].0) {
+            let tx_hash = ready.swap_remove(at);
             if let Some(entry) = self.pending_tx_of(&tx_hash) {
                 self.displaced.push(Displaced::Own(Box::new(entry)));
                 self.remove_pending(&tx_hash);
             } else if let Some(signed_tx) = self.remove_pending(&tx_hash) {
                 self.displaced.push(Displaced::Other(signed_tx));
+            }
+            for child in children.remove(&tx_hash).unwrap_or_default() {
+                let left = waiting.get_mut(&child).expect("counted above");
+                *left -= 1;
+                if *left == 0 {
+                    ready.push(child);
+                }
             }
         }
     }
@@ -888,13 +950,13 @@ impl TxState {
             .collect();
         let (_, funded_at) = self.take_landed(&landed);
         if let Some(sibling) = lineage.first_parent.and_then(|p| self.pending_child(p)) {
-            self.displace_chain(sibling);
+            self.displace([sibling]);
         }
         if let Some(sibling) = lineage
             .config_parent
             .and_then(|p| self.pending_config_child(p))
         {
-            self.displace_chain(sibling);
+            self.displace([sibling]);
         }
         self.insert_other(signed_tx, channel_id, lineage);
         if let Some(funded_at) = funded_at {
@@ -1074,10 +1136,9 @@ impl TxState {
     /// Returns the removed entries in **parent-before-child order** so a
     /// consumer that iterates and republishes naturally rebuilds the chain
     /// in dependency order.
-    pub fn shed_off_branch_pending(&mut self, tip: HeaderId) -> Vec<Displaced> {
-        let mut shed = std::mem::take(&mut self.displaced);
+    fn off_branch_entries(&self, tip: HeaderId) -> Vec<TxHash> {
         if self.pending.is_empty() && self.pending_other.is_empty() {
-            return shed;
+            return Vec::new();
         }
         let channel_tip = self.channel_tip_at(tip);
         let suffix = self.collect_pending_suffix(channel_tip);
@@ -1102,8 +1163,7 @@ impl TxState {
         }
         let safe = self.blocks.safe_at(tip);
 
-        let eligible: Vec<TxHash> = self
-            .pending
+        self.pending
             .keys()
             .filter(|hash| !on_branch.contains(hash) && !safe.contains(hash))
             .copied()
@@ -1118,9 +1178,7 @@ impl TxState {
                     })
                     .map(|(hash, _)| *hash),
             )
-            .collect();
-        shed.extend(self.displace_chains(eligible));
-        shed
+            .collect()
     }
 
     /// Pending bundles chaining from `tip`'s channel tip that are not mined
@@ -1162,16 +1220,12 @@ impl TxState {
         view
     }
 
-    /// Shed pending bundles whose transfer inputs are gone from this branch
-    /// (e.g. their deposit reorged out) — they can never land — together with
-    /// every pending entry chaining on them, parent first.
-    pub fn shed_bundles_with_missing_inputs(
-        &mut self,
-        tip: HeaderId,
-        channel_id: ChannelId,
-    ) -> Vec<Displaced> {
+    /// Pending bundles whose transfer inputs are gone from this branch (e.g.
+    /// their deposit reorged out): they can never land, and take every
+    /// pending entry chaining on them.
+    fn dead_input_bundles(&self, tip: HeaderId, channel_id: ChannelId) -> HashSet<TxHash> {
         if self.pending.is_empty() {
-            return Vec::new();
+            return HashSet::new();
         }
         let view = self.channel_wallet_view(Some(tip));
         let mut available: HashSet<NoteId> = view
@@ -1180,7 +1234,7 @@ impl TxState {
             .chain(view.unfinalized.iter())
             .map(|n| n.note_id)
             .collect();
-        let mut shed: HashSet<TxHash> = HashSet::new();
+        let mut dead = HashSet::new();
         for (info, pending) in self.unmined_bundles_in_suffix(tip) {
             let transfers: Vec<_> = channel_transfers(&pending.signed_tx, channel_id).collect();
             if transfers
@@ -1189,14 +1243,13 @@ impl TxState {
             {
                 available.extend(transfers.iter().flat_map(|t| t.utxos().map(|u| u.id())));
             } else {
-                // A bundle that cannot land takes everything chained on it.
-                shed.insert(info.tx_hash);
+                dead.insert(info.tx_hash);
             }
         }
-        self.displace_chains(shed)
+        dead
     }
 
-    /// On a config-tip change, shed the pending entries **not on this branch's
+    /// On a config-tip change, the pending entries **not on this branch's
     /// tip** (not in the safe set) — the not-yet-mined tail a config may have
     /// invalidated: inscriptions and bundles, and the opaque txs anchored on
     /// the message lineage (a custom tx chained on a shed inscription has
@@ -1206,17 +1259,10 @@ impl TxState {
     /// landed inscription, so orphaning one would re-post an on-chain
     /// original as a duplicate. The caller resets the chaining pointer to
     /// the message tip so re-posts land as a competing branch. Unchanged
-    /// config tip → empty. Returned parent first.
-    pub fn shed_pending_inscriptions_on_config(&mut self, tip: HeaderId) -> Vec<Displaced> {
-        let config_tip = self.config_tip_at(tip);
-        if config_tip == self.observed_config_tip {
-            return Vec::new();
-        }
-        self.observed_config_tip = config_tip;
-
+    /// config tip → empty.
+    fn config_tail_entries(&self, tip: HeaderId) -> Vec<TxHash> {
         let safe = self.blocks.safe_at(tip);
-        let eligible: Vec<TxHash> = self
-            .pending
+        self.pending
             .keys()
             .filter(|hash| !safe.contains(hash))
             .copied()
@@ -1226,14 +1272,23 @@ impl TxState {
                     .filter(|(hash, entry)| !safe.contains(hash) && entry.first_parent.is_some())
                     .map(|(hash, _)| *hash),
             )
-            .collect();
-        self.displace_chains(eligible)
+            .collect()
     }
 
-    /// Shed pending config-carrying txs whose config parent can no longer
-    /// reach the mined config tip, with everything pending chained on them:
-    /// removed from retry and returned parent first for orphan reporting.
-    pub fn shed_stale_pending_configs(&mut self, tip: HeaderId) -> Vec<Displaced> {
+    /// Whether `tip`'s config tip differs from the last one seen here, which
+    /// it becomes.
+    fn config_tip_moved(&mut self, tip: HeaderId) -> bool {
+        let config_tip = self.config_tip_at(tip);
+        if config_tip == self.observed_config_tip {
+            return false;
+        }
+        self.observed_config_tip = config_tip;
+        true
+    }
+
+    /// Pending config-carrying txs whose config parent can no longer reach
+    /// the mined config tip: shed with everything pending chained on them.
+    fn stale_config_entries(&self, tip: HeaderId) -> Vec<TxHash> {
         if self.pending_other.is_empty() {
             return Vec::new();
         }
@@ -1244,8 +1299,7 @@ impl TxState {
         let landable = self.landable_configs(self.config_tip_at(tip));
         let safe = self.blocks.safe_at(tip);
 
-        let stale: Vec<TxHash> = self
-            .pending_other
+        self.pending_other
             .iter()
             .filter(|(hash, entry)| {
                 // An entry whose own config already landed on this branch (its
@@ -1261,8 +1315,7 @@ impl TxState {
                         .is_some_and(|parent| !landable.contains(&parent))
             })
             .map(|(hash, _)| *hash)
-            .collect();
-        self.displace_chains(stale)
+            .collect()
     }
 
     /// Look up a pending inscription (or atomic-withdraw bundle) by tx hash.
@@ -1391,8 +1444,8 @@ impl TxState {
         let new_channel_tip = self.channel_tip_at(new_tip);
         let new_lineage = self.channel_lineage(new_tip);
 
-        let old_ids: HashSet<MsgId> = old_lineage.iter().map(|i| i.this_msg).collect();
-        let new_ids: HashSet<MsgId> = new_lineage.iter().map(|i| i.this_msg).collect();
+        let old_keys: HashSet<EntryKey> = old_lineage.iter().map(|i| self.entry_key(i)).collect();
+        let new_keys: HashSet<EntryKey> = new_lineage.iter().map(|i| self.entry_key(i)).collect();
 
         // Each lineage stops at the LIB of its capture time, so a LIB
         // advance between the captures shifts the diff's lower boundary.
@@ -1404,12 +1457,12 @@ impl TxState {
 
         let adopted_infos: Vec<&InscriptionInfo> = new_lineage
             .iter()
-            .filter(|i| !old_ids.contains(&i.this_msg) && !finalized.contains(&i.this_msg))
+            .filter(|i| !old_keys.contains(&self.entry_key(i)) && !finalized.contains(&i.this_msg))
             .collect();
 
         let orphaned_infos: Vec<&InscriptionInfo> = old_lineage
             .iter()
-            .filter(|i| !new_ids.contains(&i.this_msg) && !finalized.contains(&i.this_msg))
+            .filter(|i| !new_keys.contains(&self.entry_key(i)) && !finalized.contains(&i.this_msg))
             .collect();
 
         // Decide on the raw diff, before reportability filtering: a change
@@ -1427,6 +1480,24 @@ impl TxState {
             adopted,
             new_channel_tip,
         })
+    }
+
+    /// What a lineage entry is reported as, and so what a consumer holds: an
+    /// inscription or config by its id, a custom tx by its hash.
+    fn entry_key(&self, info: &InscriptionInfo) -> EntryKey {
+        let custom = self.blocks.channel_tx(info.tx_hash).map_or_else(
+            || {
+                self.pending_other
+                    .get(&info.tx_hash)
+                    .is_some_and(|entry| !entry.pure_config)
+            },
+            |block_tx| matches!(block_tx.kind, ChannelTxKind::Custom { .. }),
+        );
+        if custom {
+            EntryKey::Tx(info.tx_hash)
+        } else {
+            EntryKey::Msg(info.this_msg)
+        }
     }
 
     /// The reportable channel view at `tip` above the finalized boundary, in
@@ -1948,6 +2019,16 @@ mod tests {
         config_parent: MsgId,
         data: u8,
     ) -> (SignedOps<Unverified, StandardMode>, MsgId, MsgId) {
+        bundle_tx_with(parent, config_parent, data, FORK_DIGEST)
+    }
+
+    /// [`bundle_tx_on`] under `fork_digest`: the same ops, another hash.
+    fn bundle_tx_with(
+        parent: MsgId,
+        config_parent: MsgId,
+        data: u8,
+        fork_digest: lb_core::era::ForkDigest,
+    ) -> (SignedOps<Unverified, StandardMode>, MsgId, MsgId) {
         use std::num::NonZero;
 
         use lb_core::mantle::{
@@ -1974,11 +2055,149 @@ mod tests {
         let inscribe_msg = inscribe.id();
         let config_msg = config.id();
         let ops = Ops::new(
-            FORK_DIGEST,
+            fork_digest,
             [Op::ChannelInscribe(inscribe), Op::ChannelConfig(config)],
         );
         let tx = SignedOps::from_ops_with_sample_proofs(ops);
         (tx, inscribe_msg, config_msg)
+    }
+
+    /// A custom tx chained on a pending inscription and a pending config
+    /// goes after both when both are shed, whichever hashes sort first.
+    #[test]
+    fn child_on_two_shed_parents_is_shed_after_both() {
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        let (config, config_id) = pure_config_tx(MsgId::root(), 1);
+        let config_hash = config.hash();
+        state.submit_other(config, channel_id).unwrap();
+        let (inscription, inscription_msg) = submit_own(&mut state, MsgId::root(), 2);
+        let (child, _, _) = bundle_tx_on(inscription_msg, config_id, 3);
+        let child_hash = child.hash();
+        state.submit_other(child, channel_id).unwrap();
+
+        let shed = state.displace_chains([config_hash, inscription]);
+
+        let hashes: Vec<TxHash> = shed.iter().map(Displaced::tx_hash).collect();
+        assert_eq!(hashes.len(), 3);
+        assert_eq!(hashes[2], child_hash, "the child goes after both parents");
+        assert!(hashes[..2].contains(&config_hash) && hashes[..2].contains(&inscription));
+        assert!(!state.is_tracked(&child_hash));
+    }
+
+    /// One shed pass orders across its rules: an entry shed for age comes
+    /// before the entry chained on it that is shed as a stale config.
+    #[test]
+    fn expired_parent_is_shed_before_its_stale_config_child() {
+        let genesis = header_id(0);
+        let b1 = header_id(1);
+        let b2 = header_id(2);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(b1, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        // A config on root lands and is seen, so the config tip is settled
+        // before anything pends.
+        let (rival, rival_msg) = config_tx(MsgId::root(), 2);
+        state.process_block(
+            b2,
+            b1,
+            genesis,
+            vec![],
+            vec![config_block_tx(&rival, rival_msg, MsgId::root())],
+            Vec::new(),
+            vec![],
+        );
+        let settled = state.shed_block(b2, channel_id, false, Slot::from(1), 3);
+        assert!(settled.displaced.is_empty());
+
+        let (parent, parent_msg) = submit_own(&mut state, MsgId::root(), 1);
+        state.stamp_funding(&parent, Slot::from(1), None);
+        // Chained on the parent, with a config on the superseded root.
+        let (child, _, _) = bundle_tx_on(parent_msg, MsgId::root(), 3);
+        let child_hash = child.hash();
+        state.submit_other(child, channel_id).unwrap();
+        state.stamp_funding(&child_hash, Slot::from(9), None);
+
+        let shed = state.shed_block(b2, channel_id, false, Slot::from(10), 3);
+
+        assert_eq!(
+            shed.displaced
+                .iter()
+                .map(Displaced::tx_hash)
+                .collect::<Vec<_>>(),
+            vec![parent, child_hash],
+            "the expired parent first, then the stale child"
+        );
+        assert_eq!(shed.expired, HashSet::from([parent]));
+        assert!(!shed.config_shed);
+    }
+
+    /// An opaque tx mined under another hash with the same ops replaces the
+    /// pending one: the old hash is reported orphaned and the new one
+    /// adopted, since a consumer holds an opaque tx whole.
+    #[test]
+    fn opaque_tx_mined_under_another_hash_is_reported_as_a_swap() {
+        let genesis = header_id(0);
+        let b1 = header_id(1);
+        let b2 = header_id(2);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(b1, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+        let (pending, _, _) = bundle_tx_on(MsgId::root(), MsgId::root(), 1);
+        let pending_hash = pending.hash();
+        state.submit_other(pending, channel_id).unwrap();
+        let before = state.channel_lineage(b1);
+
+        let (mined, _, _) = bundle_tx_with(
+            MsgId::root(),
+            MsgId::root(),
+            1,
+            lb_core::era::ForkDigest::new([0x22; 32]),
+        );
+        let mined_hash = mined.hash();
+        assert_ne!(
+            mined_hash, pending_hash,
+            "fixture: the same ops, another hash"
+        );
+        let kind = ChannelTxKind::Custom {
+            message_entries: channel_inscriptions(&mined, channel_id),
+            config_entries: channel_configs(&mined, channel_id),
+        };
+        let block_tx = stored(&mined, kind);
+        state.observe_other_tx(mined, channel_id);
+        state.process_block(
+            b2,
+            b1,
+            genesis,
+            vec![mined_hash],
+            vec![block_tx],
+            Vec::new(),
+            vec![],
+        );
+
+        let update = state
+            .detect_channel_update(&before, b2, &HashSet::new())
+            .expect("the view changed");
+        assert_eq!(
+            update
+                .adopted
+                .iter()
+                .map(ChannelUpdateTx::tx_hash)
+                .collect::<Vec<_>>(),
+            vec![mined_hash]
+        );
+        let shed = state.shed_block(b2, channel_id, true, Slot::from(1), 30);
+        assert_eq!(
+            shed.displaced
+                .iter()
+                .map(Displaced::tx_hash)
+                .collect::<Vec<_>>(),
+            vec![pending_hash]
+        );
+        assert!(!state.is_tracked(&pending_hash));
     }
 
     /// A pending `submit_signed_tx` bundle must participate in publish-parent
@@ -2210,6 +2429,34 @@ mod tests {
 
     /// An own pending inscription on `parent` with payload `data`: its hash
     /// and message id.
+    /// The block's shed pass after a lineage change, expiry off.
+    fn shed_lineage(state: &mut TxState, tip: HeaderId) -> Vec<Displaced> {
+        state
+            .shed_block(tip, ChannelId::from([0u8; 32]), true, Slot::genesis(), 0)
+            .displaced
+    }
+
+    /// The block's shed pass without a lineage change, expiry off: the
+    /// config rules alone.
+    fn shed_configs(state: &mut TxState, tip: HeaderId) -> Vec<Displaced> {
+        state
+            .shed_block(tip, ChannelId::from([0u8; 32]), false, Slot::genesis(), 0)
+            .displaced
+    }
+
+    /// The block's shed pass without a lineage change, expiry at `lib_slot`
+    /// over `window`.
+    fn shed_expired(
+        state: &mut TxState,
+        tip: HeaderId,
+        lib_slot: Slot,
+        window: u64,
+    ) -> Vec<Displaced> {
+        state
+            .shed_block(tip, ChannelId::from([0u8; 32]), false, lib_slot, window)
+            .displaced
+    }
+
     fn submit_own(state: &mut TxState, parent: MsgId, data: u8) -> (TxHash, MsgId) {
         let tx = make_dummy_tx_on(parent, data);
         let hash = tx.hash();
@@ -2262,7 +2509,7 @@ mod tests {
                 .is_empty(),
             "inside the window nothing expires"
         );
-        assert!(state.shed_expired(tip, Slot::from(12), 3).is_empty());
+        assert!(shed_expired(&mut state, tip, Slot::from(12), 3).is_empty());
 
         let candidates = state.refund_candidates(tip, Slot::from(14), 3, usize::MAX);
         assert_eq!(
@@ -2271,7 +2518,7 @@ mod tests {
             "only the entry with pre-funding ops is rebuilt"
         );
         assert!(!candidates[0].bundle);
-        let shed = state.shed_expired(tip, Slot::from(14), 3);
+        let shed = shed_expired(&mut state, tip, Slot::from(14), 3);
         assert_eq!(
             shed.iter().map(Displaced::tx_hash).collect::<Vec<_>>(),
             vec![unfunded],
@@ -2374,7 +2621,7 @@ mod tests {
                 .refund_candidates(tip, Slot::from(1_000), 0, usize::MAX)
                 .is_empty()
         );
-        assert!(state.shed_expired(tip, Slot::from(1_000), 0).is_empty());
+        assert!(shed_expired(&mut state, tip, Slot::from(1_000), 0).is_empty());
     }
 
     /// A mined entry never expires, however old its funding; an entry the
@@ -2434,7 +2681,7 @@ mod tests {
                 .is_empty(),
             "the mined entry is not re-funded at an unseen tip"
         );
-        assert!(state.shed_expired(unseen, Slot::from(100), 3).is_empty());
+        assert!(shed_expired(&mut state, unseen, Slot::from(100), 3).is_empty());
     }
 
     /// Re-funding swaps the entry in under its new hash with the lineage
@@ -2522,7 +2769,7 @@ mod tests {
         state.submit_other(grandchild, channel_id).unwrap();
         state.stamp_funding(&grandchild_hash, Slot::from(9), None);
 
-        let shed = state.shed_expired(tip, Slot::from(10), 3);
+        let shed = shed_expired(&mut state, tip, Slot::from(10), 3);
 
         assert_eq!(
             shed.iter().map(Displaced::tx_hash).collect::<Vec<_>>(),
@@ -2553,7 +2800,7 @@ mod tests {
         let (grandchild, _) = submit_own(&mut state, child_msg, data);
         state.stamp_funding(&grandchild, Slot::from(1), None);
 
-        let shed = state.shed_expired(tip, Slot::from(10), 3);
+        let shed = shed_expired(&mut state, tip, Slot::from(10), 3);
 
         assert_eq!(
             shed.iter().map(Displaced::tx_hash).collect::<Vec<_>>(),
@@ -2600,7 +2847,7 @@ mod tests {
         state.submit_other(b, channel_id).unwrap();
         state.stamp_funding(&b_hash, Slot::from(9), None);
 
-        let shed = state.shed_expired(tip, Slot::from(10), 3);
+        let shed = shed_expired(&mut state, tip, Slot::from(10), 3);
 
         assert_eq!(
             shed.iter().map(Displaced::tx_hash).collect::<Vec<_>>(),
@@ -2674,7 +2921,7 @@ mod tests {
             "fixture: an inversion"
         );
 
-        let shed = state.shed_expired(tip, Slot::from(10), 3);
+        let shed = shed_expired(&mut state, tip, Slot::from(10), 3);
 
         assert_eq!(
             shed.iter().map(Displaced::tx_hash).collect::<Vec<_>>(),
@@ -2716,7 +2963,7 @@ mod tests {
             vec![],
         );
 
-        let shed = state.shed_stale_pending_configs(b2);
+        let shed = shed_configs(&mut state, b2);
         assert_eq!(
             shed.iter().map(Displaced::tx_hash).collect::<Vec<_>>(),
             vec![a_hash, b_hash],
@@ -2744,7 +2991,7 @@ mod tests {
         state.submit_other(child, channel_id).unwrap();
 
         state.observe_other_tx(rival, channel_id);
-        let shed = state.shed_off_branch_pending(tip);
+        let shed = shed_lineage(&mut state, tip);
 
         assert_eq!(
             shed.iter().map(Displaced::tx_hash).collect::<Vec<_>>(),
@@ -2784,7 +3031,7 @@ mod tests {
         state.observe_other_tx(same_config_other_tx, channel_id);
 
         assert!(!state.is_tracked(&again_hash), "retired");
-        assert!(state.shed_off_branch_pending(tip).is_empty());
+        assert!(shed_lineage(&mut state, tip).is_empty());
     }
 
     /// The original of a re-funded publish can still win: it is the same
@@ -2832,7 +3079,7 @@ mod tests {
             "still chains on the message"
         );
         assert!(
-            state.shed_off_branch_pending(tip).is_empty(),
+            shed_lineage(&mut state, tip).is_empty(),
             "nothing was displaced: the message landed"
         );
         assert_eq!(
@@ -2858,7 +3105,7 @@ mod tests {
         let mirrored_hash = mirrored.hash();
         state.observe_other_tx(mirrored, channel_id);
 
-        let shed = state.shed_expired(tip, Slot::from(10), 3);
+        let shed = shed_expired(&mut state, tip, Slot::from(10), 3);
 
         assert_eq!(
             shed.iter().map(Displaced::tx_hash).collect::<Vec<_>>(),
@@ -2960,7 +3207,7 @@ mod tests {
         // No config has landed yet — the local config tip is root, so ours is
         // still viable.
         state.process_block(b1, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
-        assert!(state.shed_stale_pending_configs(b1).is_empty());
+        assert!(shed_configs(&mut state, b1).is_empty());
         assert!(state.pending_other_contains(&stale_hash));
 
         // A rival config (also chaining on root) lands on-branch and moves the
@@ -2976,7 +3223,7 @@ mod tests {
             vec![],
         );
 
-        let shed = state.shed_stale_pending_configs(b2);
+        let shed = shed_configs(&mut state, b2);
         assert_eq!(shed.len(), 1);
         assert_eq!(shed[0].tx_hash(), stale_hash);
         assert!(!state.pending_other_contains(&stale_hash));
@@ -3130,9 +3377,7 @@ mod tests {
         // must be a no-op — without seeding `observed_config_tip` it would fire
         // (`config_tip != root`) and orphan the pending tail.
         assert!(
-            state
-                .shed_pending_inscriptions_on_config(genesis)
-                .is_empty(),
+            shed_configs(&mut state, genesis).is_empty(),
             "an already-finalized config must not orphan pending on resume"
         );
     }
@@ -3183,7 +3428,7 @@ mod tests {
         // The shed evaluates against that tip: the root-parented config is
         // superseded and shed; the C2-parented one still chains on the tip and
         // is kept.
-        let shed = state.shed_stale_pending_configs(b1);
+        let shed = shed_configs(&mut state, b1);
         assert_eq!(shed.len(), 1);
         assert_eq!(shed[0].tx_hash(), stale_hash);
         assert!(!state.pending_other_contains(&stale_hash));
@@ -3217,7 +3462,7 @@ mod tests {
             vec![],
         );
 
-        assert!(state.shed_stale_pending_configs(tip).is_empty());
+        assert!(shed_configs(&mut state, tip).is_empty());
         assert!(state.pending_other_contains(&config_hash));
     }
 
@@ -3251,7 +3496,7 @@ mod tests {
         state.submit_other(c_config, channel_id).unwrap();
 
         // C extends the local tip B, so it survives.
-        assert!(state.shed_stale_pending_configs(b1).is_empty());
+        assert!(shed_configs(&mut state, b1).is_empty());
         assert!(state.pending_other_contains(&c_hash));
     }
 
@@ -3288,7 +3533,7 @@ mod tests {
         let p3 = submit_fake_inscription(&mut state, 3, msg_id(2), msg_id(3));
 
         // No config has landed → the config tip is unchanged → nothing shed.
-        assert!(state.shed_pending_inscriptions_on_config(b1).is_empty());
+        assert!(shed_configs(&mut state, b1).is_empty());
 
         // A config lands, moving the config tip.
         let (cfg, cfg_msg) = config_tx(MsgId::root(), 9);
@@ -3305,8 +3550,7 @@ mod tests {
 
         // Only the not-yet-mined tail is shed, parent-first; the mined p1 is on
         // chain and must not be orphaned (re-posting it would duplicate).
-        let shed: Vec<TxHash> = state
-            .shed_pending_inscriptions_on_config(b2)
+        let shed: Vec<TxHash> = shed_configs(&mut state, b2)
             .iter()
             .map(Displaced::tx_hash)
             .collect();
@@ -3317,7 +3561,7 @@ mod tests {
         );
 
         // Same config tip on the next call → nothing more to shed.
-        assert!(state.shed_pending_inscriptions_on_config(b2).is_empty());
+        assert!(shed_configs(&mut state, b2).is_empty());
     }
 
     /// A custom tx chained on an inscription the config shed drops has lost
@@ -3371,7 +3615,7 @@ mod tests {
             vec![],
         );
 
-        let shed = state.shed_pending_inscriptions_on_config(b2);
+        let shed = shed_configs(&mut state, b2);
         assert_eq!(
             shed.iter().map(Displaced::tx_hash).collect::<Vec<_>>(),
             vec![p1, custom_hash],
@@ -3441,7 +3685,7 @@ mod tests {
             vec![],
         );
 
-        let shed = state.shed_pending_inscriptions_on_config(b2);
+        let shed = shed_configs(&mut state, b2);
         assert_eq!(
             shed.iter().map(Displaced::tx_hash).collect::<Vec<_>>(),
             vec![custom_hash, p1],
@@ -3504,7 +3748,7 @@ mod tests {
         );
         assert_eq!(state.channel_tip_at(b2), msg_id(1));
         assert!(state.pending_txs(b2).iter().any(|(h, _)| *h == p_hash));
-        assert!(state.shed_off_branch_pending(b2).is_empty());
+        assert!(shed_lineage(&mut state, b2).is_empty());
     }
 
     #[test]
@@ -3586,8 +3830,7 @@ mod tests {
         // (already `posted`, excluded from re-posting while its block is
         // on-branch via the safe set).
         assert_eq!(state.pending.len(), 1);
-        let shed: Vec<MsgId> = state
-            .shed_off_branch_pending(block2)
+        let shed: Vec<MsgId> = shed_lineage(&mut state, block2)
             .iter()
             .filter_map(|t| match t {
                 Displaced::Own(tx) => Some(tx.inscription().this_msg),
