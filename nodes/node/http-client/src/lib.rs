@@ -135,14 +135,44 @@ impl CommonHttpClient {
         body.to_ascii_lowercase().contains("channel not found")
     }
 
-    #[must_use]
-    pub fn new(basic_auth: Option<BasicAuthCredentials>) -> Self {
+    /// The `reqwest` client configuration [`Self::new`] uses: HTTP/2 flow
+    /// control sized from the default maximum body size, and no timeouts.
+    ///
+    /// Start from this to supply a client of your own through
+    /// [`Self::with_client`] and keep that tuning:
+    ///
+    /// ```ignore
+    /// let client = CommonHttpClient::default_client_builder()
+    ///     .connect_timeout(Duration::from_secs(10))
+    ///     .build()?;
+    /// let node = CommonHttpClient::with_client(client, None);
+    /// ```
+    ///
+    /// Mind what a timeout covers. `ClientBuilder::timeout` is a deadline for
+    /// the whole response, body included, so it also ends the long-lived
+    /// streams ([`Self::get_blocks_stream`], [`Self::get_lib_stream`])
+    /// after that long. `read_timeout` restarts after every successful
+    /// read, which suits a stalled connection but also cuts a stream that
+    /// is merely quiet for longer than it.
+    pub fn default_client_builder() -> ClientBuilder {
         let initial_stream_window_size: u32 =
             u32::try_from(6 * default_max_body_size() / 10).unwrap_or(4 * 1025);
-        let client = ClientBuilder::new()
-            .http2_initial_stream_window_size(initial_stream_window_size)
+        ClientBuilder::new().http2_initial_stream_window_size(initial_stream_window_size)
+    }
+
+    #[must_use]
+    pub fn new(basic_auth: Option<BasicAuthCredentials>) -> Self {
+        let client = Self::default_client_builder()
             .build()
             .expect("Client from default settings should be able to build");
+        Self::with_client(client, basic_auth)
+    }
+
+    /// Use a `reqwest` client of your own, for example one with timeouts. A
+    /// request whose response never arrives otherwise waits forever. See
+    /// [`Self::default_client_builder`] for what [`Self::new`] sets up.
+    #[must_use]
+    pub fn with_client(client: Client, basic_auth: Option<BasicAuthCredentials>) -> Self {
         Self {
             client: Arc::new(client),
             basic_auth,
