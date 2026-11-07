@@ -16,6 +16,7 @@ use lb_core::{
                 withdraw::ChannelWithdrawOp,
             },
         },
+        traits::Hashable as _,
         transactions::{OpProofs, Ops, TxList, states::Unverified},
     },
 };
