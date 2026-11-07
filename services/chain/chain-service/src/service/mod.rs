@@ -14,7 +14,7 @@ use futures::{Stream, StreamExt as _, future::join_all, stream};
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockInfo};
 use lb_core::{
-    block::{Block, BlockWithVerifiedHeader, SignedHeader, TxInBlock, UncleHeaders},
+    block::{Block, SignedHeader, TxInBlock, UncleHeaders},
     era::ForkDigest,
     header::HeaderId,
     mantle::{
@@ -40,9 +40,9 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
-    AppliedBlock, ChainServiceInfo, ConsensusMsg, Cryptarchia, CryptarchiaConsensusState,
-    EpochStateQueryResult, Error, LOG_TARGET, LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo,
-    Query, metrics,
+    AppliedBlock, BlockWithVerifiedHeader, ChainServiceInfo, ConsensusMsg, Cryptarchia,
+    CryptarchiaConsensusState, EpochStateQueryResult, Error, LOG_TARGET, LibUpdate,
+    ProcessedBlockEvent, PrunedBlocksInfo, Query, metrics,
     notifier::ChainOnlineNotifier,
     relays::{BroadcastRelay, CryptarchiaConsensusRelays},
     sync::block_provider::BlockProvider,
@@ -911,7 +911,7 @@ fn log_canonical_blend_snapshots<Tx>(cryptarchia: &Cryptarchia, block: &Block<Tx
     target = LOG_TARGET,
     level = "debug",
     skip(cryptarchia, block, relays, new_block_subscription_sender, lib_broadcaster),
-    fields(block_id = %block.header().header().id(), tx_count = block.transactions_iter().count())
+    fields(block_id = %block.header().id(), tx_count = block.transactions_iter().count())
 )]
 pub async fn process_block<Tx>(
     cryptarchia: &mut Cryptarchia,
@@ -936,8 +936,8 @@ where
         + Unpin
         + 'static,
 {
-    debug!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().header().id());
-    let header = block.header().header().clone();
+    debug!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().id());
+    let header = block.header().clone();
     let prev_lib = cryptarchia.lib();
 
     let mut candidate = cryptarchia.clone();

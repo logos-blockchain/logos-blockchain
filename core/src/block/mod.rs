@@ -2,7 +2,6 @@ mod deser;
 mod fixtures;
 pub mod genesis;
 mod uncle;
-mod verified;
 
 use core::fmt::Debug;
 
@@ -15,11 +14,10 @@ use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 use lb_utils::bounded::{BoundedError, BoundedVec, UpperBoundedVec};
 use serde::{Deserialize, Serialize};
 pub use uncle::{SignedHeader, UncleHeaders};
-pub use verified::{BlockVerificationError, BlockWithVerifiedHeader};
 
 use crate::{
     crypto::{Digest as _, Hasher},
-    header::{ContentId, Header, HeaderId, HeaderVerificationContext, VerifiedBlockHeader},
+    header::{ContentId, Header, HeaderId},
     mantle::{
         traits::{Hashable, StorageSize},
         transactions::hash::{TxHash, TxHashPrefix},
@@ -297,7 +295,7 @@ impl<Tx> Block<Tx> {
     }
 
     /// Assembles a block from its parts, without checking that they belong
-    /// together. [`BlockWithVerifiedHeader`] is what checks them.
+    /// together.
     #[must_use]
     pub const fn reconstruct(
         header: Header,
@@ -313,24 +311,6 @@ impl<Tx> Block<Tx> {
         }
     }
 
-    /// Verifies the header of this block, and that it commits to the uncles
-    /// and transactions this block carries.
-    ///
-    /// # Errors
-    ///
-    /// Returns the first check the block fails.
-    pub fn verify_header(
-        self,
-        context: &impl HeaderVerificationContext,
-    ) -> Result<BlockWithVerifiedHeader<Tx>, BlockVerificationError>
-    where
-        Tx: Hashable<Hash = TxHash> + StorageSize,
-    {
-        let header =
-            VerifiedBlockHeader::new(self.header, self.uncle_headers, self.signature, context)?;
-        Ok(BlockWithVerifiedHeader::new(header, self.transactions)?)
-    }
-
     /// Maximum canonical encoded size of a block whose era allows
     /// `max_uncles`: its transactions take at most
     /// [`MAX_BLOCK_TRANSACTIONS_SIZE`] bytes besides their count.
@@ -343,9 +323,7 @@ impl<Tx> Block<Tx> {
             + Ed25519Signature::CANONICAL_ENCODED_SIZE
     }
 
-    // TODO: Move this out of `Block` into `block/verified.rs`, since it takes no
-    // `self` and only `BlockWithVerifiedHeader` checks it.
-    pub(crate) fn validate_total_transactions_size(transactions: &[Tx]) -> Result<usize, Error>
+    pub fn validate_total_transactions_size(transactions: &[Tx]) -> Result<usize, Error>
     where
         Tx: Hashable<Hash = TxHash> + StorageSize,
     {
@@ -370,9 +348,7 @@ impl<Tx> Block<Tx> {
         Ok(total)
     }
 
-    // TODO: Move this out of `Block` into `block/verified.rs`, since it takes no
-    // `self` and only `BlockWithVerifiedHeader` checks it.
-    pub(crate) fn validate_body_root(
+    pub fn validate_body_root(
         header: &Header,
         uncle_headers: &UncleHeaders,
         transactions: &[Tx],
@@ -444,8 +420,6 @@ pub struct TxInBlock<Tx> {
 ///
 /// This does not check `proof_of_leadership` and the parent header
 /// since they require a ledger state.
-// TODO: move this to `header/verified.rs`, once it is no longer used anywhere
-// except `VerifiedBlockHeader::new`.
 pub fn verify_header_alone(header: &Header) -> Result<(), HeaderError> {
     if header.slot() == Slot::genesis() {
         return Err(HeaderError::GenesisSlot);
@@ -454,8 +428,6 @@ pub fn verify_header_alone(header: &Header) -> Result<(), HeaderError> {
 }
 
 /// Verifies the signature of block header.
-// TODO: move this to `header/verified.rs`, once it is no longer used anywhere
-// except `VerifiedBlockHeader::new`.
 pub fn verify_header_signature(header: &Header, signature: &Ed25519Signature) -> Result<(), Error> {
     let header_bytes = header.to_bytes()?;
     header

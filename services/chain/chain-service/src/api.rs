@@ -6,9 +6,9 @@ use std::{
 
 use futures::{Stream, TryStreamExt as _};
 use lb_core::{
-    block::{BlockWithVerifiedHeader, UncleHeaders},
+    block::UncleHeaders,
     events::Events,
-    header::{Header, HeaderId, HeaderVerificationError, VerifiedBlockHeader},
+    header::{Header, HeaderId},
     sdp::{Declaration, DeclarationId},
 };
 use lb_cryptarchia_engine::Slot;
@@ -22,8 +22,8 @@ use thiserror::Error;
 use tokio::sync::{broadcast, oneshot};
 
 use crate::{
-    AppliedBlock, ChainServiceInfo, ConsensusMsg, CryptarchiaInfo, EpochStateQueryResult,
-    LibUpdate, ProcessedBlockEvent, Query,
+    AppliedBlock, BlockWithVerifiedHeader, ChainServiceInfo, ConsensusMsg, CryptarchiaInfo,
+    EpochStateQueryResult, LibUpdate, ProcessedBlockEvent, Query, VerifiedBlockHeader,
 };
 
 pub trait CryptarchiaServiceData:
@@ -487,9 +487,10 @@ where
     ) -> Result<AppliedBlock<Cryptarchia::Tx>, ApiError> {
         let (reply_channel, rx) = oneshot::channel();
 
+        let boxed_block = Box::new(block);
         self.relay
             .send(ConsensusMsg::ApplyBlock {
-                block: Box::new(block),
+                block: boxed_block,
                 reply_channel,
             })
             .await
@@ -570,13 +571,10 @@ impl From<crate::Error> for ApiError {
                 current_slot,
             },
             crate::Error::AlreadyApplied(block_id) => Self::AlreadyApplied(block_id),
-            crate::Error::InvalidHeader(HeaderVerificationError::InvalidSignature) => {
-                Self::InvalidSignature
+            crate::Error::InvalidSignature => Self::InvalidSignature,
+            err @ (crate::Error::InvalidUncle { .. } | crate::Error::TooManyUncles { .. }) => {
+                Self::InvalidUncles(err.to_string())
             }
-            crate::Error::InvalidHeader(HeaderVerificationError::InvalidUncles(reason)) => {
-                Self::InvalidUncles(reason)
-            }
-            crate::Error::InvalidBody(err) => Self::InvalidBody(err.to_string()),
             err => Self::Unexpected(format!("Failure while applying block: {err:?}")),
         }
     }

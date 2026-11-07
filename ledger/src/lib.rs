@@ -26,7 +26,6 @@ use lb_core::{
     crypto::Hash as BlockHash,
     era::ForkDigest,
     events::{Events, HeaderEvent, TxEvent, TxEventPayload},
-    header::{HeaderId, VerifiedBlockHeader},
     mantle::{
         GenesisParameters, NoteId, Utxo, Value, VerificationError,
         batch::DeferredProofs,
@@ -50,7 +49,7 @@ use lb_core::{
             tx_list::ops::{OpsContext, OpsGasContext},
         },
     },
-    proofs::leader_proof::{LeaderProof as _, LeaderPublic},
+    proofs::leader_proof::LeaderPublic,
 };
 use lb_cryptarchia_engine::{Slot, UncleSlots};
 use lb_groth16::{AdditiveGroup as _, Fr};
@@ -180,31 +179,45 @@ where
         }
     }
 
-    /// Prepare to add a new [`LedgerState`] by applying `header` and
-    /// `txs` on top of the parent state.
+    /// Prepare to add a new [`LedgerState`] by applying the given header
+    /// components and transactions on top of the parent state.
+    ///
+    /// The header components must come from a header that passed Block Header
+    /// Verification, since this does not verify the proof of leadership.
     ///
     /// On success, a new [`LedgerState`] is returned, which can then be
     /// committed by calling [`Self::commit_update`].
+    #[expect(clippy::too_many_arguments, reason = "Need all args")]
     pub fn prepare_update<Tx, Profile>(
         &self,
-        header: &VerifiedBlockHeader,
+        id: Id,
+        parent_id: Id,
+        slot: Slot,
+        proof_entropy: &Fr,
+        voucher_cm: VoucherCm,
+        uncle_slots: &UncleSlots,
         txs: impl Iterator<Item = Tx>,
     ) -> Result<PreparedUpdate<Id>, LedgerError<Id>>
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
         Profile: GasProfile,
-        Id: Into<BlockHash> + From<HeaderId>,
+        Id: Into<BlockHash>,
     {
-        let id = header.header().id().into();
-        let parent = header.header().parent().into();
         let parent_state = self
             .states
-            .get(&parent)
-            .ok_or(LedgerError::ParentNotFound(parent))?;
+            .get(&parent_id)
+            .ok_or(LedgerError::ParentNotFound(parent_id))?;
 
-        let (new_state, events, deferred_proofs) = parent_state
-            .clone()
-            .try_update::<_, _, Profile>(id, header, txs, &self.era_schedule)?;
+        let (new_state, events, deferred_proofs) =
+            parent_state.clone().try_update::<_, _, Profile>(
+                id,
+                slot,
+                proof_entropy,
+                voucher_cm,
+                uncle_slots,
+                txs,
+                &self.era_schedule,
+            )?;
 
         Ok(PreparedUpdate::new(id, new_state, events, deferred_proofs))
     }
@@ -262,10 +275,14 @@ pub struct LedgerState {
 }
 
 impl LedgerState {
+    #[expect(clippy::too_many_arguments, reason = "Need all args")]
     fn try_update<Tx, Id, Profile>(
         self,
         block_id: Id,
-        header: &VerifiedBlockHeader,
+        slot: Slot,
+        proof_entropy: &Fr,
+        voucher_cm: VoucherCm,
+        uncle_slots: &UncleSlots,
         txs: impl Iterator<Item = Tx>,
         eras: &EraScheduledConfig,
     ) -> Result<(Self, Events, DeferredProofs), LedgerError<Id>>
@@ -274,14 +291,8 @@ impl LedgerState {
         Profile: GasProfile,
         Id: Into<BlockHash>,
     {
-        let slot = header.header().slot();
-        let (mut state, header_events) = self.try_apply_header(
-            slot,
-            &header.leader_proof().entropy(),
-            *header.leader_proof().voucher_cm(),
-            &header.uncle_headers().slots(),
-            eras,
-        )?;
+        let (mut state, header_events) =
+            self.try_apply_header(slot, proof_entropy, voucher_cm, uncle_slots, eras)?;
         // Record the applied block among the recently seen blocks `PoW`
         // claims may anchor to. This is the canonical apply path, where the
         // block's id is known — unlike a proposer's direct
@@ -1021,7 +1032,7 @@ impl LedgerState {
 mod tests {
     use std::num::NonZero;
 
-    use cryptarchia::tests::{GENESIS_POW_REWARD_POOL, config, utxo};
+    use cryptarchia::tests::{GENESIS_POW_REWARD_POOL, config, generate_proof, utxo};
     use lb_core::{
         events::DepositNote,
         mantle::{
@@ -1052,6 +1063,7 @@ mod tests {
         proofs::{
             channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
             leader_claim_proof::Groth16LeaderClaimProof,
+            leader_proof::LeaderProof as _,
         },
         sdp::{ActivityMetadata, DeclarationId, Nonce},
     };
@@ -1070,7 +1082,7 @@ mod tests {
             ledger, update_ledger, utxo_with_sk,
         },
         mantle::{leader::LeaderState, sdp::test_utils::generate_activity_proof},
-        test_utils::{FORK_DIGEST, schedule, single_era, verified_header},
+        test_utils::{FORK_DIGEST, schedule, single_era},
     };
 
     fn create_test_keys() -> (Ed25519Key, Ed25519PublicKey) {
@@ -1333,16 +1345,25 @@ mod tests {
             panic!("first op must be a transfer")
         };
 
-        let header = verified_header(
-            genesis_id,
+        // Create a dummy proof (using same structure as in cryptarchia tests)
+
+        let proof = generate_proof(
+            &ledger.state(&genesis_id).unwrap().cryptarchia_ledger,
+            &utxo,
             Slot::from(1u64),
-            &lb_core::proofs::leader_proof::Groth16LeaderProof::genesis(),
-            &UncleSlots::default(),
-            &[],
         );
-        let new_id = header.header().id().into();
+
+        let new_id = [1; 32];
         let update = ledger
-            .prepare_update::<_, MainnetGasProfile>(&header, std::iter::once(tx))
+            .prepare_update::<_, MainnetGasProfile>(
+                new_id,
+                genesis_id,
+                Slot::from(1u64),
+                &proof.entropy(),
+                *proof.voucher_cm(),
+                &UncleSlots::default(),
+                std::iter::once(tx),
+            )
             .unwrap()
             .verify_batch_proofs()
             .unwrap();

@@ -7,11 +7,8 @@ use std::{
 
 use futures::StreamExt as _;
 use lb_core::{
-    block::{
-        Block, BlockTransactions, BlockWithVerifiedHeader, SignedHeader, TxInBlock, UncleHeaders,
-    },
+    block::{Block, BlockTransactions, SignedHeader, TxInBlock, UncleHeaders},
     era::{AcceptedForkDigests, ForkDigest},
-    header::HeaderVerificationError,
     mantle::{
         Note, Op, OpProof, SignedOps, Utxo,
         channel::Channels,
@@ -58,8 +55,8 @@ use tokio::{
 };
 
 use crate::{
-    BootstrapConfig, Cryptarchia, CryptarchiaConsensus, CryptarchiaConsensusState, Error,
-    OfflineGracePeriodConfig, TipEra,
+    BlockWithVerifiedHeader, BootstrapConfig, Cryptarchia, CryptarchiaConsensus,
+    CryptarchiaConsensusState, Error, OfflineGracePeriodConfig, TipEra,
     relays::CryptarchiaConsensusRelays,
     service::{get_block_ids, process_block},
 };
@@ -391,7 +388,9 @@ fn future_block_is_rejected_only_from_network() {
 
     let mut cryptarchia = cryptarchia;
     cryptarchia
-        .try_apply_block_with_state_retention(&BlockWithVerifiedHeader::from_trusted(block.clone()))
+        .try_apply_block_with_state_retention(&BlockWithVerifiedHeader::new_unchecked(
+            block.clone(),
+        ))
         .expect("a stored block should be replayed regardless of the current slot");
     assert_eq!(cryptarchia.tip(), block.header().id());
 }
@@ -403,20 +402,14 @@ fn tampered_signature_is_rejected() {
     let (cryptarchia, block) = test_chain_with_next_block();
     let mut signature = block.signature().to_bytes();
     signature[0] ^= 1;
-    let tampered = Block::reconstruct(
+
+    let result = cryptarchia.verify_header(
         block.header().clone(),
         block.uncle_headers().clone(),
-        block.transactions().clone(),
         Ed25519Signature::from_bytes(&signature),
+        block.header().slot(),
     );
-
-    let result = cryptarchia.verify_block(tampered, block.header().slot());
-    assert!(matches!(
-        result,
-        Err(Error::InvalidHeader(
-            HeaderVerificationError::InvalidSignature
-        ))
-    ));
+    assert!(matches!(result, Err(Error::InvalidSignature)));
 }
 
 /// A block whose parent this node does not have is reported as missing its
@@ -447,17 +440,22 @@ fn unknown_parent_is_reported_missing() {
 fn transactions_not_committed_to_are_rejected() {
     let (cryptarchia, block) = test_chain_with_next_block();
     let (zk_key, utxo) = utxo();
-    let other = Block::reconstruct(
-        block.header().clone(),
-        block.uncle_headers().clone(),
-        BlockTransactions::<SignedOps<Preverified, StandardMode>>::from([burn_tx(utxo, &zk_key)]),
-        *block.signature(),
-    );
+    let header = cryptarchia
+        .verify_header(
+            block.header().clone(),
+            block.uncle_headers().clone(),
+            *block.signature(),
+            block.header().slot(),
+        )
+        .expect("the header is valid");
 
-    let result = cryptarchia.verify_block(other, block.header().slot());
+    let result = BlockWithVerifiedHeader::new(
+        header,
+        BlockTransactions::<SignedOps<Preverified, StandardMode>>::from([burn_tx(utxo, &zk_key)]),
+    );
     assert!(matches!(
         result,
-        Err(Error::InvalidBody(lb_core::block::Error::BodyRootMismatch))
+        Err(lb_core::block::Error::BodyRootMismatch)
     ));
 }
 

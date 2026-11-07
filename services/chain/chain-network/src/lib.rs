@@ -16,12 +16,12 @@ use std::{
 use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
 use futures::StreamExt as _;
 use lb_chain_service::{
-    AppliedBlock,
+    AppliedBlock, BlockWithVerifiedHeader, VerifiedBlockHeader,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    block::{Block, BlockTransactions, BlockWithVerifiedHeader, Proposal},
-    header::{HeaderId, VerifiedBlockHeader},
+    block::{Block, BlockTransactions, Proposal},
+    header::HeaderId,
     mantle::{
         ledger::verification_mode::StandardMode,
         traits::{Hashable, SignedMantleTx, StorageSize},
@@ -514,7 +514,7 @@ where
                             Err(DoNotProcessBlock::AlreadyApplied) => continue,
                         }
 
-                        Self::log_received_block(block.transactions().len());
+                        Self::log_received_block(&block);
 
                         match Self::apply_block_with_future_block_retry(block, &relays)
                             .await
@@ -781,9 +781,9 @@ where
     ) where
         RuntimeServiceId: Send + Sync + 'static,
     {
-        Self::log_received_block(block.transactions().len());
+        Self::log_received_block(&block);
 
-        let block_id = block.header().header().id();
+        let block_id = block.header().id();
         let started_at = Instant::now();
 
         match apply_block_with_verified_header_and_reconcile_mempool::<_, Mempool>(
@@ -869,8 +869,9 @@ where
         .await
     }
 
-    fn log_received_block(transactions: usize) {
+    fn log_received_block(block: &Block<Mempool::Item>) {
         let content_size = 0; // TODO: calculate the actual content size
+        let transactions = block.transactions_iter().len();
 
         trace!(target: LOG_TARGET, {
             counter.received_blocks = 1,
@@ -1180,7 +1181,7 @@ where
     target = LOG_TARGET,
     level = "debug",
     skip(block, cryptarchia, mempool),
-    fields(block_id = %block.header().header().id(), tx_count = block.transactions().len())
+    fields(block_id = %block.header().id(), tx_count = block.transactions().len())
 )]
 async fn apply_block_with_verified_header_and_reconcile_mempool<Cryptarchia, Mempool>(
     block: BlockWithVerifiedHeader<Cryptarchia::Tx>,
@@ -1193,8 +1194,8 @@ where
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
 {
-    let block_id = block.header().header().id();
-    let block_slot = block.header().header().slot();
+    let block_id = block.header().id();
+    let block_slot = block.header().slot();
     let applied = cryptarchia.apply_block(block).await?;
     reconcile_mempool::<Mempool>(applied, block_id, block_slot, mempool).await;
     Ok(())

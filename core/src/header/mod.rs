@@ -11,11 +11,7 @@ use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 use serde::{Deserialize, Serialize};
 
 mod fixtures;
-mod verified;
 
-pub use crate::header::verified::{
-    Error as HeaderVerificationError, HeaderVerificationContext, VerifiedBlockHeader,
-};
 use crate::{
     crypto::Hasher,
     mantle::transactions::GenesisTx,

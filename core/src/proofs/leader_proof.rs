@@ -132,23 +132,6 @@ impl Groth16LeaderProof {
         }
     }
 
-    /// A proof with the given entropy, leader key and voucher that does not
-    /// verify, for tests that apply a header without verifying its proof.
-    #[cfg(any(test, feature = "test-utils"))]
-    #[must_use]
-    pub fn dummy(
-        entropy_contribution: Fr,
-        leader_key: UnverifiedEd25519PublicKey,
-        voucher_cm: VoucherCm,
-    ) -> Self {
-        Self {
-            proof: lb_pol::PoLProof::from_bytes(&[0u8; 128]),
-            entropy_contribution,
-            leader_key,
-            voucher_cm,
-        }
-    }
-
     fn generate_proof(private: LeaderPrivate) -> Result<(lb_pol::PoLProof, Fr), Error> {
         let (proof, verif_inputs) =
             lb_pol::prove(private.input.into()).map_err(Error::PoLProofFailed)?;

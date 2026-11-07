@@ -849,6 +849,7 @@ pub mod tests {
     use std::num::{NonZero, NonZeroU64};
 
     use lb_core::{
+        crypto::{Digest as _, Hasher},
         era::AcceptedForkDigests,
         mantle::{
             Note, Op,
@@ -888,7 +889,7 @@ pub mod tests {
                 rewards::{self},
             },
         },
-        test_utils::{FORK_DIGEST, schedule, single_era, verified_header},
+        test_utils::{FORK_DIGEST, schedule, single_era},
     };
 
     type HeaderId = [u8; 32];
@@ -988,8 +989,6 @@ pub mod tests {
         state
     }
 
-    /// Updates `ledger` with a new block header at `slot` with a dummy `PoL`
-    /// for `utxo`.
     pub fn update_ledger(
         ledger: &mut Ledger<HeaderId>,
         parent: HeaderId,
@@ -1008,28 +1007,36 @@ pub mod tests {
                 &ledger.state(&parent).unwrap().mantle_ledger.pow,
                 ledger.era_schedule(),
             )?;
-        // `PoL` must be verified before a header is applied to the ledger.
+        let id = make_id(parent, slot, utxo);
         let proof = generate_proof(&ledger_state, &utxo, slot);
+        // `PoL` must be verified before a header is applied to the ledger.
         if !proof.verify(&ledger.leader_public(parent, slot)?) {
             return Err(LedgerError::InvalidProof);
         }
-        let header = verified_header(
-            parent,
-            slot,
-            &proof,
-            &UncleSlots::default(),
-            &utxo.id().as_bytes(),
-        );
         let update = ledger
             .prepare_update::<_, MainnetGasProfile>(
-                &header,
+                id,
+                parent,
+                slot,
+                &proof.entropy(),
+                *proof.voucher_cm(),
+                &UncleSlots::default(),
                 std::iter::empty::<SignedOps<Preverified, StandardMode>>(),
             )?
             .verify_batch_proofs()
             .map_err(|_| LedgerError::InvalidProof)?;
 
         ledger.commit_update(update);
-        Ok(header.header().id().into())
+        Ok(id)
+    }
+
+    fn make_id(parent: HeaderId, slot: impl Into<Slot>, utxo: Utxo) -> HeaderId {
+        Hasher::new()
+            .chain_update(parent)
+            .chain_update(slot.into().to_le_bytes())
+            .chain_update(utxo.id().as_bytes())
+            .finalize()
+            .into()
     }
 
     // produce a proof for a note

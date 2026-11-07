@@ -1,6 +1,5 @@
 pub mod api;
 mod bootstrap;
-mod header;
 mod metrics;
 mod notifier;
 mod relays;
@@ -10,6 +9,7 @@ mod sync;
 #[cfg(test)]
 mod tests;
 mod uncle;
+mod verified;
 
 use core::fmt::Debug;
 use std::{
@@ -25,10 +25,10 @@ use futures::{Stream, TryStreamExt as _};
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
-    block::{Block, BlockWithVerifiedHeader, TxInBlock, UncleHeaders, genesis::GenesisBlock},
+    block::{HeaderError, TxInBlock, UncleHeaders, genesis::GenesisBlock},
     era::ForkDigest,
     events::Events,
-    header::{Header, HeaderId, HeaderVerificationError, VerifiedBlockHeader},
+    header::{Header, HeaderId},
     mantle::{
         TxHash,
         gas::MainnetGasProfile,
@@ -36,6 +36,7 @@ use lb_core::{
         traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
         transactions::states::Preverified,
     },
+    proofs::leader_proof::LeaderProof as _,
     sdp::{Declaration, DeclarationId},
 };
 use lb_cryptarchia_engine::{Branch, EraSchedule, PrunedBlocks, ReorgedBlocks, UncleSlots};
@@ -72,6 +73,7 @@ pub use crate::{
     states::{CryptarchiaConsensusState, TipEra, saved_tip_era},
     sync::config::{BlockProviderConfig, SyncConfig},
     uncle::UncleError,
+    verified::{BlockWithVerifiedHeader, VerifiedBlockHeader},
 };
 use crate::{
     bootstrap::state::choose_engine_state,
@@ -92,9 +94,11 @@ pub(crate) const LOG_TARGET: &str = chain::service::ROOT;
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Invalid block header: {0}")]
-    InvalidHeader(HeaderVerificationError),
-    #[error("Block body does not match its header: {0}")]
-    InvalidBody(lb_core::block::Error),
+    InvalidHeader(HeaderError),
+    #[error("Invalid header signature")]
+    InvalidSignature,
+    #[error("Invalid proof of leadership")]
+    InvalidLeaderProof,
     #[error("Missing parent while applying block {parent}, {info:?}")]
     ParentMissing {
         parent: HeaderId,
@@ -140,7 +144,7 @@ struct InitializedCryptarchia {
 }
 
 struct RecoveryBlocks<Tx> {
-    blocks: Vec<Block<Tx>>,
+    blocks: Vec<BlockWithVerifiedHeader<Tx>>,
     fell_back_to_lib: bool,
 }
 
@@ -485,7 +489,7 @@ impl Cryptarchia {
     #[cfg(test)]
     fn try_apply_block<Tx>(
         &mut self,
-        block: Block<Tx>,
+        block: lb_core::block::Block<Tx>,
         current_slot: Slot,
     ) -> Result<(PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>, Events), Error>
     where
@@ -509,51 +513,32 @@ impl Cryptarchia {
         signature: Ed25519Signature,
         current_slot: Slot,
     ) -> Result<VerifiedBlockHeader, Error> {
-        VerifiedBlockHeader::new(
-            header,
-            uncle_headers,
-            signature,
-            &header::HeaderVerificationContext::new(self, current_slot),
-        )
-        .map_err(|err| self.header_verification_error(err))
-    }
-
-    fn header_verification_error(&self, err: HeaderVerificationError) -> Error {
-        match err {
-            HeaderVerificationError::ParentMissing(parent) => Error::ParentMissing {
-                parent,
-                info: Box::new(self.info()),
-            },
-            HeaderVerificationError::FutureBlock {
-                block_slot,
-                current_slot,
-            } => Error::FutureBlock {
-                block_slot,
-                current_slot,
-            },
-            err => Error::InvalidHeader(err),
-        }
+        VerifiedBlockHeader::new(header, uncle_headers, signature, self, current_slot)
     }
 
     /// Verifies the header of `block` against the block tree at
-    /// `current_slot`, and that the header commits to what `block` carries.
+    /// `current_slot`, as chain-network does for a block received in full.
     #[cfg(test)]
     fn verify_block<Tx>(
         &self,
-        block: Block<Tx>,
+        block: lb_core::block::Block<Tx>,
         current_slot: Slot,
     ) -> Result<BlockWithVerifiedHeader<Tx>, Error>
     where
         Tx: StorageSize + lb_core::mantle::traits::Hashable<Hash = TxHash>,
     {
-        block
-            .verify_header(&header::HeaderVerificationContext::new(self, current_slot))
-            .map_err(|err| match err {
-                lb_core::block::BlockVerificationError::Header(err) => {
-                    self.header_verification_error(err)
-                }
-                lb_core::block::BlockVerificationError::Body(err) => Error::InvalidBody(err),
-            })
+        let header = self.verify_header(
+            block.header().clone(),
+            block.uncle_headers().clone(),
+            *block.signature(),
+            current_slot,
+        )?;
+        let transactions = block
+            .into_transactions()
+            .try_into()
+            .map_err(|err: lb_utils::bounded::BoundedError| Error::InvalidBlock(err.to_string()))?;
+        BlockWithVerifiedHeader::new(header, transactions)
+            .map_err(|err| Error::InvalidBlock(err.to_string()))
     }
 
     /// Apply a block while retaining pruned ledger states until the caller has
@@ -565,7 +550,7 @@ impl Cryptarchia {
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
     {
-        let header = block.header().header();
+        let header = block.header();
         let id = header.id();
         let parent = header.parent();
         let slot = header.slot();
@@ -574,7 +559,8 @@ impl Cryptarchia {
             return Err(Error::AlreadyApplied(id));
         }
 
-        let block_uncle_headers_slots = block.header().uncle_headers().slots();
+        let block_uncle_headers_slots = block.uncle_headers().slots();
+        let leader_proof = header.leader_proof();
 
         // Apply the block to the ledger, and batch-verify ZK proofs.
         // This ledger update is not finalized yet, and will be committed only after
@@ -582,7 +568,12 @@ impl Cryptarchia {
         let update = self
             .ledger
             .prepare_update::<_, MainnetGasProfile>(
-                block.header(),
+                id,
+                parent,
+                slot,
+                &leader_proof.entropy(),
+                *leader_proof.voucher_cm(),
+                &block_uncle_headers_slots,
                 block.transactions_iter().cloned(),
             )
             .map_err(|err| match err {
@@ -991,7 +982,7 @@ where
         tip: HeaderId,
         lib: HeaderId,
         storage: StorageApi<Tx>,
-    ) -> Result<Vec<Block<Tx>>, Error> {
+    ) -> Result<Vec<BlockWithVerifiedHeader<Tx>>, Error> {
         let ids = load_block_ids_from_storage(tip, lib, storage.clone())
             .try_collect::<Vec<_>>()
             .await?;
@@ -1001,8 +992,7 @@ where
         // Replay recovery blocks in LIB->tip order, skipping LIB because Cryptarchia
         // is already initialized from it.
         for id in ids.into_iter().rev().skip(1) {
-            let block = storage
-                .get_block(&id)
+            let block = BlockWithVerifiedHeader::load_stored(&storage, &id)
                 .await
                 .ok_or(Error::HeaderIdNotFound(id))?;
             blocks.push(block);
@@ -1149,8 +1139,7 @@ where
             let block_id = block.header().id();
             let outcome = process_block(
                 &mut cryptarchia,
-                // This node verified the block before storing it.
-                BlockWithVerifiedHeader::from_trusted(block),
+                block,
                 relays,
                 new_block_subscription_sender,
                 lib_subscription_sender,
