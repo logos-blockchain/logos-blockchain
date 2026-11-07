@@ -65,7 +65,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
 use lb_groth16::{CompressedGroth16Proof, Fr};
-use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey};
+use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey, kdf_public_key};
 use logos_blockchain_ledger::{
     EpochState, GasAndFees, Ledger, LedgerState,
     config::{EraScheduledConfig, ModulusShift},
@@ -941,7 +941,7 @@ fn activity_proof(
         .sdp_config
         .service_rewards_params
         .blend;
-    let zk_id = zk_key.to_public_key();
+    let zk_id = kdf_public_key(zk_key.as_fr());
     let tree = MerkleTree::new(vec![zk_id.into_inner()]).expect("one provider");
     let core_path_and_selectors = tree
         .get_proof_for_key(&zk_id.into_inner())
@@ -1022,7 +1022,7 @@ fn sdp_active() -> OpShape {
     for epoch in 1..=2 {
         state = next_epoch(state, config, epoch, &[]);
     }
-    let declare = declaration(zk_key.to_public_key(), root_of(&state, LEDGER_SET));
+    let declare = declaration(kdf_public_key(zk_key.as_fr()), root_of(&state, LEDGER_SET));
     state = next_epoch(
         state,
         config,
