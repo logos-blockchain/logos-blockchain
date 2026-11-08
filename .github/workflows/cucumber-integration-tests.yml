@@ -152,6 +152,19 @@ jobs:
 
       - *check_peer_success
 
+      # Feature: Happy-path era boundaries (@era_boundaries)
+      - name: Run cucumber suite - era boundaries
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
+        with:
+          suite_tag: "@era_boundaries"
+          suite_name: era-boundaries
+          artifact_subdir: "Happy-path era boundaries"
+          max_concurrent_scenarios: "1"
+
+      - *check_peer_success
+
       # Feature: Blend (@blend_ci)
       - name: Run cucumber suite - blend
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}

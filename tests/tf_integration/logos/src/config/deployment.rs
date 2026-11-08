@@ -99,6 +99,11 @@ impl CucumberParameterSet {
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
+            // An accelerated happy-path fixture for era-boundary tests. A small
+            // k=8 and f=1/2 allow blocks to finalize quickly, while one-second
+            // slots and 3/3/4 phases give a 160-slot epoch. This leaves time to
+            // capture a finalized anchor before the boundary and keeps CI runs
+            // short; it does not represent testnet timing or security.
             "cucumber_fixture" => Some(Self {
                 name: "cucumber_fixture",
                 security_parameter: 8,
@@ -109,6 +114,8 @@ impl CucumberParameterSet {
                 slot_activation_coeff_numerator: 1,
                 slot_activation_coeff_denominator: 2,
             }),
+            // Aggressive parameters for local diagnostics that aim to reproduce
+            // abnormal Blend behavior quickly, rather than model normal operation.
             "fast_repro" => Some(Self {
                 name: "fast_repro",
                 security_parameter: 3,
@@ -119,6 +126,9 @@ impl CucumberParameterSet {
                 slot_activation_coeff_numerator: 1,
                 slot_activation_coeff_denominator: 10,
             }),
+            // An accelerated approximation of testnet: one-second slots, 3/3/4
+            // phases and f=1/30, but k=10 and 3,000-slot epochs instead of the
+            // actual testnet's k=1000 and 300,000-slot epochs.
             "testnet_representative" => Some(Self {
                 name: "testnet_representative",
                 security_parameter: 10,
