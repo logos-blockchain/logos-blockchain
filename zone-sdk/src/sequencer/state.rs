@@ -1110,14 +1110,9 @@ impl TxState {
             .count()
     }
 
-    /// Remove pending entries whose lineage does NOT reach the current
-    /// channel tip and that aren't already in a block on this branch, along
-    /// with entries a mined sibling displaced since the last pass: own
-    /// inscriptions and bundles the pending suffix no longer reaches, and
-    /// opaque txs whose first inscription's parent is no longer landable.
-    /// Returns the removed entries in **parent-before-child order** so a
-    /// consumer that iterates and republishes naturally rebuilds the chain
-    /// in dependency order.
+    /// Pending entries not in a block on this branch whose lineage no longer
+    /// reaches the channel tip: own entries outside the pending suffix, and
+    /// opaque txs whose first inscription's parent is not landable.
     fn off_branch_entries(&self, tip: HeaderId) -> Vec<TxHash> {
         if self.pending.is_empty() && self.pending_other.is_empty() {
             return Vec::new();
@@ -1231,17 +1226,9 @@ impl TxState {
         dead
     }
 
-    /// On a config-tip change, the pending entries **not on this branch's
-    /// tip** (not in the safe set) — the not-yet-mined tail a config may have
-    /// invalidated: inscriptions and bundles, and the opaque txs anchored on
-    /// the message lineage (a custom tx chained on a shed inscription has
-    /// lost its parent and would otherwise leave the view unreported).
-    /// Opaque txs on the config lineage alone are the stale-config shed's.
-    /// Mined/on-branch entries are excluded: a config never invalidates a
-    /// landed inscription, so orphaning one would re-post an on-chain
-    /// original as a duplicate. The caller resets the chaining pointer to
-    /// the message tip so re-posts land as a competing branch. Unchanged
-    /// config tip → empty.
+    /// The not-yet-mined tail a config may have invalidated: pending entries
+    /// outside the safe set, plus the opaque txs anchored on the message
+    /// lineage. Mined entries stay: a config never invalidates them.
     fn config_tail_entries(&self, tip: HeaderId) -> Vec<TxHash> {
         let safe = self.blocks.safe_at(tip);
         self.pending
