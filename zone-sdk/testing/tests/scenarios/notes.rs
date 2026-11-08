@@ -148,16 +148,14 @@ pub async fn atomic_deposit_and_inscription(chain: Chain) {
     let deposit = DepositOp {
         channel_id: world.channel_id(),
         inputs: Inputs::new(deposited.id()),
-        metadata: b"Mint 1 to Alice in Zone"
-            .to_vec()
-            .try_into()
-            .expect("metadata"),
+        metadata: lb_core::mantle::ops::channel::deposit::Metadata::new_unchecked(
+            b"Mint 1 to Alice in Zone".to_vec(),
+        ),
     };
-    let ops = Ops::try_from(vec![
-        Op::Transfer(transfer),
-        Op::ChannelDeposit(deposit.clone()),
-    ])
-    .expect("ops");
+    let ops = Ops::new(
+        FORK_DIGEST,
+        [Op::Transfer(transfer), Op::ChannelDeposit(deposit.clone())],
+    );
     let (ops, msg_id, signature) = world
         .harness
         .seq(a)

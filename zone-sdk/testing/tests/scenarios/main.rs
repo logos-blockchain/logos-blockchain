@@ -34,7 +34,7 @@ use logos_blockchain_zone_sdk_testing::{
     for_each_base_condition, for_each_chain,
     harness::RECONNECT_DELAY,
     layers::Layer,
-    node::{BlockSpec, PENDING_NOTE_EXPIRY_BLOCKS, TxSelection},
+    node::{BlockSpec, FORK_DIGEST, PENDING_NOTE_EXPIRY_BLOCKS, TxSelection},
     policy::payload_str,
     txs, world as common,
     writers::WriterOp,

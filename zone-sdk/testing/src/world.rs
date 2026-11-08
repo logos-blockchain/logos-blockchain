@@ -11,9 +11,7 @@ use lb_core::{
         ledger::{Outputs, verification_mode::StandardMode},
         ops::{
             OpId as _, OpRef,
-            channel::{
-                ChannelId, MsgId, VerifiedChannelKeys, deposit::DepositOp, inscribe::Inscription,
-            },
+            channel::{ChannelId, VerifiedChannelKeys, deposit::DepositOp, inscribe::Inscription},
         },
         traits::Hashable,
         transactions::states::Unverified,
@@ -38,7 +36,6 @@ use crate::{
     consumer::{Claims, ReferenceConsumer, SharedChoices},
     events::Event,
     harness::{self, RECONNECT_DELAY, funding_config, key},
-    layers::Layer,
     node::{BlockSpec, TxSelection},
     policy::{Policy, make_inscription, payload_str},
     txs::{self, TxError},
@@ -106,9 +103,6 @@ pub struct World {
     /// Payloads published through [`Event::Publish`], [`Event::Burst`]
     /// bursts set and [`Event::Custom`] txs, for a run's final accounting.
     pub event_payloads: EventPayloads,
-    /// Hand-built txs the SDK accepted on a taken parent
-    /// ([`KnownIssue::HandBuiltTxOnTakenParentAccepted`]).
-    pub stale_accepted: Vec<TxHash>,
 }
 
 /// What the events of a run put into the channel, for its final check.
@@ -160,35 +154,6 @@ pub enum Posted {
     Half,
     /// All of them, in reverse order, like a leader ordering differently.
     Reversed,
-}
-
-/// What the SDK does not handle yet, recognised from what a run leaves
-/// behind by [`World::known_issue`]; each has an ignored story in
-/// `tests/scenarios/known_issues.rs`. The recognisers go when the fixes
-/// land.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum KnownIssue {
-    /// A pending withdraw or pin deposit whose channel input vanished with
-    /// an orphaned deposit is resubmitted forever.
-    DeadInputBundle,
-    /// A config landing sheds a pending inscription but not the custom tx
-    /// chained on it, which leaves the view unreported.
-    CustomTxUnderConfigShed,
-    /// A restored pending publish whose parent another sequencer took in a
-    /// block that finalized while this one was down stays pending: not
-    /// posted again, never reported orphaned.
-    RestoredPublishOnTakenParent,
-    /// After a deep fork the pending entries chained on the abandoned branch,
-    /// own publishes and mirrored inscriptions alike, are re-posted forever:
-    /// the node rejects each for its parent, the view never reports them
-    /// orphaned, the chain never settles.
-    PendingOnAbandonedParent,
-    /// A hand-built tx chained on a message whose next slot is finalized is
-    /// accepted at submit: only pending children are checked, and a
-    /// finalized one has left them, where the bundle path also compares
-    /// with the view tip. The entry pends on a passed parent, re-posted and
-    /// refused, until the expiry shed.
-    HandBuiltTxOnTakenParentAccepted,
 }
 
 /// The first writer's name; a second one is [`FOREIGN_2`].
@@ -284,7 +249,6 @@ impl World {
             bundle_refusals: 0,
             stopped: Vec::new(),
             event_payloads: EventPayloads::default(),
-            stale_accepted: Vec::new(),
         }
     }
 
@@ -1208,163 +1172,6 @@ impl World {
         .await
     }
 
-    /// The known issue a run ended in, if what it left behind matches one
-    /// and nothing else is wrong: every `Chain` violation is a custom
-    /// (multi-inscription) tx that left the view without being reported
-    /// orphaned, or the chain did not settle (`settled` false) while a
-    /// sequencer holds a withdraw whose channel input is gone from the
-    /// canonical ledger.
-    #[must_use]
-    pub fn known_issue(&self, settled: bool) -> Option<KnownIssue> {
-        let channel = self.channel_id();
-        let pending: Vec<(TxHash, SignedOps<Unverified, StandardMode>)> = self
-            .harness
-            .seqs
-            .iter()
-            .filter_map(harness::Seq::checkpoint)
-            .flat_map(|checkpoint| checkpoint.pending_txs)
-            .collect();
-        let chain_violations: Vec<String> = self
-            .harness
-            .violations()
-            .filter(|(layer, _)| *layer == Layer::Chain)
-            .map(|(_, violation)| violation)
-            .collect();
-        if self.explained_by_stale_accepted(&pending, &chain_violations, settled) {
-            return Some(KnownIssue::HandBuiltTxOnTakenParentAccepted);
-        }
-        if !chain_violations.is_empty() {
-            // A hand-built tx is reported whole, keyed by its hash and not by
-            // a message, whatever it carries. The stranded one may have
-            // expired out of the pending set, or been rebuilt by its writer,
-            // by the end of the run; every tx the run saw is still known.
-            let custom_txs: Vec<TxHash> = self
-                .node()
-                .posted()
-                .iter()
-                .chain(self.writers.iter().flat_map(|writer| writer.posted.iter()))
-                .chain(self.writers.iter().flat_map(|writer| writer.rebuilt.iter()))
-                .chain(pending.iter().map(|(_, tx)| tx))
-                .filter(|tx| !lb_zone_sdk::sequencer::channel_inscriptions(tx, channel).is_empty())
-                .map(Hashable::hash)
-                .collect();
-            // The shed that strands it is a config's, on whichever branch
-            // the config landed; a reorg may have taken the config back.
-            let configs_landed = self
-                .node()
-                .mined_txs()
-                .iter()
-                .filter(|tx| {
-                    tx.op_refs_iter()
-                        .any(|op| matches!(op, OpRef::ChannelConfig(config) if config.channel() == channel))
-                })
-                .count();
-            let stranded_custom_tx = |violation: &String| {
-                configs_landed >= 2
-                    && violation.ends_with("but left common_prefix")
-                    && custom_txs
-                        .iter()
-                        .any(|hash| violation.contains(&format!("Tx({hash:?})")))
-            };
-            return chain_violations
-                .iter()
-                .all(stranded_custom_tx)
-                .then_some(KnownIssue::CustomTxUnderConfigShed);
-        }
-        if settled {
-            return None;
-        }
-        if self.stranded_publish(channel) {
-            return Some(KnownIssue::RestoredPublishOnTakenParent);
-        }
-        let ledger = self.node().ledger_at_tip();
-        let dead_input = pending.iter().any(|(_, tx)| {
-            tx.op_refs_iter().any(|op| match op {
-                OpRef::ChannelWithdraw(withdraw) => {
-                    withdraw.channel_id == channel
-                        && withdraw.inputs.iter().any(|id| ledger.note(id).is_none())
-                }
-                OpRef::ChannelTransfer(transfer) => {
-                    transfer.channel_id == channel
-                        && transfer.inputs.iter().any(|id| ledger.note(id).is_none())
-                }
-                _ => false,
-            })
-        });
-        if dead_input {
-            return Some(KnownIssue::DeadInputBundle);
-        }
-        self.pending_on_abandoned_parent(channel)
-            .then_some(KnownIssue::PendingOnAbandonedParent)
-    }
-
-    /// Whether a hand-built tx accepted on a taken parent, recorded at
-    /// submit, explains a run that did not settle while it still pends, or
-    /// chain violations that all name it.
-    fn explained_by_stale_accepted(
-        &self,
-        pending: &[(TxHash, SignedOps<Unverified, StandardMode>)],
-        chain_violations: &[String],
-        settled: bool,
-    ) -> bool {
-        if self.stale_accepted.is_empty() {
-            return false;
-        }
-        let names_one = |violation: &String| {
-            self.stale_accepted
-                .iter()
-                .any(|hash| violation.contains(&format!("{hash:?}")))
-        };
-        let still_pending = pending
-            .iter()
-            .any(|(hash, _)| self.stale_accepted.contains(hash));
-        (chain_violations.is_empty() && !settled && still_pending)
-            || (!chain_violations.is_empty() && chain_violations.iter().all(names_one))
-    }
-
-    /// Whether a sequencer still holds an entry, its own or mirrored, whose
-    /// parent sits only in abandoned blocks.
-    fn pending_on_abandoned_parent(&self, channel: ChannelId) -> bool {
-        self.harness.seqs.iter().any(|seq| {
-            seq.checkpoint().is_some_and(|checkpoint| {
-                checkpoint.pending_txs.iter().any(|(_, tx)| {
-                    lb_zone_sdk::sequencer::channel_inscriptions(tx, channel)
-                        .iter()
-                        .any(|info| {
-                            seq.node.message_status(channel, &info.parent_msg) == "abandoned"
-                        })
-                })
-            })
-        })
-    }
-
-    /// Whether a sequencer holds an own publish whose parent was taken under
-    /// it: a message that is not the channel tip, mined on some branch or
-    /// the channel root, so the publish can never land and should have been
-    /// reported orphaned. A parent that is one of its own pending messages
-    /// is a plain chain, not this.
-    fn stranded_publish(&self, channel: ChannelId) -> bool {
-        let channel_tip = self
-            .node()
-            .channel_state_at_tip(channel)
-            .map(|state| state.tip_message);
-        self.harness.seqs.iter().any(|seq| {
-            let own = seq.key.public_key().into_unverified();
-            seq.checkpoint().is_some_and(|checkpoint| {
-                checkpoint.pending_txs.iter().any(|(_, tx)| {
-                    let inscriptions = lb_zone_sdk::sequencer::channel_inscriptions(tx, channel);
-                    let [info] = inscriptions.as_slice() else {
-                        return false;
-                    };
-                    let parent = info.parent_msg;
-                    let taken = parent == MsgId::root()
-                        || seq.node.message_status(channel, &parent) != "unknown";
-                    info.signer == Some(own) && Some(parent) != channel_tip && taken
-                })
-            })
-        })
-    }
-
     /// Where every transaction is, for a failing assertion.
     pub fn diagnostics(&mut self) -> String {
         let mut out = String::new();
@@ -2168,19 +1975,18 @@ impl World {
             .handle()
             .submit_signed_tx(signed_tx, msg_id);
         if stale_parent {
-            if result.is_err() {
-                let pending = self.pending_payloads(index);
-                assert!(
-                    payloads.iter().all(|payload| !pending.contains(payload)),
-                    "a refused hand-built tx stayed pending:\n{}",
-                    self.diagnostics()
-                );
-                return;
-            }
-            // Known issue: only pending children are checked, so a parent
-            // whose taking child is finalized passes.
-            tracing::warn!(?hash, "hand-built tx on a taken parent accepted");
-            self.stale_accepted.push(hash);
+            assert!(
+                result.is_err(),
+                "a hand-built tx on a taken parent was accepted: {hash:?}\n{}",
+                self.diagnostics()
+            );
+            let pending = self.pending_payloads(index);
+            assert!(
+                payloads.iter().all(|payload| !pending.contains(payload)),
+                "a refused hand-built tx stayed pending:\n{}",
+                self.diagnostics()
+            );
+            return;
         }
         if let Err(error) = result {
             tracing::debug!(%error, ?hash, "hand-built tx refused at submit");

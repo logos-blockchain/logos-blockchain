@@ -53,8 +53,7 @@ pub async fn deposit_tx(
         channel_id: channel,
         inputs: Inputs::try_new(inputs.iter().map(Utxo::id).collect::<Vec<_>>())
             .map_err(|e| TxError::Assembly(format!("deposit inputs: {e:?}")))?,
-        metadata: Metadata::try_from(metadata.as_bytes().to_vec())
-            .map_err(|e| TxError::Assembly(format!("metadata: {e:?}")))?,
+        metadata: Metadata::new_unchecked(metadata.as_bytes().to_vec()),
     };
     let tx_builder = MantleTxBuilder::new()
         .push_op(Op::ChannelDeposit(op.clone()))

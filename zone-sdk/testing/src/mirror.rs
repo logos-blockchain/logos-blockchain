@@ -148,6 +148,15 @@ impl Mirror {
         &self.chain
     }
 
+    /// Forget the view, as a zone starting without a checkpoint does; the
+    /// next update rebuilds it.
+    pub fn forget_view(&mut self) {
+        self.chain.clear();
+        self.lib = None;
+        self.pending.clear();
+        self.pending_msgs.clear();
+    }
+
     pub fn observe(&mut self, event: &Event) {
         let Event::BlocksProcessed {
             checkpoint,

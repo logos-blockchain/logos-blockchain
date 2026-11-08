@@ -20,7 +20,7 @@ pub trait Policy: Send {
 
 #[must_use]
 pub fn make_inscription(msg: &str) -> Inscription {
-    Inscription::try_from(msg.as_bytes().to_vec()).expect("payload fits an inscription")
+    Inscription::new_unchecked(msg.as_bytes().to_vec())
 }
 
 #[must_use]

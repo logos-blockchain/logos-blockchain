@@ -13,7 +13,7 @@ use lb_core::{
     mantle::{
         Note, NoteId, Utxo,
         channel::ChannelState,
-        gas::{Gas, GasCost, MainnetGasProfile, TxGasCalculator as _},
+        gas::{Gas, GasCost, GasProfile, TxGasCalculator as _},
         ledger::{Inputs, Outputs, verification_mode::StandardMode},
         ops::{
             OpId as _, OpProofRef, OpRef,
@@ -31,6 +31,23 @@ use lb_core::{
 };
 use lb_key_management_system_service::keys::{UnverifiedEd25519PublicKey, ZkPublicKey};
 use lb_zone_sdk::node_types::{Slot, TxHash};
+
+/// What each Operation costs, the channel ones per key of their threshold:
+/// the deployments' schedule (`lb_config::deployment::GAS_PROFILE`), which
+/// the node's wallet and ledger price transactions under.
+const GAS_PROFILE: GasProfile = GasProfile {
+    transfer: Gas::new(590),
+    channel_config: Gas::new(56),
+    channel_inscribe: Gas::new(56),
+    channel_deposit: Gas::new(590),
+    channel_withdraw: Gas::new(56),
+    channel_transfer: Gas::new(56),
+    sdp_declare: Gas::new(646),
+    sdp_withdraw: Gas::new(590),
+    sdp_active: Gas::new(590),
+    leader_claim: Gas::new(580),
+    claim_pow_reward: Gas::new(1),
+};
 
 /// Why a transaction was refused by the ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,7 +95,7 @@ impl SimLedger {
     }
 
     /// The pricing context the node's wallet and ledger derive from the
-    /// channels: thresholds in force plus the gas prices.
+    /// channels: thresholds in force, the gas prices and the gas profile.
     #[must_use]
     pub fn gas_context(&self) -> OpsGasContext {
         let thresholds = |pick: fn(&ChannelState) -> ChannelKeyIndex| {
@@ -91,6 +108,7 @@ impl SimLedger {
             thresholds(|c| c.transfer_threshold),
             thresholds(|c| c.configuration_threshold),
             self.gas_prices.clone(),
+            GAS_PROFILE,
         )
     }
 
@@ -178,9 +196,7 @@ impl SimLedger {
         tx: &SignedOps<Unverified, StandardMode>,
     ) -> Result<GasCost, lb_core::mantle::gas::GasOverflow> {
         let context = self.gas_context();
-        let execution = tx
-            .op_refs()
-            .execution_gas_consumption::<MainnetGasProfile>(&context)?;
+        let execution = tx.op_refs().execution_gas_consumption(&context)?;
         let storage = Gas::new(tx.storage_size() as u64);
         GasCost::calculate(execution, self.gas_prices.execution_base_gas_price)?.checked_add(
             GasCost::calculate(storage, self.gas_prices.storage_gas_price)?,

@@ -9,7 +9,7 @@ use lb_core::mantle::{
     transactions::{GasPrices, Ops, tx_list::OpProofs},
 };
 use lb_zone_sdk::node_types::TxHash;
-use logos_blockchain_zone_sdk_testing::{SimNode, chains, world as common};
+use logos_blockchain_zone_sdk_testing::{SimNode, chains, node::FORK_DIGEST, world as common};
 
 /// Fee the included `hash` paid: transfer inputs minus outputs, read from the
 /// ledger before its block.
@@ -75,7 +75,7 @@ async fn unfunded_inscription_is_evicted() {
         parent: tip,
         signer: key.public_key().into_unverified(),
     };
-    let ops = Ops::from([Op::ChannelInscribe(op)]);
+    let ops = Ops::new(FORK_DIGEST, [Op::ChannelInscribe(op)]);
     let signature = key.sign_payload(ops.hash().as_signing_bytes());
     let tx = SignedOps::from_parts(ops, OpProofs::from([OpProof::Ed25519Sig(signature)]))
         .expect("signed");

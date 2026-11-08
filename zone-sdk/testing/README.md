@@ -26,7 +26,6 @@ a restarted sequencer reports what one that never stopped would.
 
 ```sh
 cargo test -p logos-blockchain-zone-sdk-testing               # everything
-cargo test -p logos-blockchain-zone-sdk-testing -- --ignored  # known SDK issues still open
 PROPTEST_CASES=200 SIM_EVENTS=64..512 cargo test -p logos-blockchain-zone-sdk-testing properties
 RUST_LOG=debug ...                                            # SDK log plus the per-event trace
 ```

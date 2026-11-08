@@ -317,6 +317,9 @@ impl Harness {
         let seq = &mut self.seqs[index];
         seq.oracles
             .restart_from(checkpoint.as_ref().map(|cp| cp.lib));
+        if checkpoint.is_none() {
+            seq.mirror.forget_view();
+        }
         seq.sequencer = Some(ZoneSequencer::init_with_config(
             self.channel_id,
             seq.key.clone(),

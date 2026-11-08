@@ -147,9 +147,12 @@ impl ViewChecker {
         for tx in finalized {
             self.held.remove(&Key::Tx(tx.tx_hash));
             for op in &tx.ops {
-                if let FinalizedOp::Inscription(info) | FinalizedOp::Config(info) = op {
-                    self.held.remove(&Key::Msg(info.this_msg));
-                }
+                let msg = match op {
+                    FinalizedOp::Inscription(info) => info.this_msg,
+                    FinalizedOp::Config(info) => info.this_msg,
+                    _ => continue,
+                };
+                self.held.remove(&Key::Msg(msg));
             }
         }
     }

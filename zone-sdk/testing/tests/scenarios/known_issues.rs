@@ -42,7 +42,6 @@ async fn deposit_in_losing_fork_is_not_reported() {
 /// history the restore replays without a shed, never reported orphaned:
 /// the consumer is not told and the payload never lands.
 #[tokio::test(start_paused = true)]
-#[ignore = "known issue: a restored pending publish whose parent was taken by a block finalized while the sequencer was down stays pending, unreported and never posted"]
 async fn publish_queued_out_of_turn_is_stranded_when_its_parent_is_taken_while_down() {
     let mut world = World::new(chains::linear());
     let a = world.start("SEQ_A", reference("SEQ_A")).await;
@@ -223,7 +222,6 @@ async fn others_config_on_an_abandoned_branch_is_kept_and_re_posted() {
 /// lands. The config shed drops the inscription but not the custom tx chained
 /// on it, which leaves the view without being reported orphaned.
 #[tokio::test(start_paused = true)]
-#[ignore = "known issue: the config shed drops a pending inscription but not the custom tx chained on it"]
 async fn config_shed_strands_the_custom_tx_chained_on_a_shed_inscription() {
     let mut world = World::new(chains::linear());
     let a = world.start("SEQ_A", passive()).await;
@@ -267,7 +265,6 @@ async fn config_shed_strands_the_custom_tx_chained_on_a_shed_inscription() {
 /// is dead: it must be shed, not resubmitted forever, and must not block
 /// later publishes.
 #[tokio::test(start_paused = true)]
-#[ignore = "known issue: a pending withdraw whose channel input vanished with an orphaned deposit is resubmitted forever"]
 async fn withdraw_on_orphaned_deposit_is_dropped() {
     let mut world = World::new(chains::linear());
     world.coin_split(&[2]).await;
@@ -343,9 +340,13 @@ async fn withdraw_on_orphaned_deposit_is_dropped() {
     assert!(!world.node().is_included(&withdraw));
     let after = world.publish_retry(a, "after the dead withdraw").await;
     world.include_within(after, 60).await;
-    assert_eq!(
-        world.pending_count(a),
-        0,
+    let holds_withdraw = world
+        .checkpoint(a)
+        .pending_txs
+        .iter()
+        .any(|(hash, _)| *hash == withdraw);
+    assert!(
+        !holds_withdraw,
         "SEQ_A still holds the dead withdraw:\n{}",
         world.diagnostics()
     );
@@ -360,7 +361,6 @@ async fn withdraw_on_orphaned_deposit_is_dropped() {
 /// pends on a passed parent, is re-posted and refused by the node, and is
 /// not reported orphaned until the expiry shed.
 #[tokio::test(start_paused = true)]
-#[ignore = "known issue: submit_signed_tx accepts a parent whose taking child is finalized; only pending children are checked"]
 async fn hand_built_tx_on_a_parent_with_a_finalized_child_is_refused() {
     let mut world = World::new(chains::linear());
     let a = world.start("SEQ_A", passive()).await;

@@ -21,12 +21,12 @@ use lb_common_http_client::{
     ProcessedBlockEvent, Slot, State, TimeInfo,
 };
 use lb_core::{
+    era::ForkDigest,
     events::Event as ChainEvent,
     header::{ContentId, HeaderId},
     mantle::{
         Note, NoteId, OpProof, SignedOps, Utxo,
         channel::ChannelState,
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         ops::{
             channel::{ChannelId, MsgId},
@@ -40,7 +40,10 @@ use lb_core::{
     },
     proofs::leader_proof::Groth16LeaderProof,
 };
-use lb_http_api_common::bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody};
+use lb_http_api_common::bodies::{
+    mantle::LimitsResponseBody,
+    wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
+};
 use lb_key_management_system_service::keys::{ZkPublicKey, ZkSignature};
 use lb_zone_sdk::{
     adapter::{self, BoxStream},
@@ -1289,7 +1292,7 @@ impl ChainState {
     }
 
     /// Fund `request` the way the node's wallet service does: largest notes
-    /// first, priced with `MainnetGasProfile` at the current gas prices.
+    /// first, priced with the deployment gas profile at the current gas prices.
     fn fund(
         &mut self,
         request: WalletFundRequestBody,
@@ -1299,7 +1302,7 @@ impl ChainState {
         let Some(wallet) = self.funding.as_mut() else {
             let funded_tx = request
                 .tx_builder
-                .build()
+                .build(FORK_DIGEST)
                 .map_err(|e| server(format!("funding build: {e:?}")))?;
             return Ok(WalletFundResponseBody {
                 tip,
@@ -1350,7 +1353,7 @@ impl ChainState {
         wallet.reserved.extend(inputs.iter().map(|id| (*id, 0)));
         wallet.handed += inputs.len();
         let funded_tx = funded
-            .build()
+            .build(FORK_DIGEST)
             .map_err(|e| server(format!("funding build: {e:?}")))?;
         let transfer_proof = (!inputs.is_empty()).then(|| OpProof::ZkSig(ZkSignature::sample()));
         Ok(WalletFundResponseBody {
@@ -1375,12 +1378,12 @@ fn fund_from(
     let builder_err = |e: TxBuilderError| format!("{e:?}");
     let delta = |builder: &MantleTxBuilder| {
         builder
-            .funding_delta_with_priority_fee::<MainnetGasProfile>(context, priority_fee_percent)
+            .funding_delta_with_priority_fee(context, priority_fee_percent)
             .map_err(builder_err)
     };
     let with_change = |builder: MantleTxBuilder| {
         builder
-            .return_change::<MainnetGasProfile>(context, change_pk, priority_fee_percent)
+            .return_change(context, change_pk, priority_fee_percent)
             .map_err(builder_err)
     };
     match delta(tx_builder)?.cmp(&0) {
@@ -1411,8 +1414,17 @@ fn fund_from(
     ))
 }
 
+/// The fork digest the simulated chain's transactions carry.
+pub const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
+
 #[async_trait]
 impl adapter::Node for SimNode {
+    async fn limits(&self) -> Result<LimitsResponseBody, lb_common_http_client::Error> {
+        Ok(LimitsResponseBody {
+            max_op_data_size: u32::MAX,
+        })
+    }
+
     async fn consensus_info(&self) -> Result<ChainServiceInfo, lb_common_http_client::Error> {
         let state = self.lock();
         state.require_up()?;

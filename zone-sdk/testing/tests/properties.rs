@@ -18,14 +18,9 @@
 //! outages and price moves. A failing roll is shrunk to the smallest
 //! schedule that still fails, which then becomes a hand-written story.
 
-use std::{
-    collections::HashSet,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::collections::HashSet;
 
-use common::{
-    FINALITY_DEPTH, FOREIGN, FOREIGN_2, KnownIssue, OTHER_ZONE, Posted, World, inscription, passive,
-};
+use common::{FINALITY_DEPTH, FOREIGN, FOREIGN_2, OTHER_ZONE, Posted, World, inscription, passive};
 use lb_zone_sdk::sequencer::{FinalizedOp, FinalizedTx};
 use logos_blockchain_zone_sdk_testing::{
     chains::{self, Chain, Condition, Shape},
@@ -447,7 +442,7 @@ async fn world_for(scenario: &Scenario) -> (World, Vec<String>) {
     (world, expected)
 }
 
-async fn run(scenario: Scenario, recognise_known_issues: bool) {
+async fn run(scenario: Scenario) {
     let (mut world, mut expected) = world_for(&scenario).await;
     for event in scenario.schedule.clone() {
         tracing::debug!(?event, tip = ?world.node().tip(), lib = ?world.node().lib(), "event");
@@ -471,13 +466,6 @@ async fn run(scenario: Scenario, recognise_known_issues: bool) {
     }
     world.flush_prepared().await;
     let settled = world.try_settle_chain(400).await;
-    if let Some(issue) = world
-        .known_issue(settled)
-        .filter(|_| recognise_known_issues)
-    {
-        record_known_issue(issue, &scenario);
-        return;
-    }
     assert!(
         settled,
         "chain did not settle within 400 steps:\n{}",
@@ -561,29 +549,6 @@ fn assert_one_lineage(finalized: &[FinalizedTx]) {
     }
 }
 
-/// A schedule that ran into a known SDK issue is counted and logged, not
-/// failed: the hunt keeps drawing from the whole vocabulary, and whatever
-/// else breaks in those regions still fails. The count is printed so a run
-/// shows how often it got there (`--no-capture` or `--success-output
-/// immediate`), and reaches zero once the fix lands.
-fn record_known_issue(issue: KnownIssue, scenario: &Scenario) {
-    static HITS: [AtomicUsize; 5] = [
-        AtomicUsize::new(0),
-        AtomicUsize::new(0),
-        AtomicUsize::new(0),
-        AtomicUsize::new(0),
-        AtomicUsize::new(0),
-    ];
-    let hits = HITS[issue as usize].fetch_add(1, Ordering::Relaxed) + 1;
-    eprintln!(
-        "known issue {issue:?}: {hits} schedule(s) so far ({} events, {} sequencers, {} writers)",
-        scenario.schedule.len(),
-        scenario.sequencers,
-        scenario.writers
-    );
-    tracing::warn!(?issue, schedule = ?scenario.schedule, "known issue hit");
-}
-
 /// A failing seed is kept in `tests/properties.proptest-regressions` and
 /// replayed first by the next run; `PROPTEST_DISABLE_FAILURE_PERSISTENCE`
 /// turns that off, as it does for proptest's default, which is what a
@@ -606,7 +571,7 @@ fn runtime() -> tokio::runtime::Runtime {
 }
 
 fn block_on(scenario: Scenario) {
-    runtime().block_on(run(scenario, true));
+    runtime().block_on(run(scenario));
 }
 
 // The ladder: each rung draws from one more layer than the one below, so
@@ -663,7 +628,6 @@ proptest! {
 /// branch; it re-posts them every tick, the node rejects each for its
 /// parent, none is ever reported orphaned and the chain never settles.
 #[test]
-#[ignore = "known issue: pending entries chained on an abandoned branch are re-posted forever and never reported orphaned"]
 #[expect(
     clippy::too_many_lines,
     reason = "the recorded schedule, event by event"
@@ -1164,5 +1128,5 @@ fn pending_on_an_abandoned_branch_is_reported_orphaned() {
             },
         ],
     };
-    runtime().block_on(run(scenario, false));
+    runtime().block_on(run(scenario));
 }
