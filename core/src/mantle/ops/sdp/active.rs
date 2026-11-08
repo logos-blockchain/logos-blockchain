@@ -8,7 +8,6 @@ use crate::{
     events::TxEvent,
     mantle::{
         batch::DeferredZkSig,
-        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
             VerifiableOperation,
@@ -40,12 +39,6 @@ impl ProvableOperation for SDPActiveOp {
     type Proof = ZkSignature;
     const CODE: u8 = 0x22;
 }
-
-impl OperationGas<MainnetGasProfile> for SDPActiveOp {
-    const GAS_COST: Gas = Gas::new(590);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for SDPActiveOp {}
 
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<SDPActiveOp, Unverified, StandardMode>
@@ -134,7 +127,10 @@ mod tests {
         mantle::{
             TxHash,
             batch::{DeferredZkSig, Error as BatchError, test_utils::batch_verify},
-            gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
+            gas::{
+                Gas,
+                test_utils::{FixedThresholds, GAS_PROFILE},
+            },
             ledger::{
                 Declarations, PreverifiableOperation as _, ProvableOperation,
                 VerifiableOperation as _, verification_mode::StandardMode,
@@ -564,7 +560,8 @@ mod tests {
     fn sdp_active_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
             assert_eq!(
-                SDPActiveOp::sample().execution_gas(&FixedThresholds(threshold)),
+                crate::mantle::OpRef::from(&SDPActiveOp::sample())
+                    .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(590))
             );
         }

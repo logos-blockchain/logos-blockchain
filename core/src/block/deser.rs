@@ -4,7 +4,10 @@ mod tests {
     use lb_key_management_system_keys::keys::Ed25519Key;
 
     use crate::{
-        block::{Block, BlockTransactions, UncleHeaders, tests::create_proof},
+        block::{
+            Block, BlockTransactions, UncleHeaders,
+            tests::{TEST_MAX_TRANSACTIONS_SIZE, create_proof},
+        },
         mantle::transactions::Ops,
     };
 
@@ -16,6 +19,7 @@ mod tests {
             UncleHeaders::empty(),
             create_proof(),
             BlockTransactions::empty(),
+            TEST_MAX_TRANSACTIONS_SIZE,
             &signing_key,
         )
         .expect("block creation should succeed")

@@ -6,8 +6,8 @@
 //! Every codec must also ship at least one **well-known fixture** (a value and
 //! its exact encoded bytes). This is enforced at compile time: both codec
 //! traits require [`CodecExamples`], whose only sanctioned implementation
-//! path is [`codec_fixtures!`] / `#[derive(BinaryCodec)]`, so a codec
-//! without a fixture is a compilation error.
+//! path is [`codec_fixtures!`], so a codec without a fixture is a compilation
+//! error.
 
 mod array;
 mod boolean;
@@ -23,6 +23,7 @@ mod length_prefix;
 mod math;
 mod numbers;
 mod option;
+mod runtime_bounded_vec;
 
 #[cfg(test)]
 mod tests;
@@ -33,14 +34,23 @@ pub use fixtures::{
     assert_codec_fixtures_decode_only, assert_codec_fixtures_decode_only_with,
     assert_codec_fixtures_encode_only, assert_codec_fixtures_with, decode_fixture_hex,
 };
-pub use lb_binary_codec_macros::{BinaryCodec, codec_fixtures};
+pub use lb_binary_codec_macros::{BinaryDecode, BinaryEncode, codec_fixtures};
+pub use length_prefix::length_prefix_len;
+
+/// Largest `MAX` for which an element type that decodes without consuming input
+/// is still supported.
+///
+/// Such an element makes the decode loop independent of the input, so `MAX` is
+/// the only thing bounding it — repeating it is harmless exactly when `MAX` is
+/// small enough that a hostile length prefix buys nothing. Above this, the
+/// combination is refused rather than iterated.
+const ZERO_LENGTH_ELEMENT_MAX: usize = 1024;
 
 /// Sealed marker that gates [`CodecExamples`] to the blessed macro path.
 ///
 /// `#[doc(hidden)] pub` (rather than `pub(crate)`) so the `codec_fixtures!`
-/// / `#[derive(BinaryCodec)]` expansions can implement it from any downstream
-/// crate; undocumented, so the macros remain the only sanctioned way to satisfy
-/// it.
+/// expansions can implement it from any downstream crate; undocumented, so the
+/// macro remains the only sanctioned way to satisfy it.
 #[doc(hidden)]
 pub mod sealed {
     pub trait Sealed {}

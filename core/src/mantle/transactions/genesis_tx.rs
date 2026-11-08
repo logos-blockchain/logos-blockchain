@@ -1,6 +1,6 @@
 use core::fmt::{self, Display, Formatter};
 
-use lb_binary_codec::canonical::{BTreeSet, BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BTreeSet, BinaryDecode, BinaryEncode};
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::bounded::{BoundedString, BoundedVec, UpperBoundedVec};
@@ -9,6 +9,7 @@ use time::OffsetDateTime;
 
 use crate::{
     crypto::{Digest as _, Hasher},
+    era::ForkDigest,
     mantle::{
         ledger::verification_mode::GenesisMode,
         ops::{
@@ -61,10 +62,19 @@ pub enum Error {
     InvalidGenesisParameters(String),
     #[error("Too many operations in genesis transaction: {count}")]
     TooManyOps { count: usize },
+    #[error("The genesis transaction carries the fork digest {0} instead of zero")]
+    UnexpectedForkDigest(ForkDigest),
 }
 
 impl GenesisTx {
+    /// The fork digest of the genesis transaction: 32 zero bytes, since every
+    /// fork digest hashes the genesis block.
+    pub const FORK_DIGEST: ForkDigest = ForkDigest::new([0; 32]);
+
     pub fn from_tx(signed_ops: SignedOps<Preverified, GenesisMode>) -> Result<Self, Error> {
+        if signed_ops.fork_digest != Self::FORK_DIGEST {
+            return Err(Error::UnexpectedForkDigest(signed_ops.fork_digest));
+        }
         // Genesis transactions must contain exactly one transfer as the first op,
         // one inscription as the second op, and then may contain other SDP declarations
         let genesis_parameters = match signed_ops.op_refs().as_slice() {
@@ -164,6 +174,10 @@ impl Hashable for GenesisTx {
 }
 
 impl MantleTx for GenesisTx {
+    fn fork_digest(&self) -> ForkDigest {
+        self.signed_ops.fork_digest
+    }
+
     fn op_refs(&self) -> OpRefs<'_> {
         self.signed_ops.op_refs()
     }
@@ -175,7 +189,7 @@ impl MantleTx for GenesisTx {
 
 impl GenesisTxTrait for GenesisTx {
     fn into_genesis_ops(self) -> GenesisOps {
-        let mut signed_ops = self.signed_ops.into_inner().into_inner().into_iter();
+        let mut signed_ops = self.signed_ops.into_iter();
 
         let transfer = match signed_ops.next() {
             Some(SignedOp::Transfer(signed_operation)) => signed_operation,
@@ -242,8 +256,11 @@ type ChainIdBoundedVec = BoundedVec<u8, 1, MAX_CHAIN_ID_SIZE>;
 /// the UTF-8 and domain rules live on [`ChainId`] below.
 type ChainIdBoundedString = BoundedString<1, MAX_CHAIN_ID_SIZE>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, BinaryDecode,
+)]
 #[serde(transparent)]
+#[decode(try_from = "ChainIdBoundedVec")]
 pub struct ChainId(ChainIdBoundedString);
 
 impl ChainId {
@@ -331,23 +348,9 @@ impl BinaryEncode for ChainId {
     }
 }
 
-impl BinaryDecode for ChainId {
-    type Context = ();
-
-    fn decode<'input>(
-        input: &'input [u8],
-        (): &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (rest, value) = ChainIdBoundedVec::decode(input, &())?;
-        let chain_id = Self::try_from(value)
-            .map_err(|_| DecodeError::invalid_value::<Self>("invalid chain id bytes"))?;
-        Ok((rest, chain_id))
-    }
-}
-
 /// Time at which the chain should start. u32 suffices: we only need the
 /// positive half of the i64 Unix timestamp.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, BinaryCodec)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, BinaryEncode, BinaryDecode)]
 pub struct GenesisTime(u32);
 
 impl GenesisTime {
@@ -384,7 +387,7 @@ impl TryFrom<OffsetDateTime> for GenesisTime {
 pub type ConsensusExcludedKeys = BTreeSet<ZkPublicKey>;
 
 /// The parameters of a chain, encoded as an inscription in its genesis block.
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryEncode, BinaryDecode)]
 pub struct GenesisParameters {
     pub chain_id: ChainId,
     pub start_time: GenesisTime,
@@ -395,6 +398,7 @@ pub struct GenesisParameters {
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::canonical::DecodeError;
     use lb_groth16::AdditiveGroup as _;
     use lb_key_management_system_keys::keys::{
         Ed25519PublicKey, Ed25519Signature, UnverifiedEd25519PublicKey, ZkKey,
@@ -407,7 +411,7 @@ mod tests {
             OpProof,
             ledger::{BoundedInputs, Inputs, Note, Outputs, Utxo, Value},
             ops::channel::inscribe::Inscription,
-            transactions::{OpProofs, Ops},
+            transactions::{OpProofs, Ops, TxList},
         },
         sdp::{Locator, ProviderId, ServiceType},
     };
@@ -472,7 +476,7 @@ mod tests {
     ) -> SignedOps<Preverified, GenesisMode> {
         let mut new_ops = vec![Op::Transfer(transfer_op)];
         new_ops.append(&mut ops);
-        let mantle_tx = Ops::new_unchecked(new_ops);
+        let mantle_tx = Ops::new(GenesisTx::FORK_DIGEST, TxList::new_unchecked(new_ops));
         let mut op_proofs = OpProofs::from([OpProof::ZkSig(
             ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr()).unwrap(),
         )]);
@@ -754,6 +758,25 @@ mod tests {
         );
 
         assert_eq!(GenesisTx::from_tx(tx), Err(Error::UnexpectedInput));
+    }
+
+    #[test]
+    fn from_tx_rejects_a_fork_digest_other_than_zero() {
+        let mut tx = create_trusted_tx(
+            vec![Op::ChannelInscribe(inscription_op(
+                ChannelId::from([0; 32]),
+                &genesis_parameters(),
+                MsgId::root(),
+                UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+            ))],
+            vec![OpProof::Ed25519Sig(Ed25519Signature::zero())],
+        );
+        tx.fork_digest = ForkDigest::new([1; 32]);
+
+        assert_eq!(
+            GenesisTx::from_tx(tx),
+            Err(Error::UnexpectedForkDigest(ForkDigest::new([1; 32])))
+        );
     }
 
     #[test]

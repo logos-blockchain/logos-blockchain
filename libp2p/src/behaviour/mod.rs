@@ -30,6 +30,7 @@ pub(crate) struct BehaviourConfig {
     pub chain_sync_protocol_name: StreamProtocol,
     pub public_key: identity::PublicKey,
     pub chain_sync_config: lb_cryptarchia_sync::Config,
+    pub chain_sync_max_block_size: usize,
     pub max_data_size_by_topic: HashMap<libp2p::gossipsub::TopicHash, usize>,
 }
 
@@ -63,6 +64,7 @@ impl<Rng: Clone + Send + RngCore + 'static> Behaviour<Rng> {
             kademlia_config,
             identify_config,
             chain_sync_config,
+            chain_sync_max_block_size,
             nat_config,
             kad_protocol_name,
             identify_protocol_name,
@@ -102,8 +104,11 @@ impl<Rng: Clone + Send + RngCore + 'static> Behaviour<Rng> {
         let autonat_server = autonat::v2::server::Behaviour::new(rng.clone());
         let nat = nat::Behaviour::new(rng, &nat_config);
 
-        let chain_sync =
-            lb_cryptarchia_sync::Behaviour::new(chain_sync_protocol_name, chain_sync_config);
+        let chain_sync = lb_cryptarchia_sync::Behaviour::new(
+            chain_sync_protocol_name,
+            chain_sync_config,
+            chain_sync_max_block_size,
+        );
 
         Ok(Self {
             gossipsub,
@@ -159,6 +164,7 @@ mod tests {
                     max_inbound_requests: NonZeroUsize::new(1).unwrap(),
                     inbound_download_stream_timeout: Duration::from_secs(120),
                 },
+                chain_sync_max_block_size: 1_024,
                 max_data_size_by_topic: HashMap::new(),
             },
             OsRng,

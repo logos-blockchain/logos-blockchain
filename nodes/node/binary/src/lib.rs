@@ -6,7 +6,10 @@ pub mod global_allocators;
 pub mod panic;
 
 use color_eyre::eyre::{Result, eyre};
-use lb_core::mantle::{ledger::verification_mode::StandardMode, transactions::states::Preverified};
+use lb_core::mantle::{
+    ledger::verification_mode::StandardMode,
+    transactions::states::{Preverified, Unverified},
+};
 pub use lb_core::{
     header::HeaderId,
     mantle::{SignedOps, traits::Hashable, transactions::hash::TxHash},
@@ -51,6 +54,10 @@ pub use crate::{
     config::{ApiArgs, LogArgs, NetworkArgs, UserConfig},
 };
 
+pub type Tx<State> = SignedOps<State, StandardMode>;
+pub type ValidatedTx = Tx<Preverified>;
+pub type UnvalidatedTx = Tx<Unverified>;
+
 pub type TracingService = Tracing<RuntimeServiceId>;
 
 pub(crate) type NetworkService =
@@ -90,7 +97,7 @@ pub type PoWService = generic_services::PoWService<RuntimeServiceId>;
 pub type ApiService = lb_api_service::ApiService<
     AxumBackend<
         NtpTimeBackend,
-        RocksStorageAdapter<SignedOps<Preverified, StandardMode>, TxHash>,
+        RocksStorageAdapter<ValidatedTx, TxHash>,
         SdpMempoolAdapter<RuntimeServiceId>,
         SdpWalletAdapter<RuntimeServiceId>,
         SdpRecoveryBackend<RuntimeServiceId>,
@@ -144,6 +151,12 @@ pub fn run_node_from_config(
     .into_rocks_backend_settings(&config.user.state);
 
     let recovery_data = load_recovery_data(storage_config.clone())?;
+
+    // Before any service starts: a deployment that changed an era the node has
+    // already executed must not run on the state the node left.
+    if let Some(tip_era) = lb_chain_service::saved_tip_era(&recovery_data)? {
+        config.deployment.check_keeps_tip_era(tip_era)?;
+    }
 
     let (blend_config, blend_core_config, blend_edge_config, blend_broadcast_config) =
         BlendConfig {
@@ -205,6 +218,7 @@ pub fn run_node_from_config(
     let api_config = ApiConfig {
         user: config.user.api,
         chain_id,
+        fork_digests: eras.iter().map(|era| era.parameters.fork_digest).collect(),
     };
 
     let http_config = api_config.backend_settings();

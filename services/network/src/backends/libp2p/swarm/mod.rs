@@ -141,20 +141,27 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             ..
         } = config;
         // The swarm knows the data limits of every era's topics, which
-        // gossipsub fixes when it is built, and speaks the chain sync protocol
-        // of the current era until it is instructed to enter another one.
+        // gossipsub fixes when it is built, carries the blocks of every era in
+        // chain sync, and speaks the chain sync protocol of the current era
+        // until it is instructed to enter another one.
         let current_era_chain_sync_protocol_name = era_schedule
             .get(current_era)
             .expect("The era the swarm starts in should be scheduled")
             .parameters
             .chain_sync_protocol_name
             .clone();
+        let chain_sync_max_block_size = era_schedule
+            .iter()
+            .map(|era| era.parameters.chain_sync_max_block_size)
+            .max()
+            .expect("A schedule has at least the genesis era");
         let max_data_size_by_topic = max_data_size_by_topic_of_eras(&era_schedule);
         let protocol_contract =
             ProtocolContract::from_config(&inner, &current_era_chain_sync_protocol_name);
         let swarm = Swarm::build(
             inner,
             current_era_chain_sync_protocol_name,
+            chain_sync_max_block_size,
             max_data_size_by_topic.clone(),
             rng,
         )
@@ -185,12 +192,11 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
 
         for initial_peer in &initial_peers {
             let (tx, _) = oneshot::channel();
-            let dial = Dial {
+            self.connect(Dial {
                 addr: initial_peer.clone(),
                 retry_count: 0,
                 result_sender: tx,
-            };
-            Self::schedule_connect(dial, self.commands_tx.clone()).await;
+            });
         }
 
         loop {
@@ -651,6 +657,9 @@ mod tests {
         }
     }
 
+    /// The largest block of the test eras.
+    const TEST_MAX_BLOCK_SIZE: usize = 1_024;
+
     /// A chain of one era, whose topics have the data limits
     /// `max_data_size_by_topic`.
     fn one_era(max_data_size_by_topic: HashMap<TopicHash, usize>) -> Libp2pEraSchedule {
@@ -667,6 +676,7 @@ mod tests {
         .map(move |_| Libp2pEraConfig {
             fork_digest: ForkDigest::from([0x01; 32]),
             chain_sync_protocol_name: StreamProtocol::new("/chainsync/test"),
+            chain_sync_max_block_size: TEST_MAX_BLOCK_SIZE,
             max_data_size_by_topic: max_data_size_by_topic.clone(),
         })
     }
@@ -708,6 +718,7 @@ mod tests {
             } else {
                 "/chainsync/next"
             }),
+            chain_sync_max_block_size: TEST_MAX_BLOCK_SIZE,
             max_data_size_by_topic: HashMap::new(),
         })
     }
@@ -931,6 +942,43 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+    }
+
+    #[tokio::test]
+    async fn starts_with_more_initial_peers_than_the_commands_channel_holds() {
+        let (commands_tx, commands_rx) = mpsc::channel(1);
+        let (pubsub_events_tx, _) = broadcast::channel(1);
+        let (chainsync_events_tx, _) = broadcast::channel(1);
+        let config =
+            create_libp2p_config(vec![], get_available_udp_port().unwrap(), HashMap::new());
+        let mut handler = SwarmHandler::new(
+            config,
+            Era::genesis(),
+            commands_tx.clone(),
+            commands_rx,
+            pubsub_events_tx,
+            chainsync_events_tx,
+            OsRng,
+        );
+        let initial_peers = (1..=3)
+            .map(|port| {
+                format!("/ip4/127.0.0.1/udp/{port}/quic-v1")
+                    .parse()
+                    .unwrap()
+            })
+            .collect();
+        let task = tokio::spawn(async move {
+            handler.run(initial_peers).await;
+        });
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            wait_for_network_info(&commands_tx, |_| true),
+        )
+        .await
+        .expect("the swarm should reach its loop");
+
+        task.abort();
     }
 
     #[tokio::test]

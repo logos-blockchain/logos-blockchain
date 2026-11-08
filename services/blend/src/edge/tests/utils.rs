@@ -38,6 +38,7 @@ use crate::{
     message::ServiceMessage,
     settings::{EraTimingSettings, RuntimeComponents, max_data_message_delay_in_rounds},
     test_utils::{
+        PAYLOAD_BODY_SIZE,
         crypto::mock_blend_proof,
         dispatcher::{TestBroadcastingChannel, TestPayloadDispatcher},
         epoch::OncePolStreamProvider,
@@ -211,6 +212,7 @@ pub fn settings(
                 epoch_transition_period: Duration::from_secs(1),
             },
             num_blend_layers: TEST_BLEND_LAYERS,
+            payload_body_size: PAYLOAD_BODY_SIZE,
             max_blend_delay_in_rounds: TEST_MAX_BLEND_DELAY,
             minimum_network_size: NonZeroU64::new(minimum_network_size).unwrap(),
             cover: EraCoverTrafficSettings::default(),

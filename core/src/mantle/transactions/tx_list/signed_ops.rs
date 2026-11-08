@@ -1,20 +1,25 @@
+use std::ops::Deref;
+
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_utils::bounded::BoundedError;
 
 #[cfg(any(test, feature = "test-utils"))]
 use crate::mantle::Op;
-use crate::mantle::{
-    OpProofRef, OpRef, TxHash, VerificationError,
-    ledger::verification_mode::{GenesisMode, StandardMode, VerificationMode},
-    ops::{SignedOp, signed_op_error::OpProofMismatch},
-    traits::{
-        Hashable, MantleTx, PreverifiedMantleTransaction, SignedMantleTx, StorageSize, hashable,
-    },
-    transactions::{
-        OpProofRefs, VerifiedOperations,
-        hash::TxHashView,
-        states::{Preverified, Unverified, VerificationState},
-        tx_list::{OpProofs, OpRefs, Ops, common::TxList, hash::tx_hasher},
+use crate::{
+    era::ForkDigest,
+    mantle::{
+        OpProofRef, OpRef, TxHash, VerificationError,
+        ledger::verification_mode::{GenesisMode, StandardMode, VerificationMode},
+        ops::{SignedOp, signed_op_error::OpProofMismatch},
+        traits::{
+            Hashable, MantleTx, PreverifiedMantleTransaction, SignedMantleTx, StorageSize, hashable,
+        },
+        transactions::{
+            OpProofRefs, VerifiedOperations,
+            hash::TxHashView,
+            states::{Preverified, Unverified, VerificationState},
+            tx_list::{OpProofs, OpRefs, Ops, common::TxList, hash::tx_hasher},
+        },
     },
 };
 
@@ -35,10 +40,17 @@ pub enum Error {
     // TODO: Add SignedOpErrors here, adding the op_index as metadata
 }
 
-pub type SignedOps<State, Mode> = TxList<SignedOp<State, Mode>>;
+/// A signed transaction: the fork digest it is signed under, then each of its
+/// operations with its proof.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignedOps<State: VerificationState, Mode: VerificationMode> {
+    pub(crate) fork_digest: ForkDigest,
+    pub(crate) ops: TxList<SignedOp<State, Mode>>,
+}
 
 impl<Mode: VerificationMode> SignedOps<Unverified, Mode> {
     pub fn from_parts(ops: Ops, op_proofs: OpProofs) -> Result<Self, Error> {
+        let fork_digest = ops.fork_digest;
         if ops.len() != op_proofs.len() {
             return Err(Error::LengthMismatch {
                 operations: ops.len(),
@@ -60,8 +72,10 @@ impl<Mode: VerificationMode> SignedOps<Unverified, Mode> {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let signed_ops = Self::try_from(signed_ops_vec)?;
-        Ok(signed_ops)
+        Ok(Self {
+            fork_digest,
+            ops: TxList::try_from(signed_ops_vec)?,
+        })
     }
 
     /// Converts a `SignedOps<Unverified, Mode>` into a
@@ -122,11 +136,15 @@ impl SignedOps<Unverified, StandardMode> {
     ///   and [`LeaderClaimOp`](crate::mantle::ops::leader_claim::LeaderClaimOp) have valid signatures/proofs.
     pub fn preverify(self) -> Result<SignedOps<Preverified, StandardMode>, VerificationError> {
         let tx_hash_view = TxHashView::new(self.hash());
+        let fork_digest = self.fork_digest;
         let preverified_signed_op_vec = self
             .into_iter()
             .map(|signed_op| signed_op.into_preverified(&tx_hash_view))
             .collect::<Result<Vec<SignedOp<Preverified, StandardMode>>, VerificationError>>()?;
-        Ok(SignedOps::new_unchecked(preverified_signed_op_vec))
+        Ok(SignedOps {
+            fork_digest,
+            ops: TxList::new_unchecked(preverified_signed_op_vec),
+        })
     }
 }
 
@@ -163,7 +181,10 @@ impl SignedOps<Preverified, StandardMode> {
 impl<State: VerificationState, Mode: VerificationMode> SignedOps<State, Mode> {
     #[must_use]
     pub fn op_refs(&self) -> OpRefs<'_> {
-        TxList(self.0.map_ref(SignedOp::operation))
+        OpRefs::new(
+            self.fork_digest,
+            TxList(self.ops.0.map_ref(SignedOp::operation)),
+        )
     }
 
     pub fn op_refs_iter(&self) -> impl Iterator<Item = OpRef<'_>> {
@@ -172,7 +193,7 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOps<State, Mode> {
 
     #[must_use]
     pub fn op_proof_refs(&self) -> OpProofRefs<'_> {
-        TxList(self.0.map_ref(SignedOp::proof))
+        TxList(self.ops.0.map_ref(SignedOp::proof))
     }
 
     pub fn op_proof_refs_iter(&self) -> impl Iterator<Item = OpProofRef<'_>> {
@@ -190,21 +211,41 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOps<State, Mode> {
     pub(crate) fn into_state_trusted<NewState: VerificationState>(
         self,
     ) -> SignedOps<NewState, Mode> {
+        let fork_digest = self.fork_digest;
         let new_state_signed_ops = self
             .into_iter()
             .map(SignedOp::into_state_trusted)
             .collect::<Vec<SignedOp<NewState, Mode>>>();
-        SignedOps::new_unchecked(new_state_signed_ops)
+        SignedOps {
+            fork_digest,
+            ops: TxList::new_unchecked(new_state_signed_ops),
+        }
     }
 }
 
-/// A list of [`SignedOp`] encodes columnar: `[count][ops...][proofs...]`.
-/// The single count covers both columns, so only the list can encode them.
+impl<State: VerificationState, Mode: VerificationMode> Deref for SignedOps<State, Mode> {
+    type Target = TxList<SignedOp<State, Mode>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.ops
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> IntoIterator for SignedOps<State, Mode> {
+    type Item = SignedOp<State, Mode>;
+    type IntoIter = <TxList<SignedOp<State, Mode>> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.ops.into_iter()
+    }
+}
+
+/// A signed transaction encodes its fork digest, then its operations
+/// columnar: `[fork digest][count][ops...][proofs...]`. The single count
+/// covers both columns, so only the transaction can encode them.
 /// [`OpProofs`], [`OpProofRefs`] and [`SignedOp`] deliberately implement
 /// neither codec trait, which is what makes a second count unrepresentable.
-impl<State: VerificationState, Mode: VerificationMode> BinaryEncode
-    for TxList<SignedOp<State, Mode>>
-{
+impl<State: VerificationState, Mode: VerificationMode> BinaryEncode for SignedOps<State, Mode> {
     fn encoded_length(&self) -> usize {
         self.op_refs().encoded_length()
             + self
@@ -222,13 +263,15 @@ impl<State: VerificationState, Mode: VerificationMode> BinaryEncode
 }
 
 impl<Mode: VerificationMode> BinaryDecode for SignedOps<Unverified, Mode> {
-    type Context = ();
+    /// The most bytes of data an Operation may carry in the era the transaction
+    /// is decoded under.
+    type Context = u32;
 
     fn decode<'input>(
         input: &'input [u8],
-        _context: &Self::Context,
+        max_op_data_size: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (remaining_input, ops) = Ops::decode(input, &())?;
+        let (remaining_input, ops) = Ops::decode(input, max_op_data_size)?;
         let (remaining_input, proofs) = OpProofs::decode_with_ops(remaining_input, &ops)?;
 
         let signed_ops = Self::from_parts(ops, proofs).map_err(|error| {
@@ -239,7 +282,27 @@ impl<Mode: VerificationMode> BinaryDecode for SignedOps<Unverified, Mode> {
     }
 }
 
-impl<State: VerificationState, Mode: VerificationMode> Hashable for TxList<SignedOp<State, Mode>> {
+// Decoded unverified, then preverified, as its serde form is.
+impl BinaryDecode for SignedOps<Preverified, StandardMode> {
+    /// The most bytes of data an Operation may carry in the era the transaction
+    /// is decoded under.
+    type Context = u32;
+
+    fn decode<'input>(
+        input: &'input [u8],
+        max_op_data_size: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (remaining_input, signed_ops) =
+            SignedOps::<Unverified, StandardMode>::decode(input, max_op_data_size)?;
+        let signed_ops = signed_ops.preverify().map_err(|error| {
+            DecodeError::custom(format!("Failed to preverify SignedOps: {error}"))
+        })?;
+
+        Ok((remaining_input, signed_ops))
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> Hashable for SignedOps<State, Mode> {
     //noinspection RsTypeCheck: The type is correct, but the linter is confused by
     // the closure.
     const HASHER: hashable::Hasher<Self> = tx_hasher;
@@ -257,6 +320,10 @@ impl<State: VerificationState, Mode: VerificationMode> StorageSize for SignedOps
 }
 
 impl<State: VerificationState, Mode: VerificationMode> MantleTx for SignedOps<State, Mode> {
+    fn fork_digest(&self) -> ForkDigest {
+        self.fork_digest
+    }
+
     fn op_refs(&self) -> OpRefs<'_> {
         self.op_refs()
     }
@@ -289,7 +356,7 @@ mod mantle_spec {
     //! of:
     //!
     //! ```json
-    //! { "mantle_tx": { "ops": [ ... ] }, "ops_proofs": [ ... ] }
+    //! { "mantle_tx": { "fork_digest": "…", "ops": [ ... ] }, "ops_proofs": [ ... ] }
     //! ```
     //!
     //! [`SignedOps`] breaks the standard serialization pattern, where each
@@ -298,22 +365,19 @@ mod mantle_spec {
     //! Every other sibling entity here is a list of rows and serializes as a
     //! bare sequence of them. This one is split into two named columns, and
     //! those columns sit at different levels: `mantle_tx` is the spec's
-    //! *unsigned* transaction, the op column on its own, and a signed
+    //! *unsigned* transaction, the fork digest and the op column, and a signed
     //! transaction is that plus the proof column beside it.
     //!
-    //! [`ops::mantle_spec`] builds that unsigned half, so the level comes from
-    //! there rather than from [`Ops`], which stays bare.
-    //!
     //! The binary arm carries none of this:
-    //! [`BinaryEncode`](lb_binary_codec::canonical::BinaryEncode) writes a
-    //! single count covering both columns, so position alone identifies
-    //! them.
+    //! [`BinaryEncode`](lb_binary_codec::canonical::BinaryEncode) writes the
+    //! fork digest, then a single count covering both columns, so position
+    //! alone identifies them.
     //!
     //! ```text
-    //! [count][ops...][proofs...]
+    //! [fork digest][count][ops...][proofs...]
     //! ```
 
-    use lb_binary_codec::canonical::{BinaryDecodeExt as _, BinaryEncode as _};
+    use lb_binary_codec::canonical::{BinaryDecode as _, BinaryEncode as _};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     use crate::mantle::{
@@ -321,13 +385,12 @@ mod mantle_spec {
         transactions::{
             OpProofRefs, OpProofs, OpRefs, Ops, SignedOps,
             states::{Preverified, Unverified, VerificationState},
-            tx_list::ops,
         },
     };
 
     #[derive(Serialize)]
     struct SignedOpsSerde<'a> {
-        #[serde(rename = "mantle_tx", with = "ops::mantle_spec")]
+        #[serde(rename = "mantle_tx")]
         op_refs: OpRefs<'a>,
         ops_proofs: OpProofRefs<'a>,
     }
@@ -358,7 +421,7 @@ mod mantle_spec {
 
     #[derive(Deserialize)]
     struct OwnedSignedOpsSerde {
-        #[serde(rename = "mantle_tx", with = "ops::mantle_spec")]
+        #[serde(rename = "mantle_tx")]
         ops: Ops,
         ops_proofs: OpProofs,
     }
@@ -373,7 +436,7 @@ mod mantle_spec {
                 Self::from_parts(helper.ops, helper.ops_proofs).map_err(serde::de::Error::custom)
             } else {
                 let bytes: Vec<u8> = Deserialize::deserialize(deserializer)?;
-                Self::decode_all(bytes.as_slice()).map_err(serde::de::Error::custom)
+                Self::decode_all(bytes.as_slice(), &u32::MAX).map_err(serde::de::Error::custom)
             }
         }
     }
@@ -403,25 +466,28 @@ pub mod test_utils {
     use crate::mantle::{
         NoteId, Op, OpProof,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
+        fixtures::ops::op_values::FORK_DIGEST,
         ledger::{BoundedInputs, Inputs, verification_mode::StandardMode},
         ops::channel::{
-            ChannelId, ChannelKeyIndex, MsgId, UnverifiedChannelKeys, inscribe::InscriptionOp,
-            verification::test_utils::create_channel_multi_sig_proof, withdraw::ChannelWithdrawOp,
+            ChannelId, ChannelKeyIndex, MsgId, UnverifiedChannelKeys,
+            inscribe::{Inscription, InscriptionOp},
+            verification::test_utils::create_channel_multi_sig_proof,
+            withdraw::ChannelWithdrawOp,
         },
         traits::Hashable as _,
-        transactions::{OpProofs, Ops, SignedOps, states::Preverified},
+        transactions::{OpProofs, Ops, SignedOps, TxList, states::Preverified},
     };
 
     #[must_use]
     pub fn create_test_mantle_tx(ops: Vec<Op>) -> Ops {
-        Ops::new_unchecked(ops)
+        Ops::new(FORK_DIGEST, TxList::new_unchecked(ops))
     }
 
     #[must_use]
     pub fn create_test_inscribe_op(signing_key: &Ed25519Key) -> InscriptionOp {
         InscriptionOp {
             channel_id: [0; 32].into(),
-            inscription: [1, 2, 3].into(),
+            inscription: Inscription::new_unchecked(vec![1, 2, 3]),
             parent: [0; 32].into(),
             signer: signing_key.public_key().into_unverified(),
         }
@@ -501,12 +567,16 @@ mod tests {
     use crate::mantle::{
         Note, NoteId, Op, OpProof, SignedOps, Utxo, VerificationError,
         channel::{Channels, Error as ChannelError},
-        gas::{MainnetGasProfile, TxGasCalculator as _},
+        fixtures::ops::op_values::FORK_DIGEST,
+        gas::{TxGasCalculator as _, test_utils::GAS_PROFILE},
         ledger::{BoundedInputs, Outputs, OutputsError, verification_mode::StandardMode},
         ops::{
             channel::{
-                ChannelId, MsgId, config::ChannelConfigOp, deposit::DepositOp,
-                inscribe::InscriptionOp, withdraw::ChannelWithdrawOp,
+                ChannelId, MsgId,
+                config::ChannelConfigOp,
+                deposit::{DepositOp, Metadata},
+                inscribe::InscriptionOp,
+                withdraw::ChannelWithdrawOp,
             },
             transfer::{TransferError, TransferOp},
         },
@@ -534,7 +604,7 @@ mod tests {
 
     fn mantle_spec_json(ops: &Ops, op_proofs: &OpProofs) -> serde_json::Value {
         serde_json::json!({
-            "mantle_tx": { "ops": serde_json::to_value(ops).expect("the op column serializes") },
+            "mantle_tx": { "fork_digest": ops.fork_digest, "ops": ops.inner() },
             "ops_proofs": serde_json::to_value(op_proofs.inner())
                 .expect("the proof column serializes"),
         })
@@ -557,15 +627,18 @@ mod tests {
         DepositOp {
             channel_id,
             inputs: BoundedInputs::from(NoteId(Fr::from(0u64))).into(),
-            metadata: [].into(),
+            metadata: Metadata::empty(),
         }
     }
 
     fn two_column_ops() -> Ops {
-        Ops::from([
-            Op::ChannelInscribe(InscriptionOp::sample()),
-            Op::ChannelDeposit(DepositOp::sample()),
-        ])
+        Ops::new(
+            FORK_DIGEST,
+            [
+                Op::ChannelInscribe(InscriptionOp::sample()),
+                Op::ChannelDeposit(DepositOp::sample()),
+            ],
+        )
     }
 
     fn create_withdraw_op(channel_id: ChannelId) -> ChannelWithdrawOp {
@@ -591,11 +664,14 @@ mod tests {
 
     #[test]
     fn from_parts_reports_the_index_of_the_mismatched_proof() {
-        let ops = Ops::from([
-            Op::ChannelInscribe(InscriptionOp::sample()),
-            Op::ChannelDeposit(DepositOp::sample()),
-            Op::ChannelInscribe(InscriptionOp::sample()),
-        ]);
+        let ops = Ops::new(
+            FORK_DIGEST,
+            [
+                Op::ChannelInscribe(InscriptionOp::sample()),
+                Op::ChannelDeposit(DepositOp::sample()),
+                Op::ChannelInscribe(InscriptionOp::sample()),
+            ],
+        );
         let op_proofs = OpProofs::new_unchecked(vec![
             ops[0].sample_proof(),
             ops[2].sample_proof(),
@@ -628,11 +704,12 @@ mod tests {
             [(withdraw_channel, transfer_threshold)].into(),
             [(config_channel, config_threshold)].into(),
             GasPrices::new(1, 0),
+            GAS_PROFILE,
         );
 
         let gas = mantle_tx
             .by_ref()
-            .execution_gas_consumption::<MainnetGasProfile>(&context)
+            .execution_gas_consumption(&context)
             .unwrap();
 
         let expected_config_gas = u64::from(config_threshold) * 56;
@@ -666,15 +743,15 @@ mod tests {
 
         let config_gas = config_op
             .by_ref()
-            .execution_gas::<MainnetGasProfile>(&channels)
+            .execution_gas(&GAS_PROFILE, &channels)
             .unwrap();
         let deposit_gas = deposit_op
             .by_ref()
-            .execution_gas::<MainnetGasProfile>(&channels)
+            .execution_gas(&GAS_PROFILE, &channels)
             .unwrap();
         let withdraw_gas = withdraw_op
             .by_ref()
-            .execution_gas::<MainnetGasProfile>(&channels)
+            .execution_gas(&GAS_PROFILE, &channels)
             .unwrap();
 
         assert_eq!(config_gas.into_inner(), 3 * 56);
@@ -691,7 +768,7 @@ mod tests {
 
         let gas = config_op
             .by_ref()
-            .execution_gas::<MainnetGasProfile>(&Channels::new())
+            .execution_gas(&GAS_PROFILE, &Channels::new())
             .unwrap();
 
         assert_eq!(gas.into_inner(), 0);

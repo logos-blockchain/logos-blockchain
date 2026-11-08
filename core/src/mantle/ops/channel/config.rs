@@ -1,21 +1,17 @@
 use std::{num::NonZero, sync::Arc};
 
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_cryptarchia_engine::Slot;
 #[cfg(any(test, feature = "test-utils"))]
 use lb_key_management_system_keys::keys::Ed25519Key;
-use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, MsgId};
 use crate::{
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
-        Value,
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
-        gas::{
-            Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
-        },
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
@@ -38,7 +34,9 @@ use crate::{
 /// and the configuration threshold does not exceed the number of accredited
 /// keys, which also keeps the key set non-empty. [`Self::new`] checks this, and
 /// so do the canonical decoding and the serde deserialization.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
+#[serde(try_from = "ChannelConfigFields")]
+#[decode(try_from = "ChannelConfigFields")]
 pub struct ChannelConfigOp {
     channel: ChannelId,
     parent: MsgId,
@@ -143,23 +141,29 @@ impl ChannelConfigOp {
     }
 }
 
-// Deserializes the fields as `#[derive(Deserialize)]` would, then builds the
-// configuration with `ChannelConfigOp::new`, so it rejects what `new` rejects.
-impl<'de> Deserialize<'de> for ChannelConfigOp {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename = "ChannelConfigOp")]
-        struct Fields {
-            channel: ChannelId,
-            parent: MsgId,
-            keys: VerifiedChannelKeys,
-            posting_timeframe: SlotTimeframe,
-            posting_timeout: SlotTimeout,
-            configuration_threshold: NonZero<u16>,
-            transfer_threshold: NonZero<u16>,
-        }
+/// The fields of a [`ChannelConfigOp`] as they are read. Deserializing and
+/// decoding both build the configuration from them with
+/// [`ChannelConfigOp::new`], so both reject what it rejects.
+///
+/// Public only because the codec of [`ChannelConfigOp`] names it: its fields
+/// keep it from being built outside this crate.
+#[derive(Debug, Eq, PartialEq, Deserialize, BinaryDecode)]
+#[serde(rename = "ChannelConfigOp")]
+pub struct ChannelConfigFields {
+    pub(crate) channel: ChannelId,
+    pub(crate) parent: MsgId,
+    pub(crate) keys: VerifiedChannelKeys,
+    pub(crate) posting_timeframe: SlotTimeframe,
+    pub(crate) posting_timeout: SlotTimeout,
+    pub(crate) configuration_threshold: NonZero<u16>,
+    pub(crate) transfer_threshold: NonZero<u16>,
+}
 
-        let Fields {
+impl TryFrom<ChannelConfigFields> for ChannelConfigOp {
+    type Error = Error;
+
+    fn try_from(
+        ChannelConfigFields {
             channel,
             parent,
             keys,
@@ -167,7 +171,8 @@ impl<'de> Deserialize<'de> for ChannelConfigOp {
             posting_timeout,
             configuration_threshold,
             transfer_threshold,
-        } = Fields::deserialize(deserializer)?;
+        }: ChannelConfigFields,
+    ) -> Result<Self, Self::Error> {
         Self::new(
             channel,
             parent,
@@ -177,79 +182,6 @@ impl<'de> Deserialize<'de> for ChannelConfigOp {
             configuration_threshold,
             transfer_threshold,
         )
-        .map_err(D::Error::custom)
-    }
-}
-
-// The fields in order, as `#[derive(BinaryCodec)]` would encode them. Decoding
-// goes through `ChannelConfigOp::new`, so it rejects what `new` rejects.
-impl BinaryEncode for ChannelConfigOp {
-    fn encoded_length(&self) -> usize {
-        let Self {
-            channel,
-            parent,
-            keys,
-            posting_timeframe,
-            posting_timeout,
-            configuration_threshold,
-            transfer_threshold,
-        } = self;
-        channel.encoded_length()
-            + parent.encoded_length()
-            + keys.encoded_length()
-            + posting_timeframe.encoded_length()
-            + posting_timeout.encoded_length()
-            + configuration_threshold.encoded_length()
-            + transfer_threshold.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self {
-            channel,
-            parent,
-            keys,
-            posting_timeframe,
-            posting_timeout,
-            configuration_threshold,
-            transfer_threshold,
-        } = self;
-        channel.encode_into(out);
-        parent.encode_into(out);
-        keys.encode_into(out);
-        posting_timeframe.encode_into(out);
-        posting_timeout.encode_into(out);
-        configuration_threshold.encode_into(out);
-        transfer_threshold.encode_into(out);
-    }
-}
-
-impl BinaryDecode for ChannelConfigOp {
-    type Context = ();
-
-    fn decode<'input>(
-        input: &'input [u8],
-        (): &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, channel) = ChannelId::decode(input, &())?;
-        let (input, parent) = MsgId::decode(input, &())?;
-        let (input, keys) = VerifiedChannelKeys::decode(input, &())?;
-        let (input, posting_timeframe) = SlotTimeframe::decode(input, &())?;
-        let (input, posting_timeout) = SlotTimeout::decode(input, &())?;
-        let (input, configuration_threshold) = NonZero::<u16>::decode(input, &())?;
-        let (input, transfer_threshold) = NonZero::<u16>::decode(input, &())?;
-        let operation = Self::new(
-            channel,
-            parent,
-            keys,
-            posting_timeframe,
-            posting_timeout,
-            configuration_threshold,
-            transfer_threshold,
-        )
-        .map_err(|_| {
-            DecodeError::invalid_value::<Self>("configuration threshold above the key count")
-        })?;
-        Ok((input, operation))
     }
 }
 
@@ -266,18 +198,6 @@ pub struct ChannelConfigExecutionContext {
 impl ProvableOperation for ChannelConfigOp {
     type Proof = ChannelMultiSigProof;
     const CODE: u8 = 0x10;
-}
-
-impl OperationGas<MainnetGasProfile> for ChannelConfigOp {
-    const GAS_COST: Gas = Gas::new(56);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for ChannelConfigOp {
-    fn execution_gas(&self, thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
-        Self::GAS_COST.checked_mul(Value::from(
-            thresholds.configuration_threshold(&self.channel),
-        ))
-    }
 }
 
 impl PreverifiableOperation<StandardMode>
@@ -416,11 +336,18 @@ impl<Mode: VerificationMode> ExecutableOperation
 
 #[cfg(test)]
 mod tests {
-    use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
+    use lb_binary_codec::{
+        bincode::{DeserializeOp as _, SerializeOp as _},
+        canonical::DecodeError,
+    };
 
     use super::*;
     use crate::mantle::{
-        TxHash, gas::test_utils::FixedThresholds,
+        TxHash,
+        gas::{
+            Gas,
+            test_utils::{FixedThresholds, GAS_PROFILE},
+        },
         ops::channel::verification::test_utils::create_channel_multi_sig_proof,
         transactions::tx_list::signed_ops::test_utils::make_channel_state,
     };
@@ -865,7 +792,8 @@ mod tests {
     fn channel_config_op_execution_gas_scales_with_the_threshold() {
         for (threshold, expected) in [(1, 56), (2, 112), (3, 168)] {
             assert_eq!(
-                ChannelConfigOp::sample().execution_gas(&FixedThresholds(threshold)),
+                crate::mantle::OpRef::from(&ChannelConfigOp::sample())
+                    .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(expected))
             );
         }
@@ -874,7 +802,8 @@ mod tests {
     #[test]
     fn channel_config_op_execution_gas_is_zero_against_an_unknown_channel() {
         assert_eq!(
-            ChannelConfigOp::sample().execution_gas(&FixedThresholds(0)),
+            crate::mantle::OpRef::from(&ChannelConfigOp::sample())
+                .execution_gas(&GAS_PROFILE, &FixedThresholds(0)),
             Ok(Gas::new(0))
         );
     }

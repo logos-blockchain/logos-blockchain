@@ -29,6 +29,7 @@ macro_rules! api_routes {
             get lb_http_api_common::paths::MANTLE_METRICS => crate::api::handlers::mantle_metrics, mantle_metrics::<MempoolStorageAdapter, RuntimeServiceId>;
             post lb_http_api_common::paths::MANTLE_STATUS => crate::api::handlers::mantle_status, mantle_status::<MempoolStorageAdapter, RuntimeServiceId>;
             get lb_http_api_common::paths::CHAIN_ID => crate::api::handlers::chain_id, chain_id;
+            get lb_http_api_common::paths::CHAIN_FORK => crate::api::handlers::chain_fork, chain_fork::<RuntimeServiceId>;
             get lb_http_api_common::paths::CRYPTARCHIA_INFO => crate::api::handlers::cryptarchia_info, cryptarchia_info::<RuntimeServiceId>;
             get lb_http_api_common::paths::TIME_INFO => crate::api::handlers::time_info, time_info::<RuntimeServiceId>;
             get lb_http_api_common::paths::CRYPTARCHIA_HEADERS => crate::api::handlers::cryptarchia_headers, cryptarchia_headers::<RuntimeServiceId>;
@@ -63,6 +64,7 @@ macro_rules! api_routes {
             get lb_http_api_common::paths::LEADER_AGED_NOTES => crate::api::handlers::wallet::get_leader_aged_notes, wallet::get_leader_aged_notes::<WalletService, _>;
             get lb_http_api_common::paths::wallet::BALANCE => crate::api::handlers::wallet::get_balance, wallet::get_balance::<WalletService, _>;
             get lb_http_api_common::paths::MANTLE_GAS_PRICES => crate::api::handlers::get_gas_prices, get_gas_prices::<RuntimeServiceId>;
+            get lb_http_api_common::paths::MANTLE_LIMITS => crate::api::handlers::get_limits, get_limits::<RuntimeServiceId>;
             post lb_http_api_common::paths::wallet::TRANSACTIONS_TRANSFER_FUNDS => crate::api::handlers::wallet::post_transactions_transfer_funds, wallet::post_transactions_transfer_funds::<WalletService, MempoolStorageAdapter, _>;
             post lb_http_api_common::paths::wallet::SIGN_TX_ED25519 => crate::api::handlers::wallet::sign_tx_ed25519, wallet::sign_tx_ed25519::<WalletService, MempoolStorageAdapter, _>;
             post lb_http_api_common::paths::wallet::SIGN_TX_ZK => crate::api::handlers::wallet::sign_tx_zk, wallet::sign_tx_zk::<WalletService, MempoolStorageAdapter, _>;

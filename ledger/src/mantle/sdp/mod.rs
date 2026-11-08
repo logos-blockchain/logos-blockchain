@@ -696,6 +696,7 @@ mod tests {
     use super::*;
     use crate::{
         cryptarchia::tests::utxo_with_sk, mantle::sdp::test_utils::generate_activity_proof,
+        test_utils::FORK_DIGEST,
     };
 
     fn setup(service_params: ServiceParameters) -> Config {
@@ -707,6 +708,7 @@ mod tests {
                 blend: blend::RewardsParameters {
                     rounds_per_epoch: NonZeroU64::new(10).unwrap(),
                     message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                    cover_replication_factor: 0,
                     num_blend_layers: NonZeroU64::new(3).unwrap(),
                     minimum_network_size: NonZeroU64::new(1).unwrap(),
                     data_replication_factor: 0,
@@ -843,7 +845,7 @@ mod tests {
     }
 
     fn withdraw_tx_hash_view(operation: SDPWithdrawOp) -> TxHashView {
-        TxHashView::from(Ops::from([Op::SDPWithdraw(operation)]).hash())
+        TxHashView::from(Ops::new(FORK_DIGEST, [Op::SDPWithdraw(operation)]).hash())
     }
 
     /// A declaration keeps its service note locked through `withdraw_at` and

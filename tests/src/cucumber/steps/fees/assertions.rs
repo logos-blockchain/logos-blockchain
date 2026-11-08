@@ -4,10 +4,11 @@
 use std::{collections::HashMap, time::Duration};
 
 use cucumber::gherkin::Step;
+use lb_config::deployment::GAS_PROFILE;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        gas::{GasPrice, MainnetGasProfile, TxGasCalculator as _},
+        gas::{GasPrice, TxGasCalculator as _},
         transactions::tx_list::ops::OpsGasContext,
     },
 };
@@ -195,10 +196,11 @@ pub async fn prepared_transaction_percentage_reserve_absorbed_fee_increase(
     let signed_tx = world.resolve_prepared_transaction(transaction_alias)?;
     let client = world.resolve_node_http_client(node_name)?;
     let prices = actions::live_gas_prices(&client, step).await?;
-    let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone());
+    let gas_context =
+        OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone(), GAS_PROFILE);
     let current_mandatory_fee = signed_tx
         .op_refs()
-        .total_gas_cost::<MainnetGasProfile>(&gas_context)
+        .total_gas_cost(&gas_context)
         .map_err(|source| StepError::StepFail {
             message: format!(
                 "Step `{}` error: current mandatory fee calculation failed: {source}",

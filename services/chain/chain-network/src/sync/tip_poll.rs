@@ -9,7 +9,9 @@ use lb_utils::math::NonNegativeRatio;
 use overwatch::DynError;
 use tracing::{debug, warn};
 
-use crate::{TipPollConfig, metrics, network::NetworkAdapter, sync::LOG_TARGET};
+use crate::{
+    TipPollConfig, is_at_or_before_lib, metrics, network::NetworkAdapter, sync::LOG_TARGET,
+};
 
 /// Proactive tip-poll lag watchdog.
 ///
@@ -53,11 +55,11 @@ where
         .await;
 
     // Pick the most-advanced reported tip that is strictly ahead of us.
-    let Some((height, _, tip)) = select_catchup_tip(tips, info.height) else {
+    let Some((height, _, tip)) = select_catchup_tip(tips, info.height, info.lib_slot) else {
         debug!(
             target: LOG_TARGET,
             local_height = info.height,
-            "tip poll: no sampled peer reported a tip ahead of us"
+            "tip poll: no sampled peer reported a tip ahead of us and past the LIB slot"
         );
         return None;
     };
@@ -105,10 +107,14 @@ where
 
 /// From a set of polled tip responses, pick the most-advanced tip that is
 /// strictly ahead of `local_height`. Ties on height are broken by the higher
-/// slot. `Failure` responses are ignored. Returns `(height, slot, tip)`.
+/// slot. `Failure` responses are ignored, as are tips at or before the local
+/// LIB slot: such a tip cannot descend from the LIB, so catching up to it
+/// would only walk a fork that diverged before it, the same rule the gossip
+/// path applies. Returns `(height, slot, tip)`.
 fn select_catchup_tip(
     tips: impl IntoIterator<Item = TipResponse>,
     local_height: u64,
+    lib_slot: Slot,
 ) -> Option<(u64, Slot, HeaderId)> {
     tips.into_iter()
         .filter_map(|resp| match resp {
@@ -118,7 +124,7 @@ fn select_catchup_tip(
                 None
             }
         })
-        .filter(|(height, _, _)| *height > local_height)
+        .filter(|(height, slot, _)| *height > local_height && !is_at_or_before_lib(*slot, lib_slot))
         .max_by_key(|(height, slot, _)| (*height, u64::from(*slot)))
 }
 
@@ -187,7 +193,7 @@ mod tests {
     fn select_catchup_tip_ignores_tips_at_or_below_local_height() {
         let tips = vec![tip(10, 100, 1), tip(9, 200, 2)];
         // local height is 10: nothing strictly ahead.
-        assert!(select_catchup_tip(tips, 10).is_none());
+        assert!(select_catchup_tip(tips, 10, Slot::new(0)).is_none());
     }
 
     #[test]
@@ -198,7 +204,8 @@ mod tests {
             tip(15, 400, 3), // same height, higher slot -> winner
             tip(14, 999, 4),
         ];
-        let (height, slot, id) = select_catchup_tip(tips, 11).expect("a tip ahead exists");
+        let (height, slot, id) =
+            select_catchup_tip(tips, 11, Slot::new(0)).expect("a tip ahead exists");
         assert_eq!(height, 15);
         assert_eq!(slot, Slot::new(400));
         assert_eq!(id, HeaderId::from([3; 32]));
@@ -211,13 +218,31 @@ mod tests {
             tip(20, 500, 7),
             TipResponse::Failure(TipResponseFailureReason::NodeNotOnline),
         ];
-        let (height, _, id) = select_catchup_tip(tips, 5).expect("a tip ahead exists");
+        let (height, _, id) =
+            select_catchup_tip(tips, 5, Slot::new(0)).expect("a tip ahead exists");
         assert_eq!(height, 20);
         assert_eq!(id, HeaderId::from([7; 32]));
     }
 
     #[test]
+    fn select_catchup_tip_ignores_tips_at_or_before_lib_slot() {
+        let tips = vec![
+            tip(30, 100, 1), // highest, but at the LIB slot
+            tip(25, 90, 2),  // before the LIB slot
+            tip(20, 150, 3), // past the LIB slot -> winner
+        ];
+        let (height, slot, id) =
+            select_catchup_tip(tips, 10, Slot::new(100)).expect("a tip past the LIB exists");
+        assert_eq!(height, 20);
+        assert_eq!(slot, Slot::new(150));
+        assert_eq!(id, HeaderId::from([3; 32]));
+
+        let tips = vec![tip(30, 100, 1), tip(25, 90, 2)];
+        assert!(select_catchup_tip(tips, 10, Slot::new(100)).is_none());
+    }
+
+    #[test]
     fn select_catchup_tip_empty_is_none() {
-        assert!(select_catchup_tip(Vec::new(), 0).is_none());
+        assert!(select_catchup_tip(Vec::new(), 0, Slot::new(0)).is_none());
     }
 }

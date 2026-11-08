@@ -4,9 +4,10 @@ use std::{
     time::Duration,
 };
 
+use lb_config::deployment::GAS_PROFILE;
 use lb_core::mantle::{
     Note, Utxo,
-    gas::{GasCost, MainnetGasProfile},
+    gas::GasCost,
     ledger::MAX_TRANSACTION_INPUTS,
     transactions::{
         GENESIS_EXECUTION_GAS_PRICE, GasPrices, MantleTxBuilder, OpProofs,
@@ -468,11 +469,12 @@ fn finalize_fee(builder: &MantleTxBuilder) -> Result<u64, StepError> {
                 GENESIS_EXECUTION_GAS_PRICE.into_inner(),
                 DEFAULT_STORAGE_GAS_PRICE,
             ),
+            GAS_PROFILE,
         ),
-        ..OpsContext::default()
+        leader_reward_amount: 0,
     };
     builder
-        .minimum_gas_cost::<MainnetGasProfile>(&context)
+        .minimum_gas_cost(&context)
         .map(GasCost::into_inner)
         .map_err(|error| StepError::LogicalError {
             message: error.to_string(),

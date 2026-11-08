@@ -6,13 +6,16 @@ use core::fmt::Debug;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     pin::Pin,
+    sync::Arc,
     time::Duration,
 };
 
 use futures::{Stream, StreamExt as _, future::join_all, stream};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockInfo};
 use lb_core::{
-    block::{Block, SignedHeader, UncleHeaders},
+    block::{Block, SignedHeader, TxInBlock, UncleHeaders},
+    era::ForkDigest,
     header::HeaderId,
     mantle::{
         OpRef, TxHash,
@@ -22,13 +25,12 @@ use lb_core::{
     },
     sdp::{Declaration, DeclarationId, ServiceType},
 };
-use lb_cryptarchia_engine::{Epoch, PrunedBlocks, Slot};
+use lb_cryptarchia_engine::{Epoch, EraSchedule, PrunedBlocks, Slot};
 use lb_cryptarchia_sync::{BlocksUnavailableReason, ProviderResponse, TipResponseFailureReason};
 use lb_ledger::config::{config_for_slot, stake_distribution_snapshot};
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_network_service::message::ChainSyncEvent;
 use lb_storage_service::api::StorageApi;
-use lb_utils::bounded::UpperBoundedVec;
 use overwatch::{
     DynError,
     services::{relay::InboundRelay, state::StateUpdater},
@@ -49,7 +51,7 @@ use crate::{
 pub struct ProcessBlockOutcome<Tx> {
     pub pruned_blocks: PrunedBlocks<HeaderId>,
     pub reorged_block_ids: Vec<HeaderId>,
-    pub reorged_txs: Vec<Tx>,
+    pub reorged_txs: Vec<TxInBlock<Tx>>,
     pub newly_canonical_txs: HashMap<TxHash, Slot>,
 }
 
@@ -225,6 +227,7 @@ where
     cryptarchia: Cryptarchia,
     inbound_relay: InboundRelay<ConsensusMsg<Tx>>,
     state_updater: StateUpdater<Option<CryptarchiaConsensusState>>,
+    fork_digests: Arc<EraSchedule<ForkDigest>>,
     new_block_subscription_sender: broadcast::Sender<ProcessedBlockEvent>,
     lib_subscription_sender: broadcast::Sender<LibUpdate>,
     chain_online_notifier: ChainOnlineNotifier,
@@ -249,6 +252,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + Unpin
@@ -261,6 +266,7 @@ where
             cryptarchia: self.cryptarchia,
             inbound_relay: self.inbound_relay,
             state_updater: self.state_updater,
+            fork_digests: self.fork_digests,
             new_block_subscription_sender: self.new_block_subscription_sender,
             lib_subscription_sender: self.lib_subscription_sender,
             chain_online_notifier: self.chain_online_notifier,
@@ -396,6 +402,14 @@ where
                     })
                     .unwrap_or_else(|e| {
                         error!(target: LOG_TARGET, "Could not send consensus info through channel: {:?}", e);
+                    });
+            }
+            Query::HighestBlock { reply_channel } => {
+                let highest = self.cryptarchia.highest_branch();
+                reply_channel
+                    .send((highest.id(), highest.slot()))
+                    .unwrap_or_else(|e| {
+                        error!(target: LOG_TARGET, "Could not send the highest block through channel: {:?}", e);
                     });
             }
             Query::NewBlockSubscribe { sender } => {
@@ -558,7 +572,8 @@ where
             .record(query_result.source_tip_id, query_source);
     }
 
-    /// Selects uncles for a new block extending `parent` at `slot`.
+    /// Selects uncles for a new block extending `parent` at `slot`, at most as
+    /// many as the era of `slot` allows.
     async fn select_uncles(&self, parent: HeaderId, slot: Slot) -> UncleHeaders {
         let Some(parent_branch) = self.cryptarchia.consensus.branches().get(&parent) else {
             return UncleHeaders::empty();
@@ -583,10 +598,16 @@ where
             ));
         }
 
-        UncleHeaders::new(
-            UpperBoundedVec::try_from(uncles)
-                .expect("at most MAX_UNCLES unique uncles are selected"),
-        )
+        let max_uncles = self
+            .cryptarchia
+            .ledger
+            .era_schedule()
+            .at_slot(slot)
+            .parameters
+            .consensus_config
+            .max_uncles();
+        UncleHeaders::try_new(uncles, max_uncles)
+            .expect("at most as many uncles as the era allows are selected")
     }
 
     /// Record the current service state.
@@ -594,6 +615,7 @@ where
         persist_recovery_state(
             &self.cryptarchia,
             self.storage_blocks_to_remove.clone(),
+            &self.fork_digests,
             &self.state_updater,
         );
     }
@@ -894,6 +916,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + Unpin
@@ -1022,6 +1046,8 @@ where
         + StorageSize
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = u32>
         + Clone
         + Eq
         + Send
@@ -1057,6 +1083,8 @@ where
         + StorageSize
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = u32>
         + Clone
         + Eq
         + Send
@@ -1094,7 +1122,7 @@ where
 }
 
 /// Transactions carried by `reorged_blocks` that are not in
-/// `newly_canonical_txs`.
+/// `newly_canonical_txs`, each with the slot of the block carrying it.
 ///
 /// The newly canonical blocks often carry the same transactions as the reorged
 /// blocks. Those transactions are still canonical.
@@ -1102,12 +1130,14 @@ async fn reorged_txs<'a, Tx>(
     reorged_blocks: impl Iterator<Item = &'a HeaderId>,
     newly_canonical_txs: &HashMap<TxHash, Slot>,
     storage: &StorageApi<Tx>,
-) -> impl Iterator<Item = Tx>
+) -> impl Iterator<Item = TxInBlock<Tx>>
 where
     Tx: Hashable<Hash = TxHash>
         + StorageSize
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = u32>
         + Clone
         + Eq
         + Send
@@ -1116,8 +1146,14 @@ where
 {
     load_blocks(reorged_blocks, storage)
         .await
-        .flat_map(Block::into_transactions)
-        .filter(move |tx| !newly_canonical_txs.contains_key(&tx.hash()))
+        .flat_map(|block| {
+            let slot = block.header().slot();
+            block
+                .into_transactions()
+                .into_iter()
+                .map(move |tx| TxInBlock { tx, slot })
+        })
+        .filter(move |reorged| !newly_canonical_txs.contains_key(&reorged.tx.hash()))
 }
 
 async fn log_newly_canonical_blocks<Tx>(
@@ -1134,6 +1170,8 @@ async fn log_newly_canonical_blocks<Tx>(
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + Unpin
@@ -1189,6 +1227,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + Unpin
@@ -1242,6 +1282,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + Unpin
@@ -1291,7 +1333,14 @@ pub async fn delete_stale_blocks_from_storage<Tx>(
     storage: &StorageApi<Tx>,
 ) -> HashSet<HeaderId>
 where
-    Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
+    Tx: Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = u32>
+        + Hashable<Hash = TxHash>
+        + StorageSize,
 {
     match delete_blocks_from_storage(
         stale_blocks.chain(additional_blocks.iter().copied()),
@@ -1321,7 +1370,14 @@ async fn delete_blocks_from_storage<Headers, Tx>(
 ) -> Result<(), Vec<(HeaderId, DynError)>>
 where
     Headers: Iterator<Item = HeaderId> + Send,
-    Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize,
+    Tx: Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = u32>
+        + Hashable<Hash = TxHash>
+        + StorageSize,
 {
     let blocks_to_delete = block_headers.collect::<Vec<_>>();
     let block_deletion_outcomes = blocks_to_delete.iter().copied().zip(
@@ -1397,11 +1453,13 @@ async fn broadcast_finalized_block(
 pub fn persist_recovery_state(
     cryptarchia: &Cryptarchia,
     storage_blocks_to_remove: HashSet<HeaderId>,
+    fork_digests: &EraSchedule<ForkDigest>,
     state_updater: &StateUpdater<Option<CryptarchiaConsensusState>>,
 ) {
     match CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
         cryptarchia,
         storage_blocks_to_remove,
+        fork_digests,
     ) {
         Ok(state) => {
             state_updater.update(Some(state));

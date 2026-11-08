@@ -166,6 +166,7 @@ mod tests {
     };
 
     use lb_core::{
+        era::{AcceptedForkDigests, ForkDigest},
         mantle::{Note, Utxo},
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
@@ -178,6 +179,21 @@ mod tests {
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
     use super::*;
+
+    /// The costs of the deployments' current gas profile.
+    const GAS_PROFILE: lb_core::mantle::gas::GasProfile = lb_core::mantle::gas::GasProfile {
+        transfer: lb_core::mantle::gas::Gas::new(590),
+        channel_config: lb_core::mantle::gas::Gas::new(56),
+        channel_inscribe: lb_core::mantle::gas::Gas::new(56),
+        channel_deposit: lb_core::mantle::gas::Gas::new(590),
+        channel_withdraw: lb_core::mantle::gas::Gas::new(56),
+        channel_transfer: lb_core::mantle::gas::Gas::new(56),
+        sdp_declare: lb_core::mantle::gas::Gas::new(646),
+        sdp_withdraw: lb_core::mantle::gas::Gas::new(590),
+        sdp_active: lb_core::mantle::gas::Gas::new(590),
+        leader_claim: lb_core::mantle::gas::Gas::new(580),
+        claim_pow_reward: lb_core::mantle::gas::Gas::new(1),
+    };
 
     #[tokio::test]
     async fn unchanged_tip_never_trigger_status_check() {
@@ -508,6 +524,7 @@ mod tests {
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().unwrap(),
             12,
+            4,
         );
         let epoch_config = lb_cryptarchia_engine::EpochConfig {
             epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
@@ -536,6 +553,7 @@ mod tests {
                         blend: rewards::blend::RewardsParameters {
                             rounds_per_epoch: epoch_length.try_into().unwrap(),
                             message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                            cover_replication_factor: 0,
                             num_blend_layers: NonZeroU64::new(3).unwrap(),
                             minimum_network_size: NonZeroU64::new(1).unwrap(),
                             data_replication_factor: 0,
@@ -547,6 +565,43 @@ mod tests {
                         timestamp: 0,
                     },
                 },
+                max_transactions: 1024,
+                max_transactions_size: 2 * 1024 * 1024,
+                max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+                execution_market: lb_ledger::config::ExecutionMarketConfig {
+                    max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                    fee_adjustment_rate: lb_utils::math::ProperFraction::new(
+                        1,
+                        8.try_into().unwrap(),
+                    )
+                    .unwrap(),
+                    ema_smoothing_factor: lb_utils::math::ProperFraction::new(
+                        9,
+                        10.try_into().unwrap(),
+                    )
+                    .unwrap(),
+                },
+                storage_market: lb_ledger::config::StorageMarketConfig {
+                    max_adjustment_factor: lb_utils::math::ProperFraction::new(
+                        1,
+                        8.try_into().unwrap(),
+                    )
+                    .unwrap(),
+                    ema_smoothing_factor: lb_utils::math::ProperFraction::new(
+                        1,
+                        2.try_into().unwrap(),
+                    )
+                    .unwrap(),
+                },
+                block_rewards: lb_ledger::config::BlockRewardsConfig::new(
+                    3_000_000_000,
+                    120_000_000.try_into().unwrap(),
+                    10_512,
+                    NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                    lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+                )
+                .unwrap(),
+                gas_profile: GAS_PROFILE,
                 pow_config: PoWConfig {
                     reward: disabled_reward_config(),
                     blend: BlendPoWConfig {
@@ -557,6 +612,7 @@ mod tests {
                         target_transactions_per_block: 1.try_into().unwrap(),
                     },
                 },
+                accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
             },
             0,
             &ConsensusExcludedKeys::empty(),

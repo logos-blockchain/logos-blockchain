@@ -4,7 +4,7 @@ use futures::StreamExt as _;
 use lb_c_macros::panic_to_error;
 use lb_chain_service::api::CryptarchiaServiceApi;
 use lb_core::{
-    block::{Block as CoreBlock, BlockTransactions},
+    block::Block as CoreBlock,
     mantle::{
         ledger::verification_mode::StandardMode,
         traits::{Hashable, StorageSize, hashable},
@@ -82,21 +82,18 @@ pub fn subscribe_to_new_blocks_sync(
             Ok(mut block_stream) => {
                 runtime_handler.spawn(async move {
                     while let Ok(event) = block_stream.recv().await {
-                        let res = storage.load_block(&event.block_id).await;
+                        let res = storage.try_get_block(&event.block_id).await;
                         if let Ok(Some(block)) = res {
-                            let txs_with_id: Vec<TxWithId> = block
-                                .transactions_iter()
-                                .map(|tx| TxWithId {
-                                    id: tx.hash(),
-                                    tx: tx.clone(),
-                                })
-                                .collect();
+                            let txs_with_id = block.transactions().map_ref(|tx| TxWithId {
+                                id: tx.hash(),
+                                tx: tx.clone(),
+                            });
                             let block: CoreBlock<TxWithId> = CoreBlock::reconstruct(
                                 block.header().clone(),
                                 block.uncle_headers().clone(),
-                                BlockTransactions::try_from(txs_with_id)
-                                    .expect("Block should always build from valid block"),
+                                txs_with_id,
                                 *block.signature(),
+                                u32::MAX,
                             )
                             .expect("Block should always build from valid block");
                             callback_per_block(Block::from(block).as_ptr());

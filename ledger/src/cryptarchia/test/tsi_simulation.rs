@@ -27,7 +27,6 @@ use lb_core::{
     crypto::{Digest as _, Hasher},
     mantle::{
         Note, SignedOps, Utxo, Value,
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         transactions::{
             GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, states::Preverified,
@@ -187,6 +186,7 @@ fn simulation_config() -> Config {
         ),
         1f64.try_into().expect("1 > 0"),
         UNCLE_REFERENCE_WINDOW_IN_BLOCK,
+        4,
     );
     config
 }
@@ -331,7 +331,7 @@ fn select_uncles(
         .into_iter()
         .map(Branch::slot)
         .collect::<Vec<_>>();
-    UncleSlots::try_from(uncle_slots).unwrap()
+    UncleSlots::try_new(uncle_slots, 4).unwrap()
 }
 
 /// Applies a block to both the ledger and the engine, and drops the ledger
@@ -376,7 +376,7 @@ fn apply_block_to_ledger(
     let id = block_id(parent, slot);
     let proof = generate_proof(&parent_state, &utxo, slot);
     let update = ledger
-        .prepare_update::<_, _, MainnetGasProfile>(
+        .prepare_update(
             id,
             parent,
             slot,

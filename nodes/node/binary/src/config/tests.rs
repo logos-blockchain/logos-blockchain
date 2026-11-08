@@ -25,6 +25,7 @@ use crate::{
         },
         keystore::{KeyTitle, Keystore},
         mempool::ServiceConfig as MempoolServiceConfig,
+        migrations::ConfigVersion,
         network::serde::nat,
         parse_log_filter_layer,
         sdp::{
@@ -406,9 +407,11 @@ fn init_config_writes_only_overrides_and_load_fills_them_from_the_keystore() {
         serde_yaml::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
     assert_eq!(
         written,
-        serde_yaml::from_str::<serde_yaml::Value>(
-            "{network: {backend: {swarm: {port: 4000}}}, tracing: {logger: {file: {directory: /logs}}}}"
-        )
+        serde_yaml::from_str::<serde_yaml::Value>(&format!(
+            "{{version: {}, network: {{backend: {{swarm: {{port: 4000}}}}}}, tracing: \
+             {{logger: {{file: {{directory: /logs}}}}}}}}",
+            ConfigVersion::current()
+        ))
         .unwrap()
     );
 
@@ -512,19 +515,21 @@ fn standalone_deployment_config_deserializes() {
         yaml_path.exists(),
         "standalone deployment config should exist at {yaml_path:?}"
     );
-    let bytes = std::fs::read(&yaml_path).expect("standalone deployment config should exist");
-
-    let parsed: Result<DeploymentSettings, serde_yaml::Error> = serde_yaml::from_slice(&bytes);
-    assert!(
-        parsed.is_ok(),
-        "standalone deployment config should deserialize ({:?})",
-        parsed.err(),
-    );
 
     let parsed = deserialize_value_at_path::<DeploymentSettings>(&yaml_path, OnUnknownKeys::Fail);
     assert!(
         parsed.is_ok(),
         "standalone deployment config should deserialize via loader, got: {:?}",
         parsed.err()
+    );
+}
+
+#[test]
+fn partial_blend_backend_keeps_the_peering_degree_check_default() {
+    let backend: crate::config::blend::serde::core::BackendConfig =
+        serde_yaml::from_str("listening_address: /ip4/0.0.0.0/udp/3500/quic-v1").unwrap();
+    assert_eq!(
+        backend.peering_degree_check_interval,
+        Some(std::time::Duration::from_mins(1))
     );
 }

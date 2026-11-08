@@ -6,7 +6,7 @@ use core::{
 };
 
 use futures::{Stream, StreamExt as _, stream, stream::BoxStream};
-use lb_binary_codec::bincode::DeserializeOp;
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_network_service::Message as ChainNetworkMsg;
 use lb_core::{
     header::HeaderId,
@@ -29,7 +29,7 @@ use tokio::sync::oneshot;
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 
 use super::PayloadDispatcher;
-use crate::message::{DataPayload, MAX_PAYLOAD_BODY_SIZE};
+use crate::message::DataPayload;
 
 const LOG_TARGET: &str = blend::service::CORE;
 
@@ -73,25 +73,36 @@ pub struct Libp2pPayloadDispatcher<
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct Libp2pBroadcastSettings {
     pub topic: String,
+    /// The size of the largest block proposal of the era: a larger one is not
+    /// broadcast.
+    pub max_proposal_size: usize,
+    /// The most bytes of data an Operation may carry in the era: what the
+    /// transactions leaving Blend in it are decoded under.
+    pub max_op_data_size: u32,
 }
 
-fn proposal_topic_for_era(era_schedule: &EraSchedule<Libp2pBroadcastSettings>, era: Era) -> String {
+fn broadcast_settings_for_era(
+    era_schedule: &EraSchedule<Libp2pBroadcastSettings>,
+    era: Era,
+) -> &Libp2pBroadcastSettings {
     era_schedule
         .get(era)
         .expect("The eras of the dispatcher are scheduled.")
         .parameters
-        .topic
-        .clone()
 }
 
 /// Broadcast an unencrypted block proposal to the network by publishing it
-/// under the configured gossipsub topic.
-async fn broadcast_block_proposal(network_relay: &NetworkRelay, topic: String, proposal: Vec<u8>) {
-    if proposal.len() > MAX_PAYLOAD_BODY_SIZE {
+/// under the gossipsub topic of its era.
+async fn broadcast_block_proposal(
+    network_relay: &NetworkRelay,
+    era_settings: &Libp2pBroadcastSettings,
+    proposal: Vec<u8>,
+) {
+    if proposal.len() > era_settings.max_proposal_size {
         tracing::error!(
             target: LOG_TARGET,
             size = proposal.len(),
-            maximum = MAX_PAYLOAD_BODY_SIZE,
+            maximum = era_settings.max_proposal_size,
             "Refusing to broadcast an oversized block proposal"
         );
         return;
@@ -100,7 +111,7 @@ async fn broadcast_block_proposal(network_relay: &NetworkRelay, topic: String, p
     if let Err(error) = network_relay
         .send(NetworkMsg::Process(Command::PubSub(
             PubSubCommand::Broadcast {
-                topic,
+                topic: era_settings.topic.clone(),
                 message: proposal.into_boxed_slice(),
             },
         )))
@@ -170,12 +181,10 @@ where
     };
 
     observe_items_ignoring_lags(BroadcastStream::new(received), StreamType::Proposals)
-        .filter_map(|proposal| {
+        .map(|proposal| {
             // Encoded the way it was handed to Blend, so that the two are the same
-            // bytes and comparing them is all the sender has to do. One that does
-            // not fit a payload is one Blend cannot have carried, so it is not a
-            // delivery this node is waiting on.
-            ready(DataPayload::try_from_proposal(&proposal).ok())
+            // bytes and comparing them is all the sender has to do.
+            DataPayload::from_proposal(&proposal)
         })
         .boxed()
 }
@@ -184,17 +193,20 @@ where
 /// structure.
 async fn submit_transaction<Item, Key>(
     mempool_relay: &MempoolRelay<Item, Key>,
+    era_settings: &Libp2pBroadcastSettings,
     transaction: Vec<u8>,
 ) where
-    Item: Hashable<Hash = Key> + DeserializeOp + Send,
+    Item: Hashable<Hash = Key> + BinaryDecode<Context = u32> + Send,
     Key: PrefixedKey<Prefix: Send> + Send,
 {
-    let Ok(transaction) = Item::from_bytes(&transaction).inspect_err(|e| {
-        tracing::error!(
-            target: LOG_TARGET,
-            "Discarding a decapsulated payload that does not decode as a transaction: {e}"
-        );
-    }) else {
+    let Ok(transaction) = Item::decode_all(&transaction, &era_settings.max_op_data_size)
+        .inspect_err(|e| {
+            tracing::error!(
+                target: LOG_TARGET,
+                "Discarding a decapsulated payload that does not decode as a transaction: {e}"
+            );
+        })
+    else {
         return;
     };
 
@@ -224,7 +236,7 @@ async fn observe_transactions<Item, Key>(
     mempool_relay: MempoolRelay<Item, Key>,
 ) -> BoxStream<'static, DataPayload>
 where
-    Item: Serialize + Clone + Send + 'static,
+    Item: BinaryEncode + Clone + Send + 'static,
     Key: PrefixedKey<Prefix: Send> + Send + 'static,
 {
     let (reply_channel, receiver) = oneshot::channel();
@@ -241,12 +253,10 @@ where
     };
 
     observe_items_ignoring_lags(BroadcastStream::new(accepted), StreamType::Transactions)
-        .filter_map(|transaction| {
+        .map(|transaction| {
             // Encoded the way it was handed to Blend, so that the two are the same
-            // bytes and comparing them is all the sender has to do. If it cannot fit into
-            // the maximum size Blend allows, it means the tx was not sent with Blend in the
-            // first place.
-            ready(DataPayload::try_from_transaction(&transaction).ok())
+            // bytes and comparing them is all the sender has to do.
+            DataPayload::from_transaction(&transaction)
         })
         .boxed()
 }
@@ -263,8 +273,12 @@ impl<MempoolNetAdapter, Mempool, ChainNetwork, TimeBackend, RuntimeServiceId>
     >
 where
     Mempool: RecoverableMempool<BlockId = HeaderId, RecoveryState: 'static> + Send + Sync + 'static,
-    Mempool::Item:
-        Hashable<Hash = Mempool::Key> + Clone + Serialize + DeserializeOp + Send + 'static,
+    Mempool::Item: Hashable<Hash = Mempool::Key>
+        + Clone
+        + BinaryEncode
+        + BinaryDecode<Context = u32>
+        + Send
+        + 'static,
     Mempool::Key: PrefixedKey<Prefix: Send> + Send + 'static,
     Mempool::Settings: Clone + Send + Sync,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync + 'static,
@@ -368,11 +382,12 @@ where
                     );
                     return;
                 }
-                let topic = proposal_topic_for_era(&self.era_schedule, era);
-                broadcast_block_proposal(&self.network_relay, topic, proposal).await;
+                let era_settings = broadcast_settings_for_era(&self.era_schedule, era);
+                broadcast_block_proposal(&self.network_relay, era_settings, proposal).await;
             }
             DataPayload::Transaction(transaction) => {
-                submit_transaction(&self.mempool_relay, transaction).await;
+                let era_settings = broadcast_settings_for_era(&self.era_schedule, era);
+                submit_transaction(&self.mempool_relay, era_settings, transaction).await;
             }
         }
     }

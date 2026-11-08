@@ -22,10 +22,13 @@ use lb_core::{
         },
     },
 };
-use lb_http_api_common::bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody};
+use lb_http_api_common::bodies::{
+    mantle::LimitsResponseBody,
+    wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
+};
 use lb_log_targets::zone_sdk;
 use reqwest::Url;
-use tracing::warn;
+use tracing::error;
 
 use crate::{Deposit, Withdraw, ZoneBlock, ZoneMessage};
 
@@ -59,6 +62,8 @@ pub trait Node {
 
     async fn time_info(&self) -> Result<TimeInfo, Error>;
 
+    async fn limits(&self) -> Result<LimitsResponseBody, Error>;
+
     async fn channel_state(&self, channel_id: ChannelId) -> Result<Option<ChannelState>, Error>;
 
     async fn block_stream(&self) -> Result<BoxStream<ProcessedBlockEvent>, Error>;
@@ -89,6 +94,9 @@ pub trait Node {
 
     /// The [`ZoneMessage`]s of `channel_id` carried by block `id`, composed
     /// from [`block`](Node::block) and [`block_events`](Node::block_events).
+    ///
+    /// Fails if the node serves no event for a deposit of the block, rather
+    /// than leave the deposit out.
     async fn zone_messages_in_block(
         &self,
         id: HeaderId,
@@ -98,12 +106,8 @@ pub trait Node {
             return Ok(Box::pin(stream::empty()));
         };
 
-        let deposit_events = if has_channel_deposit(&block.transactions, channel_id) {
-            let events = self.block_events(id).await?.unwrap_or_default();
-            build_deposit_events(&events)
-        } else {
-            HashMap::new()
-        };
+        let deposit_events =
+            fetch_block_deposit_events(self, id, &block.transactions, channel_id).await?;
 
         let messages = block_to_messages(block.transactions, channel_id, &deposit_events);
         Ok(Box::pin(stream::iter(messages)))
@@ -112,6 +116,9 @@ pub trait Node {
     /// The [`ZoneMessage`]s of `channel_id` in the immutable slot range,
     /// composed from [`immutable_blocks`](Node::immutable_blocks) and
     /// [`block_events`](Node::block_events).
+    ///
+    /// Fails if the node serves no event for a deposit in the range, rather
+    /// than leave the deposit out.
     async fn zone_messages_in_blocks(
         &self,
         slot_from: Slot,
@@ -123,15 +130,9 @@ pub trait Node {
         let mut all_messages = Vec::new();
         for block in blocks {
             let slot = block.header.slot;
-            let deposit_events = if has_channel_deposit(&block.transactions, channel_id) {
-                let events = self
-                    .block_events(block.header.id)
-                    .await?
-                    .unwrap_or_default();
-                build_deposit_events(&events)
-            } else {
-                HashMap::new()
-            };
+            let deposit_events =
+                fetch_block_deposit_events(self, block.header.id, &block.transactions, channel_id)
+                    .await?;
 
             for message in block_to_messages(block.transactions, channel_id, &deposit_events) {
                 all_messages.push((message, slot));
@@ -163,6 +164,10 @@ impl Node for NodeHttpClient {
 
     async fn time_info(&self) -> Result<TimeInfo, Error> {
         self.client.time_info(self.base_url.clone()).await
+    }
+
+    async fn limits(&self) -> Result<LimitsResponseBody, Error> {
+        self.client.limits(self.base_url.clone()).await
     }
 
     async fn channel_state(&self, channel_id: ChannelId) -> Result<Option<ChannelState>, Error> {
@@ -219,18 +224,6 @@ impl Node for NodeHttpClient {
     }
 }
 
-/// Returns true if `transactions` contains any deposit op on `channel_id`.
-pub(crate) fn has_channel_deposit<State: VerificationState, Mode: VerificationMode>(
-    transactions: &[SignedOps<State, Mode>],
-    channel_id: ChannelId,
-) -> bool {
-    transactions.iter().any(|tx| {
-        tx.op_refs()
-            .into_iter()
-            .any(|op| matches!(op, OpRef::ChannelDeposit(d) if d.channel_id == channel_id))
-    })
-}
-
 /// Identity of a deposit op within a block: its containing tx and the op id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct DepositOpKey {
@@ -274,6 +267,84 @@ pub(crate) fn build_deposit_events(events: &Events) -> DepositEvents {
         .collect()
 }
 
+/// Fetch the deposit-amount lookup for a single block, gated on whether the
+/// block has any deposit op for our channel.
+///
+/// Per node semantics, a block and its events are atomically visible — so a
+/// block containing a deposit op must yield an event for that op. The
+/// returned `HashMap` is therefore the *complete* `(tx_hash, op_id) → amount`
+/// lookup for every deposit op of our channel in this block.
+///
+/// On any failure (HTTP error, `Ok(None)`, or events missing an entry for
+/// some deposit op) we log at error level and return an error. The caller's
+/// contract is "either retry, or abandon this block" — never silently emit a
+/// partial result, because that drops real deposits.
+pub(crate) async fn fetch_block_deposit_events<N>(
+    node: &N,
+    block_id: HeaderId,
+    transactions: &[SignedOps<Unverified, StandardMode>],
+    channel_id: ChannelId,
+) -> Result<DepositEvents, Error>
+where
+    N: Node + Sync + ?Sized,
+{
+    let expected: Vec<DepositOpKey> = transactions
+        .iter()
+        .flat_map(|tx| {
+            let tx_hash = tx.op_refs().hash();
+            tx.op_refs().into_iter().filter_map(move |op| match op {
+                OpRef::ChannelDeposit(d) if d.channel_id == channel_id => Some(DepositOpKey {
+                    tx_hash,
+                    op_id: d.op_id(),
+                }),
+                _ => None,
+            })
+        })
+        .collect();
+
+    if expected.is_empty() {
+        return Ok(DepositEvents::new());
+    }
+
+    let events = match node.block_events(block_id).await {
+        Ok(Some(events)) => events,
+        Ok(None) => {
+            error!(
+                target: TARGET,
+                ?block_id,
+                "Events endpoint returned no body for a block with a channel deposit; \
+                 events should be atomically visible with the block"
+            );
+            return Err(Error::Server(format!(
+                "no events for block {block_id} containing channel deposits"
+            )));
+        }
+        Err(err) => {
+            error!(target: TARGET, ?block_id, ?err, "Failed to fetch events for block");
+            return Err(err);
+        }
+    };
+
+    let deposit_events = build_deposit_events(&events);
+    for key in &expected {
+        if !deposit_events.contains_key(key) {
+            error!(
+                target: TARGET,
+                ?block_id,
+                tx_hash = ?key.tx_hash,
+                op_id = ?key.op_id,
+                "Block events missing an entry for a known channel deposit op; \
+                 expected atomic block/events visibility per node semantics"
+            );
+            return Err(Error::Server(format!(
+                "block {block_id} events missing deposit entry for tx {:?} op {:?}",
+                key.tx_hash, key.op_id
+            )));
+        }
+    }
+    Ok(deposit_events)
+}
+
 /// Walks a block's transactions and emits the [`ZoneMessage`]s relevant to
 /// `channel_id`, looking up deposit amounts and notes from `deposit_events`.
 fn block_to_messages<State: VerificationState, Mode: VerificationMode>(
@@ -295,9 +366,12 @@ fn block_to_messages<State: VerificationState, Mode: VerificationMode>(
 
 /// Converts [`Op`] to [`ZoneMessage`] if it belongs to the given channel.
 ///
-/// Returns [`None`] if the op is not relevant for the channel, or if the op
-/// is a deposit without a matching event (in which case the deposit is skipped
-/// with a warning — the amount is required to be useful to consumers).
+/// Returns [`None`] if the op is not relevant for the channel.
+///
+/// # Panics
+///
+/// If the op is a deposit without an entry in `deposit_events`, which
+/// [`fetch_block_deposit_events`] guarantees.
 fn op_to_zone_message(
     op: OpRef,
     tx_hash: TxHash,
@@ -314,29 +388,18 @@ fn op_to_zone_message(
         }
         OpRef::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
             let op_id = deposit.op_id();
-            deposit_events
-                .get(&DepositOpKey { tx_hash, op_id })
-                .map_or_else(
-                    || {
-                        warn!(
-                            target: TARGET,
-                            ?tx_hash,
-                            ?op_id,
-                            "Deposit op has no matching event in block; skipping"
-                        );
-                        None
-                    },
-                    |event| {
-                        Some(ZoneMessage::Deposit(Deposit {
-                            tx_hash,
-                            op_id,
-                            inputs: deposit.inputs.clone(),
-                            notes: event.notes.clone(),
-                            amount: event.amount,
-                            metadata: deposit.metadata.clone(),
-                        }))
-                    },
-                )
+            let event = deposit_events.get(&DepositOpKey { tx_hash, op_id }).expect(
+                "deposit_events must contain every channel deposit op - \
+                 fetch_block_deposit_events invariant",
+            );
+            Some(ZoneMessage::Deposit(Deposit {
+                tx_hash,
+                op_id,
+                inputs: deposit.inputs.clone(),
+                notes: event.notes.clone(),
+                amount: event.amount,
+                metadata: deposit.metadata.clone(),
+            }))
         }
         OpRef::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
             Some(ZoneMessage::Withdraw(Withdraw {
@@ -351,6 +414,7 @@ fn op_to_zone_message(
 
 #[cfg(test)]
 mod tests {
+    use futures::StreamExt as _;
     use lb_core::mantle::{
         NoteId, Op,
         ledger::BoundedInputs,
@@ -362,7 +426,7 @@ mod tests {
     use lb_groth16::Fr;
 
     use super::*;
-    use crate::test_support::unverified_tx_with_ops;
+    use crate::test_support::{MockNode, api_block, deposit_event, unverified_tx_with_ops};
 
     fn deposit_op(channel_id: ChannelId, input_seed: u32, metadata: Metadata) -> DepositOp {
         DepositOp {
@@ -395,8 +459,12 @@ mod tests {
 
         // tx_a mixes three ops so a walker that reused the wrong op's id
         // (or the wrong channel's) would surface here.
-        let our_deposit = deposit_op(channel_id, 1, b"to Alice".into());
-        let foreign_deposit = deposit_op(other_channel, 2, b"to Bob".into());
+        let our_deposit = deposit_op(channel_id, 1, Metadata::new_unchecked(b"to Alice".to_vec()));
+        let foreign_deposit = deposit_op(
+            other_channel,
+            2,
+            Metadata::new_unchecked(b"to Bob".to_vec()),
+        );
         let our_withdraw = withdraw_op(channel_id, 42);
         let tx_a = unverified_tx_with_ops(vec![
             Op::ChannelDeposit(our_deposit.clone()),
@@ -499,20 +567,155 @@ mod tests {
         );
     }
 
-    /// A deposit whose amount is absent from the block's events is dropped
-    /// entirely, taking its identity with it — consumers never see a deposit
-    /// they cannot value.
+    /// The walker contract: `deposit_events` must contain an entry for every
+    /// channel-deposit op, as [`fetch_block_deposit_events`] validates. A
+    /// panic surfaces a caller violating that — a silent skip would drop a
+    /// real deposit.
     #[test]
-    fn block_to_messages_skips_deposit_without_matching_event() {
+    #[should_panic(expected = "fetch_block_deposit_events invariant")]
+    fn block_to_messages_panics_if_deposit_events_incomplete() {
         let channel_id = ChannelId::from([0; 32]);
         let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(deposit_op(
             channel_id,
             1,
-            b"to Alice".into(),
+            Metadata::new_unchecked(b"to Alice".to_vec()),
         ))]);
 
-        let messages = block_to_messages(vec![tx], channel_id, &HashMap::new());
+        drop(block_to_messages(vec![tx], channel_id, &HashMap::new()));
+    }
 
-        assert!(messages.is_empty(), "deposit without an event is skipped");
+    /// Serves only the primitive calls of a [`MockNode`], so the
+    /// `zone_messages_*` defaults run.
+    struct PrimitivesOnly(MockNode);
+
+    #[async_trait]
+    impl Node for PrimitivesOnly {
+        async fn consensus_info(&self) -> Result<ChainServiceInfo, Error> {
+            self.0.consensus_info().await
+        }
+
+        async fn time_info(&self) -> Result<TimeInfo, Error> {
+            self.0.time_info().await
+        }
+
+        async fn limits(&self) -> Result<LimitsResponseBody, Error> {
+            self.0.limits().await
+        }
+
+        async fn channel_state(
+            &self,
+            channel_id: ChannelId,
+        ) -> Result<Option<ChannelState>, Error> {
+            self.0.channel_state(channel_id).await
+        }
+
+        async fn block_stream(&self) -> Result<BoxStream<ProcessedBlockEvent>, Error> {
+            self.0.block_stream().await
+        }
+
+        async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, Error> {
+            self.0.lib_stream().await
+        }
+
+        async fn block(&self, id: HeaderId) -> Result<Option<ApiBlock>, Error> {
+            self.0.block(id).await
+        }
+
+        async fn block_events(&self, id: HeaderId) -> Result<Option<Events>, Error> {
+            self.0.block_events(id).await
+        }
+
+        async fn immutable_blocks(
+            &self,
+            slot_from: Slot,
+            slot_to: Slot,
+        ) -> Result<Vec<ApiBlock>, Error> {
+            self.0.immutable_blocks(slot_from, slot_to).await
+        }
+
+        async fn post_transaction(
+            &self,
+            tx: SignedOps<Unverified, StandardMode>,
+        ) -> Result<(), Error> {
+            self.0.post_transaction(tx).await
+        }
+
+        async fn fund_tx(
+            &self,
+            request: WalletFundRequestBody,
+        ) -> Result<WalletFundResponseBody, Error> {
+            self.0.fund_tx(request).await
+        }
+    }
+
+    /// A node holding `block` both as an immutable block and by id, with
+    /// `events` for it, if any.
+    fn node_with_block(block: ApiBlock, events: Option<Events>) -> PrimitivesOnly {
+        PrimitivesOnly(MockNode {
+            events: events
+                .map(|events| HashMap::from([(block.header.id, events)]))
+                .unwrap_or_default(),
+            blocks: vec![block.clone()],
+            immutable: vec![block],
+            ..MockNode::default()
+        })
+    }
+
+    #[tokio::test]
+    async fn zone_messages_in_blocks_report_a_deposit_with_its_event() {
+        let channel_id = ChannelId::from([0; 32]);
+        let op = deposit_op(channel_id, 1, Metadata::new_unchecked(b"to Alice".to_vec()));
+        let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(op.clone())]);
+        let events = deposit_event(&tx, &op, 1234, Vec::new());
+        let node = node_with_block(api_block(1, 0, 1, vec![tx]), Some(events));
+
+        let messages: Vec<_> = node
+            .zone_messages_in_blocks(Slot::genesis(), 1.into(), channel_id)
+            .await
+            .expect("events are served")
+            .collect()
+            .await;
+
+        assert!(
+            matches!(
+                messages.as_slice(),
+                [(ZoneMessage::Deposit(deposit), slot)]
+                    if deposit.op_id == op.op_id() && deposit.amount == 1234 && *slot == 1.into()
+            ),
+            "{messages:?}"
+        );
+    }
+
+    /// Leaving the deposit out would lose it for good: the caller moves past
+    /// the range.
+    #[tokio::test]
+    async fn zone_messages_in_blocks_fail_without_the_block_events() {
+        let channel_id = ChannelId::from([0; 32]);
+        let op = deposit_op(channel_id, 1, Metadata::new_unchecked(b"to Alice".to_vec()));
+        let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(op)]);
+        let node = node_with_block(api_block(1, 0, 1, vec![tx]), None);
+
+        assert!(
+            node.zone_messages_in_blocks(Slot::genesis(), 1.into(), channel_id)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn zone_messages_in_block_fail_without_an_event_of_each_deposit() {
+        let channel_id = ChannelId::from([0; 32]);
+        let first = deposit_op(channel_id, 1, Metadata::new_unchecked(b"to Alice".to_vec()));
+        let second = deposit_op(channel_id, 2, Metadata::new_unchecked(b"to Bob".to_vec()));
+        let tx = unverified_tx_with_ops(vec![
+            Op::ChannelDeposit(first.clone()),
+            Op::ChannelDeposit(second),
+        ]);
+        let events = deposit_event(&tx, &first, 1234, Vec::new());
+        let block = api_block(1, 0, 1, vec![tx]);
+        let id = block.header.id;
+        let node = node_with_block(block, Some(events));
+
+        assert!(node.zone_messages_in_block(id, channel_id).await.is_err());
     }
 }

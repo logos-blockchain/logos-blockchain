@@ -1,11 +1,19 @@
 use std::num::{NonZero, NonZeroU32, NonZeroU64, NonZeroU128};
 
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
-use lb_core::mantle::{Value, ops::pow::PowSlotWindows};
+use lb_core::{
+    era::AcceptedForkDigests,
+    mantle::{
+        Value,
+        gas::{Gas, GasProfile},
+        ops::pow::{PowSlotWindows, PowTarget},
+    },
+};
 use lb_cryptarchia_engine::{Epoch, EraSchedule, Slot};
 pub use lb_groth16::ModulusShift;
 use lb_pol::LotteryConstants;
 use lb_time::era::EpochLength;
+use lb_utils::math::{NonNegativeRatio, ProperFraction};
 
 /// The config of every era: each block is applied under the config of the era
 /// of its slot, and each epoch is settled under the config of its era.
@@ -17,8 +25,21 @@ pub use lb_core::mantle::ConsensusExcludedKeys;
 pub struct Config {
     pub epoch_config: lb_cryptarchia_engine::EpochConfig,
     pub consensus_config: lb_cryptarchia_engine::Config,
+    /// The most transactions a block may hold.
+    pub max_transactions: u16,
+    /// The most bytes a block's transactions may take in their canonical
+    /// encoding.
+    pub max_transactions_size: u32,
+    /// The most bytes of data an Operation may carry: an inscription, or a
+    /// deposit's metadata.
+    pub max_op_data_size: u32,
     pub sdp_config: crate::mantle::sdp::Config,
     pub pow_config: PoWConfig,
+    pub accepted_fork_digests: AcceptedForkDigests,
+    pub execution_market: ExecutionMarketConfig,
+    pub storage_market: StorageMarketConfig,
+    pub block_rewards: BlockRewardsConfig,
+    pub gas_profile: GasProfile,
 }
 
 impl Config {
@@ -163,7 +184,10 @@ pub struct PoWConfig {
 /// There is deliberately no `Default`: every value must be supplied by the
 /// deployment configuration. A `rate_num` of `0` disables claiming entirely;
 /// the shipped deployments enable it.
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+///
+/// A node's era digest commits to these fields through their derived encoding,
+/// in declaration order.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq, BinaryEncode)]
 // Validate the deployment-controlled invariants on deserialization, so an
 // invalid config is rejected at load time (see [`RewardPoWConfig::validate`])
 // instead of panicking later while processing consensus state.
@@ -266,6 +290,14 @@ pub enum RewardPoWConfigError {
         pow_share: u64,
         share_den: NonZeroU64,
     },
+    #[error(
+        "reward target cap ({minimum_difficulty}) must be above the reward target floor \
+         ({floor}), or the target can never move"
+    )]
+    TargetCapNotAboveFloor {
+        minimum_difficulty: ModulusShift,
+        floor: NonZeroU64,
+    },
 }
 
 impl RewardPoWConfig {
@@ -277,8 +309,9 @@ impl RewardPoWConfig {
     /// # Errors
     ///
     /// Returns [`RewardPoWConfigError`] if the EMA smoothing factor is not
-    /// below the precision, or the configured part of the payout-rate
-    /// denominator overflows `u64`.
+    /// below the precision, the fee share exceeds its denominator, the reward
+    /// target cap is not above the floor, or the configured part of the
+    /// payout-rate denominator overflows `u64`.
     pub fn validate(&self) -> Result<(), RewardPoWConfigError> {
         if self.ema_smoothing_factor >= self.ema_smoothing_precision.get() {
             return Err(RewardPoWConfigError::EmaSmoothingFactorNotBelowPrecision {
@@ -294,8 +327,16 @@ impl RewardPoWConfig {
             });
         }
 
-        // Only the errors matter here; the computed values are unused.
-        self.checked_reward_target_floor()?;
+        // The retarget clamps between the floor and the cap, the genesis
+        // target: at or below the floor, it would always return the cap.
+        let floor = self.checked_reward_target_floor()?;
+        if PowTarget::from(self.minimum_difficulty) <= PowTarget::from(floor.get()) {
+            return Err(RewardPoWConfigError::TargetCapNotAboveFloor {
+                minimum_difficulty: self.minimum_difficulty,
+                floor,
+            });
+        }
+
         self.checked_claim_rate_scale()?;
         Ok(())
     }
@@ -386,62 +427,6 @@ impl RewardPoWConfig {
     }
 }
 
-// The reward parameters: every field in declaration order. A node's era digest
-// commits to them through this encoding.
-impl BinaryEncode for RewardPoWConfig {
-    fn encoded_length(&self) -> usize {
-        // We destructure (in declaration order) so we know we are not forgetting to
-        // encode new fields.
-        let Self {
-            minimum_difficulty,
-            ema_smoothing_factor,
-            ema_smoothing_precision,
-            target_claims_per_block,
-            rate_num,
-            rate_den,
-            target_claim_per_block,
-            pow_share,
-            share_den,
-            slot_window,
-        } = self;
-        minimum_difficulty.encoded_length()
-            + ema_smoothing_factor.encoded_length()
-            + ema_smoothing_precision.encoded_length()
-            + target_claims_per_block.encoded_length()
-            + rate_num.encoded_length()
-            + rate_den.encoded_length()
-            + target_claim_per_block.encoded_length()
-            + pow_share.encoded_length()
-            + share_den.encoded_length()
-            + slot_window.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self {
-            minimum_difficulty,
-            ema_smoothing_factor,
-            ema_smoothing_precision,
-            target_claims_per_block,
-            rate_num,
-            rate_den,
-            target_claim_per_block,
-            pow_share,
-            share_den,
-            slot_window,
-        } = self;
-        minimum_difficulty.encode_into(out);
-        ema_smoothing_factor.encode_into(out);
-        ema_smoothing_precision.encode_into(out);
-        target_claims_per_block.encode_into(out);
-        rate_num.encode_into(out);
-        rate_den.encode_into(out);
-        target_claim_per_block.encode_into(out);
-        pow_share.encode_into(out);
-        share_den.encode_into(out);
-        slot_window.encode_into(out);
-    }
-}
-
 /// The encoding of the fixture below, one field per group.
 const REWARD_POW_CONFIG_HEX: &str = "20000000 2100000000000000 2200000000000000 2300000000000000 2400000000000000 2500000000000000 2600000000000000 2700000000000000 2800000000000000 2900000000000000";
 
@@ -492,6 +477,390 @@ impl BlendPoWConfig {
     }
 }
 
+/// `G_max`: the most execution gas a block may consume. At least 2, so that its
+/// half, `G_target`, the usage the base fee steers blocks towards, is never
+/// zero.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(try_from = "u64", into = "u64")]
+pub struct MaxGasPerBlock(u64);
+
+impl MaxGasPerBlock {
+    /// `gas`, if it is at least 2.
+    #[must_use]
+    pub const fn new(gas: u64) -> Option<Self> {
+        if gas >= 2 { Some(Self(gas)) } else { None }
+    }
+
+    /// `G_target`: half of the limit.
+    #[must_use]
+    pub(crate) const fn target(self) -> Gas {
+        Gas::new(self.0 / 2)
+    }
+}
+
+impl TryFrom<u64> for MaxGasPerBlock {
+    type Error = String;
+
+    fn try_from(gas: u64) -> Result<Self, Self::Error> {
+        Self::new(gas).ok_or_else(|| {
+            format!(
+                "The max execution gas per block, {gas}, must be at least 2, so that its half, \
+                 the target, is not zero."
+            )
+        })
+    }
+}
+
+impl From<MaxGasPerBlock> for u64 {
+    fn from(max_gas_per_block: MaxGasPerBlock) -> Self {
+        max_gas_per_block.0
+    }
+}
+
+impl From<MaxGasPerBlock> for Gas {
+    fn from(max_gas_per_block: MaxGasPerBlock) -> Self {
+        Self::new(max_gas_per_block.0)
+    }
+}
+
+// A block's gas limit: the `u64` it counts.
+impl BinaryEncode for MaxGasPerBlock {
+    fn encoded_length(&self) -> usize {
+        self.0.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.0.encode_into(out);
+    }
+}
+
+codec_fixtures!(MaxGasPerBlock, encode_only, MaxGasPerBlock::new(43).unwrap() => "2b00000000000000");
+
+/// The execution market of an era: how the execution base fee follows the
+/// execution gas blocks consume, per the
+/// [execution market](https://lip.logos.co/blockchain/raw/execution-market.html).
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExecutionMarketConfig {
+    /// `G_max`: the most execution gas a block may consume.
+    pub max_gas_per_block: MaxGasPerBlock,
+    /// `φ`: the fraction by which the base fee rises in a block whose average
+    /// usage is twice the target, and falls in one whose average usage is
+    /// zero.
+    pub fee_adjustment_rate: ProperFraction,
+    /// `q`: the weight of the previous average in the moving average of the
+    /// execution gas blocks consume.
+    pub ema_smoothing_factor: ProperFraction,
+}
+
+/// The storage market of an era: how the price of storage gas follows the
+/// storage gas each epoch consumes, per the
+/// [storage markets](https://lip.logos.co/blockchain/raw/storage-markets.html).
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StorageMarketConfig {
+    /// `α`: the largest fraction by which the price moves in an epoch.
+    pub max_adjustment_factor: ProperFraction,
+    /// `β`: the weight of the latest epoch in the moving average of the storage
+    /// gas epochs consume.
+    pub ema_smoothing_factor: ProperFraction,
+}
+
+// The execution market's parameters: every field in declaration order. A
+// node's era digest commits to them through this encoding.
+impl BinaryEncode for ExecutionMarketConfig {
+    fn encoded_length(&self) -> usize {
+        let Self {
+            max_gas_per_block,
+            fee_adjustment_rate,
+            ema_smoothing_factor,
+        } = self;
+        max_gas_per_block.encoded_length()
+            + fee_adjustment_rate.encoded_length()
+            + ema_smoothing_factor.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        let Self {
+            max_gas_per_block,
+            fee_adjustment_rate,
+            ema_smoothing_factor,
+        } = self;
+        max_gas_per_block.encode_into(out);
+        fee_adjustment_rate.encode_into(out);
+        ema_smoothing_factor.encode_into(out);
+    }
+}
+
+/// The encoding of the fixture below, one field per group.
+const EXECUTION_MARKET_CONFIG_HEX: &str = "2b00000000000000 2c000000 2d000000 2e000000 2f000000";
+
+codec_fixtures!(
+    ExecutionMarketConfig,
+    encode_only,
+    ExecutionMarketConfig {
+        max_gas_per_block: MaxGasPerBlock::new(43).unwrap(),
+        fee_adjustment_rate: ProperFraction::new(44, 45.try_into().unwrap()).unwrap(),
+        ema_smoothing_factor: ProperFraction::new(46, 47.try_into().unwrap()).unwrap(),
+    } => EXECUTION_MARKET_CONFIG_HEX
+);
+
+// The storage market's parameters: every field in declaration order. A node's
+// era digest commits to them through this encoding.
+impl BinaryEncode for StorageMarketConfig {
+    fn encoded_length(&self) -> usize {
+        let Self {
+            max_adjustment_factor,
+            ema_smoothing_factor,
+        } = self;
+        max_adjustment_factor.encoded_length() + ema_smoothing_factor.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        let Self {
+            max_adjustment_factor,
+            ema_smoothing_factor,
+        } = self;
+        max_adjustment_factor.encode_into(out);
+        ema_smoothing_factor.encode_into(out);
+    }
+}
+
+/// The encoding of the fixture below, one field per group.
+const STORAGE_MARKET_CONFIG_HEX: &str = "30000000 31000000 32000000 33000000";
+
+codec_fixtures!(
+    StorageMarketConfig,
+    encode_only,
+    StorageMarketConfig {
+        max_adjustment_factor: ProperFraction::new(48, 49.try_into().unwrap()).unwrap(),
+        ema_smoothing_factor: ProperFraction::new(50, 51.try_into().unwrap()).unwrap(),
+    } => STORAGE_MARKET_CONFIG_HEX
+);
+
+/// How each block is rewarded, per the
+/// [block rewards](https://lip.logos.co/blockchain/raw/block-rewards.html).
+///
+/// A block's reward mixes an emission from the reserve with the fee the block
+/// pooled: the further the stake falls short of its target, and the more fees
+/// the window pooled, the more of it is emission. The reward is split between
+/// the Blend nodes and the block's leader.
+///
+/// Its values keep every step of a reward within a `u128`, whatever the fees.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(try_from = "BlockRewardsFields", into = "BlockRewardsFields")]
+pub struct BlockRewardsConfig {
+    /// `STAKE_TARGET`: the total stake the emission steers towards.
+    stake_target: Value,
+    /// `A_SCALE`: the shortfall from the stake target at which a block's
+    /// emission is in full, and the scale of the emission's weight in a
+    /// reward.
+    emission_factor_scale: NonZeroU64,
+    /// `FEE_AVG_NUMERATOR`: how much each unit of the fees pooled over the
+    /// window adds to the emission's weight.
+    fee_average_numerator: u64,
+    /// `INFLATION_NUMERATOR / INFLATION_DENOMINATOR`, `I_max · S_cap · Δt / f`:
+    /// a block's emission in full.
+    max_emission_per_block: NonNegativeRatio,
+    /// The Blend nodes' share of a reward, the leader taking the rest with the
+    /// tips.
+    blend_share: ProperFraction,
+}
+
+/// The values of a [`BlockRewardsConfig`], as a deployment states them.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct BlockRewardsFields {
+    stake_target: Value,
+    emission_factor_scale: NonZeroU64,
+    fee_average_numerator: u64,
+    max_emission_per_block: NonNegativeRatio,
+    blend_share: ProperFraction,
+}
+
+impl BlockRewardsConfig {
+    /// The block rewards of these values, unless a reward could overflow a
+    /// `u128` at some fee: the emission's denominator, the scale and the
+    /// share's denominator must multiply to at most `u128::MAX / Value::MAX`.
+    #[must_use]
+    pub const fn new(
+        stake_target: Value,
+        emission_factor_scale: NonZeroU64,
+        fee_average_numerator: u64,
+        max_emission_per_block: NonNegativeRatio,
+        blend_share: ProperFraction,
+    ) -> Option<Self> {
+        // A reward's numerator reaches the emission's denominator times the
+        // scale times a block's fee, at most a `Value`, and the split then
+        // multiplies it by less than the share's denominator.
+        let bound = match (max_emission_per_block.denominator.get() as u128)
+            .checked_mul(emission_factor_scale.get() as u128)
+        {
+            Some(bound) => bound.checked_mul(blend_share.get().denominator.get() as u128),
+            None => None,
+        };
+        match bound {
+            Some(bound) if bound <= u128::MAX / Value::MAX as u128 => Some(Self {
+                stake_target,
+                emission_factor_scale,
+                fee_average_numerator,
+                max_emission_per_block,
+                blend_share,
+            }),
+            _ => None,
+        }
+    }
+
+    /// A block's rewards, to the Blend nodes then to its leader, before its
+    /// tips: `pooled_fees` sums the fees pooled over the window, `block_fee`,
+    /// the block's own, included, and `total_stake` is the inferred total
+    /// stake.
+    pub(crate) fn rewards(
+        &self,
+        pooled_fees: u128,
+        block_fee: Value,
+        total_stake: Value,
+    ) -> (Value, Value) {
+        let Self {
+            stake_target,
+            emission_factor_scale,
+            fee_average_numerator,
+            max_emission_per_block,
+            blend_share,
+        } = *self;
+        let scale = NonZeroU128::from(emission_factor_scale);
+        // `A_t'`: the emission's weight in the reward, out of `scale`.
+        let emission_weight = u128::from(stake_target)
+            .saturating_add(u128::from(fee_average_numerator).saturating_mul(pooled_fees))
+            .saturating_sub(u128::from(total_stake))
+            .min(scale.get());
+        let emission_denominator = NonZeroU128::from(max_emission_per_block.denominator);
+        let reward_numerator = u128::from(max_emission_per_block.numerator) * emission_weight
+            + emission_denominator.get() * (scale.get() - emission_weight) * u128::from(block_fee);
+        let NonNegativeRatio {
+            numerator: blend_numerator,
+            denominator: share_denominator,
+        } = blend_share.get();
+        let share_denominator = NonZeroU128::from(share_denominator);
+        // The reward's denominator, split: within a `u128`, as `Self::new`
+        // checks, so the product never saturates.
+        let denominator = emission_denominator
+            .saturating_mul(scale)
+            .saturating_mul(share_denominator);
+        let share = |numerator: u128| {
+            Value::try_from(reward_numerator * numerator / denominator).expect(
+                "A reward is at most the larger of a block's emission in full and its fee, both \
+                 within a Value.",
+            )
+        };
+        let blend_numerator = u128::from(blend_numerator);
+        (
+            share(blend_numerator),
+            share(share_denominator.get() - blend_numerator),
+        )
+    }
+}
+
+impl TryFrom<BlockRewardsFields> for BlockRewardsConfig {
+    type Error = String;
+
+    fn try_from(
+        BlockRewardsFields {
+            stake_target,
+            emission_factor_scale,
+            fee_average_numerator,
+            max_emission_per_block,
+            blend_share,
+        }: BlockRewardsFields,
+    ) -> Result<Self, Self::Error> {
+        Self::new(
+            stake_target,
+            emission_factor_scale,
+            fee_average_numerator,
+            max_emission_per_block,
+            blend_share,
+        )
+        .ok_or_else(|| {
+            format!(
+                "The block rewards' emission denominator, {}, scale, {emission_factor_scale}, and \
+                 Blend share denominator, {}, must multiply to at most {}, or a reward could \
+                 overflow.",
+                max_emission_per_block.denominator,
+                blend_share.get().denominator,
+                u128::MAX / u128::from(Value::MAX)
+            )
+        })
+    }
+}
+
+impl From<BlockRewardsConfig> for BlockRewardsFields {
+    fn from(
+        BlockRewardsConfig {
+            stake_target,
+            emission_factor_scale,
+            fee_average_numerator,
+            max_emission_per_block,
+            blend_share,
+        }: BlockRewardsConfig,
+    ) -> Self {
+        Self {
+            stake_target,
+            emission_factor_scale,
+            fee_average_numerator,
+            max_emission_per_block,
+            blend_share,
+        }
+    }
+}
+
+// The block rewards' parameters: every field in declaration order. A node's era
+// digest commits to them through this encoding.
+impl BinaryEncode for BlockRewardsConfig {
+    fn encoded_length(&self) -> usize {
+        let Self {
+            stake_target,
+            emission_factor_scale,
+            fee_average_numerator,
+            max_emission_per_block,
+            blend_share,
+        } = self;
+        stake_target.encoded_length()
+            + emission_factor_scale.encoded_length()
+            + fee_average_numerator.encoded_length()
+            + max_emission_per_block.encoded_length()
+            + blend_share.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        let Self {
+            stake_target,
+            emission_factor_scale,
+            fee_average_numerator,
+            max_emission_per_block,
+            blend_share,
+        } = self;
+        stake_target.encode_into(out);
+        emission_factor_scale.encode_into(out);
+        fee_average_numerator.encode_into(out);
+        max_emission_per_block.encode_into(out);
+        blend_share.encode_into(out);
+    }
+}
+
+/// The encoding of the fixture below, one field per group.
+const BLOCK_REWARDS_CONFIG_HEX: &str =
+    "3500000000000000 3600000000000000 3700000000000000 38000000 39000000 3a000000 3b000000";
+
+codec_fixtures!(
+    BlockRewardsConfig,
+    encode_only,
+    BlockRewardsConfig::new(
+        53,
+        NonZeroU64::new(54).unwrap(),
+        55,
+        NonNegativeRatio::new(56, NonZeroU32::new(57).unwrap()),
+        ProperFraction::new(58, NonZeroU32::new(59).unwrap()).unwrap(),
+    )
+    .unwrap() => BLOCK_REWARDS_CONFIG_HEX
+);
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -499,7 +868,10 @@ mod tests {
         sync::Arc,
     };
 
-    use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
+    use lb_core::{
+        era::AcceptedForkDigests,
+        sdp::{MinStake, ServiceParameters, ServiceType},
+    };
     use lb_cryptarchia_engine::EpochConfig;
     pub use lb_groth16::ModulusShift;
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
@@ -510,7 +882,7 @@ mod tests {
             stake_distribution_snapshot,
         },
         mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters},
-        test_utils::single_era,
+        test_utils::{FORK_DIGEST, single_era},
     };
 
     /// A reward config with claiming disabled, standing in for a real
@@ -601,6 +973,20 @@ mod tests {
     }
 
     #[test]
+    fn reward_config_rejects_target_cap_not_above_floor() {
+        // p / 2^253 is 1, below the floor of 9 that F/P = 9/10 sets.
+        let mut config = disabled_reward_config();
+        config.minimum_difficulty = ModulusShift::new::<253>();
+        assert_eq!(
+            config.validate(),
+            Err(RewardPoWConfigError::TargetCapNotAboveFloor {
+                minimum_difficulty: config.minimum_difficulty,
+                floor: NonZeroU64::new(9).unwrap(),
+            })
+        );
+    }
+
+    #[test]
     fn reward_config_rejects_claim_rate_scale_overflow() {
         // rate_den * target_claim_per_block would exceed u64::MAX.
         let mut config = disabled_reward_config();
@@ -652,6 +1038,7 @@ mod tests {
             NonNegativeRatio::new(1, 2.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
             12,
+            4,
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
@@ -673,6 +1060,7 @@ mod tests {
                     blend: RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
                         message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        cover_replication_factor: 0,
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
@@ -684,6 +1072,37 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            max_transactions: 1024,
+            max_transactions_size: 2 * 1024 * 1024,
+            max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            execution_market: crate::config::ExecutionMarketConfig {
+                max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                    .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
+                    9,
+                    10.try_into().unwrap(),
+                )
+                .unwrap(),
+            },
+            storage_market: crate::config::StorageMarketConfig {
+                max_adjustment_factor: lb_utils::math::ProperFraction::new(
+                    1,
+                    8.try_into().unwrap(),
+                )
+                .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
+                    .unwrap(),
+            },
+            block_rewards: crate::config::BlockRewardsConfig::new(
+                3_000_000_000,
+                120_000_000.try_into().unwrap(),
+                10_512,
+                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            )
+            .unwrap(),
+            gas_profile: crate::cryptarchia::tests::GAS_PROFILE,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -694,6 +1113,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![FORK_DIGEST]),
         };
         assert_eq!(config.epoch_length(), 100);
         let eras = single_era(config);
@@ -722,6 +1142,7 @@ mod tests {
             NonNegativeRatio::new(1, 2.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
             12,
+            4,
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
         super::Config {
@@ -742,6 +1163,7 @@ mod tests {
                     blend: RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
                         message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        cover_replication_factor: 0,
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
@@ -753,6 +1175,37 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            max_transactions: 1024,
+            max_transactions_size: 2 * 1024 * 1024,
+            max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            execution_market: crate::config::ExecutionMarketConfig {
+                max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                    .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
+                    9,
+                    10.try_into().unwrap(),
+                )
+                .unwrap(),
+            },
+            storage_market: crate::config::StorageMarketConfig {
+                max_adjustment_factor: lb_utils::math::ProperFraction::new(
+                    1,
+                    8.try_into().unwrap(),
+                )
+                .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
+                    .unwrap(),
+            },
+            block_rewards: crate::config::BlockRewardsConfig::new(
+                3_000_000_000,
+                120_000_000.try_into().unwrap(),
+                10_512,
+                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            )
+            .unwrap(),
+            gas_profile: crate::cryptarchia::tests::GAS_PROFILE,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -763,6 +1216,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![FORK_DIGEST]),
         }
     }
 
@@ -806,6 +1260,7 @@ mod tests {
             NonNegativeRatio::new(1, 2.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
             12,
+            4,
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
@@ -827,6 +1282,7 @@ mod tests {
                     blend: RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
                         message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        cover_replication_factor: 0,
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
@@ -838,6 +1294,37 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            max_transactions: 1024,
+            max_transactions_size: 2 * 1024 * 1024,
+            max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            execution_market: crate::config::ExecutionMarketConfig {
+                max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                    .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
+                    9,
+                    10.try_into().unwrap(),
+                )
+                .unwrap(),
+            },
+            storage_market: crate::config::StorageMarketConfig {
+                max_adjustment_factor: lb_utils::math::ProperFraction::new(
+                    1,
+                    8.try_into().unwrap(),
+                )
+                .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
+                    .unwrap(),
+            },
+            block_rewards: crate::config::BlockRewardsConfig::new(
+                3_000_000_000,
+                120_000_000.try_into().unwrap(),
+                10_512,
+                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            )
+            .unwrap(),
+            gas_profile: crate::cryptarchia::tests::GAS_PROFILE,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -848,6 +1335,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![FORK_DIGEST]),
         };
         let eras = single_era(config);
         assert_eq!(eras.epoch_for_slot(1.into()), 0);

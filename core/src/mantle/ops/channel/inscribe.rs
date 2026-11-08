@@ -1,21 +1,19 @@
 use std::sync::Arc;
 
-use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_cryptarchia_engine::Slot;
 #[cfg(any(test, feature = "test-utils"))]
 use lb_key_management_system_keys::keys::Ed25519Key;
 use lb_key_management_system_keys::keys::{Ed25519Signature, UnverifiedEd25519PublicKey};
-use lb_utils::bounded::UpperBoundedVec;
+use lb_utils::bounded::UpperRuntimeBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, MsgId};
 use crate::{
-    block::MAX_BLOCK_TRANSACTIONS_SIZE,
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
         channel::{ChannelState, Channels, Error},
-        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
@@ -28,16 +26,18 @@ use crate::{
     },
 };
 
-/// The maximum number of bytes that can be inscribed in a single inscription
-/// operation. This is derived from the maximum block transactions size,
-/// allowing for some overhead.
-pub const MAX_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 7 / 8;
-pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
+/// The bytes an inscription writes, at most as many as the era it is decoded
+/// under allows.
+///
+/// The length is checked against the era's maximum, a `u32`, when the
+/// inscription is built or decoded. Serde reads it without an era, under the
+/// largest maximum of the type.
+pub type Inscription = UpperRuntimeBoundedVec<u8, u32>;
 
 mod serde_inscription {
-    use serde::{Deserializer, Serializer};
+    use serde::{Deserializer, Serializer, de::Error as _};
 
-    use super::{Inscription, MAX_BYTES};
+    use super::Inscription;
 
     pub fn serialize<S>(inscription: &Inscription, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -50,13 +50,16 @@ mod serde_inscription {
     where
         D: Deserializer<'de>,
     {
-        lb_utils::serde::serde_bytes_slice::deserialize_bounded::<Inscription, MAX_BYTES, D>(
-            deserializer,
-        )
+        let bytes = lb_utils::serde::serde_bytes_slice::deserialize_bounded::<
+            Vec<u8>,
+            { u32::MAX as usize },
+            D,
+        >(deserializer)?;
+        Inscription::try_new(bytes, u32::MAX).map_err(D::Error::custom)
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode)]
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain
@@ -72,6 +75,31 @@ pub struct InscriptionOp {
     pub signer: UnverifiedEd25519PublicKey,
 }
 
+// Every field in declaration order.
+impl BinaryDecode for InscriptionOp {
+    /// The most bytes the era the inscription is decoded under allows it.
+    type Context = u32;
+
+    fn decode<'input>(
+        input: &'input [u8],
+        max_inscription_size: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, channel_id) = ChannelId::decode(input, &())?;
+        let (input, inscription) = Inscription::decode(input, &(*max_inscription_size, ()))?;
+        let (input, parent) = MsgId::decode(input, &())?;
+        let (input, signer) = UnverifiedEd25519PublicKey::decode(input, &())?;
+        Ok((
+            input,
+            Self {
+                channel_id,
+                inscription,
+                parent,
+                signer,
+            },
+        ))
+    }
+}
+
 impl InscriptionOp {
     #[must_use]
     pub fn id(&self) -> MsgId {
@@ -85,7 +113,7 @@ impl InscriptionOp {
     pub fn sample() -> Self {
         Self {
             channel_id: ChannelId::from([14u8; 32]),
-            inscription: b"hello logos".into(),
+            inscription: Inscription::new_unchecked(b"hello logos".to_vec()),
             parent: MsgId::root(),
             signer: Ed25519Key::from_bytes(&[15; 32])
                 .public_key()
@@ -112,12 +140,6 @@ impl ProvableOperation for InscriptionOp {
     type Proof = Ed25519Signature;
     const CODE: u8 = 0x11;
 }
-
-impl OperationGas<MainnetGasProfile> for InscriptionOp {
-    const GAS_COST: Gas = Gas::new(56);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for InscriptionOp {}
 
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<InscriptionOp, Unverified, StandardMode>
@@ -244,13 +266,16 @@ impl<Mode: VerificationMode> ExecutableOperation
 
 #[cfg(test)]
 mod tests {
-    use lb_utils::bounded::BoundedError;
-
     use super::*;
     use crate::{
         crypto::Hash,
         mantle::{
-            TxHash, gas::test_utils::FixedThresholds, ops::op_proof::samples::SampleProof as _,
+            TxHash,
+            gas::{
+                Gas,
+                test_utils::{FixedThresholds, GAS_PROFILE},
+            },
+            ops::op_proof::samples::SampleProof as _,
             transactions::tx_list::signed_ops::test_utils::make_channel_state,
         },
     };
@@ -279,36 +304,10 @@ mod tests {
     fn sample() -> InscriptionOp {
         InscriptionOp {
             channel_id: ChannelId([0u8; 32]),
-            inscription: b"genesis".into(),
+            inscription: Inscription::new_unchecked(b"genesis".to_vec()),
             parent: MsgId([0u8; 32]),
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
         }
-    }
-
-    #[test]
-    fn oversized_inscription_rejected_at_construction() {
-        let oversized = vec![0u8; MAX_BYTES + 1];
-        let err = Inscription::try_from(oversized).unwrap_err();
-        assert!(
-            matches!(err, BoundedError::TooManyItems { count, max } if count == MAX_BYTES + 1 && max == MAX_BYTES)
-        );
-    }
-
-    #[test]
-    fn oversized_inscription_rejected_on_deserialize() {
-        let oversized = vec![0u8; MAX_BYTES + 1];
-        let bytes = bincode::serialize(&oversized).unwrap();
-        let err = bincode::deserialize::<Inscription>(&bytes).unwrap_err();
-        assert!(
-            format!("{err}").contains(
-                format!(
-                    "Item count {} exceeds static maximum of {MAX_BYTES}",
-                    MAX_BYTES + 1,
-                )
-                .as_str()
-            ),
-            "{err:?}",
-        );
     }
 
     #[test]
@@ -346,13 +345,13 @@ mod tests {
 
         assert_eq!(
             signed_operation.preverify(&InscriptionPreverificationContext {
-                tx_hash_view: &signed_view
+                tx_hash_view: &signed_view,
             }),
             Ok(())
         );
         assert_eq!(
             signed_operation.preverify(&InscriptionPreverificationContext {
-                tx_hash_view: &other_view
+                tx_hash_view: &other_view,
             }),
             Err(Error::InvalidSignature)
         );
@@ -369,7 +368,7 @@ mod tests {
 
         assert_eq!(
             signed_operation.preverify(&InscriptionPreverificationContext {
-                tx_hash_view: &tx_hash_view
+                tx_hash_view: &tx_hash_view,
             }),
             Err(Error::InvalidSignature)
         );
@@ -619,7 +618,8 @@ mod tests {
     fn inscription_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
             assert_eq!(
-                InscriptionOp::sample().execution_gas(&FixedThresholds(threshold)),
+                crate::mantle::OpRef::from(&InscriptionOp::sample())
+                    .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(56))
             );
         }

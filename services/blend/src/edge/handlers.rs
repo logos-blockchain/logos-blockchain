@@ -64,7 +64,7 @@ where
     ) -> Self {
         let pow_mining_pool = Arc::clone(&runtime_components.pow_mining_pool);
         let cryptographic_processor = EpochCryptographicProcessor::new(
-            settings.num_blend_layers,
+            settings.message_layout(),
             membership.clone(),
             public_info,
             winning_pol_info_stream,

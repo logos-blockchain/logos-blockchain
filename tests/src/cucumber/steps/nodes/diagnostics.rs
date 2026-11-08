@@ -218,39 +218,52 @@ impl BlendDiagnosticParameterSet {
         }
     }
 
-    /// Cap W at k - 1 (floor 1) to limit pruning-related instability while
-    /// retaining a nonzero window for meaningful uncle references.
+    const fn security_param(self) -> NonZeroU32 {
+        NonZero::new(self.security_parameter)
+            .expect("named Blend diagnostic security parameter must be non-zero")
+    }
+
+    /// The default W, narrowed to the widest that the set's `k` allows, which
+    /// limits pruning-related instability while retaining uncle references.
     fn uncle_reference_window_in_block(self) -> u32 {
-        let default_window = DeploymentSettings::default()
+        let mut cryptarchia = DeploymentSettings::default()
             .genesis_era_parameters()
             .cryptarchia
-            .uncle_reference_window_in_block;
-        diagnostic_uncle_reference_window(default_window, self.security_parameter)
+            .clone();
+        cryptarchia.security_param = self.security_param();
+        cryptarchia
+            .uncle_reference_window_in_block
+            .min(cryptarchia.widest_uncle_reference_window())
     }
 
     fn apply_to(&self, settings: &mut DeploymentSettings) {
-        settings.update_genesis_era_parameters(|parameters| {
-            parameters.cryptarchia.security_param = NonZero::new(self.security_parameter)
-                .expect("named Blend diagnostic security parameter must be non-zero");
-            parameters.cryptarchia.uncle_reference_window_in_block =
-                self.uncle_reference_window_in_block();
-            parameters.time.slot_duration_in_seconds = NonZero::new(self.slot_duration_secs)
-                .expect("named Blend diagnostic slot duration must be non-zero");
-            let epoch_config = &mut parameters.cryptarchia.epoch_config;
-            epoch_config.epoch_stake_distribution_stabilization =
-                NonZero::new(self.epoch_stake_distribution_stabilization)
-                    .expect("named Blend diagnostic phase must be non-zero");
-            epoch_config.epoch_period_nonce_buffer = NonZero::new(self.epoch_period_nonce_buffer)
-                .expect("named Blend diagnostic phase must be non-zero");
-            epoch_config.epoch_period_nonce_stabilization =
-                NonZero::new(self.epoch_period_nonce_stabilization)
-                    .expect("named Blend diagnostic phase must be non-zero");
-            parameters.cryptarchia.slot_activation_coeff = NonNegativeRatio::new(
-                1,
-                NonZeroU32::new(self.slot_activation_coeff_denominator)
-                    .expect("named Blend diagnostic slot coefficient denominator must be non-zero"),
-            );
-        });
+        settings
+            .update_genesis_era_parameters(|parameters| {
+                parameters.cryptarchia.security_param = self.security_param();
+                parameters.cryptarchia.uncle_reference_window_in_block =
+                    self.uncle_reference_window_in_block();
+                parameters.time.slot_duration_in_seconds = NonZero::new(self.slot_duration_secs)
+                    .expect("named Blend diagnostic slot duration must be non-zero");
+                let epoch_config = &mut parameters.cryptarchia.epoch_config;
+                epoch_config.epoch_stake_distribution_stabilization =
+                    NonZero::new(self.epoch_stake_distribution_stabilization)
+                        .expect("named Blend diagnostic phase must be non-zero");
+                epoch_config.epoch_period_nonce_buffer =
+                    NonZero::new(self.epoch_period_nonce_buffer)
+                        .expect("named Blend diagnostic phase must be non-zero");
+                epoch_config.epoch_period_nonce_stabilization =
+                    NonZero::new(self.epoch_period_nonce_stabilization)
+                        .expect("named Blend diagnostic phase must be non-zero");
+                parameters.cryptarchia.slot_activation_coeff = NonNegativeRatio::new(
+                    1,
+                    NonZeroU32::new(self.slot_activation_coeff_denominator).expect(
+                        "named Blend diagnostic slot coefficient denominator must be non-zero",
+                    ),
+                )
+                .try_into()
+                .expect("named Blend diagnostic slot activation coefficient must be valid");
+            })
+            .expect("The changed deployment must be valid.");
     }
 
     fn effective_deployment_settings(self) -> DeploymentSettings {
@@ -258,10 +271,6 @@ impl BlendDiagnosticParameterSet {
         self.apply_to(&mut settings);
         settings
     }
-}
-
-fn diagnostic_uncle_reference_window(default_window: u32, security_parameter: u32) -> u32 {
-    default_window.min(security_parameter.saturating_sub(1).max(1))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1706,7 +1715,7 @@ mod tests {
             (
                 "clean_control",
                 10,
-                9,
+                6,
                 (1, 1, 1),
                 10,
                 (100, 300, 200, 100, 250, 299),
@@ -1714,12 +1723,12 @@ mod tests {
             (
                 "testnet_representative",
                 10,
-                9,
+                6,
                 (3, 3, 4),
                 30,
                 (300, 3_000, 1_800, 1_200, 2_400, 2_999),
             ),
-            ("fast_repro", 3, 2, (1, 1, 1), 10, (30, 90, 60, 30, 75, 89)),
+            ("fast_repro", 3, 1, (1, 1, 1), 10, (30, 90, 60, 30, 75, 89)),
         ] {
             let parameter_set =
                 BlendDiagnosticParameterSet::from_name(name).expect("profile should be known");
@@ -1838,16 +1847,20 @@ mod tests {
     }
 
     #[test]
-    fn uncle_reference_window_keeps_the_k_one_boundary_nonzero() {
-        for (security_parameter, expected_window) in
-            [(1, 1), (3, 2), (5, 4), (10, 9), (15, 12), (35, 12)]
-        {
+    fn uncle_reference_window_is_the_widest_the_set_allows() {
+        // `⌊0.6k⌋`, the widest W that `k` allows.
+        for (name, expected_window) in [
+            ("clean_control", 6),
+            ("testnet_representative", 6),
+            ("fast_repro", 1),
+        ] {
             assert_eq!(
-                diagnostic_uncle_reference_window(12, security_parameter),
+                BlendDiagnosticParameterSet::from_name(name)
+                    .unwrap()
+                    .uncle_reference_window_in_block(),
                 expected_window
             );
         }
-        assert_eq!(diagnostic_uncle_reference_window(8, 20), 8);
     }
 
     #[test]

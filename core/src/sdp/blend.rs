@@ -1,4 +1,4 @@
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_blend_proofs::{quota::ProofOfQuota, selection::ProofOfSelection};
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::Fr;
@@ -24,53 +24,12 @@ pub struct PolEpochStateSource {
     pub lib_slot: Slot,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, BinaryEncode, BinaryDecode)]
 pub struct ActivityProof {
     pub epoch: Epoch,
     pub signing_key: Ed25519PublicKey,
     pub proof_of_quota: ProofOfQuota,
     pub proof_of_selection: ProofOfSelection,
-}
-
-impl BinaryEncode for ActivityProof {
-    fn encoded_length(&self) -> usize {
-        self.epoch
-            .encoded_length()
-            .checked_add(self.signing_key.encoded_length())
-            .and_then(|len| len.checked_add(self.proof_of_quota.encoded_length()))
-            .and_then(|len| len.checked_add(self.proof_of_selection.encoded_length()))
-            .unwrap()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.epoch.encode_into(out);
-        self.signing_key.encode_into(out);
-        self.proof_of_quota.encode_into(out);
-        self.proof_of_selection.encode_into(out);
-    }
-}
-
-impl BinaryDecode for ActivityProof {
-    type Context = ();
-
-    fn decode<'input>(
-        input: &'input [u8],
-        (): &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, epoch) = Epoch::decode(input, &())?;
-        let (input, signing_key) = Ed25519PublicKey::decode(input, &())?;
-        let (input, proof_of_quota) = ProofOfQuota::decode(input, &())?;
-        let (input, proof_of_selection) = ProofOfSelection::decode(input, &())?;
-        Ok((
-            input,
-            Self {
-                epoch,
-                signing_key,
-                proof_of_quota,
-                proof_of_selection,
-            },
-        ))
-    }
 }
 
 #[cfg(test)]

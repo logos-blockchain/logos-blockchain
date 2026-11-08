@@ -16,7 +16,7 @@ use either::Either;
 use futures::StreamExt as _;
 use lb_blend_membership::Membership;
 use lb_blend_message::encap::{
-    ProofsVerifier as ProofsVerifierTrait, encapsulated_message_encoded_size,
+    MessageLayout, ProofsVerifier as ProofsVerifierTrait, encapsulated_message_encoded_size,
     validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
 use lb_blend_primitives::time::{Round, RoundClock, RoundCount};
@@ -207,9 +207,8 @@ pub struct Behaviour<ProofsVerifier> {
     protocol_name: StreamProtocol,
     /// The minimum Blend network size for messages to be relayed between peers.
     minimum_network_size: NonZeroUsize,
-    /// `ß_c`: the fixed number of encapsulation layers every well-formed Blend
-    /// message carries.
-    num_blend_layers: NonZeroU64,
+    /// The layout every well-formed Blend message of the era has.
+    message_layout: MessageLayout,
     /// States for processing messages from the old epoch
     /// before the transition period has passed.
     old_epoch: Option<OldEpoch<ProofsVerifier>>,
@@ -397,7 +396,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             local_peer_id,
             protocol_name,
             minimum_network_size: common_config.minimum_network_size,
-            num_blend_layers: common_config.num_blend_layers,
+            message_layout: common_config.message_layout,
             old_epoch: None,
             round_clock,
             current_round,
@@ -467,7 +466,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
                 .collect(),
             mem::take(&mut self.message_cache),
             current_epoch_number,
-            self.num_blend_layers,
+            self.message_layout,
             current_epoch_proofs_verifier,
         ));
 
@@ -501,9 +500,9 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             handshake_deadline,
             handshake_upgrade_timeout,
             liveness,
+            message_layout,
             minimum_network_size,
             not_live_refusals,
-            num_blend_layers,
             protocol_name,
             round_clock,
             send_deadline,
@@ -523,7 +522,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         *target_peering_degree = new_era_core_config.target_peering_degree;
         *protocol_name = new_era_protocol_name;
         *minimum_network_size = new_era_common_config.minimum_network_size;
-        *num_blend_layers = new_era_common_config.num_blend_layers;
+        *message_layout = new_era_common_config.message_layout;
         *connection_share_per_round = new_era_core_config.connection_share_per_round;
         *send_deadline = new_era_core_config.send_deadline_in_rounds;
         *handshake_deadline = new_era_core_config.handshake_deadline_in_rounds;
@@ -1485,7 +1484,7 @@ where
             &self.pending_poq_verifications,
             &mut self.waker,
             self.current_epoch_info.1,
-            self.num_blend_layers,
+            self.message_layout,
             &self.proofs_verifier,
         ) {
             tracing::debug!(target: LOG_TARGET, "Failed to handle message from the current epoch: {receive_error:?}");
@@ -1586,7 +1585,7 @@ where
                 self.round_clock.clone(),
                 self.connection_share_per_round,
                 self.send_deadline,
-                encapsulated_message_encoded_size(self.num_blend_layers),
+                encapsulated_message_encoded_size(self.message_layout),
                 self.handshake_upgrade_timeout,
             ))
         } else {
@@ -1664,7 +1663,7 @@ where
                 self.round_clock.clone(),
                 self.connection_share_per_round,
                 self.send_deadline,
-                encapsulated_message_encoded_size(self.num_blend_layers),
+                encapsulated_message_encoded_size(self.message_layout),
                 self.handshake_upgrade_timeout,
             ))
         } else {

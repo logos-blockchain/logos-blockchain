@@ -12,7 +12,7 @@ use crate::{
         behaviour::{BlocksResponseReader, BoxedStream, TipResponseReader},
         errors::{ChainSyncError, ChainSyncErrorKind},
         messages::{BlocksResponse, RequestMessage},
-        packing::unpack_from_reader,
+        packing::{unpack_from_reader, unpack_from_reader_up_to},
         utils::{self, open_stream, send_message},
     },
     messages::SerialisedBlock,
@@ -100,11 +100,13 @@ impl Downloader {
     }
 
     /// Receives the blocks response from the peer and delivers it to the
-    /// caller of `request_blocks` as a stream of blocks. The response frames
-    /// are read lazily as the caller polls the stream.
+    /// caller of `request_blocks` as a stream of blocks, each in a response of
+    /// at most `max_response_size` bytes. The response frames are read lazily
+    /// as the caller polls the stream.
     pub fn receive_blocks_response(
         blocks_response_reader: BlocksResponseReader,
         timeout: Duration,
+        max_response_size: usize,
     ) -> Result<(), ChainSyncError> {
         let libp2p_stream = blocks_response_reader.stream;
         let peer_id = blocks_response_reader.peer_id;
@@ -115,7 +117,11 @@ impl Downloader {
             reason = "Signature expected by `try_unfold`"
         )]
         let stream = stream::try_unfold(libp2p_stream, move |mut stream| async move {
-            let response = time::timeout(timeout, unpack_from_reader(&mut stream)).await;
+            let response = time::timeout(
+                timeout,
+                unpack_from_reader_up_to(&mut stream, max_response_size),
+            )
+            .await;
 
             match response {
                 Ok(Ok(BlocksResponse::Block(block))) => Ok(Some((block, stream))),

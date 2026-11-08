@@ -1,10 +1,12 @@
-use core::{convert::Infallible, num::NonZeroU64, task::Waker};
+use core::{convert::Infallible, task::Waker};
 use std::{collections::VecDeque, sync::Arc};
 
 use either::Either;
 use lb_blend_message::{
     deserialize_encapsulated_message,
-    encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
+    encap::{
+        MessageLayout, ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader,
+    },
 };
 use lb_cryptarchia_engine::Epoch;
 use libp2p::{
@@ -89,7 +91,7 @@ pub fn handle_received_serialized_encapsulated_message<Verifier>(
     pending_verifications: &PendingPoQVerifications,
     waker: &mut Option<Waker>,
     epoch: Epoch,
-    num_blend_layers: NonZeroU64,
+    message_layout: MessageLayout,
     proofs_verifier: &Arc<Verifier>,
 ) -> Result<(), ReceiveError>
 where
@@ -97,7 +99,7 @@ where
 {
     // Deserialize the message.
     let deserialized_encapsulated_message =
-        deserialize_encapsulated_message(serialized_message, &num_blend_layers)
+        deserialize_encapsulated_message(serialized_message, &message_layout)
             .map_err(|_| ReceiveError::UndeserializableMessage)?;
 
     // Exit early if we've received this message already and we know it's a valid

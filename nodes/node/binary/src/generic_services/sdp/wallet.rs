@@ -1,9 +1,5 @@
 use lb_core::{
-    mantle::{
-        Op, SignedOps,
-        ledger::verification_mode::StandardMode,
-        transactions::{MantleTxBuilder, states::Preverified},
-    },
+    mantle::{Op, transactions::MantleTxBuilder},
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };
 use lb_sdp_service::wallet::{
@@ -14,6 +10,8 @@ use lb_wallet_service::{
     api::{WalletApi, WalletServiceData},
 };
 use overwatch::services::{AsServiceId, ServiceData, relay::OutboundRelay};
+
+use crate::ValidatedTx;
 
 pub struct SdpWalletAdapter<Service, RuntimeServiceId>
 where
@@ -42,7 +40,7 @@ where
         mut tx_builder: MantleTxBuilder,
         declaration: DeclarationMessage,
         config: &SdpWalletConfig,
-    ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError> {
+    ) -> Result<ValidatedTx, SdpWalletError> {
         tx_builder = tx_builder.push_op(Op::SDPDeclare(declaration))?;
 
         let TipResponse {
@@ -83,7 +81,7 @@ where
         mut tx_builder: MantleTxBuilder,
         withdraw: WithdrawMessage,
         config: &SdpWalletConfig,
-    ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError> {
+    ) -> Result<ValidatedTx, SdpWalletError> {
         tx_builder = tx_builder.push_op(Op::SDPWithdraw(withdraw))?;
 
         let TipResponse {
@@ -124,7 +122,7 @@ where
         mut tx_builder: MantleTxBuilder,
         active: ActiveMessage,
         config: &SdpWalletConfig,
-    ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError> {
+    ) -> Result<ValidatedTx, SdpWalletError> {
         tx_builder = tx_builder.push_op(Op::SDPActive(active))?;
 
         let TipResponse {

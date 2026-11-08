@@ -1,5 +1,6 @@
 use core::{num::NonZeroU64, time::Duration};
 
+use lb_blend::message::encap::MessageLayout;
 use lb_cryptarchia_engine::EraSchedule;
 use lb_key_management_system_service::backend::preload::KeyId;
 use lb_poq::Quota;
@@ -29,6 +30,7 @@ pub struct EdgeServiceEraSettings<BackendEraSettings> {
     pub time: EraTimingSettings,
     /// `ß_c`: number of blending operations for each locally generated message.
     pub num_blend_layers: NonZeroU64,
+    pub payload_body_size: u16,
     pub minimum_network_size: NonZeroU64,
     pub cover: EraCoverTrafficSettings,
     /// `R_c`: replication factor for data messages.
@@ -38,6 +40,15 @@ pub struct EdgeServiceEraSettings<BackendEraSettings> {
 }
 
 impl<BackendEraSettings> EdgeServiceEraSettings<BackendEraSettings> {
+    /// The layout of the era's messages.
+    #[must_use]
+    pub const fn message_layout(&self) -> MessageLayout {
+        MessageLayout {
+            num_blend_layers: self.num_blend_layers,
+            payload_body_size: self.payload_body_size,
+        }
+    }
+
     pub fn epoch_pow_quota(&self) -> Quota {
         self.num_blend_layers
             .get()

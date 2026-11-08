@@ -25,11 +25,11 @@ use std::{
 };
 
 use lb_core::{
+    era::{AcceptedForkDigests, ForkDigest},
     header::HeaderId,
     mantle::{
         Note, Op, OpProof, SignedOps, Utxo,
         batch::DeferredProofs,
-        gas::MainnetGasProfile,
         ledger::{BoundedInputs, Outputs, verification_mode::StandardMode},
         ops::transfer::TransferOp,
         traits::Hashable as _,
@@ -233,7 +233,7 @@ fn apply(
 ) -> (LedgerState, DeferredProofs) {
     let (state, _, deferred) = state
         .clone()
-        .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(&TX_POOL.eras, txs)
+        .try_apply_block_contents::<_, HeaderId>(&TX_POOL.eras, txs)
         .expect("block should apply");
     (state, deferred)
 }
@@ -246,7 +246,7 @@ fn build_tx(utxo: Utxo, key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
         // Most of the tx's value goes as a tip, to withstand gas cost increases.
         Outputs::new([Note::new(1, key.to_public_key())]),
     );
-    let ops = Ops::from([Op::Transfer(transfer_op)]);
+    let ops = Ops::new(ForkDigest::new([0x11; 32]), [Op::Transfer(transfer_op)]);
     let signature = ZkKey::multi_sign(std::slice::from_ref(key), &ops.hash().to_fr()).unwrap();
     let op_proofs = OpProofs::from([OpProof::ZkSig(signature)]);
 
@@ -270,6 +270,10 @@ fn single_era(config: Config) -> EraScheduledConfig {
     .map(move |_| config.clone())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "A ledger config, spelled out field by field."
+)]
 fn config() -> Config {
     let epoch_config = EpochConfig {
         epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
@@ -281,6 +285,7 @@ fn config() -> Config {
         NonNegativeRatio::new(1, 10.try_into().unwrap()),
         1f64.try_into().expect("1 > 0"),
         12,
+        4,
     );
     let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
@@ -299,6 +304,7 @@ fn config() -> Config {
                 blend: rewards::blend::RewardsParameters {
                     rounds_per_epoch: epoch_length.try_into().unwrap(),
                     message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                    cover_replication_factor: 0,
                     num_blend_layers: NonZero::new(3).unwrap(),
                     minimum_network_size: NonZero::new(1).unwrap(),
                     data_replication_factor: 0,
@@ -309,6 +315,44 @@ fn config() -> Config {
                 threshold: 1,
                 timestamp: 0,
             },
+        },
+        max_transactions: 1024,
+        max_transactions_size: 2 * 1024 * 1024,
+        max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+        execution_market: logos_blockchain_ledger::config::ExecutionMarketConfig {
+            max_gas_per_block: logos_blockchain_ledger::config::MaxGasPerBlock::new(3_193_460)
+                .unwrap(),
+            fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                .unwrap(),
+            ema_smoothing_factor: lb_utils::math::ProperFraction::new(9, 10.try_into().unwrap())
+                .unwrap(),
+        },
+        storage_market: logos_blockchain_ledger::config::StorageMarketConfig {
+            max_adjustment_factor: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                .unwrap(),
+            ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
+                .unwrap(),
+        },
+        block_rewards: logos_blockchain_ledger::config::BlockRewardsConfig::new(
+            3_000_000_000,
+            120_000_000.try_into().unwrap(),
+            10_512,
+            NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+            lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+        )
+        .unwrap(),
+        gas_profile: lb_core::mantle::gas::GasProfile {
+            transfer: 590.into(),
+            channel_config: 56.into(),
+            channel_inscribe: 56.into(),
+            channel_deposit: 590.into(),
+            channel_withdraw: 56.into(),
+            channel_transfer: 56.into(),
+            sdp_declare: 646.into(),
+            sdp_withdraw: 590.into(),
+            sdp_active: 590.into(),
+            leader_claim: 580.into(),
+            claim_pow_reward: 1.into(),
         },
         pow_config: PoWConfig {
             blend: BlendPoWConfig {
@@ -333,5 +377,6 @@ fn config() -> Config {
                 slot_window: NonZero::new(100).unwrap(),
             },
         },
+        accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
     }
 }
