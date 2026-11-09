@@ -54,13 +54,13 @@ where
             tokio::select! {
                 Some(msg) = self.inbound_relay.next() => match msg {
                     ConsensusMsg::Query(query) => {
-                        self.process_query(query).await;
+                        self.process_query(query);
                     }
                     ConsensusMsg::ApplyBlock { block, reply_channel } => {
                         self.apply_block(*block, reply_channel);
                     }
                     ConsensusMsg::ChainSync(event) => {
-                        self.handle_chainsync_event(event).await;
+                        self.handle_chainsync_event(event);
                     }
                     ConsensusMsg::IbdCompleted => {
                         debug!(target: LOG_TARGET, "ignoring IbdCompleted: already in {:?} phase", self.phase);
@@ -69,6 +69,7 @@ where
                 Some(preparation) = OptionFuture::from(self.block_underway.as_mut()) => {
                     self.finish_block(preparation).await;
                 }
+                Some(()) = self.pending_queries.next() => {}
                 Some(tick) = self.slot_timer.next() => self.current_slot = tick.slot,
                 _ = self.state_recording_timer.tick() => self.record_recovery_state(),
             }
@@ -76,7 +77,11 @@ where
     }
 
     /// Serve a chainsync request from a peer.
-    async fn handle_chainsync_event(&self, event: ChainSyncEvent) {
+    ///
+    /// Blocks are served by a future the service loop polls along with its
+    /// other inputs, from the block tree as it is when the request comes. The
+    /// protocol caps how many are served at once.
+    fn handle_chainsync_event(&self, event: ChainSyncEvent) {
         match event {
             ChainSyncEvent::BlocksRequest {
                 target_block,
@@ -90,14 +95,13 @@ where
                     .chain(additional_blocks)
                     .collect::<HashSet<_>>();
 
-                self.sync_blocks_provider
-                    .reply_with_blocks(
-                        &self.cryptarchia.consensus,
-                        target_block,
-                        &known_blocks,
-                        reply_sender,
-                    )
-                    .await;
+                let blocks_provider = self.sync_blocks_provider.clone();
+                let block_tree = self.cryptarchia.consensus.clone();
+                self.pending_queries.push(Box::pin(async move {
+                    blocks_provider
+                        .reply_with_blocks(&block_tree, target_block, &known_blocks, reply_sender)
+                        .await;
+                }));
             }
             ChainSyncEvent::TipRequest { reply_sender } => {
                 let tip = self.cryptarchia.tip_branch();
@@ -108,7 +112,8 @@ where
                 });
 
                 trace!(target: LOG_TARGET, ?response, "sending tip response");
-                if let Err(err) = reply_sender.send(response).await {
+                // The channel is the request's own, with room for its one reply.
+                if let Err(err) = reply_sender.try_send(response) {
                     error!(target: LOG_TARGET, %err, "failed to send tip header");
                 }
             }
