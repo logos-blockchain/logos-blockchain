@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -331,6 +331,54 @@ pub struct ObservedWrite {
 struct ReplicatedDatabase {
     connection: Connection,
     functions: FunctionOverrides,
+    hooks: ApplicationHooks,
+}
+
+/// The authorizer and the execution budget that constrain application SQL.
+/// Installed once per connection; active only while armed.
+struct ApplicationHooks {
+    armed: Arc<AtomicBool>,
+    work: Arc<AtomicU64>,
+}
+
+impl ApplicationHooks {
+    fn install(connection: &mut Connection) -> Result<Self, Error> {
+        let hooks = Self {
+            armed: Arc::new(AtomicBool::new(false)),
+            work: Arc::new(AtomicU64::new(0)),
+        };
+
+        let armed = Arc::clone(&hooks.armed);
+        connection.authorizer(Some(move |context: AuthContext<'_>| {
+            if armed.load(Ordering::Relaxed) {
+                authorize_application_sql(context)
+            } else {
+                Authorization::Allow
+            }
+        }))?;
+
+        let armed = Arc::clone(&hooks.armed);
+        let work = Arc::clone(&hooks.work);
+        connection.progress_handler(
+            SQL_PROGRESS_INTERVAL,
+            Some(move || {
+                armed.load(Ordering::Relaxed)
+                    && work.fetch_add(SQL_PROGRESS_INTERVAL as u64, Ordering::Relaxed)
+                        >= MAX_SQL_STEPS
+            }),
+        )?;
+
+        Ok(hooks)
+    }
+
+    fn arm(&self) {
+        self.work.store(0, Ordering::Relaxed);
+        self.armed.store(true, Ordering::Relaxed);
+    }
+
+    fn disarm(&self) {
+        self.armed.store(false, Ordering::Relaxed);
+    }
 }
 
 /// Pending write count and payload bytes, cached to avoid scanning the
@@ -755,7 +803,7 @@ impl Databases {
         let capture = self.live.functions.capture();
         let db_transaction = self.live.connection.transaction()?;
 
-        apply_statements(&db_transaction, transaction)?;
+        apply_statements(&db_transaction, &self.live.hooks, transaction)?;
         let captured_function_calls = capture.finish()?;
         let encoded = EncodedWrite::new(
             tx_id,
@@ -1070,26 +1118,30 @@ impl FromSql for WriteStatus {
 }
 
 fn open_writer(path: &Path) -> Result<ReplicatedDatabase, Error> {
-    let connection = open_connection(path)?;
+    let mut connection = open_connection(path)?;
     let functions = FunctionOverrides::install(&connection)?;
+    let hooks = ApplicationHooks::install(&mut connection)?;
 
     Ok(ReplicatedDatabase {
         connection,
         functions,
+        hooks,
     })
 }
 
 fn open_rebuild_writer(path: &Path) -> Result<ReplicatedDatabase, Error> {
-    let connection = Connection::open(path)?;
+    let mut connection = Connection::open(path)?;
 
     configure_connection(&connection)?;
     connection.execute_batch(REBUILD_PRAGMAS)?;
 
     let functions = FunctionOverrides::install(&connection)?;
+    let hooks = ApplicationHooks::install(&mut connection)?;
 
     Ok(ReplicatedDatabase {
         connection,
         functions,
+        hooks,
     })
 }
 
@@ -1145,7 +1197,7 @@ fn apply_channel_write(
         return Ok(());
     }
 
-    if let Err(error) = apply_statements(&db_transaction, &write.transaction) {
+    if let Err(error) = apply_statements(&db_transaction, &database.hooks, &write.transaction) {
         if replay.failed() {
             return Err(Error::InvalidPayload(
                 "captured SQLite function call does not match replay",
@@ -1237,27 +1289,21 @@ fn is_deterministic_sql_error(error: &rusqlite::Error) -> bool {
 
 fn apply_statements(
     db_transaction: &rusqlite::Transaction<'_>,
+    hooks: &ApplicationHooks,
     transaction: &Transaction,
 ) -> Result<(), Error> {
     let previous_length = db_transaction.set_limit(Limit::SQLITE_LIMIT_LENGTH, MAX_SQL_BYTES)?;
     let previous_sql_length =
         db_transaction.set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, MAX_SQL_BYTES)?;
 
-    db_transaction.authorizer(Some(authorize_application_sql));
-
-    let work = Arc::new(AtomicU64::new(0));
-    let progress_work = Arc::clone(&work);
-
-    db_transaction.progress_handler(
-        SQL_PROGRESS_INTERVAL,
-        Some(move || {
-            progress_work.fetch_add(SQL_PROGRESS_INTERVAL as u64, Ordering::Relaxed)
-                >= MAX_SQL_STEPS
-        }),
-    );
+    hooks.arm();
 
     let result = transaction.statements().iter().try_for_each(|statement| {
-        if work.fetch_add(SQL_PROGRESS_INTERVAL as u64, Ordering::Relaxed) >= MAX_SQL_STEPS {
+        if hooks
+            .work
+            .fetch_add(SQL_PROGRESS_INTERVAL as u64, Ordering::Relaxed)
+            >= MAX_SQL_STEPS
+        {
             return Err(Error::ExecutionBudgetExceeded);
         }
 
@@ -1266,16 +1312,15 @@ fn apply_statements(
         Ok::<_, Error>(())
     });
 
-    db_transaction.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
     // Bookkeeping and rollback must not inherit the application's spent budget.
-    db_transaction.progress_handler(0, None::<fn() -> bool>);
+    hooks.disarm();
 
     // Internal rows also contain replication metadata and encoded payloads;
     // they are not application rows and must not inherit these size limits.
     db_transaction.set_limit(Limit::SQLITE_LIMIT_LENGTH, previous_length)?;
     db_transaction.set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, previous_sql_length)?;
 
-    if work.load(Ordering::Relaxed) > MAX_SQL_STEPS {
+    if hooks.work.load(Ordering::Relaxed) > MAX_SQL_STEPS {
         return Err(Error::ExecutionBudgetExceeded);
     }
 
