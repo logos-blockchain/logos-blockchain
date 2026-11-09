@@ -109,7 +109,8 @@ fn validate_max_tx_fee(
 }
 
 // Rejects a funded transaction whose fee exceeds `max_tx_fee`, releasing
-// `reserved`, the notes this request reserved for it.
+// `reserved`, the notes this request reserved for it. A funding capped at
+// `max_tx_fee` exceeds it only when its mandatory fee does.
 async fn check_funded_tx_fee<WalletService, RuntimeServiceId>(
     wallet: &WalletApi<WalletService, RuntimeServiceId>,
     funded: &MantleTxBuilder,
@@ -1161,6 +1162,7 @@ where
                 req.change_public_key,
                 req.funding_public_keys,
                 lb_wallet_service::FEE_MARGIN_PERCENT,
+                Some(req.max_tx_fee),
             )
             .await?;
 
@@ -2246,6 +2248,7 @@ pub mod wallet {
                     req.change_public_key,
                     req.funding_public_keys,
                     req.priority_fee_percent,
+                    Some(req.max_tx_fee),
                 )
                 .await?;
 
@@ -2399,14 +2402,14 @@ mod tests {
     }
 
     #[test]
-    fn max_tx_fee_rejects_a_percentage_funded_final_fee() {
-        let mandatory_fee: u64 = 794;
-        let priority_fee_percent: u64 = 12;
-        let priority_fee_amount = (mandatory_fee * priority_fee_percent).div_ceil(100);
-        let funded_tx_fee = GasCost::new(mandatory_fee + priority_fee_amount);
+    fn max_tx_fee_rejects_only_a_mandatory_fee_above_it() {
+        let mandatory_fee = GasCost::new(794);
 
-        let error = validate_max_tx_fee(funded_tx_fee, GasCost::new(mandatory_fee + 95))
-            .expect_err("the percentage reserve should be included in the hard cap");
+        // A funding capped at `max_tx_fee` pays at most `max_tx_fee`.
+        validate_max_tx_fee(mandatory_fee, mandatory_fee)
+            .expect("a fee at max_tx_fee should be accepted");
+        let error = validate_max_tx_fee(mandatory_fee, GasCost::new(793))
+            .expect_err("a mandatory fee above max_tx_fee should be rejected");
         assert!(error.to_string().contains("exceeds max_tx_fee"));
     }
 

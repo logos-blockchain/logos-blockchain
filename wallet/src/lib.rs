@@ -21,7 +21,7 @@ use lb_core::{
         ops::{OpRef, transfer::TransferOp},
         traits::{MantleTx, SignedMantleTx},
         transactions::{
-            builder::{FundingNote, MantleTxBuilder, ZkTransferOpening},
+            builder::{FundingNote, MantleTxBuilder, PriorityFee, ZkTransferOpening},
             states::Preverified,
             tx_list::ops::OpsContext,
         },
@@ -284,8 +284,8 @@ impl WalletState {
     }
 
     /// Funds the transaction so its excess balance is exactly the requested
-    /// percentage of the final mandatory fee. Only the unused reserve becomes
-    /// the transaction's effective priority tip. `0` funds to the exact
+    /// priority fee above the final mandatory fee. Only the unused reserve
+    /// becomes the transaction's effective priority tip. `0` funds to the exact
     /// minimum.
     #[expect(clippy::too_many_arguments, reason = "the funding inputs")]
     pub fn fund_tx<G: GasProfile>(
@@ -296,8 +296,9 @@ impl WalletState {
         pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
         context: &OpsContext,
         excluded: &HashSet<NoteNullifier>,
-        priority_fee_percent: u64,
+        priority_fee: impl Into<PriorityFee>,
     ) -> Result<MantleTxBuilder, WalletError> {
+        let priority_fee = priority_fee.into();
         // Get the ledger notes owned by the provided PKs, excluding the ones
         // the tx already consumes and the ones excluded by the caller (e.g.
         // reserved for in flight txs). Service and channel notes are in
@@ -316,7 +317,7 @@ impl WalletState {
         // supplied inputs. In that case we must not pull in an extra input (and
         // the change note it would require).
         match tx_builder
-            .funding_delta_with_priority_fee::<G>(context, priority_fee_percent)?
+            .funding_delta_with_priority_fee::<G>(context, priority_fee)?
             .cmp(&0)
         {
             Ordering::Equal => return Ok(tx_builder.clone()),
@@ -325,7 +326,7 @@ impl WalletState {
                     context,
                     change_pk,
                     change_nonce,
-                    priority_fee_percent,
+                    priority_fee,
                 )? {
                     return Ok(tx_with_change);
                 }
@@ -344,8 +345,8 @@ impl WalletState {
                 }),
             )?;
 
-            let funding_delta = funded_tx_builder
-                .funding_delta_with_priority_fee::<G>(context, priority_fee_percent)?;
+            let funding_delta =
+                funded_tx_builder.funding_delta_with_priority_fee::<G>(context, priority_fee)?;
 
             match funding_delta.cmp(&0) {
                 Ordering::Less => {
@@ -364,7 +365,7 @@ impl WalletState {
                         context,
                         change_pk,
                         change_nonce,
-                        priority_fee_percent,
+                        priority_fee,
                     )? {
                         // We were able to fund the tx with change note added.
                         return Ok(tx_with_change);
@@ -702,7 +703,7 @@ impl<KeyId> Wallet<KeyId> {
         funding_pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
         context: &OpsContext,
         excluded: &HashSet<NoteNullifier>,
-        priority_fee_percent: u64,
+        priority_fee: impl Into<PriorityFee>,
     ) -> Result<MantleTxBuilder, WalletError> {
         self.spend_state(tip)?.fund_tx::<G>(
             tx_builder,
@@ -711,7 +712,7 @@ impl<KeyId> Wallet<KeyId> {
             funding_pks,
             context,
             excluded,
-            priority_fee_percent,
+            priority_fee,
         )
     }
 
@@ -842,7 +843,7 @@ mod tests {
         crypto::ZkHasher,
         mantle::{
             Op,
-            gas::MainnetGasProfile,
+            gas::{GasCost, MainnetGasProfile},
             ops::{channel::inscribe::InscriptionOp, pow::PowNullifier, sdp::SDPDeclareOp},
             transactions::{GasPrices, tx_list::ops::OpsGasContext},
         },
@@ -1519,6 +1520,42 @@ mod tests {
             .commitment()]
             .into()
         );
+    }
+
+    #[test]
+    fn test_fund_tx_cuts_the_fee_margin_down_to_the_max_fee() {
+        let alice = pk(1);
+        let note = Note::new(5000, Fr::from(1u64), alice);
+        let wallet_state = wallet_state_of(&[(note, LEDGER_SET, nullifier(1))]);
+        let context = context(GasPrices::new(1, 1));
+        // The mandatory fee of the transaction funded with a change output.
+        let mandatory_fee = 855;
+
+        for max_fee in [mandatory_fee, mandatory_fee + 1] {
+            let funded_tx_builder = wallet_state
+                .fund_tx::<MainnetGasProfile>(
+                    &MantleTxBuilder::new(),
+                    alice,
+                    Fr::from(3u64),
+                    [alice],
+                    &context,
+                    &HashSet::new(),
+                    PriorityFee {
+                        percent: FEE_MARGIN_PERCENT,
+                        max_fee: Some(GasCost::new(max_fee)),
+                    },
+                )
+                .unwrap();
+
+            assert_eq!(
+                funded_tx_builder
+                    .minimum_gas_cost::<MainnetGasProfile>(&context)
+                    .unwrap()
+                    .into_inner(),
+                mandatory_fee
+            );
+            assert_eq!(funded_tx_builder.tx_fee().unwrap(), GasCost::new(max_fee));
+        }
     }
 
     #[test]

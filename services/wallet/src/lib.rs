@@ -31,8 +31,10 @@ use lb_core::{
         },
         traits::{GenesisTx as _, Hashable as _, MantleTx as _, SignedMantleTx, StorageSize},
         transactions::{
-            MantleTxBuilder, OpProofs, Ops, TxBuilderError, builder::ZkTransferOpening,
-            states::Preverified, tx_list::ops::OpsContext,
+            MantleTxBuilder, OpProofs, Ops, TxBuilderError,
+            builder::{PriorityFee, ZkTransferOpening},
+            states::Preverified,
+            tx_list::ops::OpsContext,
         },
     },
     sdp::DeclarationId,
@@ -173,6 +175,8 @@ pub enum WalletMsg {
         /// Percentage of the final mandatory fee reserved as a priority-fee
         /// reserve; only the unused reserve becomes the effective tip.
         priority_fee_percent: u64,
+        /// The fee the reserve is cut down to stay within, if any.
+        max_tx_fee: Option<GasCost>,
         resp_tx: Sender<Result<TipResponse<MantleTxBuilder>, WalletServiceError>>,
     },
     SignTx {
@@ -634,6 +638,7 @@ where
                 change_pk,
                 funding_pks,
                 priority_fee_percent,
+                max_tx_fee,
                 resp_tx,
             } => {
                 // Like a funding that fails, a request that fails before funding
@@ -667,7 +672,10 @@ where
                     change_nonce,
                     funding_pks,
                     &context,
-                    priority_fee_percent,
+                    PriorityFee {
+                        percent: priority_fee_percent,
+                        max_fee: max_tx_fee,
+                    },
                 ) {
                     Ok(funded) => funded,
                     Err(err) => {

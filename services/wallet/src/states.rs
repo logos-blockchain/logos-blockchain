@@ -10,7 +10,11 @@ use lb_core::{
         GasProfile, Note, Value,
         notes::{NoteCommitment, NoteNullifier},
         ops::transfer::TransferOp,
-        transactions::{MantleTxBuilder, builder::ZkTransferOpening, tx_list::ops::OpsContext},
+        transactions::{
+            MantleTxBuilder,
+            builder::{PriorityFee, ZkTransferOpening},
+            tx_list::ops::OpsContext,
+        },
     },
 };
 use lb_groth16::Fr;
@@ -307,9 +311,9 @@ impl<'u> ServiceState<'u> {
     }
 
     /// Fund `tx_builder` from the wallet's notes at `tip`, excluding notes
-    /// already reserved for in-flight transactions. `priority_fee_percent`
-    /// reserves that percentage of the final mandatory fee, including both
-    /// execution and storage cost. Only the unused reserve becomes an
+    /// already reserved for in-flight transactions. `priority_fee` reserves
+    /// its percentage of the final mandatory fee, including both execution and
+    /// storage cost, within its maximum fee. Only the unused reserve becomes an
     /// effective priority tip, and the percentage is not capped at 100. A
     /// funding that fails releases the notes `tx_builder` spends, such as a
     /// split reserved for it. If a builder is funded again while its first
@@ -328,7 +332,7 @@ impl<'u> ServiceState<'u> {
         change_nonce: Fr,
         funding_pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
         context: &OpsContext,
-        priority_fee_percent: u64,
+        priority_fee: impl Into<PriorityFee>,
     ) -> Result<MantleTxBuilder, WalletError> {
         let funded = self.wallet.fund_tx::<G>(
             tip,
@@ -338,7 +342,7 @@ impl<'u> ServiceState<'u> {
             funding_pks,
             context,
             &self.pending_notes.nullifiers(),
-            priority_fee_percent,
+            priority_fee,
         );
         if funded.is_err() {
             self.release_pending_notes(tx_builder.nullifiers_consumed());

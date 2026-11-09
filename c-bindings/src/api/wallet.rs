@@ -1156,9 +1156,10 @@ pub unsafe extern "C" fn channel_deposit(
 ///
 /// This is a synchronous wrapper that mirrors the node's `POST /wallet/fund`
 /// HTTP handler: it funds the request's transaction builder from
-/// `funding_public_keys` (change to `change_public_key`), rejects it if the
-/// fee exceeds `max_tx_fee`, and signs only the appended fee transfer. All
-/// other ops are left unsigned for the caller to prove.
+/// `funding_public_keys` (change to `change_public_key`) with its priority
+/// reserve cut down to `max_tx_fee`, rejects it if the mandatory fee alone
+/// exceeds `max_tx_fee`, and signs only the appended fee transfer. All other
+/// ops are left unsigned for the caller to prove.
 pub(crate) fn wallet_fund_tx_sync(
     node: &LogosBlockchainNode,
     request: WalletFundRequestBody,
@@ -1178,6 +1179,7 @@ pub(crate) fn wallet_fund_tx_sync(
                 request.change_public_key,
                 request.funding_public_keys,
                 request.priority_fee_percent,
+                Some(request.max_tx_fee),
             )
             .await
             .map_err(|error| {

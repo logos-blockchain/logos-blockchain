@@ -5,6 +5,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, OpProof, SignedOps, Value,
+        gas::GasCost,
         ledger::verification_mode::StandardMode,
         note_set::{LEDGER_SET, NoteSetIndex},
         notes::{NoteCommitment, NoteNullifier},
@@ -143,7 +144,9 @@ where
     /// Fund a transaction, reserving `priority_fee_percent` percent of its
     /// final mandatory fee as a priority reserve. The mandatory fee includes
     /// execution and storage cost; only the unused reserve becomes an
-    /// effective priority tip. The percentage is not capped at 100.
+    /// effective priority tip. The percentage is not capped at 100. A
+    /// `max_tx_fee` cuts the reserve down so the whole fee stays within it,
+    /// never below the mandatory fee.
     pub async fn fund_tx(
         &self,
         tip: Option<HeaderId>,
@@ -151,6 +154,7 @@ where
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
         priority_fee_percent: u64,
+        max_tx_fee: Option<GasCost>,
     ) -> Result<TipResponse<MantleTxBuilder>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
@@ -161,6 +165,7 @@ where
                 change_pk,
                 funding_pks,
                 priority_fee_percent,
+                max_tx_fee,
                 resp_tx,
             })
             .await?;
@@ -340,6 +345,7 @@ where
                 change_pk,
                 funding_pks,
                 crate::FEE_MARGIN_PERCENT,
+                None,
             )
             .await?;
         let TipResponse { tip, response } = self

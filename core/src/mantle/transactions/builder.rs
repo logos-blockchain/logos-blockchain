@@ -74,6 +74,27 @@ pub struct FundingNote {
 pub type FundingInputs = UpperBoundedVec<FundingNote, MAX_INPUTS>;
 pub type FundingOutputs = UpperBoundedVec<Note, MAX_OUTPUTS>;
 
+/// The priority fee a funding reserves above the final mandatory fee.
+///
+/// The reserve is `percent` of that fee, cut down so the whole fee stays within
+/// `max_fee`. The mandatory fee itself is never cut, so a transaction whose
+/// mandatory fee exceeds `max_fee` is funded with no reserve and pays more than
+/// `max_fee`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PriorityFee {
+    pub percent: u64,
+    pub max_fee: Option<GasCost>,
+}
+
+impl From<u64> for PriorityFee {
+    fn from(percent: u64) -> Self {
+        Self {
+            percent,
+            max_fee: None,
+        }
+    }
+}
+
 /// Builds an [`Ops`] incrementally.
 ///
 /// The builder is intentionally free of any [`OpsContext`]: gas prices are
@@ -175,19 +196,19 @@ impl MantleTxBuilder {
     }
 
     /// Return a positive change output while reserving the requested
-    /// percentage of the final transaction's mandatory fee.
+    /// priority fee above the final transaction's mandatory fee.
     pub fn return_change<G: GasProfile>(
         self,
         context: &OpsContext,
         change_pk: ZkPublicKey,
         change_nonce: Fr,
-        priority_fee_percent: u64,
+        priority_fee: impl Into<PriorityFee>,
     ) -> Result<Option<Self>, TxBuilderError> {
         // Calculate the mandatory fee with a dummy change note so the reserve
         // is based on the final transaction shape.
         let candidate = self.with_dummy_change_note()?;
         let available_change =
-            candidate.funding_delta_with_priority_fee::<G>(context, priority_fee_percent)?;
+            candidate.funding_delta_with_priority_fee::<G>(context, priority_fee)?;
 
         match available_change.cmp(&1) {
             Ordering::Less => {
@@ -266,10 +287,14 @@ impl MantleTxBuilder {
     pub fn funding_delta_with_priority_fee<G: GasProfile>(
         &self,
         context: &OpsContext,
-        priority_fee_percent: u64,
+        priority_fee: impl Into<PriorityFee>,
     ) -> Result<i128, TxBuilderError> {
+        let priority_fee = priority_fee.into();
         let mandatory_fee = self.minimum_gas_cost::<G>(context)?.into_inner();
-        let required_fee = Self::required_fee(mandatory_fee, priority_fee_percent)?;
+        let mut required_fee = Self::required_fee(mandatory_fee, priority_fee.percent)?;
+        if let Some(max_fee) = priority_fee.max_fee {
+            required_fee = required_fee.min(max_fee.into_inner().max(mandatory_fee));
+        }
         Ok(self.net_balance() - i128::from(required_fee))
     }
 
