@@ -428,7 +428,7 @@ impl<'u> ServiceState<'u> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use lb_core::era::{AcceptedForkDigests, ForkDigest};
     use lb_groth16::{Field as _, Fr};
     use lb_ledger::ConsensusExcludedKeys;
@@ -454,7 +454,7 @@ mod tests {
     const EXPIRY_BLOCKS: u64 = 4;
 
     /// A schedule of one era, with epochs of 100 slots and a `k` of 5.
-    fn era_schedule() -> ServiceEraSchedule {
+    pub fn era_schedule() -> ServiceEraSchedule {
         use std::time::Duration;
 
         use lb_time::era::{EraEntriesAfterGenesis, EraSchedule, EraTiming};
@@ -560,7 +560,7 @@ mod tests {
         clippy::too_many_lines,
         reason = "A ledger config, spelled out field by field."
     )]
-    fn ledger_config() -> lb_ledger::Config {
+    pub fn ledger_config() -> lb_ledger::Config {
         use std::sync::Arc;
 
         use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
