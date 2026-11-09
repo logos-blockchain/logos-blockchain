@@ -1,11 +1,14 @@
 pub mod api;
 mod states;
 
-use std::{collections::HashMap, num::NonZero, time::Duration};
+#[cfg(test)]
+mod tests;
+
+use std::{collections::HashMap, num::NonZero, pin::Pin, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{StreamExt as _, TryStreamExt as _};
+use futures::{StreamExt as _, TryStreamExt as _, stream::FuturesUnordered};
 use lb_binary_codec::canonical::BinaryDecode;
 use lb_chain_service::{
     ChainServiceInfo, LibUpdate,
@@ -30,11 +33,14 @@ use lb_core::{
         },
         traits::{Hashable as _, MantleTx, SignedMantleTx, StorageSize},
         transactions::{
-            MantleTxBuilder, OpProofs, TxBuilderError, states::Preverified,
+            MantleTxBuilder, OpProofs, Ops, TxBuilderError, states::Preverified,
             tx_list::ops::OpsContext,
         },
     },
-    proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
+    proofs::{
+        channel_multi_sig_proof::ChannelMultiSigProof,
+        leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
+    },
     sdp::DeclarationId,
 };
 use lb_key_management_system_service::{
@@ -64,7 +70,7 @@ use overwatch::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::{
-    sync::{oneshot, oneshot::Sender},
+    sync::{Semaphore, SemaphorePermit, oneshot, oneshot::Sender},
     task::JoinError,
 };
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
@@ -76,6 +82,10 @@ type KmsBackend = PreloadKMSBackend;
 type KeyId = <KmsBackend as KMSBackend>::KeyId;
 
 const LOG_TARGET: &str = wallet::SERVICE;
+
+/// How many signings run at once. Each one proves, so this keeps a burst of
+/// requests from crowding out the proofs consensus depends on.
+const MAX_CONCURRENT_SIGNINGS: usize = 4;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletServiceError {
@@ -229,10 +239,73 @@ pub struct UtxoWithKeyId {
     pub key_id: KeyId,
 }
 
-struct LeaderClaimTx {
-    signed_tx: SignedOps<Preverified, StandardMode>,
-    voucher_nullifier: VoucherNullifier,
-    funded_notes: Vec<NoteId>,
+/// A transaction to sign, with what signing it takes from the wallet already
+/// read, so that it can run off the service loop.
+struct TxSigningRequest {
+    mantle_tx: Ops,
+    channel_multi_sig_proofs: HashMap<usize, ChannelMultiSigProof>,
+    leader_claims: HashMap<VoucherNullifier, LeaderClaimWitness>,
+    ledger: LedgerState,
+}
+
+/// The wallet's side of proving a leader claim.
+#[derive(Clone)]
+struct LeaderClaimWitness {
+    voucher_secret: VoucherSecret,
+    path: MerklePath,
+}
+
+/// What a transaction being signed holds in the wallet, to be given back unless
+/// the requester ends up with the transaction.
+struct TxSigningReservations {
+    claim: Option<VoucherNullifier>,
+    notes: Vec<NoteId>,
+}
+
+/// What a signing takes: the KMS that signs, and the permits that cap how many
+/// sign at once.
+struct TxSigner<Kms, RuntimeServiceId>
+where
+    Kms: KmsServiceData,
+{
+    kms: KmsServiceApi<Kms, RuntimeServiceId>,
+    permits: Arc<Semaphore>,
+}
+
+impl<Kms, RuntimeServiceId> Clone for TxSigner<Kms, RuntimeServiceId>
+where
+    Kms: KmsServiceData,
+{
+    fn clone(&self) -> Self {
+        Self {
+            kms: self.kms.clone(),
+            permits: Arc::clone(&self.permits),
+        }
+    }
+}
+
+impl<Kms, RuntimeServiceId> TxSigner<Kms, RuntimeServiceId>
+where
+    Kms: KmsServiceData,
+{
+    fn new(kms: KmsServiceApi<Kms, RuntimeServiceId>) -> Self {
+        Self {
+            kms,
+            permits: Arc::new(Semaphore::new(MAX_CONCURRENT_SIGNINGS)),
+        }
+    }
+}
+
+/// A signing under way, which the service loop polls along with its other
+/// inputs. It comes to the reservations to give back, if the requester doesn't
+/// end up with the transaction.
+type PendingSigning = Pin<Box<dyn Future<Output = Option<TxSigningReservations>> + Send + Sync>>;
+
+async fn signing_permit(permits: &Semaphore) -> SemaphorePermit<'_> {
+    permits
+        .acquire()
+        .await
+        .expect("The semaphore is never closed.")
 }
 
 struct LeaderClaimTxRequest {
@@ -428,7 +501,7 @@ impl<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId> ServiceData
 impl<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId> ServiceCore<RuntimeServiceId>
     for WalletService<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId>
 where
-    Kms: KmsServiceData<Backend = KmsBackend> + Send + Sync,
+    Kms: KmsServiceData<Backend = KmsBackend> + Send + Sync + 'static,
     Tx: SignedMantleTx<Preverified, StandardMode>
         + Send
         + Sync
@@ -570,14 +643,17 @@ where
             .await?;
         let mut era_in_force = settings.era_schedule.get(current_era).unwrap();
 
+        let (signer, mut signings) = (TxSigner::new(kms), FuturesUnordered::new());
+
         service_resources_handle.status_updater.notify_ready();
         info!(target: LOG_TARGET, "Wallet service is ready and subscribed to blocks");
 
         loop {
             tokio::select! {
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
-                    Box::pin(Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage, &cryptarchia_api, &kms, &settings.era_schedule, era_in_force.parameters)).await;
+                    Box::pin(Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage, &cryptarchia_api, &signer, &signings, &settings.era_schedule, era_in_force.parameters)).await;
                 }
+                Some(unused) = signings.next() => Self::release_reservations(unused, &mut state),
                 Some(EraEvent::NewEra { era: new_era, .. }) = era_ticks.next() => {
                     if new_era > era_in_force.era {
                         era_in_force = settings.era_schedule.get(new_era).unwrap();
@@ -609,7 +685,7 @@ fn warn_lagged(stream: &str, skipped: u64) {
 impl<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId>
     WalletService<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId>
 where
-    Kms: KmsServiceData<Backend = KmsBackend>,
+    Kms: KmsServiceData<Backend = KmsBackend> + 'static,
     Tx: SignedMantleTx<Preverified, StandardMode>
         + Send
         + Sync
@@ -621,8 +697,14 @@ where
         + StorageSize
         + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx> + Send + 'static,
-    RuntimeServiceId:
-        AsServiceId<Cryptarchia> + AsServiceId<Kms> + std::fmt::Debug + std::fmt::Display + Sync,
+    TimeBackend: 'static,
+    RuntimeServiceId: AsServiceId<Cryptarchia>
+        + AsServiceId<Kms>
+        + std::fmt::Debug
+        + std::fmt::Display
+        + Send
+        + Sync
+        + 'static,
 {
     async fn msg_tip_or_latest(
         msg_tip: Option<HeaderId>,
@@ -663,7 +745,8 @@ where
         voucher_master_key_id: &KeyId,
         storage: &StorageApi<Tx>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
-        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        signer: &TxSigner<Kms, RuntimeServiceId>,
+        signings: &FuturesUnordered<PendingSigning>,
         era_schedule: &ServiceEraSchedule,
         era_settings: &WalletEraSettings,
     ) {
@@ -768,36 +851,20 @@ where
                 // threshold, by 720 bytes for `PoW` and 112 for the uncle
                 // slots.
                 // TODO: consider passing it by reference so we can remove `Box::pin`.
-                let response = Box::pin(Self::build_leader_claim_tx(
+                let built = Box::pin(Self::build_leader_claim_tx(
                     request,
                     ledger,
                     era_schedule,
                     state,
-                    kms,
+                    &signer.kms,
                 ))
                 .await;
 
-                match response {
-                    Ok(built_tx) => {
-                        let voucher_nullifier = built_tx.voucher_nullifier;
-                        let funded_notes = built_tx.funded_notes;
-                        if resp_tx
-                            .send(Ok(TipResponse {
-                                tip,
-                                response: built_tx.signed_tx,
-                            }))
-                            .is_err()
-                        {
-                            state.release_claim_reservation(voucher_nullifier);
-                            state.release_pending_notes(funded_notes);
-                            debug!(target: LOG_TARGET, "Failed to respond to BuildLeaderClaimTx");
-                        }
+                match built {
+                    Ok((job, reservations)) => {
+                        signings.push(Self::signing(job, tip, reservations, signer, resp_tx));
                     }
-                    Err(err) => {
-                        if resp_tx.send(Err(err)).is_err() {
-                            debug!(target: LOG_TARGET, "Failed to respond to BuildLeaderClaimTx");
-                        }
-                    }
+                    Err(err) => Self::send_err(resp_tx, err),
                 }
             }
             WalletMsg::SignTx {
@@ -824,29 +891,28 @@ where
                 let funded_notes: Vec<NoteId> =
                     tx_builder.notes_consumed_or_used_in_service().collect();
 
-                let resp = Self::sign_tx(
+                let job = Self::signing_job(
                     tx_builder,
                     era_settings.fork_digest,
                     tip,
                     ledger,
-                    kms,
                     state.wallet(),
+                    &signer.kms,
                 )
-                .await
-                .map(|signed_tx| TipResponse {
-                    tip,
-                    response: signed_tx,
-                });
+                .await;
 
-                let signing_failed = resp.is_err();
-                let response_delivered = resp_tx.send(resp).is_ok();
-
-                if signing_failed || !response_delivered {
-                    state.release_pending_notes(funded_notes);
-                }
-
-                if !response_delivered {
-                    debug!(target: LOG_TARGET, "Failed to respond to SignTx");
+                match job {
+                    Ok(job) => {
+                        let reservations = TxSigningReservations {
+                            claim: None,
+                            notes: funded_notes,
+                        };
+                        signings.push(Self::signing(job, tip, reservations, signer, resp_tx));
+                    }
+                    Err(err) => {
+                        state.release_pending_notes(funded_notes);
+                        Self::send_err(resp_tx, err);
+                    }
                 }
             }
             WalletMsg::SignTxWithEd25519 {
@@ -854,7 +920,7 @@ where
                 pk,
                 resp_tx,
             } => {
-                let result = Self::sign_ed25519(tx_hash, pk, kms).await;
+                let result = Self::sign_ed25519(tx_hash, pk, &signer.kms).await;
                 if resp_tx.send(result).is_err() {
                     debug!(target: LOG_TARGET, "Failed to respond to SignTxWithEd25519");
                 }
@@ -864,10 +930,15 @@ where
                 pks,
                 resp_tx,
             } => {
-                let result = Self::sign_zksig(tx_hash, pks, kms).await;
-                if resp_tx.send(result).is_err() {
-                    debug!(target: LOG_TARGET, "Failed to respond to SignTxWithZk");
-                }
+                let signer = signer.clone();
+                signings.push(Box::pin(async move {
+                    let _permit = signing_permit(&signer.permits).await;
+                    let result = Self::sign_zksig(tx_hash, pks, &signer.kms).await;
+                    if resp_tx.send(result).is_err() {
+                        debug!(target: LOG_TARGET, "Failed to respond to SignTxWithZk");
+                    }
+                    None
+                }));
             }
             WalletMsg::GetLeaderAgedNotes { tip, resp_tx } => {
                 let response = Self::leader_aged_notes_at(tip, state.wallet(), cryptarchia).await;
@@ -890,7 +961,7 @@ where
                 Self::generate_new_voucher_secret(
                     state,
                     voucher_master_key_id.clone(),
-                    kms,
+                    &signer.kms,
                     resp_tx,
                 )
                 .await;
@@ -1064,13 +1135,12 @@ where
         Ok(OpProof::ZkSig(zk_sig))
     }
 
-    async fn sign_leader_claim(
-        tx_hash: TxHash,
+    async fn leader_claim_witness(
         leader_claim_op: &LeaderClaimOp,
         tip: HeaderId,
         wallet: &Wallet,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-    ) -> Result<OpProof, WalletServiceError> {
+    ) -> Result<LeaderClaimWitness, WalletServiceError> {
         let (voucher_master_key_id, voucher_index) = wallet
             .get_voucher_by_nullifier(&leader_claim_op.voucher_nullifier)
             .ok_or(WalletServiceError::VoucherNotFound(
@@ -1085,6 +1155,27 @@ where
             .voucher_path_snapshot(tip, &voucher_cm)
             .map_err(WalletServiceError::WalletError)?
             .ok_or(WalletServiceError::VoucherMerklePathNotFound(voucher_cm))?;
+
+        Ok(LeaderClaimWitness {
+            voucher_secret,
+            path,
+        })
+    }
+
+    async fn sign_leader_claim(
+        tx_hash: TxHash,
+        leader_claim_op: &LeaderClaimOp,
+        leader_claims: &HashMap<VoucherNullifier, LeaderClaimWitness>,
+    ) -> Result<OpProof, WalletServiceError> {
+        let LeaderClaimWitness {
+            voucher_secret,
+            path,
+        } = leader_claims
+            .get(&leader_claim_op.voucher_nullifier)
+            .cloned()
+            .ok_or(WalletServiceError::VoucherNotFound(
+                leader_claim_op.voucher_nullifier,
+            ))?;
         let rewards_root = leader_claim_op.rewards_root;
 
         // TODO: This should happen in KMS
@@ -1108,18 +1199,90 @@ where
         Ok(OpProof::ZkSig(zk_sig))
     }
 
-    async fn sign_tx(
+    /// Reads what signing `tx_builder` takes from the wallet.
+    async fn signing_job(
         tx_builder: MantleTxBuilder,
         fork_digest: ForkDigest,
         tip: HeaderId,
-        tip_leader: LedgerState,
-        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        ledger: LedgerState,
         wallet: &Wallet,
-    ) -> Result<SignedOps<Preverified, StandardMode>, WalletServiceError> {
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<TxSigningRequest, WalletServiceError> {
         // TODO: Maybe Unverified?
         // Extract input public keys before building the transaction
-        let mut channel_multi_sig_proofs = tx_builder.channel_multi_sig_proofs().clone();
-        let mantle_tx = tx_builder.clone().build(fork_digest)?;
+        let channel_multi_sig_proofs = tx_builder.channel_multi_sig_proofs().clone();
+        let mantle_tx = tx_builder.build(fork_digest)?;
+
+        let mut leader_claims = HashMap::new();
+        for op in mantle_tx.op_refs() {
+            if let OpRef::LeaderClaim(claim_op) = op {
+                let witness = Self::leader_claim_witness(claim_op, tip, wallet, kms).await?;
+                leader_claims.insert(claim_op.voucher_nullifier, witness);
+            }
+        }
+
+        Ok(TxSigningRequest {
+            mantle_tx,
+            channel_multi_sig_proofs,
+            leader_claims,
+            ledger,
+        })
+    }
+
+    /// Gives back what a finished signing still holds, if anything.
+    fn release_reservations(unused: Option<TxSigningReservations>, state: &mut ServiceState<'_>) {
+        let Some(TxSigningReservations { claim, notes }) = unused else {
+            return;
+        };
+        if let Some(nullifier) = claim {
+            state.release_claim_reservation(nullifier);
+        }
+        state.release_pending_notes(notes);
+    }
+
+    /// Signs `job` and answers the request, coming to `reservations` if the
+    /// requester doesn't end up with the transaction.
+    fn signing(
+        job: TxSigningRequest,
+        tip: HeaderId,
+        reservations: TxSigningReservations,
+        signer: &TxSigner<Kms, RuntimeServiceId>,
+        resp_tx: Sender<
+            Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletServiceError>,
+        >,
+    ) -> PendingSigning {
+        let signer = signer.clone();
+        Box::pin(async move {
+            let permit = signing_permit(&signer.permits).await;
+            let resp = Box::pin(Self::sign_tx(job, &signer.kms))
+                .await
+                .map(|signed_tx| TipResponse {
+                    tip,
+                    response: signed_tx,
+                });
+            drop(permit);
+
+            let signing_failed = resp.is_err();
+            let response_delivered = resp_tx.send(resp).is_ok();
+
+            if !response_delivered {
+                debug!(target: LOG_TARGET, "Failed to respond to a signing request");
+            }
+
+            (signing_failed || !response_delivered).then_some(reservations)
+        })
+    }
+
+    async fn sign_tx(
+        job: TxSigningRequest,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<SignedOps<Preverified, StandardMode>, WalletServiceError> {
+        let TxSigningRequest {
+            mantle_tx,
+            mut channel_multi_sig_proofs,
+            leader_claims,
+            ledger: tip_leader,
+        } = job;
         let tx_hash = mantle_tx.hash();
 
         let mut op_proofs = OpProofs::empty();
@@ -1151,7 +1314,7 @@ where
                     Self::sign_sdp_active(tx_hash, active_op, &tip_leader, kms).await?
                 }
                 OpRef::LeaderClaim(claim_op) => {
-                    Self::sign_leader_claim(tx_hash, claim_op, tip, wallet, kms).await?
+                    Self::sign_leader_claim(tx_hash, claim_op, &leader_claims).await?
                 }
                 OpRef::Transfer(transfer_op) => {
                     Self::sign_transfer(tx_hash, transfer_op.inputs.clone(), kms, &tip_leader)
@@ -1162,10 +1325,13 @@ where
             op_proofs.try_push(op_proof)?;
         }
 
-        let signed_mantle_tx = SignedOps::from_parts(mantle_tx, op_proofs)
-            .expect("SignedOps should be valid with the provided proofs.")
-            .preverify()
-            .expect("Preverification should not fail.");
+        let signed_mantle_tx = spawn_blocking("logos/wallet/tx-preverify-blocking", move || {
+            SignedOps::from_parts(mantle_tx, op_proofs)
+                .expect("SignedOps should be valid with the provided proofs.")
+                .preverify()
+                .expect("Preverification should not fail.")
+        })
+        .await?;
 
         Ok(signed_mantle_tx)
     }
@@ -1351,7 +1517,7 @@ where
         era_schedule: &ServiceEraSchedule,
         state: &mut ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-    ) -> Result<LeaderClaimTx, WalletServiceError> {
+    ) -> Result<(TxSigningRequest, TxSigningReservations), WalletServiceError> {
         let security_param = era_schedule
             .at_slot(ledger.slot())
             .parameters
@@ -1368,10 +1534,12 @@ where
             state.release_claim_reservation(voucher_nullifier);
         }
 
-        result.map(|(signed_tx, funded_notes)| LeaderClaimTx {
-            signed_tx,
-            voucher_nullifier,
-            funded_notes,
+        result.map(|(job, funded_notes)| {
+            let reservations = TxSigningReservations {
+                claim: Some(voucher_nullifier),
+                notes: funded_notes,
+            };
+            (job, reservations)
         })
     }
 
@@ -1460,7 +1628,7 @@ where
         ledger: LedgerState,
         state: &mut ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-    ) -> Result<(SignedOps<Preverified, StandardMode>, Vec<NoteId>), WalletServiceError> {
+    ) -> Result<(TxSigningRequest, Vec<NoteId>), WalletServiceError> {
         let context = ledger.tx_context(request.gas_profile);
         let tx_builder = MantleTxBuilder::new().push_op(Op::LeaderClaim(LeaderClaimOp {
             rewards_root: request.rewards_root,
@@ -1482,10 +1650,8 @@ where
             .collect();
         state.reserve_pending_notes(funded_notes.iter().copied());
 
-        match Self::sign_funded_leader_claim_tx(request, funded_tx_builder, ledger, state, kms)
-            .await
-        {
-            Ok(signed_tx) => Ok((signed_tx, funded_notes)),
+        match Self::funded_leader_claim_job(request, funded_tx_builder, ledger, state, kms).await {
+            Ok(job) => Ok((job, funded_notes)),
             Err(err) => {
                 state.release_pending_notes(funded_notes);
                 Err(err)
@@ -1493,13 +1659,13 @@ where
         }
     }
 
-    async fn sign_funded_leader_claim_tx(
+    async fn funded_leader_claim_job(
         request: LeaderClaimTxRequest,
         funded_tx_builder: MantleTxBuilder,
         ledger: LedgerState,
         state: &ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-    ) -> Result<SignedOps<Preverified, StandardMode>, WalletServiceError> {
+    ) -> Result<TxSigningRequest, WalletServiceError> {
         let context = ledger.tx_context(request.gas_profile);
         let net_balance = funded_tx_builder.net_balance();
         let gas_cost = funded_tx_builder.minimum_gas_cost(&context)?;
@@ -1520,13 +1686,13 @@ where
             });
         }
 
-        Self::sign_tx(
+        Self::signing_job(
             funded_tx_builder,
             request.fork_digest,
             request.tip,
             ledger,
-            kms,
             state.wallet(),
+            kms,
         )
         .await
     }
