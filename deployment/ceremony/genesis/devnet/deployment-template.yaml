@@ -1,12 +1,12 @@
 0: !V1
   blend:
-    common:
+    common: &blend_common
       num_blend_layers: 1
       minimum_network_size: 2
       network_absorption_in_rounds: 2
       data_replication_factor: 1
     core:
-      scheduler:
+      scheduler: &blend_scheduler
         cover:
           message_frequency_per_round: 1.0
           replication_factor: 0
@@ -19,12 +19,12 @@
       expected_deliveries_per_observation_window: 60
       activity_threshold_sensitivity: 1
   cryptarchia:
-    epoch_config:
+    epoch_config: &epoch_config
       epoch_stake_distribution_stabilization: 3
       epoch_period_nonce_buffer: 3
       epoch_period_nonce_stabilization: 4
     security_param: 120
-    slot_activation_coeff:
+    slot_activation_coeff: &slot_activation_coeff
       numerator: 1
       denominator: 30
     learning_rate: 1.0
@@ -34,7 +34,7 @@
     # The most bytes a block's transactions may take, 2 MiB. An inscription or a
     # deposit's metadata may take seven eighths of it.
     max_transactions_size: 2097152
-    pow_config:
+    pow_config: &pow_config
       blend:
         # BLEND_DIFFICULTY_BASE, as the exponent n in p / 2^n: the Blend PoW
         # threshold at the reference load. Fixed by the EmPoWering
@@ -74,7 +74,7 @@
         # Acceptance window in slots; must match the mining service. Ten
         # block-intervals of tolerance for a claim to reach a block.
         slot_window: 300
-    sdp_config:
+    sdp_config: &sdp_config
       # One entry per service type, in the order they are declared: the Blend
       # network.
       service_params:
@@ -86,7 +86,7 @@
     # The execution market: the most execution gas a block may consume, G_max,
     # whose half is the target, the fee adjustment rate φ and the EMA smoothing
     # factor q.
-    execution_market:
+    execution_market: &execution_market
       max_gas_per_block: 3193460
       fee_adjustment_rate:
         numerator: 1
@@ -96,7 +96,7 @@
         denominator: 10
     # The storage market: the max adjustment factor α and the EMA smoothing factor
     # β.
-    storage_market:
+    storage_market: &storage_market
       max_adjustment_factor:
         numerator: 1
         denominator: 8
@@ -106,7 +106,7 @@
     # The block rewards: the stake target, the scale of the emission's weight, the
     # weight of the pooled fees, a block's emission in full, and the Blend nodes'
     # share of a reward, the leader taking the rest.
-    block_rewards:
+    block_rewards: &block_rewards
       stake_target: 3000000000
       emission_factor_scale: 120000000
       fee_average_numerator: 10512
@@ -118,7 +118,7 @@
         denominator: 10
     # The execution gas of each Operation; the channel configuration, withdrawal
     # and transfer cost theirs per key of the channel's threshold.
-    gas_profile:
+    gas_profile: &gas_profile
       transfer: 590
       channel_config: 56
       channel_inscribe: 56
@@ -130,5 +130,34 @@
       sdp_active: 590
       leader_claim: 580
       claim_pow_reward: 1
-  time:
+  time: &time
     slot_duration_in_seconds: 1
+# From epoch 5, era 0 with a Blend peering degree of 3, which the
+# devnet's four core nodes can reach, and up to 8 uncles a block.
+5: !V1
+  blend:
+    common: *blend_common
+    core:
+      scheduler: *blend_scheduler
+      target_peering_degree: 3
+      verification_rate_per_second: 156
+      edge_node_send_deadline_in_rounds: 1
+      core_handshake_deadline_in_rounds: 2
+      expected_deliveries_per_observation_window: 60
+      activity_threshold_sensitivity: 1
+  cryptarchia:
+    epoch_config: *epoch_config
+    security_param: 120
+    slot_activation_coeff: *slot_activation_coeff
+    learning_rate: 1.0
+    uncle_reference_window_in_block: 12
+    max_uncles: 8
+    max_transactions: 1024
+    max_transactions_size: 2097152
+    pow_config: *pow_config
+    sdp_config: *sdp_config
+    execution_market: *execution_market
+    storage_market: *storage_market
+    block_rewards: *block_rewards
+    gas_profile: *gas_profile
+  time: *time
