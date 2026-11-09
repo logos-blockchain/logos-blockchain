@@ -4907,6 +4907,7 @@ dependencies = [
  "ark-ff",
  "logos-blockchain-dynamic-merkle",
  "logos-blockchain-groth16",
+ "logos-blockchain-kv-store",
  "logos-blockchain-poseidon2",
  "logos-blockchain-utxotree",
  "num-bigint",
@@ -4997,6 +4998,14 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "logos-blockchain-kv-store"
+version = "0.0.0"
+dependencies = [
+ "bytes",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

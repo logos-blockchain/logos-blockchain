@@ -55,6 +55,7 @@ members = [
   "merkle/blake2btree",
   "merkle/dynamic-merkle",
   "merkle/imt",
+  "merkle/kv-store",
   "merkle/tree",
   "merkle/utxotree",
   "mmr",
@@ -151,6 +152,7 @@ lb-key-management-system-keys      = { default-features = false, package = "logo
 lb-key-management-system-macros    = { default-features = false, package = "logos-blockchain-key-management-system-macros", path = "./kms/macros" }
 lb-key-management-system-operators = { default-features = false, package = "logos-blockchain-key-management-system-operators", path = "./kms/operators" }
 lb-key-management-system-service   = { default-features = false, package = "logos-blockchain-key-management-system-service", path = "./services/key-management-system" }
+lb-kv-store                        = { default-features = false, package = "logos-blockchain-kv-store", path = "merkle/kv-store" }
 lb-ledger                          = { default-features = false, package = "logos-blockchain-ledger", path = "./ledger" }
 lb-libp2p                          = { default-features = false, package = "logos-blockchain-libp2p", path = "./libp2p" }
 lb-log-targets                     = { default-features = false, package = "logos-blockchain-log-targets", path = "./tracing/targets" }
