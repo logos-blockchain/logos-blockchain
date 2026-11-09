@@ -7,11 +7,7 @@ mod relays;
 mod sync;
 
 use core::{fmt::Debug, num::NonZeroUsize, pin::pin};
-use std::{
-    fmt::Display,
-    hash::Hash,
-    time::{Duration, Instant},
-};
+use std::{fmt::Display, hash::Hash, time::Instant};
 
 use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
 use futures::StreamExt as _;
