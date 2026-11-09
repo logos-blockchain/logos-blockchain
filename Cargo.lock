@@ -5197,6 +5197,7 @@ name = "logos-blockchain-sdp-service"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "futures",
  "logos-blockchain-blend-proofs",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
