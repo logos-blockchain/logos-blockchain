@@ -338,7 +338,11 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{LogosSql, LogosSqlConfig};
-    use crate::{db::tests::open_databases, error::Error, sql::TransactionBuilder};
+    use crate::{
+        db::tests::{MAX_INSCRIPTION_SIZE, open_databases},
+        error::Error,
+        sql::TransactionBuilder,
+    };
 
     #[tokio::test]
     async fn read_only_start_does_not_abandon_a_pending_write() {
@@ -347,7 +351,8 @@ mod tests {
         let (tx_id, transaction) = TransactionBuilder::new("CREATE TABLE items(value INTEGER)")
             .finish()
             .unwrap();
-        db.commit_local_write(tx_id, &transaction).unwrap();
+        db.commit_local_write(tx_id, &transaction, MAX_INSCRIPTION_SIZE)
+            .unwrap();
         drop(db);
 
         let result = LogosSql::start(LogosSqlConfig {

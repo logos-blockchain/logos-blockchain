@@ -1,8 +1,9 @@
-use core::num::{NonZero, NonZeroU32, NonZeroU64, NonZeroU128};
+use core::num::{NonZero, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU128};
 
 use lb_core::{
     block::genesis::GenesisBlock,
-    sdp::{NumberOfEpochs, ServiceType},
+    mantle::gas::{Gas, GasProfile},
+    sdp::NumberOfEpochs,
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::ModulusShift;
@@ -13,17 +14,18 @@ use lb_node::config::deployment::{
         v1::{
             blend::{
                 CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
-                CoverTrafficSettings, MessageDelayerSettings, MinimumNetworkSize,
-                SchedulerSettings, Settings as BlendDeploymentSettings,
+                CoverReplicationFactor, CoverTrafficSettings, MessageDelayerSettings,
+                MinimumNetworkSize, SchedulerSettings, Settings as BlendDeploymentSettings,
             },
             cryptarchia::{
-                EpochConfig, ServiceParameters, Settings as CryptarchiaDeploymentSettings,
+                BlockRewardsConfig, EpochConfig, MaxGasPerBlock, ServiceParameters,
+                Settings as CryptarchiaDeploymentSettings,
             },
             time::Settings as TimeDeploymentSettings,
         },
     },
 };
-use lb_utils::math::{NonNegativeRatio, PositiveF64};
+use lb_utils::math::{NonNegativeRatio, PositiveF64, ProperFraction};
 
 use crate::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 
@@ -31,9 +33,9 @@ use crate::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 const BLEND_EDGE_NODE_SEND_DEADLINE_IN_ROUNDS: u64 = 1;
 /// `T_H`: the rounds a core handshake is given to complete.
 const BLEND_CORE_HANDSHAKE_DEADLINE_IN_ROUNDS: u128 = 2;
-/// The cover messages a core connection carries in one observation window,
-/// which sizes the window.
-const BLEND_COVER_MESSAGES_PER_OBSERVATION_WINDOW: u64 = 90;
+/// `λ`: the messages a neighbour is expected to deliver to a node in one
+/// observation window, which sizes the window with the peering degree.
+const BLEND_EXPECTED_DELIVERIES_PER_OBSERVATION_WINDOW: u64 = 60;
 /// `V`: the messages per second the slowest targeted node can verify.
 const BLEND_VERIFICATION_RATE_PER_SECOND: u32 = 156;
 /// `η`: the rounds a message spends crossing the network at one hop.
@@ -44,12 +46,15 @@ const NUM_BLEND_LAYERS: u64 = 3;
 const DATA_REPLICATION_FACTOR: u64 = 0;
 
 const COVER_MESSAGE_FREQUENCY_PER_ROUND: f64 = 1.0;
+const COVER_REPLICATION_FACTOR: CoverReplicationFactor = CoverReplicationFactor::new(0).unwrap();
 const MAXIMUM_RELEASE_DELAY_IN_ROUNDS: u64 = 3;
 const ACTIVITY_THRESHOLD_SENSITIVITY: u64 = 1;
 
 const SECURITY_PARAM: u32 = 20;
 const UNCLE_REFERENCE_WINDOW_IN_BLOCK: u32 = 12;
 const MAX_UNCLES: u8 = 4;
+const MAX_TRANSACTIONS: NonZeroU16 = NonZeroU16::new(1024).unwrap();
+const MAX_TRANSACTIONS_SIZE: u32 = 2 * 1024 * 1024;
 const SLOT_ACTIVATION_COEFF_NUMERATOR: u32 = 1;
 const SLOT_ACTIVATION_COEFF_DENOMINATOR: u32 = 10;
 const EPOCH_STAKE_DISTRIBUTION_STABILIZATION: u8 = 3;
@@ -78,6 +83,51 @@ const REWARD_POW_TARGET_CLAIM_PER_BLOCK: u64 = 1;
 const REWARD_POW_SHARE: u64 = 10;
 const REWARD_POW_SHARE_DEN: u64 = 100;
 const REWARD_POW_SLOT_WINDOW: u64 = 100;
+
+/// `G_max`: the most execution gas a block may consume, whose half is the
+/// target the execution base fee steers blocks towards.
+const EXECUTION_MARKET_MAX_GAS_PER_BLOCK: MaxGasPerBlock = MaxGasPerBlock::new(3_193_460).unwrap();
+/// `φ`: how fast the execution base fee follows demand.
+const EXECUTION_MARKET_FEE_ADJUSTMENT_RATE: ProperFraction =
+    ProperFraction::new(1, NonZeroU32::new(8).unwrap()).unwrap();
+/// `q`: the weight of the previous average in the moving average of block
+/// usage.
+const EXECUTION_MARKET_EMA_SMOOTHING_FACTOR: ProperFraction =
+    ProperFraction::new(9, NonZeroU32::new(10).unwrap()).unwrap();
+/// `α`: the largest fraction by which the storage price moves in an epoch.
+const STORAGE_MARKET_MAX_ADJUSTMENT_FACTOR: ProperFraction =
+    ProperFraction::new(1, NonZeroU32::new(8).unwrap()).unwrap();
+/// `β`: the weight of the latest epoch in the moving average of storage usage.
+const STORAGE_MARKET_EMA_SMOOTHING_FACTOR: ProperFraction =
+    ProperFraction::new(1, NonZeroU32::new(2).unwrap()).unwrap();
+/// What each Operation costs, the channel ones per key of their threshold.
+///
+/// The schedule of the e2e deployment, which its clients price transactions
+/// under.
+pub const GAS_PROFILE: GasProfile = GasProfile {
+    transfer: Gas::new(590),
+    channel_config: Gas::new(56),
+    channel_inscribe: Gas::new(56),
+    channel_deposit: Gas::new(590),
+    channel_withdraw: Gas::new(56),
+    channel_transfer: Gas::new(56),
+    sdp_declare: Gas::new(646),
+    sdp_withdraw: Gas::new(590),
+    sdp_active: Gas::new(590),
+    leader_claim: Gas::new(580),
+    claim_pow_reward: Gas::new(1),
+};
+/// The block rewards: the stake target, the scale of the emission's weight, the
+/// weight of the pooled fees, a block's emission in full, and the Blend nodes'
+/// share.
+const BLOCK_REWARDS: BlockRewardsConfig = BlockRewardsConfig::new(
+    3_000_000_000,
+    NonZeroU64::new(120_000_000).unwrap(),
+    10_512,
+    NonNegativeRatio::new(62_500, NonZeroU32::new(657).unwrap()),
+    ProperFraction::new(6, NonZeroU32::new(10).unwrap()).unwrap(),
+)
+.unwrap();
 
 #[must_use]
 #[expect(
@@ -119,16 +169,17 @@ pub fn e2e_deployment_settings_with_genesis_block(
                         BLEND_CORE_HANDSHAKE_DEADLINE_IN_ROUNDS,
                     )
                     .expect("`T_H` cannot be zero."),
-                    cover_messages_per_observation_window: NonZeroU64::try_from(
-                        BLEND_COVER_MESSAGES_PER_OBSERVATION_WINDOW,
+                    expected_deliveries_per_observation_window: NonZeroU64::try_from(
+                        BLEND_EXPECTED_DELIVERIES_PER_OBSERVATION_WINDOW,
                     )
-                    .expect("The cover messages per observation window cannot be zero."),
+                    .expect("The expected deliveries per observation window cannot be zero."),
                     scheduler: SchedulerSettings {
                         cover: CoverTrafficSettings {
                             message_frequency_per_round: PositiveF64::try_from(
                                 COVER_MESSAGE_FREQUENCY_PER_ROUND,
                             )
                             .expect("Message frequency per round must be positive."),
+                            replication_factor: COVER_REPLICATION_FACTOR,
                         },
                         delayer: MessageDelayerSettings {
                             maximum_release_delay_in_rounds: NonZeroU64::try_from(
@@ -144,10 +195,14 @@ pub fn e2e_deployment_settings_with_genesis_block(
                 security_param: NonZero::new(SECURITY_PARAM).unwrap(),
                 uncle_reference_window_in_block: UNCLE_REFERENCE_WINDOW_IN_BLOCK,
                 max_uncles: MAX_UNCLES,
+                max_transactions: MAX_TRANSACTIONS,
+                max_transactions_size: MAX_TRANSACTIONS_SIZE,
                 slot_activation_coeff: NonNegativeRatio::new(
                     SLOT_ACTIVATION_COEFF_NUMERATOR,
                     NonZero::new(SLOT_ACTIVATION_COEFF_DENOMINATOR).unwrap(),
-                ),
+                )
+                .try_into()
+                .expect("The e2e slot activation coefficient is valid."),
                 epoch_config: EpochConfig {
                     epoch_stake_distribution_stabilization: NonZero::new(
                         EPOCH_STAKE_DISTRIBUTION_STABILIZATION,
@@ -160,14 +215,10 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     .unwrap(),
                 },
                 sdp_config: v1::cryptarchia::SdpConfig {
-                    service_params: (
-                        ServiceType::BlendNetwork,
-                        ServiceParameters {
-                            inactivity_period: SDP_INACTIVITY_PERIOD.try_into().unwrap(),
-                            epoch: SDP_EPOCH,
-                        },
-                    )
-                        .into(),
+                    service_params: [ServiceParameters {
+                        inactivity_period: SDP_INACTIVITY_PERIOD.try_into().unwrap(),
+                        epoch: SDP_EPOCH,
+                    }],
                     min_stake: lb_core::sdp::MinStake {
                         threshold: MIN_STAKE_THRESHOLD,
                         timestamp: MIN_STAKE_TIMESTAMP,
@@ -200,6 +251,17 @@ pub fn e2e_deployment_settings_with_genesis_block(
                         slot_window: NonZero::new(REWARD_POW_SLOT_WINDOW).unwrap(),
                     },
                 },
+                execution_market: v1::cryptarchia::ExecutionMarketConfig {
+                    max_gas_per_block: EXECUTION_MARKET_MAX_GAS_PER_BLOCK,
+                    fee_adjustment_rate: EXECUTION_MARKET_FEE_ADJUSTMENT_RATE,
+                    ema_smoothing_factor: EXECUTION_MARKET_EMA_SMOOTHING_FACTOR,
+                },
+                storage_market: v1::cryptarchia::StorageMarketConfig {
+                    max_adjustment_factor: STORAGE_MARKET_MAX_ADJUSTMENT_FACTOR,
+                    ema_smoothing_factor: STORAGE_MARKET_EMA_SMOOTHING_FACTOR,
+                },
+                block_rewards: BLOCK_REWARDS,
+                gas_profile: GAS_PROFILE,
             },
             time: TimeDeploymentSettings {
                 slot_duration_in_seconds: NonZero::new(slot_duration_in_secs)
@@ -208,4 +270,5 @@ pub fn e2e_deployment_settings_with_genesis_block(
         })),
         GenesisBlock::genesis(genesis_tx.clone()),
     )
+    .expect("The e2e deployment must be valid.")
 }

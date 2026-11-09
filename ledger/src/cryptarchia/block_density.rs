@@ -83,14 +83,14 @@ impl BlockDensity {
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use lb_core::sdp::MinStake;
+    use lb_core::{era::AcceptedForkDigests, sdp::MinStake};
     use lb_groth16::ModulusShift;
     use lb_utils::math::NonNegativeRatio;
 
     use super::*;
     use crate::{
         mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters},
-        test_utils::single_era,
+        test_utils::{FORK_DIGEST, single_era},
     };
 
     #[test]
@@ -175,6 +175,7 @@ mod tests {
                     blend: RewardsParameters {
                         rounds_per_epoch: 10.try_into().unwrap(),
                         message_frequency_per_round: 1.0.try_into().unwrap(),
+                        cover_replication_factor: 0,
                         num_blend_layers: 3.try_into().unwrap(),
                         minimum_network_size: 1.try_into().unwrap(),
                         data_replication_factor: 0,
@@ -186,6 +187,37 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            max_transactions: 1024,
+            max_transactions_size: 2 * 1024 * 1024,
+            max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            execution_market: crate::config::ExecutionMarketConfig {
+                max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                    .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
+                    9,
+                    10.try_into().unwrap(),
+                )
+                .unwrap(),
+            },
+            storage_market: crate::config::StorageMarketConfig {
+                max_adjustment_factor: lb_utils::math::ProperFraction::new(
+                    1,
+                    8.try_into().unwrap(),
+                )
+                .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
+                    .unwrap(),
+            },
+            block_rewards: crate::config::BlockRewardsConfig::new(
+                3_000_000_000,
+                120_000_000.try_into().unwrap(),
+                10_512,
+                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            )
+            .unwrap(),
+            gas_profile: crate::cryptarchia::tests::GAS_PROFILE,
             pow_config: crate::config::PoWConfig {
                 blend: crate::config::BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -196,6 +228,7 @@ mod tests {
                 },
                 reward: crate::cryptarchia::tests::disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![FORK_DIGEST]),
         }
     }
 }

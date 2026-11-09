@@ -27,7 +27,6 @@ use lb_core::{
     crypto::{Digest as _, Hasher},
     mantle::{
         Note, SignedOps, Utxo, Value,
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         transactions::{
             GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, states::Preverified,
@@ -377,7 +376,7 @@ fn apply_block_to_ledger(
     let id = block_id(parent, slot);
     let proof = generate_proof(&parent_state, &utxo, slot);
     let update = ledger
-        .prepare_update::<_, _, MainnetGasProfile>(
+        .prepare_update(
             id,
             parent,
             slot,

@@ -73,7 +73,7 @@ impl<Tx> BlockProvider<Tx>
 where
     Tx: DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + Hashable<Hash = TxHash>
         + StorageSize,
     Tx: Serialize + Clone + Eq + Send + Sync + 'static,
@@ -900,6 +900,7 @@ mod tests {
                 UncleHeaders::empty(),
                 self.proof.clone(),
                 BlockTransactions::empty(),
+                u32::MAX,
                 &dummy_signing_key,
             )
             .ok()
@@ -986,7 +987,8 @@ mod tests {
                 while let Some(res) = &stream.next().await {
                     if let Ok(bytes) = &res {
                         let block: Block<SignedOps<Unverified, StandardMode>> =
-                            Block::decode_all(bytes, &(u8::MAX, ())).unwrap();
+                            Block::decode_all(bytes, &(u8::MAX, u32::MAX, (u16::MAX, u32::MAX)))
+                                .unwrap();
                         blocks.push(block.header().id());
                     } else {
                         break;
@@ -1030,7 +1032,11 @@ mod tests {
                     }
                     ProviderResponse::Available(mut stream) => match stream.next().await {
                         Some(Ok(bytes)) => {
-                            let block = Block::<Ops>::decode_all(&bytes, &(u8::MAX, ())).unwrap();
+                            let block = Block::<Ops>::decode_all(
+                                &bytes,
+                                &(u8::MAX, u32::MAX, (u16::MAX, u32::MAX)),
+                            )
+                            .unwrap();
                             (
                                 false,
                                 format!("Available(first_block={:?})", block.header().id()),

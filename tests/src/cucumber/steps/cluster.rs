@@ -117,6 +117,7 @@ fn prepare_manual_cluster_deployment(
 
     let deployment = DeploymentBuilder::new(config)
         .with_deployment_seed(world.manual_cluster_deployment_seed())
+        .with_blend_ports(world.manual_cluster_blend_ports(nodes_count)?)
         .prepare()
         .map_err(|e| StepError::LogicalError {
             message: format!("failed to build manual cluster: {e}"),
@@ -177,6 +178,7 @@ fn prepare_devnet_manual_cluster_deployment(
 
     let deployment = DeploymentBuilder::new(config)
         .with_deployment_seed(world.manual_cluster_deployment_seed())
+        .with_blend_ports(world.manual_cluster_blend_ports(nodes_count)?)
         .prepare()
         .map_err(|e| StepError::LogicalError {
             message: format!("failed to build devnet manual cluster: {e}"),

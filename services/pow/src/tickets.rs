@@ -648,6 +648,31 @@ mod tests {
         assert!(!tickets_search.contains_key(&era_1_block));
     }
 
+    #[test]
+    fn prune_shared_nonce_searches_at_each_anchor_era_boundary() {
+        let old = HeaderId::from([1u8; 32]);
+        let new = HeaderId::from([2u8; 32]);
+        let mut streams = StreamMap::new();
+        streams.insert(old, pending_stream());
+        streams.insert(new, pending_stream());
+        let mut inputs = HashMap::from([(old, search_at(95)), (new, search_at(101))]);
+        assert_eq!(inputs[&old].epoch_nonce, inputs[&new].epoch_nonce);
+        let schedule = era_schedule(&[10, 100]);
+
+        for (current, old_live, new_live) in [
+            (105, true, true),
+            (106, false, true),
+            (201, false, true),
+            (202, false, false),
+        ] {
+            prune_out_of_window_streams(&mut streams, &mut inputs, Slot::new(current), &schedule);
+            for (block, live) in [(old, old_live), (new, new_live)] {
+                assert_eq!(streams.contains_key(&block), live, "at slot {current}");
+                assert_eq!(inputs.contains_key(&block), live, "at slot {current}");
+            }
+        }
+    }
+
     #[tokio::test]
     async fn search_winner_ticket_rejects_when_difficulty_is_zero() {
         // No ticket can be strictly below zero, so this attempt never wins.

@@ -1731,7 +1731,7 @@ mod tests {
     use lb_key_management_system_service::keys::Ed25519PublicKey;
 
     use super::*;
-    use crate::test_support::header_id;
+    use crate::test_support::{FORK_DIGEST, header_id};
 
     /// A mined channel tx as the block store holds it.
     fn stored(tx: &SignedOps<Unverified, StandardMode>, kind: ChannelTxKind) -> BlockChannelTx {
@@ -1743,12 +1743,15 @@ mod tests {
     }
 
     fn make_dummy_tx_on(parent: MsgId, data: u8) -> SignedOps<Unverified, StandardMode> {
-        let mantle_tx = Ops::from([Op::ChannelInscribe(InscriptionOp {
-            channel_id: [0u8; 32].into(),
-            inscription: [data].into(),
-            parent,
-            signer: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
-        })]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelInscribe(InscriptionOp {
+                channel_id: [0u8; 32].into(),
+                inscription: Inscription::new_unchecked(vec![data]),
+                parent,
+                signer: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            })],
+        );
         SignedOps::from_ops_with_sample_proofs(mantle_tx)
     }
 
@@ -1976,7 +1979,7 @@ mod tests {
         };
         let inscribe = InscriptionOp {
             channel_id: [0u8; 32].into(),
-            inscription: [data].into(),
+            inscription: Inscription::new_unchecked(vec![data]),
             parent,
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
         };
@@ -1993,7 +1996,10 @@ mod tests {
         .unwrap();
         let inscribe_msg = inscribe.id();
         let config_msg = config.id();
-        let ops = Ops::from([Op::ChannelInscribe(inscribe), Op::ChannelConfig(config)]);
+        let ops = Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelInscribe(inscribe), Op::ChannelConfig(config)],
+        );
         let tx = SignedOps::from_ops_with_sample_proofs(ops);
         (tx, inscribe_msg, config_msg)
     }
@@ -2121,12 +2127,22 @@ mod tests {
         state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
 
         state
-            .submit_inscription(make_dummy_tx(1), MsgId::root(), msg_id(10), [1].into())
+            .submit_inscription(
+                make_dummy_tx(1),
+                MsgId::root(),
+                msg_id(10),
+                Inscription::new_unchecked(vec![1]),
+            )
             .unwrap();
         let (bundle, inscribe_msg, _config_msg) = bundle_tx(msg_id(10), 2);
         state.submit_other(bundle, channel_id).unwrap();
         state
-            .submit_inscription(make_dummy_tx(3), inscribe_msg, msg_id(30), [3].into())
+            .submit_inscription(
+                make_dummy_tx(3),
+                inscribe_msg,
+                msg_id(30),
+                Inscription::new_unchecked(vec![3]),
+            )
             .unwrap();
 
         assert_eq!(state.publish_parent(tip), msg_id(30));
@@ -2143,7 +2159,12 @@ mod tests {
         let first = make_dummy_tx(1);
         let first_hash = first.hash();
         state
-            .submit_inscription(first, MsgId::root(), msg_id(10), [1].into())
+            .submit_inscription(
+                first,
+                MsgId::root(),
+                msg_id(10),
+                Inscription::new_unchecked(vec![1]),
+            )
             .unwrap();
         let (bundle, _i, _c) = bundle_tx(MsgId::root(), 2);
         assert_eq!(
@@ -2174,7 +2195,12 @@ mod tests {
         state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
 
         state
-            .submit_inscription(make_dummy_tx(1), MsgId::root(), msg_id(10), [1].into())
+            .submit_inscription(
+                make_dummy_tx(1),
+                MsgId::root(),
+                msg_id(10),
+                Inscription::new_unchecked(vec![1]),
+            )
             .unwrap();
 
         let config = ChannelConfigOp::new(
@@ -2188,7 +2214,7 @@ mod tests {
             NonZero::<u16>::MIN,
         )
         .unwrap();
-        let ops = Ops::from([Op::ChannelConfig(config)]);
+        let ops = Ops::new(FORK_DIGEST, [Op::ChannelConfig(config)]);
         let config_tx = SignedOps::from_ops_with_sample_proofs(ops);
         state.submit_other(config_tx, channel_id).unwrap();
 
@@ -2212,7 +2238,7 @@ mod tests {
         let hash = tx.hash();
         let msg = dummy_tx_msg(&tx);
         state
-            .submit_inscription(tx, parent, msg, [data].into())
+            .submit_inscription(tx, parent, msg, Inscription::new_unchecked(vec![data]))
             .unwrap();
         (hash, msg)
     }
@@ -2230,7 +2256,7 @@ mod tests {
             Arc::clone(&stored),
             MsgId::root(),
             msg,
-            [1].into(),
+            Inscription::new_unchecked(vec![1]),
             PendingBundle::Plain,
         );
 
@@ -2592,7 +2618,10 @@ mod tests {
     ) -> (SignedOps<Unverified, StandardMode>, MsgId) {
         let config = config_op(config_parent, seed);
         let id = config.id();
-        let tx = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::ChannelConfig(config)]));
+        let tx = SignedOps::from_ops_with_sample_proofs(Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelConfig(config)],
+        ));
         (tx, id)
     }
 
@@ -2691,19 +2720,23 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
         state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
         let again_op = config_op(MsgId::root(), 4);
-        let again = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::ChannelConfig(
-            again_op.clone(),
-        )]));
+        let again = SignedOps::from_ops_with_sample_proofs(Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelConfig(again_op.clone())],
+        ));
         let again_hash = again.hash();
         state.submit_other(again, channel_id).unwrap();
-        let same_config_other_tx = SignedOps::from_ops_with_sample_proofs(Ops::from([
-            Op::ChannelInscribe(crate::test_support::inscribe_op(
-                channel_id,
-                MsgId::root(),
-                b"beside the config",
-            )),
-            Op::ChannelConfig(again_op),
-        ]));
+        let same_config_other_tx = SignedOps::from_ops_with_sample_proofs(Ops::new(
+            FORK_DIGEST,
+            [
+                Op::ChannelInscribe(crate::test_support::inscribe_op(
+                    channel_id,
+                    MsgId::root(),
+                    b"beside the config",
+                )),
+                Op::ChannelConfig(again_op),
+            ],
+        ));
         assert_ne!(same_config_other_tx.hash(), again_hash);
         state.observe_other_tx(same_config_other_tx, channel_id);
 
@@ -2730,7 +2763,7 @@ mod tests {
             original,
             MsgId::root(),
             msg,
-            [1].into(),
+            Inscription::new_unchecked(vec![1]),
             PendingBundle::Plain,
         );
         state.process_block(
@@ -2808,7 +2841,12 @@ mod tests {
         let tx = make_dummy_tx(data);
         let hash = tx.hash();
         state
-            .submit_inscription(tx, parent_msg, this_msg, [data].into())
+            .submit_inscription(
+                tx,
+                parent_msg,
+                this_msg,
+                Inscription::new_unchecked(vec![data]),
+            )
             .unwrap();
         hash
     }
@@ -2834,7 +2872,10 @@ mod tests {
         )
         .unwrap();
         let config_msg = config.id();
-        let tx = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::ChannelConfig(config)]));
+        let tx = SignedOps::from_ops_with_sample_proofs(Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelConfig(config)],
+        ));
         (tx, config_msg)
     }
 
@@ -2853,7 +2894,7 @@ mod tests {
                 tx_hash: tx.hash(),
                 parent_msg: parent,
                 this_msg,
-                payload: [].into(),
+                payload: Inscription::empty(),
                 signer: None,
             }),
         )
@@ -2975,7 +3016,7 @@ mod tests {
             tx_hash: tx.hash(),
             parent_msg: parent,
             this_msg,
-            payload: [].into(),
+            payload: Inscription::empty(),
             signer: None,
         };
         let custom = stored(
@@ -3187,7 +3228,7 @@ mod tests {
             tx_hash: p1,
             parent_msg: MsgId::root(),
             this_msg: msg_id(1),
-            payload: [1].into(),
+            payload: Inscription::new_unchecked(vec![1]),
             signer: Some(test_signer()),
         };
         state.process_block(
@@ -3251,7 +3292,7 @@ mod tests {
             tx_hash: make_dummy_tx(1).hash(),
             parent_msg: MsgId::root(),
             this_msg: msg_id(1),
-            payload: [1].into(),
+            payload: Inscription::new_unchecked(vec![1]),
             signer: Some(test_signer()),
         };
         state.process_block(
@@ -3318,7 +3359,7 @@ mod tests {
             tx_hash: c1_tx_hash,
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
-            payload: [99].into(),
+            payload: Inscription::new_unchecked(vec![99]),
             signer: Some(test_signer()),
         };
         // Mirror the observed inscription into pending before the safe-set
@@ -3328,7 +3369,7 @@ mod tests {
             c1_tx,
             MsgId::root(),
             c1_msg,
-            [99].into(),
+            Inscription::new_unchecked(vec![99]),
             PendingBundle::Plain,
         );
         state.process_block(
@@ -3390,8 +3431,12 @@ mod tests {
 
         let b1_msg = msg_id(10);
         let b1_hash = submit_fake_inscription(&mut state, 1, MsgId::root(), b1_msg);
-        let refused =
-            state.submit_inscription(make_dummy_tx(4), MsgId::root(), msg_id(30), [4].into());
+        let refused = state.submit_inscription(
+            make_dummy_tx(4),
+            MsgId::root(),
+            msg_id(30),
+            Inscription::new_unchecked(vec![4]),
+        );
         assert_eq!(
             refused,
             Err(ParentTaken {
@@ -3441,7 +3486,7 @@ mod tests {
             tx_hash: make_dummy_tx(99).hash(),
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
-            payload: [99].into(),
+            payload: Inscription::new_unchecked(vec![99]),
             signer: Some(test_signer()),
         };
         state.process_block(

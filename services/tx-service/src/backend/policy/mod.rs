@@ -1,7 +1,7 @@
 pub mod powclaim;
 pub mod ttl;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use indexmap::IndexMap;
 use lb_core::mantle::{
@@ -13,7 +13,7 @@ use lb_cryptarchia_engine::Slot;
 pub use powclaim::{PowClaimEvictionSettings, PowClaimPolicy};
 pub use ttl::TtlPolicy;
 
-use crate::backend::AdmissionTime;
+use crate::backend::{AdmissionTime, IncludedItem};
 
 /// The clock eviction policies see.
 ///
@@ -37,7 +37,7 @@ pub type BlockSlots<BlockId> = HashMap<BlockId, Slot>;
 /// Policies own their state and see every transaction the pool admits or
 /// retires; the evictor composes them and the pool executes what they
 /// select. The admission time of each pending transaction is the pool's
-/// state, which policies read in [`Self::select`].
+/// state, which policies read in [`Self::select_retirements`].
 pub trait EvictionPolicy<Tx, BlockId>: Send + Sync
 where
     Tx: Hashable,
@@ -63,19 +63,32 @@ where
         block_slots: &BlockSlots<BlockId>,
     );
 
-    /// `key` left the pool, whether included in a block or evicted.
-    fn on_remove(&mut self, key: &Tx::Hash);
+    /// `key` was released: the pool no longer holds even its body.
+    fn on_release(&mut self, key: &Tx::Hash);
 
     /// The chain processed `block_id` at `slot`.
     fn on_processed_block(&mut self, _block_id: &BlockId, _slot: Slot) {}
 
     /// Keys this policy wants gone at `clock`, given the `pending_txs` keys
     /// mapped to their admission timestamp, oldest first.
-    fn select(
+    fn select_retirements(
         &self,
         clock: &PolicyClock,
         pending_txs: &IndexMap<Tx::Hash, AdmissionTime>,
     ) -> Vec<Tx::Hash>;
+
+    /// Retired keys this policy wants released at `clock`: they no longer need
+    /// to stay resolvable. `retired_txs` are the retired txs no canonical block
+    /// carries, mapped to their admission timestamp, and `included_txs` the
+    /// retired txs a canonical block carries. Must only select keys in either.
+    fn select_releases(
+        &self,
+        _clock: &PolicyClock,
+        _retired_txs: &BTreeMap<Tx::Hash, AdmissionTime>,
+        _included_txs: &HashMap<Tx::Hash, IncludedItem>,
+    ) -> Vec<Tx::Hash> {
+        Vec::new()
+    }
 }
 
 /// What eviction policies may inspect about a pool item.

@@ -497,12 +497,13 @@ mod tests {
     use lb_core::mantle::{
         ledger::{BoundedInputs, NoteId},
         ops::{OpProofRef, channel::withdraw::ChannelWithdrawOp},
+        transactions::TxList,
     };
     use lb_groth16::Fr;
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::test_support::{MockNode, funding_config, inscribe_op};
+    use crate::test_support::{FORK_DIGEST, MockNode, funding_config, inscribe_op};
 
     #[tokio::test]
     async fn funding_path_passes_priority_fee_as_a_percentage() {
@@ -705,7 +706,9 @@ mod tests {
                 inputs: BoundedInputs::from(NoteId::from(Fr::from(1u64))).into(),
             }),
         ];
-        Ops::try_from(ops).expect("ops fit")
+        TxList::try_from(ops)
+            .map(|ops| Ops::new(FORK_DIGEST, ops))
+            .expect("ops fit")
     }
 
     #[test]

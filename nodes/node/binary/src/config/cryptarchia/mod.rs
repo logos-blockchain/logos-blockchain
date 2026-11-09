@@ -54,7 +54,8 @@ impl ServiceConfig {
                     LibP2pAdapterEraSettings {
                         topic: ProtocolScope::Fork(era.parameters.fork_digest)
                             .to_string_with_name("cryptarchia"),
-                        max_uncles: parameters.cryptarchia.max_uncles,
+                        block_limits: parameters.cryptarchia.block_limits(),
+                        max_op_data_size: parameters.cryptarchia.max_op_data_size(),
                     }
                 }),
             },
@@ -76,7 +77,8 @@ impl ServiceConfig {
             era_schedule: eras.map(|era| {
                 let EraRuleset::V1(parameters) = &era.parameters.ruleset;
                 lb_chain_network_service::ChainNetworkEraSettings {
-                    slot_activation_coeff: parameters.cryptarchia.slot_activation_coeff,
+                    slot_activation_coeff: parameters.cryptarchia.slot_activation_coeff.get(),
+                    block_limits: parameters.cryptarchia.block_limits(),
                 }
             }),
         }
@@ -110,7 +112,12 @@ impl ServiceConfig {
                         .state_recording_interval,
                 },
             },
-            era_schedule: Arc::clone(&era_schedule),
+            era_schedule: Arc::new(eras.map(|era| {
+                (
+                    ledger_config_for_era(era.parameters),
+                    era.parameters.fork_digest,
+                )
+            })),
             recovery_data: recovery_data.clone(),
             starting_state: genesis_block.clone().into(),
             sync: lb_chain_service::SyncConfig {
@@ -141,6 +148,9 @@ fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
     let blend_rewards_params = parameters.blend_reward_params();
     lb_ledger::Config {
         consensus_config: deployment.consensus_config(),
+        max_transactions: deployment.max_transactions.get(),
+        max_transactions_size: deployment.max_transactions_size,
+        max_op_data_size: deployment.max_op_data_size(),
         epoch_config: EpochConfig {
             epoch_period_nonce_buffer: deployment.epoch_config.epoch_period_nonce_buffer,
             epoch_period_nonce_stabilization: deployment
@@ -155,11 +165,10 @@ fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
             service_params: Arc::new(
                 deployment
                     .sdp_config
-                    .service_params
-                    .iter()
+                    .service_params_by_type()
                     .map(|(service_type, service_params)| {
                         (
-                            *service_type,
+                            service_type,
                             ServiceParameters {
                                 inactivity_period: service_params.inactivity_period,
                                 epoch: service_params.epoch,
@@ -187,5 +196,10 @@ fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
             // validated ledger type.
             reward: deployment.pow_config.reward.clone(),
         },
+        accepted_fork_digests: era.accepted_fork_digests.clone(),
+        execution_market: deployment.execution_market,
+        storage_market: deployment.storage_market,
+        block_rewards: deployment.block_rewards,
+        gas_profile: deployment.gas_profile,
     }
 }

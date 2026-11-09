@@ -199,10 +199,21 @@ impl TopologyConfig {
     }
 
     pub(crate) fn apply_deployment_overrides(&self, settings: &mut DeploymentSettings) {
-        settings.update_genesis_era_parameters(|parameters| {
-            parameters.cryptarchia.security_param = self.security_param;
-            parameters.cryptarchia.slot_activation_coeff = self.active_slot_coeff;
-        });
+        settings
+            .update_genesis_era_parameters(|parameters| {
+                let cryptarchia = &mut parameters.cryptarchia;
+                cryptarchia.security_param = self.security_param;
+                cryptarchia.slot_activation_coeff = self
+                    .active_slot_coeff
+                    .try_into()
+                    .expect("The topology's slot activation coefficient must be valid.");
+                // A lower `k` narrows the widest uncle reference window the era
+                // allows.
+                cryptarchia.uncle_reference_window_in_block = cryptarchia
+                    .uncle_reference_window_in_block
+                    .min(cryptarchia.widest_uncle_reference_window());
+            })
+            .expect("The changed deployment must be valid.");
     }
 }
 
@@ -235,17 +246,32 @@ impl Default for TopologyConfig {
 pub struct DeploymentBuilder {
     config: TopologyConfig,
     seed: Option<DeploymentSeed>,
+    blend_ports: Vec<u16>,
 }
 
 impl DeploymentBuilder {
     #[must_use]
     pub const fn new(config: TopologyConfig) -> Self {
-        Self { config, seed: None }
+        Self {
+            config,
+            seed: None,
+            blend_ports: Vec::new(),
+        }
     }
 
     #[must_use]
     pub const fn with_deployment_seed(mut self, seed: DeploymentSeed) -> Self {
         self.seed = Some(seed);
+        self
+    }
+
+    /// Gives the nodes these Blend ports, one per node, instead of newly
+    /// allocated ones. The genesis block declares each node's Blend port, so a
+    /// deployment rebuilt with the same seed and ports has the same genesis
+    /// block.
+    #[must_use]
+    pub fn with_blend_ports(mut self, ports: Vec<u16>) -> Self {
+        self.blend_ports = ports;
         self
     }
 
@@ -353,7 +379,11 @@ impl DeploymentBuilder {
             .map(|account| (account.secret_key.clone(), account.value))
             .collect::<Vec<_>>();
 
-        let blend_ports = allocate_blend_ports(node_count)?;
+        let blend_ports = if self.blend_ports.is_empty() {
+            allocate_blend_ports(node_count)?
+        } else {
+            self.blend_ports.clone()
+        };
         let network = prepare_network(
             &ids,
             &blend_ports,

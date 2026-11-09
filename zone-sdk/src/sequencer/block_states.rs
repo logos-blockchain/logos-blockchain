@@ -600,7 +600,11 @@ impl BlockStates {
 #[cfg(test)]
 mod tests {
     use lb_common_http_client::Slot;
-    use lb_core::mantle::{Op, ops::channel::ChannelId, traits::Hashable as _};
+    use lb_core::mantle::{
+        Op,
+        ops::channel::{ChannelId, inscribe::Inscription},
+        traits::Hashable as _,
+    };
     use lb_groth16::Fr;
 
     use super::*;
@@ -641,7 +645,7 @@ mod tests {
             tx_hash: TxHash([this; 32]),
             parent_msg: msg_id(parent),
             this_msg: msg_id(this),
-            payload: [].into(),
+            payload: Inscription::empty(),
             signer: None,
         }
     }

@@ -2,7 +2,7 @@
 
 use lb_core::mantle::{
     TxHash,
-    transactions::{MantleTxBuilder, OpProofs, tx_list::ops::OpsContext},
+    transactions::{OpProofs, Ops, tx_list::ops::OpsContext},
 };
 
 use super::{
@@ -12,7 +12,7 @@ use super::{
 use crate::common::wallet::WalletReservedInputs;
 
 pub struct PreparedWalletTransaction {
-    funded_builder: MantleTxBuilder,
+    mantle_tx: Ops,
     context: OpsContext,
     tx_hash: TxHash,
     transfer_proofs: OpProofs,
@@ -23,7 +23,7 @@ pub struct PreparedWalletTransaction {
 impl PreparedWalletTransaction {
     #[must_use]
     pub(super) const fn new(
-        funded_builder: MantleTxBuilder,
+        mantle_tx: Ops,
         context: OpsContext,
         tx_hash: TxHash,
         transfer_proofs: OpProofs,
@@ -31,7 +31,7 @@ impl PreparedWalletTransaction {
         reserved_inputs: WalletReservedInputs,
     ) -> Self {
         Self {
-            funded_builder,
+            mantle_tx,
             context,
             tx_hash,
             transfer_proofs,
@@ -50,7 +50,7 @@ impl PreparedWalletTransaction {
         leading_op_proofs: OpProofs,
     ) -> Result<SignedWalletTransaction, WalletTransactionError> {
         let Self {
-            funded_builder,
+            mantle_tx,
             context,
             tx_hash,
             transfer_proofs,
@@ -62,7 +62,7 @@ impl PreparedWalletTransaction {
         all_leading_proofs.extend(leading_op_proofs.into_inner().into_inner());
 
         sign_prepared_wallet_transaction(
-            funded_builder,
+            mantle_tx,
             &context,
             tx_hash,
             transfer_proofs,
