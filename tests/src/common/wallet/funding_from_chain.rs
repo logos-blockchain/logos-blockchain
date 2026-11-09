@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use lb_common_http_client::Error as HttpClientError;
+use lb_config::deployment::GAS_PROFILE;
 use lb_core::mantle::{
     Op, OpProof, SignedOps, TxHash, Utxo,
-    gas::MainnetGasProfile,
     ledger::verification_mode::StandardMode,
     ops::channel::{ChannelId, ChannelKeyIndex},
     traits::Hashable as _,
@@ -62,7 +62,12 @@ pub async fn funded_signed_tx(
             .expect("funding wallet source should sync from chain");
 
     let tx_context = OpsContext {
-        gas_context: OpsGasContext::new(transfer_thresholds, HashMap::new(), GasPrices::default()),
+        gas_context: OpsGasContext::new(
+            transfer_thresholds,
+            HashMap::new(),
+            GasPrices::default(),
+            GAS_PROFILE,
+        ),
         leader_reward_amount: 0,
     };
     let tx_builder = MantleTxBuilder::new()
@@ -72,11 +77,17 @@ pub async fn funded_signed_tx(
     let funded_builder = fund_builder_from_wallet_source(&funding_source, &tx_builder, &tx_context)
         .expect("funding transaction should succeed");
     let fee = funded_builder
-        .minimum_gas_cost::<MainnetGasProfile>(&tx_context)
+        .minimum_gas_cost(&tx_context)
         .expect("funded tx gas cost should calculate")
         .into_inner();
 
-    let mantle_tx = funded_builder.build().expect("funded builder should build");
+    let fork_digest = node
+        .chain_fork()
+        .await
+        .expect("the node should report the fork digest in force");
+    let mantle_tx = funded_builder
+        .build(fork_digest)
+        .expect("funded builder should build");
     let tx_hash = mantle_tx.hash();
 
     let mut proofs = vec![op_proof(tx_hash)];

@@ -84,6 +84,7 @@ pub fn spawn(
         max_batch_transactions,
         command_rx,
         sequencer_ready: false,
+        max_inscription_size: None,
         ready_checkpoint_pending: false,
         ready_tx: Some(ready_tx),
         event_pending_retry: None,
@@ -216,6 +217,9 @@ struct Runtime {
     max_batch_transactions: NonZeroU16,
     command_rx: mpsc::Receiver<Command>,
     sequencer_ready: bool,
+    /// The most bytes an inscription may take in the era of the node's
+    /// current slot, as last fetched: what writes and publications must fit.
+    max_inscription_size: Option<u32>,
     ready_checkpoint_pending: bool,
     ready_tx: Option<oneshot::Sender<()>>,
     event_pending_retry: Option<PendingEvent>,
@@ -318,6 +322,19 @@ impl Runtime {
                 self.retry_pending_event(&sequencer)?;
             }
 
+            // Writes wait for the inscription limit of the node's era, asked
+            // for as soon as the sequencer is ready.
+            if self.sequencer_ready && self.max_inscription_size.is_none() {
+                match sequencer.max_inscription_size().await {
+                    Ok(max_inscription_size) => {
+                        self.max_inscription_size = Some(max_inscription_size);
+                    }
+                    Err(error) => {
+                        tracing::warn!(target: TARGET, %error, "writes wait for the node's inscription limit");
+                    }
+                }
+            }
+
             // Publish against fully applied channel history, after the batch
             // collection delay or failure backoff has elapsed.
             let event_applied = self.event_pending_retry.is_none();
@@ -395,7 +412,7 @@ impl Runtime {
     }
 
     fn execute(&mut self, tx_id: TxId, transaction: &Transaction) -> Result<TxId, Error> {
-        self.ensure_ready_to_write()?;
+        let max_inscription_size = self.ensure_ready_to_write()?;
 
         // No await between checking and committing: a channel event cannot
         // displace local state between these two operations.
@@ -404,7 +421,8 @@ impl Runtime {
         }
 
         let queue_was_empty = !self.db.has_pending_writes()?;
-        self.db.commit_local_write(tx_id, transaction)?;
+        self.db
+            .commit_local_write(tx_id, transaction, max_inscription_size)?;
 
         if queue_was_empty {
             self.next_publish_at = Instant::now() + BATCH_DELAY;
@@ -417,7 +435,7 @@ impl Runtime {
 
     /// An explicit retry may write while other displacements await handling.
     fn retry_displacement(&mut self, displacement: &Displacement) -> Result<TxId, Error> {
-        self.ensure_ready_to_write()?;
+        let max_inscription_size = self.ensure_ready_to_write()?;
 
         // Check the exact occurrence before committing, without yielding to
         // channel events that could restore or displace the write again.
@@ -428,7 +446,7 @@ impl Runtime {
         let tx_id = TxId::generate();
         let queue_was_empty = !self.db.has_pending_writes()?;
         self.db
-            .commit_local_write(tx_id, &displacement.transaction)?;
+            .commit_local_write(tx_id, &displacement.transaction, max_inscription_size)?;
 
         if queue_was_empty {
             self.next_publish_at = Instant::now() + BATCH_DELAY;
@@ -441,7 +459,7 @@ impl Runtime {
         Ok(tx_id)
     }
 
-    fn ensure_ready_to_write(&self) -> Result<(), Error> {
+    fn ensure_ready_to_write(&self) -> Result<u32, Error> {
         if self.read_only {
             return Err(Error::ReadOnly);
         }
@@ -464,7 +482,7 @@ impl Runtime {
             return Err(Error::SequencerNotReady);
         }
 
-        Ok(())
+        self.max_inscription_size.ok_or(Error::SequencerNotReady)
     }
 
     /// Publication failures leave the committed write pending for retry.
@@ -595,16 +613,21 @@ impl Runtime {
         }
         self.persist_publish_checkpoint()?;
 
-        let Some(pending) =
-            Publication::prepare(self.db.pending_writes()?, self.max_batch_transactions)?
+        // A publication, and the writes after it, are held to the era the node
+        // is in now.
+        let max_inscription_size = sequencer.max_inscription_size().await?;
+        self.max_inscription_size = Some(max_inscription_size);
+
+        let Some(pending) = Publication::prepare(
+            self.db.pending_writes()?,
+            self.max_batch_transactions,
+            max_inscription_size,
+        )?
         else {
             return Ok(());
         };
 
-        let inscription: Inscription = pending
-            .payload
-            .clone()
-            .try_into()
+        let inscription = Inscription::try_new(pending.payload.clone(), max_inscription_size)
             .map_err(|_| Error::InscriptionTooLarge)?;
 
         let (published, checkpoint) = sequencer.handle().publish(inscription).await?;
@@ -726,14 +749,15 @@ const fn is_retryable_apply_error(error: &Error) -> bool {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use lb_core::mantle::{
-        Op, SignedOps, ops::channel::inscribe::InscriptionOp, transactions::Ops,
+    use lb_core::{
+        era::ForkDigest,
+        mantle::{Op, SignedOps, ops::channel::inscribe::InscriptionOp, transactions::Ops},
     };
     use lb_key_management_system_service::keys::{Ed25519Key, UnverifiedEd25519PublicKey};
     use lb_zone_sdk::{
         CommonHttpClient,
         adapter::NodeHttpClient,
-        node_types::{ChannelId, HeaderId, MsgId, Slot, TxHash},
+        node_types::{ChannelId, HeaderId, Inscription, MsgId, Slot, TxHash},
         sequencer::{
             ChannelUpdate, ChannelUpdateTx, Event, FundingConfig, InscriptionInfo,
             SequencerCheckpoint, ZoneSequencer,
@@ -754,7 +778,10 @@ mod tests {
     };
     use crate::{
         PublicationConfig,
-        db::{Databases, tests::open_databases},
+        db::{
+            Databases,
+            tests::{MAX_INSCRIPTION_SIZE, open_databases},
+        },
         error::Error,
         protocol::{CapturedFunctionCalls, ChannelWrite, TxId},
         publication::Publication,
@@ -774,16 +801,17 @@ mod tests {
             transaction: transaction.clone(),
             captured_function_calls: CapturedFunctionCalls::new(Vec::new()).unwrap(),
         }
-        .encode()
+        .encode(MAX_INSCRIPTION_SIZE)
         .unwrap();
-        let tx = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::ChannelInscribe(
-            InscriptionOp {
+        let tx = SignedOps::from_ops_with_sample_proofs(Ops::new(
+            ForkDigest::new([0x11; 32]),
+            [Op::ChannelInscribe(InscriptionOp {
                 channel_id,
-                inscription: payload.try_into().unwrap(),
+                inscription: Inscription::new_unchecked(payload),
                 parent: MsgId::root(),
                 signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
-            },
-        )]));
+            })],
+        ));
         let inscription = channel_inscriptions(&tx, channel_id).remove(0);
         let checkpoint = SequencerCheckpoint {
             last_msg_id: inscription.this_msg,
@@ -807,7 +835,8 @@ mod tests {
 
         // Once the SDK accepts our own write, it leaves the SQL queue but
         // still needs the writer until its publication finishes.
-        db.commit_local_write(tx_id, &transaction).unwrap();
+        db.commit_local_write(tx_id, &transaction, MAX_INSCRIPTION_SIZE)
+            .unwrap();
         let pending = db.pending_publish().unwrap().unwrap();
         db.complete_publish(&checkpoint, inscription.this_msg, &pending)
             .unwrap();
@@ -916,6 +945,7 @@ mod tests {
         let publication = Publication::prepare(
             db.pending_writes().unwrap(),
             PublicationConfig::default().max_transactions,
+            MAX_INSCRIPTION_SIZE,
         )
         .unwrap()
         .unwrap();
@@ -950,6 +980,7 @@ mod tests {
         let publication = Publication::prepare(
             runtime.db.pending_writes().unwrap(),
             PublicationConfig::default().max_transactions,
+            MAX_INSCRIPTION_SIZE,
         )
         .unwrap()
         .unwrap();
@@ -972,7 +1003,7 @@ mod tests {
                 tx_hash: TxHash::from([4; 32]),
                 parent_msg: MsgId::root(),
                 this_msg,
-                payload: publication.payload.try_into().unwrap(),
+                payload: Inscription::new_unchecked(publication.payload),
                 signer: None,
             })],
         };
@@ -1202,7 +1233,10 @@ mod tests {
         let (tx_id, transaction) = prepare_transaction("CREATE TABLE pending(value TEXT)")
             .finish()
             .unwrap();
-        runtime.db.commit_local_write(tx_id, &transaction).unwrap();
+        runtime
+            .db
+            .commit_local_write(tx_id, &transaction, MAX_INSCRIPTION_SIZE)
+            .unwrap();
         runtime.db.require_rebuild().unwrap();
 
         runtime
@@ -1216,6 +1250,21 @@ mod tests {
             .unwrap();
         assert!(matches!(
             runtime.execute(next_id, &next),
+            Err(Error::SequencerNotReady)
+        ));
+    }
+
+    #[tokio::test]
+    async fn writes_wait_for_the_inscription_limit() {
+        let (_dir, mut runtime, _) = runtime();
+        runtime.sequencer_ready = true;
+        runtime.max_inscription_size = None;
+        let (tx_id, transaction) = prepare_transaction("CREATE TABLE items(value INTEGER)")
+            .finish()
+            .unwrap();
+
+        assert!(matches!(
+            runtime.execute(tx_id, &transaction),
             Err(Error::SequencerNotReady)
         ));
     }
@@ -1352,7 +1401,10 @@ mod tests {
                 .finish()
                 .unwrap();
 
-        runtime.db.commit_local_write(tx_id, &transaction).unwrap();
+        runtime
+            .db
+            .commit_local_write(tx_id, &transaction, MAX_INSCRIPTION_SIZE)
+            .unwrap();
         let pending = runtime.db.pending_publish().unwrap().unwrap();
 
         let Event::BlocksProcessed { checkpoint, .. } = blocks_processed() else {
@@ -1369,7 +1421,7 @@ mod tests {
             tx_hash: TxHash::from([position; 32]),
             parent_msg: MsgId::root(),
             this_msg,
-            payload: pending.payload.try_into().unwrap(),
+            payload: Inscription::new_unchecked(pending.payload),
             signer: None,
         }
     }
@@ -1396,7 +1448,7 @@ mod tests {
             .expect("transaction should be valid");
         runtime
             .db
-            .commit_local_write(tx_id, &transaction)
+            .commit_local_write(tx_id, &transaction, MAX_INSCRIPTION_SIZE)
             .expect("write should commit");
         let pending = runtime
             .db
@@ -1407,11 +1459,7 @@ mod tests {
             tx_hash: TxHash::from([2; 32]),
             parent_msg: MsgId::root(),
             this_msg: MsgId::from([2; 32]),
-            payload: pending
-                .payload
-                .clone()
-                .try_into()
-                .expect("payload should fit"),
+            payload: Inscription::new_unchecked(pending.payload.clone()),
             signer: None,
         };
         let event = orphan_event(inscription.clone());
@@ -1463,6 +1511,7 @@ mod tests {
         let pending = Publication::prepare(
             runtime.db.pending_writes().unwrap(),
             PublicationConfig::default().max_transactions,
+            MAX_INSCRIPTION_SIZE,
         )
         .unwrap()
         .unwrap();
@@ -1555,6 +1604,7 @@ mod tests {
             max_batch_transactions: PublicationConfig::default().max_transactions,
             command_rx,
             sequencer_ready: false,
+            max_inscription_size: Some(MAX_INSCRIPTION_SIZE),
             ready_checkpoint_pending: false,
             ready_tx: Some(ready_tx),
             event_pending_retry: None,

@@ -376,6 +376,20 @@ where
         SequencerHandle::new(self)
     }
 
+    /// The most bytes an inscription may take in the era of the node's
+    /// current slot: what a published inscription must fit.
+    pub fn max_inscription_size(
+        &self,
+    ) -> impl Future<Output = Result<u32, Error>> + Send + use<Node> {
+        let node = self.node.clone();
+        async move {
+            node.limits()
+                .await
+                .map(|limits| limits.max_op_data_size)
+                .map_err(|err| Error::Network(format!("failed to fetch the node's limits: {err}")))
+        }
+    }
+
     /// Obtain a cheap-to-clone client for driving the sequencer from tasks
     /// outside the drive loop.
     ///

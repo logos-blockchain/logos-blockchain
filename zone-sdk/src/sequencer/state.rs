@@ -586,8 +586,18 @@ impl TxState {
                     .map(|(hash, entry)| (*hash, entry.first_parent, entry.config_parent)),
             )
             .collect();
-        // Chain heads only: children go with their parent, parent first.
-        let expired_tips: HashSet<MsgId> = expired
+        self.displace_chains(expired)
+    }
+
+    /// Remove `entries` (each as `(hash, message parent, config parent)`)
+    /// and everything pending chained on them, on either lineage. Only the
+    /// chain heads are displaced: children go with their parent, parent
+    /// first. Returned as the inscriptions and bundles, then the opaque txs.
+    fn displace_chains(
+        &mut self,
+        entries: Vec<(TxHash, Option<MsgId>, Option<MsgId>)>,
+    ) -> (Vec<PendingTx>, Vec<SharedTx>) {
+        let tips: HashSet<MsgId> = entries
             .iter()
             .flat_map(|(hash, _, _)| {
                 self.pending_tip_of(*hash)
@@ -595,11 +605,11 @@ impl TxState {
                     .chain(self.pending_config_tip_of(*hash))
             })
             .collect();
-        let mut heads: Vec<TxHash> = expired
+        let mut heads: Vec<TxHash> = entries
             .into_iter()
             .filter(|(_, parent, config_parent)| {
-                parent.is_none_or(|parent| !expired_tips.contains(&parent))
-                    && config_parent.is_none_or(|parent| !expired_tips.contains(&parent))
+                parent.is_none_or(|parent| !tips.contains(&parent))
+                    && config_parent.is_none_or(|parent| !tips.contains(&parent))
             })
             .map(|(hash, _, _)| hash)
             .collect();
@@ -1174,26 +1184,40 @@ impl TxState {
 
     /// On a config-tip change, shed the pending entries **not on this branch's
     /// tip** (not in the safe set) — the not-yet-mined tail a config may have
-    /// invalidated. Mined/on-branch entries are excluded: a config never
-    /// invalidates a landed inscription, so orphaning one would re-post an
-    /// on-chain original as a duplicate. The caller resets the chaining pointer
-    /// to the message tip so re-posts land as a competing branch. Unchanged
-    /// config tip → empty.
-    pub fn shed_pending_inscriptions_on_config(&mut self, tip: HeaderId) -> Vec<PendingTx> {
+    /// invalidated: inscriptions and bundles, and the opaque txs anchored on
+    /// the message lineage (a custom tx chained on a shed inscription has
+    /// lost its parent and would otherwise leave the view unreported).
+    /// Opaque txs on the config lineage alone are the stale-config shed's.
+    /// Mined/on-branch entries are excluded: a config never invalidates a
+    /// landed inscription, so orphaning one would re-post an on-chain
+    /// original as a duplicate. The caller resets the chaining pointer to
+    /// the message tip so re-posts land as a competing branch. Unchanged
+    /// config tip → empty. Returned parent first, inscriptions and bundles
+    /// then opaque txs.
+    pub fn shed_pending_inscriptions_on_config(
+        &mut self,
+        tip: HeaderId,
+    ) -> (Vec<PendingTx>, Vec<SharedTx>) {
         let config_tip = self.config_tip_at(tip);
         if config_tip == self.observed_config_tip {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
         self.observed_config_tip = config_tip;
 
         let safe = self.blocks.safe_at(tip);
-        let eligible: HashSet<TxHash> = self
+        let eligible: Vec<(TxHash, Option<MsgId>, Option<MsgId>)> = self
             .pending
-            .keys()
-            .filter(|h| !safe.contains(h))
-            .copied()
+            .iter()
+            .filter(|(hash, _)| !safe.contains(hash))
+            .map(|(hash, p)| (*hash, Some(p.parent_msg), None))
+            .chain(
+                self.pending_other
+                    .iter()
+                    .filter(|(hash, entry)| !safe.contains(hash) && entry.first_parent.is_some())
+                    .map(|(hash, entry)| (*hash, entry.first_parent, entry.config_parent)),
+            )
             .collect();
-        self.drain_pending_in_lineage_order(&eligible)
+        self.displace_chains(eligible)
     }
 
     /// Shed pending opaque txs whose first inscription's parent slot was
@@ -1731,7 +1755,7 @@ mod tests {
     use lb_key_management_system_service::keys::Ed25519PublicKey;
 
     use super::*;
-    use crate::test_support::header_id;
+    use crate::test_support::{FORK_DIGEST, header_id};
 
     /// A mined channel tx as the block store holds it.
     fn stored(tx: &SignedOps<Unverified, StandardMode>, kind: ChannelTxKind) -> BlockChannelTx {
@@ -1743,12 +1767,15 @@ mod tests {
     }
 
     fn make_dummy_tx_on(parent: MsgId, data: u8) -> SignedOps<Unverified, StandardMode> {
-        let mantle_tx = Ops::from([Op::ChannelInscribe(InscriptionOp {
-            channel_id: [0u8; 32].into(),
-            inscription: [data].into(),
-            parent,
-            signer: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
-        })]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelInscribe(InscriptionOp {
+                channel_id: [0u8; 32].into(),
+                inscription: Inscription::new_unchecked(vec![data]),
+                parent,
+                signer: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            })],
+        );
         SignedOps::from_ops_with_sample_proofs(mantle_tx)
     }
 
@@ -1976,7 +2003,7 @@ mod tests {
         };
         let inscribe = InscriptionOp {
             channel_id: [0u8; 32].into(),
-            inscription: [data].into(),
+            inscription: Inscription::new_unchecked(vec![data]),
             parent,
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
         };
@@ -1993,7 +2020,10 @@ mod tests {
         .unwrap();
         let inscribe_msg = inscribe.id();
         let config_msg = config.id();
-        let ops = Ops::from([Op::ChannelInscribe(inscribe), Op::ChannelConfig(config)]);
+        let ops = Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelInscribe(inscribe), Op::ChannelConfig(config)],
+        );
         let tx = SignedOps::from_ops_with_sample_proofs(ops);
         (tx, inscribe_msg, config_msg)
     }
@@ -2121,12 +2151,22 @@ mod tests {
         state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
 
         state
-            .submit_inscription(make_dummy_tx(1), MsgId::root(), msg_id(10), [1].into())
+            .submit_inscription(
+                make_dummy_tx(1),
+                MsgId::root(),
+                msg_id(10),
+                Inscription::new_unchecked(vec![1]),
+            )
             .unwrap();
         let (bundle, inscribe_msg, _config_msg) = bundle_tx(msg_id(10), 2);
         state.submit_other(bundle, channel_id).unwrap();
         state
-            .submit_inscription(make_dummy_tx(3), inscribe_msg, msg_id(30), [3].into())
+            .submit_inscription(
+                make_dummy_tx(3),
+                inscribe_msg,
+                msg_id(30),
+                Inscription::new_unchecked(vec![3]),
+            )
             .unwrap();
 
         assert_eq!(state.publish_parent(tip), msg_id(30));
@@ -2143,7 +2183,12 @@ mod tests {
         let first = make_dummy_tx(1);
         let first_hash = first.hash();
         state
-            .submit_inscription(first, MsgId::root(), msg_id(10), [1].into())
+            .submit_inscription(
+                first,
+                MsgId::root(),
+                msg_id(10),
+                Inscription::new_unchecked(vec![1]),
+            )
             .unwrap();
         let (bundle, _i, _c) = bundle_tx(MsgId::root(), 2);
         assert_eq!(
@@ -2174,7 +2219,12 @@ mod tests {
         state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
 
         state
-            .submit_inscription(make_dummy_tx(1), MsgId::root(), msg_id(10), [1].into())
+            .submit_inscription(
+                make_dummy_tx(1),
+                MsgId::root(),
+                msg_id(10),
+                Inscription::new_unchecked(vec![1]),
+            )
             .unwrap();
 
         let config = ChannelConfigOp::new(
@@ -2188,7 +2238,7 @@ mod tests {
             NonZero::<u16>::MIN,
         )
         .unwrap();
-        let ops = Ops::from([Op::ChannelConfig(config)]);
+        let ops = Ops::new(FORK_DIGEST, [Op::ChannelConfig(config)]);
         let config_tx = SignedOps::from_ops_with_sample_proofs(ops);
         state.submit_other(config_tx, channel_id).unwrap();
 
@@ -2212,7 +2262,7 @@ mod tests {
         let hash = tx.hash();
         let msg = dummy_tx_msg(&tx);
         state
-            .submit_inscription(tx, parent, msg, [data].into())
+            .submit_inscription(tx, parent, msg, Inscription::new_unchecked(vec![data]))
             .unwrap();
         (hash, msg)
     }
@@ -2230,7 +2280,7 @@ mod tests {
             Arc::clone(&stored),
             MsgId::root(),
             msg,
-            [1].into(),
+            Inscription::new_unchecked(vec![1]),
             PendingBundle::Plain,
         );
 
@@ -2592,7 +2642,10 @@ mod tests {
     ) -> (SignedOps<Unverified, StandardMode>, MsgId) {
         let config = config_op(config_parent, seed);
         let id = config.id();
-        let tx = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::ChannelConfig(config)]));
+        let tx = SignedOps::from_ops_with_sample_proofs(Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelConfig(config)],
+        ));
         (tx, id)
     }
 
@@ -2691,19 +2744,23 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
         state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
         let again_op = config_op(MsgId::root(), 4);
-        let again = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::ChannelConfig(
-            again_op.clone(),
-        )]));
+        let again = SignedOps::from_ops_with_sample_proofs(Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelConfig(again_op.clone())],
+        ));
         let again_hash = again.hash();
         state.submit_other(again, channel_id).unwrap();
-        let same_config_other_tx = SignedOps::from_ops_with_sample_proofs(Ops::from([
-            Op::ChannelInscribe(crate::test_support::inscribe_op(
-                channel_id,
-                MsgId::root(),
-                b"beside the config",
-            )),
-            Op::ChannelConfig(again_op),
-        ]));
+        let same_config_other_tx = SignedOps::from_ops_with_sample_proofs(Ops::new(
+            FORK_DIGEST,
+            [
+                Op::ChannelInscribe(crate::test_support::inscribe_op(
+                    channel_id,
+                    MsgId::root(),
+                    b"beside the config",
+                )),
+                Op::ChannelConfig(again_op),
+            ],
+        ));
         assert_ne!(same_config_other_tx.hash(), again_hash);
         state.observe_other_tx(same_config_other_tx, channel_id);
 
@@ -2730,7 +2787,7 @@ mod tests {
             original,
             MsgId::root(),
             msg,
-            [1].into(),
+            Inscription::new_unchecked(vec![1]),
             PendingBundle::Plain,
         );
         state.process_block(
@@ -2808,7 +2865,12 @@ mod tests {
         let tx = make_dummy_tx(data);
         let hash = tx.hash();
         state
-            .submit_inscription(tx, parent_msg, this_msg, [data].into())
+            .submit_inscription(
+                tx,
+                parent_msg,
+                this_msg,
+                Inscription::new_unchecked(vec![data]),
+            )
             .unwrap();
         hash
     }
@@ -2834,7 +2896,10 @@ mod tests {
         )
         .unwrap();
         let config_msg = config.id();
-        let tx = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::ChannelConfig(config)]));
+        let tx = SignedOps::from_ops_with_sample_proofs(Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelConfig(config)],
+        ));
         (tx, config_msg)
     }
 
@@ -2853,7 +2918,7 @@ mod tests {
                 tx_hash: tx.hash(),
                 parent_msg: parent,
                 this_msg,
-                payload: [].into(),
+                payload: Inscription::empty(),
                 signer: None,
             }),
         )
@@ -2975,7 +3040,7 @@ mod tests {
             tx_hash: tx.hash(),
             parent_msg: parent,
             this_msg,
-            payload: [].into(),
+            payload: Inscription::empty(),
             signer: None,
         };
         let custom = stored(
@@ -3049,6 +3114,7 @@ mod tests {
         assert!(
             state
                 .shed_pending_inscriptions_on_config(genesis)
+                .0
                 .is_empty(),
             "an already-finalized config must not orphan pending on resume"
         );
@@ -3187,7 +3253,7 @@ mod tests {
             tx_hash: p1,
             parent_msg: MsgId::root(),
             this_msg: msg_id(1),
-            payload: [1].into(),
+            payload: Inscription::new_unchecked(vec![1]),
             signer: Some(test_signer()),
         };
         state.process_block(
@@ -3205,7 +3271,7 @@ mod tests {
         let p3 = submit_fake_inscription(&mut state, 3, msg_id(2), msg_id(3));
 
         // No config has landed → the config tip is unchanged → nothing shed.
-        assert!(state.shed_pending_inscriptions_on_config(b1).is_empty());
+        assert!(state.shed_pending_inscriptions_on_config(b1).0.is_empty());
 
         // A config lands, moving the config tip.
         let (cfg, cfg_msg) = config_tx(MsgId::root(), 9);
@@ -3222,19 +3288,88 @@ mod tests {
 
         // Only the not-yet-mined tail is shed, parent-first; the mined p1 is on
         // chain and must not be orphaned (re-posting it would duplicate).
-        let shed: Vec<TxHash> = state
-            .shed_pending_inscriptions_on_config(b2)
-            .iter()
-            .map(PendingTx::tx_hash)
-            .collect();
+        let (shed, shed_other) = state.shed_pending_inscriptions_on_config(b2);
+        let shed: Vec<TxHash> = shed.iter().map(PendingTx::tx_hash).collect();
         assert_eq!(shed, vec![p2, p3], "shed only the not-yet-mined tail");
+        assert_eq!(shed_other.len(), 0, "no opaque tx chains on the tail");
         assert!(
             state.pending_inscription(&p1).is_some(),
             "the mined inscription must not be orphaned"
         );
 
         // Same config tip on the next call → nothing more to shed.
-        assert!(state.shed_pending_inscriptions_on_config(b2).is_empty());
+        assert!(state.shed_pending_inscriptions_on_config(b2).0.is_empty());
+    }
+
+    /// A custom tx chained on an inscription the config shed drops has lost
+    /// its parent: it goes with it, reported orphaned, instead of staying
+    /// tracked while the view no longer reaches it.
+    #[test]
+    fn config_land_sheds_the_custom_tx_chained_on_a_shed_inscription() {
+        let genesis = header_id(0);
+        let b1 = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(b1, genesis, genesis, vec![], vec![], Vec::new(), vec![]);
+
+        // p1 pends on root; a two-inscription custom tx chains on p1.
+        let p1 = submit_fake_inscription(&mut state, 1, MsgId::root(), msg_id(1));
+        let signer = UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap();
+        let first = InscriptionOp {
+            channel_id,
+            inscription: Inscription::new_unchecked(vec![2]),
+            parent: msg_id(1),
+            signer,
+        };
+        let second = InscriptionOp {
+            channel_id,
+            inscription: Inscription::new_unchecked(vec![3]),
+            parent: first.id(),
+            signer,
+        };
+        let custom = SignedOps::from_ops_with_sample_proofs(Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelInscribe(first), Op::ChannelInscribe(second)],
+        ));
+        let custom_hash = custom.hash();
+        state.submit_other(custom, channel_id).unwrap();
+        assert_eq!(
+            state.channel_lineage(b1).len(),
+            3,
+            "fixture: the custom tx is in the view behind p1"
+        );
+
+        // A config lands, moving the config tip.
+        let (cfg, cfg_msg) = config_tx(MsgId::root(), 9);
+        let b2 = header_id(2);
+        state.process_block(
+            b2,
+            b1,
+            genesis,
+            vec![],
+            vec![config_block_tx(&cfg, cfg_msg, MsgId::root())],
+            Vec::new(),
+            vec![],
+        );
+
+        let (shed, shed_other) = state.shed_pending_inscriptions_on_config(b2);
+        assert_eq!(
+            shed.iter().map(PendingTx::tx_hash).collect::<Vec<_>>(),
+            vec![p1]
+        );
+        assert_eq!(
+            shed_other.iter().map(|tx| tx.hash()).collect::<Vec<_>>(),
+            vec![custom_hash],
+            "the custom tx goes with the inscription it chains on"
+        );
+        assert!(!state.is_tracked(&custom_hash));
+        assert!(
+            state
+                .channel_lineage(b2)
+                .iter()
+                .all(|info| info.this_msg == cfg_msg),
+            "only the config remains in the view"
+        );
     }
 
     /// A config-only block does not touch the message lineage: no update is
@@ -3251,7 +3386,7 @@ mod tests {
             tx_hash: make_dummy_tx(1).hash(),
             parent_msg: MsgId::root(),
             this_msg: msg_id(1),
-            payload: [1].into(),
+            payload: Inscription::new_unchecked(vec![1]),
             signer: Some(test_signer()),
         };
         state.process_block(
@@ -3318,7 +3453,7 @@ mod tests {
             tx_hash: c1_tx_hash,
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
-            payload: [99].into(),
+            payload: Inscription::new_unchecked(vec![99]),
             signer: Some(test_signer()),
         };
         // Mirror the observed inscription into pending before the safe-set
@@ -3328,7 +3463,7 @@ mod tests {
             c1_tx,
             MsgId::root(),
             c1_msg,
-            [99].into(),
+            Inscription::new_unchecked(vec![99]),
             PendingBundle::Plain,
         );
         state.process_block(
@@ -3390,8 +3525,12 @@ mod tests {
 
         let b1_msg = msg_id(10);
         let b1_hash = submit_fake_inscription(&mut state, 1, MsgId::root(), b1_msg);
-        let refused =
-            state.submit_inscription(make_dummy_tx(4), MsgId::root(), msg_id(30), [4].into());
+        let refused = state.submit_inscription(
+            make_dummy_tx(4),
+            MsgId::root(),
+            msg_id(30),
+            Inscription::new_unchecked(vec![4]),
+        );
         assert_eq!(
             refused,
             Err(ParentTaken {
@@ -3441,7 +3580,7 @@ mod tests {
             tx_hash: make_dummy_tx(99).hash(),
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
-            payload: [99].into(),
+            payload: Inscription::new_unchecked(vec![99]),
             signer: Some(test_signer()),
         };
         state.process_block(

@@ -20,6 +20,7 @@ dhat                             = { optional = true, workspace = true }
 futures                          = { workspace = true }
 hex                              = { workspace = true }
 http                             = { workspace = true }
+humantime                        = { workspace = true }
 lb-api-service                   = { workspace = true }
 lb-binary-codec                  = { workspace = true }
 lb-blend                         = { workspace = true }
@@ -56,10 +57,12 @@ num-bigint                       = { workspace = true }
 nutype                           = { features = ["serde"], workspace = true }
 overwatch                        = { workspace = true }
 rand                             = { workspace = true }
+regex                            = { features = ["std"], workspace = true }
 serde                            = { workspace = true }
 serde_json                       = { workspace = true }
 serde_with                       = { workspace = true }
 serde_yaml                       = { workspace = true }
+strum                            = { workspace = true }
 thiserror                        = { workspace = true }
 tokio                            = { workspace = true }
 tokio-stream                     = { workspace = true }

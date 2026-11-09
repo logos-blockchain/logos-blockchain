@@ -9,21 +9,22 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _, stream};
-use lb_binary_codec::bincode::{Error as CodecError, SerializeOp};
+use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_blend_service::{
     api::{ApiError as BlendApiError, BlendServiceApi, BlendServiceData},
-    message::{DataPayload, TransactionNotBlendable},
+    message::DataPayload,
 };
 use lb_chain_service::{
     ProcessedBlockEvent, Slot,
     api::{ApiError as ChainApiError, CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
+    era::ForkDigest,
     events::{Event, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
         Note, NoteId, Op, OpProof, SignedOps, Utxo, Value,
-        gas::MainnetGasProfile,
+        gas::GasProfile,
         ledger::{Inputs, InputsError, Outputs, verification_mode::StandardMode},
         ops::{
             NoOpProof, OpId as _,
@@ -103,10 +104,6 @@ pub enum PoWError {
     Sign(#[from] ZkSignError),
     #[error("signing task failed: {0}")]
     SignTask(#[from] JoinError),
-    #[error("failed to encode transaction: {0}")]
-    Encode(#[from] CodecError),
-    #[error("transaction cannot be carried by the blend network: {0}")]
-    NotBlendable(#[from] TransactionNotBlendable),
     #[error("failed to publish to the blend network: {0}")]
     Publish(#[from] BlendApiError),
     #[error("failed to query the chain service: {0}")]
@@ -233,9 +230,14 @@ pub struct PoWEraSettings {
     /// When it is not, no claim can succeed, so auto-claim does not run in the
     /// era.
     pub rewards_enabled: bool,
-    /// The size of the body of a data payload in the era: the largest
-    /// transaction the network can deliver, so the largest claim transaction.
-    pub max_data_payload_body_size: usize,
+    /// The most bytes a claim transaction may take in the era: it is published
+    /// in the body of a Blend data payload and included in a block, so the
+    /// smaller of what the two carry.
+    pub max_claim_tx_size: usize,
+    /// The fork digest of the era, which the claims signed in it carry.
+    pub fork_digest: ForkDigest,
+    /// What the era's Operations cost, which a claim transaction pays for.
+    pub gas_profile: GasProfile,
 }
 
 /// One auto-claim destination: a key and the balance we want it to reach.
@@ -561,7 +563,7 @@ where
         // the era too. Finding it probes the encoding, so it is found once each time
         // the service enters an era rather than for every claim.
         let mut max_claims_in_payload =
-            max_claims_by_payload_size(current_era_settings.parameters.max_data_payload_body_size);
+            max_claims_by_payload_size(current_era_settings.parameters.max_claim_tx_size);
 
         // Dedicated thread pool for the CPU-heavy ticket search, keeping it off
         // Tokio's runtime threads.
@@ -653,6 +655,7 @@ where
                                 &auto_claim_settings.targets,
                                 &mut state,
                                 &settings.era_schedule,
+                                current_era_settings.parameters,
                                 max_claims_in_payload,
                             )
                             .await
@@ -745,7 +748,7 @@ where
                     if era > current_era_settings.era {
                         info!(target: LOG_TARGET, "PoW follows era {} from slot {}", era.into_inner(), u64::from(slot));
                         current_era_settings = settings.era_schedule.at_slot(slot);
-                        max_claims_in_payload = max_claims_by_payload_size(current_era_settings.parameters.max_data_payload_body_size);
+                        max_claims_in_payload = max_claims_by_payload_size(current_era_settings.parameters.max_claim_tx_size);
                     }
                     if let AutoClaimTick::Slots(period) = auto_claim_settings.tick
                         && is_auto_claiming
@@ -773,6 +776,7 @@ where
                     &mut state,
                     &state_updater,
                     &settings.era_schedule,
+                    current_era_settings.parameters,
                     max_claims_in_payload,
                 )
                 .await;
@@ -1110,6 +1114,7 @@ async fn run_auto_claim<CryptarchiaService, BlendService, WalletService, Runtime
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     era_schedule: &ServiceEraSchedule,
+    era_settings: &PoWEraSettings,
     max_claims_in_payload: usize,
 ) -> bool
 where
@@ -1145,6 +1150,7 @@ where
         state,
         state_updater,
         era_schedule,
+        era_settings,
         max_claims_in_payload,
     )
     .await;
@@ -1163,6 +1169,7 @@ where
 /// emitting a burst of transactions the chain then rejects. Drawing down a
 /// local balance stops the loop when the funds are spoken for; the next tick
 /// starts again from whatever the chain actually reports.
+#[expect(clippy::too_many_arguments, reason = "Need all args")]
 async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
@@ -1170,6 +1177,7 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     era_schedule: &ServiceEraSchedule,
+    era_settings: &PoWEraSettings,
     max_claims_in_payload: usize,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -1193,6 +1201,7 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
             claim_address,
             state,
             era_schedule,
+            era_settings,
             available_pool,
             max_claims_in_payload,
         )
@@ -1239,6 +1248,7 @@ async fn manual_claim<CryptarchiaService, BlendService, WalletService, RuntimeSe
     targets: &[ClaimTarget],
     state: &mut PoWServiceState,
     era_schedule: &ServiceEraSchedule,
+    era_settings: &PoWEraSettings,
     max_claims_in_payload: usize,
 ) -> Result<Option<TxHash>, PoWError>
 where
@@ -1267,6 +1277,7 @@ where
         claim_address,
         state,
         era_schedule,
+        era_settings,
         available_pool,
         max_claims_in_payload,
     )
@@ -1309,12 +1320,14 @@ struct PublishedClaim {
 ///
 /// On any failure the ready set is left untouched so the tickets can be
 /// retried.
+#[expect(clippy::too_many_arguments, reason = "Need all args")]
 async fn claim_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
     claim_address: ZkPublicKey,
     state: &mut PoWServiceState,
     era_schedule: &ServiceEraSchedule,
+    era_settings: &PoWEraSettings,
     available_pool: Value,
     max_claims_in_payload: usize,
 ) -> Result<Option<PublishedClaim>, PoWError>
@@ -1365,10 +1378,12 @@ where
     // the pending set.
     let (signed_tx, claimed_count) = build_reward_claim_tx(
         claim_address,
+        era_settings.fork_digest,
         &ledger_state,
         available_pool,
         &tickets,
         max_claims_in_payload,
+        era_settings.gas_profile,
     )
     .await?;
     // Capture the tx id before publishing consumes the signed tx, so it can be
@@ -1646,12 +1661,20 @@ fn claim_tx_size(claims: usize) -> Result<u64, PoWError> {
         .collect();
     let transfers = transfer_ops(&note_ids, ZkPublicKey::zero(), &vec![0; groups])?;
 
-    let ops = push_reward_claim_ops(MantleTxBuilder::new(), &probe_claims, transfers)?.build()?;
+    // Every fork digest has the same size, so any sizes the transaction.
+    let ops = push_reward_claim_ops(MantleTxBuilder::new(), &probe_claims, transfers)?
+        .build(ForkDigest::new([0; 32]))?;
     let ops_proofs = claim_ops_proofs(claims, std::iter::repeat_n(signature, groups))?;
 
-    Ok(SerializeOp::bytes_size(
-        &SignedOps::<_, StandardMode>::from_parts(ops, ops_proofs)?,
-    )?)
+    Ok(SignedOps::<_, StandardMode>::from_parts(ops, ops_proofs)?.encoded_length() as u64)
+}
+
+/// Size, in bytes, of a transaction that claims a single reward: the smallest
+/// claim transaction, which a Blend payload must carry for any claim to be
+/// published.
+#[must_use]
+pub fn single_claim_tx_size() -> u64 {
+    claim_tx_size(1).expect("A transaction of a single claim builds.")
 }
 
 /// Largest claim count whose transaction still fits the body of a Blend
@@ -1672,7 +1695,7 @@ fn max_claims_by_payload_size(max_payload_body_size: usize) -> usize {
         .find(|&claims| {
             claim_tx_size(claims).is_ok_and(|size| size <= max_payload_body_size as u64)
         })
-        .expect("a single-claim tx fits a Blend payload")
+        .expect("the deployment checks that a single-claim tx fits a Blend payload and a block")
 }
 
 /// Builds and signs a single self-funding reward-claim transaction from a batch
@@ -1695,19 +1718,23 @@ fn max_claims_by_payload_size(max_payload_body_size: usize) -> usize {
 /// balance; see [`drain_ready_rewards`].
 async fn build_reward_claim_tx(
     claim_address: ZkPublicKey,
+    fork_digest: ForkDigest,
     ledger_state: &LedgerState,
     reward_pool: Value,
     tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
     max_claims_in_payload: usize,
+    gas_profile: GasProfile,
 ) -> Result<(SignedOps<Unverified, StandardMode>, usize), PoWError> {
     // The reward value and gas prices are read at `ledger_state`; they must
     // match the state the tx applies against, or the reconstructed UTXOs / fee
     // will be off.
     build_reward_claim_tx_inner(
         claim_address,
+        fork_digest,
         ledger_state.mantle_ledger().pow.epoch_reward(),
         reward_pool,
         ledger_state.get_gas_prices(),
+        gas_profile,
         tickets,
         max_claims_in_payload,
     )
@@ -1716,11 +1743,17 @@ async fn build_reward_claim_tx(
 
 /// Inner builder over plain reward/gas values, so it can be exercised without a
 /// full [`LedgerState`]. See [`build_reward_claim_tx`].
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Plain values, so tests need no ledger state"
+)]
 async fn build_reward_claim_tx_inner(
     claim_address: ZkPublicKey,
+    fork_digest: ForkDigest,
     reward_value: Value,
     reward_pool: Value,
     gas_prices: GasPrices,
+    gas_profile: GasProfile,
     tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
     max_claims_by_payload_size: usize,
 ) -> Result<(SignedOps<Unverified, StandardMode>, usize), PoWError> {
@@ -1728,7 +1761,7 @@ async fn build_reward_claim_tx_inner(
         return Err(PoWError::RewardsDisabled);
     }
     let context = OpsContext {
-        gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), gas_prices),
+        gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), gas_prices, gas_profile),
         leader_reward_amount: 0,
     };
 
@@ -1758,7 +1791,8 @@ async fn build_reward_claim_tx_inner(
     let change_outputs = change_outputs(&note_ids, reward_value, fee)?;
     let transfers = transfer_ops(&note_ids, claim_address, &change_outputs)?;
 
-    let mantle_tx = push_reward_claim_ops(MantleTxBuilder::new(), &claims, transfers)?.build()?;
+    let mantle_tx =
+        push_reward_claim_ops(MantleTxBuilder::new(), &claims, transfers)?.build(fork_digest)?;
 
     // Sign each transfer with the keys owning its input notes (a
     // multi-signature over the whole tx hash). Signing is a ZK proof
@@ -1881,7 +1915,7 @@ where
     BlendService::NodeId: Send,
     RuntimeServiceId: Sync,
 {
-    let payload = DataPayload::try_from_transaction(&signed_tx)?;
+    let payload = DataPayload::from_transaction(&signed_tx);
     blend_api.publish(payload).await?;
     Ok(())
 }
@@ -1901,7 +1935,7 @@ fn estimate_reward_claim_fee(
     let num_groups = note_ids.len().div_ceil(MAX_TRANSFER_INPUTS);
     let transfers = transfer_ops(note_ids, claim_address, &vec![0; num_groups])?;
     let fee = push_reward_claim_ops(MantleTxBuilder::new(), claims, transfers)?
-        .minimum_gas_cost::<MainnetGasProfile>(context)?
+        .minimum_gas_cost(context)?
         .into_inner();
     Ok(fee)
 }
@@ -1914,9 +1948,10 @@ mod tests {
         sync::{Arc, LazyLock},
     };
 
-    use lb_binary_codec::bincode::SerializeOp as _;
+    use lb_binary_codec::canonical::BinaryEncode as _;
     use lb_chain_service::Slot;
     use lb_core::{
+        era::ForkDigest,
         header::HeaderId,
         mantle::{
             Note, NoteId, OpProofRef, OpRef, SignedOps, Utxo,
@@ -1940,9 +1975,11 @@ mod tests {
         replace_search_pool_if_resized, slot_period_elapsed, transfer_ops,
     };
     use crate::{
-        test_utils::{PAYLOAD_BODY_SIZE, era_schedule},
+        test_utils::{GAS_PROFILE, PAYLOAD_BODY_SIZE, era_schedule},
         tickets::WinningTicket,
     };
+
+    const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
 
     const REWARD: u64 = 1_000_000;
     const POOL: u64 = 1_000_000_000;
@@ -1976,6 +2013,7 @@ mod tests {
                 HashMap::default(),
                 HashMap::default(),
                 GasPrices::new(1, 1),
+                GAS_PROFILE,
             ),
             leader_reward_amount: 0,
         }
@@ -1986,7 +2024,7 @@ mod tests {
     /// the ledger's stateless `preverify`), and the Blend payload body it is
     /// published in.
     fn assert_within_tx_limits(tx: &SignedOps<Unverified, StandardMode>) {
-        let size = tx.to_bytes().expect("built tx should serialize").len();
+        let size = tx.encoded_length();
         assert!(
             size <= PAYLOAD_BODY_SIZE,
             "tx of {size} bytes exceeds the {PAYLOAD_BODY_SIZE} a Blend payload carries"
@@ -2201,7 +2239,7 @@ mod tests {
 
         let tx = push_reward_claim_ops(MantleTxBuilder::new(), &claims, transfers)
             .unwrap()
-            .build()
+            .build(FORK_DIGEST)
             .unwrap();
         let ops = tx.op_refs();
 
@@ -2236,9 +2274,11 @@ mod tests {
 
         let (tx, claimed) = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
+            FORK_DIGEST,
             REWARD,
             POOL,
             GasPrices::new(1, 1),
+            GAS_PROFILE,
             &[(secret_key, claim)],
             *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
@@ -2267,9 +2307,11 @@ mod tests {
     async fn build_reward_claim_tx_errors_when_rewards_disabled() {
         let result = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
+            FORK_DIGEST,
             0,
             POOL,
             GasPrices::new(1, 1),
+            GAS_PROFILE,
             &[ticket()],
             *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
@@ -2282,9 +2324,11 @@ mod tests {
         // Pool below a single reward -> nothing fundable.
         let result = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
+            FORK_DIGEST,
             REWARD,
             REWARD - 1,
             GasPrices::new(1, 1),
+            GAS_PROFILE,
             &[ticket()],
             *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
@@ -2298,9 +2342,11 @@ mod tests {
         let tickets: Vec<_> = std::iter::repeat_with(ticket).take(5).collect();
         let (tx, claimed) = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
+            FORK_DIGEST,
             REWARD,
             2 * REWARD,
             GasPrices::new(1, 1),
+            GAS_PROFILE,
             &tickets,
             *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
@@ -2332,9 +2378,11 @@ mod tests {
             let tickets = vec![ticket()];
             match build_reward_claim_tx_inner(
                 ZkPublicKey::zero(),
+                FORK_DIGEST,
                 REWARD,
                 available_pool,
                 GasPrices::new(1, 1),
+                GAS_PROFILE,
                 &tickets,
                 *MAX_CLAIMS_BY_PAYLOAD_SIZE,
             )
@@ -2365,9 +2413,11 @@ mod tests {
             let tickets = vec![ticket()];
             let (_, claimed) = build_reward_claim_tx_inner(
                 ZkPublicKey::zero(),
+                FORK_DIGEST,
                 REWARD,
                 stale_pool,
                 GasPrices::new(1, 1),
+                GAS_PROFILE,
                 &tickets,
                 *MAX_CLAIMS_BY_PAYLOAD_SIZE,
             )
@@ -2390,9 +2440,11 @@ mod tests {
         let tickets: Vec<_> = std::iter::repeat_with(ticket).take(cap + 50).collect();
         let (tx, claimed) = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
+            FORK_DIGEST,
             REWARD,
             POOL, // POOL / REWARD = 1000 > cap, so the pool does not bind
             GasPrices::new(1, 1),
+            GAS_PROFILE,
             &tickets,
             *MAX_CLAIMS_BY_PAYLOAD_SIZE,
         )
@@ -2431,16 +2483,18 @@ mod tests {
             let tickets: Vec<_> = std::iter::repeat_with(ticket).take(claims).collect();
             let (tx, _) = build_reward_claim_tx_inner(
                 ZkPublicKey::zero(),
+                FORK_DIGEST,
                 REWARD,
                 POOL,
                 GasPrices::new(1, 1),
+                GAS_PROFILE,
                 &tickets,
                 *MAX_CLAIMS_BY_PAYLOAD_SIZE,
             )
             .await
             .unwrap();
             assert_eq!(
-                tx.to_bytes().unwrap().len() as u64,
+                tx.encoded_length() as u64,
                 claim_tx_size(claims).unwrap(),
                 "probe disagrees with a signed tx at {claims} claim(s)"
             );

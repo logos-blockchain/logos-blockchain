@@ -15,7 +15,7 @@ use lb_core::{
     events::{Event, Events, HeaderEvent, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
-        GasProfile, NoteId, TxHash, Utxo, Value,
+        NoteId, TxHash, Utxo, Value,
         ledger::verification_mode::StandardMode,
         ops::{
             OpId as _, OpRef,
@@ -239,7 +239,7 @@ impl WalletState {
     /// percentage of the final mandatory fee. Only the unused reserve becomes
     /// the transaction's effective priority tip. `0` funds to the exact
     /// minimum.
-    pub fn fund_tx<G: GasProfile>(
+    pub fn fund_tx(
         &self,
         tx_builder: &MantleTxBuilder,
         change_pk: ZkPublicKey,
@@ -273,16 +273,16 @@ impl WalletState {
         // supplied inputs. In that case we must not pull in an extra input (and
         // the change note it would require).
         match tx_builder
-            .funding_delta_with_priority_fee::<G>(context, priority_fee_percent)?
+            .funding_delta_with_priority_fee(context, priority_fee_percent)?
             .cmp(&0)
         {
             Ordering::Equal => return Ok(tx_builder.clone()),
             Ordering::Greater => {
-                if let Some(tx_with_change) = tx_builder.clone().return_change::<G>(
-                    context,
-                    change_pk,
-                    priority_fee_percent,
-                )? {
+                if let Some(tx_with_change) =
+                    tx_builder
+                        .clone()
+                        .return_change(context, change_pk, priority_fee_percent)?
+                {
                     return Ok(tx_with_change);
                 }
                 // The change note costs more than the surplus covers, so fall
@@ -296,8 +296,8 @@ impl WalletState {
                 .clone()
                 .extend_ledger_inputs(utxos[..=i].iter().copied())?;
 
-            let funding_delta = funded_tx_builder
-                .funding_delta_with_priority_fee::<G>(context, priority_fee_percent)?;
+            let funding_delta =
+                funded_tx_builder.funding_delta_with_priority_fee(context, priority_fee_percent)?;
 
             match funding_delta.cmp(&0) {
                 Ordering::Less => {
@@ -312,11 +312,9 @@ impl WalletState {
                     // We have enough balance, but we need to introduce a change note.
                     // The change note will slightly increase the storage cost of the tx so there is
                     // a chance that we will not be able to fund the tx with the change note.
-                    if let Some(tx_with_change) = funded_tx_builder.return_change::<G>(
-                        context,
-                        change_pk,
-                        priority_fee_percent,
-                    )? {
+                    if let Some(tx_with_change) =
+                        funded_tx_builder.return_change(context, change_pk, priority_fee_percent)?
+                    {
                         // We were able to fund the tx with change note added.
                         return Ok(tx_with_change);
                     }
@@ -544,7 +542,7 @@ where
     txs.map_ref(move |tx| {
         let mut events_by_op = events_by_tx.remove(&tx.hash()).unwrap_or_default();
 
-        let ops = tx.op_refs().into_inner().filter_map_ref(|op_ref| {
+        let ops = tx.op_refs().inner().filter_map_ref(|op_ref| {
             let event = op_id_ref(op_ref).and_then(|id| events_by_op.remove(&id));
             transform_op(op_ref, event)
         });
@@ -804,7 +802,7 @@ where
         clippy::too_many_arguments,
         reason = "thin passthrough to `WalletState::fund_tx` plus the tip"
     )]
-    pub fn fund_tx<G: GasProfile>(
+    pub fn fund_tx(
         &self,
         tip: HeaderId,
         tx_builder: &MantleTxBuilder,
@@ -814,7 +812,7 @@ where
         excluded_notes: &HashSet<NoteId>,
         priority_fee_percent: u64,
     ) -> Result<MantleTxBuilder, WalletError> {
-        self.wallet_state_at(tip)?.fund_tx::<G>(
+        self.wallet_state_at(tip)?.fund_tx(
             tx_builder,
             change_pk,
             funding_pks,
@@ -883,17 +881,18 @@ mod tests {
 
     use lb_core::{
         crypto::ZkDigest as _,
+        era::{AcceptedForkDigests, ForkDigest},
         mantle::{
             Note, Op, OpProof, SignedOps,
             channel::Channels,
-            gas::MainnetGasProfile as Gas,
+            gas::{Gas, GasProfile},
             ledger::{BoundedInputs, Inputs, Outputs},
             ops::channel::{
                 ChannelId, MsgId,
                 deposit::Metadata,
                 inscribe::{Inscription, InscriptionOp},
             },
-            transactions::{GasPrices, OpProofs, Ops, tx_list::ops::OpsGasContext},
+            transactions::{GasPrices, OpProofs, Ops, TxList, tx_list::ops::OpsGasContext},
         },
         proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
         sdp::{MinStake, ServiceParameters, ServiceType},
@@ -915,6 +914,22 @@ mod tests {
     use rpds::HashTrieSetSync;
 
     use super::*;
+
+    const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
+    /// The costs of the deployments' current gas profile.
+    const GAS_PROFILE: GasProfile = GasProfile {
+        transfer: Gas::new(590),
+        channel_config: Gas::new(56),
+        channel_inscribe: Gas::new(56),
+        channel_deposit: Gas::new(590),
+        channel_withdraw: Gas::new(56),
+        channel_transfer: Gas::new(56),
+        sdp_declare: Gas::new(646),
+        sdp_withdraw: Gas::new(590),
+        sdp_active: Gas::new(590),
+        leader_claim: Gas::new(580),
+        claim_pow_reward: Gas::new(1),
+    };
 
     fn pk(v: u64) -> ZkPublicKey {
         ZkPublicKey::from(BigUint::from(v))
@@ -1093,14 +1108,17 @@ mod tests {
             voucher_cm: v1_cm,
             // Unknown unlocked note that will be ignored.
             header_ops: vec![HeaderOp::Unlock(NoteId::from(Fr::ONE))],
-            txs: [WalletTx {
-                ops: [
-                    WalletOp::Transfer(transfer1.clone()),
-                    WalletOp::Lock(service_note),
-                ]
-                .into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [
+                        WalletOp::Transfer(transfer1.clone()),
+                        WalletOp::Lock(service_note),
+                    ]
+                    .into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
 
         wallet.apply_block(&block_1).unwrap();
@@ -1124,15 +1142,18 @@ mod tests {
             voucher_cm: v2_cm,
             // Unlock the previously locked note
             header_ops: vec![HeaderOp::Unlock(service_note)],
-            txs: [WalletTx {
-                ops: [
-                    WalletOp::Transfer(transfer2.clone()),
-                    // Unknown service note that will be ignored
-                    WalletOp::Lock(NoteId::from(Fr::ONE)),
-                ]
-                .into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [
+                        WalletOp::Transfer(transfer2.clone()),
+                        // Unknown service note that will be ignored
+                        WalletOp::Lock(NoteId::from(Fr::ONE)),
+                    ]
+                    .into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&block_2).unwrap();
         assert_service_notes(&wallet, block_2.id, []);
@@ -1179,14 +1200,17 @@ mod tests {
             epoch: 2.into(),
             voucher_cm: v3_cm,
             header_ops: vec![],
-            txs: [WalletTx {
-                ops: [
-                    WalletOp::ChannelDeposit(deposit),
-                    WalletOp::LeaderClaim(Utxo::new(tx_hash(9), 0, Note::new(38, alice))),
-                ]
-                .into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [
+                        WalletOp::ChannelDeposit(deposit),
+                        WalletOp::LeaderClaim(Utxo::new(tx_hash(9), 0, Note::new(38, alice))),
+                    ]
+                    .into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&block_3).unwrap();
 
@@ -1259,14 +1283,17 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm,
             header_ops: vec![],
-            txs: [WalletTx {
-                ops: [
-                    WalletOp::Transfer(transfer_a),
-                    WalletOp::Transfer(transfer_b),
-                ]
-                .into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [
+                        WalletOp::Transfer(transfer_a),
+                        WalletOp::Transfer(transfer_b),
+                    ]
+                    .into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&block).unwrap();
 
@@ -1317,15 +1344,18 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm,
             header_ops: vec![],
-            txs: [
-                WalletTx {
-                    ops: [WalletOp::Transfer(transfer_a)].into(),
-                },
-                WalletTx {
-                    ops: [WalletOp::Transfer(transfer_b)].into(),
-                },
-            ]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![
+                    WalletTx {
+                        ops: [WalletOp::Transfer(transfer_a)].into(),
+                    },
+                    WalletTx {
+                        ops: [WalletOp::Transfer(transfer_b)].into(),
+                    },
+                ],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&block).unwrap();
 
@@ -1443,32 +1473,36 @@ mod tests {
         wallet_state.service_notes = wallet_state.service_notes.insert(utxo1.id());
 
         let context = OpsContext {
-            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
+            gas_context: OpsGasContext::from_channels(
+                &Channels::default(),
+                GasPrices::new(1, 1),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new();
 
         // Fund the transaction
         let funded_tx_builder = wallet_state
-            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
+            .fund_tx(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
             .unwrap();
 
         assert_eq!(
-            794,
+            826,
             funded_tx_builder
-                .minimum_gas_cost::<Gas>(&context)
+                .minimum_gas_cost(&context)
                 .unwrap()
                 .into_inner()
         );
-        assert_eq!(794, funded_tx_builder.net_balance());
+        assert_eq!(826, funded_tx_builder.net_balance());
         assert_eq!(
             0,
             funded_tx_builder
-                .funding_delta_with_priority_fee::<Gas>(&context, 0)
+                .funding_delta_with_priority_fee(&context, 0)
                 .unwrap()
         );
 
-        let funded_tx = funded_tx_builder.build().unwrap();
+        let funded_tx = funded_tx_builder.build(FORK_DIGEST).unwrap();
 
         if let Some(Op::Transfer(transfer_op)) = funded_tx.last() {
             // ensure alices utxo was used to pay the fee
@@ -1477,7 +1511,7 @@ mod tests {
             assert_eq!(
                 transfer_op.outputs,
                 Outputs::new([Note {
-                    value: 4206,
+                    value: 4174,
                     pk: alice,
                 }])
             );
@@ -1496,7 +1530,11 @@ mod tests {
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
 
         let context = OpsContext {
-            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
+            gas_context: OpsGasContext::from_channels(
+                &Channels::default(),
+                GasPrices::new(1, 1),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new();
@@ -1505,12 +1543,12 @@ mod tests {
             .clone()
             .add_ledger_input(Utxo::new(tx_hash(1), 0, Note::new(0, alice)))
             .unwrap()
-            .minimum_gas_cost::<Gas>(&context)
+            .minimum_gas_cost(&context)
             .unwrap()
             .into_inner();
 
         let funded_tx_builder = wallet_state
-            .fund_tx::<Gas>(
+            .fund_tx(
                 &tx_builder,
                 alice,
                 [alice],
@@ -1523,11 +1561,11 @@ mod tests {
         // The final mandatory fee includes the change output, and the tip is
         // the rounded-up percentage of that final fee.
         let mandatory_fee = funded_tx_builder
-            .minimum_gas_cost::<Gas>(&context)
+            .minimum_gas_cost(&context)
             .unwrap()
             .into_inner();
-        assert_eq!(mandatory_fee_without_change, 754);
-        assert_eq!(mandatory_fee, 794);
+        assert_eq!(mandatory_fee_without_change, 786);
+        assert_eq!(mandatory_fee, 826);
         let priority_fee_amount = (mandatory_fee * priority_fee_percent).div_ceil(100);
         assert_eq!(
             i128::from(mandatory_fee + priority_fee_amount),
@@ -1536,12 +1574,12 @@ mod tests {
         assert_eq!(
             0,
             funded_tx_builder
-                .funding_delta_with_priority_fee::<Gas>(&context, priority_fee_percent)
+                .funding_delta_with_priority_fee(&context, priority_fee_percent)
                 .unwrap()
         );
 
         // The change output shrank by the mandatory fee and percentage tip.
-        let funded_tx = funded_tx_builder.build().unwrap();
+        let funded_tx = funded_tx_builder.build(FORK_DIGEST).unwrap();
         if let Some(Op::Transfer(transfer_op)) = funded_tx.last() {
             assert_eq!(
                 transfer_op.outputs,
@@ -1568,7 +1606,11 @@ mod tests {
         // ...but with zero gas prices a transfer-less transaction owes no fee,
         // so it needs no funding at all.
         let context = OpsContext {
-            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(0, 0)),
+            gas_context: OpsGasContext::from_channels(
+                &Channels::default(),
+                GasPrices::new(0, 0),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 0,
         };
         let mut tx_builder = MantleTxBuilder::new();
@@ -1577,16 +1619,16 @@ mod tests {
         tx_builder = tx_builder
             .push_op(Op::ChannelInscribe(InscriptionOp {
                 channel_id: ChannelId::from([0xAA; 32]),
-                inscription: [0xAB; 8].into(),
+                inscription: Inscription::new_unchecked(vec![0xAB; 8]),
                 parent: MsgId::from([0xBB; 32]),
                 signer: signing_key.public_key().into_unverified(),
             }))
             .unwrap();
 
-        assert_eq!(0, tx_builder.funding_delta::<Gas>(&context).unwrap());
+        assert_eq!(0, tx_builder.funding_delta(&context).unwrap());
 
         let funded_tx_builder = wallet_state
-            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
+            .fund_tx(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
             .unwrap();
 
         // No input was pulled in (an added input would push the net balance to
@@ -1594,7 +1636,7 @@ mod tests {
         assert_eq!(0, funded_tx_builder.net_balance());
 
         // The empty transfer is dropped, so the built tx carries no transfer op.
-        let funded_tx = funded_tx_builder.build().unwrap();
+        let funded_tx = funded_tx_builder.build(FORK_DIGEST).unwrap();
         assert!(
             !funded_tx.iter().any(|op| matches!(op, Op::Transfer(_))),
             "a fee-less transaction must not contain a transfer op"
@@ -1620,6 +1662,7 @@ mod tests {
             gas_context: OpsGasContext::from_channels(
                 ledger_state.mantle_ledger().channels(),
                 GasPrices::new(1, 1),
+                GAS_PROFILE,
             ),
             leader_reward_amount: ledger_state.mantle_ledger().leader_reward_amount(),
         };
@@ -1632,7 +1675,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let inscription = Op::ChannelInscribe(InscriptionOp {
             channel_id: ChannelId::from([0xAA; 32]),
-            inscription: [0xAB; 1000].into(),
+            inscription: Inscription::new_unchecked(vec![0xAB; 1000]),
             parent: MsgId::from([0xBB; 32]),
             signer: signing_key.public_key().into_unverified(),
         });
@@ -1641,7 +1684,7 @@ mod tests {
 
         // Fund the transaction
         let fund_attempt =
-            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
+            wallet_state.fund_tx(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
 
         assert_eq!(
             fund_attempt.unwrap_err(),
@@ -1661,14 +1704,18 @@ mod tests {
         // Use non-zero gas prices so the transaction actually owes a fee and
         // therefore needs funding.
         let context = OpsContext {
-            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
+            gas_context: OpsGasContext::from_channels(
+                &Channels::default(),
+                GasPrices::new(1, 1),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new();
 
         // Fund the transaction
         let fund_attempt =
-            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
+            wallet_state.fund_tx(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
 
         assert_eq!(
             fund_attempt.unwrap_err(),
@@ -1691,14 +1738,18 @@ mod tests {
         // Use non-zero gas prices so the transaction actually owes a fee and
         // therefore needs funding.
         let context = OpsContext {
-            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
+            gas_context: OpsGasContext::from_channels(
+                &Channels::default(),
+                GasPrices::new(1, 1),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new();
 
         // Fund the transaction
         let fund_attempt =
-            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
+            wallet_state.fund_tx(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
 
         assert_eq!(
             fund_attempt.unwrap_err(),
@@ -1723,14 +1774,18 @@ mod tests {
         // Use non-zero gas prices so the transaction actually owes a fee and
         // therefore needs funding.
         let context = OpsContext {
-            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
+            gas_context: OpsGasContext::from_channels(
+                &Channels::default(),
+                GasPrices::new(1, 1),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new();
 
         // Attempt to fund the transaction with Alice's notes.
         let fund_attempt =
-            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
+            wallet_state.fund_tx(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
 
         assert_eq!(
             fund_attempt.unwrap_err(),
@@ -1739,7 +1794,7 @@ mod tests {
 
         // Fund the transaction with Bob's notes.
         wallet_state
-            .fund_tx::<Gas>(&tx_builder, bob, [bob], &context, &HashSet::new(), 0)
+            .fund_tx(&tx_builder, bob, [bob], &context, &HashSet::new(), 0)
             .unwrap(); // succesfully funded;
     }
 
@@ -1748,19 +1803,23 @@ mod tests {
         let alice = pk(1);
 
         let context = OpsContext {
-            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
+            gas_context: OpsGasContext::from_channels(
+                &Channels::default(),
+                GasPrices::new(1, 1),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new();
 
         // Determine gas cost without change note
         assert_eq!(
-            754,
+            786,
             tx_builder
                 .clone()
                 .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
                 .unwrap()
-                .minimum_gas_cost::<Gas>(&context)
+                .minimum_gas_cost(&context)
                 .unwrap()
                 .into_inner()
         );
@@ -1770,7 +1829,7 @@ mod tests {
         let wallet_state = WalletState::from_ledger(
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(754, alice))],
+                [Utxo::new(tx_hash(0), 0, Note::new(786, alice))],
                 &ledger_config(),
                 0,
                 &ConsensusExcludedKeys::empty(),
@@ -1778,9 +1837,9 @@ mod tests {
         );
 
         let funded_tx_wo_change = wallet_state
-            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
+            .fund_tx(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
             .unwrap()
-            .build()
+            .build(FORK_DIGEST)
             .unwrap(); // successfully funded the tx
 
         // verify that no change output was used.
@@ -1792,19 +1851,19 @@ mod tests {
 
         // Determine gas cost with change note
         assert_eq!(
-            794,
+            826,
             tx_builder
                 .clone()
                 .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
                 .unwrap()
                 .with_dummy_change_note()
                 .unwrap()
-                .minimum_gas_cost::<Gas>(&context)
+                .minimum_gas_cost(&context)
                 .unwrap()
                 .into_inner()
         );
 
-        for value in 755..=794 {
+        for value in 787..=826 {
             // this region of note values will fail to fund the tx.
             // We can fund the tx if the note value is exactly the gas cost without change
             // note
@@ -1818,14 +1877,8 @@ mod tests {
                 ),
             );
 
-            let fund_attempt = wallet_state.fund_tx::<Gas>(
-                &tx_builder,
-                alice,
-                [alice],
-                &context,
-                &HashSet::new(),
-                0,
-            );
+            let fund_attempt =
+                wallet_state.fund_tx(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
 
             assert_eq!(
                 fund_attempt.unwrap_err(),
@@ -1837,7 +1890,7 @@ mod tests {
         let wallet_state = WalletState::from_ledger(
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(795, alice))],
+                [Utxo::new(tx_hash(0), 0, Note::new(827, alice))],
                 &ledger_config(),
                 0,
                 &ConsensusExcludedKeys::empty(),
@@ -1845,9 +1898,9 @@ mod tests {
         );
 
         let funded_tx_wo_change = wallet_state
-            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
+            .fund_tx(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
             .unwrap()
-            .build()
+            .build(FORK_DIGEST)
             .unwrap(); // successfully funded the tx
 
         // verify that indeed a change output was used.
@@ -1909,6 +1962,7 @@ mod tests {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
                         message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        cover_replication_factor: 0,
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
@@ -1920,6 +1974,37 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            max_transactions: 1024,
+            max_transactions_size: 2 * 1024 * 1024,
+            max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            execution_market: lb_ledger::config::ExecutionMarketConfig {
+                max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                    .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
+                    9,
+                    10.try_into().unwrap(),
+                )
+                .unwrap(),
+            },
+            storage_market: lb_ledger::config::StorageMarketConfig {
+                max_adjustment_factor: lb_utils::math::ProperFraction::new(
+                    1,
+                    8.try_into().unwrap(),
+                )
+                .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
+                    .unwrap(),
+            },
+            block_rewards: lb_ledger::config::BlockRewardsConfig::new(
+                3_000_000_000,
+                120_000_000.try_into().unwrap(),
+                10_512,
+                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            )
+            .unwrap(),
+            gas_profile: GAS_PROFILE,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -1930,6 +2015,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
         }
     }
 
@@ -2016,10 +2102,13 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm,
             header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelDeposit(deposit)].into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [WalletOp::ChannelDeposit(deposit)].into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&block).unwrap();
 
@@ -2034,11 +2123,15 @@ mod tests {
         // `fund_tx` must also exclude the channel note: with no other
         // UTXOs available, funding a fee-paying tx must fail.
         let context = OpsContext {
-            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
+            gas_context: OpsGasContext::from_channels(
+                &Channels::default(),
+                GasPrices::new(1, 1),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 0,
         };
         let err = state
-            .fund_tx::<Gas>(
+            .fund_tx(
                 &MantleTxBuilder::new(),
                 alice,
                 [alice],
@@ -2090,10 +2183,13 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_1,
             header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelDeposit(deposit)].into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [WalletOp::ChannelDeposit(deposit)].into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&deposit_block).unwrap();
 
@@ -2114,10 +2210,13 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_2,
             header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelTransfer(transfer_op)].into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [WalletOp::ChannelTransfer(transfer_op)].into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&transfer_block).unwrap();
 
@@ -2182,10 +2281,13 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_1,
             header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelDeposit(deposit)].into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [WalletOp::ChannelDeposit(deposit)].into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&deposit_block).unwrap();
 
@@ -2206,10 +2308,13 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_2,
             header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelTransfer(transfer_op)].into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [WalletOp::ChannelTransfer(transfer_op)].into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&transfer_block).unwrap();
 
@@ -2258,10 +2363,13 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_1,
             header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelDeposit(deposit)].into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [WalletOp::ChannelDeposit(deposit)].into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&deposit_block).unwrap();
 
@@ -2282,10 +2390,13 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_2,
             header_ops: vec![],
-            txs: [WalletTx {
-                ops: [WalletOp::ChannelWithdraw(withdraw_op)].into(),
-            }]
-            .into(),
+            txs: BlockTransactions::try_new(
+                vec![WalletTx {
+                    ops: [WalletOp::ChannelWithdraw(withdraw_op)].into(),
+                }],
+                u16::MAX,
+            )
+            .unwrap(),
         };
         wallet.apply_block(&withdraw_block).unwrap();
 
@@ -2302,11 +2413,15 @@ mod tests {
 
         // `fund_tx` can now use the released note.
         let context = OpsContext {
-            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
+            gas_context: OpsGasContext::from_channels(
+                &Channels::default(),
+                GasPrices::new(1, 1),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 0,
         };
         let err = state
-            .fund_tx::<Gas>(
+            .fund_tx(
                 &MantleTxBuilder::new(),
                 alice,
                 [alice],
@@ -2343,11 +2458,15 @@ mod tests {
                 .into_unverified(),
         });
 
-        let source_transactions: BlockTransactions<SignedOps<Preverified, StandardMode>> = [
-            signed_test_tx(vec![transfer, deposit]),
-            signed_test_tx(vec![ignored_inscription]),
-        ]
-        .into();
+        let source_transactions: BlockTransactions<SignedOps<Preverified, StandardMode>> =
+            BlockTransactions::try_new(
+                vec![
+                    signed_test_tx(vec![transfer, deposit]),
+                    signed_test_tx(vec![ignored_inscription]),
+                ],
+                u16::MAX,
+            )
+            .unwrap();
 
         let source_block = Block::create(
             HeaderId::from([0; 32]),
@@ -2355,6 +2474,7 @@ mod tests {
             lb_core::block::UncleHeaders::empty(),
             test_leader_proof(),
             source_transactions,
+            u32::MAX,
             &Ed25519Key::from_bytes(&[0; 32]),
         )
         .expect("test block should be valid");
@@ -2388,7 +2508,9 @@ mod tests {
     }
 
     fn signed_test_tx(ops: Vec<Op>) -> SignedOps<Preverified, StandardMode> {
-        let ops = Ops::try_from(ops).expect("test operations should fit");
+        let ops = TxList::try_from(ops)
+            .map(|ops| Ops::new(FORK_DIGEST, ops))
+            .expect("test operations should fit");
         let proofs = ops
             .iter()
             .map(|op| match op {

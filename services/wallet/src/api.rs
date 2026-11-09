@@ -58,8 +58,8 @@ pub trait WalletServiceData:
     type Tx;
 }
 
-impl<Kms, Cryptarchia, Tx, RuntimeServiceId> WalletServiceData
-    for crate::WalletService<Kms, Cryptarchia, Tx, RuntimeServiceId>
+impl<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId> WalletServiceData
+    for crate::WalletService<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId>
 {
     type Kms = Kms;
     type Cryptarchia = Cryptarchia;
@@ -371,6 +371,19 @@ mod tests {
                             std::iter::once((expected_channel_id, expected_threshold)).collect(),
                             std::collections::HashMap::new(),
                             expected_gas_prices,
+                            lb_core::mantle::gas::GasProfile {
+                                transfer: 590.into(),
+                                channel_config: 56.into(),
+                                channel_inscribe: 56.into(),
+                                channel_deposit: 590.into(),
+                                channel_withdraw: 56.into(),
+                                channel_transfer: 56.into(),
+                                sdp_declare: 646.into(),
+                                sdp_withdraw: 590.into(),
+                                sdp_active: 590.into(),
+                                leader_claim: 580.into(),
+                                claim_pow_reward: 1.into(),
+                            },
                         ),
                         leader_reward_amount: 0,
                     };

@@ -9,7 +9,6 @@ use crate::{
     events::TxEvent,
     mantle::{
         batch::DeferredZkSig,
-        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
             VerifiableOperation,
@@ -49,12 +48,6 @@ impl OpId for SDPWithdrawOp {
         self.encode_to_vec()
     }
 }
-
-impl OperationGas<MainnetGasProfile> for SDPWithdrawOp {
-    const GAS_COST: Gas = Gas::new(590);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for SDPWithdrawOp {}
 
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<SDPWithdrawOp, Unverified, StandardMode>
@@ -169,7 +162,10 @@ mod tests {
         mantle::{
             Note, NoteId, TxHash,
             batch::{Error as BatchError, test_utils::batch_verify},
-            gas::test_utils::FixedThresholds,
+            gas::{
+                Gas,
+                test_utils::{FixedThresholds, GAS_PROFILE},
+            },
             ops::op_proof::samples::SampleProof as _,
         },
         sdp::{DeclarationId, DeclarationMessage, MinStake, Nonce, ServiceType},
@@ -592,7 +588,8 @@ mod tests {
     fn sdp_withdraw_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
             assert_eq!(
-                SDPWithdrawOp::sample().execution_gas(&FixedThresholds(threshold)),
+                crate::mantle::OpRef::from(&SDPWithdrawOp::sample())
+                    .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(590))
             );
         }

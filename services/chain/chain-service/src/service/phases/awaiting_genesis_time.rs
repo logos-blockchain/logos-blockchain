@@ -1,9 +1,10 @@
 use core::fmt::{self, Debug};
-use std::{collections::HashSet, pin::Pin, time::Duration};
+use std::{collections::HashSet, pin::Pin, sync::Arc, time::Duration};
 
 use futures::StreamExt as _;
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_core::{
+    era::ForkDigest,
     header::HeaderId,
     mantle::{
         ledger::verification_mode::StandardMode,
@@ -11,7 +12,7 @@ use lb_core::{
         transactions::states::Preverified,
     },
 };
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{EraSchedule, Slot};
 use overwatch::services::{relay::InboundRelay, state::StateUpdater};
 use serde::{Serialize, de::DeserializeOwned};
 use time::OffsetDateTime;
@@ -60,7 +61,7 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + Unpin
@@ -73,6 +74,7 @@ where
         cryptarchia: Cryptarchia,
         inbound_relay: InboundRelay<ConsensusMsg<Tx>>,
         state_updater: StateUpdater<Option<CryptarchiaConsensusState>>,
+        fork_digests: Arc<EraSchedule<ForkDigest>>,
         new_block_subscription_sender: broadcast::Sender<ProcessedBlockEvent>,
         lib_subscription_sender: broadcast::Sender<LibUpdate>,
         chain_online_notifier: ChainOnlineNotifier,
@@ -91,6 +93,7 @@ where
             cryptarchia,
             inbound_relay,
             state_updater,
+            fork_digests,
             new_block_subscription_sender,
             lib_subscription_sender,
             chain_online_notifier,

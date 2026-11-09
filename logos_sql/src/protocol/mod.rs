@@ -6,9 +6,8 @@ use std::{
 };
 
 use blake2::{Blake2b, Digest as _, digest::consts::U32};
-use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_utils::bounded::{NonEmptyBoundedVec, UpperBoundedVec};
-use lb_zone_sdk::node_types::Inscription;
 use rand::RngCore as _;
 use rusqlite::types::{ToSql, ToSqlOutput, Value};
 
@@ -23,9 +22,6 @@ pub const PAYLOAD_MARKER: [u8; 9] = *b"LOGOS_SQL";
 const PAYLOAD_VERSION: u16 = 2;
 const PAYLOAD_HEADER_LEN: usize = PAYLOAD_MARKER.len() + size_of::<u16>() + 1;
 
-// Published bytes, including our header, must fit into one chain inscription.
-const MAX_PAYLOAD_BYTES: usize = Inscription::MAX;
-
 // Allow up to 64 MiB before compression. This caps decompression allocations;
 // the compressed payload must still fit the chain's smaller inscription limit.
 pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
@@ -35,7 +31,7 @@ pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_BATCH_WRITES: usize = u16::MAX as usize;
 
 /// Stable identity of one application write.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, BinaryCodec)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, BinaryEncode, BinaryDecode)]
 pub struct TxId([u8; 32]);
 
 impl Display for TxId {
@@ -135,7 +131,7 @@ impl SqlParameter {
 }
 
 /// One parameterized SQL statement.
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, BinaryEncode, BinaryDecode)]
 pub struct Statement {
     sql: SqlText,
     params: UpperBoundedVec<SqlParameter, MAX_BODY_BYTES>,
@@ -170,7 +166,7 @@ impl Statement {
 }
 
 /// Statements applied atomically at one channel position.
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, BinaryEncode, BinaryDecode)]
 pub struct Transaction {
     statements: NonEmptyBoundedVec<Statement, MAX_BODY_BYTES>,
 }
@@ -218,7 +214,7 @@ pub enum CapturedFunction {
 }
 
 /// One captured `SQLite` function call and the value returned locally.
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, BinaryEncode, BinaryDecode)]
 pub struct CapturedFunctionCall {
     pub function: CapturedFunction,
     pub result: SqlParameter,
@@ -234,7 +230,7 @@ impl CapturedFunctionCall {
 }
 
 /// Function results captured while executing one replicated transaction.
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, BinaryEncode, BinaryDecode)]
 pub struct CapturedFunctionCalls {
     calls: UpperBoundedVec<CapturedFunctionCall, MAX_BODY_BYTES>,
 }
@@ -258,7 +254,7 @@ impl CapturedFunctionCalls {
 }
 
 /// One independently applied transaction within a channel inscription.
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, BinaryEncode, BinaryDecode)]
 pub struct ChannelWrite {
     pub tx_id: TxId,
     pub transaction: Transaction,
@@ -266,12 +262,12 @@ pub struct ChannelWrite {
 }
 
 impl ChannelWrite {
-    pub fn encode(&self) -> Result<Vec<u8>, Error> {
-        ChannelBatch::new(vec![self.clone()])?.encode()
+    pub fn encode(&self, max_inscription_size: u32) -> Result<Vec<u8>, Error> {
+        ChannelBatch::new(vec![self.clone()])?.encode(max_inscription_size)
     }
 
     pub fn decode(payload: &[u8]) -> Result<Self, Error> {
-        let mut writes = ChannelBatch::decode_body(payload)?.into_writes();
+        let mut writes = ChannelBatch::decode(payload)?.into_writes();
 
         if writes.len() != 1 {
             return Err(Error::InvalidPayload("expected one stored transaction"));
@@ -292,7 +288,7 @@ impl ChannelWrite {
 }
 
 /// Ordered transactions sharing one publication, not one SQL transaction.
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, BinaryEncode, BinaryDecode)]
 pub struct ChannelBatch {
     writes: NonEmptyBoundedVec<ChannelWrite, MAX_BATCH_WRITES>,
 }
@@ -313,10 +309,10 @@ impl ChannelBatch {
         self.writes.into_inner()
     }
 
-    pub fn encode(&self) -> Result<Vec<u8>, Error> {
+    pub fn encode(&self, max_inscription_size: u32) -> Result<Vec<u8>, Error> {
         let payload = self.encode_body()?;
 
-        if payload.len() > MAX_PAYLOAD_BYTES {
+        if payload.len() > max_inscription_size as usize {
             return Err(Error::InscriptionTooLarge);
         }
 
@@ -342,14 +338,6 @@ impl ChannelBatch {
     }
 
     pub fn decode(payload: &[u8]) -> Result<Self, Error> {
-        if payload.len() > MAX_PAYLOAD_BYTES {
-            return Err(Error::InvalidPayload("payload exceeds the protocol limit"));
-        }
-
-        Self::decode_body(payload)
-    }
-
-    fn decode_body(payload: &[u8]) -> Result<Self, Error> {
         if payload.len() > MAX_BODY_BYTES + PAYLOAD_HEADER_LEN {
             return Err(Error::InvalidPayload(
                 "stored payload exceeds the size limit",
@@ -402,6 +390,7 @@ impl EncodedWrite {
         tx_id: TxId,
         transaction: &Transaction,
         captured_function_calls: CapturedFunctionCalls,
+        max_inscription_size: u32,
     ) -> Result<Self, Error> {
         let write = ChannelWrite {
             tx_id,
@@ -410,7 +399,7 @@ impl EncodedWrite {
         };
 
         let content_digest = write.content_digest();
-        let payload = write.encode()?;
+        let payload = write.encode(max_inscription_size)?;
 
         Ok(Self {
             tx_id,
@@ -433,9 +422,10 @@ mod tests {
     use rusqlite::types::Value;
 
     use super::{
-        CapturedFunctionCalls, ChannelWrite, EncodedWrite, MAX_BODY_BYTES, MAX_PAYLOAD_BYTES,
-        Statement, Transaction, TxId,
+        CapturedFunctionCalls, ChannelWrite, EncodedWrite, MAX_BODY_BYTES, Statement, Transaction,
+        TxId,
     };
+    use crate::db::tests::MAX_INSCRIPTION_SIZE;
 
     #[test]
     fn a_batch_cannot_repeat_a_transaction_id() {
@@ -484,6 +474,7 @@ mod tests {
             TxId::generate(),
             &transaction,
             CapturedFunctionCalls::empty(),
+            MAX_INSCRIPTION_SIZE,
         )
         .expect("payload should encode");
         let decoded =
@@ -505,7 +496,9 @@ mod tests {
             transaction,
             captured_function_calls: CapturedFunctionCalls::empty(),
         };
-        let mut payload = write.encode().expect("payload should encode");
+        let mut payload = write
+            .encode(MAX_INSCRIPTION_SIZE)
+            .expect("payload should encode");
         payload.push(0);
 
         assert!(ChannelWrite::decode(&payload).is_err());
@@ -575,7 +568,7 @@ mod tests {
         let transaction = Transaction::new(vec![
             Statement::new(
                 "SELECT ?1".to_owned(),
-                vec![Value::Blob(vec![0; MAX_PAYLOAD_BYTES + 1])],
+                vec![Value::Blob(vec![0; MAX_INSCRIPTION_SIZE as usize + 1])],
             )
             .expect("statement should be valid"),
         ])
@@ -584,10 +577,11 @@ mod tests {
             TxId::generate(),
             &transaction,
             CapturedFunctionCalls::empty(),
+            MAX_INSCRIPTION_SIZE,
         )
         .expect("compressed transaction should fit");
 
-        assert!(encoded.payload.len() <= MAX_PAYLOAD_BYTES);
+        assert!(encoded.payload.len() <= MAX_INSCRIPTION_SIZE as usize);
         let decoded = ChannelWrite::decode(&encoded.payload).expect("payload should decode");
 
         assert_eq!(decoded.transaction, transaction);
@@ -595,7 +589,7 @@ mod tests {
 
     #[test]
     fn published_payload_must_still_fit_one_inscription() {
-        let mut data = vec![0; MAX_PAYLOAD_BYTES + 1];
+        let mut data = vec![0; MAX_INSCRIPTION_SIZE as usize + 1];
         StdRng::seed_from_u64(7).fill_bytes(&mut data);
 
         let transaction = Transaction::new(vec![
@@ -610,7 +604,7 @@ mod tests {
         };
 
         assert!(matches!(
-            write.encode(),
+            write.encode(MAX_INSCRIPTION_SIZE),
             Err(crate::Error::InscriptionTooLarge)
         ));
     }
@@ -632,7 +626,7 @@ mod tests {
         };
 
         assert!(matches!(
-            write.encode(),
+            write.encode(MAX_INSCRIPTION_SIZE),
             Err(crate::Error::InvalidTransaction(_))
         ));
     }

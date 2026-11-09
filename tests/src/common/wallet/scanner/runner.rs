@@ -1180,6 +1180,7 @@ mod tests {
 
     use lb_common_http_client::{ApiBlock, ApiHeader, Slot};
     use lb_core::{
+        era::ForkDigest,
         header::{ContentId, HeaderId},
         mantle::{
             Note, SignedOps,
@@ -1204,7 +1205,10 @@ mod tests {
             Note::new(seed, owner),
             Note::new(seed.saturating_add(1), owner),
         ]);
-        let ops = Ops::from([Op::Transfer(TransferOp::new(Inputs::empty(), outputs))]);
+        let ops = Ops::new(
+            ForkDigest::new([0x11; 32]),
+            [Op::Transfer(TransferOp::new(Inputs::empty(), outputs))],
+        );
         SignedOps::from_ops_with_sample_proofs(ops)
     }
 

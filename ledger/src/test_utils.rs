@@ -2,11 +2,15 @@
 
 use std::{num::NonZero, time::Duration};
 
+use lb_core::era::ForkDigest;
 use lb_cryptarchia_engine::EraSchedule;
 use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraTiming};
 use time::OffsetDateTime;
 
 use crate::config::{Config, EraScheduledConfig};
+
+/// The fork digest the tests' transactions carry.
+pub const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
 
 /// A schedule running `genesis` from genesis, then each config of
 /// `after_genesis` from the epoch it is paired with.

@@ -1,4 +1,4 @@
-use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_cryptarchia_engine::UncleSlots;
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_utils::bounded::{BoundedError, UpperRuntimeBoundedVec};
@@ -16,7 +16,7 @@ use crate::{
 /// maximum, when the headers are built or decoded. Serde reads them without
 /// an era, under the largest maximum allowed by the type used for length
 /// prefix.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryEncode)]
 pub struct UncleHeaders(UpperRuntimeBoundedVec<SignedHeader, u8>);
 
 impl UncleHeaders {
@@ -66,16 +66,6 @@ impl UncleHeaders {
     }
 }
 
-impl BinaryEncode for UncleHeaders {
-    fn encoded_length(&self) -> usize {
-        self.0.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.0.encode_into(out);
-    }
-}
-
 impl BinaryDecode for UncleHeaders {
     /// The most uncles the era of the block allows, which decoding holds the
     /// count to.
@@ -91,7 +81,7 @@ impl BinaryDecode for UncleHeaders {
 }
 
 /// A header together with the signature its leader produced over it.
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct SignedHeader {
     header: Header,
     signature: Ed25519Signature,

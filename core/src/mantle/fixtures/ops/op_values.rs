@@ -6,6 +6,7 @@ use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
 
 use crate::{
+    era::ForkDigest,
     mantle::{
         Note, NoteId,
         channel::{SlotTimeframe, SlotTimeout},
@@ -16,7 +17,7 @@ use crate::{
                 channel_transfer::ChannelTransferOp,
                 config::ChannelConfigOp,
                 deposit::{DepositOp, Metadata},
-                inscribe::InscriptionOp,
+                inscribe::{Inscription, InscriptionOp},
                 withdraw::ChannelWithdrawOp,
             },
             leader_claim::LeaderClaimOp,
@@ -55,7 +56,7 @@ pub static CHANNEL_CONFIG: LazyLock<ChannelConfigOp> = LazyLock::new(|| {
 
 pub static INSCRIPTION: LazyLock<InscriptionOp> = LazyLock::new(|| InscriptionOp {
     channel_id: ChannelId::from([0x20u8; 32]),
-    inscription: b"fixture".into(),
+    inscription: Inscription::new_unchecked(b"fixture".to_vec()),
     parent: MsgId::from([0x21u8; 32]),
     signer: Ed25519Key::from_bytes(&[0x22u8; 32])
         .public_key()
@@ -65,8 +66,7 @@ pub static INSCRIPTION: LazyLock<InscriptionOp> = LazyLock::new(|| InscriptionOp
 pub static DEPOSIT: LazyLock<DepositOp> = LazyLock::new(|| DepositOp {
     channel_id: ChannelId::from([0x30u8; 32]),
     inputs: BoundedInputs::from(NoteId(Fr::from(0x31u64))).into(),
-    metadata: Metadata::try_from(b"fixture-metadata".to_vec())
-        .expect("the metadata is within bounds"),
+    metadata: Metadata::new_unchecked(b"fixture-metadata".to_vec()),
 });
 
 pub static CHANNEL_WITHDRAW: LazyLock<ChannelWithdrawOp> = LazyLock::new(|| ChannelWithdrawOp {
@@ -144,6 +144,12 @@ pub const LEADER_CLAIM_PAYLOAD_HEX: &str = "900000000000000000000000000000000000
 pub const LEADER_CLAIM_HEX: &str = "30900000000000000000000000000000000000000000000000000000000000000091000000000000000000000000000000000000000000000000000000000000009200000000000000000000000000000000000000000000000000000000000000";
 pub const CLAIM_POW_REWARD_PAYLOAD_HEX: &str = "a000000000000000000000000000000000000000000000000000000000000000a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a200000000000000000000000000000000000000000000000000000000000000";
 pub const CLAIM_POW_REWARD_HEX: &str = "40a000000000000000000000000000000000000000000000000000000000000000a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a200000000000000000000000000000000000000000000000000000000000000";
+
+/// The fork digest of the transaction fixtures: the test fork digest of the
+/// Mantle specification's transaction-hash vectors.
+pub const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
+pub const FORK_DIGEST_HEX: &str =
+    "1111111111111111111111111111111111111111111111111111111111111111";
 
 pub const EMPTY_COLUMN_HEX: &str = "00";
 pub const TRANSFER_COLUMN_HEX: &str = "01000101000000000000000000000000000000000000000000000000000000000000000102000000000000000300000000000000000000000000000000000000000000000000000000000000";

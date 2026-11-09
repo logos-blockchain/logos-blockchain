@@ -3,7 +3,7 @@ use core::fmt::{self, Debug, Formatter};
 use blake2::Digest as _;
 use lb_binary_codec::{
     bincode::{BoundedSerializeOp, SerializeOp as _},
-    canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
+    canonical::{BinaryDecode, BinaryEncode},
 };
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::fr_to_bytes;
@@ -24,7 +24,7 @@ pub const HEADER_BINCODE_SIZE: usize = <Slot as BoundedSerializeOp>::MAX_ENCODED
     + <ContentId as BoundedSerializeOp>::MAX_ENCODED_SIZE
     + <Groth16LeaderProof as BoundedSerializeOp>::MAX_ENCODED_SIZE;
 
-#[derive(Clone, Eq, PartialEq, Copy, Hash, PartialOrd, Ord, BinaryCodec)]
+#[derive(Clone, Eq, PartialEq, Copy, Hash, PartialOrd, Ord, BinaryEncode, BinaryDecode)]
 pub struct HeaderId([u8; 32]);
 
 impl HeaderId {
@@ -38,7 +38,7 @@ impl Debug for HeaderId {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Copy, Hash, BinaryCodec)]
+#[derive(Clone, Eq, PartialEq, Copy, Hash, BinaryEncode, BinaryDecode)]
 pub struct ContentId([u8; 32]);
 
 impl ContentId {
@@ -61,68 +61,14 @@ impl Debug for Nonce {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct Header {
+    // The first field, which must never change across eras. A node reads the slot
+    // to learn which era's rules parse the rest of the header.
     slot: Slot,
     parent_block: HeaderId,
     body_root: ContentId,
     proof_of_leadership: Groth16LeaderProof,
-}
-
-impl BinaryEncode for Header {
-    fn encoded_length(&self) -> usize {
-        let Self {
-            slot,
-            parent_block,
-            body_root,
-            proof_of_leadership,
-        } = self;
-
-        slot.encoded_length()
-            + parent_block.encoded_length()
-            + body_root.encoded_length()
-            + proof_of_leadership.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self {
-            slot,
-            parent_block,
-            body_root,
-            proof_of_leadership,
-        } = self;
-
-        // The first field, which must never change across eras. A node reads the slot
-        // to learn which era's rules parse the rest of the header.
-        slot.encode_into(out);
-        parent_block.encode_into(out);
-        body_root.encode_into(out);
-        proof_of_leadership.encode_into(out);
-    }
-}
-
-impl BinaryDecode for Header {
-    type Context = ();
-
-    fn decode<'input>(
-        input: &'input [u8],
-        context: &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, slot) = Slot::decode(input, context)?;
-        let (input, parent_block) = HeaderId::decode(input, context)?;
-        let (input, body_root) = ContentId::decode(input, context)?;
-        let (input, proof_of_leadership) = Groth16LeaderProof::decode(input, context)?;
-
-        Ok((
-            input,
-            Self {
-                slot,
-                parent_block,
-                body_root,
-                proof_of_leadership,
-            },
-        ))
-    }
 }
 
 impl Header {
@@ -411,7 +357,10 @@ mod body_root_test_vectors {
     use super::*;
     use crate::{
         block::{SignedHeader, UncleHeaders},
-        mantle::{ops::leader_claim::VoucherCm, traits::Hashable as _, transactions::Ops},
+        mantle::{
+            fixtures::ops::op_values::FORK_DIGEST, ops::leader_claim::VoucherCm,
+            traits::Hashable as _, transactions::Ops,
+        },
         utils::merkle,
     };
 
@@ -469,7 +418,7 @@ mod body_root_test_vectors {
         //    operation's name.
         let txs_with_names: Vec<(&'static str, Ops)> = Ops::sample()
             .into_iter()
-            .map(|op| (op.as_str(), Ops::from([op])))
+            .map(|op| (op.as_str(), Ops::new(FORK_DIGEST, [op])))
             .collect();
         let txs: Vec<Ops> = txs_with_names.iter().map(|(_, tx)| tx.clone()).collect();
         println!("================================================================");

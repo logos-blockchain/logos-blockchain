@@ -9,7 +9,10 @@ use lb_core::{
         NoteId,
         gas::GasCost,
         ledger::BoundedInputs,
-        ops::channel::{ChannelId, deposit::DepositOp},
+        ops::channel::{
+            ChannelId,
+            deposit::{DepositOp, Metadata},
+        },
         traits::Hashable as _,
         transactions::hash::TxHash,
     },
@@ -119,10 +122,9 @@ async fn channel_deposit() {
     let deposit_op = DepositOp {
         channel_id,
         inputs: BoundedInputs::from(note_id).into(),
-        metadata: format!("Mint {deposit_amount} to Alice in Zone")
-            .into_bytes()
-            .try_into()
-            .expect("Metadata too large for deposit op."),
+        metadata: Metadata::new_unchecked(
+            format!("Mint {deposit_amount} to Alice in Zone").into_bytes(),
+        ),
     };
     let body = ChannelDepositRequestBody {
         tip: None,
@@ -416,8 +418,13 @@ fn channel_test_config(mut config: RunConfig) -> RunConfig {
             parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
             parameters.cryptarchia.security_param = NonZero::new(3).unwrap();
             parameters.cryptarchia.slot_activation_coeff =
-                NonNegativeRatio::new(1, 2.try_into().unwrap());
-        });
+                NonNegativeRatio::new(1, 2.try_into().unwrap())
+                    .try_into()
+                    .unwrap();
+            // The widest uncle reference window k allows, ⌊0.6k⌋.
+            parameters.cryptarchia.uncle_reference_window_in_block = 1;
+        })
+        .expect("The changed deployment must be valid.");
     config
 }
 
@@ -437,10 +444,9 @@ async fn submit_channel_deposit(
     let deposit_op = DepositOp {
         channel_id,
         inputs: BoundedInputs::from(note_id).into(),
-        metadata: format!("Mint {deposit_amount} to Alice in Zone")
-            .into_bytes()
-            .try_into()
-            .expect("Metadata too large for deposit op."),
+        metadata: Metadata::new_unchecked(
+            format!("Mint {deposit_amount} to Alice in Zone").into_bytes(),
+        ),
     };
     let body = ChannelDepositRequestBody {
         tip: None,

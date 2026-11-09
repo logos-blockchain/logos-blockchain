@@ -266,7 +266,7 @@ mod tests {
         DepositOp {
             channel_id,
             inputs: BoundedInputs::from(note_id(input_seed)).into(),
-            metadata: Metadata::try_from(b"m".to_vec()).unwrap(),
+            metadata: Metadata::new_unchecked(b"m".to_vec()),
         }
     }
 
@@ -345,7 +345,7 @@ mod tests {
             inputs: BoundedInputs::try_from_iter([note_id(1), note_id(2)])
                 .unwrap()
                 .into(),
-            metadata: Metadata::try_from(b"m".to_vec()).unwrap(),
+            metadata: Metadata::new_unchecked(b"m".to_vec()),
         };
         let tx = crate::test_support::unverified_tx_with_ops(vec![Op::ChannelDeposit(op.clone())]);
         let events = deposit_events_for(&tx, &op, 70, vec![dep_note(10, 30), dep_note(11, 40)]);

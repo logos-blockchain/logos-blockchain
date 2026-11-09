@@ -717,6 +717,7 @@ mod tests {
             uncle_headers,
             proof.clone(),
             BlockTransactions::empty(),
+            u32::MAX,
             key,
         )
         .unwrap()

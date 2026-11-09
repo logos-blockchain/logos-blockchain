@@ -1,9 +1,10 @@
 use core::{num::NonZero, time::Duration};
 use std::collections::BTreeMap;
 
+use lb_chain_service::TipEra;
 use lb_core::{
     block::genesis::GenesisBlock,
-    era::{EraDigest, ForkDigest},
+    era::{AcceptedForkDigests, EraDigest, ForkDigest},
     header::HeaderId,
     mantle::{
         traits::GenesisTx as _,
@@ -21,7 +22,34 @@ pub mod era;
 use era::GENESIS_EPOCH;
 pub use era::{EraDeclarations, EraScheduleError};
 
-use crate::config::deployment::era::ruleset::{EraRuleset, v1};
+use crate::config::{
+    deployment::era::ruleset::{EraRuleset, v1},
+    time::check_transition_periods,
+};
+
+/// Why a deployment cannot run: an era whose values the node refuses, alone or
+/// after the era before it, eras that cannot be resolved, or a change to an
+/// era the node has already executed.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct InvalidDeployment(String);
+
+impl InvalidDeployment {
+    pub(crate) const fn new(reason: String) -> Self {
+        Self(reason)
+    }
+}
+
+/// Returns an [`InvalidDeployment`] for the reason the remaining arguments
+/// format unless `condition` holds: the `assert!` of the deployment's checks.
+macro_rules! ensure {
+    ($condition:expr, $($reason:tt)+) => {
+        if !$condition {
+            return Err($crate::config::deployment::InvalidDeployment::new(format!($($reason)+)));
+        }
+    };
+}
+pub(crate) use ensure;
 
 /// The main file of the default deployment, which includes each of its eras
 /// from its own file.
@@ -44,10 +72,10 @@ struct EraDefinitions {
 /// the genesis block they start from.
 ///
 /// It is read and written as its file declares it, its eras then its genesis
-/// block, and the eras are resolved as it is read: a schedule that does not
-/// resolve is refused at load.
+/// block, and the eras are checked and resolved as it is read: loading a
+/// schedule that does not resolve, or whose eras cannot run, fails.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(from = "EraDefinitions", into = "EraDefinitions")]
+#[serde(try_from = "EraDefinitions", into = "EraDefinitions")]
 pub struct DeploymentSettings {
     eras: EraSchedule,
     genesis_block: GenesisBlock,
@@ -58,27 +86,45 @@ impl DeploymentSettings {
     /// `eras` declares, resolved: where each era starts, and its digest and
     /// fork digest.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// If an era starts beyond the slots or the time this node can represent.
-    #[must_use]
-    pub fn new(eras: &EraDeclarations, genesis_block: GenesisBlock) -> Self {
+    /// If an era's values cannot run, alone or after the era before it, an era
+    /// starts beyond the slots or the time this node can represent, or an era
+    /// ends within the transition period it opens.
+    pub fn new(
+        eras: &EraDeclarations,
+        genesis_block: GenesisBlock,
+    ) -> Result<Self, InvalidDeployment> {
+        // Before resolving the eras, which reads their epoch lengths.
+        eras.validate()?;
         let (genesis_id, genesis_time) = (
             genesis_block.header().id(),
             genesis_block.genesis_tx().genesis_parameters().start_time,
         );
         let eras_after_genesis = eras.eras_after_genesis();
         let mut era_digests = Vec::with_capacity(eras_after_genesis.len() + 1);
+        let mut accepted_fork_digests = Vec::with_capacity(eras_after_genesis.len() + 1);
+        let mut previous_ruleset: Option<EraRuleset> = None;
         // Called in activation order: the fork digest of an era is over the
-        // digests of the eras up to it.
+        // digests of the eras up to it, and an era accepts the fork digests
+        // of the eras before it until one refuses the transactions of those.
         let mut definition = |first_epoch: Epoch, ruleset: &EraRuleset| {
             let digest = EraDigest::compute(first_epoch, ruleset);
             era_digests.push(digest);
             let fork_digest = ForkDigest::compute(genesis_id, era_digests.iter().copied());
+            if previous_ruleset
+                .as_ref()
+                .is_some_and(|previous| ruleset.refuses_earlier_transactions(previous))
+            {
+                accepted_fork_digests.clear();
+            }
+            accepted_fork_digests.push(fork_digest);
+            previous_ruleset = Some(ruleset.clone());
             EraDefinition {
                 ruleset: ruleset.clone(),
                 digest,
                 fork_digest,
+                accepted_fork_digests: AcceptedForkDigests::new(accepted_fork_digests.clone()),
             }
         };
         let genesis = definition(GENESIS_EPOCH, eras.genesis_era());
@@ -91,11 +137,15 @@ impl DeploymentSettings {
             },
         ))
         .expect("The resolved eras are as many as the declared ones.");
-        let eras = EraSchedule::new(genesis_time.into(), genesis, after_genesis).unwrap();
-        Self {
+        let eras =
+            EraSchedule::new(genesis_time.into(), genesis, after_genesis).map_err(|error| {
+                InvalidDeployment::new(format!("The eras cannot be resolved: {error}."))
+            })?;
+        check_transition_periods(&eras)?;
+        Ok(Self {
             eras,
             genesis_block,
-        }
+        })
     }
 
     /// The eras of this deployment's chain, resolved.
@@ -149,6 +199,28 @@ impl DeploymentSettings {
         self.eras.slot_at(time::OffsetDateTime::now_utc())
     }
 
+    /// Checks that this deployment gives the slot of the node's saved tip the
+    /// fork digest the tip was applied under.
+    ///
+    /// # Errors
+    ///
+    /// If it gives the slot another fork digest: the deployment starts from
+    /// another genesis block or changes an era the node has already executed,
+    /// so the node would run on state executed under other rules.
+    pub fn check_keeps_tip_era(&self, tip_era: TipEra) -> Result<(), InvalidDeployment> {
+        let TipEra { slot, fork_digest } = tip_era;
+        let scheduled = self.eras.at_slot(slot).parameters.fork_digest;
+        ensure!(
+            scheduled == fork_digest,
+            "The node's tip, at slot {}, was applied under fork {fork_digest}, but this deployment \
+             schedules that slot under fork {scheduled}: it starts from another genesis block or \
+             changes an era the node has already executed. Run the release the node ran with, or \
+             remove the node's state and sync again.",
+            slot.into_inner()
+        );
+        Ok(())
+    }
+
     /// The parameters of the genesis era, in version 1's layout, the only one
     /// there is.
     #[must_use]
@@ -161,11 +233,14 @@ impl DeploymentSettings {
     /// Changes the parameters of the genesis era with `update`, and resolves
     /// the schedule again, so the digests of every era follow the change.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// If the change makes a later era start beyond the slots or the time this
-    /// node can represent.
-    pub fn update_genesis_era_parameters<Update>(&mut self, update: Update)
+    /// If [`Self::new`] does on the changed deployment, leaving this one as it
+    /// was.
+    pub fn update_genesis_era_parameters<Update>(
+        &mut self,
+        update: Update,
+    ) -> Result<(), InvalidDeployment>
     where
         Update: FnOnce(&mut v1::Parameters),
     {
@@ -175,7 +250,8 @@ impl DeploymentSettings {
         } = EraDefinitions::from(self.clone());
         let EraRuleset::V1(parameters) = eras.genesis_era_mut();
         update(parameters);
-        *self = Self::new(&eras, genesis_block);
+        *self = Self::new(&eras, genesis_block)?;
+        Ok(())
     }
 
     #[must_use]
@@ -184,13 +260,15 @@ impl DeploymentSettings {
     }
 }
 
-impl From<EraDefinitions> for DeploymentSettings {
-    fn from(
+impl TryFrom<EraDefinitions> for DeploymentSettings {
+    type Error = InvalidDeployment;
+
+    fn try_from(
         EraDefinitions {
             eras,
             genesis_block,
         }: EraDefinitions,
-    ) -> Self {
+    ) -> Result<Self, Self::Error> {
         Self::new(&eras, genesis_block)
     }
 }
@@ -224,6 +302,8 @@ pub struct EraDefinition {
     pub digest: EraDigest,
     /// The digest of the eras up to this one, in activation order.
     pub fork_digest: ForkDigest,
+    /// The fork digests a transaction may carry in this era.
+    pub accepted_fork_digests: AcceptedForkDigests,
 }
 
 impl SlotDuration for EraDefinition {
@@ -247,30 +327,87 @@ impl Default for DeploymentSettings {
 
 #[cfg(test)]
 mod tests {
+    use core::num::NonZero;
     use std::collections::{BTreeMap, BTreeSet};
 
-    use lb_core::era::ForkDigest;
-    use lb_time::{Epoch, Era};
-    use lb_utils::yaml::INCLUDE_TAG;
+    use lb_chain_service::TipEra;
+    use lb_core::era::{AcceptedForkDigests, ForkDigest};
+    use lb_time::{Epoch, Era, Slot, era::EpochLength as _};
+    use lb_utils::{math::NonNegativeRatio, yaml::INCLUDE_TAG};
     use serde_yaml::Value;
 
-    use super::{EraDeclarations, EraDefinitions, SERIALIZED_DEPLOYMENT, SERIALIZED_ERAS};
-    use crate::config::DeploymentSettings;
+    use super::{
+        EraDeclarations, EraDefinitions, InvalidDeployment, SERIALIZED_DEPLOYMENT, SERIALIZED_ERAS,
+    };
+    use crate::config::{
+        DeploymentSettings,
+        deployment::era::ruleset::{
+            EraRuleset,
+            v1::{self, cryptarchia::EpochConfig},
+        },
+    };
+
+    /// The default deployment's genesis block, starting `eras`, each keyed by
+    /// its first epoch.
+    fn deployment(
+        eras: impl IntoIterator<Item = (u32, EraRuleset)>,
+    ) -> Result<DeploymentSettings, InvalidDeployment> {
+        let EraDefinitions { genesis_block, .. } = DeploymentSettings::default().into();
+        let eras = EraDeclarations::try_from(
+            eras.into_iter()
+                .map(|(first_epoch, ruleset)| (Epoch::new(first_epoch), ruleset))
+                .collect::<BTreeMap<_, _>>(),
+        )
+        .unwrap();
+        DeploymentSettings::new(&eras, genesis_block)
+    }
+
+    /// The default deployment's genesis era, changed by `change`.
+    fn ruleset(change: impl FnOnce(&mut v1::Parameters)) -> EraRuleset {
+        let mut parameters = DeploymentSettings::default()
+            .genesis_era_parameters()
+            .clone();
+        change(&mut parameters);
+        EraRuleset::V1(parameters)
+    }
 
     /// The default deployment, with a second era from epoch 10 that runs the
     /// genesis era's ruleset.
     fn two_eras() -> DeploymentSettings {
-        let EraDefinitions {
-            eras,
-            genesis_block,
-        } = DeploymentSettings::default().into();
-        let ruleset = eras.genesis_era().clone();
-        let eras = EraDeclarations::try_from(BTreeMap::from([
-            (Epoch::new(0), ruleset.clone()),
-            (Epoch::new(10), ruleset),
-        ]))
-        .unwrap();
-        DeploymentSettings::new(&eras, genesis_block)
+        let genesis = ruleset(|_| ());
+        deployment([(0, genesis.clone()), (10, genesis)]).unwrap()
+    }
+
+    /// A genesis era at f = 1/20, whose transition period lasts ⌊1/f⌋ = 20 of
+    /// its one-second slots, then two eras of 12-slot epochs (3 phases of
+    /// ⌊k/f⌋ = 4 slots), from epoch 10 and from `third_era_epoch`.
+    fn eras_after_a_transition_period(
+        third_era_epoch: u32,
+    ) -> Result<DeploymentSettings, InvalidDeployment> {
+        let genesis = ruleset(|parameters| {
+            parameters.cryptarchia.slot_activation_coeff =
+                NonNegativeRatio::new(1, NonZero::new(20).unwrap())
+                    .try_into()
+                    .unwrap();
+        });
+        let short_epochs = ruleset(|parameters| {
+            let cryptarchia = &mut parameters.cryptarchia;
+            cryptarchia.security_param = NonZero::new(2).unwrap();
+            cryptarchia.slot_activation_coeff = NonNegativeRatio::new(1, NonZero::new(2).unwrap())
+                .try_into()
+                .unwrap();
+            cryptarchia.uncle_reference_window_in_block = 1;
+            cryptarchia.epoch_config = EpochConfig {
+                epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
+                epoch_period_nonce_buffer: NonZero::new(1).unwrap(),
+                epoch_period_nonce_stabilization: NonZero::new(1).unwrap(),
+            };
+        });
+        deployment([
+            (0, genesis),
+            (10, short_epochs.clone()),
+            (third_era_epoch, short_epochs),
+        ])
     }
 
     #[test]
@@ -361,13 +498,77 @@ mod tests {
     }
 
     #[test]
+    fn an_era_that_outlasts_the_transition_period_it_opens_is_accepted() {
+        // Era 1 lasts 24 slots.
+        drop(eras_after_a_transition_period(12).unwrap());
+    }
+
+    #[test]
+    fn an_era_that_ends_within_the_transition_period_it_opens_is_refused() {
+        let reason = eras_after_a_transition_period(11).unwrap_err().to_string();
+        assert!(
+            reason.contains("Era 1 lasts 12 slots, not more than the 20 slots"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn a_deployment_that_appends_an_era_keeps_the_era_of_the_tip() {
+        let default = DeploymentSettings::default();
+        let genesis_era = default.era_schedule().genesis();
+        // In epoch 5, which both deployments give to the genesis era.
+        let tip_era = TipEra {
+            slot: Slot::new(5 * genesis_era.parameters.epoch_length().get()),
+            fork_digest: genesis_era.parameters.fork_digest,
+        };
+        two_eras().check_keeps_tip_era(tip_era).unwrap();
+    }
+
+    #[test]
+    fn a_deployment_that_changes_the_era_of_the_tip_is_refused() {
+        let two_eras = two_eras();
+        let era_1 = two_eras.era_schedule().get(Era::new(1)).unwrap();
+        // A tip in era 1, a slot the default deployment gives to the genesis era.
+        let tip_era = TipEra {
+            slot: era_1.first_slot,
+            fork_digest: era_1.parameters.fork_digest,
+        };
+        let reason = DeploymentSettings::default()
+            .check_keeps_tip_era(tip_era)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            reason.contains("changes an era the node has already executed"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn an_era_accepts_the_fork_digests_of_the_eras_before_it() {
+        let two_eras = two_eras();
+        let genesis_era = two_eras.era_schedule().genesis().parameters;
+        let era_1 = two_eras.era_schedule().get(Era::new(1)).unwrap().parameters;
+
+        assert_eq!(
+            genesis_era.accepted_fork_digests,
+            AcceptedForkDigests::new(vec![genesis_era.fork_digest])
+        );
+        assert_eq!(
+            era_1.accepted_fork_digests,
+            AcceptedForkDigests::new(vec![genesis_era.fork_digest, era_1.fork_digest])
+        );
+    }
+
+    #[test]
     fn the_fork_digest_commits_to_the_era_parameters() {
         let settings = DeploymentSettings::default();
         let mut changed = settings.clone();
-        changed.update_genesis_era_parameters(|parameters| {
-            let reward = &mut parameters.cryptarchia.pow_config.reward;
-            reward.slot_window = reward.slot_window.checked_add(1).unwrap();
-        });
+        changed
+            .update_genesis_era_parameters(|parameters| {
+                let reward = &mut parameters.cryptarchia.pow_config.reward;
+                reward.slot_window = reward.slot_window.checked_add(1).unwrap();
+            })
+            .unwrap();
         let genesis_fork_digest = |settings: &DeploymentSettings| {
             settings.era_schedule().genesis().parameters.fork_digest
         };
