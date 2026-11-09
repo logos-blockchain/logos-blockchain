@@ -4,7 +4,7 @@ blend:
     num_blend_layers: 1
     minimum_network_size: 2
     network_absorption_in_rounds: 2
-    data_replication_factor: 0
+    data_replication_factor: 1
   core:
     scheduler:
       cover:
@@ -23,69 +23,40 @@ cryptarchia:
     epoch_stake_distribution_stabilization: 3
     epoch_period_nonce_buffer: 3
     epoch_period_nonce_stabilization: 4
-  security_param: 30
+  security_param: 120
   slot_activation_coeff:
     numerator: 1
-    denominator: 20
-  learning_rate: 0.5
+    denominator: 30
+  learning_rate: 1.0
   uncle_reference_window_in_block: 12
   max_uncles: 4
   max_transactions: 1024
-  # The most bytes a block's transactions may take, 2 MiB. An inscription or a
-  # deposit's metadata may take seven eighths of it.
   max_transactions_size: 2097152
   pow_config:
     blend:
-      # BLEND_DIFFICULTY_BASE, as the exponent n in p / 2^n: the Blend PoW
-      # threshold at the reference load. Fixed by the EmPoWering
-      # specification from a measurement on the target hardware itself
-      # (Raspberry Pi 5, one core), at which one solution is around fifty
-      # seconds of work.
       base_difficulty: 19
-      # The reference load the threshold is calibrated at, so it has to be the
-      # load the network actually carries: two transactions per block. A
-      # theoretical capacity here would pin the threshold off its calibrated
-      # point.
       target_transactions_per_block: 2
       max_step: 2
       damping_num: 1
       damping_den_offset: 1
     reward:
-      # Token-reward PoW parameters, sized for the target network of ~200
-      # mining nodes over the two-week epoch schedule.
-      # Genesis `d_reward`, as the exponent n in p / 2^n — the same form as
-      # the Blend `base_difficulty` above. Fixed by the specification.
-      # Also the minimum difficulty: the retarget never eases past it.
       minimum_difficulty: 19
       ema_smoothing_factor: 9
       ema_smoothing_precision: 10
-      # One claim per block: claims are transactions, and the per-block
-      # transaction budget is 2. Must track `target_claim_per_block` below.
       target_claims_per_block: 1
-      # rho = rate_num / rate_den = 1/10 of the pool per epoch, which
-      # distributes 97% of it across the two weeks.
       rate_num: 1
       rate_den: 10
       target_claim_per_block: 1
-      # `pow_share / share_den` of the fees each block collects is
-      # diverted to the pow reward pool at the epoch boundary.
       pow_share: 10
       share_den: 100
-      # Acceptance window in slots; must match the mining service. Ten
-      # block-intervals of tolerance for a claim to reach a block.
       slot_window: 300
   sdp_config:
-    # One entry per service type, in the order they are declared: the Blend
-    # network.
     service_params:
-      - inactivity_period: 2
-        epoch: 0
+    - inactivity_period: 2
+      epoch: 0
     min_stake:
-      threshold: 1
+      threshold: 1000000000
       timestamp: 0
-  # The execution market: the most execution gas a block may consume, G_max,
-  # whose half is the target, the fee adjustment rate φ and the EMA smoothing
-  # factor q.
   execution_market:
     max_gas_per_block: 3193460
     fee_adjustment_rate:
@@ -94,8 +65,6 @@ cryptarchia:
     ema_smoothing_factor:
       numerator: 9
       denominator: 10
-  # The storage market: the max adjustment factor α and the EMA smoothing factor
-  # β.
   storage_market:
     max_adjustment_factor:
       numerator: 1
@@ -103,9 +72,6 @@ cryptarchia:
     ema_smoothing_factor:
       numerator: 1
       denominator: 2
-  # The block rewards: the stake target, the scale of the emission's weight, the
-  # weight of the pooled fees, a block's emission in full, and the Blend nodes'
-  # share of a reward, the leader taking the rest.
   block_rewards:
     stake_target: 3000000000
     emission_factor_scale: 120000000
@@ -116,8 +82,6 @@ cryptarchia:
     blend_share:
       numerator: 6
       denominator: 10
-  # The execution gas of each Operation; the channel configuration, withdrawal
-  # and transfer cost theirs per key of the channel's threshold.
   gas_profile:
     transfer: 590
     channel_config: 56
