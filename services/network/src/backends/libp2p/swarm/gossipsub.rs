@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use lb_libp2p::{behaviour::gossipsub::swarm_ext::topic_hash, gossipsub};
 use lb_log_targets::network_service;
 use lb_utils::tokio::task::spawn;
 use rand::RngCore;
+use tokio::sync::broadcast;
 
 use crate::backends::libp2p::{
     Command,
@@ -31,6 +32,13 @@ fn is_within_application_data_limit(
     application_data_size_is_valid(max_data_size_by_topic, &message.topic, message.data.len())
 }
 
+/// Receives the gossip of some topics, on a channel of its own, so that a
+/// burst on one topic can't push another topic's messages out of its buffer.
+pub struct PubSubSubscriber {
+    topics: HashSet<gossipsub::TopicHash>,
+    events_tx: broadcast::Sender<gossipsub::Message>,
+}
+
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum PubSubCommand {
@@ -40,6 +48,11 @@ pub enum PubSubCommand {
     },
     Subscribe(Topic),
     Unsubscribe(Topic),
+    /// Forward the messages of `topics` to `events_tx`.
+    AddSubscriber {
+        topics: HashSet<gossipsub::TopicHash>,
+        events_tx: broadcast::Sender<gossipsub::Message>,
+    },
     #[doc(hidden)]
     RetryBroadcast {
         topic: Topic,
@@ -75,6 +88,14 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             PubSubCommand::Unsubscribe(topic) => {
                 tracing::trace!(target: LOG_TARGET, "unsubscribing to topic: {topic}");
                 self.swarm.unsubscribe(&topic);
+            }
+            PubSubCommand::AddSubscriber { topics, events_tx } => {
+                // A subscriber with no receivers left has stopped, and one that
+                // starts again subscribes anew.
+                self.pubsub_subscribers
+                    .retain(|subscriber| subscriber.events_tx.receiver_count() > 0);
+                self.pubsub_subscribers
+                    .push(PubSubSubscriber { topics, events_tx });
             }
             PubSubCommand::RetryBroadcast {
                 topic,
@@ -130,12 +151,12 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 );
                 // self-notification because libp2p doesn't do it
                 if self.swarm.is_subscribed(&topic) {
-                    log_error!(self.pubsub_messages_tx.send(gossipsub::Message {
+                    self.notify_pubsub_subscribers(&gossipsub::Message {
                         source: None,
                         data: message.into(),
                         sequence_number: None,
                         topic: topic_hash(&topic),
-                    }));
+                    });
                 }
             }
             Err(gossipsub::PublishError::NoPeersSubscribedToTopic) if retry_count < MAX_RETRY => {
@@ -203,8 +224,15 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 return;
             }
 
-            if let Err(e) = self.pubsub_messages_tx.send(message) {
-                tracing::error!(target: LOG_TARGET, "Failed to send gossipsub message event: {}", e);
+            self.notify_pubsub_subscribers(&message);
+        }
+    }
+
+    fn notify_pubsub_subscribers(&self, message: &gossipsub::Message) {
+        for subscriber in &self.pubsub_subscribers {
+            if subscriber.topics.contains(&message.topic) {
+                // Fails only when the subscriber has gone away.
+                drop(subscriber.events_tx.send(message.clone()));
             }
         }
     }

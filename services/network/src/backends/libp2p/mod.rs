@@ -2,6 +2,8 @@ mod command;
 pub mod config;
 pub(crate) mod swarm;
 
+use std::collections::HashSet;
+
 pub use lb_libp2p::{
     PeerId,
     libp2p::gossipsub::{Message, TopicHash},
@@ -29,7 +31,6 @@ use crate::message::ChainSyncEvent;
 const LOG_TARGET: &str = network_service::backends::libp2p::ROOT;
 
 pub struct Libp2p {
-    pubsub_events_tx: Sender<Message>,
     chainsync_events_tx: Sender<ChainSyncEvent>,
     commands_tx: mpsc::Sender<Command>,
 }
@@ -50,7 +51,6 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Libp2p {
         let rng = ChaCha20Rng::from_entropy();
         let (commands_tx, commands_rx) = mpsc::channel(BUFFER_SIZE);
 
-        let (pubsub_events_tx, _) = broadcast::channel(BUFFER_SIZE);
         let (chainsync_events_tx, _) = broadcast::channel(BUFFER_SIZE);
 
         let initial_peers = config.initial_peers.clone();
@@ -60,7 +60,6 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Libp2p {
             current_era,
             commands_tx.clone(),
             commands_rx,
-            pubsub_events_tx.clone(),
             chainsync_events_tx.clone(),
             rng,
         );
@@ -74,7 +73,6 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Libp2p {
         );
 
         Self {
-            pubsub_events_tx,
             chainsync_events_tx,
             commands_tx,
         }
@@ -111,8 +109,22 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Libp2p {
         }
     }
 
-    async fn subscribe_to_pubsub(&mut self) -> BroadcastStream<Self::PubSubEvent> {
-        BroadcastStream::new(self.pubsub_events_tx.subscribe())
+    async fn subscribe_to_pubsub(
+        &mut self,
+        topics: HashSet<String>,
+    ) -> BroadcastStream<Self::PubSubEvent> {
+        let (events_tx, events_rx) = broadcast::channel(BUFFER_SIZE);
+        let subscriber = PubSubCommand::AddSubscriber {
+            topics: topics.into_iter().map(TopicHash::from_raw).collect(),
+            events_tx,
+        };
+        if let Err(e) = self.commands_tx.send(Command::PubSub(subscriber)).await {
+            tracing::error!(
+                target: LOG_TARGET,
+                "failed to send command to logos-blockchain-libp2p: {e:?}"
+            );
+        }
+        BroadcastStream::new(events_rx)
     }
 
     async fn subscribe_to_chainsync(&mut self) -> BroadcastStream<Self::ChainSyncEvent> {

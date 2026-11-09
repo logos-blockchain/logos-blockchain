@@ -41,7 +41,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::StreamExt as _;
 
 use super::{
-    Libp2pConfig, Message, TopicHash,
+    Libp2pConfig, TopicHash,
     command::{Command, Dial, NetworkCommand},
 };
 use crate::backends::libp2p::{
@@ -54,7 +54,7 @@ mod identify;
 mod kademlia;
 
 pub use chainsync::ChainSyncCommand;
-pub use gossipsub::PubSubCommand;
+pub use gossipsub::{PubSubCommand, PubSubSubscriber};
 pub use kademlia::DiscoveryCommand;
 
 use crate::message::ChainSyncEvent;
@@ -93,7 +93,7 @@ pub struct SwarmHandler<R: Clone + Send + RngCore + 'static> {
     pub pending_dials: HashMap<ConnectionId, Dial>,
     pub commands_tx: mpsc::Sender<Command>,
     pub commands_rx: mpsc::Receiver<Command>,
-    pub pubsub_messages_tx: broadcast::Sender<Message>,
+    pub pubsub_subscribers: Vec<PubSubSubscriber>,
     pub chainsync_events_tx: broadcast::Sender<ChainSyncEvent>,
     pub max_data_size_by_topic: HashMap<TopicHash, usize>,
 
@@ -131,7 +131,6 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         current_era: Era,
         commands_tx: mpsc::Sender<Command>,
         commands_rx: mpsc::Receiver<Command>,
-        pubsub_events_tx: broadcast::Sender<Message>,
         chainsync_events_tx: broadcast::Sender<ChainSyncEvent>,
         rng: R,
     ) -> Self {
@@ -176,7 +175,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             pending_dials,
             commands_tx,
             commands_rx,
-            pubsub_messages_tx: pubsub_events_tx,
+            pubsub_subscribers: Vec::new(),
             chainsync_events_tx,
             max_data_size_by_topic,
             pending_queries: HashMap::new(),
@@ -611,7 +610,7 @@ mod tests {
     use tracing_subscriber::EnvFilter;
 
     use super::*;
-    use crate::backends::libp2p::Libp2pEraConfig;
+    use crate::backends::libp2p::{Libp2pEraConfig, Message};
 
     static INIT: Once = Once::new();
 
@@ -729,7 +728,6 @@ mod tests {
 
     fn create_handler_with_eras(era_schedule: Libp2pEraSchedule) -> SwarmHandler<OsRng> {
         let (tx, rx) = mpsc::channel(10);
-        let (pubsub_events_tx, _) = broadcast::channel(10);
         let (chainsync_events_tx, _) = broadcast::channel(10);
         let config = Libp2pConfig {
             inner: create_swarm_config(get_available_udp_port().unwrap(), false),
@@ -737,15 +735,7 @@ mod tests {
             era_schedule,
         };
 
-        SwarmHandler::new(
-            config,
-            Era::genesis(),
-            tx,
-            rx,
-            pubsub_events_tx,
-            chainsync_events_tx,
-            OsRng,
-        )
+        SwarmHandler::new(config, Era::genesis(), tx, rx, chainsync_events_tx, OsRng)
     }
 
     fn create_test_address() -> Multiaddr {
@@ -805,18 +795,21 @@ mod tests {
         let config = create_libp2p_config(
             vec![],
             get_available_udp_port().unwrap(),
-            HashMap::from([(topic, max_data_size)]),
+            HashMap::from([(topic.clone(), max_data_size)]),
         );
 
-        let handler = SwarmHandler::new(
+        let mut handler = SwarmHandler::new(
             config,
             Era::genesis(),
             commands_tx,
             commands_rx,
-            pubsub_events_tx,
             chainsync_events_tx,
             OsRng,
         );
+        handler.handle_pubsub_command(PubSubCommand::AddSubscriber {
+            topics: [topic].into(),
+            events_tx: pubsub_events_tx,
+        });
 
         (handler, pubsub_events_rx)
     }
@@ -847,6 +840,32 @@ mod tests {
             pubsub_events_rx.try_recv().unwrap().data.len(),
             max_data_size
         );
+    }
+
+    #[tokio::test]
+    async fn a_burst_on_one_topic_leaves_another_topics_messages_alone() {
+        let transactions = lb_libp2p::gossipsub::IdentTopic::new("transactions").hash();
+        let proposals = lb_libp2p::gossipsub::IdentTopic::new("proposals").hash();
+        let (mut handler, _) = create_gossipsub_handler(transactions.clone(), 512);
+        handler
+            .max_data_size_by_topic
+            .insert(proposals.clone(), 512);
+        let (events_tx, mut proposal_events) = broadcast::channel(1);
+        handler.handle_pubsub_command(PubSubCommand::AddSubscriber {
+            topics: [proposals.clone()].into(),
+            events_tx,
+        });
+
+        handler.handle_gossipsub_event(gossipsub_message_event(proposals.clone(), 512));
+        for _ in 0..4 {
+            handler.handle_gossipsub_event(gossipsub_message_event(transactions.clone(), 512));
+        }
+
+        assert_eq!(proposal_events.try_recv().unwrap().topic, proposals);
+        assert!(matches!(
+            proposal_events.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
     }
 
     #[tokio::test]
@@ -947,7 +966,6 @@ mod tests {
     #[tokio::test]
     async fn starts_with_more_initial_peers_than_the_commands_channel_holds() {
         let (commands_tx, commands_rx) = mpsc::channel(1);
-        let (pubsub_events_tx, _) = broadcast::channel(1);
         let (chainsync_events_tx, _) = broadcast::channel(1);
         let config =
             create_libp2p_config(vec![], get_available_udp_port().unwrap(), HashMap::new());
@@ -956,7 +974,6 @@ mod tests {
             Era::genesis(),
             commands_tx.clone(),
             commands_rx,
-            pubsub_events_tx,
             chainsync_events_tx,
             OsRng,
         );
@@ -988,7 +1005,6 @@ mod tests {
         let max_data_size = 512;
 
         let (bootstrap_commands_tx, bootstrap_commands_rx) = mpsc::channel(10);
-        let (bootstrap_pubsub_events_tx, _) = broadcast::channel(10);
         let (bootstrap_chainsync_events_tx, _) = broadcast::channel(10);
         let bootstrap_config = create_libp2p_config(
             vec![],
@@ -1000,7 +1016,6 @@ mod tests {
             Era::genesis(),
             bootstrap_commands_tx.clone(),
             bootstrap_commands_rx,
-            bootstrap_pubsub_events_tx,
             bootstrap_chainsync_events_tx,
             OsRng,
         );
@@ -1031,10 +1046,13 @@ mod tests {
             Era::genesis(),
             peer_commands_tx.clone(),
             peer_commands_rx,
-            peer_pubsub_events_tx,
             peer_chainsync_events_tx,
             OsRng,
         );
+        peer.handle_pubsub_command(PubSubCommand::AddSubscriber {
+            topics: [topic_hash.clone()].into(),
+            events_tx: peer_pubsub_events_tx,
+        });
         peer.handle_pubsub_command(PubSubCommand::Subscribe(topic.to_owned()));
         let peer_task = tokio::spawn(async move {
             peer.run(vec![bootstrap_address]).await;
@@ -1297,8 +1315,6 @@ mod tests {
         // Create first node (bootstrap node)
         let (tx1, rx1) = mpsc::channel(10);
         txs.push(tx1.clone());
-
-        let (pubsub_events_tx, _) = broadcast::channel(10);
         let (chainsync_events_tx, _) = broadcast::channel(10);
 
         let config =
@@ -1308,7 +1324,6 @@ mod tests {
             Era::genesis(),
             tx1.clone(),
             rx1,
-            pubsub_events_tx,
             chainsync_events_tx,
             OsRng,
         );
@@ -1355,7 +1370,6 @@ mod tests {
             txs.push(tx.clone());
 
             // Each node connects to the bootstrap node
-            let (pubsub_events_tx, _) = broadcast::channel(10);
             let (chainsync_events_tx, _) = broadcast::channel(10);
 
             let config = create_libp2p_config(
@@ -1368,7 +1382,6 @@ mod tests {
                 Era::genesis(),
                 tx.clone(),
                 rx,
-                pubsub_events_tx,
                 chainsync_events_tx,
                 OsRng,
             );
@@ -1461,21 +1474,13 @@ mod tests {
         init_tracing();
 
         let (tx, rx) = mpsc::channel(10);
-        let (pubsub_events_tx, _) = broadcast::channel(10);
         let (chainsync_events_tx, _) = broadcast::channel(10);
 
         let config =
             create_libp2p_config(vec![], get_available_udp_port().unwrap(), HashMap::new());
 
-        let mut handler = SwarmHandler::new(
-            config,
-            Era::genesis(),
-            tx,
-            rx,
-            pubsub_events_tx,
-            chainsync_events_tx,
-            OsRng,
-        );
+        let mut handler =
+            SwarmHandler::new(config, Era::genesis(), tx, rx, chainsync_events_tx, OsRng);
 
         let remote_peer = PeerId::random();
         let remote_addr = format!(
@@ -1545,21 +1550,13 @@ mod tests {
         init_tracing();
 
         let (tx, rx) = mpsc::channel(10);
-        let (pubsub_events_tx, _) = broadcast::channel(10);
         let (chainsync_events_tx, _) = broadcast::channel(10);
 
         let config =
             create_libp2p_config(vec![], get_available_udp_port().unwrap(), HashMap::new());
 
-        let mut handler = SwarmHandler::new(
-            config,
-            Era::genesis(),
-            tx,
-            rx,
-            pubsub_events_tx,
-            chainsync_events_tx,
-            OsRng,
-        );
+        let mut handler =
+            SwarmHandler::new(config, Era::genesis(), tx, rx, chainsync_events_tx, OsRng);
 
         // A peer learned via discovery (Kademlia/Identify), i.e. NOT through our
         // own `connect()` call, so there is no `pending_dials` entry for it.
@@ -1612,20 +1609,12 @@ mod tests {
         init_tracing();
 
         let (tx, rx) = mpsc::channel(10);
-        let (pubsub_events_tx, _) = broadcast::channel(10);
         let (chainsync_events_tx, _) = broadcast::channel(10);
 
         let config =
             create_libp2p_config(vec![], get_available_udp_port().unwrap(), HashMap::new());
-        let mut handler = SwarmHandler::new(
-            config,
-            Era::genesis(),
-            tx,
-            rx,
-            pubsub_events_tx,
-            chainsync_events_tx,
-            OsRng,
-        );
+        let mut handler =
+            SwarmHandler::new(config, Era::genesis(), tx, rx, chainsync_events_tx, OsRng);
 
         let expected_peers: Vec<(PeerId, Multiaddr)> = std::iter::repeat_with(|| {
             let peer_id = PeerId::random();
@@ -1663,20 +1652,12 @@ mod tests {
         init_tracing();
 
         let (tx, rx) = mpsc::channel(10);
-        let (pubsub_events_tx, _) = broadcast::channel(10);
         let (chainsync_events_tx, _) = broadcast::channel(10);
 
         let config =
             create_libp2p_config(vec![], get_available_udp_port().unwrap(), HashMap::new());
-        let mut handler = SwarmHandler::new(
-            config,
-            Era::genesis(),
-            tx,
-            rx,
-            pubsub_events_tx,
-            chainsync_events_tx,
-            OsRng,
-        );
+        let mut handler =
+            SwarmHandler::new(config, Era::genesis(), tx, rx, chainsync_events_tx, OsRng);
 
         handler.bootstrap_kad_from_peers(&vec![]);
 
