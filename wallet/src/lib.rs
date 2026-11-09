@@ -1527,7 +1527,20 @@ mod tests {
         let wallet_state = wallet_state_of(&[(note, LEDGER_SET, nullifier(1))]);
         let context = context(GasPrices::new(1, 1));
         // The mandatory fee of the transaction funded with a change output.
-        let mandatory_fee = 855;
+        let mandatory_fee = wallet_state
+            .fund_tx::<MainnetGasProfile>(
+                &MantleTxBuilder::new(),
+                alice,
+                Fr::from(3u64),
+                [alice],
+                &context,
+                &HashSet::new(),
+                0,
+            )
+            .unwrap()
+            .minimum_gas_cost::<MainnetGasProfile>(&context)
+            .unwrap()
+            .into_inner();
 
         for max_fee in [mandatory_fee, mandatory_fee + 1] {
             let funded_tx_builder = wallet_state
