@@ -35,19 +35,19 @@ pub struct CoreInfo<NodeId> {
 /// A core node's Blend status.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct CoreStatus {
-    pub session_peers: SessionPeers,
+    pub epoch_peers: EpochPeers,
     /// Blending tokens collected in the current epoch.
     pub tokens_collected_in_current_epoch: usize,
 }
 
 /// The negotiated peers for the current epoch.
 #[derive(Debug, Clone, Copy, Serialize)]
-pub struct SessionPeers {
+pub struct EpochPeers {
     pub total: usize,
     pub healthy: usize,
 }
 
-impl<NodeId> From<&CoreInfo<NodeId>> for SessionPeers {
+impl<NodeId> From<&CoreInfo<NodeId>> for EpochPeers {
     fn from(core_info: &CoreInfo<NodeId>) -> Self {
         let peers = &core_info.current_epoch_peers;
         Self {

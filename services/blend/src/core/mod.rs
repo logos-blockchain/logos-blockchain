@@ -112,7 +112,7 @@ use crate::{
         chain::{BlendEpoch, BlendEpochState},
     },
     message::{
-        CoreStatus, DataPayload, DataPayloadType, ProcessedMessage, ServiceMessage, SessionPeers,
+        CoreStatus, DataPayload, DataPayloadType, EpochPeers, ProcessedMessage, ServiceMessage,
     },
     mode::{CoreMembership, ModeMembership},
     pending::{
@@ -1336,7 +1336,7 @@ where
 {
     let core_info = backend.network_info().await?.core_info?;
     Some(CoreStatus {
-        session_peers: SessionPeers::from(&core_info),
+        epoch_peers: EpochPeers::from(&core_info),
         tokens_collected_in_current_epoch: recovery_checkpoint
             .current_epoch_token_collector()
             .tokens()

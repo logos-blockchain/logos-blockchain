@@ -814,13 +814,13 @@ impl From<status::ActivityStatus> for ActivityStatus {
 /// The negotiated peers for the current epoch.
 #[repr(C)]
 #[derive(Default)]
-pub struct SessionPeers {
+pub struct EpochPeers {
     pub total: usize,
     pub healthy: usize,
 }
 
-impl From<lb_blend_service::message::SessionPeers> for SessionPeers {
-    fn from(peers: lb_blend_service::message::SessionPeers) -> Self {
+impl From<lb_blend_service::message::EpochPeers> for EpochPeers {
+    fn from(peers: lb_blend_service::message::EpochPeers) -> Self {
         Self {
             total: peers.total,
             healthy: peers.healthy,
@@ -832,7 +832,7 @@ impl From<lb_blend_service::message::SessionPeers> for SessionPeers {
 #[repr(C)]
 #[derive(Default)]
 pub struct CoreStatus {
-    pub session_peers: SessionPeers,
+    pub epoch_peers: EpochPeers,
     /// Blending tokens collected in the current epoch.
     pub tokens_collected_in_current_epoch: usize,
 }
@@ -840,7 +840,7 @@ pub struct CoreStatus {
 impl From<lb_blend_service::message::CoreStatus> for CoreStatus {
     fn from(status: lb_blend_service::message::CoreStatus) -> Self {
         Self {
-            session_peers: status.session_peers.into(),
+            epoch_peers: status.epoch_peers.into(),
             tokens_collected_in_current_epoch: status.tokens_collected_in_current_epoch,
         }
     }
