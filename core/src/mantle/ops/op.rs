@@ -394,25 +394,25 @@ mod tests {
 
         // Every channel the thresholds are asked about requires 2 signatures.
         for (op, gas) in [
-            // 2 inputs, 2 outputs: 12 + 1770 + 2 * 725 + 2 * 24
-            (Op::Transfer(TransferOp::sample()), 3_280),
-            (Op::ProgramRegister(ProgramRegisterOp::sample()), 6_839),
-            // 20 + 2 * 161
-            (Op::ChannelConfig(ChannelConfigOp::sample()), 342),
-            // 21 + 161
-            (Op::ChannelInscribe(InscriptionOp::sample()), 182),
-            // 1 input, 1 output: 6 + 1770 + 725 + 24
-            (Op::ChannelDeposit(DepositOp::sample()), 2_525),
-            // 1 input, 1 output: 31 + 1770 + 725 + 24
-            (Op::ChannelWithdraw(ChannelWithdrawOp::sample()), 2_550),
-            // 622 + 161 + 1770 + 725 + 24
-            (Op::SDPDeclare(SDPDeclareOp::sample()), 3_302),
-            // 0 + 161 + 1770 + 725 + 24, and the root of the service note alone
-            // (879 + 23)
-            (Op::SDPWithdraw(SDPWithdrawOp::sample()), 3_582),
-            // 6927 + 161
-            (Op::SDPActive(SDPActiveOp::sample()), 7_088),
-            (Op::ClaimPowReward(ClaimPowRewardOp::sample()), 592),
+            // 2 inputs, 2 outputs: 10 + 4177 + 2 * 1758 + 2 * 58
+            (Op::Transfer(TransferOp::sample()), 7_819),
+            (Op::ProgramRegister(ProgramRegisterOp::sample()), 15_114),
+            // 24 + 2 * 557
+            (Op::ChannelConfig(ChannelConfigOp::sample()), 1_138),
+            // 26 + 557
+            (Op::ChannelInscribe(InscriptionOp::sample()), 583),
+            // 1 input, 1 output: 26 + 4177 + 1758 + 58
+            (Op::ChannelDeposit(DepositOp::sample()), 6_019),
+            // 1 input, 1 output: 33 + 4177 + 1758 + 58
+            (Op::ChannelWithdraw(ChannelWithdrawOp::sample()), 6_026),
+            // 1693 + 557 + 4177 + 1758 + 58
+            (Op::SDPDeclare(SDPDeclareOp::sample()), 8_243),
+            // 0 + 557 + 4177 + 1758 + 58, and the root of the service note alone
+            // (2332 + 60)
+            (Op::SDPWithdraw(SDPWithdrawOp::sample()), 8_942),
+            // 15117 + 557
+            (Op::SDPActive(SDPActiveOp::sample()), 15_674),
+            (Op::ClaimPowReward(ClaimPowRewardOp::sample()), 1_506),
         ] {
             assert_eq!(
                 op.by_ref()

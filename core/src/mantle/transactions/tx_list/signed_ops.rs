@@ -630,10 +630,10 @@ mod tests {
             .execution_gas_consumption::<MainnetGasProfile>(&context)
             .unwrap();
 
-        let expected_config_gas = 20 + u64::from(config_threshold) * 161;
+        let expected_config_gas = 24 + u64::from(config_threshold) * 557;
         // 1 input, no output, nothing buffered
-        let expected_deposit_gas = 6 + 1770 + 725;
-        let expected_withdraw_gas = 31 + 1770 + 725;
+        let expected_deposit_gas = 26 + 4177 + 1758;
+        let expected_withdraw_gas = 33 + 4177 + 1758;
         // The bytes of the transaction and the note sets of the deposit and
         // withdrawal channels: the deposit changes its channel set even with no
         // output.
@@ -684,9 +684,9 @@ mod tests {
             .execution_gas::<MainnetGasProfile>(&state)
             .unwrap();
 
-        assert_eq!(config_gas.into_inner(), 20 + 3 * 161);
-        assert_eq!(deposit_gas.into_inner(), 6 + 1770 + 725);
-        assert_eq!(withdraw_gas.into_inner(), 31 + 1770 + 725);
+        assert_eq!(config_gas.into_inner(), 24 + 3 * 557);
+        assert_eq!(deposit_gas.into_inner(), 26 + 4177 + 1758);
+        assert_eq!(withdraw_gas.into_inner(), 33 + 4177 + 1758);
     }
 
     // A config creating a channel is verified against a threshold of 0, so it
@@ -701,7 +701,7 @@ mod tests {
             .execution_gas::<MainnetGasProfile>(&TxGasState::new(Channels::new()))
             .unwrap();
 
-        assert_eq!(gas.into_inner(), 20);
+        assert_eq!(gas.into_inner(), 24);
     }
 
     #[test]

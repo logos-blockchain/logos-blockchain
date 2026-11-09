@@ -278,7 +278,7 @@ impl ProvableOperation for ClaimPowRewardOp {
 }
 
 impl OperationGas<MainnetGasProfile> for ClaimPowRewardOp {
-    const GAS_COST: Gas = Gas::new(592);
+    const GAS_COST: Gas = Gas::new(1506);
 }
 
 impl OpGasCalculator<MainnetGasProfile> for ClaimPowRewardOp {}
@@ -867,7 +867,7 @@ mod tests {
         for threshold in [0, 1, 3] {
             assert_eq!(
                 ClaimPowRewardOp::sample().execution_gas(&FixedThresholds(threshold)),
-                Ok(Gas::new(592))
+                Ok(Gas::new(1506))
             );
         }
     }

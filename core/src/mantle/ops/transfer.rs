@@ -102,7 +102,7 @@ impl ProvableOperation for TransferOp {
 }
 
 impl OperationGas<MainnetGasProfile> for TransferOp {
-    const GAS_COST: Gas = Gas::new(12);
+    const GAS_COST: Gas = Gas::new(10);
 }
 
 impl OpGasCalculator<MainnetGasProfile> for TransferOp {
@@ -304,10 +304,10 @@ mod test {
     #[test]
     fn transfer_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
-            // 2 inputs, 2 outputs, nothing buffered: 12 + 1770 + 2 * 725 + 2 * 24
+            // 2 inputs, 2 outputs, nothing buffered: 10 + 4177 + 2 * 1758 + 2 * 58
             assert_eq!(
                 TransferOp::sample().execution_gas(&FixedThresholds(threshold)),
-                Ok(Gas::new(3_280))
+                Ok(Gas::new(7_819))
             );
         }
     }

@@ -392,7 +392,7 @@ impl ProvableOperation for InscriptionOp {
 }
 
 impl OperationGas<MainnetGasProfile> for InscriptionOp {
-    const GAS_COST: Gas = Gas::new(21);
+    const GAS_COST: Gas = Gas::new(26);
 }
 
 impl OpGasCalculator<MainnetGasProfile> for InscriptionOp {
@@ -1341,8 +1341,8 @@ mod tests {
         for threshold in [0, 1, 3] {
             assert_eq!(
                 InscriptionOp::sample().execution_gas(&FixedThresholds(threshold)),
-                // 21 + 161
-                Ok(Gas::new(182))
+                // 26 + 557
+                Ok(Gas::new(583))
             );
         }
     }
@@ -1355,8 +1355,8 @@ mod tests {
             commitment_merkle_root: Fr::ZERO,
             inscription: Inscription::default(),
         };
-        // 182 + steps * (195 + 1770 + 725), one input, no output, nothing buffered
-        for (steps, expected) in [(0usize, 182u64), (1, 2_872), (3, 8_252)] {
+        // 583 + steps * (28 + 4177 + 1758), one input, no output, nothing buffered
+        for (steps, expected) in [(0usize, 583u64), (1, 6_546), (3, 18_472)] {
             let operation = with_steps(vec![Step::User(step.clone()); steps]);
             for threshold in [0, 3] {
                 assert_eq!(
@@ -1372,17 +1372,17 @@ mod tests {
         let user = Step::User(step(&[nullifier(1)], &[], Fr::ZERO));
         let deposit = Step::ProgramDeposit(ProgramDeposit::sample());
         let program = Step::Program(ProgramStep::sample());
-        // A user step of one input is 195 + 1770 + 725 = 2_690, a program deposit
-        // of one input and one output 267 + 1770 + 725 + 24 = 2_786, and a program
-        // step of one input and one program output 6374 + 1770 + 725 + 24 + 151 =
-        // 9_044. The transaction pays the root extensions.
+        // A user step of one input is 28 + 4177 + 1758 = 5_963, a program deposit
+        // of one input and one output 144 + 4177 + 1758 + 58 = 6_137, and a program
+        // step of one input and one program output 13528 + 4177 + 1758 + 58 + 470 =
+        // 19_991. The transaction pays the root extensions.
         for (steps, expected) in [
-            (vec![], 182u64),
-            // 182 + 9_044
-            (vec![program.clone()], 9_226),
-            // 182 + 2_690 + 2_786 + 9_044
-            (vec![user, deposit.clone(), program.clone()], 14_702),
-            // 182 + 4 * 2_786 + 2 * 9_044
+            (vec![], 583u64),
+            // 583 + 19_991
+            (vec![program.clone()], 20_574),
+            // 583 + 5_963 + 6_137 + 19_991
+            (vec![user, deposit.clone(), program.clone()], 32_674),
+            // 583 + 4 * 6_137 + 2 * 19_991
             (
                 vec![
                     deposit.clone(),
@@ -1392,7 +1392,7 @@ mod tests {
                     deposit,
                     program,
                 ],
-                29_414,
+                65_113,
             ),
         ] {
             let operation = with_steps(steps);
@@ -1411,11 +1411,11 @@ mod tests {
             outputs: [commitment(5)].into(),
             ..ProgramStep::sample()
         })]);
-        // 182 + 6374 + the spend of two inputs and three outputs (1770 + 2 * 725 +
-        // 3 * 24) + two openings (2 * 151)
+        // 583 + 13528 + the spend of two inputs and three outputs (4177 + 2 * 1758 +
+        // 3 * 58) + two openings (2 * 470)
         assert_eq!(
             operation.execution_gas(&FixedThresholds(3)),
-            Ok(Gas::new(182 + 6_374 + 3_292 + 302))
+            Ok(Gas::new(583 + 13_528 + 7_867 + 940))
         );
     }
 

@@ -339,10 +339,10 @@ mod tests {
 
         assert_eq!(
             ops.by_ref().total_gas_cost::<MainnetGasProfile>(&context),
-            // The inscription costs 21 + 161 execution gas at price 2, plus the bytes
+            // The inscription costs 26 + 557 execution gas at price 2, plus the bytes
             // of the transaction and the note set of the channel it creates.
             Ok(GasCost::new(
-                2 * (182 + terms.into_inner()) + 3 * size as u64
+                2 * (583 + terms.into_inner()) + 3 * size as u64
             ))
         );
     }
@@ -364,11 +364,11 @@ mod tests {
         assert_eq!(
             ops.by_ref()
                 .execution_gas_consumption::<MainnetGasProfile>(&context),
-            // The config: 20 + 3 * 161. The deposit and the withdrawal of the samples
+            // The config: 24 + 3 * 557. The deposit and the withdrawal of the samples
             // spend 1 input and 1 output with nothing buffered:
-            // 6 + 1770 + 725 + 24 and 31 + 1770 + 725 + 24. The transaction adds
+            // 26 + 4177 + 1758 + 58 and 33 + 4177 + 1758 + 58. The transaction adds
             // its bytes and the note sets of the two channels it changed.
-            Ok(Gas::from(503 + 2_525 + 2_550).checked_add(terms).unwrap())
+            Ok(Gas::from(1_695 + 6_019 + 6_026).checked_add(terms).unwrap())
         );
     }
 
@@ -384,7 +384,7 @@ mod tests {
         assert_eq!(
             ops.by_ref()
                 .execution_gas_consumption::<MainnetGasProfile>(&context),
-            Ok(Gas::from(20).checked_add(terms).unwrap())
+            Ok(Gas::from(24).checked_add(terms).unwrap())
         );
     }
 
@@ -398,8 +398,8 @@ mod tests {
         assert_eq!(
             ops.by_ref()
                 .execution_gas_consumption::<MainnetGasProfile>(&context),
-            // 6 + 1770 + 725 + 24, and the note set of the channel it changes
-            Ok(Gas::from(2_525).checked_add(terms).unwrap())
+            // 26 + 4177 + 1758 + 58, and the note set of the channel it changes
+            Ok(Gas::from(6_019).checked_add(terms).unwrap())
         );
     }
 

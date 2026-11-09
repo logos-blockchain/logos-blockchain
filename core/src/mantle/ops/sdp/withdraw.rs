@@ -605,12 +605,12 @@ mod tests {
 
     #[test]
     fn sdp_withdraw_op_execution_gas_does_not_scale_with_the_threshold() {
-        // The service note and 1 output: 0 + 161 + 1770 + 725 + 24, and the root
-        // of the note alone, 879 + 23
+        // The service note and 1 output: 0 + 557 + 4177 + 1758 + 58, and the root
+        // of the note alone, 2332 + 60
         for threshold in [0, 1, 3] {
             assert_eq!(
                 SDPWithdrawOp::sample().execution_gas(&FixedThresholds(threshold)),
-                Ok(Gas::new(3_582))
+                Ok(Gas::new(8_942))
             );
         }
     }

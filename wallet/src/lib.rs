@@ -1247,7 +1247,7 @@ mod tests {
     #[test]
     fn a_spend_survives_a_fork_of_its_tip_block() {
         let alice = pk(1);
-        let note = Note::new(5000, Fr::from(1u64), alice);
+        let note = Note::new(10000, Fr::from(1u64), alice);
         let known = known(&[(note, LEDGER_SET, nullifier(1))]);
         let mut wallet = wallet_on_chain(known.clone(), &[note], &[], 40);
         let context = context(GasPrices::new(1, 1));
@@ -1412,7 +1412,7 @@ mod tests {
     #[test]
     fn test_fund_tx_with_change() {
         let alice = pk(1);
-        let ledger_note = Note::new(5000, Fr::from(1u64), alice);
+        let ledger_note = Note::new(10000, Fr::from(1u64), alice);
         // A service note of alice, which `fund_tx` must not spend
         let service_note = Note::new(5000, Fr::from(2u64), alice);
         let wallet_state = wallet_state_of(&[
@@ -1439,9 +1439,10 @@ mod tests {
             .minimum_gas_cost::<MainnetGasProfile>(&context)
             .unwrap()
             .into_inner();
-        // The cost with a change note, 2773: 236 bytes at a storage price of 1, and
-        // 12 + 1770 + 725 + 24 + 236 * 27 // 1000 = 2537 Execution Gas at a price of 1.
-        assert_eq!(2773, fee);
+        // The cost with a change note, 6246: 236 bytes at a storage price of 1, and
+        // 10 + 4177 + 1758 + 58 + 236 * 30 // 1000 = 6010 Execution Gas at a price
+        // of 1.
+        assert_eq!(6246, fee);
         assert_eq!(i128::from(fee), funded_tx_builder.net_balance());
         assert_eq!(
             0,
@@ -1456,14 +1457,14 @@ mod tests {
         // ensure change was returned to alice
         assert_eq!(
             transfer_op.outputs,
-            [Note::new(5000 - fee, change_nonce, alice).commitment()].into()
+            [Note::new(10000 - fee, change_nonce, alice).commitment()].into()
         );
     }
 
     #[test]
     fn test_fund_tx_with_priority_fee_percentage() {
         let alice = pk(1);
-        let note = Note::new(5000, Fr::from(1u64), alice);
+        let note = Note::new(10000, Fr::from(1u64), alice);
         let wallet_state = wallet_state_of(&[(note, LEDGER_SET, nullifier(1))]);
         let context = context(GasPrices::new(1, 1));
         let change_nonce = Fr::from(3u64);
@@ -1492,8 +1493,8 @@ mod tests {
             .minimum_gas_cost::<MainnetGasProfile>(&context)
             .unwrap()
             .into_inner();
-        assert_eq!(mandatory_fee_without_change, 2716);
-        assert_eq!(mandatory_fee, 2773);
+        assert_eq!(mandatory_fee_without_change, 6155);
+        assert_eq!(mandatory_fee, 6246);
         let priority_fee_amount = (mandatory_fee * priority_fee_percent).div_ceil(100);
         assert_eq!(
             i128::from(mandatory_fee + priority_fee_amount),
@@ -1513,7 +1514,7 @@ mod tests {
         assert_eq!(
             funding_transfer(funded_tx_builder).outputs,
             [Note::new(
-                5000 - mandatory_fee - priority_fee_amount,
+                10000 - mandatory_fee - priority_fee_amount,
                 change_nonce,
                 alice
             )
@@ -1525,7 +1526,7 @@ mod tests {
     #[test]
     fn test_fund_tx_cuts_the_fee_margin_down_to_the_max_fee() {
         let alice = pk(1);
-        let note = Note::new(5000, Fr::from(1u64), alice);
+        let note = Note::new(10000, Fr::from(1u64), alice);
         let wallet_state = wallet_state_of(&[(note, LEDGER_SET, nullifier(1))]);
         let context = context(GasPrices::new(1, 1));
         // The mandatory fee of the transaction funded with a change output.
@@ -1790,9 +1791,9 @@ mod tests {
             .minimum_gas_cost::<MainnetGasProfile>(&context)
             .unwrap()
             .into_inner();
-        // 204 bytes at a storage price of 1, and 12 + 1770 + 725 + 204 * 27 // 1000 =
-        // 2512 Execution Gas at a price of 1.
-        assert_eq!(2716, cost_without_change);
+        // 204 bytes at a storage price of 1, and 10 + 4177 + 1758 + 204 * 30 // 1000 =
+        // 5951 Execution Gas at a price of 1.
+        assert_eq!(6155, cost_without_change);
 
         // We can fund the tx if the note value is exactly the gas cost without change
         // note
@@ -1811,7 +1812,7 @@ mod tests {
             .minimum_gas_cost::<MainnetGasProfile>(&context)
             .unwrap()
             .into_inner();
-        assert_eq!(2773, cost_with_change);
+        assert_eq!(6246, cost_with_change);
 
         for value in cost_without_change + 1..=cost_with_change {
             // this region of note values will fail to fund the tx.

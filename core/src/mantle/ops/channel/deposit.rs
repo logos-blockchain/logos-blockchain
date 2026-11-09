@@ -102,7 +102,7 @@ impl ProvableOperation for DepositOp {
 }
 
 impl OperationGas<MainnetGasProfile> for DepositOp {
-    const GAS_COST: Gas = Gas::new(6);
+    const GAS_COST: Gas = Gas::new(26);
 }
 
 impl OpGasCalculator<MainnetGasProfile> for DepositOp {
@@ -281,10 +281,10 @@ mod test {
     #[test]
     fn deposit_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
-            // 1 input, 1 output, nothing buffered: 6 + 1770 + 725 + 24
+            // 1 input, 1 output, nothing buffered: 26 + 4177 + 1758 + 58
             assert_eq!(
                 DepositOp::sample().execution_gas(&FixedThresholds(threshold)),
-                Ok(Gas::new(2_525))
+                Ok(Gas::new(6_019))
             );
         }
     }
