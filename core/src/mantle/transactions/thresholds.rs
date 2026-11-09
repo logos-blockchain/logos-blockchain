@@ -6,7 +6,7 @@ use crate::mantle::{
     OpRef,
     channel::Channels,
     gas::{Gas, GasOverflow, NoteSetKey, OpGasContext, ThresholdSource, root_gas},
-    ops::channel::{ChannelId, ChannelKeyIndex, inscribe::Step},
+    ops::channel::{ChannelId, ChannelKeyIndex, NULL_CHANNEL_ID, inscribe::Step},
     transactions::tx_list::ops::OpsGasContext,
 };
 
@@ -105,6 +105,14 @@ impl<C: ChannelSource> TxGasState<C> {
         self.changed_note_sets.insert(set);
     }
 
+    // A channel created by the transaction: its new note set is changed, and
+    // the null channel has none.
+    fn create_channel(&mut self, channel: ChannelId) {
+        if channel != NULL_CHANNEL_ID {
+            self.change(NoteSetKey::Channel(channel));
+        }
+    }
+
     // The number of channel and SDP note sets the transaction changed so far.
     #[must_use]
     pub fn changed_note_sets(&self) -> usize {
@@ -122,7 +130,7 @@ impl<C: ChannelSource> TxGasState<C> {
             OpRef::ClaimPowReward(_) => self.buffer(NoteSetKey::Ledger, 1),
             OpRef::ChannelConfig(operation) => {
                 if !self.channel_exists(&operation.channel()) {
-                    self.change(NoteSetKey::Channel(operation.channel()));
+                    self.create_channel(operation.channel());
                 }
                 self.configuration_thresholds.insert(
                     operation.channel(),
@@ -130,14 +138,12 @@ impl<C: ChannelSource> TxGasState<C> {
                 );
             }
             // A deposit spends from the ledger set and adds its outputs to its
-            // channel set, which it leaves unchanged when it has none.
+            // channel set, which it changes even with no output.
             OpRef::ChannelDeposit(operation) => {
                 let set = NoteSetKey::Channel(operation.channel_id);
                 self.extend_root_over_buffer(NoteSetKey::Ledger, operation.commitment_merkle_root);
                 self.buffer(set, operation.outputs.as_slice().len());
-                if !operation.outputs.is_empty() {
-                    self.change(set);
-                }
+                self.change(set);
             }
             OpRef::ChannelWithdraw(operation) => {
                 let set = NoteSetKey::Channel(operation.channel_id);
@@ -145,19 +151,20 @@ impl<C: ChannelSource> TxGasState<C> {
                 self.change(set);
             }
             // An inscription creates the channel when it does not exist yet, and
-            // changes its set when a step spends from it or adds to it. The user
-            // steps and program deposits of a mini-block cover the buffer as it
-            // stands when the mini-block starts, a program step the whole buffer at
-            // its position. Each step then buffers the notes it creates, the
-            // program outputs of a program step before its outputs.
+            // changes its set when it carries a step, even one spending and
+            // creating nothing. The user steps and program deposits of a
+            // mini-block cover the buffer as it stands when the mini-block starts,
+            // a program step the whole buffer at its position. Each step then
+            // buffers the notes it creates, the program outputs of a program step
+            // before its outputs.
             OpRef::ChannelInscribe(operation) => {
                 let set = NoteSetKey::Channel(operation.channel_id);
                 if !self.channel_exists(&operation.channel_id) {
                     self.configuration_thresholds
                         .insert(operation.channel_id, 1);
-                    self.change(set);
+                    self.create_channel(operation.channel_id);
                 }
-                if operation.steps().any(moves_notes) {
+                if operation.steps().next().is_some() {
                     self.change(set);
                 }
                 for mini_block in operation.mini_blocks.iter() {
@@ -183,11 +190,6 @@ impl<C: ChannelSource> TxGasState<C> {
             OpRef::SDPActive(_) | OpRef::ProgramRegister(_) => {}
         }
     }
-}
-
-// Whether the step spends from or adds to the channel set.
-fn moves_notes(step: &Step) -> bool {
-    !step.inputs().is_empty() || step.created().next().is_some()
 }
 
 impl<C: ChannelSource> ThresholdSource for TxGasState<C> {
@@ -442,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn deposit_without_outputs_changes_no_set() {
+    fn deposit_without_outputs_changes_its_channel_set() {
         let deposit = DepositOp {
             outputs: OutputCommitments::default(),
             ..DepositOp::sample()
@@ -452,7 +454,7 @@ mod tests {
         let mut state = TxGasState::new(&context);
         state.apply(Op::ChannelDeposit(deposit).by_ref());
         assert_eq!(state.buffered(&set), 0);
-        assert_eq!(state.changed_note_sets(), 0);
+        assert_eq!(state.changed_note_sets(), 1);
     }
 
     // A program step that spends and creates nothing, proven against a recent
@@ -474,10 +476,22 @@ mod tests {
     }
 
     #[test]
-    fn inscription_with_an_empty_step_on_an_existing_channel_changes_no_set() {
+    fn inscription_with_an_empty_step_on_an_existing_channel_changes_its_set() {
         let inscription = inscription_with(vec![Step::Program(empty_program_step())]);
         let context = existing(inscription.channel_id, 1);
         let mut state = TxGasState::new(&context);
+        state.apply(Op::ChannelInscribe(inscription).by_ref());
+        assert_eq!(state.changed_note_sets(), 1);
+    }
+
+    #[test]
+    fn creating_the_null_channel_changes_no_set() {
+        let context = empty();
+        let mut state = TxGasState::new(&context);
+        let inscription = InscriptionOp {
+            channel_id: NULL_CHANNEL_ID,
+            ..InscriptionOp::sample()
+        };
         state.apply(Op::ChannelInscribe(inscription).by_ref());
         assert_eq!(state.changed_note_sets(), 0);
     }

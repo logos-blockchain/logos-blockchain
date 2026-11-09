@@ -634,11 +634,12 @@ mod tests {
         // 1 input, no output, nothing buffered
         let expected_deposit_gas = 6 + 1770 + 725;
         let expected_withdraw_gas = 31 + 1770 + 725;
-        // The bytes of the transaction and the note set of the withdrawal
-        // channel: the deposit, with no output, adds nothing to its channel set.
+        // The bytes of the transaction and the note sets of the deposit and
+        // withdrawal channels: the deposit changes its channel set even with no
+        // output.
         let expected_terms = tx_terms_gas(
             minimum_signed_transaction_size(&mantle_tx.by_ref(), &context),
-            1,
+            2,
         )
         .unwrap()
         .into_inner();

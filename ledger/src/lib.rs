@@ -3702,7 +3702,7 @@ mod tests {
         let eras = single_era(test_config.clone());
         let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
         let (signing_key, verifying_key) = create_test_keys();
-        let channel_id = ChannelId::from([0u8; 32]);
+        let channel_id = ChannelId::from([1u8; 32]);
 
         let inscribe_op = InscriptionOp {
             channel_id,
