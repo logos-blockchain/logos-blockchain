@@ -328,6 +328,46 @@ fn store_block_data_stores_block_and_indexes() {
     );
 }
 
+/// Nothing gets read: these two aren't even blocks.
+#[test]
+fn remove_blocks_removes_all_that_is_stored_for_them() {
+    let temp_dir = TempDir::new().unwrap();
+    let backend = RocksBackend::new(RocksBackendSettings {
+        db_path: temp_dir.path().to_path_buf(),
+        read_only: false,
+        column_family: None,
+    })
+    .unwrap();
+    let parent_id = HeaderId::from([0u8; 32]);
+    let (first, second, kept) = (
+        HeaderId::from([1u8; 32]),
+        HeaderId::from([2u8; 32]),
+        HeaderId::from([3u8; 32]),
+    );
+    for header_id in [first, second, kept] {
+        backend
+            .store_block_data(
+                header_id,
+                parent_id,
+                Bytes::from_static(b"block"),
+                Bytes::from_static(b"events"),
+                BTreeMap::new(),
+            )
+            .unwrap();
+    }
+
+    backend.remove_blocks(&[first, second]).unwrap();
+
+    for header_id in [first, second] {
+        assert_eq!(backend.get_block(header_id).unwrap(), None);
+        assert_eq!(backend.get_block_parent(header_id).unwrap(), None);
+        assert_eq!(backend.get_block_events(header_id).unwrap(), None);
+    }
+    assert!(backend.get_block(kept).unwrap().is_some());
+    assert_eq!(backend.get_block_parent(kept).unwrap(), Some(parent_id));
+    assert!(backend.get_block_events(kept).unwrap().is_some());
+}
+
 #[test]
 fn immutable_block_ids() {
     let temp_dir = TempDir::new().unwrap();

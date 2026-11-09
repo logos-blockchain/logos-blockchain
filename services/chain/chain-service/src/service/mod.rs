@@ -31,16 +31,13 @@ use lb_ledger::config::{config_for_slot, stake_distribution_snapshot};
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_network_service::message::ChainSyncEvent;
 use lb_storage_service::api::StorageApi;
-use lb_utils::tokio::task::{CancellableHandle, spawn_blocking};
+use lb_utils::tokio::task::spawn_blocking;
 use overwatch::{
     DynError,
     services::{relay::InboundRelay, state::StateUpdater},
 };
 use serde::{Serialize, de::DeserializeOwned};
-use tokio::{
-    sync::{broadcast, mpsc, oneshot},
-    task::JoinError,
-};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
@@ -62,8 +59,13 @@ pub struct ProcessBlockOutcome<Tx> {
 /// Where the outcome of applying a block goes.
 type ApplyBlockReply<Tx> = oneshot::Sender<Result<AppliedBlock<Tx>, Error>>;
 
-/// What a block's verification came to, along with who is waiting on the block.
-type BlockVerification<Tx> = (Result<VerifiedBlock<Tx>, Error>, ApplyBlockReply<Tx>);
+/// What became of a block off the service loop, for the loop to finish.
+struct BlockPreparation<Tx> {
+    prepared: Result<PreparedBlock<Tx>, Error>,
+    /// The blocks that are yet to be removed from storage.
+    storage_blocks_to_remove: HashSet<HeaderId>,
+    reply_channel: ApplyBlockReply<Tx>,
+}
 
 /// A block that passed verification on a copy of the chain, which holds the
 /// block's changes until it's committed.
@@ -71,6 +73,15 @@ struct VerifiedBlock<Tx> {
     block: Block<Tx>,
     candidate: Cryptarchia,
     applied: TryApplyBlockOutcome,
+}
+
+/// A verified and stored block, with all it takes to commit it.
+struct PreparedBlock<Tx> {
+    candidate: Cryptarchia,
+    block_id: HeaderId,
+    block_slot: Slot,
+    tx_count: usize,
+    outcome: ProcessBlockOutcome<Tx>,
 }
 
 // Source tips normally leave this map when they pass the LIB. These small
@@ -257,8 +268,9 @@ where
     state_recording_timer: tokio::time::Interval,
     prolonged_bootstrap_period: Duration,
     epoch_state_query_sources: EpochStateQuerySourceTracker,
-    /// The block being verified off the service loop, if any.
-    block_under_verification: Option<CancellableHandle<BlockVerification<Tx>>>,
+    /// The block being prepared, if any, which the service loop polls along
+    /// with its other inputs.
+    block_underway: Option<Pin<Box<dyn Future<Output = BlockPreparation<Tx>> + Send + Sync>>>,
     /// The blocks waiting for it.
     queued_blocks: VecDeque<(Block<Tx>, ApplyBlockReply<Tx>)>,
 }
@@ -300,7 +312,7 @@ where
             state_recording_timer: self.state_recording_timer,
             prolonged_bootstrap_period: self.prolonged_bootstrap_period,
             epoch_state_query_sources: self.epoch_state_query_sources,
-            block_under_verification: self.block_under_verification,
+            block_underway: self.block_underway,
             queued_blocks: self.queued_blocks,
         }
     }
@@ -308,17 +320,19 @@ where
     /// Apply a block to the chain, once the blocks ahead of it are through, and
     /// reply with the result.
     ///
-    /// A block's proofs are verified off the service loop, which goes on
-    /// serving queries and slot ticks meanwhile. They're verified on a copy of
-    /// the chain that replaces it when the block is committed, so blocks go one
-    /// at a time: of two verified side by side, one would be lost.
+    /// A block's proofs and storage round trips are polled along with the
+    /// service loop's other inputs, so it goes on serving queries and slot
+    /// ticks meanwhile, and the proofs are verified on the blocking pool. They
+    /// work on a copy of the chain that replaces it when the block is
+    /// committed, so blocks go one at a time: of two prepared side by side, one
+    /// would be lost.
     fn apply_block(&mut self, block: Block<Tx>, reply_channel: ApplyBlockReply<Tx>) {
         self.queued_blocks.push_back((block, reply_channel));
-        self.verify_next_block();
+        self.prepare_next_block();
     }
 
-    fn verify_next_block(&mut self) {
-        if self.block_under_verification.is_some() {
+    fn prepare_next_block(&mut self) {
+        if self.block_underway.is_some() {
             return;
         }
         let Some((block, reply_channel)) = self.queued_blocks.pop_front() else {
@@ -326,35 +340,55 @@ where
         };
         let candidate = self.cryptarchia.clone();
         let current_slot = self.current_slot;
-        self.block_under_verification = Some(
-            spawn_blocking("logos/chain/block-verification-blocking", move || {
-                let verified = verify_block(candidate, block, current_slot, BlockOrigin::Network);
-                (verified, reply_channel)
-            })
-            .into(),
-        );
+        let storage = self.relays.storage().clone();
+        let blocks_to_remove = self.storage_blocks_to_remove.clone();
+        self.block_underway = Some(Box::pin(async move {
+            let prepared = prepare_block(
+                candidate,
+                block,
+                current_slot,
+                BlockOrigin::Network,
+                &storage,
+            )
+            .await;
+            let storage_blocks_to_remove = delete_stale_blocks_from_storage(
+                prepared
+                    .iter()
+                    .flat_map(|prepared| prepared.outcome.pruned_blocks.stale_blocks().copied()),
+                &blocks_to_remove,
+                &storage,
+            )
+            .await;
+            BlockPreparation {
+                prepared,
+                storage_blocks_to_remove,
+                reply_channel,
+            }
+        }));
     }
 
-    /// Commit the block whose verification is over, and move on to the next.
-    async fn finish_block(&mut self, verification: Result<BlockVerification<Tx>, JoinError>) {
-        self.block_under_verification = None;
-        let (verified, reply_channel) = verification.expect("Block verification should not fail");
-        self.commit_block_and_reply(verified, reply_channel).await;
-        self.verify_next_block();
+    /// Commit the block that has been prepared, and move on to the next.
+    async fn finish_block(&mut self, preparation: BlockPreparation<Tx>) {
+        self.block_underway = None;
+        let BlockPreparation {
+            prepared,
+            storage_blocks_to_remove,
+            reply_channel,
+        } = preparation;
+        self.storage_blocks_to_remove = storage_blocks_to_remove;
+        self.commit_block_and_reply(prepared, reply_channel).await;
+        self.prepare_next_block();
     }
 
-    /// Commit a verified block to the chain and reply with the result.
+    /// Commit a prepared block to the chain and reply with the result.
     async fn commit_block_and_reply(
         &mut self,
-        verified: Result<VerifiedBlock<Tx>, Error>,
+        prepared: Result<PreparedBlock<Tx>, Error>,
         reply_channel: ApplyBlockReply<Tx>,
     ) {
-        let outcome = match verified {
-            Ok(verified) => self.commit_block_and_update_state(verified).await,
-            Err(e) => Err(e),
-        };
-        match outcome {
-            Ok(outcome) => {
+        match prepared {
+            Ok(prepared) => {
+                let outcome = self.commit_block_and_update_state(prepared).await;
                 reply_channel
                     .send(Ok(AppliedBlock {
                         tip: self.cryptarchia.tip(),
@@ -375,22 +409,20 @@ where
         }
     }
 
-    /// Commit a verified block and update the service state accordingly.
-    ///
-    /// On error, the service state is not mutated.
+    /// Commit a prepared block and update the service state accordingly.
     async fn commit_block_and_update_state(
         &mut self,
-        verified: VerifiedBlock<Tx>,
-    ) -> Result<ProcessBlockOutcome<Tx>, Error> {
+        prepared: PreparedBlock<Tx>,
+    ) -> ProcessBlockOutcome<Tx> {
         let previous_lib_slot = self.cryptarchia.lib_branch().slot();
         let outcome = commit_block(
             &mut self.cryptarchia,
-            verified,
-            &self.relays,
+            prepared,
+            self.relays.broadcast_relay(),
             &self.new_block_subscription_sender,
             &self.lib_subscription_sender,
         )
-        .await?;
+        .await;
 
         self.log_epoch_state_query_sources_became_stale(
             outcome
@@ -403,16 +435,9 @@ where
             self.retire_epoch_state_query_sources_behind_lib();
         }
 
-        self.storage_blocks_to_remove = delete_stale_blocks_from_storage(
-            outcome.pruned_blocks.stale_blocks().copied(),
-            &self.storage_blocks_to_remove,
-            self.relays.storage(),
-        )
-        .await;
-
         self.record_recovery_state();
 
-        Ok(outcome)
+        outcome
     }
 
     fn log_epoch_state_query_sources_became_stale(
@@ -980,15 +1005,22 @@ where
         + Unpin
         + 'static,
 {
-    let verified = verify_block(cryptarchia.clone(), block, current_slot, origin)?;
-    commit_block(
+    let prepared = prepare_block(
+        cryptarchia.clone(),
+        block,
+        current_slot,
+        origin,
+        relays.storage(),
+    )
+    .await?;
+    Ok(commit_block(
         cryptarchia,
-        verified,
-        relays,
+        prepared,
+        relays.broadcast_relay(),
         new_block_subscription_sender,
         lib_broadcaster,
     )
-    .await
+    .await)
 }
 
 /// Apply `block` to `candidate`, a copy of the chain, which is what verifies
@@ -1019,27 +1051,23 @@ where
     })
 }
 
-/// Store a verified block and replace `cryptarchia` with the copy the block was
-/// verified on, which has to be a copy of `cryptarchia` as it stands now. On
-/// error, `cryptarchia` is unchanged.
+/// All it takes to apply `block` to `candidate`, a copy of the chain, short of
+/// committing it: verifying the block, storing it, and reading the blocks that
+/// a reorg brings in and takes out.
 #[expect(clippy::allow_attributes_without_reason)]
 #[instrument(
     target = LOG_TARGET,
     level = "debug",
-    skip_all,
-    fields(block_id = %block.header().id(), tx_count = block.transactions_iter().count())
+    skip(candidate, block, storage),
+    fields(block_id = %block.header().id(), tx_count = block.transactions_iter().count(), current_slot = ?current_slot)
 )]
-async fn commit_block<Tx>(
-    cryptarchia: &mut Cryptarchia,
-    VerifiedBlock {
-        block,
-        mut candidate,
-        applied,
-    }: VerifiedBlock<Tx>,
-    relays: &CryptarchiaConsensusRelays<Tx>,
-    new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
-    lib_broadcaster: &broadcast::Sender<LibUpdate>,
-) -> Result<ProcessBlockOutcome<Tx>, Error>
+async fn prepare_block<Tx>(
+    candidate: Cryptarchia,
+    block: Block<Tx>,
+    current_slot: Slot,
+    origin: BlockOrigin,
+    storage: &StorageApi<Tx>,
+) -> Result<PreparedBlock<Tx>, Error>
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
@@ -1056,39 +1084,99 @@ where
         + Unpin
         + 'static,
 {
-    let header = block.header().clone();
-    let prev_lib = cryptarchia.lib();
-    let new_lib = candidate.lib();
+    let prev_lib = candidate.lib();
+    let VerifiedBlock {
+        block,
+        mut candidate,
+        applied:
+            TryApplyBlockOutcome {
+                pruned_blocks,
+                reorged_blocks,
+                newly_canonical_blocks,
+                events,
+            },
+    } = spawn_blocking("logos/chain/block-verification-blocking", move || {
+        verify_block(candidate, block, current_slot, origin)
+    })
+    .await
+    .expect("Block verification should not fail")?;
 
+    let header = block.header().clone();
     let tx_count = block.transactions_iter().count();
 
     let immutable_blocks = immutable_blocks_index(
-        &applied.pruned_blocks,
+        &pruned_blocks,
         Some(prev_lib),
-        new_lib,
+        candidate.lib(),
         candidate.consensus.lib_branch().slot(),
     );
 
-    relays
-        .storage()
+    storage
         .store_block_data(
             header.id(),
             header.parent(),
             block.clone(),
-            applied.events,
+            events,
             immutable_blocks,
         )
         .await
         .map_err(|e| Error::Storage(format!("Failed to store block data: {e}")))?;
 
-    log_newly_canonical_blocks(
-        &candidate,
-        &block,
-        &applied.newly_canonical_blocks,
-        relays.storage(),
-    )
-    .await;
-    candidate.prune_ledger_states(applied.pruned_blocks.all());
+    let newly_canonical =
+        newly_canonical_blocks_by_id(block, &newly_canonical_blocks, storage).await;
+    log_newly_canonical_blocks(&candidate, &newly_canonical_blocks, &newly_canonical);
+    candidate.prune_ledger_states(pruned_blocks.all());
+
+    let newly_canonical_txs: HashMap<_, _> = newly_canonical
+        .values()
+        .flat_map(|block| {
+            let slot = block.header().slot();
+            block.transactions_iter().map(move |tx| (tx.hash(), slot))
+        })
+        .collect();
+    let reorged_txs = reorged_txs(reorged_blocks.iter(), &newly_canonical_txs, storage)
+        .await
+        .collect();
+
+    Ok(PreparedBlock {
+        candidate,
+        block_id: header.id(),
+        block_slot: header.slot(),
+        tx_count,
+        outcome: ProcessBlockOutcome {
+            pruned_blocks,
+            reorged_block_ids: reorged_blocks.iter().copied().collect(),
+            reorged_txs,
+            newly_canonical_txs,
+        },
+    })
+}
+
+/// Replace `cryptarchia` with the copy a block was prepared on, which has to be
+/// a copy of `cryptarchia` as it stands now, and tell the block's subscribers.
+#[expect(clippy::allow_attributes_without_reason)]
+#[instrument(
+    target = LOG_TARGET,
+    level = "debug",
+    skip_all,
+    fields(block_id = %block_id, tx_count = tx_count)
+)]
+async fn commit_block<Tx>(
+    cryptarchia: &mut Cryptarchia,
+    PreparedBlock {
+        candidate,
+        block_id,
+        block_slot,
+        tx_count,
+        outcome,
+    }: PreparedBlock<Tx>,
+    broadcast_relay: &BroadcastRelay,
+    new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
+    lib_broadcaster: &broadcast::Sender<LibUpdate>,
+) -> ProcessBlockOutcome<Tx> {
+    let prev_lib = cryptarchia.lib();
+    let new_lib = candidate.lib();
+
     *cryptarchia = candidate;
     metrics::emit_block_transactions_metric(tx_count);
 
@@ -1096,8 +1184,8 @@ where
         let tip = cryptarchia.tip_branch();
         let lib = cryptarchia.lib_branch();
         ProcessedBlockEvent {
-            block_id: header.id(),
-            block_slot: header.slot(),
+            block_id,
+            block_slot,
             tip: tip.id(),
             tip_slot: tip.slot(),
             lib: lib.id(),
@@ -1112,9 +1200,9 @@ where
         log_lib_advanced(
             &prev_lib,
             &new_lib,
-            applied.pruned_blocks.stale_blocks().count(),
-            applied.pruned_blocks.immutable_blocks().len(),
-            applied.reorged_blocks.len(),
+            outcome.pruned_blocks.stale_blocks().count(),
+            outcome.pruned_blocks.immutable_blocks().len(),
+            outcome.reorged_block_ids.len(),
         );
 
         let height = cryptarchia
@@ -1128,15 +1216,15 @@ where
             header_id: new_lib,
         };
 
-        if let Err(e) = broadcast_finalized_block(relays.broadcast_relay(), block_info).await {
+        if let Err(e) = broadcast_finalized_block(broadcast_relay, block_info).await {
             warn!(target: LOG_TARGET, "Failed to notify finalized-block subscribers: {e}");
         }
 
         let lib_update = LibUpdate {
             new_lib: cryptarchia.lib(),
             pruned_blocks: PrunedBlocksInfo {
-                stale_blocks: applied.pruned_blocks.stale_blocks().copied().collect(),
-                immutable_blocks: applied.pruned_blocks.immutable_blocks().clone(),
+                stale_blocks: outcome.pruned_blocks.stale_blocks().copied().collect(),
+                immutable_blocks: outcome.pruned_blocks.immutable_blocks().clone(),
             },
         };
 
@@ -1145,23 +1233,7 @@ where
         }
     }
 
-    let newly_canonical_txs: HashMap<_, _> =
-        newly_canonical_txs(&block, &applied.newly_canonical_blocks, relays.storage())
-            .await
-            .collect();
-    let reorged_txs = reorged_txs(
-        applied.reorged_blocks.iter(),
-        &newly_canonical_txs,
-        relays.storage(),
-    )
-    .await;
-
-    Ok(ProcessBlockOutcome {
-        pruned_blocks: applied.pruned_blocks,
-        reorged_block_ids: applied.reorged_blocks.iter().copied().collect(),
-        reorged_txs: reorged_txs.collect(),
-        newly_canonical_txs,
-    })
+    outcome
 }
 
 /// Blocks of `block_ids`, loaded from storage.
@@ -1194,18 +1266,16 @@ where
     .flatten()
 }
 
-/// Tx hashes carried by `newly_canonical_blocks`, each with the slot of the
-/// block carrying it.
+/// The `newly_canonical_blocks` by ID, as loaded from storage.
 ///
-/// If `applied_block` is among the `newly_canonical_blocks`, its txs are loaded
-/// from `applied_block` instead of storage. This saves a storage read in the
-/// common case where the applied block extends the tip, which is the only newly
+/// `applied_block` is taken as it is if it's among them. This saves a storage
+/// read in the common case where it extends the tip, which is the only newly
 /// canonical block then.
-async fn newly_canonical_txs<Tx>(
-    applied_block: &Block<Tx>,
+async fn newly_canonical_blocks_by_id<Tx>(
+    applied_block: Block<Tx>,
     newly_canonical_blocks: &[HeaderId],
     storage: &StorageApi<Tx>,
-) -> impl Iterator<Item = (TxHash, Slot)>
+) -> HashMap<HeaderId, Block<Tx>>
 where
     Tx: Hashable<Hash = TxHash>
         + StorageSize
@@ -1219,34 +1289,20 @@ where
         + Sync
         + 'static,
 {
-    // Gather txs from all newly canonical blocks except `applied_block`.
     let applied_block_id = applied_block.header().id();
-    let early_txs = load_blocks(
+    let mut blocks = load_blocks(
         newly_canonical_blocks
             .iter()
             .filter(move |block_id| **block_id != applied_block_id),
         storage,
     )
     .await
-    .flat_map(|block| {
-        let slot = block.header().slot();
-        block
-            .into_transactions()
-            .into_iter()
-            .map(move |tx| (tx.hash(), slot))
-    });
-
-    // Gather txs from `applied_block` if it's among the newly canonical blocks.
-    let applied_slot = applied_block.header().slot();
-    let applied_txs = newly_canonical_blocks
-        .contains(&applied_block_id)
-        .then(|| applied_block.transactions_iter())
-        .into_iter()
-        .flatten()
-        .map(move |tx| (tx.hash(), applied_slot));
-
-    // Return all gathered txs.
-    early_txs.chain(applied_txs)
+    .map(|block| (block.header().id(), block))
+    .collect::<HashMap<_, _>>();
+    if newly_canonical_blocks.contains(&applied_block_id) {
+        blocks.insert(applied_block_id, applied_block);
+    }
+    blocks
 }
 
 /// Transactions carried by `reorged_blocks` that are not in
@@ -1284,11 +1340,10 @@ where
         .filter(move |reorged| !newly_canonical_txs.contains_key(&reorged.tx.hash()))
 }
 
-async fn log_newly_canonical_blocks<Tx>(
+fn log_newly_canonical_blocks<Tx>(
     cryptarchia: &Cryptarchia,
-    applied_block: &Block<Tx>,
     newly_canonical_blocks: &[HeaderId],
-    storage: &StorageApi<Tx>,
+    blocks: &HashMap<HeaderId, Block<Tx>>,
 ) where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
@@ -1310,12 +1365,7 @@ async fn log_newly_canonical_blocks<Tx>(
     }
 
     for block_id in newly_canonical_blocks {
-        let canonical_block = if *block_id == applied_block.header().id() {
-            Some(applied_block.clone())
-        } else {
-            storage.get_block(block_id).await
-        };
-        let Some(canonical_block) = canonical_block else {
+        let Some(canonical_block) = blocks.get(block_id) else {
             warn!(
                 target: LOG_TARGET,
                 diagnostic = BLEND_REACHABILITY,
@@ -1328,10 +1378,10 @@ async fn log_newly_canonical_blocks<Tx>(
         log_canonical_sdp_activity(
             cryptarchia,
             canonical_block.header().parent(),
-            &canonical_block,
+            canonical_block,
         );
-        log_canonical_blend_snapshots(cryptarchia, &canonical_block);
-        log_canonical_tsi_transition(cryptarchia, &canonical_block);
+        log_canonical_blend_snapshots(cryptarchia, canonical_block);
+        log_canonical_tsi_transition(cryptarchia, canonical_block);
     }
 }
 
@@ -1459,91 +1509,24 @@ pub async fn delete_stale_blocks_from_storage<Tx>(
     stale_blocks: impl Iterator<Item = HeaderId> + Send,
     additional_blocks: &HashSet<HeaderId>,
     storage: &StorageApi<Tx>,
-) -> HashSet<HeaderId>
-where
-    Tx: Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + BinaryEncode
-        + BinaryDecode<Context = u32>
-        + Hashable<Hash = TxHash>
-        + StorageSize,
-{
-    match delete_blocks_from_storage(
-        stale_blocks.chain(additional_blocks.iter().copied()),
-        storage,
-    )
-    .await
-    {
-        // No blocks failed to be deleted.
-        Ok(()) => HashSet::new(),
-        // We retain the blocks that failed to be deleted.
-        Err(failed_blocks) => failed_blocks
-            .into_iter()
-            .map(|(block_id, _)| block_id)
-            .collect(),
+) -> HashSet<HeaderId> {
+    let blocks = stale_blocks
+        .chain(additional_blocks.iter().copied())
+        .collect::<HashSet<_>>();
+    if blocks.is_empty() {
+        return blocks;
     }
-}
 
-/// Send a bulk blocks deletion request to the storage adapter.
-///
-/// If no request fails, the method returns `Ok()`.
-/// If any request fails, the header ID and the generated error for each
-/// failing request are collected and returned as part of the `Err`
-/// result.
-async fn delete_blocks_from_storage<Headers, Tx>(
-    block_headers: Headers,
-    storage: &StorageApi<Tx>,
-) -> Result<(), Vec<(HeaderId, DynError)>>
-where
-    Headers: Iterator<Item = HeaderId> + Send,
-    Tx: Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + BinaryEncode
-        + BinaryDecode<Context = u32>
-        + Hashable<Hash = TxHash>
-        + StorageSize,
-{
-    let blocks_to_delete = block_headers.collect::<Vec<_>>();
-    let block_deletion_outcomes = blocks_to_delete.iter().copied().zip(
-        storage
-            .remove_blocks(blocks_to_delete.iter().copied())
-            .await,
-    );
-
-    let errors: Vec<_> = block_deletion_outcomes
-        .filter_map(|(block_id, outcome)| match outcome {
-            Ok(Some(_)) => {
-                debug!(
-                    target: LOG_TARGET,
-                    "Block {block_id:#?} successfully deleted from storage."
-                );
-                None
-            }
-            Ok(None) => {
-                trace!(
-                    target: LOG_TARGET,
-                    "Block {block_id:#?} was not found in storage."
-                );
-                None
-            }
-            Err(e) => {
-                error!(
-                    target: LOG_TARGET,
-                    "Error deleting block {block_id:#?} from storage: {e}."
-                );
-                Some((block_id, e))
-            }
-        })
-        .collect();
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
+    match storage.remove_blocks(blocks.iter().copied()).await {
+        Ok(()) => {
+            debug!(target: LOG_TARGET, "Deleted {} stale block(s) from storage.", blocks.len());
+            HashSet::new()
+        }
+        // We retain the blocks that failed to be deleted.
+        Err(e) => {
+            error!(target: LOG_TARGET, "Could not delete {} stale block(s) from storage: {e}", blocks.len());
+            blocks
+        }
     }
 }
 
@@ -1658,12 +1641,13 @@ fn log_lib_advanced(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc as std_mpsc;
+    use std::{iter, sync::mpsc as std_mpsc};
 
     use futures::channel::mpsc as slot_tick_channel;
     use lb_core::mantle::{SignedOps, Utxo};
     use lb_cryptarchia_engine::{Era, State};
     use lb_key_management_system_keys::keys::ZkKey;
+    use lb_storage_service::StorageMsg;
     use lb_time_service::SlotTick;
     use overwatch::services::relay::{OutboundRelay, Relay};
     use tempfile::TempDir;
@@ -1695,7 +1679,7 @@ mod tests {
     struct ServiceHandle {
         relay: OutboundRelay<ConsensusMsg<TestTx>>,
         slot_ticks: slot_tick_channel::Sender<SlotTick>,
-        _storage: (JoinHandle<()>, TempDir),
+        _storage: Option<(JoinHandle<()>, TempDir)>,
     }
 
     impl ServiceHandle {
@@ -1754,13 +1738,38 @@ mod tests {
     where
         Phase: phases::Phase,
     {
+        let (storage_tx, storage_rx) = mpsc::channel(16);
+        let (service, handle) = service_on_storage(
+            storage_tx,
+            phase,
+            cryptarchia,
+            current_slot,
+            prolonged_bootstrap_period,
+        );
+        let handle = ServiceHandle {
+            _storage: Some(spawn_storage_service(storage_rx)),
+            ..handle
+        };
+        (service, handle)
+    }
+
+    /// A [`Service`] whose storage is whatever answers `storage_tx`.
+    fn service_on_storage<Phase>(
+        storage_tx: mpsc::Sender<StorageMsg>,
+        phase: Phase,
+        cryptarchia: Cryptarchia,
+        current_slot: Slot,
+        prolonged_bootstrap_period: Duration,
+    ) -> (Service<Phase, TestTx>, ServiceHandle)
+    where
+        Phase: phases::Phase,
+    {
         let Relay {
             inbound_relay,
             outbound_relay,
             ..
         } = Relay::new(16);
         let (slot_ticks, slot_timer) = slot_tick_channel::channel(16);
-        let (storage_tx, storage_rx) = mpsc::channel(16);
         let (broadcast_tx, _) = mpsc::channel(16);
         let (time_tx, _) = mpsc::channel(16);
         let storage = StorageApi::new(OutboundRelay::new(storage_tx));
@@ -1794,14 +1803,14 @@ mod tests {
             state_recording_timer: interval(Duration::from_hours(1)),
             prolonged_bootstrap_period,
             epoch_state_query_sources: EpochStateQuerySourceTracker::default(),
-            block_under_verification: None,
+            block_underway: None,
             queued_blocks: VecDeque::new(),
             cryptarchia,
         };
         let handle = ServiceHandle {
             relay: outbound_relay,
             slot_ticks,
-            _storage: spawn_storage_service(storage_rx),
+            _storage: None,
         };
         (service, handle)
     }
@@ -1894,10 +1903,90 @@ mod tests {
         });
     }
 
+    /// Storing is the one round trip a block on the tip takes.
+    #[tokio::test]
+    async fn the_service_goes_on_while_a_block_is_stored() {
+        let (zk_key, utxo) = utxo();
+        let chain = genesis_cryptarchia(utxo);
+        let genesis = chain.tip();
+        let (block, _) = two_blocks(&chain, utxo, &zk_key);
+        let block_id = block.header().id();
+        let (storage_tx, mut storage_rx) = mpsc::channel(16);
+        let (service, handle) = service_on_storage(
+            storage_tx,
+            Following,
+            chain,
+            block.header().slot(),
+            Duration::ZERO,
+        );
+        tokio::spawn(service.process_following());
+
+        let applied = handle.apply(block).await;
+        let request = timeout(REPLY_TIMEOUT, storage_rx.recv()).await.unwrap();
+        let Some(StorageMsg::StoreBlockData { response_tx, .. }) = request else {
+            panic!("the block should be stored first");
+        };
+
+        assert_eq!(handle.info().await.tip, genesis);
+
+        response_tx.send(Ok(())).unwrap();
+        assert_eq!(replied(applied).await.unwrap().tip, block_id);
+        assert!(storage_rx.try_recv().is_err());
+    }
+
+    /// The stale block and the one left from before, for a storage that answers
+    /// `reply` to deleting them, and what the deletion leaves to remove.
+    async fn deletion_answered_with(
+        reply: Result<(), String>,
+    ) -> (HeaderId, HeaderId, HashSet<HeaderId>) {
+        let (storage_tx, mut storage_rx) = mpsc::channel(1);
+        let storage = StorageApi::<TestTx>::new(OutboundRelay::new(storage_tx));
+        tokio::spawn(async move {
+            let Some(StorageMsg::RemoveBlocks { response_tx, .. }) = storage_rx.recv().await else {
+                panic!("the blocks should be removed");
+            };
+            response_tx.send(reply).unwrap();
+        });
+        let (stale, left_from_before) = (HeaderId::from([1; 32]), HeaderId::from([2; 32]));
+
+        let remaining = delete_stale_blocks_from_storage(
+            iter::once(stale),
+            &HashSet::from([left_from_before]),
+            &storage,
+        )
+        .await;
+        (stale, left_from_before, remaining)
+    }
+
+    #[tokio::test]
+    async fn deleted_blocks_are_forgotten() {
+        let (_, _, remaining) = deletion_answered_with(Ok(())).await;
+
+        assert_eq!(remaining, HashSet::new());
+    }
+
+    #[tokio::test]
+    async fn blocks_that_could_not_be_deleted_are_kept_for_later() {
+        let (stale, left_from_before, remaining) =
+            deletion_answered_with(Err("storage failure".to_owned())).await;
+
+        assert_eq!(remaining, HashSet::from([stale, left_from_before]));
+    }
+
+    #[tokio::test]
+    async fn nothing_to_delete_leaves_storage_alone() {
+        let (storage_tx, mut storage_rx) = mpsc::channel(1);
+        let storage = StorageApi::<TestTx>::new(OutboundRelay::new(storage_tx));
+
+        delete_stale_blocks_from_storage(iter::empty(), &HashSet::new(), &storage).await;
+
+        assert!(storage_rx.try_recv().is_err());
+    }
+
     /// Going online changes the chain, and the block would undo that by
-    /// replacing it with the copy it was verified on.
+    /// replacing it with the copy it was prepared on.
     #[test]
-    fn going_online_waits_for_the_block_under_verification() {
+    fn going_online_waits_for_the_block_underway() {
         runtime().block_on(async {
             let (zk_key, utxo) = utxo();
             let chain = genesis_cryptarchia(utxo);
