@@ -16,7 +16,10 @@ use std::{
     time::Duration,
 };
 
-use futures::{FutureExt as _, Stream, StreamExt as _, stream};
+use futures::{
+    FutureExt as _, Stream, StreamExt as _,
+    stream::{self, FuturesUnordered},
+};
 use lb_blend_service::message::proposal_diagnostic_timestamp_unix_ms;
 use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
 use lb_chain_service::{
@@ -561,6 +564,9 @@ where
             )
             .fuse()
         );
+        // Building a claim's transaction proves too, so the loop polls claims
+        // along with its other inputs as well.
+        let mut claims = FuturesUnordered::new();
 
         self.service_resources_handle.status_updater.notify_ready();
         info!(
@@ -599,10 +605,12 @@ where
                     }
 
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
-                        Self::handle_inbound_message(msg, &cryptarchia_api, &wallet_api, &kms_api, relays.time_relay(), &era_schedule, &consensus_excluded_keys, &wallet_config, relays.mempool_adapter()).await;
+                        Self::handle_inbound_message(msg, &cryptarchia_api, &wallet_api, &kms_api, relays.time_relay(), &era_schedule, &consensus_excluded_keys, &wallet_config, &mempool, &claims);
                     }
 
                     () = &mut proposing => {}
+
+                    Some(()) = claims.next() => {}
                 }
             }
         };
@@ -674,7 +682,7 @@ where
         + 'static,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
     <Mempool as MemPool>::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    TimeBackend: lb_time_service::backends::TimeBackend,
+    TimeBackend: lb_time_service::backends::TimeBackend + 'static,
     TimeBackend::Settings: Clone + Send + Sync,
     CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Item> + 'static,
     ChainNetwork: ChainNetworkServiceData<Tx = Mempool::Item>,
@@ -925,22 +933,29 @@ where
 
     #[expect(
         clippy::too_many_arguments,
-        reason = "All handles are required to serve the winning-slot subscription off the main loop."
+        reason = "All handles are required to serve claims and the winning-slot subscription."
     )]
-    async fn handle_inbound_message(
+    fn handle_inbound_message<'a>(
         msg: LeaderMsg,
-        cryptarchia: &CryptarchiaServiceApi<CryptarchiaService>,
-        wallet: &WalletApi<Wallet, RuntimeServiceId>,
+        cryptarchia: &'a CryptarchiaServiceApi<CryptarchiaService>,
+        wallet: &'a WalletApi<Wallet, RuntimeServiceId>,
         kms: &KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
         time_relay: &OutboundRelay<TimeServiceMessage>,
         era_schedule: &Arc<EraScheduledConfig>,
         consensus_excluded_keys: &ConsensusExcludedKeys,
-        config: &LeaderWalletConfig,
-        mempool: &MempoolAdapter<Mempool::Item>,
+        config: &'a LeaderWalletConfig,
+        mempool: &'a MempoolAdapter<Mempool::Item>,
+        claims: &FuturesUnordered<Pin<Box<dyn Future<Output = ()> + Send + 'a>>>,
     ) {
         match msg {
             LeaderMsg::Claim { sender } => {
-                Self::handle_claim_message(cryptarchia, wallet, config, mempool, sender).await;
+                claims.push(Box::pin(Self::handle_claim_message(
+                    cryptarchia,
+                    wallet,
+                    config,
+                    mempool,
+                    sender,
+                )));
             }
             LeaderMsg::PotentialWinningPolEpochSlotStreamSubscribe { sender } => {
                 // Spawn a dedicated, off-main-loop task that scans winning slots
