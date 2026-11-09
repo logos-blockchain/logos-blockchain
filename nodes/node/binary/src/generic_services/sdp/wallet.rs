@@ -38,7 +38,8 @@ where
     R: AsServiceId<S> + std::fmt::Debug + std::fmt::Display + Sync,
 {
     // Rejects a funded transaction whose fee exceeds the configured maximum,
-    // releasing `reserved`, the notes this request reserved for it.
+    // releasing `reserved`, the notes this request reserved for it. A funding
+    // capped at that maximum exceeds it only when its mandatory fee does.
     async fn check_tx_fee(
         &self,
         funded: &MantleTxBuilder,
@@ -140,6 +141,7 @@ where
                 config.funding_pk,
                 vec![config.funding_pk],
                 lb_wallet_service::FEE_MARGIN_PERCENT,
+                Some(config.max_tx_fee),
             )
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
@@ -207,6 +209,7 @@ where
                 config.funding_pk,
                 vec![config.funding_pk],
                 lb_wallet_service::FEE_MARGIN_PERCENT,
+                Some(config.max_tx_fee),
             )
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
@@ -243,6 +246,7 @@ where
                 config.funding_pk,
                 vec![config.funding_pk],
                 lb_wallet_service::FEE_MARGIN_PERCENT,
+                Some(config.max_tx_fee),
             )
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;

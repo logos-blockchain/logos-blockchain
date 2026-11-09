@@ -180,7 +180,9 @@ pub mod fund {
         pub tx_builder: MantleTxBuilder,
         pub change_public_key: ZkPublicKey,
         pub funding_public_keys: Vec<ZkPublicKey>,
-        /// Absolute hard cap on the final funded transaction fee.
+        /// Absolute hard cap on the final funded transaction fee. The priority
+        /// reserve is cut down to stay within it, so only a mandatory fee above
+        /// it refuses the request.
         pub max_tx_fee: GasCost,
         /// Percentage of the final mandatory fee reserved as a priority fee.
         /// The percentage applies to the complete mandatory fee (execution
