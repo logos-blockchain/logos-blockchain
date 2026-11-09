@@ -295,7 +295,10 @@ mod tests {
     use lb_key_management_system_keys::keys::{Ed25519Key, UnverifiedEd25519PublicKey};
 
     use super::*;
-    use crate::mantle::transactions::{GasPrices, tx_list::ops::OpsGasContext};
+    use crate::mantle::{
+        gas::test_utils::GAS_PROFILE,
+        transactions::{GasPrices, tx_list::ops::OpsGasContext},
+    };
 
     fn test_public_key(seed: u8) -> UnverifiedEd25519PublicKey {
         Ed25519Key::from_bytes(&[seed; 32])
@@ -374,7 +377,8 @@ mod tests {
             channel_notes: ChannelNotes::new(),
         };
 
-        let gas_context = OpsGasContext::from_channels(&channels, GasPrices::new(0, 0));
+        let gas_context =
+            OpsGasContext::from_channels(&channels, GasPrices::new(0, 0), GAS_PROFILE);
 
         assert_eq!(gas_context.transfer_threshold(&first_id), Some(1));
         assert_eq!(gas_context.transfer_threshold(&second_id), Some(2));

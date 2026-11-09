@@ -18,7 +18,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         NoteId, Op, OpProof, SignedOps, TxHash, Utxo, Value, VerificationError,
-        gas::{GasCost, GasOverflow, MainnetGasProfile},
+        gas::{GasCost, GasOverflow, GasProfile},
         ledger::{Inputs, verification_mode::StandardMode},
         ops::{
             NoOpProof, OpRef, ZkAndEd25519Proof,
@@ -239,6 +239,8 @@ struct LeaderClaimTxRequest {
     tip: HeaderId,
     /// The fork digest the claim is signed under.
     fork_digest: ForkDigest,
+    /// What the era of that fork digest charges, which the claim is funded for.
+    gas_profile: GasProfile,
     rewards_root: RewardsRoot,
     reward_amount: Value,
     funding_pk: ZkPublicKey,
@@ -383,6 +385,8 @@ pub struct WalletEraSettings {
     /// The fork digest of the era, which the transactions the wallet signs in
     /// it carry.
     pub fork_digest: ForkDigest,
+    /// What the era's Operations cost, which the wallet funds transactions for.
+    pub gas_profile: GasProfile,
 }
 
 impl EpochLength for WalletEraSettings {
@@ -432,7 +436,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + StorageSize
         + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx>,
@@ -549,7 +553,8 @@ where
         .await?;
 
         // The transactions the wallet signs carry the fork digest of the era
-        // the clock is in.
+        // the clock is in, and are funded for what that era charges: they can
+        // only land in it or in a later one, even while the tip is older.
         let (current_era, mut era_ticks) =
             TimeServiceApi::<TimeService<TimeBackend, RuntimeServiceId>>::new(
                 &service_resources_handle.overwatch_handle,
@@ -565,7 +570,7 @@ where
         loop {
             tokio::select! {
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
-                    Box::pin(Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage, &cryptarchia_api, &kms, &settings.era_schedule, era_in_force.parameters.fork_digest)).await;
+                    Box::pin(Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage, &cryptarchia_api, &kms, &settings.era_schedule, era_in_force.parameters)).await;
                 }
                 Some(EraEvent::NewEra { era: new_era, .. }) = era_ticks.next() => {
                     if new_era > era_in_force.era {
@@ -606,7 +611,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + StorageSize
         + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx> + Send + 'static,
@@ -654,7 +659,7 @@ where
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         era_schedule: &ServiceEraSchedule,
-        fork_digest: ForkDigest,
+        era_settings: &WalletEraSettings,
     ) {
         if let Err(err) =
             Self::backfill_if_not_in_sync(msg.tip(), state, storage, cryptarchia, era_schedule)
@@ -691,14 +696,14 @@ where
                 // tip-dependent, so a builder handed to us earlier must be funded
                 // against the current context rather than a stale one.
                 let context = match Self::ledger_state_at(tip, cryptarchia).await {
-                    Ok(ledger) => ledger.tx_context(),
+                    Ok(ledger) => ledger.tx_context(era_settings.gas_profile),
                     Err(err) => {
                         Self::send_err(resp_tx, err);
                         return;
                     }
                 };
 
-                let funded = match state.fund_tx::<MainnetGasProfile>(
+                let funded = match state.fund_tx(
                     tip,
                     &tx_builder,
                     change_pk,
@@ -745,7 +750,8 @@ where
                 };
                 let request = LeaderClaimTxRequest {
                     tip,
-                    fork_digest,
+                    fork_digest: era_settings.fork_digest,
+                    gas_profile: era_settings.gas_profile,
                     rewards_root,
                     reward_amount,
                     funding_pk,
@@ -812,12 +818,19 @@ where
                 let funded_notes: Vec<NoteId> =
                     tx_builder.notes_consumed_or_used_in_service().collect();
 
-                let resp = Self::sign_tx(tx_builder, fork_digest, tip, ledger, kms, state.wallet())
-                    .await
-                    .map(|signed_tx| TipResponse {
-                        tip,
-                        response: signed_tx,
-                    });
+                let resp = Self::sign_tx(
+                    tx_builder,
+                    era_settings.fork_digest,
+                    tip,
+                    ledger,
+                    kms,
+                    state.wallet(),
+                )
+                .await
+                .map(|signed_tx| TipResponse {
+                    tip,
+                    response: signed_tx,
+                });
 
                 let signing_failed = resp.is_err();
                 let response_delivered = resp_tx.send(resp).is_ok();
@@ -883,7 +896,8 @@ where
                 Self::get_known_addresses(state.wallet(), resp_tx);
             }
             WalletMsg::GetTxContext { block_id, resp_tx } => {
-                Self::get_tx_context(block_id, resp_tx, cryptarchia).await;
+                Self::get_tx_context(block_id, resp_tx, cryptarchia, era_settings.gas_profile)
+                    .await;
             }
         }
     }
@@ -1441,14 +1455,14 @@ where
         state: &mut ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<(SignedOps<Preverified, StandardMode>, Vec<NoteId>), WalletServiceError> {
-        let context = ledger.tx_context();
+        let context = ledger.tx_context(request.gas_profile);
         let tx_builder = MantleTxBuilder::new().push_op(Op::LeaderClaim(LeaderClaimOp {
             rewards_root: request.rewards_root,
             voucher_nullifier,
             pk: request.funding_pk,
         }))?;
 
-        let funded_tx_builder = state.fund_tx::<MainnetGasProfile>(
+        let funded_tx_builder = state.fund_tx(
             request.tip,
             &tx_builder,
             request.funding_pk,
@@ -1480,9 +1494,9 @@ where
         state: &ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<SignedOps<Preverified, StandardMode>, WalletServiceError> {
-        let context = ledger.tx_context();
+        let context = ledger.tx_context(request.gas_profile);
         let net_balance = funded_tx_builder.net_balance();
-        let gas_cost = funded_tx_builder.minimum_gas_cost::<MainnetGasProfile>(&context)?;
+        let gas_cost = funded_tx_builder.minimum_gas_cost(&context)?;
         debug!(
             target: LOG_TARGET,
             net_balance,
@@ -1808,6 +1822,7 @@ where
         block_id: Option<HeaderId>,
         resp_tx: Sender<Result<OpsContext, WalletServiceError>>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
+        gas_profile: GasProfile,
     ) {
         let block_id = match Self::msg_tip_or_latest(block_id, cryptarchia).await {
             Ok(block_id) => block_id,
@@ -1825,7 +1840,8 @@ where
             }
         };
 
-        if let Err(e) = resp_tx.send(Ok(ledger_state.tx_context())) {
+        let context = ledger_state.tx_context(gas_profile);
+        if let Err(e) = resp_tx.send(Ok(context)) {
             debug!(target: LOG_TARGET, err = ?e, "Failed to send gas context response");
         }
     }

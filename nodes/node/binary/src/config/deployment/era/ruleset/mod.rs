@@ -68,7 +68,7 @@ impl EraRuleset {
     pub fn blend_payload_body_size(&self) -> u16 {
         match self {
             Self::V1(parameters) => u16::try_from(parameters.cryptarchia.max_proposal_size())
-                .expect("max proposal size fits in u16"),
+                .expect("The era's checks keep its largest proposal within a Blend payload."),
         }
     }
 

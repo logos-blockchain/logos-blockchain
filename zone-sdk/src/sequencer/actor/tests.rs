@@ -11,7 +11,7 @@ use lb_core::{
             channel::{
                 MsgId, UnverifiedChannelKeys, VerifiedChannelKeys,
                 config::ChannelConfigOp,
-                deposit::DepositOp,
+                deposit::{DepositOp, Metadata},
                 inscribe::{Inscription, InscriptionOp},
                 withdraw::ChannelWithdrawOp,
             },
@@ -74,7 +74,7 @@ async fn prepare_submit_deposit_and_inscription() {
     let deposit_op = DepositOp {
         channel_id,
         inputs: BoundedInputs::from(utxo.id()).into(),
-        metadata: b"to Alice".into(),
+        metadata: Metadata::new_unchecked(b"to Alice".to_vec()),
     };
 
     // Build a `MantleTx` via the handle
@@ -82,7 +82,7 @@ async fn prepare_submit_deposit_and_inscription() {
         .handle()
         .prepare_tx(
             Ops::new(FORK_DIGEST, [Op::ChannelDeposit(deposit_op.clone())]),
-            b"Mint 10 to Alice".into(),
+            Inscription::new_unchecked(b"Mint 10 to Alice".to_vec()),
         )
         .unwrap();
     assert_eq!(tx.inner().len(), 2);
@@ -139,7 +139,7 @@ async fn submit_signed_tx_refuses_a_parent_with_a_pending_child() {
         .handle()
         .prepare_tx(
             Ops::new(FORK_DIGEST, TxList::new_unchecked(Vec::new())),
-            b"prepared first".into(),
+            Inscription::new_unchecked(b"prepared first".to_vec()),
         )
         .unwrap();
     let signed_tx =
@@ -148,7 +148,7 @@ async fn submit_signed_tx_refuses_a_parent_with_a_pending_child() {
 
     sequencer
         .handle()
-        .publish(b"published in between".into())
+        .publish(Inscription::new_unchecked(b"published in between".to_vec()))
         .await
         .unwrap();
 
@@ -192,7 +192,7 @@ async fn gap_deposits_surface_after_a_failed_backfill_and_a_fork_switch() {
         let op = DepositOp {
             channel_id,
             inputs: BoundedInputs::from(NoteId::from(Fr::from(n))).into(),
-            metadata: Metadata::try_from(vec![u8::try_from(n).unwrap()]).unwrap(),
+            metadata: Metadata::new_unchecked(vec![u8::try_from(n).unwrap()]),
         };
         let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(op.clone())]);
         let note = DepositNote {
@@ -349,7 +349,7 @@ async fn drive_stale_publish(
             break;
         }
     }
-    let publish = client.publish(b"stale".into());
+    let publish = client.publish(Inscription::new_unchecked(b"stale".to_vec()));
     tokio::select! {
         result = publish => drop(result.expect("publish is accepted after Ready")),
         () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
@@ -421,7 +421,7 @@ async fn funding_record_survives_a_checkpoint_round_trip() {
             break;
         }
     }
-    let publish = client.publish(b"restored".into());
+    let publish = client.publish(Inscription::new_unchecked(b"restored".to_vec()));
     let (result, checkpoint) = tokio::select! {
         result = publish => result.expect("publish is accepted after Ready"),
         () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
@@ -679,7 +679,7 @@ async fn client_publish_fails_fast_during_reconnect_and_recovers() {
     // `wait_reconnect_delay` while the node is still down. With the old
     // behavior the request would never be drained during reconnect and this
     // would hang (caught by the timeout).
-    let publish = client.publish(b"during-reconnect".into());
+    let publish = client.publish(Inscription::new_unchecked(b"during-reconnect".to_vec()));
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         tokio::select! {
             result = publish => result,
@@ -706,7 +706,7 @@ async fn client_publish_fails_fast_during_reconnect_and_recovers() {
     .expect("Ready should be re-announced after reconnect");
 
     // Publishing works again and the inscription is posted.
-    let publish = client.publish(b"after-reconnect".into());
+    let publish = client.publish(Inscription::new_unchecked(b"after-reconnect".to_vec()));
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         tokio::select! {
             result = publish => result,
@@ -980,7 +980,7 @@ async fn publish_after_bundle_chains_on_the_bundle_inscription_tip() {
 
     let inscribe = InscriptionOp {
         channel_id,
-        inscription: b"bundle".to_vec().try_into().unwrap(),
+        inscription: Inscription::new_unchecked(b"bundle".to_vec()),
         parent: MsgId::root(),
         signer: sequencer_key.public_key().into_unverified(),
     };
@@ -1012,7 +1012,7 @@ async fn publish_after_bundle_chains_on_the_bundle_inscription_tip() {
 
     let (published, _cp) = sequencer
         .handle()
-        .publish(b"after-bundle".into())
+        .publish(Inscription::new_unchecked(b"after-bundle".to_vec()))
         .await
         .expect("publish after bundle should be accepted");
     assert_eq!(
@@ -1073,7 +1073,7 @@ async fn config_only_block_orphans_pending_inscription_but_keeps_message_tip() {
         }
     }
 
-    let publish = client.publish(b"survives-config".into());
+    let publish = client.publish(Inscription::new_unchecked(b"survives-config".to_vec()));
     let (result, _checkpoint) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         tokio::select! {
             result = publish => result,
@@ -1152,7 +1152,7 @@ fn track_pending_tx_classifies_atomic_bundle_with_withdraws() {
     };
     let inscribe_op = InscriptionOp {
         channel_id,
-        inscription: Inscription::try_from(b"hello".to_vec()).unwrap(),
+        inscription: Inscription::new_unchecked(b"hello".to_vec()),
         parent: MsgId::root(),
         signer: Ed25519Key::from_bytes(&[0; 32])
             .public_key()
@@ -1191,7 +1191,7 @@ fn track_pending_tx_classifies_plain_inscription_with_none_withdraws() {
     let channel_id = ChannelId::from([2u8; 32]);
     let inscribe_op = InscriptionOp {
         channel_id,
-        inscription: Inscription::try_from(b"hello".to_vec()).unwrap(),
+        inscription: Inscription::new_unchecked(b"hello".to_vec()),
         parent: MsgId::root(),
         signer: Ed25519Key::from_bytes(&[0; 32])
             .public_key()
@@ -1218,7 +1218,7 @@ fn track_pending_tx_falls_back_to_other_when_no_inscribe_for_channel() {
     let other_channel = ChannelId::from([4u8; 32]);
     let inscribe_op = InscriptionOp {
         channel_id: other_channel,
-        inscription: Inscription::try_from(b"hello".to_vec()).unwrap(),
+        inscription: Inscription::new_unchecked(b"hello".to_vec()),
         parent: MsgId::root(),
         signer: Ed25519Key::from_bytes(&[0; 32])
             .public_key()
@@ -1278,7 +1278,7 @@ async fn cold_start_backfills_genesis_slot() {
     let deposit = DepositOp {
         channel_id,
         inputs: BoundedInputs::from(NoteId::from(Fr::from(1u64))).into(),
-        metadata: Metadata::try_from(vec![1u8]).unwrap(),
+        metadata: Metadata::new_unchecked(vec![1u8]),
     };
     let deposit_tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(deposit.clone())]);
     let note_id = NoteId::from(Fr::from(1001u64));

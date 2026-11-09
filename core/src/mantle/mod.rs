@@ -9,7 +9,6 @@ pub mod ops;
 pub mod traits;
 pub mod transactions;
 
-pub use gas::GasProfile;
 pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof, OpProofRef, OpRef};
 pub use transactions::{

@@ -11,7 +11,7 @@
 
 use blake2::Digest as _;
 use divan::{Bencher, black_box};
-use lb_binary_codec::canonical::{BinaryDecodeExt as _, BinaryEncode as _};
+use lb_binary_codec::canonical::{BinaryDecode as _, BinaryEncode as _};
 use lb_groth16::{Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes_unchecked};
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey};
 use lb_poseidon2::Digest;
@@ -195,6 +195,7 @@ fn bench_decode_mantle_transaction(bencher: Bencher, size: usize) {
         let protected_input_slice = black_box(&encoded);
         black_box(SignedOps::<Unverified, StandardMode>::decode(
             protected_input_slice,
+            &u32::MAX,
         ))
     });
 }

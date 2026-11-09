@@ -1,8 +1,8 @@
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 #[cfg(any(test, feature = "test-utils"))]
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
-use lb_utils::bounded::UpperBoundedVec;
+use lb_utils::bounded::UpperRuntimeBoundedVec;
 use serde::{Deserialize, Serialize};
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -12,7 +12,6 @@ use crate::{
     mantle::{
         batch::DeferredZkSig,
         channel::{Channels, Error},
-        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             ExecutableOperation, Inputs, InputsError, Outputs, PreverifiableOperation,
             ProvableOperation, Utxos, VerifiableOperation,
@@ -27,14 +26,42 @@ use crate::{
     sdp::service_notes::ServiceNotes,
 };
 
-pub const MAX_METADATA_SIZE: usize = u32::MAX as usize;
-pub type Metadata = UpperBoundedVec<u8, { MAX_METADATA_SIZE }>;
+/// The bytes a deposit attaches, at most as many as the era it is decoded under
+/// allows.
+///
+/// The length is checked against the era's maximum, a `u32`, when the metadata
+/// is built or decoded. Serde reads it without an era, under the largest
+/// maximum of the type.
+pub type Metadata = UpperRuntimeBoundedVec<u8, u32>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode)]
 pub struct DepositOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
     pub metadata: Metadata,
+}
+
+// Every field in declaration order.
+impl BinaryDecode for DepositOp {
+    /// The most bytes the era the deposit is decoded under allows its metadata.
+    type Context = u32;
+
+    fn decode<'input>(
+        input: &'input [u8],
+        max_metadata_size: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, channel_id) = ChannelId::decode(input, &())?;
+        let (input, inputs) = Inputs::decode(input, &())?;
+        let (input, metadata) = Metadata::decode(input, &(*max_metadata_size, ()))?;
+        Ok((
+            input,
+            Self {
+                channel_id,
+                inputs,
+                metadata,
+            },
+        ))
+    }
 }
 
 impl DepositOp {
@@ -60,8 +87,7 @@ impl DepositOp {
         Self {
             channel_id: ChannelId::from([16u8; 32]),
             inputs: crate::mantle::ledger::BoundedInputs::from(NoteId(Fr::from(17u64))).into(),
-            metadata: Metadata::try_from(b"deposit-metadata".to_vec())
-                .expect("Metadata is within bounds."),
+            metadata: Metadata::new_unchecked(b"deposit-metadata".to_vec()),
         }
     }
 }
@@ -89,12 +115,6 @@ impl ProvableOperation for DepositOp {
     type Proof = ZkSignature;
     const CODE: u8 = 0x12;
 }
-
-impl OperationGas<MainnetGasProfile> for DepositOp {
-    const GAS_COST: Gas = Gas::new(590);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for DepositOp {}
 
 impl PreverifiableOperation<StandardMode> for SignedOperation<DepositOp, Unverified, StandardMode> {
     type Context<'a> = ();
@@ -203,7 +223,10 @@ mod test {
         Note, Utxo,
         batch::{Error as BatchError, test_utils::batch_verify},
         channel_notes,
-        gas::test_utils::FixedThresholds,
+        gas::{
+            Gas,
+            test_utils::{FixedThresholds, GAS_PROFILE},
+        },
         ledger::BoundedInputs,
         ops::op_proof::samples::SampleProof as _,
         transactions::tx_list::signed_ops::test_utils::make_channel_state,
@@ -545,7 +568,8 @@ mod test {
     fn deposit_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
             assert_eq!(
-                DepositOp::sample().execution_gas(&FixedThresholds(threshold)),
+                crate::mantle::OpRef::from(&DepositOp::sample())
+                    .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(590))
             );
         }

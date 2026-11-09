@@ -4,11 +4,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     events::TxEvent,
     mantle::{
-        TxHash, Value,
+        TxHash,
         channel::{Channels, Error},
-        gas::{
-            Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
-        },
         ledger::{
             ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation, Utxo,
             Utxos, VerifiableOperation,
@@ -81,16 +78,6 @@ pub struct ChannelTransferExecutionContext {
 impl ProvableOperation for ChannelTransferOp {
     type Proof = ChannelMultiSigProof;
     const CODE: u8 = 0x14;
-}
-
-impl OperationGas<MainnetGasProfile> for ChannelTransferOp {
-    const GAS_COST: Gas = Gas::new(56);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for ChannelTransferOp {
-    fn execution_gas(&self, thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
-        Self::GAS_COST.checked_mul(Value::from(thresholds.transfer_threshold(&self.channel_id)))
-    }
 }
 
 impl PreverifiableOperation<StandardMode>
@@ -226,7 +213,10 @@ mod test {
             Note, TxHash, Utxo, Value,
             channel::{Channels, Error},
             channel_notes,
-            gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
+            gas::{
+                Gas, GasOverflow, GasProfile,
+                test_utils::{FixedThresholds, GAS_PROFILE},
+            },
             ledger::{
                 BoundedInputs, Inputs, InputsError, Outputs, OutputsError,
                 PreverifiableOperation as _, Utxos, VerifiableOperation as _,
@@ -907,7 +897,8 @@ mod test {
     fn channel_transfer_op_execution_gas_scales_with_the_threshold() {
         for (threshold, expected) in [(1, 56), (2, 112), (3, 168)] {
             assert_eq!(
-                ChannelTransferOp::sample().execution_gas(&FixedThresholds(threshold)),
+                crate::mantle::OpRef::from(&ChannelTransferOp::sample())
+                    .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(expected))
             );
         }
@@ -916,8 +907,22 @@ mod test {
     #[test]
     fn channel_transfer_op_execution_gas_is_zero_against_an_unknown_channel() {
         assert_eq!(
-            ChannelTransferOp::sample().execution_gas(&FixedThresholds(0)),
+            crate::mantle::OpRef::from(&ChannelTransferOp::sample())
+                .execution_gas(&GAS_PROFILE, &FixedThresholds(0)),
             Ok(Gas::new(0))
+        );
+    }
+
+    #[test]
+    fn channel_transfer_op_execution_gas_reports_overflow() {
+        let schedule = GasProfile {
+            channel_transfer: Gas::new(Value::MAX),
+            ..GAS_PROFILE
+        };
+        assert_eq!(
+            crate::mantle::OpRef::from(&ChannelTransferOp::sample())
+                .execution_gas(&schedule, &FixedThresholds(2)),
+            Err(GasOverflow)
         );
     }
 }

@@ -5,7 +5,7 @@ use std::{
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream};
 use lb_binary_codec::canonical::{BinaryDecode, DecodeError};
 use lb_core::{
-    block::{Block, Proposal},
+    block::{Block, BlockLimits, Proposal},
     header::HeaderId,
     mantle::{
         TxHash,
@@ -78,34 +78,47 @@ pub struct LibP2pAdapterSettings {
 pub struct LibP2pAdapterEraSettings {
     /// The topic block proposals are gossiped on.
     pub topic: String,
-    /// The most uncles a block of the era may reference: the maximum the era's
-    /// proposals and synced blocks are decoded under.
-    pub max_uncles: u8,
+    /// The most uncles, transactions and transaction bytes a block of the era
+    /// may hold: the limits the era's proposals and synced blocks are decoded
+    /// under.
+    pub block_limits: BlockLimits,
+    /// The most bytes of data an Operation may carry in the era: what the
+    /// transactions of its synced blocks are decoded under.
+    pub max_op_data_size: u32,
 }
 
-/// Decodes a proposal under the uncle maximum of the era of its slot, which its
+/// Decodes a proposal under the limits of the era of its slot, which its
 /// encoding opens with.
 fn decode_proposal(
     bytes: &[u8],
     era_schedule: &EraSchedule<LibP2pAdapterEraSettings>,
 ) -> Result<Proposal, DecodeError> {
     let slot = Slot::peek_decode(bytes, &())?;
-    Proposal::decode_all(bytes, &era_schedule.at_slot(slot).parameters.max_uncles)
+    Proposal::decode_all(bytes, &era_schedule.at_slot(slot).parameters.block_limits)
 }
 
-/// Decodes a synced block under the uncle maximum of the era of its slot, which
-/// its encoding opens with.
+/// Decodes a synced block under the limits of the era of its slot, which its
+/// encoding opens with.
 fn decode_block<Tx>(
     bytes: &[u8],
     era_schedule: &EraSchedule<LibP2pAdapterEraSettings>,
 ) -> Result<Block<Tx>, DecodeError>
 where
-    Tx: BinaryDecode<Context = ()> + Hashable<Hash = TxHash> + StorageSize,
+    Tx: BinaryDecode<Context = u32> + Hashable<Hash = TxHash> + StorageSize,
 {
     let slot = Slot::peek_decode(bytes, &())?;
+    let LibP2pAdapterEraSettings {
+        block_limits,
+        max_op_data_size,
+        ..
+    } = era_schedule.at_slot(slot).parameters;
     Block::decode_all(
         bytes,
-        &(era_schedule.at_slot(slot).parameters.max_uncles, ()),
+        &(
+            block_limits.max_uncles,
+            block_limits.max_transactions_size,
+            (block_limits.max_transactions, *max_op_data_size),
+        ),
     )
 }
 
@@ -143,7 +156,7 @@ where
     ) -> Result<BlockDownloadStream<Tx>, DynError>
     where
         Tx: SignedMantleTx<Preverified, StandardMode>
-            + BinaryDecode<Context = ()>
+            + BinaryDecode<Context = u32>
             + StorageSize
             + Serialize
             + DeserializeOwned
@@ -254,7 +267,7 @@ where
 impl<Tx, RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for LibP2pAdapter<Tx, RuntimeServiceId>
 where
     Tx: SignedMantleTx<Preverified, StandardMode>
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + StorageSize
         + Serialize
         + DeserializeOwned

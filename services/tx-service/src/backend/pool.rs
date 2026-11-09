@@ -13,7 +13,8 @@ use lb_core::{
     block::TxInBlock,
     era::AcceptedForkDigests,
     mantle::{
-        traits::{Hashable, MantleTx},
+        OpRef,
+        traits::{Hashable, MantleTx, StorageSize},
         transactions::hash::PrefixedKey,
     },
 };
@@ -57,6 +58,59 @@ pub struct MempoolSettings {
     /// never held by the start of the slot of the block carrying it. `None`
     /// dates it at its re-admission instead.
     pub era_timing: Option<EraSchedule<EraTiming>>,
+    /// What a transaction must fit to be admitted, in every era: the pool
+    /// admits each under the era it is in.
+    pub admission: EraSchedule<AdmissionLimits>,
+}
+
+/// What a transaction must fit, in an era, for the pool to admit it: what a
+/// block of the era could carry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AdmissionLimits {
+    /// The most bytes a transaction may take in its canonical encoding: all
+    /// that a block's transactions may.
+    pub max_transaction_size: usize,
+    /// The most bytes of data an Operation may carry: an inscription, or a
+    /// deposit's metadata.
+    pub max_op_data_size: usize,
+}
+
+impl AdmissionLimits {
+    /// Refuses `item` if it, or the data one of its Operations carries, is
+    /// larger than the era allows.
+    fn admit<Item>(&self, item: &Item) -> Result<(), MempoolError>
+    where
+        Item: MantleTx + StorageSize,
+    {
+        let size = item.storage_size();
+        if size > self.max_transaction_size {
+            return Err(MempoolError::ItemTooLarge {
+                size,
+                max: self.max_transaction_size,
+            });
+        }
+        for op in item.op_refs_iter() {
+            if let OpRef::ChannelInscribe(inscription) = op {
+                let size = inscription.inscription.len();
+                if size > self.max_op_data_size {
+                    return Err(MempoolError::InscriptionTooLarge {
+                        size,
+                        max: self.max_op_data_size,
+                    });
+                }
+            }
+            if let OpRef::ChannelDeposit(deposit) = op {
+                let size = deposit.metadata.len();
+                if size > self.max_op_data_size {
+                    return Err(MempoolError::MetadataTooLarge {
+                        size,
+                        max: self.max_op_data_size,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -122,6 +176,7 @@ where
     settings: MempoolSettings,
     last_item_timestamp: u64,
     evictor: Evictor<Item, BlockId>,
+    /// The era the pool admits transactions under.
     era_in_force: Era,
     storage_adapter: Storage,
     _phantom: std::marker::PhantomData<(BlockId, Item, RuntimeServiceId)>,
@@ -149,7 +204,14 @@ where
 impl<BlockId, Item, Storage, RuntimeServiceId> MemPool
     for Mempool<BlockId, Item, Storage, RuntimeServiceId>
 where
-    Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de> + MantleTx,
+    Item: Clone
+        + Send
+        + Sync
+        + 'static
+        + Serialize
+        + for<'de> Deserialize<'de>
+        + MantleTx
+        + StorageSize,
     ItemKey<Item>: Ord + PrefixedKey<Prefix: Eq + Hash + Send + Sync>,
     BlockId: Hash
         + Eq
@@ -205,6 +267,16 @@ where
         key: Self::Key,
         item: I,
     ) -> Result<(), MempoolError> {
+        let item = item.into();
+        // A transaction no block of the era could carry is refused, whether it
+        // is new or was admitted under an earlier era.
+        self.settings
+            .admission
+            .get(self.era_in_force)
+            .expect("The pool is only ever in a scheduled era.")
+            .parameters
+            .admit(&item)?;
+
         self.release_retained().await;
 
         if self.pending_items.contains_key(&key) || self.included_in_canonical.contains_key(&key) {
@@ -212,7 +284,6 @@ where
         }
 
         let timestamp = current_timestamp_millis();
-        let item = item.into();
 
         let fork_digest = item.fork_digest();
         let accepted = self
@@ -417,7 +488,14 @@ where
 impl<BlockId, Item, Storage, RuntimeServiceId> RecoverableMempool
     for Mempool<BlockId, Item, Storage, RuntimeServiceId>
 where
-    Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de> + MantleTx,
+    Item: Clone
+        + Send
+        + Sync
+        + 'static
+        + Serialize
+        + for<'de> Deserialize<'de>
+        + MantleTx
+        + StorageSize,
     ItemKey<Item>:
         Ord + PrefixedKey<Prefix: Eq + Hash + Send + Sync> + Serialize + for<'de> Deserialize<'de>,
     BlockId: Hash
@@ -493,7 +571,14 @@ where
 
 impl<BlockId, Item, Storage, RuntimeServiceId> Mempool<BlockId, Item, Storage, RuntimeServiceId>
 where
-    Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de> + MantleTx,
+    Item: Clone
+        + Send
+        + Sync
+        + 'static
+        + Serialize
+        + for<'de> Deserialize<'de>
+        + MantleTx
+        + StorageSize,
     ItemKey<Item>: Ord + PrefixedKey<Prefix: Eq + Hash + Send + Sync>,
     BlockId: Hash
         + Eq

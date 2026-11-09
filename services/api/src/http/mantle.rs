@@ -228,7 +228,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + 'static
@@ -295,7 +295,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + 'static
@@ -366,7 +366,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + 'static
@@ -475,7 +475,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + 'static
@@ -512,7 +512,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + 'static
@@ -636,7 +636,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + 'static
@@ -701,7 +701,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + 'static
