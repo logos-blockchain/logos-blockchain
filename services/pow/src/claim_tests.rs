@@ -17,7 +17,10 @@ use lb_core::{
     mantle::{
         OpRef, SignedOps,
         ledger::verification_mode::StandardMode,
-        ops::{leader_claim::VoucherCm, pow::ClaimPowRewardOp},
+        ops::{
+            leader_claim::VoucherCm,
+            pow::{AcceptedPowEpochNonces, ClaimPowRewardOp},
+        },
         transactions::states::{Preverified, Unverified},
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderProof, LeaderPublic},
@@ -247,7 +250,10 @@ fn ledger_fixture() -> LedgerFixture {
     let current_nonce = tip.epoch_state().nonce;
     assert_eq!(
         tip.accepted_pow_epoch_nonces(),
-        (current_nonce, previous_nonce)
+        AcceptedPowEpochNonces {
+            current: current_nonce,
+            previous: previous_nonce,
+        }
     );
     assert_ne!(old_nonce, current_nonce);
     assert_ne!(old_nonce, previous_nonce);

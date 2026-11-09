@@ -21,7 +21,7 @@ pub use gas_and_fees::GasAndFees;
 pub use intent::{Intent, IntentStatus};
 use lb_core::{
     block::BlockNumber,
-    crypto::{Hash as BlockHash, ZkHash},
+    crypto::Hash as BlockHash,
     era::ForkDigest,
     events::{Events, HeaderEvent, TxEvent, TxEventPayload},
     mantle::{
@@ -36,7 +36,7 @@ use lb_core::{
                 deposit::DepositExecutionContext, withdraw::WithdrawExecutionContext,
             },
             leader_claim::LeaderClaimExecutionContext,
-            pow::{ClaimPoWRewardExecutionContext, PowReward},
+            pow::{AcceptedPowEpochNonces, ClaimPoWRewardExecutionContext, PowReward},
             sdp::{SDPActiveOp, SDPDeclareOp},
         },
         traits::{GenesisTx, PreverifiedMantleTransaction, StorageSize, genesis::GenesisOps},
@@ -623,11 +623,11 @@ impl LedgerState {
     /// The epoch nonces accepted by `PoW` reward claims at this ledger state:
     /// the current epoch's nonce and the nonce of the preceding epoch.
     #[must_use]
-    pub const fn accepted_pow_epoch_nonces(&self) -> (ZkHash, ZkHash) {
-        (
-            self.cryptarchia_ledger.epoch_state.nonce,
-            self.cryptarchia_ledger.previous_epoch_nonce,
-        )
+    pub const fn accepted_pow_epoch_nonces(&self) -> AcceptedPowEpochNonces {
+        AcceptedPowEpochNonces {
+            current: self.cryptarchia_ledger.epoch_state.nonce,
+            previous: self.cryptarchia_ledger.previous_epoch_nonce,
+        }
     }
 
     #[must_use]

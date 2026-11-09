@@ -1309,6 +1309,21 @@ struct PublishedClaim {
     remaining_pool: Value,
 }
 
+/// Whether a winning ticket can be claimed against this ledger state.
+///
+/// This service-side check filters claims by their canonical anchor and
+/// currently accepted epoch nonce; consensus still performs full operation
+/// verification when the transaction is applied.
+fn is_ticket_eligible(ticket: &WinningTicket, ledger_state: &LedgerState) -> bool {
+    let accepted_nonces = ledger_state.accepted_pow_epoch_nonces();
+    ledger_state
+        .mantle_ledger()
+        .pow
+        .block_slots()
+        .contains_key(&ticket.claim.block_hash)
+        && accepted_nonces.accepts(ticket.claim.epoch_nonce)
+}
+
 /// Builds and publishes a reward-claim transaction for every ticket currently
 /// ready to claim, moving the claimed tickets to the pending set on success.
 ///
@@ -1361,17 +1376,10 @@ where
     // nonces. Keep ineligible tickets ready: a reorg may restore either their
     // anchor or nonce eligibility. Only the window check above discards a
     // ticket for good.
-    let known_blocks = ledger_state.mantle_ledger().pow.block_slots();
-    let (current_nonce, previous_nonce) = ledger_state.accepted_pow_epoch_nonces();
-    let is_eligible = |ticket: &WinningTicket| {
-        known_blocks.contains_key(&ticket.claim.block_hash)
-            && (ticket.claim.epoch_nonce == current_nonce
-                || ticket.claim.epoch_nonce == previous_nonce)
-    };
     let tickets: Vec<(UnsecuredZkKey, ClaimPowRewardOp)> = state
         .ready_to_claim
         .iter()
-        .filter(|ticket| is_eligible(ticket))
+        .filter(|ticket| is_ticket_eligible(ticket, &ledger_state))
         .map(|ticket| (ticket.secret_key.clone(), ticket.claim.clone()))
         .collect();
     if tickets.is_empty() {
@@ -1402,7 +1410,7 @@ where
     let mut claimed = Vec::with_capacity(claimed_count);
     for ticket in state.ready_to_claim.drain(..) {
         // Take the eligible prefix the builder consumed and keep the rest ready.
-        if claimed.len() < claimed_count && is_eligible(&ticket) {
+        if claimed.len() < claimed_count && is_ticket_eligible(&ticket, &ledger_state) {
             claimed.push(ticket);
         } else {
             remaining.push(ticket);

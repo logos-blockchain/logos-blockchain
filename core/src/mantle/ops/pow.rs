@@ -31,6 +31,20 @@ pub type PowReward = Value;
 /// The acceptance window, in slots, of the `PoW` reward claims of each era.
 pub type PowSlotWindows = EraSchedule<NonZeroU64>;
 
+/// Epoch nonces accepted by `PoW` reward claims at a given ledger state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcceptedPowEpochNonces {
+    pub current: ZkHash,
+    pub previous: ZkHash,
+}
+
+impl AcceptedPowEpochNonces {
+    #[must_use]
+    pub fn accepts(&self, nonce: ZkHash) -> bool {
+        nonce == self.current || nonce == self.previous
+    }
+}
+
 /// Nullifier of a spent `PoW` solution, recorded on claim to prevent the same
 /// solution from being claimed twice.
 #[derive(
@@ -135,8 +149,8 @@ pub enum ClaimPowRewardError {
     #[error("Mismatch epoch nonce ({claim:?}), accepted {accepted:?}")]
     MismatchEpochNonce {
         claim: ZkHash,
-        /// The (previous, current) epoch nonces a claim may match.
-        accepted: (ZkHash, ZkHash),
+        /// The current and previous epoch nonces a claim may match.
+        accepted: AcceptedPowEpochNonces,
     },
     #[error("Invalid PoW reward ticket")]
     InvalidPoWRewardTicket,
@@ -221,12 +235,14 @@ impl ClaimPoWRewardVerificationContext<'_> {
 
     /// The claim's epoch nonce must be the current or the previous one.
     fn validate_epoch_nonce(&self, claim_epoch_nonce: ZkHash) -> Result<(), ClaimPowRewardError> {
-        if claim_epoch_nonce != self.current_epoch_nonce
-            && claim_epoch_nonce != self.previous_epoch_nonce
-        {
+        let accepted = AcceptedPowEpochNonces {
+            current: self.current_epoch_nonce,
+            previous: self.previous_epoch_nonce,
+        };
+        if !accepted.accepts(claim_epoch_nonce) {
             return Err(ClaimPowRewardError::MismatchEpochNonce {
                 claim: claim_epoch_nonce,
-                accepted: (self.previous_epoch_nonce, self.current_epoch_nonce),
+                accepted,
             });
         }
         Ok(())
@@ -487,6 +503,18 @@ mod tests {
     /// claims and contexts for different epochs without a real ledger.
     fn nonce_for_epoch(epoch: u32) -> ZkHash {
         ZkHasher::digest(&[fr_from_mod_bytes(&epoch.to_le_bytes())])
+    }
+
+    #[test]
+    fn accepted_pow_epoch_nonces_accept_current_and_previous_only() {
+        let accepted = AcceptedPowEpochNonces {
+            current: nonce_for_epoch(CURRENT_EPOCH),
+            previous: nonce_for_epoch(PREVIOUS_EPOCH),
+        };
+
+        assert!(accepted.accepts(nonce_for_epoch(CURRENT_EPOCH)));
+        assert!(accepted.accepts(nonce_for_epoch(PREVIOUS_EPOCH)));
+        assert!(!accepted.accepts(nonce_for_epoch(PREVIOUS_EPOCH - 1)));
     }
 
     fn claim_op(epoch: u32) -> ClaimPowRewardOp {
@@ -770,10 +798,10 @@ mod tests {
             signed_operation.verify(&ctx).err().unwrap(),
             ClaimPowRewardError::MismatchEpochNonce {
                 claim: signed_operation.operation().epoch_nonce,
-                accepted: (
-                    nonce_for_epoch(PREVIOUS_EPOCH),
-                    nonce_for_epoch(CURRENT_EPOCH)
-                ),
+                accepted: AcceptedPowEpochNonces {
+                    current: nonce_for_epoch(CURRENT_EPOCH),
+                    previous: nonce_for_epoch(PREVIOUS_EPOCH),
+                },
             }
         );
     }
