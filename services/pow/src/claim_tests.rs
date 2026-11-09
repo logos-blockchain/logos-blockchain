@@ -1,6 +1,6 @@
 use std::{iter::empty, num::NonZero, sync::Arc, time::Duration};
 
-use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
+use lb_binary_codec::{bincode::SerializeOp as _, canonical::BinaryDecode as _};
 use lb_blend_service::{
     ServiceComponents,
     api::BlendServiceApi,
@@ -12,10 +12,10 @@ use lb_chain_service::{
 };
 use lb_core::{
     crypto::ZkHash,
+    era::ForkDigest,
     header::HeaderId,
     mantle::{
         OpRef, SignedOps,
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         ops::{leader_claim::VoucherCm, pow::ClaimPowRewardOp},
         transactions::states::{Preverified, Unverified},
@@ -44,13 +44,17 @@ use super::{
     PoWEraSettings, PoWError, PoWServiceState, PublishedClaim, ServiceEraSchedule,
     claim_ready_rewards, max_claims_by_payload_size,
 };
-use crate::{test_utils::PAYLOAD_BODY_SIZE, tickets::WinningTicket};
+use crate::{
+    test_utils::{GAS_PROFILE, PAYLOAD_BODY_SIZE},
+    tickets::WinningTicket,
+};
 
 const ANCHOR: [u8; 32] = [1; 32];
 const OTHER_BLOCK: [u8; 32] = [2; 32];
 const PREVIOUS_BLOCK: [u8; 32] = [150; 32];
 const TIP: [u8; 32] = [160; 32];
 const POOL: u64 = 1_000_000_000_000;
+const MAX_OP_DATA_SIZE: u32 = 2 * 1024 * 1024 * 7 / 8;
 
 struct TestProof(Groth16LeaderProof);
 
@@ -96,17 +100,51 @@ fn ledger_config(short_epochs: bool) -> Config {
             "uncle_reference_window_in_block": 0,
             "max_uncles": 0
         },
+        "max_transactions": 1024,
+        "max_transactions_size": 2 * 1024 * 1024,
+        "max_op_data_size": MAX_OP_DATA_SIZE,
         "sdp_config": {
             "service_params": {"BN": {"inactivity_period": 20, "epoch": 0}},
             "service_rewards_params": {"blend": {
                 "rounds_per_epoch": if short_epochs { 20 } else { 100 },
                 "message_frequency_per_round": 1.0,
+                "cover_replication_factor": 0,
                 "num_blend_layers": 1,
                 "data_replication_factor": 0,
                 "minimum_network_size": 1,
                 "activity_threshold_sensitivity": 1
             }},
             "min_stake": {"threshold": 1, "timestamp": 0}
+        },
+        "accepted_fork_digests": ["1111111111111111111111111111111111111111111111111111111111111111"],
+        "execution_market": {
+            "max_gas_per_block": 3_193_460,
+            "fee_adjustment_rate": {"numerator": 1, "denominator": 8},
+            "ema_smoothing_factor": {"numerator": 9, "denominator": 10}
+        },
+        "storage_market": {
+            "max_adjustment_factor": {"numerator": 1, "denominator": 8},
+            "ema_smoothing_factor": {"numerator": 1, "denominator": 2}
+        },
+        "block_rewards": {
+            "stake_target": 3_000_000_000u64,
+            "emission_factor_scale": 120_000_000,
+            "fee_average_numerator": 10_512,
+            "max_emission_per_block": {"numerator": 62_500, "denominator": 657},
+            "blend_share": {"numerator": 6, "denominator": 10}
+        },
+        "gas_profile": {
+            "transfer": 590,
+            "channel_config": 56,
+            "channel_inscribe": 56,
+            "channel_deposit": 590,
+            "channel_withdraw": 56,
+            "channel_transfer": 56,
+            "sdp_declare": 646,
+            "sdp_withdraw": 590,
+            "sdp_active": 590,
+            "leader_claim": 580,
+            "claim_pow_reward": 1
         },
         "pow_config": {
             "blend": {
@@ -158,7 +196,9 @@ fn ledger_fixture() -> LedgerFixture {
     let schedule = timings.map(|era| PoWEraSettings {
         slot_window: NonZero::new(if era.era.into_inner() == 0 { 100 } else { 20 }).unwrap(),
         rewards_enabled: true,
-        max_data_payload_body_size: PAYLOAD_BODY_SIZE,
+        max_claim_tx_size: PAYLOAD_BODY_SIZE,
+        fork_digest: ForkDigest::new([0x11; 32]),
+        gas_profile: GAS_PROFILE,
     });
     let ledger_schedule = timings.map(|era| {
         if era.era.into_inner() == 0 {
@@ -188,7 +228,7 @@ fn ledger_fixture() -> LedgerFixture {
     for slot in [100u8, 110, 120, 130, 140, 150, 160] {
         let block_id = [slot; 32];
         let update = ledger
-            .prepare_update::<SignedOps<Preverified, StandardMode>, _, MainnetGasProfile>(
+            .prepare_update::<SignedOps<Preverified, StandardMode>, _>(
                 block_id,
                 parent,
                 Slot::new(u64::from(slot)),
@@ -324,12 +364,14 @@ impl TestApis {
         schedule: &ServiceEraSchedule,
         pool: u64,
     ) -> Result<Option<PublishedClaim>, PoWError> {
+        let era_settings = schedule.at_slot(Slot::new(160)).parameters;
         let claim = claim_ready_rewards(
             &self.chain,
             &self.blend,
             ZkPublicKey::zero(),
             state,
             schedule,
+            era_settings,
             pool,
             max_claims_by_payload_size(PAYLOAD_BODY_SIZE),
         );
@@ -357,7 +399,8 @@ impl TestApis {
         let Some(DataPayload::Transaction(bytes)) = self.published.take() else {
             panic!("expected a published claim transaction");
         };
-        let tx = SignedOps::<Unverified, StandardMode>::from_bytes(&bytes).unwrap();
+        let tx =
+            SignedOps::<Unverified, StandardMode>::decode_all(&bytes, &MAX_OP_DATA_SIZE).unwrap();
         tx.op_refs()
             .into_iter()
             .filter_map(|op| match op {

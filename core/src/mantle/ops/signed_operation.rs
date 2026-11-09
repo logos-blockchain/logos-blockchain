@@ -50,6 +50,10 @@ impl<T: ProvableOperation, State: VerificationState, Mode: VerificationMode>
     /// Converts a `SignedOperation<T, State, Mode>` into a
     /// `SignedOperation<T, NewState, Mode>` without performing any
     /// verification.
+    #[expect(
+        clippy::cfg_not_test,
+        reason = "Test builds use the public variant below"
+    )]
     #[cfg(not(any(test, feature = "test-utils")))]
     #[must_use]
     pub(crate) fn into_state_trusted<NewState: VerificationState>(
