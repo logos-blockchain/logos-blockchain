@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -327,10 +327,96 @@ pub struct ObservedWrite {
     pub payload: Vec<u8>,
 }
 
-/// A replicated database connection and the function state attached to it.
+/// A replicated database connection and the function and hook state attached
+/// to it.
 struct ReplicatedDatabase {
     connection: Connection,
     functions: FunctionOverrides,
+    hooks: ApplicationSqlHooks,
+}
+
+/// Authorizer and execution budget for application SQL. Installed once per
+/// writer connection, because rusqlite needs `&mut Connection` to change
+/// hooks, and switched on only while application statements run.
+#[derive(Clone, Default)]
+struct ApplicationSqlHooks {
+    enabled: Arc<AtomicBool>,
+    /// SQLite steps executed by the current write.
+    executed_steps_counter: Arc<AtomicU64>,
+}
+
+impl ApplicationSqlHooks {
+    fn install(connection: &mut Connection) -> Result<Self, Error> {
+        let this = Self::default();
+
+        this.install_authorizer(connection)?;
+        this.install_progress_handler(connection)?;
+
+        Ok(this)
+    }
+
+    fn install_authorizer(&self, connection: &mut Connection) -> Result<(), Error> {
+        let hooks = self.clone();
+
+        connection.authorizer(Some(move |context: AuthContext<'_>| {
+            if hooks.is_enabled() {
+                authorize_application_sql(context)
+            } else {
+                Authorization::Allow
+            }
+        }))?;
+
+        Ok(())
+    }
+
+    fn install_progress_handler(&self, connection: &mut Connection) -> Result<(), Error> {
+        let hooks = self.clone();
+
+        connection.progress_handler(
+            SQL_PROGRESS_INTERVAL,
+            Some(move || hooks.is_enabled() && hooks.charge()),
+        )?;
+
+        Ok(())
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    /// Resets the budget and enables the hooks until the guard is dropped.
+    fn enable(&self) -> ApplicationSqlHooksGuard<'_> {
+        self.executed_steps_counter.store(0, Ordering::Relaxed);
+        self.enabled.store(true, Ordering::Relaxed);
+
+        ApplicationSqlHooksGuard(self)
+    }
+
+    /// Adds `SQL_PROGRESS_INTERVAL` to the executed steps.
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if the count was already at `MAX_SQL_STEPS` or more, so
+    /// the SQL must stop.
+    fn charge(&self) -> bool {
+        self.executed_steps_counter
+            .fetch_add(SQL_PROGRESS_INTERVAL as u64, Ordering::Relaxed)
+            >= MAX_SQL_STEPS
+    }
+
+    /// Returns `true` if the steps used are more than `MAX_SQL_STEPS`.
+    fn is_step_budget_exceeded(&self) -> bool {
+        self.executed_steps_counter.load(Ordering::Relaxed) > MAX_SQL_STEPS
+    }
+}
+
+/// Disables the application SQL hooks on drop.
+struct ApplicationSqlHooksGuard<'a>(&'a ApplicationSqlHooks);
+
+impl Drop for ApplicationSqlHooksGuard<'_> {
+    fn drop(&mut self) {
+        self.0.enabled.store(false, Ordering::Relaxed);
+    }
 }
 
 /// Pending write count and payload bytes, cached to avoid scanning the
@@ -755,7 +841,7 @@ impl Databases {
         let capture = self.live.functions.capture();
         let db_transaction = self.live.connection.transaction()?;
 
-        apply_statements(&db_transaction, transaction)?;
+        apply_statements(&db_transaction, &self.live.hooks, transaction)?;
         let captured_function_calls = capture.finish()?;
         let encoded = EncodedWrite::new(
             tx_id,
@@ -1070,26 +1156,30 @@ impl FromSql for WriteStatus {
 }
 
 fn open_writer(path: &Path) -> Result<ReplicatedDatabase, Error> {
-    let connection = open_connection(path)?;
+    let mut connection = open_connection(path)?;
     let functions = FunctionOverrides::install(&connection)?;
+    let hooks = ApplicationSqlHooks::install(&mut connection)?;
 
     Ok(ReplicatedDatabase {
         connection,
         functions,
+        hooks,
     })
 }
 
 fn open_rebuild_writer(path: &Path) -> Result<ReplicatedDatabase, Error> {
-    let connection = Connection::open(path)?;
+    let mut connection = Connection::open(path)?;
 
     configure_connection(&connection)?;
     connection.execute_batch(REBUILD_PRAGMAS)?;
 
     let functions = FunctionOverrides::install(&connection)?;
+    let hooks = ApplicationSqlHooks::install(&mut connection)?;
 
     Ok(ReplicatedDatabase {
         connection,
         functions,
+        hooks,
     })
 }
 
@@ -1145,7 +1235,7 @@ fn apply_channel_write(
         return Ok(());
     }
 
-    if let Err(error) = apply_statements(&db_transaction, &write.transaction) {
+    if let Err(error) = apply_statements(&db_transaction, &database.hooks, &write.transaction) {
         if replay.failed() {
             return Err(Error::InvalidPayload(
                 "captured SQLite function call does not match replay",
@@ -1237,49 +1327,47 @@ fn is_deterministic_sql_error(error: &rusqlite::Error) -> bool {
 
 fn apply_statements(
     db_transaction: &rusqlite::Transaction<'_>,
+    hooks: &ApplicationSqlHooks,
     transaction: &Transaction,
 ) -> Result<(), Error> {
     let previous_length = db_transaction.set_limit(Limit::SQLITE_LIMIT_LENGTH, MAX_SQL_BYTES)?;
     let previous_sql_length =
         db_transaction.set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, MAX_SQL_BYTES)?;
 
-    db_transaction.authorizer(Some(authorize_application_sql));
-
-    let work = Arc::new(AtomicU64::new(0));
-    let progress_work = Arc::clone(&work);
-
-    db_transaction.progress_handler(
-        SQL_PROGRESS_INTERVAL,
-        Some(move || {
-            progress_work.fetch_add(SQL_PROGRESS_INTERVAL as u64, Ordering::Relaxed)
-                >= MAX_SQL_STEPS
-        }),
-    );
-
-    let result = transaction.statements().iter().try_for_each(|statement| {
-        if work.fetch_add(SQL_PROGRESS_INTERVAL as u64, Ordering::Relaxed) >= MAX_SQL_STEPS {
-            return Err(Error::ExecutionBudgetExceeded);
-        }
-
-        db_transaction.execute(statement.sql(), params_from_iter(statement.params()))?;
-
-        Ok::<_, Error>(())
-    });
-
-    db_transaction.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
-    // Bookkeeping and rollback must not inherit the application's spent budget.
-    db_transaction.progress_handler(0, None::<fn() -> bool>);
+    let result = run_statements_with_hooks(db_transaction, hooks, transaction);
 
     // Internal rows also contain replication metadata and encoded payloads;
     // they are not application rows and must not inherit these size limits.
     db_transaction.set_limit(Limit::SQLITE_LIMIT_LENGTH, previous_length)?;
     db_transaction.set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, previous_sql_length)?;
 
-    if work.load(Ordering::Relaxed) > MAX_SQL_STEPS {
+    if hooks.is_step_budget_exceeded() {
         return Err(Error::ExecutionBudgetExceeded);
     }
 
     result
+}
+
+/// Runs the application SQL with the hooks on.
+///
+/// The hooks turn off when this function returns so that any SQL that runs
+/// after this function is not limited.
+fn run_statements_with_hooks(
+    db_transaction: &rusqlite::Transaction<'_>,
+    hooks: &ApplicationSqlHooks,
+    transaction: &Transaction,
+) -> Result<(), Error> {
+    let _hooks_guard = hooks.enable();
+
+    transaction.statements().iter().try_for_each(|statement| {
+        if hooks.charge() {
+            return Err(Error::ExecutionBudgetExceeded);
+        }
+
+        db_transaction.execute(statement.sql(), params_from_iter(statement.params()))?;
+
+        Ok(())
+    })
 }
 
 // λSQL owns the surrounding transaction and its bookkeeping tables, so

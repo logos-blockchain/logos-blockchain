@@ -15,7 +15,7 @@ use rusqlite::{
     functions::{Context, FunctionFlags},
     limits::Limit,
     params_from_iter,
-    types::Value,
+    types::{FromSqlError, Value},
 };
 
 use crate::{
@@ -278,8 +278,8 @@ fn evaluate(
     // Calling the function on the replicated connection would recurse into
     // this override. The evaluator connection still has SQLite's built-in.
     let arguments = (0..context.len())
-        .map(|index| context.get_raw(index).into())
-        .collect::<Vec<Value>>();
+        .map(|index| context.get_raw(index).try_into())
+        .collect::<Result<Vec<Value>, FromSqlError>>()?;
     let query = definition.query(arguments.len());
 
     lock(evaluator).query_row(&query, params_from_iter(arguments), |row| row.get(0))
