@@ -83,7 +83,7 @@ where
                 },
                 Some(msg) = self.inbound_relay.next() => match msg {
                     ConsensusMsg::Query(query) => {
-                        self.process_query(query).await;
+                        self.process_query(query);
                     }
                     ConsensusMsg::ApplyBlock { block, reply_channel } => {
                         self.apply_block(*block, reply_channel);
@@ -96,6 +96,7 @@ where
                 Some(preparation) = OptionFuture::from(self.block_underway.as_mut()) => {
                     self.finish_block(preparation).await;
                 }
+                Some(()) = self.pending_queries.next() => {}
                 Some(tick) = self.slot_timer.next() => self.current_slot = tick.slot,
                 _ = self.state_recording_timer.tick() => self.record_recovery_state(),
             }

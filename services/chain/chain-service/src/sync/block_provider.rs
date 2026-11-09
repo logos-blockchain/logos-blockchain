@@ -62,6 +62,15 @@ pub struct BlockProvider<Tx> {
     config: BlockProviderConfig,
 }
 
+impl<Tx> Clone for BlockProvider<Tx> {
+    fn clone(&self) -> Self {
+        Self {
+            storage: self.storage.clone(),
+            config: self.config.clone(),
+        }
+    }
+}
+
 impl<Tx> BlockProvider<Tx> {
     #[must_use]
     pub const fn new(storage: StorageApi<Tx>, config: BlockProviderConfig) -> Self {

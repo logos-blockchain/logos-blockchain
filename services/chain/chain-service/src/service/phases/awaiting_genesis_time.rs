@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use futures::StreamExt as _;
+use futures::{StreamExt as _, stream::FuturesUnordered};
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_core::{
     era::ForkDigest,
@@ -112,6 +112,7 @@ where
             epoch_state_query_sources: crate::service::EpochStateQuerySourceTracker::default(),
             block_underway: None,
             queued_blocks: VecDeque::new(),
+            pending_queries: FuturesUnordered::new(),
         }
     }
 
@@ -142,7 +143,7 @@ where
                 }
                 Some(msg) = self.inbound_relay.next() => match msg {
                     ConsensusMsg::Query(query) => {
-                        self.process_query(query).await;
+                        self.process_query(query);
                     }
                     ConsensusMsg::ApplyBlock { reply_channel, .. } => {
                         self.reject_apply_block_msg(reply_channel);
@@ -153,6 +154,7 @@ where
                         ibd_skipped = true;
                     }
                 },
+                Some(()) = self.pending_queries.next() => {}
                 Some(tick) = self.slot_timer.next() => self.current_slot = tick.slot,
                 _ = self.state_recording_timer.tick() => self.record_recovery_state(),
             }
