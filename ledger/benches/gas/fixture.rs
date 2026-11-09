@@ -143,8 +143,13 @@ fn build() -> Fixture {
     let config = config();
     let channel = ChannelId::from([1u8; 32]);
     let channel_key = Ed25519Key::from_bytes(&[7u8; 32]);
-    let genesis_note = notes::Note::new(1, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
-    let state = LedgerState::from_notes([genesis_note], parameters(&config), 1_000_000_000)
+    let genesis_notes = [notes::Note::new(
+        1,
+        Fr::from(1u64),
+        ZkPublicKey::new(Fr::from(2u64)),
+    )];
+    let genesis_held = genesis_notes.len();
+    let state = LedgerState::from_notes(genesis_notes, parameters(&config), 1_000_000_000)
         .with_gas_prices(&GasPrices::new(0, 0));
 
     let create_channel = Op::ChannelInscribe(InscriptionOp {
@@ -174,14 +179,17 @@ fn build() -> Fixture {
 
     let mut rng = StdRng::seed_from_u64(0x6a5);
     let mut note_sets = state.latest_note_sets().clone();
-    for index in [LEDGER_SET, channel_set] {
+    // The ledger set already holds the genesis notes and the channel set
+    // nothing: both are filled up to the same number of commitments, so the
+    // next commitment merges the same peaks of the MMR in either set.
+    for (index, held) in [(LEDGER_SET, genesis_held), (channel_set, 0)] {
         let filled_nullifiers: Vec<NoteNullifier> =
             std::iter::repeat_with(|| NoteNullifier(Fr::from(rng.gen_range(1..u128::MAX))))
                 .take(fill())
                 .collect();
         let filled_commitments: Vec<NoteCommitment> =
             std::iter::repeat_with(|| NoteCommitment(Fr::from(rng.r#gen::<u128>())))
-                .take(fill())
+                .take(fill() - held)
                 .collect();
         let set = note_sets
             .get(index)
