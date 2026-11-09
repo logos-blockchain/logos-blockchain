@@ -399,6 +399,8 @@ mod tests {
         assert!(futures::poll!(readiness.as_mut()).is_pending());
         tokio::task::yield_now().await;
         assert!(futures::poll!(readiness.as_mut()).is_pending());
+        tokio::task::yield_now().await;
+        assert!(futures::poll!(readiness.as_mut()).is_pending());
         fail_when.notify_one();
 
         let error = tokio::time::timeout(Duration::from_secs(5), &mut readiness)
