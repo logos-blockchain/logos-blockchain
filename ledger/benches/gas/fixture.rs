@@ -1,5 +1,5 @@
 //! A ledger as a live chain holds it: the ledger note set and the note set of
-//! one channel each hold [`fill`] nullifiers and [`fill`] commitments, and one
+//! one channel each hold [`fill`] nullifiers and one more commitment, and one
 //! program is registered. The gas prices are `0`, so the measured
 //! transactions fund no fee.
 
@@ -48,9 +48,9 @@ use time::OffsetDateTime;
 
 pub type HeaderId = [u8; 32];
 
-/// The number of nullifiers, and of commitments, in each filled note set
-/// unless `GAS_BENCH_FILL` sets another, which only shortens the fill while
-/// developing a case: the measures are taken at the default.
+/// The number of nullifiers in each filled note set, one less than its
+/// commitments, unless `GAS_BENCH_FILL` sets another, which only shortens the
+/// fill while developing a case: the measures are taken at the default.
 pub const DEFAULT_FILL: usize = 1_000_000;
 
 pub fn fill() -> usize {
@@ -180,8 +180,9 @@ fn build() -> Fixture {
     let mut rng = StdRng::seed_from_u64(0x6a5);
     let mut note_sets = state.latest_note_sets().clone();
     // The ledger set already holds the genesis notes and the channel set
-    // nothing: both are filled up to the same number of commitments, so the
-    // next commitment merges the same peaks of the MMR in either set.
+    // nothing: both are filled up to `fill() + 1` commitments, an odd count, so
+    // in either set the next commitment merges one peak of the MMR, as on
+    // average, and its root skips no level, as at worst.
     for (index, held) in [(LEDGER_SET, genesis_held), (channel_set, 0)] {
         let filled_nullifiers: Vec<NoteNullifier> =
             std::iter::repeat_with(|| NoteNullifier(Fr::from(rng.gen_range(1..u128::MAX))))
@@ -189,7 +190,7 @@ fn build() -> Fixture {
                 .collect();
         let filled_commitments: Vec<NoteCommitment> =
             std::iter::repeat_with(|| NoteCommitment(Fr::from(rng.r#gen::<u128>())))
-                .take(fill() - held)
+                .take(fill() + 1 - held)
                 .collect();
         let set = note_sets
             .get(index)
