@@ -57,47 +57,86 @@ macro_rules! wait_until_services_are_ready {
         async {
             let overwatch_handle: &::overwatch::overwatch::OverwatchHandle<RuntimeServiceId> = $overwatch_handle;
             let timeout: Option<::std::time::Duration> = $timeout;
-            let mut dependencies = Vec::new();
+            let mut status_watchers = Vec::new();
 
             $(
                 let status_watcher = overwatch_handle
                     .status_watcher::<$service_type>()
                     .await
                     .map_err(::overwatch::DynError::from)?;
-                let service_id =
-                    <RuntimeServiceId as ::overwatch::services::AsServiceId<$service_type>>::SERVICE_ID;
-                dependencies.push((service_id, status_watcher));
+                status_watchers.push((stringify!($service_type), status_watcher));
             )+
 
-            ::overwatch::services::status::wait_for_all_with_policy(
-                dependencies,
-                ::overwatch::services::status::ServiceStatus::Ready,
-                timeout,
-                ::overwatch::services::status::WaitPolicy::RestartFriendly,
-                ::overwatch::services::status::CompletionPolicy::TargetReachedOnce,
-            )
-            .await
-            .map_err(::overwatch::DynError::from)
+            $crate::overwatch::status::macros::wait_for_all_ready(&mut status_watchers, timeout)
+                .await
         }
     }};
 }
 
+use std::time::Duration;
+
+use futures::future::try_join_all;
+use overwatch::services::status::{ServiceStatus, StatusWatcher, WaitForError, WaitPolicy};
 pub use wait_until_services_are_ready;
+
+#[derive(Debug, ::thiserror::Error)]
+#[error(
+    "waiting for {failed_service} to become ready failed: {wait_error}; current dependency statuses: {current_statuses:?}"
+)]
+#[doc(hidden)]
+pub struct ServiceReadinessError {
+    pub failed_service: &'static str,
+    #[source]
+    pub wait_error: WaitForError,
+    pub current_statuses: Vec<(&'static str, ServiceStatus)>,
+}
+
+#[doc(hidden)]
+pub async fn wait_for_all_ready(
+    status_watchers: &mut [(&'static str, StatusWatcher)],
+    timeout: Option<Duration>,
+) -> Result<(), ::overwatch::DynError> {
+    let wait_result = try_join_all(status_watchers.iter_mut().map(
+        |(service_name, status_watcher)| {
+            let service_name = *service_name;
+            async move {
+                status_watcher
+                    .wait_with_policy(ServiceStatus::Ready, timeout, WaitPolicy::RestartFriendly)
+                    .await
+                    .map_err(|wait_error| (service_name, wait_error))
+            }
+        },
+    ))
+    .await;
+
+    match wait_result {
+        Ok(_) => Ok(()),
+        Err((failed_service, wait_error)) => {
+            let current_statuses = status_watchers
+                .iter()
+                .map(|(service_name, status_watcher)| (*service_name, status_watcher.current()))
+                .collect();
+            Err(::overwatch::DynError::from(ServiceReadinessError {
+                failed_service,
+                wait_error,
+                current_statuses,
+            }))
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
-    use std::{error::Error, sync::Arc, time::Duration};
+    use std::{sync::Arc, time::Duration};
 
     use async_trait::async_trait;
     use overwatch::{
         DynError, OpaqueServiceResourcesHandle,
         overwatch::{Overwatch, OverwatchRunner, Shutdown},
         services::{
-            AsServiceId, ServiceCore, ServiceData,
+            ServiceCore, ServiceData,
             state::{NoOperator, NoState},
-            status::{
-                DependencyObservation, ServiceStatus, WaitForAllError, WaitForError, WaitPolicy,
-            },
+            status::{ServiceStatus, WaitForError, WaitPolicy},
         },
     };
     use overwatch_derive::derive_services;
@@ -354,7 +393,8 @@ mod tests {
         let mut readiness = Box::pin(wait_until_services_are_ready!(
             &handle,
             None,
-            FailingService
+            FailingService,
+            HeavyService
         ));
         assert!(futures::poll!(readiness.as_mut()).is_pending());
         tokio::task::yield_now().await;
@@ -365,21 +405,21 @@ mod tests {
             .await
             .expect("failed dependency should end readiness wait")
             .expect_err("failed dependency must return an error");
-        let aggregate = error
+        let readiness_error = error
             .as_ref()
-            .downcast_ref::<WaitForAllError<RuntimeServiceId>>()
-            .expect("the Overwatch aggregate error should be preserved");
-        assert_eq!(
-            aggregate.failed().map(DependencyObservation::id),
-            Some(&<RuntimeServiceId as AsServiceId<FailingService>>::SERVICE_ID)
-        );
+            .downcast_ref::<super::ServiceReadinessError>()
+            .expect("the readiness error should include dependency statuses");
         let expected = WaitForError::ServiceFailed {
             initial_status: ServiceStatus::Starting,
         };
-        assert_eq!(aggregate.wait_error(), Some(&expected));
+        assert_eq!(readiness_error.failed_service, "FailingService");
+        assert_eq!(readiness_error.wait_error, expected);
         assert_eq!(
-            Error::source(aggregate).and_then(|source| source.downcast_ref::<WaitForError>()),
-            Some(&expected)
+            readiness_error.current_statuses,
+            vec![
+                ("FailingService", ServiceStatus::Failed),
+                ("HeavyService", ServiceStatus::Stopped),
+            ]
         );
         drop(readiness);
 
