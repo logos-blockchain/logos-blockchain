@@ -631,14 +631,18 @@ where
         // Shed the not-on-branch pending tail a config change may have
         // invalidated. Only never-mined entries are shed, so re-posts form at
         // most a competing branch that adoption collapses — never a duplicate.
-        let config_shed = match (self.state.as_mut(), self.current_tip) {
+        let (config_shed, config_shed_other) = match (self.state.as_mut(), self.current_tip) {
             (Some(s), Some(tip)) => s.shed_pending_inscriptions_on_config(tip),
-            _ => Vec::new(),
+            _ => (Vec::new(), Vec::new()),
         };
-        let config_shed_any = !config_shed.is_empty();
+        let config_shed_any = !config_shed.is_empty() || !config_shed_other.is_empty();
         let mut seen: HashSet<_> = orphaned.iter().map(ChannelUpdateTx::tx_hash).collect();
-        for entry in config_shed {
-            let tx = orphan_from_shed(entry);
+        let config_shed = config_shed.into_iter().map(orphan_from_shed).chain(
+            config_shed_other
+                .into_iter()
+                .map(|tx| classify_shed_other(tx, self.channel_id)),
+        );
+        for tx in config_shed {
             if seen.insert(tx.tx_hash()) {
                 orphaned.push(tx);
             }
