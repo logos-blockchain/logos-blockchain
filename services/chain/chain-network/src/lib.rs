@@ -7,17 +7,13 @@ mod relays;
 mod sync;
 
 use core::{fmt::Debug, num::NonZeroUsize};
-use std::{
-    fmt::Display,
-    hash::Hash,
-    time::{Duration, Instant},
-};
+use std::{fmt::Display, hash::Hash, time::Instant};
 
 use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
 use futures::{StreamExt as _, future::join_all};
 use lb_chain_service::{
     AppliedBlock,
-    api::{CryptarchiaServiceApi, CryptarchiaServiceData},
+    api::{ApiError, CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
     block::{Block, BlockTransactions, Proposal, verify_header_alone, verify_header_signature},
@@ -56,9 +52,8 @@ use thiserror::Error;
 use tokio::{
     sync::{broadcast, mpsc, oneshot},
     task::JoinHandle,
-    time::sleep,
 };
-use tracing::{Level, debug, error, info, instrument, span, trace, warn};
+use tracing::{Level, debug, error, info, instrument, span, trace};
 use tracing_futures::Instrument as _;
 
 pub use crate::{
@@ -78,13 +73,11 @@ use crate::{
 const SERVICE_ID: &str = "ChainNetwork";
 
 pub(crate) const LOG_TARGET: &str = chain::network::ROOT;
-const FUTURE_BLOCK_MAX_RETRIES: usize = 3;
-const FUTURE_BLOCK_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
-    Cryptarchia(#[from] lb_chain_service::api::ApiError),
+    Cryptarchia(#[from] ApiError),
     #[error("Serialization error: {0}")]
     Serialisation(#[from] lb_binary_codec::bincode::Error),
     #[error("Invalid block: {0}")]
@@ -474,9 +467,7 @@ where
 
                         Self::log_received_block(&block);
 
-                        match Self::apply_block_with_future_block_retry(block, &relays)
-                            .await
-                        {
+                        match Self::apply_block(block, &relays).await {
                             Ok(()) => {
                                 trace!(target: LOG_TARGET, {
                                     counter.consensus_processed_blocks = 1
@@ -650,8 +641,7 @@ where
             }
         };
 
-        self.apply_reconstructed_block(block, orphan_downloader, relays)
-            .await;
+        Self::apply_reconstructed_block(block, orphan_downloader, relays).await;
     }
 
     #[expect(
@@ -666,7 +656,7 @@ where
         RuntimeServiceId: Send + Sync + 'static,
     {
         match err {
-            Error::Cryptarchia(lb_chain_service::api::ApiError::ParentMissing { parent, info }) => {
+            Error::Cryptarchia(ApiError::ParentMissing { parent, info }) => {
                 debug!(
                     target: LOG_TARGET, ?block_id, ?parent,
                     "Parent block missing. Trying to enqueue block for orphan processing",
@@ -680,13 +670,13 @@ where
                     );
                 }
             }
-            Error::Cryptarchia(lb_chain_service::api::ApiError::FutureBlock {
+            Error::Cryptarchia(ApiError::FutureBlock {
                 block_slot,
                 current_slot,
             }) => {
-                warn!(
+                debug!(
                     target: LOG_TARGET, ?block_id, ?block_slot, ?current_slot,
-                    "Block is still from a future slot after apply retries",
+                    "Dropping block from a future slot; it is fetched again once a descendant arrives",
                 );
             }
             err => {
@@ -702,7 +692,6 @@ where
     }
 
     async fn apply_reconstructed_block(
-        &self,
         block: Block<Mempool::Item>,
         orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
         relays: &ChainNetworkRelays<
@@ -720,7 +709,7 @@ where
         let block_id = block.header().id();
         let started_at = Instant::now();
 
-        match Self::apply_block_with_future_block_retry(block, relays).await {
+        match Self::apply_block(block, relays).await {
             Ok(()) => {
                 metrics::consensus_observe_apply_block_ok(started_at.elapsed());
                 orphan_downloader.remove_orphan(&block_id);
@@ -735,7 +724,7 @@ where
         }
     }
 
-    async fn apply_block_with_future_block_retry(
+    async fn apply_block(
         block: Block<Mempool::Item>,
         relays: &ChainNetworkRelays<
             Cryptarchia,
@@ -748,17 +737,10 @@ where
     where
         RuntimeServiceId: Send + Sync + 'static,
     {
-        retry_future_block_apply_with_delay(
-            block.header().id(),
-            FUTURE_BLOCK_MAX_RETRIES,
-            FUTURE_BLOCK_RETRY_DELAY,
-            || {
-                apply_block_and_reconcile_mempool::<_, Mempool>(
-                    block.clone(),
-                    relays.cryptarchia(),
-                    relays.mempool_adapter(),
-                )
-            },
+        apply_block_and_reconcile_mempool::<_, Mempool>(
+            block,
+            relays.cryptarchia(),
+            relays.mempool_adapter(),
         )
         .await
     }
@@ -976,66 +958,12 @@ const fn is_recoverable_apply_error(err: &Error) -> bool {
     matches!(
         err,
         Error::Cryptarchia(
-            lb_chain_service::api::ApiError::ParentMissing { .. }
-                | lb_chain_service::api::ApiError::FutureBlock { .. }
-                | lb_chain_service::api::ApiError::AlreadyApplied(_)
-                | lb_chain_service::api::ApiError::CommsFailure(_),
+            ApiError::ParentMissing { .. }
+                | ApiError::FutureBlock { .. }
+                | ApiError::AlreadyApplied(_)
+                | ApiError::CommsFailure(_),
         ),
     )
-}
-
-/// Retry applying a block when `Cryptarchia` reports it as a `FutureBlock`.
-///
-/// This is an acceptable incremental policy, where we accept bounded per-block
-/// latency to reduce immediate orphan churn.
-///
-/// This helper is intentionally defined in the chain-network service (instead
-/// of chain-service) because retry policy depends on **where the block came
-/// from** (for example: gossipsub, chainsync, orphan download, etc.).
-///
-/// Different ingress paths may require different retry/backoff behavior, so the
-/// networking layer owns this control and decides when/how often to retry
-/// before surfacing an error.
-async fn retry_future_block_apply_with_delay<F, Fut>(
-    block_id: HeaderId,
-    max_retries: usize,
-    retry_delay: Duration,
-    mut apply_block: F,
-) -> Result<(), Error>
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = Result<(), Error>>,
-{
-    let mut last_err: Option<Error> = None;
-
-    for attempt in 0..=max_retries {
-        match apply_block().await {
-            Ok(()) => return Ok(()),
-            Err(Error::Cryptarchia(lb_chain_service::api::ApiError::FutureBlock {
-                block_slot,
-                current_slot,
-            })) if attempt < max_retries => {
-                debug!(
-                    target: LOG_TARGET,
-                    ?block_id,
-                    ?block_slot,
-                    ?current_slot,
-                    attempt,
-                    "Future block received; deferring apply retry"
-                );
-                last_err = Some(Error::Cryptarchia(
-                    lb_chain_service::api::ApiError::FutureBlock {
-                        block_slot,
-                        current_slot,
-                    },
-                ));
-                sleep(retry_delay).await;
-            }
-            Err(err) => return Err(err),
-        }
-    }
-
-    Err(last_err.expect("future block retry loop should capture last FutureBlock error"))
 }
 
 /// Try to add a [`Block`] to [`Cryptarchia`].
@@ -1175,10 +1103,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::HashSet,
-        sync::atomic::{AtomicUsize, Ordering},
-    };
+    use std::collections::HashSet;
 
     use futures::stream;
     use lb_binary_codec::canonical::BinaryDecodeExt as _;
@@ -1299,85 +1224,6 @@ mod tests {
             resolve_reference(1, prefix, &mempool).await,
             Err(Error::CollidingReference { index: 1, prefix: p }) if p == prefix
         ));
-    }
-
-    fn future_block_error() -> Error {
-        Error::Cryptarchia(lb_chain_service::api::ApiError::FutureBlock {
-            block_slot: Slot::new(2),
-            current_slot: Slot::new(1),
-        })
-    }
-
-    #[tokio::test]
-    async fn retry_future_block_apply_retries_until_success() {
-        let attempts = AtomicUsize::new(0);
-
-        let result = retry_future_block_apply_with_delay(
-            HeaderId::from([1u8; 32]),
-            3,
-            Duration::ZERO,
-            || {
-                let attempt = attempts.fetch_add(1, Ordering::SeqCst);
-                async move {
-                    if attempt < 2 {
-                        Err(future_block_error())
-                    } else {
-                        Ok(())
-                    }
-                }
-            },
-        )
-        .await;
-
-        assert!(result.is_ok());
-        assert_eq!(attempts.load(Ordering::SeqCst), 3);
-    }
-
-    #[tokio::test]
-    async fn retry_future_block_apply_returns_last_future_block_after_exhausting_retries() {
-        let attempts = AtomicUsize::new(0);
-
-        let result = retry_future_block_apply_with_delay(
-            HeaderId::from([2u8; 32]),
-            2,
-            Duration::ZERO,
-            || {
-                attempts.fetch_add(1, Ordering::SeqCst);
-                async { Err(future_block_error()) }
-            },
-        )
-        .await;
-
-        assert!(matches!(
-            result,
-            Err(Error::Cryptarchia(
-                lb_chain_service::api::ApiError::FutureBlock { .. }
-            ))
-        ));
-        assert_eq!(attempts.load(Ordering::SeqCst), 3);
-    }
-
-    #[tokio::test]
-    async fn retry_future_block_apply_does_not_retry_non_future_block_errors() {
-        let attempts = AtomicUsize::new(0);
-
-        let result = retry_future_block_apply_with_delay(
-            HeaderId::from([3u8; 32]),
-            3,
-            Duration::ZERO,
-            || {
-                attempts.fetch_add(1, Ordering::SeqCst);
-                async {
-                    Err(Error::InvalidBlock(
-                        "non-future-block errors should fail immediately".to_owned(),
-                    ))
-                }
-            },
-        )
-        .await;
-
-        assert!(matches!(result, Err(Error::InvalidBlock(_))));
-        assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 
     /// A block ID rejected due to a tampered signature must not be cached by
