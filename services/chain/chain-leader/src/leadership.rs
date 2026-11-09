@@ -50,8 +50,39 @@ use crate::{
 
 const LOG_TARGET: &str = chain::leader::LEADERSHIP;
 
-/// Return a leadership proof and signing key if the current slot is a winning
-/// one for any of the eligible UTXOs, for use in a block proposal.
+/// Whether `slot` is a winning one for any of the eligible UTXOs.
+///
+/// The lottery only depends on the epoch, the slot and the note, so this needs
+/// no tip. The proof of a win does, as it attests that the note is unspent.
+pub async fn is_winning_slot<RuntimeServiceId>(
+    utxos: &[UtxoWithKeyId],
+    epoch_state: &EpochState,
+    slot: Slot,
+    kms: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync),
+) -> bool {
+    let public_inputs = public_inputs_for_slot(epoch_state, slot, &epoch_state.utxos);
+    for UtxoWithKeyId { utxo, key_id } in utxos {
+        match kms
+            .check_winning_with_key(key_id.clone(), utxo, &public_inputs)
+            .await
+        {
+            Ok(true) => return true,
+            Ok(false) => {}
+            Err(e) => {
+                metrics::consensus_proposals_create_failed("leadership_check");
+                tracing::error!(
+                    target: LOG_TARGET,
+                    "Failed to check winning utxo {:?} for {slot:?}: {e:?}",
+                    utxo.id(),
+                );
+            }
+        }
+    }
+    false
+}
+
+/// Return a leadership proof and signing key if `slot` is a winning one for any
+/// of the eligible UTXOs, for use in a block proposal.
 ///
 /// If the slot is not a winning one, it returns `Ok(None)`.
 #[expect(
@@ -258,8 +289,8 @@ pub enum BuildProofError {
 /// aged UTXO tree) and the wallet's leader-eligible notes (aged at the end of
 /// the previous epoch). The block-proposal path additionally needs the *latest*
 /// ledger state (to prove a note is still unspent), which it fetches separately
-/// per slot; the Blend winning-slot scan does not, since the leadership quota
-/// proof only attests that a note was aged, not that it is unspent.
+/// per won slot; the Blend winning-slot scan does not, since the leadership
+/// quota proof only attests that a note was aged, not that it is unspent.
 pub struct SlotContext {
     /// Tip explicitly passed to `get_leader_aged_notes` for the wallet query.
     pub wallet_tip: HeaderId,
@@ -662,6 +693,31 @@ mod pol_tests {
             proof.verify(&public_inputs),
             "proof verification should succeed"
         );
+    }
+
+    #[tokio::test]
+    async fn a_slot_is_winning_exactly_when_it_yields_a_proof() {
+        let (_, kms, utxos, tree, epoch_state) = scan_test_fixtures();
+        let wallet = DummyWallet::spawn();
+        let slots = || (0..1000).map(Slot::from);
+
+        let mut winning_slot = None;
+        let mut losing_slot = None;
+        for slot in slots() {
+            if is_winning_slot(&utxos, &epoch_state, slot, &kms).await {
+                winning_slot.get_or_insert(slot);
+            } else {
+                losing_slot.get_or_insert(slot);
+            }
+        }
+
+        let proof_for = async |slot| {
+            build_proof_for(&utxos, &tree, &epoch_state, slot, &wallet, &kms)
+                .await
+                .expect("proof build should not fail")
+        };
+        assert!(proof_for(winning_slot.unwrap()).await.is_some());
+        assert!(proof_for(losing_slot.unwrap()).await.is_none());
     }
 
     /// Find a winning slot by calling `build_proof_for` until it succeeds
