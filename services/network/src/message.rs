@@ -11,7 +11,9 @@ use crate::backends::NetworkBackend;
 #[derive(Debug)]
 pub enum NetworkMsg<Payload, PubSubEvent, ChainSyncEvent> {
     Process(Payload),
+    /// Subscribe to the events of `topics`, on a channel of their own.
     SubscribeToPubSub {
+        topics: HashSet<String>,
         sender: oneshot::Sender<BroadcastStream<PubSubEvent>>,
     },
     SubscribeToChainSync {

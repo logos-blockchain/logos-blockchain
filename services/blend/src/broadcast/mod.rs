@@ -397,7 +397,10 @@ mod tests {
         async fn process(&self, _: Self::Message) {}
         async fn rotate_era(&mut self, _: Era) {}
         async fn complete_era_transition(&mut self, _ended_era: Era) {}
-        async fn subscribe_to_pubsub(&mut self) -> BroadcastStream<Self::PubSubEvent> {
+        async fn subscribe_to_pubsub(
+            &mut self,
+            _topics: std::collections::HashSet<String>,
+        ) -> BroadcastStream<Self::PubSubEvent> {
             unimplemented!()
         }
         async fn subscribe_to_chainsync(&mut self) -> BroadcastStream<Self::ChainSyncEvent> {

@@ -936,7 +936,10 @@ mod tests {
             unimplemented!()
         }
 
-        async fn subscribe_to_pubsub(&mut self) -> BroadcastStream<Self::PubSubEvent> {
+        async fn subscribe_to_pubsub(
+            &mut self,
+            _topics: HashSet<String>,
+        ) -> BroadcastStream<Self::PubSubEvent> {
             unimplemented!()
         }
 

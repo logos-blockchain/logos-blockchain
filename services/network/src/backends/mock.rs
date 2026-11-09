@@ -310,7 +310,10 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Mock {
 
     async fn complete_era_transition(&mut self, _ended_era: Era) {}
 
-    async fn subscribe_to_pubsub(&mut self) -> BroadcastStream<Self::PubSubEvent> {
+    async fn subscribe_to_pubsub(
+        &mut self,
+        _topics: HashSet<String>,
+    ) -> BroadcastStream<Self::PubSubEvent> {
         BroadcastStream::new(self.pubsub_events_tx.subscribe())
     }
 

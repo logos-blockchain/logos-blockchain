@@ -391,7 +391,10 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for TestNetworkBackend {
 
     async fn complete_era_transition(&mut self, _ended_era: Era) {}
 
-    async fn subscribe_to_pubsub(&mut self) -> BroadcastStream<Self::PubSubEvent> {
+    async fn subscribe_to_pubsub(
+        &mut self,
+        _topics: std::collections::HashSet<String>,
+    ) -> BroadcastStream<Self::PubSubEvent> {
         BroadcastStream::new(self.pubsub_sender.subscribe())
     }
 

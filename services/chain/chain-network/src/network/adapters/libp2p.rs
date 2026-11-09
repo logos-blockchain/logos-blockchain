@@ -21,7 +21,6 @@ use lb_network_service::{
     backends::libp2p::{
         ChainSyncCommand, Command, DiscoveryCommand, Libp2p, NetworkCommand, PeerId,
         PubSubCommand::{Subscribe, Unsubscribe},
-        TopicHash,
     },
     message::{BackendNetworkMsg, ChainSyncEvent, NetworkMsg},
 };
@@ -367,38 +366,35 @@ where
     }
 
     async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
-        let (sender, receiver) = oneshot::channel();
-        if let Err(error) = self
-            .network_relay
-            .send(NetworkMsg::SubscribeToPubSub { sender })
-            .await
-        {
-            return Err(Box::new(error));
-        }
         // Gossipsub only hands over the messages of the topics the node is
         // subscribed to: the topic of the adapter's current era, and the topic
         // of the era before during its transition period. So the stream keeps
         // the messages of every era's topic, and follows the adapter from era
         // to era.
-        let topic_hashes: HashSet<TopicHash> = self
+        let topics = self
             .settings
             .era_schedule
             .iter()
-            .map(|era| TopicHash::from_raw(era.parameters.topic.clone()))
+            .map(|era| era.parameters.topic.clone())
             .collect();
+        let (sender, receiver) = oneshot::channel();
+        if let Err(error) = self
+            .network_relay
+            .send(NetworkMsg::SubscribeToPubSub { topics, sender })
+            .await
+        {
+            return Err(Box::new(error));
+        }
         let era_schedule = self.settings.era_schedule.clone();
         let stream = receiver.await.map_err(Box::new)?;
         Ok(Box::new(stream.filter_map(move |message| match message {
-            Ok(message) if topic_hashes.contains(&message.topic) => {
-                match decode_proposal(&message.data, &era_schedule) {
-                    Ok(proposal) => Some(proposal),
-                    Err(e) => {
-                        tracing::debug!(target: LOG_TARGET, "unrecognized gossipsub message: {e}");
-                        None
-                    }
+            Ok(message) => match decode_proposal(&message.data, &era_schedule) {
+                Ok(proposal) => Some(proposal),
+                Err(e) => {
+                    tracing::debug!(target: LOG_TARGET, "unrecognized gossipsub message: {e}");
+                    None
                 }
-            }
-            Ok(_) => None,
+            },
             Err(BroadcastStreamRecvError::Lagged(n)) => {
                 tracing::error!(target: LOG_TARGET, "lagged messages: {n}");
                 None
