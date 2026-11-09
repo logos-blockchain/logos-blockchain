@@ -303,7 +303,7 @@ where
 
     #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     async fn run(mut self) -> Result<(), DynError> {
-        let mut relays: ChainNetworkRelays<
+        let relays: ChainNetworkRelays<
             Cryptarchia,
             Mempool,
             MempoolNetAdapter,
@@ -372,6 +372,20 @@ where
             network_adapter.clone(),
         );
 
+        // Blocks go through their own task from here on, so that this one only
+        // routes and is never held up by a block.
+        let mut ingestion = BlockIngestion::new(
+            relays.cryptarchia().clone(),
+            relays.mempool_adapter().clone(),
+            OrphanBlocksDownloader::new(
+                network_adapter.clone(),
+                sync_config.orphan.max_orphan_cache_size,
+                sync_config.orphan.max_rejected_cache_size,
+            ),
+            era_schedule.map(|era| era.parameters.block_limits),
+        )
+        .spawn();
+
         // The adapters keep following the clock while the initial block
         // download runs, so they never fall behind its eras. The download
         // works on its own copies of them, through chain sync only.
@@ -384,13 +398,17 @@ where
                     if tick.era > current_era {
                         current_era = tick.era;
                         network_adapter.rotate_era(current_era).await;
-                        relays.mempool_adapter_mut().rotate_era(current_era).await;
+                        ingestion.rotate_era(current_era).await;
                     }
                 }
                 Some(transition_end) = era_transition_ends.next() => {
                     network_adapter.complete_era_transition(transition_end.era()).await;
-                    relays.mempool_adapter_mut().complete_era_transition(transition_end.era()).await;
+                    ingestion.complete_era_transition(transition_end.era()).await;
                 }
+                Some(msg) = self.service_resources_handle.inbound_relay.next() => {
+                    Self::handle_message(msg, &self.received_proposals_sender, &ingestion).await;
+                }
+                result = ingestion.task() => panic!("Block ingestion stopped: {result:?}"),
             }
         };
 
@@ -431,20 +449,6 @@ where
             )
             .fuse()
         );
-
-        // Blocks go through their own task from here on, so that this one only
-        // routes and is never held up by a block.
-        let mut ingestion = BlockIngestion::new(
-            relays.cryptarchia().clone(),
-            relays.mempool_adapter().clone(),
-            OrphanBlocksDownloader::new(
-                network_adapter.clone(),
-                sync_config.orphan.max_orphan_cache_size,
-                sync_config.orphan.max_rejected_cache_size,
-            ),
-            era_schedule.map(|era| era.parameters.block_limits),
-        )
-        .spawn();
 
         // Set up the proactive tip-poll lag watchdog: in each era, derive the
         // polling cadence / lag threshold from the era's active slot
