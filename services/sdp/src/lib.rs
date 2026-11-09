@@ -8,6 +8,7 @@ pub mod wallet;
 use std::fmt::{Debug, Display};
 
 use async_trait::async_trait;
+use futures::{future::BoxFuture, stream::FuturesUnordered};
 use lb_chain_service::{
     ChainServiceInfo, Epoch, ProcessedBlockEvent,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
@@ -129,6 +130,29 @@ struct ActivitySubmission {
     tip: HeaderId,
     tx_id: TxHash,
 }
+
+/// What a transaction submission came to. Submissions prove, so they run beside
+/// the service loop rather than in it, and they come back to it through this.
+enum Submission {
+    Declaration {
+        declaration_id: DeclarationId,
+        result: Result<TxHash, DynError>,
+        reply_channel: oneshot::Sender<Result<SdpSubmission, DynError>>,
+    },
+    Activity {
+        activity: Activity,
+        submission: Option<ActivitySubmission>,
+        reply_channel: Option<oneshot::Sender<Result<SdpSubmission, DynError>>>,
+    },
+    ActivityResubmission,
+    Withdrawal {
+        declaration_id: DeclarationId,
+        result: Result<TxHash, DynError>,
+        reply_channel: oneshot::Sender<Result<SdpSubmission, DynError>>,
+    },
+}
+
+type PendingSubmission<'adapters> = BoxFuture<'adapters, Submission>;
 
 const fn next_message_nonce(current_ledger_nonce: Nonce) -> Option<Nonce> {
     current_ledger_nonce.checked_next()
@@ -279,6 +303,7 @@ where
         // Wrapped so that lag on the broadcast channel surfaces as an item
         // rather than being dropped by a `select!` pattern.
         let mut new_blocks = BroadcastStream::new(chain_api.subscribe_new_blocks().await?);
+        let mut submissions = FuturesUnordered::new();
 
         self.service_resources_handle.status_updater.notify_ready();
         info!(
@@ -290,11 +315,14 @@ where
         loop {
             tokio::select! {
                 Some(msg) = self.service_resources_handle.inbound_relay.recv() => {
-                    self.handle_message(msg, &wallet_adapter, &mempool_adapter, &chain_api).await;
+                    let submission = self.handle_message(msg, &wallet_adapter, &mempool_adapter, &chain_api).await;
+                    submissions.extend(submission);
                 }
+                Some(finished) = submissions.next() => self.finish_submission(finished, &chain_api),
                 Some(event) = new_blocks.next() => match event {
                     Ok(event) => {
-                        self.handle_new_block(event, &wallet_adapter, &mempool_adapter, &chain_api).await;
+                        let submission = self.handle_new_block(event, &wallet_adapter, &mempool_adapter, &chain_api).await;
+                        submissions.extend(submission);
                     }
                     // The tracker only needs the latest tip, so a skipped
                     // event costs nothing but is worth knowing about.
@@ -326,13 +354,13 @@ where
         + Sync
         + 'static,
 {
-    async fn handle_message(
+    async fn handle_message<'adapters>(
         &mut self,
         msg: SdpMessage,
-        wallet_adapter: &WalletAdapter,
-        mempool_adapter: &MempoolAdapter,
-        chain_api: &CryptarchiaServiceApi<ChainService>,
-    ) {
+        wallet_adapter: &'adapters WalletAdapter,
+        mempool_adapter: &'adapters MempoolAdapter,
+        chain_api: &'adapters CryptarchiaServiceApi<ChainService>,
+    ) -> Option<PendingSubmission<'adapters>> {
         match msg {
             SdpMessage::PostActivity {
                 metadata,
@@ -347,7 +375,6 @@ where
                     chain_api,
                     reply_channel,
                 )
-                .await;
             }
             SdpMessage::PostDeclaration {
                 declaration,
@@ -355,13 +382,22 @@ where
             } => {
                 metrics::declarations_total();
 
-                self.handle_post_declaration(
-                    declaration,
-                    wallet_adapter,
-                    mempool_adapter,
-                    reply_channel,
-                )
-                .await;
+                let declaration_id = declaration.id();
+                let wallet_config = self.wallet_config.clone();
+                Some(Box::pin(async move {
+                    let result = Self::submit_declaration(
+                        declaration,
+                        wallet_adapter,
+                        mempool_adapter,
+                        &wallet_config,
+                    )
+                    .await;
+                    Submission::Declaration {
+                        declaration_id,
+                        result,
+                        reply_channel,
+                    }
+                }))
             }
             SdpMessage::PostWithdrawal {
                 declaration_id,
@@ -369,14 +405,22 @@ where
             } => {
                 metrics::withdrawals_total();
 
-                self.handle_post_withdrawal(
-                    declaration_id,
-                    wallet_adapter,
-                    mempool_adapter,
-                    chain_api,
-                    reply_channel,
-                )
-                .await;
+                let wallet_config = self.wallet_config.clone();
+                Some(Box::pin(async move {
+                    let result = Self::submit_withdrawal(
+                        declaration_id,
+                        wallet_adapter,
+                        mempool_adapter,
+                        chain_api,
+                        &wallet_config,
+                    )
+                    .await;
+                    Submission::Withdrawal {
+                        declaration_id,
+                        result,
+                        reply_channel,
+                    }
+                }))
             }
             SdpMessage::SetCurrentDeclarationId {
                 declaration_id,
@@ -384,86 +428,165 @@ where
             } => {
                 self.handle_set_current_declaration_id(declaration_id, reply_channel, chain_api)
                     .await;
+                None
             }
         }
     }
 
-    async fn handle_new_block(
+    /// Records what a submission came to and only then replies to it, so that
+    /// a caller that's been replied to finds the service up to date.
+    fn finish_submission(
         &mut self,
-        event: ProcessedBlockEvent,
-        wallet_adapter: &WalletAdapter,
-        mempool_adapter: &MempoolAdapter,
+        submission: Submission,
         chain_api: &CryptarchiaServiceApi<ChainService>,
     ) {
+        match submission {
+            Submission::Declaration {
+                declaration_id,
+                result,
+                reply_channel,
+            } => {
+                if result.is_ok() {
+                    self.declaration_id = Some(declaration_id);
+                    self.update_state();
+                }
+                let response = result.map(|tx_id| SdpSubmission::submitted(declaration_id, tx_id));
+                Self::reply(Some(reply_channel), response, "post declaration");
+            }
+            Submission::Activity {
+                activity,
+                submission,
+                reply_channel,
+            } => {
+                let declaration_id = activity.declaration_id;
+                let tip = submission.map(|ActivitySubmission { tip, .. }| tip);
+
+                if self
+                    .active_message_tracker
+                    .replace(IntentTracker::new(
+                        activity,
+                        self.active_message_tracker_config.clone(),
+                        tip,
+                        chain_api.clone(),
+                    ))
+                    .is_some()
+                {
+                    debug!(target: LOG_TARGET, "active message tracker replaced");
+                }
+                self.update_state();
+
+                Self::reply(
+                    reply_channel,
+                    submission.map_or_else(
+                        || Err(DynError::from("Failed to submit activity transaction")),
+                        |ActivitySubmission { tx_id, .. }| {
+                            Ok(SdpSubmission::submitted(declaration_id, tx_id))
+                        },
+                    ),
+                    "post activity",
+                );
+            }
+            Submission::ActivityResubmission => {}
+            Submission::Withdrawal {
+                declaration_id,
+                result,
+                reply_channel,
+            } => {
+                if result.is_ok() {
+                    self.declaration_id = None;
+                    self.active_message_tracker = None;
+                    self.update_state();
+                }
+                let response = result.map(|tx_id| SdpSubmission::submitted(declaration_id, tx_id));
+                Self::reply(Some(reply_channel), response, "post withdrawal");
+            }
+        }
+    }
+
+    async fn handle_new_block<'adapters>(
+        &mut self,
+        event: ProcessedBlockEvent,
+        wallet_adapter: &'adapters WalletAdapter,
+        mempool_adapter: &'adapters MempoolAdapter,
+        chain_api: &'adapters CryptarchiaServiceApi<ChainService>,
+    ) -> Option<PendingSubmission<'adapters>> {
         let Some(tracker) = self.active_message_tracker.as_mut() else {
             trace!(target: LOG_TARGET, "no active message tracker exists");
-            return;
+            return None;
         };
 
         match tracker.handle_tip(event.tip, event.lib).await {
-            Ok(outcome) => {
-                self.handle_active_message_tracker_outcome(
-                    outcome,
-                    wallet_adapter,
-                    mempool_adapter,
-                    chain_api,
-                )
-                .await;
-            }
+            Ok(outcome) => self.handle_active_message_tracker_outcome(
+                outcome,
+                wallet_adapter,
+                mempool_adapter,
+                chain_api,
+            ),
             Err(err) => {
                 error!(target: LOG_TARGET, %err, "active message tracker failed to handle tip");
+                None
             }
         }
     }
 
-    async fn handle_active_message_tracker_outcome(
+    fn handle_active_message_tracker_outcome<'adapters>(
         &mut self,
         outcome: intent::Outcome<Activity>,
-        wallet_adapter: &WalletAdapter,
-        mempool_adapter: &MempoolAdapter,
-        chain_api: &CryptarchiaServiceApi<ChainService>,
-    ) {
+        wallet_adapter: &'adapters WalletAdapter,
+        mempool_adapter: &'adapters MempoolAdapter,
+        chain_api: &'adapters CryptarchiaServiceApi<ChainService>,
+    ) -> Option<PendingSubmission<'adapters>> {
         match outcome {
             intent::Outcome::StatusChecked {
                 intent: activity,
                 status,
-            } => {
-                self.handle_active_message_status(
-                    activity,
-                    status,
-                    wallet_adapter,
-                    mempool_adapter,
-                    chain_api,
-                )
-                .await;
-            }
+            } => self.handle_active_message_status(
+                activity,
+                status,
+                wallet_adapter,
+                mempool_adapter,
+                chain_api,
+            ),
             intent::Outcome::WaitingforMoreTipChanges => {
                 trace!(target: LOG_TARGET, "active message tracker waiting for more tip changes before status check");
+                None
             }
             intent::Outcome::Finalized => {
                 debug!(target: LOG_TARGET, "active message intent has been finalized in the LIB: dropping the tracker");
                 self.active_message_tracker = None;
                 self.update_state();
+                None
             }
         }
     }
 
-    async fn handle_active_message_status(
+    fn handle_active_message_status<'adapters>(
         &self,
         activity: Activity,
         status: IntentStatus,
-        wallet_adapter: &WalletAdapter,
-        mempool_adapter: &MempoolAdapter,
-        chain_api: &CryptarchiaServiceApi<ChainService>,
-    ) {
+        wallet_adapter: &'adapters WalletAdapter,
+        mempool_adapter: &'adapters MempoolAdapter,
+        chain_api: &'adapters CryptarchiaServiceApi<ChainService>,
+    ) -> Option<PendingSubmission<'adapters>> {
         match status {
             IntentStatus::NotApplied => {
                 trace!(target: LOG_TARGET, "active message status: not applied in the tip ledger: resubmitting it");
-                self.submit_activity(activity, wallet_adapter, mempool_adapter, chain_api)
+                let wallet_config = self.wallet_config.clone();
+                Some(Box::pin(async move {
+                    Self::submit_activity(
+                        activity,
+                        wallet_adapter,
+                        mempool_adapter,
+                        chain_api,
+                        &wallet_config,
+                    )
                     .await;
+                    Submission::ActivityResubmission
+                }))
             }
             IntentStatus::Applied => {
                 trace!(target: LOG_TARGET, "active message status: applied in the tip ledger: keep tracking it");
+                None
             }
         }
     }
@@ -474,11 +597,10 @@ where
     /// (including current nonce) from the ledger. This ensures the service
     /// continues with the correct nonce after a restart.
     async fn try_fetch_runtime_declaration(
-        &self,
         declaration_id: DeclarationId,
         chain_api: &CryptarchiaServiceApi<ChainService>,
     ) -> Result<RuntimeDeclarationContext, SdpError> {
-        self.fetch_declaration_from_ledger(chain_api, declaration_id)
+        Self::fetch_declaration_from_ledger(chain_api, declaration_id)
             .await?
             .map_or_else(
                 || {
@@ -501,7 +623,6 @@ where
 
     /// Fetch declaration info from the ledger via chain service.
     async fn fetch_declaration_from_ledger(
-        &self,
         chain_api: &CryptarchiaServiceApi<ChainService>,
         declaration_id: DeclarationId,
     ) -> Result<Option<RuntimeDeclarationContext>, DynError> {
@@ -548,7 +669,7 @@ where
             return Ok(());
         };
 
-        match self.try_fetch_runtime_declaration(id, chain_api).await {
+        match Self::try_fetch_runtime_declaration(id, chain_api).await {
             Ok(_) => Ok(()),
             Err(e) => match e {
                 SdpError::ChainApi(err) => {
@@ -588,13 +709,12 @@ where
         clippy::cognitive_complexity,
         reason = "TODO: address this in a dedicated refactor"
     )]
-    async fn handle_post_declaration(
-        &mut self,
+    async fn submit_declaration(
         declaration: Box<DeclarationMessage>,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
-        reply_channel: oneshot::Sender<Result<SdpSubmission, DynError>>,
-    ) {
+        wallet_config: &SdpWalletConfig,
+    ) -> Result<TxHash, DynError> {
         let tx_builder = MantleTxBuilder::new();
         let declaration_id = declaration.id();
         let provider_id = declaration.provider_id;
@@ -611,15 +731,14 @@ where
         );
 
         let signed_tx = match wallet_adapter
-            .declare_tx(tx_builder, *declaration, &self.wallet_config)
+            .declare_tx(tx_builder, *declaration, wallet_config)
             .await
         {
             Ok(tx) => tx,
             Err(e) => {
                 error!(target: LOG_TARGET, "Failed to create declaration transaction: {:?}", e);
                 metrics::declaration_tx_failures_total();
-                Self::reply(Some(reply_channel), Err(e.into()), "post declaration");
-                return;
+                return Err(e.into());
             }
         };
 
@@ -638,8 +757,7 @@ where
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
             error!(target: LOG_TARGET, "Failed to post declaration to mempool: {:?}", e);
             metrics::declaration_mempool_failures_total();
-            Self::reply(Some(reply_channel), Err(e.into()), "post declaration");
-            return;
+            return Err(e.into());
         }
 
         info!(
@@ -654,24 +772,17 @@ where
         );
 
         metrics::declaration_success_total();
-        Self::reply(
-            Some(reply_channel),
-            Ok(SdpSubmission::submitted(declaration_id, tx_id)),
-            "post declaration",
-        );
-
-        self.declaration_id = Some(declaration_id);
-        self.update_state();
+        Ok(tx_id)
     }
 
-    async fn handle_post_activity(
-        &mut self,
+    fn handle_post_activity<'adapters>(
+        &self,
         metadata: ActivityMetadata,
-        wallet_adapter: &WalletAdapter,
-        mempool_adapter: &MempoolAdapter,
-        chain_api: &CryptarchiaServiceApi<ChainService>,
+        wallet_adapter: &'adapters WalletAdapter,
+        mempool_adapter: &'adapters MempoolAdapter,
+        chain_api: &'adapters CryptarchiaServiceApi<ChainService>,
         reply_channel: Option<oneshot::Sender<Result<SdpSubmission, DynError>>>,
-    ) {
+    ) -> Option<PendingSubmission<'adapters>> {
         let Some(declaration_id) = self.declaration_id else {
             tracing::error!(target: LOG_TARGET, "No declaration_id set. Cannot post activity without declaration.");
             Self::reply(
@@ -681,7 +792,7 @@ where
                 )),
                 "post activity",
             );
-            return;
+            return None;
         };
 
         let activity = Activity {
@@ -689,36 +800,22 @@ where
             metadata,
         };
 
-        let submission = self
-            .submit_activity(activity.clone(), wallet_adapter, mempool_adapter, chain_api)
+        let wallet_config = self.wallet_config.clone();
+        Some(Box::pin(async move {
+            let submission = Self::submit_activity(
+                activity.clone(),
+                wallet_adapter,
+                mempool_adapter,
+                chain_api,
+                &wallet_config,
+            )
             .await;
-
-        Self::reply(
-            reply_channel,
-            submission.map_or_else(
-                || Err(DynError::from("Failed to submit activity transaction")),
-                |ActivitySubmission { tx_id, .. }| {
-                    Ok(SdpSubmission::submitted(declaration_id, tx_id))
-                },
-            ),
-            "post activity",
-        );
-
-        let tip = submission.map(|ActivitySubmission { tip, .. }| tip);
-
-        if self
-            .active_message_tracker
-            .replace(IntentTracker::new(
+            Submission::Activity {
                 activity,
-                self.active_message_tracker_config.clone(),
-                tip,
-                chain_api.clone(),
-            ))
-            .is_some()
-        {
-            debug!(target: LOG_TARGET, "active message tracker replaced");
-        }
-        self.update_state();
+                submission,
+                reply_channel,
+            }
+        }))
     }
 
     #[expect(
@@ -727,11 +824,11 @@ where
         reason = "TODO: address this in a dedicated refactor"
     )]
     async fn submit_activity(
-        &self,
         activity: Activity,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
         chain_api: &CryptarchiaServiceApi<ChainService>,
+        wallet_config: &SdpWalletConfig,
     ) -> Option<ActivitySubmission> {
         trace!(
             target: LOG_TARGET,
@@ -744,9 +841,7 @@ where
             chain_epoch,
             chain_slot,
             provider_id,
-        }) = self
-            .try_fetch_runtime_declaration(activity.declaration_id, chain_api)
-            .await
+        }) = Self::try_fetch_runtime_declaration(activity.declaration_id, chain_api).await
         else {
             error!(target: LOG_TARGET, "Can't find declaration. Cannot post activity without declaration.");
             return None;
@@ -781,7 +876,7 @@ where
         let tx_builder = MantleTxBuilder::new();
 
         let signed_tx = match wallet_adapter
-            .active_tx(tx_builder, active_message, &self.wallet_config)
+            .active_tx(tx_builder, active_message, wallet_config)
             .await
         {
             Ok(tx) => tx,
@@ -864,39 +959,27 @@ where
         clippy::cognitive_complexity,
         reason = "TODO: address this in a dedicated refactor"
     )]
-    async fn handle_post_withdrawal(
-        &mut self,
+    async fn submit_withdrawal(
         declaration_id: DeclarationId,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
         chain_api: &CryptarchiaServiceApi<ChainService>,
-        reply_channel: oneshot::Sender<Result<SdpSubmission, DynError>>,
-    ) {
-        let Ok(RuntimeDeclarationContext { declaration, .. }) = self
-            .try_fetch_runtime_declaration(declaration_id, chain_api)
-            .await
+        wallet_config: &SdpWalletConfig,
+    ) -> Result<TxHash, DynError> {
+        let Ok(RuntimeDeclarationContext { declaration, .. }) =
+            Self::try_fetch_runtime_declaration(declaration_id, chain_api).await
         else {
             error!(target: LOG_TARGET, "Can't find declaration. Cannot post activity without declaration.");
             metrics::withdrawal_validation_failures_total();
-            Self::reply(
-                Some(reply_channel),
-                Err(DynError::from(
-                    "Can't find declaration. Cannot post withdrawal without declaration.",
-                )),
-                "post withdrawal",
-            );
-            return;
+            return Err(DynError::from(
+                "Can't find declaration. Cannot post withdrawal without declaration.",
+            ));
         };
 
         let Some(nonce) = next_message_nonce(declaration.nonce) else {
             error!(target: LOG_TARGET, "SDP nonce sequence exhausted; cannot post withdrawal");
             metrics::withdrawal_validation_failures_total();
-            Self::reply(
-                Some(reply_channel),
-                Err(DynError::from("Can't bump nonce")),
-                "post withdrawal",
-            );
-            return;
+            return Err(DynError::from("Can't bump nonce"));
         };
 
         let withdraw_message = WithdrawMessage {
@@ -907,15 +990,14 @@ where
         let tx_builder = MantleTxBuilder::new();
 
         let signed_tx = match wallet_adapter
-            .withdraw_tx(tx_builder, withdraw_message, &self.wallet_config)
+            .withdraw_tx(tx_builder, withdraw_message, wallet_config)
             .await
         {
             Ok(tx) => tx,
             Err(e) => {
                 error!(target: LOG_TARGET, "Failed to create withdrawal transaction: {:?}", e);
                 metrics::withdrawal_tx_failures_total();
-                Self::reply(Some(reply_channel), Err(e.into()), "post withdrawal");
-                return;
+                return Err(e.into());
             }
         };
 
@@ -924,21 +1006,11 @@ where
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
             error!(target: LOG_TARGET, "Failed to post withdrawal to mempool: {:?}", e);
             metrics::withdrawal_mempool_failures_total();
-            Self::reply(Some(reply_channel), Err(e.into()), "post withdrawal");
-            return;
+            return Err(e.into());
         }
 
         metrics::withdrawal_success_total();
-
-        Self::reply(
-            Some(reply_channel),
-            Ok(SdpSubmission::submitted(declaration_id, tx_id)),
-            "post withdrawal",
-        );
-
-        self.declaration_id = None;
-        self.active_message_tracker = None;
-        self.update_state();
+        Ok(tx_id)
     }
 
     async fn handle_set_current_declaration_id(
@@ -962,8 +1034,7 @@ where
         chain_api: &CryptarchiaServiceApi<ChainService>,
     ) -> Result<(), SdpError> {
         let validated_id = match declaration_id {
-            Some(id) => self
-                .try_fetch_runtime_declaration(id, chain_api)
+            Some(id) => Self::try_fetch_runtime_declaration(id, chain_api)
                 .await
                 .map(|_| Some(id))?,
             None => None,
