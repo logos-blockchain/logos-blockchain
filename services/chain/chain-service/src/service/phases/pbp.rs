@@ -76,9 +76,9 @@ where
         let mut pbp_timer = Box::pin(tokio::time::sleep(self.prolonged_bootstrap_period));
         loop {
             tokio::select! {
-                // Going online changes the chain, which a block under
-                // verification would undo on commit.
-                () = pbp_timer.as_mut(), if self.block_under_verification.is_none() => {
+                // Going online changes the chain, which a block underway
+                // would undo on commit.
+                () = pbp_timer.as_mut(), if self.block_underway.is_none() => {
                     return;
                 },
                 Some(msg) = self.inbound_relay.next() => match msg {
@@ -93,8 +93,8 @@ where
                         debug!(target: LOG_TARGET, "ignoring IbdCompleted: already in {:?} phase", self.phase);
                     }
                 },
-                Some(verification) = OptionFuture::from(self.block_under_verification.as_mut()) => {
-                    self.finish_block(verification).await;
+                Some(preparation) = OptionFuture::from(self.block_underway.as_mut()) => {
+                    self.finish_block(preparation).await;
                 }
                 Some(tick) = self.slot_timer.next() => self.current_slot = tick.slot,
                 _ = self.state_recording_timer.tick() => self.record_recovery_state(),

@@ -9,7 +9,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures::{StreamExt as _, future::join_all, stream::BoxStream};
+use futures::{StreamExt as _, stream::BoxStream};
 use lb_binary_codec::{
     bincode::{DeserializeOp as _, SerializeOp as _},
     canonical::{BinaryDecode, BinaryEncode, DecodeError},
@@ -70,6 +70,21 @@ impl<Tx> StorageApi<Tx> {
             .relay::<StorageService<RuntimeServiceId>>()
             .await
             .map(Self::new)
+    }
+
+    /// Removes blocks and all that's stored for them, in one write. Blocks that
+    /// aren't there make no difference.
+    pub async fn remove_blocks<Ids>(&self, ids: Ids) -> Result<(), DynError>
+    where
+        Ids: IntoIterator<Item = HeaderId>,
+    {
+        let header_ids = ids.into_iter().collect();
+        self.request(|response_tx| StorageMsg::RemoveBlocks {
+            header_ids,
+            response_tx,
+        })
+        .await?
+        .map_err(Into::into)
     }
 
     pub async fn store<Value: Serialize>(&self, key: Bytes, value: Value) -> Result<(), DynError> {
@@ -261,28 +276,6 @@ where
             .map(|bytes| decode_stored_block(&bytes))
             .transpose()
             .map_err(Into::into)
-    }
-
-    pub async fn remove_block(&self, id: HeaderId) -> Result<Option<Block<Tx>>, DynError> {
-        let bytes = self
-            .request(|response_tx| StorageMsg::RemoveBlock {
-                header_id: id,
-                response_tx,
-            })
-            .await?;
-        bytes
-            .map(|bytes| decode_stored_block(&bytes))
-            .transpose()
-            .map_err(Into::into)
-    }
-
-    pub async fn remove_blocks(
-        &self,
-        ids: impl Iterator<Item = HeaderId>,
-    ) -> impl Iterator<Item = Result<Option<Block<Tx>>, DynError>> {
-        join_all(ids.map(|id| self.remove_block(id)))
-            .await
-            .into_iter()
     }
 }
 

@@ -110,7 +110,7 @@ where
             state_recording_timer,
             prolonged_bootstrap_period,
             epoch_state_query_sources: crate::service::EpochStateQuerySourceTracker::default(),
-            block_under_verification: None,
+            block_underway: None,
             queued_blocks: VecDeque::new(),
         }
     }
