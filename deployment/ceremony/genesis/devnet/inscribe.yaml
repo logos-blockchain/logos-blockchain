@@ -4,5 +4,5 @@ entropy_sources:
 pow_reward_pool: 300000000000
 
 # === PER-RELEASE: edit on every release ===
-chain_id: "X.Y.Z-rc.N"
-genesis_time: "YYYY-MM-DDTHH:MM:SSZ"
+chain_id: "0.3.5-rc.1"
+genesis_time: "2026-11-09T16:00:00Z"
