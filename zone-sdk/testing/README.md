@@ -19,8 +19,9 @@ one of them, and random schedules hunt for the orderings nobody listed.
   so the lowest failing rung names what the SDK gets wrong.
 
 Only invariants are asserted: the view is the canonical chain, every payload
-finalizes exactly once in one lineage, the wallet is the ledger's note set,
-a restarted sequencer reports what one that never stopped would.
+finalizes exactly once in one lineage, every report lists a parent before
+what chains on it, the wallet is the ledger's note set, a restarted
+sequencer reports what one that never stopped would.
 
 **How.**
 

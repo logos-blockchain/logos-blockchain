@@ -260,7 +260,7 @@ test only asserts on the result.
 | `notes.rs` | 10 | deposits, withdraws, pins, refunds, the wallet view |
 | `bundles.rs` | 6 | multi-sig rounds, the prepare-then-submit boundary, hand-built custom txs |
 | `configs.rs` | 4 | re-keying, orphaning by config, posting timeouts |
-| `known_issues.rs` | 6 | stories that began as ignored SDK issues, each the acceptance test of its fix |
+| `known_issues.rs` | 6 | shed and liveness mechanisms distilled from property-ladder findings, each with the fewest moves that reach it |
 | `tiers.rs` | 1 + pairs | the catalogue's self-check (`s00_chain_does_what_it_says`) and the four pairs stories |
 | `tests/gas.rs` | | the fee model: paid equals priced, unfunded txs are evicted, price rises are paid |
 
@@ -305,8 +305,9 @@ hash.
 **The mirror** (`src/mirror.rs`) is a consumer written the way LEZ consumes
 the SDK: it rebuilds the channel view from `ChannelUpdate`s alone, appending
 on an extension and rebuilding on a conflict, and is compared with the
-node's canonical chain after every settle. If the updates are not enough to
-rebuild the view, this is what fails.
+node's canonical chain after every settle. A restart without a checkpoint
+starts the mirror over, as a zone starting from nothing would. If the
+updates are not enough to rebuild the view, this is what fails.
 
 **The oracles** (`src/oracles.rs`) check, once a sequencer has caught up
 with its node (connected, told about the tip, agreeing on LIB):
@@ -317,6 +318,9 @@ with its node (connected, told about the tip, agreeing on LIB):
   against LIB and unfinalized against the tip;
 - the turn view agrees with the ledger's `round_robin`;
 - the finalized history reported is the chain's, once each and in order;
+- `adopted` and `orphaned` list an entry before anything chained on it, on
+  the message lineage and on the config lineage, so a consumer that replays
+  them in order rebuilds the chain in dependency order;
 - promptness, judged on the sequencer's two clocks (the stream position and
   the paused tokio time its resubmit timer runs on): every post of an own
   inscription was made after the sequencer's last turn announcement and
@@ -469,48 +473,21 @@ test. The workflow is:
    with the fewest moves and names the mechanism in its doc comment. It runs
    on every chain shape like any other story. If the mechanism cannot be
    named yet, keep the shrunk schedule itself as a `#[test]` replay, event by
-   event, which is how the mirrored-entry finding lived until its root cause
-   was found.
-3. While the SDK is unfixed the story is `#[ignore]`d with the issue in the
-   reason string, and the property run recognises that known outcome so it
-   keeps hunting for new ones instead of re-finding the same.
-4. The story is the acceptance test of the fix. When the fix lands it turns
-   green, the ignore and the recogniser go, and it stays as a regular test.
+   event, until the root cause is found.
+3. The story is the acceptance test of the SDK fix: red until the fix lands,
+   a regular test after. The bed carries no list of open issues; the SDK's
+   pull requests are where a fix is tracked.
 
 A schedule that fails because of a chain shape nobody had listed becomes a
 new catalogue entry instead; that is where the last four ordering entries
 came from.
 
-## Results so far
+## Coverage
 
-The first sweep produced six findings. Five were SDK bugs and are now a
-stack of PRs; one turned out to be correct behaviour and its story was
-rewritten to prove it. Each bug needs three or four independent events in a
-particular order, which is what makes them hard to find by hand or in
-cucumber.
-
-| Finding | Mechanism | Severity | Fix |
-| --- | --- | --- | --- |
-| Config shed strands a chained custom tx | the config shed dropped pending inscriptions but not the opaque tx chained on one | medium: one unreported entry | #3940 |
-| Dead-input bundle re-funded forever | a withdraw whose deposit was reorged out on a block with no channel update kept being re-funded; it can never land | high: wallet churn, stalled chain, no report | #3941 |
-| Hand-built tx on a stale parent accepted | only pending children were checked, not mined ones | low to medium | #3942 |
-| Restored publish on a taken parent stranded | the lineage sheds only ran when the lineage diff reported a change; finalized history replays without one | high: silent payload loss | #3943 |
-| Others' config on an abandoned branch | the SDK keeps and re-posts it; the node readmits reorged txs and it re-lands | not a bug | story rewritten |
-| Mirrored entry never expires | another sequencer's tx the node rejected for good held some thirty entries behind it, own publishes included | highest: whole channel stalls | #3944 |
-
-Three of the five share a root cause: liveness checks gated on the lineage
-diff instead of running on every block.
-
-The bed also rejected two wrong fixes. The first versions of the dead-input
-and mirrored-entry fixes shed the entry on its first unmined sighting. They
-passed every unit test. The `deep_forks` chain broke them in one run,
-because it re-lands dropped transactions a few blocks later; both fixes were
-reworked to wait for the stale window.
-
-**Mutation testing.** To measure the bed against the SDK's own unit tests,
-cargo-mutants mutated the sequencer files and three arms ran over the same
-mutants with equal machine time per mutant: the random rung with 24
-schedules, the catalogue, and the unit tests.
+To measure the bed against the SDK's own unit tests, cargo-mutants mutated
+the sequencer files and three arms ran over the same mutants with equal
+machine time per mutant: the random rung with 24 schedules, the catalogue,
+and the unit tests.
 
 | Arm | Mutants caught of 427 viable |
 | --- | --- |
@@ -523,8 +500,8 @@ schedules, the catalogue, and the unit tests.
 | nobody sees | 42 |
 
 The two are complementary: neither is redundant, and the catalogue is the
-cheaper catch per minute. The recommendation was to keep both bed arms with
-the random rung at 24 schedules.
+cheaper catch per minute. That is why both bed arms stay, with the random
+rung at 24 schedules.
 
 ## Limits, and how to run it
 
@@ -540,7 +517,6 @@ stays as the fidelity check; the bed is the breadth check.
 
 ```sh
 cargo test -p logos-blockchain-zone-sdk-testing              # everything: catalogue, pairs, properties, gas
-cargo test -p logos-blockchain-zone-sdk-testing -- --ignored # the known-issue stories still open
 PROPTEST_CASES=200 cargo test -p logos-blockchain-zone-sdk-testing properties  # a longer hunt
 SIM_EVENTS=64..512 ...                                       # longer schedules
 RUST_LOG=debug ...                                           # SDK log plus the per-event trace
