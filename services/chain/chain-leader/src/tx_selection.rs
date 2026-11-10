@@ -190,7 +190,7 @@ mod tests {
             ops::{
                 NoOpProof, ZkTransferProof,
                 program::ProgramRegisterOp,
-                transfer::{TransferOp, prove_transfer},
+                transfer::{TransferOp, test_utils::prove_transfer},
             },
             programs::ProgramVerificationKey,
             traits::StorageSize,

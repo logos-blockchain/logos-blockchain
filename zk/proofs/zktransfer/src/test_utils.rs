@@ -5,7 +5,8 @@ use serde_json::Value;
 
 use crate::{
     ZkTransferChainInputsData, ZkTransferInputNoteData, ZkTransferOutputNoteData,
-    ZkTransferWalletInputsData, ZkTransferWitnessInputsData,
+    ZkTransferUnsignedInput, ZkTransferWalletInputsData, ZkTransferWitnessBuilder,
+    ZkTransferWitnessInputsData,
 };
 
 pub const SAMPLE_INPUT_JSON: &str = include_str!("../test_vectors/sample.input.json");
@@ -58,4 +59,43 @@ pub fn sample_witness_data() -> ZkTransferWitnessInputsData {
         msg: fr(&json["msg"]),
     };
     ZkTransferWitnessInputsData::from_chain_and_wallet_data(chain, wallet)
+}
+
+/// The sample witness without its secret keys, and the secret keys of its
+/// active inputs.
+#[must_use]
+pub fn sample_unsigned_witness() -> (ZkTransferWitnessBuilder, Vec<Fr>) {
+    let sample = sample_witness_data();
+    let mut builder =
+        ZkTransferWitnessBuilder::new(sample.chain.tx_commitment_root, sample.chain.msg);
+    let mut secret_keys = Vec::new();
+    for (input, _) in sample
+        .wallet
+        .inputs
+        .iter()
+        .zip(sample.chain.inputs_active)
+        .filter(|(_, active)| *active)
+    {
+        secret_keys.push(input.secret_key);
+        builder = builder
+            .input(ZkTransferUnsignedInput {
+                stake_public_key: input.stake_public_key,
+                nonce: input.nonce,
+                value: input.value,
+                path_and_selectors: input.path_and_selectors,
+            })
+            .expect("the sample fits the circuit");
+    }
+    for (output, _) in sample
+        .wallet
+        .outputs
+        .iter()
+        .zip(sample.chain.outputs_active)
+        .filter(|(_, active)| *active)
+    {
+        builder = builder
+            .output(*output)
+            .expect("the sample fits the circuit");
+    }
+    (builder, secret_keys)
 }

@@ -25,7 +25,7 @@ lb-binary-codec                  = { workspace = true }
 lb-blend-service                 = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-config                        = { features = ["testing"], workspace = true }
-lb-core                          = { workspace = true }
+lb-core                          = { features = ["test-utils"], workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { workspace = true }

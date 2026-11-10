@@ -12,7 +12,7 @@ use lb_core::mantle::{
     ledger::verification_mode::StandardMode,
     note_set::CommitmentMmr,
     notes::derive_note_nullifier,
-    ops::{ZkTransferProof, transfer::prove_transfer},
+    ops::{ZkTransferProof, transfer::test_utils::prove_transfer},
     traits::{GenesisTx as _, Hashable as _},
     transactions::{
         GasPrices, MantleTxBuilder, OpProofs, builder::FundingNote, states::Preverified,

@@ -26,6 +26,7 @@
 //!     assert!(verify(&proof, &inputs).unwrap());
 //! }
 
+mod builder;
 mod chain_inputs;
 mod inputs;
 #[cfg(any(test, feature = "test-utils"))]
@@ -37,6 +38,9 @@ mod witness;
 use core::fmt::Debug;
 use std::error::Error;
 
+pub use builder::{
+    Signed, Unsigned, ZkTransferSecretKeysError, ZkTransferUnsignedInput, ZkTransferWitnessBuilder,
+};
 pub use chain_inputs::{ZkTransferChainInputs, ZkTransferChainInputsData};
 pub use inputs::{ZkTransferWitnessInputs, ZkTransferWitnessInputsData};
 use lb_circuits_prover::Prover as _;

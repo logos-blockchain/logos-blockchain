@@ -6,7 +6,7 @@ use lb_core::mantle::{
     Op, OpProof, OpRef, SignedOps, TxHash,
     gas::{MainnetGasProfile, TxGasCalculator as _},
     notes::NoteNullifier,
-    ops::{ChannelInscribeProof, ZkTransferProof, transfer::prove_transfer},
+    ops::{ChannelInscribeProof, ZkTransferProof, transfer::test_utils::prove_transfer},
     traits::Hashable as _,
     transactions::{
         MantleTxBuilder, OpProofs, Ops, builder::ZkTransferOpening, tx_list::ops::OpsContext,

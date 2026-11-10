@@ -2866,7 +2866,7 @@ mod tests {
             .unwrap();
         assert_eq!(witnesses.len(), 1);
         assert_eq!(
-            witnesses[0].witness.chain.tx_commitment_root,
+            witnesses[0].witness.tx_commitment_root(),
             extended.frontier_root()
         );
     }

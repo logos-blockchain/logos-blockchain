@@ -15,7 +15,9 @@ mod public;
 pub use self::public::PublicKey;
 
 // The input secret keys are set by the KMS.
-pub type ZkTransferPayload = lb_zktransfer::ZkTransferWitnessInputsData;
+// The witness of a transfer without the secret keys of its inputs, which the
+// keys of the KMS complete.
+pub type ZkTransferPayload = lb_zktransfer::ZkTransferWitnessBuilder<lb_zktransfer::Unsigned>;
 
 /// An hardened ZK secret key that only exposes methods to retrieve public
 /// information.
@@ -125,17 +127,12 @@ impl SecuredKey for ZkKey {
     type PublicKey = PublicKey;
     type Error = KeyError;
 
-    // Every active input is proven with this key.
+    // Every input is proven with this key.
     fn sign(&self, payload: &Self::Payload) -> Result<Self::Signature, Self::Error> {
-        let active = payload
-            .chain
-            .inputs_active
-            .iter()
-            .filter(|active| **active)
-            .count();
-        UnsecuredZkKey::prove_transfer(&vec![self.0.clone(); active], payload.clone())
+        self.0.prove_transfer_alone(payload.clone())
     }
 
+    // The i-th input is proven with the i-th key.
     fn sign_multiple(
         keys: &[&Self],
         payload: &Self::Payload,
@@ -188,16 +185,11 @@ mod tests {
 
     #[test]
     fn sign_multiple_proves_the_transfer_with_one_key_per_active_input() {
-        let sample = lb_zktransfer::test_utils::sample_witness_data();
-        let (_, public) = lb_zktransfer::prove(sample.clone().into()).unwrap();
-        let keys: Vec<ZkKey> = sample.wallet.inputs[..2]
-            .iter()
-            .map(|input| ZkKey::new(input.secret_key))
-            .collect();
-        let mut payload = sample;
-        for input in &mut payload.wallet.inputs {
-            input.secret_key = Fr::ZERO;
-        }
+        let (_, public) =
+            lb_zktransfer::prove(lb_zktransfer::test_utils::sample_witness_data().into()).unwrap();
+        let (payload, secret_keys) = lb_zktransfer::test_utils::sample_unsigned_witness();
+        let keys: Vec<ZkKey> = secret_keys.into_iter().map(ZkKey::new).collect();
+        assert_eq!(keys.len(), 2);
 
         let proof = ZkKey::sign_multiple(&[&keys[0], &keys[1]], &payload).unwrap();
         assert!(lb_zktransfer::verify(&proof, &public).unwrap());
