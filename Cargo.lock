@@ -4625,7 +4625,6 @@ dependencies = [
  "hex",
  "logos-blockchain-binary-codec",
  "logos-blockchain-core",
- "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-libp2p",
