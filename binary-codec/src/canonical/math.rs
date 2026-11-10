@@ -4,29 +4,23 @@ use lb_utils::math::{NonNegativeF64, NonNegativeRatio, PositiveRatio, ProperFrac
 
 use super::{BinaryEncode, codec_fixtures};
 
-// A non-negative float: its IEEE 754 bits, with negative zero written as zero,
-// since the two compare equal and so must encode alike.
+// A non-negative float: its IEEE 754 bits. Negative zero is no non-negative
+// float, so zero encodes one way.
 impl BinaryEncode for NonNegativeF64 {
     fn encoded_length(&self) -> usize {
-        canonical_bits(self.get()).encoded_length()
+        self.get().to_bits().encoded_length()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
-        canonical_bits(self.get()).encode_into(out);
+        self.get().to_bits().encode_into(out);
     }
-}
-
-/// The IEEE 754 bits of `value`, with both zeros written as positive zero.
-fn canonical_bits(value: f64) -> u64 {
-    if value == 0.0 { 0 } else { value.to_bits() }
 }
 
 codec_fixtures!(
     NonNegativeF64,
     encode_only,
     NonNegativeF64::try_from(0.5).unwrap() => "000000000000e03f",
-    NonNegativeF64::try_from(0.0).unwrap() => "0000000000000000",
-    NonNegativeF64::try_from(-0.0).unwrap() => "0000000000000000"
+    NonNegativeF64::try_from(0.0).unwrap() => "0000000000000000"
 );
 
 // A ratio: its numerator, then its denominator.
