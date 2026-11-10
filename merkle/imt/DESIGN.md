@@ -1,4 +1,4 @@
-# KV-backed, fork-safe nullifier IMT — design plan (v6)
+# KV-backed, fork-safe nullifier IMT — design plan (v7)
 
 Status:
 
@@ -6,8 +6,20 @@ Status:
 - Phase 4 is implemented: `NoteSet` keeps its nullifier tree in the store, and
   `Ledger` commits, finalizes, prunes and collects it
   (`ledger/src/nullifier_storage.rs`).
-- Phases 5–6 are not started. The node still keeps the store in memory
+- Phase 5 is split in two. 5a is implemented: `RocksKv`, a `KvStore` on a
+  `RocksDB` database of its own (`lb-kv-store`, feature `rocksdb`). 5b, the
+  node wiring, is not started: the node still keeps the store in memory
   (`MemKv`), as it kept the tree before.
+- Phase 6 is not started.
+
+Changes since v6, the decisions of phase 5 (see §5):
+
+- The store is a dedicated `RocksDB` database, not a column family of the
+  storage service's. Its type is a parameter of the chain service, given in
+  the overwatch services declaration of the node.
+- The gap between the saved consensus state and the store is closed by an
+  anchor written in the pruning batch, not by a shared batch.
+- Existing data directories are not migrated: they resync.
 
 Changes since v5, all found while implementing phase 4 (see §4):
 
@@ -575,33 +587,67 @@ each makes the suite fail.
 
 ## 5. Node wiring
 
-- A RocksDB `KvStore` on a dedicated column family, through a synchronous
-  `Arc<DB>` handle:
-  - `get_prev` uses `seek_for_prev`
-  - `DeletePrefix` uses `delete_range_cf`
-  - bloom filters on `H` and `N`
-- Chain-service: it already passes the whole `PrunedBlocks` to
-  `Ledger::apply_pruning` (phase 4). What remains is building the genesis and
-  the recovered LIB state on the RocksDB store (`NoteSets::with_store`)
-  instead of the `MemKv` of `NoteSets::new()`.
+### 5a. `RocksKv` (implemented)
+
+`lb_kv_store::RocksKv`, behind the `rocksdb` feature, so that the crates
+holding the trees (core, ledger) depend on the trait only.
+
+- It owns a database of its own and uses its default column family.
+- `get_prev` iterates between the prefix (lower bound) and the key, clamped
+  to the end of the prefix (upper bound, exclusive), from the last key.
+- `scan_prefix` iterates between the prefix and its end.
+- A `WriteBatch` becomes one `RocksDB` batch: atomic, and in order, since its
+  writes take increasing sequence numbers. `DeletePrefix` is a
+  `delete_range` to the end of the prefix, so a put after it in the same
+  batch survives. A prefix without end (empty, or `0xff` bytes only) deletes
+  up to the greatest key it covers, stored or put earlier in the batch.
+- `RocksKvOptions`:
+  - `sync_writes` (off by default): without it, a crash of the machine may
+    lose the last batches, never tear or reorder them. A crash of the
+    process loses nothing.
+  - `bloom_bits_per_key` (10 by default): a bloom filter on whole keys, for
+    `get` on absent keys. Filters on prefixes would need a prefix extractor
+    that knows the key layout of the tree; they wait for phase 6.
+- Tests: the conformance suite, with and without the bloom filter; reopening
+  the database; prefixes without end. The fork simulation of the tree store
+  (`test_forks_match_oracle`) also runs on `RocksKv`, and fails when
+  `get_prev` ignores its key bound.
+
+### 5b. Chain service and restart
+
+- The database:
+  - A dedicated `RocksDB` database, under the node's state folder next to
+    the storage service's. The chain service opens it and owns it: the
+    ledger reads and writes it synchronously, while the storage service is
+    reached through async messages.
+  - Its type is a parameter of the chain service, given in the overwatch
+    services declaration of the node (`RocksKv` there, `MemKv` in tests),
+    behind a trait that opens it from the service settings.
+  - The genesis and the recovered LIB state are built on it
+    (`NoteSets::with_store`) instead of the `MemKv` of `NoteSets::new()`.
 - Serde: a saved state encodes its trees as `Snapshot { len, root }` instead
-  of every leaf (phase 4 keeps the leaves, imported in memory at decoding).
-- Restart:
-  1. Restore the LIB state and run `attach_store`.
-  2. Replay the blocks from the LIB to the tip. `commit_update` **reuses** the
-     version found in `BlockVersionKey`: the recomputed nodes are
-     byte-identical, so the writes are idempotent.
+  of every leaf, and is attached to the store after decoding
+  (`Imt::from_snapshot`, plus `check_base` for the LIB's own sets).
+- The anchor. The consensus state is saved by the storage service on a timer
+  (`state_recording_timer`), while the store's base moves at every pruning.
+  After a crash the saved LIB can be older than the base, and the garbage
+  collection may have deleted nodes of its trees. So the pruning batch also
+  writes an anchor: the LIB's id, length, slot and uncle slots, and its
+  ledger state, which `Snapshot` makes small. At restart:
+  1. Start from the anchor's LIB, which the store is consistent with. The
+     saved state's LIB is usually older; it is newer only after a failed
+     pruning, whose blocks the replay applies again.
+  2. Replay the stored blocks from that LIB to the saved tip. If the tip does
+     not descend from it, fall back to the LIB, as the recovery does today.
+     `commit_update` **reuses** the version found in `BlockVersionKey`: the
+     recomputed nodes are byte-identical, so the writes are idempotent.
   3. Discard every `LiveVersionKey` that the replay did not reuse (forks lost
      at the restart, or a crash before a pruning batch).
-- Crash consistency:
-  - Commit, finalize and pruning are each one atomic batch.
-  - The remaining gap is between `BaseMeta` and the separately saved
-    `CryptarchiaConsensusState`. Either save the consensus state in the same
-    RocksDB batch as the finalize (preferred), or detect a mismatch at startup
-    and rebuild.
-- Migration: existing data directories hold a full-leaf `NullifierImt` in the
-  saved state. Either a one-shot import (`Imt::import`, which phase 4 already
-  runs at every decoding into memory), or a resync on devnets.
+- Crash consistency: commit, finalize and pruning are each one atomic batch,
+  and the anchor is in the finalize's.
+- Migration: none. A saved state in the old format, with every leaf, fails
+  to decode; the node stops with a message to delete its data directory and
+  resync.
 
 ---
 
@@ -721,7 +767,8 @@ Takeaways:
 | 2 | imt: layout, codecs, walk, insert / seal / commit on a single chain | correctness of the walk and the siblings (oracle tests) |
 | 3 | imt: index overlay, finalize, fork pruning, rebase, GC | GC invariants (reachability test) |
 | 4 | `NoteSet` / `Ledger` integration, `apply_pruning` (done) | `Result` propagation; `commit_update` becomes fallible |
-| 5 | RocksDB + chain-service | stale vs immutable pruning, version reuse at restart, crash consistency, migration |
+| 5a | `RocksKv` (done) | ordered reads and range deletes match `MemKv` (conformance, fork simulation) |
+| 5b | chain-service on `RocksKv`, `Snapshot` serde, anchor, restart | version reuse at restart, crash consistency |
 | 6 | benches + gas | per-insert cost of H reads (mitigated by `NodeCache`) |
 
 Phases 1 to 3 stay within `merkle/`, change no behaviour and can be merged
@@ -738,9 +785,9 @@ first.
 3. ~~`discard_lag`~~: 0. A pruned fork is deleted in the pruning batch.
 4. Node keys: position + version (proposed) or content-addressed with
    refcounts (Aztec).
-5. RocksDB: share the storage service's DB or a dedicated one; whether the
-   finalize and the consensus state are written in the same atomic batch.
-6. Migration: import or resync.
+5. ~~RocksDB~~: a dedicated database, its type a parameter of the chain
+   service; the anchor instead of a shared batch (§5b).
+6. ~~Migration~~: resync.
 7. Size and eviction policy of `NodeCache`.
 8. Whether the commitment MMR, the eligible tree and the recent-root snapshots
    later move to the same trait, since they share the growth problem.

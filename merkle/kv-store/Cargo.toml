@@ -10,12 +10,18 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [features]
+# A `KvStore` on a RocksDB database of its own.
+rocksdb = ["dep:rocksdb"]
 # Exposes the conformance suite to the crates implementing `KvStore`.
 testing = []
 
 [dependencies]
 bytes     = { workspace = true }
+rocksdb   = { features = ["bindgen-runtime"], optional = true, workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

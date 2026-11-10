@@ -1,14 +1,26 @@
 use std::collections::BTreeMap;
 
 use ark_ff::Field as _;
-use lb_kv_store::{Bytes, KvEntry, MemKv};
+use lb_kv_store::{Bytes, DynKvStore, ErasedKv, KvEntry, MemKv, RocksKv};
 use proptest::prelude::*;
 
 use super::*;
 use crate::IndexedMerkleTree;
 
 type ZkHasher = lb_poseidon2::Poseidon2Bn254Hasher;
-type Store = Arc<MemKv>;
+type Store = DynKvStore;
+
+fn mem_store() -> Store {
+    ErasedKv::into_dyn(MemKv::new())
+}
+
+fn rocks_store(path: &std::path::Path) -> Store {
+    ErasedKv::into_dyn(RocksKv::open(path).expect("the database opens"))
+}
+
+fn count_entries(store: &Store) -> usize {
+    store.scan_prefix(b"").expect("the store is read").len()
+}
 type Tree = Imt<Store, ZkHasher, 40>;
 type Oracle = IndexedMerkleTree<ZkHasher, 40>;
 
@@ -60,7 +72,10 @@ struct Sim {
 
 impl Sim {
     fn new() -> Self {
-        let store = Arc::new(MemKv::new());
+        Self::with_store(mem_store())
+    }
+
+    fn with_store(store: Store) -> Self {
         let imt = Tree::initialize(Arc::clone(&store), block_id(GENESIS)).unwrap();
         let mut blocks = BTreeMap::new();
         blocks.insert(
@@ -458,7 +473,7 @@ impl Sim {
     }
 }
 
-fn keys_with_tag(store: &MemKv, tag: &[u8]) -> BTreeSet<Vec<u8>> {
+fn keys_with_tag(store: &Store, tag: &[u8]) -> BTreeSet<Vec<u8>> {
     store
         .scan_prefix(tag)
         .unwrap()
@@ -468,7 +483,7 @@ fn keys_with_tag(store: &MemKv, tag: &[u8]) -> BTreeSet<Vec<u8>> {
 }
 
 fn collect_reachable(
-    store: &MemKv,
+    store: &Store,
     position: NodePosition,
     child: Child,
     reachable: &mut BTreeSet<NodeKey>,
@@ -570,10 +585,10 @@ fn test_fork_at_the_lib_is_kept_and_below_is_pruned() {
 #[test]
 fn test_empty_blocks_write_nothing() {
     let mut sim = Sim::new();
-    let before = sim.store.len();
+    let before = count_entries(&sim.store);
     let empty = sim.extend(GENESIS, &[]);
     // only the version registry entries
-    assert_eq!(sim.store.len(), before + 3);
+    assert_eq!(count_entries(&sim.store), before + 3);
     let child = sim.extend(empty, &frs(&[3]));
     sim.check(&frs(&[1, 3, 4]));
     sim.advance_lib(child);
@@ -702,7 +717,7 @@ fn test_errors_leave_the_state_unchanged() {
     );
     assert_eq!(imt.snapshot().unwrap_err(), ImtError::UncommittedBlock);
     assert_eq!(
-        Tree::open(Arc::new(MemKv::new())).unwrap_err(),
+        Tree::open(mem_store()).unwrap_err(),
         ImtError::NotInitialized
     );
 }
@@ -710,7 +725,7 @@ fn test_errors_leave_the_state_unchanged() {
 #[test]
 fn test_full_tree() {
     type Small = Imt<Store, ZkHasher, 2>;
-    let store = Arc::new(MemKv::new());
+    let store = mem_store();
     let imt = Small::initialize(Arc::clone(&store), block_id(0)).unwrap();
     let imt = imt
         .insert(fr(1))
@@ -752,9 +767,9 @@ fn test_reseal_after_more_inserts() {
 
 #[test]
 fn test_empty_tree_needs_no_base_until_finalized() {
-    let store = Arc::new(MemKv::new());
+    let store = mem_store();
     let empty = Tree::empty(Arc::clone(&store));
-    assert_eq!(store.len(), 0, "starting a tree writes nothing");
+    assert_eq!(count_entries(&store), 0, "starting a tree writes nothing");
     assert_eq!(empty.sealed_root(), Some(Oracle::new().root()));
     // a store without a base is no reason to fail a rebase
     let empty = empty.rebase().unwrap();
@@ -788,7 +803,7 @@ fn test_import_and_leaves_round_trip() {
     let leaves: Vec<NullifierLeaf> = (0..oracle.len() as u64)
         .map(|index| *oracle.leaf(index).unwrap())
         .collect();
-    let store = Arc::new(MemKv::new());
+    let store = mem_store();
     let imported = Tree::import(Arc::clone(&store), &leaves, block_id(7)).unwrap();
     Sim::check_state("imported", &imported, &oracle, &frs(&[1, 3, 8, 42, 901]));
     imported.check_base().unwrap();
@@ -798,7 +813,7 @@ fn test_import_and_leaves_round_trip() {
         ImtError::AlreadyInitialized
     );
     assert!(matches!(
-        Tree::import(Arc::new(MemKv::new()), &leaves[1..], block_id(7)),
+        Tree::import(mem_store(), &leaves[1..], block_id(7)),
         Err(ImtError::Corrupted(_))
     ));
 
@@ -822,7 +837,7 @@ fn test_states_compare_by_leaves() {
     // the same nullifiers in another order are other leaves
     assert_ne!(a, b);
     assert_eq!(a, a.seal().unwrap());
-    assert_eq!(*genesis, Tree::empty(Arc::new(MemKv::new())));
+    assert_eq!(*genesis, Tree::empty(mem_store()));
     assert_ne!(*genesis, a);
 }
 
@@ -896,61 +911,72 @@ fn op() -> impl Strategy<Value = Op> {
     ]
 }
 
+// Random forks over a small nullifier domain, so siblings often share low
+// leaves, with snapshots pinned below the LIB: every state matches its oracle,
+// no reachable node is missing and the garbage is only what the pins retain.
+fn run_ops(mut sim: Sim, ops: Vec<Op>) {
+    let probes = frs(&[0, 1, 17, 31, 32, 63, 64, 1000]);
+    for op in ops {
+        match op {
+            Op::Extend { parent, nullifiers } => {
+                let parent = sim.pick(parent);
+                sim.extend(parent, &frs(&nullifiers));
+            }
+            Op::AdvanceLib { pick } => {
+                let new_lib = sim.pick(pick);
+                sim.advance_lib(new_lib);
+            }
+            Op::Pin { pick } => {
+                let id = sim.pick(pick);
+                sim.pin(id);
+            }
+            Op::Unpin { pick } => {
+                let pinned: Vec<u64> = sim.pins.keys().copied().collect();
+                if let Some(id) = pinned.get(pick as usize % pinned.len().max(1)) {
+                    sim.unpin(*id);
+                }
+            }
+            Op::Restart { lose } => {
+                let candidates: Vec<u64> =
+                    sim.live().into_iter().filter(|id| *id != sim.lib).collect();
+                let lost: BTreeSet<u64> = candidates
+                    .get(lose as usize % candidates.len().max(1))
+                    .copied()
+                    .filter(|_| lose % 2 == 0)
+                    .into_iter()
+                    .collect();
+                sim.restart(&lost);
+            }
+        }
+        sim.check(&probes);
+    }
+    // with every pin released, nothing but the live states is stored
+    let pinned: Vec<u64> = sim.pins.keys().copied().collect();
+    for id in pinned {
+        sim.unpin(id);
+    }
+    sim.collect_garbage();
+    sim.check(&probes);
+    sim.assert_no_garbage();
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(48))]
 
-    // Random forks over a small nullifier domain, so siblings often share low
-    // leaves, with snapshots pinned below the LIB: every state matches its
-    // oracle, no reachable node is missing and the garbage is only what the
-    // pins retain.
     #[test]
     fn test_forks_match_oracle(ops in prop::collection::vec(op(), 1..24)) {
-        let mut sim = Sim::new();
-        let probes = frs(&[0, 1, 17, 31, 32, 63, 64, 1000]);
-        for op in ops {
-            match op {
-                Op::Extend { parent, nullifiers } => {
-                    let parent = sim.pick(parent);
-                    sim.extend(parent, &frs(&nullifiers));
-                }
-                Op::AdvanceLib { pick } => {
-                    let new_lib = sim.pick(pick);
-                    sim.advance_lib(new_lib);
-                }
-                Op::Pin { pick } => {
-                    let id = sim.pick(pick);
-                    sim.pin(id);
-                }
-                Op::Unpin { pick } => {
-                    let pinned: Vec<u64> = sim.pins.keys().copied().collect();
-                    if let Some(id) = pinned.get(pick as usize % pinned.len().max(1)) {
-                        sim.unpin(*id);
-                    }
-                }
-                Op::Restart { lose } => {
-                    let candidates: Vec<u64> = sim
-                        .live()
-                        .into_iter()
-                        .filter(|id| *id != sim.lib)
-                        .collect();
-                    let lost: BTreeSet<u64> = candidates
-                        .get(lose as usize % candidates.len().max(1))
-                        .copied()
-                        .filter(|_| lose % 2 == 0)
-                        .into_iter()
-                        .collect();
-                    sim.restart(&lost);
-                }
-            }
-            sim.check(&probes);
-        }
-        // with every pin released, nothing but the live states is stored
-        let pinned: Vec<u64> = sim.pins.keys().copied().collect();
-        for id in pinned {
-            sim.unpin(id);
-        }
-        sim.collect_garbage();
-        sim.check(&probes);
-        sim.assert_no_garbage();
+        run_ops(Sim::new(), ops);
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(16))]
+
+    // The same on RocksDB, whose ordered reads and range deletes stand in for
+    // the in-memory map.
+    #[test]
+    fn test_forks_match_oracle_on_rocksdb(ops in prop::collection::vec(op(), 1..24)) {
+        let directory = tempfile::tempdir().expect("a temporary directory is created");
+        run_ops(Sim::with_store(rocks_store(directory.path())), ops);
     }
 }

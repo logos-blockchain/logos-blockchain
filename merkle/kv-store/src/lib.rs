@@ -9,7 +9,8 @@
 //! [`MemKv`] keeps everything in a [`BTreeMap`], for tests and benches.
 //! [`Prefixed`] namespaces the keys of a store, so several trees share one.
 //! [`ErasedKv`] and [`DynKvStore`] erase the backend type behind a trait
-//! object.
+//! object. With the `rocksdb` feature, [`RocksKv`] keeps everything in a
+//! `RocksDB` database of its own.
 
 use std::{
     collections::BTreeMap,
@@ -26,6 +27,11 @@ pub use bytes::Bytes;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod conformance;
+#[cfg(feature = "rocksdb")]
+mod rocks;
+
+#[cfg(feature = "rocksdb")]
+pub use rocks::{RocksError, RocksKv, RocksKvOptions};
 
 /// A stored key and its value.
 #[derive(Clone, Debug, PartialEq, Eq)]

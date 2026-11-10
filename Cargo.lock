@@ -4917,6 +4917,7 @@ dependencies = [
  "rpds",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
@@ -5006,6 +5007,8 @@ name = "logos-blockchain-kv-store"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "rocksdb",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
