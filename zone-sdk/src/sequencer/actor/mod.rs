@@ -442,7 +442,13 @@ where
             .max_pending_publish_depth
             .max(1)
             .saturating_sub(state.posted_pending_publish_count(tip));
-        let candidates = state.refund_candidates(tip, self.lib_slot, window, first_post_budget);
+        let candidates = state.refund_candidates(
+            tip,
+            self.lib_slot,
+            window,
+            first_post_budget,
+            self.channel_id,
+        );
         let mut changed = false;
         for candidate in candidates {
             if self.posting.contains(&candidate.tx_hash) {
