@@ -32,7 +32,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use strum::{EnumCount, EnumIter, FromRepr};
 
 use crate::{
-    block::BlockNumber,
     mantle::{NoteId, ops::sdp::SdpError, transactions::hash::TxHashView},
     sdp::blend::ActivityProof,
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
@@ -45,15 +44,12 @@ pub type StakeThreshold = u64;
 )]
 pub struct MinStake {
     pub threshold: StakeThreshold,
-    pub timestamp: BlockNumber,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceParameters {
     /// Maximum epochs during which an activity message must be sent.
     pub inactivity_period: InactivityPeriod,
-    // Epoch number at which this parameter was set
-    pub epoch: Epoch,
 }
 
 pub type NumberOfEpochs = Epoch;

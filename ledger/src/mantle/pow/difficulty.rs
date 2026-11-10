@@ -20,7 +20,7 @@ pub fn compute_new_reward_difficulty(
 ) -> PowTarget {
     let smoothing_precision = config.ema_smoothing_precision.get();
     let smoothing_factor = config.ema_smoothing_factor;
-    let target_claims_per_block = config.target_claims_per_block;
+    let target_claims_per_block = config.target_claims_per_block.get();
 
     // (P - F): the weight of the fresh observation, with q = F / P.
     let observation_weight = smoothing_precision
@@ -87,10 +87,10 @@ mod tests {
             ema_smoothing_factor: factor,
             ema_smoothing_precision: NonZeroU64::new(precision)
                 .expect("test precision is non-zero"),
-            target_claims_per_block,
+            target_claims_per_block: NonZeroU64::new(target_claims_per_block)
+                .expect("test target is non-zero"),
             rate_num: 0,
             rate_den: NonZeroU64::MIN,
-            target_claim_per_block: NonZeroU64::MIN,
             pow_share: 0,
             share_den: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(100).expect("100 is non-zero"),

@@ -8,7 +8,9 @@ blend:
   core:
     scheduler:
       cover:
-        message_frequency_per_round: 1.0
+        message_frequency_per_round:
+          numerator: 1
+          denominator: 1
         replication_factor: 0
       delayer:
         maximum_release_delay_in_rounds: 1
@@ -60,13 +62,13 @@ cryptarchia:
       ema_smoothing_factor: 9
       ema_smoothing_precision: 10
       # One claim per block: claims are transactions, and the per-block
-      # transaction budget is 2. Must track `target_claim_per_block` below.
+      # transaction budget is 2. The payout rate counts on it too: an epoch
+      # whose blocks carry that many claims each pays out rho of the pool.
       target_claims_per_block: 1
       # rho = rate_num / rate_den = 1/10 of the pool per epoch, which
       # distributes 97% of it across the two weeks.
       rate_num: 1
       rate_den: 10
-      target_claim_per_block: 1
       # `pow_share / share_den` of the fees each block collects is
       # diverted to the pow reward pool at the epoch boundary.
       pow_share: 10
@@ -79,10 +81,8 @@ cryptarchia:
     # network.
     service_params:
       - inactivity_period: 2
-        epoch: 0
     min_stake:
       threshold: 1
-      timestamp: 0
   # The execution market: the most execution gas a block may consume, G_max,
   # whose half is the target, the fee adjustment rate φ and the EMA smoothing
   # factor q.

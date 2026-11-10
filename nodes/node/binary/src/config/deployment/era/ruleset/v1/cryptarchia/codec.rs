@@ -79,17 +79,13 @@ const fn fixture_epoch_config() -> EpochConfig {
 fn fixture_sdp_config() -> SdpConfig {
     SdpConfig {
         service_params: [fixture_service_parameters()],
-        min_stake: MinStake {
-            threshold: 22,
-            timestamp: 23,
-        },
+        min_stake: MinStake { threshold: 22 },
     }
 }
 
 fn fixture_service_parameters() -> ServiceParameters {
     ServiceParameters {
         inactivity_period: InactivityPeriod::new(Epoch::new(20)).unwrap(),
-        epoch: Epoch::new(21),
     }
 }
 
@@ -100,10 +96,9 @@ const fn fixture_pow_config() -> PoWConfig {
             minimum_difficulty: ModulusShift::new::<32>(),
             ema_smoothing_factor: 33,
             ema_smoothing_precision: NonZeroU64::new(34).unwrap(),
-            target_claims_per_block: 35,
+            target_claims_per_block: NonZeroU64::new(35).unwrap(),
             rate_num: 36,
             rate_den: NonZeroU64::new(37).unwrap(),
-            target_claim_per_block: NonZeroU64::new(38).unwrap(),
             pow_share: 39,
             share_den: NonZeroU64::new(40).unwrap(),
             slot_window: NonZeroU64::new(41).unwrap(),
@@ -122,22 +117,21 @@ const fn fixture_blend_pow_config() -> BlendPoWConfig {
 }
 
 pub const SETTINGS_HEX: &str = "
-    0c 0d 0e 0f000000 10000000 11000000 0000000000003240 13000000 18 3400 47000000 14000000 15000000
-    1600000000000000 1700000000000000 19000000 1a00000000000000
+    0c 0d 0e 0f000000 10000000 11000000 0000000000003240 13000000 18 3400 47000000 14000000
+    1600000000000000 19000000 1a00000000000000
     1b00000000000000 1c000000 1d000000 20000000
     2100000000000000 2200000000000000 2300000000000000 2400000000000000 2500000000000000
-    2600000000000000 2700000000000000 2800000000000000 2900000000000000
+    2700000000000000 2800000000000000 2900000000000000
     2b00000000000000 2c000000 2d000000 2e000000 2f000000 30000000 31000000 32000000 33000000
     3500000000000000 3600000000000000 3700000000000000 38000000 39000000 3a000000 3b000000
     3c00000000000000 3d00000000000000 3e00000000000000 3f00000000000000 4000000000000000
     4100000000000000 4200000000000000 4300000000000000 4400000000000000 4500000000000000
     4600000000000000
 ";
-const SDP_CONFIG_HEX: &str = "14000000 15000000 1600000000000000 1700000000000000";
+const SDP_CONFIG_HEX: &str = "14000000 1600000000000000";
 const POW_CONFIG_HEX: &str = "
     19000000 1a00000000000000 1b00000000000000 1c000000 1d000000 20000000 2100000000000000 2200000000000000 2300000000000000
-    2400000000000000 2500000000000000 2600000000000000 2700000000000000 2800000000000000
-    2900000000000000
+    2400000000000000 2500000000000000 2700000000000000 2800000000000000 2900000000000000
 ";
 const BLEND_POW_CONFIG_HEX: &str = "
     19000000 1a00000000000000 1b00000000000000 1c000000 1d000000
@@ -147,6 +141,6 @@ codec_fixtures!(Settings, encode_only, fixture_settings() => SETTINGS_HEX);
 codec_fixtures!(SlotActivationCoeff, encode_only, fixture_slot_activation_coeff() => "1000000011000000");
 codec_fixtures!(EpochConfig, encode_only, fixture_epoch_config() => "0c0d0e");
 codec_fixtures!(SdpConfig, encode_only, fixture_sdp_config() => SDP_CONFIG_HEX);
-codec_fixtures!(ServiceParameters, encode_only, fixture_service_parameters() => "1400000015000000");
+codec_fixtures!(ServiceParameters, encode_only, fixture_service_parameters() => "14000000");
 codec_fixtures!(PoWConfig, encode_only, fixture_pow_config() => POW_CONFIG_HEX);
 codec_fixtures!(BlendPoWConfig, encode_only, fixture_blend_pow_config() => BLEND_POW_CONFIG_HEX);

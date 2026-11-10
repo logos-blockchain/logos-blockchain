@@ -8,7 +8,9 @@ blend:
   core:
     scheduler:
       cover:
-        message_frequency_per_round: 1.0
+        message_frequency_per_round:
+          numerator: 1
+          denominator: 1
         replication_factor: 0
       delayer:
         maximum_release_delay_in_rounds: 1
@@ -46,17 +48,14 @@ cryptarchia:
       target_claims_per_block: 1
       rate_num: 1
       rate_den: 10
-      target_claim_per_block: 1
       pow_share: 10
       share_den: 100
       slot_window: 300
   sdp_config:
     service_params:
     - inactivity_period: 2
-      epoch: 0
     min_stake:
       threshold: 1000000000
-      timestamp: 0
   execution_market:
     max_gas_per_block: 3193460
     fee_adjustment_rate:

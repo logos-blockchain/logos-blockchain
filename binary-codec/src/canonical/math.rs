@@ -1,21 +1,8 @@
 use core::num::NonZero;
 
-use lb_utils::math::{NonNegativeF64, NonNegativeRatio, PositiveF64, ProperFraction};
+use lb_utils::math::{NonNegativeF64, NonNegativeRatio, PositiveRatio, ProperFraction};
 
 use super::{BinaryEncode, codec_fixtures};
-
-// A positive float: its IEEE 754 bits.
-impl BinaryEncode for PositiveF64 {
-    fn encoded_length(&self) -> usize {
-        self.get().to_bits().encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.get().to_bits().encode_into(out);
-    }
-}
-
-codec_fixtures!(PositiveF64, encode_only, PositiveF64::try_from(0.5).unwrap() => "000000000000e03f");
 
 // A non-negative float: its IEEE 754 bits, with negative zero written as zero,
 // since the two compare equal and so must encode alike.
@@ -72,3 +59,16 @@ impl BinaryEncode for ProperFraction {
 }
 
 codec_fixtures!(ProperFraction, encode_only, ProperFraction::new(1, 2.try_into().unwrap()).unwrap() => "0100000002000000");
+
+// A positive ratio: the ratio it is.
+impl BinaryEncode for PositiveRatio {
+    fn encoded_length(&self) -> usize {
+        self.get().encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.get().encode_into(out);
+    }
+}
+
+codec_fixtures!(PositiveRatio, encode_only, PositiveRatio::new(3, 2.try_into().unwrap()).unwrap() => "0300000002000000");

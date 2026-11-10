@@ -7,7 +7,7 @@ use lb_cryptarchia_engine::EraSchedule;
 use lb_key_management_system_service::backend::preload::KeyId;
 use lb_poq::Quota;
 use lb_services_utils::overwatch::{RecoveryData, StorageRecoverySettings};
-use lb_utils::math::PositiveF64;
+use lb_utils::math::PositiveRatio;
 
 use crate::settings::{EraTimingSettings, max_data_message_delay_in_rounds};
 
@@ -126,7 +126,7 @@ pub struct EraSchedulerSettings {
 #[derive(Clone, Debug)]
 pub struct EraCoverTrafficSettings {
     /// `F_c`: frequency at which cover messages are generated per round.
-    pub message_frequency_per_round: PositiveF64,
+    pub message_frequency_per_round: PositiveRatio,
     /// `R_c`: the redundancy of cover messages. A core node's quota, and so the
     /// cover messages it sends, grow to `1 + R_c` times what `F_c` gives.
     pub replication_factor: u64,
@@ -136,7 +136,7 @@ pub struct EraCoverTrafficSettings {
 impl Default for EraCoverTrafficSettings {
     fn default() -> Self {
         Self {
-            message_frequency_per_round: 1.try_into().unwrap(),
+            message_frequency_per_round: PositiveRatio::new(1, core::num::NonZeroU32::MIN).unwrap(),
             replication_factor: 0,
         }
     }

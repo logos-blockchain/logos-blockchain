@@ -19,7 +19,7 @@
 
 use std::{
     collections::HashMap,
-    num::NonZero,
+    num::{NonZero, NonZeroU32},
     sync::{Arc, LazyLock},
     time::Duration,
 };
@@ -40,7 +40,7 @@ use lb_core::{
 use lb_cryptarchia_engine::EpochConfig;
 use lb_key_management_system_keys::keys::ZkKey;
 use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
-use lb_utils::math::{NonNegativeRatio, PositiveF64};
+use lb_utils::math::{NonNegativeRatio, PositiveRatio};
 use lb_zksign::verify;
 use logos_blockchain_ledger::{
     Config, ConsensusExcludedKeys, LedgerState,
@@ -270,10 +270,6 @@ fn single_era(config: Config) -> EraScheduledConfig {
     .map(move |_| config.clone())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "A ledger config, spelled out field by field."
-)]
 fn config() -> Config {
     let epoch_config = EpochConfig {
         epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
@@ -297,13 +293,12 @@ fn config() -> Config {
                 ServiceType::BlendNetwork,
                 ServiceParameters {
                     inactivity_period: 2.try_into().unwrap(),
-                    epoch: 0.into(),
                 },
             )])),
             service_rewards_params: ServiceRewardsParameters {
                 blend: rewards::blend::RewardsParameters {
                     rounds_per_epoch: epoch_length.try_into().unwrap(),
-                    message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                    message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN).unwrap(),
                     cover_replication_factor: 0,
                     num_blend_layers: NonZero::new(3).unwrap(),
                     minimum_network_size: NonZero::new(1).unwrap(),
@@ -311,10 +306,7 @@ fn config() -> Config {
                     activity_threshold_sensitivity: 1,
                 },
             },
-            min_stake: MinStake {
-                threshold: 1,
-                timestamp: 0,
-            },
+            min_stake: MinStake { threshold: 1 },
         },
         max_transactions: 1024,
         max_transactions_size: 2 * 1024 * 1024,
@@ -368,10 +360,9 @@ fn config() -> Config {
                 minimum_difficulty: ModulusShift::new::<26>(),
                 ema_smoothing_factor: 9,
                 ema_smoothing_precision: NonZero::new(10).unwrap(),
-                target_claims_per_block: 100,
+                target_claims_per_block: NonZero::<u64>::new(100).unwrap(),
                 rate_num: 0,
                 rate_den: NonZero::<u64>::MIN,
-                target_claim_per_block: NonZero::<u64>::MIN,
                 pow_share: 0,
                 share_den: NonZero::<u64>::MIN,
                 slot_window: NonZero::new(100).unwrap(),
