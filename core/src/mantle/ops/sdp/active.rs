@@ -94,9 +94,7 @@ impl VerifiableOperation<StandardMode> for SignedOperation<SDPActiveOp, Preverif
         // Operation.
         declaration
             .provider_id
-            .0
-            .verify(context.tx_hash_view.as_bytes(), self.proof())
-            .map_err(|_| SdpError::InvalidEddsaSignature)?;
+            .verify(context.tx_hash_view.as_bytes(), self.proof())?;
         Ok(())
     }
 }

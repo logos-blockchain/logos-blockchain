@@ -1,7 +1,6 @@
 use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Fr, serde::serde_fr};
-use lb_zktransfer::{MAX_INPUTS, MAX_OUTPUTS, ZkTransferInputsError, ZkTransferVerifierInput};
 use serde::{Deserialize, Serialize};
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -25,6 +24,7 @@ use crate::{
         ops::{
             OpId, SignedOperation, ZkTransferProof,
             channel::{ChannelId, deposit::channel_note_set},
+            zk_transfer::{defer_zk_transfer, preverify_zk_transfer},
         },
         transactions::{
             hash::TxHashView,
@@ -164,21 +164,7 @@ impl PreverifiableOperation<StandardMode>
 
     fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
         let operation = self.operation();
-
-        // Ensure the inputs is non-empty
-        if operation.inputs.is_empty() {
-            return Err(NoteSetError::EmptyInputs.into());
-        }
-
-        // Ensure the ZkTransfer circuit fits the inputs and the outputs
-        if operation.inputs.len() > MAX_INPUTS {
-            return Err(ZkTransferInputsError::TooManyInputs(operation.inputs.len()).into());
-        }
-        if operation.outputs.len() > MAX_OUTPUTS {
-            return Err(ZkTransferInputsError::TooManyOutputs(operation.outputs.len()).into());
-        }
-
-        Ok(())
+        preverify_zk_transfer(&operation.inputs, operation.outputs.len())
     }
 }
 
@@ -196,37 +182,27 @@ impl VerifiableOperation<StandardMode>
         let index = channel_note_set(context.channels, operation.channel_id)?;
 
         // Validate the inputs against the channel note set
-        let set = context
+        let tx_commitment_root = context
             .note_sets
             .get(index)
-            .expect("a channel's note set exists");
-        set.assert_spendable(operation.inputs.as_slice())?;
-        let tx_commitment_root = set.cached_tx_commitment_root(
-            context.note_sets.tx_roots(),
-            &operation.commitment_merkle_root,
-            context.block_number,
-        )?;
+            .expect("a channel's note set exists")
+            .spendable_tx_root(
+                context.note_sets.tx_roots(),
+                operation.inputs.as_slice(),
+                &operation.commitment_merkle_root,
+                context.block_number,
+            )?;
 
-        // Defer the proof verification so that the caller can batch it.
-        let nullifiers: Vec<Fr> = operation
-            .inputs
-            .iter()
-            .map(|nullifier| nullifier.0)
-            .collect();
-        let commitments: Vec<Fr> = operation
-            .outputs
-            .iter()
-            .map(|commitment| commitment.0)
-            .collect();
-        // A withdrawal balances exactly
-        let public = ZkTransferVerifierInput::new(
-            &nullifiers,
-            &commitments,
+        // Defer the proof verification so that the caller can batch it. A withdrawal
+        // balances exactly.
+        Ok(defer_zk_transfer(
+            self.proof(),
+            &operation.inputs,
+            &operation.outputs,
             0,
             tx_commitment_root,
             *context.tx_hash_view.as_fr(),
-        )?;
-        Ok(DeferredZkTransfer::new(*self.proof().as_proof(), public))
+        )?)
     }
 }
 

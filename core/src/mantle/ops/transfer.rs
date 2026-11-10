@@ -3,8 +3,8 @@ use lb_groth16::{AdditiveGroup as _, Fr, serde::serde_fr};
 use lb_mmr::MerklePath;
 use lb_zktransfer::{
     MAX_INPUTS, MAX_OUTPUTS, ZkTransferChainInputsData, ZkTransferInputNoteData,
-    ZkTransferInputsError, ZkTransferOutputNoteData, ZkTransferVerifierInput,
-    ZkTransferWalletInputsData, ZkTransferWitnessInputsData,
+    ZkTransferInputsError, ZkTransferOutputNoteData, ZkTransferWalletInputsData,
+    ZkTransferWitnessInputsData,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -27,7 +27,10 @@ use crate::{
         },
         note_set::{LEDGER_SET, NoteSetError, NoteSets},
         notes::{InputNullifiers, Note, OutputCommitments},
-        ops::{OpId, SignedOperation, ZkTransferProof},
+        ops::{
+            OpId, SignedOperation, ZkTransferProof,
+            zk_transfer::{defer_zk_transfer, preverify_zk_transfer},
+        },
         transactions::{
             hash::TxHashView,
             states::{Preverified, Unverified, Verified},
@@ -120,21 +123,7 @@ impl PreverifiableOperation<StandardMode>
 
     fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
         let operation = self.operation();
-
-        // Ensure the inputs is non-empty
-        if operation.inputs.is_empty() {
-            return Err(NoteSetError::EmptyInputs.into());
-        }
-
-        // Ensure the ZkTransfer circuit fits the inputs and the outputs
-        if operation.inputs.len() > MAX_INPUTS {
-            return Err(ZkTransferInputsError::TooManyInputs(operation.inputs.len()).into());
-        }
-        if operation.outputs.len() > MAX_OUTPUTS {
-            return Err(ZkTransferInputsError::TooManyOutputs(operation.outputs.len()).into());
-        }
-
-        Ok(())
+        preverify_zk_transfer(&operation.inputs, operation.outputs.len())
     }
 }
 
@@ -146,37 +135,27 @@ impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverifi
     fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
-        // Validate Inputs
-        let ledger = context
+        // Validate the inputs against the ledger note set
+        let tx_commitment_root = context
             .note_sets
             .get(LEDGER_SET)
-            .expect("the ledger note set always exists");
-        ledger.assert_spendable(operation.inputs.as_slice())?;
-        let tx_commitment_root = ledger.cached_tx_commitment_root(
-            context.note_sets.tx_roots(),
-            &operation.commitment_merkle_root,
-            context.block_number,
-        )?;
+            .expect("the ledger note set always exists")
+            .spendable_tx_root(
+                context.note_sets.tx_roots(),
+                operation.inputs.as_slice(),
+                &operation.commitment_merkle_root,
+                context.block_number,
+            )?;
 
         // Defer the proof verification so that the caller can batch it.
-        let nullifiers: Vec<Fr> = operation
-            .inputs
-            .iter()
-            .map(|nullifier| nullifier.0)
-            .collect();
-        let commitments: Vec<Fr> = operation
-            .outputs
-            .iter()
-            .map(|commitment| commitment.0)
-            .collect();
-        let public = ZkTransferVerifierInput::new(
-            &nullifiers,
-            &commitments,
+        Ok(defer_zk_transfer(
+            self.proof(),
+            &operation.inputs,
+            &operation.outputs,
             operation.excess_value,
             tx_commitment_root,
             *context.tx_hash_view.as_fr(),
-        )?;
-        Ok(DeferredZkTransfer::new(*self.proof().as_proof(), public))
+        )?)
     }
 }
 
@@ -190,17 +169,16 @@ impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<TransferOp,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         let operation = self.operation();
 
-        // Spend the inputs and add the outputs to the ledger note set
-        let ledger = note_sets
-            .get(LEDGER_SET)
-            .expect("the ledger note set always exists")
-            .clone()
-            .execute_spending(operation.inputs.as_slice())?
-            .execute_adding(operation.outputs.as_slice())?
-            // The outputs extend the buffer the next Operations of the
-            // transaction are proven against.
-            .buffer_outputs(operation.outputs.as_slice());
-        Ok((note_sets.update(LEDGER_SET, ledger), Vec::new()))
+        // Spend the inputs and add the outputs to the ledger note set, the
+        // outputs extending the buffer the next Operations of the
+        // transaction are proven against.
+        let note_sets = note_sets.execute_transfer(
+            LEDGER_SET,
+            operation.inputs.as_slice(),
+            LEDGER_SET,
+            operation.outputs.as_slice(),
+        )?;
+        Ok((note_sets, Vec::new()))
     }
 }
 

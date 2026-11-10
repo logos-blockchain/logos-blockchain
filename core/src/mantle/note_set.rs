@@ -250,6 +250,20 @@ impl NoteSet {
         )
     }
 
+    /// Checks that `inputs` are spendable and returns the root a `ZkTransfer`
+    /// spending them is proven against: `commitment_merkle_root` extended with
+    /// the buffer of the transaction.
+    pub fn spendable_tx_root(
+        &self,
+        tx_roots: &TxRoots,
+        inputs: &[NoteNullifier],
+        commitment_merkle_root: &Fr,
+        block: BlockNumber,
+    ) -> Result<Fr, NoteSetError> {
+        self.assert_spendable(inputs)?;
+        self.cached_tx_commitment_root(tx_roots, commitment_merkle_root, block)
+    }
+
     // Same root as `step_commitment_root`, resuming from the closest extended MMR
     // `tx_roots` holds for the referenced root instead of replaying the whole
     // buffer for every Operation and step.
@@ -341,6 +355,12 @@ impl NoteSet {
             self.block_nullifiers.push_back_mut(*input);
         }
         Ok(self)
+    }
+
+    /// Adds the outputs of an Operation to the set and to the buffer the next
+    /// Operations of the transaction are proven against.
+    pub fn add_tx_outputs(self, outputs: &[NoteCommitment]) -> Result<Self, NoteSetError> {
+        Ok(self.execute_adding(outputs)?.buffer_outputs(outputs))
     }
 
     pub fn execute_adding(mut self, outputs: &[NoteCommitment]) -> Result<Self, NoteSetError> {
@@ -509,6 +529,35 @@ impl NoteSets {
         }
         assert!(self.sets.set_mut(position, set), "note set {index} exists");
         self
+    }
+
+    /// Spends `inputs` in the set `from` and adds `outputs` to the set `to` and
+    /// to its transaction buffer, the two sets updated together.
+    ///
+    /// # Panics
+    ///
+    /// If `from` or `to` is not a note set.
+    pub fn execute_transfer(
+        self,
+        from: NoteSetIndex,
+        inputs: &[NoteNullifier],
+        to: NoteSetIndex,
+        outputs: &[NoteCommitment],
+    ) -> Result<Self, NoteSetError> {
+        let spent = self
+            .get(from)
+            .unwrap_or_else(|| panic!("note set {from} exists"))
+            .clone()
+            .execute_spending(inputs)?;
+        if from == to {
+            return Ok(self.update(from, spent.add_tx_outputs(outputs)?));
+        }
+        let added = self
+            .get(to)
+            .unwrap_or_else(|| panic!("note set {to} exists"))
+            .clone()
+            .add_tx_outputs(outputs)?;
+        Ok(self.update(from, spent).update(to, added))
     }
 
     #[must_use]
@@ -1017,6 +1066,38 @@ mod test {
         assert_eq!(
             set.tx_commitment_root(&empty, 1034),
             Err(NoteSetError::UnknownRoot(empty))
+        );
+    }
+
+    #[test]
+    fn test_execute_transfer_spends_in_one_set_and_adds_and_buffers_in_another() {
+        let (sets, channel) = NoteSets::new().push_empty();
+        let sets = sets
+            .execute_transfer(LEDGER_SET, &[nullifier(1)], channel, &[commitment(2)])
+            .unwrap();
+        let ledger = sets.get(LEDGER_SET).unwrap();
+        let channel_set = sets.get(channel).unwrap();
+        assert!(ledger.contains_nullifier(&nullifier(1)));
+        assert_eq!(ledger.tx_commitment_buffer_len(), 0);
+        assert_ne!(
+            channel_set.commitment_root(),
+            NoteSet::empty().commitment_root()
+        );
+        assert_eq!(channel_set.tx_commitment_buffer_len(), 1);
+
+        // Within one set, the spend and the outputs land in the same set
+        let sets = sets
+            .execute_transfer(LEDGER_SET, &[nullifier(3)], LEDGER_SET, &[commitment(4)])
+            .unwrap();
+        let ledger = sets.get(LEDGER_SET).unwrap();
+        assert!(ledger.contains_nullifier(&nullifier(1)));
+        assert!(ledger.contains_nullifier(&nullifier(3)));
+        assert_eq!(ledger.tx_commitment_buffer_len(), 1);
+
+        // A spent input fails the whole transfer
+        assert_eq!(
+            sets.execute_transfer(LEDGER_SET, &[nullifier(3)], channel, &[commitment(5)]),
+            Err(NoteSetError::Imt(ImtError::AlreadyPresent(nullifier(3).0)))
         );
     }
 

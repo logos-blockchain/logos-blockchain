@@ -1,7 +1,5 @@
 use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_cryptarchia_engine::Epoch;
-use lb_groth16::Fr;
-use lb_zktransfer::ZkTransferVerifierInput;
 
 use super::{SDPDeclareOp, SdpError};
 use crate::{
@@ -19,7 +17,7 @@ use crate::{
             verification_mode::{GenesisMode, StandardMode, VerificationMode},
         },
         note_set::{LEDGER_SET, NoteSets, SDP_SET},
-        ops::{OpId, SignedOperation, ZkAndEd25519Proof},
+        ops::{OpId, SignedOperation, ZkAndEd25519Proof, zk_transfer::defer_zk_transfer},
         transactions::{
             hash::TxHashView,
             states::{Preverified, Unverified, Verified},
@@ -194,37 +192,29 @@ impl VerifiableOperation<StandardMode>
             context.min_stake,
         )?;
 
-        // Validate Inputs
-        let ledger = context
+        // Validate the inputs against the ledger note set
+        let tx_commitment_root = context
             .note_sets
             .get(LEDGER_SET)
-            .expect("the ledger note set always exists");
-        ledger.assert_spendable(operation.inputs.as_slice())?;
-        let tx_commitment_root = ledger.cached_tx_commitment_root(
-            context.note_sets.tx_roots(),
-            &operation.commitment_merkle_root,
-            context.block_number,
-        )?;
+            .expect("the ledger note set always exists")
+            .spendable_tx_root(
+                context.note_sets.tx_roots(),
+                operation.inputs.as_slice(),
+                &operation.commitment_merkle_root,
+                context.block_number,
+            )?;
 
         // Defer the proof verification so that the caller can batch it.
-        // Ed25519 verification is done by `preverify`.
-        let nullifiers: Vec<Fr> = operation
-            .inputs
-            .iter()
-            .map(|nullifier| nullifier.0)
-            .collect();
-        // The declaration creates no output in the ledger set: its excess is the stake.
-        let public = ZkTransferVerifierInput::new(
-            &nullifiers,
+        // Ed25519 verification is done by `preverify`. The declaration creates no
+        // output in the ledger set: its excess is the stake.
+        Ok(defer_zk_transfer(
+            &self.proof().zk_proof,
+            &operation.inputs,
             &[],
             operation.amount,
             tx_commitment_root,
             *context.tx_hash_view.as_fr(),
-        )?;
-        Ok(DeferredZkTransfer::new(
-            *self.proof().zk_proof.as_proof(),
-            public,
-        ))
+        )?)
     }
 }
 

@@ -18,6 +18,12 @@ pub type SDPDeclareOp = crate::sdp::DeclarationMessage;
 pub type SDPWithdrawOp = crate::sdp::WithdrawMessage;
 pub type SDPActiveOp = crate::sdp::ActiveMessage;
 
+impl From<crate::sdp::InvalidProviderSignature> for SdpError {
+    fn from(_: crate::sdp::InvalidProviderSignature) -> Self {
+        Self::InvalidEddsaSignature
+    }
+}
+
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum SdpError {
     #[error("Invalid SDP declare EDDSA signature")]

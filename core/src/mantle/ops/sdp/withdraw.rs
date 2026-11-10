@@ -1,8 +1,6 @@
 use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_groth16::Fr;
 use lb_log_targets::mantle;
-use lb_zktransfer::ZkTransferVerifierInput;
 use tracing::debug;
 
 use super::{SDPWithdrawOp, SdpError, validate_declaration_id};
@@ -24,6 +22,7 @@ use crate::{
         ops::{
             OpId, SignedOperation, ZkAndEd25519Proof,
             channel::withdraw::{PendingWithdrawal, PendingWithdrawals},
+            zk_transfer::defer_zk_transfer,
         },
         transactions::{
             hash::TxHashView,
@@ -114,9 +113,7 @@ impl VerifiableOperation<StandardMode>
         // Operation.
         declaration
             .provider_id
-            .0
-            .verify(context.tx_hash_view.as_bytes(), &self.proof().ed25519_sig)
-            .map_err(|_| SdpError::InvalidEddsaSignature)?;
+            .verify(context.tx_hash_view.as_bytes(), &self.proof().ed25519_sig)?;
 
         // Check that the service note is unspent. The message carries no nonce: it is
         // valid only while no withdrawal is scheduled, and consumes this nullifier
@@ -135,22 +132,14 @@ impl VerifiableOperation<StandardMode>
             .frontier_root();
 
         // Defer the proof verification so that the caller can batch it.
-        let commitments: Vec<Fr> = operation
-            .outputs
-            .iter()
-            .map(|commitment| commitment.0)
-            .collect();
-        let public = ZkTransferVerifierInput::new(
-            &[operation.service_note_nullifier.0],
-            &commitments,
+        Ok(defer_zk_transfer(
+            &self.proof().zk_proof,
+            &[operation.service_note_nullifier],
+            &operation.outputs,
             operation.excess_value,
             tx_commitment_root,
             *context.tx_hash_view.as_fr(),
-        )?;
-        Ok(DeferredZkTransfer::new(
-            *self.proof().zk_proof.as_proof(),
-            public,
-        ))
+        )?)
     }
 }
 
@@ -208,7 +197,7 @@ impl<Mode: VerificationMode> ExecutableOperation
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::{AdditiveGroup as _, Groth16Input};
+    use lb_groth16::{AdditiveGroup as _, Fr, Groth16Input};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey};
     use lb_zktransfer::ZkTransferInputsError;
 
