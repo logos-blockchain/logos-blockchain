@@ -190,12 +190,19 @@ pub(super) fn stale_bundle_reasons(
             live_keys.len()
         ));
     }
-    if prepared_parent != live_parent {
-        reasons.push(format!(
-            "inscription parent {prepared_parent:?} is no longer the publish tip {live_parent:?}"
-        ));
-    }
+    reasons.extend(stale_parent_reason(prepared_parent, live_parent));
     reasons
+}
+
+/// Why a tx chained on `prepared_parent` can no longer land, if the publish
+/// tip has moved on to `live_parent` since it was built; `None` while they
+/// agree.
+pub(super) fn stale_parent_reason(prepared_parent: MsgId, live_parent: MsgId) -> Option<String> {
+    (prepared_parent != live_parent).then(|| {
+        format!(
+            "inscription parent {prepared_parent:?} is no longer the publish tip {live_parent:?}"
+        )
+    })
 }
 
 /// Check externally-collected multi-sig `signatures` against `accredited_keys`
