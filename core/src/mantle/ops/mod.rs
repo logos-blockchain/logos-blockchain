@@ -17,6 +17,7 @@ pub mod signed_op;
 pub mod signed_op_error;
 pub mod signed_operation;
 pub mod transfer;
+pub mod zk_transfer;
 
 use std::sync::LazyLock;
 

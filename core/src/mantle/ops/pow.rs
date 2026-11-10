@@ -343,8 +343,7 @@ impl ExecutableOperation for SignedOperation<ClaimPowRewardOp, Verified, Standar
             .get(LEDGER_SET)
             .expect("the ledger set always exists")
             .clone()
-            .execute_adding(&[note_commitment])?
-            .buffer_outputs(&[note_commitment]);
+            .add_tx_outputs(&[note_commitment])?;
         context.note_sets = context.note_sets.update(LEDGER_SET, ledger);
         // decrement current pool
         context.decrement_reward_pool();

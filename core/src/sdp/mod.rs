@@ -497,6 +497,24 @@ impl AsRef<[u8; 32]> for ProviderId {
 #[derive(Debug)]
 pub struct InvalidKeyBytesError;
 
+/// The signature is not one of the provider over the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("invalid signature of the provider")]
+pub struct InvalidProviderSignature;
+
+impl ProviderId {
+    /// Verifies that the provider signed `message`.
+    pub fn verify(
+        &self,
+        message: &[u8],
+        signature: &Ed25519Signature,
+    ) -> Result<(), InvalidProviderSignature> {
+        self.0
+            .verify(message, signature)
+            .map_err(|_| InvalidProviderSignature)
+    }
+}
+
 impl From<Ed25519PublicKey> for ProviderId {
     fn from(pk: Ed25519PublicKey) -> Self {
         Self(pk)

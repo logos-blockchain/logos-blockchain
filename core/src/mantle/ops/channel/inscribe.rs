@@ -11,7 +11,6 @@ use lb_program_spend::{
     ZkProgramSpendInputsError, ZkProgramSpendPublic, ZkProgramSpendVerifierInput,
 };
 use lb_utils::bounded::{Bounded, NonEmptyBoundedVec, UpperBoundedVec};
-use lb_zktransfer::{MAX_INPUTS, MAX_OUTPUTS, ZkTransferInputsError, ZkTransferVerifierInput};
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, MAX_OPERATION_DATA_SIZE, MsgId, step_id};
@@ -46,6 +45,7 @@ use crate::{
                     ProgramDeposit, ProgramStep, program_deposit_id, program_deposits_hash,
                 },
             },
+            zk_transfer::{check_zk_transfer_bounds, defer_zk_transfer},
         },
         programs::Programs,
         transactions::{
@@ -474,16 +474,7 @@ impl PreverifiableOperation<StandardMode>
         {
             match (step, proof) {
                 (Step::User(_) | Step::ProgramDeposit(_), StepProof::User(_)) => {
-                    if step.inputs().len() > MAX_INPUTS {
-                        return Err(
-                            ZkTransferInputsError::TooManyInputs(step.inputs().len()).into()
-                        );
-                    }
-                    if step.created().count() > MAX_OUTPUTS {
-                        return Err(
-                            ZkTransferInputsError::TooManyOutputs(step.created().count()).into(),
-                        );
-                    }
+                    check_zk_transfer_bounds(step.inputs().len(), step.created().count())?;
                 }
                 (Step::Program(step), StepProof::Program(proof)) => {
                     // The ZkProgramSpend circuit fits the inputs and both output lists
@@ -761,16 +752,14 @@ fn holder_transfer(
         covered,
         block_number,
     )?;
-    let nullifiers: Vec<Fr> = step.inputs().iter().map(|nullifier| nullifier.0).collect();
-    let commitments: Vec<Fr> = step.created().map(|commitment| commitment.0).collect();
-    let public = ZkTransferVerifierInput::new(
-        &nullifiers,
-        &commitments,
+    Ok(defer_zk_transfer(
+        proof,
+        step.inputs(),
+        step.created(),
         excess_value,
         tx_commitment_root,
         msg,
-    )?;
-    Ok(DeferredZkTransfer::new(*proof.as_proof(), public))
+    )?)
 }
 
 impl<Mode: VerificationMode> ExecutableOperation
@@ -823,10 +812,9 @@ impl<Mode: VerificationMode> ExecutableOperation
                 let created: Vec<_> = step.created().copied().collect();
                 note_set = note_set
                     .execute_spending(step.inputs().as_slice())?
-                    .execute_adding(&created)?
                     // The notes extend the buffer the next Operations of the
                     // transaction are proven against.
-                    .buffer_outputs(&created);
+                    .add_tx_outputs(&created)?;
             }
             context.note_sets = context.note_sets.update(index, note_set);
         }
@@ -857,6 +845,7 @@ mod tests {
     };
     use lb_key_management_system_keys::keys::{PK0, ZkKey, ZkPublicKey};
     use lb_utils::bounded::BoundedError;
+    use lb_zktransfer::{ZkTransferInputsError, ZkTransferVerifierInput};
 
     use super::*;
     use crate::{

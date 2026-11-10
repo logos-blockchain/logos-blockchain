@@ -1,7 +1,6 @@
 use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
 use lb_groth16::{Fr, serde::serde_fr};
 use lb_utils::bounded::UpperBoundedVec;
-use lb_zktransfer::{MAX_INPUTS, MAX_OUTPUTS, ZkTransferInputsError, ZkTransferVerifierInput};
 use serde::{Deserialize, Serialize};
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -21,11 +20,12 @@ use crate::{
             VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
         },
-        note_set::{LEDGER_SET, NoteSetError, NoteSetIndex, NoteSets},
+        note_set::{LEDGER_SET, NoteSetIndex, NoteSets},
         notes::{InputNullifiers, OutputCommitments},
         ops::{
             OpId, SignedOperation, ZkTransferProof,
             channel::{ChannelId, MAX_OPERATION_DATA_SIZE},
+            zk_transfer::{defer_zk_transfer, preverify_zk_transfer},
         },
         transactions::{
             hash::{TxHash, TxHashView},
@@ -118,21 +118,7 @@ impl PreverifiableOperation<StandardMode> for SignedOperation<DepositOp, Unverif
 
     fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
         let operation = self.operation();
-
-        // Ensure the inputs is non-empty
-        if operation.inputs.is_empty() {
-            return Err(NoteSetError::EmptyInputs.into());
-        }
-
-        // Ensure the ZkTransfer circuit fits the inputs and the outputs
-        if operation.inputs.len() > MAX_INPUTS {
-            return Err(ZkTransferInputsError::TooManyInputs(operation.inputs.len()).into());
-        }
-        if operation.outputs.len() > MAX_OUTPUTS {
-            return Err(ZkTransferInputsError::TooManyOutputs(operation.outputs.len()).into());
-        }
-
-        Ok(())
+        preverify_zk_transfer(&operation.inputs, operation.outputs.len())
     }
 }
 
@@ -148,36 +134,26 @@ impl VerifiableOperation<StandardMode> for SignedOperation<DepositOp, Preverifie
         channel_note_set(context.channels, operation.channel_id)?;
 
         // Validate the inputs against the ledger note set
-        let ledger = context
+        let tx_commitment_root = context
             .note_sets
             .get(LEDGER_SET)
-            .expect("the ledger note set always exists");
-        ledger.assert_spendable(operation.inputs.as_slice())?;
-        let tx_commitment_root = ledger.cached_tx_commitment_root(
-            context.note_sets.tx_roots(),
-            &operation.commitment_merkle_root,
-            context.block_number,
-        )?;
+            .expect("the ledger note set always exists")
+            .spendable_tx_root(
+                context.note_sets.tx_roots(),
+                operation.inputs.as_slice(),
+                &operation.commitment_merkle_root,
+                context.block_number,
+            )?;
 
         // Defer the proof verification so that the caller can batch it.
-        let nullifiers: Vec<Fr> = operation
-            .inputs
-            .iter()
-            .map(|nullifier| nullifier.0)
-            .collect();
-        let commitments: Vec<Fr> = operation
-            .outputs
-            .iter()
-            .map(|commitment| commitment.0)
-            .collect();
-        let public = ZkTransferVerifierInput::new(
-            &nullifiers,
-            &commitments,
+        Ok(defer_zk_transfer(
+            self.proof(),
+            &operation.inputs,
+            &operation.outputs,
             operation.excess_value,
             tx_commitment_root,
             *context.tx_hash_view.as_fr(),
-        )?;
-        Ok(DeferredZkTransfer::new(*self.proof().as_proof(), public))
+        )?)
     }
 }
 
@@ -194,28 +170,15 @@ impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<DepositOp, 
         // Resolved again here since the genesis mode executes unverified
         let channel_set = channel_note_set(context.channels, operation.channel_id)?;
 
-        // Spend the inputs in the ledger note set
-        let ledger = context
-            .note_sets
-            .get(LEDGER_SET)
-            .expect("the ledger note set always exists")
-            .clone()
-            .execute_spending(operation.inputs.as_slice())?;
-
-        // Add the outputs to the channel note set
-        let channel = context
-            .note_sets
-            .get(channel_set)
-            .expect("the note set of a channel exists")
-            .clone()
-            .execute_adding(operation.outputs.as_slice())?
-            // Step 5 of the Validate of CHANNEL_DEPOSIT, done at execution as
-            // for every Operation.
-            .buffer_outputs(operation.outputs.as_slice());
-        context.note_sets = context
-            .note_sets
-            .update(LEDGER_SET, ledger)
-            .update(channel_set, channel);
+        // Spend the inputs in the ledger note set and add the outputs to the channel
+        // note set, step 5 of the Validate of CHANNEL_DEPOSIT done at execution as
+        // for every Operation.
+        context.note_sets = context.note_sets.execute_transfer(
+            LEDGER_SET,
+            operation.inputs.as_slice(),
+            channel_set,
+            operation.outputs.as_slice(),
+        )?;
 
         let events = vec![TxEvent::new(
             context.tx_hash,
@@ -237,11 +200,12 @@ mod test {
     use lb_cryptarchia_engine::Slot;
     use lb_groth16::AdditiveGroup as _;
     use lb_key_management_system_keys::keys::Ed25519Key;
+    use lb_zktransfer::ZkTransferInputsError;
 
     use super::*;
     use crate::mantle::{
         gas::test_utils::FixedThresholds,
-        note_set::{CommitmentMmr, NoteSet},
+        note_set::{CommitmentMmr, NoteSet, NoteSetError},
         ops::{
             channel::{NULL_CHANNEL_ID, UnverifiedChannelKeys},
             op_proof::samples::SampleProof as _,
