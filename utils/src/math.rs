@@ -294,6 +294,46 @@ impl From<ProperFraction> for NonNegativeRatio {
     }
 }
 
+/// A ratio strictly above 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
+#[serde(try_from = "NonNegativeRatio", into = "NonNegativeRatio")]
+pub struct PositiveRatio(NonNegativeRatio);
+
+impl PositiveRatio {
+    /// `numerator / denominator`, if it lies above 0.
+    #[must_use]
+    pub const fn new(numerator: u32, denominator: NonZeroU32) -> Option<Self> {
+        if numerator == 0 {
+            return None;
+        }
+        Some(Self(NonNegativeRatio::new(numerator, denominator)))
+    }
+
+    #[must_use]
+    pub const fn get(self) -> NonNegativeRatio {
+        self.0
+    }
+}
+
+impl TryFrom<NonNegativeRatio> for PositiveRatio {
+    type Error = String;
+
+    fn try_from(ratio: NonNegativeRatio) -> Result<Self, Self::Error> {
+        let NonNegativeRatio {
+            numerator,
+            denominator,
+        } = ratio;
+        Self::new(numerator, denominator)
+            .ok_or_else(|| format!("{numerator}/{denominator} must lie above 0."))
+    }
+}
+
+impl From<PositiveRatio> for NonNegativeRatio {
+    fn from(ratio: PositiveRatio) -> Self {
+        ratio.0
+    }
+}
+
 mod serde {
     use serde::Deserialize as _;
 

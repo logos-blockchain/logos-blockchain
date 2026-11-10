@@ -4,7 +4,6 @@ use core::{
 };
 
 use lb_binary_codec::canonical::BinaryEncode;
-use lb_chain_service::Epoch;
 use lb_core::{
     block::{Block, BlockLimits, Proposal},
     mantle::gas::{Gas, GasProfile},
@@ -360,7 +359,6 @@ impl SdpConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, BinaryEncode)]
 pub struct ServiceParameters {
     pub inactivity_period: InactivityPeriod,
-    pub epoch: Epoch,
 }
 
 // The same as `lb_ledger::config::PoWConfig`.

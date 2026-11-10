@@ -210,10 +210,7 @@ mod tests {
         let utxo = utxo();
         let note_id = utxo.id();
         let service_notes = ServiceNotes::new();
-        let min_stake = MinStake {
-            threshold: 1,
-            timestamp: 0,
-        };
+        let min_stake = MinStake { threshold: 1 };
 
         let service_notes_bn = service_notes
             .lock(
@@ -240,10 +237,7 @@ mod tests {
         let utxo = utxo();
         let note_id = utxo.id();
         let service_notes = ServiceNotes::new();
-        let min_stake = MinStake {
-            threshold: 1,
-            timestamp: 0,
-        };
+        let min_stake = MinStake { threshold: 1 };
 
         let service_notes_once = service_notes
             .lock(
@@ -278,10 +272,7 @@ mod tests {
         let utxo = utxo();
         let note_id = utxo.id();
         let service_notes = ServiceNotes::new();
-        let min_stake = MinStake {
-            threshold: 999_999,
-            timestamp: 0,
-        };
+        let min_stake = MinStake { threshold: 999_999 };
 
         let result = service_notes.lock(
             &min_stake,
@@ -306,10 +297,7 @@ mod tests {
         let utxo = utxo();
         let note_id = utxo.id();
         let service_notes = ServiceNotes::new();
-        let min_stake = MinStake {
-            threshold: 1,
-            timestamp: 0,
-        };
+        let min_stake = MinStake { threshold: 1 };
 
         let result = service_notes.lock(
             &min_stake,
@@ -325,10 +313,7 @@ mod tests {
     fn test_unlock_last_service_removes_note() {
         let utxo = utxo();
         let note_id = utxo.id();
-        let min_stake = MinStake {
-            threshold: 1,
-            timestamp: 0,
-        };
+        let min_stake = MinStake { threshold: 1 };
         let mut locked = ServiceNotes::new()
             .lock(
                 &min_stake,
@@ -367,10 +352,7 @@ mod tests {
     fn shared_note_stays_locked_until_last_service_releases_it() {
         let utxo = utxo();
         let note_id = utxo.id();
-        let min_stake = MinStake {
-            threshold: 1,
-            timestamp: 0,
-        };
+        let min_stake = MinStake { threshold: 1 };
         let message_a = DeclarationMessage {
             service_note_id: note_id,
             ..DeclarationMessage::sample()

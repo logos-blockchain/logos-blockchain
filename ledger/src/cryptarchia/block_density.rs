@@ -81,11 +81,11 @@ impl BlockDensity {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{collections::HashMap, num::NonZeroU32, sync::Arc};
 
     use lb_core::{era::AcceptedForkDigests, sdp::MinStake};
     use lb_groth16::ModulusShift;
-    use lb_utils::math::NonNegativeRatio;
+    use lb_utils::math::{NonNegativeRatio, PositiveRatio};
 
     use super::*;
     use crate::{
@@ -174,7 +174,8 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
                         rounds_per_epoch: 10.try_into().unwrap(),
-                        message_frequency_per_round: 1.0.try_into().unwrap(),
+                        message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN)
+                            .unwrap(),
                         cover_replication_factor: 0,
                         num_blend_layers: 3.try_into().unwrap(),
                         minimum_network_size: 1.try_into().unwrap(),
@@ -182,10 +183,7 @@ mod tests {
                         activity_threshold_sensitivity: 1,
                     },
                 },
-                min_stake: MinStake {
-                    threshold: 1,
-                    timestamp: 0,
-                },
+                min_stake: MinStake { threshold: 1 },
             },
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,

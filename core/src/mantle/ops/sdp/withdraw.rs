@@ -182,10 +182,7 @@ mod tests {
     fn locked_notes(service_note_id: &NoteId, declaration_id: DeclarationId) -> ServiceNotes {
         ServiceNotes::new()
             .lock(
-                &MinStake {
-                    threshold: 0,
-                    timestamp: 0,
-                },
+                &MinStake { threshold: 0 },
                 ServiceType::BlendNetwork,
                 declaration_id,
                 Note::new(10_000, note_key().to_public_key()),

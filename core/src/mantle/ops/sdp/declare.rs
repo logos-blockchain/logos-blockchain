@@ -30,7 +30,7 @@ trait SDPDeclareValidationExt {
         declarations: &Declarations,
         provider_index: &ProviderIndex,
         service_notes: &ServiceNotes,
-        min_stake: &MinStake,
+        min_stake: MinStake,
     ) -> Result<(), SdpError>;
 
     fn execute(
@@ -47,7 +47,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         declarations: &Declarations,
         provider_index: &ProviderIndex,
         service_notes: &ServiceNotes,
-        min_stake: &MinStake,
+        min_stake: MinStake,
     ) -> Result<(), SdpError> {
         // Check that the declaration doesn't already exist
         if declarations.contains_key(&self.id()) {
@@ -207,7 +207,7 @@ impl VerifiableOperation<StandardMode>
             context.declarations,
             context.provider_index,
             context.service_notes,
-            context.min_stake,
+            *context.min_stake,
         )?;
 
         Ok(DeferredZkSig::new(*self.proof().zk_sig.as_proof(), inputs))
@@ -248,7 +248,7 @@ impl VerifiableOperation<GenesisMode> for SignedOperation<SDPDeclareOp, Preverif
             context.declarations,
             context.provider_index,
             context.service_notes,
-            context.min_stake,
+            *context.min_stake,
         )?;
 
         Ok(())
@@ -408,10 +408,7 @@ mod tests {
                         tx_hash_view: &tx_hash_view,
                         declarations: &Declarations::new_sync(),
                         provider_index: &ProviderIndex::new_sync(),
-                        min_stake: &MinStake {
-                            threshold: 0,
-                            timestamp: 0,
-                        },
+                        min_stake: &MinStake { threshold: 0 },
                     })
                     .unwrap_err(),
                 SdpError::InexistingNote(service_note_id)
@@ -448,10 +445,7 @@ mod tests {
                         tx_hash_view: &tx_hash_view,
                         declarations: &declarations,
                         provider_index: &ProviderIndex::new_sync(),
-                        min_stake: &MinStake {
-                            threshold: 0,
-                            timestamp: 0,
-                        },
+                        min_stake: &MinStake { threshold: 0 },
                     })
                     .unwrap_err(),
                 SdpError::DuplicateDeclaration(declaration_id)
@@ -489,10 +483,7 @@ mod tests {
                         tx_hash_view: &tx_hash_view,
                         declarations: &Declarations::new_sync(),
                         provider_index: &ProviderIndex::new_sync(),
-                        min_stake: &MinStake {
-                            threshold: 0,
-                            timestamp: 0,
-                        },
+                        min_stake: &MinStake { threshold: 0 },
                     })
                     .unwrap_err(),
                 SdpError::ChannelNote(utxo.id())
@@ -528,7 +519,6 @@ mod tests {
                         provider_index: &ProviderIndex::new_sync(),
                         min_stake: &MinStake {
                             threshold: utxo.note.value + 1,
-                            timestamp: 0,
                         },
                     })
                     .unwrap_err(),
@@ -567,7 +557,6 @@ mod tests {
                     provider_index: &ProviderIndex::new_sync(),
                     min_stake: &MinStake {
                         threshold: utxo.note.value,
-                        timestamp: 0,
                     },
                 })
                 .expect("a locked note exactly meeting the minimum stake is accepted");
@@ -589,10 +578,7 @@ mod tests {
             let zk_sig = ZkKey::multi_sign(&[note_key, declaration_key], tx_hash_view.as_fr())
                 .expect("signing should succeed");
 
-            let min_stake = MinStake {
-                threshold: 0,
-                timestamp: 0,
-            };
+            let min_stake = MinStake { threshold: 0 };
             let locked_notes = ServiceNotes::new()
                 .lock(
                     &min_stake,
@@ -651,10 +637,7 @@ mod tests {
                     tx_hash_view: &tx_hash_view,
                     declarations: &Declarations::new_sync(),
                     provider_index: &ProviderIndex::new_sync(),
-                    min_stake: &MinStake {
-                        threshold: 0,
-                        timestamp: 0,
-                    },
+                    min_stake: &MinStake { threshold: 0 },
                 })
                 .expect("verify leaves the proof to the batch")
         }
@@ -700,10 +683,7 @@ mod tests {
                     tx_hash_view: &tx_hash_view,
                     declarations: &Declarations::new_sync(),
                     provider_index: &ProviderIndex::new_sync(),
-                    min_stake: &MinStake {
-                        threshold: 0,
-                        timestamp: 0,
-                    },
+                    min_stake: &MinStake { threshold: 0 },
                 })
                 .expect("a well-formed declaration is accepted");
         }
@@ -740,10 +720,7 @@ mod tests {
                     declarations: Declarations::new_sync(),
                     provider_index: ProviderIndex::new_sync(),
                     service_notes: ServiceNotes::new(),
-                    min_stake: MinStake {
-                        threshold: 0,
-                        timestamp: 0,
-                    },
+                    min_stake: MinStake { threshold: 0 },
                 })
                 .expect("the locked note is in the ledger");
 
@@ -771,10 +748,7 @@ mod tests {
                 declarations: Declarations::new_sync(),
                 provider_index: ProviderIndex::new_sync(),
                 service_notes: ServiceNotes::new(),
-                min_stake: MinStake {
-                    threshold: 0,
-                    timestamp: 0,
-                },
+                min_stake: MinStake { threshold: 0 },
             }));
         }
 
@@ -799,7 +773,6 @@ mod tests {
                         service_notes: ServiceNotes::new(),
                         min_stake: MinStake {
                             threshold: utxo.note.value + 1,
-                            timestamp: 0,
                         },
                     })
                     .map(|_| ())
@@ -860,10 +833,7 @@ mod tests {
                         service_notes: &ServiceNotes::new(),
                         declarations: &Declarations::new_sync(),
                         provider_index: &ProviderIndex::new_sync(),
-                        min_stake: &MinStake {
-                            threshold: 0,
-                            timestamp: 0,
-                        },
+                        min_stake: &MinStake { threshold: 0 },
                     })
                     .unwrap_err(),
                 SdpError::InexistingNote(service_note_id)
@@ -919,10 +889,7 @@ mod tests {
                     service_notes: &ServiceNotes::new(),
                     declarations: &Declarations::new_sync(),
                     provider_index: &ProviderIndex::new_sync(),
-                    min_stake: &MinStake {
-                        threshold: 0,
-                        timestamp: 0,
-                    },
+                    min_stake: &MinStake { threshold: 0 },
                 })
                 .expect("a genesis declaration needs no ZK signature");
         }
