@@ -53,6 +53,10 @@ const LOG_TARGET: &str = mempool::SERVICE;
 /// How often the pool releases what's due and persists its state, which take a
 /// scan of the retired items and a copy of the pool: too much to do per
 /// transaction.
+///
+/// A stop can therefore lose what the pool took in during the last interval:
+/// Overwatch persists the last state it was given, then aborts the service
+/// without notice, so there is no point at which to flush.
 const HOUSEKEEPING_INTERVAL: Duration = Duration::from_millis(250);
 
 type TxMempoolRecoveryState<Pool, NetworkAdapter, RuntimeServiceId> = TxMempoolState<
@@ -373,18 +377,18 @@ where
                     }
                 }
                 Event::Inbound(Inbound::Relay(relay_msg)) => {
-                    Self::handle_mempool_message(
+                    state_changed |= Self::handle_mempool_message(
                         pool,
                         relay_msg,
                         network_adapter,
                         accepted_items_channel_sender,
                     )
                     .await;
-                    state_changed = true;
                 }
                 Event::Inbound(Inbound::Network(key, item)) => {
-                    Self::handle_network_item(pool, key, item, accepted_items_channel_sender).await;
-                    state_changed = true;
+                    state_changed |=
+                        Self::handle_network_item(pool, key, item, accepted_items_channel_sender)
+                            .await;
                 }
             }
         }
@@ -409,12 +413,15 @@ where
         }
     }
 
+    /// Handles `message`, and tells whether it changed the pool, so that only
+    /// then is its state persisted again.
     async fn handle_mempool_message(
         pool: &mut Pool,
         message: MempoolMsg<Pool::BlockId, Pool::Item, Pool::Item, Pool::Key>,
         network_adapter: &NetworkAdapter,
         accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
-    ) where
+    ) -> bool
+    where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
     {
@@ -432,13 +439,14 @@ where
                     network_adapter,
                     accepted_items_channel_sender,
                 )
-                .await;
+                .await
             }
             MempoolMsg::View {
                 ancestor_hint,
                 reply_channel,
             } => {
                 Self::handle_view_message(pool, ancestor_hint, reply_channel).await;
+                false
             }
             MempoolMsg::GetTransactionsByPrefixes {
                 prefixes,
@@ -449,9 +457,11 @@ where
                 if let Err(_e) = reply_channel.send(result) {
                     tracing::debug!(target: LOG_TARGET, "Failed to send prefix lookup reply");
                 }
+                false
             }
             MempoolMsg::Remove { ids } => {
                 pool.remove(&ids).await;
+                true
             }
             MempoolMsg::CanonicalChainUpdated { entered, reorged } => {
                 Self::handle_canonical_chain_updated_message(
@@ -461,6 +471,7 @@ where
                     accepted_items_channel_sender,
                 )
                 .await;
+                true
             }
             MempoolMsg::ProcessedBlock {
                 block_id,
@@ -468,15 +479,18 @@ where
                 lib_slot,
             } => {
                 pool.on_processed_block(block_id, slot, lib_slot).await;
+                true
             }
             MempoolMsg::Metrics { reply_channel } => {
                 Self::handle_metrics_message(pool, reply_channel);
+                false
             }
             MempoolMsg::Status {
                 items,
                 reply_channel,
             } => {
                 Self::handle_status_message(pool, &items, reply_channel);
+                false
             }
             MempoolMsg::SubscribeToAccepted { reply_channel } => {
                 if reply_channel
@@ -485,6 +499,7 @@ where
                 {
                     tracing::warn!(target: LOG_TARGET, "Subscriber hung up before it could be given the accepted-item stream.");
                 }
+                false
             }
         }
     }
@@ -507,6 +522,7 @@ where
         }
     }
 
+    /// Adds a submitted item, and tells whether it went into the pool.
     async fn handle_add_message(
         pool: &mut Pool,
         key: Pool::Key,
@@ -514,7 +530,8 @@ where
         reply_channel: oneshot::Sender<Result<(), MempoolError>>,
         network_adapter: &NetworkAdapter,
         accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
-    ) where
+    ) -> bool
+    where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
     {
@@ -522,6 +539,7 @@ where
             Ok(_id) => {
                 Self::notify_about_accepted_item(accepted_items_channel_sender, item.clone());
                 Self::handle_add_success(network_adapter.clone(), item, reply_channel);
+                true
             }
             Err(MempoolError::ExistingItem) => {
                 // Tx already in pool, but since this came from a local
@@ -535,8 +553,12 @@ where
                 if let Err(e) = reply_channel.send(Ok(())) {
                     tracing::debug!(target: LOG_TARGET, "Failed to send add reply: {:?}", e);
                 }
+                false
             }
-            Err(e) => Self::handle_add_error(e, reply_channel),
+            Err(e) => {
+                Self::handle_add_error(e, reply_channel);
+                false
+            }
         }
     }
 
@@ -643,19 +665,21 @@ where
         }
     }
 
+    /// Adds an item from the network, and tells whether it went into the pool.
     async fn handle_network_item(
         pool: &mut Pool,
         key: Pool::Key,
         item: Pool::Item,
         accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
-    ) where
+    ) -> bool
+    where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
     {
         let accepted_item = item.clone();
         if let Err(e) = pool.add_item(key, item).await {
             Self::handle_network_add_error(e);
-            return;
+            return false;
         }
         Self::notify_about_accepted_item(accepted_items_channel_sender, accepted_item);
 
@@ -666,6 +690,7 @@ where
             },
             "mempool pending items updated"
         );
+        true
     }
 
     fn handle_network_add_error(error: MempoolError) {
