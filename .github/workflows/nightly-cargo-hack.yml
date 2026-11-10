@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  issues: write
+  contents: read
 
 jobs:
   features:
@@ -35,6 +35,8 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        with:
+          persist-credentials: false
 
       - name: Install cargo-hack
         uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25  # Version 2.49.35
@@ -51,7 +53,6 @@ jobs:
       - name: Set up Cargo cache
         uses: ./.github/actions/setup-cargo-cache
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           key-prefix: cargo-hack/${{ matrix.platform.label }}
 
       - name: Run Cargo Hack Check (Cache-Aware)
@@ -61,7 +62,6 @@ jobs:
         if: success() || failure()
         uses: ./.github/actions/update-cargo-cache
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           key-prefix: cargo-hack/${{ matrix.platform.label }}
 
       - name: Clean up build artifacts
@@ -70,11 +70,52 @@ jobs:
         with:
           command: clean
 
+  # Deletes the caches that `features` superseded, in a job of its own like `prune-lint-caches` in
+  # `code-check.yml`: deleting caches needs `actions: write`, and `features` compiles third-party code.
+  prune-caches:
+    name: Prune Cargo caches
+    needs: [ features ]
+    # `update-cargo-cache` saves a cache only on master.
+    if: ${{ !cancelled() && github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Checkout prune action
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # Version 4.2.2
+        with:
+          sparse-checkout: .github/actions/prune-cache
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # The key prefixes are the ones of `features`, with a trailing slash so that no other label matches.
+      - name: Prune Cargo caches (self-hosted-linux)
+        uses: ./.github/actions/prune-cache
+        continue-on-error: true
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          key-prefix: cargo-hack/self-hosted-linux/main/
+          mode: keep-latest
+
+      - name: Prune Cargo caches (self-hosted-macos)
+        uses: ./.github/actions/prune-cache
+        continue-on-error: true
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          key-prefix: cargo-hack/self-hosted-macos/main/
+          mode: keep-latest
+
   report:
     name: Report failures
     needs: [ features ]
     if: failure() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: [ self-hosted, Linux ]
+    permissions:
+      # Lists this run's jobs and reads the commit's author.
+      actions: read
+      contents: read
+      # Opens or comments on the failure issue.
+      issues: write
     steps:
       - name: Create or update failure issue
         run: |

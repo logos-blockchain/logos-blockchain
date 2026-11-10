@@ -46,6 +46,7 @@ jobs:
           ref: master
           path: repo
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Collect merge-group snapshot
         id: collect_snapshot
@@ -68,7 +69,7 @@ jobs:
 
       - name: Upload merge-group telemetry
         if: ${{ always() && steps.collect_snapshot.outputs.collector_available == 'true' }}
-        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # Version 4.6.2
         with:
           name: merge-queue-telemetry-merge-group-${{ github.run_id }}-${{ github.run_attempt }}
           path: telemetry
@@ -98,6 +99,7 @@ jobs:
           ref: master
           path: repo
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Collect completed merge-group workflow timings
         env:
@@ -109,7 +111,7 @@ jobs:
 
       - name: Upload workflow timing telemetry
         if: always()
-        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # Version 4.6.2
         with:
           name: merge-queue-telemetry-completion-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}-collector-${{ github.run_id }}-${{ github.run_attempt }}
           path: telemetry

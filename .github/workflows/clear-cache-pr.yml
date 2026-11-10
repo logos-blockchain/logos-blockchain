@@ -5,24 +5,33 @@ on:
     types:
       - closed
 
+permissions:
+  contents: read
+
 jobs:
   clear-caches:
+    # Pull requests from forks get a read-only token, which cannot delete caches.
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
     steps:
-      - name: Prune Cargo Hack Cache
-        uses: ./.github/actions/prune-cache
-        continue-on-error: true
+      # The action is taken from the default branch: the pull request's merge ref can be gone once it is
+      # closed.
+      - name: Checkout prune action
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # Version 4.2.2
         with:
-          github-token: ${{ inputs.github-token }}
-          key-prefix: "cargo-hack-check/"
-          ref: ${{ github.ref }}
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: .github/actions/prune-cache
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
 
-      - name: Prune Code Check Cache
+      # Every cache saved on the pull request's ref, whatever saved it: only the pull request's own runs
+      # can restore them.
+      - name: Prune the pull request's caches
         uses: ./.github/actions/prune-cache
         continue-on-error: true
         with:
-          github-token: ${{ inputs.github-token }}
-          key-prefix: "code-check/"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          key-prefix: ""
           ref: ${{ github.ref }}
