@@ -637,6 +637,10 @@ where
         // state, and reports the claims it publishes for this loop to apply.
         let mut queued_claim_runs = VecDeque::new();
         let mut claim_run: Option<BoxFuture<'static, ClaimRunEnd>> = None;
+        // Whether mining or auto-claim was decided on while the run underway
+        // went on. A run works from the settings it started with, so it can't
+        // overrule a decision made since.
+        let mut decided_during_run = false;
         let (published_claims_sender, mut published_claims) =
             mpsc::channel(PUBLISHED_CLAIMS_BUFFER_SIZE);
         // Round trips for this loop to act on, without waiting for them, and
@@ -660,12 +664,14 @@ where
                                 info!(target: LOG_TARGET, "PoW mining started");
                             }
                             is_mining = true;
+                            decided_during_run = true;
                         }
                         PoWServiceMessage::StopMining => {
                             if is_mining {
                                 info!(target: LOG_TARGET, "PoW mining stopped");
                             }
                             is_mining = false;
+                            decided_during_run = true;
                         }
                         PoWServiceMessage::StartAutoClaim => {
                             if auto_claim_settings.targets.is_empty() {
@@ -675,6 +681,7 @@ where
                                     info!(target: LOG_TARGET, "PoW auto-claim started");
                                 }
                                 is_auto_claiming = true;
+                                decided_during_run = true;
                             }
                         }
                         PoWServiceMessage::StopAutoClaim => {
@@ -682,6 +689,7 @@ where
                                 info!(target: LOG_TARGET, "PoW auto-claim stopped");
                             }
                             is_auto_claiming = false;
+                            decided_during_run = true;
                         }
                         PoWServiceMessage::Claim { claim_address, reply_channel } => {
                             queued_claim_runs.push_back(ClaimRun::Manual { claim_address, reply_channel });
@@ -732,6 +740,7 @@ where
                     if let Err(error) = &result {
                         error!(target: LOG_TARGET, "Refusing the new PoW auto-claim settings: {error}");
                     } else {
+                        decided_during_run = true;
                         // With no targets left, the next tick would stop mining too, so
                         // stop auto-claim here.
                         if auto_claim_settings.targets.is_empty() {
@@ -770,11 +779,7 @@ where
                         }
                         ClaimRunEnd::Auto { still_armed: true } => {}
                         ClaimRunEnd::Auto { still_armed: false } => {
-                            is_auto_claiming = false;
-                            if is_mining {
-                                info!(target: LOG_TARGET, "Every PoW auto-claim target reached its threshold; stopping mining");
-                                is_mining = false;
-                            }
+                            stop_once_every_target_is_funded(decided_during_run, &mut is_auto_claiming, &mut is_mining);
                         }
                     }
                 }
@@ -848,6 +853,7 @@ where
                     published_claims: published_claims_sender.clone(),
                 };
                 claim_run = Some(run_claims(flow, next_run, state.clone()).boxed());
+                decided_during_run = false;
             }
         }
     }
@@ -962,6 +968,29 @@ fn apply_auto_claim_settings(
     }
 
     *auto_claim = new_settings;
+}
+
+/// Stops auto-claim and mining once a run of auto-claims found every target
+/// funded, unless either was decided on while the run went on: the run worked
+/// from the settings it started with, so that decision is the latest word, and
+/// the next run judges the targets afresh.
+fn stop_once_every_target_is_funded(
+    decided_during_run: bool,
+    is_auto_claiming: &mut bool,
+    is_mining: &mut bool,
+) {
+    if decided_during_run {
+        info!(
+            target: LOG_TARGET,
+            "A PoW auto-claim run found every target funded, but mining or auto-claim changed while it ran; leaving them for the next run to judge"
+        );
+        return;
+    }
+    *is_auto_claiming = false;
+    if *is_mining {
+        info!(target: LOG_TARGET, "Every PoW auto-claim target reached its threshold; stopping mining");
+        *is_mining = false;
+    }
 }
 
 /// The ticker of second-paced auto-claims, which never ticks under slot
@@ -2052,7 +2081,8 @@ mod tests {
         PoWServiceState, build_reward_claim_tx_inner, build_search_pool, change_outputs,
         claim_tx_size, claimable_rewards_info, estimate_reward_claim_fee, max_claims_by_ops,
         max_claims_by_payload_size, neediest_target, prune_expired_tickets, push_reward_claim_ops,
-        replace_search_pool_if_resized, slot_period_elapsed, transfer_ops,
+        replace_search_pool_if_resized, slot_period_elapsed, stop_once_every_target_is_funded,
+        transfer_ops,
     };
     use crate::{
         test_utils::{GAS_PROFILE, PAYLOAD_BODY_SIZE, era_schedule},
@@ -2726,6 +2756,20 @@ mod tests {
         assert_eq!(state.outstanding_tickets(), 3);
         prune_expired_tickets(&mut state, Slot::new(200), &era_schedule(&[SLOT_WINDOW]));
         assert_eq!(state.outstanding_tickets(), 1);
+    }
+
+    /// A run of auto-claims works from the settings it started with, so its
+    /// finding that every target is funded doesn't undo a decision made while
+    /// it went on.
+    #[test]
+    fn a_funded_verdict_leaves_a_decision_made_during_the_run_alone() {
+        let (mut is_auto_claiming, mut is_mining) = (true, true);
+
+        stop_once_every_target_is_funded(true, &mut is_auto_claiming, &mut is_mining);
+        assert!(is_auto_claiming && is_mining);
+
+        stop_once_every_target_is_funded(false, &mut is_auto_claiming, &mut is_mining);
+        assert!(!is_auto_claiming && !is_mining);
     }
 
     /// A claim runs on a copy of the state, so the tickets it took are told
