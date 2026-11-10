@@ -16,13 +16,13 @@ codec_fixtures!(
 );
 codec_fixtures!(
     ProgramStepProof,
-    context = crate::mantle::ops::StepProofShape::Program { program_notes: 1 },
+    context = crate::mantle::ops::StepProofShape::ProgramStep { program_notes: 1 },
     PROGRAM_STEP_PROOF.clone() => PROGRAM_STEP_PROOF_HEX,
 );
 codec_fixtures!(
     StepProof,
-    context = crate::mantle::ops::StepProofShape::User,
-    StepProof::User(*ZK_TRANSFER) => ZK_TRANSFER_HEX,
+    context = crate::mantle::ops::StepProofShape::ZkTransfer,
+    StepProof::ZkTransfer(*ZK_TRANSFER) => ZK_TRANSFER_HEX,
 );
 codec_fixtures!(
     ZkProgramSpendProof,

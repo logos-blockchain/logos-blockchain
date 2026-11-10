@@ -6,6 +6,7 @@ use crate::{
     mantle::{
         OpRef,
         gas::ThresholdSource as _,
+        ops::ChannelInscribeProof,
         transactions::{
             thresholds::TxGasState,
             tx_list::{OpRefs, ops::OpsGasContext},
@@ -29,11 +30,7 @@ pub fn minimum_signed_transaction_size(op_refs: &OpRefs<'_>, context: &OpsGasCon
             let proof_size = match op {
                 // ChannelInscribeOpProof = Ed25519Signature *StepProof
                 OpRef::ChannelInscribe(operation) => {
-                    ED25519_SIGNATURE_SIZE
-                        + operation
-                            .steps()
-                            .map(|step| step.proof_shape().encoded_length())
-                            .sum::<usize>()
+                    ChannelInscribeProof::encoded_length_for(operation)
                 }
 
                 // ChannelMultiSigProof
@@ -90,7 +87,7 @@ mod tests {
             ledger::verification_mode::StandardMode,
             notes::{InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments},
             ops::{
-                ChannelInscribeProof, StepProof, ZkAndEd25519Proof, ZkTransferProof,
+                StepProof, ZkAndEd25519Proof, ZkTransferProof,
                 channel::{
                     ChannelId, MsgId,
                     config::ChannelConfigOp,
@@ -385,8 +382,8 @@ mod tests {
         let proof = ChannelInscribeProof::new(
             Ed25519Signature::zero(),
             vec![
-                StepProof::User(ZkTransferProof::sample()),
-                StepProof::User(ZkTransferProof::sample()),
+                StepProof::ZkTransfer(ZkTransferProof::sample()),
+                StepProof::ZkTransfer(ZkTransferProof::sample()),
             ],
         );
         let signed = SignedOps::<Unverified, StandardMode>::from_parts(

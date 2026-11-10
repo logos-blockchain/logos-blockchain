@@ -501,7 +501,7 @@ fn note_sets_shape(changed: usize) -> BlockShape {
                 })])]
                 .into(),
             };
-            encode_inscription(op, &[StepProof::User(zk_transfer(index))])
+            encode_inscription(op, &[StepProof::ZkTransfer(zk_transfer(index))])
         })
         .collect();
     BlockShape {
@@ -541,7 +541,7 @@ fn mixed() -> BlockShape {
         let (steps, proofs): (Vec<_>, Vec<_>) = if index < USER_INSCRIPTIONS {
             (
                 vec![user_step(1, 1, salt)],
-                vec![StepProof::User(zk_transfer(index))],
+                vec![StepProof::ZkTransfer(zk_transfer(index))],
             )
         } else {
             program_steps(program, salt).into_iter().unzip()

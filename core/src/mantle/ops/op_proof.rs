@@ -6,10 +6,7 @@ use crate::{
     mantle::{
         Op,
         ledger::ProvableOperation,
-        ops::{
-            ChannelInscribeProof, NoOpProof, OpProofRef, ZkAndEd25519Proof, ZkTransferProof,
-            channel::inscribe::Step,
-        },
+        ops::{ChannelInscribeProof, NoOpProof, OpProofRef, ZkAndEd25519Proof, ZkTransferProof},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
@@ -34,7 +31,7 @@ impl OpProof {
     pub fn decode_for_op<'i>(input: &'i [u8], op: &Op) -> Result<(&'i [u8], Self), DecodeError> {
         match op {
             Op::ChannelInscribe(op) => {
-                ChannelInscribeProof::decode(input, &op.steps().map(Step::proof_shape).collect())
+                ChannelInscribeProof::decode(input, &ChannelInscribeProof::decode_context(op))
                     .map(|(rest, proof)| (rest, proof.into()))
             }
             Op::ChannelConfig(op) => decode_proof_for(op, input),

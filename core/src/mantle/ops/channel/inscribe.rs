@@ -36,7 +36,7 @@ use crate::{
         notes::{InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments},
         ops::{
             ChannelInscribeProof, OpId, ProgramStepProof, SignedOperation, StepProof,
-            StepProofShape, ZkTransferProof,
+            ZkTransferProof,
             channel::{
                 UnverifiedChannelKeys,
                 program_step::{
@@ -204,17 +204,6 @@ impl From<ProgramStep> for Step {
 }
 
 impl Step {
-    // A ZkTransfer for a user step or a program deposit.
-    #[must_use]
-    pub const fn proof_shape(&self) -> StepProofShape {
-        match self {
-            Self::User(_) | Self::ProgramDeposit(_) => StepProofShape::User,
-            Self::Program(step) => StepProofShape::Program {
-                program_notes: step.program_outputs.len(),
-            },
-        }
-    }
-
     #[must_use]
     pub const fn inputs(&self) -> &InputNullifiers {
         match self {
@@ -248,10 +237,12 @@ impl Step {
     // the step and that its circuit fits the step.
     fn preverify_proof(&self, proof: &StepProof, index: usize) -> Result<(), Error> {
         match (self, proof) {
-            (Self::User(_) | Self::ProgramDeposit(_), StepProof::User(_)) => Ok(
+            (Self::User(_) | Self::ProgramDeposit(_), StepProof::ZkTransfer(_)) => Ok(
                 check_zk_transfer_bounds(self.inputs().len(), self.outputs().len())?,
             ),
-            (Self::Program(step), StepProof::Program(proof)) => step.preverify_proof(proof, index),
+            (Self::Program(step), StepProof::ProgramStep(proof)) => {
+                step.preverify_proof(proof, index)
+            }
             _ => Err(Error::StepProofKind { step: index }),
         }
     }
@@ -689,14 +680,14 @@ impl<'a> StepVerifier<'a> {
                 .expect("preverify checked one proof per step");
             self.check_step_inputs(step)?;
             match (step, proof) {
-                (Step::User(user_step), StepProof::User(proof)) => {
+                (Step::User(user_step), StepProof::ZkTransfer(proof)) => {
                     self.verify_user_step(user_step, step, covered, proof)?;
                 }
-                (Step::ProgramDeposit(deposit), StepProof::User(proof)) => {
+                (Step::ProgramDeposit(deposit), StepProof::ZkTransfer(proof)) => {
                     self.verify_program_deposit(deposit, step, covered, proof)?;
                     program_deposits.push(deposit);
                 }
-                (Step::Program(program_step), StepProof::Program(proof)) => {
+                (Step::Program(program_step), StepProof::ProgramStep(proof)) => {
                     self.verify_program_step(program_step, step, proof, &program_deposits)?;
                     program_deposits.clear();
                 }
@@ -1580,7 +1571,7 @@ mod tests {
     ) -> Result<InscriptionDeferredProofs, Error> {
         let proofs = steps
             .iter()
-            .map(|step| StepProof::sample_for(step.proof_shape()))
+            .map(|step| StepProof::sample_for(step.into()))
             .collect();
         signed(with_steps(steps), proofs)
             .into_preverified(&InscriptionPreverificationContext {
@@ -1650,7 +1641,7 @@ mod tests {
         let outputs: Vec<NoteCommitment> = (1..=9).map(commitment).collect();
         let signed_operation = signed(
             with_steps(vec![Step::User(step(&[nullifier(2)], &outputs, root()))]),
-            vec![StepProof::User(ZkTransferProof::sample())],
+            vec![StepProof::ZkTransfer(ZkTransferProof::sample())],
         );
         assert_eq!(
             signed_operation.preverify(&InscriptionPreverificationContext {
@@ -1675,18 +1666,21 @@ mod tests {
                     root(),
                 ))])
             };
-            let deferred = signed(operation, vec![StepProof::User(ZkTransferProof::sample())])
-                .into_preverified(&InscriptionPreverificationContext {
-                    tx_hash_view: &tx_hash_view(),
-                })
-                .unwrap()
-                .verify(&InscriptionValidationContext {
-                    channels: &Channels::new(),
-                    note_sets: &NoteSets::new(),
-                    programs: &Programs::new(),
-                    block_slot: Slot::from(0u64),
-                    block_number: 1,
-                });
+            let deferred = signed(
+                operation,
+                vec![StepProof::ZkTransfer(ZkTransferProof::sample())],
+            )
+            .into_preverified(&InscriptionPreverificationContext {
+                tx_hash_view: &tx_hash_view(),
+            })
+            .unwrap()
+            .verify(&InscriptionValidationContext {
+                channels: &Channels::new(),
+                note_sets: &NoteSets::new(),
+                programs: &Programs::new(),
+                block_slot: Slot::from(0u64),
+                block_number: 1,
+            });
             assert_eq!(deferred.unwrap_err(), Error::NoNoteSet { channel_id });
         }
     }
@@ -1934,8 +1928,8 @@ mod tests {
         let signed_operation: SignedOperation<_, _, StandardMode> = signed(
             operation,
             vec![
-                StepProof::User(ZkTransferProof::sample()),
-                StepProof::User(ZkTransferProof::sample()),
+                StepProof::ZkTransfer(ZkTransferProof::sample()),
+                StepProof::ZkTransfer(ZkTransferProof::sample()),
             ],
         )
         .into_state_trusted();
@@ -1996,7 +1990,7 @@ mod tests {
 
         let deferred = signed(
             with_steps(vec![Step::User(step)]),
-            vec![StepProof::User(ZkTransferProof::new(proof))],
+            vec![StepProof::ZkTransfer(ZkTransferProof::new(proof))],
         )
         .into_preverified(&InscriptionPreverificationContext {
             tx_hash_view: &tx_hash_view(),
@@ -2139,7 +2133,7 @@ mod tests {
     fn sample_proofs(steps: &[Step]) -> Vec<StepProof> {
         steps
             .iter()
-            .map(|step| StepProof::sample_for(step.proof_shape()))
+            .map(|step| StepProof::sample_for(step.into()))
             .collect()
     }
 
@@ -2349,7 +2343,7 @@ mod tests {
         };
         let step = program_step(&[], &[note.commitment()], &[commitment(9)], root());
         let proof = |openings: Vec<ProgramNoteOpening>| {
-            StepProof::Program(ProgramStepProof {
+            StepProof::ProgramStep(ProgramStepProof {
                 spend_proof: ZkProgramSpendProof::sample(),
                 program_proof: ProgramProof::sample(),
                 program_notes: openings,
@@ -2394,7 +2388,10 @@ mod tests {
             })
         );
         assert_eq!(
-            preverify(step.clone(), StepProof::User(ZkTransferProof::sample())),
+            preverify(
+                step.clone(),
+                StepProof::ZkTransfer(ZkTransferProof::sample())
+            ),
             Err(Error::StepProofKind { step: 0 })
         );
         assert_eq!(
@@ -2564,8 +2561,8 @@ mod tests {
             5,
         );
         let proofs = vec![
-            StepProof::User(ZkTransferProof::new(deposit_proof)),
-            StepProof::Program(ProgramStepProof {
+            StepProof::ZkTransfer(ZkTransferProof::new(deposit_proof)),
+            StepProof::ProgramStep(ProgramStepProof {
                 spend_proof: ZkProgramSpendProof::new(spend_proof),
                 program_proof: ProgramProof::new(
                     CompressedGroth16Proof::try_from(&program_proof).unwrap(),

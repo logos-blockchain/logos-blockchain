@@ -136,9 +136,9 @@ fn all_ops<State: VerificationState, Mode: VerificationMode>() -> SignedOps<Stat
             ChannelInscribeProof::new(
                 *ED25519_SIG,
                 vec![
-                    StepProof::User(*ZK_TRANSFER),
-                    StepProof::User(*ZK_TRANSFER),
-                    StepProof::Program(PROGRAM_STEP_PROOF.clone())
+                    StepProof::ZkTransfer(*ZK_TRANSFER),
+                    StepProof::ZkTransfer(*ZK_TRANSFER),
+                    StepProof::ProgramStep(PROGRAM_STEP_PROOF.clone())
                 ]
             )
         ),
