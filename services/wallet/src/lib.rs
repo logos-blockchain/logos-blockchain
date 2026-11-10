@@ -76,7 +76,7 @@ use tokio::{
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{debug, error, info, trace, warn};
 
-use crate::states::{RecoveryState, ServiceState, Wallet};
+use crate::states::{HeldReservations, RecoveryState, ServiceState, Wallet};
 
 type KmsBackend = PreloadKMSBackend;
 type KeyId = <KmsBackend as KMSBackend>::KeyId;
@@ -255,13 +255,6 @@ struct LeaderClaimWitness {
     path: MerklePath,
 }
 
-/// What a transaction being signed holds in the wallet, to be given back unless
-/// the requester ends up with the transaction.
-struct TxSigningReservations {
-    claim: Option<VoucherNullifier>,
-    notes: Vec<NoteId>,
-}
-
 /// What a signing takes: the KMS that signs, and the permits that cap how many
 /// sign at once.
 struct TxSigner<Kms, RuntimeServiceId>
@@ -299,7 +292,7 @@ where
 /// A signing under way, which the service loop polls along with its other
 /// inputs. It comes to the reservations to give back, if the requester doesn't
 /// end up with the transaction.
-type PendingSigning = Pin<Box<dyn Future<Output = Option<TxSigningReservations>> + Send + Sync>>;
+type PendingSigning = Pin<Box<dyn Future<Output = Option<HeldReservations>> + Send + Sync>>;
 
 async fn signing_permit(permits: &Semaphore) -> SemaphorePermit<'_> {
     permits
@@ -897,10 +890,7 @@ where
 
                 match job {
                     Ok(job) => {
-                        let reservations = TxSigningReservations {
-                            claim: None,
-                            notes: funded_notes,
-                        };
+                        let reservations = state.held_reservations(None, funded_notes);
                         signings.push(Self::signing(job, tip, reservations, signer, resp_tx));
                     }
                     Err(err) => {
@@ -1224,14 +1214,10 @@ where
     }
 
     /// Gives back what a finished signing still holds, if anything.
-    fn release_reservations(unused: Option<TxSigningReservations>, state: &mut ServiceState<'_>) {
-        let Some(TxSigningReservations { claim, notes }) = unused else {
-            return;
-        };
-        if let Some(nullifier) = claim {
-            state.release_claim_reservation(nullifier);
+    fn release_reservations(unused: Option<HeldReservations>, state: &mut ServiceState<'_>) {
+        if let Some(held) = unused {
+            state.give_back(held);
         }
-        state.release_pending_notes(notes);
     }
 
     /// Signs `job` and answers the request, coming to `reservations` if the
@@ -1239,7 +1225,7 @@ where
     fn signing(
         job: TxSigningRequest,
         tip: HeaderId,
-        reservations: TxSigningReservations,
+        reservations: HeldReservations,
         signer: &TxSigner<Kms, RuntimeServiceId>,
         resp_tx: Sender<
             Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletServiceError>,
@@ -1511,7 +1497,7 @@ where
         era_schedule: &ServiceEraSchedule,
         state: &mut ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-    ) -> Result<(TxSigningRequest, TxSigningReservations), WalletServiceError> {
+    ) -> Result<(TxSigningRequest, HeldReservations), WalletServiceError> {
         let security_param = era_schedule
             .at_slot(ledger.slot())
             .parameters
@@ -1524,17 +1510,16 @@ where
             Self::build_reserved_leader_claim_tx(request, voucher_nullifier, ledger, state, kms)
                 .await;
 
-        if result.is_err() {
-            state.release_claim_reservation(voucher_nullifier);
+        match result {
+            Ok((job, funded_notes)) => Ok((
+                job,
+                state.held_reservations(Some(voucher_nullifier), funded_notes),
+            )),
+            Err(err) => {
+                state.release_claim_reservation(voucher_nullifier);
+                Err(err)
+            }
         }
-
-        result.map(|(job, funded_notes)| {
-            let reservations = TxSigningReservations {
-                claim: Some(voucher_nullifier),
-                notes: funded_notes,
-            };
-            (job, reservations)
-        })
     }
 
     fn reserve_claimable_voucher(
