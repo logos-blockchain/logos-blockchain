@@ -3,7 +3,7 @@
     reason = "`ZoneSequencer`'s public API lives in zone_sequencer.rs; internal handlers live here."
 )]
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use lb_common_http_client::{ProcessedBlockEvent, Slot};
 use lb_core::mantle::{channel::ChannelState, ops::channel::ChannelId, transactions::hash::TxHash};
@@ -619,12 +619,23 @@ where
             ),
             _ => BlockShed::default(),
         };
-        let mut seen: HashSet<_> = orphaned.iter().map(ChannelUpdateTx::tx_hash).collect();
+        let mut positions: HashMap<_, _> = orphaned
+            .iter()
+            .enumerate()
+            .map(|(index, tx)| (tx.tx_hash(), index))
+            .collect();
         for tx in orphans_from_shed(shed.displaced, self.channel_id) {
-            if seen.insert(tx.tx_hash()) {
-                if shed.expired.contains(&tx.tx_hash()) {
-                    warn!(target: TARGET, "Pending tx {} expired unmined; orphaned", hex::encode(tx.tx_hash().0));
+            let hash = tx.tx_hash();
+            if let Some(index) = positions.get(&hash) {
+                // Mirroring can displace a pending tx before the lineage diff
+                // types it, leaving only its first inscription there. Keep the
+                // diff's order, but report the complete stored shed entry.
+                orphaned[*index] = tx;
+            } else {
+                if shed.expired.contains(&hash) {
+                    warn!(target: TARGET, "Pending tx {} expired unmined; orphaned", hex::encode(hash.0));
                 }
+                positions.insert(hash, orphaned.len());
                 orphaned.push(tx);
             }
         }
