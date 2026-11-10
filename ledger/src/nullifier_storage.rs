@@ -22,13 +22,18 @@
 //! its own, and the snapshots of the current and next epochs taken at the
 //! stake distribution freeze. They are all canonical states once their block is
 //! final, the snapshots reading the store below its finalized base.
+//!
+//! Every finalization may also write an anchor under [`ANCHOR_KEY`], in its
+//! batch: what a restart needs to read the store again, starting from its base
+//! (see [`crate::Anchor`]). The store and the anchor never disagree, whatever
+//! the moment the node stops.
 
 use std::{collections::HashMap, sync::Arc};
 
 use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_core::mantle::note_set::{CommittedSets, NoteSetError, NoteSetIndex, NoteSets};
 use lb_imt::store::{BlockId, ImtError, LiveBlock, Version, VersionRegistry};
-use lb_kv_store::{DynKvStore, KvStore as _, Prefixed, WriteBatch};
+use lb_kv_store::{Bytes, DynKvStore, KvStore as _, Prefixed, WriteBatch};
 
 use crate::cryptarchia::LedgerState as CryptarchiaLedger;
 
@@ -44,6 +49,10 @@ pub const WRITTEN_NAMESPACE: &[u8] = b"W";
 fn written_key(version: Version) -> Vec<u8> {
     version.0.to_be_bytes().to_vec()
 }
+
+/// The key of the anchor of the finalized base, next to the namespaces of the
+/// note sets and of the [`VersionRegistry`].
+pub const ANCHOR_KEY: &[u8] = b"A";
 
 /// The store of the nullifier trees of a ledger, and the versions of its
 /// committed blocks.
@@ -83,13 +92,22 @@ impl NullifierStorage {
         &self.store
     }
 
-    fn write(&self, batch: WriteBatch) -> Result<(), NoteSetError> {
-        if batch.is_empty() {
-            return Ok(());
-        }
-        self.store
-            .write_batch(batch)
-            .map_err(|error| NoteSetError::Imt(ImtError::Storage(Arc::new(error))))
+    /// Writes `batch` in the store, atomically.
+    pub fn write(&self, batch: WriteBatch) -> Result<(), NoteSetError> {
+        write(&self.store, batch)
+    }
+
+    /// The anchor written with the last finalization, if any.
+    pub fn read_anchor(store: &DynKvStore) -> Result<Option<Bytes>, NoteSetError> {
+        store.get(ANCHOR_KEY).map_err(storage_error)
+    }
+
+    /// Deletes everything `store` holds, as when what it holds has no anchor
+    /// to be read again from.
+    pub fn clear(store: &DynKvStore) -> Result<(), NoteSetError> {
+        let mut batch = WriteBatch::new();
+        batch.delete_prefix(Bytes::new());
+        write(store, batch)
     }
 
     // The writes of the registry, as writes of the store.
@@ -107,11 +125,16 @@ impl NullifierStorage {
                     block_id,
                 }),
             ));
-            let mut written = WriteBatch::new();
-            written.delete(written_key(version));
-            batch.append(self.written_store.namespace_batch(written));
+            batch.append(self.forget_written(version));
         }
         Ok(())
+    }
+
+    // The writes forgetting the sets the block of `version` wrote to.
+    fn forget_written(&self, version: Version) -> WriteBatch {
+        let mut written = WriteBatch::new();
+        written.delete(written_key(version));
+        self.written_store.namespace_batch(written)
     }
 
     // The writes recording that the block of `version` wrote to `sets`.
@@ -135,7 +158,7 @@ impl NullifierStorage {
         let Some(bytes) = self
             .written_store
             .get(&written_key(version))
-            .map_err(|error| NoteSetError::Imt(ImtError::Storage(Arc::new(error))))?
+            .map_err(storage_error)?
         else {
             return Ok(Vec::new());
         };
@@ -164,11 +187,14 @@ impl NullifierStorage {
     /// Makes the state of block `block_id`, the root of a ledger, the finalized
     /// base of the store: committed first if it has a pending block, as the
     /// genesis state does. A state restored from the store already is its base.
+    ///
+    /// Returns the batch finalizing it, for the caller to write, then collect
+    /// the garbage.
     pub fn make_root(
         &self,
         block_id: BlockId,
         state: CryptarchiaLedger,
-    ) -> Result<CryptarchiaLedger, NoteSetError> {
+    ) -> Result<(CryptarchiaLedger, WriteBatch), NoteSetError> {
         let state = if has_pending(&state) {
             self.commit(block_id, state)?
         } else {
@@ -177,9 +203,7 @@ impl NullifierStorage {
         let mut batch = WriteBatch::new();
         let state = finalize_state(state, block_id, &mut batch)?;
         self.release(block_id, &mut batch)?;
-        self.write(batch)?;
-        self.collect_garbage(&state, std::iter::once(&state))?;
-        Ok(state)
+        Ok((state, batch))
     }
 
     /// Makes `lib`, the state of block `lib_id`, the finalized base of the
@@ -188,12 +212,14 @@ impl NullifierStorage {
     /// states of the stale forks are not needed. Every state kept
     /// afterwards must be `lib`, one of its descendants, or one of their epoch
     /// snapshots: the others read a base that is not theirs.
+    ///
+    /// Returns the batch doing it all, for the caller to write.
     pub fn prune(
         &self,
         lib_id: BlockId,
         lib: CryptarchiaLedger,
         pruned: &PrunedVersions<'_>,
-    ) -> Result<CryptarchiaLedger, NoteSetError> {
+    ) -> Result<(CryptarchiaLedger, WriteBatch), NoteSetError> {
         let mut batch = WriteBatch::new();
         let lib = finalize_state(lib, lib_id, &mut batch)?;
         for block_id in pruned.stale {
@@ -209,8 +235,36 @@ impl NullifierStorage {
         for block_id in pruned.immutable.iter().chain(std::iter::once(&lib_id)) {
             self.release(*block_id, &mut batch)?;
         }
+        Ok((lib, batch))
+    }
+
+    /// Deletes what the blocks of the versions still recorded wrote, unless
+    /// `kept` keeps them, and forgets their versions. After a restart, these
+    /// are the blocks the replay did not apply again: forks lost with the
+    /// stop, or blocks pruned by a pruning the stop interrupted. Their writes
+    /// are deleted from the note sets each recorded at its commit.
+    ///
+    /// Returns the number of blocks discarded.
+    pub fn discard_lost(&self, kept: impl Fn(BlockId) -> bool) -> Result<usize, NoteSetError> {
+        let mut batch = WriteBatch::new();
+        let mut discarded = 0usize;
+        for live in self.versions.live_blocks()? {
+            if kept(live.block_id) {
+                continue;
+            }
+            batch.append(NoteSets::discard_writes(
+                &self.store,
+                self.written(live.version)?,
+                live.version,
+            ));
+            batch.append(self.forget_written(live.version));
+            batch.append(self.versions_batch(
+                VersionRegistry::<Prefixed<DynKvStore>>::release_writes(live),
+            ));
+            discarded = discarded.saturating_add(1);
+        }
         self.write(batch)?;
-        Ok(lib)
+        Ok(discarded)
     }
 
     /// Deletes the nodes the finalized blocks of `lib` replaced that no state
@@ -265,6 +319,37 @@ pub fn retention_floors<'a>(
     floors
 }
 
+/// The note sets of `state`, decoded from an anchor, attached to `store`: those
+/// of the state itself must be its finalized base.
+pub fn attach_state(
+    state: CryptarchiaLedger,
+    store: &DynKvStore,
+) -> Result<CryptarchiaLedger, NoteSetError> {
+    let mut state = state;
+    state.note_sets = state.note_sets.attach(Arc::clone(store))?;
+    state.note_sets.check_base()?;
+    state.epoch_state.note_sets = state.epoch_state.note_sets.attach(Arc::clone(store))?;
+    state.next_epoch_state.note_sets =
+        state.next_epoch_state.note_sets.attach(Arc::clone(store))?;
+    Ok(state)
+}
+
+/// The note sets of `state`, never committed, moved to `store` (see
+/// [`NoteSets::move_to`]).
+pub fn move_state(
+    state: CryptarchiaLedger,
+    store: &DynKvStore,
+) -> Result<CryptarchiaLedger, NoteSetError> {
+    let mut state = state;
+    state.note_sets = state.note_sets.move_to(Arc::clone(store))?;
+    state.epoch_state.note_sets = state.epoch_state.note_sets.move_to(Arc::clone(store))?;
+    state.next_epoch_state.note_sets = state
+        .next_epoch_state
+        .note_sets
+        .move_to(Arc::clone(store))?;
+    Ok(state)
+}
+
 /// Drops from the memory of `state` what the finalized base of the store holds.
 pub fn rebase_state(state: CryptarchiaLedger) -> Result<CryptarchiaLedger, NoteSetError> {
     let mut state = state;
@@ -281,6 +366,17 @@ const fn held_note_sets(state: &CryptarchiaLedger) -> [&NoteSets; 3] {
         &state.epoch_state.note_sets,
         &state.next_epoch_state.note_sets,
     ]
+}
+
+fn storage_error(error: lb_kv_store::StoreError) -> NoteSetError {
+    NoteSetError::Imt(ImtError::Storage(Arc::new(error)))
+}
+
+fn write(store: &DynKvStore, batch: WriteBatch) -> Result<(), NoteSetError> {
+    if batch.is_empty() {
+        return Ok(());
+    }
+    store.write_batch(batch).map_err(storage_error)
 }
 
 fn has_pending(state: &CryptarchiaLedger) -> bool {
@@ -347,7 +443,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        Ledger, LedgerState,
+        Ledger, LedgerState, Restored,
         cryptarchia::tests::{GENESIS_POW_REWARD_POOL, config},
         test_utils::single_era,
         update::BatchVerifiedUpdate,
@@ -448,40 +544,87 @@ mod tests {
             .fold(oracle.clone(), |oracle, n| oracle.insert(fr(*n)).unwrap())
     }
 
+    // A block as applied, to be applied again after a restart.
+    #[derive(Clone)]
+    struct Applied {
+        parent: Id,
+        spent: Vec<(NoteSetIndex, Vec<u64>)>,
+    }
+
     /// A ledger and the consensus engine driving its pruning, with what each
-    /// set of each kept block should hold.
+    /// set of each kept block should hold. Each finalization writes an anchor
+    /// whose info is the first byte of the id of the LIB.
     struct Chain {
         ledger: Ledger<Id>,
         engine: Cryptarchia<Id>,
-        store: Arc<MemKv>,
+        store: DynKvStore,
         oracles: HashMap<Id, HashMap<NoteSetIndex, Oracle>>,
+        applied: HashMap<Id, Applied>,
         next: u8,
+    }
+
+    // A block on `parent` spending `spent`, applied on the state of `parent` in
+    // `ledger` after `amend`.
+    fn build(
+        ledger: &Ledger<Id>,
+        id: Id,
+        parent: Id,
+        spent: &[(NoteSetIndex, Vec<u64>)],
+        amend: impl FnOnce(LedgerState) -> LedgerState,
+    ) -> BatchVerifiedUpdate<Id> {
+        let mut state = ledger.state(&parent).unwrap().clone();
+        state.block_number += 1;
+        let mut state = amend(state);
+        let mut note_sets = state.cryptarchia_ledger.note_sets.clone();
+        for (index, nullifiers) in spent {
+            note_sets = spend(&note_sets, *index, nullifiers);
+        }
+        state.cryptarchia_ledger.note_sets = note_sets.end_block(state.block_number).unwrap();
+        BatchVerifiedUpdate {
+            id,
+            state,
+            events: Events::new(),
+        }
     }
 
     impl Chain {
         fn new() -> Self {
+            Self::with_store(ErasedKv::into_dyn(MemKv::new()))
+        }
+
+        fn with_store(store: DynKvStore) -> Self {
             let config = config();
-            let store = Arc::new(MemKv::new());
-            let note_sets = NoteSets::with_store(ErasedKv::into_dyn(Arc::clone(&store)));
-            let mut state = LedgerState::from_notes([], &config, GENESIS_POW_REWARD_POOL);
-            state.cryptarchia_ledger.note_sets = note_sets.clone();
-            state.cryptarchia_ledger.epoch_state.note_sets = note_sets.clone();
-            state.cryptarchia_ledger.next_epoch_state.note_sets = note_sets;
+            // a genesis state is built in memory, then moved to the store
+            let state = LedgerState::from_notes([], &config, GENESIS_POW_REWARD_POOL)
+                .with_nullifier_store(&store)
+                .unwrap();
             let eras = single_era(config);
             let engine = Cryptarchia::from_genesis(
                 GENESIS,
                 Arc::new(eras.map(|era| era.parameters.consensus_config.clone())),
                 State::Online,
             );
-            let ledger = Ledger::new(GENESIS, state, Arc::new(eras)).unwrap();
+            let ledger = Ledger::new_anchored(GENESIS, state, Arc::new(eras), &GENESIS[0]).unwrap();
             let genesis = HashMap::from([(LEDGER_SET, Oracle::new())]);
             Self {
                 ledger,
                 engine,
                 store,
                 oracles: HashMap::from([(GENESIS, genesis)]),
+                applied: HashMap::new(),
                 next: 1,
             }
+        }
+
+        fn dyn_store(&self) -> DynKvStore {
+            Arc::clone(&self.store)
+        }
+
+        // The ledger a restart restores from the anchor of the store.
+        fn restore(&self) -> Restored<Id, u8> {
+            Ledger::restore(&self.dyn_store(), Arc::clone(self.ledger.era_schedule()))
+                .unwrap()
+                .expect("the store has an anchor")
         }
 
         fn state(&self, id: &Id) -> &CryptarchiaLedger {
@@ -500,39 +643,58 @@ mod tests {
             spent: &[(NoteSetIndex, &[u64])],
             amend: impl FnOnce(LedgerState) -> LedgerState,
         ) -> Id {
-            let id = [self.next; 32];
-            let slot = Slot::from(u64::from(self.next));
-            self.next += 1;
-            let mut state = self.ledger.state(&parent).unwrap().clone();
-            state.block_number += 1;
-            let mut state = amend(state);
-            let mut note_sets = state.cryptarchia_ledger.note_sets.clone();
-            let mut oracles = self.oracles[&parent].clone();
-            for (index, nullifiers) in spent {
-                note_sets = spend(&note_sets, *index, nullifiers);
-                let oracle = oracles.entry(*index).or_default();
-                *oracle = insert_all(oracle, nullifiers);
-            }
-            state.cryptarchia_ledger.note_sets = note_sets.end_block(state.block_number).unwrap();
-            self.ledger
-                .commit_update(BatchVerifiedUpdate {
-                    id,
-                    state,
-                    events: Events::new(),
-                })
-                .unwrap();
-            self.oracles.insert(id, oracles);
+            let id = self.commit(parent, spent, amend);
+            let slot = Slot::from(u64::from(id[0]));
             let (pruned, _) = self
                 .engine
                 .receive_block(id, parent, slot, UncleSlots::default())
                 .unwrap();
+            let lib = self.engine.lib();
             self.ledger
-                .apply_pruning(self.engine.lib(), &pruned)
+                .apply_pruning_anchored(lib, &pruned, &lib[0])
                 .unwrap();
             let ledger = &self.ledger;
             self.oracles
                 .retain(|block, _| ledger.state(block).is_some());
             id
+        }
+
+        // Commits a block on `parent`, without telling the consensus: as when
+        // the node stops before the pruning that follows.
+        fn commit(
+            &mut self,
+            parent: Id,
+            spent: &[(NoteSetIndex, &[u64])],
+            amend: impl FnOnce(LedgerState) -> LedgerState,
+        ) -> Id {
+            let id = [self.next; 32];
+            self.next += 1;
+            let spent: Vec<(NoteSetIndex, Vec<u64>)> = spent
+                .iter()
+                .map(|(index, nullifiers)| (*index, nullifiers.to_vec()))
+                .collect();
+            let update = build(&self.ledger, id, parent, &spent, amend);
+            self.ledger.commit_update(update).unwrap();
+            let mut oracles = self.oracles[&parent].clone();
+            for (index, nullifiers) in &spent {
+                let oracle = oracles.entry(*index).or_default();
+                *oracle = insert_all(oracle, nullifiers);
+            }
+            self.oracles.insert(id, oracles);
+            self.applied.insert(id, Applied { parent, spent });
+            id
+        }
+
+        // The blocks from the child of `lib` to `tip`, in order.
+        fn path(&self, lib: Id, tip: Id) -> Vec<Id> {
+            let mut path = Vec::new();
+            let mut id = tip;
+            while id != lib {
+                path.push(id);
+                id = self.applied[&id].parent;
+            }
+            path.reverse();
+            path
         }
 
         // Every kept state reads as its oracles.
@@ -551,10 +713,8 @@ mod tests {
         }
 
         fn version(&self, id: Id) -> Version {
-            let versions = VersionRegistry::new(Prefixed::new(
-                ErasedKv::into_dyn(Arc::clone(&self.store)),
-                VERSIONS_NAMESPACE,
-            ));
+            let versions =
+                VersionRegistry::new(Prefixed::new(Arc::clone(&self.store), VERSIONS_NAMESPACE));
             versions.lookup(BlockId(id)).unwrap().unwrap()
         }
 
@@ -732,9 +892,13 @@ mod tests {
             tip = chain.extend(tip, &nullifiers);
         }
         let lib = chain.engine.lib();
-        let saved = chain.ledger.state(&lib).unwrap().to_bytes().unwrap();
-        let restored = LedgerState::from_bytes(&saved).unwrap();
-        let ledger = Ledger::new(lib, restored, Arc::clone(chain.ledger.era_schedule())).unwrap();
+        assert_ne!(lib, GENESIS);
+        let Restored {
+            ledger,
+            lib: restored_lib,
+            info,
+        } = chain.restore();
+        assert_eq!((restored_lib, info), (lib, lib[0]));
         let state = &ledger.state(&lib).unwrap().cryptarchia_ledger;
         let oracle = &chain.oracles[&lib][&LEDGER_SET];
         check_set(
@@ -744,6 +908,168 @@ mod tests {
             &PROBES,
         );
         assert_eq!(*state, *chain.state(&lib));
+    }
+
+    #[test]
+    fn test_a_decoded_state_reads_nothing_until_attached() {
+        let mut chain = Chain::new();
+        let mut tip = GENESIS;
+        for nullifiers in [[3, 9], [1, 7], [5, 2]] {
+            tip = chain.extend(tip, &nullifiers);
+        }
+        let lib = chain.engine.lib();
+        let saved = chain.ledger.state(&lib).unwrap().to_bytes().unwrap();
+        let decoded = LedgerState::from_bytes(&saved).unwrap();
+        let set = decoded.latest_note_sets().get(LEDGER_SET).unwrap();
+        assert!(matches!(
+            set.contains_nullifier(&NoteNullifier(fr(3))),
+            Err(NoteSetError::Imt(ImtError::Storage(_)))
+        ));
+        let attached = attach_state(decoded.cryptarchia_ledger, &chain.dyn_store()).unwrap();
+        assert_eq!(attached, *chain.state(&lib));
+        // a tree above the base is not a canonical state to attach
+        let saved = chain.ledger.state(&tip).unwrap().to_bytes().unwrap();
+        let above = LedgerState::from_bytes(&saved).unwrap();
+        assert!(attach_state(above.cryptarchia_ledger, &chain.dyn_store()).is_err());
+    }
+
+    #[test]
+    fn test_restart_replays_the_chain_and_discards_lost_forks() {
+        let mut chain = Chain::new();
+        let mut tip = GENESIS;
+        for nullifiers in [[3, 9], [1, 7], [5, 2], [8, 4]] {
+            tip = chain.extend(tip, &nullifiers);
+        }
+        let lib = chain.engine.lib();
+        // Committed before the stop, never seen by the consensus nor pruned:
+        // two blocks on the chain, and a fork above the LIB the restart
+        // forgets, as one received just before the stop.
+        let lost = chain.commit(lib, &[(LEDGER_SET, &[60])], |state| state);
+        let lost_version = chain.version(lost);
+        assert!(chain.written(LEDGER_SET, lost_version) > 0);
+        tip = chain.commit(tip, &[(LEDGER_SET, &[11])], |state| state);
+        tip = chain.commit(tip, &[(LEDGER_SET, &[12, 13])], |state| state);
+
+        let Restored { mut ledger, .. } = chain.restore();
+        for id in chain.path(lib, tip) {
+            let version = chain.version(id);
+            let Applied { parent, spent } = chain.applied[&id].clone();
+            let update = build(&ledger, id, parent, &spent, |state| state);
+            ledger.commit_update(update).unwrap();
+            assert_eq!(chain.version(id), version, "the version is reused");
+            assert_eq!(
+                ledger.state(&id).unwrap().cryptarchia_ledger,
+                *chain.state(&id)
+            );
+        }
+        assert_eq!(ledger.discard_lost_blocks().unwrap(), 1);
+        assert_eq!(chain.written(LEDGER_SET, lost_version), 0);
+        assert_eq!(ledger.discard_lost_blocks().unwrap(), 0);
+        for id in chain.path(lib, tip) {
+            check_set(
+                &format!("replayed block {}", id[0]),
+                ledger
+                    .state(&id)
+                    .unwrap()
+                    .cryptarchia_ledger
+                    .note_sets
+                    .get(LEDGER_SET)
+                    .unwrap(),
+                &chain.oracles[&id][&LEDGER_SET],
+                &PROBES,
+            );
+        }
+    }
+
+    #[test]
+    fn test_restart_reopens_the_store_on_disk() {
+        let directory = tempfile::tempdir().expect("a temporary directory is created");
+        let open = || {
+            ErasedKv::into_dyn(
+                lb_kv_store::RocksKv::open(directory.path()).expect("the database opens"),
+            )
+        };
+        let mut chain = Chain::with_store(open());
+        let mut tip = GENESIS;
+        for nullifiers in [[3, 9], [1, 7], [5, 2], [8, 4]] {
+            tip = chain.extend(tip, &nullifiers);
+        }
+        let lost = chain.commit(chain.engine.lib(), &[(LEDGER_SET, &[60])], |state| state);
+        tip = chain.commit(tip, &[(LEDGER_SET, &[11])], |state| state);
+        let lib = chain.engine.lib();
+        let path = chain.path(lib, tip);
+        let (applied, oracles) = (chain.applied.clone(), chain.oracles.clone());
+        // a state holds its store: its encoding is kept instead
+        let lib_state = chain.state(&lib).to_bytes().unwrap();
+        let eras = Arc::clone(chain.ledger.era_schedule());
+        // the stop: every handle of the database is dropped, closing it
+        drop(chain);
+
+        let store = open();
+        let Restored {
+            mut ledger,
+            lib: restored_lib,
+            info,
+        } = Ledger::<Id>::restore::<u8>(&store, eras)
+            .unwrap()
+            .expect("the store has an anchor");
+        assert_eq!((restored_lib, info), (lib, lib[0]));
+        assert_eq!(
+            ledger
+                .state(&lib)
+                .unwrap()
+                .cryptarchia_ledger
+                .to_bytes()
+                .unwrap(),
+            lib_state
+        );
+        for id in &path {
+            let Applied { parent, spent } = applied[id].clone();
+            ledger
+                .commit_update(build(&ledger, *id, parent, &spent, |state| state))
+                .unwrap();
+        }
+        assert_eq!(ledger.discard_lost_blocks().unwrap(), 1);
+        assert!(ledger.state(&lost).is_none());
+        for id in path.iter().chain([&lib]) {
+            check_set(
+                &format!("block {} after the restart", id[0]),
+                ledger
+                    .state(id)
+                    .unwrap()
+                    .cryptarchia_ledger
+                    .note_sets
+                    .get(LEDGER_SET)
+                    .unwrap(),
+                &oracles[id][&LEDGER_SET],
+                &PROBES,
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_store_without_anchor_restores_nothing() {
+        let store = ErasedKv::into_dyn(MemKv::new());
+        let config = config();
+        let state = LedgerState::from_notes([], &config, GENESIS_POW_REWARD_POOL)
+            .with_nullifier_store(&store)
+            .unwrap();
+        let eras = Arc::new(single_era(config));
+        assert!(
+            Ledger::<Id>::restore::<u8>(&store, Arc::clone(&eras))
+                .unwrap()
+                .is_none()
+        );
+        // a ledger created without anchor writes none
+        let ledger = Ledger::new(GENESIS, state, Arc::clone(&eras)).unwrap();
+        assert!(
+            Ledger::<Id>::restore::<u8>(ledger.storage.store(), eras)
+                .unwrap()
+                .is_none()
+        );
+        assert_ne!(store.scan_prefix(b"").unwrap(), vec![]);
+        NullifierStorage::clear(&store).unwrap();
+        assert_eq!(store.scan_prefix(b"").unwrap(), vec![]);
     }
 
     #[test]

@@ -52,6 +52,7 @@ use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
 use lb_key_management_system_keys::keys::{
     Ed25519Key, UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey,
 };
+use lb_kv_store::MemKv;
 use lb_ledger::{
     GENESIS_STAKE_SUPPLY, LedgerState,
     config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
@@ -303,7 +304,7 @@ async fn recovery_blocks_fall_back_to_lib_when_tip_missing_from_storage() {
     let lib = [0; 32].into();
     let missing_tip = [1; 32].into();
 
-    let recovery_blocks = CryptarchiaConsensus::<_, SystemTimeBackend, TestRuntimeServiceId>::load_recovery_blocks_or_fall_back_to_lib(
+    let recovery_blocks = CryptarchiaConsensus::<_, SystemTimeBackend, MemKv, TestRuntimeServiceId>::load_recovery_blocks_or_fall_back_to_lib(
         missing_tip, lib, relays.storage().clone()
     )
     .await;
@@ -365,10 +366,11 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
         .expect("the block should be valid before the restart");
     }
 
+    // The store was finalized at `B1` before the restart.
+    anchor_at(&stored, &b1);
     let recovery_state = CryptarchiaConsensusState {
         tip: b2_id,
         lib: b1_id,
-        lib_ledger_state: stored.ledger.state(&b1_id).unwrap().clone(),
         lib_block_length: 1,
         lib_block_slot: b1.header().slot(),
         lib_block_uncle_slots: UncleSlots::default(),
@@ -384,9 +386,12 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
     let initialized = CryptarchiaConsensus::<
         Tx,
         SystemTimeBackend,
+        MemKv,
         TestRuntimeServiceId,
     >::initialize_cryptarchia(
         &recovery_state,
+        stored.ledger.store(),
+        &genesis_block_with(&[note]).into(),
         &bootstrap_config,
         Arc::clone(stored.ledger.era_schedule()),
         &relays,
@@ -455,10 +460,11 @@ async fn recovery_chain_with_tip_ahead_of_current_slot() {
     let (b1_id, b2_id) = (b1.header().id(), b2.header().id());
     let current_slot = b2.header().slot().checked_sub(1.into()).unwrap();
 
+    // The store was finalized at `B1` before the restart.
+    anchor_at(&stored, b1);
     let recovery_state = CryptarchiaConsensusState {
         tip: b2_id,
         lib: b1_id,
-        lib_ledger_state: stored.ledger.state(&b1_id).unwrap().clone(),
         lib_block_length: 1,
         lib_block_slot: b1.header().slot(),
         lib_block_uncle_slots: UncleSlots::default(),
@@ -474,9 +480,12 @@ async fn recovery_chain_with_tip_ahead_of_current_slot() {
     let initialized = CryptarchiaConsensus::<
         Tx,
         SystemTimeBackend,
+        MemKv,
         TestRuntimeServiceId,
     >::initialize_cryptarchia(
         &recovery_state,
+        stored.ledger.store(),
+        &genesis_block_with(&[note]).into(),
         &bootstrap_config,
         Arc::clone(stored.ledger.era_schedule()),
         &relays,
@@ -570,10 +579,11 @@ async fn get_block_ids_past_recovered_lib() {
     let (b1, b2) = (&blocks[0], &blocks[1]);
     let (b1_id, b2_id) = (b1.header().id(), b2.header().id());
 
+    // The store was finalized at `B1` before the restart.
+    anchor_at(&stored, b1);
     let recovery_state = CryptarchiaConsensusState {
         tip: b2_id,
         lib: b1_id,
-        lib_ledger_state: stored.ledger.state(&b1_id).unwrap().clone(),
         lib_block_length: 1,
         lib_block_slot: b1.header().slot(),
         lib_block_uncle_slots: UncleSlots::default(),
@@ -589,9 +599,12 @@ async fn get_block_ids_past_recovered_lib() {
     let initialized = CryptarchiaConsensus::<
         Tx,
         SystemTimeBackend,
+        MemKv,
         TestRuntimeServiceId,
     >::initialize_cryptarchia(
         &recovery_state,
+        stored.ledger.store(),
+        &genesis_block_with(&[note]).into(),
         &bootstrap_config,
         Arc::clone(stored.ledger.era_schedule()),
         &relays,
@@ -1642,6 +1655,24 @@ pub fn chain_with_fork_on(
 pub const GENESIS_ID: [u8; 32] = [0; 32];
 
 /// A chain with only the genesis block, holding `note`.
+/// Finalizes the nullifier store of `stored` at `lib`, a child of genesis,
+/// with its anchor, as the pruning making it the LIB does.
+fn anchor_at(stored: &Cryptarchia, lib: &Block<SignedOps<Preverified, StandardMode>>) {
+    let header = lib.header();
+    lb_ledger::Ledger::new_anchored(
+        header.id(),
+        stored.ledger.state(&header.id()).unwrap().clone(),
+        Arc::clone(stored.ledger.era_schedule()),
+        &crate::LibInfo {
+            parent: header.parent(),
+            slot: header.slot(),
+            length: 1,
+            uncle_slots: UncleSlots::default(),
+        },
+    )
+    .unwrap();
+}
+
 pub fn genesis_cryptarchia(note: Note) -> Cryptarchia {
     genesis_cryptarchia_on(note, single_era(ledger_config(3.try_into().unwrap())))
 }
@@ -1743,8 +1774,9 @@ pub fn spawn_storage_service(mut rx: mpsc::Receiver<StorageMsg>) -> (JoinHandle<
 pub struct TestRuntimeServiceId;
 
 impl
-    AsServiceId<CryptarchiaConsensus<SignedOps<Preverified, StandardMode>, SystemTimeBackend, Self>>
-    for TestRuntimeServiceId
+    AsServiceId<
+        CryptarchiaConsensus<SignedOps<Preverified, StandardMode>, SystemTimeBackend, MemKv, Self>,
+    > for TestRuntimeServiceId
 {
     const SERVICE_ID: Self = Self;
 }

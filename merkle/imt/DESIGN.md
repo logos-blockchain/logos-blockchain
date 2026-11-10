@@ -1,4 +1,4 @@
-# KV-backed, fork-safe nullifier IMT — design plan (v7)
+# KV-backed, fork-safe nullifier IMT — design plan (v8)
 
 Status:
 
@@ -7,10 +7,15 @@ Status:
   `Ledger` commits, finalizes, prunes and collects it
   (`ledger/src/nullifier_storage.rs`).
 - Phase 5 is split in two. 5a is implemented: `RocksKv`, a `KvStore` on a
-  `RocksDB` database of its own (`lb-kv-store`, feature `rocksdb`). 5b, the
-  node wiring, is not started: the node still keeps the store in memory
-  (`MemKv`), as it kept the tree before.
+  `RocksDB` database of its own (`lb-kv-store`, feature `rocksdb`). 5b is
+  implemented: the node keeps the trees in that database, saved states
+  encode them as snapshots, and a restart resumes from an anchor in the
+  store (§5b).
 - Phase 6 is not started.
+
+Changes since v7: §5b as implemented. The recovery state no longer holds the
+LIB's ledger state, which the anchor replaces; §4's "Serde, until phase 5" is
+superseded.
 
 Changes since v6, the decisions of phase 5 (see §5):
 
@@ -552,7 +557,8 @@ each makes the suite fail.
 
 ### Chain service
 
-- `Cryptarchia::from_genesis` and `from_lib` become fallible (`Ledger::new`).
+- `Cryptarchia::from_genesis` becomes fallible (`Ledger::new`); `from_lib`
+  is replaced by `from_restored` in phase 5b.
 - A failed `commit_update` is an `Error::Ledger`. Only a storage failure fails
   it, and it leaves the consensus ahead of the ledger: the block is known but
   not its state.
@@ -560,7 +566,7 @@ each makes the suite fail.
   the consensus. A failure is logged: the states stay in place, and the next
   pruning finalizes the newer LIB.
 
-### Serde, until phase 5
+### Serde, until phase 5 (superseded by §5b)
 
 - A `NoteSet` is still encoded with every leaf, in the format of the
   in-memory tree, so saved states keep decoding.
@@ -613,27 +619,40 @@ holding the trees (core, ledger) depend on the trait only.
   (`test_forks_match_oracle`) also runs on `RocksKv`, and fails when
   `get_prev` ignores its key bound.
 
-### 5b. Chain service and restart
+### 5b. Chain service and restart (implemented)
 
 - The database:
-  - A dedicated `RocksDB` database, under the node's state folder next to
-    the storage service's. The chain service opens it and owns it: the
+  - A dedicated `RocksDB` database at `<state folder>/nullifiers`, next to
+    the storage service's. The chain service opens it in `init`, so a store
+    that cannot open stops the service before it starts, and owns it: the
     ledger reads and writes it synchronously, while the storage service is
     reached through async messages.
-  - Its type is a parameter of the chain service, given in the overwatch
-    services declaration of the node (`RocksKv` there, `MemKv` in tests),
-    behind a trait that opens it from the service settings.
-  - The genesis and the recovered LIB state are built on it
-    (`NoteSets::with_store`) instead of the `MemKv` of `NoteSets::new()`.
+  - Its type is a parameter of the chain service,
+    `CryptarchiaConsensus<Tx, TimeBackend, NullifierStore, RuntimeServiceId>`,
+    given in the overwatch services declaration of the node (`RocksKv` there,
+    `MemKv` in tests). `lb_kv_store::OpenKvStore` opens it from
+    `KvStoreSettings { path, sync_writes }` (in `CryptarchiaSettings`,
+    `nullifier_store`; the node sets `sync_writes: false`, see §5a). The
+    settings are concrete: overwatch's `ServiceState` impl leaves no room for
+    settings generic over the store.
+  - The genesis state is built in memory, then moved to the store
+    (`LedgerState::with_nullifier_store`, `NoteSets::move_to`).
 - Serde: a saved state encodes its trees as `Snapshot { len, root }` instead
-  of every leaf, and is attached to the store after decoding
+  of every leaf (`EncodedNullifiers`); encoding a tree with pending
+  nullifiers is an error. Decoding gives trees over `DetachedKv`, where every
+  read fails, until `NoteSets::attach` puts them on the store
   (`Imt::from_snapshot`, plus `check_base` for the LIB's own sets).
 - The anchor. The consensus state is saved by the storage service on a timer
   (`state_recording_timer`), while the store's base moves at every pruning.
   After a crash the saved LIB can be older than the base, and the garbage
   collection may have deleted nodes of its trees. So the pruning batch also
-  writes an anchor: the LIB's id, length, slot and uncle slots, and its
-  ledger state, which `Snapshot` makes small. At restart:
+  writes an anchor (key `A` at the store's root, `Anchor { lib, state, info }`
+  in `ledger/src/lib.rs`): the LIB's id, its parent, length, slot and uncle
+  slots (`LibInfo`), and its ledger state, which `Snapshot` makes small. Its
+  size per pruning is not measured yet (phase 6). `Ledger::new_anchored`
+  writes the first one at genesis, `apply_pruning_anchored` the next ones,
+  and `Ledger::restore` reads it back (`Restored { ledger, lib, info }`).
+  At restart (`cryptarchia_from_store` in the chain service):
   1. Start from the anchor's LIB, which the store is consistent with. The
      saved state's LIB is usually older; it is newer only after a failed
      pruning, whose blocks the replay applies again.
@@ -642,12 +661,30 @@ holding the trees (core, ledger) depend on the trait only.
      `commit_update` **reuses** the version found in `BlockVersionKey`: the
      recomputed nodes are byte-identical, so the writes are idempotent.
   3. Discard every `LiveVersionKey` that the replay did not reuse (forks lost
-     at the restart, or a crash before a pruning batch).
+     at the restart, or a crash before a pruning batch):
+     `Ledger::discard_lost_blocks`, each in the sets it recorded under `W`,
+     so a lost fork's channel set needs no state to be cleaned up.
+
+  Without an anchor, a node whose saved LIB is the genesis clears the store
+  and starts from the genesis; any other node stops with `Error::NoAnchor`,
+  asking to delete its chain data and sync.
+- The recovery state (`CryptarchiaConsensusState`) no longer holds the LIB's
+  ledger state: the anchor holds it, consistent with the store.
 - Crash consistency: commit, finalize and pruning are each one atomic batch,
   and the anchor is in the finalize's.
 - Migration: none. A saved state in the old format, with every leaf, fails
   to decode; the node stops with a message to delete its data directory and
   resync.
+- Tests:
+  - `ledger/src/nullifier_storage.rs`: a restored LIB state; a decoded state
+    unattached until attached; a restart that replays the blocks and
+    discards the lost forks; a restart reopening a `RocksKv` on disk; a store
+    without anchor.
+  - `core/src/mantle/note_set.rs`: snapshot round trips, attach, and sets
+    never committed moved to another store.
+  - chain-service: the recovery tests on an anchored `MemKv`.
+  - Mutation check: dropping the anchor write in the pruning fails three
+    restart tests.
 
 ---
 
@@ -768,7 +805,7 @@ Takeaways:
 | 3 | imt: index overlay, finalize, fork pruning, rebase, GC | GC invariants (reachability test) |
 | 4 | `NoteSet` / `Ledger` integration, `apply_pruning` (done) | `Result` propagation; `commit_update` becomes fallible |
 | 5a | `RocksKv` (done) | ordered reads and range deletes match `MemKv` (conformance, fork simulation) |
-| 5b | chain-service on `RocksKv`, `Snapshot` serde, anchor, restart | version reuse at restart, crash consistency |
+| 5b | chain-service on `RocksKv`, `Snapshot` serde, anchor, restart (done) | version reuse at restart, crash consistency |
 | 6 | benches + gas | per-insert cost of H reads (mitigated by `NodeCache`) |
 
 Phases 1 to 3 stay within `merkle/`, change no behaviour and can be merged

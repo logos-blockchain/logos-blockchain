@@ -10,11 +10,8 @@ use std::{
 
 use lb_dynamic_merkle::{DynamicMerkleTree, MerklePath};
 use lb_groth16::{Fr, fr_from_bytes, fr_to_bytes, serde::serde_fr};
-use lb_imt::{
-    IndexedMerkleTree, NullifierLeaf,
-    store::{BlockId, Committed, Finalized, Imt, ImtError, Version},
-};
-use lb_kv_store::{Bytes, DynKvStore, ErasedKv, MemKv, Prefixed, WriteBatch};
+use lb_imt::store::{BlockId, Child, Committed, Finalized, Imt, ImtError, Snapshot, Version};
+use lb_kv_store::{Bytes, DetachedKv, DynKvStore, ErasedKv, MemKv, Prefixed, WriteBatch};
 use lb_mmr::MerkleMountainRange;
 use lb_poseidon2::Digest as _;
 use lb_utxotree::UtxoMerkleHasher;
@@ -148,8 +145,6 @@ pub type CommitmentMmr = MerkleMountainRange<NoteCommitment, ZkHasher, 41>;
 /// The store of a note set: its namespace in the store of its [`NoteSets`].
 pub type NoteSetStore = Prefixed<DynKvStore>;
 pub type NullifierImt = Imt<NoteSetStore, ZkHasher, 40>;
-// The tree as serialized, checked when decoded.
-type CheckedNullifierImt = IndexedMerkleTree<ZkHasher, 40>;
 type EligibleTree = DynamicMerkleTree<UtxoMerkleHasher<ZkHasher>, 40>;
 
 static ELIGIBLE_SET_LEAF_V1: LazyLock<Fr> = LazyLock::new(|| {
@@ -172,6 +167,8 @@ pub enum NoteSetError {
     Imt(#[from] ImtError),
     #[error("The commitment MMR is full")]
     MmrFull,
+    #[error("The nullifier tree of set {0} was committed to a store and cannot move to another")]
+    AlreadyStored(NoteSetIndex),
 }
 
 // The commitment MMR of a referenced root extended by a prefix of the
@@ -847,6 +844,11 @@ fn in_memory_store() -> DynKvStore {
     ErasedKv::into_dyn(MemKv::new())
 }
 
+// The store of decoded sets until they are attached to theirs.
+fn detached_store() -> DynKvStore {
+    ErasedKv::into_dyn(DetachedKv)
+}
+
 fn set_store(store: &DynKvStore, index: NoteSetIndex) -> NoteSetStore {
     Prefixed::new(Arc::clone(store), note_set_namespace(index))
 }
@@ -1132,6 +1134,76 @@ impl NoteSets {
         self.sets().any(|(_, set)| set.nullifiers.has_pending())
     }
 
+    // The sets kept in `store`, each nullifier tree replaced by `rebuild` from
+    // the set it was, and the namespace of the set in `store`.
+    fn rebuilt_in(
+        &self,
+        store: DynKvStore,
+        mut rebuild: impl FnMut(
+            NoteSetIndex,
+            &NoteSet,
+            NoteSetStore,
+        ) -> Result<NullifierImt, NoteSetError>,
+    ) -> Result<Self, NoteSetError> {
+        let mut sets = Self {
+            store,
+            ..self.clone()
+        };
+        for (index, set) in self.sets() {
+            let nullifiers = rebuild(index, set, set_store(&sets.store, index))?;
+            sets.replace(
+                index,
+                NoteSet {
+                    nullifiers,
+                    ..set.clone()
+                },
+            );
+        }
+        Ok(sets)
+    }
+
+    /// The decoded sets, attached to `store`, the store they were encoded
+    /// from. Each tree must be a canonical state at or below the finalized
+    /// base of its set, as the trees of the LIB and of its epoch snapshots
+    /// are.
+    pub fn attach(&self, store: DynKvStore) -> Result<Self, NoteSetError> {
+        self.rebuilt_in(store, |_, set, set_store| {
+            Ok(NullifierImt::from_snapshot(
+                set_store,
+                set.nullifiers.snapshot()?,
+            )?)
+        })
+    }
+
+    /// Checks that the nullifier tree of every set is the finalized base of its
+    /// store.
+    pub fn check_base(&self) -> Result<(), NoteSetError> {
+        for (_, set) in self.sets() {
+            set.nullifiers.check_base()?;
+        }
+        Ok(())
+    }
+
+    /// The sets, with their nullifier trees rebuilt in `store`. Only trees
+    /// never committed can move, like those of a genesis state: their
+    /// nullifiers are all pending, and are inserted again in the same order.
+    pub fn move_to(&self, store: DynKvStore) -> Result<Self, NoteSetError> {
+        self.rebuilt_in(store, |index, set, set_store| {
+            if set.nullifiers.has_committed() {
+                return Err(NoteSetError::AlreadyStored(index));
+            }
+            let mut nullifiers = NullifierImt::empty(set_store);
+            // the first leaf is the sentinel, which a tree starts with
+            for leaf in set.nullifiers.leaves()?.iter().skip(1) {
+                nullifiers = nullifiers.insert(leaf.nullifier)?;
+            }
+            if set.nullifiers.sealed_root().is_some() {
+                nullifiers = nullifiers.seal()?;
+            }
+            Ok(nullifiers)
+        })
+    }
+
     /// The length of the nullifier tree of each set.
     pub fn nullifier_lens(&self) -> impl Iterator<Item = (NoteSetIndex, u64)> + '_ {
         self.sets()
@@ -1226,9 +1298,10 @@ impl NoteSets {
     }
 }
 
-// The encoding of a set. The nullifier tree is encoded by its leaves, as the
-// tree kept in memory was, and a decoded set is imported in a store kept in
-// memory.
+// The encoding of a set. Its nullifier tree is encoded by its snapshot, its
+// length and root, since its nodes are in the store: only a committed tree is
+// encoded, and a decoded one reads nothing until its sets are attached to
+// their store (see `NoteSets::attach`).
 #[derive(Serialize)]
 #[serde(rename = "NoteSet")]
 struct EncodedNoteSet<'a> {
@@ -1240,17 +1313,43 @@ struct EncodedNoteSet<'a> {
     recent_commitment_roots: &'a RecentRoots,
 }
 
-#[derive(Serialize)]
-#[serde(rename = "IndexedMerkleTree")]
+#[derive(Serialize, Deserialize)]
+#[serde(rename = "NullifierSnapshot")]
 struct EncodedNullifiers {
-    leaves: Vec<NullifierLeaf>,
+    len: u64,
+    #[serde(with = "serde_fr")]
+    root: Fr,
+    // the version of the stored root node, none for an empty tree
+    root_version: Option<u64>,
+}
+
+impl From<Snapshot> for EncodedNullifiers {
+    fn from(snapshot: Snapshot) -> Self {
+        Self {
+            len: snapshot.len,
+            root: snapshot.root.hash,
+            root_version: snapshot.root.version.map(|version| version.0),
+        }
+    }
+}
+
+impl From<EncodedNullifiers> for Snapshot {
+    fn from(encoded: EncodedNullifiers) -> Self {
+        Self {
+            len: encoded.len,
+            root: Child {
+                hash: encoded.root,
+                version: encoded.root_version.map(Version),
+            },
+        }
+    }
 }
 
 #[derive(Deserialize)]
 #[serde(rename = "NoteSet")]
 struct DecodedNoteSet {
     commitments: CommitmentMmr,
-    nullifiers: CheckedNullifierImt,
+    nullifiers: EncodedNullifiers,
     #[serde(with = "serde_fr")]
     committed_root: Fr,
     #[serde(with = "serde_recent_commitment_roots")]
@@ -1258,26 +1357,24 @@ struct DecodedNoteSet {
 }
 
 impl DecodedNoteSet {
-    fn import(self, store: NoteSetStore) -> Result<NoteSet, ImtError> {
-        let leaves: Vec<NullifierLeaf> = (0..self.nullifiers.len() as u64)
-            .filter_map(|index| self.nullifiers.leaf(index).copied())
-            .collect();
-        let nullifiers = NullifierImt::import(store, &leaves, BlockId([0; 32]))?;
-        Ok(NoteSet {
+    fn unattached(self, store: NoteSetStore) -> NoteSet {
+        NoteSet {
             committed_root: self.committed_root,
             recent_commitment_roots: self.recent_commitment_roots,
-            ..NoteSet::with_nullifiers(self.commitments, nullifiers)
-        })
+            ..NoteSet::with_nullifiers(
+                self.commitments,
+                NullifierImt::unattached(store, self.nullifiers.into()),
+            )
+        }
     }
 }
 
+/// Only a set whose nullifier tree has no pending block is encoded.
 impl Serialize for NoteSet {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         EncodedNoteSet {
             commitments: &self.commitments,
-            nullifiers: EncodedNullifiers {
-                leaves: self.nullifiers.leaves().map_err(S::Error::custom)?,
-            },
+            nullifiers: self.nullifiers.snapshot().map_err(S::Error::custom)?.into(),
             committed_root: self.committed_root,
             recent_commitment_roots: &self.recent_commitment_roots,
         }
@@ -1285,12 +1382,11 @@ impl Serialize for NoteSet {
     }
 }
 
-/// A set decoded alone is kept in a store of its own in memory.
+/// A set decoded alone reads no nullifier: it is not attached to a store.
 impl<'de> Deserialize<'de> for NoteSet {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        DecodedNoteSet::deserialize(deserializer)?
-            .import(Prefixed::new(in_memory_store(), Bytes::new()))
-            .map_err(D::Error::custom)
+        Ok(DecodedNoteSet::deserialize(deserializer)?
+            .unattached(Prefixed::new(detached_store(), Bytes::new())))
     }
 }
 
@@ -1326,7 +1422,8 @@ impl Serialize for NoteSets {
     }
 }
 
-/// The decoded sets are kept in a store of their own in memory.
+/// The decoded sets read no nullifier until they are attached to their store
+/// with [`NoteSets::attach`].
 impl<'de> Deserialize<'de> for NoteSets {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let EncodedNoteSets {
@@ -1334,13 +1431,11 @@ impl<'de> Deserialize<'de> for NoteSets {
             sdp,
             channels: decoded,
         } = EncodedNoteSets::deserialize(deserializer)?;
-        let store = in_memory_store();
-        let import = |index: NoteSetIndex, set: DecodedNoteSet| {
-            set.import(set_store(&store, index))
-                .map_err(D::Error::custom)
-        };
-        let ledger = import(NoteSetIndex::Ledger, ledger)?;
-        let sdp = import(NoteSetIndex::Sdp, sdp)?;
+        let store = detached_store();
+        let unattached =
+            |index: NoteSetIndex, set: DecodedNoteSet| set.unattached(set_store(&store, index));
+        let ledger = unattached(NoteSetIndex::Ledger, ledger);
+        let sdp = unattached(NoteSetIndex::Sdp, sdp);
         let mut channels = HashTrieMapSync::new_sync();
         for (position, (channel_id, set)) in decoded.into_iter().enumerate() {
             if channels.contains_key(&channel_id) {
@@ -1348,7 +1443,7 @@ impl<'de> Deserialize<'de> for NoteSets {
                     "channel {channel_id} holds two note sets"
                 )));
             }
-            let set = import(NoteSetIndex::Channel(channel_id), set)?;
+            let set = unattached(NoteSetIndex::Channel(channel_id), set);
             let kind = Channel {
                 id: channel_id,
                 leaf: FIRST_CHANNEL_LEAF + position,
@@ -1454,6 +1549,18 @@ mod test {
         )
     }
 
+    // The sets written to their store as its finalized base, as the sets of
+    // the LIB are: only committed trees are encoded.
+    fn finalized(sets: &NoteSets, block: u64) -> NoteSets {
+        let CommittedSets { sets, writes, .. } = sets.commit(Version(block)).unwrap();
+        sets.store().write_batch(writes).unwrap();
+        let mut id = [0; 32];
+        id[24..].copy_from_slice(&block.to_be_bytes());
+        let (sets, writes) = sets.finalize(BlockId(id)).unwrap();
+        sets.store().write_batch(writes).unwrap();
+        sets
+    }
+
     fn add_and_end_block(
         sets: NoteSets,
         note_commitment: NoteCommitment,
@@ -1545,10 +1652,13 @@ mod test {
 
             assert_eq!(recent_entries(set), scanned.roots, "block {block}");
             if block % 500 == 0 {
+                sets = finalized(&sets, block);
+                let set = sets.ledger();
                 let decoded: NoteSet =
                     bincode::deserialize(&bincode::serialize::<NoteSet>(set).unwrap()).unwrap();
                 assert_eq!(recent_entries(&decoded), scanned.roots);
             }
+            let set = sets.ledger();
             for next in [block + 1, block + 1024, block + 1025] {
                 for root in &seen {
                     assert_eq!(
@@ -1981,6 +2091,11 @@ mod test {
             .execute_spending(&[nullifier(3)])
             .unwrap();
         let sets = sets.update(channel, channel_set).end_block(2).unwrap();
+        assert!(
+            serde_json::to_string(&sets).is_err(),
+            "a pending block is not encoded"
+        );
+        let sets = finalized(&sets, 2);
 
         let decoded: NoteSets =
             serde_json::from_str(&serde_json::to_string(&sets).unwrap()).unwrap();
@@ -2003,11 +2118,83 @@ mod test {
 
         let bytes = bincode::serialize(&sets).unwrap();
         assert_eq!(bincode::deserialize::<NoteSets>(&bytes).unwrap(), sets);
+
+        // the nullifiers are read once the sets are attached to their store
+        assert!(matches!(
+            decoded
+                .get(channel)
+                .unwrap()
+                .contains_nullifier(&nullifier(3)),
+            Err(NoteSetError::Imt(ImtError::Storage(_)))
+        ));
+        let attached = decoded.attach(Arc::clone(sets.store())).unwrap();
+        assert_eq!(attached, sets);
+        assert!(
+            attached
+                .get(channel)
+                .unwrap()
+                .contains_nullifier(&nullifier(3))
+                .unwrap()
+        );
+        assert!(!attached.ledger().contains_nullifier(&nullifier(3)).unwrap());
+        // a store that is not theirs has no base to attach them to
+        assert!(decoded.attach(in_memory_store()).is_err());
+    }
+
+    #[test]
+    fn test_sets_never_committed_move_to_another_store() {
+        let (sets, channel) = with_channel(NoteSets::new(), 1);
+        let channel_set = sets
+            .get(channel)
+            .unwrap()
+            .clone()
+            .execute_spending(&[nullifier(7), nullifier(3)])
+            .unwrap();
+        let sets = sets.update(channel, channel_set).end_block(0).unwrap();
+        let store = in_memory_store();
+        let moved = sets.move_to(Arc::clone(&store)).unwrap();
+        assert_eq!(moved, sets);
+        assert_eq!(moved.eligible_root(), sets.eligible_root());
+        assert!(Arc::ptr_eq(moved.store(), &store));
+        // the moved trees are committed to their new store, the channel set
+        // in its own namespace
+        let moved = finalized(&moved, 1);
+        assert_ne!(
+            store.scan_prefix(&note_set_namespace(channel)).unwrap(),
+            vec![]
+        );
+        assert!(
+            moved
+                .get(channel)
+                .unwrap()
+                .contains_nullifier(&nullifier(3))
+                .unwrap()
+        );
+        assert_eq!(
+            moved.move_to(in_memory_store()).unwrap_err(),
+            NoteSetError::AlreadyStored(NoteSetIndex::Ledger)
+        );
+    }
+
+    #[test]
+    fn test_no_namespace_is_a_prefix_of_another() {
+        let namespaces = [
+            note_set_namespace(NoteSetIndex::Ledger),
+            note_set_namespace(NoteSetIndex::Sdp),
+            note_set_namespace(NoteSetIndex::Channel(channel_id(1))),
+            note_set_namespace(NoteSetIndex::Channel(channel_id(2))),
+        ];
+        for (i, a) in namespaces.iter().enumerate() {
+            for (j, b) in namespaces.iter().enumerate() {
+                assert!(i == j || !b.starts_with(a), "{a:?} is a prefix of {b:?}");
+            }
+        }
     }
 
     #[test]
     fn test_deserialize_rejects_fewer_than_two_sets() {
-        let one = serde_json::to_string(&vec![NoteSet::empty()]).unwrap();
+        let sets = finalized(&NoteSets::new(), 0);
+        let one = serde_json::to_string(&vec![&**sets.ledger()]).unwrap();
         assert!(serde_json::from_str::<NoteSets>(&one).is_err());
         assert!(serde_json::from_str::<NoteSets>("[]").is_err());
     }

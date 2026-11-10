@@ -5,6 +5,7 @@ use lb_chain_network_service::network::adapters::libp2p::{
 };
 use lb_core::{block::genesis::GenesisBlock, sdp::ServiceParameters};
 use lb_cryptarchia_engine::{EpochConfig, EraSchedule};
+use lb_kv_store::KvStoreSettings;
 use lb_ledger::mantle::sdp::ServiceRewardsParameters;
 use lb_libp2p::{PeerId, protocol_name::ProtocolScope};
 use lb_services_utils::overwatch::RecoveryData;
@@ -12,7 +13,12 @@ use lb_services_utils::overwatch::RecoveryData;
 use crate::config::{
     cryptarchia::serde::Config,
     deployment::{EraDefinition, era::ruleset::EraRuleset},
+    state::Config as StateConfig,
 };
+
+/// The folder of the nullifier store, in the state folder of the node, next to
+/// the storage service's database.
+pub const NULLIFIER_STORE_FOLDER: &str = "nullifiers";
 
 pub mod serde;
 
@@ -81,13 +87,15 @@ impl ServiceConfig {
     }
 
     /// The settings of the chain service and the leader: the user's, and the
-    /// ledger config of every era of `eras`, which both share.
+    /// ledger config of every era of `eras`, which both share. The chain
+    /// service keeps its nullifier store in the state folder of `state`.
     #[must_use]
     pub fn into_cryptarchia_services_settings(
         self,
         eras: &EraSchedule<EraDefinition>,
         genesis_block: &GenesisBlock,
         recovery_data: &RecoveryData,
+        state: &StateConfig,
     ) -> (
         lb_chain_service::CryptarchiaSettings,
         lb_chain_leader_service::LeaderSettings,
@@ -114,6 +122,10 @@ impl ServiceConfig {
                 block_provider: lb_chain_service::BlockProviderConfig {
                     batch_size: user.service.sync.block_provider.batch_size,
                 },
+            },
+            nullifier_store: KvStoreSettings {
+                path: state.base_folder.join(NULLIFIER_STORE_FOLDER),
+                sync_writes: false,
             },
         };
         let chain_leader_settings = lb_chain_leader_service::LeaderSettings {

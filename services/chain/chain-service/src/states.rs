@@ -1,17 +1,21 @@
 use std::{collections::HashSet, time::SystemTime};
 
 use lb_core::header::HeaderId;
-use lb_ledger::LedgerState;
 use overwatch::{DynError, services::state::ServiceState};
 use serde::{Deserialize, Serialize};
 
 use crate::{Cryptarchia, CryptarchiaSettings, Error, StartingState};
 
+/// The state the chain service saves on a timer, to restart from.
+///
+/// The state of the LIB is not in it: the nullifier store keeps it, in the
+/// anchor written with every finalization of its LIB (see
+/// [`lb_ledger::Anchor`]), the LIB the restart starts from. The LIB saved here
+/// may be older.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CryptarchiaConsensusState {
     pub(crate) tip: HeaderId,
     pub(crate) lib: HeaderId,
-    pub(crate) lib_ledger_state: LedgerState,
     pub(crate) lib_block_length: u64,
     pub(crate) lib_block_slot: lb_cryptarchia_engine::Slot,
     /// The uncle slots in the LIB header.
@@ -46,11 +50,11 @@ impl CryptarchiaConsensusState {
         storage_blocks_to_remove: HashSet<HeaderId>,
     ) -> Result<Self, DynError> {
         let lib = cryptarchia.consensus.lib_branch();
-        let Some(lib_ledger_state) = cryptarchia.ledger.state(&lib.id()).cloned() else {
+        if cryptarchia.ledger.state(&lib.id()).is_none() {
             return Err(DynError::from(
                 "Ledger state associated with LIB not found, something is corrupted",
             ));
-        };
+        }
         let lib_block_length = lib.length();
         let lib_block_slot = lib.slot();
         let lib_block_uncle_slots = lib.uncle_slots().clone();
@@ -59,7 +63,6 @@ impl CryptarchiaConsensusState {
             tip: cryptarchia.consensus.tip_branch().id(),
             lib: lib.id(),
             genesis_id: cryptarchia.genesis_id,
-            lib_ledger_state,
             lib_block_length,
             lib_block_slot,
             lib_block_uncle_slots,
@@ -81,15 +84,10 @@ impl ServiceState for CryptarchiaConsensusState {
     ) -> Result<Self, <Self as ServiceState>::Error> {
         let StartingState::Genesis { genesis_block } = &settings.starting_state;
         let genesis_id = genesis_block.header().id();
-        let (lib_ledger_state, _events) = LedgerState::from_genesis_tx(
-            genesis_block.genesis_tx().clone(),
-            settings.era_schedule.genesis().parameters,
-        )?;
 
         Ok(Self {
             tip: genesis_id,
             lib: genesis_id,
-            lib_ledger_state,
             lib_block_length: 0,
             lib_block_slot: lb_cryptarchia_engine::Slot::default(),
             lib_block_uncle_slots: lb_cryptarchia_engine::UncleSlots::default(),
@@ -304,7 +302,7 @@ mod tests {
         // Empty ledger state.
         let ledger_state = lb_ledger::Ledger::new(
             cryptarchia_engine.lib(),
-            LedgerState::from_notes([], &ledger_config, 0),
+            lb_ledger::LedgerState::from_notes([], &ledger_config, 0),
             single_era(ledger_config),
         )
         .unwrap();
@@ -424,13 +422,15 @@ mod tests {
             "LIB should have advanced past genesis"
         );
 
-        // Build the full Cryptarchia (with ledger) to get info() before save.
+        // Build the full Cryptarchia (with ledger) to get info() before save,
+        // its store finalized at the LIB with the anchor of the LIB.
         let original = Cryptarchia {
             consensus: engine.clone(),
-            ledger: lb_ledger::Ledger::new(
+            ledger: lb_ledger::Ledger::new_anchored(
                 lib_id,
-                LedgerState::from_notes([], &ledger_config, 0),
+                lb_ledger::LedgerState::from_notes([], &ledger_config, 0),
                 single_era(ledger_config.clone()),
+                &crate::LibInfo::of(engine.lib_branch()),
             )
             .unwrap(),
             genesis_id: genesis_header_id,
@@ -446,20 +446,17 @@ mod tests {
         let encoded_state = saved_state.to_bytes().unwrap();
         let saved_state = CryptarchiaConsensusState::from_bytes(&encoded_state).unwrap();
 
-        // Restore (simulates initialize_cryptarchia on restart):
-        // Create a new Cryptarchia from the saved LIB with its slot and length.
-        let mut restored = Cryptarchia::from_lib(
-            saved_state.lib,
-            engine.lib_branch().parent(),
-            saved_state.lib_ledger_state.clone(),
+        // Restore (simulates initialize_cryptarchia on restart): a new
+        // Cryptarchia from the LIB of the anchor of the store.
+        let eras = single_era(ledger_config);
+        let mut restored = Cryptarchia::from_restored(
+            lb_ledger::Ledger::restore(original.ledger.store(), Arc::clone(&eras))
+                .unwrap()
+                .expect("the store has an anchor"),
             saved_state.genesis_id,
-            single_era(ledger_config),
             *engine.state(),
-            saved_state.lib_block_slot,
-            saved_state.lib_block_length,
-            saved_state.lib_block_uncle_slots.clone(),
-        )
-        .unwrap();
+        );
+        assert_eq!(restored.lib(), saved_state.lib);
 
         // Check the restore LIB is the same as before.
         let restored_lib = restored.consensus.lib_branch();
@@ -524,6 +521,10 @@ mod tests {
                 },
             },
             recovery_data: RecoveryData::default(),
+            nullifier_store: lb_kv_store::KvStoreSettings {
+                path: std::path::PathBuf::from("unused"),
+                sync_writes: false,
+            },
         };
         let state = CryptarchiaConsensusState::from_settings(&settings).unwrap();
         assert_eq!(state.genesis_id, genesis.header().id());

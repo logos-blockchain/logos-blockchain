@@ -33,6 +33,7 @@ lb-cryptarchia-engine            = { features = ["openapi"], workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { features = ["unsafe"], workspace = true }
+lb-kv-store                      = { features = ["rocksdb"], workspace = true }
 lb-ledger                        = { workspace = true }
 lb-libp2p                        = { workspace = true }
 lb-log-targets                   = { workspace = true }

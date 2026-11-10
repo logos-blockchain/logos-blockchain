@@ -55,9 +55,12 @@ use lb_core::{
 use lb_cryptarchia_engine::{Epoch, PrunedBlocks, Slot, UncleSlots};
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_imt::store::BlockId;
+use lb_kv_store::{Bytes, DynKvStore};
 use lb_log_targets::{diagnostic::BLEND_REACHABILITY, ledger};
 use mantle::LedgerState as MantleLedger;
-use nullifier_storage::{NullifierStorage, PrunedVersions, rebase_state};
+use nullifier_storage::{
+    ANCHOR_KEY, NullifierStorage, PrunedVersions, attach_state, move_state, rebase_state,
+};
 use rpds::HashTrieMapSync;
 use thiserror::Error;
 
@@ -151,10 +154,52 @@ pub enum LedgerError<Id> {
     WrongRewardValue { header: Value, computed: Value },
     #[error("The state of the LIB {0:?} could not be found")]
     LibNotFound(Id),
+    #[error("The anchor of the nullifier store could not be encoded or decoded: {0}")]
+    Anchor(String),
 }
 
 fn block_id<Id: Into<BlockHash>>(id: Id) -> BlockId {
     BlockId(id.into())
+}
+
+/// What a restart needs to read the nullifier store of a ledger again: its
+/// LIB, the state of the LIB, and what the consensus keeps of the LIB block
+/// (`info`).
+///
+/// [`Ledger::new_anchored`] and [`Ledger::apply_pruning_anchored`] write it in
+/// the batch that finalizes the LIB, so it describes the finalized base of the
+/// store at every moment, while a state saved elsewhere may lag behind it.
+/// [`Ledger::restore`] reads it back.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Anchor<Id, Info> {
+    pub lib: Id,
+    pub state: LedgerState,
+    pub info: Info,
+}
+
+// The encoding of an anchor, borrowed from what it is made of.
+#[derive(serde::Serialize)]
+#[serde(rename = "Anchor")]
+struct AnchorRef<'a, Id, Info> {
+    lib: &'a Id,
+    state: &'a LedgerState,
+    info: &'a Info,
+}
+
+fn encode_anchor<Id: serde::Serialize, Info: serde::Serialize>(
+    lib: &Id,
+    state: &LedgerState,
+    info: &Info,
+) -> Result<Bytes, LedgerError<Id>> {
+    lb_binary_codec::bincode::SerializeOp::to_bytes(&AnchorRef { lib, state, info })
+        .map_err(|error| LedgerError::Anchor(error.to_string()))
+}
+
+/// A ledger restored from the anchor of its store (see [`Ledger::restore`]).
+pub struct Restored<Id: Eq + Hash, Info> {
+    pub ledger: Ledger<Id>,
+    pub lib: Id,
+    pub info: Info,
 }
 
 /// The states of the blocks the chain holds: the LIB and the blocks above it.
@@ -197,8 +242,62 @@ where
     /// block, as a genesis state does.
     pub fn new(
         id: Id,
+        state: LedgerState,
+        era_schedule: Arc<EraScheduledConfig>,
+    ) -> Result<Self, LedgerError<Id>>
+    where
+        Id: Into<BlockHash>,
+    {
+        Self::with_root(id, state, era_schedule, |_, _| Ok(None))
+    }
+
+    /// Like [`Self::new`], writing the [`Anchor`] of the root with `info` in
+    /// the batch that finalizes it.
+    pub fn new_anchored<Info: serde::Serialize>(
+        id: Id,
+        state: LedgerState,
+        era_schedule: Arc<EraScheduledConfig>,
+        info: &Info,
+    ) -> Result<Self, LedgerError<Id>>
+    where
+        Id: Into<BlockHash> + serde::Serialize,
+    {
+        Self::with_root(id, state, era_schedule, |id, state| {
+            encode_anchor(id, state, info).map(Some)
+        })
+    }
+
+    /// The ledger whose root is the LIB of the anchor of `store`, its state
+    /// attached to the store, or `None` if the store has no anchor. The blocks
+    /// above the LIB are applied again with [`Self::commit_update`], which
+    /// reuses their versions, then [`Self::discard_lost_blocks`] deletes what
+    /// the others wrote.
+    pub fn restore<Info: serde::de::DeserializeOwned>(
+        store: &DynKvStore,
+        era_schedule: Arc<EraScheduledConfig>,
+    ) -> Result<Option<Restored<Id, Info>>, LedgerError<Id>>
+    where
+        Id: Into<BlockHash> + serde::de::DeserializeOwned,
+    {
+        let Some(bytes) = NullifierStorage::read_anchor(store)? else {
+            return Ok(None);
+        };
+        let Anchor { lib, state, info } =
+            <Anchor<Id, Info> as lb_binary_codec::bincode::DeserializeOp>::from_bytes(&bytes)
+                .map_err(|error| LedgerError::Anchor(error.to_string()))?;
+        let mut state = state;
+        state.cryptarchia_ledger = attach_state(state.cryptarchia_ledger, store)?;
+        let ledger = Self::with_root(lib, state, era_schedule, |_, _| Ok(None))?;
+        Ok(Some(Restored { ledger, lib, info }))
+    }
+
+    // The ledger whose root is `state`, made the finalized base of its store
+    // in one batch with the anchor `anchor` encodes, if any.
+    fn with_root(
+        id: Id,
         mut state: LedgerState,
         era_schedule: Arc<EraScheduledConfig>,
+        anchor: impl FnOnce(&Id, &LedgerState) -> Result<Option<Bytes>, LedgerError<Id>>,
     ) -> Result<Self, LedgerError<Id>>
     where
         Id: Into<BlockHash>,
@@ -211,12 +310,36 @@ where
             .mantle_ledger
             .add_seen_block(id.into(), slot, &era_schedule);
         let storage = NullifierStorage::new(Arc::clone(state.latest_note_sets().store()));
-        state.cryptarchia_ledger = storage.make_root(block_id(id), state.cryptarchia_ledger)?;
+        let (root, mut batch) = storage.make_root(block_id(id), state.cryptarchia_ledger)?;
+        state.cryptarchia_ledger = root;
+        if let Some(bytes) = anchor(&id, &state)? {
+            batch.put(Bytes::from_static(ANCHOR_KEY), bytes);
+        }
+        storage.write(batch)?;
+        storage.collect_garbage(
+            &state.cryptarchia_ledger,
+            std::iter::once(&state.cryptarchia_ledger),
+        )?;
         Ok(Self {
             states: HashTrieMapSync::new_sync().insert(id, state),
             era_schedule,
             storage,
         })
+    }
+
+    /// Deletes what the blocks with a version but no state wrote, and forgets
+    /// their versions: after a restart and the replay of the blocks above the
+    /// LIB, the blocks of forks lost with the stop, or pruned by a pruning
+    /// the stop interrupted.
+    ///
+    /// Returns the number of blocks discarded.
+    pub fn discard_lost_blocks(&self) -> Result<usize, LedgerError<Id>>
+    where
+        Id: Into<BlockHash>,
+    {
+        let kept: std::collections::HashSet<BlockId> =
+            self.states.keys().map(|id| block_id(*id)).collect();
+        Ok(self.storage.discard_lost(|block| kept.contains(&block))?)
     }
 
     /// Prepare to add a new [`LedgerState`] by applying the given proof and
@@ -282,6 +405,12 @@ where
         self.states.get(id)
     }
 
+    /// The store the nullifier trees of the states are kept in.
+    #[must_use]
+    pub const fn store(&self) -> &DynKvStore {
+        self.storage.store()
+    }
+
     #[must_use]
     pub const fn era_schedule(&self) -> &Arc<EraScheduledConfig> {
         &self.era_schedule
@@ -306,6 +435,34 @@ where
     where
         Id: Into<BlockHash>,
     {
+        self.prune_with(lib, pruned, |_, _| Ok(None))
+    }
+
+    /// Like [`Self::apply_pruning`], writing the [`Anchor`] of `lib` with
+    /// `info` in the batch that finalizes it.
+    pub fn apply_pruning_anchored<Info: serde::Serialize>(
+        &mut self,
+        lib: Id,
+        pruned: &PrunedBlocks<Id>,
+        info: &Info,
+    ) -> Result<usize, LedgerError<Id>>
+    where
+        Id: Into<BlockHash> + serde::Serialize,
+    {
+        self.prune_with(lib, pruned, |lib, state| {
+            encode_anchor(lib, state, info).map(Some)
+        })
+    }
+
+    fn prune_with(
+        &mut self,
+        lib: Id,
+        pruned: &PrunedBlocks<Id>,
+        anchor: impl FnOnce(&Id, &LedgerState) -> Result<Option<Bytes>, LedgerError<Id>>,
+    ) -> Result<usize, LedgerError<Id>>
+    where
+        Id: Into<BlockHash>,
+    {
         if pruned.is_empty() {
             return Ok(0);
         }
@@ -321,7 +478,7 @@ where
             .copied()
             .map(block_id)
             .collect();
-        let lib_ledger = self.storage.prune(
+        let (lib_ledger, mut batch) = self.storage.prune(
             block_id(lib),
             lib_state.cryptarchia_ledger.clone(),
             &PrunedVersions {
@@ -329,6 +486,14 @@ where
                 immutable: &immutable,
             },
         )?;
+        let lib_state = LedgerState {
+            cryptarchia_ledger: lib_ledger,
+            ..lib_state
+        };
+        if let Some(bytes) = anchor(&lib, &lib_state)? {
+            batch.put(Bytes::from_static(ANCHOR_KEY), bytes);
+        }
+        self.storage.write(batch)?;
 
         let mut removed = 0usize;
         for block in pruned.all() {
@@ -336,13 +501,7 @@ where
                 removed = removed.saturating_add(1);
             }
         }
-        self.states.insert_mut(
-            lib,
-            LedgerState {
-                cryptarchia_ledger: lib_ledger,
-                ..lib_state
-            },
-        );
+        self.states.insert_mut(lib, lib_state);
         // The overlays of the kept states shrink to what is above the new base.
         let mut states = HashTrieMapSync::new_sync();
         for (id, state) in &self.states {
@@ -905,6 +1064,14 @@ impl LedgerState {
     #[must_use]
     pub const fn latest_note_sets(&self) -> &NoteSets {
         self.cryptarchia_ledger.latest_note_sets()
+    }
+
+    /// This state, its nullifier trees rebuilt in `store`: a genesis state,
+    /// built in memory, moves to the store of the node before its ledger is
+    /// created. Only trees never committed can move.
+    pub fn with_nullifier_store(mut self, store: &DynKvStore) -> Result<Self, NoteSetError> {
+        self.cryptarchia_ledger = move_state(self.cryptarchia_ledger, store)?;
+        Ok(self)
     }
 
     #[must_use]

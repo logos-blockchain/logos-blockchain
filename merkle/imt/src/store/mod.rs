@@ -1055,6 +1055,28 @@ where
         ))
     }
 
+    /// A state known by its snapshot alone, decoded without its store: its
+    /// root and length are known, and it reads nothing from `store` until it
+    /// is attached to its own with [`Self::from_snapshot`].
+    #[must_use]
+    pub fn unattached(store: S, snapshot: Snapshot) -> Self {
+        Self::base_state(
+            store,
+            BaseMeta {
+                len: snapshot.len,
+                root: snapshot.root,
+                block_id: BlockId([0; 32]),
+            },
+        )
+    }
+
+    /// Whether a block of this state was ever committed: a tree started with
+    /// [`Self::empty`] has none until its first [`Self::commit`].
+    #[must_use]
+    pub fn has_committed(&self) -> bool {
+        self.root.version.is_some() || !self.unfinalized.is_empty()
+    }
+
     /// Drops from memory the blocks of the state the finalized base of the
     /// store holds, so that the memory of a state follows the base. It only
     /// frees memory: the dropped nullifiers are in the base index.

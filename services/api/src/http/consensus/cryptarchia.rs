@@ -8,14 +8,19 @@ use lb_core::{
         SignedOps, ledger::verification_mode::StandardMode, transactions::states::Preverified,
     },
 };
+use lb_kv_store::RocksKv;
 use lb_ledger::LedgerState;
 use lb_time_service::backends::ntp::NtpTimeBackend;
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 
 use crate::http::DynError;
 
-pub type Cryptarchia<RuntimeServiceId> =
-    CryptarchiaConsensus<SignedOps<Preverified, StandardMode>, NtpTimeBackend, RuntimeServiceId>;
+pub type Cryptarchia<RuntimeServiceId> = CryptarchiaConsensus<
+    SignedOps<Preverified, StandardMode>,
+    NtpTimeBackend,
+    RocksKv,
+    RuntimeServiceId,
+>;
 
 pub async fn cryptarchia_info<RuntimeServiceId>(
     handle: &OverwatchHandle<RuntimeServiceId>,

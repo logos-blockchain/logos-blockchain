@@ -10,7 +10,9 @@
 //! [`Prefixed`] namespaces the keys of a store, so several trees share one.
 //! [`ErasedKv`] and [`DynKvStore`] erase the backend type behind a trait
 //! object. With the `rocksdb` feature, [`RocksKv`] keeps everything in a
-//! `RocksDB` database of its own.
+//! `RocksDB` database of its own. [`OpenKvStore`] opens a store from
+//! [`KvStoreSettings`], and [`DetachedKv`] stands for the store of decoded data
+//! until it is attached to it.
 
 use std::{
     collections::BTreeMap,
@@ -27,9 +29,11 @@ pub use bytes::Bytes;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod conformance;
+mod open;
 #[cfg(feature = "rocksdb")]
 mod rocks;
 
+pub use open::{Detached, DetachedKv, KvStoreSettings, OpenKvStore};
 #[cfg(feature = "rocksdb")]
 pub use rocks::{RocksError, RocksKv, RocksKvOptions};
 

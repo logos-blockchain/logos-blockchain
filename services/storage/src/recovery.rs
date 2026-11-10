@@ -103,9 +103,11 @@ where
             return Ok(None);
         };
 
-        State::from_bytes(&bytes)
-            .map(Some)
-            .map_err(|error| RecoveryError::Backend(error.to_string()))
+        State::from_bytes(&bytes).map(Some).map_err(|error| {
+            RecoveryError::Backend(format!(
+                "the saved state could not be decoded ({error}); if the node was upgraded from a version saving it in another format, remove the chain data and sync from genesis"
+            ))
+        })
     }
 
     async fn save_state(&mut self, state: Self::State) -> RecoveryResult<()> {

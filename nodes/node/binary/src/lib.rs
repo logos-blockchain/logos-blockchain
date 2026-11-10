@@ -172,6 +172,7 @@ pub fn run_node_from_config(
             eras,
             config.deployment.genesis_block(),
             &recovery_data,
+            &config.user.state,
         );
 
     let mempool_service_config = MempoolConfig {
