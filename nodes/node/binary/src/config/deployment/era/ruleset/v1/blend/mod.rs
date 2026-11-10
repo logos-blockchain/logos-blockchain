@@ -5,7 +5,7 @@ use core::{
 };
 
 use lb_binary_codec::canonical::BinaryEncode;
-use lb_blend_service::settings::EraTimingSettings;
+use lb_blend_service::settings::{EraTimingSettings, max_data_message_delay_in_rounds};
 use lb_core::blend::core_quota;
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_utils::math::{NonNegativeRatio, PositiveRatio};
@@ -222,13 +222,28 @@ impl Settings {
         Duration::from_secs(slot_duration.as_secs() * self.epoch_transition_slots(slots_per_block))
     }
 
-    /// Length of the epoch transition period, in slots.
+    /// `T`: the length of the epoch transition period, in slots, a round
+    /// lasting one slot.
     ///
-    /// The Blend spec defines this as roughly the same time it takes to propose
-    /// a new block.
+    /// Roughly the time it takes to propose a new block, as the Blend spec
+    /// sets it, but at least a round longer than the `T_M` rounds a message
+    /// takes to cross the network: `T ≥ T_M + T_C`, honest clocks differing by
+    /// `T_C`, less than a round. A node whose clock runs ahead still processes
+    /// the past epoch's messages that are crossing the network.
     #[must_use]
     pub const fn epoch_transition_slots(&self, slots_per_block: u64) -> u64 {
-        slots_per_block
+        let message_traversal = max_data_message_delay_in_rounds(
+            self.common.num_blend_layers,
+            self.core.scheduler.delayer.maximum_release_delay_in_rounds,
+            self.common.network_absorption_in_rounds,
+        )
+        .get();
+        let shortest = message_traversal.saturating_add(1);
+        if slots_per_block > shortest {
+            slots_per_block
+        } else {
+            shortest
+        }
     }
 
     #[must_use]
@@ -460,6 +475,27 @@ mod tests {
                 .get(),
             100
         );
+    }
+
+    /// 3 blending layers, holding a message 3 rounds each and carrying it 2 at
+    /// each hop, take 15 rounds to cross the network: a period of 30 slots
+    /// covers them, and one of 10 grows to 16.
+    #[test]
+    fn the_transition_period_outlasts_a_message_traversal_by_a_round() {
+        let mut settings = DeploymentSettings::default()
+            .genesis_era_parameters()
+            .blend
+            .clone();
+        settings.common.num_blend_layers = NonZeroU64::new(3).unwrap();
+        settings.common.network_absorption_in_rounds = NonZeroU64::new(2).unwrap();
+        settings
+            .core
+            .scheduler
+            .delayer
+            .maximum_release_delay_in_rounds = NonZeroU64::new(3).unwrap();
+
+        assert_eq!(settings.epoch_transition_slots(30), 30);
+        assert_eq!(settings.epoch_transition_slots(10), 16);
     }
 
     #[test]

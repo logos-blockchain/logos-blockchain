@@ -556,10 +556,6 @@ mod tests {
         assert!(pending_notes.note_ids().is_empty());
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "A ledger config, spelled out field by field."
-    )]
     fn ledger_config() -> lb_ledger::Config {
         use std::{num::NonZeroU32, sync::Arc};
 
