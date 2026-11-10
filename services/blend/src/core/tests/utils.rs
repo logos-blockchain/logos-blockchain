@@ -362,7 +362,6 @@ where
 
 pub struct TestNetworkBackend {
     pubsub_sender: broadcast::Sender<()>,
-    chainsync_sender: broadcast::Sender<()>,
 }
 
 #[async_trait]
@@ -378,11 +377,7 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for TestNetworkBackend {
         _overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     ) -> Self {
         let (pubsub_sender, _) = broadcast::channel(CHANNEL_SIZE);
-        let (chainsync_sender, _) = broadcast::channel(CHANNEL_SIZE);
-        Self {
-            pubsub_sender,
-            chainsync_sender,
-        }
+        Self { pubsub_sender }
     }
 
     async fn process(&self, _msg: Self::Message) {}
@@ -398,8 +393,8 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for TestNetworkBackend {
         BroadcastStream::new(self.pubsub_sender.subscribe())
     }
 
-    async fn subscribe_to_chainsync(&mut self) -> BroadcastStream<Self::ChainSyncEvent> {
-        BroadcastStream::new(self.chainsync_sender.subscribe())
+    async fn subscribe_to_chainsync(&mut self) -> ReceiverStream<Self::ChainSyncEvent> {
+        ReceiverStream::new(mpsc::channel(CHANNEL_SIZE).1)
     }
 }
 

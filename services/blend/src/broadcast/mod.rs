@@ -403,7 +403,7 @@ mod tests {
         ) -> BroadcastStream<Self::PubSubEvent> {
             unimplemented!()
         }
-        async fn subscribe_to_chainsync(&mut self) -> BroadcastStream<Self::ChainSyncEvent> {
+        async fn subscribe_to_chainsync(&mut self) -> ReceiverStream<Self::ChainSyncEvent> {
             unimplemented!()
         }
     }

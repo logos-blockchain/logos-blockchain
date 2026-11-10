@@ -413,12 +413,7 @@ where
             return Err(Box::new(error));
         }
 
-        let stream = receiver.await.map_err(Box::new)?;
-        Ok(Box::new(stream.filter_map(|event| {
-            event
-                .map_err(|e| tracing::error!(target: LOG_TARGET, "lagged messages: {e}"))
-                .ok()
-        })))
+        Ok(Box::new(receiver.await.map_err(Box::new)?))
     }
 
     async fn request_tip(&self, peer: Self::PeerId) -> Result<TipResponse, DynError> {

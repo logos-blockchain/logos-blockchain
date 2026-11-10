@@ -14,8 +14,8 @@ use lb_utils::tokio::task::spawn_on;
 use overwatch::overwatch::handle::OverwatchHandle;
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
-use tokio::sync::{broadcast, broadcast::Sender, mpsc};
-use tokio_stream::wrappers::BroadcastStream;
+use tokio::sync::{broadcast, mpsc};
+use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 
 use self::swarm::SwarmHandler;
 pub use self::{
@@ -31,7 +31,6 @@ use crate::message::ChainSyncEvent;
 const LOG_TARGET: &str = network_service::backends::libp2p::ROOT;
 
 pub struct Libp2p {
-    chainsync_events_tx: Sender<ChainSyncEvent>,
     commands_tx: mpsc::Sender<Command>,
 }
 const BUFFER_SIZE: usize = 64;
@@ -51,18 +50,10 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Libp2p {
         let rng = ChaCha20Rng::from_entropy();
         let (commands_tx, commands_rx) = mpsc::channel(BUFFER_SIZE);
 
-        let (chainsync_events_tx, _) = broadcast::channel(BUFFER_SIZE);
-
         let initial_peers = config.initial_peers.clone();
 
-        let mut swarm_handler = SwarmHandler::new(
-            config,
-            current_era,
-            commands_tx.clone(),
-            commands_rx,
-            chainsync_events_tx.clone(),
-            rng,
-        );
+        let mut swarm_handler =
+            SwarmHandler::new(config, current_era, commands_tx.clone(), commands_rx, rng);
 
         spawn_on(
             overwatch_handle.runtime(),
@@ -72,10 +63,7 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Libp2p {
             },
         );
 
-        Self {
-            chainsync_events_tx,
-            commands_tx,
-        }
+        Self { commands_tx }
     }
 
     async fn process(&self, msg: Self::Message) {
@@ -127,7 +115,15 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Libp2p {
         BroadcastStream::new(events_rx)
     }
 
-    async fn subscribe_to_chainsync(&mut self) -> BroadcastStream<Self::ChainSyncEvent> {
-        BroadcastStream::new(self.chainsync_events_tx.subscribe())
+    async fn subscribe_to_chainsync(&mut self) -> ReceiverStream<Self::ChainSyncEvent> {
+        let (events_tx, events_rx) = mpsc::channel(BUFFER_SIZE);
+        let subscriber = ChainSyncCommand::SetSubscriber { events_tx };
+        if let Err(e) = self.commands_tx.send(Command::ChainSync(subscriber)).await {
+            tracing::error!(
+                target: LOG_TARGET,
+                "failed to send command to logos-blockchain-libp2p: {e:?}"
+            );
+        }
+        ReceiverStream::new(events_rx)
     }
 }
