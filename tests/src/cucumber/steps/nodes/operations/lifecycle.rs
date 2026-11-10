@@ -147,6 +147,19 @@ pub async fn start_node(
     immediate_start: bool,
     extra_user_overrides: &[ConfigOverride],
 ) -> StepResult {
+    if world.cluster.node_peer_ids.is_empty()
+        && world.lifecycle.explicit_genesis_time
+        && world.lifecycle.genesis_time.is_some_and(|genesis| {
+            time::OffsetDateTime::from(genesis) < time::OffsetDateTime::now_utc()
+        })
+    {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "explicit genesis time {:?} has expired before the first node started",
+                world.lifecycle.genesis_time
+            ),
+        });
+    }
     let check_source_era = needs_source_era_guard(world);
     let mut startup_settings =
         get_startup_settings(world, initial_peers, node_name).inspect_err(|e| {
@@ -336,6 +349,7 @@ pub async fn start_node(
             name: node_name.to_owned(),
             runtime_name: started_node_name.clone(),
             client: client.clone(),
+            cryptarchia_security_param: runtime_info.cryptarchia_security_param,
             chain_info: HashMap::default(),
             wallet_info,
             runtime_dir: node_runtime_dir,
@@ -651,7 +665,7 @@ impl StartupSettings {
         }
 
         Ok(Some(StartNodeOptions::default().create_patch(
-            move |mut config: RunConfig| {
+            move |mut config: lb_testing_framework::LbcNodeConfig| {
                 prepare_config_patch(
                     &mut config,
                     self.join_external_network,

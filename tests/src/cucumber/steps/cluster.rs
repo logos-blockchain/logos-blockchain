@@ -68,11 +68,19 @@ fn prepare_manual_cluster_deployment(
         .with_allow_zero_value_genesis_tokens(true)
         .with_test_context(world.lifecycle.test_context.clone())
         .with_sdp_funding_config(world.cluster.sdp_funding_config)
-        .with_node_binary_profile(if world.tokio_console_profile_enabled() {
-            NodeBinaryProfile::TokioConsole
-        } else {
-            NodeBinaryProfile::Normal
-        });
+        .with_resolved_node_binary_profile(
+            world
+                .lifecycle
+                .node_binary_profile
+                .clone()
+                .unwrap_or_else(|| {
+                    NodeBinaryProfile::from_env_or(if world.tokio_console_profile_enabled() {
+                        NodeBinaryProfile::TokioConsole
+                    } else {
+                        NodeBinaryProfile::Normal
+                    })
+                }),
+        );
     let mut config = apply_blend_core_nodes(world, config, nodes_count)?;
     if let Some(parameter_set) = world.cluster.cucumber_parameter_set {
         config = config.with_parameter_set(parameter_set);
@@ -191,11 +199,19 @@ fn prepare_devnet_manual_cluster_deployment(
         .with_allow_zero_value_genesis_tokens(true)
         .with_test_context(world.lifecycle.test_context.clone())
         .with_sdp_funding_config(world.cluster.sdp_funding_config)
-        .with_node_binary_profile(if world.tokio_console_profile_enabled() {
-            NodeBinaryProfile::TokioConsole
-        } else {
-            NodeBinaryProfile::Normal
-        });
+        .with_resolved_node_binary_profile(
+            world
+                .lifecycle
+                .node_binary_profile
+                .clone()
+                .unwrap_or_else(|| {
+                    NodeBinaryProfile::from_env_or(if world.tokio_console_profile_enabled() {
+                        NodeBinaryProfile::TokioConsole
+                    } else {
+                        NodeBinaryProfile::Normal
+                    })
+                }),
+        );
     let config = apply_blend_core_nodes(world, config, nodes_count)?;
 
     let config = config.with_genesis_time(genesis_time);
@@ -460,6 +476,7 @@ pub async fn insert_started_node_info<S: BuildHasher>(
             name: logical_node_name.to_owned(),
             runtime_name: started_node.name,
             client: started_node.client,
+            cryptarchia_security_param: None,
             chain_info: HashMap::new(),
             wallet_info,
             runtime_dir: std::path::PathBuf::new(),

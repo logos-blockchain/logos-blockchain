@@ -9,13 +9,13 @@ use blockchain_test_support::runtime_info::{
 use hex::ToHex as _;
 use lb_binary_codec::bincode::SerializeOp as _;
 use lb_libp2p::identity::{Keypair, ed25519};
-use lb_node::{UserConfig, config::RunConfig};
+use lb_node::UserConfig;
 use testing_framework_core::scenario::DynError;
 
-use crate::LbcEnv;
+use crate::{LbcEnv, LbcNodeConfig};
 
 impl NodeRuntimeInfoProvider for LbcEnv {
-    fn runtime_info(config: &RunConfig) -> Result<NodeRuntimeInfo, DynError> {
+    fn runtime_info(config: &LbcNodeConfig) -> Result<NodeRuntimeInfo, DynError> {
         let key = Keypair::from(ed25519::Keypair::from(
             config.user.network.backend.swarm.node_key.clone(),
         ));
@@ -30,6 +30,13 @@ impl NodeRuntimeInfoProvider for LbcEnv {
                     .slots_per_epoch(),
             )
             .ok_or("deployment has zero slots per epoch")?,
+            cryptarchia_security_param: Some(
+                config
+                    .deployment
+                    .genesis_era_parameters()
+                    .cryptarchia
+                    .security_param,
+            ),
             wallets: node_wallet_keys_from_config(&config.user)?,
         })
     }

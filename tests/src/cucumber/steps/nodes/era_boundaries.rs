@@ -597,14 +597,17 @@ async fn verify_target_era_fork_digest(world: &mut CucumberWorld, seconds: u64) 
             let fork = timeout_at(deadline, client.chain_fork())
                 .await
                 .map_err(|_| {
-                    failure(format!(
-                        "Node `{name}` fork query exceeded the {seconds}s deadline"
+                    failure(polling_timeout_message(
+                        &format!("Node `{name}` fork query exceeded the {seconds}s deadline"),
+                        &names,
+                        &last_observations,
                     ))
                 })?
                 .map_err(|error| failure(format!("Node `{name}` fork query failed: {error}")))?;
             match fork {
                 fork if format!("{fork:?}") == proof.target_fork => {
-                    last_observations.remove(name);
+                    last_observations
+                        .insert(name.clone(), format!("active target fork digest {fork:?}"));
                     observed_fork_digests.insert(name.clone(), format!("{fork:?}"));
                 }
                 fork => {
@@ -900,6 +903,11 @@ where
                 "Canonical ancestry contains a cycle at block {current:?}"
             )));
         }
+        if current == genesis {
+            result.includes_anchor = anchor == Some(current);
+            result.anchor_slot = result.includes_anchor.then_some(0);
+            return Ok(result);
+        }
         let Some(block) = fetch(current).await? else {
             return Err(HistoryInspectionError::retryable(format!(
                 "Canonical ancestor {current:?} is not available yet"
@@ -912,16 +920,6 @@ where
             return Err(HistoryInspectionError::immediate(format!(
                 "Invalid canonical ancestry: parent {current:?} at slot {slot} is not strictly before its child at slot {child_slot}"
             )));
-        }
-        if current == genesis {
-            if slot != 0 {
-                return Err(HistoryInspectionError::immediate(format!(
-                    "Genesis block {current:?} has nonzero slot {slot}"
-                )));
-            }
-            result.includes_anchor = anchor == Some(current);
-            result.anchor_slot = result.includes_anchor.then_some(0);
-            return Ok(result);
         }
         if slot == 0 {
             return Err(HistoryInspectionError::immediate(format!(
@@ -1446,6 +1444,28 @@ mod tests {
         assert!(timeout.contains("ancestor block is temporarily unavailable"));
     }
 
+    #[test]
+    fn fork_query_deadline_reports_last_observations() {
+        let nodes = vec!["NODE_1".to_owned(), "NODE_2".to_owned()];
+        let observations = HashMap::from([
+            (
+                "NODE_1".to_owned(),
+                "active target fork digest abc".to_owned(),
+            ),
+            (
+                "NODE_2".to_owned(),
+                "active fork digest def, expected abc".to_owned(),
+            ),
+        ]);
+        let diagnostic = polling_timeout_message(
+            "Node `NODE_2` fork query exceeded deadline",
+            &nodes,
+            &observations,
+        );
+        assert!(diagnostic.contains("NODE_1: active target fork digest abc"));
+        assert!(diagnostic.contains("NODE_2: active fork digest def, expected abc"));
+    }
+
     #[tokio::test]
     async fn canonical_history_requires_strict_parent_slots_and_accepts_gaps() {
         let tip = id(1);
@@ -1511,22 +1531,19 @@ mod tests {
             .expect_err("missing ancestor should be classified for retry");
         assert!(missing.retryable);
 
-        let valid = HashMap::from([
-            (
-                tip,
-                HistoryHeader {
-                    parent: genesis,
-                    slot: 100,
-                },
-            ),
-            (
-                genesis,
-                HistoryHeader {
-                    parent: genesis,
-                    slot: 0,
-                },
-            ),
-        ]);
+        let missing_parent = HashMap::from([(tip, HistoryHeader { parent, slot: 100 })]);
+        let missing = inspect_from(tip, genesis, None, missing_parent, None)
+            .await
+            .expect_err("missing non-genesis parent should be retryable");
+        assert!(missing.retryable);
+
+        let valid = HashMap::from([(
+            tip,
+            HistoryHeader {
+                parent: genesis,
+                slot: 100,
+            },
+        )]);
         let history = inspect_from(tip, genesis, Some(genesis), valid, None)
             .await
             .expect("genesis termination should be valid");

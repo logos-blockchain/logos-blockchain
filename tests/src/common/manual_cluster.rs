@@ -226,7 +226,13 @@ where
                     StartNodeOptions::default()
                         .with_peers(peers)
                         .with_persist_dir(scenario_base_dir.join(format!("node-{node_index}")))
-                        .create_patch(config_patch.clone()),
+                        .create_patch({
+                            let config_patch = config_patch.clone();
+                            move |mut config: lb_testing_framework::LbcNodeConfig| {
+                                config.run_config = config_patch(config.run_config)?;
+                                Ok(config)
+                            }
+                        }),
                 ),
             )
             .await

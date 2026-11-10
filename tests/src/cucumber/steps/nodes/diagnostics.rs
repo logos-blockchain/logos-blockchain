@@ -1721,6 +1721,7 @@ mod tests {
                 name: "NODE_1".to_owned(),
                 runtime_name: "NODE_1".to_owned(),
                 client: NodeHttpClient::new("127.0.0.1:1".parse().unwrap()),
+                cryptarchia_security_param: None,
                 chain_info: std::collections::HashMap::new(),
                 wallet_info: std::collections::HashMap::new(),
                 runtime_dir: PathBuf::new(),

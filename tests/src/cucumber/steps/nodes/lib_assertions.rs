@@ -118,6 +118,18 @@ where
             )));
         }
 
+        // Genesis is identified by the sampled chain height and is not served
+        // by the ordinary block endpoint.
+        if current_height == 0 {
+            return if current == target_lib {
+                Ok(0)
+            } else {
+                Err(LibResolveError::Invalid(format!(
+                    "node `{node_name}` reached genesis {current:?} before sampled LIB {target_lib:?}"
+                )))
+            };
+        }
+
         let Some((parent, slot)) = fetch(current).await? else {
             return Err(LibResolveError::Retryable(format!(
                 "node `{node_name}` block {current:?} is temporarily unavailable while locating LIB {target_lib:?}"
@@ -738,6 +750,10 @@ mod tests {
             resolve_from(tip, 2, lib, HashMap::new()).await,
             Err(LibResolveError::Retryable(_))
         ));
+        assert!(matches!(
+            resolve_from(tip, 2, lib, HashMap::from([(tip, (lib, 10))])).await,
+            Err(LibResolveError::Retryable(_))
+        ));
 
         let missing_lib = HashMap::from([(tip, (genesis, 10)), (genesis, (genesis, 0))]);
         assert!(matches!(
@@ -745,7 +761,7 @@ mod tests {
             Err(LibResolveError::Invalid(_))
         ));
 
-        let genesis_lib = HashMap::from([(tip, (genesis, 10)), (genesis, (genesis, 0))]);
+        let genesis_lib = HashMap::from([(tip, (genesis, 10))]);
         assert_eq!(
             resolve_from(tip, 1, genesis, genesis_lib)
                 .await

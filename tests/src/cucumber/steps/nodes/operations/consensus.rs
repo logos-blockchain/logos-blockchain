@@ -3,6 +3,8 @@ use lb_core::header::HeaderId;
 use super::*;
 
 const MAX_CONVERGENCE_ANCESTOR_WALK: u64 = 1_000_000;
+const CONSENSUS_RECOVERY_BUDGET: Duration = Duration::from_secs(5);
+const CONSENSUS_LIVENESS_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeConsensusSnapshot {
@@ -86,9 +88,116 @@ fn complete_snapshot_set(
     }
 }
 
+#[derive(Debug)]
+struct ConsensusPollFailure {
+    node: String,
+    message: String,
+    retryable: bool,
+}
+
+fn retryable_consensus_error(error: &lb_common_http_client::Error) -> bool {
+    matches!(error, lb_common_http_client::Error::Request(source) if source.is_connect() || source.is_timeout())
+}
+
+async fn poll_complete_snapshots<Fetch, FetchFuture, Check, CheckFuture>(
+    deadline: tokio::time::Instant,
+    recovery_budget: Duration,
+    observations: &mut HashMap<String, String>,
+    mut fetch: Fetch,
+    mut check_liveness: Check,
+) -> Result<Vec<NodeConsensusSnapshot>, String>
+where
+    Fetch: FnMut() -> FetchFuture,
+    FetchFuture: Future<Output = Vec<Result<NodeConsensusSnapshot, ConsensusPollFailure>>>,
+    Check: FnMut(Vec<String>) -> CheckFuture,
+    CheckFuture: Future<Output = Vec<(String, Result<(), String>)>>,
+{
+    let mut recovery_deadline = None;
+    loop {
+        let active_deadline = recovery_deadline.unwrap_or(deadline);
+        if tokio::time::Instant::now() >= active_deadline {
+            return Err(format!(
+                "consensus polling or partial-failure recovery deadline elapsed; {}",
+                format_node_observations(observations)
+            ));
+        }
+        let results = tokio::time::timeout_at(active_deadline, fetch())
+            .await
+            .map_err(|_| {
+                format!(
+                    "consensus polling deadline elapsed; {}",
+                    format_node_observations(observations)
+                )
+            })?;
+        let mut snapshots = Vec::new();
+        let mut failures = Vec::new();
+        let mut invalid = Vec::new();
+        for result in results {
+            match result {
+                Ok(snapshot) => {
+                    observations.insert(
+                        snapshot.node_name.clone(),
+                        format!("current height {}, tip {:?}", snapshot.height, snapshot.tip),
+                    );
+                    snapshots.push(snapshot);
+                }
+                Err(failure) if failure.retryable => {
+                    observations.insert(failure.node.clone(), failure.message);
+                    failures.push(failure.node);
+                }
+                Err(failure) => {
+                    observations.insert(failure.node.clone(), failure.message);
+                    invalid.push(failure.node);
+                }
+            }
+        }
+        if snapshots.is_empty() && (!failures.is_empty() || !invalid.is_empty()) {
+            return Err(format!(
+                "all nodes failed their consensus requests; {}",
+                format_node_observations(observations)
+            ));
+        }
+        if !invalid.is_empty() {
+            return Err(format!(
+                "non-retryable consensus request failure for {}; {}",
+                invalid.join(", "),
+                format_node_observations(observations)
+            ));
+        }
+        if failures.is_empty() {
+            return Ok(snapshots);
+        }
+        let recovery_end = *recovery_deadline
+            .get_or_insert_with(|| (tokio::time::Instant::now() + recovery_budget).min(deadline));
+        let check_end =
+            (tokio::time::Instant::now() + CONSENSUS_LIVENESS_TIMEOUT).min(recovery_end);
+        let checks = tokio::time::timeout_at(check_end, check_liveness(failures))
+            .await
+            .map_err(|_| {
+                format!(
+                    "consensus liveness check timed out; {}",
+                    format_node_observations(observations)
+                )
+            })?;
+        for (node, result) in checks {
+            if let Err(error) = result {
+                return Err(format!(
+                    "node `{node}` is unresponsive: {error}; {}",
+                    format_node_observations(observations)
+                ));
+            }
+        }
+        tokio::time::sleep_until(
+            (tokio::time::Instant::now() + Duration::from_millis(100)).min(recovery_end),
+        )
+        .await;
+    }
+}
+
 async fn ancestor_at_height<Id, Fetch, FetchFuture>(
     tip: Id,
     distance: u64,
+    target_is_genesis: bool,
     mut fetch: Fetch,
 ) -> Result<Id, AncestorFetchError>
 where
@@ -115,11 +224,24 @@ where
                 "Convergence ancestry contains a cycle at block {current:?}"
             )));
         }
+        if traversed == distance && target_is_genesis {
+            if child_slot == Some(0) {
+                return Err(AncestorFetchError::Invalid(
+                    "Genesis cannot have a child at slot zero".to_owned(),
+                ));
+            }
+            return Ok(current);
+        }
         let (parent, slot) = fetch(current.clone()).await?.ok_or_else(|| {
             AncestorFetchError::Retryable(format!(
                 "Canonical ancestor {current:?} is temporarily unavailable"
             ))
         })?;
+        if slot == 0 {
+            return Err(AncestorFetchError::Invalid(format!(
+                "Non-genesis convergence ancestor {current:?} has slot zero"
+            )));
+        }
         if child_slot.is_some_and(|child| slot >= child) {
             return Err(AncestorFetchError::Invalid(format!(
                 "Convergence ancestor {current:?} has slot {slot}, not strictly before its child at slot {}",
@@ -166,42 +288,68 @@ pub async fn wait_for_canonical_convergence(
     let mut poll_count = 0usize;
 
     loop {
-        let poll_results = tokio::time::timeout(
-            timeout.saturating_sub(start.elapsed()),
-            futures_util::future::join_all(clients.iter().map(async |(name, client)| {
-                match client.consensus_info().await {
-                    Ok(info) => Ok(NodeConsensusSnapshot {
-                        node_name: name.clone(),
-                        height: info.cryptarchia_info.height,
-                        tip: info.cryptarchia_info.tip,
-                    }),
-                    Err(error) => Err((name.clone(), error)),
-                }
-            })),
+        let poll_results = poll_complete_snapshots(
+            tokio::time::Instant::from_std(start + timeout),
+            CONSENSUS_RECOVERY_BUDGET,
+            &mut last_observations,
+            || {
+                futures_util::future::join_all(clients.iter().map(async |(name, client)| {
+                    match client.consensus_info().await {
+                        Ok(info) => Ok(NodeConsensusSnapshot {
+                            node_name: name.clone(),
+                            height: info.cryptarchia_info.height,
+                            tip: info.cryptarchia_info.tip,
+                        }),
+                        Err(error) => {
+                            let retryable = retryable_consensus_error(&error);
+                            Err(ConsensusPollFailure {
+                                node: name.clone(),
+                                message: error.to_string(),
+                                retryable,
+                            })
+                        }
+                    }
+                }))
+            },
+            |failed_nodes| {
+                futures_util::future::join_all(failed_nodes.into_iter().map(|name| {
+                    let client = clients
+                        .iter()
+                        .find(|(node, _)| *node == name)
+                        .expect("failed node has a client")
+                        .1
+                        .clone();
+                    async move {
+                        (
+                            name,
+                            client
+                                .network_info()
+                                .await
+                                .map(|_| ())
+                                .map_err(|error| error.to_string()),
+                        )
+                    }
+                }))
+            },
         )
         .await
-        .map_err(|_| StepError::StepFail {
-            message: format!("Step `{step}` error: consensus polling exceeded {timeout_seconds}s"),
+        .map_err(|error| StepError::StepFail {
+            message: format!("Step `{step}` error: {error}"),
         })?;
 
         let mut current_poll = Vec::with_capacity(poll_results.len());
-        for result in poll_results {
-            match result {
-                Ok(snapshot) => {
-                    let node = world.nodes_info.get_mut(&snapshot.node_name).ok_or_else(|| StepError::LogicalError {
-                        message: format!("Step `{step}` error: node '{}' disappeared during consensus polling", snapshot.node_name),
-                    })?;
-                    node.upsert_tip(snapshot.height, snapshot.tip.encode_hex::<String>());
-                    current_poll.push(Ok(snapshot));
-                }
-                Err((name, error)) => {
-                    return Err(StepError::StepFail {
-                        message: format!(
-                            "Step `{step}` error: node `{name}` consensus query failed: {error}"
-                        ),
-                    });
-                }
-            }
+        for snapshot in poll_results {
+            let node = world
+                .nodes_info
+                .get_mut(&snapshot.node_name)
+                .ok_or_else(|| StepError::LogicalError {
+                    message: format!(
+                        "Step `{step}` error: node '{}' disappeared during consensus polling",
+                        snapshot.node_name
+                    ),
+                })?;
+            node.upsert_tip(snapshot.height, snapshot.tip.encode_hex::<String>());
+            current_poll.push(Ok(snapshot));
         }
         {
             let snapshots =
@@ -230,6 +378,7 @@ pub async fn wait_for_canonical_convergence(
                             let ancestor = ancestor_at_height(
                                 tip,
                                 distance,
+                                range.minimum == 0,
                                 async |id| match client.block(&id).await {
                                     Ok(Some(block)) => Ok(Some((
                                         block.header.parent_block,
@@ -387,7 +536,7 @@ mod convergence_tests {
         distance: u64,
         parents: &HashMap<HeaderId, (HeaderId, u64)>,
     ) -> Result<HeaderId, AncestorFetchError> {
-        ancestor_at_height(tip, distance, async |block| {
+        ancestor_at_height(tip, distance, false, async |block| {
             Ok(parents.get(&block).copied())
         })
         .await
@@ -481,7 +630,7 @@ mod convergence_tests {
 
     #[tokio::test]
     async fn missing_ancestor_is_retryable_and_cycles_or_nonincreasing_slots_are_invalid() {
-        let missing = ancestor_at_height(id(1), 1, async |_| {
+        let missing = ancestor_at_height(id(1), 1, false, async |_| {
             Err(AncestorFetchError::Retryable(
                 "temporary missing block".to_owned(),
             ))
@@ -492,7 +641,7 @@ mod convergence_tests {
 
         let tip = id(1);
         let parent = id(2);
-        let cycle = ancestor_at_height(tip, 2, async |current| {
+        let cycle = ancestor_at_height(tip, 2, false, async |current| {
             Ok(Some((if current == tip { parent } else { tip }, 1)))
         })
         .await
@@ -500,7 +649,7 @@ mod convergence_tests {
         assert!(matches!(cycle, AncestorFetchError::Invalid(_)));
 
         for (parent_slot, description) in [(100, "equal"), (101, "greater")] {
-            let invalid_order = ancestor_at_height(tip, 1, async |current| {
+            let invalid_order = ancestor_at_height(tip, 1, false, async |current| {
                 Ok(Some((
                     parent,
                     if current == tip { 100 } else { parent_slot },
@@ -515,7 +664,7 @@ mod convergence_tests {
         }
 
         for parent_slot in [99, 90] {
-            let valid = ancestor_at_height(tip, 1, async |current| {
+            let valid = ancestor_at_height(tip, 1, false, async |current| {
                 Ok(Some((
                     parent,
                     if current == tip { 100 } else { parent_slot },
@@ -531,5 +680,220 @@ mod convergence_tests {
     fn empty_node_set_has_no_height_range_or_convergence() {
         assert!(height_range(&[]).is_err());
         assert!(!all_ancestors_match(&[]));
+    }
+
+    #[tokio::test]
+    async fn genesis_ancestor_does_not_require_a_genesis_block_endpoint() {
+        let tip = id(1);
+        let genesis = id(0);
+        let ancestor = ancestor_at_height(tip, 1, true, async |current| {
+            Ok((current == tip).then_some((genesis, 1)))
+        })
+        .await
+        .expect("genesis is identified by its parent link");
+        assert_eq!(ancestor, genesis);
+    }
+
+    #[tokio::test]
+    async fn incomplete_consensus_poll_retries_and_recovers() {
+        let mut polls = 0;
+        let mut observations = HashMap::new();
+        let snapshots = poll_complete_snapshots(
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            Duration::from_secs(1),
+            &mut observations,
+            || {
+                polls += 1;
+                let second = if polls == 1 {
+                    Err(ConsensusPollFailure {
+                        node: "NODE_2".into(),
+                        message: "connection refused".into(),
+                        retryable: true,
+                    })
+                } else {
+                    Ok(snapshot("NODE_2", 2, 2))
+                };
+                std::future::ready(vec![Ok(snapshot("NODE_1", 2, 2)), second])
+            },
+            |nodes| std::future::ready(nodes.into_iter().map(|node| (node, Ok(()))).collect()),
+        )
+        .await
+        .expect("a complete fresh poll recovers");
+        assert_eq!(polls, 2);
+        assert_eq!(snapshots.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn complete_disagreeing_polls_can_be_followed_by_convergence() {
+        let mut polls = 0;
+        let mut observations = HashMap::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        loop {
+            let snapshots = poll_complete_snapshots(
+                deadline,
+                Duration::from_millis(20),
+                &mut observations,
+                || {
+                    polls += 1;
+                    std::future::ready(vec![
+                        Ok(snapshot("NODE_1", 2, 2)),
+                        Ok(snapshot("NODE_2", 2, if polls == 1 { 3 } else { 2 })),
+                    ])
+                },
+                async |_| panic!("complete polls need no liveness checks"),
+            )
+            .await
+            .expect("complete consensus observations");
+            let tips = snapshots
+                .into_iter()
+                .map(|s| (s.node_name, s.tip))
+                .collect::<Vec<_>>();
+            if all_ancestors_match(&tips) {
+                break;
+            }
+        }
+        assert_eq!(polls, 2);
+    }
+
+    #[tokio::test]
+    async fn all_consensus_requests_fail_immediately_with_node_errors() {
+        let mut observations = HashMap::new();
+        let error = poll_complete_snapshots(
+            tokio::time::Instant::now() + Duration::from_secs(3600),
+            Duration::from_secs(5),
+            &mut observations,
+            || {
+                std::future::ready(vec![
+                    Err(ConsensusPollFailure {
+                        node: "NODE_2".into(),
+                        message: "connection refused".into(),
+                        retryable: true,
+                    }),
+                    Err(ConsensusPollFailure {
+                        node: "NODE_1".into(),
+                        message: "timed out".into(),
+                        retryable: true,
+                    }),
+                ])
+            },
+            async |_| panic!("all failed must not invoke liveness checks"),
+        )
+        .await
+        .expect_err("persistent failure cannot converge");
+        assert!(error.contains("NODE_2"));
+        assert!(error.contains("connection refused"));
+        assert!(error.contains("NODE_1"));
+        assert!(error.contains("all nodes failed"));
+    }
+
+    #[tokio::test]
+    async fn partial_failure_has_independent_bounded_recovery() {
+        let mut observations = HashMap::new();
+        let start = tokio::time::Instant::now();
+        let error = poll_complete_snapshots(
+            start + Duration::from_secs(3600),
+            Duration::from_millis(20),
+            &mut observations,
+            || {
+                std::future::ready(vec![
+                    Ok(snapshot("NODE_1", 2, 2)),
+                    Err(ConsensusPollFailure {
+                        node: "NODE_2".into(),
+                        message: "connection refused".into(),
+                        retryable: true,
+                    }),
+                ])
+            },
+            |nodes| std::future::ready(nodes.into_iter().map(|node| (node, Ok(()))).collect()),
+        )
+        .await
+        .expect_err("partial snapshots cannot succeed");
+        assert!(start.elapsed() < Duration::from_secs(1));
+        assert!(
+            error.contains("NODE_1")
+                && error.contains("NODE_2")
+                && error.contains("connection refused")
+        );
+    }
+
+    #[tokio::test]
+    async fn unreachable_node_fails_liveness_check_promptly() {
+        let mut observations = HashMap::new();
+        let error = poll_complete_snapshots(
+            tokio::time::Instant::now() + Duration::from_secs(3600),
+            Duration::from_secs(5),
+            &mut observations,
+            || {
+                std::future::ready(vec![
+                    Ok(snapshot("NODE_1", 2, 2)),
+                    Err(ConsensusPollFailure {
+                        node: "NODE_2".into(),
+                        message: "connection refused".into(),
+                        retryable: true,
+                    }),
+                ])
+            },
+            |nodes| {
+                std::future::ready(
+                    nodes
+                        .into_iter()
+                        .map(|node| (node, Err("network unavailable".into())))
+                        .collect(),
+                )
+            },
+        )
+        .await
+        .expect_err("unreachable node must fail");
+        assert!(
+            error.contains("NODE_2")
+                && error.contains("unresponsive")
+                && error.contains("network unavailable")
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_consensus_response_fails_without_retry() {
+        let mut observations = HashMap::new();
+        let mut polls = 0;
+        let error = poll_complete_snapshots(
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            Duration::from_secs(1),
+            &mut observations,
+            || {
+                polls += 1;
+                std::future::ready(vec![Err(ConsensusPollFailure {
+                    node: "NODE_1".into(),
+                    message: "invalid response".into(),
+                    retryable: false,
+                })])
+            },
+            async |_| panic!("invalid response must not be retried"),
+        )
+        .await
+        .expect_err("invalid responses must fail immediately");
+        assert_eq!(polls, 1);
+        assert!(error.contains("NODE_1"));
+        assert!(error.contains("invalid response"));
+    }
+
+    #[tokio::test]
+    async fn consensus_error_classification_retries_connections_only() {
+        let error = Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get("http://127.0.0.1:0")
+            .send()
+            .await
+            .expect_err("port zero cannot accept a connection");
+        assert!(retryable_consensus_error(
+            &lb_common_http_client::Error::Request(error)
+        ));
+        assert!(!retryable_consensus_error(
+            &lb_common_http_client::Error::Server("invalid response".into())
+        ));
+        assert!(!retryable_consensus_error(
+            &lb_common_http_client::Error::Client("bad request".into())
+        ));
     }
 }

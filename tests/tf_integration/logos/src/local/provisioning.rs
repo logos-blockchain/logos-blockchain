@@ -37,7 +37,7 @@ use testing_framework_runner_local::{
 use tracing::debug;
 
 use crate::{
-    DeploymentPlan, LOG_LEVEL, LbcEnv, NodeHttpClient, NodePlan,
+    DeploymentPlan, LOG_LEVEL, LbcEnv, LbcNodeConfig, NodeHttpClient, NodePlan,
     config::{
         Config, Libp2pNetworkLayout, NetworkParams, create_node_config_for_node,
         deployment::TopologyConfig, deployment_settings_for_topology,
@@ -48,7 +48,6 @@ use crate::{
         unregister_system_monitor_output_file,
     },
     env as tf_env,
-    env::{remove_default_env, replace_default_env},
 };
 
 const LOGS_PREFIX: &str = "__logs";
@@ -142,7 +141,10 @@ impl LocalDeployerEnv for LbcEnv {
                 Ok::<_, ProcessSpawnError>(PreparedNode {
                     name: label,
                     network_port: config.user.network.backend.swarm.port,
-                    config,
+                    config: LbcNodeConfig {
+                        run_config: config,
+                        binary_profile: topology.config().node_binary_profile().clone(),
+                    },
                 })
             })
             .collect::<Result<Vec<_>, _>>()
@@ -161,7 +163,8 @@ impl LocalDeployerEnv for LbcEnv {
         dir: &Path,
         label: &str,
     ) -> Result<LaunchSpec, DynError> {
-        let mut config = config.clone();
+        let binary_profile = config.binary_profile.clone();
+        let mut config = config.run_config.clone();
 
         record_system_monitor_event(
             "node_runtime_prepared",
@@ -202,7 +205,7 @@ impl LocalDeployerEnv for LbcEnv {
         let deployment_yaml =
             serde_yaml::to_string(&config.deployment).map_err(io::Error::other)?;
 
-        build_node_launch_spec(dir, user_yaml, deployment_yaml).await
+        build_node_launch_spec(dir, user_yaml, deployment_yaml, &binary_profile).await
     }
 
     fn node_endpoints(
@@ -251,32 +254,31 @@ async fn build_node_launch_spec(
     dir: &Path,
     user_yaml: String,
     deployment_yaml: String,
+    node_binary_profile: &NodeBinaryProfile,
+) -> Result<LaunchSpec, DynError> {
+    build_node_launch_spec_with(
+        dir,
+        user_yaml,
+        deployment_yaml,
+        node_binary_profile,
+        node_binary_provider,
+    )
+    .await
+}
+
+async fn build_node_launch_spec_with(
+    dir: &Path,
+    user_yaml: String,
+    deployment_yaml: String,
+    node_binary_profile: &NodeBinaryProfile,
+    provider_for_profile: impl FnOnce(&NodeBinaryProfile) -> Result<BinaryProviderRef, DynError>,
 ) -> Result<LaunchSpec, DynError> {
     let config_path = dir.join(USER_CONFIG_FILE);
     let deployment_path = dir.join(DEPLOYMENT_CONFIG_FILE);
     let time_backend =
         env::var("LOGOS_BLOCKCHAIN_TIME_BACKEND").unwrap_or_else(|_| "monotonic".to_owned());
-    let node_binary_profile =
-        NodeBinaryProfile::from_string(&env::var("NODE_BINARY_PROFILE").unwrap_or_default());
-
     Ok(LaunchSpec {
-        binary: {
-            let provider = node_binary_provider(&node_binary_profile)?;
-            let current = if node_binary_profile == NodeBinaryProfile::TokioConsole {
-                replace_default_env("RUSTFLAGS", &rustflags_with_tokio_unstable())
-            } else {
-                None
-            };
-            let resolve_result = provider.resolve().await;
-            if node_binary_profile == NodeBinaryProfile::TokioConsole {
-                if let Some(val) = current {
-                    let _unused = replace_default_env("RUSTFLAGS", &val);
-                } else {
-                    remove_default_env("RUSTFLAGS");
-                }
-            }
-            resolve_result?
-        },
+        binary: resolve_node_binary_with(node_binary_profile, provider_for_profile).await?,
         files: vec![
             launch_file(USER_CONFIG_FILE, user_yaml.into_bytes()),
             launch_file(DEPLOYMENT_CONFIG_FILE, deployment_yaml.into_bytes()),
@@ -293,17 +295,6 @@ async fn build_node_launch_spec(
     })
 }
 
-fn rustflags_with_tokio_unstable() -> String {
-    const TOKIO_UNSTABLE_CFG: &str = "--cfg tokio_unstable";
-
-    match env::var("RUSTFLAGS") {
-        Ok(flags) if flags.contains(TOKIO_UNSTABLE_CFG) => flags,
-        Ok(flags) if flags.trim().is_empty() => TOKIO_UNSTABLE_CFG.to_owned(),
-        Ok(flags) => format!("{flags} {TOKIO_UNSTABLE_CFG}"),
-        Err(_) => TOKIO_UNSTABLE_CFG.to_owned(),
-    }
-}
-
 fn launch_file(relative_path: &str, contents: Vec<u8>) -> LaunchFile {
     LaunchFile {
         relative_path: PathBuf::from(relative_path),
@@ -316,7 +307,14 @@ fn launch_file(relative_path: &str, contents: Vec<u8>) -> LaunchFile {
 pub async fn ensure_node_binary_built(
     node_binary_profile: &NodeBinaryProfile,
 ) -> Result<PathBuf, DynError> {
-    node_binary_provider(node_binary_profile)?
+    resolve_node_binary_with(node_binary_profile, node_binary_provider).await
+}
+
+async fn resolve_node_binary_with(
+    node_binary_profile: &NodeBinaryProfile,
+    provider_for_profile: impl FnOnce(&NodeBinaryProfile) -> Result<BinaryProviderRef, DynError>,
+) -> Result<PathBuf, DynError> {
+    provider_for_profile(node_binary_profile)?
         .resolve()
         .await
         .map_err(Into::into)
@@ -426,25 +424,43 @@ fn release_node_binary_path() -> PathBuf {
 }
 
 fn tokio_console_node_binary_provider() -> BinaryProviderRef {
-    if running_in_ci() {
-        Arc::new(PathBinaryProvider::new(release_node_binary_path()))
-    } else {
-        Arc::new(BuildBinaryProvider {
-            command: BuildCommand::new("cargo").with_args([
-                "build",
-                "--locked",
-                "--profile",
-                "release-profiling",
-                "-p",
-                "logos-blockchain-node",
-                "--features",
-                "testing,tokio-console",
-            ]),
-            output_path: release_profiling_node_binary_path(),
-            working_dir: Some(workspace_root()),
-            lock_dir: Some(workspace_root().join("target").join(".tf-binaries")),
-        })
-    }
+    Arc::new(BuildBinaryProvider {
+        command: tokio_console_build_command([
+            "build".to_owned(),
+            "--locked".to_owned(),
+            "--profile".to_owned(),
+            "release-profiling".to_owned(),
+            "-p".to_owned(),
+            "logos-blockchain-node".to_owned(),
+            "--features".to_owned(),
+            "testing,tokio-console".to_owned(),
+        ]),
+        output_path: release_profiling_node_binary_path(),
+        working_dir: Some(workspace_root()),
+        lock_dir: Some(workspace_root().join("target").join(".tf-binaries")),
+    })
+}
+
+fn tokio_console_build_command(args: impl IntoIterator<Item = String>) -> BuildCommand {
+    BuildCommand::new("env").with_args(
+        [
+            format!(
+                "LOGOS_ORIGINAL_RUSTC_WRAPPER={}",
+                env::var("RUSTC_WRAPPER")
+                    .or_else(|_| env::var("CARGO_BUILD_RUSTC_WRAPPER"))
+                    .unwrap_or_default()
+            ),
+            format!(
+                "RUSTC_WRAPPER={}",
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("assets/tokio_console_rustc_wrapper.sh")
+                    .display()
+            ),
+            "cargo".to_owned(),
+        ]
+        .into_iter()
+        .chain(args),
+    )
 }
 
 fn release_profiling_node_binary_path() -> PathBuf {
@@ -519,8 +535,8 @@ fn build_dynamic_node_config(
     peer_ports_by_name: &HashMap<String, u16>,
     options: &StartNodeOptions<LbcEnv>,
     peer_ports: &[u16],
-    template_config: Option<&RunConfig>,
-) -> Result<PreparedNode<RunConfig>, DynError> {
+    template_config: Option<&LbcNodeConfig>,
+) -> Result<PreparedNode<LbcNodeConfig>, DynError> {
     let plan = plan_local_node_config(
         topology,
         index,
@@ -528,8 +544,11 @@ fn build_dynamic_node_config(
         options.common.peers.as_ref(),
         peer_ports,
     )?;
-    let mut config =
-        finalize_dynamic_run_config(&plan, options.config_override.as_ref(), template_config);
+    let mut config = finalize_dynamic_run_config(
+        &plan,
+        options.config_override.as_ref().map(|c| &c.run_config),
+        template_config.map(|c| &c.run_config),
+    );
     let mut network_port = config.user.network.backend.swarm.port;
 
     match plan.port_strategy {
@@ -545,7 +564,10 @@ fn build_dynamic_node_config(
 
     Ok(PreparedNode {
         name: format!("node-{index}"),
-        config,
+        config: LbcNodeConfig {
+            run_config: config,
+            binary_profile: topology.config().node_binary_profile().clone(),
+        },
         network_port,
     })
 }
@@ -899,6 +921,274 @@ mod tests {
 
     use super::*;
     use crate::config::deployment::DeploymentBuilder;
+
+    #[test]
+    fn external_profile_override_takes_precedence() {
+        use NodeBinaryProfile::{Normal, TokioConsole};
+        assert_eq!(NodeBinaryProfile::resolve(None, Normal), Normal);
+        assert_eq!(NodeBinaryProfile::resolve(None, TokioConsole), TokioConsole);
+        assert_eq!(
+            NodeBinaryProfile::resolve(Some("normal"), TokioConsole),
+            Normal
+        );
+        assert_eq!(
+            NodeBinaryProfile::resolve(Some("tokio-console"), Normal),
+            TokioConsole
+        );
+    }
+
+    #[test]
+    fn deployment_profile_reaches_initial_local_node_configuration() {
+        let original_profile = env::var_os("NODE_BINARY_PROFILE");
+        for profile in [NodeBinaryProfile::Normal, NodeBinaryProfile::TokioConsole] {
+            let topology = DeploymentBuilder::new(
+                TopologyConfig::with_node_numbers(1)
+                    .with_resolved_node_binary_profile(profile.clone()),
+            )
+            .build()
+            .expect("deployment");
+            let nodes = LbcEnv::build_initial_node_configs(&topology).expect("node configs");
+            assert_eq!(nodes[0].config.binary_profile, profile);
+        }
+        assert_eq!(env::var_os("NODE_BINARY_PROFILE"), original_profile);
+    }
+
+    #[test]
+    fn runtime_metadata_reflects_profile_and_applied_security_override() {
+        use blockchain_test_support::runtime_info::NodeRuntimeInfoProvider as _;
+
+        use crate::config::deployment::CucumberParameterSet;
+        for (name, expected) in [
+            ("cucumber_fixture", 8),
+            ("fast_repro", 3),
+            ("testnet_representative", 10),
+        ] {
+            let profile = CucumberParameterSet::from_name(name).unwrap();
+            let topology = DeploymentBuilder::new(
+                TopologyConfig::with_node_numbers(1).with_parameter_set(profile),
+            )
+            .build()
+            .unwrap();
+            let mut config = LbcEnv::build_initial_node_configs(&topology)
+                .unwrap()
+                .remove(0)
+                .config;
+            assert_eq!(
+                LbcEnv::runtime_info(&config)
+                    .unwrap()
+                    .cryptarchia_security_param
+                    .unwrap()
+                    .get(),
+                expected
+            );
+            config
+                .deployment
+                .update_genesis_era_parameters(|parameters| {
+                    parameters.cryptarchia.security_param = std::num::NonZeroU32::new(30).unwrap();
+                })
+                .unwrap();
+            assert_eq!(
+                LbcEnv::runtime_info(&config)
+                    .unwrap()
+                    .cryptarchia_security_param
+                    .unwrap()
+                    .get(),
+                30
+            );
+        }
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "The fixture exercises both complete profile orders and their launch paths"
+    )]
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn alternating_profiles_build_and_reuse_distinct_executables() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let parent_rustflags = env::var_os("RUSTFLAGS");
+        let parent_encoded = env::var_os("CARGO_ENCODED_RUSTFLAGS");
+        for tokio_first in [false, true] {
+            let dir = tempfile::tempdir().expect("fixture directory");
+            fs::create_dir_all(dir.path().join("src")).expect("source directory");
+            fs::write(dir.path().join("Cargo.toml"), "[package]\nname='profile-fixture'\nversion='0.1.0'\nedition='2021'\n[profile.release-profiling]\ninherits='release'\n").expect("manifest");
+            fs::write(
+                dir.path().join("src/main.rs"),
+                "#![allow(unexpected_cfgs)]\nfn main() { println!(\"{}:{}\", cfg!(tokio_unstable), cfg!(fixture_user_flag)); }\n",
+            )
+            .expect("source");
+            let target = dir.path().join("target");
+            let compile_log = dir.path().join("compiler-invocations");
+            let wrapper = dir.path().join("count-compiler.sh");
+            fs::write(&wrapper, "#!/bin/sh\ncase \" $* \" in *' --crate-name profile_fixture '*) printf 'compile\\n' >> \"$PROFILE_COMPILER_LOG\";; esac\nexec \"$@\"\n").expect("compiler counter");
+            fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755))
+                .expect("executable counter");
+            let args = |profile: &str| {
+                vec![
+                    "build".to_owned(),
+                    "--offline".to_owned(),
+                    "--quiet".to_owned(),
+                    "--profile".to_owned(),
+                    profile.to_owned(),
+                    "--target-dir".to_owned(),
+                    target.display().to_string(),
+                ]
+            };
+            let normal = BuildBinaryProvider {
+                command: BuildCommand::new("env").with_args(
+                    [
+                        "-u".to_owned(),
+                        "CARGO_ENCODED_RUSTFLAGS".to_owned(),
+                        "RUSTFLAGS=--cfg=fixture_user_flag".to_owned(),
+                        format!("RUSTC_WRAPPER={}", wrapper.display()),
+                        format!("PROFILE_COMPILER_LOG={}", compile_log.display()),
+                        "cargo".to_owned(),
+                    ]
+                    .into_iter()
+                    .chain(args("release")),
+                ),
+                output_path: target.join("release/profile-fixture"),
+                working_dir: Some(dir.path().to_owned()),
+                lock_dir: Some(dir.path().join("locks")),
+            };
+            let mut tokio_command = tokio_console_build_command(args("release-profiling"));
+            let original = tokio_command
+                .args
+                .iter_mut()
+                .find(|arg| arg.starts_with("LOGOS_ORIGINAL_RUSTC_WRAPPER="))
+                .expect("wrapper setting");
+            *original = format!("LOGOS_ORIGINAL_RUSTC_WRAPPER={}", wrapper.display());
+            tokio_command.args.splice(
+                0..0,
+                [
+                    "-u".to_owned(),
+                    "CARGO_ENCODED_RUSTFLAGS".to_owned(),
+                    "RUSTFLAGS=--cfg=fixture_user_flag".to_owned(),
+                    format!("PROFILE_COMPILER_LOG={}", compile_log.display()),
+                ],
+            );
+            let tokio = BuildBinaryProvider {
+                command: tokio_command,
+                output_path: target.join("release-profiling/profile-fixture"),
+                working_dir: Some(dir.path().to_owned()),
+                lock_dir: Some(dir.path().join("locks")),
+            };
+            let normal: BinaryProviderRef = Arc::new(normal);
+            let tokio: BinaryProviderRef = Arc::new(tokio);
+            let provider = |profile: &NodeBinaryProfile| {
+                Ok(match profile {
+                    NodeBinaryProfile::Normal => Arc::clone(&normal),
+                    NodeBinaryProfile::TokioConsole => Arc::clone(&tokio),
+                })
+            };
+            let sequence = if tokio_first {
+                [
+                    NodeBinaryProfile::TokioConsole,
+                    NodeBinaryProfile::Normal,
+                    NodeBinaryProfile::TokioConsole,
+                    NodeBinaryProfile::Normal,
+                ]
+            } else {
+                [
+                    NodeBinaryProfile::Normal,
+                    NodeBinaryProfile::TokioConsole,
+                    NodeBinaryProfile::Normal,
+                    NodeBinaryProfile::TokioConsole,
+                ]
+            };
+            let mut paths = Vec::new();
+            for (index, profile) in sequence.into_iter().enumerate() {
+                let path = resolve_node_binary_with(&profile, provider)
+                    .await
+                    .expect("preflight fixture binary");
+                assert!(path.is_file());
+                let expected_compiles = (index + 1).min(2);
+                assert_eq!(
+                    fs::read_to_string(&compile_log).unwrap().lines().count(),
+                    expected_compiles,
+                    "only each profile's first preflight should compile"
+                );
+                let launch = build_node_launch_spec_with(
+                    dir.path(),
+                    "user".into(),
+                    "deployment".into(),
+                    &profile,
+                    provider,
+                )
+                .await
+                .expect("launch specification");
+                assert_eq!(launch.binary, path);
+                assert_eq!(
+                    fs::read_to_string(&compile_log).unwrap().lines().count(),
+                    expected_compiles,
+                    "launch resolution must not recompile"
+                );
+                paths.push(path);
+            }
+            assert_eq!(paths[0], paths[2]);
+            assert_eq!(paths[1], paths[3]);
+            assert_ne!(paths[0], paths[1]);
+            let output =
+                std::process::Command::new(tokio.resolve().await.expect("cached profiling binary"))
+                    .output()
+                    .expect("fixture runs");
+            assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "true:true");
+            let output =
+                std::process::Command::new(normal.resolve().await.expect("cached normal binary"))
+                    .output()
+                    .expect("normal fixture runs");
+            assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "false:true");
+        }
+        assert_eq!(env::var_os("RUSTFLAGS"), parent_rustflags);
+        assert_eq!(env::var_os("CARGO_ENCODED_RUSTFLAGS"), parent_encoded);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn tokio_build_retains_cargo_target_rustflags() {
+        let dir = tempfile::tempdir().expect("fixture directory");
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::create_dir_all(dir.path().join(".cargo")).unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname='target-flags-fixture'\nversion='0.1.0'\nedition='2021'\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join(".cargo/config.toml"),
+            "[target.'cfg(unix)']\nrustflags = ['--cfg=fixture_target_flag']\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("src/main.rs"), "#![allow(unexpected_cfgs)]\nfn main() { println!(\"{}:{}\", cfg!(tokio_unstable), cfg!(fixture_target_flag)); }\n").unwrap();
+        let target = dir.path().join("target");
+        let mut command = tokio_console_build_command([
+            "build".to_owned(),
+            "--offline".to_owned(),
+            "--quiet".to_owned(),
+            "--target-dir".to_owned(),
+            target.display().to_string(),
+        ]);
+        command.args.splice(
+            0..0,
+            [
+                "-u".to_owned(),
+                "RUSTFLAGS".to_owned(),
+                "-u".to_owned(),
+                "CARGO_ENCODED_RUSTFLAGS".to_owned(),
+            ],
+        );
+        let provider: BinaryProviderRef = Arc::new(BuildBinaryProvider {
+            command,
+            output_path: target.join("debug/target-flags-fixture"),
+            working_dir: Some(dir.path().to_owned()),
+            lock_dir: Some(dir.path().join("locks")),
+        });
+        let output = std::process::Command::new(provider.resolve().await.unwrap())
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "true:true");
+    }
 
     #[test]
     fn release_download_rejects_tokio_console_profile() {

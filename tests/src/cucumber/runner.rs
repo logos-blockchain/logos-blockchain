@@ -10,13 +10,18 @@ use std::{
 };
 
 use cucumber::{
-    StatsWriter as _, World, WriterExt as _, codegen::WorldInventory, event::ScenarioFinished,
-    step::Collection, writer, writer::Verbosity,
+    StatsWriter as _, World, WriterExt as _,
+    codegen::WorldInventory,
+    event::ScenarioFinished,
+    gherkin::{Feature, Rule, Scenario},
+    step::Collection,
+    writer,
+    writer::Verbosity,
 };
 use lb_testing_framework::{
-    hash_str, is_truthy_env, record_system_monitor_event, register_system_monitor_output_file,
-    release_reserved_port_block, resolve_automatic_genesis_time,
-    unregister_system_monitor_output_file,
+    configs::deployment::NodeBinaryProfile, ensure_node_binary_built, hash_str, is_truthy_env,
+    record_system_monitor_event, register_system_monitor_output_file, release_reserved_port_block,
+    resolve_automatic_genesis_time, unregister_system_monitor_output_file,
 };
 
 use crate::cucumber::{
@@ -156,10 +161,13 @@ where
         .fail_on_skipped()
         // Sets a hook, executed on each Scenario before running all its Steps, including Background
         // ones.
-        .before(move |feature, _rule, scenario, world| {
+        .before(move |feature, rule, scenario, world| {
             Box::pin({
                 let output_dir_clone = output_dir.clone();
                 let scenario_attempts_clone = ScenarioAttempts::clone(&scenario_attempts);
+                let profile = NodeBinaryProfile::from_env_or(scenario_binary_profile(
+                    feature, rule, scenario,
+                ));
                 async move {
                     println!(
                         "\nStarting - {}: {} ({}: {})\n",
@@ -172,9 +180,11 @@ where
                         deployer,
                         &output_dir_clone,
                         &scenario_attempts_clone,
+                        profile,
                         &feature.name,
                         &scenario.name,
-                    );
+                    )
+                    .await;
                 }
             })
         });
@@ -252,16 +262,26 @@ fn get_feature_path_for_deployer(deployer: DeployerKind) -> PathBuf {
     feature_path
 }
 
-fn prepare_world_for_scenario(
+async fn prepare_world_for_scenario(
     world: &mut CucumberWorld,
     deployer: DeployerKind,
     output_dir: &Path,
     scenario_attempts: &ScenarioAttempts,
+    profile: NodeBinaryProfile,
     feature_name: &str,
     scenario_name: &str,
 ) {
     world.set_deployer(deployer);
-    world.set_genesis_time(resolve_automatic_genesis_time());
+    world.lifecycle.node_binary_profile = Some(profile.clone());
+    let requires_binary =
+        deployer.requires_local_node_binary() && world.cluster.implementation.is_logos();
+    assign_genesis_after_resolution(world, async {
+        if requires_binary {
+            let binary = ensure_node_binary_built(&profile).await.map_err(|error| format!("Failed to resolve {profile:?} node binary before assigning genesis time: {error}"))?;
+            tracing::info!(?profile, path = %binary.display(), "Resolved node binary before scenario genesis");
+        }
+        Ok(())
+    }).await.expect("scenario binary and genesis preparation failed");
 
     if let Err(err) = world.preflight(deployer) {
         println!("Preflight failed for scenario '{scenario_name}': {err}");
@@ -300,6 +320,50 @@ fn prepare_world_for_scenario(
 
     let raw_context = format!("{}::{started_at_ns}", scenario_dir.display());
     world.set_test_context(hash_str(&raw_context));
+}
+
+async fn assign_genesis_after_resolution(
+    world: &mut CucumberWorld,
+    resolution: impl Future<Output = Result<(), String>>,
+) -> Result<(), String> {
+    resolution.await?;
+    if let Some(genesis) = world.lifecycle.genesis_time {
+        if world.lifecycle.explicit_genesis_time
+            && time::OffsetDateTime::from(genesis) < time::OffsetDateTime::now_utc()
+        {
+            return Err(format!(
+                "explicit genesis time {genesis:?} has expired during binary resolution"
+            ));
+        }
+    } else {
+        world.set_genesis_time(resolve_automatic_genesis_time());
+    }
+    Ok(())
+}
+
+fn scenario_binary_profile(
+    feature: &Feature,
+    rule: Option<&Rule>,
+    scenario: &Scenario,
+) -> NodeBinaryProfile {
+    let mut steps = feature
+        .background
+        .iter()
+        .flat_map(|background| &background.steps)
+        .chain(
+            rule.into_iter()
+                .flat_map(|rule| rule.background.iter())
+                .flat_map(|background| &background.steps),
+        )
+        .chain(&scenario.steps);
+    if steps.any(|step| {
+        step.value
+            .starts_with("I will have tokio console profile nodes")
+    }) {
+        NodeBinaryProfile::TokioConsole
+    } else {
+        NodeBinaryProfile::Normal
+    }
 }
 
 fn scenario_output_dir(
@@ -365,6 +429,39 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[tokio::test]
+    async fn genesis_is_assigned_after_resolution_and_explicit_times_are_preserved() {
+        let mut world = CucumberWorld::default();
+        let resolution_started = time::OffsetDateTime::now_utc();
+        assign_genesis_after_resolution(&mut world, async {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            Ok(())
+        })
+        .await
+        .expect("binary resolution");
+        assert!(
+            time::OffsetDateTime::from(world.lifecycle.genesis_time.unwrap())
+                >= resolution_started.replace_nanosecond(0).unwrap()
+        );
+
+        let future = time::OffsetDateTime::now_utc() + time::Duration::seconds(60);
+        let genesis = lb_core::mantle::GenesisTime::try_from(future).unwrap();
+        world.set_genesis_time(genesis);
+        world.lifecycle.explicit_genesis_time = true;
+        assign_genesis_after_resolution(&mut world, async { Ok(()) })
+            .await
+            .unwrap();
+        assert_eq!(world.lifecycle.genesis_time, Some(genesis));
+
+        world.set_genesis_time(lb_core::mantle::GenesisTime::new(1));
+        assert!(
+            assign_genesis_after_resolution(&mut world, async { Ok(()) })
+                .await
+                .unwrap_err()
+                .contains("expired")
+        );
+    }
     use crate::cucumber::error::StepError;
 
     #[derive(Default)]

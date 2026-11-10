@@ -273,6 +273,15 @@ const NODE_BINARY_PROFILE_TOKIO_CONSOLE: &str = "tokio-console";
 
 impl NodeBinaryProfile {
     #[must_use]
+    pub fn from_env_or(profile: Self) -> Self {
+        Self::resolve(std::env::var(NODE_BINARY_PROFILE).ok().as_deref(), profile)
+    }
+
+    #[must_use]
+    pub fn resolve(override_value: Option<&str>, profile: Self) -> Self {
+        override_value.map_or(profile, Self::from_string)
+    }
+    #[must_use]
     pub fn from_string(s: &str) -> Self {
         match s {
             NODE_BINARY_PROFILE_TOKIO_CONSOLE => Self::TokioConsole,
@@ -354,12 +363,20 @@ impl TopologyConfig {
     }
 
     #[must_use]
-    pub const fn with_node_binary_profile(
-        mut self,
-        node_binary_profile: NodeBinaryProfile,
-    ) -> Self {
-        self.node_binary_profile = node_binary_profile;
+    pub fn with_node_binary_profile(mut self, node_binary_profile: NodeBinaryProfile) -> Self {
+        self.node_binary_profile = NodeBinaryProfile::from_env_or(node_binary_profile);
         self
+    }
+
+    #[must_use]
+    pub const fn with_resolved_node_binary_profile(mut self, profile: NodeBinaryProfile) -> Self {
+        self.node_binary_profile = profile;
+        self
+    }
+
+    #[must_use]
+    pub const fn node_binary_profile(&self) -> &NodeBinaryProfile {
+        &self.node_binary_profile
     }
 
     #[must_use]
@@ -464,7 +481,7 @@ impl Default for TopologyConfig {
             allow_multiple_genesis_tokens: false,
             allow_zero_value_genesis_tokens: false,
             test_context: None,
-            node_binary_profile: NodeBinaryProfile::default(),
+            node_binary_profile: NodeBinaryProfile::from_env_or(NodeBinaryProfile::default()),
         }
     }
 }
