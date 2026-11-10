@@ -177,7 +177,7 @@ where
     /// one.
     ///
     /// Three rules, and they are the whole transition matrix:
-    /// - already in `to_mode`: stay, including while a core drains behind it;
+    /// - already in `to_mode`: stay, and let a core draining behind it go;
     /// - leaving core: start the new mode and keep the core draining;
     /// - anything else: stop what is running, then start the new mode.
     async fn transition(
@@ -187,13 +187,13 @@ where
     ) -> Result<Self, orchestrator::Error<CoreService::Message>> {
         let previous_mode = self.mode();
         if previous_mode == to_mode {
-            // Already serving this mode. If a core is still draining behind
-            // it, a fresh epoch calling for the same mode settles the overlap
-            // just as the transition period expiring would — which is the
-            // safety net for an expiry that never arrives.
-            let settled = self.settle().await;
-            log_mode_applied(previous_mode, to_mode, settled.mode());
-            return Ok(settled);
+            // Already serving this mode. A core still draining behind it is let
+            // go of, just as the transition period expiring would, which is
+            // the safety net for an expiry that never arrives. Its shutdown
+            // runs on its own, so payloads don't wait for it.
+            let next = self.handle_transition_period_expired();
+            log_mode_applied(previous_mode, to_mode, next.mode());
+            return Ok(next);
         }
         let leaving_core = match self {
             Self::Core(core) => Some(core),
@@ -245,21 +245,6 @@ where
                 mode,
                 prev: prev.shutdown(),
             },
-            already_settled => already_settled,
-        }
-    }
-
-    /// Leaves the running mode on its own, once the core behind it is gone.
-    async fn settle(self) -> Self {
-        match self {
-            Self::EdgeAfterCore { mode, prev } => {
-                prev.await_shutdown().await;
-                Self::Edge(mode)
-            }
-            Self::BroadcastAfterCore { mode, prev } => {
-                prev.await_shutdown().await;
-                Self::Broadcast(mode)
-            }
             already_settled => already_settled,
         }
     }
@@ -427,12 +412,18 @@ mod tests {
             assert!(matches!(instance, Instance::Edge(_)));
             instance.stop().await;
 
-            // EdgeAfterCore -> Edge
+            // EdgeAfterCore -> EdgeAfterCore, letting the core go
             let instance = TestInstance::new(Mode::Core, handle).await.unwrap();
             let instance = instance.transition(Mode::Edge, handle).await.unwrap();
             assert!(matches!(instance, Instance::EdgeAfterCore { .. }));
             let instance = instance.transition(Mode::Edge, handle).await.unwrap();
-            assert!(matches!(instance, Instance::Edge(_)));
+            assert!(matches!(
+                instance,
+                Instance::EdgeAfterCore {
+                    prev: PreviousCore::ShuttingDown(_),
+                    ..
+                }
+            ));
             instance.stop().await;
 
             // Broadcast -> Edge
@@ -485,12 +476,18 @@ mod tests {
             assert!(matches!(instance, Instance::Broadcast(_)));
             instance.stop().await;
 
-            // BroadcastAfterCore -> Broadcast
+            // BroadcastAfterCore -> BroadcastAfterCore, letting the core go
             let instance = TestInstance::new(Mode::Core, handle).await.unwrap();
             let instance = instance.transition(Mode::Broadcast, handle).await.unwrap();
             assert!(matches!(instance, Instance::BroadcastAfterCore { .. }));
             let instance = instance.transition(Mode::Broadcast, handle).await.unwrap();
-            assert!(matches!(instance, Instance::Broadcast(_)));
+            assert!(matches!(
+                instance,
+                Instance::BroadcastAfterCore {
+                    prev: PreviousCore::ShuttingDown(_),
+                    ..
+                }
+            ));
             instance.stop().await;
         });
     }
@@ -567,6 +564,26 @@ mod tests {
                 .await
                 .unwrap();
             assert!(matches!(instance, Instance::Core(_)));
+        });
+    }
+
+    /// A new epoch in the mode already running lets the core draining behind it
+    /// go without waiting for it, as the end of its transition period would:
+    /// the test core never stops by itself, so waiting would take all of its
+    /// grace.
+    #[test]
+    fn a_new_epoch_in_the_same_mode_leaves_the_running_mode_free() {
+        let app = OverwatchRunner::<Services>::run(settings(), None).unwrap();
+        app.runtime().handle().block_on(async {
+            let handle = app.handle();
+            let instance = TestInstance::new(Mode::Core, handle).await.unwrap();
+            let instance = instance.transition(Mode::Edge, handle).await.unwrap();
+
+            let new_epoch = Instant::now();
+            let instance = instance.transition(Mode::Edge, handle).await.unwrap();
+
+            assert!(new_epoch.elapsed() < CORE_SHUTDOWN_GRACE);
+            instance.stop().await;
         });
     }
 
