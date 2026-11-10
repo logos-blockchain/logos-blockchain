@@ -193,7 +193,7 @@ fn op_effects<'a>(
                 None,
                 inscription
                     .steps()
-                    .flat_map(Step::created)
+                    .flat_map(Step::outputs)
                     .map(|commitment| (note_set, *commitment))
                     .collect(),
             )
