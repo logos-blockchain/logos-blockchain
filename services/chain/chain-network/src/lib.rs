@@ -1137,13 +1137,22 @@ mod tests {
     where
         Tx: Hashable<Hash = TxHash> + StorageSize,
     {
+        block_carrying(slot, Vec::new())
+    }
+
+    /// A dummy block at `slot` carrying `transactions`, signed by a dummy
+    /// leader.
+    pub fn block_carrying<Tx>(slot: u64, transactions: Vec<Tx>) -> Block<Tx>
+    where
+        Tx: Hashable<Hash = TxHash> + StorageSize,
+    {
         let leader_key = Ed25519Key::from_bytes(&[1; 32]);
         Block::create(
             HeaderId::from([0; 32]),
             Slot::new(slot),
             UncleHeaders::empty(),
             leader_proof(&leader_key.public_key()),
-            BlockTransactions::empty(),
+            BlockTransactions::try_new(transactions, u16::MAX).unwrap(),
             u32::MAX,
             &leader_key,
         )

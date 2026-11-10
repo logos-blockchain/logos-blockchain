@@ -5,7 +5,10 @@
 use core::{fmt::Debug, future, pin::Pin};
 use std::time::Instant;
 
-use futures::StreamExt as _;
+use futures::{
+    FutureExt as _, StreamExt as _,
+    future::{BoxFuture, OptionFuture},
+};
 use lb_chain_service::api::{ApiError, CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     block::{Block, BlockLimits, Proposal},
@@ -69,6 +72,24 @@ enum NetworkInput<Tx> {
     Proposal(Proposal),
     PolledTip(PolledTip),
     Orphan(Block<Tx>),
+}
+
+/// A block from the network being checked, and rebuilt from the mempool if it
+/// came as a proposal. That changes nothing, so it can run while the node's own
+/// blocks are applied.
+type Preparation<Tx> = BoxFuture<'static, Prepared<Tx>>;
+
+/// What a [`Preparation`] comes to.
+enum Prepared<Tx> {
+    /// A proposal's block, rebuilt and ready to apply.
+    Proposal(Block<Tx>),
+    /// A downloaded block ready to apply.
+    Orphan(Block<Tx>),
+    /// A block at or before the LIB, which the orphan downloader isn't to
+    /// fetch again.
+    OlderThanLib(HeaderId),
+    /// A block in the chain already, or a proposal that couldn't be rebuilt.
+    Skipped,
 }
 
 /// The block ingestion task, as seen by the service.
@@ -230,7 +251,14 @@ where
     /// they aren't published soon. Era changes come next. What peers send and
     /// chain recovery take turns after them, so that neither can hold the other
     /// up for good.
+    ///
+    /// A block from the network is checked, and rebuilt if it came as a
+    /// proposal, while the node's own blocks and era changes keep going ahead.
+    /// Only applying it takes its turn with them. The next block from the
+    /// network waits for it, so blocks are still applied one at a time and in
+    /// the order they're taken.
     async fn run(mut self, mut inputs: Inputs<Cryptarchia::Tx>) {
+        let mut preparation: Option<Preparation<Cryptarchia::Tx>> = None;
         loop {
             tokio::select! {
                 biased;
@@ -249,16 +277,21 @@ where
 
                 Some(change) = inputs.era_changes.recv() => self.follow_era(change).await,
 
+                Some(prepared) = OptionFuture::from(preparation.as_mut()) => {
+                    preparation = None;
+                    self.apply_prepared(prepared).await;
+                }
+
                 input = Self::next_network_input(
                     &mut inputs.proposals,
                     &mut inputs.polled_tips,
                     &mut self.orphan_downloader,
-                ) => match input {
+                ), if preparation.is_none() => match input {
                     NetworkInput::Proposal(proposal) => {
-                        self.handle_incoming_proposal(proposal).await;
+                        preparation = self.prepare_proposal(proposal);
                     }
                     NetworkInput::PolledTip(polled) => self.enqueue_polled_tip(polled),
-                    NetworkInput::Orphan(block) => self.handle_downloaded_orphan(block).await,
+                    NetworkInput::Orphan(block) => preparation = Some(self.prepare_orphan(block)),
                 },
             }
         }
@@ -301,85 +334,103 @@ where
         }
     }
 
-    async fn handle_incoming_proposal(&mut self, proposal: Proposal) {
-        let block_id = proposal.header().id();
-        let block_slot = proposal.header().slot();
+    /// Starts checking `proposal` and rebuilding its block, unless its header
+    /// or signature is bad.
+    fn prepare_proposal(&mut self, proposal: Proposal) -> Option<Preparation<Cryptarchia::Tx>> {
         metrics::consensus_proposals_received_total("network");
 
-        match should_process_block(&self.cryptarchia, block_id, block_slot).await {
-            Ok(()) => {}
-            Err(DoNotProcessBlock::OlderThanLib) => {
-                metrics::consensus_proposals_ignored_total("older_than_lib", "network");
-                self.orphan_downloader().insert_rejected_block(block_id);
-                return;
-            }
-            Err(DoNotProcessBlock::AlreadyApplied) => {
-                metrics::consensus_proposals_ignored_total("already_processed", "network");
-                return;
-            }
-        }
-
-        // Check the proposal before any mempool scanning.
+        // Check the proposal before any chain lookup or mempool scanning. It's
+        // the one check that tells the orphan downloader what it found, so it
+        // runs here, where the downloader can be reached.
         if let Err(e) = verify_proposal_and_cache_rejected(&proposal, self.orphan_downloader()) {
             metrics::consensus_observe_proposal_reconstruct_err("network", &e);
-            return;
+            return None;
         }
 
-        let reconstruct_started_at = Instant::now();
-        let block = match reconstruct_block_from_proposal(
-            proposal,
-            *self.block_limits.at_slot(block_slot).parameters,
-            &self.mempool,
-        )
-        .await
-        {
-            Ok(block) => {
-                metrics::consensus_observe_proposal_reconstruct_ok(
-                    reconstruct_started_at.elapsed(),
-                );
-                block
+        let block_limits = *self
+            .block_limits
+            .at_slot(proposal.header().slot())
+            .parameters;
+        let cryptarchia = self.cryptarchia.clone();
+        let mempool = self.mempool.clone();
+        let preparation = async move {
+            let block_id = proposal.header().id();
+            match should_process_block(&cryptarchia, block_id, proposal.header().slot()).await {
+                Ok(()) => {}
+                Err(DoNotProcessBlock::OlderThanLib) => {
+                    metrics::consensus_proposals_ignored_total("older_than_lib", "network");
+                    return Prepared::OlderThanLib(block_id);
+                }
+                Err(DoNotProcessBlock::AlreadyApplied) => {
+                    metrics::consensus_proposals_ignored_total("already_processed", "network");
+                    return Prepared::Skipped;
+                }
             }
-            Err(e) => {
-                metrics::consensus_observe_proposal_reconstruct_err("network", &e);
-                error!(
-                    target: LOG_TARGET,
-                    "Failed to reconstruct block from proposal: {:?}",
-                    e
-                );
-                // Deliberately not recorded against `block_id`. Failing to
-                // resolve a reference says the transaction has not reached
-                // *this* mempool, not that the block is invalid; the same block
-                // may arrive in full through chain synchronisation and must
-                // then be judged on its merits.
-                return;
-            }
-        };
 
-        log_received_block(&block);
-        let source = BlockSource::Proposal {
-            started_at: Instant::now(),
+            let reconstruct_started_at = Instant::now();
+            match reconstruct_block_from_proposal(proposal, block_limits, &mempool).await {
+                Ok(block) => {
+                    metrics::consensus_observe_proposal_reconstruct_ok(
+                        reconstruct_started_at.elapsed(),
+                    );
+                    Prepared::Proposal(block)
+                }
+                Err(e) => {
+                    metrics::consensus_observe_proposal_reconstruct_err("network", &e);
+                    error!(
+                        target: LOG_TARGET,
+                        "Failed to reconstruct block from proposal: {:?}",
+                        e
+                    );
+                    // Deliberately not recorded against `block_id`. Failing to
+                    // resolve a reference says the transaction has not reached
+                    // *this* mempool, not that the block is invalid; the same
+                    // block may arrive in full through chain synchronisation
+                    // and must then be judged on its merits.
+                    Prepared::Skipped
+                }
+            }
         };
-        self.apply_block(block, source).await;
+        Some(preparation.boxed())
     }
 
-    async fn handle_downloaded_orphan(&mut self, block: Block<Cryptarchia::Tx>) {
-        let header_id = block.header().id();
-        debug!(
-            target: LOG_TARGET,
-            "Processing block from orphan downloader: {header_id:?}"
-        );
+    /// Starts checking whether a downloaded block is still to be applied.
+    fn prepare_orphan(&self, block: Block<Cryptarchia::Tx>) -> Preparation<Cryptarchia::Tx> {
+        let cryptarchia = self.cryptarchia.clone();
+        async move {
+            let header_id = block.header().id();
+            debug!(
+                target: LOG_TARGET,
+                "Processing block from orphan downloader: {header_id:?}"
+            );
 
-        match should_process_block(&self.cryptarchia, header_id, block.header().slot()).await {
-            Ok(()) => {}
-            Err(DoNotProcessBlock::OlderThanLib) => {
-                self.orphan_downloader().insert_rejected_block(header_id);
-                return;
+            match should_process_block(&cryptarchia, header_id, block.header().slot()).await {
+                Ok(()) => Prepared::Orphan(block),
+                Err(DoNotProcessBlock::OlderThanLib) => Prepared::OlderThanLib(header_id),
+                Err(DoNotProcessBlock::AlreadyApplied) => Prepared::Skipped,
             }
-            Err(DoNotProcessBlock::AlreadyApplied) => return,
         }
+        .boxed()
+    }
 
-        log_received_block(&block);
-        self.apply_block(block, BlockSource::OrphanDownload).await;
+    async fn apply_prepared(&mut self, prepared: Prepared<Cryptarchia::Tx>) {
+        match prepared {
+            Prepared::Proposal(block) => {
+                log_received_block(&block);
+                let source = BlockSource::Proposal {
+                    started_at: Instant::now(),
+                };
+                self.apply_block(block, source).await;
+            }
+            Prepared::Orphan(block) => {
+                log_received_block(&block);
+                self.apply_block(block, BlockSource::OrphanDownload).await;
+            }
+            Prepared::OlderThanLib(block_id) => {
+                self.orphan_downloader().insert_rejected_block(block_id);
+            }
+            Prepared::Skipped => {}
+        }
     }
 
     /// Applies a block and handles the outcome.
@@ -510,11 +561,18 @@ mod tests {
         time::Duration,
     };
 
+    use futures::stream;
     use lb_chain_service::{AppliedBlock, ConsensusMsg, CryptarchiaInfo, Error as ChainError};
-    use lb_core::mantle::{SignedOps, TxHash};
+    use lb_core::{
+        era::ForkDigest,
+        mantle::{
+            SignedOps, TxHash,
+            transactions::{OpProofs, Ops, states::Unverified},
+        },
+    };
     use lb_cryptarchia_engine::{Slot, State};
     use lb_time::era::{EraEntriesAfterGenesis, EraTiming};
-    use lb_tx_service::MempoolMsg;
+    use lb_tx_service::{MempoolMsg, TxsByPrefix};
     use overwatch::services::{
         ServiceData,
         relay::{InboundRelay, Relay},
@@ -523,7 +581,7 @@ mod tests {
     use tokio::time::timeout;
 
     use super::*;
-    use crate::tests::{NoopNetworkAdapter, block};
+    use crate::tests::{NoopNetworkAdapter, block, block_carrying};
 
     const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -563,7 +621,8 @@ mod tests {
     struct Started {
         chain: StubChain,
         ingestion: Ingestion,
-        _mempool: InboundRelay<MempoolMsg<HeaderId, Tx, Tx, TxHash>>,
+        /// The mempool's end of the relay.
+        mempool: InboundRelay<MempoolMsg<HeaderId, Tx, Tx, TxHash>>,
     }
 
     fn started() -> Started {
@@ -586,7 +645,7 @@ mod tests {
         Started {
             chain: StubChain(chain),
             ingestion,
-            _mempool: mempool,
+            mempool,
         }
     }
 
@@ -614,7 +673,7 @@ mod tests {
         let Started {
             mut chain,
             ingestion,
-            _mempool,
+            mempool: _mempool,
         } = started();
         let ((local_blocks, proposals, _polled_tips, _era_changes), inputs) = channels();
         let proposal = block::<Tx>(1);
@@ -631,6 +690,66 @@ mod tests {
         let _task: CancellableHandle<()> = spawn("test/ingestion", ingestion.run(inputs)).into();
 
         assert_eq!(chain.next_block().await.0, local_id);
+    }
+
+    /// A transaction with no operations, which is all a block needs to carry
+    /// one.
+    fn transaction() -> Tx {
+        SignedOps::<Unverified, StandardMode>::from_parts(
+            Ops::new(ForkDigest::new([1; 32]), []),
+            OpProofs::empty(),
+        )
+        .unwrap()
+        .preverify()
+        .unwrap()
+    }
+
+    /// The node's own block doesn't wait for a proposal still being rebuilt
+    /// from the mempool, and the proposal is applied after it once the mempool
+    /// answers.
+    #[tokio::test]
+    async fn a_local_block_goes_ahead_of_a_proposal_being_rebuilt() {
+        let Started {
+            mut chain,
+            ingestion,
+            mut mempool,
+        } = started();
+        let ((local_blocks, proposals, _polled_tips, _era_changes), inputs) = channels();
+        let transaction = transaction();
+        let proposal = block_carrying(1, vec![transaction.clone()]);
+        let proposal_id = proposal.header().id();
+        let local = block(2);
+        let local_id = local.header().id();
+        let _task: CancellableHandle<()> = spawn("test/ingestion", ingestion.run(inputs)).into();
+
+        proposals.try_send(proposal.to_proposal()).unwrap();
+        let lookup = timeout(REPLY_TIMEOUT, async {
+            loop {
+                tokio::select! {
+                    // Queries go unanswered, as in `StubChain::next_block`.
+                    Some(_) = chain.0.recv() => {}
+                    Some(request) = mempool.recv() => {
+                        if let MempoolMsg::GetTransactionsByPrefixes { reply_channel, .. } = request {
+                            break reply_channel;
+                        }
+                    }
+                }
+            }
+        })
+        .await
+        .expect("The proposal's transaction should be looked up in the mempool.");
+
+        let (resp, _result) = oneshot::channel();
+        assert!(
+            local_blocks
+                .try_send(LocalBlock { block: local, resp })
+                .is_ok()
+        );
+        assert_eq!(chain.next_block().await.0, local_id);
+
+        let found: TxsByPrefix<Tx> = Box::pin(stream::iter([transaction]));
+        assert!(lookup.send(Ok(found)).is_ok());
+        assert_eq!(chain.next_block().await.0, proposal_id);
     }
 
     /// A tip some peer is at, as the tip poller hands it over.
