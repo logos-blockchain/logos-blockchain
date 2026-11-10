@@ -27,7 +27,7 @@ use lb_core::{
         ledger::verification_mode::{StandardMode, VerificationMode},
         note_set::LEDGER_SET,
         notes::derive_note_nullifier,
-        ops::{OpRef, ZkTransferProof, transfer::prove_transfer},
+        ops::{OpRef, ZkTransferProof, transfer::test_utils::prove_transfer},
         traits::Hashable as _,
         transactions::{
             GasPrices, MantleTxBuilder, OpProofs,

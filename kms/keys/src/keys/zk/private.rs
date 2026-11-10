@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr, fr_from_bytes_unchecked, fr_from_mod_bytes};
 use lb_poseidon2::{Digest, Poseidon2Bn254Hasher};
-use lb_zktransfer::ZkTransferProof;
+use lb_zktransfer::{ZkTransferProof, ZkTransferSecretKeysError, ZkTransferWitnessInputsData};
 use num_bigint::BigUint;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -13,6 +13,12 @@ use crate::keys::{
     errors::KeyError,
     zk::{ZkTransferPayload, public::PublicKey},
 };
+
+fn prove(witness: ZkTransferWitnessInputsData) -> Result<ZkTransferProof, KeyError> {
+    lb_zktransfer::prove(witness.into())
+        .map(|(proof, _)| proof)
+        .map_err(|e| KeyError::ZkTransferProve(e.to_string()))
+}
 
 static KDF: LazyLock<Fr> = LazyLock::new(|| fr_from_bytes_unchecked(b"KDF"));
 static NF_KDF_V1: LazyLock<Fr> = LazyLock::new(|| fr_from_bytes_unchecked(b"NF_KDF_V1"));
@@ -54,32 +60,27 @@ impl SecretKey {
         self.0
     }
 
-    // keys[i] proves the i-th active input
+    // keys[i] proves the i-th input
     pub fn prove_transfer(
         keys: &[Self],
-        mut payload: ZkTransferPayload,
+        payload: ZkTransferPayload,
     ) -> Result<ZkTransferProof, KeyError> {
-        let active = payload
-            .chain
-            .inputs_active
-            .iter()
-            .filter(|active| **active)
-            .count();
-        if keys.len() != active {
-            return Err(KeyError::UnsupportedMultisignatureSize(active, keys.len()));
-        }
-        let active_inputs = payload
-            .wallet
-            .inputs
-            .iter_mut()
-            .zip(payload.chain.inputs_active)
-            .filter_map(|(input, active)| active.then_some(input));
-        for (input, key) in active_inputs.zip(keys) {
-            input.secret_key = key.0;
-        }
-        lb_zktransfer::prove(payload.into())
-            .map(|(proof, _)| proof)
-            .map_err(|e| KeyError::ZkTransferProve(e.to_string()))
+        let secret_keys: Vec<Fr> = keys.iter().map(|key| key.0).collect();
+        let witness = payload
+            .with_secret_keys(&secret_keys)
+            .map_err(|ZkTransferSecretKeysError::KeyCount { inputs, keys }| {
+                KeyError::UnsupportedMultisignatureSize(inputs, keys)
+            })?
+            .build();
+        prove(witness)
+    }
+
+    // This key proves every input, the notes of a single holder.
+    pub fn prove_transfer_alone(
+        &self,
+        payload: ZkTransferPayload,
+    ) -> Result<ZkTransferProof, KeyError> {
+        prove(payload.with_secret_key(self.0).build())
     }
 
     /// The nullifier key `nf_sk = zkhash(NF_KDF_V1, spending_sk)`, which

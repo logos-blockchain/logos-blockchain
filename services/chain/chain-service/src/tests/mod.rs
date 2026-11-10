@@ -28,7 +28,7 @@ use lb_core::{
                 config::ChannelConfigOp,
                 inscribe::{Inscription, InscriptionOp, MiniBlocks},
             },
-            transfer::{TransferOp, prove_transfer},
+            transfer::{TransferOp, test_utils::prove_transfer},
         },
         traits::Hashable as _,
         transactions::{

@@ -8,7 +8,7 @@ use lb_core::mantle::{
     notes::{InputNullifiers, derive_note_nullifier},
     ops::{
         ZkTransferProof,
-        transfer::{TransferOp, prove_transfer},
+        transfer::{TransferOp, test_utils::prove_transfer},
     },
     traits::Hashable as _,
     transactions::{OpProofs, Ops, hash::TxHash, states::Unverified},

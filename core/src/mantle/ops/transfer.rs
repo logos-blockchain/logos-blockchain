@@ -1,10 +1,9 @@
 use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
-use lb_groth16::{AdditiveGroup as _, Fr, serde::serde_fr};
+use lb_groth16::{Fr, serde::serde_fr};
 use lb_mmr::MerklePath;
 use lb_zktransfer::{
-    MAX_INPUTS, MAX_OUTPUTS, ZkTransferChainInputsData, ZkTransferInputNoteData,
-    ZkTransferInputsError, ZkTransferOutputNoteData, ZkTransferWalletInputsData,
-    ZkTransferWitnessInputsData,
+    ZkTransferInputsError, ZkTransferOutputNoteData, ZkTransferUnsignedInput,
+    ZkTransferWitnessBuilder,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -182,95 +181,90 @@ impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<TransferOp,
     }
 }
 
-// The witness of a ZkTransfer from note openings and their paths in the
-// commitment MMR, the secret keys of the inputs left 0 for the prover to fill.
+/// The witness of a `ZkTransfer` from note openings and their paths in the
+/// commitment MMR, without the secret keys of the inputs, which their holders
+/// add.
+///
+/// # Panics
+///
+/// If the circuit does not fit the notes: at most 4 inputs and 8 outputs.
 #[must_use]
 pub fn transfer_witness(
     inputs: &[(Note, MerklePath)],
     outputs: &[Note],
     tx_commitment_root: Fr,
     msg: Fr,
-) -> ZkTransferWitnessInputsData {
-    assert!(
-        inputs.len() <= MAX_INPUTS,
-        "a ZkTransfer spends at most 4 notes"
-    );
-    assert!(
-        outputs.len() <= MAX_OUTPUTS,
-        "a ZkTransfer creates at most 8 notes"
-    );
-    let wallet = ZkTransferWalletInputsData {
-        inputs: core::array::from_fn(|i| {
-            inputs
-                .get(i)
-                .map_or_else(ZkTransferInputNoteData::inactive, |(note, path)| {
-                    ZkTransferInputNoteData {
-                        secret_key: Fr::ZERO,
-                        stake_public_key: *note.stake_public_key.as_fr(),
-                        nonce: note.nonce,
-                        value: note.value,
-                        path_and_selectors: core::array::from_fn(|h| {
-                            (path.siblings()[h], (path.leaf_index() >> h) & 1 == 1)
-                        }),
-                    }
-                })
-        }),
-        outputs: core::array::from_fn(|j| {
-            outputs
-                .get(j)
-                .map_or_else(ZkTransferOutputNoteData::inactive, |note| {
-                    ZkTransferOutputNoteData {
-                        public_key: *note.public_key.as_fr(),
-                        stake_public_key: *note.stake_public_key.as_fr(),
-                        nonce: note.nonce,
-                        value: note.value,
-                    }
-                })
-        }),
-    };
-    let chain = ZkTransferChainInputsData {
-        inputs_active: core::array::from_fn(|i| i < inputs.len()),
-        outputs_active: core::array::from_fn(|j| j < outputs.len()),
-        tx_commitment_root,
-        msg,
-    };
-    ZkTransferWitnessInputsData::from_chain_and_wallet_data(chain, wallet)
-}
-
-// Proves a ZkTransfer from note openings and their commitment MMR paths, used
-// by tests. Each input is a note, its secret key and
-// its path in the commitment MMR.
-#[must_use]
-pub fn prove_transfer(
-    inputs: &[(Note, Fr, MerklePath)],
-    outputs: &[Note],
-    tx_commitment_root: Fr,
-    msg: Fr,
-) -> lb_zktransfer::ZkTransferProof {
-    let openings: Vec<(Note, MerklePath)> = inputs
+) -> ZkTransferWitnessBuilder {
+    inputs
         .iter()
-        .map(|(note, _, path)| (*note, path.clone()))
-        .collect();
-    let mut witness = transfer_witness(&openings, outputs, tx_commitment_root, msg);
-    for (input, (_, secret_key, _)) in witness.wallet.inputs.iter_mut().zip(inputs) {
-        input.secret_key = *secret_key;
-    }
-    lb_zktransfer::prove(witness.into())
-        .expect("the witness proves")
-        .0
+        .try_fold(
+            ZkTransferWitnessBuilder::new(tx_commitment_root, msg),
+            |builder, (note, path)| {
+                builder.input(ZkTransferUnsignedInput {
+                    stake_public_key: *note.stake_public_key.as_fr(),
+                    nonce: note.nonce,
+                    value: note.value,
+                    path_and_selectors: core::array::from_fn(|h| {
+                        (path.siblings()[h], (path.leaf_index() >> h) & 1 == 1)
+                    }),
+                })
+            },
+        )
+        .and_then(|builder| {
+            outputs.iter().try_fold(builder, |builder, note| {
+                builder.output(ZkTransferOutputNoteData {
+                    public_key: *note.public_key.as_fr(),
+                    stake_public_key: *note.stake_public_key.as_fr(),
+                    nonce: note.nonce,
+                    value: note.value,
+                })
+            })
+        })
+        .expect("a ZkTransfer spends at most 4 notes and creates at most 8")
 }
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils {
-    pub use super::prove_transfer;
+    use lb_groth16::Fr;
+    use lb_mmr::MerklePath;
+
+    use super::transfer_witness;
+    use crate::mantle::notes::Note;
+
+    /// Proves a `ZkTransfer` from note openings and their commitment MMR
+    /// paths. Each input is a note, its secret key and its path in the
+    /// commitment MMR.
+    #[must_use]
+    pub fn prove_transfer(
+        inputs: &[(Note, Fr, MerklePath)],
+        outputs: &[Note],
+        tx_commitment_root: Fr,
+        msg: Fr,
+    ) -> lb_zktransfer::ZkTransferProof {
+        let openings: Vec<(Note, MerklePath)> = inputs
+            .iter()
+            .map(|(note, _, path)| (*note, path.clone()))
+            .collect();
+        let secret_keys: Vec<Fr> = inputs
+            .iter()
+            .map(|(_, secret_key, _)| *secret_key)
+            .collect();
+        let witness = transfer_witness(&openings, outputs, tx_commitment_root, msg)
+            .with_secret_keys(&secret_keys)
+            .expect("one secret key per input")
+            .build();
+        lb_zktransfer::prove(witness.into())
+            .expect("the witness proves")
+            .0
+    }
 }
 
 #[cfg(test)]
 mod test {
-    use lb_groth16::{Field as _, Groth16Input};
+    use lb_groth16::{AdditiveGroup as _, Field as _, Groth16Input};
     use lb_key_management_system_keys::keys::{ZkKey, ZkPublicKey};
 
-    use super::*;
+    use super::{test_utils::prove_transfer, *};
     use crate::mantle::{
         TxHash,
         gas::test_utils::FixedThresholds,
@@ -543,7 +537,7 @@ mod test {
     }
 
     #[test]
-    fn transfer_witness_leaves_the_secret_keys_to_the_prover() {
+    fn transfer_witness_leaves_the_secret_keys_to_their_holders() {
         let input = Note::new(1_000, Fr::from(11u64), ZkPublicKey::new(Fr::from(2u64)));
         let (mmr, path) = CommitmentMmr::new()
             .push(NoteCommitment(Fr::from(4u64)))
@@ -557,7 +551,9 @@ mod test {
             mmr.frontier_root(),
             Fr::from(77u64),
         );
-        assert_eq!(witness.wallet.inputs[0].secret_key, Fr::ZERO);
+        assert_eq!(witness.inputs_len(), 1);
+        let witness = witness.with_secret_key(Fr::from(5u64)).build();
+        assert_eq!(witness.wallet.inputs[0].secret_key, Fr::from(5u64));
         assert_eq!(
             witness.wallet.inputs[0].path_and_selectors[0],
             (Fr::from(4u64), true)

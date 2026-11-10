@@ -1290,13 +1290,13 @@ mod tests {
             Fr::from(77u64),
         )
         .unwrap();
-        assert_eq!(witnesses[0].witness.chain.tx_commitment_root, root);
+        assert_eq!(witnesses[0].witness.tx_commitment_root(), root);
         let path_at_root = wallet.wallet_state_at(block_id(36)).unwrap().notes[&note.commitment()]
             .path
             .clone();
         assert!(path_at_root.verify::<ZkHasher>(note.commitment().0, root));
         assert_eq!(
-            witnesses[0].witness.wallet.inputs[0].path_and_selectors[0].0,
+            witnesses[0].witness.inputs()[0].path_and_selectors[0].0,
             path_at_root.siblings()[0]
         );
 

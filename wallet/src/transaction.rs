@@ -15,7 +15,7 @@ use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_mmr::{MerklePath, PushWithPathsError};
 use lb_utils::bounded::BoundedError;
-use lb_zktransfer::{MAX_INPUTS, MAX_OUTPUTS, ZkTransferWitnessInputsData};
+use lb_zktransfer::{MAX_INPUTS, MAX_OUTPUTS, ZkTransferWitnessBuilder};
 
 use crate::{KnownNotes, WalletError, WalletState};
 
@@ -27,12 +27,12 @@ pub struct WitnessContext {
     pub pow_epoch_reward: Value,
 }
 
-// The ZkTransfer witness of one Operation, its secret keys left 0 for the
-// holders of `signers` (in input order) to fill.
+// The ZkTransfer witness of one Operation, without the secret keys, which the
+// holders of `signers` (in input order) add.
 #[derive(Clone, Debug)]
 pub struct OpWitness {
     pub op_index: usize,
-    pub witness: ZkTransferWitnessInputsData,
+    pub witness: ZkTransferWitnessBuilder,
     pub signers: Vec<ZkPublicKey>,
 }
 
@@ -405,7 +405,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::too_many_lines, reason = "Test function.")]
     fn op_witnesses_chain_the_buffer_and_prove_withdrawals_against_the_service_note() {
         let owned = Note::new(1_000, Fr::from(1u64), pk(1));
         let service = Note::new(500, Fr::from(2u64), pk(3));
@@ -475,7 +474,7 @@ mod tests {
         .unwrap();
         let roots: Vec<Fr> = witnesses
             .iter()
-            .map(|w| w.witness.chain.tx_commitment_root)
+            .map(|w| w.witness.tx_commitment_root())
             .collect();
         assert_eq!(
             roots,
@@ -498,7 +497,7 @@ mod tests {
         // `exact` is leaf 1 of the extended ledger set: its level 0 sibling is `owned`,
         // on the left.
         assert_eq!(
-            witnesses[1].witness.wallet.inputs[0].path_and_selectors[0],
+            witnesses[1].witness.inputs()[0].path_and_selectors[0],
             (owned.commitment().0, true)
         );
         assert_eq!(
@@ -508,11 +507,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![vec![pk(1)], vec![pk(1)], vec![pk(3)]]
         );
-        assert!(
-            witnesses
-                .iter()
-                .all(|w| w.witness.chain.msg == Fr::from(77u64))
-        );
+        assert!(witnesses.iter().all(|w| w.witness.msg() == Fr::from(77u64)));
     }
 
     #[test]
@@ -552,7 +547,7 @@ mod tests {
         .unwrap();
         assert_eq!(witness.op_index, 1);
         assert_eq!(
-            witness.witness.chain.tx_commitment_root,
+            witness.witness.tx_commitment_root(),
             CommitmentMmr::new()
                 .push(owned.commitment())
                 .unwrap()
