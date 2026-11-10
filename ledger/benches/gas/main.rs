@@ -26,12 +26,9 @@ mod micro;
 mod ops;
 
 #[cfg(target_os = "linux")]
-use cycles::{Case, Counter};
+use cycles::{Case, Counter, ROUNDS};
 #[cfg(target_os = "linux")]
 use rand::seq::SliceRandom as _;
-
-#[cfg(target_os = "linux")]
-const ROUNDS: usize = 15;
 
 #[cfg(target_os = "linux")]
 fn run_cases(mut cases: Vec<Case>, counter: &mut Counter, rounds: usize) {

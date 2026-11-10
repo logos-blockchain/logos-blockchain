@@ -13,7 +13,7 @@ use lb_core::{
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         note_set::{LEDGER_SET, NoteSet, NoteSets, RECENT_ROOTS_WINDOW, TxRoots, eligible_leaf},
-        notes::{InputNullifiers, OutputCommitments},
+        notes::{InputNullifiers, NoteNullifier, OutputCommitments},
         ops::{
             ChannelInscribeProof, StepProof,
             channel::{
@@ -38,12 +38,12 @@ use lb_zktransfer::ZkTransferVerifierInput;
 use rand::{Rng as _, SeedableRng as _, rngs::StdRng};
 
 use crate::{
-    cycles::{Case, Counter},
+    cycles::{Case, Counter, ROUNDS, in_turn},
     fixture::{HeaderId, commitments, filled_state, nullifiers, program_key, signed},
 };
 
 const BATCH_SIZES: [u64; 9] = [1, 2, 4, 8, 16, 32, 64, 128, 256];
-const BUFFERED: [u64; 7] = [0, 1, 2, 4, 8, 16, 32];
+const BUFFERED: [u64; 11] = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512];
 const HASHED_BYTES: [u64; 7] = [0, 64, 256, 1024, 4096, 16384, 65536];
 const INSCRIBED_BYTES: [u64; 6] = [0, 256, 1024, 4096, 16384, 65536];
 const MMR_MERGES: [u64; 6] = [0, 1, 2, 4, 8, 12];
@@ -221,21 +221,24 @@ fn hash_cases(rng: &mut StdRng) -> Vec<Case> {
 
 fn tree_cases() -> Vec<Case> {
     let set = ledger_set();
-    let nullifier = nullifiers(1, 0x1a7);
+    // Each round inserts or looks up its own absent nullifier, its low leaf
+    // elsewhere in the tree, the insertion into a clone of the set, so that no
+    // round finds the path of an earlier one in the caches.
+    let mut inserted = in_turn(nullifiers(ROUNDS, 0x1a7));
+    let absent = in_turn(nullifiers(ROUNDS, 0x1a7));
     let commitment = commitments(1, 0x33a);
-    let absent = nullifier[0];
     let mut cases = vec![
         case(
             "micro/imt_insert",
             vec![],
-            || ledger_set().clone(),
-            move |set: NoteSet| set.execute_spending(&nullifier),
+            move || (ledger_set().clone(), [inserted()]),
+            |(set, nullifier): (NoteSet, [NoteNullifier; 1])| set.execute_spending(&nullifier),
         ),
         case(
             "micro/imt_contains",
             vec![],
-            || (),
-            move |()| ledger_set().contains_nullifier(&absent),
+            absent,
+            |nullifier: NoteNullifier| ledger_set().contains_nullifier(&nullifier),
         ),
         case(
             "micro/mmr_frontier_root",

@@ -75,3 +75,18 @@ pub struct Case {
     pub dims: Vec<(&'static str, u64)>,
     pub run: Box<dyn FnMut(&mut Counter) -> u64>,
 }
+
+/// The rounds of a run of the benchmark, each running every case once.
+pub const ROUNDS: usize = 15;
+
+/// A setup handing out `values` in turn, one per call: given one value per
+/// round, each round of a case gets its own.
+pub fn in_turn<T: Clone>(values: Vec<T>) -> impl FnMut() -> T {
+    assert!(!values.is_empty(), "a setup hands out at least one value");
+    let mut next = 0;
+    move || {
+        let value = values[next % values.len()].clone();
+        next += 1;
+        value
+    }
+}

@@ -110,10 +110,16 @@ fn mmr_push_costs_more_with_more_merges_and_the_root_hashes_every_height() {
 
 #[test]
 fn step_root_costs_more_with_more_buffered_commitments() {
+    let mut cases = micro::micro_cases();
     assert_costlier(
-        &mut micro::micro_cases(),
+        &mut cases,
         ("micro/step_root", &[("buffered", 32)]),
         ("micro/step_root", &[("buffered", 0)]),
+    );
+    assert_costlier(
+        &mut cases,
+        ("micro/step_root", &[("buffered", 512)]),
+        ("micro/step_root", &[("buffered", 32)]),
     );
 }
 

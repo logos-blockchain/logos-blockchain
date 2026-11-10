@@ -20,7 +20,7 @@ mod fixture;
 #[path = "../benches/gas/ops.rs"]
 mod ops;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cycles::{Case, Counter};
 use lb_core::{
@@ -57,11 +57,42 @@ fn series(names: impl Iterator<Item = &'static str>) -> BTreeMap<&'static str, u
 #[test]
 fn every_op_case_applies() {
     for shape in ops::op_shapes() {
-        let (_, _, _, deferred) = ops::execute(shape.state.clone(), &shape.config, &shape.bytes)
-            .unwrap_or_else(|error| panic!("{} {:?}: {error}", shape.name, shape.dims));
+        for (round, bytes) in shape.bytes.iter().enumerate() {
+            let (_, _, _, deferred) = ops::execute(shape.state.clone(), &shape.config, bytes)
+                .unwrap_or_else(|error| {
+                    panic!("{} {:?} round {round}: {error}", shape.name, shape.dims)
+                });
+            assert_eq!(
+                ops::Deferred::of(&deferred),
+                shape.deferred,
+                "{} {:?} round {round}",
+                shape.name,
+                shape.dims
+            );
+        }
+    }
+}
+
+// A case spending notes spends fresh ones in each round, so that none is
+// measured with the path of its nullifier in the caches: its transaction
+// differs from one round to the next.
+#[test]
+fn each_round_of_a_spending_case_has_its_own_transaction() {
+    for shape in ops::op_shapes() {
+        let spends = match shape.name {
+            "op/transfer"
+            | "op/deposit"
+            | "op/withdraw"
+            | "op/inscribe_program"
+            | "op/sdp_declare"
+            | "op/sdp_withdraw" => true,
+            "op/inscribe" => dim(&shape.dims, "user_steps") != Some(0),
+            _ => false,
+        };
+        let distinct: BTreeSet<&Vec<u8>> = shape.bytes.iter().collect();
         assert_eq!(
-            ops::Deferred::of(&deferred),
-            shape.deferred,
+            distinct.len(),
+            if spends { cycles::ROUNDS } else { 1 },
             "{} {:?}",
             shape.name,
             shape.dims
@@ -75,9 +106,10 @@ fn the_op_cases_cover_every_series() {
     let expected = BTreeMap::from([
         ("op/claim_pow", 1),
         ("op/config", 4),
+        ("op/config_keys", 6),
         ("op/deposit", 11),
-        ("op/inscribe", 13),
-        ("op/inscribe_program", 24),
+        ("op/inscribe", 20),
+        ("op/inscribe_program", 30),
         ("op/program_register", 1),
         ("op/sdp_active", 1),
         ("op/sdp_declare", 4),
@@ -122,6 +154,96 @@ fn a_larger_payload_costs_more_cycles() {
     let empty = cycles_of(&mut cases, "op/inscribe", &dims(0), &mut counter);
     let large = cycles_of(&mut cases, "op/inscribe", &dims(16_384), &mut counter);
     assert!(large > empty, "payload=16384: {large}, payload=0: {empty}");
+}
+
+#[test]
+fn more_channel_keys_cost_more_cycles() {
+    let mut counter = Counter::new().expect("counters must be available and the process pinned");
+    let mut cases = ops::op_cases();
+    let dims = |keys| [("keys", keys), ("threshold", 1)];
+    let one = cycles_of(&mut cases, "op/config_keys", &dims(1), &mut counter);
+    let many = cycles_of(&mut cases, "op/config_keys", &dims(1024), &mut counter);
+    assert!(many > one, "keys=1024: {many}, keys=1: {one}");
+}
+
+#[test]
+fn the_keys_of_the_key_series_are_distinct() {
+    let most = *ops::CONFIG_KEYS.last().expect("a key count");
+    let keys: BTreeSet<[u8; 32]> = (0..most)
+        .map(|index| *ops::config_key(index).public_key().as_bytes())
+        .collect();
+    assert_eq!(keys.len(), usize::from(most));
+}
+
+#[test]
+fn longer_inscriptions_cost_more_cycles() {
+    let mut counter = Counter::new().expect("counters must be available and the process pinned");
+    let mut cases = ops::op_cases();
+    let user = |steps| {
+        [
+            ("user_steps", steps),
+            ("outputs", steps),
+            ("buffered", 0),
+            ("payload", 0),
+        ]
+    };
+    let short = cycles_of(&mut cases, "op/inscribe", &user(16), &mut counter);
+    let long = cycles_of(&mut cases, "op/inscribe", &user(512), &mut counter);
+    assert!(
+        long > short,
+        "user_steps=512: {long}, user_steps=16: {short}"
+    );
+    let program = |deposits| {
+        [
+            ("program_deposits", deposits),
+            ("program_inputs", 1),
+            ("program_outputs", 1),
+            ("openings", 0),
+        ]
+    };
+    let short = cycles_of(
+        &mut cases,
+        "op/inscribe_program",
+        &program(16),
+        &mut counter,
+    );
+    let long = cycles_of(
+        &mut cases,
+        "op/inscribe_program",
+        &program(256),
+        &mut counter,
+    );
+    assert!(
+        long > short,
+        "program_deposits=256: {long}, program_deposits=16: {short}"
+    );
+}
+
+// The ends of the user step and program deposit series are transactions a
+// block takes, within its Execution Gas limit.
+#[test]
+fn the_longest_inscriptions_fit_the_execution_gas_limit() {
+    let shapes = ops::op_shapes();
+    for (name, dimension, count) in [
+        ("op/inscribe", "user_steps", ops::MOST_USER_STEPS),
+        (
+            "op/inscribe_program",
+            "program_deposits",
+            ops::MOST_PROGRAM_DEPOSITS,
+        ),
+    ] {
+        let shape = shapes
+            .iter()
+            .find(|shape| shape.name == name && dim(&shape.dims, dimension) == Some(count as u64))
+            .unwrap_or_else(|| panic!("no case {name} {dimension}={count}"));
+        let (.., deferred) = block::execute(shape.state.clone(), &shape.config, &shape.bytes[..1])
+            .unwrap_or_else(|error| panic!("{name} {dimension}={count}: {error}"));
+        assert_eq!(
+            ops::Deferred::of(&deferred),
+            shape.deferred,
+            "{name} {dimension}={count}"
+        );
+    }
 }
 
 #[test]
@@ -346,7 +468,7 @@ fn the_mixed_block_holds_64_transactions_of_its_counted_shape() {
 
 #[test]
 fn no_two_cases_share_a_name_and_dimensions() {
-    let mut seen = std::collections::BTreeSet::new();
+    let mut seen = BTreeSet::new();
     for case in ops::op_cases().into_iter().chain(block::block_cases()) {
         assert!(
             seen.insert((case.name, case.dims.clone())),

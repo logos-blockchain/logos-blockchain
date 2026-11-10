@@ -72,7 +72,7 @@ use logos_blockchain_ledger::{
 };
 
 use crate::{
-    cycles::Case,
+    cycles::{Case, ROUNDS, in_turn},
     fixture::{HeaderId, commitments, filled_state, nullifiers},
 };
 
@@ -106,14 +106,16 @@ impl Deferred {
     }
 }
 
-/// One encoded transaction, the state and the config it applies to, and the
-/// proofs it defers.
+/// The encodings of one transaction, the state and the config it applies to,
+/// and the proofs it defers. A transaction spending notes has one encoding per
+/// round, from [`each_round`], each spending its own nullifiers; any other may
+/// have a single one.
 pub struct OpShape {
     pub name: &'static str,
     pub dims: Vec<(&'static str, u64)>,
     pub state: LedgerState,
     pub config: EraScheduledConfig,
-    pub bytes: Vec<u8>,
+    pub bytes: Vec<Vec<u8>>,
     pub deferred: Deferred,
 }
 
@@ -121,7 +123,7 @@ impl OpShape {
     fn on_fixture(
         name: &'static str,
         dims: Vec<(&'static str, u64)>,
-        bytes: Vec<u8>,
+        bytes: Vec<Vec<u8>>,
         deferred: Deferred,
     ) -> Self {
         let fixture = filled_state();
@@ -137,6 +139,8 @@ impl OpShape {
 
     // A case measuring the transaction, once checked to apply and to defer
     // the proofs of its shape, so that no run measures an early rejection.
+    // Each round applies its own encoding to a clone of the state, so that
+    // nothing a round spends stays for the next.
     fn into_case(self) -> Case {
         let Self {
             name,
@@ -146,15 +150,16 @@ impl OpShape {
             bytes,
             deferred,
         } = self;
-        let (.., proofs) = execute(state.clone(), &config, &bytes)
+        let (.., proofs) = execute(state.clone(), &config, &bytes[0])
             .unwrap_or_else(|error| panic!("{name} {dims:?}: {error}"));
         assert_eq!(Deferred::of(&proofs), deferred, "{name} {dims:?}");
+        let mut next_bytes = in_turn(bytes);
         Case {
             name,
             dims,
             run: Box::new(move |counter| {
                 counter.measure(
-                    || (state.clone(), bytes.clone()),
+                    || (state.clone(), next_bytes()),
                     |(state, bytes)| {
                         let applied = execute(state, &config, &bytes).expect("the case applies");
                         (bytes, applied)
@@ -286,6 +291,20 @@ pub fn fresh_commitments(count: usize, salt: u64) -> OutputCommitments {
         .expect("the outputs fit a list")
 }
 
+/// The salt the round `round` of a case adds to the salts of its notes, in bits
+/// none of them uses.
+pub const fn round_salt(round: usize) -> u64 {
+    (round as u64) << 32
+}
+
+/// The encodings of a transaction, one per round, `encode` given the salt of
+/// the round: each round spends its own fresh nullifiers, whose low leaves are
+/// elsewhere in the tree, so that no round reads the paths an earlier one left
+/// in the caches.
+pub fn each_round(encode: impl Fn(u64) -> Vec<u8>) -> Vec<Vec<u8>> {
+    (0..ROUNDS).map(|round| encode(round_salt(round))).collect()
+}
+
 fn transfer_op(inputs: usize, outputs: usize, salt: u64) -> TransferOp {
     TransferOp::new(
         fresh_nullifiers(inputs, salt),
@@ -322,7 +341,7 @@ fn transfers() -> Vec<OpShape> {
             OpShape::on_fixture(
                 "op/transfer",
                 io_dims(inputs, outputs),
-                transfer_tx(inputs, outputs, 0),
+                each_round(|salt| transfer_tx(inputs, outputs, salt)),
                 Deferred::transfers(1),
             )
         })
@@ -385,10 +404,24 @@ pub fn channel_tip() -> MsgId {
         .tip_message
 }
 
-// `buffered` is the number of commitments the last mini-block covers.
-fn user_inscription_shape(mini_blocks: Vec<Vec<Step>>, buffered: u16, payload: usize) -> OpShape {
-    let user_steps = mini_blocks.iter().map(Vec::len).sum::<usize>();
-    let outputs: usize = mini_blocks
+/// The most user steps of one input and one output an inscription of no
+/// payload carries within the Execution Gas limit, at the gas prices of the
+/// node: the end of the step series.
+pub const MOST_USER_STEPS: usize = 518;
+
+/// The user steps of the step series of `op/inscribe`.
+pub const USER_STEPS: [usize; 12] = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, MOST_USER_STEPS];
+
+// `buffered` is the number of commitments the last mini-block covers; the
+// mini-blocks of round salt `salt` are `mini_blocks(salt)`.
+fn user_inscription_shape(
+    mini_blocks: impl Fn(u64) -> Vec<Vec<Step>>,
+    buffered: u16,
+    payload: usize,
+) -> OpShape {
+    let first = mini_blocks(round_salt(0));
+    let user_steps = first.iter().map(Vec::len).sum::<usize>();
+    let outputs: usize = first
         .iter()
         .flatten()
         .map(|step| step.created().count())
@@ -396,7 +429,7 @@ fn user_inscription_shape(mini_blocks: Vec<Vec<Step>>, buffered: u16, payload: u
     let step_proofs: Vec<StepProof> = (0..user_steps)
         .map(|index| StepProof::User(zk_transfer(index)))
         .collect();
-    let op = inscription_of_mini_blocks(channel_tip(), mini_blocks, payload);
+    let tip = channel_tip();
     OpShape::on_fixture(
         "op/inscribe",
         vec![
@@ -405,48 +438,63 @@ fn user_inscription_shape(mini_blocks: Vec<Vec<Step>>, buffered: u16, payload: u
             ("buffered", u64::from(buffered)),
             ("payload", payload as u64),
         ],
-        encode_inscription(op, &step_proofs),
+        each_round(|salt| {
+            let op = inscription_of_mini_blocks(tip, mini_blocks(salt), payload);
+            encode_inscription(op, &step_proofs)
+        }),
         Deferred::transfers(user_steps),
     )
 }
 
 // Three series, each step spending one note: the user steps of one output at
-// no buffered output and no payload; a step of one output in a second
-// mini-block covering the outputs of the first, one step creating them; the
-// payload of one step of one output. The outputs of all the steps are a
-// dimension, the buffered series being the only one where they differ from the
-// steps.
+// no buffered output and no payload, in one mini-block; a step of one output
+// in a second mini-block covering the outputs of the first, one step creating
+// them; the payload of one step of one output. The outputs of all the steps are
+// a dimension, the buffered series being the only one where they differ from
+// the steps.
 fn inscriptions() -> Vec<OpShape> {
     let mut shapes = Vec::new();
-    for user_steps in [0, 1, 2, 4, 8] {
-        let steps: Vec<Step> = (0..user_steps)
-            .map(|index| user_step(1, 1, 100 + index))
-            .collect();
-        let mini_blocks = if steps.is_empty() {
-            vec![]
-        } else {
-            vec![steps]
-        };
-        shapes.push(user_inscription_shape(mini_blocks, 0, 0));
+    for user_steps in USER_STEPS {
+        shapes.push(user_inscription_shape(
+            |salt| {
+                let steps: Vec<Step> = (0..user_steps as u64)
+                    .map(|index| user_step(1, 1, salt + 100 + index))
+                    .collect();
+                if steps.is_empty() {
+                    vec![]
+                } else {
+                    vec![steps]
+                }
+            },
+            0,
+            0,
+        ));
     }
     shapes.push(user_inscription_shape(
-        vec![vec![user_step(1, 8, 200), user_step(1, 1, 201)]],
+        |salt| {
+            vec![vec![
+                user_step(1, 8, salt + 200),
+                user_step(1, 1, salt + 201),
+            ]]
+        },
         0,
         0,
     ));
     for buffered in [1u16, 4, 8] {
         shapes.push(user_inscription_shape(
-            vec![
-                vec![user_step(1, usize::from(buffered), 200)],
-                vec![user_step(1, 1, 201)],
-            ],
+            |salt| {
+                vec![
+                    vec![user_step(1, usize::from(buffered), salt + 200)],
+                    vec![user_step(1, 1, salt + 201)],
+                ]
+            },
             buffered,
             0,
         ));
     }
     for payload in [256, 1024, 4096, 16_384] {
         shapes.push(user_inscription_shape(
-            vec![vec![user_step(1, 1, 300)]],
+            |salt| vec![vec![user_step(1, 1, salt + 300)]],
             0,
             payload,
         ));
@@ -464,6 +512,12 @@ pub struct ProgramShape {
     pub openings: usize,
 }
 
+// The tags of the salts of the notes a program deposit and a program step
+// spend and create, which keep them apart from each other and from the notes
+// of the user steps of the same salt.
+const DEPOSIT_NOTES: u64 = 1 << 48;
+const STEP_NOTES: u64 = 2 << 48;
+
 /// The program deposits of `shape`, then its program step, with their proofs:
 /// each program deposit spends one fresh note and returns one change note;
 /// `openings` of the `outputs` are program outputs, derived from their
@@ -471,21 +525,27 @@ pub struct ProgramShape {
 pub fn program_steps(shape: ProgramShape, salt: u64) -> Vec<(Step, StepProof)> {
     let fixture = filled_state();
     let root = channel_root();
-    let deposits = (0..shape.deposits).map(|index| {
-        let deposit = ProgramDeposit {
-            program_id: fixture.program,
-            inputs: fresh_nullifiers(1, salt * 64 + index as u64),
-            outputs: fresh_commitments(1, salt * 64 + index as u64),
-            commitment_merkle_root: root,
-            value: 1,
-            intent: Fr::from(index as u64),
-            inscription: Inscription::default(),
-        };
-        (
-            Step::ProgramDeposit(deposit),
-            StepProof::User(zk_transfer(index)),
-        )
-    });
+    let spent = nullifiers(shape.deposits, salt | DEPOSIT_NOTES);
+    let change = commitments(shape.deposits, salt | DEPOSIT_NOTES);
+    let deposits = spent
+        .into_iter()
+        .zip(change)
+        .enumerate()
+        .map(|(index, (input, output))| {
+            let deposit = ProgramDeposit {
+                program_id: fixture.program,
+                inputs: [input].into(),
+                outputs: [output].into(),
+                commitment_merkle_root: root,
+                value: 1,
+                intent: Fr::from(index as u64),
+                inscription: Inscription::default(),
+            };
+            (
+                Step::ProgramDeposit(deposit),
+                StepProof::User(zk_transfer(index)),
+            )
+        });
     let openings: Vec<ProgramNoteOpening> = (0..shape.openings)
         .map(|index| ProgramNoteOpening {
             value: 1 + index as u64,
@@ -500,9 +560,9 @@ pub fn program_steps(shape: ProgramShape, salt: u64) -> Vec<(Step, StepProof)> {
         .collect();
     let step = ProgramStep {
         program_id: fixture.program,
-        inputs: fresh_nullifiers(shape.inputs, salt * 64 + 48),
+        inputs: fresh_nullifiers(shape.inputs, salt | STEP_NOTES),
         program_outputs: program_outputs.try_into().expect("the program outputs fit"),
-        outputs: fresh_commitments(shape.outputs - shape.openings, salt * 64 + 32),
+        outputs: fresh_commitments(shape.outputs - shape.openings, salt | STEP_NOTES),
         commitment_merkle_root: root,
         program_step_id: Fr::from(7u64),
         inscription: Inscription::default(),
@@ -515,6 +575,17 @@ pub fn program_steps(shape: ProgramShape, salt: u64) -> Vec<(Step, StepProof)> {
     deposits.chain([(Step::Program(step), proof)]).collect()
 }
 
+/// The most program deposits of one input and one output an inscription of no
+/// payload carries before a program step of one input and one output, within
+/// the Execution Gas limit, at the gas prices of the node: the end of the
+/// program deposit series.
+pub const MOST_PROGRAM_DEPOSITS: usize = 500;
+
+/// The program deposits of the program deposit series of
+/// `op/inscribe_program`.
+pub const PROGRAM_DEPOSITS: [usize; 11] =
+    [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, MOST_PROGRAM_DEPOSITS];
+
 // Four series, one dimension varying at a time from no program deposit, one
 // program input, one output and no opening; the openings vary at eight
 // outputs, the most a step can create.
@@ -525,7 +596,8 @@ fn program_inscriptions() -> Vec<OpShape> {
         outputs: 1,
         openings: 0,
     };
-    let shapes = [0, 1, 2, 4, 8]
+    let tip = channel_tip();
+    PROGRAM_DEPOSITS
         .map(|deposits| ProgramShape { deposits, ..base })
         .into_iter()
         .chain(
@@ -538,11 +610,8 @@ fn program_inscriptions() -> Vec<OpShape> {
             outputs: 8,
             openings,
             ..base
-        }));
-    shapes
+        }))
         .map(|shape| {
-            let (steps, proofs): (Vec<_>, Vec<_>) = program_steps(shape, 1).into_iter().unzip();
-            let op = inscription(channel_tip(), steps, 0);
             OpShape::on_fixture(
                 "op/inscribe_program",
                 vec![
@@ -551,7 +620,11 @@ fn program_inscriptions() -> Vec<OpShape> {
                     ("program_outputs", shape.outputs as u64),
                     ("openings", shape.openings as u64),
                 ],
-                encode_inscription(op, &proofs),
+                each_round(|salt| {
+                    let (steps, proofs): (Vec<_>, Vec<_>) =
+                        program_steps(shape, 1 + salt).into_iter().unzip();
+                    encode_inscription(inscription(tip, steps, 0), &proofs)
+                }),
                 Deferred {
                     zk_transfers: shape.deposits,
                     program_spends: 1,
@@ -562,23 +635,23 @@ fn program_inscriptions() -> Vec<OpShape> {
         .collect()
 }
 
-// A channel of `threshold` accredited keys, all needed to configure it: it is
-// created by a first configuration, and the measured one replaces it, signed
-// by every key.
-fn config_shape(threshold: u16) -> OpShape {
+// A channel of `keys`, the first `threshold` of them needed to configure it:
+// it is created by a first configuration, and the measured one replaces it with
+// the same keys, signed by the first `threshold`.
+fn config_shape(
+    name: &'static str,
+    dims: Vec<(&'static str, u64)>,
+    channel: ChannelId,
+    keys: &[Ed25519Key],
+    threshold: u16,
+) -> OpShape {
     let fixture = filled_state();
-    let keys: Vec<Ed25519Key> = (0..threshold)
-        .map(|index| Ed25519Key::from_bytes(&[0x50 + index as u8; 32]))
-        .collect();
-    let channel = ChannelId::from([0x40 + threshold as u8; 32]);
+    let public_keys: Vec<_> = keys.iter().map(Ed25519Key::public_key).collect();
     let config_op = |parent, posting_timeframe: u32| {
         ChannelConfigOp::new(
             channel,
             parent,
-            VerifiedChannelKeys::try_from(
-                keys.iter().map(Ed25519Key::public_key).collect::<Vec<_>>(),
-            )
-            .expect("the keys fit"),
+            VerifiedChannelKeys::try_from(public_keys.clone()).expect("the keys fit"),
             SlotTimeframe::from(posting_timeframe),
             SlotTimeout::from(0u32),
             NonZero::new(threshold).expect("the threshold is positive"),
@@ -596,6 +669,7 @@ fn config_shape(threshold: u16) -> OpShape {
         OpProof::ChannelMultiSigProof(ChannelMultiSigProof::new(
             IndexedSignatures::try_from_iter(
                 keys.iter()
+                    .take(usize::from(threshold))
                     .enumerate()
                     .map(|(index, key)| (index as u16, key.sign_payload(hash))),
             )
@@ -603,17 +677,52 @@ fn config_shape(threshold: u16) -> OpShape {
         ))
     });
     OpShape {
-        name: "op/config",
-        dims: vec![("threshold", u64::from(threshold))],
+        name,
+        dims,
         state,
         config: fixture.config.clone(),
-        bytes,
+        bytes: vec![bytes],
         deferred: Deferred::default(),
     }
 }
 
+/// The keys of the key series of `op/config_keys`, at a threshold of one.
+pub const CONFIG_KEYS: [u16; 6] = [1, 64, 256, 1024, 4096, 16_384];
+
+/// The key `index` of a channel of the key series, each distinct.
+pub fn config_key(index: u16) -> Ed25519Key {
+    let mut bytes = [0x5a; 32];
+    bytes[..2].copy_from_slice(&index.to_le_bytes());
+    Ed25519Key::from_bytes(&bytes)
+}
+
+// Two series: the threshold, every key needed; the keys at a threshold of
+// one, each of which the node decodes from the transaction, decompresses and
+// checks not to be of small order.
 fn configs() -> Vec<OpShape> {
-    [1, 2, 4, 8].map(config_shape).into()
+    let thresholds = [1u16, 2, 4, 8].map(|threshold| {
+        let keys: Vec<Ed25519Key> = (0..threshold)
+            .map(|index| Ed25519Key::from_bytes(&[0x50 + index as u8; 32]))
+            .collect();
+        config_shape(
+            "op/config",
+            vec![("threshold", u64::from(threshold))],
+            ChannelId::from([0x40 + threshold as u8; 32]),
+            &keys,
+            threshold,
+        )
+    });
+    let key_counts = CONFIG_KEYS.map(|count| {
+        let keys: Vec<Ed25519Key> = (0..count).map(config_key).collect();
+        config_shape(
+            "op/config_keys",
+            vec![("keys", u64::from(count)), ("threshold", 1)],
+            ChannelId::from([0x80; 32]),
+            &keys,
+            1,
+        )
+    });
+    thresholds.into_iter().chain(key_counts).collect()
 }
 
 /// A deposit of `inputs` notes of the ledger set into `outputs` notes of the
@@ -632,12 +741,14 @@ pub fn deposit_op(inputs: usize, outputs: usize, salt: u64) -> DepositOp {
 fn deposits() -> Vec<OpShape> {
     zk_transfer_series()
         .map(|(inputs, outputs)| {
-            let op = Op::ChannelDeposit(deposit_op(inputs, outputs, 0));
             OpShape::on_fixture(
                 "op/deposit",
                 io_dims(inputs, outputs),
-                encode(vec![op], |index, _, _| {
-                    OpProof::ZkTransfer(zk_transfer(index))
+                each_round(|salt| {
+                    let op = Op::ChannelDeposit(deposit_op(inputs, outputs, salt));
+                    encode(vec![op], |index, _, _| {
+                        OpProof::ZkTransfer(zk_transfer(index))
+                    })
                 }),
                 Deferred::transfers(1),
             )
@@ -646,19 +757,22 @@ fn deposits() -> Vec<OpShape> {
 }
 
 fn withdrawals() -> Vec<OpShape> {
+    let root = channel_root();
     zk_transfer_series()
         .map(|(inputs, outputs)| {
-            let op = Op::ChannelWithdraw(ChannelWithdrawOp {
-                channel_id: filled_state().channel,
-                inputs: fresh_nullifiers(inputs, 0),
-                commitment_merkle_root: channel_root(),
-                outputs: fresh_commitments(outputs, 0),
-            });
             OpShape::on_fixture(
                 "op/withdraw",
                 io_dims(inputs, outputs),
-                encode(vec![op], |index, _, _| {
-                    OpProof::ZkTransfer(zk_transfer(index))
+                each_round(|salt| {
+                    let op = Op::ChannelWithdraw(ChannelWithdrawOp {
+                        channel_id: filled_state().channel,
+                        inputs: fresh_nullifiers(inputs, salt),
+                        commitment_merkle_root: root,
+                        outputs: fresh_commitments(outputs, salt),
+                    });
+                    encode(vec![op], |index, _, _| {
+                        OpProof::ZkTransfer(zk_transfer(index))
+                    })
                 }),
                 Deferred::transfers(1),
             )
@@ -742,7 +856,7 @@ const DECLARATIONS: [usize; 4] = [0, 16, 256, 1024];
 
 // The declarations a setup block holds, within the Execution Gas limit of a
 // block.
-const DECLARATIONS_PER_BLOCK: usize = 256;
+const DECLARATIONS_PER_BLOCK: usize = 128;
 
 // The fixture, then after the blocks declaring the providers between two
 // counts of `DECLARATIONS`, each built on the state the one before left: one
@@ -778,16 +892,20 @@ fn sdp_declares() -> Vec<OpShape> {
         .iter()
         .zip(DECLARED.iter())
         .map(|(declarations, state)| {
-            let op = Op::SDPDeclare(declaration(
-                ZkPublicKey::new(Fr::from(0x62u64)),
-                root_of(state, LEDGER_SET),
-            ));
+            let root = root_of(state, LEDGER_SET);
             OpShape {
                 name: "op/sdp_declare",
                 dims: vec![("declarations", *declarations as u64)],
                 state: state.clone(),
                 config: fixture.config.clone(),
-                bytes: provider_signed(op),
+                bytes: each_round(|salt| {
+                    provider_signed(Op::SDPDeclare(declaration_of(
+                        &provider_key(),
+                        ZkPublicKey::new(Fr::from(0x62u64)),
+                        root,
+                        400 + salt,
+                    )))
+                }),
                 deferred: Deferred::transfers(1),
             }
         })
@@ -804,18 +922,19 @@ fn sdp_withdraw() -> OpShape {
         &provider_signed(Op::SDPDeclare(declare.clone())),
     )
     .expect("the declaration applies");
-    let withdraw = SDPWithdrawOp {
-        declaration_id: declare.id(),
-        service_note_nullifier: nullifiers(1, 401)[0],
-        outputs: fresh_commitments(1, 401),
-        excess_value: 0,
-    };
     OpShape {
         name: "op/sdp_withdraw",
         dims: Vec::new(),
         state,
         config: fixture.config.clone(),
-        bytes: provider_signed(Op::SDPWithdraw(withdraw)),
+        bytes: each_round(|salt| {
+            provider_signed(Op::SDPWithdraw(SDPWithdrawOp {
+                declaration_id: declare.id(),
+                service_note_nullifier: nullifiers(1, 401 + salt)[0],
+                outputs: fresh_commitments(1, 401 + salt),
+                excess_value: 0,
+            }))
+        }),
         deferred: Deferred::transfers(1),
     }
 }
@@ -852,9 +971,9 @@ fn claim_pow() -> OpShape {
         dims: Vec::new(),
         state,
         config,
-        bytes: encode(vec![Op::ClaimPowReward(claim)], |_, _, _| {
+        bytes: vec![encode(vec![Op::ClaimPowReward(claim)], |_, _, _| {
             OpProof::None(NoOpProof)
-        }),
+        })],
         deferred: Deferred::default(),
     }
 }
@@ -867,10 +986,10 @@ fn program_register() -> OpShape {
     OpShape::on_fixture(
         "op/program_register",
         Vec::new(),
-        encode(
+        vec![encode(
             vec![Op::ProgramRegister(ProgramRegisterOp { verification_key })],
             |_, _, _| OpProof::None(NoOpProof),
-        ),
+        )],
         Deferred::default(),
     )
 }
@@ -1049,9 +1168,9 @@ fn sdp_active() -> OpShape {
         dims: Vec::new(),
         state,
         config: config.clone(),
-        bytes: encode(vec![Op::SDPActive(active)], |_, _, hash| {
+        bytes: vec![encode(vec![Op::SDPActive(active)], |_, _, hash| {
             OpProof::Ed25519Sig(provider_key().sign_payload(hash))
-        }),
+        })],
         deferred: Deferred::default(),
     }
 }
