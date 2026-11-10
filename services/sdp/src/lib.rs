@@ -8,7 +8,10 @@ pub mod wallet;
 use std::fmt::{Debug, Display};
 
 use async_trait::async_trait;
-use futures::{future::BoxFuture, stream::FuturesUnordered};
+use futures::{
+    future::{BoxFuture, OptionFuture},
+    stream::FuturesUnordered,
+};
 use lb_chain_service::{
     ChainServiceInfo, Epoch, ProcessedBlockEvent,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
@@ -303,7 +306,12 @@ where
         // Wrapped so that lag on the broadcast channel surfaces as an item
         // rather than being dropped by a `select!` pattern.
         let mut new_blocks = BroadcastStream::new(chain_api.subscribe_new_blocks().await?);
-        let mut submissions = FuturesUnordered::new();
+        // The submission of the message being handled. The next message waits
+        // for it: what that one does can depend on what this one comes to, so
+        // requests take effect in the order they come.
+        let mut submission: Option<PendingSubmission<'_>> = None;
+        // Resubmissions leave the state alone, so they run beside the rest.
+        let mut resubmissions = FuturesUnordered::new();
 
         self.service_resources_handle.status_updater.notify_ready();
         info!(
@@ -314,15 +322,18 @@ where
 
         loop {
             tokio::select! {
-                Some(msg) = self.service_resources_handle.inbound_relay.recv() => {
-                    let submission = self.handle_message(msg, &wallet_adapter, &mempool_adapter, &chain_api).await;
-                    submissions.extend(submission);
+                Some(msg) = self.service_resources_handle.inbound_relay.recv(), if submission.is_none() => {
+                    submission = self.handle_message(msg, &wallet_adapter, &mempool_adapter, &chain_api).await;
                 }
-                Some(finished) = submissions.next() => self.finish_submission(finished, &chain_api),
+                Some(finished) = OptionFuture::from(submission.as_mut()) => {
+                    submission = None;
+                    self.finish_submission(finished, &chain_api);
+                }
+                Some(finished) = resubmissions.next() => self.finish_submission(finished, &chain_api),
                 Some(event) = new_blocks.next() => match event {
                     Ok(event) => {
-                        let submission = self.handle_new_block(event, &wallet_adapter, &mempool_adapter, &chain_api).await;
-                        submissions.extend(submission);
+                        let resubmission = self.handle_new_block(event, &wallet_adapter, &mempool_adapter, &chain_api).await;
+                        resubmissions.extend(resubmission);
                     }
                     // The tracker only needs the latest tip, so a skipped
                     // event costs nothing but is worth knowing about.
