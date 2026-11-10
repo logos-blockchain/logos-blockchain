@@ -55,7 +55,10 @@ use lb_tx_service::{
     storage::MempoolStorageAdapter,
 };
 use lb_utils::tokio::task::spawn;
-use lb_wallet_service::api::{WalletApi, WalletApiError};
+use lb_wallet_service::{
+    UtxoWithKeyId,
+    api::{WalletApi, WalletApiError},
+};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
@@ -73,7 +76,7 @@ use crate::{
     blend::BlendAdapter,
     kms::PreloadKmsService,
     leadership::{
-        SlotContext, build_proof_for, fetch_slot_context, is_winning_slot, search_for_winning_slots,
+        SlotContext, build_proof_for, fetch_slot_context, search_for_winning_slots, winning_note,
     },
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
     relays::CryptarchiaConsensusRelays,
@@ -84,17 +87,20 @@ use crate::{
 const MAX_QUEUED_WON_SLOTS: usize = 4;
 
 /// A slot this node won, on its way to a block.
-struct WonSlot {
+struct WonSlot<Note> {
     slot: Slot,
     /// The slot the next block is due by, on average. Built any later, this
     /// slot's block would only come in late against it.
     deadline: Slot,
+    /// The note that won it, which the block's proof is to be of.
+    note: Note,
 }
 
-impl WonSlot {
-    /// `slot`, with as long to build as a block takes on average in its era:
-    /// `1/f` slots, `f` being the era's slot activation coefficient.
-    fn new(slot: Slot, era_schedule: &EraScheduledConfig) -> Self {
+impl<Note> WonSlot<Note> {
+    /// `slot`, won by `note`, with as long to build as a block takes on average
+    /// in its era: `1/f` slots, `f` being the era's slot activation
+    /// coefficient.
+    fn new(slot: Slot, note: Note, era_schedule: &EraScheduledConfig) -> Self {
         let f = config_for_slot(era_schedule, slot)
             .consensus_config
             .slot_activation_coeff();
@@ -104,6 +110,7 @@ impl WonSlot {
         Self {
             slot,
             deadline: Slot::from(u64::from(slot).saturating_add(average_block_slots.get())),
+            note,
         }
     }
 }
@@ -113,20 +120,25 @@ impl WonSlot {
 ///
 /// A build is given up on once `current_slot` reaches its deadline. Publishing
 /// isn't, as a block should not be left applied but unpublished.
-async fn propose_in_turn<Block, Build, Built, Publish, Published>(
-    mut won_slots: mpsc::Receiver<WonSlot>,
+async fn propose_in_turn<Note, Block, Build, Built, Publish, Published>(
+    mut won_slots: mpsc::Receiver<WonSlot<Note>>,
     mut current_slot: watch::Receiver<Slot>,
     mut build: Build,
     mut publish: Publish,
 ) where
-    Build: FnMut(Slot) -> Built,
+    Build: FnMut(Slot, Note) -> Built,
     Built: Future<Output = Option<Block>>,
     Publish: FnMut(Block) -> Published,
     Published: Future<Output = ()>,
 {
-    while let Some(WonSlot { slot, deadline }) = won_slots.recv().await {
+    while let Some(WonSlot {
+        slot,
+        deadline,
+        note,
+    }) = won_slots.recv().await
+    {
         tokio::select! {
-            built = build(slot) => {
+            built = build(slot, note) => {
                 if let Some(block) = built {
                     publish(block).await;
                 }
@@ -543,9 +555,10 @@ where
             propose_in_turn(
                 won_slots_rx,
                 current_slot_rx,
-                |slot| {
+                |slot, note| {
                     Self::build_block_for(
                         slot,
+                        note,
                         &cryptarchia_api,
                         &wallet_api,
                         &kms_api,
@@ -592,8 +605,8 @@ where
                             continue;
                         };
 
-                        if is_winning_slot(&eligible_aged, &epoch_state, slot, &kms_api).await
-                            && won_slots.try_send(WonSlot::new(slot, &era_schedule)).is_err()
+                        if let Some(note) = winning_note(&eligible_aged, &epoch_state, slot, &kms_api).await
+                            && won_slots.try_send(WonSlot::new(slot, note, &era_schedule)).is_err()
                         {
                             metrics::consensus_proposals_create_failed("won_slots_queue_full");
                             error!(target: LOG_TARGET, "Too many proposals underway: giving up on {slot:?}");
@@ -695,9 +708,15 @@ where
         + AsServiceId<Wallet>
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>,
 {
-    /// Builds the block of `slot` on the current tip, if any.
+    /// Builds the block of `slot`, which `note` won, on the current tip, if
+    /// any.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Everything a block of the node's is built from"
+    )]
     async fn build_block_for(
         slot: Slot,
+        note: UtxoWithKeyId,
         cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
         wallet_api: &WalletApi<Wallet, RuntimeServiceId>,
         kms_api: &KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
@@ -712,7 +731,6 @@ where
         let Some(SlotContext {
             wallet_tip,
             epoch_state,
-            eligible_aged,
             ..
         }) = fetch_slot_context(cryptarchia_api, wallet_api, consensus_excluded_keys, slot).await
         else {
@@ -723,7 +741,7 @@ where
 
         let latest_tree = tip_state.latest_utxos();
         let proof = match build_proof_for(
-            &eligible_aged,
+            &note,
             latest_tree,
             &epoch_state,
             slot,
@@ -1095,15 +1113,16 @@ mod tests {
     const FAR_OFF: u64 = u64::MAX;
 
     /// A slot won, to be built by the slot `deadline`.
-    fn won(slot: u64, deadline: u64) -> WonSlot {
+    fn won(slot: u64, deadline: u64) -> WonSlot<()> {
         WonSlot {
             slot: Slot::new(slot),
             deadline: Slot::new(deadline),
+            note: (),
         }
     }
 
     /// The slots won, one after the other, with no more to come.
-    fn won_slots(slots: impl IntoIterator<Item = WonSlot>) -> mpsc::Receiver<WonSlot> {
+    fn won_slots(slots: impl IntoIterator<Item = WonSlot<()>>) -> mpsc::Receiver<WonSlot<()>> {
         let (won_slots, won_slots_rx) = mpsc::channel(MAX_QUEUED_WON_SLOTS);
         for won_slot in slots {
             assert!(won_slots.try_send(won_slot).is_ok());
@@ -1120,7 +1139,7 @@ mod tests {
         propose_in_turn(
             won_slots([won(1, FAR_OFF), won(2, FAR_OFF), won(3, FAR_OFF)]),
             current_slot,
-            async move |slot| {
+            async move |slot, ()| {
                 assert_eq!(building.fetch_add(1, Ordering::SeqCst), 0);
                 sleep(Duration::from_millis(1)).await;
                 building.fetch_sub(1, Ordering::SeqCst);
@@ -1145,7 +1164,7 @@ mod tests {
         let proposing = propose_in_turn(
             won_slots([won(1, 2), won(2, FAR_OFF)]),
             current_slot,
-            move |slot| {
+            move |slot, ()| {
                 let build_is_stuck = slot == stuck;
                 async move {
                     if build_is_stuck {
@@ -1178,7 +1197,7 @@ mod tests {
         propose_in_turn(
             won_slots([won(1, 2)]),
             current_slot,
-            async |slot| Some(slot),
+            async |slot, ()| Some(slot),
             async move |slot| {
                 clock.send_replace(Slot::new(2));
                 sleep(Duration::from_millis(10)).await;
@@ -1212,7 +1231,7 @@ mod tests {
 
         // `1/f` slots, rounded down.
         for (f, deadline) in [(f(1, 10), 17), (f(3, 10), 10)] {
-            let won_slot = WonSlot::new(Slot::new(7), &era_schedule_with(f));
+            let won_slot = WonSlot::new(Slot::new(7), (), &era_schedule_with(f));
             assert_eq!(won_slot.deadline, Slot::new(deadline));
         }
     }

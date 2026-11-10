@@ -1,7 +1,6 @@
 use std::{
     fmt::{Debug, Display},
     sync::Arc,
-    time::Instant,
 };
 
 use futures::{StreamExt as _, stream};
@@ -50,23 +49,28 @@ use crate::{
 
 const LOG_TARGET: &str = chain::leader::LEADERSHIP;
 
-/// Whether `slot` is a winning one for any of the eligible UTXOs.
+/// The first of the eligible UTXOs that wins `slot`, if any.
 ///
 /// The lottery only depends on the epoch, the slot and the note, so this needs
 /// no tip. The proof of a win does, as it attests that the note is unspent.
-pub async fn is_winning_slot<RuntimeServiceId>(
+pub async fn winning_note<RuntimeServiceId>(
     utxos: &[UtxoWithKeyId],
     epoch_state: &EpochState,
     slot: Slot,
     kms: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync),
-) -> bool {
+) -> Option<UtxoWithKeyId> {
     let public_inputs = public_inputs_for_slot(epoch_state, slot, &epoch_state.utxos);
     for UtxoWithKeyId { utxo, key_id } in utxos {
         match kms
             .check_winning_with_key(key_id.clone(), utxo, &public_inputs)
             .await
         {
-            Ok(true) => return true,
+            Ok(true) => {
+                return Some(UtxoWithKeyId {
+                    utxo: *utxo,
+                    key_id: key_id.clone(),
+                });
+            }
             Ok(false) => {}
             Err(e) => {
                 metrics::consensus_proposals_create_failed("leadership_check");
@@ -78,19 +82,19 @@ pub async fn is_winning_slot<RuntimeServiceId>(
             }
         }
     }
-    false
+    None
 }
 
-/// Return a leadership proof and signing key if `slot` is a winning one for any
-/// of the eligible UTXOs, for use in a block proposal.
+/// Return the proof that `note`, which won `slot` (see [`winning_note`]), is
+/// still unspent in `latest_tree`, and the signing key of the block it's for.
 ///
-/// If the slot is not a winning one, it returns `Ok(None)`.
+/// It returns `Ok(None)` if the proof could not be built.
 #[expect(
     clippy::cognitive_complexity,
     reason = "TODO: address this in a dedicated refactor"
 )]
 pub async fn build_proof_for<Wallet, RuntimeServiceId>(
-    utxos: &[UtxoWithKeyId],
+    note: &UtxoWithKeyId,
     latest_tree: &UtxoTree,
     epoch_state: &EpochState,
     slot: Slot,
@@ -101,108 +105,76 @@ where
     Wallet: WalletServiceData,
     RuntimeServiceId: Debug + Display + Sync + AsServiceId<Wallet>,
 {
-    let (mut non_winning_utxos, mut winning_utxos, start) = (0usize, 0usize, Instant::now());
-    for UtxoWithKeyId { utxo, key_id } in utxos {
-        let public_inputs = public_inputs_for_slot(epoch_state, slot, latest_tree);
-        let winning = match kms
-            .check_winning_with_key(key_id.clone(), utxo, &public_inputs)
-            .await
-        {
-            Ok(winning) => winning,
-            Err(e) => {
-                metrics::consensus_proposals_create_failed("leadership_check");
-                tracing::error!(
-                    target: LOG_TARGET,
-                    "Failed to check winning utxo {:?} for {slot:?}: {e:?}",
-                    utxo.id(),
-                );
-                continue;
-            }
-        };
-
-        if winning {
-            winning_utxos += 1;
-            tracing::debug!(
-                target: LOG_TARGET,
-                "leader for slot {:?}, {:?}/{:?}",
-                slot,
-                utxo.note.value,
-                epoch_state.total_stake()
-            );
-
-            let (private_inputs, leader_signing_key) = match kms
-                .build_private_inputs_for_winning_utxo_and_slot(
-                    key_id.clone(),
-                    utxo,
-                    epoch_state,
-                    public_inputs,
-                    latest_tree,
-                )
-                .await
-            {
-                Ok(result) => result,
-                Err(e) => {
-                    metrics::consensus_proposals_create_failed("private_inputs");
-                    tracing::error!(
-                        target: LOG_TARGET,
-                        "Failed to build private inputs for winning utxo {:?} for {slot:?}: {e:?}",
-                        utxo.id(),
-                    );
-                    continue;
-                }
-            };
-
-            let voucher_cm = match wallet.generate_new_voucher().await {
-                Ok(voucher_cm) => voucher_cm,
-                Err(e) => {
-                    metrics::consensus_proposals_create_failed("voucher_generation");
-                    tracing::error!(
-                        target: LOG_TARGET,
-                        "Failed to generate voucher for winning utxo {:?} for {slot:?}: {e:?}",
-                        utxo.id(),
-                    );
-                    continue;
-                }
-            };
-
-            let res = spawn_blocking("logos/chain/leader-proof-blocking", move || {
-                Groth16LeaderProof::prove(private_inputs, voucher_cm)
-            })
-            .await;
-            match res {
-                Ok(Ok(proof)) => return Ok(Some((proof, leader_signing_key))),
-                Ok(Err(e)) => {
-                    metrics::consensus_proposals_create_failed("proof_generation");
-                    tracing::error!(
-                        target: LOG_TARGET,
-                        "Failed to build proof for winning utxo {:?} for {slot:?}: {e:?}",
-                        utxo.id(),
-                    );
-                }
-                Err(e) => {
-                    metrics::consensus_proposals_create_failed("proof_task");
-                    tracing::error!(
-                        target: LOG_TARGET,
-                        "Failed to wait for proof task for winning utxo {:?} for {slot:?}: {e:?}",
-                        utxo.id(),
-                    );
-                }
-            }
-        } else {
-            non_winning_utxos += 1;
-        }
-    }
-
-    tracing::trace!(
+    let UtxoWithKeyId { utxo, key_id } = note;
+    tracing::debug!(
         target: LOG_TARGET,
-        "Leadership scan completed in {:.2?} - slot: {}, eligible: {}, winning: {winning_utxos}, \
-        non winning: {non_winning_utxos}",
-        start.elapsed(),
-        slot.into_inner(),
-        utxos.len(),
+        "leader for slot {:?}, {:?}/{:?}",
+        slot,
+        utxo.note.value,
+        epoch_state.total_stake()
     );
 
-    Ok(None)
+    let public_inputs = public_inputs_for_slot(epoch_state, slot, latest_tree);
+    let (private_inputs, leader_signing_key) = match kms
+        .build_private_inputs_for_winning_utxo_and_slot(
+            key_id.clone(),
+            utxo,
+            epoch_state,
+            public_inputs,
+            latest_tree,
+        )
+        .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            metrics::consensus_proposals_create_failed("private_inputs");
+            tracing::error!(
+                target: LOG_TARGET,
+                "Failed to build private inputs for winning utxo {:?} for {slot:?}: {e:?}",
+                utxo.id(),
+            );
+            return Ok(None);
+        }
+    };
+
+    let voucher_cm = match wallet.generate_new_voucher().await {
+        Ok(voucher_cm) => voucher_cm,
+        Err(e) => {
+            metrics::consensus_proposals_create_failed("voucher_generation");
+            tracing::error!(
+                target: LOG_TARGET,
+                "Failed to generate voucher for winning utxo {:?} for {slot:?}: {e:?}",
+                utxo.id(),
+            );
+            return Ok(None);
+        }
+    };
+
+    let res = spawn_blocking("logos/chain/leader-proof-blocking", move || {
+        Groth16LeaderProof::prove(private_inputs, voucher_cm)
+    })
+    .await;
+    match res {
+        Ok(Ok(proof)) => Ok(Some((proof, leader_signing_key))),
+        Ok(Err(e)) => {
+            metrics::consensus_proposals_create_failed("proof_generation");
+            tracing::error!(
+                target: LOG_TARGET,
+                "Failed to build proof for winning utxo {:?} for {slot:?}: {e:?}",
+                utxo.id(),
+            );
+            Ok(None)
+        }
+        Err(e) => {
+            metrics::consensus_proposals_create_failed("proof_task");
+            tracing::error!(
+                target: LOG_TARGET,
+                "Failed to wait for proof task for winning utxo {:?} for {slot:?}: {e:?}",
+                utxo.id(),
+            );
+            Ok(None)
+        }
+    }
 }
 
 pub fn operator_for_private_inputs_arguments_for_winning_utxo_and_slot(
@@ -667,7 +639,7 @@ mod pol_tests {
         // Create dummy wallet service
         let wallet = DummyWallet::spawn();
 
-        // Find a winning slot by calling `build_proof_for` until it succeeds
+        // Find a winning slot, and build the proof of its win
         let (proof, winning_slot) = find_winning_slot_and_build_proof(
             (0..1000).map(Slot::from),
             UtxoWithKeyId { utxo, key_id },
@@ -695,32 +667,7 @@ mod pol_tests {
         );
     }
 
-    #[tokio::test]
-    async fn a_slot_is_winning_exactly_when_it_yields_a_proof() {
-        let (_, kms, utxos, tree, epoch_state) = scan_test_fixtures();
-        let wallet = DummyWallet::spawn();
-        let slots = || (0..1000).map(Slot::from);
-
-        let mut winning_slot = None;
-        let mut losing_slot = None;
-        for slot in slots() {
-            if is_winning_slot(&utxos, &epoch_state, slot, &kms).await {
-                winning_slot.get_or_insert(slot);
-            } else {
-                losing_slot.get_or_insert(slot);
-            }
-        }
-
-        let proof_for = async |slot| {
-            build_proof_for(&utxos, &tree, &epoch_state, slot, &wallet, &kms)
-                .await
-                .expect("proof build should not fail")
-        };
-        assert!(proof_for(winning_slot.unwrap()).await.is_some());
-        assert!(proof_for(losing_slot.unwrap()).await.is_none());
-    }
-
-    /// Find a winning slot by calling `build_proof_for` until it succeeds
+    /// Find the first slot `utxo` wins, and build the proof of its win.
     async fn find_winning_slot_and_build_proof(
         slots: impl Iterator<Item = Slot>,
         utxo: UtxoWithKeyId,
@@ -730,17 +677,12 @@ mod pol_tests {
         kms: &(impl KmsAdapter<TestRuntimeServiceId, KeyId = KeyId> + Sync),
     ) -> Option<(Groth16LeaderProof, Slot)> {
         for slot in slots {
-            if let Some((proof, _signing_key)) = build_proof_for(
-                slice::from_ref(&utxo),
-                latest_tree,
-                epoch_state,
-                slot,
-                wallet,
-                kms,
-            )
-            .await
-            .expect("proof build should not fail")
-            {
+            if let Some(note) = winning_note(slice::from_ref(&utxo), epoch_state, slot, kms).await {
+                let (proof, _signing_key) =
+                    build_proof_for(&note, latest_tree, epoch_state, slot, wallet, kms)
+                        .await
+                        .expect("proof build should not fail")
+                        .expect("the note that won the slot should prove it");
                 return Some((proof, slot));
             }
         }
