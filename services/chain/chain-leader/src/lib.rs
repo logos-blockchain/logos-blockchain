@@ -18,7 +18,7 @@ use std::{
 
 use futures::{
     FutureExt as _, Stream, StreamExt as _,
-    stream::{self, FuturesUnordered},
+    stream::{self, FuturesOrdered, FuturesUnordered},
 };
 use lb_blend_service::message::proposal_diagnostic_timestamp_unix_ms;
 use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
@@ -85,6 +85,11 @@ use crate::{
 /// How many won slots wait for the proposal underway. Wins are far apart, so
 /// these only fill up if proposals have stopped getting through.
 const MAX_QUEUED_WON_SLOTS: usize = 4;
+
+/// How many slots wait for their check before the next ones are skipped. A
+/// check takes a fraction of a slot, so they only pile up if the wallet or the
+/// KMS stalls, and one this far behind leaves its block little time anyway.
+const MAX_PENDING_SLOT_CHECKS: usize = 16;
 
 /// A slot this node won, on its way to a block.
 struct WonSlot<Note> {
@@ -580,6 +585,10 @@ where
         // Building a claim's transaction proves too, so the loop polls claims
         // along with its other inputs as well.
         let mut claims = FuturesUnordered::new();
+        // Checking a slot for a win takes the wallet and the KMS, so the loop
+        // polls the checks too, and takes the next tick on time whatever they
+        // take. They come back in slot order, the order to build in.
+        let mut slot_checks = FuturesOrdered::new();
 
         self.service_resources_handle.status_updater.notify_ready();
         info!(
@@ -598,14 +607,16 @@ where
                             relays.mempool_adapter_mut().rotate_era(era).await;
                             current_era = era;
                         }
-                        let Some(SlotContext { epoch_state, eligible_aged, .. }) =
-                            fetch_slot_context(&cryptarchia_api, &wallet_api, &consensus_excluded_keys, slot).await
-                        else {
-                            error!(target: LOG_TARGET, "Failed to fetch epoch context for slot {slot:?}");
-                            continue;
-                        };
+                        if slot_checks.len() < MAX_PENDING_SLOT_CHECKS {
+                            slot_checks.push_back(Self::check_slot(slot, &cryptarchia_api, &wallet_api, &kms_api, &consensus_excluded_keys));
+                        } else {
+                            metrics::consensus_proposals_create_failed("slot_checks_queue_full");
+                            error!(target: LOG_TARGET, "Too many slots waiting for their check: skipping {slot:?}");
+                        }
+                    }
 
-                        if let Some(note) = winning_note(&eligible_aged, &epoch_state, slot, &kms_api).await
+                    Some((slot, note)) = slot_checks.next() => {
+                        if let Some(note) = note
                             && won_slots.try_send(WonSlot::new(slot, note, &era_schedule)).is_err()
                         {
                             metrics::consensus_proposals_create_failed("won_slots_queue_full");
@@ -708,6 +719,27 @@ where
         + AsServiceId<Wallet>
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>,
 {
+    /// `slot`, with the note of the node's that won it, if any.
+    async fn check_slot(
+        slot: Slot,
+        cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
+        wallet_api: &WalletApi<Wallet, RuntimeServiceId>,
+        kms_api: &KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
+        consensus_excluded_keys: &ConsensusExcludedKeys,
+    ) -> (Slot, Option<UtxoWithKeyId>) {
+        let Some(SlotContext {
+            epoch_state,
+            eligible_aged,
+            ..
+        }) = fetch_slot_context(cryptarchia_api, wallet_api, consensus_excluded_keys, slot).await
+        else {
+            error!(target: LOG_TARGET, "Failed to fetch epoch context for slot {slot:?}");
+            return (slot, None);
+        };
+        let note = winning_note(&eligible_aged, &epoch_state, slot, kms_api).await;
+        (slot, note)
+    }
+
     /// Builds the block of `slot`, which `note` won, on the current tip, if
     /// any.
     #[expect(
