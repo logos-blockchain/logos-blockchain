@@ -403,8 +403,8 @@ mod tests {
             (Op::ChannelInscribe(InscriptionOp::sample()), 583),
             // 1 input, 1 output: 26 + 4177 + 1758 + 58
             (Op::ChannelDeposit(DepositOp::sample()), 6_019),
-            // 1 input, 1 output: 33 + 4177 + 1758 + 58
-            (Op::ChannelWithdraw(ChannelWithdrawOp::sample()), 6_026),
+            // 1 input, 1 output: 33 + 8961 + 4177 + 1758 + 58
+            (Op::ChannelWithdraw(ChannelWithdrawOp::sample()), 14_987),
             // 1693 + 557 + 4177 + 1758 + 58
             (Op::SDPDeclare(SDPDeclareOp::sample()), 8_243),
             // 0 + 557 + 4177 + 1758 + 58, and the root of the service note alone

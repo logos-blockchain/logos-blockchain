@@ -13,8 +13,8 @@ use crate::{
         batch::DeferredZkTransfer,
         channel::{Channels, Error},
         gas::{
-            Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OpGasContext, OperationGas,
-            spend_gas,
+            EXECUTION_NOTE_SET_GAS, Gas, GasOverflow, MainnetGasProfile, OpGasCalculator,
+            OpGasContext, OperationGas, spend_gas,
         },
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
@@ -147,9 +147,12 @@ impl OperationGas<MainnetGasProfile> for ChannelWithdrawOp {
 }
 
 impl OpGasCalculator<MainnetGasProfile> for ChannelWithdrawOp {
-    // The Operation, plus the spend of its notes.
+    // The Operation, the update of its channel note set when the withdrawal is
+    // released, and the spend of its notes.
     fn execution_gas(&self, _context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
-        Self::GAS_COST.checked_add(spend_gas(self.inputs.len(), self.outputs.len())?)
+        Self::GAS_COST
+            .checked_add(EXECUTION_NOTE_SET_GAS)?
+            .checked_add(spend_gas(self.inputs.len(), self.outputs.len())?)
     }
 }
 
@@ -440,10 +443,10 @@ mod test {
     #[test]
     fn channel_withdraw_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
-            // 1 input, 1 output, nothing buffered: 33 + 4177 + 1758 + 58
+            // 1 input, 1 output, nothing buffered: 33 + 8961 + 4177 + 1758 + 58
             assert_eq!(
                 ChannelWithdrawOp::sample().execution_gas(&FixedThresholds(threshold)),
-                Ok(Gas::new(6_026))
+                Ok(Gas::new(14_987))
             );
         }
     }

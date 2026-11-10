@@ -359,16 +359,19 @@ mod tests {
             GasPrices::new(1, 0),
         );
         let terms =
-            tx_terms_gas(minimum_signed_transaction_size(&ops.by_ref(), &context), 2).unwrap();
+            tx_terms_gas(minimum_signed_transaction_size(&ops.by_ref(), &context), 1).unwrap();
 
         assert_eq!(
             ops.by_ref()
                 .execution_gas_consumption::<MainnetGasProfile>(&context),
             // The config: 24 + 3 * 557. The deposit and the withdrawal of the samples
             // spend 1 input and 1 output with nothing buffered:
-            // 26 + 4177 + 1758 + 58 and 33 + 4177 + 1758 + 58. The transaction adds
-            // its bytes and the note sets of the two channels it changed.
-            Ok(Gas::from(1_695 + 6_019 + 6_026).checked_add(terms).unwrap())
+            // 26 + 4177 + 1758 + 58 and 33 + 8961 + 4177 + 1758 + 58, the
+            // withdrawal paying the update of its channel set on release. The
+            // transaction adds its bytes and the note set of the deposit channel.
+            Ok(Gas::from(1_695 + 6_019 + 14_987)
+                .checked_add(terms)
+                .unwrap())
         );
     }
 

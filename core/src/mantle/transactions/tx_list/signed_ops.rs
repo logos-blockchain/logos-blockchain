@@ -633,12 +633,14 @@ mod tests {
         let expected_config_gas = 24 + u64::from(config_threshold) * 557;
         // 1 input, no output, nothing buffered
         let expected_deposit_gas = 26 + 4177 + 1758;
-        let expected_withdraw_gas = 33 + 4177 + 1758;
-        // The bytes of the transaction and the note set of the withdrawal
-        // channel: the deposit, with no output, adds nothing to its channel set.
+        // The withdrawal also pays the update of its channel set on release.
+        let expected_withdraw_gas = 33 + 8961 + 4177 + 1758;
+        // The bytes of the transaction alone: the deposit, with no output, adds
+        // nothing to its channel set, and the withdrawal changes its channel set
+        // only when it is released.
         let expected_terms = tx_terms_gas(
             minimum_signed_transaction_size(&mantle_tx.by_ref(), &context),
-            1,
+            0,
         )
         .unwrap()
         .into_inner();
@@ -685,7 +687,7 @@ mod tests {
 
         assert_eq!(config_gas.into_inner(), 24 + 3 * 557);
         assert_eq!(deposit_gas.into_inner(), 26 + 4177 + 1758);
-        assert_eq!(withdraw_gas.into_inner(), 33 + 4177 + 1758);
+        assert_eq!(withdraw_gas.into_inner(), 33 + 8961 + 4177 + 1758);
     }
 
     // A config creating a channel is verified against a threshold of 0, so it

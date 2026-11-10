@@ -147,10 +147,11 @@ impl<C: ChannelSource> TxGasState<C> {
                     self.change(set);
                 }
             }
+            // A withdrawal changes its channel set only when it is released, and
+            // pays that update in its own gas.
             OpRef::ChannelWithdraw(operation) => {
                 let set = NoteSetKey::Channel(operation.channel_id);
                 self.extend_root_over_buffer(set, operation.commitment_merkle_root);
-                self.change(set);
             }
             // An inscription creates the channel when it does not exist yet, and
             // changes its set when a step spends from it or adds to it. The user
@@ -543,11 +544,11 @@ mod tests {
     }
 
     #[test]
-    fn withdraw_changes_its_channel_set() {
+    fn withdraw_changes_no_set() {
         let context = empty();
         let mut state = TxGasState::new(&context);
         state.apply(Op::ChannelWithdraw(ChannelWithdrawOp::sample()).by_ref());
-        assert_eq!(state.changed_note_sets(), 1);
+        assert_eq!(state.changed_note_sets(), 0);
     }
 
     #[test]
