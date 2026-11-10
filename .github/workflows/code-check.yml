@@ -190,7 +190,6 @@ jobs:
           args: >-
             run --workspace --locked --lib --bins --examples --tests --retries 2
             --all-features --no-fail-fast --exclude logos-blockchain-tests
-            --exclude logos-blockchain-zone-tests --exclude logos-blockchain-sql-tests
 
       - name: Run test support unit tests
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
@@ -198,7 +197,7 @@ jobs:
           command: nextest
           args: >-
             run --locked --lib --retries 2 --no-fail-fast
-            -p logos-blockchain-tests -p logos-blockchain-zone-tests -p logos-blockchain-sql-tests
+            -p logos-blockchain-tests
 
       - name: Clean up build artifacts
         if: success() || failure()
