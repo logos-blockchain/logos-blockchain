@@ -94,7 +94,7 @@ mod tests {
                 channel::{
                     ChannelId, MsgId,
                     config::ChannelConfigOp,
-                    inscribe::{self, ChannelStep, Inscription, InscriptionOp, MiniBlocks, Step},
+                    inscribe::{self, Inscription, InscriptionOp, MiniBlocks, Step, UserStep},
                     withdraw::ChannelWithdrawOp,
                 },
                 op_proof::samples::SampleProof as _,
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn minimum_size_counts_one_zk_transfer_per_step() {
-        let step = ChannelStep {
+        let step = UserStep {
             inputs: [NoteNullifier(Fr::ONE)].into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: Fr::ZERO,

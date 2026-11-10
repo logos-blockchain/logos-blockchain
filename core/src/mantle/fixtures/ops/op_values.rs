@@ -15,7 +15,7 @@ use crate::{
                 ChannelId, MsgId,
                 config::ChannelConfigOp,
                 deposit::{DepositOp, Metadata},
-                inscribe::{ChannelStep, InscriptionOp, MiniBlock, Step},
+                inscribe::{InscriptionOp, MiniBlock, Step, UserStep},
                 program_step::{ProgramDeposit, ProgramStep},
                 withdraw::ChannelWithdrawOp,
             },
@@ -74,7 +74,7 @@ pub static INSCRIPTION: LazyLock<InscriptionOp> = LazyLock::new(|| InscriptionOp
         .public_key()
         .into_unverified(),
     mini_blocks: [MiniBlock::from([
-        Step::User(ChannelStep {
+        Step::User(UserStep {
             inputs: [NoteNullifier(Fr::from(0x23u64))].into(),
             outputs: [NoteCommitment(Fr::from(0x24u64))].into(),
             commitment_merkle_root: Fr::from(0x25u64),

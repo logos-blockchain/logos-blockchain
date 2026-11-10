@@ -1143,9 +1143,7 @@ mod tests {
                     ChannelId, MsgId, NULL_CHANNEL_ID,
                     config::ChannelConfigOp,
                     deposit::{DepositOp, Metadata},
-                    inscribe::{
-                        ChannelStep, Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step,
-                    },
+                    inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step, UserStep},
                     program_step::{ProgramDeposit, ProgramStep},
                     withdraw::{
                         ChannelWithdrawOp, PendingWithdrawal, PendingWithdrawals, WITHDRAW_DELAY,
@@ -3068,7 +3066,7 @@ mod tests {
     }
 
     fn one_step(input: u64, output: u64, commitment_merkle_root: Fr) -> MiniBlocks {
-        [MiniBlock::from([Step::User(ChannelStep {
+        [MiniBlock::from([Step::User(UserStep {
             inputs: [NoteNullifier(Fr::from(input))].into(),
             outputs: [NoteCommitment(Fr::from(output))].into(),
             commitment_merkle_root,

@@ -180,7 +180,7 @@ impl<C: ChannelSource> TxGasState<C> {
                                 self.extend_root_over_buffer(set, step.commitment_merkle_root);
                             }
                         }
-                        self.buffer(set, step.created().count());
+                        self.buffer(set, step.outputs().len());
                     }
                 }
             }
@@ -196,7 +196,7 @@ impl<C: ChannelSource> TxGasState<C> {
 
 // Whether the step spends from or adds to the channel set.
 fn moves_notes(step: &Step) -> bool {
-    !step.inputs().is_empty() || step.created().next().is_some()
+    !step.inputs().is_empty() || !step.outputs().is_empty()
 }
 
 impl<C: ChannelSource> ThresholdSource for TxGasState<C> {
@@ -221,7 +221,7 @@ mod tests {
             channel::{
                 config::ChannelConfigOp,
                 deposit::DepositOp,
-                inscribe::{ChannelStep, Inscription, InscriptionOp, MiniBlock, MiniBlocks},
+                inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, UserStep},
                 program_step::{ProgramDeposit, ProgramStep},
                 withdraw::ChannelWithdrawOp,
             },
@@ -241,7 +241,7 @@ mod tests {
     }
 
     fn user_step(root: u64, nullifier: u64, outputs: u64) -> Step {
-        Step::User(ChannelStep {
+        Step::User(UserStep {
             inputs: [NoteNullifier(Fr::from(nullifier))].into(),
             outputs: OutputCommitments::try_from_iter((0..outputs).map(|output| {
                 crate::mantle::notes::NoteCommitment(Fr::from(100 + nullifier + output))
@@ -384,7 +384,7 @@ mod tests {
         let mut state = TxGasState::new(&context);
         let inscription = InscriptionOp::sample_with_step();
         let set = NoteSetKey::Channel(inscription.channel_id);
-        let expected: usize = inscription.steps().map(|step| step.created().count()).sum();
+        let expected: usize = inscription.steps().map(|step| step.outputs().len()).sum();
         assert!(expected > 0);
         state.apply(Op::ChannelInscribe(inscription).by_ref());
         assert_eq!(state.buffered(&set), expected);
@@ -514,7 +514,7 @@ mod tests {
 
     #[test]
     fn inscription_with_a_step_spending_only_changes_its_set() {
-        let step = ChannelStep {
+        let step = UserStep {
             inputs: [NoteNullifier(Fr::from(0x23u64))].into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: Fr::from(0x25u64),
