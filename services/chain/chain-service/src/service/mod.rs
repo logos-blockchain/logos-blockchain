@@ -66,8 +66,6 @@ type ApplyBlockReply<Tx> = oneshot::Sender<Result<AppliedBlock<Tx>, Error>>;
 /// What became of a block off the service loop, for the loop to finish.
 struct BlockPreparation<Tx> {
     prepared: Result<PreparedBlock<Tx>, Error>,
-    /// The blocks that are yet to be removed from storage.
-    storage_blocks_to_remove: HashSet<HeaderId>,
     reply_channel: ApplyBlockReply<Tx>,
 }
 
@@ -349,7 +347,6 @@ where
         let candidate = self.cryptarchia.clone();
         let current_slot = self.current_slot;
         let storage = self.relays.storage().clone();
-        let blocks_to_remove = self.storage_blocks_to_remove.clone();
         self.block_underway = Some(Box::pin(async move {
             let prepared = prepare_block(
                 candidate,
@@ -359,17 +356,8 @@ where
                 &storage,
             )
             .await;
-            let storage_blocks_to_remove = delete_stale_blocks_from_storage(
-                prepared
-                    .iter()
-                    .flat_map(|prepared| prepared.outcome.pruned_blocks.stale_blocks().copied()),
-                &blocks_to_remove,
-                &storage,
-            )
-            .await;
             BlockPreparation {
                 prepared,
-                storage_blocks_to_remove,
                 reply_channel,
             }
         }));
@@ -380,10 +368,8 @@ where
         self.block_underway = None;
         let BlockPreparation {
             prepared,
-            storage_blocks_to_remove,
             reply_channel,
         } = preparation;
-        self.storage_blocks_to_remove = storage_blocks_to_remove;
         self.commit_block_and_reply(prepared, reply_channel).await;
         self.prepare_next_block();
     }
@@ -442,6 +428,15 @@ where
         if self.cryptarchia.lib_branch().slot() > previous_lib_slot {
             self.retire_epoch_state_query_sources_behind_lib();
         }
+
+        // Only now that the chain without them is committed: the one served
+        // until then still holds them.
+        self.storage_blocks_to_remove = delete_stale_blocks_from_storage(
+            outcome.pruned_blocks.stale_blocks().copied(),
+            &self.storage_blocks_to_remove,
+            self.relays.storage(),
+        )
+        .await;
 
         self.record_recovery_state();
 
@@ -2095,6 +2090,45 @@ mod tests {
         response_tx.send(Ok(())).unwrap();
         assert_eq!(replied(applied).await.unwrap().tip, block_id);
         assert!(storage_rx.try_recv().is_err());
+    }
+
+    /// Blocks only go from storage once the chain that still holds them is no
+    /// longer served: the next block's commit is announced before they're
+    /// deleted.
+    #[tokio::test]
+    async fn blocks_are_deleted_once_the_next_block_is_committed() {
+        let (zk_key, utxo) = utxo();
+        let chain = genesis_cryptarchia(utxo);
+        let (block, _) = two_blocks(&chain, utxo, &zk_key);
+        let block_id = block.header().id();
+        let (storage_tx, mut storage_rx) = mpsc::channel(16);
+        let (mut service, handle) = service_on_storage(
+            storage_tx,
+            Following,
+            chain,
+            block.header().slot(),
+            Duration::ZERO,
+        );
+        service
+            .storage_blocks_to_remove
+            .insert(HeaderId::from([1; 32]));
+        let mut committed = service.new_block_subscription_sender.subscribe();
+        tokio::spawn(service.process_following());
+
+        let applied = handle.apply(block).await;
+        let request = timeout(REPLY_TIMEOUT, storage_rx.recv()).await.unwrap();
+        let Some(StorageMsg::StoreBlockData { response_tx, .. }) = request else {
+            panic!("the block should be stored first");
+        };
+        response_tx.send(Ok(())).unwrap();
+        let request = timeout(REPLY_TIMEOUT, storage_rx.recv()).await.unwrap();
+        let Some(StorageMsg::RemoveBlocks { response_tx, .. }) = request else {
+            panic!("the blocks left to delete should be deleted next");
+        };
+
+        assert_eq!(committed.try_recv().unwrap().block_id, block_id);
+        response_tx.send(Ok(())).unwrap();
+        assert_eq!(replied(applied).await.unwrap().tip, block_id);
     }
 
     /// The stale block and the one left from before, for a storage that answers
