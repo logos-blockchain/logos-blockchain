@@ -27,8 +27,9 @@ pub static CHANNEL_MULTI_SIG: LazyLock<ChannelMultiSigProof> = LazyLock::new(|| 
     ])))
 });
 
-pub static CHANNEL_INSCRIBE_PROOF: LazyLock<ChannelInscribeProof> =
-    LazyLock::new(|| ChannelInscribeProof::new(*ED25519_SIG, vec![StepProof::User(*ZK_TRANSFER)]));
+pub static CHANNEL_INSCRIBE_PROOF: LazyLock<ChannelInscribeProof> = LazyLock::new(|| {
+    ChannelInscribeProof::new(*ED25519_SIG, vec![StepProof::ZkTransfer(*ZK_TRANSFER)])
+});
 
 pub static PROGRAM_STEP_PROOF: LazyLock<ProgramStepProof> = LazyLock::new(|| ProgramStepProof {
     spend_proof: ZkProgramSpendProof::new(CompressedGroth16Proof::from_bytes(&[2u8; 128])),

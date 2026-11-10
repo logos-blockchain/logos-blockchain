@@ -1084,7 +1084,7 @@ mod tests {
             vec![
                 OpProof::ChannelInscribe(ChannelInscribeProof::new(
                     Ed25519Signature::zero(),
-                    vec![StepProof::User(ZkTransferProof::new(
+                    vec![StepProof::ZkTransfer(ZkTransferProof::new(
                         CompressedGroth16Proof::from_bytes(&[0u8; 128]),
                     ))],
                 )),

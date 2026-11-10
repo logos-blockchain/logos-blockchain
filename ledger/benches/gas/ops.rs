@@ -427,7 +427,7 @@ fn user_inscription_shape(
         .map(|step| step.outputs().len())
         .sum();
     let step_proofs: Vec<StepProof> = (0..user_steps)
-        .map(|index| StepProof::User(zk_transfer(index)))
+        .map(|index| StepProof::ZkTransfer(zk_transfer(index)))
         .collect();
     let tip = channel_tip();
     OpShape::on_fixture(
@@ -543,7 +543,7 @@ pub fn program_steps(shape: ProgramShape, salt: u64) -> Vec<(Step, StepProof)> {
             };
             (
                 Step::ProgramDeposit(deposit),
-                StepProof::User(zk_transfer(index)),
+                StepProof::ZkTransfer(zk_transfer(index)),
             )
         });
     let openings: Vec<ProgramNoteOpening> = (0..shape.openings)
@@ -567,7 +567,7 @@ pub fn program_steps(shape: ProgramShape, salt: u64) -> Vec<(Step, StepProof)> {
         program_step_id: Fr::from(7u64),
         inscription: Inscription::default(),
     };
-    let proof = StepProof::Program(ProgramStepProof {
+    let proof = StepProof::ProgramStep(ProgramStepProof {
         spend_proof: ZkProgramSpendProof::new(proof(1)),
         program_proof: ProgramProof::new(proof(2)),
         program_notes: openings,

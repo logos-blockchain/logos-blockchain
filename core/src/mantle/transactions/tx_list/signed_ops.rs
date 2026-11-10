@@ -1063,7 +1063,7 @@ mod tests {
         let encoded = |opening: ProgramNoteOpening| {
             let proof = ChannelInscribeProof::new(
                 signature,
-                vec![StepProof::Program(ProgramStepProof {
+                vec![StepProof::ProgramStep(ProgramStepProof {
                     spend_proof: ZkProgramSpendProof::sample(),
                     program_proof: ProgramProof::sample(),
                     program_notes: vec![opening],

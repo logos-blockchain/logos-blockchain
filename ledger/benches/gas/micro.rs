@@ -465,7 +465,7 @@ fn applied_program_spend() -> DeferredZkProgramSpend {
     let step_proofs = mini_blocks
         .iter()
         .flat_map(Bounded::iter)
-        .map(|step| StepProof::sample_for(step.proof_shape()))
+        .map(|step| StepProof::sample_for(step.into()))
         .collect();
     let ops = Ops::new_unchecked(vec![Op::ChannelInscribe(InscriptionOp {
         channel_id: fixture.channel,

@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::mantle::{
     Value,
     notes::{Note, ProgramId},
-    ops::ZkTransferProof,
+    ops::{ZkTransferProof, channel::inscribe::Step},
 };
 
 // A compressed Groth16 proof (`Groth16Proof` in the encoding), with the JSON
@@ -120,7 +120,7 @@ pub struct ProgramStepProof {
 
 impl BinaryEncode for ProgramStepProof {
     fn encoded_length(&self) -> usize {
-        StepProofShape::Program {
+        StepProofShape::ProgramStep {
             program_notes: self.program_notes.len(),
         }
         .encoded_length()
@@ -143,7 +143,7 @@ impl BinaryDecode for ProgramStepProof {
         input: &'input [u8],
         context: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let StepProofShape::Program { program_notes } = *context else {
+        let StepProofShape::ProgramStep { program_notes } = *context else {
             return Err(DecodeError::invalid_value::<Self>(
                 "a program step proof needs the shape of a program step",
             ));
@@ -171,18 +171,31 @@ impl BinaryDecode for ProgramStepProof {
 // a program deposit, the proofs and openings of a program step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StepProofShape {
-    User,
-    Program { program_notes: usize },
+    ZkTransfer,
+    ProgramStep { program_notes: usize },
+}
+
+// The shape of the proof of a step is given by the step: its kind, and for a
+// program step the notes of the program it creates.
+impl From<&Step> for StepProofShape {
+    fn from(step: &Step) -> Self {
+        match step {
+            Step::User(_) | Step::ProgramDeposit(_) => Self::ZkTransfer,
+            Step::Program(step) => Self::ProgramStep {
+                program_notes: step.program_outputs.len(),
+            },
+        }
+    }
 }
 
 impl StepProofShape {
     #[must_use]
     pub const fn encoded_length(self) -> usize {
         match self {
-            Self::User => COMPRESSED_PROOF_SIZE,
+            Self::ZkTransfer => COMPRESSED_PROOF_SIZE,
             // The program spend and the program proof, then the openings; cannot
             // overflow for 8 openings.
-            Self::Program { program_notes } => {
+            Self::ProgramStep { program_notes } => {
                 let openings = PROGRAM_NOTE_OPENING_SIZE
                     .checked_mul(program_notes)
                     .expect("the openings of a step fit a usize");
@@ -199,8 +212,8 @@ impl StepProofShape {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StepProof {
-    User(ZkTransferProof),
-    Program(ProgramStepProof),
+    ZkTransfer(ZkTransferProof),
+    ProgramStep(ProgramStepProof),
 }
 
 impl StepProof {
@@ -212,8 +225,8 @@ impl StepProof {
         use crate::mantle::ops::op_proof::samples::SampleProof as _;
 
         match shape {
-            StepProofShape::User => Self::User(ZkTransferProof::sample()),
-            StepProofShape::Program { program_notes } => Self::Program(ProgramStepProof {
+            StepProofShape::ZkTransfer => Self::ZkTransfer(ZkTransferProof::sample()),
+            StepProofShape::ProgramStep { program_notes } => Self::ProgramStep(ProgramStepProof {
                 spend_proof: ZkProgramSpendProof::sample(),
                 program_proof: ProgramProof::sample(),
                 program_notes: vec![
@@ -234,15 +247,15 @@ impl StepProof {
 impl BinaryEncode for StepProof {
     fn encoded_length(&self) -> usize {
         match self {
-            Self::User(proof) => proof.encoded_length(),
-            Self::Program(proof) => proof.encoded_length(),
+            Self::ZkTransfer(proof) => proof.encoded_length(),
+            Self::ProgramStep(proof) => proof.encoded_length(),
         }
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         match self {
-            Self::User(proof) => proof.encode_into(out),
-            Self::Program(proof) => proof.encode_into(out),
+            Self::ZkTransfer(proof) => proof.encode_into(out),
+            Self::ProgramStep(proof) => proof.encode_into(out),
         }
     }
 }
@@ -255,11 +268,10 @@ impl BinaryDecode for StepProof {
         context: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
         match context {
-            StepProofShape::User => {
-                ZkTransferProof::decode(input, &()).map(|(rest, proof)| (rest, Self::User(proof)))
-            }
-            StepProofShape::Program { .. } => ProgramStepProof::decode(input, context)
-                .map(|(rest, proof)| (rest, Self::Program(proof))),
+            StepProofShape::ZkTransfer => ZkTransferProof::decode(input, &())
+                .map(|(rest, proof)| (rest, Self::ZkTransfer(proof))),
+            StepProofShape::ProgramStep { .. } => ProgramStepProof::decode(input, context)
+                .map(|(rest, proof)| (rest, Self::ProgramStep(proof))),
         }
     }
 }
@@ -270,18 +282,20 @@ mod tests {
 
     #[test]
     fn program_step_proof_reads_its_shape_from_the_step() {
-        let proof = StepProof::sample_for(StepProofShape::Program { program_notes: 1 });
+        let proof = StepProof::sample_for(StepProofShape::ProgramStep { program_notes: 1 });
         let bytes = proof.encode();
         assert_eq!(bytes.len(), 128 + 128 + 104);
         assert_eq!(
-            StepProofShape::Program { program_notes: 1 }.encoded_length(),
+            StepProofShape::ProgramStep { program_notes: 1 }.encoded_length(),
             bytes.len()
         );
         assert_eq!(
-            StepProof::decode(&bytes, &StepProofShape::Program { program_notes: 1 }).unwrap(),
+            StepProof::decode(&bytes, &StepProofShape::ProgramStep { program_notes: 1 }).unwrap(),
             (&[][..], proof)
         );
-        assert_eq!(StepProofShape::User.encoded_length(), 128);
-        assert!(StepProof::decode(&bytes, &StepProofShape::Program { program_notes: 2 }).is_err());
+        assert_eq!(StepProofShape::ZkTransfer.encoded_length(), 128);
+        assert!(
+            StepProof::decode(&bytes, &StepProofShape::ProgramStep { program_notes: 2 }).is_err()
+        );
     }
 }

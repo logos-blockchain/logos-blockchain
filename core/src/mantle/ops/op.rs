@@ -186,7 +186,7 @@ impl Op {
             Self::ChannelInscribe(op) => OpProof::ChannelInscribe(ChannelInscribeProof::new(
                 Ed25519Signature::sample(),
                 op.steps()
-                    .map(|step| StepProof::sample_for(step.proof_shape()))
+                    .map(|step| StepProof::sample_for(step.into()))
                     .collect(),
             )),
             Self::ChannelConfig(op) => sample_proof_for(op),

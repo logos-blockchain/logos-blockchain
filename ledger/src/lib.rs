@@ -3052,7 +3052,7 @@ mod tests {
             .map(|op| match op {
                 Op::ChannelInscribe(_) => OpProof::ChannelInscribe(ChannelInscribeProof::new(
                     signing_key.sign_payload(tx_hash.as_signing_bytes()),
-                    std::iter::repeat_with(|| StepProof::User(zero_proof()))
+                    std::iter::repeat_with(|| StepProof::ZkTransfer(zero_proof()))
                         .take(step_proofs)
                         .collect(),
                 )),
@@ -3215,7 +3215,7 @@ mod tests {
                         signing_key.sign_payload(tx_hash.as_signing_bytes()),
                         inscribe
                             .steps()
-                            .map(|step| StepProof::sample_for(step.proof_shape()))
+                            .map(|step| StepProof::sample_for(step.into()))
                             .collect(),
                     ))
                 }
