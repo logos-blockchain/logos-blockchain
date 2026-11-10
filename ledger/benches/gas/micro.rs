@@ -82,7 +82,8 @@ fn with_recent_roots(recent_roots: u64) -> (NoteSets, Vec<Fr>) {
             .expect("the commitment MMR has room");
         sets = sets
             .update_ledger(ledger)
-            .end_block(RECENT_ROOTS_WINDOW + block);
+            .end_block(RECENT_ROOTS_WINDOW + block)
+            .expect("the note sets live in memory, which cannot fail");
     }
     (sets, roots)
 }
@@ -234,7 +235,11 @@ fn tree_cases() -> Vec<Case> {
             "micro/imt_contains",
             vec![],
             absent,
-            |nullifier: NoteNullifier| ledger_set().contains_nullifier(&nullifier),
+            |nullifier: NoteNullifier| {
+                ledger_set()
+                    .contains_nullifier(&nullifier)
+                    .expect("the note sets live in memory, which cannot fail")
+            },
         ),
         case(
             "micro/mmr_frontier_root",
@@ -304,10 +309,18 @@ fn tree_cases() -> Vec<Case> {
             "micro/end_block_one_set",
             vec![("recent_roots", recent_roots)],
             move || changed.clone(),
-            move |note_sets: NoteSets| note_sets.end_block(last_block + 1),
+            move |note_sets: NoteSets| {
+                note_sets
+                    .end_block(last_block + 1)
+                    .expect("the note sets live in memory, which cannot fail")
+            },
         ));
     }
-    let (commitment_root, nullifier_root) = (set.commitment_root(), set.nullifier_root());
+    let (commitment_root, nullifier_root) = (
+        set.commitment_root(),
+        set.nullifier_root()
+            .expect("the note sets live in memory, which cannot fail"),
+    );
     cases.push(case(
         "micro/eligible_leaf",
         vec![],
@@ -653,7 +666,11 @@ fn end_block_nullifier_cases() -> Vec<Case> {
             "micro/end_block_nullifiers",
             vec![("nullifiers", spent as u64)],
             move || changed.clone(),
-            move |note_sets: NoteSets| note_sets.end_block(last_block + 1),
+            move |note_sets: NoteSets| {
+                note_sets
+                    .end_block(last_block + 1)
+                    .expect("the note sets live in memory, which cannot fail")
+            },
         ));
     }
     cases

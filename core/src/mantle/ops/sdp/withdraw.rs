@@ -351,7 +351,7 @@ mod tests {
             .clone()
             .execute_adding(&[NoteCommitment(Fr::from(1u64))])
             .unwrap();
-        let sets = NoteSets::new().update_sdp(sdp).end_block(0);
+        let sets = NoteSets::new().update_sdp(sdp).end_block(0).unwrap();
         let deferred = verify_withdrawal(
             &preverified(
                 operation,
@@ -571,6 +571,7 @@ mod tests {
                 .note_sets
                 .sdp()
                 .contains_nullifier(&NoteNullifier(Fr::from(28u64)))
+                .unwrap()
         );
         assert_eq!(
             context.note_sets.ledger().commitment_root(),

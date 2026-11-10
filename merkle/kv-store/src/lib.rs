@@ -232,6 +232,33 @@ impl<S> Prefixed<S> {
         full.into()
     }
 
+    /// The store holding the namespace.
+    pub const fn inner(&self) -> &S {
+        &self.store
+    }
+
+    /// The writes of `batch`, made within the namespace, as writes of the
+    /// inner store: to apply them atomically with writes of other namespaces.
+    #[must_use]
+    pub fn namespace_batch(&self, batch: WriteBatch) -> WriteBatch {
+        batch
+            .into_ops()
+            .into_iter()
+            .map(|op| match op {
+                WriteOp::Put(entry) => WriteOp::Put(KvEntry {
+                    key: self.key(&entry.key),
+                    value: entry.value,
+                }),
+                WriteOp::Delete { key } => WriteOp::Delete {
+                    key: self.key(&key),
+                },
+                WriteOp::DeletePrefix { prefix } => WriteOp::DeletePrefix {
+                    prefix: self.key(&prefix),
+                },
+            })
+            .collect()
+    }
+
     fn strip(&self, entry: KvEntry) -> KvEntry {
         KvEntry {
             key: entry.key.slice(self.namespace.len()..),
@@ -273,24 +300,7 @@ impl<S: KvStore> KvStore for Prefixed<S> {
     }
 
     fn write_batch(&self, batch: WriteBatch) -> Result<(), Self::Error> {
-        self.store.write_batch(
-            batch
-                .into_ops()
-                .into_iter()
-                .map(|op| match op {
-                    WriteOp::Put(entry) => WriteOp::Put(KvEntry {
-                        key: self.key(&entry.key),
-                        value: entry.value,
-                    }),
-                    WriteOp::Delete { key } => WriteOp::Delete {
-                        key: self.key(&key),
-                    },
-                    WriteOp::DeletePrefix { prefix } => WriteOp::DeletePrefix {
-                        prefix: self.key(&prefix),
-                    },
-                })
-                .collect(),
-        )
+        self.store.write_batch(self.namespace_batch(batch))
     }
 }
 
@@ -488,6 +498,23 @@ mod tests {
         batch.delete_prefix(&b""[..]);
         b.write_batch(batch).unwrap();
         assert_eq!(a.get(b"k").unwrap(), Some(Bytes::from_static(b"1")));
+    }
+
+    #[test]
+    fn test_namespaced_batches_apply_together() {
+        let store = Arc::new(MemKv::new());
+        let a = Prefixed::new(Arc::clone(&store), &b"a/"[..]);
+        let b = Prefixed::new(Arc::clone(&store), &b"b/"[..]);
+        let mut writes_a = WriteBatch::new();
+        writes_a.put(&b"k"[..], &b"1"[..]);
+        let mut writes_b = WriteBatch::new();
+        writes_b.put(&b"k"[..], &b"2"[..]);
+        let mut batch = a.namespace_batch(writes_a);
+        batch.append(b.namespace_batch(writes_b));
+        a.inner().write_batch(batch).unwrap();
+        assert_eq!(a.get(b"k").unwrap(), Some(Bytes::from_static(b"1")));
+        assert_eq!(b.get(b"k").unwrap(), Some(Bytes::from_static(b"2")));
+        assert_eq!(store.len(), 2);
     }
 
     #[test]

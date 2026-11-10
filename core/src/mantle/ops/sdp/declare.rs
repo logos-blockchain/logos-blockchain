@@ -288,7 +288,7 @@ mod tests {
             .clone()
             .execute_adding(&[NoteCommitment(Fr::from(1u64))])
             .unwrap();
-        NoteSets::new().update_ledger(ledger).end_block(0)
+        NoteSets::new().update_ledger(ledger).end_block(0).unwrap()
     }
 
     fn root() -> Fr {
@@ -615,7 +615,7 @@ mod tests {
                 .clone()
                 .execute_adding(&[input.commitment()])
                 .unwrap();
-            let sets = NoteSets::new().update_ledger(ledger).end_block(0);
+            let sets = NoteSets::new().update_ledger(ledger).end_block(0).unwrap();
             let root = mmr.frontier_root();
             let nullifier =
                 derive_note_nullifier(&input.commitment(), &ZkKey::new(secret_key).nullifier_key());
@@ -689,7 +689,7 @@ mod tests {
 
             let empty_root = NoteSet::empty().commitment_root();
             let ledger = context.note_sets.ledger();
-            assert!(ledger.contains_nullifier(&nullifier(26)));
+            assert!(ledger.contains_nullifier(&nullifier(26)).unwrap());
             assert_eq!(ledger.commitment_root(), empty_root);
             assert_eq!(
                 context.note_sets.sdp().commitment_root(),
@@ -806,8 +806,8 @@ mod tests {
 
             assert_eq!(events, []);
             assert_eq!(
-                context.note_sets.ledger().nullifier_root(),
-                NoteSets::new().ledger().nullifier_root()
+                context.note_sets.ledger().nullifier_root().unwrap(),
+                NoteSets::new().ledger().nullifier_root().unwrap()
             );
             assert_eq!(
                 context.note_sets.sdp().commitment_root(),

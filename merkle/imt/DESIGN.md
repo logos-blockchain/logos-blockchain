@@ -1,12 +1,30 @@
-# KV-backed, fork-safe nullifier IMT — design plan (v5)
+# KV-backed, fork-safe nullifier IMT — design plan (v6)
 
 Status:
 
 - Phases 1–3 are implemented: `merkle/kv-store` and `merkle/imt/src/store/`.
-- Phases 4–6 are not started. `NoteSet` still uses the in-memory
-  `IndexedMerkleTree`.
+- Phase 4 is implemented: `NoteSet` keeps its nullifier tree in the store, and
+  `Ledger` commits, finalizes, prunes and collects it
+  (`ledger/src/nullifier_storage.rs`).
+- Phases 5–6 are not started. The node still keeps the store in memory
+  (`MemKv`), as it kept the tree before.
 
-Changes since v4, both found while implementing:
+Changes since v5, all found while implementing phase 4 (see §4):
+
+- The retention floor is option A: the shortest tree any kept state holds,
+  computed per note set over the three note sets of every kept state. See
+  §3, "Garbage collection and retained snapshots".
+- `discard_lag` is 0: a pruned fork is deleted in the pruning batch.
+- Note sets are created at runtime (channel sets), possibly by two forks at
+  the same index. A new tree starts with no write (`Imt::empty`) and its
+  store gets a base at its first finalize.
+- Until phase 5, a ledger state is still serialized with every leaf, in the
+  format of the in-memory tree, and a decoded one is imported in a store of
+  its own. `Snapshot` and the attach step move to phase 5, with RocksDB.
+- `NoteSets::new()` keeps a store in memory of its own. The ledger takes its
+  store from the note sets of its root state.
+
+Changes since v4:
 
 - Reads filter base index entries by `leaf_index < len`.
 - Garbage collection waits for a retention floor, so that epoch snapshots
@@ -87,7 +105,8 @@ pub struct WriteBatch { ops: Vec<WriteOp> }
   stale records). It can become an iterator later.
 - `MemKv` is a `BTreeMap` behind a `RwLock`, for tests and benches, with
   optional read counters.
-- `Prefixed<S>` namespaces each note set's keys under `imt/{note_set_index}/…`.
+- `Prefixed<S>` namespaces each note set's keys under the namespace of the
+  set (§3).
 - A conformance suite runs against any implementation: edge cases of
   `get_prev`, scanning and deleting by prefix, and batch atomicity.
 
@@ -196,9 +215,10 @@ pub struct LowLeaf { pub index: LeafIndex, pub leaf: NullifierLeaf }
 
 Every operation returns the new state and, where it writes, the
 `WriteBatch` to apply. Nothing writes to the store except `Imt::initialize`
-(genesis). The caller applies the batch, together with its own writes, before
-it uses the returned state, so a failed write leaves memory and store as they
-were.
+and `Imt::import`, which write a whole tree as a finalized base; `Imt::empty`
+starts a tree without writing. The caller applies the batch, together with
+its own writes, before it uses the returned state, so a failed write leaves
+memory and store as they were.
 
 ### Reads (any state, committed or pending)
 
@@ -281,8 +301,51 @@ For each collected block it:
 - deletes those records;
 - deletes the `G` key.
 
-`floor_len` is the smallest `len` among the retained states (the LIB and the
-epoch snapshots in use), computed by the ledger for each note set.
+`floor_len` is the retention floor of the note set, computed by the ledger
+(`retention_floors` in `ledger/src/nullifier_storage.rs`), option A below.
+
+#### The retention floor
+
+Who reads an old tree:
+
+- Leader proofs are the only reader of nullifier paths. `pol_wallet_inputs`
+  reads the low leaf and path of a nullifier in two trees: the current set of
+  the tip state, and its `epoch_state.note_sets`, frozen at the stake
+  distribution snapshot.
+- Each `LedgerState` holds three versions of each note set: its own
+  `note_sets`, `epoch_state.note_sets` and `next_epoch_state.note_sets`. The
+  next epoch snapshot becomes the epoch snapshot at the epoch transition.
+- Everything else reads roots only, which need no old node. The wallet states
+  kept below the LIB (`dd0afacc8`) hold commitment trees and aged paths, no
+  nullifier tree.
+
+**Option A, implemented: the shortest tree held by a kept state.** For each
+note set, `floor_len` is the smallest `len` among the three note sets of
+every state the ledger keeps after the pruning: the LIB, its descendants, and
+their epoch snapshots. A set a state does not hold, a channel set created
+after its snapshot was taken, does not bound the floor of that set.
+
+- It is exact: it holds whatever the epoch rules are, without assuming that
+  the snapshots of the descendants are at least as long as those of the LIB.
+- It costs a pass over the lengths of the kept states at each LIB advance:
+  O(states × sets), no read.
+- It lives in one place, `Ledger::apply_pruning`, right after the finalize
+  batch.
+- In practice the floor is the length of the oldest epoch snapshot of the
+  LIB, up to about an epoch below it. The disk held for it is the nodes the
+  canonical chain replaced over that window, about 40 per insert.
+
+Options not taken:
+
+| | Floor | Why not |
+|---|---|---|
+| B | `lib_state.epoch_state.note_sets[i].len()` | O(1), but relies on the snapshots only moving forward along a chain, checked by a `debug_assert` at best. A takes the same minimum without the assumption, at a negligible cost. |
+| C | Pins: snapshots handed to readers carry a guard, the floor is the smallest live one | Protects readers outside the ledger too, such as RPC, but needs shared state and `Drop` hooks, and the pins to be restored at restart. It can be added on top of A if such readers appear. |
+| D | Keep everything inserted in the last *K* epochs | A guess: too small breaks leader proofs, too large wastes disk, and it needs tuning per era. |
+
+A state of a pruned fork read after the pruning, such as a chain-leader
+proposal on a tip pruned meanwhile, fails with `MissingNode`. The proposal
+fails as it would on a pruned fork today.
 
 - A canonical state with `len ≥ end_len` is at or after that block, so it
   never reads the nodes the block replaced. That is why deleting at
@@ -339,7 +402,8 @@ never committed has no version, so there is nothing to discard.
    `release_writes` for the newly finalized blocks (the `immutable_blocks`
    and `new_lib` itself).
 2. **Discard**: `discard_writes` and `release_writes` for every
-   `pruned.stale_blocks()`, in each note set.
+   `pruned.stale_blocks()`, in each note set the block recorded at its commit
+   (`W ‖ version`).
 3. **Write steps 1 and 2 in one `write_batch`.** Their writes touch disjoint
    keys.
 4. **Only after the write**, in memory: replace the `new_lib` state with the
@@ -407,47 +471,105 @@ each makes the suite fail.
 
 ---
 
-## 4. `NoteSet` and `Ledger` integration
+## 4. `NoteSet` and `Ledger` integration (implemented)
 
-- `note_set.rs`:
-  - `NullifierImt = store::Imt<Prefixed<DynKvStore>, ZkHasher, 40>`, with
-    `DynKvStore = Arc<dyn KvStore<Error = StoreError>>` from `lb-kv-store`
-    (wrap a backend with `ErasedKv::into_dyn`), so that `LedgerState` does
-    not become generic. Each note set gets its own `Prefixed` namespace; the
-    `VersionRegistry` uses one more, shared.
-  - `NoteSet::empty()` takes the store and the note set index.
-  - `seal()` runs at the end of each block, where `flush` runs today.
-  - `NoteSetError` derives `Copy`. `ImtError` is `Clone` + `Eq`, not `Copy`,
-    because it can carry a storage error, so `NoteSetError` and the errors
-    built on it lose `Copy`.
-- `Ledger`:
-  - New fields: the store and the `VersionRegistry`.
-  - `prepare_update` rebases the parent state's trees. Its result keeps the
-    pending writes in memory.
-  - `commit_update` becomes fallible (`Result`). It allocates a version,
-    commits both note sets, writes one batch, and only then inserts the state.
-  - `prune_state_at` is replaced by `apply_pruning(new_lib, &PrunedBlocks)`
-    (section 3). It computes the GC floor per note set from the remaining
-    states' LIB and epoch snapshots (`epoch_state.note_sets`).
-  - Genesis (`from_notes`, `from_genesis_tx`) calls `Imt::initialize`, which
-    writes the sentinel at version 0 together with `BaseMeta`.
-- Errors: `ImtError::Storage` and `ImtError::MissingNode(NodeKey)`,
-  propagated through `NoteSetError`, `TransferError`, `SdpError`, the channel
-  errors and `LedgerError`.
-- Serde:
-  - The trees of a saved `LedgerState` are canonical states at or below the
-    base: the LIB's own sets, and its epoch snapshot. They are serialized as
-    `Snapshot { len, root }`.
-  - Decoding is followed by an attach step (`Imt::from_snapshot`, plus
-    `check_base` for the LIB's own sets), which needs the store.
-  - `PartialEq` compares `(len, root.hash)`.
-- Callers to review (they will now receive `Result`):
-  - `ledger/tests/gas_micro.rs` and `ledger/benches/gas/micro.rs`
-  - `zk/proofs/{poq,pol}/src/wallet_inputs.rs`
-  - the wallet service
-  - `c-bindings/src/api/pow.rs`
-  - chain-leader's block proposal, which reads states that are prepared but
-    not committed. That works, because reads go to `pending` first.
+### Note sets (`core/src/mantle/note_set.rs`)
+
+- `NullifierImt = store::Imt<NoteSetStore, ZkHasher, 40>`, with
+  `NoteSetStore = Prefixed<DynKvStore>` and
+  `DynKvStore = Arc<dyn KvStore<Error = StoreError>>`, so that `LedgerState`
+  does not become generic.
+- `NoteSets` holds the store. Each set lives in its own namespace, named by
+  the set rather than by its eligible leaf: `note_set_namespace(index)` is
+  `L` for the ledger set, `S` for the SDP set and `C ‖ channel_id` (32 bytes)
+  for a channel set. No namespace is a prefix of another. The
+  `VersionRegistry` lives in `V`, and the sets each block wrote to in `W`
+  (see the ledger below), both shared by every set.
+  - `NoteSets::new()` keeps a `MemKv` of its own: tests, benches and the node
+    until phase 5. `NoteSets::with_store(store)` takes the store.
+  - `NoteSet::empty()` keeps a `MemKv` of its own;
+    `NoteSet::empty_in(store)` takes the namespace of a set.
+- Dynamic sets. Channels add sets at runtime (`with_channel`), and two forks
+  can each create the set of the same channel. A channel's eligible leaf
+  depends on the order of creation on its fork, its namespace does not. A new set starts with `Imt::empty`:
+  the sentinel in a pending block, sealed, nothing read or written. The block
+  creating it writes it under its own version like any other block, and the
+  namespace gets a `BaseMeta` at its first finalize. Until then, a store
+  without base reads as empty, and `rebase` leaves the tree as is.
+- `seal()` runs at the end of each block, where `flush` ran. The eligible leaf
+  takes the root of the sealed tree (`Imt::sealed_root`), which reads nothing.
+- Fallible now: `nullifier_root`, `contains_nullifier`, `end_block`,
+  `end_block_with_updates`. `NoteSetError` loses `Copy` (`ImtError` can carry
+  a storage error), and so does `LeaderWitnessError`, which gains a
+  `NoteSet` variant.
+- Lifecycle, each returning the writes of every set as one batch of the
+  store (`Prefixed::namespace_batch`): `NoteSets::commit(version)`,
+  `finalize(block_id)`, `rebase()`, and the static `discard_writes(store,
+  written, version)` and `collect_garbage(store, index, floor_len)`.
+  `commit` also returns the sets it wrote to (`CommittedSets::written`).
+- `PartialEq`: a tree compares by `len` and root (`Imt` hashes a pending
+  block not sealed yet). `NoteSets` ignores its store; `NoteSet` and
+  `NoteSets` are no longer `Eq`, nor is `EpochState`.
+
+### Ledger (`ledger/src/lib.rs`, `ledger/src/nullifier_storage.rs`)
+
+- `NullifierStorage` holds the store, the `VersionRegistry`, and under `W`
+  the sets each committed block wrote to, keyed by its version. The ledger
+  takes the store from the note sets of its root state.
+- `Ledger::new(id, state, eras)` becomes fallible. The root state becomes the
+  finalized base of the store, committed first if it has a pending block, as
+  a genesis state does. The epoch snapshots of a genesis state are its own
+  note sets, committed with them.
+- `commit_update(update)` becomes fallible. It allocates the version of the
+  block, commits the three note sets of the state, writes one batch with the
+  registry entry and the record of the sets it wrote to, and only then keeps
+  the state. The epoch snapshots of a
+  block are those of its parent, committed already.
+- `prune_state_at` is replaced by `apply_pruning(lib, &PrunedBlocks)`, a
+  no-op when nothing is pruned:
+  1. One batch: the LIB's own note sets are finalized; everything the stale
+     blocks wrote is deleted, in the sets each recorded, so a channel only a
+     stale fork created is cleaned up too; the versions of the pruned blocks
+     and of the LIB are released with their records.
+  2. The pruned states are removed and the kept ones rebased.
+  3. One batch: the garbage collection of each set of the LIB, with the
+     retention floor of §3 (option A).
+- A state kept by the ledger cannot change: its trees are in the store. Tests
+  that changed a state after committing it now change it before
+  (`update_ledger_amended` in the cryptarchia tests).
+
+### Chain service
+
+- `Cryptarchia::from_genesis` and `from_lib` become fallible (`Ledger::new`).
+- A failed `commit_update` is an `Error::Ledger`. Only a storage failure fails
+  it, and it leaves the consensus ahead of the ledger: the block is known but
+  not its state.
+- `prune_ledger_states(&PrunedBlocks)` calls `apply_pruning` with the LIB of
+  the consensus. A failure is logged: the states stay in place, and the next
+  pruning finalizes the newer LIB.
+
+### Serde, until phase 5
+
+- A `NoteSet` is still encoded with every leaf, in the format of the
+  in-memory tree, so saved states keep decoding.
+- Decoding checks the leaves with the in-memory tree, then imports them in a
+  store kept in memory, one per `NoteSets` (`Imt::import`, at
+  `Version::GENESIS`). Encoding walks every committed node once
+  (`Imt::leaves`).
+- Phase 5 replaces this with `Snapshot { len, root }` and an attach step to
+  the RocksDB store, plus a one-shot import of the existing data directories.
+
+### Tests
+
+- `merkle/imt/src/store/tests.rs`: `Imt::empty` on two forks of one store,
+  `import` and `leaves` round trips, equality.
+- `ledger/src/nullifier_storage.rs`: the ledger and the consensus engine
+  together, against the in-memory tree as oracle: a chain while the LIB
+  advances, a pruned fork leaving no key in the store, an epoch snapshot below
+  the LIB readable until replaced and then collected, two forks creating the
+  same channel set, a restored LIB state, and the retention floors.
+- Mutation checks: a floor from the LIB alone fails the snapshot and restart
+  tests; skipping the discard of pruned forks fails the fork tests.
 
 ---
 
@@ -458,12 +580,12 @@ each makes the suite fail.
   - `get_prev` uses `seek_for_prev`
   - `DeletePrefix` uses `delete_range_cf`
   - bloom filters on `H` and `N`
-- Chain-service:
-  - It passes the whole `PrunedBlocks` to `Ledger::apply_pruning` instead of
-    `prune_ledger_states(pruned_blocks.all())`. This covers `lib.rs:474`,
-    `lib.rs:662`, and the pbp, following and ibd phases.
-  - Finalize, discard and the removal of the states happen in that order, with
-    a single batch.
+- Chain-service: it already passes the whole `PrunedBlocks` to
+  `Ledger::apply_pruning` (phase 4). What remains is building the genesis and
+  the recovered LIB state on the RocksDB store (`NoteSets::with_store`)
+  instead of the `MemKv` of `NoteSets::new()`.
+- Serde: a saved state encodes its trees as `Snapshot { len, root }` instead
+  of every leaf (phase 4 keeps the leaves, imported in memory at decoding).
 - Restart:
   1. Restore the LIB state and run `attach_store`.
   2. Replay the blocks from the LIB to the tip. `commit_update` **reuses** the
@@ -478,8 +600,8 @@ each makes the suite fail.
     RocksDB batch as the finalize (preferred), or detect a mismatch at startup
     and rebuild.
 - Migration: existing data directories hold a full-leaf `NullifierImt` in the
-  saved state. Either a one-shot import (bulk build at version 0, plus the base
-  index), or a resync on devnets.
+  saved state. Either a one-shot import (`Imt::import`, which phase 4 already
+  runs at every decoding into memory), or a resync on devnets.
 
 ---
 
@@ -598,7 +720,7 @@ Takeaways:
 | 1 | `kv-store` crate + `MemKv` + conformance suite | low |
 | 2 | imt: layout, codecs, walk, insert / seal / commit on a single chain | correctness of the walk and the siblings (oracle tests) |
 | 3 | imt: index overlay, finalize, fork pruning, rebase, GC | GC invariants (reachability test) |
-| 4 | `NoteSet` / `Ledger` integration, `apply_pruning` | `Result` propagation; `commit_update` becomes fallible |
+| 4 | `NoteSet` / `Ledger` integration, `apply_pruning` (done) | `Result` propagation; `commit_update` becomes fallible |
 | 5 | RocksDB + chain-service | stale vs immutable pruning, version reuse at restart, crash consistency, migration |
 | 6 | benches + gas | per-insert cost of H reads (mitigated by `NodeCache`) |
 
@@ -609,13 +731,11 @@ first.
 
 ## Open decisions
 
-1. Scope of the next iteration (phase 4 alone, or 4–6).
-2. ~~`gc_lag`~~: replaced by the retention floor. The ledger has to compute
-   it from the LIB state and the epoch snapshots of the remaining states, one
-   floor per note set. Also check what `dd0afacc8` keeps just below the LIB:
-   a canonical state there is readable as long as it is counted in the floor.
-3. `discard_lag`: 0, or a margin for readers still holding clones of pruned
-   states.
+1. ~~Scope of the next iteration~~: phase 4 alone, stacked on phases 1–3.
+2. ~~Retention floor~~: option A, the shortest tree any kept state holds
+   (§3). `dd0afacc8` keeps wallet states below the LIB, which hold no
+   nullifier tree.
+3. ~~`discard_lag`~~: 0. A pruned fork is deleted in the pruning batch.
 4. Node keys: position + version (proposed) or content-addressed with
    refcounts (Aztec).
 5. RocksDB: share the storage service's DB or a dedicated one; whether the

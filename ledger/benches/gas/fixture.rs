@@ -201,7 +201,11 @@ fn build() -> Fixture {
             .expect("the commitment MMR has room");
         note_sets = note_sets.update(index, set);
     }
-    let state = state.with_latest_note_sets(note_sets.end_block(0));
+    let state = state.with_latest_note_sets(
+        note_sets
+            .end_block(0)
+            .expect("the note sets live in memory, which cannot fail"),
+    );
 
     Fixture {
         config,

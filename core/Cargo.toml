@@ -27,6 +27,7 @@ lb-dynamic-merkle             = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-imt                        = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
+lb-kv-store                   = { workspace = true }
 lb-log-targets                = { workspace = true }
 lb-mmr                        = { workspace = true }
 lb-pol                        = { workspace = true }

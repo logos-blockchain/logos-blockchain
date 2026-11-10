@@ -306,7 +306,8 @@ mod tests {
             cryptarchia_engine.lib(),
             LedgerState::from_notes([], &ledger_config, 0),
             single_era(ledger_config),
-        );
+        )
+        .unwrap();
 
         // Build [`CryptarchiaConsensusState`] with the pruned blocks.
         let pruned_stale_blocks = pruned_blocks
@@ -430,7 +431,8 @@ mod tests {
                 lib_id,
                 LedgerState::from_notes([], &ledger_config, 0),
                 single_era(ledger_config.clone()),
-            ),
+            )
+            .unwrap(),
             genesis_id: genesis_header_id,
         };
         let info_before = original.info();
@@ -456,7 +458,8 @@ mod tests {
             saved_state.lib_block_slot,
             saved_state.lib_block_length,
             saved_state.lib_block_uncle_slots.clone(),
-        );
+        )
+        .unwrap();
 
         // Check the restore LIB is the same as before.
         let restored_lib = restored.consensus.lib_branch();

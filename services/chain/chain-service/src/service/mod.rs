@@ -964,7 +964,7 @@ where
         relays.storage(),
     )
     .await;
-    candidate.prune_ledger_states(applied.pruned_blocks.all());
+    candidate.prune_ledger_states(&applied.pruned_blocks);
     *cryptarchia = candidate;
     metrics::emit_block_transactions_metric(tx_count);
 

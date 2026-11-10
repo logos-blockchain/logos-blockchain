@@ -372,13 +372,12 @@ pub(crate) struct TryApplyBlockOutcome {
 
 impl Cryptarchia {
     /// Creates the chain with the genesis block as its only block.
-    #[must_use]
     pub fn from_genesis(
         genesis_id: HeaderId,
         genesis_ledger_state: LedgerState,
         era_schedule: Arc<EraScheduledConfig>,
         state: State,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         Self::from_lib(
             genesis_id,
             genesis_id,
@@ -392,8 +391,8 @@ impl Cryptarchia {
         )
     }
 
-    /// Initialize a new [`Cryptarchia`] instance.
-    #[must_use]
+    /// Initialize a new [`Cryptarchia`] instance. The LIB state becomes the
+    /// finalized base of the store of its nullifier trees.
     #[expect(
         clippy::too_many_arguments,
         reason = "TODO: define Lib struct to reduce args"
@@ -408,8 +407,8 @@ impl Cryptarchia {
         lib_slot: Slot,
         lib_length: u64,
         lib_uncle_slots: UncleSlots,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, Error> {
+        Ok(Self {
             consensus: <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib_id,
                 lib_parent,
@@ -419,9 +418,9 @@ impl Cryptarchia {
                 lib_length,
                 lib_uncle_slots,
             ),
-            ledger: <lb_ledger::Ledger<_>>::new(lib_id, lib_ledger_state, era_schedule),
+            ledger: <lb_ledger::Ledger<_>>::new(lib_id, lib_ledger_state, era_schedule)?,
             genesis_id,
-        }
+        })
     }
 
     #[must_use]
@@ -471,7 +470,7 @@ impl Cryptarchia {
     {
         let outcome =
             self.try_apply_block_with_state_retention(block, current_slot, BlockOrigin::Network)?;
-        self.prune_ledger_states(outcome.pruned_blocks.all());
+        self.prune_ledger_states(&outcome.pruned_blocks);
         Ok((
             outcome.pruned_blocks,
             outcome.reorged_blocks,
@@ -554,7 +553,9 @@ impl Cryptarchia {
                 err => Error::Consensus(err),
             })?;
 
-        let events = self.ledger.commit_update(update);
+        // Only a storage failure fails a commit, which leaves the consensus ahead
+        // of the ledger: the block is known but not its state.
+        let events = self.ledger.commit_update(update)?;
 
         metrics::emit_consensus_metrics(&self.consensus, &self.ledger);
         metrics::emit_block_imported_metric();
@@ -627,27 +628,31 @@ impl Cryptarchia {
     }
 
     /// Remove the ledger states associated with blocks that have been pruned by
-    /// the [`lb_cryptarchia_engine::Cryptarchia`].
+    /// the [`lb_cryptarchia_engine::Cryptarchia`], making the state of the
+    /// current LIB the finalized base of the nullifier trees.
     ///
     /// Details on which blocks are pruned can be found in the
     /// [`lb_cryptarchia_engine::Cryptarchia::receive_block`].
-    pub(crate) fn prune_ledger_states<'a>(
-        &'a mut self,
-        blocks: impl Iterator<Item = &'a HeaderId>,
-    ) {
-        let mut pruned_states_count = 0usize;
-        for block in blocks {
-            if self.ledger.prune_state_at(block) {
-                pruned_states_count = pruned_states_count.saturating_add(1);
-            } else {
-                error!(
-                   target: LOG_TARGET,
-                    "Failed to prune ledger state for block {:?} which should exist.",
-                    block
-                );
+    pub(crate) fn prune_ledger_states(&mut self, pruned_blocks: &PrunedBlocks<HeaderId>) {
+        match self.ledger.apply_pruning(self.lib(), pruned_blocks) {
+            Ok(pruned_states_count) => {
+                if pruned_states_count != pruned_blocks.len() {
+                    error!(
+                        target: LOG_TARGET,
+                        "Pruned {pruned_states_count} ledger states out of {} pruned blocks.",
+                        pruned_blocks.len()
+                    );
+                }
+                log_pruned_ledger_states(pruned_states_count);
             }
+            // A failed write leaves the states in place, and the next pruning
+            // finalizes the newer LIB.
+            Err(err) => error!(
+                target: LOG_TARGET,
+                "Failed to prune the ledger states of {} pruned blocks: {err}",
+                pruned_blocks.len()
+            ),
         }
-        log_pruned_ledger_states(pruned_states_count);
     }
 
     fn online(self) -> (Self, PrunedBlocks<HeaderId>) {
@@ -659,7 +664,7 @@ impl Cryptarchia {
         };
 
         // Prune the ledger states of all the pruned blocks.
-        cryptarchia.prune_ledger_states(pruned_blocks.all());
+        cryptarchia.prune_ledger_states(&pruned_blocks);
 
         (cryptarchia, pruned_blocks)
     }
@@ -1177,19 +1182,19 @@ where
         let lib_id = recovery_state.lib;
         let genesis_id = recovery_state.genesis_id;
         if lib_id == genesis_id {
-            return Ok(Cryptarchia::from_genesis(
+            return Cryptarchia::from_genesis(
                 genesis_id,
                 recovery_state.lib_ledger_state.clone(),
                 era_schedule,
                 state,
-            ));
+            );
         }
 
         let lib_parent = storage
             .get_block_parent(&lib_id)
             .await
             .ok_or(Error::ParentIdNotFound(lib_id))?;
-        Ok(Cryptarchia::from_lib(
+        Cryptarchia::from_lib(
             lib_id,
             lib_parent,
             recovery_state.lib_ledger_state.clone(),
@@ -1199,7 +1204,7 @@ where
             recovery_state.lib_block_slot,
             recovery_state.lib_block_length,
             recovery_state.lib_block_uncle_slots.clone(),
-        ))
+        )
     }
 }
 

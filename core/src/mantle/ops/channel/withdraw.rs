@@ -117,11 +117,14 @@ impl PendingWithdrawals {
                 .clone();
             // A step consumed one of its notes before it was due: the withdrawal is
             // dropped.
-            if withdrawal
-                .inputs
-                .iter()
-                .any(|nullifier| set.contains_nullifier(nullifier))
-            {
+            let mut consumed = false;
+            for nullifier in &withdrawal.inputs {
+                if set.contains_nullifier(nullifier)? {
+                    consumed = true;
+                    break;
+                }
+            }
+            if consumed {
                 continue;
             }
             let set = set.execute_spending(withdrawal.inputs.as_slice())?;
@@ -302,7 +305,8 @@ mod test {
             note_sets
                 .update_ledger(ledger)
                 .update_channel(channel)
-                .end_block(0),
+                .end_block(0)
+                .unwrap(),
         )
     }
 
@@ -471,8 +475,8 @@ mod test {
             vec![&pending(101, 7, 70)]
         );
         let channel = note_sets.channel(&CHANNEL).unwrap();
-        assert!(channel.contains_nullifier(&nullifier(5)));
-        assert!(!channel.contains_nullifier(&nullifier(7)));
+        assert!(channel.contains_nullifier(&nullifier(5)).unwrap());
+        assert!(!channel.contains_nullifier(&nullifier(7)).unwrap());
         let expected = ledger_before.execute_adding(&[commitment(50)]).unwrap();
         assert_eq!(
             note_sets.ledger().commitment_root(),

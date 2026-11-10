@@ -71,7 +71,7 @@ const STORAGE_MARKET_CLAMP_UP_NUMERATOR: u128 = 9;
 
 use super::{Config, LedgerError, mantle};
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EpochState {
     /// The epoch this snapshot is for
     pub epoch: Epoch,
@@ -795,18 +795,19 @@ impl LedgerState {
         &self.epoch_state.note_sets
     }
 
-    #[must_use]
-    pub fn end_block(self, block_number: BlockNumber) -> Self {
-        Self {
-            note_sets: self.note_sets.end_block(block_number),
+    pub fn end_block(self, block_number: BlockNumber) -> Result<Self, NoteSetError> {
+        Ok(Self {
+            note_sets: self.note_sets.end_block(block_number)?,
             ..self
-        }
+        })
     }
 
-    #[must_use]
-    pub fn end_block_with_updates(self, block_number: BlockNumber) -> (Self, Vec<NoteSetUpdate>) {
-        let (note_sets, updates) = self.note_sets.end_block_with_updates(block_number);
-        (Self { note_sets, ..self }, updates)
+    pub fn end_block_with_updates(
+        self,
+        block_number: BlockNumber,
+    ) -> Result<(Self, Vec<NoteSetUpdate>), NoteSetError> {
+        let (note_sets, updates) = self.note_sets.end_block_with_updates(block_number)?;
+        Ok((Self { note_sets, ..self }, updates))
     }
 
     #[must_use]
@@ -905,7 +906,10 @@ impl LedgerState {
             .clone()
             .execute_adding(&commitments)
             .expect("genesis notes fit in the commitment MMR");
-        let note_sets = note_sets.update_ledger(ledger_set).end_block(0);
+        let note_sets = note_sets
+            .update_ledger(ledger_set)
+            .end_block(0)
+            .expect("a new tree is hashed without reading the store");
         let (lottery_0, lottery_1) = config
             .lottery_constants()
             .compute_lottery_values(total_stake);
@@ -1136,6 +1140,19 @@ pub mod tests {
         slot: impl Into<Slot>,
         utxo: notes::Note,
     ) -> Result<HeaderId, LedgerError<HeaderId>> {
+        update_ledger_amended(ledger, parent, slot, utxo, |state| state)
+    }
+
+    /// Applies an empty block, then `amend` to its state before it is
+    /// committed, as if the block held what `amend` does: a committed state is
+    /// in the store, and cannot change anymore.
+    pub fn update_ledger_amended(
+        ledger: &mut Ledger<HeaderId>,
+        parent: HeaderId,
+        slot: impl Into<Slot>,
+        utxo: notes::Note,
+        amend: impl FnOnce(crate::LedgerState) -> crate::LedgerState,
+    ) -> Result<HeaderId, LedgerError<HeaderId>> {
         let slot = slot.into();
         let ledger_state = ledger
             .state(&parent)
@@ -1152,7 +1169,7 @@ pub mod tests {
         let mut proof = generate_proof(&ledger_state, &utxo, slot);
         proof.reward_value =
             computed_reward_value(ledger, parent, slot, &proof, &UncleSlots::default(), [])?;
-        let update = ledger
+        let mut update = ledger
             .prepare_update::<_, _, MainnetGasProfile>(
                 id,
                 parent,
@@ -1163,9 +1180,26 @@ pub mod tests {
             )?
             .verify_batch_proofs()
             .map_err(|_| LedgerError::InvalidProof)?;
+        update.state = amend(update.state);
 
-        ledger.commit_update(update);
+        ledger.commit_update(update)?;
         Ok(id)
+    }
+
+    // The state with `utxo` added to its ledger set.
+    fn add_utxo(mut state: crate::LedgerState, utxo: notes::Note) -> crate::LedgerState {
+        let note_sets = &state.cryptarchia_ledger.note_sets;
+        let ledger_set = note_sets
+            .ledger()
+            .clone()
+            .execute_adding(&[utxo.commitment()])
+            .unwrap();
+        state.cryptarchia_ledger.note_sets = note_sets
+            .clone()
+            .update_ledger(ledger_set)
+            .end_block(state.block_number)
+            .unwrap();
+        state
     }
 
     fn make_id(parent: HeaderId, slot: impl Into<Slot>, utxo: notes::Note) -> HeaderId {
@@ -1334,7 +1368,8 @@ pub mod tests {
                 [0; 32],
                 full_ledger_state(genesis_state, &config),
                 Arc::new(single_era(config)),
-            ),
+            )
+            .unwrap(),
             [0; 32],
         )
     }
@@ -1346,22 +1381,13 @@ pub mod tests {
         utxo_proof: notes::Note,
         utxo_add: notes::Note,
     ) -> HeaderId {
-        let id = update_ledger(ledger, parent, slot, utxo_proof).unwrap();
         // we still don't have transactions, so the only way to add a commitment to
         // spendable utxos and test epoch snapshotting is by doing this
         // manually
-        let block_ledger = ledger.states.get_mut(&id).unwrap();
-        let note_sets = &block_ledger.cryptarchia_ledger.note_sets;
-        let ledger_set = note_sets
-            .ledger()
-            .clone()
-            .execute_adding(&[utxo_add.commitment()])
-            .unwrap();
-        block_ledger.cryptarchia_ledger.note_sets = note_sets
-            .clone()
-            .update_ledger(ledger_set)
-            .end_block(block_ledger.block_number);
-        id
+        update_ledger_amended(ledger, parent, slot, utxo_proof, |state| {
+            add_utxo(state, utxo_add)
+        })
+        .unwrap()
     }
 
     pub fn apply_and_add_utxo_and_declaration(
@@ -1372,62 +1398,62 @@ pub mod tests {
         utxo_add: notes::Note,
         (sdp_secret_key, sdp_utxo): (Fr, notes::Note),
     ) -> (HeaderId, SDPDeclareOp, ZkKey) {
-        let id = apply_and_add_utxo(ledger, parent, slot, utxo_proof, utxo_add);
-
         let mut zk_key = [0u8; 16];
         thread_rng().fill_bytes(&mut zk_key);
         let zk_key: ZkKey = fr_from_bytes(&zk_key).unwrap().into();
         let mut signing_key_bytes = [0u8; 32];
         thread_rng().fill_bytes(&mut signing_key_bytes);
         let signing_key = Ed25519Key::from_bytes(&signing_key_bytes);
-        let declare_op = SDPDeclareOp {
-            service_type: ServiceType::BlendNetwork,
-            locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
-            provider_id: signing_key.public_key().into(),
-            // The zk_id of the quota secret key, the service note under the
-            // keys of the notes of the same key.
-            zk_id: kdf_public_key(zk_key.as_fr()),
-            note_pk: zk_key.to_public_key(),
-            note_stake_pk: zk_key.to_public_key(),
-            inputs: [derive_note_nullifier(
-                &sdp_utxo.commitment(),
-                &ZkKey::new(sdp_secret_key).nullifier_key(),
-            )]
-            .into(),
-            commitment_merkle_root: ledger.states[&id]
-                .cryptarchia_ledger
-                .latest_note_sets()
-                .ledger()
-                .commitment_root(),
-            amount: sdp_utxo.value,
-        };
-
-        let proof = ZkAndEd25519Proof {
-            zk_proof: ZkTransferProof::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
-            ed25519_sig: Ed25519Signature::zero(),
-        };
-        let signed_operation =
-            SignedOperation::<_, _, StandardMode>::new(declare_op.clone(), proof)
-                .into_state_trusted();
         let config = ledger.era_schedule().genesis().parameters.clone();
+        let mut declared = None;
+        let id = update_ledger_amended(ledger, parent, slot, utxo_proof, |state| {
+            let mut state = add_utxo(state, utxo_add);
+            let declare_op = SDPDeclareOp {
+                service_type: ServiceType::BlendNetwork,
+                locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
+                provider_id: signing_key.public_key().into(),
+                // The zk_id of the quota secret key, the service note under the
+                // keys of the notes of the same key.
+                zk_id: kdf_public_key(zk_key.as_fr()),
+                note_pk: zk_key.to_public_key(),
+                note_stake_pk: zk_key.to_public_key(),
+                inputs: [derive_note_nullifier(
+                    &sdp_utxo.commitment(),
+                    &ZkKey::new(sdp_secret_key).nullifier_key(),
+                )]
+                .into(),
+                commitment_merkle_root: state
+                    .cryptarchia_ledger
+                    .latest_note_sets()
+                    .ledger()
+                    .commitment_root(),
+                amount: sdp_utxo.value,
+            };
 
-        let block_ledger = ledger.states.get_mut(&id).unwrap();
-        let (mantle_ledger, note_sets, _) = block_ledger
-            .mantle_ledger
-            .clone()
-            .try_apply_sdp_declaration(
-                signed_operation,
-                block_ledger.cryptarchia_ledger.latest_note_sets().clone(),
-                &config,
-            )
-            .unwrap();
-        block_ledger.mantle_ledger = mantle_ledger;
-        block_ledger.cryptarchia_ledger = block_ledger
-            .cryptarchia_ledger
-            .clone()
-            .update_note_sets(note_sets);
+            let proof = ZkAndEd25519Proof {
+                zk_proof: ZkTransferProof::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
+                ed25519_sig: Ed25519Signature::zero(),
+            };
+            let signed_operation =
+                SignedOperation::<_, _, StandardMode>::new(declare_op.clone(), proof)
+                    .into_state_trusted();
+            let (mantle_ledger, note_sets, _) = state
+                .mantle_ledger
+                .clone()
+                .try_apply_sdp_declaration(
+                    signed_operation,
+                    state.cryptarchia_ledger.latest_note_sets().clone(),
+                    &config,
+                )
+                .unwrap();
+            state.mantle_ledger = mantle_ledger;
+            state.cryptarchia_ledger = state.cryptarchia_ledger.clone().update_note_sets(note_sets);
+            declared = Some(declare_op);
+            state
+        })
+        .unwrap();
 
-        (id, declare_op, zk_key)
+        (id, declared.expect("the block was amended"), zk_key)
     }
 
     fn assert_sdp_snapshot(
@@ -2267,7 +2293,11 @@ pub mod tests {
             .push(NoteCommitment(Fr::from(4u64)))
             .unwrap()
             .frontier_root();
-        assert!(ledger_set.contains_nullifier(&NoteNullifier(Fr::from(3u64))));
+        assert!(
+            ledger_set
+                .contains_nullifier(&NoteNullifier(Fr::from(3u64)))
+                .unwrap()
+        );
         assert_eq!(ledger_set.commitment_root(), expected);
         assert_eq!(tx_notes.commitment_root(ledger_set, &root, 1), Ok(expected));
     }

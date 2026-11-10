@@ -21,7 +21,9 @@ lb-blend-proofs               = { workspace = true }
 lb-core                       = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
 lb-groth16                    = { workspace = true }
+lb-imt                        = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
+lb-kv-store                   = { workspace = true }
 lb-log-targets                = { workspace = true }
 lb-mmr                        = { workspace = true }
 lb-pol                        = { workspace = true }
@@ -36,13 +38,14 @@ thiserror                     = { workspace = true }
 tracing                       = { workspace = true }
 
 [dev-dependencies]
-divan         = { workspace = true }
-lb-core       = { features = ["test-utils", "unsafe-test-functions"], workspace = true }
-lb-groth16    = { features = ["test-utils"], workspace = true }
-lb-zktransfer = { features = ["test-utils"], workspace = true }
-rand          = { features = ["std", "std_rng"], workspace = true }
-serde_json    = { features = ["alloc"], workspace = true }
-time          = { workspace = true }
+divan             = { workspace = true }
+lb-core           = { features = ["test-utils", "unsafe-test-functions"], workspace = true }
+lb-dynamic-merkle = { workspace = true }
+lb-groth16        = { features = ["test-utils"], workspace = true }
+lb-zktransfer     = { features = ["test-utils"], workspace = true }
+rand              = { features = ["std", "std_rng"], workspace = true }
+serde_json        = { features = ["alloc"], workspace = true }
+time              = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 perf-event2 = { workspace = true }

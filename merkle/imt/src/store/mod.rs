@@ -265,6 +265,25 @@ impl<S, H, const HEIGHT: usize> fmt::Debug for Imt<S, H, HEIGHT> {
     }
 }
 
+/// Two states are equal when they hold the same leaves: the same length and
+/// root. A pending block not yet sealed is hashed to compare it, and a state
+/// whose root cannot be computed (a storage error) is equal to none.
+impl<S, H, const HEIGHT: usize> PartialEq for Imt<S, H, HEIGHT>
+where
+    S: KvStore + Clone,
+    H: Digest,
+{
+    fn eq(&self, other: &Self) -> bool {
+        if self.len != other.len {
+            return false;
+        }
+        match (self.root(), other.root()) {
+            (Ok(left), Ok(right)) => left == right,
+            _ => false,
+        }
+    }
+}
+
 #[expect(
     clippy::len_without_is_empty,
     reason = "the sentinel leaf makes the tree never empty"
@@ -317,25 +336,72 @@ where
             .transpose()
     }
 
-    /// Writes the genesis tree, holding the sentinel leaf only, as the
-    /// finalized state of `block_id`.
-    pub fn initialize(store: S, block_id: BlockId) -> Result<Self, ImtError> {
-        if Self::read_meta(&store)?.is_some() {
-            return Err(ImtError::AlreadyInitialized);
-        }
-        let empty = Self::base_state(
+    // The tree with no leaf, not even the sentinel, over a store holding no
+    // base.
+    fn unrooted(store: S) -> Self {
+        Self::base_state(
             store,
             BaseMeta {
                 len: 0,
                 root: Self::empty_child(HEIGHT as u8),
-                block_id,
+                block_id: BlockId([0; 32]),
             },
-        );
-        let sentinel = empty.stage(LeafIndex::new(0), NullifierLeaf::SENTINEL, None);
+        )
+    }
+
+    /// A new tree holding the sentinel leaf only, in a pending block already
+    /// sealed. Nothing is read or written: the block is written by
+    /// [`Self::commit`] like any other, and the store gets a finalized base at
+    /// the first [`Self::finalize`]. Until then, two forks can each start a
+    /// tree in the same store, since their blocks have distinct versions.
+    #[must_use]
+    pub fn empty(store: S) -> Self {
+        let sentinel =
+            Self::unrooted(store).stage(LeafIndex::new(0), NullifierLeaf::SENTINEL, None);
+        let pending = sentinel.pending.as_ref().expect("the sentinel was staged");
+        // The tree is empty below the sentinel, so hashing it reads nothing.
+        let sealed = sentinel
+            .compute_seal(pending)
+            .expect("an empty tree is hashed without reading the store");
+        Self {
+            pending: Some(Pending {
+                sealed: Some(sealed),
+                ..pending.clone()
+            }),
+            ..sentinel
+        }
+    }
+
+    /// Writes the genesis tree, holding the sentinel leaf only, as the
+    /// finalized state of `block_id`.
+    pub fn initialize(store: S, block_id: BlockId) -> Result<Self, ImtError> {
+        Self::import(store, &[NullifierLeaf::SENTINEL], block_id)
+    }
+
+    /// Writes the tree of `leaves`, in insertion order and starting with the
+    /// sentinel, as the finalized state of `block_id`, under
+    /// [`Version::GENESIS`]. The leaves are trusted to form a valid tree: they
+    /// come from a tree serialized before, already checked.
+    pub fn import(store: S, leaves: &[NullifierLeaf], block_id: BlockId) -> Result<Self, ImtError> {
+        if Self::read_meta(&store)?.is_some() {
+            return Err(ImtError::AlreadyInitialized);
+        }
+        if leaves.first().map(|leaf| leaf.nullifier) != Some(Fr::ZERO) {
+            return Err(ImtError::Corrupted(
+                "the first imported leaf is not the sentinel".to_owned(),
+            ));
+        }
+        if leaves.len() as u64 > Self::CAPACITY {
+            return Err(ImtError::Full);
+        }
+        let mut staged = Self::unrooted(store);
+        for (index, leaf) in leaves.iter().enumerate() {
+            staged = staged.stage(LeafIndex::new(index as u64), *leaf, None);
+        }
         let Committed {
             imt,
             writes: mut batch,
-        } = sentinel.commit(Version::GENESIS)?;
+        } = staged.commit(Version::GENESIS)?;
         let Finalized { imt, writes } = imt.finalize(block_id)?;
         batch.append(writes);
         imt.store.write_batch(batch).map_err(ImtError::storage)?;
@@ -381,6 +447,17 @@ where
     /// base, oldest first.
     pub fn unfinalized_versions(&self) -> impl Iterator<Item = Version> + '_ {
         self.unfinalized.iter().map(|record| record.version)
+    }
+
+    /// The root of the tree if it is known without hashing nor reading the
+    /// store: when no block is pending, or the pending one is sealed.
+    #[must_use]
+    pub fn sealed_root(&self) -> Option<Fr> {
+        self.pending
+            .as_ref()
+            .map_or(Some(self.root.hash), |pending| {
+                pending.sealed.as_ref().map(|sealed| sealed.root)
+            })
     }
 
     /// The committed root, as stored, or `None` while a block is pending.
@@ -632,6 +709,57 @@ where
         Ok(Some(siblings.try_into().map_err(|_| {
             ImtError::Corrupted("path of the wrong length".to_owned())
         })?))
+    }
+
+    /// Every leaf of the tree, in insertion order. It reads each committed
+    /// node of the tree once.
+    pub fn leaves(&self) -> Result<Vec<NullifierLeaf>, ImtError> {
+        let len = usize::try_from(self.len)
+            .map_err(|_| ImtError::Corrupted("the tree does not fit in memory".to_owned()))?;
+        let mut leaves: Vec<Option<NullifierLeaf>> = vec![None; len];
+        let mut stack = vec![(Self::root_position(), self.root)];
+        while let Some((position, child)) = stack.pop() {
+            let Some(version) = child.version else {
+                continue;
+            };
+            let key = NodeKey { version, position };
+            match self.read_node(key)? {
+                StoredNode::Leaf { leaf } => {
+                    if let Some(slot) = usize::try_from(position.index)
+                        .ok()
+                        .and_then(|index| leaves.get_mut(index))
+                    {
+                        *slot = Some(leaf);
+                    }
+                }
+                StoredNode::Internal { left, right } if position.level > 0 => {
+                    stack.push((position.right(), right));
+                    stack.push((position.left(), left));
+                }
+                StoredNode::Internal { .. } => {
+                    return Err(ImtError::Corrupted(format!(
+                        "internal node where a leaf was expected at {key:?}"
+                    )));
+                }
+            }
+        }
+        if let Some(pending) = &self.pending {
+            for (index, leaf) in &pending.leaves {
+                if let Some(slot) = usize::try_from(index.as_u64())
+                    .ok()
+                    .and_then(|index| leaves.get_mut(index))
+                {
+                    *slot = Some(*leaf);
+                }
+            }
+        }
+        leaves
+            .into_iter()
+            .enumerate()
+            .map(|(index, leaf)| {
+                leaf.ok_or_else(|| ImtError::Corrupted(format!("leaf {index} is missing")))
+            })
+            .collect()
     }
 
     fn stage(&self, index: LeafIndex, leaf: NullifierLeaf, low: Option<LowLeaf>) -> Self {
@@ -930,8 +1058,12 @@ where
     /// Drops from memory the blocks of the state the finalized base of the
     /// store holds, so that the memory of a state follows the base. It only
     /// frees memory: the dropped nullifiers are in the base index.
+    ///
+    /// A tree whose store holds no finalized base yet is returned as is.
     pub fn rebase(&self) -> Result<Self, ImtError> {
-        let meta = Self::base_meta(&self.store)?;
+        let Some(meta) = Self::read_meta(&self.store)? else {
+            return Ok(self.clone());
+        };
         let mut unfinalized = self.unfinalized.clone();
         let mut index = self.index.clone();
         while let Some(record) = unfinalized.peek() {

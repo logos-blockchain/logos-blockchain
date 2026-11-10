@@ -247,7 +247,7 @@ fn genesis_ledger(config: &Config, leader_utxo: Note) -> Ledger<HeaderId> {
         ),
         cryptarchia_ledger,
     };
-    Ledger::new(GENESIS, state, Arc::new(single_era(config.clone())))
+    Ledger::new(GENESIS, state, Arc::new(single_era(config.clone()))).unwrap()
 }
 
 fn block_id(parent: HeaderId, slot: Slot) -> HeaderId {
@@ -348,9 +348,9 @@ fn apply_block(
     let (pruned, _) = engine
         .receive_block(block, parent, slot, uncle_slots)
         .expect("engine update");
-    for pruned_block in pruned.all() {
-        ledger.prune_state_at(pruned_block);
-    }
+    ledger
+        .apply_pruning(engine.lib(), &pruned)
+        .expect("the pruned states are removed");
 }
 
 /// Applies a block to the real ledger, by generating a dummy proof.
@@ -389,6 +389,6 @@ fn apply_block_to_ledger(
         .expect("ledger update")
         .verify_batch_proofs()
         .expect("batch proof verification");
-    ledger.commit_update(update);
+    ledger.commit_update(update).unwrap();
     id
 }

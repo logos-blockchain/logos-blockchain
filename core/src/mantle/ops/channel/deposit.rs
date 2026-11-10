@@ -267,7 +267,10 @@ mod test {
             .clone()
             .execute_adding(&[commitment(1)])
             .unwrap();
-        (channels, note_sets.update_ledger(ledger).end_block(0))
+        (
+            channels,
+            note_sets.update_ledger(ledger).end_block(0).unwrap(),
+        )
     }
 
     fn root() -> Fr {
@@ -467,7 +470,7 @@ mod test {
             .expect("the input is unspent");
 
         let ledger = context.note_sets.ledger();
-        assert!(ledger.contains_nullifier(&nullifier(2)));
+        assert!(ledger.contains_nullifier(&nullifier(2)).unwrap());
         assert_eq!(ledger.commitment_root(), root());
         let channel = context.note_sets.channel(&CHANNEL).unwrap();
         let expected = CommitmentMmr::new()

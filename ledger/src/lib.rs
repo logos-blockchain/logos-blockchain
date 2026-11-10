@@ -8,6 +8,7 @@ pub mod cryptarchia;
 mod gas_and_fees;
 mod intent;
 pub mod mantle;
+pub mod nullifier_storage;
 mod update;
 
 #[cfg(test)]
@@ -51,10 +52,12 @@ use lb_core::{
     },
     proofs::leader_proof,
 };
-use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
+use lb_cryptarchia_engine::{Epoch, PrunedBlocks, Slot, UncleSlots};
 use lb_groth16::{AdditiveGroup as _, Fr};
+use lb_imt::store::BlockId;
 use lb_log_targets::{diagnostic::BLEND_REACHABILITY, ledger};
 use mantle::LedgerState as MantleLedger;
+use nullifier_storage::{NullifierStorage, PrunedVersions, rebase_state};
 use rpds::HashTrieMapSync;
 use thiserror::Error;
 
@@ -146,21 +149,57 @@ pub enum LedgerError<Id> {
     BlockRewards(#[from] BlockRewardsError),
     #[error("The header carries the reward value {header}, the block computes {computed}")]
     WrongRewardValue { header: Value, computed: Value },
+    #[error("The state of the LIB {0:?} could not be found")]
+    LibNotFound(Id),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+fn block_id<Id: Into<BlockHash>>(id: Id) -> BlockId {
+    BlockId(id.into())
+}
+
+/// The states of the blocks the chain holds: the LIB and the blocks above it.
+///
+/// The nullifier trees of the states are kept in the store of the root state
+/// (see [`nullifier_storage`]): [`Self::commit_update`] writes each block, and
+/// [`Self::apply_pruning`] finalizes the LIB and removes the pruned blocks.
+#[derive(Clone)]
 pub struct Ledger<Id: Eq + Hash> {
     states: HashTrieMapSync<Id, LedgerState>,
     /// The config of every era: each block is applied under the config of the
     /// era of its slot, and each epoch is settled under the config of its era.
     era_schedule: Arc<EraScheduledConfig>,
+    storage: NullifierStorage,
+}
+
+impl<Id: Eq + Hash + core::fmt::Debug> core::fmt::Debug for Ledger<Id> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Ledger")
+            .field("states", &self.states)
+            .field("era_schedule", &self.era_schedule)
+            .finish_non_exhaustive()
+    }
+}
+
+// The storage is where the states are kept, not what they hold.
+impl<Id: Eq + Hash> PartialEq for Ledger<Id> {
+    fn eq(&self, other: &Self) -> bool {
+        self.states == other.states && self.era_schedule == other.era_schedule
+    }
 }
 
 impl<Id> Ledger<Id>
 where
     Id: Eq + Hash + Copy,
 {
-    pub fn new(id: Id, mut state: LedgerState, era_schedule: Arc<EraScheduledConfig>) -> Self
+    /// A ledger whose root, and LIB, is the state of block `id`. Its nullifier
+    /// trees are kept in the store of its note sets: the state becomes the
+    /// finalized base of that store, committed first if it has a pending
+    /// block, as a genesis state does.
+    pub fn new(
+        id: Id,
+        mut state: LedgerState,
+        era_schedule: Arc<EraScheduledConfig>,
+    ) -> Result<Self, LedgerError<Id>>
     where
         Id: Into<BlockHash>,
     {
@@ -171,10 +210,13 @@ where
         state
             .mantle_ledger
             .add_seen_block(id.into(), slot, &era_schedule);
-        Self {
+        let storage = NullifierStorage::new(Arc::clone(state.latest_note_sets().store()));
+        state.cryptarchia_ledger = storage.make_root(block_id(id), state.cryptarchia_ledger)?;
+        Ok(Self {
             states: HashTrieMapSync::new_sync().insert(id, state),
             era_schedule,
-        }
+            storage,
+        })
     }
 
     /// Prepare to add a new [`LedgerState`] by applying the given proof and
@@ -215,10 +257,25 @@ where
         Ok(PreparedUpdate::new(id, new_state, events, deferred_proofs))
     }
 
-    /// Commits a new [`LedgerState`] created by [`Self::prepare_update`].
-    pub fn commit_update(&mut self, update: BatchVerifiedUpdate<Id>) -> Events {
-        self.states.insert_mut(update.id, update.state);
-        update.events
+    /// Commits a new [`LedgerState`] created by [`Self::prepare_update`]: its
+    /// nullifier trees are written in the store before it is kept.
+    pub fn commit_update(
+        &mut self,
+        update: BatchVerifiedUpdate<Id>,
+    ) -> Result<Events, LedgerError<Id>>
+    where
+        Id: Into<BlockHash>,
+    {
+        let BatchVerifiedUpdate {
+            id,
+            mut state,
+            events,
+        } = update;
+        state.cryptarchia_ledger = self
+            .storage
+            .commit(block_id(id), state.cryptarchia_ledger)?;
+        self.states.insert_mut(id, state);
+        Ok(events)
     }
 
     pub fn state(&self, id: &Id) -> Option<&LedgerState> {
@@ -230,20 +287,81 @@ where
         &self.era_schedule
     }
 
-    /// Removes the state stored for the given block id.
+    /// Follows the LIB to `lib` once the consensus pruned the `pruned` blocks:
+    /// the state of `lib` becomes the finalized base of the store, and the
+    /// states of the pruned blocks are removed, with everything the stale ones
+    /// wrote. The nodes no kept state reads anymore are then deleted (see
+    /// [`nullifier_storage::retention_floors`]).
     ///
-    /// This function must be called only when the states being pruned won't be
-    /// needed for any subsequent proof.
+    /// The pruned blocks must be every block that is not `lib` or one of its
+    /// descendants, as [`lb_cryptarchia_engine::Cryptarchia`] prunes them.
+    /// Nothing happens when nothing is pruned: the LIB did not move.
     ///
-    /// ## Arguments
-    ///
-    /// The block ID to prune the state for.
-    ///
-    /// ## Returns
-    ///
-    /// `true` if the state was successfully removed, `false` otherwise.
-    pub fn prune_state_at(&mut self, block: &Id) -> bool {
-        self.states.remove_mut(block)
+    /// Returns the number of states removed.
+    pub fn apply_pruning(
+        &mut self,
+        lib: Id,
+        pruned: &PrunedBlocks<Id>,
+    ) -> Result<usize, LedgerError<Id>>
+    where
+        Id: Into<BlockHash>,
+    {
+        if pruned.is_empty() {
+            return Ok(0);
+        }
+        let lib_state = self
+            .states
+            .get(&lib)
+            .ok_or(LedgerError::LibNotFound(lib))?
+            .clone();
+        let stale: Vec<BlockId> = pruned.stale_blocks().copied().map(block_id).collect();
+        let immutable: Vec<BlockId> = pruned
+            .immutable_blocks()
+            .values()
+            .copied()
+            .map(block_id)
+            .collect();
+        let lib_ledger = self.storage.prune(
+            block_id(lib),
+            lib_state.cryptarchia_ledger.clone(),
+            &PrunedVersions {
+                stale: &stale,
+                immutable: &immutable,
+            },
+        )?;
+
+        let mut removed = 0usize;
+        for block in pruned.all() {
+            if self.states.remove_mut(block) {
+                removed = removed.saturating_add(1);
+            }
+        }
+        self.states.insert_mut(
+            lib,
+            LedgerState {
+                cryptarchia_ledger: lib_ledger,
+                ..lib_state
+            },
+        );
+        // The overlays of the kept states shrink to what is above the new base.
+        let mut states = HashTrieMapSync::new_sync();
+        for (id, state) in &self.states {
+            let mut state = state.clone();
+            state.cryptarchia_ledger = rebase_state(state.cryptarchia_ledger)?;
+            states.insert_mut(*id, state);
+        }
+        self.states = states;
+
+        let lib_ledger = &self
+            .states
+            .get(&lib)
+            .expect("the LIB state was just kept")
+            .cryptarchia_ledger;
+        self.storage.collect_garbage(
+            lib_ledger,
+            self.states.values().map(|state| &state.cryptarchia_ledger),
+        )?;
+        Ok(removed)
     }
 }
 
@@ -662,7 +780,7 @@ impl LedgerState {
             .append_leader_reward(reward_commitment)?;
         let (cryptarchia_ledger, updates) = self
             .cryptarchia_ledger
-            .end_block_with_updates(self.block_number);
+            .end_block_with_updates(self.block_number)?;
         self.cryptarchia_ledger = cryptarchia_ledger;
         let block_events = std::iter::once(BlockEvent::LeaderRewardPaid {
             commitment: reward_commitment,
@@ -735,7 +853,7 @@ impl LedgerState {
         )?;
         // Once the whole genesis transaction is executed every note set records its
         // root, and the epoch states and the Blend inputs are taken from the result.
-        let cryptarchia_ledger = cryptarchia_ledger.with_genesis_note_sets(note_sets.end_block(0));
+        let cryptarchia_ledger = cryptarchia_ledger.with_genesis_note_sets(note_sets.end_block(0)?);
         let mantle_ledger =
             mantle_ledger.with_genesis_epoch_state(config, cryptarchia_ledger.epoch_state());
         let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(&mantle_ledger.sdp, config);
@@ -1288,7 +1406,7 @@ mod tests {
         let (secret_key, note) = note_with_sk();
         let mut genesis_state = LedgerState::from_notes([note], &config, GENESIS_POW_REWARD_POOL);
         update_ledger_prices(&mut genesis_state, 1, 1);
-        let ledger = Ledger::new([0; 32], genesis_state, Arc::new(single_era(config)));
+        let ledger = Ledger::new([0; 32], genesis_state, Arc::new(single_era(config))).unwrap();
         (ledger, [0; 32], (secret_key, note))
     }
 
@@ -1346,7 +1464,8 @@ mod tests {
                     .execute_adding(&[genesis_note.commitment(), added, reward_commitment])
                     .unwrap(),
             )
-            .end_block(5);
+            .end_block(5)
+            .unwrap();
         assert_eq!(
             state.latest_note_sets().eligible_root(),
             expected.eligible_root()
@@ -1768,8 +1887,16 @@ mod tests {
         // In the next block the nullifier is still spent, the other one too.
         let (state, _, _, _) = apply_contents(state, &eras, [first, other]).unwrap();
         let ledger_set = state.latest_note_sets().ledger();
-        assert!(ledger_set.contains_nullifier(&NoteNullifier(Fr::ONE)));
-        assert!(ledger_set.contains_nullifier(&NoteNullifier(Fr::from(2u64))));
+        assert!(
+            ledger_set
+                .contains_nullifier(&NoteNullifier(Fr::ONE))
+                .unwrap()
+        );
+        assert!(
+            ledger_set
+                .contains_nullifier(&NoteNullifier(Fr::from(2u64)))
+                .unwrap()
+        );
         assert_eq!(
             apply_contents(state, &eras, [second]).err(),
             Some(LedgerError::VerificationError(
@@ -1898,6 +2025,7 @@ mod tests {
         assert!(
             sets.ledger()
                 .contains_nullifier(&NoteNullifier(Fr::from(26u64)))
+                .unwrap()
         );
         assert_eq!(sets.sdp().commitment_root(), service_note_root(&declare));
         assert!(
@@ -1953,6 +2081,7 @@ mod tests {
                 .latest_note_sets()
                 .sdp()
                 .contains_nullifier(&NoteNullifier(Fr::from(28u64)))
+                .unwrap()
         );
         assert_eq!(ledger_root(&state), root_before);
         // The outputs wait, with no input, for the removal of the declaration.
@@ -2003,7 +2132,6 @@ mod tests {
         let config = config();
         let epoch_length = config.epoch_length();
         let (mut ledger, genesis) = ledger(&[leader_utxo], config.clone());
-        let h_1 = update_ledger(&mut ledger, genesis, epoch_length, leader_utxo).unwrap();
 
         // Declared and withdrawn in epoch 1: `withdraw_at = 3`, released in the first
         // block of epoch 4.
@@ -2012,30 +2140,41 @@ mod tests {
             declaration_id: declare.id(),
             ..SDPWithdrawOp::sample()
         };
-        let state = ledger.states.get_mut(&h_1).unwrap();
-        let (mantle_ledger, note_sets, _) = state
-            .mantle_ledger
-            .clone()
-            .try_apply_sdp_declaration(
-                SignedOperation::new(declare.clone(), ZkAndEd25519Proof::sample())
-                    .into_state_trusted(),
-                state.latest_note_sets().clone(),
-                &config,
-            )
-            .unwrap();
-        let (mantle_ledger, note_sets, pending_withdrawals, _) = mantle_ledger
-            .try_apply_sdp_withdraw(
-                SignedOperation::new(withdraw, ZkAndEd25519Proof::sample()).into_state_trusted(),
-                note_sets,
-                state.cryptarchia_ledger.pending_withdrawals.clone(),
-                Slot::from(4 * epoch_length),
-                &config,
-            )
-            .unwrap();
-        state.mantle_ledger = mantle_ledger;
-        state.cryptarchia_ledger = state.cryptarchia_ledger.clone().update_note_sets(note_sets);
-        state.cryptarchia_ledger.pending_withdrawals = pending_withdrawals;
-        let ledger_set_before = state.latest_note_sets().ledger().clone();
+        let h_1 = cryptarchia::tests::update_ledger_amended(
+            &mut ledger,
+            genesis,
+            epoch_length,
+            leader_utxo,
+            |mut state| {
+                let (mantle_ledger, note_sets, _) = state
+                    .mantle_ledger
+                    .clone()
+                    .try_apply_sdp_declaration(
+                        SignedOperation::new(declare.clone(), ZkAndEd25519Proof::sample())
+                            .into_state_trusted(),
+                        state.latest_note_sets().clone(),
+                        &config,
+                    )
+                    .unwrap();
+                let (mantle_ledger, note_sets, pending_withdrawals, _) = mantle_ledger
+                    .try_apply_sdp_withdraw(
+                        SignedOperation::new(withdraw, ZkAndEd25519Proof::sample())
+                            .into_state_trusted(),
+                        note_sets,
+                        state.cryptarchia_ledger.pending_withdrawals.clone(),
+                        Slot::from(4 * epoch_length),
+                        &config,
+                    )
+                    .unwrap();
+                state.mantle_ledger = mantle_ledger;
+                state.cryptarchia_ledger =
+                    state.cryptarchia_ledger.clone().update_note_sets(note_sets);
+                state.cryptarchia_ledger.pending_withdrawals = pending_withdrawals;
+                state
+            },
+        )
+        .unwrap();
+        let ledger_set_before = ledger.states[&h_1].latest_note_sets().ledger().clone();
 
         // Every block also pays its leader, under the commitment its header names.
         let leader_note = NoteCommitment(Fr::ZERO);
@@ -2172,8 +2311,8 @@ mod tests {
         // The declaration consumed no note, so the nullifier tree still holds its
         // single sentinel leaf.
         assert_eq!(
-            ledger_set.nullifier_root(),
-            NoteSets::new().ledger().nullifier_root()
+            ledger_set.nullifier_root().unwrap(),
+            NoteSets::new().ledger().nullifier_root().unwrap()
         );
         // A block 1 transaction sees the recorded root alone.
         assert_eq!(
@@ -2614,12 +2753,13 @@ mod tests {
         assert!(
             !ledger
                 .commit_update(update)
+                .unwrap()
                 .iter()
                 .any(|event| matches!(event, lb_core::events::Event::Tx(_)))
         );
 
         let ledger_set = ledger.state(&new_id).unwrap().latest_note_sets().ledger();
-        assert!(ledger_set.contains_nullifier(&nullifier));
+        assert!(ledger_set.contains_nullifier(&nullifier).unwrap());
         assert_eq!(
             ledger_set.commitment_root(),
             mmr.push(output.commitment())
@@ -3023,6 +3163,7 @@ mod tests {
                 .latest_note_sets()
                 .ledger()
                 .contains_nullifier(&NoteNullifier(Fr::ONE))
+                .unwrap()
         );
         assert_eq!(
             state
@@ -3145,6 +3286,7 @@ mod tests {
                 .channel(&channel_id)
                 .unwrap()
                 .contains_nullifier(&NoteNullifier(Fr::from(11u64)))
+                .unwrap()
         );
     }
 
@@ -3329,7 +3471,10 @@ mod tests {
             Fr::from(5u64)
         );
         let set = state.latest_note_sets().channel(&channel_id).unwrap();
-        assert!(set.contains_nullifier(&NoteNullifier(Fr::from(11u64))));
+        assert!(
+            set.contains_nullifier(&NoteNullifier(Fr::from(11u64)))
+                .unwrap()
+        );
         assert_eq!(
             set.commitment_root(),
             CommitmentMmr::new()
@@ -3648,6 +3793,7 @@ mod tests {
                 .channel(&channel_id)
                 .unwrap()
                 .contains_nullifier(&NoteNullifier(Fr::from(5u64)))
+                .unwrap()
         );
         assert_eq!(
             state
@@ -3736,6 +3882,7 @@ mod tests {
                 .get(channel_set)
                 .unwrap()
                 .contains_nullifier(&NoteNullifier(Fr::from(7u64)))
+                .unwrap()
         );
         assert_eq!(
             state.latest_note_sets().ledger().commitment_root(),

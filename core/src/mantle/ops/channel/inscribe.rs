@@ -1571,7 +1571,10 @@ mod tests {
             .clone()
             .execute_adding(&[commitment(1)])
             .unwrap();
-        (channels, note_sets.update_channel(set).end_block(0))
+        (
+            channels,
+            note_sets.update_channel(set).end_block(0).unwrap(),
+        )
     }
 
     fn sample_channel() -> ChannelId {
@@ -1991,7 +1994,10 @@ mod tests {
             .push(commitment(5))
             .unwrap()
             .frontier_root();
-        assert!(set.contains_nullifier(&nullifier(2)) && set.contains_nullifier(&nullifier(4)));
+        assert!(
+            set.contains_nullifier(&nullifier(2)).unwrap()
+                && set.contains_nullifier(&nullifier(4)).unwrap()
+        );
         assert_eq!(set.commitment_root(), expected);
         assert_eq!(
             context.tx_notes.commitment_root(set, &root(), 1),
@@ -2017,7 +2023,7 @@ mod tests {
             .clone()
             .execute_adding(&[input.commitment()])
             .unwrap();
-        let note_sets = note_sets.update_channel(set).end_block(1);
+        let note_sets = note_sets.update_channel(set).end_block(1).unwrap();
         let output = notes::Note::new(1_000, Fr::from(12u64), ZkPublicKey::new(Fr::from(2u64)));
         let step = step(
             &[derive_note_nullifier(
@@ -2514,7 +2520,7 @@ mod tests {
         assert!(
             [2, 4, 6, 9]
                 .iter()
-                .all(|n| set.contains_nullifier(&nullifier(*n)))
+                .all(|n| set.contains_nullifier(&nullifier(*n)).unwrap())
         );
         assert_eq!(set.commitment_root(), expected);
         assert_eq!(
@@ -2549,7 +2555,7 @@ mod tests {
             .clone()
             .execute_adding(&[user_note.commitment()])
             .unwrap();
-        let note_sets = note_sets.update_channel(set).end_block(1);
+        let note_sets = note_sets.update_channel(set).end_block(1).unwrap();
         let (_, proving_key) = three_input_setup(1);
         // Staked by an operator of key 7.
         let program_note = notes::Note {

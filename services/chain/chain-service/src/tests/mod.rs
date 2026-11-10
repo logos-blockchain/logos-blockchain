@@ -94,7 +94,8 @@ fn cryptarchia_switch_to_online() {
         LedgerState::from_notes([note], &config, 0),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
-    );
+    )
+    .unwrap();
 
     // Add 3 new blocks to the chain
     let mut block_ids = vec![genesis_id];
@@ -172,7 +173,8 @@ async fn get_block_ids_from_memory_and_storage() {
         LedgerState::from_notes([note], &config, 0),
         single_era(config),
         lb_cryptarchia_engine::State::Online,
-    );
+    )
+    .unwrap();
 
     // Add 2 blocks (not finalized yet since k=3)
     let mut slot = Slot::genesis().strict_add(1.into());
@@ -691,7 +693,8 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         LedgerState::from_notes(genesis_notes, &config, 0),
         single_era(config),
         lb_cryptarchia_engine::State::Online,
-    );
+    )
+    .unwrap();
     let tx1 = burn_tx(&funding_note_a, funding_key_a, &paths[1]);
     let tx2 = burn_tx(&funding_note_b, funding_key_b, &paths[2]);
     let tx3 = burn_tx(&funding_note_c, funding_key_c, &paths[3]);
@@ -787,7 +790,8 @@ fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
         LedgerState::from_notes([note], &config, 0),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
-    );
+    )
+    .unwrap();
 
     let fake_key = ZkKey::from(Fr::from(42u64));
     assert_ne!(fake_key.to_public_key(), note.public_key);
@@ -831,7 +835,8 @@ fn a_copy_failing_an_operation_proof_leaves_the_genuine_block_applicable() {
         LedgerState::from_notes(genesis_notes, &config, 0),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
-    );
+    )
+    .unwrap();
 
     let (block, _) = try_build_block_with_transactions(
         &cryptarchia,
@@ -897,7 +902,8 @@ fn a_copy_with_one_signature_too_many_leaves_the_genuine_block_applicable() {
         LedgerState::from_notes(genesis_notes, &config, 0),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
-    );
+    )
+    .unwrap();
 
     // Two keys accredited and a threshold of one, so that a second signature
     // passes every check but the count.
@@ -997,7 +1003,8 @@ fn proposal_header_check_classifies_without_touching_the_chain() {
         LedgerState::from_notes([note], &config, 0),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
-    );
+    )
+    .unwrap();
     let (block, _) = try_build_block(
         &cryptarchia,
         genesis_id,
@@ -1177,7 +1184,8 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedOps<Preverified, St
         LedgerState::from_notes([note], &config, 0),
         single_era(config),
         lb_cryptarchia_engine::State::Online,
-    );
+    )
+    .unwrap();
     let (block, _) = try_build_block(
         &cryptarchia,
         cryptarchia.tip(),
@@ -1647,6 +1655,7 @@ pub fn genesis_cryptarchia_on(note: Note, era_schedule: Arc<EraScheduledConfig>)
         era_schedule,
         lb_cryptarchia_engine::State::Bootstrapping,
     )
+    .unwrap()
 }
 
 /// A genesis block distributing the value of each of `notes` to its key and

@@ -302,7 +302,9 @@ fn every_header_case_applies_and_releases_its_withdrawals() {
                         .get(*note_set)
                         .expect("the set exists");
                     assert!(
-                        inputs.iter().all(|input| set.contains_nullifier(input)),
+                        inputs
+                            .iter()
+                            .all(|input| set.contains_nullifier(input).unwrap()),
                         "{label}: an input is unspent"
                     );
                     released.extend(outputs.iter().copied());

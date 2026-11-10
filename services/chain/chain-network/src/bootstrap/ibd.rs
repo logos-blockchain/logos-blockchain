@@ -956,6 +956,7 @@ mod tests {
             single_era(ledger_config),
             lb_cryptarchia_engine::State::Bootstrapping,
         )
+        .unwrap()
     }
 
     /// `config` as the only era, from genesis.

@@ -297,7 +297,7 @@ mod test {
             .clone()
             .execute_adding(&[commitment(1)])
             .unwrap();
-        NoteSets::new().update_ledger(ledger).end_block(0)
+        NoteSets::new().update_ledger(ledger).end_block(0).unwrap()
     }
 
     fn root() -> Fr {
@@ -487,7 +487,7 @@ mod test {
             .push(commitment(3))
             .unwrap()
             .frontier_root();
-        assert!(ledger.contains_nullifier(&nullifier(2)));
+        assert!(ledger.contains_nullifier(&nullifier(2)).unwrap());
         assert_eq!(ledger.commitment_root(), expected);
         assert_eq!(tx_notes.commitment_root(ledger, &root(), 1), Ok(expected));
         assert_eq!(events, []);
@@ -509,7 +509,7 @@ mod test {
             .clone()
             .execute_adding(&[input.commitment()])
             .unwrap();
-        let sets = NoteSets::new().update_ledger(ledger).end_block(0);
+        let sets = NoteSets::new().update_ledger(ledger).end_block(0).unwrap();
         let root = sets.ledger().commitment_root();
         assert_eq!(root, mmr.frontier_root());
         let output = Note::new(994, Fr::from(12u64), ZkPublicKey::new(Fr::from(2u64)));

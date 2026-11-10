@@ -8,6 +8,7 @@ use lb_binary_codec::{
 };
 use lb_dynamic_merkle::{MerkleNode, MerklePath};
 use lb_groth16::{COMPRESSED_PROOF_SIZE, FR_BYTES_SIZE, Fr, fr_from_bytes, serde::serde_fr};
+use lb_imt::store::LowLeaf;
 use lb_key_management_system_keys::keys::kdf_public_key;
 use lb_log_targets::proofs;
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
@@ -19,7 +20,7 @@ use crate::{
     crypto::ZkHasher,
     mantle::{
         Value,
-        note_set::{NoteSetIndex, NoteSets},
+        note_set::{NoteSet, NoteSetError, NoteSetIndex, NoteSets},
         notes::{self, NoteCommitment, NoteNullifier},
     },
 };
@@ -377,7 +378,7 @@ impl From<LeaderPrivate> for lb_pol::PolWitnessInputsData {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum LeaderWitnessError {
     #[error("Note set {0} is unknown")]
     UnknownNoteSet(NoteSetIndex),
@@ -385,6 +386,26 @@ pub enum LeaderWitnessError {
     AgedPathMismatch(NoteSetIndex),
     #[error("The note is spent in the latest note set")]
     Spent,
+    #[error("Note set error: {0}")]
+    NoteSet(#[from] NoteSetError),
+}
+
+// The low leaf of `nullifier` in `set` and its path, or `Spent` if the set
+// holds `nullifier`.
+fn low_leaf_witness(
+    set: &NoteSet,
+    nullifier: &NoteNullifier,
+) -> Result<(LowLeaf, MerklePath<Fr, { lb_pol::NOTE_SET_TREE_DEPTH }>), LeaderWitnessError> {
+    let nullifiers = set.nullifiers();
+    let low = nullifiers
+        .low_leaf(&nullifier.0)
+        .map_err(NoteSetError::from)?
+        .ok_or(LeaderWitnessError::Spent)?;
+    let path = nullifiers
+        .path(low.index)
+        .map_err(NoteSetError::from)?
+        .expect("the low leaf is in the tree");
+    Ok((low, path))
 }
 
 fn nodes_and_selectors(
@@ -410,46 +431,33 @@ pub fn pol_wallet_inputs(
     aged: &NoteSets,
     latest: &NoteSets,
 ) -> Result<lb_pol::PolWalletInputsData, LeaderWitnessError> {
-    let unknown = LeaderWitnessError::UnknownNoteSet(note_set);
-    let aged_set = aged.get(note_set).ok_or(unknown)?;
-    let latest_set = latest.get(note_set).ok_or(unknown)?;
+    let unknown = || LeaderWitnessError::UnknownNoteSet(note_set);
+    let aged_set = aged.get(note_set).ok_or_else(unknown)?;
+    let latest_set = latest.get(note_set).ok_or_else(unknown)?;
 
-    let mismatch = LeaderWitnessError::AgedPathMismatch(note_set);
+    let mismatch = || LeaderWitnessError::AgedPathMismatch(note_set);
     if !commitment_aged_path.verify::<ZkHasher>(note.commitment().0, aged_set.commitment_root()) {
-        return Err(mismatch);
+        return Err(mismatch());
     }
     let commitment_aged_selectors =
         core::array::from_fn(|level| commitment_aged_path.path_and_selectors(level).selector);
     let commitment_aged_path = commitment_aged_path
         .siblings()
         .try_into()
-        .map_err(|_| mismatch)?;
+        .map_err(|_| mismatch())?;
 
-    let (low_index, low) = latest_set
-        .nullifiers()
-        .low_leaf(&nullifier.0)
-        .ok_or(LeaderWitnessError::Spent)?;
-    let low_path = latest_set
-        .nullifiers()
-        .path(low_index)
-        .expect("the low leaf is in the tree");
+    let (LowLeaf { leaf: low, .. }, low_path) = low_leaf_witness(latest_set, nullifier)?;
     let (low_leaf_path, low_leaf_selectors) = nodes_and_selectors(&low_path);
 
     // The same low leaf at the freeze of the stake distribution, for the PoQ.
-    let (low_aged_index, low_aged) = aged_set
-        .nullifiers()
-        .low_leaf(&nullifier.0)
-        .ok_or(LeaderWitnessError::Spent)?;
-    let low_aged_path = aged_set
-        .nullifiers()
-        .path(low_aged_index)
-        .expect("the low leaf is in the tree");
+    let (LowLeaf { leaf: low_aged, .. }, low_aged_path) = low_leaf_witness(aged_set, nullifier)?;
     let (low_leaf_aged_path, low_leaf_aged_selectors) = nodes_and_selectors(&low_aged_path);
 
     // Both eligible trees hold the set at the same index, so the selectors agree.
     let (set_aged_path, set_selectors) =
-        nodes_and_selectors(&aged.eligible_path(note_set).ok_or(unknown)?);
-    let (set_latest_path, _) = nodes_and_selectors(&latest.eligible_path(note_set).ok_or(unknown)?);
+        nodes_and_selectors(&aged.eligible_path(note_set).ok_or_else(unknown)?);
+    let (set_latest_path, _) =
+        nodes_and_selectors(&latest.eligible_path(note_set).ok_or_else(unknown)?);
 
     Ok(lb_pol::PolWalletInputsData {
         note_value: note.value,
@@ -459,7 +467,7 @@ pub fn pol_wallet_inputs(
         set_selectors,
         commitment_aged_path,
         commitment_aged_selectors,
-        nullifier_root_aged: aged_set.nullifier_root(),
+        nullifier_root_aged: aged_set.nullifier_root()?,
         low_leaf_aged_nullifier: low_aged.nullifier,
         low_leaf_aged_next_nullifier: low_aged.next_nullifier,
         low_leaf_aged_next_index: low_aged.next_index.as_u64(),
@@ -539,7 +547,10 @@ pub mod test_utils {
             .clone()
             .execute_adding(&[commitment])
             .expect("the commitment MMR is not full");
-        let sets = sets.update_ledger(ledger).end_block(1);
+        let sets = sets
+            .update_ledger(ledger)
+            .end_block(1)
+            .expect("a new tree is hashed without reading the store");
         let set = sets.ledger();
         assert_eq!(set.commitment_root(), mmr.frontier_root());
 
@@ -749,7 +760,7 @@ mod tests {
             .unwrap();
         let sets = NoteSets::new();
         let ledger = sets.ledger().clone().execute_adding(&[commitment]).unwrap();
-        let sets = sets.update_ledger(ledger).end_block(1);
+        let sets = sets.update_ledger(ledger).end_block(1).unwrap();
         let nullifier = derive_note_nullifier(
             &commitment,
             &UnsecuredZkKey::new(secret_key).nullifier_key(),
@@ -770,7 +781,10 @@ mod tests {
             wallet.commitment_root_latest,
             sets.ledger().commitment_root()
         );
-        assert_eq!(wallet.nullifier_root_aged, sets.ledger().nullifier_root());
+        assert_eq!(
+            wallet.nullifier_root_aged,
+            sets.ledger().nullifier_root().unwrap()
+        );
         assert_eq!(
             (
                 wallet.low_leaf_nullifier,
@@ -786,7 +800,7 @@ mod tests {
             .clone()
             .execute_spending(&[nullifier])
             .unwrap();
-        let latest = sets.clone().update_ledger(spent_set).end_block(2);
+        let latest = sets.clone().update_ledger(spent_set).end_block(2).unwrap();
         assert_eq!(
             pol_wallet_inputs(
                 &note,

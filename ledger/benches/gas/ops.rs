@@ -955,7 +955,8 @@ fn claim_pow() -> OpShape {
         .with_gas_prices(&GasPrices::new(0, 0))
         .with_latest_note_sets(fixture.state.latest_note_sets().clone());
     let config = crate::fixture::single_era(parameters);
-    let ledger = Ledger::new(ANCHOR, state, Arc::new(config.clone()));
+    let ledger = Ledger::new(ANCHOR, state, Arc::new(config.clone()))
+        .expect("the anchor state commits to the in-memory store of its note sets");
     let state = ledger.state(&ANCHOR).expect("the anchor state").clone();
     let difficulty = state.mantle_ledger().pow.reward_difficulty();
     let claim = (0u64..1024)

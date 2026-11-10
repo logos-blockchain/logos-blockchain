@@ -750,6 +750,82 @@ fn test_reseal_after_more_inserts() {
     assert_eq!(resealed.root().unwrap(), oracle.root());
 }
 
+#[test]
+fn test_empty_tree_needs_no_base_until_finalized() {
+    let store = Arc::new(MemKv::new());
+    let empty = Tree::empty(Arc::clone(&store));
+    assert_eq!(store.len(), 0, "starting a tree writes nothing");
+    assert_eq!(empty.sealed_root(), Some(Oracle::new().root()));
+    // a store without a base is no reason to fail a rebase
+    let empty = empty.rebase().unwrap();
+    Sim::check_state("empty", &empty, &Oracle::new(), &frs(&[1, 5]));
+
+    // two forks start a tree in the same store, then one of them is finalized
+    let left = empty.insert(fr(4)).unwrap().commit(Version(1)).unwrap();
+    let right = empty.insert(fr(9)).unwrap().commit(Version(2)).unwrap();
+    store.write_batch(left.writes).unwrap();
+    store.write_batch(right.writes).unwrap();
+    let probes = frs(&[3, 4, 9, 12]);
+    for (name, tree, nullifier) in [("left", &left.imt, 4), ("right", &right.imt, 9)] {
+        let oracle = Oracle::new().insert(fr(nullifier)).unwrap();
+        Sim::check_state(name, &tree.rebase().unwrap(), &oracle, &probes);
+    }
+    let finalized = left.imt.finalize(block_id(1)).unwrap();
+    store.write_batch(finalized.writes).unwrap();
+    store.write_batch(Tree::discard_writes(Version(2))).unwrap();
+    let oracle = Oracle::new().insert(fr(4)).unwrap();
+    Sim::check_state("finalized", &finalized.imt, &oracle, &probes);
+    finalized.imt.check_base().unwrap();
+}
+
+#[test]
+fn test_import_and_leaves_round_trip() {
+    let oracle = frs(&[50, 7, 900, 3, 41])
+        .into_iter()
+        .fold(Oracle::new(), |oracle, nullifier| {
+            oracle.insert(nullifier).unwrap()
+        });
+    let leaves: Vec<NullifierLeaf> = (0..oracle.len() as u64)
+        .map(|index| *oracle.leaf(index).unwrap())
+        .collect();
+    let store = Arc::new(MemKv::new());
+    let imported = Tree::import(Arc::clone(&store), &leaves, block_id(7)).unwrap();
+    Sim::check_state("imported", &imported, &oracle, &frs(&[1, 3, 8, 42, 901]));
+    imported.check_base().unwrap();
+    assert_eq!(imported.leaves().unwrap(), leaves);
+    assert_eq!(
+        Tree::import(Arc::clone(&store), &leaves, block_id(7)).unwrap_err(),
+        ImtError::AlreadyInitialized
+    );
+    assert!(matches!(
+        Tree::import(Arc::new(MemKv::new()), &leaves[1..], block_id(7)),
+        Err(ImtError::Corrupted(_))
+    ));
+
+    // the leaves of a state with a pending block, rewritten low leaves included
+    let pending = imported.insert(fr(5)).unwrap();
+    let oracle = oracle.insert(fr(5)).unwrap();
+    let expected: Vec<NullifierLeaf> = (0..oracle.len() as u64)
+        .map(|index| *oracle.leaf(index).unwrap())
+        .collect();
+    assert_eq!(pending.leaves().unwrap(), expected);
+    assert_eq!(pending.sealed_root(), None);
+    assert_eq!(pending.seal().unwrap().sealed_root(), Some(oracle.root()));
+}
+
+#[test]
+fn test_states_compare_by_leaves() {
+    let sim = Sim::new();
+    let genesis = &sim.blocks[&GENESIS].imt;
+    let a = genesis.insert(fr(3)).unwrap().insert(fr(8)).unwrap();
+    let b = genesis.insert(fr(8)).unwrap().insert(fr(3)).unwrap();
+    // the same nullifiers in another order are other leaves
+    assert_ne!(a, b);
+    assert_eq!(a, a.seal().unwrap());
+    assert_eq!(*genesis, Tree::empty(Arc::new(MemKv::new())));
+    assert_ne!(*genesis, a);
+}
+
 /// A store whose reads fail.
 struct FailingKv;
 
