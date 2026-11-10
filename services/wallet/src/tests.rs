@@ -158,11 +158,14 @@ fn unsignable_job() -> TxSigningRequest {
     signing_job(MantleTxBuilder::new().push_op(claim).unwrap())
 }
 
-fn reservations() -> TxSigningReservations {
-    TxSigningReservations {
-        claim: Some(VoucherNullifier::default()),
-        notes: vec![NoteId::from(Fr::ONE)],
-    }
+/// What a signing holds for the voucher and the note reserved for it.
+fn reservations() -> HeldReservations {
+    let updater = updater();
+    let mut state = wallet_state(&updater);
+    let (claim, note) = (VoucherNullifier::default(), NoteId::from(Fr::ONE));
+    state.reserve_claim(claim, NonZero::new(1).unwrap());
+    state.reserve_pending_notes([note]);
+    state.held_reservations(Some(claim), [note])
 }
 
 #[tokio::test]
