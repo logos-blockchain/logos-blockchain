@@ -65,7 +65,15 @@ impl PreverifiableOperation<StandardMode>
     type Error = ProgramRegisterError;
 
     fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
-        Ok(())
+        // Every point on its curve, in its prime order subgroup and not the point
+        // at infinity, since an invalid point would make the proofs of the program
+        // unsound. The check reads the key alone, and the key keeps its
+        // decompression for the execution.
+        self.operation()
+            .verification_key
+            .groth16()
+            .map(drop)
+            .map_err(Into::into)
     }
 }
 
@@ -76,15 +84,9 @@ impl VerifiableOperation<StandardMode>
     type Context<'a> = ();
     type Error = ProgramRegisterError;
 
+    // The key was checked by `preverify`.
     fn verify(&self, _context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
-        // Every point on its curve, in its prime order subgroup and not the point
-        // at infinity, since an invalid point would make the proofs of the program
-        // unsound.
-        self.operation()
-            .verification_key
-            .to_groth16()
-            .map(drop)
-            .map_err(Into::into)
+        Ok(())
     }
 }
 
@@ -97,7 +99,8 @@ impl ExecutableOperation for SignedOperation<ProgramRegisterOp, Verified, Standa
         context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         // Storing an already registered key has no effect, and e(α, β) is computed
-        // once here, paid by the registration.
+        // once here, paid by the registration. The points are the ones the
+        // preverification decompressed and checked, kept by the key.
         let program = RegisteredProgram::new(self.operation().verification_key.clone())?;
         let (programs, _) = context.programs.register(program);
         Ok((ProgramRegisterExecutionContext { programs }, Vec::new()))
@@ -121,20 +124,18 @@ mod tests {
         ProgramVerificationKey::try_from(&three_input_setup(1).0).unwrap()
     }
 
-    fn verify(verification_key: &ProgramVerificationKey) -> Result<(), ProgramRegisterError> {
+    fn preverify(verification_key: &ProgramVerificationKey) -> Result<(), ProgramRegisterError> {
         SignedOperation::<_, Unverified, StandardMode>::new(
             ProgramRegisterOp {
                 verification_key: verification_key.clone(),
             },
             NoOpProof,
         )
-        .into_preverified(&())
-        .expect("preverify does not read the key")
-        .verify(&())
+        .preverify(&())
     }
 
     #[test]
-    fn verify_checks_every_point_of_the_key() {
+    fn preverify_checks_every_point_of_the_key() {
         let invalid = ProgramRegisterError::InvalidKey(ProgramKeyError::InvalidPoint);
         let key = three_input_setup(1).0;
         let program_key =
@@ -151,17 +152,17 @@ mod tests {
         off_curve[..32].fill(0);
         for decodable in [off_subgroup.to_bytes(), off_curve] {
             let decoded = ProgramVerificationKey::decode_all(&decodable, &()).unwrap();
-            assert_eq!(verify(&decoded), Err(invalid.clone()));
+            assert_eq!(preverify(&decoded), Err(invalid.clone()));
         }
         assert_eq!(
-            verify(&program_key(&Groth16VerificationKey {
+            preverify(&program_key(&Groth16VerificationKey {
                 // The point at infinity.
                 delta_2: <_>::default(),
                 ..key.clone()
             })),
             Err(invalid.clone())
         );
-        assert_eq!(verify(&program_key(&key)), Ok(()));
+        assert_eq!(preverify(&program_key(&key)), Ok(()));
         assert!(
             !VerificationError::from(invalid).is_operation_proof_failure(),
             "an invalid key condemns the block and not one copy of it"
@@ -209,6 +210,37 @@ mod tests {
             })
             .expect("registering again has no effect");
         assert_eq!(again.programs, context.programs);
+    }
+
+    #[test]
+    fn execute_reuses_the_key_decompressed_by_preverify() {
+        let key = valid_key();
+        let verified = SignedOperation::<_, Unverified, StandardMode>::new(
+            ProgramRegisterOp {
+                verification_key: key.clone(),
+            },
+            NoOpProof,
+        )
+        .into_preverified(&())
+        .expect("a valid key preverifies")
+        .into_verified(&())
+        .map_err(|(_, error)| error)
+        .expect("verify does not read the key");
+        assert!(!key.keeps_groth16());
+        assert!(
+            verified.operation().verification_key.keeps_groth16(),
+            "the execution finds the points preverify decompressed"
+        );
+        let (context, _) = verified
+            .execute(ProgramRegisterExecutionContext {
+                programs: Programs::new(),
+            })
+            .map_err(|(_, error)| error)
+            .expect("a checked key registers");
+        assert_eq!(
+            context.programs.get(&derive_program_id(&key)),
+            Some(&RegisteredProgram::new(key).unwrap())
+        );
     }
 
     #[test]
