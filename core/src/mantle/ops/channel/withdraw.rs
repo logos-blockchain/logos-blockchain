@@ -23,7 +23,7 @@ use crate::{
         notes::{InputNullifiers, OutputCommitments},
         ops::{
             OpId, SignedOperation, ZkTransferProof,
-            channel::{ChannelId, deposit::channel_note_set},
+            channel::ChannelId,
             zk_transfer::{defer_zk_transfer, preverify_zk_transfer},
         },
         transactions::{
@@ -69,7 +69,7 @@ pub const WITHDRAW_DELAY: u64 = 86_400; // slots
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PendingWithdrawal {
     pub due: Slot,
-    pub note_set: NoteSetIndex,
+    pub note_set_index: NoteSetIndex,
     pub inputs: InputNullifiers,
     pub outputs: OutputCommitments,
 }
@@ -111,7 +111,7 @@ impl PendingWithdrawals {
                 continue;
             }
             let set = note_sets
-                .get(withdrawal.note_set)
+                .get(withdrawal.note_set_index)
                 .expect("a withdrawal's note set exists")
                 .clone();
             // A step consumed one of its notes before it was due: the withdrawal is
@@ -124,7 +124,7 @@ impl PendingWithdrawals {
                 continue;
             }
             let set = set.execute_spending(withdrawal.inputs.as_slice())?;
-            note_sets = note_sets.update(withdrawal.note_set, set);
+            note_sets = note_sets.update(withdrawal.note_set_index, set);
             let ledger = note_sets
                 .get(LEDGER_SET)
                 .expect("the ledger note set always exists")
@@ -179,7 +179,7 @@ impl VerifiableOperation<StandardMode>
         let operation = self.operation();
 
         // Check that the channel exists and holds a note set
-        let index = channel_note_set(context.channels, operation.channel_id)?;
+        let index = context.channels.note_set_index(operation.channel_id)?;
 
         // Validate the inputs against the channel note set
         let tx_commitment_root = context
@@ -219,14 +219,14 @@ impl<Mode: VerificationMode> ExecutableOperation
         let operation = self.operation();
 
         // Resolved again here since the genesis mode executes unverified
-        let note_set = channel_note_set(context.channels, operation.channel_id)?;
+        let note_set_index = context.channels.note_set_index(operation.channel_id)?;
 
         // The inputs are spent and the outputs created when the withdrawal is
         // released.
         let due = context.block_slot.strict_add(Slot::from(WITHDRAW_DELAY));
         context.pending_withdrawals = context.pending_withdrawals.push(PendingWithdrawal {
             due,
-            note_set,
+            note_set_index,
             inputs: operation.inputs.clone(),
             outputs: operation.outputs.clone(),
         });
@@ -408,7 +408,7 @@ mod test {
             context.pending_withdrawals.iter().collect::<Vec<_>>(),
             vec![&PendingWithdrawal {
                 due: Slot::from(86_410u64),
-                note_set: 2,
+                note_set_index: 2,
                 inputs: [nullifier(5)].into(),
                 outputs: [commitment(50)].into(),
             }]
@@ -430,7 +430,7 @@ mod test {
     fn pending(due: u64, input: u64, output: u64) -> PendingWithdrawal {
         PendingWithdrawal {
             due: Slot::from(due),
-            note_set: 2,
+            note_set_index: 2,
             inputs: [nullifier(input)].into(),
             outputs: [commitment(output)].into(),
         }
@@ -523,7 +523,7 @@ mod test {
         // channel withdrawal due earlier, and one with no input due now.
         let sdp = |due: u64, output: u64| PendingWithdrawal {
             due: Slot::from(due),
-            note_set: SDP_SET,
+            note_set_index: SDP_SET,
             inputs: InputNullifiers::default(),
             outputs: [commitment(output)].into(),
         };

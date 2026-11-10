@@ -20,7 +20,7 @@ use crate::{
             VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
         },
-        note_set::{LEDGER_SET, NoteSetIndex, NoteSets},
+        note_set::{LEDGER_SET, NoteSets},
         notes::{InputNullifiers, OutputCommitments},
         ops::{
             OpId, SignedOperation, ZkTransferProof,
@@ -34,8 +34,7 @@ use crate::{
     },
 };
 
-pub const MAX_METADATA_SIZE: usize = MAX_OPERATION_DATA_SIZE;
-pub type Metadata = UpperBoundedVec<u8, { MAX_METADATA_SIZE }>;
+pub type Metadata = UpperBoundedVec<u8, { MAX_OPERATION_DATA_SIZE }>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct DepositOp {
@@ -84,18 +83,6 @@ pub struct DepositExecutionContext<'a> {
     pub tx_hash: TxHash,
 }
 
-// The index of the note set the channel holds its notes in.
-pub(super) fn channel_note_set(
-    channels: &Channels,
-    channel_id: ChannelId,
-) -> Result<NoteSetIndex, Error> {
-    channels
-        .channel_state(&channel_id)
-        .ok_or(Error::ChannelNotFound { channel_id })?
-        .note_set
-        .ok_or(Error::NoNoteSet { channel_id })
-}
-
 impl ProvableOperation for DepositOp {
     type Proof = ZkTransferProof;
     const CODE: u8 = 0x12;
@@ -131,7 +118,7 @@ impl VerifiableOperation<StandardMode> for SignedOperation<DepositOp, Preverifie
         let operation = self.operation();
 
         // Check that the channel exists and holds a note set
-        channel_note_set(context.channels, operation.channel_id)?;
+        context.channels.note_set_index(operation.channel_id)?;
 
         // Validate the inputs against the ledger note set
         let tx_commitment_root = context
@@ -168,7 +155,7 @@ impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<DepositOp, 
         let operation = self.operation();
 
         // Resolved again here since the genesis mode executes unverified
-        let channel_set = channel_note_set(context.channels, operation.channel_id)?;
+        let channel_set = context.channels.note_set_index(operation.channel_id)?;
 
         // Spend the inputs in the ledger note set and add the outputs to the channel
         // note set, step 5 of the Validate of CHANNEL_DEPOSIT done at execution as

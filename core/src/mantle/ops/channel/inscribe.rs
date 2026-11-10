@@ -775,26 +775,17 @@ impl<Mode: VerificationMode> ExecutableOperation
         let operation = self.operation();
 
         // if the channel doesn't exist, create it
-        if context
-            .channels
-            .channel_state(&operation.channel_id)
-            .is_none()
-        {
-            (context.channels, context.note_sets) = context.channels.create_channel(
-                operation.channel_id,
-                context.block_slot,
-                UnverifiedChannelKeys::from(operation.signer),
-                context.note_sets,
-            );
-        }
+        (context.channels, context.note_sets) = context.channels.create_if_not_exists(
+            operation.channel_id,
+            context.block_slot,
+            UnverifiedChannelKeys::from(operation.signer),
+            context.note_sets,
+        );
         let channel = context
             .channels
-            .channels
-            .get(&operation.channel_id)
+            .channel_state(&operation.channel_id)
             .cloned()
-            .ok_or(Error::ChannelNotFound {
-                channel_id: operation.channel_id,
-            })?;
+            .expect("the channel exists once created");
 
         // Apply the steps to the channel note set, in order
         if !operation.mini_blocks.is_empty() {

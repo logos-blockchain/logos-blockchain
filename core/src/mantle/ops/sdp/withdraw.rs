@@ -179,7 +179,7 @@ impl<Mode: VerificationMode> ExecutableOperation
         // The outputs wait, with no input, until the declaration is removed.
         context.pending_withdrawals = context.pending_withdrawals.push(PendingWithdrawal {
             due: context.release_slot,
-            note_set: SDP_SET,
+            note_set_index: SDP_SET,
             inputs: InputNullifiers::default(),
             outputs: operation.outputs.clone(),
         });
@@ -559,7 +559,7 @@ mod tests {
             context.pending_withdrawals.iter().collect::<Vec<_>>(),
             vec![&PendingWithdrawal {
                 due: Slot::from(70u64),
-                note_set: SDP_SET,
+                note_set_index: SDP_SET,
                 inputs: InputNullifiers::default(),
                 outputs: [NoteCommitment(Fr::from(46u64))].into(),
             }]
