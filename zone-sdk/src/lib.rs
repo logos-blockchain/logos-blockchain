@@ -111,7 +111,7 @@ pub mod node_types {
         mantle::{
             SignedOps, TxHash, Value,
             channel::ChannelState,
-            ledger::Inputs,
+            ledger::{Inputs, verification_mode::StandardMode},
             ops::channel::{ChannelId, MsgId, deposit::Metadata, inscribe::Inscription},
             transactions::states::Unverified,
         },
