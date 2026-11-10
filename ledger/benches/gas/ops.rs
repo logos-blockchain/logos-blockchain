@@ -44,7 +44,7 @@ use lb_core::{
                 ChannelId, MsgId, VerifiedChannelKeys,
                 config::ChannelConfigOp,
                 deposit::{DepositOp, Metadata},
-                inscribe::{ChannelStep, Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step},
+                inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step, UserStep},
                 program_step::{ProgramDeposit, ProgramStep},
                 withdraw::ChannelWithdrawOp,
             },
@@ -351,7 +351,7 @@ fn transfers() -> Vec<OpShape> {
 /// A user step of the fixture channel, spending `inputs` and creating
 /// `outputs` fresh notes against the current root of its set.
 pub fn user_step(inputs: usize, outputs: usize, salt: u64) -> Step {
-    Step::User(ChannelStep {
+    Step::User(UserStep {
         inputs: fresh_nullifiers(inputs, salt),
         outputs: fresh_commitments(outputs, salt),
         commitment_merkle_root: channel_root(),
@@ -424,7 +424,7 @@ fn user_inscription_shape(
     let outputs: usize = first
         .iter()
         .flatten()
-        .map(|step| step.created().count())
+        .map(|step| step.outputs().len())
         .sum();
     let step_proofs: Vec<StepProof> = (0..user_steps)
         .map(|index| StepProof::User(zk_transfer(index)))

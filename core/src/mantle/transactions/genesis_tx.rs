@@ -496,7 +496,7 @@ mod tests {
             notes::{InputNullifiers, NoteNullifier, OutputCommitments},
             ops::{
                 ChannelInscribeProof, StepProof, ZkTransferProof,
-                channel::inscribe::{ChannelStep, Inscription, MiniBlock, MiniBlocks, Step},
+                channel::inscribe::{Inscription, MiniBlock, MiniBlocks, Step, UserStep},
             },
             transactions::{OpProofs, Ops},
         },
@@ -1066,7 +1066,7 @@ mod tests {
             Err(Error::InvalidGenesisParameters(_))
         ));
 
-        let step = ChannelStep {
+        let step = UserStep {
             inputs: [NoteNullifier(Fr::ONE)].into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: Fr::ZERO,

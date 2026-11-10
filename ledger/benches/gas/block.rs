@@ -26,7 +26,7 @@ use lb_core::{
             StepProof,
             channel::{
                 ChannelId, MsgId,
-                inscribe::{ChannelStep, Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step},
+                inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step, UserStep},
                 withdraw::{ChannelWithdrawOp, WITHDRAW_DELAY},
             },
             sdp::SDPWithdrawOp,
@@ -493,7 +493,7 @@ fn note_sets_shape(changed: usize) -> BlockShape {
                 inscription: [1].into(),
                 parent: channel_state.tip_message,
                 signer: fixture.channel_key.public_key().into_unverified(),
-                mini_blocks: [MiniBlock::from([Step::User(ChannelStep {
+                mini_blocks: [MiniBlock::from([Step::User(UserStep {
                     inputs: nullifiers(1, salt).try_into().expect("one input"),
                     outputs: commitments(1, salt).try_into().expect("one output"),
                     commitment_merkle_root: root,

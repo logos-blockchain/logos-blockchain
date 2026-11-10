@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, iter::Chain, slice, sync::Arc};
 
 use ark_ff::PrimeField as _;
 use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
@@ -7,9 +7,7 @@ use lb_groth16::{Fr, serde::serde_fr};
 #[cfg(any(test, feature = "test-utils"))]
 use lb_key_management_system_keys::keys::Ed25519Key;
 use lb_key_management_system_keys::keys::UnverifiedEd25519PublicKey;
-use lb_program_spend::{
-    ZkProgramSpendInputsError, ZkProgramSpendPublic, ZkProgramSpendVerifierInput,
-};
+use lb_program_spend::{ZkProgramSpendPublic, ZkProgramSpendVerifierInput};
 use lb_utils::bounded::{Bounded, NonEmptyBoundedVec, UpperBoundedVec};
 use serde::{Deserialize, Serialize};
 
@@ -34,11 +32,11 @@ use crate::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
         },
-        note_set::{NoteSet, NoteSets, TxRoots},
-        notes::{InputNullifiers, NoteCommitment, OutputCommitments},
+        note_set::{NoteSet, NoteSets},
+        notes::{InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments},
         ops::{
-            ChannelInscribeProof, OpId, SignedOperation, StepProof, StepProofShape,
-            ZkTransferProof,
+            ChannelInscribeProof, OpId, ProgramStepProof, SignedOperation, StepProof,
+            StepProofShape, ZkTransferProof,
             channel::{
                 UnverifiedChannelKeys,
                 program_step::{
@@ -91,7 +89,7 @@ pub type MiniBlock = NonEmptyBoundedVec<Step, MAX_CHANNEL_STEPS>;
 pub type MiniBlocks = UpperBoundedVec<MiniBlock, MAX_MINI_BLOCKS>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
-pub struct ChannelStep {
+pub struct UserStep {
     pub inputs: InputNullifiers,
     pub outputs: OutputCommitments,
     #[serde(with = "serde_fr")]
@@ -102,6 +100,79 @@ pub struct ChannelStep {
     pub inscription: Inscription,
 }
 
+impl UserStep {
+    /// The user notes the step creates.
+    #[must_use]
+    pub fn outputs(&self) -> StepOutputs<'_> {
+        StepOutputs::user(self.outputs.as_slice())
+    }
+}
+
+/// The notes a step creates, in the order they are appended: the notes of the
+/// program of a program step before the user notes it pays.
+#[derive(Clone, Copy, Debug)]
+pub struct StepOutputs<'a> {
+    program_outputs: &'a [NoteCommitment],
+    outputs: &'a [NoteCommitment],
+}
+
+impl<'a> StepOutputs<'a> {
+    /// The user notes of a step creating no note of a program.
+    #[must_use]
+    pub const fn user(outputs: &'a [NoteCommitment]) -> Self {
+        Self {
+            program_outputs: &[],
+            outputs,
+        }
+    }
+
+    /// The notes of the program, then the user notes.
+    #[must_use]
+    pub const fn program(
+        program_outputs: &'a [NoteCommitment],
+        outputs: &'a [NoteCommitment],
+    ) -> Self {
+        Self {
+            program_outputs,
+            outputs,
+        }
+    }
+
+    /// The notes of the program among them.
+    #[must_use]
+    pub const fn program_outputs(&self) -> &'a [NoteCommitment] {
+        self.program_outputs
+    }
+
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.program_outputs.len() + self.outputs.len()
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.program_outputs.is_empty() && self.outputs.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &'a NoteCommitment> + use<'a> {
+        self.into_iter()
+    }
+
+    #[must_use]
+    pub fn to_vec(&self) -> Vec<NoteCommitment> {
+        self.iter().copied().collect()
+    }
+}
+
+impl<'a> IntoIterator for StepOutputs<'a> {
+    type Item = &'a NoteCommitment;
+    type IntoIter = Chain<slice::Iter<'a, NoteCommitment>, slice::Iter<'a, NoteCommitment>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.program_outputs.iter().chain(self.outputs.iter())
+    }
+}
+
 pub const USER_STEP_KIND: u8 = 0x00;
 pub const PROGRAM_DEPOSIT_KIND: u8 = 0x01;
 pub const PROGRAM_STEP_KIND: u8 = 0x02;
@@ -109,13 +180,13 @@ pub const PROGRAM_STEP_KIND: u8 = 0x02;
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Step {
-    User(ChannelStep),
+    User(UserStep),
     ProgramDeposit(ProgramDeposit),
     Program(ProgramStep),
 }
 
-impl From<ChannelStep> for Step {
-    fn from(step: ChannelStep) -> Self {
+impl From<UserStep> for Step {
+    fn from(step: UserStep) -> Self {
         Self::User(step)
     }
 }
@@ -153,15 +224,36 @@ impl Step {
         }
     }
 
-    /// The notes the step creates, in the order they are appended: the notes of
-    /// the program of a program step before the user notes it pays.
-    pub fn created(&self) -> impl Iterator<Item = &NoteCommitment> {
-        let (program_outputs, outputs) = match self {
-            Self::User(step) => (&[][..], &step.outputs),
-            Self::ProgramDeposit(deposit) => (&[][..], &deposit.outputs),
-            Self::Program(step) => (step.program_outputs.as_slice(), &step.outputs),
-        };
-        program_outputs.iter().chain(outputs.iter())
+    /// The notes the step creates, in the order they are appended.
+    #[must_use]
+    pub fn outputs(&self) -> StepOutputs<'_> {
+        match self {
+            Self::User(step) => step.outputs(),
+            Self::ProgramDeposit(deposit) => deposit.outputs(),
+            Self::Program(step) => step.outputs(),
+        }
+    }
+
+    /// The kind byte the step is encoded and identified with.
+    #[must_use]
+    pub const fn kind(&self) -> u8 {
+        match self {
+            Self::User(_) => USER_STEP_KIND,
+            Self::ProgramDeposit(_) => PROGRAM_DEPOSIT_KIND,
+            Self::Program(_) => PROGRAM_STEP_KIND,
+        }
+    }
+
+    // Checks that `proof`, the proof of the step at `index`, is of the kind of
+    // the step and that its circuit fits the step.
+    fn preverify_proof(&self, proof: &StepProof, index: usize) -> Result<(), Error> {
+        match (self, proof) {
+            (Self::User(_) | Self::ProgramDeposit(_), StepProof::User(_)) => Ok(
+                check_zk_transfer_bounds(self.inputs().len(), self.outputs().len())?,
+            ),
+            (Self::Program(step), StepProof::Program(proof)) => step.preverify_proof(proof, index),
+            _ => Err(Error::StepProofKind { step: index }),
+        }
     }
 
     #[must_use]
@@ -194,19 +286,11 @@ impl BinaryEncode for Step {
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
+        self.kind().encode_into(out);
         match self {
-            Self::User(step) => {
-                USER_STEP_KIND.encode_into(out);
-                step.encode_into(out);
-            }
-            Self::ProgramDeposit(deposit) => {
-                PROGRAM_DEPOSIT_KIND.encode_into(out);
-                deposit.encode_into(out);
-            }
-            Self::Program(step) => {
-                PROGRAM_STEP_KIND.encode_into(out);
-                step.encode_into(out);
-            }
+            Self::User(step) => step.encode_into(out),
+            Self::ProgramDeposit(deposit) => deposit.encode_into(out),
+            Self::Program(step) => step.encode_into(out),
         }
     }
 }
@@ -221,7 +305,7 @@ impl BinaryDecode for Step {
         let (input, kind) = u8::decode(input, &())?;
         match kind {
             USER_STEP_KIND => {
-                ChannelStep::decode(input, &()).map(|(rest, step)| (rest, Self::User(step)))
+                UserStep::decode(input, &()).map(|(rest, step)| (rest, Self::User(step)))
             }
             PROGRAM_DEPOSIT_KIND => ProgramDeposit::decode(input, &())
                 .map(|(rest, deposit)| (rest, Self::ProgramDeposit(deposit))),
@@ -235,7 +319,7 @@ impl BinaryDecode for Step {
 
 // The message the ZkTransfer of a user step is bound to.
 #[must_use]
-pub fn user_step_id(channel_id: &ChannelId, step: &ChannelStep) -> Fr {
+pub fn user_step_id(channel_id: &ChannelId, step: &UserStep) -> Fr {
     step_id(b"USER_STEP_V1", channel_id, USER_STEP_KIND, step)
 }
 
@@ -327,6 +411,74 @@ impl InscriptionOp {
         self.mini_blocks.iter().flat_map(Bounded::iter)
     }
 
+    /// The number of steps of the inscription, over all its mini-blocks.
+    #[must_use]
+    pub fn steps_len(&self) -> usize {
+        self.mini_blocks.iter().map(MiniBlock::len).sum()
+    }
+
+    // One proof per step, each of the kind of its step and fitting its circuit.
+    fn preverify_step_proofs(&self, proofs: &[StepProof]) -> Result<(), Error> {
+        let steps = self.steps_len();
+        if proofs.len() != steps {
+            return Err(Error::StepProofCount {
+                steps,
+                proofs: proofs.len(),
+            });
+        }
+        self.steps()
+            .zip(proofs)
+            .enumerate()
+            .try_for_each(|(index, (step, proof))| step.preverify_proof(proof, index))
+    }
+
+    // The note set of the channel the inscription extends, after checking the
+    // inscription may extend it. A channel being created holds no note yet.
+    fn verify_channel(
+        &self,
+        context: &InscriptionValidationContext<'_>,
+    ) -> Result<Option<NoteSet>, Error> {
+        if let Some(channel) = context.channels.channels.get(&self.channel_id) {
+            // Check the parent corresponds to the payload
+            if self.parent != channel.tip_message {
+                return Err(Error::InvalidParent {
+                    channel_id: self.channel_id,
+                    parent: self.parent.into(),
+                    actual: channel.tip_message.into(),
+                });
+            }
+
+            // Check that the signer is the authorized one
+            if self.signer
+                != channel.accredited_keys[channel.round_robin(context.block_slot).0 as usize]
+            {
+                return Err(Error::UnauthorizedSigner {
+                    channel_id: self.channel_id,
+                    signer: format!("{signer:?}", signer = self.signer),
+                });
+            }
+
+            Ok(channel.note_set.map(|index| {
+                context
+                    .note_sets
+                    .get(index)
+                    .expect("the note set of a channel exists")
+                    .clone()
+            }))
+        } else if self.parent != MsgId::root() {
+            // The channel doesn't exist, so the parent must be ZERO
+            Err(Error::InvalidParent {
+                channel_id: self.channel_id,
+                parent: self.parent.into(),
+                actual: MsgId::root().into(),
+            })
+        } else {
+            // A channel being created holds no note yet, so its inscription carries no
+            // step
+            Ok(None)
+        }
+    }
+
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
@@ -347,8 +499,8 @@ impl InscriptionOp {
         Self {
             // The steps of the spec vector.
             mini_blocks: [MiniBlock::from([
-                Step::User(ChannelStep {
-                    inputs: [crate::mantle::notes::NoteNullifier(Fr::from(0x23u64))].into(),
+                Step::User(UserStep {
+                    inputs: [NoteNullifier(Fr::from(0x23u64))].into(),
                     outputs: [NoteCommitment(Fr::from(0x24u64))].into(),
                     commitment_merkle_root: Fr::from(0x25u64),
                     inscription: b"step-inscription".into(),
@@ -455,68 +607,9 @@ impl PreverifiableOperation<StandardMode>
             .verify(context.tx_hash_view.as_bytes(), &self.proof().signature)
             .map_err(|_error| Error::InvalidSignature)?;
 
-        // One proof per step
-        let steps = self.operation().steps().count();
-        if self.proof().step_proofs.len() != steps {
-            return Err(Error::StepProofCount {
-                steps,
-                proofs: self.proof().step_proofs.len(),
-            });
-        }
-
-        // Ensure each step proof is of the kind of its step, and the ZkTransfer circuit
-        // fits the inputs and the outputs of each user step and deposit
-        for (index, (step, proof)) in self
-            .operation()
-            .steps()
-            .zip(&self.proof().step_proofs)
-            .enumerate()
-        {
-            match (step, proof) {
-                (Step::User(_) | Step::ProgramDeposit(_), StepProof::User(_)) => {
-                    check_zk_transfer_bounds(step.inputs().len(), step.created().count())?;
-                }
-                (Step::Program(step), StepProof::Program(proof)) => {
-                    // The ZkProgramSpend circuit fits the inputs and both output lists
-                    // together
-                    if step.inputs.len() > lb_program_spend::MAX_INPUTS {
-                        return Err(
-                            ZkProgramSpendInputsError::TooManyInputs(step.inputs.len()).into()
-                        );
-                    }
-                    let outputs = step.program_outputs.len() + step.outputs.len();
-                    if outputs > lb_program_spend::MAX_OUTPUTS {
-                        return Err(ZkProgramSpendInputsError::TooManyOutputs(outputs).into());
-                    }
-                    if proof.program_notes.len() != step.program_outputs.len() {
-                        return Err(Error::ProgramNoteCount {
-                            step: index,
-                            openings: proof.program_notes.len(),
-                            program_outputs: step.program_outputs.len(),
-                        });
-                    }
-                    // Every note of the program the step creates is opened, for the
-                    // availability of its state; the check reads the step alone, so a copy
-                    // failing it is dropped when it deserializes.
-                    for ((output, commitment), opening) in step
-                        .program_outputs
-                        .iter()
-                        .enumerate()
-                        .zip(&proof.program_notes)
-                    {
-                        if opening.note(step.program_id).commitment() != *commitment {
-                            return Err(Error::ProgramNoteOpening {
-                                step: index,
-                                output,
-                            });
-                        }
-                    }
-                }
-                _ => return Err(Error::StepProofKind { step: index }),
-            }
-        }
-
-        Ok(())
+        // One proof per step, of the kind of its step and fitting its circuit
+        self.operation()
+            .preverify_step_proofs(&self.proof().step_proofs)
     }
 }
 
@@ -527,239 +620,245 @@ impl VerifiableOperation<StandardMode>
     type Context<'a> = InscriptionValidationContext<'a>;
     type Error = Error;
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the channel checks, then the steps of the three kinds in order"
-    )]
     fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
-
-        // Check if the channel exist otherwise the inscription is valid only if and
-        // only if parent == ZERO
-        let note_set = if let Some(channel) = context
-            .channels
-            .channels
-            .get(&operation.channel_id)
-            .cloned()
-        {
-            // Check the parent corresponds to the payload
-            if operation.parent != channel.tip_message {
-                return Err(Error::InvalidParent {
-                    channel_id: operation.channel_id,
-                    parent: operation.parent.into(),
-                    actual: channel.tip_message.into(),
-                });
-            }
-
-            // Check that the signer is the authorized one
-            if operation.signer
-                != channel.accredited_keys[channel.round_robin(context.block_slot).0 as usize]
-            {
-                return Err(Error::UnauthorizedSigner {
-                    channel_id: operation.channel_id,
-                    signer: format!("{signer:?}", signer = operation.signer),
-                });
-            }
-
-            channel.note_set.map(|index| {
-                context
-                    .note_sets
-                    .get(index)
-                    .expect("the note set of a channel exists")
-                    .clone()
-            })
-        } else {
-            if operation.parent != MsgId::root() {
-                // Checked that the parent is ZERO because channel doesn't exist
-                return Err(Error::InvalidParent {
-                    channel_id: operation.channel_id,
-                    parent: operation.parent.into(),
-                    actual: MsgId::root().into(),
-                });
-            }
-
-            // A channel being created holds no note yet, so its inscription carries no
-            // step
-            None
-        };
+        let note_set = operation.verify_channel(context)?;
 
         // The signature is cheap and checked by `preverify`, only the step proofs
         // are deferred.
         if operation.mini_blocks.is_empty() {
             return Ok(InscriptionDeferredProofs::default());
         }
-        let mut note_set = note_set.ok_or(Error::NoNoteSet {
+        let note_set = note_set.ok_or(Error::NoNoteSet {
             channel_id: operation.channel_id,
         })?;
-        let mut step_nullifiers = HashSet::new();
-        let tx_roots = context.note_sets.tx_roots();
-        let mut deferred = InscriptionDeferredProofs::default();
-        // The message of the program spends and the third input of the program proofs
-        let op_id_fr = Fr::from_le_bytes_mod_order(&operation.op_id());
         let mut step_proofs = self.proof().step_proofs.iter();
-        let mut index = 0;
-        for mini_block in operation.mini_blocks.iter() {
-            // The user steps and program deposits of the mini-block cover the buffer as
-            // it stands now.
-            let covered = note_set.tx_commitment_buffer_len();
-            // The program deposits pending for the next program step.
-            let mut program_deposits: Vec<&ProgramDeposit> = Vec::new();
-            for step in mini_block.iter() {
-                let proof = step_proofs.next().ok_or_else(|| Error::StepProofCount {
-                    steps: operation.steps().count(),
-                    proofs: self.proof().step_proofs.len(),
-                })?;
-
-                // The step consumes unspent notes of the channel, which no earlier step
-                // consumed, a program step possibly none.
-                if !matches!(step, Step::Program(_)) || !step.inputs().is_empty() {
-                    note_set.assert_spendable(step.inputs().as_slice())?;
-                }
-                for note_nullifier in step.inputs().iter() {
-                    if !step_nullifiers.insert(*note_nullifier) {
-                        return Err(Error::StepDoubleSpend(*note_nullifier));
-                    }
-                }
-
-                match (step, proof) {
-                    // A user step balances exactly.
-                    (Step::User(user_step), StepProof::User(proof)) => {
-                        deferred.zk_transfers.push(holder_transfer(
-                            &note_set,
-                            tx_roots,
-                            step,
-                            covered,
-                            context.block_number,
-                            0,
-                            user_step_id(&operation.channel_id, user_step),
-                            proof,
-                        )?);
-                    }
-                    // A program deposit pays its value to a registered program and waits
-                    // for the next program step.
-                    (Step::ProgramDeposit(deposit), StepProof::User(proof)) => {
-                        if context.programs.get(&deposit.program_id).is_none() {
-                            return Err(Error::UnknownProgram(deposit.program_id));
-                        }
-                        deferred.zk_transfers.push(holder_transfer(
-                            &note_set,
-                            tx_roots,
-                            step,
-                            covered,
-                            context.block_number,
-                            deposit.value,
-                            program_deposit_id(&operation.channel_id, deposit),
-                            proof,
-                        )?);
-                        program_deposits.push(deposit);
-                    }
-                    // A program step of a registered program consumes the pending program
-                    // deposits, which must all pay its program.
-                    (Step::Program(program_step), StepProof::Program(proof)) => {
-                        let program = context
-                            .programs
-                            .get(&program_step.program_id)
-                            .ok_or(Error::UnknownProgram(program_step.program_id))?;
-                        if let Some(deposit) = program_deposits
-                            .iter()
-                            .find(|deposit| deposit.program_id != program_step.program_id)
-                        {
-                            return Err(Error::DepositToAnotherProgram {
-                                step: index,
-                                program_id: deposit.program_id,
-                            });
-                        }
-                        let paid_value = program_deposits
-                            .iter()
-                            .try_fold(0, |paid: Value, deposit| paid.checked_add(deposit.value))
-                            .ok_or(Error::PaidValueOverflow { step: index })?;
-                        // Rejects a root outside the window when the spend consumes nothing
-                        let tx_commitment_root = note_set.cached_tx_commitment_root(
-                            tx_roots,
-                            &program_step.commitment_merkle_root,
-                            context.block_number,
-                        )?;
-                        let nullifiers: Vec<Fr> = program_step
-                            .inputs
-                            .iter()
-                            .map(|nullifier| nullifier.0)
-                            .collect();
-                        // The notes of the program, then the user notes it pays.
-                        let commitments: Vec<Fr> =
-                            step.created().map(|commitment| commitment.0).collect();
-                        let outputs_of_program: Vec<bool> = (0..commitments.len())
-                            .map(|output| output < program_step.program_outputs.len())
-                            .collect();
-                        let public = ZkProgramSpendVerifierInput::new(&ZkProgramSpendPublic {
-                            inputs: &nullifiers,
-                            outputs: &commitments,
-                            outputs_of_program: &outputs_of_program,
-                            tx_commitment_root,
-                            program_id: program_step.program_id,
-                            paid_value,
-                            program_step_id: program_step.program_step_id,
-                            msg: op_id_fr,
-                        })?;
-                        deferred.program_spends.push(DeferredZkProgramSpend::new(
-                            *proof.spend_proof.as_proof(),
-                            public,
-                        ));
-                        deferred.program_proofs.push(DeferredProgramProof::new(
-                            *proof.program_proof.as_proof(),
-                            ProgramProofInput {
-                                program: program.clone(),
-                                public: [
-                                    program_step.program_step_id,
-                                    program_deposits_hash(&program_deposits),
-                                    op_id_fr,
-                                ],
-                            },
-                        ));
-                        program_deposits.clear();
-                    }
-                    _ => return Err(Error::StepProofKind { step: index }),
-                }
-                // The next program spends and the next mini-blocks cover the notes this
-                // step creates.
-                note_set = note_set.buffer_outputs(&step.created().copied().collect::<Vec<_>>());
-                index += 1;
-            }
-            // Every program deposit of the mini-block was consumed.
-            if let Some(deposit) = program_deposits.first() {
-                return Err(Error::UnconsumedDeposit(deposit.program_id));
-            }
-        }
-        Ok(deferred)
+        let verifier = operation.mini_blocks.iter().try_fold(
+            StepVerifier::new(operation, context, note_set),
+            |verifier, mini_block| verifier.verify_mini_block(mini_block, &mut step_proofs),
+        )?;
+        Ok(verifier.deferred)
     }
 }
 
-// The ZkTransfer a holder signed for its user step or program deposit, against
-// its root extended with the buffer before its mini-block.
-#[expect(clippy::too_many_arguments, reason = "the public values of the proof")]
-fn holder_transfer(
-    note_set: &NoteSet,
-    tx_roots: &TxRoots,
-    step: &Step,
-    covered: usize,
-    block_number: BlockNumber,
-    excess_value: Value,
-    msg: Fr,
-    proof: &ZkTransferProof,
-) -> Result<DeferredZkTransfer, Error> {
-    let tx_commitment_root = note_set.cached_step_commitment_root(
-        tx_roots,
-        step.commitment_merkle_root(),
-        covered,
-        block_number,
-    )?;
-    Ok(defer_zk_transfer(
-        proof,
-        step.inputs(),
-        step.created(),
-        excess_value,
-        tx_commitment_root,
-        msg,
-    )?)
+// The verification of the steps of an inscription, in order: the channel note
+// set extended with the notes of the steps verified so far, and their proofs.
+struct StepVerifier<'a> {
+    operation: &'a InscriptionOp,
+    context: &'a InscriptionValidationContext<'a>,
+    note_set: NoteSet,
+    // The nullifiers the steps verified so far consume
+    step_nullifiers: HashSet<NoteNullifier>,
+    // The message of the program spends and the third input of the program proofs
+    op_id_fr: Fr,
+    // The index of the next step, over all the mini-blocks
+    index: usize,
+    deferred: InscriptionDeferredProofs,
+}
+
+impl<'a> StepVerifier<'a> {
+    fn new(
+        operation: &'a InscriptionOp,
+        context: &'a InscriptionValidationContext<'a>,
+        note_set: NoteSet,
+    ) -> Self {
+        Self {
+            operation,
+            context,
+            note_set,
+            step_nullifiers: HashSet::new(),
+            op_id_fr: Fr::from_le_bytes_mod_order(&operation.op_id()),
+            index: 0,
+            deferred: InscriptionDeferredProofs::default(),
+        }
+    }
+
+    fn verify_mini_block<'p>(
+        mut self,
+        mini_block: &'a MiniBlock,
+        step_proofs: &mut impl Iterator<Item = &'p StepProof>,
+    ) -> Result<Self, Error> {
+        // The user steps and program deposits of the mini-block cover the buffer as
+        // it stands now.
+        let covered = self.note_set.tx_commitment_buffer_len();
+        // The program deposits pending for the next program step.
+        let mut program_deposits: Vec<&ProgramDeposit> = Vec::new();
+        for step in mini_block.iter() {
+            let proof = step_proofs
+                .next()
+                .expect("preverify checked one proof per step");
+            self.check_step_inputs(step)?;
+            match (step, proof) {
+                (Step::User(user_step), StepProof::User(proof)) => {
+                    self.verify_user_step(user_step, step, covered, proof)?;
+                }
+                (Step::ProgramDeposit(deposit), StepProof::User(proof)) => {
+                    self.verify_program_deposit(deposit, step, covered, proof)?;
+                    program_deposits.push(deposit);
+                }
+                (Step::Program(program_step), StepProof::Program(proof)) => {
+                    self.verify_program_step(program_step, step, proof, &program_deposits)?;
+                    program_deposits.clear();
+                }
+                _ => return Err(Error::StepProofKind { step: self.index }),
+            }
+            // The next program spends and the next mini-blocks cover the notes this
+            // step creates.
+            self.note_set = self.note_set.buffer_outputs(&step.outputs().to_vec());
+            self.index += 1;
+        }
+        // Every program deposit of the mini-block was consumed.
+        if let Some(deposit) = program_deposits.first() {
+            return Err(Error::UnconsumedDeposit(deposit.program_id));
+        }
+        Ok(self)
+    }
+
+    // The step consumes unspent notes of the channel, which no earlier step
+    // consumed, a program step possibly none.
+    fn check_step_inputs(&mut self, step: &Step) -> Result<(), Error> {
+        if !matches!(step, Step::Program(_)) || !step.inputs().is_empty() {
+            self.note_set.assert_spendable(step.inputs().as_slice())?;
+        }
+        for note_nullifier in step.inputs().iter() {
+            if !self.step_nullifiers.insert(*note_nullifier) {
+                return Err(Error::StepDoubleSpend(*note_nullifier));
+            }
+        }
+        Ok(())
+    }
+
+    // A user step balances exactly.
+    fn verify_user_step(
+        &mut self,
+        user_step: &UserStep,
+        step: &Step,
+        covered: usize,
+        proof: &ZkTransferProof,
+    ) -> Result<(), Error> {
+        let msg = user_step_id(&self.operation.channel_id, user_step);
+        let transfer = self.holder_transfer(step, covered, 0, msg, proof)?;
+        self.deferred.zk_transfers.push(transfer);
+        Ok(())
+    }
+
+    // A program deposit pays its value to a registered program and waits for the
+    // next program step.
+    fn verify_program_deposit(
+        &mut self,
+        deposit: &ProgramDeposit,
+        step: &Step,
+        covered: usize,
+        proof: &ZkTransferProof,
+    ) -> Result<(), Error> {
+        if self.context.programs.get(&deposit.program_id).is_none() {
+            return Err(Error::UnknownProgram(deposit.program_id));
+        }
+        let msg = program_deposit_id(&self.operation.channel_id, deposit);
+        let transfer = self.holder_transfer(step, covered, deposit.value, msg, proof)?;
+        self.deferred.zk_transfers.push(transfer);
+        Ok(())
+    }
+
+    // A program step of a registered program consumes the pending program
+    // deposits, which must all pay its program.
+    fn verify_program_step(
+        &mut self,
+        program_step: &ProgramStep,
+        step: &Step,
+        proof: &ProgramStepProof,
+        program_deposits: &[&ProgramDeposit],
+    ) -> Result<(), Error> {
+        let program = self
+            .context
+            .programs
+            .get(&program_step.program_id)
+            .ok_or(Error::UnknownProgram(program_step.program_id))?;
+        if let Some(deposit) = program_deposits
+            .iter()
+            .find(|deposit| deposit.program_id != program_step.program_id)
+        {
+            return Err(Error::DepositToAnotherProgram {
+                step: self.index,
+                program_id: deposit.program_id,
+            });
+        }
+        let paid_value = program_deposits
+            .iter()
+            .try_fold(0, |paid: Value, deposit| paid.checked_add(deposit.value))
+            .ok_or(Error::PaidValueOverflow { step: self.index })?;
+        // Rejects a root outside the window when the spend consumes nothing
+        let tx_commitment_root = self.note_set.cached_tx_commitment_root(
+            self.context.note_sets.tx_roots(),
+            &program_step.commitment_merkle_root,
+            self.context.block_number,
+        )?;
+        let nullifiers: Vec<Fr> = program_step
+            .inputs
+            .iter()
+            .map(|nullifier| nullifier.0)
+            .collect();
+        // The notes of the program, then the user notes it pays.
+        let outputs = step.outputs();
+        let commitments: Vec<Fr> = outputs.iter().map(|commitment| commitment.0).collect();
+        let outputs_of_program: Vec<bool> = (0..outputs.len())
+            .map(|output| output < outputs.program_outputs().len())
+            .collect();
+        let public = ZkProgramSpendVerifierInput::new(&ZkProgramSpendPublic {
+            inputs: &nullifiers,
+            outputs: &commitments,
+            outputs_of_program: &outputs_of_program,
+            tx_commitment_root,
+            program_id: program_step.program_id,
+            paid_value,
+            program_step_id: program_step.program_step_id,
+            msg: self.op_id_fr,
+        })?;
+        self.deferred
+            .program_spends
+            .push(DeferredZkProgramSpend::new(
+                *proof.spend_proof.as_proof(),
+                public,
+            ));
+        self.deferred.program_proofs.push(DeferredProgramProof::new(
+            *proof.program_proof.as_proof(),
+            ProgramProofInput {
+                program: program.clone(),
+                public: [
+                    program_step.program_step_id,
+                    program_deposits_hash(program_deposits),
+                    self.op_id_fr,
+                ],
+            },
+        ));
+        Ok(())
+    }
+
+    // The ZkTransfer a holder signed for its user step or program deposit,
+    // against its root extended with the buffer before its mini-block.
+    fn holder_transfer(
+        &self,
+        step: &Step,
+        covered: usize,
+        excess_value: Value,
+        msg: Fr,
+        proof: &ZkTransferProof,
+    ) -> Result<DeferredZkTransfer, Error> {
+        let tx_commitment_root = self.note_set.cached_step_commitment_root(
+            self.context.note_sets.tx_roots(),
+            step.commitment_merkle_root(),
+            covered,
+            self.context.block_number,
+        )?;
+        Ok(defer_zk_transfer(
+            proof,
+            step.inputs(),
+            step.outputs(),
+            excess_value,
+            tx_commitment_root,
+            msg,
+        )?)
+    }
 }
 
 impl<Mode: VerificationMode> ExecutableOperation
@@ -792,21 +891,19 @@ impl<Mode: VerificationMode> ExecutableOperation
             let index = channel.note_set.ok_or(Error::NoNoteSet {
                 channel_id: operation.channel_id,
             })?;
-            let mut note_set = context
+            let note_set = context
                 .note_sets
                 .get(index)
                 .expect("the note set of a channel exists")
                 .clone();
-            for step in operation.steps() {
-                // A program step creates its notes of the program before the user
-                // notes it pays.
-                let created: Vec<_> = step.created().copied().collect();
-                note_set = note_set
+            // A program step creates its notes of the program before the user notes
+            // it pays, the notes extending the buffer the next Operations of the
+            // transaction are proven against.
+            let note_set = operation.steps().try_fold(note_set, |note_set, step| {
+                note_set
                     .execute_spending(step.inputs().as_slice())?
-                    // The notes extend the buffer the next Operations of the
-                    // transaction are proven against.
-                    .add_tx_outputs(&created)?;
-            }
+                    .add_tx_outputs(&step.outputs().to_vec())
+            })?;
             context.note_sets = context.note_sets.update(index, note_set);
         }
 
@@ -835,6 +932,7 @@ mod tests {
         test_utils::{three_input_prove, three_input_setup},
     };
     use lb_key_management_system_keys::keys::{PK0, ZkKey, ZkPublicKey};
+    use lb_program_spend::ZkProgramSpendInputsError;
     use lb_utils::bounded::BoundedError;
     use lb_zktransfer::{ZkTransferInputsError, ZkTransferVerifierInput};
 
@@ -846,9 +944,9 @@ mod tests {
             batch::{DeferrableProof as _, DeferredProofs},
             gas::test_utils::FixedThresholds,
             note_set::{CommitmentMmr, NoteSetError},
-            notes::{self, NoteNullifier, derive_note_nullifier},
+            notes::{self, derive_note_nullifier},
             ops::{
-                ProgramNoteOpening, ProgramProof, ProgramStepProof, ZkProgramSpendProof,
+                ProgramNoteOpening, ProgramProof, ZkProgramSpendProof,
                 channel::{NULL_CHANNEL_ID, program_step::test_utils::prove_program_spend},
                 op_proof::samples::SampleProof as _,
                 transfer::test_utils::prove_transfer,
@@ -925,7 +1023,7 @@ mod tests {
         // One byte in a user step, one in a deposit, `program_step_len` in the
         // program step and the rest of the limit in the inscribe.
         let inscribed = |program_step_len: usize| {
-            let user = ChannelStep {
+            let user = UserStep {
                 inscription: bytes(1),
                 ..step(&[nullifier(2)], &[commitment(3)], root())
             };
@@ -1329,7 +1427,7 @@ mod tests {
 
     #[test]
     fn inscription_op_execution_gas_charges_a_spend_per_user_step() {
-        let step = ChannelStep {
+        let step = UserStep {
             inputs: [NoteNullifier(Fr::from(1u64))].into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: Fr::ZERO,
@@ -1411,8 +1509,8 @@ mod tests {
         inputs: &[NoteNullifier],
         outputs: &[NoteCommitment],
         commitment_merkle_root: Fr,
-    ) -> ChannelStep {
-        ChannelStep {
+    ) -> UserStep {
+        UserStep {
             inputs: InputNullifiers::try_from_iter(inputs.iter().copied()).unwrap(),
             outputs: OutputCommitments::try_from_iter(outputs.iter().copied()).unwrap(),
             commitment_merkle_root,
@@ -1501,7 +1599,7 @@ mod tests {
     #[test]
     fn user_step_id_hashes_the_channel_and_the_encoded_user_step() {
         let channel = ChannelId::from([0x22u8; 32]);
-        let user_step = ChannelStep {
+        let user_step = UserStep {
             inscription: b"step-inscription".into(),
             ..step(&[nullifier(0x23)], &[commitment(0x24)], Fr::from(0x25u64))
         };
@@ -1517,7 +1615,7 @@ mod tests {
         assert_ne!(
             user_step_id(
                 &channel,
-                &ChannelStep {
+                &UserStep {
                     commitment_merkle_root: Fr::ONE,
                     ..user_step.clone()
                 }

@@ -3,18 +3,21 @@ use std::sync::LazyLock;
 use lb_binary_codec::canonical::BinaryCodec;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_poseidon2::Digest as _;
+use lb_program_spend::ZkProgramSpendInputsError;
 use serde::{Deserialize, Serialize};
 
 use super::{
     ChannelId,
-    inscribe::{Inscription, PROGRAM_DEPOSIT_KIND, serde_inscription},
+    inscribe::{Inscription, PROGRAM_DEPOSIT_KIND, StepOutputs, serde_inscription},
     step_id,
 };
 use crate::{
     crypto::ZkHasher,
     mantle::{
         Value,
+        channel::Error,
         notes::{InputNullifiers, OutputCommitments, ProgramId},
+        ops::ProgramStepProof,
     },
 };
 
@@ -44,6 +47,12 @@ pub struct ProgramDeposit {
 }
 
 impl ProgramDeposit {
+    /// The change, user notes of the channel.
+    #[must_use]
+    pub fn outputs(&self) -> StepOutputs<'_> {
+        StepOutputs::user(self.outputs.as_slice())
+    }
+
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
@@ -82,6 +91,57 @@ pub struct ProgramStep {
 }
 
 impl ProgramStep {
+    // Checks that the ZkProgramSpend circuit fits the step and that `proof`, the
+    // proof of the step at `index`, opens every note of the program it creates.
+    pub(super) fn preverify_proof(
+        &self,
+        proof: &ProgramStepProof,
+        index: usize,
+    ) -> Result<(), Error> {
+        // The ZkProgramSpend circuit fits the inputs and both output lists together
+        if self.inputs.len() > lb_program_spend::MAX_INPUTS {
+            return Err(ZkProgramSpendInputsError::TooManyInputs(self.inputs.len()).into());
+        }
+        let outputs = self.outputs().len();
+        if outputs > lb_program_spend::MAX_OUTPUTS {
+            return Err(ZkProgramSpendInputsError::TooManyOutputs(outputs).into());
+        }
+        self.check_openings(proof, index)
+    }
+
+    // Every note of the program the step creates is opened, for the availability
+    // of its state; the check reads the step alone, so a copy failing it is
+    // dropped when it deserializes.
+    fn check_openings(&self, proof: &ProgramStepProof, index: usize) -> Result<(), Error> {
+        if proof.program_notes.len() != self.program_outputs.len() {
+            return Err(Error::ProgramNoteCount {
+                step: index,
+                openings: proof.program_notes.len(),
+                program_outputs: self.program_outputs.len(),
+            });
+        }
+        for ((output, commitment), opening) in self
+            .program_outputs
+            .iter()
+            .enumerate()
+            .zip(&proof.program_notes)
+        {
+            if opening.note(self.program_id).commitment() != *commitment {
+                return Err(Error::ProgramNoteOpening {
+                    step: index,
+                    output,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// The notes of the program the step creates, then the user notes it pays.
+    #[must_use]
+    pub fn outputs(&self) -> StepOutputs<'_> {
+        StepOutputs::program(self.program_outputs.as_slice(), self.outputs.as_slice())
+    }
+
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
