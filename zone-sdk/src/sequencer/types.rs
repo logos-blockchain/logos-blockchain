@@ -609,8 +609,9 @@ pub enum ChannelUpdate {
         adopted: Vec<ChannelUpdateTx>,
         /// Entries that left the view: ones that were on chain, plus our own
         /// pending that can no longer land, plus stale multi-sig and custom
-        /// txs. Revert from state and treat as republish candidates; see
-        /// [`ChannelUpdateTx`] for how to republish each variant.
+        /// txs. An entry comes before the entries chained on it. Revert from
+        /// state and treat as republish candidates; see [`ChannelUpdateTx`]
+        /// for how to republish each variant.
         orphaned: Vec<ChannelUpdateTx>,
     },
 }
