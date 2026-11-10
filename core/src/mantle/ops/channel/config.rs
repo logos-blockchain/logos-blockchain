@@ -372,24 +372,23 @@ impl<Mode: VerificationMode> ExecutableOperation
         let keys = UnverifiedChannelKeys::new_unchecked(
             operation.keys.iter().map(|k| k.into_unverified()).collect(),
         );
-        if context.channels.channel_state(&operation.channel).is_none() {
-            (context.channels, context.note_sets) = context.channels.create_channel(
-                operation.channel,
-                context.block_slot,
-                keys.clone(),
-                context.note_sets,
-            );
-        }
-        if let Some(channel) = context.channels.channels.get_mut(&operation.channel) {
-            channel.accredited_keys = Arc::new(keys);
-            channel.configuration_threshold = operation.configuration_threshold.get();
-            channel.tip_sequencer = 0;
-            channel.tip_sequencer_starting_slot = context.block_slot;
-            channel.posting_timeframe = operation.posting_timeframe.clone();
-            channel.posting_timeout = operation.posting_timeout.clone();
-            channel.tip_slot = context.block_slot;
-            channel.config_tip_hash = operation.id();
-        }
+        (context.channels, context.note_sets) = context.channels.create_if_not_exists(
+            operation.channel,
+            context.block_slot,
+            keys.clone(),
+            context.note_sets,
+        );
+        let Some(channel) = context.channels.channels.get_mut(&operation.channel) else {
+            unreachable!("the channel exists once created");
+        };
+        channel.accredited_keys = Arc::new(keys);
+        channel.configuration_threshold = operation.configuration_threshold.get();
+        channel.tip_sequencer = 0;
+        channel.tip_sequencer_starting_slot = context.block_slot;
+        channel.posting_timeframe = operation.posting_timeframe.clone();
+        channel.posting_timeout = operation.posting_timeout.clone();
+        channel.tip_slot = context.block_slot;
+        channel.config_tip_hash = operation.id();
         Ok((context, Vec::new()))
     }
 }

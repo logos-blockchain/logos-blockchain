@@ -357,7 +357,7 @@ impl LedgerState {
             released
                 .into_iter()
                 .map(|withdrawal| HeaderEvent::WithdrawalReleased {
-                    note_set: withdrawal.note_set,
+                    note_set: withdrawal.note_set_index,
                     inputs: withdrawal.inputs,
                     outputs: withdrawal.outputs,
                 }),
@@ -1953,7 +1953,7 @@ mod tests {
                 .pending_withdrawals
                 .iter()
                 .map(|pending| (
-                    pending.note_set,
+                    pending.note_set_index,
                     pending.inputs.len(),
                     pending.outputs.clone()
                 ))
@@ -3631,7 +3631,7 @@ mod tests {
                 .cryptarchia_ledger
                 .pending_withdrawals
                 .iter()
-                .map(|w| (w.due, w.note_set))
+                .map(|w| (w.due, w.note_set_index))
                 .collect::<Vec<_>>(),
             vec![(state.slot().strict_add(Slot::from(WITHDRAW_DELAY)), 2)]
         );
@@ -3647,7 +3647,7 @@ mod tests {
         let ledger_before = state.latest_note_sets().get(LEDGER_SET).unwrap().clone();
         let withdrawal = PendingWithdrawal {
             due: Slot::from(1u64),
-            note_set: channel_set,
+            note_set_index: channel_set,
             inputs: [NoteNullifier(Fr::from(7u64))].into(),
             outputs: [NoteCommitment(Fr::from(70u64))].into(),
         };

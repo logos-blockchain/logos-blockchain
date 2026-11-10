@@ -206,6 +206,30 @@ impl Channels {
         self.channels.get(channel_id)
     }
 
+    /// The index of the note set the channel holds its notes in.
+    pub fn note_set_index(&self, channel_id: ChannelId) -> Result<NoteSetIndex, Error> {
+        self.channel_state(&channel_id)
+            .ok_or(Error::ChannelNotFound { channel_id })?
+            .note_set
+            .ok_or(Error::NoNoteSet { channel_id })
+    }
+
+    /// Creates the channel, with `keys` and a note set of its own, unless it
+    /// already exists.
+    #[must_use]
+    pub fn create_if_not_exists(
+        self,
+        channel_id: ChannelId,
+        block_slot: Slot,
+        keys: UnverifiedChannelKeys,
+        note_sets: NoteSets,
+    ) -> (Self, NoteSets) {
+        if self.channel_state(&channel_id).is_some() {
+            return (self, note_sets);
+        }
+        self.create_channel(channel_id, block_slot, keys, note_sets)
+    }
+
     #[must_use]
     pub fn create_channel(
         mut self,
