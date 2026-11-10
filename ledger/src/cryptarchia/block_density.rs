@@ -85,7 +85,7 @@ mod tests {
 
     use lb_core::{era::AcceptedForkDigests, sdp::MinStake};
     use lb_groth16::ModulusShift;
-    use lb_utils::math::{NonNegativeRatio, PositiveRatio};
+    use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
 
     use super::*;
     use crate::{
@@ -163,7 +163,7 @@ mod tests {
             },
             consensus_config: lb_cryptarchia_engine::Config::new(
                 5.try_into().unwrap(),
-                NonNegativeRatio::new(1, 2.try_into().unwrap()),
+                ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
                 1f64.try_into().unwrap(),
                 12.try_into().unwrap(),
                 4,
@@ -190,29 +190,19 @@ mod tests {
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
             execution_market: crate::config::ExecutionMarketConfig {
                 max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
-                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
-                    .unwrap(),
-                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
-                    9,
-                    10.try_into().unwrap(),
-                )
-                .unwrap(),
+                fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
             },
             storage_market: crate::config::StorageMarketConfig {
-                max_adjustment_factor: lb_utils::math::ProperFraction::new(
-                    1,
-                    8.try_into().unwrap(),
-                )
-                .unwrap(),
-                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
-                    .unwrap(),
+                max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
             },
             block_rewards: crate::config::BlockRewardsConfig::new(
                 3_000_000_000,
                 120_000_000.try_into().unwrap(),
                 10_512,
                 NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
-                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+                ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
             gas_profile: crate::cryptarchia::tests::GAS_PROFILE,

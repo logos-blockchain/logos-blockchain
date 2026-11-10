@@ -5,8 +5,7 @@ use lb_chain_service::{
 };
 use lb_cryptarchia_sync::{HeaderId, TipResponse};
 use lb_time_service::SlotTick;
-use lb_utils::math::NonNegativeRatio;
-use overwatch::DynError;
+use lb_utils::math::ProperFraction;
 use tracing::{debug, warn};
 
 use crate::{
@@ -150,28 +149,22 @@ impl TipPollParams {
     /// coefficient `f`. The expected number of slots between blocks is `1/f`,
     /// so the cadence is `ceil(1/f)` slots and the lag threshold is
     /// `lag_threshold_blocks` such intervals.
-    pub fn derive(
-        config: &TipPollConfig,
-        slot_activation_coeff: NonNegativeRatio,
-    ) -> Result<Self, DynError> {
+    #[must_use]
+    pub fn derive(config: &TipPollConfig, slot_activation_coeff: ProperFraction) -> Self {
         // `f = numerator / denominator`, so `1/f = denominator / numerator`.
-        // Compute `ceil(1/f)` with integer arithmetic to avoid float casts.
+        // Compute `ceil(1/f)` with integer arithmetic to avoid float casts. The
+        // numerator of a proper fraction is not zero.
         let numerator = u64::from(slot_activation_coeff.numerator);
         let denominator = core::num::NonZeroU64::from(slot_activation_coeff.denominator).get();
-        if numerator == 0 {
-            return Err(DynError::from(
-                "active slot coefficient f must be > 0 for tip polling",
-            ));
-        }
 
         let cadence_slots = denominator.div_ceil(numerator).max(1);
         let lag_threshold_slots = cadence_slots.saturating_mul(config.lag_threshold_blocks.get());
 
-        Ok(Self {
+        Self {
             cadence_slots,
             lag_threshold_slots,
             max_peers: config.max_peers_to_sample.get(),
-        })
+        }
     }
 }
 

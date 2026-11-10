@@ -972,7 +972,7 @@ pub mod tests {
     };
 
     use lb_time::era::{EraEntriesAfterGenesis, EraTiming};
-    use lb_utils::math::NonNegativeRatio;
+    use lb_utils::math::ProperFraction;
 
     use super::{Cryptarchia, Error, Slot, UncleSlots, maxvalid_bg};
     use crate::{Config, EraSchedule, ReorgedBlocks, State};
@@ -1028,7 +1028,7 @@ pub mod tests {
     pub fn config_with(security_param: u32) -> Config {
         Config::new(
             NonZero::new(security_param).unwrap(),
-            NonNegativeRatio::new(1, 10.try_into().unwrap()),
+            ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
             1f64.try_into().expect("1 > 0"),
             12,
             TEST_MAX_UNCLES,
@@ -1826,7 +1826,7 @@ mod uncle_tests {
         sync::Arc,
     };
 
-    use lb_utils::math::NonNegativeRatio;
+    use lb_utils::math::ProperFraction;
 
     use crate::{
         Branch, Config, Cryptarchia, EraSchedule, Slot, State, UncleSlots,
@@ -2224,7 +2224,7 @@ mod uncle_tests {
 
         Config::new(
             NonZero::new(10).unwrap(),
-            NonNegativeRatio::new(f_numerator, f_denominator),
+            ProperFraction::new(f_numerator, f_denominator).unwrap(),
             1f64.try_into().expect("1 > 0"),
             uncle_reference_window_in_block,
             max_uncles,
