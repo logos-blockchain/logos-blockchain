@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use lb_time::Era;
 use overwatch::overwatch::handle::OverwatchHandle;
-use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 
 use super::Debug;
 
@@ -29,5 +29,7 @@ pub trait NetworkBackend<RuntimeServiceId> {
         &mut self,
         topics: HashSet<String>,
     ) -> BroadcastStream<Self::PubSubEvent>;
-    async fn subscribe_to_chainsync(&mut self) -> BroadcastStream<Self::ChainSyncEvent>;
+    /// The chain sync requests, which go to the latest subscriber only: every
+    /// request is answered once.
+    async fn subscribe_to_chainsync(&mut self) -> ReceiverStream<Self::ChainSyncEvent>;
 }

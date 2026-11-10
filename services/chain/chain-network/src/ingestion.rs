@@ -2,7 +2,7 @@
 //! however long a block takes, the service keeps taking in what peers and other
 //! services send it.
 
-use core::{fmt::Debug, pin::Pin};
+use core::{fmt::Debug, future, pin::Pin};
 use std::time::Instant;
 
 use futures::StreamExt as _;
@@ -61,6 +61,14 @@ struct LocalBlock<Tx> {
 enum EraChange {
     Started(Era),
     TransitionEnded(Era),
+}
+
+/// What peers send, and what chain recovery takes in: the inputs that take
+/// turns.
+enum NetworkInput<Tx> {
+    Proposal(Proposal),
+    PolledTip(PolledTip),
+    Orphan(Block<Tx>),
 }
 
 /// The block ingestion task, as seen by the service.
@@ -219,7 +227,9 @@ where
     }
 
     /// Takes the node's own blocks first: they've won a slot, which is lost if
-    /// they aren't published soon.
+    /// they aren't published soon. Era changes come next. What peers send and
+    /// chain recovery take turns after them, so that neither can hold the other
+    /// up for good.
     async fn run(mut self, mut inputs: Inputs<Cryptarchia::Tx>) {
         loop {
             tokio::select! {
@@ -239,18 +249,36 @@ where
 
                 Some(change) = inputs.era_changes.recv() => self.follow_era(change).await,
 
-                Some(proposal) = inputs.proposals.recv() => {
-                    self.handle_incoming_proposal(proposal).await;
-                }
-
-                Some(polled) = inputs.polled_tips.recv() => {
-                    self.enqueue_polled_tip(polled);
-                }
-
-                Some(block) = self.orphan_downloader.next(), if self.orphan_downloader.should_poll() => {
-                    self.handle_downloaded_orphan(block).await;
-                }
+                input = Self::next_network_input(
+                    &mut inputs.proposals,
+                    &mut inputs.polled_tips,
+                    &mut self.orphan_downloader,
+                ) => match input {
+                    NetworkInput::Proposal(proposal) => {
+                        self.handle_incoming_proposal(proposal).await;
+                    }
+                    NetworkInput::PolledTip(polled) => self.enqueue_polled_tip(polled),
+                    NetworkInput::Orphan(block) => self.handle_downloaded_orphan(block).await,
+                },
             }
+        }
+    }
+
+    /// The next proposal, polled tip or downloaded orphan, picked at random
+    /// among those ready.
+    async fn next_network_input(
+        proposals: &mut mpsc::Receiver<Proposal>,
+        polled_tips: &mut mpsc::Receiver<PolledTip>,
+        orphan_downloader: &mut Pin<Box<OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>>>,
+    ) -> NetworkInput<Cryptarchia::Tx> {
+        tokio::select! {
+            Some(proposal) = proposals.recv() => NetworkInput::Proposal(proposal),
+            Some(polled) = polled_tips.recv() => NetworkInput::PolledTip(polled),
+            Some(block) = orphan_downloader.next(), if orphan_downloader.should_poll() => {
+                NetworkInput::Orphan(block)
+            }
+            // Their senders are gone only as the service stops.
+            else => future::pending().await,
         }
     }
 
@@ -482,8 +510,9 @@ mod tests {
         time::Duration,
     };
 
-    use lb_chain_service::{AppliedBlock, ConsensusMsg, Error as ChainError};
+    use lb_chain_service::{AppliedBlock, ConsensusMsg, CryptarchiaInfo, Error as ChainError};
     use lb_core::mantle::{SignedOps, TxHash};
+    use lb_cryptarchia_engine::{Slot, State};
     use lb_time::era::{EraEntriesAfterGenesis, EraTiming};
     use lb_tx_service::MempoolMsg;
     use overwatch::services::{
@@ -500,6 +529,7 @@ mod tests {
 
     type Tx = SignedOps<Preverified, StandardMode>;
     type ApplyReply = oneshot::Sender<Result<AppliedBlock<Tx>, ChainError>>;
+    type Ingestion = BlockIngestion<Chain, NoopNetworkAdapter<Block<Tx>>, usize>;
 
     struct Chain;
 
@@ -532,7 +562,7 @@ mod tests {
 
     struct Started {
         chain: StubChain,
-        ingestion: BlockIngestion<Chain, NoopNetworkAdapter<Block<Tx>>, usize>,
+        ingestion: Ingestion,
         _mempool: InboundRelay<MempoolMsg<HeaderId, Tx, Tx, TxHash>>,
     }
 
@@ -601,5 +631,56 @@ mod tests {
         let _task: CancellableHandle<()> = spawn("test/ingestion", ingestion.run(inputs)).into();
 
         assert_eq!(chain.next_block().await.0, local_id);
+    }
+
+    /// A tip some peer is at, as the tip poller hands it over.
+    fn polled_tip() -> PolledTip {
+        let genesis = HeaderId::from([0; 32]);
+        PolledTip {
+            tip: HeaderId::from([1; 32]),
+            height: 1,
+            local: CryptarchiaInfo {
+                lib: genesis,
+                lib_slot: Slot::genesis(),
+                tip: genesis,
+                slot: Slot::genesis(),
+                height: 0,
+                state: State::Online,
+            },
+        }
+    }
+
+    /// Proposals that never let up still leave chain recovery its turns.
+    #[tokio::test]
+    async fn proposals_that_keep_coming_leave_recovery_its_turn() {
+        let ((_, proposals, polled_tips, _), mut inputs) = channels::<Tx>();
+        let mut orphan_downloader = Box::pin(OrphanBlocksDownloader::new(
+            NoopNetworkAdapter::new(),
+            NonZeroUsize::MIN,
+            1,
+        ));
+        let proposal = block::<Tx>(1).to_proposal();
+        while proposals.try_send(proposal.clone()).is_ok() {}
+        polled_tips.try_send(polled_tip()).unwrap();
+
+        let tip_taken = async {
+            loop {
+                match Ingestion::next_network_input(
+                    &mut inputs.proposals,
+                    &mut inputs.polled_tips,
+                    &mut orphan_downloader,
+                )
+                .await
+                {
+                    NetworkInput::PolledTip(_) => break,
+                    NetworkInput::Proposal(_) => proposals.try_send(proposal.clone()).unwrap(),
+                    NetworkInput::Orphan(_) => {}
+                }
+            }
+        };
+
+        timeout(REPLY_TIMEOUT, tip_taken)
+            .await
+            .expect("The polled tip should get its turn.");
     }
 }

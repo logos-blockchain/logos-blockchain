@@ -378,7 +378,7 @@ mod tests {
     use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
     use overwatch::{overwatch::OverwatchHandle, services::relay::OutboundRelay};
-    use tokio_stream::wrappers::BroadcastStream;
+    use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 
     use super::*;
     use crate::network::BoxedStream;
@@ -943,7 +943,7 @@ mod tests {
             unimplemented!()
         }
 
-        async fn subscribe_to_chainsync(&mut self) -> BroadcastStream<Self::ChainSyncEvent> {
+        async fn subscribe_to_chainsync(&mut self) -> ReceiverStream<Self::ChainSyncEvent> {
             unimplemented!()
         }
     }
