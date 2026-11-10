@@ -155,8 +155,8 @@ struct TestConfigPaths {
 impl TestConfigPaths {
     fn new() -> Self {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        std::fs::create_dir_all(temp_dir.path().join("state/logs"))
-            .expect("Failed to create log dir");
+        let log_dir = temp_dir.path().join("state/logs");
+        std::fs::create_dir_all(&log_dir).expect("Failed to create log dir");
 
         let node_config_path = temp_dir.path().join("standalone-node-config.yaml");
 
@@ -166,6 +166,9 @@ impl TestConfigPaths {
         )
         .expect("Standalone user config should deserialize");
         node_config.state.base_folder = temp_dir.path().join("state");
+        if let Some(file) = node_config.tracing.logger.file.as_mut() {
+            file.directory = log_dir;
+        }
         node_config.api.backend.listen_address = "127.0.0.1:0"
             .parse()
             .expect("Local address should be correct");
