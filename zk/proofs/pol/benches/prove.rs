@@ -1,7 +1,7 @@
 use std::str::FromStr as _;
 
 use lb_groth16::Fr;
-use lb_utils::math::NonNegativeRatio;
+use lb_utils::math::ProperFraction;
 use logos_blockchain_pol::{
     LotteryConstants, PolChainInputsData, PolWalletInputsData, PolWitnessInputs,
     PolWitnessInputsData, prove,
@@ -18,7 +18,7 @@ fn main() {
 )]
 fn make_inputs() -> PolWitnessInputs {
     let (lottery_0, lottery_1) =
-        LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
+        LotteryConstants::new(ProperFraction::new(1, 10.try_into().unwrap()).unwrap())
             .compute_lottery_values(5000);
 
     let chain_data = PolChainInputsData {

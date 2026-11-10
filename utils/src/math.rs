@@ -275,6 +275,14 @@ impl ProperFraction {
     }
 }
 
+impl Deref for ProperFraction {
+    type Target = NonNegativeRatio;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 impl TryFrom<NonNegativeRatio> for ProperFraction {
     type Error = String;
 

@@ -48,7 +48,7 @@ use lb_storage_service::{
 };
 use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraTiming};
 use lb_time_service::backends::SystemTimeBackend;
-use lb_utils::math::{NonNegativeRatio, PositiveRatio};
+use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
 use overwatch::services::{AsServiceId, relay::OutboundRelay};
 use rand::{RngCore as _, thread_rng};
 use tempfile::TempDir;
@@ -1012,7 +1012,7 @@ fn ledger_config_with_uncles(
     };
     let consensus_config = lb_cryptarchia_engine::Config::new(
         security_param,
-        NonNegativeRatio::new(1, 10.try_into().unwrap()),
+        ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
         1.0.try_into().unwrap(),
         uncle_reference_window_in_block,
         max_uncles,
@@ -1042,23 +1042,19 @@ fn ledger_config_with_uncles(
         max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
         execution_market: lb_ledger::config::ExecutionMarketConfig {
             max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_193_460).unwrap(),
-            fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
-                .unwrap(),
-            ema_smoothing_factor: lb_utils::math::ProperFraction::new(9, 10.try_into().unwrap())
-                .unwrap(),
+            fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+            ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
         },
         storage_market: lb_ledger::config::StorageMarketConfig {
-            max_adjustment_factor: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
-                .unwrap(),
-            ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
-                .unwrap(),
+            max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+            ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
         },
         block_rewards: lb_ledger::config::BlockRewardsConfig::new(
             3_000_000_000,
             120_000_000.try_into().unwrap(),
             10_512,
             NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
-            lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
         )
         .unwrap(),
         gas_profile: lb_core::mantle::gas::GasProfile {

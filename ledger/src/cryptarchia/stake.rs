@@ -85,7 +85,7 @@ mod tests {
 
     use lb_core::{era::AcceptedForkDigests, sdp::MinStake};
     use lb_groth16::ModulusShift;
-    use lb_utils::math::{NonNegativeRatio, PositiveRatio};
+    use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
 
     use super::*;
     use crate::{
@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn test_total_stake_inference_zero_block_density() {
-        let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
+        let config = config(ProperFraction::new(1, 2.try_into().unwrap()).unwrap());
         let inference = StakeInference::after_epoch(&single_era(config), Epoch::genesis());
         let total_stake_estimate = 1000u64;
         let period_block_density = 0u64;
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn test_total_stake_inference_high_block_density() {
-        let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
+        let config = config(ProperFraction::new(1, 2.try_into().unwrap()).unwrap());
         let inference = StakeInference::after_epoch(&single_era(config), Epoch::genesis());
         let total_stake_estimate = 1000u64;
         let measured_block_density = expected_density(&inference) * 2;
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn test_total_stake_inference_exact_block_density() {
-        let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
+        let config = config(ProperFraction::new(1, 2.try_into().unwrap()).unwrap());
         let inference = StakeInference::after_epoch(&single_era(config), Epoch::genesis());
         let total_stake_estimate = 1000u64;
         let measured_block_density = expected_density(&inference);
@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn test_total_stake_inference_intermediate_block_density() {
-        let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
+        let config = config(ProperFraction::new(1, 2.try_into().unwrap()).unwrap());
         let inference = StakeInference::after_epoch(&single_era(config), Epoch::genesis());
         let total_stake_estimate = 1000u64;
         let measured_block_density = expected_density(&inference) / 2;
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn test_total_stake_inference_very_high_stake() {
-        let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
+        let config = config(ProperFraction::new(1, 2.try_into().unwrap()).unwrap());
         let inference = StakeInference::after_epoch(&single_era(config), Epoch::genesis());
         let total_stake_estimate = u64::MAX; //maximum stake supported is half
         let measured_block_density = expected_density(&inference) / 2;
@@ -178,7 +178,7 @@ mod tests {
         );
     }
 
-    fn config(slot_activation_coeff: NonNegativeRatio) -> Config {
+    fn config(slot_activation_coeff: ProperFraction) -> Config {
         Config {
             epoch_config: lb_cryptarchia_engine::EpochConfig {
                 epoch_stake_distribution_stabilization: 3.try_into().unwrap(),
@@ -214,29 +214,19 @@ mod tests {
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
             execution_market: crate::config::ExecutionMarketConfig {
                 max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
-                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
-                    .unwrap(),
-                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
-                    9,
-                    10.try_into().unwrap(),
-                )
-                .unwrap(),
+                fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
             },
             storage_market: crate::config::StorageMarketConfig {
-                max_adjustment_factor: lb_utils::math::ProperFraction::new(
-                    1,
-                    8.try_into().unwrap(),
-                )
-                .unwrap(),
-                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
-                    .unwrap(),
+                max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
             },
             block_rewards: crate::config::BlockRewardsConfig::new(
                 3_000_000_000,
                 120_000_000.try_into().unwrap(),
                 10_512,
                 NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
-                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+                ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
             gas_profile: crate::cryptarchia::tests::GAS_PROFILE,

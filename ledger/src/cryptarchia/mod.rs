@@ -1120,7 +1120,7 @@ pub mod tests {
         };
         let consensus_config = lb_cryptarchia_engine::Config::new(
             NonZero::new(1).unwrap(),
-            NonNegativeRatio::new(1, 10.try_into().unwrap()),
+            ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
             1f64.try_into().expect("1 > 0"),
             12,
             4,
@@ -2315,7 +2315,7 @@ pub mod tests {
         let era_1 = Config {
             consensus_config: lb_cryptarchia_engine::Config::new(
                 NonZero::new(4).unwrap(),
-                NonNegativeRatio::new(1, 5.try_into().unwrap()),
+                ProperFraction::new(1, 5.try_into().unwrap()).unwrap(),
                 0.5f64.try_into().expect("1/2 > 0"),
                 12,
                 4,
