@@ -608,8 +608,7 @@ where
                 (adopted, orphaned)
             },
         );
-        // One shed pass for the block: the lineage diff's entries first, then
-        // whatever the pass removed, in chain order across every rule.
+        // The diff's entries first, then the shed pass's, in chain order.
         let shed = match (self.state.as_mut(), self.current_tip) {
             (Some(s), Some(tip)) => s.shed_block(
                 tip,
@@ -629,16 +628,14 @@ where
                 orphaned.push(tx);
             }
         }
-        // The chaining pointer follows: after a config shed, the message tip,
-        // so re-posts re-home there; otherwise the current publish parent
-        // (channel tip + our pending tail), the same value publishing chains
-        // on. An expiry overrides either, as the pending tail just shrank.
+        // Publishing chains on the publish parent (channel tip + own pending
+        // tail); after a config shed, on the message tip, so re-posts re-home.
         if let (Some(state), Some(tip)) = (self.state.as_ref(), self.current_tip) {
             if !shed.expired.is_empty() {
                 self.last_msg_id = state.publish_parent(tip);
             } else if shed.config_shed {
                 self.last_msg_id = state.channel_tip_at(tip);
-            } else if lineage_changed {
+            } else if lineage_changed || !orphaned.is_empty() {
                 self.last_msg_id = state.publish_parent(tip);
             }
         }
