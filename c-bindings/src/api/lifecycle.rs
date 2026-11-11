@@ -101,12 +101,7 @@ unsafe fn initialize_lb_node(
     // Captured before the run config is consumed, so the node handle can answer
     // for its chain without querying a service for a value that cannot change.
     let chain_id = run_config.deployment.chain_id();
-    let fork_digests = run_config
-        .deployment
-        .era_schedule()
-        .iter()
-        .map(|era| era.parameters.fork_digest)
-        .collect();
+    let fork_digests = run_config.deployment.fork_digests();
 
     let runtime = Runtime::new().expect("Failed to create Tokio runtime");
     let app = run_node_from_config(run_config, Some(runtime.handle().clone())).map_err(|e| {

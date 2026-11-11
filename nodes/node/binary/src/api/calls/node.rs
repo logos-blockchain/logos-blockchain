@@ -5,6 +5,8 @@ use lb_tracing_service::{TracingMessage, TracingOpenMetricsError};
 use super::{Error, Handle, request};
 use crate::TracingService;
 
+const LOG_TARGET: &str = lb_log_targets::node::api::TRACING;
+
 /// The version and build provenance of the node.
 #[must_use]
 pub fn version() -> lb_version::BuildVersionInfo {
@@ -23,7 +25,9 @@ pub async fn reload_tracing_filter(handle: &Handle, filter: EnvFilterConfig) -> 
         reply_channel,
     })
     .await?
-    .map_err(Error::internal)
+    .map_err(Error::internal)?;
+    tracing::debug!(target: LOG_TARGET, "Tracing filter reloaded");
+    Ok(())
 }
 
 /// The node's metrics in the `OpenMetrics` text format.

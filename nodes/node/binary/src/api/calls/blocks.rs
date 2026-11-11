@@ -263,7 +263,7 @@ async fn fetch_and_load_immutable_blocks(
     load_blocks_with_chain_state_by_ids(storage, header_ids, chain_info, remaining).await
 }
 
-pub async fn get_blocks_in_slot_range_with_snapshot(
+pub(super) async fn get_blocks_in_slot_range_with_snapshot(
     handle: &Handle,
     slot_from: Slot,
     slot_to: Slot,

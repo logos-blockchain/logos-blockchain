@@ -131,6 +131,7 @@ pub fn run_node_from_config(
     // chain ID is fixed by the deployment, so the API backend is handed it up
     // front rather than querying a service for a value that cannot change.
     let chain_id = config.deployment.chain_id();
+    let fork_digests = config.deployment.fork_digests();
 
     let eras = config.deployment.era_schedule();
 
@@ -207,7 +208,7 @@ pub fn run_node_from_config(
     let api_config = ApiConfig {
         user: config.user.api,
         chain_id,
-        fork_digests: eras.iter().map(|era| era.parameters.fork_digest).collect(),
+        fork_digests,
     };
 
     let http_config = api_config.backend_settings();
