@@ -1,7 +1,8 @@
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     fmt,
-    sync::{Arc, LazyLock, Mutex, PoisonError},
+    sync::LazyLock,
 };
 
 use lb_dynamic_merkle::{DynamicMerkleTree, MerklePath};
@@ -69,10 +70,11 @@ const EMPTY_PREFIX: PrefixId = [0; 32];
 
 type TxRootKey = (Fr, usize, PrefixId);
 
-// The extended MMRs computed during the current Mantle Transaction, shared by
-// its Operations; not state, so emptied with every transaction and block.
-#[derive(Clone, Default)]
-pub struct TxRoots(Arc<Mutex<HashMap<TxRootKey, ExtendedMmr>>>);
+// The extended MMRs computed during a Mantle Transaction, shared by its
+// Operations. The verification of an Operation only reads the state it is
+// verified against, so the cache fills behind a shared reference.
+#[derive(Default)]
+pub struct TxRoots(RefCell<HashMap<TxRootKey, ExtendedMmr>>);
 
 // An extended MMR and, once a proof named it, its root. A checkpoint on the way
 // to another prefix has none.
@@ -88,13 +90,142 @@ impl fmt::Debug for TxRoots {
     }
 }
 
-impl PartialEq for TxRoots {
-    fn eq(&self, _other: &Self) -> bool {
-        true
+/// The commitments the previous Operations of a Mantle Transaction added to a
+/// note set, which the next ones are proven against.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TxBuffer {
+    commitments: Vec<NoteCommitment>,
+    // the id of each prefix of `commitments`, ending at each commitment
+    prefix_ids: Vec<PrefixId>,
+}
+
+static EMPTY_BUFFER: TxBuffer = TxBuffer::new();
+
+impl TxBuffer {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            commitments: Vec::new(),
+            prefix_ids: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.commitments.len()
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.commitments.is_empty()
+    }
+
+    pub fn push(&mut self, outputs: &[NoteCommitment]) {
+        for note_commitment in outputs {
+            let previous = self.prefix_ids.last().copied().unwrap_or(EMPTY_PREFIX);
+            let prefix_id: PrefixId = Hasher::new()
+                .chain_update(previous)
+                .chain_update(fr_to_bytes(&note_commitment.0))
+                .finalize()
+                .into();
+            self.commitments.push(*note_commitment);
+            self.prefix_ids.push(prefix_id);
+        }
+    }
+
+    #[must_use]
+    pub fn with(mut self, outputs: &[NoteCommitment]) -> Self {
+        self.push(outputs);
+        self
+    }
+
+    // The id of the first `len` commitments.
+    fn prefix_id(&self, len: usize) -> PrefixId {
+        len.checked_sub(1)
+            .map_or(EMPTY_PREFIX, |last| self.prefix_ids[last])
+    }
+
+    const fn check_buffered(&self, buffered: usize) -> Result<(), NoteSetError> {
+        if buffered > self.len() {
+            return Err(NoteSetError::BufferedTooLarge {
+                buffered,
+                len: self.len(),
+            });
+        }
+        Ok(())
     }
 }
 
-impl Eq for TxRoots {}
+/// What the Operations of a Mantle Transaction share about the note sets.
+///
+/// It holds the buffer of each set they added to and the roots computed from
+/// them. Created empty for every transaction and dropped with it, it is never
+/// ledger state.
+#[derive(Debug, Default)]
+pub struct TxNoteState {
+    buffers: HashMap<NoteSetIndex, TxBuffer>,
+    roots: TxRoots,
+}
+
+impl TxNoteState {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The buffer of the set `index`, empty if no Operation added to it.
+    #[must_use]
+    pub fn buffer(&self, index: NoteSetIndex) -> &TxBuffer {
+        self.buffers.get(&index).unwrap_or(&EMPTY_BUFFER)
+    }
+
+    /// Adds `outputs` to the buffer of the set `index`, which the next
+    /// Operations of the transaction are proven against.
+    pub fn buffer_outputs(&mut self, index: NoteSetIndex, outputs: &[NoteCommitment]) {
+        if !outputs.is_empty() {
+            self.buffers.entry(index).or_default().push(outputs);
+        }
+    }
+
+    #[must_use]
+    pub const fn roots(&self) -> &TxRoots {
+        &self.roots
+    }
+
+    /// Checks that `inputs` are spendable in `set`, the set `index`, and
+    /// returns the root a `ZkTransfer` spending them is proven against:
+    /// `commitment_merkle_root` extended with the buffer of the set.
+    pub fn spendable_root(
+        &self,
+        index: NoteSetIndex,
+        set: &NoteSet,
+        inputs: &[NoteNullifier],
+        commitment_merkle_root: &Fr,
+        block: BlockNumber,
+    ) -> Result<Fr, NoteSetError> {
+        set.assert_spendable(inputs)?;
+        self.commitment_root(index, set, commitment_merkle_root, block)
+    }
+
+    /// `commitment_merkle_root` of `set`, the set `index`, extended with its
+    /// buffer.
+    pub fn commitment_root(
+        &self,
+        index: NoteSetIndex,
+        set: &NoteSet,
+        commitment_merkle_root: &Fr,
+        block: BlockNumber,
+    ) -> Result<Fr, NoteSetError> {
+        let buffer = self.buffer(index);
+        set.cached_step_commitment_root(
+            &self.roots,
+            buffer,
+            commitment_merkle_root,
+            buffer.len(),
+            block,
+        )
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoteSetUpdate {
@@ -115,12 +246,6 @@ pub struct NoteSet {
     // snapshot of each recent root, with the block at whose end it was superseded
     #[serde(with = "serde_recent_commitment_roots")]
     recent_commitment_roots: RecentRoots,
-    // commitments added by the previous Operations of the Mantle Transaction
-    #[serde(skip)]
-    tx_commitment_buffer: VectorSync<NoteCommitment>,
-    // the id of each prefix of `tx_commitment_buffer`, ending at each commitment
-    #[serde(skip)]
-    tx_commitment_prefix_ids: VectorSync<PrefixId>,
     // what the set inserted and appended during the current block, reported at its end
     #[serde(skip)]
     block_nullifiers: VectorSync<NoteNullifier>,
@@ -142,8 +267,6 @@ impl NoteSet {
             commitments,
             nullifiers: NullifierImt::new(),
             committed_root,
-            tx_commitment_buffer: VectorSync::new_sync(),
-            tx_commitment_prefix_ids: VectorSync::new_sync(),
             block_nullifiers: VectorSync::new_sync(),
             block_commitments: VectorSync::new_sync(),
         }
@@ -194,74 +317,37 @@ impl NoteSet {
         Ok(())
     }
 
+    /// `commitment_merkle_root` extended with all of `buffer`.
     pub fn tx_commitment_root(
         &self,
+        buffer: &TxBuffer,
         commitment_merkle_root: &Fr,
         block: BlockNumber,
     ) -> Result<Fr, NoteSetError> {
-        self.step_commitment_root(
-            commitment_merkle_root,
-            self.tx_commitment_buffer.len(),
-            block,
-        )
+        self.step_commitment_root(buffer, commitment_merkle_root, buffer.len(), block)
     }
 
-    #[must_use]
-    pub fn tx_commitment_buffer_len(&self) -> usize {
-        self.tx_commitment_buffer.len()
-    }
-
+    /// `commitment_merkle_root` extended with the first `buffered` commitments
+    /// of `buffer`, replayed one by one.
     pub fn step_commitment_root(
         &self,
+        buffer: &TxBuffer,
         commitment_merkle_root: &Fr,
         buffered: usize,
         block: BlockNumber,
     ) -> Result<Fr, NoteSetError> {
-        if buffered > self.tx_commitment_buffer.len() {
-            return Err(NoteSetError::BufferedTooLarge {
-                buffered,
-                len: self.tx_commitment_buffer.len(),
-            });
-        }
+        buffer.check_buffered(buffered)?;
         let base = self.recent_mmr(commitment_merkle_root, block)?;
         if buffered == 0 {
             return Ok(unextended_root(commitment_merkle_root, base));
         }
         let mut mmr = base.clone();
-        for note_commitment in self.tx_commitment_buffer.iter().take(buffered) {
+        for note_commitment in buffer.commitments.iter().take(buffered) {
             mmr = mmr
                 .push(*note_commitment)
                 .map_err(|_| NoteSetError::MmrFull)?;
         }
         Ok(mmr.frontier_root())
-    }
-
-    pub fn cached_tx_commitment_root(
-        &self,
-        tx_roots: &TxRoots,
-        commitment_merkle_root: &Fr,
-        block: BlockNumber,
-    ) -> Result<Fr, NoteSetError> {
-        self.cached_step_commitment_root(
-            tx_roots,
-            commitment_merkle_root,
-            self.tx_commitment_buffer.len(),
-            block,
-        )
-    }
-
-    /// Checks that `inputs` are spendable and returns the root a `ZkTransfer`
-    /// spending them is proven against: `commitment_merkle_root` extended with
-    /// the buffer of the transaction.
-    pub fn spendable_tx_root(
-        &self,
-        tx_roots: &TxRoots,
-        inputs: &[NoteNullifier],
-        commitment_merkle_root: &Fr,
-        block: BlockNumber,
-    ) -> Result<Fr, NoteSetError> {
-        self.assert_spendable(inputs)?;
-        self.cached_tx_commitment_root(tx_roots, commitment_merkle_root, block)
     }
 
     // Same root as `step_commitment_root`, resuming from the closest extended MMR
@@ -270,27 +356,18 @@ impl NoteSet {
     pub fn cached_step_commitment_root(
         &self,
         tx_roots: &TxRoots,
+        buffer: &TxBuffer,
         commitment_merkle_root: &Fr,
         buffered: usize,
         block: BlockNumber,
     ) -> Result<Fr, NoteSetError> {
-        if buffered > self.tx_commitment_buffer.len() {
-            return Err(NoteSetError::BufferedTooLarge {
-                buffered,
-                len: self.tx_commitment_buffer.len(),
-            });
-        }
+        buffer.check_buffered(buffered)?;
         let base = self.recent_mmr(commitment_merkle_root, block)?;
         if buffered == 0 {
             return Ok(unextended_root(commitment_merkle_root, base));
         }
-        let key = |len: usize| {
-            let prefix_id = len
-                .checked_sub(1)
-                .map_or(EMPTY_PREFIX, |last| self.tx_commitment_prefix_ids[last]);
-            (*commitment_merkle_root, base.len(), prefix_id)
-        };
-        let mut cache = tx_roots.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let key = |len: usize| (*commitment_merkle_root, base.len(), buffer.prefix_id(len));
+        let mut cache = tx_roots.0.borrow_mut();
         if let Some(root) = cache.get(&key(buffered)).and_then(|extended| extended.root) {
             return Ok(root);
         }
@@ -306,7 +383,7 @@ impl NoteSet {
         };
         for len in start + 1..=buffered {
             mmr = mmr
-                .push(self.tx_commitment_buffer[len - 1])
+                .push(buffer.commitments[len - 1])
                 .map_err(|_| NoteSetError::MmrFull)?;
             if len % PREFIX_CHECKPOINT == 0 {
                 cache.insert(
@@ -330,37 +407,12 @@ impl NoteSet {
         Ok(root)
     }
 
-    #[must_use]
-    pub fn buffer_outputs(mut self, outputs: &[NoteCommitment]) -> Self {
-        for note_commitment in outputs {
-            let previous = self
-                .tx_commitment_prefix_ids
-                .last()
-                .copied()
-                .unwrap_or(EMPTY_PREFIX);
-            let prefix_id: PrefixId = Hasher::new()
-                .chain_update(previous)
-                .chain_update(fr_to_bytes(&note_commitment.0))
-                .finalize()
-                .into();
-            self.tx_commitment_buffer.push_back_mut(*note_commitment);
-            self.tx_commitment_prefix_ids.push_back_mut(prefix_id);
-        }
-        self
-    }
-
     pub fn execute_spending(mut self, inputs: &[NoteNullifier]) -> Result<Self, NoteSetError> {
         for input in inputs {
             self.nullifiers = self.nullifiers.insert(input.0)?;
             self.block_nullifiers.push_back_mut(*input);
         }
         Ok(self)
-    }
-
-    /// Adds the outputs of an Operation to the set and to the buffer the next
-    /// Operations of the transaction are proven against.
-    pub fn add_tx_outputs(self, outputs: &[NoteCommitment]) -> Result<Self, NoteSetError> {
-        Ok(self.execute_adding(outputs)?.buffer_outputs(outputs))
     }
 
     pub fn execute_adding(mut self, outputs: &[NoteCommitment]) -> Result<Self, NoteSetError> {
@@ -415,8 +467,6 @@ impl NoteSet {
         );
         self.recent_commitment_roots
             .expire_mut(&self.committed_root, block);
-        self.tx_commitment_buffer = VectorSync::new_sync();
-        self.tx_commitment_prefix_ids = VectorSync::new_sync();
         self.block_nullifiers = VectorSync::new_sync();
         self.block_commitments = VectorSync::new_sync();
         self
@@ -485,9 +535,6 @@ pub struct NoteSets {
     eligible: EligibleTree,
     // sets whose notes moved in the current block
     changed: HashTrieSetSync<NoteSetIndex>,
-    // sets whose buffer the current transaction appended to
-    tx_appended: HashTrieSetSync<NoteSetIndex>,
-    tx_roots: TxRoots,
 }
 
 impl Default for NoteSets {
@@ -503,8 +550,6 @@ impl NoteSets {
             sets: VectorSync::new_sync(),
             eligible: EligibleTree::new(),
             changed: HashTrieSetSync::new_sync(),
-            tx_appended: HashTrieSetSync::new_sync(),
-            tx_roots: TxRoots::default(),
         };
         let (sets, ledger) = sets.push_empty();
         let (sets, sdp) = sets.push_empty();
@@ -524,21 +569,19 @@ impl NoteSets {
         if !set.block_nullifiers.is_empty() || !set.block_commitments.is_empty() {
             self.changed.insert_mut(index);
         }
-        if !set.tx_commitment_buffer.is_empty() {
-            self.tx_appended.insert_mut(index);
-        }
         assert!(self.sets.set_mut(position, set), "note set {index} exists");
         self
     }
 
     /// Spends `inputs` in the set `from` and adds `outputs` to the set `to` and
-    /// to its transaction buffer, the two sets updated together.
+    /// to its buffer in `tx`, the two sets updated together.
     ///
     /// # Panics
     ///
     /// If `from` or `to` is not a note set.
     pub fn execute_transfer(
         self,
+        tx: &mut TxNoteState,
         from: NoteSetIndex,
         inputs: &[NoteNullifier],
         to: NoteSetIndex,
@@ -549,15 +592,28 @@ impl NoteSets {
             .unwrap_or_else(|| panic!("note set {from} exists"))
             .clone()
             .execute_spending(inputs)?;
-        if from == to {
-            return Ok(self.update(from, spent.add_tx_outputs(outputs)?));
-        }
+        let sets = self.update(from, spent);
+        sets.add_tx_outputs(tx, to, outputs)
+    }
+
+    /// Adds `outputs` to the set `index` and to its buffer in `tx`.
+    ///
+    /// # Panics
+    ///
+    /// If `index` is not a note set.
+    pub fn add_tx_outputs(
+        self,
+        tx: &mut TxNoteState,
+        index: NoteSetIndex,
+        outputs: &[NoteCommitment],
+    ) -> Result<Self, NoteSetError> {
         let added = self
-            .get(to)
-            .unwrap_or_else(|| panic!("note set {to} exists"))
+            .get(index)
+            .unwrap_or_else(|| panic!("note set {index} exists"))
             .clone()
-            .add_tx_outputs(outputs)?;
-        Ok(self.update(from, spent).update(to, added))
+            .execute_adding(outputs)?;
+        tx.buffer_outputs(index, outputs);
+        Ok(self.update(index, added))
     }
 
     #[must_use]
@@ -573,28 +629,7 @@ impl NoteSets {
     }
 
     #[must_use]
-    pub fn start_transaction(mut self) -> Self {
-        for index in &self.tx_appended {
-            let position = usize::try_from(*index).expect("note set index fits in usize");
-            let mut set = self.sets[position].clone();
-            set.tx_commitment_buffer = VectorSync::new_sync();
-            set.tx_commitment_prefix_ids = VectorSync::new_sync();
-            self.sets.set_mut(position, set);
-        }
-        self.tx_appended = HashTrieSetSync::new_sync();
-        self.tx_roots = TxRoots::default();
-        self
-    }
-
-    #[must_use]
-    pub const fn tx_roots(&self) -> &TxRoots {
-        &self.tx_roots
-    }
-
-    #[must_use]
     pub fn end_block(mut self, block: BlockNumber) -> Self {
-        // Every buffer write reaching `update` is paired with `execute_adding`, so a
-        // changed set covers every non-empty buffer.
         for index in &self.changed {
             let position = usize::try_from(*index).expect("note set index fits in usize");
             // `record_commitment_root` computes the commitment root of the set once.
@@ -606,8 +641,6 @@ impl NoteSets {
             self.sets.set_mut(position, set);
         }
         self.changed = HashTrieSetSync::new_sync();
-        self.tx_appended = HashTrieSetSync::new_sync();
-        self.tx_roots = TxRoots::default();
         self
     }
 
@@ -671,8 +704,6 @@ impl<'de> Deserialize<'de> for NoteSets {
             sets,
             eligible,
             changed: HashTrieSetSync::new_sync(),
-            tx_appended: HashTrieSetSync::new_sync(),
-            tx_roots: TxRoots::default(),
         })
     }
 }
@@ -867,20 +898,24 @@ mod test {
     fn test_tx_commitment_root_appends_buffer_to_referenced_root() {
         let set = NoteSet::empty();
         let referenced = set.commitment_root();
-        let set = set.buffer_outputs(&[commitment(1), commitment(2)]);
+        let buffer = TxBuffer::new().with(&[commitment(1), commitment(2)]);
         let expected = CommitmentMmr::new()
             .push(commitment(1))
             .unwrap()
             .push(commitment(2))
             .unwrap()
             .frontier_root();
-        assert_eq!(set.tx_commitment_root(&referenced, 1).unwrap(), expected);
         assert_eq!(
-            set.step_commitment_root(&referenced, 0, 1).unwrap(),
+            set.tx_commitment_root(&buffer, &referenced, 1).unwrap(),
+            expected
+        );
+        assert_eq!(
+            set.step_commitment_root(&buffer, &referenced, 0, 1)
+                .unwrap(),
             referenced
         );
         assert_eq!(
-            set.step_commitment_root(&referenced, 3, 1),
+            set.step_commitment_root(&buffer, &referenced, 3, 1),
             Err(NoteSetError::BufferedTooLarge {
                 buffered: 3,
                 len: 2
@@ -893,7 +928,7 @@ mod test {
         let (sets, index) = NoteSets::new().push_empty();
         let set = sets.get(index).unwrap().clone();
 
-        let empty = set.clone().execute_adding(&[]).unwrap().buffer_outputs(&[]);
+        let empty = set.clone().execute_adding(&[]).unwrap();
         assert!(!sets.clone().update(index, empty).changed.contains(&index));
 
         let moved = set.execute_adding(&[commitment(1)]).unwrap();
@@ -901,26 +936,29 @@ mod test {
     }
 
     #[test]
-    fn update_does_not_record_a_set_not_appended_to_and_records_the_extended_root() {
+    fn the_tx_state_buffers_only_the_set_added_to_and_caches_the_extended_root() {
         let (sets, channel) = NoteSets::new().push_empty();
-        let set = sets
-            .get(LEDGER_SET)
-            .unwrap()
-            .clone()
-            .buffer_outputs(&[commitment(1)]);
-        let referenced = set.commitment_root();
-        let sets = sets.update(LEDGER_SET, set);
-        assert!(!sets.tx_appended.contains(&channel));
+        let referenced = sets.get(LEDGER_SET).unwrap().commitment_root();
+        let mut tx = TxNoteState::new();
+        let sets = sets
+            .add_tx_outputs(&mut tx, LEDGER_SET, &[commitment(1)])
+            .unwrap();
+        assert_eq!(tx.buffer(LEDGER_SET).len(), 1);
+        assert!(tx.buffer(channel).is_empty());
+        // Nothing added, nothing buffered
+        tx.buffer_outputs(channel, &[]);
+        assert!(!tx.buffers.contains_key(&channel));
 
         let set = sets.get(LEDGER_SET).unwrap();
-        let root = set
-            .cached_step_commitment_root(sets.tx_roots(), &referenced, 1, 1)
-            .unwrap();
+        let root = tx.commitment_root(LEDGER_SET, set, &referenced, 1).unwrap();
+        assert_eq!(
+            Ok(root),
+            set.tx_commitment_root(tx.buffer(LEDGER_SET), &referenced, 1)
+        );
         assert!(
-            sets.tx_roots()
+            tx.roots()
                 .0
-                .lock()
-                .unwrap()
+                .borrow()
                 .values()
                 .any(|extended| extended.root == Some(root))
         );
@@ -931,27 +969,27 @@ mod test {
         let set = NoteSet::empty();
         let referenced = set.commitment_root();
         let tx_roots = TxRoots::default();
-        let set = set.buffer_outputs(&[commitment(1), commitment(2), commitment(3)]);
+        let buffer = TxBuffer::new().with(&[commitment(1), commitment(2), commitment(3)]);
         for buffered in [2, 0, 3, 1] {
             assert_eq!(
-                set.cached_step_commitment_root(&tx_roots, &referenced, buffered, 1),
-                set.step_commitment_root(&referenced, buffered, 1)
+                set.cached_step_commitment_root(&tx_roots, &buffer, &referenced, buffered, 1),
+                set.step_commitment_root(&buffer, &referenced, buffered, 1)
             );
         }
-        let set = set.buffer_outputs(&[commitment(4)]);
+        let buffer = buffer.with(&[commitment(4)]);
         assert_eq!(
-            set.cached_step_commitment_root(&tx_roots, &referenced, 4, 1),
-            set.step_commitment_root(&referenced, 4, 1)
+            set.cached_step_commitment_root(&tx_roots, &buffer, &referenced, 4, 1),
+            set.step_commitment_root(&buffer, &referenced, 4, 1)
         );
         assert_eq!(
-            set.cached_step_commitment_root(&tx_roots, &referenced, 5, 1),
+            set.cached_step_commitment_root(&tx_roots, &buffer, &referenced, 5, 1),
             Err(NoteSetError::BufferedTooLarge {
                 buffered: 5,
                 len: 4
             })
         );
         assert_eq!(
-            set.cached_step_commitment_root(&tx_roots, &Fr::from(7u64), 0, 1),
+            set.cached_step_commitment_root(&tx_roots, &buffer, &Fr::from(7u64), 0, 1),
             Err(NoteSetError::UnknownRoot(Fr::from(7u64)))
         );
     }
@@ -962,26 +1000,26 @@ mod test {
         let sets = add_and_end_block(NoteSets::new(), commitment(1), 1);
         let set = sets.get(LEDGER_SET).unwrap().clone();
         let current = set.commitment_root();
-        let unbuffered = set.clone();
-        let set = set.buffer_outputs(&[commitment(2), commitment(3)]);
+        let buffer = TxBuffer::new().with(&[commitment(2), commitment(3)]);
+        let empty = TxBuffer::new();
         let tx_roots = TxRoots::default();
         for referenced in [seed, current] {
             let snapshot = set.recent_mmr(&referenced, 1024).unwrap().frontier_root();
             assert_eq!(snapshot, referenced);
             assert_eq!(
-                set.step_commitment_root(&referenced, 0, 1024),
+                set.step_commitment_root(&buffer, &referenced, 0, 1024),
                 Ok(referenced)
             );
             assert_eq!(
-                set.cached_step_commitment_root(&tx_roots, &referenced, 0, 1024),
+                set.cached_step_commitment_root(&tx_roots, &buffer, &referenced, 0, 1024),
                 Ok(referenced)
             );
             assert_eq!(
-                unbuffered.tx_commitment_root(&referenced, 1024),
+                set.tx_commitment_root(&empty, &referenced, 1024),
                 Ok(referenced)
             );
             assert_eq!(
-                unbuffered.cached_tx_commitment_root(&tx_roots, &referenced, 1024),
+                set.cached_step_commitment_root(&tx_roots, &empty, &referenced, 0, 1024),
                 Ok(referenced)
             );
         }
@@ -989,18 +1027,20 @@ mod test {
         let unknown = Fr::from(7u64);
         for (referenced, block) in [(seed, 1025), (unknown, 1)] {
             let rejected = Err(NoteSetError::UnknownRoot(referenced));
-            assert_eq!(set.step_commitment_root(&referenced, 0, block), rejected);
             assert_eq!(
-                set.cached_step_commitment_root(&tx_roots, &referenced, 0, block),
+                set.step_commitment_root(&buffer, &referenced, 0, block),
                 rejected
             );
-            assert_eq!(unbuffered.tx_commitment_root(&referenced, block), rejected);
             assert_eq!(
-                unbuffered.cached_tx_commitment_root(&tx_roots, &referenced, block),
+                set.cached_step_commitment_root(&tx_roots, &buffer, &referenced, 0, block),
                 rejected
             );
+            assert_eq!(set.tx_commitment_root(&empty, &referenced, block), rejected);
         }
-        assert_eq!(set.step_commitment_root(&current, 0, 5000), Ok(current));
+        assert_eq!(
+            set.step_commitment_root(&buffer, &current, 0, 5000),
+            Ok(current)
+        );
     }
 
     #[test]
@@ -1009,18 +1049,18 @@ mod test {
         let referenced = set.commitment_root();
         let tx_roots = TxRoots::default();
         let outputs: Vec<NoteCommitment> = (1..=200).map(commitment).collect();
-        let set = set.buffer_outputs(&outputs);
+        let buffer = TxBuffer::new().with(&outputs);
         for buffered in [200, 130, 64, 65, 199, 1] {
             assert_eq!(
-                set.cached_step_commitment_root(&tx_roots, &referenced, buffered, 1),
-                set.step_commitment_root(&referenced, buffered, 1)
+                set.cached_step_commitment_root(&tx_roots, &buffer, &referenced, buffered, 1),
+                set.step_commitment_root(&buffer, &referenced, buffered, 1)
             );
         }
-        // A clone with another buffer shares the cache but none of its prefixes
-        let other = NoteSet::empty().buffer_outputs(&[commitment(1), commitment(9)]);
+        // Another buffer shares the cache but none of its prefixes
+        let other = TxBuffer::new().with(&[commitment(1), commitment(9)]);
         assert_eq!(
-            other.cached_step_commitment_root(&tx_roots, &referenced, 2, 1),
-            other.step_commitment_root(&referenced, 2, 1)
+            set.cached_step_commitment_root(&tx_roots, &other, &referenced, 2, 1),
+            set.step_commitment_root(&other, &referenced, 2, 1)
         );
     }
 
@@ -1030,12 +1070,15 @@ mod test {
         let old = sets.get(LEDGER_SET).unwrap().commitment_root();
         let sets = add_and_end_block(sets, commitment(1), 1); // `old` last current at block 0
         let set = sets.get(LEDGER_SET).unwrap();
-        assert!(set.tx_commitment_root(&old, 1024).is_ok());
+        assert!(set.tx_commitment_root(&TxBuffer::new(), &old, 1024).is_ok());
         assert_eq!(
-            set.tx_commitment_root(&old, 1025),
+            set.tx_commitment_root(&TxBuffer::new(), &old, 1025),
             Err(NoteSetError::UnknownRoot(old))
         );
-        assert!(set.tx_commitment_root(&set.commitment_root(), 5000).is_ok()); // untouched set
+        assert!(
+            set.tx_commitment_root(&TxBuffer::new(), &set.commitment_root(), 5000)
+                .is_ok()
+        ); // untouched set
     }
 
     #[test]
@@ -1046,9 +1089,12 @@ mod test {
         // it.
         let sets = add_and_end_block(NoteSets::new(), commitment(1), 0);
         let set = sets.get(LEDGER_SET).unwrap();
-        assert!(set.tx_commitment_root(&empty, 1023).is_ok());
+        assert!(
+            set.tx_commitment_root(&TxBuffer::new(), &empty, 1023)
+                .is_ok()
+        );
         assert_eq!(
-            set.tx_commitment_root(&empty, 1024),
+            set.tx_commitment_root(&TxBuffer::new(), &empty, 1024),
             Err(NoteSetError::UnknownRoot(empty))
         );
 
@@ -1062,9 +1108,12 @@ mod test {
             .unwrap();
         let sets = sets.update(channel, channel_set).end_block(10);
         let set = sets.get(channel).unwrap();
-        assert!(set.tx_commitment_root(&empty, 1033).is_ok());
+        assert!(
+            set.tx_commitment_root(&TxBuffer::new(), &empty, 1033)
+                .is_ok()
+        );
         assert_eq!(
-            set.tx_commitment_root(&empty, 1034),
+            set.tx_commitment_root(&TxBuffer::new(), &empty, 1034),
             Err(NoteSetError::UnknownRoot(empty))
         );
     }
@@ -1072,31 +1121,50 @@ mod test {
     #[test]
     fn test_execute_transfer_spends_in_one_set_and_adds_and_buffers_in_another() {
         let (sets, channel) = NoteSets::new().push_empty();
+        let mut tx = TxNoteState::new();
         let sets = sets
-            .execute_transfer(LEDGER_SET, &[nullifier(1)], channel, &[commitment(2)])
+            .execute_transfer(
+                &mut tx,
+                LEDGER_SET,
+                &[nullifier(1)],
+                channel,
+                &[commitment(2)],
+            )
             .unwrap();
         let ledger = sets.get(LEDGER_SET).unwrap();
         let channel_set = sets.get(channel).unwrap();
         assert!(ledger.contains_nullifier(&nullifier(1)));
-        assert_eq!(ledger.tx_commitment_buffer_len(), 0);
+        assert!(tx.buffer(LEDGER_SET).is_empty());
         assert_ne!(
             channel_set.commitment_root(),
             NoteSet::empty().commitment_root()
         );
-        assert_eq!(channel_set.tx_commitment_buffer_len(), 1);
+        assert_eq!(tx.buffer(channel).len(), 1);
 
         // Within one set, the spend and the outputs land in the same set
         let sets = sets
-            .execute_transfer(LEDGER_SET, &[nullifier(3)], LEDGER_SET, &[commitment(4)])
+            .execute_transfer(
+                &mut tx,
+                LEDGER_SET,
+                &[nullifier(3)],
+                LEDGER_SET,
+                &[commitment(4)],
+            )
             .unwrap();
         let ledger = sets.get(LEDGER_SET).unwrap();
         assert!(ledger.contains_nullifier(&nullifier(1)));
         assert!(ledger.contains_nullifier(&nullifier(3)));
-        assert_eq!(ledger.tx_commitment_buffer_len(), 1);
+        assert_eq!(tx.buffer(LEDGER_SET).len(), 1);
 
         // A spent input fails the whole transfer
         assert_eq!(
-            sets.execute_transfer(LEDGER_SET, &[nullifier(3)], channel, &[commitment(5)]),
+            sets.execute_transfer(
+                &mut tx,
+                LEDGER_SET,
+                &[nullifier(3)],
+                channel,
+                &[commitment(5)]
+            ),
             Err(NoteSetError::Imt(ImtError::AlreadyPresent(nullifier(3).0)))
         );
     }
@@ -1119,18 +1187,22 @@ mod test {
     }
 
     #[test]
-    fn test_buffer_cleared_between_transactions() {
+    fn test_a_new_transaction_starts_with_empty_buffers() {
         let sets = NoteSets::new();
-        let set = sets
-            .get(LEDGER_SET)
-            .unwrap()
-            .clone()
-            .buffer_outputs(&[commitment(1)]);
-        let sets = sets.update(LEDGER_SET, set).start_transaction();
+        let mut tx = TxNoteState::new();
+        let sets = sets
+            .add_tx_outputs(&mut tx, LEDGER_SET, &[commitment(1)])
+            .unwrap();
         let set = sets.get(LEDGER_SET).unwrap();
+        let referenced = NoteSet::empty().commitment_root();
+        assert_ne!(
+            tx.commitment_root(LEDGER_SET, set, &referenced, 0),
+            Ok(referenced)
+        );
+        let tx = TxNoteState::new();
         assert_eq!(
-            set.tx_commitment_root(&set.commitment_root(), 0).unwrap(),
-            set.commitment_root()
+            tx.commitment_root(LEDGER_SET, set, &referenced, 0),
+            Ok(referenced)
         );
     }
 
@@ -1179,7 +1251,7 @@ mod test {
             decoded
                 .get(LEDGER_SET)
                 .unwrap()
-                .tx_commitment_root(&old, 1024)
+                .tx_commitment_root(&TxBuffer::new(), &old, 1024)
                 .is_ok()
         );
 

@@ -17,13 +17,13 @@ use lb_core::{
         Value,
         gas::{Gas, GasOverflow, GasPrice, GasProfile},
         ledger::verification_mode::StandardMode,
-        note_set::{LEDGER_SET, NoteSetError, NoteSetUpdate, NoteSets},
+        note_set::{LEDGER_SET, NoteSetError, NoteSetUpdate, NoteSets, TxNoteState},
         notes::{self, NoteCommitment},
         ops::{
             SignedOperation,
             channel::withdraw::{PendingWithdrawal, PendingWithdrawals},
             pow::PowTarget,
-            transfer::TransferOp,
+            transfer::{TransferExecutionContext, TransferOp},
         },
         transactions::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, states::Verified},
     },
@@ -573,14 +573,18 @@ impl LedgerState {
     pub fn try_apply_transfer<Id, Profile: GasProfile>(
         mut self,
         signed_operation: SignedOperation<TransferOp, Verified, StandardMode>,
+        tx_notes: &mut TxNoteState,
     ) -> Result<(Self, Value, Vec<TxEvent>), LedgerError<Id>> {
         let excess = signed_operation.operation().excess_value;
 
         // Execute the transfer on the note sets
         let (result, events) = signed_operation
-            .execute(self.note_sets)
+            .execute(TransferExecutionContext {
+                note_sets: self.note_sets,
+                tx_notes,
+            })
             .map_err(|(_signed_operation, error)| mantle::Error::Transfer(error))?;
-        self.note_sets = result;
+        self.note_sets = result.note_sets;
         Ok((self, excess, events))
     }
 
@@ -772,14 +776,6 @@ impl LedgerState {
     #[must_use]
     pub const fn aged_note_sets(&self) -> &NoteSets {
         &self.epoch_state.note_sets
-    }
-
-    #[must_use]
-    pub fn start_transaction(self) -> Self {
-        Self {
-            note_sets: self.note_sets.start_transaction(),
-            ..self
-        }
     }
 
     #[must_use]
@@ -2263,8 +2259,9 @@ pub mod tests {
         );
         let signed_operation = SignedOperation::new(operation, zero_proof()).into_state_trusted();
 
+        let mut tx_notes = TxNoteState::new();
         let (state, excess, events) = state
-            .try_apply_transfer::<(), MainnetGasProfile>(signed_operation)
+            .try_apply_transfer::<(), MainnetGasProfile>(signed_operation, &mut tx_notes)
             .unwrap();
 
         assert_eq!(excess, 6);
@@ -2278,7 +2275,10 @@ pub mod tests {
             .frontier_root();
         assert!(ledger_set.contains_nullifier(&NoteNullifier(Fr::from(3u64))));
         assert_eq!(ledger_set.commitment_root(), expected);
-        assert_eq!(ledger_set.tx_commitment_root(&root, 1), Ok(expected));
+        assert_eq!(
+            tx_notes.commitment_root(LEDGER_SET, ledger_set, &root, 1),
+            Ok(expected)
+        );
     }
 
     #[test]

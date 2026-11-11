@@ -280,7 +280,10 @@ mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
     use lb_core::{
-        mantle::{note_set::NoteSets, transactions::hash::TxHash},
+        mantle::{
+            note_set::{NoteSets, TxNoteState},
+            transactions::hash::TxHash,
+        },
         sdp::Declarations,
     };
     use lb_cryptarchia_engine::Epoch;
@@ -564,6 +567,7 @@ mod tests {
             nullifiers,
             tx_hash: TxHash::from([7u8; 32]),
             note_sets: NoteSets::new(),
+            tx_notes: &mut TxNoteState::new(),
             block_slots: HashTrieMapSync::new_sync(),
         });
 
@@ -617,6 +621,7 @@ mod tests {
             nullifiers: HashTrieMapSync::new_sync().insert(nullifier, Slot::from(anchor)),
             tx_hash: TxHash::from([7u8; 32]),
             note_sets: NoteSets::new(),
+            tx_notes: &mut TxNoteState::new(),
             block_slots: HashTrieMapSync::new_sync(),
         });
 
@@ -645,6 +650,7 @@ mod tests {
             nullifiers: nullifiers.clone(),
             tx_hash: TxHash::from([7u8; 32]),
             note_sets: NoteSets::new(),
+            tx_notes: &mut TxNoteState::new(),
             block_slots: HashTrieMapSync::new_sync(),
         };
 
@@ -662,13 +668,15 @@ mod tests {
     fn claim_result(
         reward_pool: PowReward,
         nullifier: PowNullifier,
-    ) -> ClaimPoWRewardExecutionContext {
+        tx_notes: &mut TxNoteState,
+    ) -> ClaimPoWRewardExecutionContext<'_> {
         ClaimPoWRewardExecutionContext {
             reward_pool,
             epoch_reward: 0,
             nullifiers: HashTrieMapSync::new_sync().insert(nullifier, Slot::from(7u64)),
             tx_hash: TxHash::from([7u8; 32]),
             note_sets: NoteSets::new(),
+            tx_notes,
             block_slots: HashTrieMapSync::new_sync(),
         }
     }
@@ -687,13 +695,21 @@ mod tests {
         );
 
         // Claims drain the pool down to 990.
-        state.update_from_claim_execution_result(&claim_result(990, PowNullifier::from(Fr::ONE)));
+        state.update_from_claim_execution_result(&claim_result(
+            990,
+            PowNullifier::from(Fr::ONE),
+            &mut TxNoteState::new(),
+        ));
         state.update_epoch_reward(&test_pool_config());
         assert_eq!(state.epoch_reward(), 9);
 
         // Drained below the payout rate, sigma_e floors to zero and the
         // safety cutoff (§5.6 `pow_reward_enabled`) would disable claiming.
-        state.update_from_claim_execution_result(&claim_result(99, PowNullifier::from(Fr::ONE)));
+        state.update_from_claim_execution_result(&claim_result(
+            99,
+            PowNullifier::from(Fr::ONE),
+            &mut TxNoteState::new(),
+        ));
         state.update_epoch_reward(&test_pool_config());
         assert_eq!(state.epoch_reward(), 0);
     }
@@ -706,7 +722,11 @@ mod tests {
         // yet, so today the whole set must survive a transition untouched.
         let nullifier = PowNullifier::from(Fr::ONE);
         let mut state = pow_state();
-        state.update_from_claim_execution_result(&claim_result(0, nullifier));
+        state.update_from_claim_execution_result(&claim_result(
+            0,
+            nullifier,
+            &mut TxNoteState::new(),
+        ));
 
         let new_state = state.apply_header(&epoch_state(0), &epoch_state(1), &ledger_config());
 
@@ -721,7 +741,11 @@ mod tests {
         let mut state = pow_state();
         state.credit_reward_pool(1_000).unwrap();
         state.update_epoch_reward(&test_pool_config());
-        state.update_from_claim_execution_result(&claim_result(990, PowNullifier::from(Fr::ONE)));
+        state.update_from_claim_execution_result(&claim_result(
+            990,
+            PowNullifier::from(Fr::ONE),
+            &mut TxNoteState::new(),
+        ));
 
         let json = serde_json::to_string(&state).expect("PowState should serialize");
         let restored: PowState = serde_json::from_str(&json).expect("PowState should deserialize");

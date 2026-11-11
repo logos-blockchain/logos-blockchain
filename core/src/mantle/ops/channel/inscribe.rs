@@ -32,7 +32,7 @@ use crate::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
         },
-        note_set::{NoteSet, NoteSets},
+        note_set::{NoteSet, NoteSetIndex, NoteSets, TxBuffer, TxNoteState},
         notes::{InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments},
         ops::{
             ChannelInscribeProof, OpId, ProgramStepProof, SignedOperation, StepProof,
@@ -428,7 +428,7 @@ impl InscriptionOp {
     fn verify_channel(
         &self,
         context: &InscriptionValidationContext<'_>,
-    ) -> Result<Option<NoteSet>, Error> {
+    ) -> Result<Option<NoteSetIndex>, Error> {
         if let Some(channel) = context.channels.channels.get(&self.channel_id) {
             // Check the parent corresponds to the payload
             if self.parent != channel.tip_message {
@@ -449,13 +449,7 @@ impl InscriptionOp {
                 });
             }
 
-            Ok(channel.note_set.map(|index| {
-                context
-                    .note_sets
-                    .get(index)
-                    .expect("the note set of a channel exists")
-                    .clone()
-            }))
+            Ok(channel.note_set)
         } else if self.parent != MsgId::root() {
             // The channel doesn't exist, so the parent must be ZERO
             Err(Error::InvalidParent {
@@ -518,14 +512,16 @@ pub struct InscriptionPreverificationContext<'a> {
 pub struct InscriptionValidationContext<'a> {
     pub channels: &'a Channels,
     pub note_sets: &'a NoteSets,
+    pub tx_notes: &'a TxNoteState,
     pub programs: &'a Programs,
     pub block_slot: Slot,
     pub block_number: BlockNumber,
 }
 
-pub struct InscriptionExecutionContext {
+pub struct InscriptionExecutionContext<'a> {
     pub channels: Channels,
     pub note_sets: NoteSets,
+    pub tx_notes: &'a mut TxNoteState,
     pub block_slot: Slot,
 }
 
@@ -620,24 +616,26 @@ impl VerifiableOperation<StandardMode>
         if operation.mini_blocks.is_empty() {
             return Ok(InscriptionDeferredProofs::default());
         }
-        let note_set = note_set.ok_or(Error::NoNoteSet {
+        let index = note_set.ok_or(Error::NoNoteSet {
             channel_id: operation.channel_id,
         })?;
         let mut step_proofs = self.proof().step_proofs.iter();
         let verifier = operation.mini_blocks.iter().try_fold(
-            StepVerifier::new(operation, context, note_set),
+            StepVerifier::new(operation, context, index),
             |verifier, mini_block| verifier.verify_mini_block(mini_block, &mut step_proofs),
         )?;
         Ok(verifier.deferred)
     }
 }
 
-// The verification of the steps of an inscription, in order: the channel note
-// set extended with the notes of the steps verified so far, and their proofs.
+// The verification of the steps of an inscription, in order: the buffer of the
+// channel note set extended with the notes of the steps verified so far, and
+// their proofs.
 struct StepVerifier<'a> {
     operation: &'a InscriptionOp,
     context: &'a InscriptionValidationContext<'a>,
-    note_set: NoteSet,
+    note_set: &'a NoteSet,
+    buffer: TxBuffer,
     // The nullifiers the steps verified so far consume
     step_nullifiers: HashSet<NoteNullifier>,
     // The message of the program spends and the third input of the program proofs
@@ -651,12 +649,16 @@ impl<'a> StepVerifier<'a> {
     fn new(
         operation: &'a InscriptionOp,
         context: &'a InscriptionValidationContext<'a>,
-        note_set: NoteSet,
+        index: NoteSetIndex,
     ) -> Self {
         Self {
             operation,
             context,
-            note_set,
+            note_set: context
+                .note_sets
+                .get(index)
+                .expect("the note set of a channel exists"),
+            buffer: context.tx_notes.buffer(index).clone(),
             step_nullifiers: HashSet::new(),
             op_id_fr: Fr::from_le_bytes_mod_order(&operation.op_id()),
             index: 0,
@@ -671,7 +673,7 @@ impl<'a> StepVerifier<'a> {
     ) -> Result<Self, Error> {
         // The user steps and program deposits of the mini-block cover the buffer as
         // it stands now.
-        let covered = self.note_set.tx_commitment_buffer_len();
+        let covered = self.buffer.len();
         // The program deposits pending for the next program step.
         let mut program_deposits: Vec<&ProgramDeposit> = Vec::new();
         for step in mini_block.iter() {
@@ -695,7 +697,7 @@ impl<'a> StepVerifier<'a> {
             }
             // The next program spends and the next mini-blocks cover the notes this
             // step creates.
-            self.note_set = self.note_set.buffer_outputs(&step.outputs().to_vec());
+            self.buffer.push(&step.outputs().to_vec());
             self.index += 1;
         }
         // Every program deposit of the mini-block was consumed.
@@ -779,9 +781,11 @@ impl<'a> StepVerifier<'a> {
             .try_fold(0, |paid: Value, deposit| paid.checked_add(deposit.value))
             .ok_or(Error::PaidValueOverflow { step: self.index })?;
         // Rejects a root outside the window when the spend consumes nothing
-        let tx_commitment_root = self.note_set.cached_tx_commitment_root(
-            self.context.note_sets.tx_roots(),
+        let tx_commitment_root = self.note_set.cached_step_commitment_root(
+            self.context.tx_notes.roots(),
+            &self.buffer,
             &program_step.commitment_merkle_root,
+            self.buffer.len(),
             self.context.block_number,
         )?;
         let nullifiers: Vec<Fr> = program_step
@@ -836,7 +840,8 @@ impl<'a> StepVerifier<'a> {
         proof: &ZkTransferProof,
     ) -> Result<DeferredZkTransfer, Error> {
         let tx_commitment_root = self.note_set.cached_step_commitment_root(
-            self.context.note_sets.tx_roots(),
+            self.context.tx_notes.roots(),
+            &self.buffer,
             step.commitment_merkle_root(),
             covered,
             self.context.block_number,
@@ -855,7 +860,7 @@ impl<'a> StepVerifier<'a> {
 impl<Mode: VerificationMode> ExecutableOperation
     for SignedOperation<InscriptionOp, Verified, Mode>
 {
-    type Context<'a> = InscriptionExecutionContext;
+    type Context<'a> = InscriptionExecutionContext<'a>;
     type Error = Error;
 
     fn execute<'a>(
@@ -891,9 +896,11 @@ impl<Mode: VerificationMode> ExecutableOperation
             // it pays, the notes extending the buffer the next Operations of the
             // transaction are proven against.
             let note_set = operation.steps().try_fold(note_set, |note_set, step| {
+                let outputs = step.outputs().to_vec();
+                context.tx_notes.buffer_outputs(index, &outputs);
                 note_set
                     .execute_spending(step.inputs().as_slice())?
-                    .add_tx_outputs(&step.outputs().to_vec())
+                    .execute_adding(&outputs)
             })?;
             context.note_sets = context.note_sets.update(index, note_set);
         }
@@ -1134,6 +1141,7 @@ mod tests {
                 .verify(&InscriptionValidationContext {
                     channels: &Channels::new(),
                     note_sets: &NoteSets::new(),
+                    tx_notes: &TxNoteState::new(),
                     programs: &Programs::new(),
                     block_slot: Slot::from(0),
                     block_number: 1,
@@ -1157,6 +1165,7 @@ mod tests {
                 .verify(&InscriptionValidationContext {
                     channels: &Channels::new(),
                     note_sets: &NoteSets::new(),
+                    tx_notes: &TxNoteState::new(),
                     programs: &Programs::new(),
                     block_slot: Slot::from(0),
                     block_number: 1,
@@ -1196,6 +1205,7 @@ mod tests {
                 .verify(&InscriptionValidationContext {
                     channels: &channels,
                     note_sets: &NoteSets::new(),
+                    tx_notes: &TxNoteState::new(),
                     programs: &Programs::new(),
                     block_slot: Slot::from(0),
                     block_number: 1,
@@ -1231,6 +1241,7 @@ mod tests {
                 .verify(&InscriptionValidationContext {
                     channels: &channels,
                     note_sets: &NoteSets::new(),
+                    tx_notes: &TxNoteState::new(),
                     programs: &Programs::new(),
                     block_slot: Slot::from(0),
                     block_number: 1,
@@ -1271,6 +1282,7 @@ mod tests {
                 .verify(&InscriptionValidationContext {
                     channels: &channels,
                     note_sets: &NoteSets::new(),
+                    tx_notes: &TxNoteState::new(),
                     programs: &Programs::new(),
                     block_slot: Slot::from(0),
                     block_number: 1,
@@ -1293,10 +1305,13 @@ mod tests {
         )
         .into_state_trusted();
 
+        let mut tx_notes = TxNoteState::new();
+
         let (context, events) = signed_operation
             .execute(InscriptionExecutionContext {
                 channels: Channels::new(),
                 note_sets: NoteSets::new(),
+                tx_notes: &mut tx_notes,
                 block_slot,
             })
             .expect("inscribing never fails");
@@ -1332,10 +1347,13 @@ mod tests {
         )
         .into_state_trusted();
 
+        let mut tx_notes = TxNoteState::new();
+
         let (context, _) = signed_operation
             .execute(InscriptionExecutionContext {
                 channels: Channels::new(),
                 note_sets: NoteSets::new(),
+                tx_notes: &mut tx_notes,
                 block_slot: Slot::from(7u64),
             })
             .expect("inscribing never fails");
@@ -1379,10 +1397,13 @@ mod tests {
         )
         .into_state_trusted();
 
+        let mut tx_notes = TxNoteState::new();
+
         let (context, events) = signed_operation
             .execute(InscriptionExecutionContext {
                 channels,
                 note_sets: NoteSets::new(),
+                tx_notes: &mut tx_notes,
                 block_slot: Slot::from(1u64),
             })
             .expect("inscribing never fails");
@@ -1581,6 +1602,7 @@ mod tests {
             .verify(&InscriptionValidationContext {
                 channels,
                 note_sets,
+                tx_notes: &TxNoteState::new(),
                 programs: &Programs::new(),
                 block_slot: Slot::from(0u64),
                 block_number: 1,
@@ -1677,6 +1699,7 @@ mod tests {
             .verify(&InscriptionValidationContext {
                 channels: &Channels::new(),
                 note_sets: &NoteSets::new(),
+                tx_notes: &TxNoteState::new(),
                 programs: &Programs::new(),
                 block_slot: Slot::from(0u64),
                 block_number: 1,
@@ -1718,12 +1741,8 @@ mod tests {
         let (_, note_sets) = state();
         // An earlier Operation of the transaction deposited commitment(7) into the
         // channel.
-        let set = note_sets
-            .get(2)
-            .unwrap()
-            .clone()
-            .buffer_outputs(&[commitment(7)]);
-        let note_sets = note_sets.update(2, set);
+        let mut tx_notes = TxNoteState::new();
+        tx_notes.buffer_outputs(2, &[commitment(7)]);
         let mini_blocks = vec![
             vec![
                 Step::User(step(&[nullifier(2)], &[commitment(3)], root())),
@@ -1731,10 +1750,11 @@ mod tests {
             ],
             vec![Step::User(step(&[nullifier(6)], &[commitment(8)], root()))],
         ];
-        let deferred = verify_operation(
+        let deferred = verify_in_tx(
             with_mini_blocks(mini_blocks.clone()),
             sample_proofs(&mini_blocks.concat()),
             &note_sets,
+            &tx_notes,
         )
         .unwrap();
         let extended = |commitments: &[u64]| {
@@ -1769,15 +1789,16 @@ mod tests {
     fn a_second_inscription_of_the_transaction_covers_the_first_in_its_first_mini_block() {
         let (_, note_sets) = state();
         // The first inscription of the transaction added commitment(3) to the buffer.
-        let set = note_sets
-            .get(2)
-            .unwrap()
-            .clone()
-            .buffer_outputs(&[commitment(3)]);
-        let note_sets = note_sets.update(2, set);
+        let mut tx_notes = TxNoteState::new();
+        tx_notes.buffer_outputs(2, &[commitment(3)]);
         let steps = vec![Step::User(step(&[nullifier(4)], &[], root()))];
-        let deferred =
-            verify_operation(with_steps(steps.clone()), sample_proofs(&steps), &note_sets).unwrap();
+        let deferred = verify_in_tx(
+            with_steps(steps.clone()),
+            sample_proofs(&steps),
+            &note_sets,
+            &tx_notes,
+        )
+        .unwrap();
         assert_eq!(
             deferred.zk_transfers[0]
                 .inputs()
@@ -1934,10 +1955,13 @@ mod tests {
         )
         .into_state_trusted();
 
+        let mut tx_notes = TxNoteState::new();
+
         let (context, _) = signed_operation
             .execute(InscriptionExecutionContext {
                 channels,
                 note_sets,
+                tx_notes: &mut tx_notes,
                 block_slot: Slot::from(1u64),
             })
             .expect("the channel has a note set");
@@ -1953,7 +1977,10 @@ mod tests {
             .frontier_root();
         assert!(set.contains_nullifier(&nullifier(2)) && set.contains_nullifier(&nullifier(4)));
         assert_eq!(set.commitment_root(), expected);
-        assert_eq!(set.tx_commitment_root(&root(), 1), Ok(expected));
+        assert_eq!(
+            context.tx_notes.commitment_root(2, set, &root(), 1),
+            Ok(expected)
+        );
     }
 
     #[test]
@@ -1999,6 +2026,7 @@ mod tests {
         .verify(&InscriptionValidationContext {
             channels: &channels,
             note_sets: &note_sets,
+            tx_notes: &TxNoteState::new(),
             programs: &Programs::new(),
             block_slot: Slot::from(0u64),
             block_number: 2,
@@ -2115,6 +2143,15 @@ mod tests {
         proofs: Vec<StepProof>,
         note_sets: &NoteSets,
     ) -> Result<InscriptionDeferredProofs, Error> {
+        verify_in_tx(operation, proofs, note_sets, &TxNoteState::new())
+    }
+
+    fn verify_in_tx(
+        operation: InscriptionOp,
+        proofs: Vec<StepProof>,
+        note_sets: &NoteSets,
+        tx_notes: &TxNoteState,
+    ) -> Result<InscriptionDeferredProofs, Error> {
         let (channels, _) = state();
         signed(operation, proofs)
             .into_preverified(&InscriptionPreverificationContext {
@@ -2124,6 +2161,7 @@ mod tests {
             .verify(&InscriptionValidationContext {
                 channels: &channels,
                 note_sets,
+                tx_notes,
                 programs: &programs(),
                 block_slot: Slot::from(0u64),
                 block_number: 1,
@@ -2220,12 +2258,8 @@ mod tests {
         let (_, note_sets) = state();
         // An earlier Operation of the transaction deposited commitment(7) into the
         // channel.
-        let set = note_sets
-            .get(2)
-            .unwrap()
-            .clone()
-            .buffer_outputs(&[commitment(7)]);
-        let note_sets = note_sets.update(2, set);
+        let mut tx_notes = TxNoteState::new();
+        tx_notes.buffer_outputs(2, &[commitment(7)]);
         let user = Step::User(step(&[nullifier(9)], &[commitment(10)], root()));
         let mini_blocks = vec![
             vec![
@@ -2235,10 +2269,11 @@ mod tests {
             ],
             vec![user],
         ];
-        let deferred = verify_operation(
+        let deferred = verify_in_tx(
             with_mini_blocks(mini_blocks.clone()),
             sample_proofs(&mini_blocks.concat()),
             &note_sets,
+            &tx_notes,
         )
         .unwrap();
 
@@ -2438,10 +2473,13 @@ mod tests {
         let signed_operation: SignedOperation<_, _, StandardMode> =
             signed(with_steps(steps.clone()), sample_proofs(&steps)).into_state_trusted();
 
+        let mut tx_notes = TxNoteState::new();
+
         let (context, _) = signed_operation
             .execute(InscriptionExecutionContext {
                 channels,
                 note_sets,
+                tx_notes: &mut tx_notes,
                 block_slot: Slot::from(1u64),
             })
             .expect("the channel has a note set");
@@ -2460,7 +2498,10 @@ mod tests {
                 .all(|n| set.contains_nullifier(&nullifier(*n)))
         );
         assert_eq!(set.commitment_root(), expected);
-        assert_eq!(set.tx_commitment_root(&root(), 1), Ok(expected));
+        assert_eq!(
+            context.tx_notes.commitment_root(2, set, &root(), 1),
+            Ok(expected)
+        );
     }
 
     #[test]
@@ -2584,6 +2625,7 @@ mod tests {
             .verify(&InscriptionValidationContext {
                 channels: &channels,
                 note_sets: &note_sets,
+                tx_notes: &TxNoteState::new(),
                 programs: &programs(),
                 block_slot: Slot::from(0u64),
                 block_number: 2,

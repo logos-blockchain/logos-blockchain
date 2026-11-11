@@ -70,7 +70,7 @@ fn rejects_unpinned_process() {
 }
 
 mod filled_ledger {
-    use lb_core::mantle::note_set::LEDGER_SET;
+    use lb_core::mantle::note_set::{LEDGER_SET, TxBuffer};
 
     use crate::fixture::{fill, filled_state, nullifiers};
 
@@ -89,7 +89,10 @@ mod filled_ledger {
         let fixture = filled_state();
         let set = fixture.state.latest_note_sets().get(LEDGER_SET).unwrap();
         assert!(set.assert_spendable(&nullifiers(4, 0)).is_ok());
-        assert!(set.tx_commitment_root(&set.commitment_root(), 1).is_ok());
+        assert!(
+            set.tx_commitment_root(&TxBuffer::new(), &set.commitment_root(), 1)
+                .is_ok()
+        );
     }
 
     // The low leaf of a nullifier of a real note is anywhere in the tree: the
