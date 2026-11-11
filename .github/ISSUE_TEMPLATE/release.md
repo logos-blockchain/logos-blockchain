@@ -17,6 +17,7 @@ Most of the template content is the same or very similar to what is in `release-
 
 * This checklist should only be used with a release candidate that has been thoroughly tested and can be "promoted" to be a release. No changes other than what is needed to release it are supposed to be committed from the commit of the last release candidate being released
 * Progress on the checklist must be provided as comments to the issue.
+* Release tags must be signed and annotated (`git tag -s`), with a key registered on your GitHub account: the bundling workflow refuses a tag whose signature GitHub doesn't verify.
 
 ---
 
@@ -42,7 +43,7 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Verify the `Cargo.lock` is now up to date with `cargo update -w --locked`
 - [ ] Verify the `HEAD` of the release branch has green CI ✅
 - [ ] Check that `scripts/logosctl.sha256` pins the `x86_64-linux` and `aarch64-linux` archives of the latest Logos Core release (A.B.C), which the node image will use. If not, add them: the release page shows the SHA-256 digest of each asset
-- [ ] Commit the changes, and tag them with `X.Y.Z`
+- [ ] Commit the changes, and tag them with a signed annotated tag: `git tag -s X.Y.Z -m X.Y.Z`
 - [ ] Push the commit and the tag
 - [ ] Manually trigger the [Logos Blockchain tools build workflow][build-logos-tools-docker-workflow] from the `X.Y.Z` tag on GitHub specifying the `testnet` image tag. Leave "Optional version tag" empty.
 - [ ] Post the link to the workflow run to this issue for easier review
@@ -52,10 +53,7 @@ Most of the template content is the same or very similar to what is in `release-
 
 - [ ] Manually trigger the [bundling workflow][release-bundling-workflow] from the `X.Y.Z` tag on GitHub with the `release` input to prepare the GitHub release draft with the built binaries
 - [ ] Post the link to the workflow run to this issue for easier review
-- [ ] Without waiting for the workflow to complete, move on to the next section
-- [ ] Address checklist of the generated GitHub release in [https://github.com/logos-blockchain/logos-blockchain/releases](https://github.com/logos-blockchain/logos-blockchain/releases)
-- [ ] Publish release
-- [ ] Post the link to the published release to this issue for easier review
+- [ ] Without waiting for the workflow to complete, move on to the next section. The draft is published at the end of the next section, once its notes can carry the module's SHA-256
 
 ## Release module
 
@@ -74,6 +72,8 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Wait until `blockchain_module` appears in the [index.json](https://github.com/logos-co/logos-modules-release/releases/download/index/index.json) with version `X.Y.Z`
 - [ ] Manually trigger the [node Docker image build workflow][node-docker-build-workflow] from the `X.Y.Z` tag. Use latest (A.B.C) Logos Core release for `LC Core Version`, `X.Y.Z` for `LB Node Version`, and for `LB Module SHA256` the `sha256` that the [module index][module-index] lists for `blockchain_module` `X.Y.Z`. Post that SHA-256 to this issue too.
 - [ ] Post the link to the workflow run to this issue for easier review
+- [ ] Address the checklist of the generated GitHub release draft on the [releases page][github-releases]
+- [ ] Post the link to the published release to this issue for easier review
 - [ ] Wait for the workflow to complete before moving on to the next section
 
 ## Testnet deployment
@@ -113,3 +113,4 @@ Most of the template content is the same or very similar to what is in `release-
 [module-index]: https://github.com/logos-blockchain/blockchain-modules-release/releases/download/index/index.json
 [logos-blockchain-module]: https://github.com/logos-blockchain/logos-blockchain-module
 [logos-modules-release]: https://github.com/logos-co/logos-modules-release
+[github-releases]: https://github.com/logos-blockchain/logos-blockchain/releases

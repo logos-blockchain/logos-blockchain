@@ -2,54 +2,78 @@
 
 ### 📦 Prerequisites
 
-1. Download `logos-core` binaries:
+1. Install `logosctl`, the Logos Core CLI, as described in its [latest release](https://github.com/logos-co/logos-logoscore-cli/releases/latest).
 
-- `lgpd` (Logos Package Downloader): https://github.com/logos-co/logos-package-downloader/releases/latest
-- `lgpm` (Logos Package Manager): https://github.com/logos-co/logos-package-manager/releases/latest
-- `logoscore` (Logos Core CLI): https://github.com/logos-co/logos-logoscore-cli/releases/latest
-
-2. Download the Logos Blockchain module using the Logos Package Downloader:
+2. Start the `logosctl` daemon, and add the catalog that publishes the Logos Blockchain module:
 
 ```bash
-lgpd download blockchain_module --version {{BLOCKCHAIN_MODULE_VERSION}} --output ./
+logosctl daemon start --detach
+logosctl catalog add https://raw.githubusercontent.com/logos-blockchain/blockchain-modules-release/refs/heads/main/logos-repo.json
+logosctl catalog refresh
+```
+
+3. Download the Logos Blockchain module, and check its SHA-256 against the one under **Verify Your Downloads** below:
+
+```bash
+logosctl package download blockchain_module --version {{BLOCKCHAIN_MODULE_VERSION}} --output ./
 # writes ./blockchain_module-{{BLOCKCHAIN_MODULE_VERSION}}.lgx
+sha256sum blockchain_module-{{BLOCKCHAIN_MODULE_VERSION}}.lgx  # on macOS: shasum -a 256 blockchain_module-{{BLOCKCHAIN_MODULE_VERSION}}.lgx
 ```
 
-3. Install the Logos Blockchain module using the Logos Package Manager:
+4. Install the module and load it:
 
 ```bash
-lgpm --modules-dir ./modules install --file blockchain_module-{{BLOCKCHAIN_MODULE_VERSION}}.lgx
+logosctl install ./blockchain_module-{{BLOCKCHAIN_MODULE_VERSION}}.lgx -y
+logosctl module load blockchain_module
 ```
 
-4. Launch the Logos Core CLI in daemon mode and load the blockchain module:
+### 🔐 Verify Your Downloads
 
-```bash
-logoscore -m ./modules -D &
-logoscore load-module blockchain_module
-```
+- **Blockchain module**: `blockchain_module-{{BLOCKCHAIN_MODULE_VERSION}}.lgx` must have this SHA-256. Don't install it if it differs:
+
+  ```
+  MODULE_SHA256_PENDING
+  ```
+
+- **Node binaries** attached to this release: check an archive against `SHA256SUMS`, then check that this repository's release workflow built it, with the [GitHub CLI](https://cli.github.com/):
+
+  ```bash
+  sha256sum --ignore-missing -c SHA256SUMS  # on macOS: shasum -a 256 --ignore-missing -c SHA256SUMS
+  gh attestation verify logos-blockchain-node-<os>-<arch>-{{BLOCKCHAIN_MODULE_VERSION}}.tar.gz --repo logos-blockchain/logos-blockchain
+  ```
+
+- **Docker image**: check that this repository's image workflow built it:
+
+  ```bash
+  gh attestation verify oci://ghcr.io/logos-blockchain/logos-blockchain-node:{{BLOCKCHAIN_MODULE_VERSION}} --repo logos-blockchain/logos-blockchain
+  ```
 
 ### ⚙️ Initialize Your Node
 
-Generate a default configuration by connecting to the bootstrap peers:
+Generate a default configuration that connects to the bootstrap peers. The arguments go in a file: `@user_config_args.json` passes its contents to the module, and `output` sets where the configuration is written:
 
 ```bash
-logoscore call blockchain_module generate_user_config '{
+cat > user_config_args.json <<EOF
+{
+  "output": "$PWD/user_config.yaml",
   "initial_peers": [
 {{INITIAL_PEERS}}
   ]
-}'
+}
+EOF
+logosctl call blockchain_module generate_user_config @user_config_args.json
 ```
 
-If your node has a known public IP address and you want to disable NAT traversal, you can add `--external-address /ip4/<public-ip>/udp/<port>/quic-v1` to the previous command. Nodes behind NAT or CG-NAT require no extra flags — NAT traversal is enabled by default.
+If your node has a known public IP address and you want to disable NAT traversal, add `"external_address": "/ip4/<public-ip>/udp/<port>/quic-v1",` on a line after `"output"` before running the command. Nodes behind NAT or CG-NAT require nothing extra — NAT traversal is enabled by default.
 
-This takes a few seconds and produces a `user_config.yaml` file.
+This takes a few seconds and writes `user_config.yaml`, and its `keystore.yaml`, to the current directory.
 
 ### ▶️ Run Your Node
 
 Run the node:
 
 ```bash
-logoscore call blockchain_module start user_config.yaml ""
+logosctl call blockchain_module start "$PWD/user_config.yaml" ""
 ```
 
 The node writes rotating log files (one per hour).
@@ -58,8 +82,8 @@ The node writes rotating log files (one per hour).
 
 Check your local consensus state by querying your node's API:
 
-```
-logoscore call blockchain_module get_cryptarchia_info | jq -r .result.value | jq .
+```bash
+logosctl call blockchain_module get_cryptarchia_info --json | jq -r .result.value | jq .
 ```
 
 Your node should be in `Bootstrapping` mode for a few minutes, with both `slot` and `height` steadily increasing.
@@ -126,7 +150,8 @@ Having issues? Reach out to the Logos Blockchain team on [Discord][testnet-disco
     * If this is the first release candidate, then the previous tag is the version of the latest release, e.g. `0.1.3-rc.1` compares against `0.1.2`
     * If this is a release candidate but not the first one that has a GH release, then the previous tag is the version of previous release candidate for this release, e.g., `0.1.3-rc.2` compares against `0.1.3-rc.1`
     * If this is an actual release, then the previous tag is the latest release, e.g., `0.1.3` compares against `0.1.2`
-- [ ] Verify binaries are present for **Mac** and **Linux**
+- [ ] Verify binaries are present for **Mac** and **Linux**, with `SHA256SUMS`, and that the commands under **Verify Your Downloads** accept one of them
+- [ ] Replace `MODULE_SHA256_PENDING` with the SHA-256 of `blockchain_module` {{BLOCKCHAIN_MODULE_VERSION}} that the release issue records once the module is published
 - [ ] Delete this checklist and publish
 
 [release-notion]: https://www.notion.so/nomos-tech/Internal-Devnet-Launch-February-2026-2fe261aa09df8025ad94e380933b4cf9#2ff261aa09df8058935ecb85aa587564
