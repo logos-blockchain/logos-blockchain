@@ -7,7 +7,7 @@ use rpds::StackSync;
 
 mod path;
 
-pub use path::{MerklePath, MerklePathError, is_left_child};
+pub use path::{MerklePath, MerklePathError, PathAndSelector, is_left_child};
 use path::{update_paths_above_merge, update_paths_at_merge};
 
 const EMPTY_VALUE: Fr = Fr::ZERO;
@@ -416,6 +416,25 @@ mod test {
             root = <ZkHasher as Digest>::compress(&[root, root]);
         }
         assert_eq!(mmr.frontier_root(), root);
+    }
+
+    #[test]
+    fn path_and_selectors_set_the_selector_on_a_right_child() {
+        // leaf 5 = 0b101: right child at levels 0 and 2, left child at level 1
+        let siblings: Vec<Fr> = (1..=4u64).map(Fr::from).collect();
+        let path = MerklePath::try_new(5, siblings).unwrap();
+        let levels: Vec<(Fr, bool)> = (0..4)
+            .map(|level| path.path_and_selectors(level).into())
+            .collect();
+        assert_eq!(
+            levels,
+            vec![
+                (Fr::from(1u64), true),
+                (Fr::from(2u64), false),
+                (Fr::from(3u64), true),
+                (Fr::from(4u64), false),
+            ]
+        );
     }
 
     #[test]

@@ -2,7 +2,10 @@ use std::sync::LazyLock;
 
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr, fr_from_bytes_unchecked, fr_from_mod_bytes};
 use lb_poseidon2::{Digest, Poseidon2Bn254Hasher};
-use lb_zktransfer::{ZkTransferProof, ZkTransferSecretKeysError, ZkTransferWitnessInputsData};
+use lb_zktransfer::{
+    ZkTransferProof, ZkTransferSecretKeysError, ZkTransferWitnessInputsData,
+    prove as prove_zk_transfer,
+};
 use num_bigint::BigUint;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -15,7 +18,7 @@ use crate::keys::{
 };
 
 fn prove(witness: ZkTransferWitnessInputsData) -> Result<ZkTransferProof, KeyError> {
-    lb_zktransfer::prove(witness.into())
+    prove_zk_transfer(witness.into())
         .map(|(proof, _)| proof)
         .map_err(|e| KeyError::ZkTransferProve(e.to_string()))
 }

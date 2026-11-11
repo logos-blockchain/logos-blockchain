@@ -219,7 +219,7 @@ pub mod test_utils {
                             value: note.value,
                             data: note.data,
                             path_and_selectors: core::array::from_fn(|h| {
-                                (path.siblings()[h], (path.leaf_index() >> h) & 1 == 1)
+                                path.path_and_selectors(h).into()
                             }),
                         }
                     })
