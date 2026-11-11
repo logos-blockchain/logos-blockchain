@@ -15,7 +15,7 @@ workspace = true
 [dependencies]
 axum                          = { features = ["http1", "http2", "json", "matched-path", "query", "tokio"], workspace = true }
 lb-core                       = { features = ["openapi"], workspace = true }
-lb-key-management-system-keys = { workspace = true }
+lb-key-management-system-keys = { features = ["openapi"], workspace = true }
 lb-log-targets                = { workspace = true }
 lb-tracing                    = { workspace = true }
 serde                         = { features = ["alloc", "derive"], workspace = true }
