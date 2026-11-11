@@ -2,11 +2,11 @@ use std::path::PathBuf;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
-use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient};
-use lb_core::{mantle::NoteId, sdp::Locator};
-use lb_http_api_common::bodies::{
+use lb_api_common::bodies::{
     blend::JoinBlendRequestBody, wallet::balance::WalletBalanceResponseBody,
 };
+use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient};
+use lb_core::{mantle::NoteId, sdp::Locator};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_node::config::UserConfig;
 use serde::{Deserialize, de::IntoDeserializer as _};

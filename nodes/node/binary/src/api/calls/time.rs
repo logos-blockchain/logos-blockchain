@@ -1,5 +1,5 @@
+use lb_api_common::{EraTiming, TimeInfo};
 use lb_core::era::ForkDigest;
-use lb_http_api_common::{EraTiming, TimeInfo};
 use lb_time_service::TimeServiceMessage;
 
 use super::{Error, Handle, request};

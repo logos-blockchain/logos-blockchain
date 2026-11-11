@@ -3,8 +3,8 @@ use axum::{
     extract::State,
     response::{IntoResponse as _, Response},
 };
+use lb_api_common::{bodies::chain::ChainIdResponseBody, paths};
 use lb_core::mantle::transactions::genesis_tx::ChainId;
-use lb_http_api_common::{bodies::chain::ChainIdResponseBody, paths};
 use lb_log_targets::node as targets;
 use lb_tracing::filter::envfilter::EnvFilterConfig;
 use lb_version::BuildVersionInfo;

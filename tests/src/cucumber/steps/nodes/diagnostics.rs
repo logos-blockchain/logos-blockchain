@@ -12,9 +12,9 @@ use std::{
 use cucumber::{gherkin::Step, given, when};
 use futures::future::join_all;
 use hex::ToHex as _;
+use lb_api_common::TimeInfo;
 use lb_chain_service::ChainServiceInfo;
 use lb_core::sdp::{ProviderId, ServiceType};
-use lb_http_api_common::TimeInfo;
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_node::config::DeploymentSettings;
 use lb_testing_framework::{NodeHttpClient, USER_CONFIG_FILE};

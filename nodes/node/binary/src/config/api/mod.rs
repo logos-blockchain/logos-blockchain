@@ -1,8 +1,7 @@
 use lb_api_service::ApiServiceSettings;
 use lb_core::{era::ForkDigest, mantle::transactions::genesis_tx::ChainId};
-use lb_http_api_common::settings::AxumBackendSettings;
 
-use crate::config::api::serde::Config;
+use crate::{api::settings::AxumBackendSettings, config::api::serde::Config};
 
 pub mod serde;
 

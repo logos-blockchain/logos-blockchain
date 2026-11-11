@@ -9,10 +9,10 @@ use std::{
 use cucumber::gherkin::Table;
 use futures::future::try_join_all;
 use hex::ToHex as _;
+use lb_api_common::paths::CRYPTARCHIA_INFO;
 use lb_chain_service::{ChainServiceInfo, CryptarchiaInfo, PhaseTag};
 use lb_config::kms::key_id_for_preload_backend;
 use lb_core::mantle::{Utxo, ops::OpId as _};
-use lb_http_api_common::paths::CRYPTARCHIA_INFO;
 use lb_key_management_system_service::{backend::preload::KeyId, keys::Key};
 use lb_libp2p::PeerId;
 use lb_node::config::{

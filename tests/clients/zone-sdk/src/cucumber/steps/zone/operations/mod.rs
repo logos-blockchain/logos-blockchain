@@ -11,6 +11,13 @@ use std::{
     time::{Duration, Instant},
 };
 
+use lb_api_common::bodies::{
+    channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
+    wallet::{
+        fund::WalletFundRequestBody,
+        sign::{WalletSignTxZkRequestBody, WalletSignTxZkResponseBody},
+    },
+};
 use lb_common_http_client::{ApiBlock, CommonHttpClient, Slot};
 use lb_core::{
     crypto::Hash,
@@ -33,13 +40,6 @@ use lb_core::{
         transactions::{builder::MantleTxBuilder, states::Unverified},
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
-};
-use lb_http_api_common::bodies::{
-    channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
-    wallet::{
-        fund::WalletFundRequestBody,
-        sign::{WalletSignTxZkRequestBody, WalletSignTxZkResponseBody},
-    },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, ZkPublicKeys, ZkSignature};
 use lb_testing_framework::NodeHttpClient;

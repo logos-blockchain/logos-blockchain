@@ -1,5 +1,5 @@
 use axum::{Json, extract::State, response::Response};
-use lb_http_api_common::paths;
+use lb_api_common::paths;
 use lb_libp2p::Multiaddr;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

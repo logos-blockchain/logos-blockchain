@@ -3,9 +3,9 @@ use axum::{
     extract::{Query, State},
     response::Response,
 };
+use lb_api_common::{bodies::chain::ChainForkResponseBody, paths};
 use lb_chain_service::ChainServiceInfo;
 use lb_core::{era::ForkDigest, header::HeaderId};
-use lb_http_api_common::{bodies::chain::ChainForkResponseBody, paths};
 use serde::Deserialize;
 
 use crate::api::{

@@ -21,6 +21,7 @@ futures                          = { workspace = true }
 hex                              = { workspace = true }
 http                             = { workspace = true }
 humantime                        = { workspace = true }
+lb-api-common                    = { workspace = true }
 lb-api-service                   = { workspace = true }
 lb-binary-codec                  = { workspace = true }
 lb-blend                         = { workspace = true }
@@ -32,7 +33,6 @@ lb-chain-service                 = { features = ["openapi"], workspace = true }
 lb-core                          = { features = ["openapi"], workspace = true }
 lb-cryptarchia-engine            = { features = ["openapi"], workspace = true }
 lb-groth16                       = { workspace = true }
-lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { features = ["unsafe"], workspace = true }
 lb-ledger                        = { workspace = true }
 lb-libp2p                        = { workspace = true }
@@ -75,7 +75,7 @@ utoipa = { features = ["macros"], workspace = true }
 utoipa-swagger-ui = { features = ["axum", "vendored"], workspace = true }
 
 # axum related dependencies
-axum       = { features = ["http1", "http2", "json", "query", "tokio"], workspace = true }
+axum       = { features = ["http1", "http2", "json", "matched-path", "query", "tokio"], workspace = true }
 time       = { workspace = true }
 tower      = { features = ["limit"], workspace = true }
 tower-http = { features = ["cors", "limit", "timeout", "trace"], workspace = true }
@@ -93,12 +93,15 @@ serde_urlencoded = { workspace = true }
 serial_test      = { workspace = true }
 tempfile         = { workspace = true }
 
+[target.'cfg(not(windows))'.dependencies]
+pprof = { features = ["criterion", "flamegraph", "protobuf-codec"], optional = true, workspace = true }
+
 [features]
 dhat-heap = ["dep:dhat"]
 jemalloc  = ["dep:tikv-jemallocator"]
 # Existing broad profiling feature. Keep this as an umbrella feature for
 # backwards compatibility: HTTP pprof + tokio-console support.
-profiling                        = ["lb-http-api-common/profiling", "tokio-console"]
+profiling                        = ["dep:pprof", "tokio-console"]
 testing                          = ["lb-key-management-system-service/unsafe"]
 testing-disable-proposal-publish = ["lb-chain-leader-service/testing-disable-proposal-publish"]
 

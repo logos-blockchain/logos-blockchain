@@ -15,11 +15,11 @@ workspace = true
 [dependencies]
 futures                       = { workspace = true }
 hex                           = { workspace = true }
+lb-api-common                 = { workspace = true }
 lb-chain-broadcast-service    = { workspace = true }
 lb-chain-service              = { workspace = true }
 lb-core                       = { workspace = true }
 lb-groth16                    = { workspace = true }
-lb-http-api-common            = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-log-targets                = { workspace = true }
 lb-sdp-service                = { workspace = true }

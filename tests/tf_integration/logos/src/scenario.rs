@@ -80,7 +80,7 @@ impl Application for LbcEnv {
 
     fn node_readiness_probe() -> ReadinessProbe {
         ReadinessProbe::Http {
-            path: lb_http_api_common::paths::CRYPTARCHIA_INFO,
+            path: lb_api_common::paths::CRYPTARCHIA_INFO,
         }
     }
 }

@@ -1,6 +1,6 @@
 use axum::{Json, extract::State, response::Response};
+use lb_api_common::paths;
 use lb_core::mantle::{TxHash, traits::Hashable};
-use lb_http_api_common::paths;
 
 use crate::{
     ValidatedTx,

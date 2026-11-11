@@ -1,9 +1,4 @@
-use lb_core::{
-    era::ForkDigest,
-    header::HeaderId,
-    mantle::{OpProof, gas::GasCost, traits::Hashable as _},
-};
-use lb_http_api_common::bodies::wallet::{
+use lb_api_common::bodies::wallet::{
     aged_notes::{LeaderAgedNoteResponseBody, LeaderAgedNotesResponseBody},
     balance::WalletBalanceResponseBody,
     claimable_vouchers::{ClaimableVoucherInfoResponseBody, WalletClaimableVouchersResponseBody},
@@ -13,6 +8,11 @@ use lb_http_api_common::bodies::wallet::{
         WalletSignTxZkResponseBody,
     },
     transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+};
+use lb_core::{
+    era::ForkDigest,
+    header::HeaderId,
+    mantle::{OpProof, gas::GasCost, traits::Hashable as _},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_wallet_service::{

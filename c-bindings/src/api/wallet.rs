@@ -4,6 +4,16 @@ use std::{
     time::Duration,
 };
 
+use lb_api_common::bodies::{
+    channel::ChannelDepositRequestBody,
+    wallet::{
+        aged_notes::LeaderAgedNotesResponseBody,
+        balance::WalletBalanceResponseBody,
+        claimable_vouchers::WalletClaimableVouchersResponseBody,
+        fund::{WalletFundRequestBody, WalletFundResponseBody},
+        transfer_funds::WalletTransferFundsRequestBody,
+    },
+};
 use lb_c_macros::panic_to_error;
 use lb_core::{
     header::HeaderId as CoreHeaderId,
@@ -20,16 +30,6 @@ use lb_core::{
     },
 };
 use lb_groth16::{fr_from_bytes, fr_to_bytes};
-use lb_http_api_common::bodies::{
-    channel::ChannelDepositRequestBody,
-    wallet::{
-        aged_notes::LeaderAgedNotesResponseBody,
-        balance::WalletBalanceResponseBody,
-        claimable_vouchers::WalletClaimableVouchersResponseBody,
-        fund::{WalletFundRequestBody, WalletFundResponseBody},
-        transfer_funds::WalletTransferFundsRequestBody,
-    },
-};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_node::{
     RuntimeServiceId,

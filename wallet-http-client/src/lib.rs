@@ -1,7 +1,4 @@
-use lb_binary_codec::bincode::SerializeOp as _;
-use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient, Error};
-use lb_core::header::HeaderId;
-use lb_http_api_common::{
+use lb_api_common::{
     bodies::{
         NoopBody,
         wallet::{
@@ -11,6 +8,9 @@ use lb_http_api_common::{
     },
     paths,
 };
+use lb_binary_codec::bincode::SerializeOp as _;
+use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient, Error};
+use lb_core::header::HeaderId;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use url::Url;
 

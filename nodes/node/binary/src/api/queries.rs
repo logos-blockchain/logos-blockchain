@@ -1,6 +1,6 @@
 use std::num::{NonZero, NonZeroUsize};
 
-use lb_http_api_common::{
+use lb_api_common::{
     DEFAULT_BLOCKS_STREAM_CHUNK_SIZE, DEFAULT_NUMBER_OF_BLOCKS_TO_STREAM, MAX_BLOCKS_STREAM_BLOCKS,
     queries::{BlockFilter, BlockSortOrder, BlocksStreamQuery},
 };
@@ -82,7 +82,7 @@ impl TryFrom<BlocksStreamQuery> for BlocksStreamRequest {
 mod tests {
     use std::num::{NonZero, NonZeroUsize};
 
-    use lb_http_api_common::{
+    use lb_api_common::{
         DEFAULT_BLOCKS_STREAM_CHUNK_SIZE, DEFAULT_NUMBER_OF_BLOCKS_TO_STREAM,
         MAX_BLOCKS_STREAM_BLOCKS,
         queries::{BlockFilter, BlockSortOrder, BlocksStreamQuery},

@@ -4,7 +4,7 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "logos-blockchain-http-api-common"
+name        = "logos-blockchain-api-common"
 readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }
@@ -13,23 +13,12 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-axum                          = { features = ["http1", "http2", "json", "matched-path", "query", "tokio"], workspace = true }
 lb-core                       = { features = ["openapi"], workspace = true }
 lb-key-management-system-keys = { features = ["openapi"], workspace = true }
-lb-log-targets                = { workspace = true }
-lb-tracing                    = { workspace = true }
 serde                         = { features = ["alloc", "derive"], workspace = true }
 serde_urlencoded              = { workspace = true }
 serde_with                    = { features = ["macros"], workspace = true }
 time                          = { features = ["serde-well-known"], workspace = true }
-tokio                         = { features = ["time"], optional = true, workspace = true }
-tracing                       = { workspace = true }
 url                           = { workspace = true }
 utoipa                        = { features = ["macros"], workspace = true }
 validator                     = { features = ["derive"], workspace = true }
-
-[target.'cfg(not(windows))'.dependencies]
-pprof = { features = ["criterion", "flamegraph", "protobuf-codec"], optional = true, workspace = true }
-
-[features]
-profiling = ["dep:pprof", "dep:tokio"]
