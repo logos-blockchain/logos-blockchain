@@ -152,6 +152,7 @@ mod tests {
     use core::time::Duration;
 
     use ConfigVersion::{Master, Release};
+    use rustix::fs::Mode;
 
     use super::*;
     use crate::UserConfig;
@@ -167,7 +168,11 @@ mod tests {
         let path = dir.path().join("user_config.yaml");
         let (config, keystore) = FIXTURE.split_once("\n---\n").unwrap();
         std::fs::write(&path, config).unwrap();
-        std::fs::write(dir.path().join("keystore.yaml"), keystore).unwrap();
+        let keystore_path = dir.path().join("keystore.yaml");
+        std::fs::write(&keystore_path, keystore).unwrap();
+        // 0.3.2 wrote it with the default mode: its owner has to restrict it before
+        // this release loads it.
+        rustix::fs::chmod(&keystore_path, Mode::RUSR | Mode::WUSR).unwrap();
 
         let loaded = UserConfig::load(&path).unwrap();
         // Everything else 0.3.2 wrote was a default, then or now.

@@ -5139,6 +5139,7 @@ dependencies = [
  "overwatch",
  "rand 0.8.8",
  "regex",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "serde_urlencoded",

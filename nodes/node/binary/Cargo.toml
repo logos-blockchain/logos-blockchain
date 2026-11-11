@@ -58,6 +58,7 @@ nutype                           = { features = ["serde"], workspace = true }
 overwatch                        = { workspace = true }
 rand                             = { workspace = true }
 regex                            = { features = ["std"], workspace = true }
+rustix                           = { features = ["fs", "std"], workspace = true }
 serde                            = { workspace = true }
 serde_json                       = { workspace = true }
 serde_with                       = { workspace = true }
