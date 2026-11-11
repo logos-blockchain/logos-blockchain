@@ -137,3 +137,21 @@ impl<E: Pairing> AsRef<ark_groth16::PreparedVerifyingKey<E>> for PreparedVerific
         &self.vk
     }
 }
+
+/// Whether two serialized verification keys are the same bytes. It is a
+/// `const fn` so that a proof crate can assert, at compile time, that the key a
+/// circuits release ships is the one the crate commits.
+#[must_use]
+pub const fn verification_keys_match(released: &[u8], committed: &[u8]) -> bool {
+    if released.len() != committed.len() {
+        return false;
+    }
+    let mut index = 0;
+    while index < released.len() {
+        if released[index] != committed[index] {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}

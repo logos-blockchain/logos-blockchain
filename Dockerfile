@@ -4,6 +4,8 @@
 
 ARG LC_CORE_VERSION=X.Y.Z
 ARG LB_NODE_VERSION=X.Y.Z
+# SHA-256 of the blockchain_module package of LB_NODE_VERSION, checked before the package is installed.
+ARG LB_MODULE_SHA256
 
 # ===========================
 # BUILD IMAGE
@@ -13,6 +15,9 @@ FROM debian:trixie-slim AS builder
 
 ARG LC_CORE_VERSION
 ARG LB_NODE_VERSION
+ARG LB_MODULE_SHA256
+
+RUN test -n "$LB_MODULE_SHA256" || { echo "Set LB_MODULE_SHA256 to the SHA-256 of blockchain_module-$LB_NODE_VERSION.lgx." >&2; exit 1; }
 
 ENV LOGOSCTL_CONFIG_DIR=/logos-blockchain/session
 
@@ -31,12 +36,14 @@ RUN dd if=/dev/zero of=logosctl bs=1 count=3 seek=8 conv=notrunc
 
 RUN ./logosctl --appimage-extract && mv squashfs-root ext-logosctl
 
+# The downloaded package must match LB_MODULE_SHA256 before it is installed.
 RUN ./ext-logosctl/AppRun daemon start --detach && \
     ./ext-logosctl/AppRun catalog add \
     https://raw.githubusercontent.com/logos-blockchain/blockchain-modules-release/refs/heads/main/logos-repo.json && \
     ./ext-logosctl/AppRun catalog refresh && \
     ./ext-logosctl/AppRun package download blockchain_module \
     --version "$LB_NODE_VERSION" --output ./ && \
+    echo "$LB_MODULE_SHA256  blockchain_module-${LB_NODE_VERSION}.lgx" | sha256sum -c - && \
     ./ext-logosctl/AppRun install "./blockchain_module-${LB_NODE_VERSION}.lgx" -y && \
     ./ext-logosctl/AppRun daemon stop
 
