@@ -29,7 +29,7 @@ pub use wallet_inputs::{AgedNotePathAndSelectors, PoQWalletInputs, PoQWalletInpu
 use crate::inputs::PoQVerifierInputJson;
 
 pub type PoQProof = CompressedGroth16Proof;
-pub type ProveError = lbp_error::Error;
+pub type ProveError = lb_proofs_error::Error;
 
 /// Width, in bits, of the quota signals in the `PoQ` circuit.
 pub const QUOTA_BITS: u8 = 20;
