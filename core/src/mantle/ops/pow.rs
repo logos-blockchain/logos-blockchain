@@ -815,12 +815,8 @@ mod tests {
         let ledger_set = ctx.note_sets.ledger();
         assert_eq!(ledger_set.commitment_root(), expected_root);
         assert_eq!(
-            ctx.tx_notes.commitment_root(
-                NoteSetIndex::Ledger,
-                ledger_set,
-                &CommitmentMmr::new().frontier_root(),
-                0
-            ),
+            ctx.tx_notes
+                .commitment_root(ledger_set, &CommitmentMmr::new().frontier_root(), 0),
             Ok(expected_root)
         );
 

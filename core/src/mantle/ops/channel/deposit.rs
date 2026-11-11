@@ -124,7 +124,6 @@ impl VerifiableOperation<StandardMode> for SignedOperation<DepositOp, Preverifie
 
         // Validate the inputs against the ledger note set
         let tx_commitment_root = context.tx_notes.spendable_root(
-            NoteSetIndex::Ledger,
             context.note_sets.ledger(),
             operation.inputs.as_slice(),
             &operation.commitment_merkle_root,
@@ -192,7 +191,7 @@ mod test {
     use super::*;
     use crate::mantle::{
         gas::test_utils::FixedThresholds,
-        note_set::{CommitmentMmr, NoteSet, NoteSetError},
+        note_set::{CommitmentMmr, NoteSetError},
         ops::{
             channel::{NULL_CHANNEL_ID, UnverifiedChannelKeys},
             op_proof::samples::SampleProof as _,
@@ -263,7 +262,11 @@ mod test {
     fn state() -> (Channels, NoteSets) {
         let (channels, note_sets) =
             Channels::new().create_channel(CHANNEL, Slot::from(0u64), keys(), NoteSets::new());
-        let ledger = NoteSet::empty().execute_adding(&[commitment(1)]).unwrap();
+        let ledger = note_sets
+            .ledger()
+            .clone()
+            .execute_adding(&[commitment(1)])
+            .unwrap();
         (channels, note_sets.update_ledger(ledger).end_block(0))
     }
 
@@ -473,12 +476,9 @@ mod test {
             .frontier_root();
         assert_eq!(channel.commitment_root(), expected);
         assert_eq!(
-            context.tx_notes.commitment_root(
-                NoteSetIndex::Channel(CHANNEL),
-                channel,
-                &CommitmentMmr::new().frontier_root(),
-                1
-            ),
+            context
+                .tx_notes
+                .commitment_root(channel, &CommitmentMmr::new().frontier_root(), 1),
             Ok(expected)
         );
         assert_eq!(

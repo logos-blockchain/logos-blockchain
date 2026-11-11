@@ -346,7 +346,9 @@ mod tests {
         let operation = operation();
         // Other notes of the SDP set do not change the root the withdrawal is proven
         // against.
-        let sdp = NoteSet::empty()
+        let sdp = NoteSets::new()
+            .sdp()
+            .clone()
             .execute_adding(&[NoteCommitment(Fr::from(1u64))])
             .unwrap();
         let sets = NoteSets::new().update_sdp(sdp).end_block(0);
@@ -396,7 +398,9 @@ mod tests {
 
     #[test]
     fn verify_rejects_a_spent_service_note() {
-        let spent = NoteSet::empty()
+        let spent = NoteSets::new()
+            .sdp()
+            .clone()
             .execute_spending(&[NoteNullifier(Fr::from(28u64))])
             .unwrap();
         let sets = NoteSets::new().update_sdp(spent);

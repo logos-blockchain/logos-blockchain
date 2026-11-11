@@ -17,7 +17,7 @@ use lb_core::{
         Value,
         gas::{Gas, GasOverflow, GasPrice, GasProfile},
         ledger::verification_mode::StandardMode,
-        note_set::{NoteSetError, NoteSetIndex, NoteSetUpdate, NoteSets, TxNoteState},
+        note_set::{NoteSetError, NoteSetUpdate, NoteSets, TxNoteState},
         notes::{self, NoteCommitment},
         ops::{
             SignedOperation,
@@ -882,9 +882,8 @@ impl LedgerState {
         let commitments = commitments.into_iter().collect::<Vec<_>>();
         let note_sets = NoteSets::new();
         let ledger_set = note_sets
-            .get(NoteSetIndex::Ledger)
-            .cloned()
-            .expect("the ledger set exists")
+            .ledger()
+            .clone()
             .execute_adding(&commitments)
             .expect("genesis notes fit in the commitment MMR");
         let note_sets = note_sets.update_ledger(ledger_set).end_block(0);
@@ -1336,9 +1335,8 @@ pub mod tests {
         let block_ledger = ledger.states.get_mut(&id).unwrap();
         let note_sets = &block_ledger.cryptarchia_ledger.note_sets;
         let ledger_set = note_sets
-            .get(NoteSetIndex::Ledger)
-            .cloned()
-            .unwrap()
+            .ledger()
+            .clone()
             .execute_adding(&[utxo_add.commitment()])
             .unwrap();
         block_ledger.cryptarchia_ledger.note_sets = note_sets
@@ -2256,10 +2254,7 @@ pub mod tests {
             .frontier_root();
         assert!(ledger_set.contains_nullifier(&NoteNullifier(Fr::from(3u64))));
         assert_eq!(ledger_set.commitment_root(), expected);
-        assert_eq!(
-            tx_notes.commitment_root(NoteSetIndex::Ledger, ledger_set, &root, 1),
-            Ok(expected)
-        );
+        assert_eq!(tx_notes.commitment_root(ledger_set, &root, 1), Ok(expected));
     }
 
     #[test]

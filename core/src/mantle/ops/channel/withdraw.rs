@@ -179,14 +179,13 @@ impl VerifiableOperation<StandardMode>
         let operation = self.operation();
 
         // Check that the channel exists and holds a note set
-        let index = context.channels.note_set_index(operation.channel_id)?;
+        context.channels.note_set_index(operation.channel_id)?;
 
         // Validate the inputs against the channel note set
         let tx_commitment_root = context.tx_notes.spendable_root(
-            index,
             context
                 .note_sets
-                .get(index)
+                .channel(&operation.channel_id)
                 .expect("a channel's note set exists"),
             operation.inputs.as_slice(),
             &operation.commitment_merkle_root,
@@ -256,7 +255,7 @@ mod test {
     use super::*;
     use crate::mantle::{
         gas::test_utils::FixedThresholds,
-        note_set::{CommitmentMmr, NoteSet},
+        note_set::CommitmentMmr,
         ops::{
             channel::{NULL_CHANNEL_ID, UnverifiedChannelKeys},
             op_proof::samples::SampleProof as _,
@@ -287,13 +286,22 @@ mod test {
     fn state() -> (Channels, NoteSets) {
         let (channels, note_sets) =
             Channels::new().create_channel(CHANNEL, Slot::from(0u64), keys(), NoteSets::new());
-        let ledger = NoteSet::empty().execute_adding(&[commitment(1)]).unwrap();
-        let channel = NoteSet::empty().execute_adding(&[commitment(5)]).unwrap();
+        let ledger = note_sets
+            .ledger()
+            .clone()
+            .execute_adding(&[commitment(1)])
+            .unwrap();
+        let channel = note_sets
+            .channel(&CHANNEL)
+            .unwrap()
+            .clone()
+            .execute_adding(&[commitment(5)])
+            .unwrap();
         (
             channels,
             note_sets
                 .update_ledger(ledger)
-                .update_channel(CHANNEL, channel)
+                .update_channel(channel)
                 .end_block(0),
         )
     }
@@ -447,7 +455,7 @@ mod test {
             .clone()
             .execute_spending(&[nullifier(6)])
             .unwrap();
-        let note_sets = note_sets.update_channel(CHANNEL, channel);
+        let note_sets = note_sets.update_channel(channel);
         let ledger_before = note_sets.ledger().clone();
         let withdrawals = PendingWithdrawals::new()
             .push(pending(100, 5, 50))

@@ -16,7 +16,7 @@ use crate::{
             ProviderIndex, VerifiableOperation,
             verification_mode::{GenesisMode, StandardMode, VerificationMode},
         },
-        note_set::{NoteSetIndex, NoteSets, TxNoteState},
+        note_set::{NoteSets, TxNoteState},
         ops::{OpId, SignedOperation, ZkAndEd25519Proof, zk_transfer::defer_zk_transfer},
         transactions::{
             hash::TxHashView,
@@ -190,7 +190,6 @@ impl VerifiableOperation<StandardMode>
 
         // Validate the inputs against the ledger note set
         let tx_commitment_root = context.tx_notes.spendable_root(
-            NoteSetIndex::Ledger,
             context.note_sets.ledger(),
             operation.inputs.as_slice(),
             &operation.commitment_merkle_root,
@@ -284,7 +283,9 @@ mod tests {
 
     // The ledger set holds the commitment 1, recorded at the end of block 0.
     fn note_sets() -> NoteSets {
-        let ledger = NoteSet::empty()
+        let ledger = NoteSets::new()
+            .ledger()
+            .clone()
             .execute_adding(&[NoteCommitment(Fr::from(1u64))])
             .unwrap();
         NoteSets::new().update_ledger(ledger).end_block(0)
@@ -609,7 +610,9 @@ mod tests {
             let (mmr, path) = CommitmentMmr::new()
                 .push_with_paths(input.commitment(), &mut [])
                 .unwrap();
-            let ledger = NoteSet::empty()
+            let ledger = NoteSets::new()
+                .ledger()
+                .clone()
                 .execute_adding(&[input.commitment()])
                 .unwrap();
             let sets = NoteSets::new().update_ledger(ledger).end_block(0);

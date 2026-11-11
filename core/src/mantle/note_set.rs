@@ -3,6 +3,7 @@ use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     fmt,
+    ops::Deref,
     str::FromStr,
     sync::LazyLock,
 };
@@ -14,7 +15,10 @@ use lb_mmr::MerkleMountainRange;
 use lb_poseidon2::Digest as _;
 use lb_utxotree::UtxoMerkleHasher;
 use rpds::{HashTrieMapSync, HashTrieSetSync, RedBlackTreeSetSync, VectorSync};
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
+use serde::{
+    Deserialize, Deserializer, Serialize, Serializer,
+    de::{EnumAccess, Error as _, Unexpected, VariantAccess as _, Visitor},
+};
 use thiserror::Error;
 
 use crate::{
@@ -72,25 +76,22 @@ impl FromStr for NoteSetIndex {
     }
 }
 
-// The binary encoding of a note set index.
-#[derive(Serialize, Deserialize)]
-enum EncodedNoteSetIndex {
-    Ledger,
-    Sdp,
-    Channel(ChannelId),
-}
+const NOTE_SET_INDEX: &str = "NoteSetIndex";
+const NOTE_SET_INDEX_VARIANTS: &[&str] = &["Ledger", "Sdp", "Channel"];
 
+// A binary format encodes the index as an enum.
 impl Serialize for NoteSetIndex {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if serializer.is_human_readable() {
             return serializer.collect_str(self);
         }
-        match *self {
-            Self::Ledger => EncodedNoteSetIndex::Ledger,
-            Self::Sdp => EncodedNoteSetIndex::Sdp,
-            Self::Channel(channel_id) => EncodedNoteSetIndex::Channel(channel_id),
+        match self {
+            Self::Ledger => serializer.serialize_unit_variant(NOTE_SET_INDEX, 0, "Ledger"),
+            Self::Sdp => serializer.serialize_unit_variant(NOTE_SET_INDEX, 1, "Sdp"),
+            Self::Channel(channel_id) => {
+                serializer.serialize_newtype_variant(NOTE_SET_INDEX, 2, "Channel", channel_id)
+            }
         }
-        .serialize(serializer)
     }
 }
 
@@ -101,11 +102,30 @@ impl<'de> Deserialize<'de> for NoteSetIndex {
                 .parse()
                 .map_err(D::Error::custom);
         }
-        Ok(match EncodedNoteSetIndex::deserialize(deserializer)? {
-            EncodedNoteSetIndex::Ledger => Self::Ledger,
-            EncodedNoteSetIndex::Sdp => Self::Sdp,
-            EncodedNoteSetIndex::Channel(channel_id) => Self::Channel(channel_id),
-        })
+        deserializer.deserialize_enum(NOTE_SET_INDEX, NOTE_SET_INDEX_VARIANTS, NoteSetIndexVisitor)
+    }
+}
+
+struct NoteSetIndexVisitor;
+
+impl<'de> Visitor<'de> for NoteSetIndexVisitor {
+    type Value = NoteSetIndex;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a note set index")
+    }
+
+    fn visit_enum<A: EnumAccess<'de>>(self, data: A) -> Result<Self::Value, A::Error> {
+        let (variant, access) = data.variant::<u32>()?;
+        match variant {
+            0 => access.unit_variant().map(|()| NoteSetIndex::Ledger),
+            1 => access.unit_variant().map(|()| NoteSetIndex::Sdp),
+            2 => access.newtype_variant().map(NoteSetIndex::Channel),
+            _ => Err(A::Error::invalid_value(
+                Unexpected::Unsigned(variant.into()),
+                &"a variant index 0 <= i < 3",
+            )),
+        }
     }
 }
 
@@ -281,31 +301,28 @@ impl TxNoteState {
         &self.roots
     }
 
-    /// Checks that `inputs` are spendable in `set`, the set `index`, and
-    /// returns the root a `ZkTransfer` spending them is proven against:
-    /// `commitment_merkle_root` extended with the buffer of the set.
-    pub fn spendable_root(
+    /// Checks that `inputs` are spendable in `set` and returns the root a
+    /// `ZkTransfer` spending them is proven against: `commitment_merkle_root`
+    /// extended with the buffer of the set.
+    pub fn spendable_root<K: SetKind>(
         &self,
-        index: NoteSetIndex,
-        set: &NoteSet,
+        set: &TypedNoteSet<K>,
         inputs: &[NoteNullifier],
         commitment_merkle_root: &Fr,
         block: BlockNumber,
     ) -> Result<Fr, NoteSetError> {
         set.assert_spendable(inputs)?;
-        self.commitment_root(index, set, commitment_merkle_root, block)
+        self.commitment_root(set, commitment_merkle_root, block)
     }
 
-    /// `commitment_merkle_root` of `set`, the set `index`, extended with its
-    /// buffer.
-    pub fn commitment_root(
+    /// `commitment_merkle_root` of `set` extended with its buffer.
+    pub fn commitment_root<K: SetKind>(
         &self,
-        index: NoteSetIndex,
-        set: &NoteSet,
+        set: &TypedNoteSet<K>,
         commitment_merkle_root: &Fr,
         block: BlockNumber,
     ) -> Result<Fr, NoteSetError> {
-        let buffer = self.buffer(index);
+        let buffer = self.buffer(set.index());
         set.cached_step_commitment_root(
             &self.roots,
             &buffer,
@@ -623,17 +640,101 @@ impl PartialEq for RecentRoots {
 
 impl Eq for RecentRoots {}
 
-// The note set of a channel and its leaf in the eligible tree.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ChannelNoteSet {
+/// The kind of a [`TypedNoteSet`], which names the set.
+pub trait SetKind {
+    fn index(&self) -> NoteSetIndex;
+}
+
+/// The kind of the ledger note set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ledger;
+
+/// The kind of the SDP note set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sdp;
+
+/// The kind of the note set of a channel, at its leaf of the eligible tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Channel {
+    id: ChannelId,
     leaf: usize,
+}
+
+impl Channel {
+    #[must_use]
+    pub const fn id(&self) -> ChannelId {
+        self.id
+    }
+}
+
+impl SetKind for Ledger {
+    fn index(&self) -> NoteSetIndex {
+        NoteSetIndex::Ledger
+    }
+}
+
+impl SetKind for Sdp {
+    fn index(&self) -> NoteSetIndex {
+        NoteSetIndex::Sdp
+    }
+}
+
+impl SetKind for Channel {
+    fn index(&self) -> NoteSetIndex {
+        NoteSetIndex::Channel(self.id)
+    }
+}
+
+/// A note set that knows which set of [`NoteSets`] it is, so it cannot be
+/// taken for another one. Spending from or adding to it keeps its kind.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TypedNoteSet<K> {
+    kind: K,
     set: NoteSet,
+}
+
+pub type LedgerNoteSet = TypedNoteSet<Ledger>;
+pub type SdpNoteSet = TypedNoteSet<Sdp>;
+pub type ChannelNoteSet = TypedNoteSet<Channel>;
+
+impl<K: SetKind> TypedNoteSet<K> {
+    #[must_use]
+    pub fn index(&self) -> NoteSetIndex {
+        self.kind.index()
+    }
+
+    pub fn execute_spending(self, inputs: &[NoteNullifier]) -> Result<Self, NoteSetError> {
+        Ok(Self {
+            set: self.set.execute_spending(inputs)?,
+            ..self
+        })
+    }
+
+    pub fn execute_adding(self, outputs: &[NoteCommitment]) -> Result<Self, NoteSetError> {
+        Ok(Self {
+            set: self.set.execute_adding(outputs)?,
+            ..self
+        })
+    }
+
+    #[must_use]
+    pub fn into_inner(self) -> NoteSet {
+        self.set
+    }
+}
+
+impl<K> Deref for TypedNoteSet<K> {
+    type Target = NoteSet;
+
+    fn deref(&self) -> &NoteSet {
+        &self.set
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NoteSets {
-    ledger: NoteSet,
-    sdp: NoteSet,
+    ledger: LedgerNoteSet,
+    sdp: SdpNoteSet,
     channels: HashTrieMapSync<ChannelId, ChannelNoteSet>,
     eligible: EligibleTree,
     // sets whose notes moved in the current block
@@ -655,8 +756,14 @@ impl NoteSets {
         let (eligible, sdp_leaf) = eligible.insert(sdp.eligible_leaf());
         debug_assert_eq!((ledger_leaf, sdp_leaf), (LEDGER_LEAF, SDP_LEAF));
         Self {
-            ledger,
-            sdp,
+            ledger: TypedNoteSet {
+                kind: Ledger,
+                set: ledger,
+            },
+            sdp: TypedNoteSet {
+                kind: Sdp,
+                set: sdp,
+            },
             channels: HashTrieMapSync::new_sync(),
             eligible,
             changed: HashTrieSetSync::new_sync(),
@@ -664,19 +771,19 @@ impl NoteSets {
     }
 
     #[must_use]
-    pub const fn ledger(&self) -> &NoteSet {
+    pub const fn ledger(&self) -> &LedgerNoteSet {
         &self.ledger
     }
 
     #[must_use]
-    pub const fn sdp(&self) -> &NoteSet {
+    pub const fn sdp(&self) -> &SdpNoteSet {
         &self.sdp
     }
 
     /// The note set of the channel, if it holds one.
     #[must_use]
-    pub fn channel(&self, channel_id: &ChannelId) -> Option<&NoteSet> {
-        self.channels.get(channel_id).map(|channel| &channel.set)
+    pub fn channel(&self, channel_id: &ChannelId) -> Option<&ChannelNoteSet> {
+        self.channels.get(channel_id)
     }
 
     #[must_use]
@@ -684,26 +791,33 @@ impl NoteSets {
         match index {
             NoteSetIndex::Ledger => Some(&self.ledger),
             NoteSetIndex::Sdp => Some(&self.sdp),
-            NoteSetIndex::Channel(channel_id) => self.channel(&channel_id),
+            NoteSetIndex::Channel(channel_id) => self.channel(&channel_id).map(Deref::deref),
         }
     }
 
     #[must_use]
-    pub fn update_ledger(self, set: NoteSet) -> Self {
-        self.update(NoteSetIndex::Ledger, set)
+    pub fn update_ledger(self, set: LedgerNoteSet) -> Self {
+        self.update_typed(set)
     }
 
     #[must_use]
-    pub fn update_sdp(self, set: NoteSet) -> Self {
-        self.update(NoteSetIndex::Sdp, set)
+    pub fn update_sdp(self, set: SdpNoteSet) -> Self {
+        self.update_typed(set)
     }
 
+    /// Replaces the note set of the channel of `set`.
+    ///
     /// # Panics
     ///
     /// If the channel holds no note set.
     #[must_use]
-    pub fn update_channel(self, channel_id: ChannelId, set: NoteSet) -> Self {
-        self.update(NoteSetIndex::Channel(channel_id), set)
+    pub fn update_channel(self, set: ChannelNoteSet) -> Self {
+        self.update_typed(set)
+    }
+
+    fn update_typed<K: SetKind>(self, set: TypedNoteSet<K>) -> Self {
+        let index = set.index();
+        self.update(index, set.into_inner())
     }
 
     /// The sets with an empty note set for the channel, at the next leaf of the
@@ -721,8 +835,12 @@ impl NoteSets {
             "eligible leaves follow the sets"
         );
         self.eligible = eligible;
+        let kind = Channel {
+            id: channel_id,
+            leaf,
+        };
         self.channels
-            .insert_mut(channel_id, ChannelNoteSet { leaf, set });
+            .insert_mut(channel_id, TypedNoteSet { kind, set });
         self
     }
 
@@ -743,14 +861,15 @@ impl NoteSets {
 
     fn replace(&mut self, index: NoteSetIndex, set: NoteSet) {
         match index {
-            NoteSetIndex::Ledger => self.ledger = set,
-            NoteSetIndex::Sdp => self.sdp = set,
+            NoteSetIndex::Ledger => self.ledger.set = set,
+            NoteSetIndex::Sdp => self.sdp.set = set,
             NoteSetIndex::Channel(channel_id) => {
-                let leaf = self
-                    .leaf(index)
-                    .unwrap_or_else(|| panic!("channel {channel_id} holds a note set"));
+                let kind = self
+                    .channel(&channel_id)
+                    .unwrap_or_else(|| panic!("channel {channel_id} holds a note set"))
+                    .kind;
                 self.channels
-                    .insert_mut(channel_id, ChannelNoteSet { leaf, set });
+                    .insert_mut(channel_id, TypedNoteSet { kind, set });
             }
         }
     }
@@ -760,7 +879,7 @@ impl NoteSets {
             NoteSetIndex::Ledger => Some(LEDGER_LEAF),
             NoteSetIndex::Sdp => Some(SDP_LEAF),
             NoteSetIndex::Channel(channel_id) => {
-                self.channels.get(&channel_id).map(|channel| channel.leaf)
+                self.channel(&channel_id).map(|channel| channel.kind.leaf)
             }
         }
     }
@@ -858,7 +977,7 @@ impl NoteSets {
     // The channel sets in the order of their eligible leaves.
     fn channels_by_leaf(&self) -> Vec<(&ChannelId, &ChannelNoteSet)> {
         let mut channels: Vec<_> = self.channels.iter().collect();
-        channels.sort_unstable_by_key(|(_, channel)| channel.leaf);
+        channels.sort_unstable_by_key(|(_, channel)| channel.kind.leaf);
         channels
     }
 }
@@ -883,8 +1002,8 @@ struct EncodedNoteSets {
 impl Serialize for NoteSets {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         EncodedNoteSetsRef {
-            ledger: &self.ledger,
-            sdp: &self.sdp,
+            ledger: &self.ledger.set,
+            sdp: &self.sdp.set,
             channels: self
                 .channels_by_leaf()
                 .into_iter()
@@ -909,8 +1028,11 @@ impl<'de> Deserialize<'de> for NoteSets {
                     "channel {channel_id} holds two note sets"
                 )));
             }
-            let leaf = FIRST_CHANNEL_LEAF + position;
-            channels.insert_mut(channel_id, ChannelNoteSet { leaf, set });
+            let kind = Channel {
+                id: channel_id,
+                leaf: FIRST_CHANNEL_LEAF + position,
+            };
+            channels.insert_mut(channel_id, TypedNoteSet { kind, set });
         }
         let mut leaves: Vec<(usize, Fr)> = vec![
             (LEDGER_LEAF, ledger.eligible_leaf()),
@@ -919,12 +1041,18 @@ impl<'de> Deserialize<'de> for NoteSets {
         leaves.extend(
             channels
                 .values()
-                .map(|channel| (channel.leaf, channel.set.eligible_leaf())),
+                .map(|channel| (channel.kind.leaf, channel.eligible_leaf())),
         );
         leaves.sort_unstable_by_key(|(leaf, _)| *leaf);
         Ok(Self {
-            ledger,
-            sdp,
+            ledger: TypedNoteSet {
+                kind: Ledger,
+                set: ledger,
+            },
+            sdp: TypedNoteSet {
+                kind: Sdp,
+                set: sdp,
+            },
             channels,
             eligible: EligibleTree::from_sorted_items(leaves),
             changed: HashTrieSetSync::new_sync(),
@@ -1096,7 +1224,7 @@ mod test {
             assert_eq!(recent_entries(set), scanned.roots, "block {block}");
             if block % 500 == 0 {
                 let decoded: NoteSet =
-                    bincode::deserialize(&bincode::serialize(set).unwrap()).unwrap();
+                    bincode::deserialize(&bincode::serialize::<NoteSet>(set).unwrap()).unwrap();
                 assert_eq!(recent_entries(&decoded), scanned.roots);
             }
             for next in [block + 1, block + 1024, block + 1025] {
@@ -1184,9 +1312,7 @@ mod test {
         assert!(!tx.buffers.contains_key(&channel));
 
         let set = sets.ledger();
-        let root = tx
-            .commitment_root(NoteSetIndex::Ledger, set, &referenced, 1)
-            .unwrap();
+        let root = tx.commitment_root(set, &referenced, 1).unwrap();
         assert_eq!(
             Ok(root),
             set.tx_commitment_root(&tx.buffer(NoteSetIndex::Ledger), &referenced, 1)
@@ -1431,15 +1557,9 @@ mod test {
             .unwrap();
         let set = sets.ledger();
         let referenced = NoteSet::empty().commitment_root();
-        assert_ne!(
-            tx.commitment_root(NoteSetIndex::Ledger, set, &referenced, 0),
-            Ok(referenced)
-        );
+        assert_ne!(tx.commitment_root(set, &referenced, 0), Ok(referenced));
         let tx = TxNoteState::new();
-        assert_eq!(
-            tx.commitment_root(NoteSetIndex::Ledger, set, &referenced, 0),
-            Ok(referenced)
-        );
+        assert_eq!(tx.commitment_root(set, &referenced, 0), Ok(referenced));
     }
 
     #[test]
@@ -1500,6 +1620,29 @@ mod test {
             .unwrap();
         let sets = sets.update(channel, channel_set);
         assert_eq!(sets.clone().with_channel(channel_id(1)), sets);
+    }
+
+    #[test]
+    fn a_typed_set_keeps_its_set_through_spending_and_adding() {
+        let (sets, _) = with_channel(NoteSets::new(), 1);
+        let (sets, channel) = with_channel(sets, 2);
+        assert_eq!(sets.ledger().index(), NoteSetIndex::Ledger);
+        assert_eq!(sets.sdp().index(), NoteSetIndex::Sdp);
+
+        let channel_set = sets
+            .channel(&channel_id(2))
+            .unwrap()
+            .clone()
+            .execute_adding(&[commitment(1)])
+            .unwrap()
+            .execute_spending(&[nullifier(1)])
+            .unwrap();
+        assert_eq!(channel_set.index(), channel);
+
+        let sets = sets.update_channel(channel_set.clone());
+        assert_eq!(sets.channel(&channel_id(2)), Some(&channel_set));
+        assert_eq!(sets.leaf(channel), Some(FIRST_CHANNEL_LEAF + 1));
+        assert_eq!(**sets.channel(&channel_id(1)).unwrap(), NoteSet::empty());
     }
 
     #[test]

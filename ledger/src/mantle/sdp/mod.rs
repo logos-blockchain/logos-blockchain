@@ -1544,7 +1544,9 @@ mod tests {
         // carries no nonce, but the nullifier it consumed is spent.
         let tx_hash_view = TxHashView::from(TxHash::from([99; 32]));
         let spent = NoteSets::new().update_sdp(
-            NoteSet::empty()
+            NoteSets::new()
+                .sdp()
+                .clone()
                 .execute_spending(&[accepted_withdraw.service_note_nullifier])
                 .unwrap(),
         );

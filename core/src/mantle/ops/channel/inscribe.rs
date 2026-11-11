@@ -884,14 +884,14 @@ impl<Mode: VerificationMode> ExecutableOperation
 
         // Apply the steps to the channel note set, in order
         if !operation.mini_blocks.is_empty() {
-            let index = channel_note_set(operation.channel_id).ok_or(Error::NoNoteSet {
-                channel_id: operation.channel_id,
-            })?;
             let note_set = context
                 .note_sets
-                .get(index)
-                .expect("the note set of a channel exists")
+                .channel(&operation.channel_id)
+                .ok_or(Error::NoNoteSet {
+                    channel_id: operation.channel_id,
+                })?
                 .clone();
+            let index = note_set.index();
             // A program step creates its notes of the program before the user notes
             // it pays, the notes extending the buffer the next Operations of the
             // transaction are proven against.
@@ -902,7 +902,7 @@ impl<Mode: VerificationMode> ExecutableOperation
                     .execute_spending(step.inputs().as_slice())?
                     .execute_adding(&outputs)
             })?;
-            context.note_sets = context.note_sets.update(index, note_set);
+            context.note_sets = context.note_sets.update_channel(note_set);
         }
 
         // Update the channel sequencer, its starting slot, the tip message and the tip
@@ -941,7 +941,7 @@ mod tests {
             TxHash,
             batch::{DeferrableProof as _, DeferredProofs},
             gas::test_utils::FixedThresholds,
-            note_set::{CommitmentMmr, NoteSetError},
+            note_set::{CommitmentMmr, NoteSetError, TypedNoteSet},
             notes::{self, derive_note_nullifier},
             ops::{
                 ProgramNoteOpening, ProgramProof, ZkProgramSpendProof,
@@ -1331,8 +1331,12 @@ mod tests {
             })
         );
         assert_eq!(
-            context.note_sets.channel(&channel_id),
-            Some(&NoteSet::empty())
+            context
+                .note_sets
+                .channel(&channel_id)
+                .cloned()
+                .map(TypedNoteSet::into_inner),
+            Some(NoteSet::empty())
         );
         assert_eq!(events, []);
     }
@@ -1550,18 +1554,24 @@ mod tests {
         Ed25519Key::from_bytes(&[15; 32])
     }
 
+    // The sample channel, accrediting the sample signer, with an empty note set.
+    fn empty_state() -> (Channels, NoteSets) {
+        let keys = UnverifiedChannelKeys::from(signer().public_key().into_unverified());
+        Channels::new().create_channel(sample_channel(), Slot::from(0u64), keys, NoteSets::new())
+    }
+
     // The sample channel, accrediting the sample signer, owns note set 2, which
     // holds commitment(1), recorded at the end of block 0.
     fn state() -> (Channels, NoteSets) {
-        let channel_id = InscriptionOp::sample().channel_id;
-        let keys = UnverifiedChannelKeys::from(signer().public_key().into_unverified());
-        let (channels, note_sets) =
-            Channels::new().create_channel(channel_id, Slot::from(0u64), keys, NoteSets::new());
-        let set = NoteSet::empty().execute_adding(&[commitment(1)]).unwrap();
-        (
-            channels,
-            note_sets.update_channel(sample_channel(), set).end_block(0),
-        )
+        let channel_id = sample_channel();
+        let (channels, note_sets) = empty_state();
+        let set = note_sets
+            .channel(&channel_id)
+            .unwrap()
+            .clone()
+            .execute_adding(&[commitment(1)])
+            .unwrap();
+        (channels, note_sets.update_channel(set).end_block(0))
     }
 
     fn sample_channel() -> ChannelId {
@@ -1933,7 +1943,7 @@ mod tests {
             .clone()
             .execute_spending(&[nullifier(2)])
             .unwrap();
-        let note_sets = note_sets.update_channel(sample_channel(), set);
+        let note_sets = note_sets.update_channel(set);
         assert_eq!(
             verify_steps(
                 vec![Step::User(step(&[nullifier(2)], &[commitment(3)], root()))],
@@ -1984,9 +1994,7 @@ mod tests {
         assert!(set.contains_nullifier(&nullifier(2)) && set.contains_nullifier(&nullifier(4)));
         assert_eq!(set.commitment_root(), expected);
         assert_eq!(
-            context
-                .tx_notes
-                .commitment_root(sample_set(), set, &root(), 1),
+            context.tx_notes.commitment_root(set, &root(), 1),
             Ok(expected)
         );
     }
@@ -2002,11 +2010,14 @@ mod tests {
         let (mmr, path) = CommitmentMmr::new()
             .push_with_paths(input.commitment(), &mut [])
             .unwrap();
-        let (channels, note_sets) = state();
-        let set = NoteSet::empty()
+        let (channels, note_sets) = empty_state();
+        let set = note_sets
+            .channel(&sample_channel())
+            .unwrap()
+            .clone()
             .execute_adding(&[input.commitment()])
             .unwrap();
-        let note_sets = note_sets.update_channel(sample_channel(), set).end_block(1);
+        let note_sets = note_sets.update_channel(set).end_block(1);
         let output = notes::Note::new(1_000, Fr::from(12u64), ZkPublicKey::new(Fr::from(2u64)));
         let step = step(
             &[derive_note_nullifier(
@@ -2507,9 +2518,7 @@ mod tests {
         );
         assert_eq!(set.commitment_root(), expected);
         assert_eq!(
-            context
-                .tx_notes
-                .commitment_root(sample_set(), set, &root(), 1),
+            context.tx_notes.commitment_root(set, &root(), 1),
             Ok(expected)
         );
     }
@@ -2533,11 +2542,14 @@ mod tests {
             .push_with_paths(user_note.commitment(), &mut [])
             .unwrap();
         let root = mmr.frontier_root();
-        let (channels, note_sets) = state();
-        let set = NoteSet::empty()
+        let (channels, note_sets) = empty_state();
+        let set = note_sets
+            .channel(&sample_channel())
+            .unwrap()
+            .clone()
             .execute_adding(&[user_note.commitment()])
             .unwrap();
-        let note_sets = note_sets.update_channel(sample_channel(), set).end_block(1);
+        let note_sets = note_sets.update_channel(set).end_block(1);
         let (_, proving_key) = three_input_setup(1);
         // Staked by an operator of key 7.
         let program_note = notes::Note {
