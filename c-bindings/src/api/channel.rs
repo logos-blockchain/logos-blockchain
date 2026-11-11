@@ -2,10 +2,10 @@ use std::ffi::{CString, c_char};
 
 use lb_c_macros::panic_to_error;
 use lb_core::mantle::ops::channel::ChannelId;
-use lb_node::RuntimeServiceId;
 
 use crate::{
     LogosBlockchainNode,
+    api::node::to_json_c_string,
     errors::{OperationStatus, OperationStatusCode},
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
@@ -14,7 +14,7 @@ use crate::{
 /// Gets a channel's state as a JSON string.
 ///
 /// This is a synchronous wrapper around the asynchronous
-/// [`channel_state`](lb_api_service::http::mantle::channel_state) function.
+/// [`channel_state`](lb_node::api::calls::channel::state) function.
 ///
 /// # Arguments
 ///
@@ -30,39 +30,11 @@ pub(crate) fn get_channel_state_sync(
     node: &LogosBlockchainNode,
     channel_id: ChannelId,
 ) -> StatusResult<CString> {
-    let runtime_handle = node.get_runtime_handle()?;
-    let overwatch_handle = node.get_overwatch_handle();
-
-    let state = runtime_handle
-        .block_on(lb_api_service::http::mantle::channel_state::<
-            RuntimeServiceId,
-        >(overwatch_handle, channel_id))
-        .map_err(|e| {
-            OperationStatus::error(
-                OperationStatusCode::ServiceError,
-                format!("Failed to get channel state: {e}"),
-            )
-        })?
-        .ok_or_else(|| {
-            OperationStatus::error(
-                OperationStatusCode::NotFound,
-                format!("No channel found for id {channel_id:?}"),
-            )
-        })?;
-
-    let json = serde_json::to_string(&state).map_err(|e| {
-        OperationStatus::error(
-            OperationStatusCode::RuntimeError,
-            format!("Failed to serialize channel state: {e}"),
-        )
-    })?;
-
-    CString::new(json).map_err(|e| {
-        OperationStatus::error(
-            OperationStatusCode::RuntimeError,
-            format!("Failed to create CString: {e}"),
-        )
-    })
+    let state = node.call(
+        "Failed to get channel state",
+        lb_node::api::calls::channel::state(node.get_overwatch_handle(), channel_id),
+    )?;
+    to_json_c_string(&state)
 }
 
 /// Result type for `get_channel_state`. On success, `value` is a pointer to a

@@ -46,33 +46,32 @@ use crate::{
     LogosBlockchainNode, OperationStatus, OperationStatusCode,
     api::{
         blend::{blend_info, blend_join_as_core_node},
-        chain::{get_chain_id, get_fork_digest},
+        blocks::{
+            get_block, get_block_events, get_blocks, get_transaction, subscribe_to_lib_blocks,
+            subscribe_to_new_blocks, subscribe_to_processed_blocks,
+        },
         channel::get_channel_state,
         config::{GenerateConfigArgs, generate_user_config, participate, show_config},
-        cryptarchia::{free_cryptarchia_info, get_block_events, get_cryptarchia_info},
-        deployment::{free_deployment_info, get_deployment_info},
+        cryptarchia::{free_cryptarchia_info, get_cryptarchia_info, get_fork_digest},
         free_cstring,
         keys::{KeyType, add_key, generate_key, remove_key},
         leader::leader_claim,
         lifecycle::{shutdown_node, start_lb_node},
-        metrics::get_open_metrics,
-        network::get_network_info,
-        peer::get_peer_id,
+        network::{get_network_info, get_peer_id},
+        node::{
+            free_deployment_info, get_build_version_info, get_chain_id, get_deployment_info,
+            get_open_metrics,
+        },
         pow::{
             PoWClaimableRewards, PoWStatus, free_pow_claimable_rewards, free_pow_status, pow_claim,
             pow_claimable_rewards, pow_start_auto_claim, pow_start_mining, pow_status,
             pow_stop_auto_claim, pow_stop_mining,
-        },
-        storage::{get_block, get_blocks, get_transaction},
-        subscriptions::{
-            subscribe_to_lib_blocks, subscribe_to_new_blocks, subscribe_to_processed_blocks,
         },
         time::{free_time_info, get_time_info},
         types::{
             claimable_vouchers::ClaimableVouchers, known_addresses::KnownAddresses,
             leader_aged_notes::LeaderAgedNotes, wallet_notes::WalletNotes,
         },
-        version::get_build_version_info,
         wallet::{
             ChannelDepositArguments, ChannelDepositWithNotesArguments, TransferFundsArguments,
             channel_deposit, channel_deposit_with_notes, free_claimable_vouchers,

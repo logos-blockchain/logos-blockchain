@@ -8,4 +8,3 @@ mod queries;
 mod responses;
 mod routes;
 pub mod serializers;
-mod tracing;

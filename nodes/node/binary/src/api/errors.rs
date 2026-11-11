@@ -3,8 +3,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use http::StatusCode;
-use lb_api_service::http::{DynError, blend::JoinError};
 use serde::Serialize;
+
+use crate::api::calls::{self, DynError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
@@ -14,32 +15,25 @@ pub enum ApiError {
     Forbidden(String),
     #[error("{0}")]
     NotFound(String),
-    #[error("Not found")]
-    NotFoundEmpty,
-    #[error("Internal server error")]
-    InternalServerError,
     #[error(transparent)]
     Internal(#[from] DynError),
 }
 
-impl ApiError {
-    pub fn internal(error: impl std::error::Error + Send + Sync + 'static) -> Self {
-        Self::Internal(Box::new(error))
-    }
-
-    pub fn internal_message(message: impl Into<String>) -> Self {
-        Self::Internal(DynError::from(message.into()))
+impl From<calls::Error> for ApiError {
+    fn from(error: calls::Error) -> Self {
+        match error {
+            calls::Error::NotFound(message) => Self::NotFound(message),
+            calls::Error::InvalidInput(message) => Self::BadRequest(message),
+            calls::Error::Unavailable(error) | calls::Error::Internal(error) => {
+                Self::Internal(error)
+            }
+        }
     }
 }
 
-impl From<JoinError> for ApiError {
-    fn from(error: JoinError) -> Self {
-        match error {
-            JoinError::Internal(error) => Self::Internal(error),
-            error @ (JoinError::KeyNotInWallet(_) | JoinError::NoServiceNote { .. }) => {
-                Self::NotFound(error.to_string())
-            }
-        }
+impl IntoResponse for calls::Error {
+    fn into_response(self) -> Response {
+        ApiError::from(self).into_response()
     }
 }
 
@@ -68,10 +62,6 @@ impl IntoResponse for ApiError {
             Self::BadRequest(message) => error_response(StatusCode::BAD_REQUEST, message),
             Self::Forbidden(message) => error_response(StatusCode::FORBIDDEN, message),
             Self::NotFound(message) => error_response(StatusCode::NOT_FOUND, message),
-            error @ Self::NotFoundEmpty => error_response(StatusCode::NOT_FOUND, error.to_string()),
-            error @ Self::InternalServerError => {
-                error_response(StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
-            }
             Self::Internal(error) => {
                 error_response(StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
             }
@@ -134,7 +124,7 @@ pub enum BlocksStreamHandlerError {
     #[error(transparent)]
     InvalidWindow(#[from] BlocksStreamWindowError),
     #[error(transparent)]
-    Internal(#[from] DynError),
+    Internal(#[from] calls::Error),
 }
 
 impl IntoResponse for BlocksStreamHandlerError {
@@ -142,7 +132,7 @@ impl IntoResponse for BlocksStreamHandlerError {
         match self {
             Self::Query(err) => err.into_response(),
             Self::InvalidWindow(err) => err.into_response(),
-            Self::Internal(err) => ApiError::Internal(err).into_response(),
+            Self::Internal(err) => err.into_response(),
         }
     }
 }
@@ -168,11 +158,6 @@ mod tests {
             (
                 ApiError::NotFound("not found".into()),
                 StatusCode::NOT_FOUND,
-            ),
-            (ApiError::NotFoundEmpty, StatusCode::NOT_FOUND),
-            (
-                ApiError::InternalServerError,
-                StatusCode::INTERNAL_SERVER_ERROR,
             ),
         ];
 
@@ -222,18 +207,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generic_internal_error_returns_json_envelope() {
-        let response = ApiError::InternalServerError.into_response();
-        let (status, envelope) = envelope_of(response).await;
-
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(
-            envelope,
-            serde_json::json!({ "code": 500, "message": "Internal server error" })
-        );
-    }
-
-    #[tokio::test]
     async fn internal_error_returns_json_envelope() {
         let response = ApiError::from(DynError::from("service unavailable")).into_response();
         let (status, envelope) = envelope_of(response).await;
@@ -242,18 +215,6 @@ mod tests {
         assert_eq!(
             envelope,
             serde_json::json!({ "code": 500, "message": "service unavailable" })
-        );
-    }
-
-    #[tokio::test]
-    async fn empty_not_found_returns_json_envelope() {
-        let response = ApiError::NotFoundEmpty.into_response();
-        let (status, envelope) = envelope_of(response).await;
-
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(
-            envelope,
-            serde_json::json!({ "code": 404, "message": "Not found" })
         );
     }
 

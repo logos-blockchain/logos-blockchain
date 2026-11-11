@@ -8,10 +8,7 @@ use lb_core::{
     mantle::{
         ledger::verification_mode::StandardMode,
         traits::{Hashable, StorageSize, hashable},
-        transactions::{
-            hash::TxHash,
-            states::{Preverified, Unverified},
-        },
+        transactions::{hash::TxHash as CoreTxHash, states::Unverified},
     },
 };
 use lb_node::{
@@ -23,17 +20,25 @@ use serde::Serialize;
 
 use crate::{
     LogosBlockchainNode, OperationStatus,
-    api::types::block::Block,
+    api::{
+        node::to_json_c_string,
+        types::{
+            block::Block,
+            hash::{HeaderId, TxHash, into_tx_hash},
+        },
+    },
     callbacks::{BoxedCallback, EventCallback, into_boxed_callback},
     errors::OperationStatusCode,
-    logging, return_error_if_null_pointer, unwrap_or_return_error,
+    logging,
+    result::{FfiStatusResult, StatusResult},
+    return_error_if_null_pointer, unwrap_or_return_error,
 };
 
 #[derive(Serialize)]
 #[serde(rename = "SignedMantleTx")]
 #[derive(Clone)]
 pub struct TxWithId {
-    id: TxHash,
+    id: CoreTxHash,
     #[serde(flatten)]
     tx: SignedOps<Unverified, StandardMode>,
 }
@@ -191,13 +196,7 @@ pub fn subscribe_to_processed_blocks_sync(
     let runtime_handler = unwrap_or_return_error!(node.get_runtime_handle());
     let overwatch = node.get_overwatch_handle();
     runtime_handler.block_on(async move {
-        let stream = match lb_api_service::http::mantle::get_new_blocks_stream::<
-            SignedOps<Preverified, StandardMode>,
-            CryptarchiaService<RuntimeServiceId>,
-            RuntimeServiceId,
-        >(overwatch)
-        .await
-        {
+        let stream = match lb_node::api::calls::blocks::get_new_blocks_stream(overwatch).await {
             Ok(stream) => stream,
             Err(e) => {
                 return OperationStatus::error(
@@ -275,7 +274,7 @@ pub fn subscribe_to_lib_blocks_sync(
     let runtime_handler = unwrap_or_return_error!(node.get_runtime_handle());
     let overwatch = node.get_overwatch_handle();
     runtime_handler.block_on(async move {
-        let stream = match lb_api_service::http::mantle::lib_block_stream(overwatch).await {
+        let stream = match lb_node::api::calls::blocks::lib_block_stream(overwatch).await {
             Ok(stream) => stream,
             Err(e) => {
                 return OperationStatus::error(
@@ -352,4 +351,319 @@ pub unsafe extern "C" fn subscribe_to_lib_blocks(
     };
     let node = unsafe { &*node };
     subscribe_to_lib_blocks_sync(node, unsafe { into_boxed_callback(callback_per_event) })
+}
+
+/// Gets a block by its header ID as a JSON string.
+///
+/// This is a synchronous wrapper around the asynchronous
+/// [`get_block`](lb_node::api::calls::blocks::get_block) function.
+///
+/// # Arguments
+///
+/// - `node`: A [`LogosBlockchainNode`] instance.
+/// - `header_id`: The 32-byte header ID of the block to fetch.
+///
+/// # Returns
+///
+/// A `Result` containing a JSON string representation of `Block` on success,
+/// or an [`OperationStatus`] error on failure. Returns
+/// [`OperationStatusCode::NotFound`] if no block with the given header ID
+/// exists.
+pub(crate) fn get_block_sync(
+    node: &LogosBlockchainNode,
+    header_id: HeaderId,
+) -> StatusResult<CString> {
+    let block = node.call(
+        "Failed to get block",
+        lb_node::api::calls::blocks::get_block(
+            node.get_overwatch_handle(),
+            lb_core::header::HeaderId::from(header_id),
+        ),
+    )?;
+    to_json_c_string(&block)
+}
+
+/// Result type for `get_block`. On success, `value` is a pointer to a
+/// NUL-terminated C string containing the JSON-serialized block.
+pub type FfiGetBlockResult = FfiStatusResult<*mut c_char>;
+
+/// Get a block by its header ID as a JSON string.
+///
+/// Returns the JSON-serialized block for the given 32-byte header ID.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a [`LogosBlockchainNode`].
+/// - `header_id`: A non-null pointer to a 32-byte header ID.
+///
+/// # Returns
+///
+/// A [`FfiGetBlockResult`] containing a pointer to an allocated C string (JSON
+/// block) on success, or an [`OperationStatus`] error on failure. Returns
+/// [`OperationStatusCode::NotFound`] if no block with the given header ID
+/// exists.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+/// The caller must ensure that `node` is non-null and points to a valid
+/// [`LogosBlockchainNode`], and that `header_id` is non-null and points to at
+/// least 32 valid bytes.
+///
+/// # Memory Management
+///
+/// This function allocates memory for the output C string. The caller must
+/// free this memory using the [`free_cstring`](super::free_cstring) function.
+#[panic_to_error]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn get_block(
+    node: *const LogosBlockchainNode,
+    header_id: *const HeaderId,
+) -> FfiGetBlockResult {
+    return_error_if_null_pointer!(node);
+    return_error_if_null_pointer!(header_id);
+
+    let header_id = unsafe { *header_id };
+    let node = unsafe { &*node };
+    let json_cstring = unwrap_or_return_error!(get_block_sync(node, header_id));
+    FfiGetBlockResult::ok(json_cstring.into_raw())
+}
+
+/// Gets a transaction by its hash as a JSON string.
+///
+/// This is a synchronous wrapper around the asynchronous
+/// [`get_transaction`](lb_node::api::calls::blocks::get_transaction) function.
+///
+/// # Arguments
+///
+/// - `node`: A [`LogosBlockchainNode`] instance.
+/// - `tx_hash`: The [`lb_core::mantle::TxHash`] of the transaction to fetch.
+///
+/// # Returns
+///
+/// A `Result` containing a JSON string of the transaction on success, or an
+/// [`OperationStatus`] error on failure. Returns
+/// [`OperationStatusCode::NotFound`] if no transaction with the given hash
+/// exists.
+pub(crate) fn get_transaction_sync(
+    node: &LogosBlockchainNode,
+    tx_hash: lb_core::mantle::TxHash,
+) -> StatusResult<CString> {
+    let transaction = node.call(
+        "Failed to get transaction",
+        lb_node::api::calls::blocks::get_transaction(node.get_overwatch_handle(), tx_hash),
+    )?;
+    to_json_c_string(&transaction)
+}
+
+/// Result type for `get_transaction`. On success, `value` is a pointer to a
+/// NUL-terminated C string containing the JSON-serialized transaction.
+pub type FfiGetTransactionResult = FfiStatusResult<*mut c_char>;
+
+/// Get a transaction by its hash as a JSON string.
+///
+/// Returns the JSON-serialized transaction for the given 32-byte transaction
+/// hash.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a [`LogosBlockchainNode`].
+/// - `tx_hash`: A non-null pointer to the 32-byte transaction hash.
+///
+/// # Returns
+///
+/// A [`FfiGetTransactionResult`] containing a pointer to an allocated C string
+/// (JSON transaction) on success, or an [`OperationStatus`] error on failure.
+/// Returns [`OperationStatusCode::NotFound`] if no transaction with the given
+/// hash exists.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+/// The caller must ensure that `node` is non-null and points to a valid
+/// [`LogosBlockchainNode`], and that `tx_hash` is non-null and points to at
+/// least 32 valid bytes.
+///
+/// # Memory Management
+///
+/// This function allocates memory for the output C string. The caller must
+/// free this memory using the [`free_cstring`](super::free_cstring) function.
+#[panic_to_error]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn get_transaction(
+    node: *const LogosBlockchainNode,
+    tx_hash: *const TxHash,
+) -> FfiGetTransactionResult {
+    return_error_if_null_pointer!(node);
+    return_error_if_null_pointer!(tx_hash);
+
+    let node = unsafe { &*node };
+    let tx_hash = unsafe { into_tx_hash(tx_hash) };
+    let json_cstring = unwrap_or_return_error!(get_transaction_sync(node, tx_hash));
+    FfiGetTransactionResult::ok(json_cstring.into_raw())
+}
+
+/// Gets blocks in a slot range as a JSON array string.
+///
+/// This is a synchronous wrapper around the asynchronous
+/// [`get_blocks`](lb_node::api::calls::blocks::get_immutable_blocks) function.
+///
+/// # Arguments
+///
+/// - `node`: A [`LogosBlockchainNode`] instance.
+/// - `from_slot`: Starting slot (inclusive).
+/// - `to_slot`: Ending slot (inclusive).
+///
+/// # Returns
+///
+/// A `Result` containing a JSON string representation of `Vec<Block>` on
+/// success, or an [`OperationStatus`] error on failure.
+pub(crate) fn get_blocks_sync(
+    node: &LogosBlockchainNode,
+    from_slot: usize,
+    to_slot: usize,
+) -> StatusResult<CString> {
+    let blocks = node.call(
+        "Failed to get blocks",
+        lb_node::api::calls::blocks::get_immutable_blocks(
+            node.get_overwatch_handle(),
+            from_slot,
+            to_slot,
+        ),
+    )?;
+    to_json_c_string(&blocks)
+}
+
+/// Result type for `get_blocks`. On success, `value` is a pointer to a
+/// NUL-terminated C string containing a JSON array of blocks.
+pub type FfiGetBlocksResult = FfiStatusResult<*mut c_char>;
+
+/// Get blocks in a slot range as a JSON array string.
+///
+/// Returns a JSON array of blocks for the specified slot range.
+/// The JSON format matches the server's block serialization.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a [`LogosBlockchainNode`].
+/// - `from_slot`: Starting slot (inclusive).
+/// - `to_slot`: Ending slot (inclusive).
+///
+/// # Returns
+///
+/// A [`FfiGetBlocksResult`] containing a pointer to an allocated C string (JSON
+/// array) on success, or an [`OperationStatus`] error on failure.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+/// The caller must ensure that all pointers are non-null and point to valid
+/// memory.
+///
+/// # Memory Management
+///
+/// This function allocates memory for the output C string. The caller must
+/// free this memory using the [`free_cstring`](super::free_cstring) function.
+#[panic_to_error]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn get_blocks(
+    node: *const LogosBlockchainNode,
+    from_slot: u64,
+    to_slot: u64,
+) -> FfiGetBlocksResult {
+    return_error_if_null_pointer!(node);
+
+    let Ok(from_slot) = usize::try_from(from_slot) else {
+        return FfiGetBlocksResult::err(OperationStatus::error(
+            OperationStatusCode::ValidationError,
+            "from_slot overflow.",
+        ));
+    };
+    let Ok(to_slot) = usize::try_from(to_slot) else {
+        return FfiGetBlocksResult::err(OperationStatus::error(
+            OperationStatusCode::ValidationError,
+            "to_slot overflow.",
+        ));
+    };
+
+    let node = unsafe { &*node };
+    let json_cstring = unwrap_or_return_error!(get_blocks_sync(node, from_slot, to_slot));
+    FfiGetBlocksResult::ok(json_cstring.into_raw())
+}
+
+/// Gets a block's events as a JSON string.
+///
+/// This is a synchronous wrapper around the asynchronous
+/// [`CryptarchiaServiceApi::get_block_events`] function.
+///
+/// # Arguments
+///
+/// - `node`: A [`LogosBlockchainNode`] instance.
+/// - `header_id`: The 32-byte header ID of the block whose events to fetch.
+///
+/// # Returns
+///
+/// A `Result` containing a JSON string of the block's events on success, or an
+/// [`OperationStatus`] error on failure. Returns
+/// [`OperationStatusCode::NotFound`] if no block with the given header ID
+/// exists.
+pub(crate) fn get_block_events_sync(
+    node: &LogosBlockchainNode,
+    header_id: HeaderId,
+) -> StatusResult<CString> {
+    let events = node.call(
+        "Failed to get block events",
+        lb_node::api::calls::blocks::get_block_events(
+            node.get_overwatch_handle(),
+            lb_core::header::HeaderId::from(header_id),
+        ),
+    )?;
+    to_json_c_string(&events)
+}
+
+/// Result type for `get_block_events`. On success, `value` is a pointer to a
+/// NUL-terminated C string containing the JSON-serialized events.
+pub type FfiGetBlockEventsResult = FfiStatusResult<*mut c_char>;
+
+/// Get a block's events as a JSON string.
+///
+/// Returns the JSON-serialized events emitted by the block with the given
+/// 32-byte header ID.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a [`LogosBlockchainNode`].
+/// - `header_id`: A non-null pointer to a 32-byte header ID.
+///
+/// # Returns
+///
+/// A [`FfiGetBlockEventsResult`] containing a pointer to an allocated C string
+/// (JSON events) on success, or an [`OperationStatus`] error on failure.
+/// Returns [`OperationStatusCode::NotFound`] if no block with the given header
+/// ID exists.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+/// The caller must ensure that `node` is non-null and points to a valid
+/// [`LogosBlockchainNode`], and that `header_id` is non-null and points to at
+/// least 32 valid bytes.
+///
+/// # Memory Management
+///
+/// This function allocates memory for the output C string. The caller must
+/// free this memory using the [`free_cstring`](super::free_cstring) function.
+#[panic_to_error]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn get_block_events(
+    node: *const LogosBlockchainNode,
+    header_id: *const HeaderId,
+) -> FfiGetBlockEventsResult {
+    return_error_if_null_pointer!(node);
+    return_error_if_null_pointer!(header_id);
+
+    let header_id = unsafe { *header_id };
+    let node = unsafe { &*node };
+    let json_cstring = unwrap_or_return_error!(get_block_events_sync(node, header_id));
+    FfiGetBlockEventsResult::ok(json_cstring.into_raw())
 }

@@ -5,14 +5,17 @@ use std::{
 
 use lb_c_macros::panic_to_error;
 use lb_groth16::fr_to_bytes;
+use lb_http_api_common::bodies::pow::PoWClaimRequestBody;
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_node::{PoWService, RuntimeServiceId};
 use lb_pow_service::{AutoClaimSettings, AutoClaimTick, PoWMiningSettings};
 use serde::de::DeserializeOwned;
 
 use crate::{
     LogosBlockchainNode, OperationStatus,
-    api::{cryptarchia::Hash, types::value::Value, wallet::parse_public_key},
+    api::{
+        types::{hash::Hash, value::Value},
+        wallet::parse_public_key,
+    },
     errors::OperationStatusCode,
     option::FfiOption,
     result::{FfiStatusResult, StatusResult},
@@ -22,7 +25,7 @@ use crate::{
 /// Enables `PoW` mining.
 ///
 /// This is a synchronous wrapper around the asynchronous
-/// [`start_mining`](lb_api_service::http::pow::start_mining) function. Mining
+/// [`start_mining`](lb_node::api::calls::pow::start_mining) function. Mining
 /// is a fire-and-forget toggle that is not persisted, so a restart clears it.
 ///
 /// # Arguments
@@ -34,18 +37,10 @@ use crate::{
 /// An [`OperationStatus`] error on failure, or [`OperationStatus::OK`] on
 /// success.
 pub(crate) fn pow_start_mining_sync(node: &LogosBlockchainNode) -> StatusResult<()> {
-    node.get_runtime_handle()?.block_on(async {
-        lb_api_service::http::pow::start_mining::<PoWService, RuntimeServiceId>(
-            node.get_overwatch_handle(),
-        )
-        .await
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::RelayError,
-                format!("Failed to start PoW mining: {error}"),
-            )
-        })
-    })
+    node.call(
+        "Failed to start PoW mining",
+        lb_node::api::calls::pow::start_mining(node.get_overwatch_handle()),
+    )
 }
 
 /// Enables `PoW` mining.
@@ -78,7 +73,7 @@ pub unsafe extern "C" fn pow_start_mining(node: *const LogosBlockchainNode) -> O
 /// Disables `PoW` mining.
 ///
 /// This is a synchronous wrapper around the asynchronous
-/// [`stop_mining`](lb_api_service::http::pow::stop_mining) function.
+/// [`stop_mining`](lb_node::api::calls::pow::stop_mining) function.
 ///
 /// # Arguments
 ///
@@ -89,18 +84,10 @@ pub unsafe extern "C" fn pow_start_mining(node: *const LogosBlockchainNode) -> O
 /// An [`OperationStatus`] error on failure, or [`OperationStatus::OK`] on
 /// success.
 pub(crate) fn pow_stop_mining_sync(node: &LogosBlockchainNode) -> StatusResult<()> {
-    node.get_runtime_handle()?.block_on(async {
-        lb_api_service::http::pow::stop_mining::<PoWService, RuntimeServiceId>(
-            node.get_overwatch_handle(),
-        )
-        .await
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::RelayError,
-                format!("Failed to stop PoW mining: {error}"),
-            )
-        })
-    })
+    node.call(
+        "Failed to stop PoW mining",
+        lb_node::api::calls::pow::stop_mining(node.get_overwatch_handle()),
+    )
 }
 
 /// Disables `PoW` mining.
@@ -133,7 +120,7 @@ pub unsafe extern "C" fn pow_stop_mining(node: *const LogosBlockchainNode) -> Op
 /// Enables unattended `PoW` claiming.
 ///
 /// This is a synchronous wrapper around the asynchronous
-/// [`start_auto_claim`](lb_api_service::http::pow::start_auto_claim) function.
+/// [`start_auto_claim`](lb_node::api::calls::pow::start_auto_claim) function.
 /// It has no effect when the node has no `auto_claim` targets configured, and
 /// the service stops itself again once every target reaches its threshold.
 ///
@@ -146,18 +133,10 @@ pub unsafe extern "C" fn pow_stop_mining(node: *const LogosBlockchainNode) -> Op
 /// An [`OperationStatus`] error on failure, or [`OperationStatus::OK`] on
 /// success.
 pub(crate) fn pow_start_auto_claim_sync(node: &LogosBlockchainNode) -> StatusResult<()> {
-    node.get_runtime_handle()?.block_on(async {
-        lb_api_service::http::pow::start_auto_claim::<PoWService, RuntimeServiceId>(
-            node.get_overwatch_handle(),
-        )
-        .await
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::RelayError,
-                format!("Failed to start PoW auto-claim: {error}"),
-            )
-        })
-    })
+    node.call(
+        "Failed to start PoW auto-claim",
+        lb_node::api::calls::pow::start_auto_claim(node.get_overwatch_handle()),
+    )
 }
 
 /// Enables unattended `PoW` claiming.
@@ -190,7 +169,7 @@ pub unsafe extern "C" fn pow_start_auto_claim(node: *const LogosBlockchainNode) 
 /// Disables unattended `PoW` claiming. Manual claims keep working.
 ///
 /// This is a synchronous wrapper around the asynchronous
-/// [`stop_auto_claim`](lb_api_service::http::pow::stop_auto_claim) function.
+/// [`stop_auto_claim`](lb_node::api::calls::pow::stop_auto_claim) function.
 ///
 /// # Arguments
 ///
@@ -201,18 +180,10 @@ pub unsafe extern "C" fn pow_start_auto_claim(node: *const LogosBlockchainNode) 
 /// An [`OperationStatus`] error on failure, or [`OperationStatus::OK`] on
 /// success.
 pub(crate) fn pow_stop_auto_claim_sync(node: &LogosBlockchainNode) -> StatusResult<()> {
-    node.get_runtime_handle()?.block_on(async {
-        lb_api_service::http::pow::stop_auto_claim::<PoWService, RuntimeServiceId>(
-            node.get_overwatch_handle(),
-        )
-        .await
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::RelayError,
-                format!("Failed to stop PoW auto-claim: {error}"),
-            )
-        })
-    })
+    node.call(
+        "Failed to stop PoW auto-claim",
+        lb_node::api::calls::pow::stop_auto_claim(node.get_overwatch_handle()),
+    )
 }
 
 /// Disables unattended `PoW` claiming. Manual claims keep working.
@@ -246,7 +217,7 @@ pub unsafe extern "C" fn pow_stop_auto_claim(node: *const LogosBlockchainNode) -
 /// tickets.
 ///
 /// This is a synchronous wrapper around the asynchronous
-/// [`claim`](lb_api_service::http::pow::claim) function.
+/// [`claim`](lb_node::api::calls::pow::claim) function.
 ///
 /// # Arguments
 ///
@@ -261,19 +232,13 @@ pub(crate) fn pow_claim_sync(
     node: &LogosBlockchainNode,
     claim_address: Option<ZkPublicKey>,
 ) -> StatusResult<lb_core::mantle::TxHash> {
-    let tx_hash = node.get_runtime_handle()?.block_on(async {
-        lb_api_service::http::pow::claim::<PoWService, RuntimeServiceId>(
+    let tx_hash = node.call(
+        "Failed to claim PoW rewards",
+        lb_node::api::calls::pow::claim(
             node.get_overwatch_handle(),
-            claim_address,
-        )
-        .await
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::ServiceError,
-                format!("Failed to claim PoW rewards: {error}"),
-            )
-        })
-    })?;
+            PoWClaimRequestBody { claim_address },
+        ),
+    )?;
 
     tx_hash.tx_hash.ok_or_else(|| {
         OperationStatus::error(
@@ -358,7 +323,7 @@ impl Default for PoWClaimableRewards {
 /// Reports the rewards this node can currently claim.
 ///
 /// This is a synchronous wrapper around the asynchronous
-/// [`claimable_rewards`](lb_api_service::http::pow::claimable_rewards)
+/// [`claimable_rewards`](lb_node::api::calls::pow::claimable_rewards)
 /// function.
 ///
 /// # Arguments
@@ -372,18 +337,10 @@ impl Default for PoWClaimableRewards {
 pub(crate) fn pow_claimable_rewards_sync(
     node: &LogosBlockchainNode,
 ) -> StatusResult<lb_pow_service::ClaimableRewardsInfo> {
-    node.get_runtime_handle()?.block_on(async {
-        lb_api_service::http::pow::claimable_rewards::<PoWService, RuntimeServiceId>(
-            node.get_overwatch_handle(),
-        )
-        .await
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::RelayError,
-                format!("Failed to get claimable PoW rewards: {error}"),
-            )
-        })
-    })
+    node.call(
+        "Failed to get claimable PoW rewards",
+        lb_node::api::calls::pow::claimable_rewards(node.get_overwatch_handle()),
+    )
 }
 
 pub type FfiPoWClaimableRewardsResult = FfiStatusResult<PoWClaimableRewards>;
@@ -523,7 +480,7 @@ pub struct PoWStatus {
 /// Reports the runtime state of the `PoW` service.
 ///
 /// This is a synchronous wrapper around the asynchronous
-/// [`status`](lb_api_service::http::pow::status) function.
+/// [`status`](lb_node::api::calls::pow::status) function.
 ///
 /// # Arguments
 ///
@@ -536,18 +493,10 @@ pub struct PoWStatus {
 pub(crate) fn pow_status_sync(
     node: &LogosBlockchainNode,
 ) -> StatusResult<lb_pow_service::PoWStatus> {
-    node.get_runtime_handle()?.block_on(async {
-        lb_api_service::http::pow::status::<PoWService, RuntimeServiceId>(
-            node.get_overwatch_handle(),
-        )
-        .await
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::RelayError,
-                format!("Failed to get PoW status: {error}"),
-            )
-        })
-    })
+    node.call(
+        "Failed to get PoW status",
+        lb_node::api::calls::pow::status(node.get_overwatch_handle()),
+    )
 }
 
 pub type FfiPoWStatusResult = FfiStatusResult<PoWStatus>;
@@ -671,7 +620,7 @@ unsafe fn parse_settings_json<T: DeserializeOwned>(json: *const c_char) -> Statu
 /// Replaces the `PoW` ticket-search tuning on a running node.
 ///
 /// This is a synchronous wrapper around the asynchronous
-/// [`set_mining_settings`](lb_api_service::http::pow::set_mining_settings)
+/// [`set_mining_settings`](lb_node::api::calls::pow::set_mining_settings)
 /// function.
 ///
 /// # Arguments
@@ -687,19 +636,10 @@ pub(crate) fn pow_set_mining_settings_sync(
     node: &LogosBlockchainNode,
     settings: PoWMiningSettings,
 ) -> StatusResult<()> {
-    node.get_runtime_handle()?.block_on(async {
-        lb_api_service::http::pow::set_mining_settings::<PoWService, RuntimeServiceId>(
-            node.get_overwatch_handle(),
-            settings,
-        )
-        .await
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::ServiceError,
-                format!("Failed to set the PoW mining settings: {error}"),
-            )
-        })
-    })
+    node.call(
+        "Failed to set the PoW mining settings",
+        lb_node::api::calls::pow::set_mining_settings(node.get_overwatch_handle(), settings),
+    )
 }
 
 /// Replaces the `PoW` ticket-search tuning on a running node.
@@ -739,7 +679,7 @@ pub unsafe extern "C" fn pow_set_mining_settings(
 /// Replaces the `PoW` auto-claim configuration on a running node.
 ///
 /// This is a synchronous wrapper around the asynchronous
-/// [`set_auto_claim_settings`](lb_api_service::http::pow::set_auto_claim_settings)
+/// [`set_auto_claim_settings`](lb_node::api::calls::pow::set_auto_claim_settings)
 /// function.
 ///
 /// # Arguments
@@ -755,19 +695,10 @@ pub(crate) fn pow_set_auto_claim_settings_sync(
     node: &LogosBlockchainNode,
     settings: AutoClaimSettings,
 ) -> StatusResult<()> {
-    node.get_runtime_handle()?.block_on(async {
-        lb_api_service::http::pow::set_auto_claim_settings::<PoWService, RuntimeServiceId>(
-            node.get_overwatch_handle(),
-            settings,
-        )
-        .await
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::ServiceError,
-                format!("Failed to set the PoW auto-claim settings: {error}"),
-            )
-        })
-    })
+    node.call(
+        "Failed to set the PoW auto-claim settings",
+        lb_node::api::calls::pow::set_auto_claim_settings(node.get_overwatch_handle(), settings),
+    )
 }
 
 /// Replaces the `PoW` auto-claim configuration on a running node.
