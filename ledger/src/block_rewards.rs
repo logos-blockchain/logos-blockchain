@@ -29,6 +29,44 @@ pub struct BlockRewardShares {
     pub blend: Value,
 }
 
+/// The pooled fees of the last `POOLED_FEES_WINDOW` blocks, oldest first.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct PooledFeesWindow(#[serde(with = "serde_arrays")] [Value; POOLED_FEES_WINDOW]);
+
+impl PooledFeesWindow {
+    /// The window before any block pooled fees.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self([0; POOLED_FEES_WINDOW])
+    }
+
+    /// The window once a block pooled `pooled_fees`: they enter as the last
+    /// entry, and the oldest entry leaves.
+    #[must_use]
+    pub const fn with_block(mut self, pooled_fees: Value) -> Self {
+        self.0.rotate_left(1);
+        self.0[POOLED_FEES_WINDOW - 1] = pooled_fees;
+        self
+    }
+
+    /// The pooled fees of the last block.
+    #[must_use]
+    pub const fn last(&self) -> Value {
+        self.0[POOLED_FEES_WINDOW - 1]
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Value> {
+        self.0.iter()
+    }
+}
+
+impl From<[Value; POOLED_FEES_WINDOW]> for PooledFeesWindow {
+    fn from(fees: [Value; POOLED_FEES_WINDOW]) -> Self {
+        Self(fees)
+    }
+}
+
 /// The reserve, the pool, the closed and pending Blend shares and the window of
 /// Block Rewards, in units of `10^-9` LGO.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -39,8 +77,7 @@ pub struct BlockRewards {
     blend_rewards_closed: Value,
     /// The Blend share of the current epoch.
     blend_rewards_pending: Value,
-    #[serde(with = "serde_arrays")]
-    pooled_fees_window: [Value; POOLED_FEES_WINDOW],
+    pooled_fees_window: PooledFeesWindow,
 }
 
 impl BlockRewards {
@@ -51,7 +88,7 @@ impl BlockRewards {
             rewards_pool: 0,
             blend_rewards_closed: 0,
             blend_rewards_pending: 0,
-            pooled_fees_window: [0; POOLED_FEES_WINDOW],
+            pooled_fees_window: PooledFeesWindow::empty(),
         }
     }
 
@@ -60,10 +97,7 @@ impl BlockRewards {
         pooled_fees: Value,
         total_stake: Value,
     ) -> Result<(Self, BlockRewardShares), BlockRewardsError> {
-        // The pooled fees of the block enter the window, this block last.
-        let mut pooled_fees_window = self.pooled_fees_window;
-        pooled_fees_window.rotate_left(1);
-        pooled_fees_window[POOLED_FEES_WINDOW - 1] = pooled_fees;
+        let pooled_fees_window = self.pooled_fees_window.with_block(pooled_fees);
         let (release, payout) =
             block_reward(total_stake, &pooled_fees_window, self.rewards_reserve)?;
         let reward = release
@@ -137,7 +171,7 @@ impl BlockRewards {
     }
 
     #[must_use]
-    pub const fn pooled_fees_window(&self) -> &[Value; POOLED_FEES_WINDOW] {
+    pub const fn pooled_fees_window(&self) -> &PooledFeesWindow {
         &self.pooled_fees_window
     }
 }
@@ -146,7 +180,7 @@ impl BlockRewards {
 /// reward.
 pub fn block_reward(
     total_stake: Value,
-    pooled_fees_window: &[Value; POOLED_FEES_WINDOW],
+    pooled_fees_window: &PooledFeesWindow,
     reserve: Value,
 ) -> Result<(Value, Value), BlockRewardsError> {
     // The pooled fees of a block never exceed the supply cap, so every product
@@ -192,10 +226,19 @@ mod tests {
 
     const STAKE_AT_TARGET: Value = 3_000_000_000_000_000_000;
 
-    fn window_with_last(fee: Value) -> [Value; POOLED_FEES_WINDOW] {
-        let mut window = [0; POOLED_FEES_WINDOW];
-        window[POOLED_FEES_WINDOW - 1] = fee;
-        window
+    fn window_with_last(fee: Value) -> PooledFeesWindow {
+        PooledFeesWindow::empty().with_block(fee)
+    }
+
+    #[test]
+    fn a_block_enters_the_window_last_and_pushes_out_the_oldest() {
+        let mut fees = [0; POOLED_FEES_WINDOW];
+        fees[0] = 7;
+        fees[1] = 8;
+        let window = PooledFeesWindow::from(fees).with_block(9);
+        assert_eq!(window.last(), 9);
+        assert_eq!(window.iter().next(), Some(&8));
+        assert_eq!(window.iter().sum::<Value>(), 17);
     }
 
     #[test]
@@ -203,7 +246,7 @@ mod tests {
         // No stake, no fees: A_t = 1, the maximum release 62_500 * 10^9 / 657 rounded
         // down.
         assert_eq!(
-            block_reward(0, &[0; POOLED_FEES_WINDOW], REWARDS_RESERVE_GENESIS),
+            block_reward(0, &PooledFeesWindow::empty(), REWARDS_RESERVE_GENESIS),
             Ok((95_129_375_951, 0))
         );
         // Stake at target, one block pooled 10^12: A_t' = 10_512 * 10^12.
@@ -220,13 +263,13 @@ mod tests {
         assert_eq!(
             block_reward(
                 4_000_000_000_000_000_000,
-                &[10_000_000_000; POOLED_FEES_WINDOW],
+                &PooledFeesWindow::from([10_000_000_000; POOLED_FEES_WINDOW]),
                 REWARDS_RESERVE_GENESIS
             ),
             Ok((0, 10_000_000_000))
         );
         // The release is capped at the reserve.
-        assert_eq!(block_reward(0, &[0; POOLED_FEES_WINDOW], 5), Ok((5, 0)));
+        assert_eq!(block_reward(0, &PooledFeesWindow::empty(), 5), Ok((5, 0)));
     }
 
     #[test]
@@ -278,7 +321,7 @@ mod tests {
             }
         );
         assert_eq!(state.rewards_pool(), 87_600_000_040);
-        assert_eq!(state.pooled_fees_window(), &[0; POOLED_FEES_WINDOW]);
+        assert_eq!(state.pooled_fees_window(), &PooledFeesWindow::empty());
     }
 
     #[test]

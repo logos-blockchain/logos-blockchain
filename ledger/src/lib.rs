@@ -1188,7 +1188,6 @@ mod tests {
 
     use super::*;
     use crate::{
-        block_rewards::POOLED_FEES_WINDOW,
         config::ModulusShift,
         cryptarchia::tests::{
             apply_and_add_utxo, apply_and_add_utxo_and_declaration, declaration_in_snapshot,
@@ -4813,7 +4812,11 @@ mod tests {
 
             // The pooled fees of the block are the last entry of the window.
             assert_eq!(
-                state.cryptarchia_ledger.block_rewards.pooled_fees_window()[POOLED_FEES_WINDOW - 1],
+                state
+                    .cryptarchia_ledger
+                    .block_rewards
+                    .pooled_fees_window()
+                    .last(),
                 900
             );
             assert_eq!(state.mantle_ledger.pow.reward_pool(), pool_before + 100);
@@ -4836,7 +4839,11 @@ mod tests {
                 .expect("reward computation should succeed");
 
             assert_eq!(
-                state.cryptarchia_ledger.block_rewards.pooled_fees_window()[POOLED_FEES_WINDOW - 1],
+                state
+                    .cryptarchia_ledger
+                    .block_rewards
+                    .pooled_fees_window()
+                    .last(),
                 1_000
             );
             assert_eq!(state.mantle_ledger.pow.reward_pool(), pool_before);

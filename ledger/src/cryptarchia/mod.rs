@@ -214,7 +214,7 @@ impl EpochState {
 #[educe(Clone, PartialEq)]
 pub struct LedgerState {
     pub note_sets: NoteSets,
-    // The channel withdrawals waiting for their due slot
+    // The channel and SDP withdrawals waiting for their due slot
     pub pending_withdrawals: PendingWithdrawals,
     // randomness contribution
     #[serde(with = "lb_groth16::serde::serde_fr")]
@@ -1008,7 +1008,6 @@ pub mod tests {
     use super::*;
     use crate::{
         Ledger,
-        block_rewards::POOLED_FEES_WINDOW,
         leader_proof::LeaderProof,
         mantle::{
             pow::tx_density::ClosedEpochLoad,
@@ -2082,10 +2081,7 @@ pub mod tests {
             state.block_rewards.rewards_reserve(),
             999_999_904_870_624_049
         );
-        assert_eq!(
-            state.block_rewards.pooled_fees_window()[POOLED_FEES_WINDOW - 1],
-            1_000
-        );
+        assert_eq!(state.block_rewards.pooled_fees_window().last(), 1_000);
     }
 
     #[test]
