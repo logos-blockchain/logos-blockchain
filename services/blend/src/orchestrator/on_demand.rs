@@ -233,6 +233,95 @@ mod tests {
         });
     }
 
+    mod startup_error {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        use super::{
+            DynError, NoOperator, NoState, OnDemandServiceMode, OpaqueServiceResourcesHandle,
+            OverwatchRunner, ServiceCore, ServiceData, ServiceStatus, Shutdown,
+        };
+
+        #[test_log::test(test)]
+        fn on_demand_startup_error_returns_without_hanging() {
+            let ran = Arc::new(AtomicBool::new(false));
+            let app = OverwatchRunner::<Services>::run(
+                ServicesServiceSettings {
+                    failing: Arc::clone(&ran),
+                },
+                None,
+            )
+            .expect("test runtime should start");
+
+            app.runtime().handle().block_on(async {
+                let handle = app.handle();
+                let status = handle
+                    .status_watcher::<FailingService>()
+                    .await
+                    .expect("status watcher should be available");
+                let result = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    OnDemandServiceMode::<FailingService, RuntimeServiceId>::new(handle.clone()),
+                )
+                .await
+                .expect("startup should not hang after the service stops");
+                let Err(error) = result else {
+                    panic!("startup should fail when the service never becomes ready");
+                };
+
+                assert!(ran.load(Ordering::SeqCst), "the service must have run");
+                assert_eq!(status.current(), ServiceStatus::Stopped);
+                let message = error.to_string();
+                assert!(
+                    message.contains("Service readiness wait failed"),
+                    "{message}"
+                );
+                assert!(
+                    message.contains("service stopped while waiting"),
+                    "{message}"
+                );
+            });
+        }
+
+        #[overwatch::derive_services(panic_policy = Shutdown)]
+        struct Services {
+            failing: FailingService,
+        }
+
+        struct FailingService {
+            ran: Arc<AtomicBool>,
+        }
+
+        impl ServiceData for FailingService {
+            type Settings = Arc<AtomicBool>;
+            type State = NoState<Self::Settings>;
+            type StateOperator = NoOperator<Self::State>;
+            type Message = ();
+        }
+
+        #[async_trait::async_trait]
+        impl ServiceCore<RuntimeServiceId> for FailingService {
+            fn init(
+                service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
+                _: Self::State,
+            ) -> Result<Self, DynError> {
+                Ok(Self {
+                    ran: service_resources_handle
+                        .settings_handle
+                        .notifier()
+                        .get_updated_settings(),
+                })
+            }
+
+            async fn run(self) -> Result<(), DynError> {
+                self.ran.store(true, Ordering::SeqCst);
+                Err(std::io::Error::other("startup failed before readiness").into())
+            }
+        }
+    }
+
     #[overwatch::derive_services(panic_policy = Shutdown)]
     struct Services {
         pong: PongService,
