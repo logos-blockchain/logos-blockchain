@@ -137,7 +137,6 @@ impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverifi
 
         // Validate the inputs against the ledger note set
         let tx_commitment_root = context.tx_notes.spendable_root(
-            NoteSetIndex::Ledger,
             context.note_sets.ledger(),
             operation.inputs.as_slice(),
             &operation.commitment_merkle_root,
@@ -268,11 +267,8 @@ mod test {
 
     use super::{test_utils::prove_transfer, *};
     use crate::mantle::{
-        TxHash,
-        gas::test_utils::FixedThresholds,
-        note_set::{CommitmentMmr, NoteSet},
-        notes::derive_note_nullifier,
-        ops::op_proof::samples::SampleProof as _,
+        TxHash, gas::test_utils::FixedThresholds, note_set::CommitmentMmr,
+        notes::derive_note_nullifier, ops::op_proof::samples::SampleProof as _,
     };
 
     #[test]
@@ -296,7 +292,11 @@ mod test {
 
     // The ledger set holds commitment(1), recorded at the end of block 0.
     fn note_sets() -> NoteSets {
-        let ledger = NoteSet::empty().execute_adding(&[commitment(1)]).unwrap();
+        let ledger = NoteSets::new()
+            .ledger()
+            .clone()
+            .execute_adding(&[commitment(1)])
+            .unwrap();
         NoteSets::new().update_ledger(ledger).end_block(0)
     }
 
@@ -489,10 +489,7 @@ mod test {
             .frontier_root();
         assert!(ledger.contains_nullifier(&nullifier(2)));
         assert_eq!(ledger.commitment_root(), expected);
-        assert_eq!(
-            tx_notes.commitment_root(NoteSetIndex::Ledger, ledger, &root(), 1),
-            Ok(expected)
-        );
+        assert_eq!(tx_notes.commitment_root(ledger, &root(), 1), Ok(expected));
         assert_eq!(events, []);
     }
 
@@ -507,7 +504,9 @@ mod test {
         let (mmr, path) = CommitmentMmr::new()
             .push_with_paths(input.commitment(), &mut [])
             .unwrap();
-        let ledger = NoteSet::empty()
+        let ledger = NoteSets::new()
+            .ledger()
+            .clone()
             .execute_adding(&[input.commitment()])
             .unwrap();
         let sets = NoteSets::new().update_ledger(ledger).end_block(0);

@@ -596,10 +596,7 @@ mod tests {
     use rand::RngCore as _;
 
     use super::*;
-    use crate::mantle::{
-        note_set::{CommitmentMmr, NoteSet},
-        notes::derive_note_nullifier,
-    };
+    use crate::mantle::{note_set::CommitmentMmr, notes::derive_note_nullifier};
 
     #[test]
     fn a_proof_flagging_the_point_at_infinity_does_not_decode() {
@@ -750,9 +747,9 @@ mod tests {
         let (_, path) = CommitmentMmr::new()
             .push_with_paths(commitment, &mut [])
             .unwrap();
-        let sets = NoteSets::new()
-            .update_ledger(NoteSet::empty().execute_adding(&[commitment]).unwrap())
-            .end_block(1);
+        let sets = NoteSets::new();
+        let ledger = sets.ledger().clone().execute_adding(&[commitment]).unwrap();
+        let sets = sets.update_ledger(ledger).end_block(1);
         let nullifier = derive_note_nullifier(
             &commitment,
             &UnsecuredZkKey::new(secret_key).nullifier_key(),

@@ -348,7 +348,7 @@ mod tests {
     use lb_key_management_system_keys::keys::{Ed25519Key, UnverifiedEd25519PublicKey};
 
     use super::*;
-    use crate::mantle::note_set::NoteSet;
+    use crate::mantle::note_set::{NoteSet, TypedNoteSet};
 
     fn test_public_key(seed: u8) -> UnverifiedEd25519PublicKey {
         Ed25519Key::from_bytes(&[seed; 32])
@@ -406,8 +406,11 @@ mod tests {
 
         assert_eq!(note_sets.channel(&NULL_CHANNEL_ID), None);
         assert_eq!(
-            note_sets.channel(&ChannelId::from([2u8; 32])),
-            Some(&NoteSet::empty())
+            note_sets
+                .channel(&ChannelId::from([2u8; 32]))
+                .cloned()
+                .map(TypedNoteSet::into_inner),
+            Some(NoteSet::empty())
         );
         assert!(note_sets.channel(&ChannelId::from([3u8; 32])).is_none());
         assert_eq!(

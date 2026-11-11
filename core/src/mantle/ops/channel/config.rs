@@ -399,7 +399,10 @@ mod tests {
 
     use super::*;
     use crate::mantle::{
-        TxHash, channel::ChannelState, gas::test_utils::FixedThresholds, note_set::NoteSet,
+        TxHash,
+        channel::ChannelState,
+        gas::test_utils::FixedThresholds,
+        note_set::{NoteSet, TypedNoteSet},
         ops::channel::verification::test_utils::create_channel_multi_sig_proof,
         transactions::tx_list::signed_ops::test_utils::make_channel_state,
     };
@@ -785,8 +788,12 @@ mod tests {
 
         assert_eq!(context.channels.channel_state(&channel_id), Some(&expected));
         assert_eq!(
-            context.note_sets.channel(&channel_id),
-            Some(&NoteSet::empty())
+            context
+                .note_sets
+                .channel(&channel_id)
+                .cloned()
+                .map(TypedNoteSet::into_inner),
+            Some(NoteSet::empty())
         );
         assert_eq!(events, []);
     }

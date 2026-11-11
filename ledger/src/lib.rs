@@ -1144,6 +1144,7 @@ mod tests {
             gas::{MainnetGasProfile, TxGasCalculator as _},
             note_set::{
                 CommitmentMmr, NoteSet, NoteSetIndex, NoteSetUpdate, TxBuffer, TxNoteState,
+                TypedNoteSet,
             },
             notes::{
                 InputNullifiers, NoteNullifier, OutputCommitments, derive_note_nonce,
@@ -1302,7 +1303,9 @@ mod tests {
         );
         let expected = NoteSets::new()
             .update_ledger(
-                NoteSet::empty()
+                NoteSets::new()
+                    .ledger()
+                    .clone()
                     .execute_adding(&[genesis_note.commitment(), added, reward_commitment])
                     .unwrap(),
             )
@@ -2621,8 +2624,12 @@ mod tests {
                 .contains_key(&channel_id)
         );
         assert_eq!(
-            new_state.latest_note_sets().channel(&channel_id),
-            Some(&NoteSet::empty())
+            new_state
+                .latest_note_sets()
+                .channel(&channel_id)
+                .cloned()
+                .map(TypedNoteSet::into_inner),
+            Some(NoteSet::empty())
         );
         assert_eq!(events, []);
     }
@@ -4703,7 +4710,7 @@ mod tests {
 
             let ledger_set = state.latest_note_sets().ledger();
             assert_eq!(
-                tx_notes.commitment_root(NoteSetIndex::Ledger, ledger_set, &root_before, 0),
+                tx_notes.commitment_root(ledger_set, &root_before, 0),
                 Ok(ledger_set.commitment_root())
             );
             assert_ne!(ledger_set.commitment_root(), root_before);

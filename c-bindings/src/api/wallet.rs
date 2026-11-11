@@ -7,6 +7,7 @@ use lb_core::{
     header::HeaderId as CoreHeaderId,
     mantle::{
         Note, Op, SignedOps,
+        channel::channel_note_set,
         ledger::verification_mode::StandardMode,
         notes::NoteCommitment as CoreNoteCommitment,
         ops::channel::{
@@ -1059,7 +1060,7 @@ async fn adopt_holder_note(
                     format!("Failed to get channel state: {error}"),
                 )
             })?
-            .and_then(|_| lb_core::mantle::channel::channel_note_set(channel_id));
+            .and_then(|_| channel_note_set(channel_id));
     if let Some(note_set) = note_set {
         api.import_note(holder_note, note_set)
             .await
