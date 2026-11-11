@@ -34,12 +34,12 @@ jobs:
         run: rustup override unset || true
 
       - name: Checkout repository
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           persist-credentials: false
 
       - name: Install cargo-hack
-        uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25  # Version 2.49.35
+        uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25  # v2.49.35
         with:
           tool: cargo-hack
 
@@ -48,27 +48,25 @@ jobs:
       # restored cache lands onto a disk that has already been cleaned, maximizing the chance the restore succeeds
       # without hitting disk limits.
       - name: Prune disk space (cache-aware, self-hosted)
-        uses: ./.github/actions/prune-disk-space
+        uses: $/.github/actions/prune-disk-space
 
       - name: Set up Cargo cache
-        uses: ./.github/actions/setup-cargo-cache
+        uses: $/.github/actions/setup-cargo-cache
         with:
           key-prefix: cargo-hack/${{ matrix.platform.label }}
 
       - name: Run Cargo Hack Check (Cache-Aware)
-        uses: ./.github/actions/cargo-hack-check-cached
+        uses: $/.github/actions/cargo-hack-check-cached
 
       - name: Update Cargo cache
         if: success() || failure()
-        uses: ./.github/actions/update-cargo-cache
+        uses: $/.github/actions/update-cargo-cache
         with:
           key-prefix: cargo-hack/${{ matrix.platform.label }}
 
       - name: Clean up build artifacts
         if: success() || failure()
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: clean
+        run: cargo clean
 
   # Deletes the caches that `features` superseded, in a job of its own like `prune-lint-caches` in
   # `code-check.yml`: deleting caches needs `actions: write`, and `features` compiles third-party code.
@@ -81,16 +79,9 @@ jobs:
     permissions:
       actions: write
     steps:
-      - name: Checkout prune action
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # Version 4.2.2
-        with:
-          sparse-checkout: .github/actions/prune-cache
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-
       # The key prefixes are the ones of `features`, with a trailing slash so that no other label matches.
       - name: Prune Cargo caches (self-hosted-linux)
-        uses: ./.github/actions/prune-cache
+        uses: $/.github/actions/prune-cache
         continue-on-error: true
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -98,7 +89,7 @@ jobs:
           mode: keep-latest
 
       - name: Prune Cargo caches (self-hosted-macos)
-        uses: ./.github/actions/prune-cache
+        uses: $/.github/actions/prune-cache
         continue-on-error: true
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
