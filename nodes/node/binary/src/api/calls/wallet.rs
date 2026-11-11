@@ -10,7 +10,6 @@ use lb_api_common::bodies::wallet::{
     transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
 };
 use lb_core::{
-    era::ForkDigest,
     header::HeaderId,
     mantle::{OpProof, gas::GasCost, traits::Hashable as _},
 };
@@ -20,7 +19,7 @@ use lb_wallet_service::{
     api::{WalletApi, WalletApiError},
 };
 
-use super::{Error, Handle, mempool, time::fork_digest_in_force};
+use super::{Error, Handle, ensure_ready, mempool, time::fork_digest_in_force};
 use crate::{RuntimeServiceId, WalletService};
 
 impl From<WalletApiError> for Error {
@@ -98,6 +97,7 @@ pub async fn claimable_vouchers(
     handle: &Handle,
     tip: Option<HeaderId>,
 ) -> Result<WalletClaimableVouchersResponseBody, Error> {
+    ensure_ready::<WalletService>(handle).await?;
     let TipResponse { tip, response } = wallet_api(handle)
         .await?
         .get_claimable_vouchers(tip)
@@ -164,7 +164,6 @@ pub async fn sign_tx_zk(
 /// leaving every other op for the caller to sign.
 pub async fn fund(
     handle: &Handle,
-    fork_digests: &[ForkDigest],
     request: WalletFundRequestBody,
 ) -> Result<WalletFundResponseBody, Error> {
     let wallet = wallet_api(handle).await?;
@@ -193,7 +192,7 @@ pub async fn fund(
         .collect();
 
     let funded_tx = funded_tx_builder
-        .build(fork_digest_in_force(handle, fork_digests).await?)
+        .build(fork_digest_in_force(handle).await?)
         .map_err(Error::internal)?;
     let transfer_proof = if funding_note_pks.is_empty() {
         None

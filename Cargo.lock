@@ -4572,7 +4572,6 @@ dependencies = [
  "logos-blockchain-node",
  "logos-blockchain-pow-service",
  "logos-blockchain-sdp-service",
- "logos-blockchain-storage-service",
  "logos-blockchain-utils",
  "logos-blockchain-version",
  "multiaddr",

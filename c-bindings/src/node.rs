@@ -1,13 +1,9 @@
-use std::ffi::CString;
-
-use lb_core::era::ForkDigest;
 use lb_node::{RuntimeServiceId, config::DeploymentSettings};
-use overwatch::overwatch::{Overwatch, OverwatchHandle, ServicePanic};
+use overwatch::overwatch::{Overwatch, ServicePanic};
 use tokio::runtime::{Handle, Runtime};
 
 use crate::{
     errors::{OperationStatus, OperationStatusCode},
-    logging,
     result::StatusResult,
 };
 
@@ -34,6 +30,9 @@ pub struct LogosBlockchainNode {
     // while the runtime they run on is still alive.
     overwatch: LogosBlockchainOverwatch,
     runtime: Runtime,
+    // What the API calls work with: the node's services and the constants of
+    // the deployment it was started with.
+    handle: lb_node::api::calls::Handle,
     // The deployment this node was started with, kept so era-dependent
     // parameters can be read for the current epoch.
     deployment: DeploymentSettings,
@@ -41,14 +40,24 @@ pub struct LogosBlockchainNode {
 
 impl LogosBlockchainNode {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         overwatch: LogosBlockchainOverwatch,
         runtime: Runtime,
         deployment: DeploymentSettings,
     ) -> Self {
+        let handle = lb_node::api::calls::Handle::new(
+            overwatch.handle().clone(),
+            deployment.chain_id(),
+            deployment
+                .era_schedule()
+                .iter()
+                .map(|era| era.parameters.fork_digest)
+                .collect(),
+        );
         Self {
             overwatch,
             runtime,
+            handle,
             deployment,
         }
     }
@@ -59,42 +68,9 @@ impl LogosBlockchainNode {
         &self.deployment
     }
 
-    /// The fork digest of every era of the deployment, era `n` at position
-    /// `n`.
     #[must_use]
-    pub(crate) fn fork_digests(&self) -> Vec<ForkDigest> {
-        self.deployment
-            .era_schedule()
-            .iter()
-            .map(|era| era.parameters.fork_digest)
-            .collect()
-    }
-
-    /// Fetch the chain ID of the deployment this node runs.
-    ///
-    /// # Returns
-    ///
-    /// The chain ID as a `CString` or `None` when it is not representable as
-    /// such.
-    #[must_use]
-    pub(crate) fn chain_id(&self) -> Option<CString> {
-        let chain_id = self.deployment.chain_id();
-
-        // A `ChainId` is only bounded and UTF-8, so nothing stops it from
-        // carrying an interior NUL that no C string can hold.
-        CString::new(<_ as AsRef<str>>::as_ref(&chain_id))
-            .inspect_err(|error| {
-                logging::error!(
-                    "chain_id",
-                    "Chain ID {chain_id} cannot be represented as a C string: {error}."
-                );
-            })
-            .ok()
-    }
-
-    #[must_use]
-    pub(crate) const fn get_overwatch_handle(&self) -> &OverwatchHandle<RuntimeServiceId> {
-        self.overwatch.handle()
+    pub(crate) const fn get_overwatch_handle(&self) -> &lb_node::api::calls::Handle {
+        &self.handle
     }
 
     /// Runs a call into the node's API to completion, reporting its failure

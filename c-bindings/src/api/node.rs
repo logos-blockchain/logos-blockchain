@@ -35,7 +35,7 @@ pub type FfiGetBuildVersionInfoResult = FfiStatusResult<*mut c_char>;
 #[panic_to_error]
 #[unsafe(no_mangle)]
 pub extern "C" fn get_build_version_info() -> FfiGetBuildVersionInfoResult {
-    let version_info = lb_version::build_version_info();
+    let version_info = lb_node::api::calls::node::version();
 
     let json = match serde_json::to_string(&version_info) {
         Ok(json) => json,
@@ -94,14 +94,14 @@ pub unsafe extern "C" fn get_chain_id(node: *const LogosBlockchainNode) -> FfiGe
     return_error_if_null_pointer!(node);
     let node = unsafe { &*node };
 
-    let Some(chain_id) = node.chain_id() else {
-        return FfiGetChainIdResult::err(OperationStatus::error(
+    let chain_id = lb_node::api::calls::node::chain_id(node.get_overwatch_handle());
+    match CString::new(<_ as AsRef<str>>::as_ref(&chain_id)) {
+        Ok(chain_id) => FfiGetChainIdResult::ok(chain_id.into_raw()),
+        Err(error) => FfiGetChainIdResult::err(OperationStatus::error(
             OperationStatusCode::RuntimeError,
-            "The chain ID of this deployment cannot be represented as a C string.",
-        ));
-    };
-
-    FfiGetChainIdResult::ok(chain_id.into_raw())
+            format!("Failed to create CString: {error}"),
+        )),
+    }
 }
 
 /// The libp2p protocol and topic names a deployment uses, derived from its
