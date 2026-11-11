@@ -70,14 +70,14 @@ fn rejects_unpinned_process() {
 }
 
 mod filled_ledger {
-    use lb_core::mantle::note_set::{LEDGER_SET, TxBuffer};
+    use lb_core::mantle::note_set::{NoteSetIndex, TxBuffer};
 
     use crate::fixture::{fill, filled_state, nullifiers};
 
     #[test]
     fn note_sets_are_filled() {
         let fixture = filled_state();
-        for index in [LEDGER_SET, fixture.channel_set] {
+        for index in [NoteSetIndex::Ledger, fixture.channel_set] {
             let set = fixture.state.latest_note_sets().get(index).unwrap();
             assert_eq!(set.nullifiers().len(), fill() + 1, "set {index}");
             assert!(set.commitments().len() >= fill(), "set {index}");
@@ -87,7 +87,7 @@ mod filled_ledger {
     #[test]
     fn fresh_nullifiers_are_spendable_against_the_current_root() {
         let fixture = filled_state();
-        let set = fixture.state.latest_note_sets().get(LEDGER_SET).unwrap();
+        let set = fixture.state.latest_note_sets().ledger();
         assert!(set.assert_spendable(&nullifiers(4, 0)).is_ok());
         assert!(
             set.tx_commitment_root(&TxBuffer::new(), &set.commitment_root(), 1)
@@ -100,7 +100,7 @@ mod filled_ledger {
     #[test]
     fn fresh_nullifiers_are_scattered_among_the_filled_ones() {
         let fixture = filled_state();
-        let set = fixture.state.latest_note_sets().get(LEDGER_SET).unwrap();
+        let set = fixture.state.latest_note_sets().ledger();
         let low_leaves: std::collections::HashSet<u64> = nullifiers(16, 0)
             .iter()
             .map(|nullifier| set.nullifiers().low_leaf(&nullifier.0).unwrap().0)

@@ -1143,7 +1143,7 @@ mod tests {
             channel::Channels,
             gas::{MainnetGasProfile, TxGasCalculator as _},
             note_set::{
-                CommitmentMmr, LEDGER_SET, NoteSet, NoteSetUpdate, SDP_SET, TxBuffer, TxNoteState,
+                CommitmentMmr, NoteSet, NoteSetIndex, NoteSetUpdate, TxBuffer, TxNoteState,
             },
             notes::{
                 InputNullifiers, NoteNullifier, OutputCommitments, derive_note_nonce,
@@ -1242,11 +1242,7 @@ mod tests {
     }
 
     fn ledger_root(state: &LedgerState) -> Fr {
-        state
-            .latest_note_sets()
-            .get(LEDGER_SET)
-            .unwrap()
-            .commitment_root()
+        state.latest_note_sets().ledger().commitment_root()
     }
 
     pub fn create_test_ledger() -> (Ledger<HeaderId>, HeaderId, (Fr, notes::Note)) {
@@ -1267,23 +1263,16 @@ mod tests {
         let mut state =
             LedgerState::from_notes([genesis_note], &test_config, GENESIS_POW_REWARD_POOL);
         state.block_number = 5;
-        let old_root = state
-            .latest_note_sets()
-            .get(LEDGER_SET)
-            .unwrap()
-            .commitment_root();
+        let old_root = state.latest_note_sets().ledger().commitment_root();
         let added = NoteCommitment(Fr::from(77u64));
         let ledger_set = state
             .latest_note_sets()
-            .get(LEDGER_SET)
-            .unwrap()
+            .ledger()
             .clone()
             .execute_adding(&[added])
             .unwrap();
-        state.cryptarchia_ledger.note_sets = state
-            .cryptarchia_ledger
-            .note_sets
-            .update(LEDGER_SET, ledger_set);
+        state.cryptarchia_ledger.note_sets =
+            state.cryptarchia_ledger.note_sets.update_ledger(ledger_set);
 
         let reward_commitment = NoteCommitment(Fr::from(0x4444u64));
         let (state, _, _, _) = state
@@ -1295,7 +1284,7 @@ mod tests {
             )
             .unwrap();
 
-        let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
+        let ledger_set = state.latest_note_sets().ledger();
         let empty = TxBuffer::new();
         assert!(
             ledger_set
@@ -1312,8 +1301,7 @@ mod tests {
                 .is_ok()
         );
         let expected = NoteSets::new()
-            .update(
-                LEDGER_SET,
+            .update_ledger(
                 NoteSet::empty()
                     .execute_adding(&[genesis_note.commitment(), added, reward_commitment])
                     .unwrap(),
@@ -1351,7 +1339,7 @@ mod tests {
             .push(reward_commitment)
             .unwrap()
             .frontier_root();
-        let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
+        let ledger_set = state.latest_note_sets().ledger();
         assert_eq!(ledger_set.commitment_root(), expected);
         // The recorded root of block 1 includes the leader note.
         assert!(
@@ -1422,7 +1410,7 @@ mod tests {
                     value: 38_051_750_380,
                 },
                 BlockEvent::NoteSetUpdated(NoteSetUpdate {
-                    note_set: LEDGER_SET,
+                    note_set: NoteSetIndex::Ledger,
                     nullifiers: vec![],
                     commitments: vec![reward_commitment],
                 }),
@@ -1739,7 +1727,7 @@ mod tests {
 
         // In the next block the nullifier is still spent, the other one too.
         let (state, _, _, _) = apply_contents(state, &eras, [first, other]).unwrap();
-        let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
+        let ledger_set = state.latest_note_sets().ledger();
         assert!(ledger_set.contains_nullifier(&NoteNullifier(Fr::ONE)));
         assert!(ledger_set.contains_nullifier(&NoteNullifier(Fr::from(2u64))));
         assert_eq!(
@@ -1868,14 +1856,10 @@ mod tests {
         assert_eq!(public.tx_commitment_root.into_inner(), root);
         let sets = state.latest_note_sets();
         assert!(
-            sets.get(LEDGER_SET)
-                .unwrap()
+            sets.ledger()
                 .contains_nullifier(&NoteNullifier(Fr::from(26u64)))
         );
-        assert_eq!(
-            sets.get(SDP_SET).unwrap().commitment_root(),
-            service_note_root(&declare)
-        );
+        assert_eq!(sets.sdp().commitment_root(), service_note_root(&declare));
         assert!(
             state
                 .mantle_ledger()
@@ -1927,8 +1911,7 @@ mod tests {
         assert!(
             state
                 .latest_note_sets()
-                .get(SDP_SET)
-                .unwrap()
+                .sdp()
                 .contains_nullifier(&NoteNullifier(Fr::from(28u64)))
         );
         assert_eq!(ledger_root(&state), root_before);
@@ -1944,7 +1927,11 @@ mod tests {
                     pending.outputs.clone()
                 ))
                 .collect::<Vec<_>>(),
-            vec![(SDP_SET, 0, [NoteCommitment(Fr::from(46u64))].into())]
+            vec![(
+                NoteSetIndex::Sdp,
+                0,
+                [NoteCommitment(Fr::from(46u64))].into()
+            )]
         );
     }
 
@@ -2008,7 +1995,7 @@ mod tests {
         state.mantle_ledger = mantle_ledger;
         state.cryptarchia_ledger = state.cryptarchia_ledger.clone().update_note_sets(note_sets);
         state.cryptarchia_ledger.pending_withdrawals = pending_withdrawals;
-        let ledger_set_before = state.latest_note_sets().get(LEDGER_SET).unwrap().clone();
+        let ledger_set_before = state.latest_note_sets().ledger().clone();
 
         // Every block also pays its leader, under the commitment its header names.
         let leader_note = NoteCommitment(Fr::ZERO);
@@ -2132,7 +2119,7 @@ mod tests {
         let distribution_op_id = tx.distribution_inscription().operation().op_id();
         let (state, _) = LedgerState::from_genesis_tx::<HeaderId>(tx, &config).unwrap();
 
-        let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
+        let ledger_set = state.latest_note_sets().ledger();
         let ledger_root = allocations
             .iter()
             .enumerate()
@@ -2146,7 +2133,7 @@ mod tests {
         // single sentinel leaf.
         assert_eq!(
             ledger_set.nullifier_root(),
-            NoteSets::new().get(LEDGER_SET).unwrap().nullifier_root()
+            NoteSets::new().ledger().nullifier_root()
         );
         // A block 1 transaction sees the recorded root alone.
         assert_eq!(
@@ -2154,11 +2141,7 @@ mod tests {
             Ok(ledger_root)
         );
         assert_eq!(
-            state
-                .latest_note_sets()
-                .get(SDP_SET)
-                .unwrap()
-                .commitment_root(),
+            state.latest_note_sets().sdp().commitment_root(),
             CommitmentMmr::new()
                 .push(declaration.service_note().commitment())
                 .unwrap()
@@ -2171,15 +2154,7 @@ mod tests {
                 .get_declaration(&declaration.id())
                 .is_some()
         );
-        assert!(
-            state
-                .mantle_ledger()
-                .channels()
-                .channel_state(&NULL_CHANNEL_ID)
-                .unwrap()
-                .note_set
-                .is_none()
-        );
+        assert!(state.latest_note_sets().channel(&NULL_CHANNEL_ID).is_none());
 
         // C_LEAD of epochs 0 and 1 is the eligible root after the genesis transaction.
         let eligible_root = state.latest_note_sets().eligible_root();
@@ -2603,12 +2578,7 @@ mod tests {
                 .any(|event| matches!(event, lb_core::events::Event::Tx(_)))
         );
 
-        let ledger_set = ledger
-            .state(&new_id)
-            .unwrap()
-            .latest_note_sets()
-            .get(LEDGER_SET)
-            .unwrap();
+        let ledger_set = ledger.state(&new_id).unwrap().latest_note_sets().ledger();
         assert!(ledger_set.contains_nullifier(&nullifier));
         assert_eq!(
             ledger_set.commitment_root(),
@@ -2651,15 +2621,9 @@ mod tests {
                 .contains_key(&channel_id)
         );
         assert_eq!(
-            new_state
-                .mantle_ledger
-                .channels()
-                .channel_state(&channel_id)
-                .unwrap()
-                .note_set,
-            Some(2)
+            new_state.latest_note_sets().channel(&channel_id),
+            Some(&NoteSet::empty())
         );
-        assert_eq!(new_state.latest_note_sets().get(2), Some(&NoteSet::empty()));
         assert_eq!(events, []);
     }
 
@@ -3013,12 +2977,15 @@ mod tests {
         assert!(
             state
                 .latest_note_sets()
-                .get(LEDGER_SET)
-                .unwrap()
+                .ledger()
                 .contains_nullifier(&NoteNullifier(Fr::ONE))
         );
         assert_eq!(
-            state.latest_note_sets().get(2).unwrap().commitment_root(),
+            state
+                .latest_note_sets()
+                .channel(&channel_id)
+                .unwrap()
+                .commitment_root(),
             CommitmentMmr::new()
                 .push(NoteCommitment(Fr::from(10u64)))
                 .unwrap()
@@ -3085,7 +3052,11 @@ mod tests {
             .channel_state(&channel_id)
             .unwrap()
             .clone();
-        let channel_root = state.latest_note_sets().get(2).unwrap().commitment_root();
+        let channel_root = state
+            .latest_note_sets()
+            .channel(&channel_id)
+            .unwrap()
+            .commitment_root();
         let deposit = DepositOp {
             channel_id,
             inputs: [NoteNullifier(Fr::ONE)].into(),
@@ -3127,7 +3098,7 @@ mod tests {
         assert!(
             state
                 .latest_note_sets()
-                .get(2)
+                .channel(&channel_id)
                 .unwrap()
                 .contains_nullifier(&NoteNullifier(Fr::from(11u64)))
         );
@@ -3153,7 +3124,11 @@ mod tests {
             .channel_state(&channel_id)
             .unwrap()
             .clone();
-        let channel_root = state.latest_note_sets().get(2).unwrap().commitment_root();
+        let channel_root = state
+            .latest_note_sets()
+            .channel(&channel_id)
+            .unwrap()
+            .commitment_root();
         let first = InscriptionOp {
             channel_id,
             inscription: [1].into(),
@@ -3272,7 +3247,11 @@ mod tests {
             .channel_state(&channel_id)
             .unwrap()
             .clone();
-        let channel_root = state.latest_note_sets().get(2).unwrap().commitment_root();
+        let channel_root = state
+            .latest_note_sets()
+            .channel(&channel_id)
+            .unwrap()
+            .commitment_root();
         let key = test_program_key();
         let inscribe = InscriptionOp {
             channel_id,
@@ -3305,7 +3284,7 @@ mod tests {
                 .into_inner(),
             Fr::from(5u64)
         );
-        let set = state.latest_note_sets().get(2).unwrap();
+        let set = state.latest_note_sets().channel(&channel_id).unwrap();
         assert!(set.contains_nullifier(&NoteNullifier(Fr::from(11u64))));
         assert_eq!(
             set.commitment_root(),
@@ -3344,7 +3323,11 @@ mod tests {
             .channel_state(&channel_id)
             .unwrap()
             .clone();
-        let channel_root = state.latest_note_sets().get(2).unwrap().commitment_root();
+        let channel_root = state
+            .latest_note_sets()
+            .channel(&channel_id)
+            .unwrap()
+            .commitment_root();
         let inscribe = InscriptionOp {
             channel_id,
             inscription: [1].into(),
@@ -3393,7 +3376,11 @@ mod tests {
             .channel_state(&channel_id)
             .unwrap()
             .clone();
-        let channel_root = state.latest_note_sets().get(2).unwrap().commitment_root();
+        let channel_root = state
+            .latest_note_sets()
+            .channel(&channel_id)
+            .unwrap()
+            .commitment_root();
         let key = test_program_key();
         let deposit = DepositOp {
             channel_id,
@@ -3583,7 +3570,11 @@ mod tests {
             &signing_key,
             verifying_key.into_unverified(),
         );
-        let channel_root = state.latest_note_sets().get(2).unwrap().commitment_root();
+        let channel_root = state
+            .latest_note_sets()
+            .channel(&channel_id)
+            .unwrap()
+            .commitment_root();
         let ledger_before = ledger_root(&state);
         let withdraw = ChannelWithdrawOp {
             channel_id,
@@ -3610,7 +3601,7 @@ mod tests {
         assert!(
             !state
                 .latest_note_sets()
-                .get(2)
+                .channel(&channel_id)
                 .unwrap()
                 .contains_nullifier(&NoteNullifier(Fr::from(5u64)))
         );
@@ -3621,7 +3612,10 @@ mod tests {
                 .iter()
                 .map(|w| (w.due, w.note_set_index))
                 .collect::<Vec<_>>(),
-            vec![(state.slot().strict_add(Slot::from(WITHDRAW_DELAY)), 2)]
+            vec![(
+                state.slot().strict_add(Slot::from(WITHDRAW_DELAY)),
+                NoteSetIndex::Channel(channel_id)
+            )]
         );
     }
 
@@ -3630,9 +3624,14 @@ mod tests {
         let test_config = config();
         let eras = single_era(test_config.clone());
         let mut state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
-        let (note_sets, channel_set) = state.cryptarchia_ledger.note_sets.clone().push_empty();
-        state.cryptarchia_ledger.note_sets = note_sets;
-        let ledger_before = state.latest_note_sets().get(LEDGER_SET).unwrap().clone();
+        let channel_id = ChannelId::from([4u8; 32]);
+        let channel_set = NoteSetIndex::Channel(channel_id);
+        state.cryptarchia_ledger.note_sets = state
+            .cryptarchia_ledger
+            .note_sets
+            .clone()
+            .with_channel(channel_id);
+        let ledger_before = state.latest_note_sets().ledger().clone();
         let withdrawal = PendingWithdrawal {
             due: Slot::from(1u64),
             note_set_index: channel_set,
@@ -3664,11 +3663,7 @@ mod tests {
                 .contains_nullifier(&NoteNullifier(Fr::from(7u64)))
         );
         assert_eq!(
-            state
-                .latest_note_sets()
-                .get(LEDGER_SET)
-                .unwrap()
-                .commitment_root(),
+            state.latest_note_sets().ledger().commitment_root(),
             ledger_before
                 .execute_adding(&[NoteCommitment(Fr::from(70u64))])
                 .unwrap()
@@ -4148,7 +4143,7 @@ mod tests {
             0,
         );
         update_ledger_prices(&mut ledger, 1, 1);
-        let ledger_set_before = ledger.latest_note_sets().get(LEDGER_SET).unwrap().clone();
+        let ledger_set_before = ledger.latest_note_sets().ledger().clone();
         let reward_commitment = NoteCommitment(Fr::from(0x4444u64));
         let gas_context = OpsGasContext::from_channels(&Channels::new(), ledger.get_gas_prices());
         let fees = tx
@@ -4537,7 +4532,7 @@ mod tests {
                     .nullifiers()
                     .contains_key(&claim_op().get_puzzle_ticket())
             );
-            let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
+            let ledger_set = state.latest_note_sets().ledger();
             assert_ne!(ledger_set.commitment_root(), root_before);
             assert_eq!(events.len(), 1);
             let TxEventPayload::PoWRewardClaimed { note, .. } = &events[0].payload else {
@@ -4706,9 +4701,9 @@ mod tests {
                     .contains_key(&op.get_puzzle_ticket())
             );
 
-            let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
+            let ledger_set = state.latest_note_sets().ledger();
             assert_eq!(
-                tx_notes.commitment_root(LEDGER_SET, ledger_set, &root_before, 0),
+                tx_notes.commitment_root(NoteSetIndex::Ledger, ledger_set, &root_before, 0),
                 Ok(ledger_set.commitment_root())
             );
             assert_ne!(ledger_set.commitment_root(), root_before);

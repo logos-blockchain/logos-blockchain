@@ -22,7 +22,7 @@ use crate::{
             DeferredProgramProof, DeferredZkProgramSpend, DeferredZkTransfer,
             InscriptionDeferredProofs, ProgramProofInput,
         },
-        channel::{ChannelState, Channels, Error},
+        channel::{ChannelState, Channels, Error, channel_note_set},
         gas::{
             EXECUTION_OPENING_GAS, EXECUTION_PROGRAM_DEPOSIT_GAS, EXECUTION_PROGRAM_STEP_GAS,
             EXECUTION_SIGNATURE_GAS, EXECUTION_USER_STEP_GAS, Gas, GasOverflow, MainnetGasProfile,
@@ -449,7 +449,7 @@ impl InscriptionOp {
                 });
             }
 
-            Ok(channel.note_set)
+            Ok(channel_note_set(self.channel_id))
         } else if self.parent != MsgId::root() {
             // The channel doesn't exist, so the parent must be ZERO
             Err(Error::InvalidParent {
@@ -884,7 +884,7 @@ impl<Mode: VerificationMode> ExecutableOperation
 
         // Apply the steps to the channel note set, in order
         if !operation.mini_blocks.is_empty() {
-            let index = channel.note_set.ok_or(Error::NoNoteSet {
+            let index = channel_note_set(operation.channel_id).ok_or(Error::NoNoteSet {
                 channel_id: operation.channel_id,
             })?;
             let note_set = context
@@ -1328,10 +1328,12 @@ mod tests {
                 tip_sequencer_starting_slot: block_slot,
                 posting_timeframe: 0.into(),
                 posting_timeout: 0.into(),
-                note_set: Some(2),
             })
         );
-        assert_eq!(context.note_sets.get(2), Some(&NoteSet::empty()));
+        assert_eq!(
+            context.note_sets.channel(&channel_id),
+            Some(&NoteSet::empty())
+        );
         assert_eq!(events, []);
     }
 
@@ -1358,14 +1360,8 @@ mod tests {
             })
             .expect("inscribing never fails");
 
-        assert_eq!(
-            context
-                .channels
-                .channel_state(&NULL_CHANNEL_ID)
-                .unwrap()
-                .note_set,
-            None
-        );
+        assert!(context.channels.channel_state(&NULL_CHANNEL_ID).is_some());
+        assert_eq!(context.note_sets.channel(&NULL_CHANNEL_ID), None);
         assert_eq!(context.note_sets, NoteSets::new());
     }
 
@@ -1420,7 +1416,6 @@ mod tests {
                 tip_sequencer_starting_slot: Slot::from(1u64),
                 posting_timeframe: 1.into(),
                 posting_timeout: 0.into(),
-                note_set: None,
             })
         );
         assert_eq!(events, []);
@@ -1563,7 +1558,18 @@ mod tests {
         let (channels, note_sets) =
             Channels::new().create_channel(channel_id, Slot::from(0u64), keys, NoteSets::new());
         let set = NoteSet::empty().execute_adding(&[commitment(1)]).unwrap();
-        (channels, note_sets.update(2, set).end_block(0))
+        (
+            channels,
+            note_sets.update_channel(sample_channel(), set).end_block(0),
+        )
+    }
+
+    fn sample_channel() -> ChannelId {
+        InscriptionOp::sample().channel_id
+    }
+
+    fn sample_set() -> NoteSetIndex {
+        NoteSetIndex::Channel(sample_channel())
     }
 
     fn root() -> Fr {
@@ -1742,7 +1748,7 @@ mod tests {
         // An earlier Operation of the transaction deposited commitment(7) into the
         // channel.
         let mut tx_notes = TxNoteState::new();
-        tx_notes.buffer_outputs(2, &[commitment(7)]);
+        tx_notes.buffer_outputs(sample_set(), &[commitment(7)]);
         let mini_blocks = vec![
             vec![
                 Step::User(step(&[nullifier(2)], &[commitment(3)], root())),
@@ -1790,7 +1796,7 @@ mod tests {
         let (_, note_sets) = state();
         // The first inscription of the transaction added commitment(3) to the buffer.
         let mut tx_notes = TxNoteState::new();
-        tx_notes.buffer_outputs(2, &[commitment(3)]);
+        tx_notes.buffer_outputs(sample_set(), &[commitment(3)]);
         let steps = vec![Step::User(step(&[nullifier(4)], &[], root()))];
         let deferred = verify_in_tx(
             with_steps(steps.clone()),
@@ -1922,12 +1928,12 @@ mod tests {
     fn verify_rejects_a_spent_channel_note() {
         let (channels, note_sets) = state();
         let set = note_sets
-            .get(2)
+            .channel(&sample_channel())
             .unwrap()
             .clone()
             .execute_spending(&[nullifier(2)])
             .unwrap();
-        let note_sets = note_sets.update(2, set);
+        let note_sets = note_sets.update_channel(sample_channel(), set);
         assert_eq!(
             verify_steps(
                 vec![Step::User(step(&[nullifier(2)], &[commitment(3)], root()))],
@@ -1966,7 +1972,7 @@ mod tests {
             })
             .expect("the channel has a note set");
 
-        let set = context.note_sets.get(2).unwrap();
+        let set = context.note_sets.channel(&sample_channel()).unwrap();
         let expected = CommitmentMmr::new()
             .push(commitment(1))
             .unwrap()
@@ -1978,7 +1984,9 @@ mod tests {
         assert!(set.contains_nullifier(&nullifier(2)) && set.contains_nullifier(&nullifier(4)));
         assert_eq!(set.commitment_root(), expected);
         assert_eq!(
-            context.tx_notes.commitment_root(2, set, &root(), 1),
+            context
+                .tx_notes
+                .commitment_root(sample_set(), set, &root(), 1),
             Ok(expected)
         );
     }
@@ -1998,7 +2006,7 @@ mod tests {
         let set = NoteSet::empty()
             .execute_adding(&[input.commitment()])
             .unwrap();
-        let note_sets = note_sets.update(2, set).end_block(1);
+        let note_sets = note_sets.update_channel(sample_channel(), set).end_block(1);
         let output = notes::Note::new(1_000, Fr::from(12u64), ZkPublicKey::new(Fr::from(2u64)));
         let step = step(
             &[derive_note_nullifier(
@@ -2259,7 +2267,7 @@ mod tests {
         // An earlier Operation of the transaction deposited commitment(7) into the
         // channel.
         let mut tx_notes = TxNoteState::new();
-        tx_notes.buffer_outputs(2, &[commitment(7)]);
+        tx_notes.buffer_outputs(sample_set(), &[commitment(7)]);
         let user = Step::User(step(&[nullifier(9)], &[commitment(10)], root()));
         let mini_blocks = vec![
             vec![
@@ -2484,7 +2492,7 @@ mod tests {
             })
             .expect("the channel has a note set");
 
-        let set = context.note_sets.get(2).unwrap();
+        let set = context.note_sets.channel(&sample_channel()).unwrap();
         let expected = [3, 5, 8, 10]
             .iter()
             .fold(
@@ -2499,7 +2507,9 @@ mod tests {
         );
         assert_eq!(set.commitment_root(), expected);
         assert_eq!(
-            context.tx_notes.commitment_root(2, set, &root(), 1),
+            context
+                .tx_notes
+                .commitment_root(sample_set(), set, &root(), 1),
             Ok(expected)
         );
     }
@@ -2527,7 +2537,7 @@ mod tests {
         let set = NoteSet::empty()
             .execute_adding(&[user_note.commitment()])
             .unwrap();
-        let note_sets = note_sets.update(2, set).end_block(1);
+        let note_sets = note_sets.update_channel(sample_channel(), set).end_block(1);
         let (_, proving_key) = three_input_setup(1);
         // Staked by an operator of key 7.
         let program_note = notes::Note {

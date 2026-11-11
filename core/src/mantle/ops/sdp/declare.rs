@@ -16,7 +16,7 @@ use crate::{
             ProviderIndex, VerifiableOperation,
             verification_mode::{GenesisMode, StandardMode, VerificationMode},
         },
-        note_set::{LEDGER_SET, NoteSets, SDP_SET, TxNoteState},
+        note_set::{NoteSetIndex, NoteSets, TxNoteState},
         ops::{OpId, SignedOperation, ZkAndEd25519Proof, zk_transfer::defer_zk_transfer},
         transactions::{
             hash::TxHashView,
@@ -78,20 +78,15 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         // Spend the inputs from the ledger set and add the service note to the SDP set
         let ledger = context
             .note_sets
-            .get(LEDGER_SET)
-            .expect("the ledger note set always exists")
+            .ledger()
             .clone()
             .execute_spending(self.inputs.as_slice())?;
         let sdp = context
             .note_sets
-            .get(SDP_SET)
-            .expect("the SDP note set always exists")
+            .sdp()
             .clone()
             .execute_adding(&[self.service_note().commitment()])?;
-        context.note_sets = context
-            .note_sets
-            .update(LEDGER_SET, ledger)
-            .update(SDP_SET, sdp);
+        context.note_sets = context.note_sets.update_ledger(ledger).update_sdp(sdp);
 
         Ok((context, Vec::new()))
     }
@@ -195,11 +190,8 @@ impl VerifiableOperation<StandardMode>
 
         // Validate the inputs against the ledger note set
         let tx_commitment_root = context.tx_notes.spendable_root(
-            LEDGER_SET,
-            context
-                .note_sets
-                .get(LEDGER_SET)
-                .expect("the ledger note set always exists"),
+            NoteSetIndex::Ledger,
+            context.note_sets.ledger(),
             operation.inputs.as_slice(),
             &operation.commitment_merkle_root,
             context.block_number,
@@ -277,9 +269,7 @@ mod tests {
             batch::DeferredZkTransfer,
             gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
             ledger::{Declarations, ProviderIndex},
-            note_set::{
-                CommitmentMmr, LEDGER_SET, NoteSet, NoteSetError, NoteSets, SDP_SET, TxNoteState,
-            },
+            note_set::{CommitmentMmr, NoteSet, NoteSetError, NoteSetIndex, NoteSets, TxNoteState},
             notes::{
                 self, NoteCommitment, NoteNullifier, derive_note_nonce, derive_note_nullifier,
             },
@@ -297,11 +287,11 @@ mod tests {
         let ledger = NoteSet::empty()
             .execute_adding(&[NoteCommitment(Fr::from(1u64))])
             .unwrap();
-        NoteSets::new().update(LEDGER_SET, ledger).end_block(0)
+        NoteSets::new().update_ledger(ledger).end_block(0)
     }
 
     fn root() -> Fr {
-        note_sets().get(LEDGER_SET).unwrap().commitment_root()
+        note_sets().ledger().commitment_root()
     }
 
     fn declare_op(provider_sk: u8, zk_sk: u64, locator: &str) -> SDPDeclareOp {
@@ -506,7 +496,7 @@ mod tests {
         #[test]
         fn verify_extends_the_referenced_root_with_the_buffer() {
             let mut tx_notes = TxNoteState::new();
-            tx_notes.buffer_outputs(LEDGER_SET, &[NoteCommitment(Fr::from(4u64))]);
+            tx_notes.buffer_outputs(NoteSetIndex::Ledger, &[NoteCommitment(Fr::from(4u64))]);
             let deferred = verify_in_tx(
                 declare_op(1, 1, "/ip4/1.1.1.1/udp/3000"),
                 ZkTransferProof::sample(),
@@ -541,12 +531,11 @@ mod tests {
         fn verify_rejects_a_spent_input() {
             let sets = note_sets();
             let spent = sets
-                .get(LEDGER_SET)
-                .unwrap()
+                .ledger()
                 .clone()
                 .execute_spending(&[nullifier(2)])
                 .unwrap();
-            let sets = sets.update(LEDGER_SET, spent);
+            let sets = sets.update_ledger(spent);
             assert_eq!(
                 verify_against(
                     declare_op(1, 1, "/ip4/1.1.1.1/udp/3000"),
@@ -623,7 +612,7 @@ mod tests {
             let ledger = NoteSet::empty()
                 .execute_adding(&[input.commitment()])
                 .unwrap();
-            let sets = NoteSets::new().update(LEDGER_SET, ledger).end_block(0);
+            let sets = NoteSets::new().update_ledger(ledger).end_block(0);
             let root = mmr.frontier_root();
             let nullifier =
                 derive_note_nullifier(&input.commitment(), &ZkKey::new(secret_key).nullifier_key());
@@ -696,11 +685,11 @@ mod tests {
                 .expect("the input is unspent");
 
             let empty_root = NoteSet::empty().commitment_root();
-            let ledger = context.note_sets.get(LEDGER_SET).unwrap();
+            let ledger = context.note_sets.ledger();
             assert!(ledger.contains_nullifier(&nullifier(26)));
             assert_eq!(ledger.commitment_root(), empty_root);
             assert_eq!(
-                context.note_sets.get(SDP_SET).unwrap().commitment_root(),
+                context.note_sets.sdp().commitment_root(),
                 CommitmentMmr::new()
                     .push(expected.commitment())
                     .unwrap()
@@ -814,11 +803,11 @@ mod tests {
 
             assert_eq!(events, []);
             assert_eq!(
-                context.note_sets.get(LEDGER_SET).unwrap().nullifier_root(),
-                NoteSets::new().get(LEDGER_SET).unwrap().nullifier_root()
+                context.note_sets.ledger().nullifier_root(),
+                NoteSets::new().ledger().nullifier_root()
             );
             assert_eq!(
-                context.note_sets.get(SDP_SET).unwrap().commitment_root(),
+                context.note_sets.sdp().commitment_root(),
                 CommitmentMmr::new()
                     .push(operation.service_note().commitment())
                     .unwrap()

@@ -19,7 +19,7 @@ use crate::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::StandardMode,
         },
-        note_set::{LEDGER_SET, NoteSetError, NoteSets, TxNoteState},
+        note_set::{NoteSetError, NoteSetIndex, NoteSets, TxNoteState},
         notes::{self, derive_note_nonce},
         ops::{NoOpProof, OpId, SignedOperation},
         transactions::states::{Preverified, Unverified, Verified},
@@ -341,10 +341,11 @@ impl ExecutableOperation for SignedOperation<ClaimPowRewardOp, Verified, Standar
             operation.public_key,
         );
         let note_commitment = note.commitment();
-        context.note_sets =
-            context
-                .note_sets
-                .add_tx_outputs(context.tx_notes, LEDGER_SET, &[note_commitment])?;
+        context.note_sets = context.note_sets.add_tx_outputs(
+            context.tx_notes,
+            NoteSetIndex::Ledger,
+            &[note_commitment],
+        )?;
         // decrement current pool
         context.decrement_reward_pool();
         // output event
@@ -811,11 +812,11 @@ mod tests {
             .push(expected_note.commitment())
             .unwrap()
             .frontier_root();
-        let ledger_set = ctx.note_sets.get(LEDGER_SET).unwrap();
+        let ledger_set = ctx.note_sets.ledger();
         assert_eq!(ledger_set.commitment_root(), expected_root);
         assert_eq!(
             ctx.tx_notes.commitment_root(
-                LEDGER_SET,
+                NoteSetIndex::Ledger,
                 ledger_set,
                 &CommitmentMmr::new().frontier_root(),
                 0

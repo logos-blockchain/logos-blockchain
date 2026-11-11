@@ -2,7 +2,7 @@ use lb_core::{
     mantle::{
         Note, Op, SignedOps,
         ledger::verification_mode::StandardMode,
-        note_set::LEDGER_SET,
+        note_set::NoteSetIndex,
         notes::NoteNullifier,
         transactions::{MantleTxBuilder, builder::ZkTransferOpening, states::Preverified},
     },
@@ -182,7 +182,7 @@ where
         );
         // the wallet adopts the withdrawn stake once its commitment is appended
         self.api
-            .import_note(output, LEDGER_SET)
+            .import_note(output, NoteSetIndex::Ledger)
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
         tx_builder = tx_builder.push_op_with_opening(

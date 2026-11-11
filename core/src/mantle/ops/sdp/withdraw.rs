@@ -17,7 +17,7 @@ use crate::{
             VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
         },
-        note_set::{CommitmentMmr, NoteSets, SDP_SET},
+        note_set::{CommitmentMmr, NoteSetIndex, NoteSets},
         notes::InputNullifiers,
         ops::{
             OpId, SignedOperation, ZkAndEd25519Proof,
@@ -120,8 +120,7 @@ impl VerifiableOperation<StandardMode>
         // once.
         context
             .note_sets
-            .get(SDP_SET)
-            .expect("the SDP note set always exists")
+            .sdp()
             .assert_spendable(&[operation.service_note_nullifier])?;
 
         // The root of an empty MMR to which only the service note of the declaration is
@@ -158,11 +157,10 @@ impl<Mode: VerificationMode> ExecutableOperation
         // Spend the service note from the SDP set
         let sdp = context
             .note_sets
-            .get(SDP_SET)
-            .expect("the SDP note set always exists")
+            .sdp()
             .clone()
             .execute_spending(&[operation.service_note_nullifier])?;
-        context.note_sets = context.note_sets.update(SDP_SET, sdp);
+        context.note_sets = context.note_sets.update_sdp(sdp);
 
         let declaration = context
             .declarations
@@ -179,7 +177,7 @@ impl<Mode: VerificationMode> ExecutableOperation
         // The outputs wait, with no input, until the declaration is removed.
         context.pending_withdrawals = context.pending_withdrawals.push(PendingWithdrawal {
             due: context.release_slot,
-            note_set_index: SDP_SET,
+            note_set_index: NoteSetIndex::Sdp,
             inputs: InputNullifiers::default(),
             outputs: operation.outputs.clone(),
         });
@@ -206,7 +204,7 @@ mod tests {
         mantle::{
             TxHash,
             gas::test_utils::FixedThresholds,
-            note_set::{LEDGER_SET, NoteSet, NoteSetError},
+            note_set::{NoteSet, NoteSetError},
             notes::{
                 self, NoteCommitment, NoteNullifier, OutputCommitments, derive_note_nullifier,
             },
@@ -351,7 +349,7 @@ mod tests {
         let sdp = NoteSet::empty()
             .execute_adding(&[NoteCommitment(Fr::from(1u64))])
             .unwrap();
-        let sets = NoteSets::new().update(SDP_SET, sdp).end_block(0);
+        let sets = NoteSets::new().update_sdp(sdp).end_block(0);
         let deferred = verify_withdrawal(
             &preverified(
                 operation,
@@ -401,7 +399,7 @@ mod tests {
         let spent = NoteSet::empty()
             .execute_spending(&[NoteNullifier(Fr::from(28u64))])
             .unwrap();
-        let sets = NoteSets::new().update(SDP_SET, spent);
+        let sets = NoteSets::new().update_sdp(spent);
         assert_eq!(
             verify_withdrawal(
                 &preverified(
@@ -559,7 +557,7 @@ mod tests {
             context.pending_withdrawals.iter().collect::<Vec<_>>(),
             vec![&PendingWithdrawal {
                 due: Slot::from(70u64),
-                note_set_index: SDP_SET,
+                note_set_index: NoteSetIndex::Sdp,
                 inputs: InputNullifiers::default(),
                 outputs: [NoteCommitment(Fr::from(46u64))].into(),
             }]
@@ -567,12 +565,11 @@ mod tests {
         assert!(
             context
                 .note_sets
-                .get(SDP_SET)
-                .unwrap()
+                .sdp()
                 .contains_nullifier(&NoteNullifier(Fr::from(28u64)))
         );
         assert_eq!(
-            context.note_sets.get(LEDGER_SET).unwrap().commitment_root(),
+            context.note_sets.ledger().commitment_root(),
             NoteSet::empty().commitment_root()
         );
         assert_eq!(events, []);

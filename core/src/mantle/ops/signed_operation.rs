@@ -182,7 +182,7 @@ mod tests {
             channel::{Channels, Error},
             gas::MainnetGasProfile,
             ledger::verification_mode::StandardMode,
-            note_set::{LEDGER_SET, NoteSets, TxNoteState},
+            note_set::{NoteSets, TxNoteState},
             notes::{NoteNullifier, OutputCommitments},
             ops::{
                 ChannelInscribeProof, ZkTransferProof,
@@ -330,10 +330,7 @@ mod tests {
     #[test]
     fn into_verified_defers_a_zk_proof_to_the_batch() {
         let note_sets = NoteSets::new();
-        let root = note_sets
-            .get(LEDGER_SET)
-            .expect("the ledger note set always exists")
-            .commitment_root();
+        let root = note_sets.ledger().commitment_root();
         let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
             TransferOp::new(
                 [NoteNullifier(Fr::from(2u64))].into(),

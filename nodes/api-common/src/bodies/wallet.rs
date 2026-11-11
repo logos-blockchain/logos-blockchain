@@ -246,7 +246,7 @@ pub mod import {
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{Note, note_set::LEDGER_SET};
+    use lb_core::mantle::{Note, note_set::NoteSetIndex};
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::ZkPublicKey;
 
@@ -256,7 +256,7 @@ mod tests {
     fn import_note_body_round_trips() {
         let body = WalletImportNoteRequestBody {
             note: Note::new(5, Fr::from(3u64), ZkPublicKey::new(Fr::from(7u64))),
-            note_set: LEDGER_SET,
+            note_set: NoteSetIndex::Ledger,
         };
         let decoded: WalletImportNoteRequestBody =
             serde_json::from_str(&serde_json::to_string(&body).unwrap()).unwrap();

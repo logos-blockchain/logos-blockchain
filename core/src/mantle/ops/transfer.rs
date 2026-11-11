@@ -24,7 +24,7 @@ use crate::{
             VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
         },
-        note_set::{LEDGER_SET, NoteSetError, NoteSets, TxNoteState},
+        note_set::{NoteSetError, NoteSetIndex, NoteSets, TxNoteState},
         notes::{InputNullifiers, Note, OutputCommitments},
         ops::{
             OpId, SignedOperation, ZkTransferProof,
@@ -137,11 +137,8 @@ impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverifi
 
         // Validate the inputs against the ledger note set
         let tx_commitment_root = context.tx_notes.spendable_root(
-            LEDGER_SET,
-            context
-                .note_sets
-                .get(LEDGER_SET)
-                .expect("the ledger note set always exists"),
+            NoteSetIndex::Ledger,
+            context.note_sets.ledger(),
             operation.inputs.as_slice(),
             &operation.commitment_merkle_root,
             context.block_number,
@@ -179,9 +176,9 @@ impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<TransferOp,
         // transaction are proven against.
         context.note_sets = context.note_sets.execute_transfer(
             context.tx_notes,
-            LEDGER_SET,
+            NoteSetIndex::Ledger,
             operation.inputs.as_slice(),
-            LEDGER_SET,
+            NoteSetIndex::Ledger,
             operation.outputs.as_slice(),
         )?;
         Ok((context, Vec::new()))
@@ -300,11 +297,11 @@ mod test {
     // The ledger set holds commitment(1), recorded at the end of block 0.
     fn note_sets() -> NoteSets {
         let ledger = NoteSet::empty().execute_adding(&[commitment(1)]).unwrap();
-        NoteSets::new().update(LEDGER_SET, ledger).end_block(0)
+        NoteSets::new().update_ledger(ledger).end_block(0)
     }
 
     fn root() -> Fr {
-        note_sets().get(LEDGER_SET).unwrap().commitment_root()
+        note_sets().ledger().commitment_root()
     }
 
     fn transfer(
@@ -425,7 +422,7 @@ mod test {
     #[test]
     fn verify_extends_the_referenced_root_with_the_buffer() {
         let mut tx_notes = TxNoteState::new();
-        tx_notes.buffer_outputs(LEDGER_SET, &[commitment(4)]);
+        tx_notes.buffer_outputs(NoteSetIndex::Ledger, &[commitment(4)]);
         let deferred = verify_in_tx(
             transfer(&[nullifier(2)], &[commitment(3)], root()),
             &note_sets(),
@@ -457,12 +454,11 @@ mod test {
     fn verify_rejects_a_spent_input() {
         let sets = note_sets();
         let spent = sets
-            .get(LEDGER_SET)
-            .unwrap()
+            .ledger()
             .clone()
             .execute_spending(&[nullifier(2)])
             .unwrap();
-        let sets = sets.update(LEDGER_SET, spent);
+        let sets = sets.update_ledger(spent);
         assert_eq!(
             verify(transfer(&[nullifier(2)], &[commitment(3)], root()), &sets).unwrap_err(),
             TransferError::NoteSet(NoteSetError::AlreadySpent(nullifier(2)))
@@ -484,7 +480,7 @@ mod test {
             })
             .expect("the input is unspent");
         let sets = context.note_sets;
-        let ledger = sets.get(LEDGER_SET).unwrap();
+        let ledger = sets.ledger();
         let expected = CommitmentMmr::new()
             .push(commitment(1))
             .unwrap()
@@ -494,7 +490,7 @@ mod test {
         assert!(ledger.contains_nullifier(&nullifier(2)));
         assert_eq!(ledger.commitment_root(), expected);
         assert_eq!(
-            tx_notes.commitment_root(LEDGER_SET, ledger, &root(), 1),
+            tx_notes.commitment_root(NoteSetIndex::Ledger, ledger, &root(), 1),
             Ok(expected)
         );
         assert_eq!(events, []);
@@ -514,8 +510,8 @@ mod test {
         let ledger = NoteSet::empty()
             .execute_adding(&[input.commitment()])
             .unwrap();
-        let sets = NoteSets::new().update(LEDGER_SET, ledger).end_block(0);
-        let root = sets.get(LEDGER_SET).unwrap().commitment_root();
+        let sets = NoteSets::new().update_ledger(ledger).end_block(0);
+        let root = sets.ledger().commitment_root();
         assert_eq!(root, mmr.frontier_root());
         let output = Note::new(994, Fr::from(12u64), ZkPublicKey::new(Fr::from(2u64)));
         let nullifier =

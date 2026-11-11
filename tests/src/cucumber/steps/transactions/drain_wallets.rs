@@ -7,7 +7,7 @@ use std::{
 use lb_core::mantle::{
     Note,
     gas::{GasCost, MainnetGasProfile},
-    note_set::LEDGER_SET,
+    note_set::NoteSetIndex,
     notes::NoteNullifier,
     transactions::{
         GENESIS_EXECUTION_GAS_PRICE, GasPrices, MantleTxBuilder, OpProofs,
@@ -436,7 +436,7 @@ fn estimate_drain_fee_with_values(input_count: NonZeroUsize, value: u64) -> Resu
     let input_utxos = (0..input_count.get())
         .map(|index| OwnedNote {
             note: Note::new(input_value, Fr::from(index as u64), ZkPublicKey::zero()),
-            note_set: LEDGER_SET,
+            note_set: NoteSetIndex::Ledger,
             nullifier: NoteNullifier(Fr::from(index as u64)),
             path: MerklePath::try_new(index, Vec::new()).expect("an empty path is bounded"),
         })

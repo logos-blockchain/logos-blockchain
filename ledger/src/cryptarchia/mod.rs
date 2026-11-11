@@ -17,7 +17,7 @@ use lb_core::{
         Value,
         gas::{Gas, GasOverflow, GasPrice, GasProfile},
         ledger::verification_mode::StandardMode,
-        note_set::{LEDGER_SET, NoteSetError, NoteSetUpdate, NoteSets, TxNoteState},
+        note_set::{NoteSetError, NoteSetIndex, NoteSetUpdate, NoteSets, TxNoteState},
         notes::{self, NoteCommitment},
         ops::{
             SignedOperation,
@@ -713,12 +713,11 @@ impl LedgerState {
     ) -> Result<Self, LedgerError<Id>> {
         let ledger_set = self
             .note_sets
-            .get(LEDGER_SET)
-            .expect("the ledger note set always exists")
+            .ledger()
             .clone()
             .execute_adding(&[reward_commitment])?;
         Ok(Self {
-            note_sets: self.note_sets.update(LEDGER_SET, ledger_set),
+            note_sets: self.note_sets.update_ledger(ledger_set),
             ..self
         })
     }
@@ -740,12 +739,11 @@ impl LedgerState {
         let commitments: Vec<_> = reward_notes.iter().map(notes::Note::commitment).collect();
         let ledger_set = self
             .note_sets
-            .get(LEDGER_SET)
-            .expect("the ledger note set always exists")
+            .ledger()
             .clone()
             .execute_adding(&commitments)?;
         Ok(Self {
-            note_sets: self.note_sets.update(LEDGER_SET, ledger_set),
+            note_sets: self.note_sets.update_ledger(ledger_set),
             block_rewards,
             ..self
         })
@@ -884,12 +882,12 @@ impl LedgerState {
         let commitments = commitments.into_iter().collect::<Vec<_>>();
         let note_sets = NoteSets::new();
         let ledger_set = note_sets
-            .get(LEDGER_SET)
+            .get(NoteSetIndex::Ledger)
             .cloned()
             .expect("the ledger set exists")
             .execute_adding(&commitments)
             .expect("genesis notes fit in the commitment MMR");
-        let note_sets = note_sets.update(LEDGER_SET, ledger_set).end_block(0);
+        let note_sets = note_sets.update_ledger(ledger_set).end_block(0);
         let (lottery_0, lottery_1) = config
             .lottery_constants()
             .compute_lottery_values(total_stake);
@@ -1338,14 +1336,14 @@ pub mod tests {
         let block_ledger = ledger.states.get_mut(&id).unwrap();
         let note_sets = &block_ledger.cryptarchia_ledger.note_sets;
         let ledger_set = note_sets
-            .get(LEDGER_SET)
+            .get(NoteSetIndex::Ledger)
             .cloned()
             .unwrap()
             .execute_adding(&[utxo_add.commitment()])
             .unwrap();
         block_ledger.cryptarchia_ledger.note_sets = note_sets
             .clone()
-            .update(LEDGER_SET, ledger_set)
+            .update_ledger(ledger_set)
             .end_block(block_ledger.block_number);
         id
     }
@@ -1383,8 +1381,7 @@ pub mod tests {
             commitment_merkle_root: ledger.states[&id]
                 .cryptarchia_ledger
                 .latest_note_sets()
-                .get(LEDGER_SET)
-                .unwrap()
+                .ledger()
                 .commitment_root(),
             amount: sdp_utxo.value,
         };
@@ -2046,11 +2043,7 @@ pub mod tests {
             .unwrap()
             .frontier_root();
         assert_eq!(
-            state
-                .latest_note_sets()
-                .get(LEDGER_SET)
-                .unwrap()
-                .commitment_root(),
+            state.latest_note_sets().ledger().commitment_root(),
             expected
         );
         assert_eq!(state.epoch_state().total_stake(), 300);
@@ -2083,11 +2076,7 @@ pub mod tests {
             .unwrap()
             .frontier_root();
         assert_eq!(
-            state
-                .latest_note_sets()
-                .get(LEDGER_SET)
-                .unwrap()
-                .commitment_root(),
+            state.latest_note_sets().ledger().commitment_root(),
             expected
         );
         assert_eq!(state.block_rewards.rewards_pool(), 1_000);
@@ -2128,11 +2117,7 @@ pub mod tests {
             .unwrap()
             .frontier_root();
         assert_eq!(
-            state
-                .latest_note_sets()
-                .get(LEDGER_SET)
-                .unwrap()
-                .commitment_root(),
+            state.latest_note_sets().ledger().commitment_root(),
             expected
         );
         assert_eq!(state.block_rewards.blend_rewards_pending(), 0);
@@ -2246,11 +2231,7 @@ pub mod tests {
         let genesis_note =
             notes::Note::new(10_000, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
         let state = LedgerState::from_notes([genesis_note], &config(), Fr::ZERO);
-        let root = state
-            .latest_note_sets()
-            .get(LEDGER_SET)
-            .unwrap()
-            .commitment_root();
+        let root = state.latest_note_sets().ledger().commitment_root();
         let operation = TransferOp::new(
             [NoteNullifier(Fr::from(3u64))].into(),
             [NoteCommitment(Fr::from(4u64))].into(),
@@ -2266,7 +2247,7 @@ pub mod tests {
 
         assert_eq!(excess, 6);
         assert_eq!(events, []);
-        let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
+        let ledger_set = state.latest_note_sets().ledger();
         let expected = CommitmentMmr::new()
             .push(genesis_note.commitment())
             .unwrap()
@@ -2276,7 +2257,7 @@ pub mod tests {
         assert!(ledger_set.contains_nullifier(&NoteNullifier(Fr::from(3u64))));
         assert_eq!(ledger_set.commitment_root(), expected);
         assert_eq!(
-            tx_notes.commitment_root(LEDGER_SET, ledger_set, &root, 1),
+            tx_notes.commitment_root(NoteSetIndex::Ledger, ledger_set, &root, 1),
             Ok(expected)
         );
     }
@@ -2291,7 +2272,7 @@ pub mod tests {
             .push(notes[1].commitment())
             .unwrap()
             .frontier_root();
-        let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
+        let ledger_set = state.latest_note_sets().ledger();
         assert_eq!(ledger_set.commitment_root(), expected);
         assert_eq!(state.epoch_state().total_stake(), 3_000);
     }

@@ -31,7 +31,7 @@ use lb_core::{
         batch::DeferredProofs,
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
-        note_set::{CommitmentMmr, LEDGER_SET},
+        note_set::CommitmentMmr,
         notes::{self, derive_note_nullifier},
         ops::{
             ZkTransferProof,
@@ -208,14 +208,7 @@ static TX_POOL: LazyLock<TxPool> = LazyLock::new(|| {
     let root = mmr.frontier_root();
 
     let genesis = LedgerState::from_notes(notes.iter().copied(), &config, 0);
-    assert_eq!(
-        genesis
-            .latest_note_sets()
-            .get(LEDGER_SET)
-            .expect("the ledger set exists")
-            .commitment_root(),
-        root
-    );
+    assert_eq!(genesis.latest_note_sets().ledger().commitment_root(), root);
 
     let txs = notes
         .iter()

@@ -25,7 +25,7 @@ use lb_core::{
         Note, OpProof, SignedOps,
         gas::{MainnetGasProfile, TxGasCalculator as _},
         ledger::verification_mode::{StandardMode, VerificationMode},
-        note_set::LEDGER_SET,
+        note_set::NoteSetIndex,
         notes::derive_note_nullifier,
         ops::{OpRef, ZkTransferProof, transfer::test_utils::prove_transfer},
         traits::Hashable as _,
@@ -207,7 +207,7 @@ pub fn self_transfer_paying_fee_at(
         note.commitment(),
         KnownNote {
             note,
-            note_set: LEDGER_SET,
+            note_set: NoteSetIndex::Ledger,
             nullifier,
         },
     )]);

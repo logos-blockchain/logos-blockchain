@@ -23,7 +23,7 @@ use lb_core::{
         Note, Op, OpProof, SignedOps, TxHash, Value, VerificationError,
         gas::{GasCost, GasOverflow, MainnetGasProfile},
         ledger::verification_mode::StandardMode,
-        note_set::{LEDGER_SET, NoteSetIndex, SDP_SET},
+        note_set::NoteSetIndex,
         notes::{NoteCommitment, NoteNullifier},
         ops::{
             ChannelInscribeProof, NoOpProof, OpRef, ZkAndEd25519Proof, ZkTransferProof,
@@ -1063,8 +1063,8 @@ where
             })
             .filter_map(|channel_id| {
                 channels
-                    .channel_state(&channel_id)
-                    .and_then(|channel| channel.note_set)
+                    .note_set_index(channel_id)
+                    .ok()
                     .map(|note_set| (channel_id, note_set))
             })
             .collect();
@@ -1322,7 +1322,7 @@ where
         if value == 0 {
             return Ok(note);
         }
-        Self::import_note(note, LEDGER_SET, state, kms).await?;
+        Self::import_note(note, NoteSetIndex::Ledger, state, kms).await?;
         let key = recovery_key(WalletServiceSettings::RECOVERY_KEY_SUFFIX);
         wait_until_note_persisted(
             || storage.load::<RecoveryState>(key.clone()),
@@ -1350,7 +1350,7 @@ where
             .flat_map(|opening| opening.outputs)
             .find(|note| note.nonce == change_nonce && note.public_key == change_pk);
         if let Some(change) = change {
-            let known_note = Self::known_note(kms, key_id, change, LEDGER_SET).await?;
+            let known_note = Self::known_note(kms, key_id, change, NoteSetIndex::Ledger).await?;
             state.add_known_notes([known_note]);
         }
         Ok(())
@@ -1391,12 +1391,13 @@ where
             kms,
             key_id.clone(),
             Note::new(value, nonce, owner),
-            LEDGER_SET,
+            NoteSetIndex::Ledger,
         )
         .await?;
         let mut known_notes = vec![exact_note];
         for note in opening.outputs.iter().skip(1) {
-            known_notes.push(Self::known_note(kms, key_id.clone(), *note, LEDGER_SET).await?);
+            known_notes
+                .push(Self::known_note(kms, key_id.clone(), *note, NoteSetIndex::Ledger).await?);
         }
 
         let tx_builder = tx_builder.push_op_with_opening(Op::Transfer(split), opening)?;
@@ -1486,8 +1487,8 @@ where
         let mut known_notes = Vec::new();
         for (note_set, note) in notes
             .iter()
-            .map(|note| (LEDGER_SET, note))
-            .chain(service_notes.iter().map(|note| (SDP_SET, note)))
+            .map(|note| (NoteSetIndex::Ledger, note))
+            .chain(service_notes.iter().map(|note| (NoteSetIndex::Sdp, note)))
         {
             if let Some(key_id) = key_ids.get(&note.public_key) {
                 known_notes.push(Self::known_note(kms, (*key_id).clone(), *note, note_set).await?);

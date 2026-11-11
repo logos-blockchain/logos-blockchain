@@ -2309,7 +2309,7 @@ mod continuous_workload_reservation_tests {
 
     use lb_core::{
         header::HeaderId,
-        mantle::{Note, TxHash, note_set::LEDGER_SET, notes::NoteNullifier},
+        mantle::{Note, TxHash, note_set::NoteSetIndex, notes::NoteNullifier},
     };
     use lb_groth16::Fr;
     use lb_key_management_system_service::keys::{UnsecuredZkKey, ZkPublicKey};
@@ -2337,7 +2337,7 @@ mod continuous_workload_reservation_tests {
     fn input(value: u64, index: u64) -> OwnedNote {
         OwnedNote {
             note: Note::new(value, Fr::from(index), ZkPublicKey::zero()),
-            note_set: LEDGER_SET,
+            note_set: NoteSetIndex::Ledger,
             nullifier: NoteNullifier(Fr::from(index)),
             path: MerklePath::try_new(0, Vec::new()).expect("an empty path is bounded"),
         }

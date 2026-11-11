@@ -298,7 +298,7 @@ mod tests {
 
     use lb_core::mantle::{
         Op,
-        note_set::LEDGER_SET,
+        note_set::NoteSetIndex,
         notes::NoteNullifier,
         ops::channel::{
             ChannelId, MsgId,
@@ -338,7 +338,7 @@ mod tests {
             .expect("test wallet account should build");
         let funding_utxo = OwnedNote {
             note: Note::new(2_000_000, Fr::from(7u64), account.public_key()),
-            note_set: LEDGER_SET,
+            note_set: NoteSetIndex::Ledger,
             nullifier: NoteNullifier(Fr::from(7u64)),
             path: MerklePath::try_new(0, Vec::new()).expect("an empty path is bounded"),
         };

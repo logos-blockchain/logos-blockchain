@@ -14,7 +14,7 @@ use lb_core::{
         Op, OpProof, SignedOps,
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
-        note_set::{LEDGER_SET, NoteSetIndex},
+        note_set::NoteSetIndex,
         notes::{self, NoteCommitment, NoteNullifier, ProgramId},
         ops::{
             ChannelInscribeProof, NoOpProof,
@@ -173,8 +173,7 @@ fn build() -> Fixture {
     let channel_set = state
         .mantle_ledger()
         .channels()
-        .channel_state(&channel)
-        .and_then(|channel| channel.note_set)
+        .note_set_index(channel)
         .expect("the channel has a note set");
 
     let mut rng = StdRng::seed_from_u64(0x6a5);
@@ -183,7 +182,7 @@ fn build() -> Fixture {
     // nothing: both are filled up to `fill() + 1` commitments, an odd count, so
     // in either set the next commitment merges one peak of the MMR, as on
     // average, and its root skips no level, as at worst.
-    for (index, held) in [(LEDGER_SET, genesis_held), (channel_set, 0)] {
+    for (index, held) in [(NoteSetIndex::Ledger, genesis_held), (channel_set, 0)] {
         let filled_nullifiers: Vec<NoteNullifier> =
             std::iter::repeat_with(|| NoteNullifier(Fr::from(rng.gen_range(1..u128::MAX))))
                 .take(fill())

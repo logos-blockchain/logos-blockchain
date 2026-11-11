@@ -152,9 +152,6 @@ pub struct ChannelState {
     pub tip_sequencer_starting_slot: Slot,
     pub posting_timeframe: SlotTimeframe, // number of slots (0 = infinity)
     pub posting_timeout: SlotTimeout,     // number of slots (0 = no timeout)
-
-    // Bridging
-    pub note_set: Option<NoteSetIndex>, // index of the note set, None for the null channel
 }
 
 impl Default for Channels {
@@ -169,6 +166,13 @@ impl ThresholdSource for Channels {
             .get(channel)
             .map_or(0, |channel| channel.configuration_threshold)
     }
+}
+
+/// The note set of the channel: none for the null channel, which only receives
+/// the genesis inscriptions and holds no note.
+#[must_use]
+pub fn channel_note_set(channel_id: ChannelId) -> Option<NoteSetIndex> {
+    (channel_id != NULL_CHANNEL_ID).then_some(NoteSetIndex::Channel(channel_id))
 }
 
 impl Channels {
@@ -208,12 +212,13 @@ impl Channels {
         self.channels.get(channel_id)
     }
 
-    /// The index of the note set the channel holds its notes in.
+    /// The note set the channel holds its notes in, which every channel but
+    /// the null one has.
     pub fn note_set_index(&self, channel_id: ChannelId) -> Result<NoteSetIndex, Error> {
-        self.channel_state(&channel_id)
-            .ok_or(Error::ChannelNotFound { channel_id })?
-            .note_set
-            .ok_or(Error::NoNoteSet { channel_id })
+        if self.channel_state(&channel_id).is_none() {
+            return Err(Error::ChannelNotFound { channel_id });
+        }
+        channel_note_set(channel_id).ok_or(Error::NoNoteSet { channel_id })
     }
 
     /// Creates the channel, with `keys` and a note set of its own, unless it
@@ -240,12 +245,10 @@ impl Channels {
         keys: UnverifiedChannelKeys,
         note_sets: NoteSets,
     ) -> (Self, NoteSets) {
-        // The null channel only receives the genesis inscriptions and holds no note.
-        let (note_sets, note_set) = if channel_id == NULL_CHANNEL_ID {
-            (note_sets, None)
+        let note_sets = if channel_note_set(channel_id).is_some() {
+            note_sets.with_channel(channel_id)
         } else {
-            let (note_sets, index) = note_sets.push_empty();
-            (note_sets, Some(index))
+            note_sets
         };
         self.channels = self.channels.insert(
             channel_id,
@@ -259,7 +262,6 @@ impl Channels {
                 tip_sequencer_starting_slot: block_slot,
                 posting_timeframe: 0.into(),
                 posting_timeout: 0.into(),
-                note_set,
             },
         );
         (self, note_sets)
@@ -376,7 +378,6 @@ mod tests {
             configuration_threshold: 0,
             tip_message: MsgId::root(),
             config_tip_hash: MsgId::root(),
-            note_set: None,
         }
     }
 
@@ -403,19 +404,22 @@ mod tests {
             note_sets,
         );
 
+        assert_eq!(note_sets.channel(&NULL_CHANNEL_ID), None);
         assert_eq!(
-            channels.channel_state(&NULL_CHANNEL_ID).unwrap().note_set,
-            None
+            note_sets.channel(&ChannelId::from([2u8; 32])),
+            Some(&NoteSet::empty())
+        );
+        assert!(note_sets.channel(&ChannelId::from([3u8; 32])).is_none());
+        assert_eq!(
+            channels.note_set_index(NULL_CHANNEL_ID),
+            Err(Error::NoNoteSet {
+                channel_id: NULL_CHANNEL_ID
+            })
         );
         assert_eq!(
-            channels
-                .channel_state(&ChannelId::from([2u8; 32]))
-                .unwrap()
-                .note_set,
-            Some(3)
+            channels.note_set_index(ChannelId::from([2u8; 32])),
+            Ok(NoteSetIndex::Channel(ChannelId::from([2u8; 32])))
         );
-        assert_eq!(note_sets.get(3), Some(&NoteSet::empty()));
-        assert!(note_sets.get(4).is_none());
         assert_eq!(
             channels.channel_state(&ChannelId::from([1u8; 32])),
             Some(&ChannelState {
@@ -428,7 +432,6 @@ mod tests {
                 tip_sequencer_starting_slot: Slot::new(3),
                 posting_timeframe: 0.into(),
                 posting_timeout: 0.into(),
-                note_set: Some(2),
             })
         );
     }

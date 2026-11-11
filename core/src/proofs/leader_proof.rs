@@ -511,7 +511,7 @@ pub mod test_utils {
 
     use super::*;
     use crate::mantle::{
-        note_set::{CommitmentMmr, LEDGER_SET},
+        note_set::CommitmentMmr,
         notes::{Note, derive_note_nullifier},
     };
 
@@ -535,13 +535,12 @@ pub mod test_utils {
 
         let sets = NoteSets::new();
         let ledger = sets
-            .get(LEDGER_SET)
-            .expect("the ledger set exists")
+            .ledger()
             .clone()
             .execute_adding(&[commitment])
             .expect("the commitment MMR is not full");
-        let sets = sets.update(LEDGER_SET, ledger).end_block(1);
-        let set = sets.get(LEDGER_SET).expect("the ledger set exists");
+        let sets = sets.update_ledger(ledger).end_block(1);
+        let set = sets.ledger();
         assert_eq!(set.commitment_root(), mmr.frontier_root());
 
         let nullifier = derive_note_nullifier(&commitment, &nullifier_key);
@@ -571,7 +570,7 @@ pub mod test_utils {
             reward_nonce: reward.nonce,
             ..pol_wallet_inputs(
                 &note,
-                LEDGER_SET,
+                NoteSetIndex::Ledger,
                 &nullifier,
                 &commitment_path,
                 &sets,
@@ -598,7 +597,7 @@ mod tests {
 
     use super::*;
     use crate::mantle::{
-        note_set::{CommitmentMmr, LEDGER_SET, NoteSet},
+        note_set::{CommitmentMmr, NoteSet},
         notes::derive_note_nullifier,
     };
 
@@ -752,17 +751,16 @@ mod tests {
             .push_with_paths(commitment, &mut [])
             .unwrap();
         let sets = NoteSets::new()
-            .update(
-                LEDGER_SET,
-                NoteSet::empty().execute_adding(&[commitment]).unwrap(),
-            )
+            .update_ledger(NoteSet::empty().execute_adding(&[commitment]).unwrap())
             .end_block(1);
         let nullifier = derive_note_nullifier(
             &commitment,
             &UnsecuredZkKey::new(secret_key).nullifier_key(),
         );
 
-        let wallet = pol_wallet_inputs(&note, LEDGER_SET, &nullifier, &path, &sets, &sets).unwrap();
+        let wallet =
+            pol_wallet_inputs(&note, NoteSetIndex::Ledger, &nullifier, &path, &sets, &sets)
+                .unwrap();
         assert_eq!(
             (wallet.nullifier_key, wallet.staking_secret_key),
             (Fr::ZERO, Fr::ZERO)
@@ -773,12 +771,9 @@ mod tests {
         );
         assert_eq!(
             wallet.commitment_root_latest,
-            sets.get(LEDGER_SET).unwrap().commitment_root()
+            sets.ledger().commitment_root()
         );
-        assert_eq!(
-            wallet.nullifier_root_aged,
-            sets.get(LEDGER_SET).unwrap().nullifier_root()
-        );
+        assert_eq!(wallet.nullifier_root_aged, sets.ledger().nullifier_root());
         assert_eq!(
             (
                 wallet.low_leaf_nullifier,
@@ -790,14 +785,21 @@ mod tests {
         assert_eq!(wallet.set_selectors, [false; 40]);
 
         let spent_set = sets
-            .get(LEDGER_SET)
-            .unwrap()
+            .ledger()
             .clone()
             .execute_spending(&[nullifier])
             .unwrap();
-        let latest = sets.clone().update(LEDGER_SET, spent_set).end_block(2);
+        let latest = sets.clone().update_ledger(spent_set).end_block(2);
         assert_eq!(
-            pol_wallet_inputs(&note, LEDGER_SET, &nullifier, &path, &sets, &latest).unwrap_err(),
+            pol_wallet_inputs(
+                &note,
+                NoteSetIndex::Ledger,
+                &nullifier,
+                &path,
+                &sets,
+                &latest
+            )
+            .unwrap_err(),
             LeaderWitnessError::Spent
         );
 
@@ -807,12 +809,30 @@ mod tests {
             .push_with_paths(commitment, &mut [])
             .unwrap();
         assert_eq!(
-            pol_wallet_inputs(&note, LEDGER_SET, &nullifier, &foreign, &sets, &sets).unwrap_err(),
-            LeaderWitnessError::AgedPathMismatch(LEDGER_SET)
+            pol_wallet_inputs(
+                &note,
+                NoteSetIndex::Ledger,
+                &nullifier,
+                &foreign,
+                &sets,
+                &sets
+            )
+            .unwrap_err(),
+            LeaderWitnessError::AgedPathMismatch(NoteSetIndex::Ledger)
         );
         assert_eq!(
-            pol_wallet_inputs(&note, 7, &nullifier, &path, &sets, &sets).unwrap_err(),
-            LeaderWitnessError::UnknownNoteSet(7)
+            pol_wallet_inputs(
+                &note,
+                NoteSetIndex::Channel(crate::mantle::ops::channel::ChannelId::from([7; 32])),
+                &nullifier,
+                &path,
+                &sets,
+                &sets
+            )
+            .unwrap_err(),
+            LeaderWitnessError::UnknownNoteSet(NoteSetIndex::Channel(
+                crate::mantle::ops::channel::ChannelId::from([7; 32])
+            ))
         );
     }
 

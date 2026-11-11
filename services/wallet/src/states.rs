@@ -416,7 +416,7 @@ mod tests {
     use core::num::NonZero;
     use std::{collections::VecDeque, sync::Mutex};
 
-    use lb_core::mantle::note_set::LEDGER_SET;
+    use lb_core::mantle::note_set::NoteSetIndex;
     use lb_groth16::Field as _;
 
     use super::*;
@@ -451,7 +451,7 @@ mod tests {
     fn recovery_state_keeps_the_known_notes_and_the_reward_key_index() {
         let note = KnownNote {
             note: Note::new(10, Fr::ONE, ZkPublicKey::new(Fr::from(2u64))),
-            note_set: LEDGER_SET,
+            note_set: NoteSetIndex::Ledger,
             nullifier: NoteNullifier(Fr::from(3u64)),
         };
         let state = RecoveryState {
@@ -469,7 +469,7 @@ mod tests {
     async fn a_note_counts_as_persisted_once_the_persisted_state_knows_it() {
         let note = KnownNote {
             note: Note::new(10, Fr::ONE, ZkPublicKey::new(Fr::from(2u64))),
-            note_set: LEDGER_SET,
+            note_set: NoteSetIndex::Ledger,
             nullifier: NoteNullifier(Fr::from(3u64)),
         };
         let commitment = note.note.commitment();

@@ -19,7 +19,7 @@ mod fixture;
 mod micro;
 
 use cycles::{Case, Counter};
-use lb_core::mantle::note_set::{LEDGER_SET, NoteSet, RECENT_ROOTS_WINDOW, TxBuffer};
+use lb_core::mantle::note_set::{NoteSet, RECENT_ROOTS_WINDOW, TxBuffer};
 use lb_groth16::Fr;
 
 fn counter() -> Counter {
@@ -147,7 +147,7 @@ fn the_ledger_set_holds_its_recent_roots() {
     let empty = TxBuffer::new();
     for recent_roots in micro::RECENT_ROOTS {
         let (sets, roots, block) = micro::recent_roots_sets(recent_roots);
-        let set = sets.get(LEDGER_SET).expect("the ledger set exists");
+        let set = sets.ledger();
         assert_eq!(roots.len() as u64, recent_roots);
         assert!(!roots.contains(&set.commitment_root()));
         for root in &roots {
@@ -161,7 +161,7 @@ fn the_ledger_set_holds_its_recent_roots() {
     }
     // The window is full: the oldest root expires at the next block.
     let (sets, roots, block) = micro::recent_roots_sets(RECENT_ROOTS_WINDOW);
-    let set = sets.get(LEDGER_SET).expect("the ledger set exists");
+    let set = sets.ledger();
     assert!(
         set.tx_commitment_root(&empty, &roots[0], block + 1)
             .is_err()

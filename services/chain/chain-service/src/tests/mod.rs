@@ -19,7 +19,7 @@ use lb_core::{
         channel::Channels,
         gas::{MainnetGasProfile, TxGasCalculator as _},
         ledger::verification_mode::StandardMode,
-        note_set::{CommitmentMmr, LEDGER_SET},
+        note_set::{CommitmentMmr, NoteSetIndex},
         notes::{NoteCommitment, OutputCommitments, derive_note_nullifier},
         ops::{
             ZkTransferProof,
@@ -1543,7 +1543,7 @@ fn build_block_paying(
         );
         let mut wallet = pol_wallet_inputs(
             note,
-            LEDGER_SET,
+            NoteSetIndex::Ledger,
             &nullifier,
             aged_path,
             &epoch_state.note_sets,

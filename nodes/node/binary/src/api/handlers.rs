@@ -26,7 +26,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, Op, TxHash,
-        channel::ChannelState,
+        channel::{ChannelState, channel_note_set},
         ledger::verification_mode::StandardMode,
         notes::NoteNullifier,
         ops::channel::{ChannelId, deposit::DepositOp},
@@ -1121,7 +1121,7 @@ where
                 && let Some(note_set) =
                     mantle::channel_state::<RuntimeServiceId>(&handle, req.channel_id)
                         .await?
-                        .and_then(|channel| channel.note_set)
+                        .and_then(|_| channel_note_set(req.channel_id))
             {
                 wallet.import_note(holder_note, note_set).await?;
             }
@@ -2364,7 +2364,6 @@ mod tests {
             tip_sequencer_starting_slot: Slot::default(),
             posting_timeframe: SlotTimeframe::from(0),
             posting_timeout: SlotTimeout::from(0),
-            note_set: None,
         }
     }
 

@@ -6,7 +6,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, SignedOps, TxHash,
-        note_set::{LEDGER_SET, NoteSetIndex, NoteSetUpdate, SDP_SET},
+        note_set::{NoteSetIndex, NoteSetUpdate},
         notes::derive_note_nullifier,
         traits::Hashable as _,
     },
@@ -57,8 +57,8 @@ impl ScannerAccounting {
     ) -> Result<Self, ScannerAccountingError> {
         let mut accounting = Self::empty(tracked_wallets)?;
         for (note_set, notes) in [
-            (LEDGER_SET, &genesis.notes),
-            (SDP_SET, &genesis.service_notes),
+            (NoteSetIndex::Ledger, &genesis.notes),
+            (NoteSetIndex::Sdp, &genesis.service_notes),
         ] {
             for note in notes {
                 accounting.add_known_note(note_set, *note);
@@ -279,7 +279,7 @@ mod tests {
             },
         )
         .expect("accounting should build");
-        accounting.add_known_note(LEDGER_SET, young);
+        accounting.add_known_note(NoteSetIndex::Ledger, young);
 
         let block_id = |id: u8| HeaderId::from([id; 32]);
         let values = |utxos: &WalletUtxos| {
@@ -295,7 +295,7 @@ mod tests {
             .apply_wallet_block(
                 block_id(1),
                 vec![NoteSetUpdate {
-                    note_set: LEDGER_SET,
+                    note_set: NoteSetIndex::Ledger,
                     nullifiers: Vec::new(),
                     commitments: vec![young.commitment()],
                 }],
@@ -324,7 +324,7 @@ mod tests {
             .apply_wallet_block(
                 block_id(6),
                 vec![NoteSetUpdate {
-                    note_set: LEDGER_SET,
+                    note_set: NoteSetIndex::Ledger,
                     nullifiers: Vec::new(),
                     commitments: vec![other.commitment()],
                 }],

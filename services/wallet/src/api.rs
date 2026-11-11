@@ -7,7 +7,7 @@ use lb_core::{
         Note, OpProof, SignedOps, Value,
         gas::GasCost,
         ledger::verification_mode::StandardMode,
-        note_set::{LEDGER_SET, NoteSetIndex},
+        note_set::NoteSetIndex,
         notes::{NoteCommitment, NoteNullifier},
         transactions::{
             MantleTxBuilder, Ops, TxBuilderError, hash::TxHash, states::Preverified,
@@ -335,7 +335,7 @@ where
     ) -> Result<TipResponse<(SignedOps<Preverified, StandardMode>, Note)>, WalletApiError> {
         let note = Note::new(amount, crate::random_nonce(), recipient_pk);
         if self.get_known_addresses().await?.contains(&recipient_pk) {
-            self.import_note(note, LEDGER_SET).await?;
+            self.import_note(note, NoteSetIndex::Ledger).await?;
         }
         let mantle_tx_builder = MantleTxBuilder::new().add_ledger_output(note)?;
         let funded_tx_builder = self
