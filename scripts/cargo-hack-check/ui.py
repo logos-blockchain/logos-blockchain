@@ -17,12 +17,10 @@ class CargoHackDashboard:
         tag: str,
         max_crate_name_width: int = 0,
         rich_enabled: Optional[bool] = None,
-        verbose: bool = False,
     ):
         self.total_crates = total_crates
         self.tag = tag
         self.max_crate_name_width = max_crate_name_width
-        self.verbose = verbose
         self._rich_crate_width = min(max(self.max_crate_name_width, 24), self._RICH_CRATE_WIDTH_CAP)
 
         self.success = 0
@@ -168,12 +166,6 @@ class CargoHackDashboard:
             return
 
         self.log(f"{self.tag} ({crate_name}) {message}")
-
-    # ----------------------------------------------------------
-
-    def log_cache_invalidation_summary(self, removed: int, missing: int):
-        parts = [f"{removed} removed", f"{missing} already missing"]
-        self.log(f"    - dependent cache invalidation: {', '.join(parts)}.")
 
     # ----------------------------------------------------------
 
