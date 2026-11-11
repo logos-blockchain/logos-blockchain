@@ -2,7 +2,6 @@ use std::ffi::{CString, c_char};
 
 use futures::StreamExt as _;
 use lb_c_macros::panic_to_error;
-use lb_chain_service::api::CryptarchiaServiceApi;
 use lb_core::{
     block::Block as CoreBlock,
     mantle::{
@@ -11,11 +10,7 @@ use lb_core::{
         transactions::{hash::TxHash as CoreTxHash, states::Unverified},
     },
 };
-use lb_node::{
-    RuntimeServiceId, SignedOps, api::serializers::blocks::ApiProcessedBlockEventOwned,
-    generic_services::CryptarchiaService,
-};
-use lb_storage_service::api::StorageApi;
+use lb_node::{SignedOps, api::serializers::blocks::ApiProcessedBlockEventOwned};
 use serde::Serialize;
 
 use crate::{
@@ -69,60 +64,40 @@ pub fn subscribe_to_new_blocks_sync(
     let runtime_handler = unwrap_or_return_error!(node.get_runtime_handle());
     let overwatch = node.get_overwatch_handle();
     runtime_handler.block_on(async move {
-        let Ok(storage) =
-            StorageApi::<SignedOps<Unverified, StandardMode>>::from_overwatch_handle(overwatch)
-                .await
-        else {
-            return OperationStatus::error(
-                OperationStatusCode::RelayError,
-                "Failed to get relay to StorageService.",
-            );
-        };
-        let api =
-            CryptarchiaServiceApi::<CryptarchiaService<RuntimeServiceId>>::from_overwatch_handle(
-                overwatch,
-            )
-            .await;
-        match api.subscribe_new_blocks().await {
-            Ok(mut block_stream) => {
-                runtime_handler.spawn(async move {
-                    while let Ok(event) = block_stream.recv().await {
-                        let res = storage.try_get_block(&event.block_id).await;
-                        if let Ok(Some(block)) = res {
-                            let txs_with_id = block.transactions().map_ref(|tx| TxWithId {
-                                id: tx.hash(),
-                                tx: tx.clone(),
-                            });
-                            let block: CoreBlock<TxWithId> = CoreBlock::reconstruct(
-                                block.header().clone(),
-                                block.uncle_headers().clone(),
-                                txs_with_id,
-                                *block.signature(),
-                                u32::MAX,
-                            )
-                            .expect("Block should always build from valid block");
-                            callback_per_block(Block::from(block).as_ptr());
-                        } else {
-                            logging::error!(
-                                "subscribe_to_new_blocks_sync",
-                                "Failed to get block {:?} from storage",
-                                event.block_id
-                            );
-                        }
-                    }
-                    logging::warning!(
-                        "subscribe_to_new_blocks_sync",
-                        "Block stream closed, subscription to new blocks ended."
-                    );
-                    callback_per_block(std::ptr::null());
-                });
-                OperationStatus::OK
+        let stream = match lb_node::api::calls::blocks::get_new_blocks_stream(overwatch).await {
+            Ok(stream) => stream,
+            Err(e) => {
+                return OperationStatus::error(
+                    OperationStatusCode::ServiceError,
+                    format!("Failed to subscribe to blocks: {e}"),
+                );
             }
-            Err(e) => OperationStatus::error(
-                OperationStatusCode::ServiceError,
-                format!("Failed to subscribe to blocks: {e}"),
-            ),
-        }
+        };
+        runtime_handler.spawn(async move {
+            let mut stream = Box::pin(stream);
+            while let Some(event) = stream.next().await {
+                let block = event.block;
+                let txs_with_id = block.transactions().map_ref(|tx| TxWithId {
+                    id: tx.hash(),
+                    tx: tx.clone(),
+                });
+                let block: CoreBlock<TxWithId> = CoreBlock::reconstruct(
+                    block.header().clone(),
+                    block.uncle_headers().clone(),
+                    txs_with_id,
+                    *block.signature(),
+                    u32::MAX,
+                )
+                .expect("Block should always build from valid block");
+                callback_per_block(Block::from(block).as_ptr());
+            }
+            logging::warning!(
+                "subscribe_to_new_blocks_sync",
+                "Block stream closed, subscription to new blocks ended."
+            );
+            callback_per_block(std::ptr::null());
+        });
+        OperationStatus::OK
     })
 }
 

@@ -1,8 +1,5 @@
 use core::ptr;
-use std::{
-    ffi::{CStr, CString, c_char},
-    time::Duration,
-};
+use std::ffi::{CStr, CString, c_char};
 
 use lb_api_common::bodies::{
     channel::ChannelDepositRequestBody,
@@ -18,25 +15,19 @@ use lb_c_macros::panic_to_error;
 use lb_core::{
     header::HeaderId as CoreHeaderId,
     mantle::{
-        NoteId as CoreNoteId, SignedOps, TxHash,
+        NoteId as CoreNoteId, TxHash,
         gas::GasCost,
-        ledger::{Inputs, verification_mode::StandardMode},
+        ledger::Inputs,
         ops::channel::{
             ChannelId,
             deposit::{DepositOp, Metadata},
         },
         traits::Hashable as _,
-        transactions::states::Unverified,
     },
 };
 use lb_groth16::{fr_from_bytes, fr_to_bytes};
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_node::{
-    RuntimeServiceId,
-    api::calls::{Error, channel, mempool, wallet},
-    generic_services::{CryptarchiaService, WalletService as NodeWalletService},
-};
-use overwatch::services::status::ServiceStatus;
+use lb_node::api::calls::{channel, mempool, wallet};
 
 use crate::{
     LogosBlockchainNode,
@@ -54,9 +45,6 @@ use crate::{
 };
 
 pub type FfiClaimableVouchersResult = FfiStatusResult<ClaimableVouchers>;
-
-pub(crate) type WalletService =
-    NodeWalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>;
 
 /// Resolved tip plus the `(note ID, value)` pairs for a wallet address.
 /// Gets the known wallet addresses from the wallet service.
@@ -269,18 +257,10 @@ pub(crate) fn get_claimable_vouchers_sync(
     node: &LogosBlockchainNode,
     tip: Option<CoreHeaderId>,
 ) -> StatusResult<WalletClaimableVouchersResponseBody> {
-    node.call("Failed to get claimable vouchers", async {
-        let handle = node.get_overwatch_handle();
-        handle
-            .status_watcher::<WalletService>()
-            .await?
-            .wait_for(ServiceStatus::Ready, Some(Duration::from_millis(100)))
-            .await
-            .map_err(|status| {
-                Error::unavailable(format!("Wallet service is not ready: {status:?}"))
-            })?;
-        wallet::claimable_vouchers(handle, tip).await
-    })
+    node.call(
+        "Failed to get claimable vouchers",
+        wallet::claimable_vouchers(node.get_overwatch_handle(), tip),
+    )
 }
 
 /// Gets the claimable vouchers tracked by the wallet.
@@ -1135,7 +1115,6 @@ pub(crate) fn channel_deposit_sync(
         "Failed to deposit to channel",
         channel::deposit_amount(
             node.get_overwatch_handle(),
-            node.fork_digests(),
             tip,
             channel_id,
             funding_public_key,
@@ -1232,7 +1211,7 @@ pub(crate) fn wallet_fund_tx_sync(
 ) -> StatusResult<WalletFundResponseBody> {
     node.call(
         "Failed to fund tx",
-        wallet::fund(node.get_overwatch_handle(), node.fork_digests(), request),
+        wallet::fund(node.get_overwatch_handle(), request),
     )
 }
 
@@ -1371,22 +1350,12 @@ pub unsafe extern "C" fn submit_signed_transaction(
                 ));
             }
         };
-        let signed_tx: SignedOps<Unverified, StandardMode> =
-            match serde_json::from_str(signed_tx_json) {
-                Ok(signed_tx) => signed_tx,
-                Err(error) => {
-                    return FfiSubmitTransactionResult::err(OperationStatus::error(
-                        OperationStatusCode::ValidationError,
-                        format!("Failed to parse signed transaction: {error}"),
-                    ));
-                }
-            };
-        match signed_tx.preverify() {
+        match serde_json::from_str::<lb_node::ValidatedTx>(signed_tx_json) {
             Ok(preverified_tx) => preverified_tx,
             Err(error) => {
                 return FfiSubmitTransactionResult::err(OperationStatus::error(
                     OperationStatusCode::ValidationError,
-                    format!("Failed to preverify signed transaction: {error}"),
+                    format!("Failed to parse signed transaction: {error}"),
                 ));
             }
         }

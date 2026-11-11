@@ -1,11 +1,10 @@
 use axum::{
-    Extension,
     extract::{Query, State},
     response::Response,
 };
 use lb_api_common::{bodies::chain::ChainForkResponseBody, paths};
 use lb_chain_service::ChainServiceInfo;
-use lb_core::{era::ForkDigest, header::HeaderId};
+use lb_core::header::HeaderId;
 use serde::Deserialize;
 
 use crate::api::{
@@ -35,12 +34,9 @@ pub async fn cryptarchia_info(State(handle): State<Handle>) -> Response {
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
-pub async fn chain_fork(
-    State(handle): State<Handle>,
-    Extension(fork_digests): Extension<Vec<ForkDigest>>,
-) -> Response {
+pub async fn chain_fork(State(handle): State<Handle>) -> Response {
     make_request_and_return_response!(async {
-        let fork_digest = time::fork_digest_in_force(&handle, &fork_digests).await?;
+        let fork_digest = time::fork_digest_in_force(&handle).await?;
         Ok::<_, calls::Error>(ChainForkResponseBody { fork_digest })
     })
 }

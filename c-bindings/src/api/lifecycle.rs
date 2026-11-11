@@ -140,7 +140,7 @@ unsafe fn initialize_lb_node(
     Ok(LogosBlockchainNode::new(
         app,
         runtime,
-        &chain_id,
+        chain_id,
         fork_digests,
     ))
 }

@@ -170,10 +170,7 @@ pub unsafe extern "C" fn get_fork_digest(
     let node = unsafe { &*node };
     let fork_digest = unwrap_or_return_error!(node.call(
         "Failed to get fork digest",
-        lb_node::api::calls::time::fork_digest_in_force(
-            node.get_overwatch_handle(),
-            node.fork_digests(),
-        ),
+        lb_node::api::calls::time::fork_digest_in_force(node.get_overwatch_handle()),
     ));
 
     match CString::new(hex::encode(<[u8; 32]>::from(fork_digest))) {

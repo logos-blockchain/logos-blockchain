@@ -1,5 +1,5 @@
 use axum::{
-    Extension, Json,
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse as _, Response},
@@ -12,7 +12,7 @@ use lb_api_common::{
     },
     paths,
 };
-use lb_core::{era::ForkDigest, header::HeaderId};
+use lb_core::header::HeaderId;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use serde::Deserialize;
 
@@ -130,8 +130,7 @@ pub async fn sign_tx_zk(
 )]
 pub async fn fund(
     State(handle): State<Handle>,
-    Extension(fork_digests): Extension<Vec<ForkDigest>>,
     Json(req): Json<WalletFundRequestBody>,
 ) -> Response {
-    make_request_and_return_response!(wallet::fund(&handle, &fork_digests, req))
+    make_request_and_return_response!(wallet::fund(&handle, req))
 }
