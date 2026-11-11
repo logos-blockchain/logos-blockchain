@@ -5,6 +5,9 @@ on:
     - cron: "0 3 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   check-latest-version:
     name: Fetch and compare latest Rust release
@@ -12,6 +15,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        with:
+          persist-credentials: false
       - name: Fetch latest Rust release
         id: latest-version
         run: |
@@ -41,9 +46,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: check-latest-version
     if: ${{ needs.check-latest-version.outputs.new-version-available == 'true' }}
+    permissions:
+      contents: read
+      # Opens the update issue.
+      issues: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        with:
+          persist-credentials: false
       - name: Create a GH issue (if it does not exist)
         uses: JasonEtco/create-an-issue@1b14a70e4d8dc185e5cc76d3bec9eab20257b2c5 # Version 2.9.2
         env:
