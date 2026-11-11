@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     cell::RefCell,
     collections::{HashMap, HashSet},
     fmt,
@@ -99,8 +100,6 @@ pub struct TxBuffer {
     prefix_ids: Vec<PrefixId>,
 }
 
-static EMPTY_BUFFER: TxBuffer = TxBuffer::new();
-
 impl TxBuffer {
     #[must_use]
     pub const fn new() -> Self {
@@ -175,8 +174,10 @@ impl TxNoteState {
 
     /// The buffer of the set `index`, empty if no Operation added to it.
     #[must_use]
-    pub fn buffer(&self, index: NoteSetIndex) -> &TxBuffer {
-        self.buffers.get(&index).unwrap_or(&EMPTY_BUFFER)
+    pub fn buffer(&self, index: NoteSetIndex) -> Cow<'_, TxBuffer> {
+        self.buffers
+            .get(&index)
+            .map_or_else(|| Cow::Owned(TxBuffer::new()), Cow::Borrowed)
     }
 
     /// Adds `outputs` to the buffer of the set `index`, which the next
@@ -219,7 +220,7 @@ impl TxNoteState {
         let buffer = self.buffer(index);
         set.cached_step_commitment_root(
             &self.roots,
-            buffer,
+            &buffer,
             commitment_merkle_root,
             buffer.len(),
             block,
@@ -953,7 +954,7 @@ mod test {
         let root = tx.commitment_root(LEDGER_SET, set, &referenced, 1).unwrap();
         assert_eq!(
             Ok(root),
-            set.tx_commitment_root(tx.buffer(LEDGER_SET), &referenced, 1)
+            set.tx_commitment_root(&tx.buffer(LEDGER_SET), &referenced, 1)
         );
         assert!(
             tx.roots()
