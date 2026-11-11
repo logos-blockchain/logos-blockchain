@@ -57,11 +57,11 @@ impl Cryptarchia {
         header: &Header,
         uncle_headers: &UncleHeaders,
     ) -> Result<(), Error> {
-        self.verify_uncle_count(header, uncle_headers)?;
-
         if uncle_headers.is_empty() {
             return Ok(());
         }
+
+        self.verify_uncle_count(header, uncle_headers)?;
 
         let slot = header.slot();
         let parent = self
