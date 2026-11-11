@@ -7,6 +7,7 @@ use serde_big_array::BigArray;
 use crate::{
     MAX_INPUTS, MAX_OUTPUTS, ZkProgramSpendChainInputsData, ZkProgramSpendWalletInputsData,
     chain_inputs::{ZkProgramSpendChainInputs, ZkProgramSpendChainInputsJson},
+    check_bounds,
     wallet_inputs::{ZkProgramSpendWalletInputs, ZkProgramSpendWalletInputsJson},
 };
 
@@ -249,16 +250,7 @@ impl ZkProgramSpendVerifierInput {
     }
 
     pub fn new(public: &ZkProgramSpendPublic<'_>) -> Result<Self, ZkProgramSpendInputsError> {
-        if public.inputs.len() > MAX_INPUTS {
-            return Err(ZkProgramSpendInputsError::TooManyInputs(
-                public.inputs.len(),
-            ));
-        }
-        if public.outputs.len() > MAX_OUTPUTS {
-            return Err(ZkProgramSpendInputsError::TooManyOutputs(
-                public.outputs.len(),
-            ));
-        }
+        check_bounds(public.inputs.len(), public.outputs.len())?;
         if public.outputs_of_program.len() != public.outputs.len() {
             return Err(ZkProgramSpendInputsError::ProgramOutputsLength {
                 flags: public.outputs_of_program.len(),

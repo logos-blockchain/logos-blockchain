@@ -58,6 +58,18 @@ pub use crate::inputs::{
 pub const MAX_INPUTS: usize = 4;
 pub const MAX_OUTPUTS: usize = 8;
 
+/// Fails if the `ZkProgramSpend` circuit does not fit `inputs` input notes and
+/// `outputs` output notes.
+pub const fn check_bounds(inputs: usize, outputs: usize) -> Result<(), ZkProgramSpendInputsError> {
+    if inputs > MAX_INPUTS {
+        return Err(ZkProgramSpendInputsError::TooManyInputs(inputs));
+    }
+    if outputs > MAX_OUTPUTS {
+        return Err(ZkProgramSpendInputsError::TooManyOutputs(outputs));
+    }
+    Ok(())
+}
+
 pub type ZkProgramSpendProof = CompressedGroth16Proof;
 pub type ProveError = lbp_error::Error;
 
