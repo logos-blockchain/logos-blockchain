@@ -1,3 +1,6 @@
+# One node built from this checkout, running the standalone one-node network: its config holds the keys that
+# the genesis of the deployment next to it stakes. Its API listens inside the container only:
+# `docker compose exec logos-blockchain-node curl -s localhost:8080/cryptarchia/info`.
 services:
 
   logos-blockchain-node:
@@ -5,7 +8,8 @@ services:
       context: ..
       dockerfile: deployment/Dockerfile
     volumes:
-      - .:/etc/logos-blockchain
-    deploy:
-      replicas: ${DOCKER_COMPOSE_LIBP2P_REPLICAS:-1}
-    entrypoint: /etc/logos-blockchain/scripts/run_node.sh
+      - ../nodes/node/standalone-node-config.yaml:/etc/logos-blockchain/user_config.yaml:ro
+      - ../nodes/node/standalone-deployment-config.yaml:/etc/logos-blockchain/deployment.yaml:ro
+      # The deployment includes its era files by a path relative to its own.
+      - ../nodes/node/era:/etc/logos-blockchain/era:ro
+    command: [ "--deployment", "/etc/logos-blockchain/deployment.yaml", "/etc/logos-blockchain/user_config.yaml" ]

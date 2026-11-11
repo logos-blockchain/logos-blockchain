@@ -51,10 +51,7 @@
     <h2>Tools</h2>
     <ul>
         <li>
-            <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/web/cfgsync/deployment-settings" target="_blank">Deployment Settings (In Browser)</a>
-        </li>
-        <li>
-            <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/internal/node-data/cfgsync/deployment-settings.yaml" target="_blank">Deployment Settings (File Download)</a>
+            <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/internal/node-data/deployment.yaml" target="_blank">Deployment Settings</a>
         </li>
         <li>
             <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/internal/node-data/" target="_blank">Node Data</a>
