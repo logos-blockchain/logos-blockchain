@@ -104,7 +104,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           persist-credentials: false
 
@@ -115,10 +115,10 @@ jobs:
         run: cargo build -p logos-blockchain-node --release --locked --target ${{ matrix.platform.target_triple }}
 
       - name: Tar node binary
-        run: tar -czf logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar.gz -C target/${{ matrix.platform.target_triple }}/release logos-blockchain-node
+        run: tar -czf "logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-$VERSION.tar.gz" -C target/${{ matrix.platform.target_triple }}/release logos-blockchain-node
 
       - name: Upload binary tar (${{ matrix.platform.arch }})
-        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}
           path: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar.gz
@@ -144,7 +144,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           persist-credentials: false
 
@@ -196,7 +196,7 @@ jobs:
           fi
 
       - name: Download the archives
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # Version 4.2.1
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
           pattern: logos-blockchain-node-*-${{ env.VERSION }}
           path: ${{ runner.temp }}/archives
@@ -209,7 +209,7 @@ jobs:
           cat SHA256SUMS
 
       - name: Attest the build provenance of the archives
-        uses: actions/attest-build-provenance@9d3beef6515cb82652d066f999b94affc15acfac # Version 2.2.3
+        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
         with:
           subject-path: ${{ runner.temp }}/archives/*.tar.gz
 

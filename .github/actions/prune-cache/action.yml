@@ -27,13 +27,15 @@ runs:
   steps:
     - name: Validate mode
       shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
       run: |
-        case "${{ inputs.mode }}" in
+        case "$MODE" in
           delete-all|keep-latest)
             exit 0
             ;;
           *)
-            echo "Invalid prune mode: '${{ inputs.mode }}'"
+            echo "Invalid prune mode: '$MODE'"
             echo "Valid modes: delete-all, keep-latest"
             exit 1
             ;;
@@ -80,9 +82,9 @@ runs:
       id: keep-latest
       if: inputs.mode == 'keep-latest'
       shell: bash
+      env:
+        IDS: ${{ steps.select.outputs.ids }}
       run: |
-        IDS="${{ steps.select.outputs.ids }}"
-
         if [ -z "$IDS" ]; then
           echo "ids=" >> "$GITHUB_OUTPUT"
           exit 0
@@ -98,13 +100,16 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
+        MODE: ${{ inputs.mode }}
+        KEEP_LATEST_IDS: ${{ steps.keep-latest.outputs.ids }}
+        ALL_IDS: ${{ steps.select.outputs.ids }}
       run: |
         set -euo pipefail
 
-        if [ "${{ inputs.mode }}" = "keep-latest" ]; then
-          IDS="${{ steps.keep-latest.outputs.ids }}"
-        elif [ "${{ inputs.mode }}" = "delete-all" ]; then
-          IDS="${{ steps.select.outputs.ids }}"
+        if [ "$MODE" = "keep-latest" ]; then
+          IDS="$KEEP_LATEST_IDS"
+        elif [ "$MODE" = "delete-all" ]; then
+          IDS="$ALL_IDS"
         else
           # This should never happen due to prior validation
           exit 1
