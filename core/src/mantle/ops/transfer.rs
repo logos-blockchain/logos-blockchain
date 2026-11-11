@@ -204,9 +204,7 @@ pub fn transfer_witness(
                     stake_public_key: *note.stake_public_key.as_fr(),
                     nonce: note.nonce,
                     value: note.value,
-                    path_and_selectors: core::array::from_fn(|h| {
-                        (path.siblings()[h], (path.leaf_index() >> h) & 1 == 1)
-                    }),
+                    path_and_selectors: core::array::from_fn(|h| path.path_and_selectors(h).into()),
                 })
             },
         )

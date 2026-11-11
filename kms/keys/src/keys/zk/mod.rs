@@ -3,6 +3,7 @@ use std::hash::{Hash, Hasher};
 
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::Fr;
+use lb_zktransfer::{Unsigned, ZkTransferProof, ZkTransferWitnessBuilder};
 use num_bigint::BigUint;
 use serde::Deserialize;
 use zeroize::ZeroizeOnDrop;
@@ -17,7 +18,7 @@ pub use self::public::PublicKey;
 // The input secret keys are set by the KMS.
 // The witness of a transfer without the secret keys of its inputs, which the
 // keys of the KMS complete.
-pub type ZkTransferPayload = lb_zktransfer::ZkTransferWitnessBuilder<lb_zktransfer::Unsigned>;
+pub type ZkTransferPayload = ZkTransferWitnessBuilder<Unsigned>;
 
 /// An hardened ZK secret key that only exposes methods to retrieve public
 /// information.
@@ -123,7 +124,7 @@ impl BinaryDecode for PublicKey {
 #[async_trait::async_trait]
 impl SecuredKey for ZkKey {
     type Payload = ZkTransferPayload;
-    type Signature = lb_zktransfer::ZkTransferProof;
+    type Signature = ZkTransferProof;
     type PublicKey = PublicKey;
     type Error = KeyError;
 
@@ -152,6 +153,11 @@ impl SecuredKey for ZkKey {
 mod tests {
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
+    use lb_zktransfer::{
+        prove,
+        test_utils::{sample_unsigned_witness, sample_witness_data},
+        verify,
+    };
     use num_bigint::BigUint;
 
     use super::{PK0, ZkKey, kdf_public_key};
@@ -185,14 +191,13 @@ mod tests {
 
     #[test]
     fn sign_multiple_proves_the_transfer_with_one_key_per_active_input() {
-        let (_, public) =
-            lb_zktransfer::prove(lb_zktransfer::test_utils::sample_witness_data().into()).unwrap();
-        let (payload, secret_keys) = lb_zktransfer::test_utils::sample_unsigned_witness();
+        let (_, public) = prove(sample_witness_data().into()).unwrap();
+        let (payload, secret_keys) = sample_unsigned_witness();
         let keys: Vec<ZkKey> = secret_keys.into_iter().map(ZkKey::new).collect();
         assert_eq!(keys.len(), 2);
 
         let proof = ZkKey::sign_multiple(&[&keys[0], &keys[1]], &payload).unwrap();
-        assert!(lb_zktransfer::verify(&proof, &public).unwrap());
+        assert!(verify(&proof, &public).unwrap());
         assert!(matches!(
             ZkKey::sign_multiple(&[&keys[0]], &payload),
             Err(KeyError::UnsupportedMultisignatureSize(2, 1))

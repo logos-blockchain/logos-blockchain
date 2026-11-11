@@ -419,7 +419,7 @@ pub fn pol_wallet_inputs(
         return Err(mismatch);
     }
     let commitment_aged_selectors =
-        core::array::from_fn(|level| (commitment_aged_path.leaf_index() >> level) & 1 == 1);
+        core::array::from_fn(|level| commitment_aged_path.path_and_selectors(level).selector);
     let commitment_aged_path = commitment_aged_path
         .siblings()
         .try_into()
