@@ -50,7 +50,7 @@ use crate::inputs::PolVerifierInputJson;
 pub use crate::lottery::{LotteryConstants, P};
 
 pub type PoLProof = CompressedGroth16Proof;
-pub type ProveError = lbp_error::Error;
+pub type ProveError = lb_proofs_error::Error;
 
 const LOG_TARGET: &str = proofs::POL;
 

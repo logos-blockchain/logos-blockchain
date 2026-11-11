@@ -13,9 +13,9 @@ version     = { workspace = true }
 lb-circuits-prover = { workspace = true }
 lb-groth16         = { workspace = true }
 lb-log-targets     = { workspace = true }
+lb-proofs-error    = { workspace = true }
 lbc-poc-sys        = { features = ["prebuilt"], workspace = true }
 lbc-types          = { workspace = true }
-lbp-error          = { workspace = true }
 num-bigint         = { workspace = true }
 serde              = { features = ["derive", "std"], workspace = true }
 serde_json         = { workspace = true }

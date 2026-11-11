@@ -14,9 +14,9 @@ lb-circuits-prover = { workspace = true }
 lb-groth16         = { workspace = true }
 lb-log-targets     = { workspace = true }
 lb-poseidon2       = { workspace = true }
+lb-proofs-error    = { workspace = true }
 lbc-signature-sys  = { features = ["prebuilt"], workspace = true }
 lbc-types          = { workspace = true }
-lbp-error          = { workspace = true }
 num-bigint         = { workspace = true }
 serde              = { features = ["derive"], workspace = true }
 serde-big-array    = { workspace = true }

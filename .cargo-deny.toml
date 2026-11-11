@@ -2,7 +2,11 @@
 
 [graph]
 all-features = true
-exclude-dev  = false
+# `jf-poseidon2`, from jellyfish, requires `jf-crhf` by its `jf-crhf-v0.2.0` tag, which `required-git-spec = "rev"`
+# refuses and which we can't override from our manifests. This removes that one crate from every check below;
+# drop the entry once `jf-poseidon2` requires `jf-crhf` by commit.
+exclude     = ["jf-crhf@0.2.0"]
+exclude-dev = false
 
 [advisories]
 # When adding a new line, please consider to which group the advisory belongs, and whether the issue can be fixed by upgrading some dependencies.
@@ -67,7 +71,7 @@ allow-git = [
   "https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git",
   "https://github.com/logos-blockchain/logos-blockchain-testing.git",
 ]
-required-git-spec = "tag"
+required-git-spec = "rev"
 unknown-git = "deny"
 unknown-registry = "deny"
 unused-allowed-org = "deny"

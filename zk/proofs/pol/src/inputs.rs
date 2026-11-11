@@ -16,7 +16,7 @@ pub struct PolWitnessInputs {
 }
 
 impl TryFrom<PolWitnessInputs> for lbc_pol_sys::PolWitnessInput<'_> {
-    type Error = lbp_error::Error;
+    type Error = lb_proofs_error::Error;
 
     fn try_from(value: PolWitnessInputs) -> Result<Self, Self::Error> {
         let inputs_json: PolInputsJson = value.into();
