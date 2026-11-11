@@ -18,6 +18,7 @@ lb-key-management-system-keys      = { workspace = true }
 lb-key-management-system-operators = { workspace = true }
 lb-log-targets                     = { workspace = true }
 lb-tracing                         = { workspace = true }
+lb-utils                           = { features = ["tokio"], workspace = true }
 overwatch                          = { workspace = true }
 serde                              = { features = ["derive"], workspace = true }
 thiserror                          = { workspace = true }
@@ -33,5 +34,5 @@ serde                         = { features = ["std"], workspace = true }
 serde_yaml                    = { workspace = true }
 
 [features]
-tokio-task-names = ["lb-key-management-system-operators/tokio-task-names"]
+tokio-task-names = ["lb-key-management-system-operators/tokio-task-names", "lb-utils/tokio-task-names"]
 unsafe           = ["lb-key-management-system-keys/unsafe", "lb-key-management-system-operators/unsafe"]

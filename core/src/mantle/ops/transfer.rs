@@ -8,7 +8,6 @@ use crate::{
     mantle::{
         batch::DeferredZkSig,
         channel::Channels,
-        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             self, ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation,
             Utxo, Utxos, VerifiableOperation,
@@ -112,12 +111,6 @@ impl ProvableOperation for TransferOp {
     const CODE: u8 = 0x00;
 }
 
-impl OperationGas<MainnetGasProfile> for TransferOp {
-    const GAS_COST: Gas = Gas::new(590);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for TransferOp {}
-
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<TransferOp, Unverified, StandardMode>
 {
@@ -190,7 +183,10 @@ mod test {
             Note, NoteId, TxHash, Utxo,
             batch::{DeferredZkSig, Error as BatchError, test_utils::batch_verify},
             channel::Channels,
-            gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
+            gas::{
+                Gas,
+                test_utils::{FixedThresholds, GAS_PROFILE},
+            },
             ledger::{
                 self, BoundedInputs, Inputs, InputsError, Outputs, PreverifiableOperation as _,
                 ProvableOperation, Utxos, VerifiableOperation as _,
@@ -482,7 +478,8 @@ mod test {
     fn transfer_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
             assert_eq!(
-                TransferOp::sample().execution_gas(&FixedThresholds(threshold)),
+                crate::mantle::OpRef::from(&TransferOp::sample())
+                    .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(590))
             );
         }

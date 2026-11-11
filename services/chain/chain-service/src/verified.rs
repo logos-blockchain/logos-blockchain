@@ -118,7 +118,8 @@ impl<Tx> BlockWithVerifiedHeader<Tx> {
     /// # Errors
     ///
     /// Returns an error if the body root of `header` does not commit to its
-    /// uncles and `transactions`, or if `transactions` do not fit in a block.
+    /// uncles and `transactions`. Whether `transactions` fit in the block's era
+    /// is checked by the ledger when the block is applied.
     pub fn new(
         header: VerifiedBlockHeader,
         transactions: BlockTransactions<Tx>,
@@ -126,7 +127,6 @@ impl<Tx> BlockWithVerifiedHeader<Tx> {
     where
         Tx: Hashable<Hash = TxHash> + StorageSize,
     {
-        Block::validate_total_transactions_size(&transactions)?;
         Block::validate_body_root(&header.header, &header.uncle_headers, &transactions)?;
         Ok(Self(Block::reconstruct(
             header.header,
@@ -140,7 +140,7 @@ impl<Tx> BlockWithVerifiedHeader<Tx> {
     /// node verified the block before storing it.
     pub(crate) async fn load_stored(storage: &StorageApi<Tx>, id: &HeaderId) -> Option<Self>
     where
-        Tx: BinaryDecode<Context = ()> + Hashable<Hash = TxHash> + StorageSize,
+        Tx: BinaryDecode<Context = u32> + Hashable<Hash = TxHash> + StorageSize,
     {
         storage.get_block(id).await.map(Self)
     }

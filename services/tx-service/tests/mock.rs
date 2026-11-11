@@ -11,16 +11,19 @@ use futures::{Stream, StreamExt as _, stream};
 use indexmap::IndexMap;
 use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_core::{
-    block::{MAX_BLOCK_TRANSACTIONS_SIZE, TxInBlock},
+    block::TxInBlock,
     era::{AcceptedForkDigests, ForkDigest},
     header::HeaderId,
     mantle::{
         Op,
         ops::{
-            channel::inscribe::{Inscription, InscriptionOp, MAX_BYTES as MAX_INSCRIPTION_BYTES},
+            channel::{
+                deposit::{DepositOp, Metadata},
+                inscribe::{Inscription, InscriptionOp},
+            },
             pow::ClaimPowRewardOp,
         },
-        traits::Hashable as _,
+        traits::{Hashable as _, StorageSize as _},
         transactions::{
             hash::{PrefixedKey as _, TxHash, TxHashPrefix},
             tx_list::ops::Ops,
@@ -54,8 +57,9 @@ use lb_utils::noop_service::NoService;
 use logos_blockchain_tx_service::{
     MempoolMsg, TxMempoolSettings,
     backend::{
-        AdmissionTime, DEFAULT_TX_TTL, MemPool as _, Mempool, MempoolError, MempoolSettings,
-        PoolRecoveryState, PowClaimEvictionSettings, RecoverableMempool as _, Status,
+        AdmissionLimits, AdmissionTime, DEFAULT_TX_TTL, MemPool as _, Mempool, MempoolError,
+        MempoolSettings, PoolRecoveryState, PowClaimEvictionSettings, RecoverableMempool as _,
+        Status,
     },
     network::adapters::mock::{MOCK_TX_CONTENT_TOPIC, MockAdapter, mock_message},
     storage::{BlockSlotLookup, MempoolStorageAdapter, adapters::rocksdb::RocksStorageAdapter},
@@ -111,8 +115,7 @@ fn inscribing(bytes: &[u8]) -> Ops {
     Ops::new(
         FORK_DIGEST,
         [Op::ChannelInscribe(InscriptionOp {
-            inscription: Inscription::try_from_iter(bytes.iter().copied())
-                .expect("inscription should fit"),
+            inscription: Inscription::new_unchecked(bytes.to_vec()),
             ..InscriptionOp::sample()
         })],
     )
@@ -444,6 +447,7 @@ fn ttl_settings(tx_ttl: Duration) -> MempoolSettings {
         pow_claim: None,
         accepted_fork_digests: accepted_fork_digests(),
         era_timing: None,
+        admission: admission(),
     }
 }
 
@@ -452,17 +456,31 @@ fn accepted_fork_digests() -> EraSchedule<AcceptedForkDigests> {
     era_schedule().map(|_| AcceptedForkDigests::new(vec![FORK_DIGEST]))
 }
 
+/// The timing of the tests' eras: 1-second slots and 100-slot epochs.
+const ERA_TIMING: EraTiming = EraTiming {
+    slot_duration: Duration::from_secs(1),
+    epoch_length: NonZero::new(100).unwrap(),
+};
+
 /// The single era the tests run in, of 100-slot epochs.
 fn era_schedule() -> EraSchedule<EraTiming> {
     EraSchedule::new(
         OffsetDateTime::UNIX_EPOCH,
-        EraTiming {
-            slot_duration: Duration::from_secs(1),
-            epoch_length: NonZero::new(100).unwrap(),
-        },
+        ERA_TIMING,
         EraEntriesAfterGenesis::empty(),
     )
     .unwrap()
+}
+
+/// What the tests' era admits: 2 MiB transactions, whose Operations carry
+/// seven eighths of that in data.
+const ADMISSION_LIMITS: AdmissionLimits = AdmissionLimits {
+    max_transaction_size: 2 * 1024 * 1024,
+    max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+};
+
+fn admission() -> EraSchedule<AdmissionLimits> {
+    era_schedule().map(|_| ADMISSION_LIMITS)
 }
 
 const TEST_SLOT_WINDOW: u64 = 10;
@@ -478,6 +496,7 @@ fn pow_claim_settings() -> MempoolSettings {
         })),
         accepted_fork_digests: accepted_fork_digests(),
         era_timing: None,
+        admission: admission(),
     }
 }
 
@@ -580,6 +599,7 @@ async fn expired_tx_is_not_evicted_when_ttl_is_disabled() {
         pow_claim: None,
         accepted_fork_digests: accepted_fork_digests(),
         era_timing: None,
+        admission: admission(),
     })
     .await;
     let tx_id = tx.hash();
@@ -618,26 +638,22 @@ async fn a_tx_whose_fork_digest_the_era_in_force_does_not_accept_is_refused() {
 #[tokio::test]
 async fn the_pool_admits_the_fork_digests_of_the_era_it_rotates_to() {
     let next_fork = ForkDigest::new([0x22; 32]);
-    let timing = EraTiming {
-        slot_duration: Duration::from_secs(1),
-        epoch_length: NonZero::new(100).unwrap(),
-    };
     let two_eras = EraSchedule::new(
         OffsetDateTime::UNIX_EPOCH,
-        timing,
-        EraEntriesAfterGenesis::try_from_iter([(NonZero::new(1).unwrap(), timing)]).unwrap(),
+        ERA_TIMING,
+        EraEntriesAfterGenesis::try_from_iter([(NonZero::new(1).unwrap(), ERA_TIMING)]).unwrap(),
     )
-    .unwrap()
-    .map(|era| {
-        if era.era == Era::genesis() {
-            AcceptedForkDigests::new(vec![FORK_DIGEST])
-        } else {
-            AcceptedForkDigests::new(vec![FORK_DIGEST, next_fork])
-        }
-    });
+    .unwrap();
     let mut pool = InMemoryPool::new(
         MempoolSettings {
-            accepted_fork_digests: two_eras,
+            accepted_fork_digests: two_eras.map(|era| {
+                if era.era == Era::genesis() {
+                    AcceptedForkDigests::new(vec![FORK_DIGEST])
+                } else {
+                    AcceptedForkDigests::new(vec![FORK_DIGEST, next_fork])
+                }
+            }),
+            admission: two_eras.map(|_| ADMISSION_LIMITS),
             ..default_settings()
         },
         Era::genesis(),
@@ -657,6 +673,97 @@ async fn the_pool_admits_the_fork_digests_of_the_era_it_rotates_to() {
         .await
         .expect("the next era accepts its own fork digest");
     assert_eq!(pool.status(&[tx_id]), vec![Status::Pending]);
+}
+
+#[tokio::test]
+async fn deposit_metadata_beyond_the_era_limit_is_refused() {
+    let mut pool = InMemoryPool::new(
+        default_settings(),
+        Era::genesis(),
+        InMemoryStorageAdapter::default(),
+    );
+    let tx = Ops::new(
+        FORK_DIGEST,
+        [Op::ChannelDeposit(DepositOp {
+            metadata: Metadata::new_unchecked(vec![b'x'; ADMISSION_LIMITS.max_op_data_size + 1]),
+            ..DepositOp::sample()
+        })],
+    );
+
+    let error = pool
+        .add_item(tx.hash(), tx)
+        .await
+        .expect_err("the metadata is larger than the era allows");
+
+    assert!(matches!(
+        error,
+        MempoolError::MetadataTooLarge { size, max }
+            if max == ADMISSION_LIMITS.max_op_data_size && size == max + 1
+    ));
+}
+
+#[tokio::test]
+async fn an_inscription_beyond_the_era_limit_is_refused() {
+    let mut pool = InMemoryPool::new(
+        default_settings(),
+        Era::genesis(),
+        InMemoryStorageAdapter::default(),
+    );
+    let tx = inscribing(&vec![b'x'; ADMISSION_LIMITS.max_op_data_size + 1]);
+
+    let error = pool
+        .add_item(tx.hash(), tx)
+        .await
+        .expect_err("the inscription is larger than the era allows");
+
+    assert!(matches!(
+        error,
+        MempoolError::InscriptionTooLarge { size, max }
+            if max == ADMISSION_LIMITS.max_op_data_size && size == max + 1
+    ));
+}
+
+/// The pool holds a transaction to the era it is in, even one it admitted under
+/// an earlier era.
+#[tokio::test]
+async fn the_pool_admits_under_the_era_it_is_in() {
+    let tx = tx("admitted under the genesis era only");
+    let size = tx.storage_size();
+    let eras = EraSchedule::new(
+        OffsetDateTime::UNIX_EPOCH,
+        ERA_TIMING,
+        EraEntriesAfterGenesis::try_from_iter([(NonZero::new(1).unwrap(), ERA_TIMING)]).unwrap(),
+    )
+    .unwrap();
+    let settings = MempoolSettings {
+        tx_ttl: None,
+        pow_claim: None,
+        accepted_fork_digests: eras.map(|_| AcceptedForkDigests::new(vec![FORK_DIGEST])),
+        era_timing: None,
+        admission: eras.map(|era| AdmissionLimits {
+            max_transaction_size: if era.era == Era::genesis() {
+                size
+            } else {
+                size - 1
+            },
+            ..ADMISSION_LIMITS
+        }),
+    };
+    let mut pool = InMemoryPool::new(settings, Era::genesis(), InMemoryStorageAdapter::default());
+
+    pool.add_item(tx.hash(), tx.clone())
+        .await
+        .expect("the genesis era admits the transaction");
+    pool.rotate_era(Era::new(1)).await;
+    let error = pool
+        .add_item(tx.hash(), tx)
+        .await
+        .expect_err("the next era allows a byte less");
+
+    assert!(matches!(
+        error,
+        MempoolError::ItemTooLarge { size: refused, max } if refused == size && max == size - 1
+    ));
 }
 
 #[tokio::test]
@@ -1408,6 +1515,7 @@ fn no_eviction_settings() -> MempoolSettings {
         pow_claim: None,
         accepted_fork_digests: accepted_fork_digests(),
         era_timing: None,
+        admission: admission(),
     }
 }
 
@@ -1450,13 +1558,10 @@ fn local_submission_rejects_oversized_tx() {
             .handle()
             .block_on(async { app.handle().relay::<MockMempoolService>().await.unwrap() });
 
-        // Two inscriptions at their own maximum add up past the block limit.
+        // Two inscriptions at the era's maximum add up past what a block of
+        // the era carries.
         let max_inscription = Op::ChannelInscribe(InscriptionOp {
-            inscription: Inscription::try_from_iter(std::iter::repeat_n(
-                b'x',
-                MAX_INSCRIPTION_BYTES,
-            ))
-            .expect("a maximal inscription should fit"),
+            inscription: Inscription::new_unchecked(vec![b'x'; ADMISSION_LIMITS.max_op_data_size]),
             ..InscriptionOp::sample()
         });
         let oversized_tx = Ops::new(FORK_DIGEST, [max_inscription.clone(), max_inscription]);
@@ -1469,10 +1574,8 @@ fn local_submission_rejects_oversized_tx() {
 
         assert!(matches!(
             error,
-            MempoolError::ItemTooLarge {
-                size,
-                max: MAX_BLOCK_TRANSACTIONS_SIZE,
-            } if size > MAX_BLOCK_TRANSACTIONS_SIZE
+            MempoolError::ItemTooLarge { size, max }
+                if max == ADMISSION_LIMITS.max_transaction_size && size > max
         ));
 
         assert_eq!(

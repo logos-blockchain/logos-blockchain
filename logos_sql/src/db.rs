@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -331,6 +331,54 @@ pub struct ObservedWrite {
 struct ReplicatedDatabase {
     connection: Connection,
     functions: FunctionOverrides,
+    hooks: ApplicationHooks,
+}
+
+/// The authorizer and the execution budget that constrain application SQL.
+/// Installed once per connection; active only while armed.
+struct ApplicationHooks {
+    armed: Arc<AtomicBool>,
+    work: Arc<AtomicU64>,
+}
+
+impl ApplicationHooks {
+    fn install(connection: &mut Connection) -> Result<Self, Error> {
+        let hooks = Self {
+            armed: Arc::new(AtomicBool::new(false)),
+            work: Arc::new(AtomicU64::new(0)),
+        };
+
+        let armed = Arc::clone(&hooks.armed);
+        connection.authorizer(Some(move |context: AuthContext<'_>| {
+            if armed.load(Ordering::Relaxed) {
+                authorize_application_sql(context)
+            } else {
+                Authorization::Allow
+            }
+        }))?;
+
+        let armed = Arc::clone(&hooks.armed);
+        let work = Arc::clone(&hooks.work);
+        connection.progress_handler(
+            SQL_PROGRESS_INTERVAL,
+            Some(move || {
+                armed.load(Ordering::Relaxed)
+                    && work.fetch_add(SQL_PROGRESS_INTERVAL as u64, Ordering::Relaxed)
+                        >= MAX_SQL_STEPS
+            }),
+        )?;
+
+        Ok(hooks)
+    }
+
+    fn arm(&self) {
+        self.work.store(0, Ordering::Relaxed);
+        self.armed.store(true, Ordering::Relaxed);
+    }
+
+    fn disarm(&self) {
+        self.armed.store(false, Ordering::Relaxed);
+    }
 }
 
 /// Pending write count and payload bytes, cached to avoid scanning the
@@ -743,6 +791,7 @@ impl Databases {
         &mut self,
         tx_id: TxId,
         transaction: &Transaction,
+        max_inscription_size: u32,
     ) -> Result<TxId, Error> {
         let usage = self.pending_publish_usage()?;
 
@@ -754,9 +803,14 @@ impl Databases {
         let capture = self.live.functions.capture();
         let db_transaction = self.live.connection.transaction()?;
 
-        apply_statements(&db_transaction, transaction)?;
+        apply_statements(&db_transaction, &self.live.hooks, transaction)?;
         let captured_function_calls = capture.finish()?;
-        let encoded = EncodedWrite::new(tx_id, transaction, captured_function_calls)?;
+        let encoded = EncodedWrite::new(
+            tx_id,
+            transaction,
+            captured_function_calls,
+            max_inscription_size,
+        )?;
 
         let bytes = usage.bytes + encoded.payload.len();
 
@@ -1064,26 +1118,30 @@ impl FromSql for WriteStatus {
 }
 
 fn open_writer(path: &Path) -> Result<ReplicatedDatabase, Error> {
-    let connection = open_connection(path)?;
+    let mut connection = open_connection(path)?;
     let functions = FunctionOverrides::install(&connection)?;
+    let hooks = ApplicationHooks::install(&mut connection)?;
 
     Ok(ReplicatedDatabase {
         connection,
         functions,
+        hooks,
     })
 }
 
 fn open_rebuild_writer(path: &Path) -> Result<ReplicatedDatabase, Error> {
-    let connection = Connection::open(path)?;
+    let mut connection = Connection::open(path)?;
 
     configure_connection(&connection)?;
     connection.execute_batch(REBUILD_PRAGMAS)?;
 
     let functions = FunctionOverrides::install(&connection)?;
+    let hooks = ApplicationHooks::install(&mut connection)?;
 
     Ok(ReplicatedDatabase {
         connection,
         functions,
+        hooks,
     })
 }
 
@@ -1139,7 +1197,7 @@ fn apply_channel_write(
         return Ok(());
     }
 
-    if let Err(error) = apply_statements(&db_transaction, &write.transaction) {
+    if let Err(error) = apply_statements(&db_transaction, &database.hooks, &write.transaction) {
         if replay.failed() {
             return Err(Error::InvalidPayload(
                 "captured SQLite function call does not match replay",
@@ -1231,27 +1289,21 @@ fn is_deterministic_sql_error(error: &rusqlite::Error) -> bool {
 
 fn apply_statements(
     db_transaction: &rusqlite::Transaction<'_>,
+    hooks: &ApplicationHooks,
     transaction: &Transaction,
 ) -> Result<(), Error> {
     let previous_length = db_transaction.set_limit(Limit::SQLITE_LIMIT_LENGTH, MAX_SQL_BYTES)?;
     let previous_sql_length =
         db_transaction.set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, MAX_SQL_BYTES)?;
 
-    db_transaction.authorizer(Some(authorize_application_sql));
-
-    let work = Arc::new(AtomicU64::new(0));
-    let progress_work = Arc::clone(&work);
-
-    db_transaction.progress_handler(
-        SQL_PROGRESS_INTERVAL,
-        Some(move || {
-            progress_work.fetch_add(SQL_PROGRESS_INTERVAL as u64, Ordering::Relaxed)
-                >= MAX_SQL_STEPS
-        }),
-    );
+    hooks.arm();
 
     let result = transaction.statements().iter().try_for_each(|statement| {
-        if work.fetch_add(SQL_PROGRESS_INTERVAL as u64, Ordering::Relaxed) >= MAX_SQL_STEPS {
+        if hooks
+            .work
+            .fetch_add(SQL_PROGRESS_INTERVAL as u64, Ordering::Relaxed)
+            >= MAX_SQL_STEPS
+        {
             return Err(Error::ExecutionBudgetExceeded);
         }
 
@@ -1260,16 +1312,15 @@ fn apply_statements(
         Ok::<_, Error>(())
     });
 
-    db_transaction.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
     // Bookkeeping and rollback must not inherit the application's spent budget.
-    db_transaction.progress_handler(0, None::<fn() -> bool>);
+    hooks.disarm();
 
     // Internal rows also contain replication metadata and encoded payloads;
     // they are not application rows and must not inherit these size limits.
     db_transaction.set_limit(Limit::SQLITE_LIMIT_LENGTH, previous_length)?;
     db_transaction.set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, previous_sql_length)?;
 
-    if work.load(Ordering::Relaxed) > MAX_SQL_STEPS {
+    if hooks.work.load(Ordering::Relaxed) > MAX_SQL_STEPS {
         return Err(Error::ExecutionBudgetExceeded);
     }
 
@@ -1397,6 +1448,9 @@ pub mod tests {
         status::WriteStatus,
     };
 
+    /// The most bytes an inscription may take in the tests' era: today's limit.
+    pub const MAX_INSCRIPTION_SIZE: u32 = 1_835_008;
+
     pub fn open_databases(directory: &Path) -> Result<Databases, Error> {
         Databases::open(directory, PublicationConfig::default().max_pending_writes)
     }
@@ -1437,7 +1491,7 @@ pub mod tests {
         transaction: &Transaction,
         this_msg: MsgId,
     ) -> PendingPublish {
-        db.commit_local_write(tx_id, transaction)
+        db.commit_local_write(tx_id, transaction, MAX_INSCRIPTION_SIZE)
             .expect("local write should commit");
 
         let pending = db
@@ -1479,7 +1533,7 @@ pub mod tests {
 
         let transaction = transaction(sql);
         let error = db
-            .commit_local_write(TxId::generate(), &transaction)
+            .commit_local_write(TxId::generate(), &transaction, MAX_INSCRIPTION_SIZE)
             .expect_err("application SQL should be rejected");
 
         assert!(
@@ -1554,16 +1608,17 @@ pub mod tests {
         db.commit_local_write(
             TxId::generate(),
             &transaction("CREATE TABLE items(value TEXT)"),
+            MAX_INSCRIPTION_SIZE,
         )
         .unwrap();
 
         for _ in 1..capacity {
-            db.commit_local_write(TxId::generate(), &insert("queued"))
+            db.commit_local_write(TxId::generate(), &insert("queued"), MAX_INSCRIPTION_SIZE)
                 .unwrap();
         }
 
         assert!(matches!(
-            db.commit_local_write(TxId::generate(), &insert("overflow")),
+            db.commit_local_write(TxId::generate(), &insert("overflow"), MAX_INSCRIPTION_SIZE),
             Err(Error::PublishPending)
         ));
         let overflow: i64 = db
@@ -1585,31 +1640,48 @@ pub mod tests {
         let mut db = Databases::open(dir.path(), capacity).unwrap();
         let schema = transaction("CREATE TABLE items(value TEXT)");
 
-        db.commit_local_write(TxId::generate(), &schema).unwrap();
-        assert!(db.commit_local_write(TxId::generate(), &schema).is_err());
-        db.commit_local_write(TxId::generate(), &insert("queued"))
+        db.commit_local_write(TxId::generate(), &schema, MAX_INSCRIPTION_SIZE)
+            .unwrap();
+        assert!(
+            db.commit_local_write(TxId::generate(), &schema, MAX_INSCRIPTION_SIZE)
+                .is_err()
+        );
+        db.commit_local_write(TxId::generate(), &insert("queued"), MAX_INSCRIPTION_SIZE)
             .unwrap();
         drop(db);
 
         let mut db = Databases::open(dir.path(), capacity).unwrap();
         assert!(matches!(
-            db.commit_local_write(TxId::generate(), &insert("overflow")),
+            db.commit_local_write(TxId::generate(), &insert("overflow"), MAX_INSCRIPTION_SIZE),
             Err(Error::PublishPending)
         ));
 
         let pending = db.pending_writes().unwrap();
         db.complete_batch(&checkpoint(1, 1), MsgId::from([1; 32]), &pending)
             .unwrap();
-        db.commit_local_write(TxId::generate(), &insert("after publication"))
-            .unwrap();
-        db.commit_local_write(TxId::generate(), &insert("fills queue"))
-            .unwrap();
+        db.commit_local_write(
+            TxId::generate(),
+            &insert("after publication"),
+            MAX_INSCRIPTION_SIZE,
+        )
+        .unwrap();
+        db.commit_local_write(
+            TxId::generate(),
+            &insert("fills queue"),
+            MAX_INSCRIPTION_SIZE,
+        )
+        .unwrap();
 
         let rebuild = db.begin_live_rebuild().unwrap();
         db.finish_live_rebuild(rebuild).unwrap();
-        db.commit_local_write(TxId::generate(), &schema).unwrap();
-        db.commit_local_write(TxId::generate(), &insert("after rebuild"))
+        db.commit_local_write(TxId::generate(), &schema, MAX_INSCRIPTION_SIZE)
             .unwrap();
+        db.commit_local_write(
+            TxId::generate(),
+            &insert("after rebuild"),
+            MAX_INSCRIPTION_SIZE,
+        )
+        .unwrap();
 
         assert_eq!(db.pending_writes().unwrap().len(), 2);
         assert_eq!(
@@ -1624,12 +1696,18 @@ pub mod tests {
         let mut db = open_databases(dir.path()).unwrap();
         let first = TxId::generate();
         let second = TxId::generate();
-        db.commit_local_write(first, &transaction("CREATE TABLE items(value TEXT)"))
+        db.commit_local_write(
+            first,
+            &transaction("CREATE TABLE items(value TEXT)"),
+            MAX_INSCRIPTION_SIZE,
+        )
+        .unwrap();
+        db.commit_local_write(second, &insert("second"), MAX_INSCRIPTION_SIZE)
             .unwrap();
-        db.commit_local_write(second, &insert("second")).unwrap();
         let publication = crate::publication::Publication::prepare(
             db.pending_writes().unwrap(),
             PublicationConfig::default().max_transactions,
+            MAX_INSCRIPTION_SIZE,
         )
         .unwrap()
         .unwrap();
@@ -1696,7 +1774,7 @@ pub mod tests {
         );
         let second = publish_write(&mut db, second_id, &insert("second"), second_position);
 
-        db.commit_local_write(pending_id, &insert("pending"))
+        db.commit_local_write(pending_id, &insert("pending"), MAX_INSCRIPTION_SIZE)
             .unwrap();
         let pending = db.pending_publish().unwrap().unwrap();
 
@@ -1747,7 +1825,8 @@ pub mod tests {
             .finish()
             .unwrap();
 
-            db.commit_local_write(original_id, &original).unwrap();
+            db.commit_local_write(original_id, &original, MAX_INSCRIPTION_SIZE)
+                .unwrap();
             let pending = db.pending_publish().unwrap().unwrap();
 
             if published {
@@ -1773,7 +1852,8 @@ pub mod tests {
             assert_eq!(retry, &original);
 
             db.mark_displacement_handled(&displacement).unwrap();
-            db.commit_local_write(retry_id, retry).unwrap();
+            db.commit_local_write(retry_id, retry, MAX_INSCRIPTION_SIZE)
+                .unwrap();
 
             let retried = db.pending_publish().unwrap().unwrap();
             let inscription = ChannelWrite::decode(&retried.payload).unwrap();
@@ -1789,6 +1869,7 @@ pub mod tests {
         db.commit_local_write(
             TxId::generate(),
             &transaction("CREATE TABLE local_write(value INTEGER)"),
+            MAX_INSCRIPTION_SIZE,
         )
         .unwrap();
         let pending = db.pending_publish().unwrap().unwrap();
@@ -1958,7 +2039,7 @@ pub mod tests {
 
         let transaction = insert("hello");
         let tx_id = db
-            .commit_local_write(TxId::generate(), &transaction)
+            .commit_local_write(TxId::generate(), &transaction, MAX_INSCRIPTION_SIZE)
             .expect("write should commit");
 
         let count: i64 = db
@@ -1999,13 +2080,13 @@ pub mod tests {
 
         let transaction = insert("hello");
         let first_tx_id = db
-            .commit_local_write(TxId::generate(), &transaction)
+            .commit_local_write(TxId::generate(), &transaction, MAX_INSCRIPTION_SIZE)
             .expect("first write should commit");
         db.clear_pending_publish(first_tx_id)
             .expect("first publication should complete");
 
         let second_tx_id = db
-            .commit_local_write(TxId::generate(), &transaction)
+            .commit_local_write(TxId::generate(), &transaction, MAX_INSCRIPTION_SIZE)
             .expect("second write should commit");
 
         assert_ne!(second_tx_id, first_tx_id);
@@ -2059,7 +2140,7 @@ pub mod tests {
                 CURRENT_TIMESTAMP
             )",
         );
-        db.commit_local_write(TxId::generate(), &write)
+        db.commit_local_write(TxId::generate(), &write, MAX_INSCRIPTION_SIZE)
             .expect("local write should commit");
 
         let pending = db
@@ -2124,7 +2205,7 @@ pub mod tests {
         }
 
         let write = transaction("INSERT INTO items(value) VALUES ('hello')");
-        db.commit_local_write(TxId::generate(), &write)
+        db.commit_local_write(TxId::generate(), &write, MAX_INSCRIPTION_SIZE)
             .expect("local write should commit");
 
         let pending = db
@@ -2230,13 +2311,17 @@ pub mod tests {
         .unwrap();
 
         assert!(matches!(
-            db.commit_local_write(TxId::generate(), &write),
+            db.commit_local_write(TxId::generate(), &write, MAX_INSCRIPTION_SIZE),
             Err(Error::ExecutionBudgetExceeded)
         ));
         assert!(db.pending_publish().unwrap().is_none());
 
-        db.commit_local_write(TxId::generate(), &insert("next write"))
-            .expect("a rejected transaction must not block later writes");
+        db.commit_local_write(
+            TxId::generate(),
+            &insert("next write"),
+            MAX_INSCRIPTION_SIZE,
+        )
+        .expect("a rejected transaction must not block later writes");
 
         assert_eq!(
             row_values(&db.live, "items"),
@@ -2272,7 +2357,9 @@ pub mod tests {
             ])
             .unwrap();
 
-            let error = db.commit_local_write(TxId::generate(), &write).unwrap_err();
+            let error = db
+                .commit_local_write(TxId::generate(), &write, MAX_INSCRIPTION_SIZE)
+                .unwrap_err();
             assert!(
                 matches!(error, Error::Database(ref error)
                 if super::is_deterministic_sql_error(error)),
@@ -2280,8 +2367,12 @@ pub mod tests {
             );
             assert!(db.pending_publish().unwrap().is_none());
 
-            db.commit_local_write(TxId::generate(), &insert("next write"))
-                .expect("oversized values must not block later writes");
+            db.commit_local_write(
+                TxId::generate(),
+                &insert("next write"),
+                MAX_INSCRIPTION_SIZE,
+            )
+            .expect("oversized values must not block later writes");
             assert_eq!(
                 row_values(&db.live, "items"),
                 vec![Value::Text("next write".into())]
@@ -2302,7 +2393,7 @@ pub mod tests {
         let write = Transaction::new(vec![statement; count]).unwrap();
 
         assert!(matches!(
-            db.commit_local_write(TxId::generate(), &write),
+            db.commit_local_write(TxId::generate(), &write, MAX_INSCRIPTION_SIZE),
             Err(Error::ExecutionBudgetExceeded)
         ));
         let count: i64 = db
@@ -2440,7 +2531,7 @@ pub mod tests {
         let dir = TempDir::new().expect("temporary directory should be created");
         let mut db = open_databases(dir.path()).expect("databases should open");
         let transaction = transaction("CREATE TABLE items(value TEXT NOT NULL)");
-        db.commit_local_write(TxId::generate(), &transaction)
+        db.commit_local_write(TxId::generate(), &transaction, MAX_INSCRIPTION_SIZE)
             .expect("schema write should commit");
 
         db.live
@@ -2467,7 +2558,7 @@ pub mod tests {
                 Statement::new(control.to_owned(), Vec::new()).expect("statement should be valid"),
             ])
             .expect("transaction should be valid");
-            db.commit_local_write(TxId::generate(), &transaction)
+            db.commit_local_write(TxId::generate(), &transaction, MAX_INSCRIPTION_SIZE)
                 .expect_err("transaction control should be rejected");
 
             let count: i64 = db
@@ -2537,7 +2628,7 @@ pub mod tests {
         let mut db = open_databases(dir.path()).expect("databases should open");
         let transaction = transaction("CREATE TABLE aaaaaaaaaa\u{65e5}(value INTEGER)");
 
-        db.commit_local_write(TxId::generate(), &transaction)
+        db.commit_local_write(TxId::generate(), &transaction, MAX_INSCRIPTION_SIZE)
             .expect("non-reserved Unicode name should be accepted");
     }
 

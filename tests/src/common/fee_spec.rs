@@ -19,11 +19,12 @@ use std::collections::{HashMap, HashSet};
 
 use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_common_http_client::ApiBlock;
+use lb_config::deployment::GAS_PROFILE;
 use lb_core::{
     era::ForkDigest,
     mantle::{
         Note, SignedOps, Utxo,
-        gas::{MainnetGasProfile, TxGasCalculator as _},
+        gas::TxGasCalculator as _,
         ledger::verification_mode::{StandardMode, VerificationMode},
         ops::OpRef,
         traits::Hashable as _,
@@ -158,7 +159,8 @@ pub fn self_transfer_paying_fee_at(
         .copied()
         .expect("account should own a genesis note");
 
-    let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone());
+    let gas_context =
+        OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone(), GAS_PROFILE);
     let context = OpsContext {
         gas_context,
         leader_reward_amount: 0,
@@ -175,7 +177,7 @@ pub fn self_transfer_paying_fee_at(
     let fee_for_output = |output_value: u64| {
         i128::from(
             builder_with_output(output_value)
-                .minimum_gas_cost::<MainnetGasProfile>(&context)
+                .minimum_gas_cost(&context)
                 .expect("gas cost should calculate")
                 .into_inner(),
         )
@@ -217,7 +219,7 @@ pub fn self_transfer_paying_fee_at(
 
     assert_eq!(
         builder
-            .funding_delta::<MainnetGasProfile>(&context)
+            .funding_delta(&context)
             .expect("funding delta should calculate"),
         tip,
         "the built transaction must carry exactly the requested tip"
@@ -245,7 +247,8 @@ pub fn check_size_prediction<State: VerificationState, Mode: VerificationMode>(
     tx: &SignedOps<State, Mode>,
     prices: &GasPrices,
 ) -> Result<(), String> {
-    let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone());
+    let gas_context =
+        OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone(), GAS_PROFILE);
     let predicted = minimum_signed_transaction_size(&tx.op_refs(), &gas_context) as u64;
     let actual = tx.encode().len() as u64;
     if predicted == actual {
@@ -304,10 +307,11 @@ pub fn fee_surplus_at<State: VerificationState, Mode: VerificationMode>(
     prices: &GasPrices,
 ) -> Result<i128, String> {
     let paid = net_balance_against(genesis_utxos, tx)?;
-    let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone());
+    let gas_context =
+        OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone(), GAS_PROFILE);
     let required = tx
         .op_refs()
-        .total_gas_cost::<MainnetGasProfile>(&gas_context)
+        .total_gas_cost(&gas_context)
         .map_err(|source| format!("transaction gas cost calculation failed: {source}"))?;
 
     Ok(i128::from(paid) - i128::from(required.into_inner()))

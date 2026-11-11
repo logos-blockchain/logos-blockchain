@@ -104,6 +104,7 @@ pub fn settings(
             scheduler: EraSchedulerSettings {
                 cover: EraCoverTrafficSettings {
                     message_frequency_per_round: 1.0.try_into().unwrap(),
+                    replication_factor: 0,
                 },
                 delayer: EraMessageDelayerSettings {
                     maximum_release_delay_in_rounds: 1.try_into().unwrap(),

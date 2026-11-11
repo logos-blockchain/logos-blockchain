@@ -1,8 +1,8 @@
 use std::{collections::HashMap, time::Instant};
 
+use lb_config::deployment::GAS_PROFILE;
 use lb_core::mantle::{
     Note,
-    gas::MainnetGasProfile,
     transactions::{
         MantleTxBuilder,
         tx_list::ops::{OpsContext, OpsGasContext},
@@ -267,11 +267,11 @@ fn estimate_split_required_fee(
             })?;
     }
     let context = OpsContext {
-        gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), gas_prices),
-        ..OpsContext::default()
+        gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), gas_prices, GAS_PROFILE),
+        leader_reward_amount: 0,
     };
     let mandatory_fee = builder
-        .minimum_gas_cost::<MainnetGasProfile>(&context)
+        .minimum_gas_cost(&context)
         .map_err(|error| StepError::LogicalError {
             message: format!("could not estimate split transaction fee: {error}"),
         })?

@@ -27,7 +27,6 @@ use lb_core::{
     crypto::{Digest as _, Hasher},
     mantle::{
         Note, SignedOps, Utxo, Value,
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         transactions::{
             GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, states::Preverified,
@@ -381,7 +380,7 @@ fn apply_block_to_ledger(
     // so verify it here as Block Header Verification does.
     assert!(proof.verify(&ledger.leader_public(parent, slot).expect("leader public")));
     let update = ledger
-        .prepare_update::<_, MainnetGasProfile>(
+        .prepare_update(
             id,
             parent,
             slot,

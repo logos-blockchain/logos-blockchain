@@ -501,7 +501,7 @@ fn is_logos_sql_inscription(inscription: &InscriptionInfo) -> bool {
 mod tests {
     use lb_zone_sdk::{
         UnverifiedEd25519PublicKey,
-        node_types::{ChannelId, HeaderId, MsgId, Slot, TxHash},
+        node_types::{ChannelId, HeaderId, Inscription, MsgId, Slot, TxHash},
         sequencer::{
             ChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, InscriptionInfo,
             SequencerCheckpoint,
@@ -512,7 +512,10 @@ mod tests {
 
     use crate::{
         PublicationConfig,
-        db::{Databases, tests::open_databases},
+        db::{
+            Databases,
+            tests::{MAX_INSCRIPTION_SIZE, open_databases},
+        },
         protocol::{
             CapturedFunctionCalls, ChannelBatch, ChannelWrite, EncodedWrite, PAYLOAD_MARKER,
             Statement, Transaction, TxId,
@@ -547,7 +550,10 @@ mod tests {
                 captured_function_calls: CapturedFunctionCalls::empty(),
             })
             .collect();
-        let payload = ChannelBatch::new(writes).unwrap().encode().unwrap();
+        let payload = ChannelBatch::new(writes)
+            .unwrap()
+            .encode(MAX_INSCRIPTION_SIZE)
+            .unwrap();
         let event = blocks_processed(
             checkpoint(1, 1),
             vec![ChannelUpdateTx::Inscription(inscription(&payload, 1))],
@@ -590,11 +596,13 @@ mod tests {
         db.commit_local_write(
             first,
             &transaction("CREATE TABLE items(value INTEGER)", Vec::new()),
+            MAX_INSCRIPTION_SIZE,
         )
         .unwrap();
         db.commit_local_write(
             second,
             &transaction("INSERT INTO items VALUES (random())", Vec::new()),
+            MAX_INSCRIPTION_SIZE,
         )
         .unwrap();
         let original: i64 = Databases::open_reader(db.live_path())
@@ -604,6 +612,7 @@ mod tests {
         let publication = Publication::prepare(
             db.pending_writes().unwrap(),
             PublicationConfig::default().max_transactions,
+            MAX_INSCRIPTION_SIZE,
         )
         .unwrap()
         .unwrap();
@@ -682,11 +691,13 @@ mod tests {
         db.commit_local_write(
             first,
             &transaction("CREATE TABLE items(value INTEGER)", Vec::new()),
+            MAX_INSCRIPTION_SIZE,
         )
         .unwrap();
         db.commit_local_write(
             second,
             &transaction("INSERT INTO items VALUES (1)", Vec::new()),
+            MAX_INSCRIPTION_SIZE,
         )
         .unwrap();
 
@@ -763,10 +774,7 @@ mod tests {
             tx_hash: TxHash::from([byte; 32]),
             parent_msg: MsgId::root(),
             this_msg: MsgId::from([byte; 32]),
-            payload: payload
-                .to_vec()
-                .try_into()
-                .expect("test payload should fit an inscription"),
+            payload: Inscription::new_unchecked(payload.to_vec()),
             signer: Some(UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap()),
         }
     }
@@ -814,6 +822,7 @@ mod tests {
             TxId::generate(),
             transaction,
             CapturedFunctionCalls::empty(),
+            MAX_INSCRIPTION_SIZE,
         )
         .expect("payload should encode")
     }
@@ -996,7 +1005,7 @@ mod tests {
 
         let setup = transaction("CREATE TABLE items(value INTEGER NOT NULL)", Vec::new());
         let setup_tx_id = db
-            .commit_local_write(TxId::generate(), &setup)
+            .commit_local_write(TxId::generate(), &setup, MAX_INSCRIPTION_SIZE)
             .expect("setup write should commit");
         let setup_pending = db
             .pending_publish()
@@ -1011,7 +1020,7 @@ mod tests {
             vec![Value::Integer(1)],
         );
         let insert_tx_id = db
-            .commit_local_write(TxId::generate(), &insert)
+            .commit_local_write(TxId::generate(), &insert, MAX_INSCRIPTION_SIZE)
             .expect("insert write should commit");
         let insert_pending = db
             .pending_publish()
@@ -1047,7 +1056,7 @@ mod tests {
 
         let create = transaction("CREATE TABLE items(value INTEGER NOT NULL)", Vec::new());
         let create_tx_id = db
-            .commit_local_write(TxId::generate(), &create)
+            .commit_local_write(TxId::generate(), &create, MAX_INSCRIPTION_SIZE)
             .expect("schema write should commit");
         let create_pending = db
             .pending_publish()
@@ -1064,7 +1073,7 @@ mod tests {
             vec![Value::Integer(1)],
         );
         let insert_tx_id = db
-            .commit_local_write(TxId::generate(), &insert)
+            .commit_local_write(TxId::generate(), &insert, MAX_INSCRIPTION_SIZE)
             .expect("next write should commit");
 
         let finalization = blocks_processed(
@@ -1230,6 +1239,7 @@ mod tests {
             .commit_local_write(
                 TxId::generate(),
                 &transaction("CREATE TABLE local_write(value TEXT)", Vec::new()),
+                MAX_INSCRIPTION_SIZE,
             )
             .unwrap();
         let event = blocks_processed(
@@ -1310,7 +1320,7 @@ mod tests {
             transaction: transaction("CREATE TABLE conflicting_write(value INTEGER)", Vec::new()),
             captured_function_calls: CapturedFunctionCalls::empty(),
         }
-        .encode()
+        .encode(MAX_INSCRIPTION_SIZE)
         .expect("conflicting write should encode");
         let following = encoded_write(&transaction(
             "CREATE TABLE following_write(value INTEGER)",
@@ -1401,7 +1411,7 @@ mod tests {
         let live_path = db.live_path().to_owned();
 
         let local = transaction("CREATE TABLE local_write(value INTEGER)", Vec::new());
-        db.commit_local_write(TxId::generate(), &local)
+        db.commit_local_write(TxId::generate(), &local, MAX_INSCRIPTION_SIZE)
             .expect("local write should commit");
         let local_pending = db
             .pending_publish()
@@ -1487,7 +1497,7 @@ mod tests {
 
         let local = transaction("CREATE TABLE local_write(value INTEGER)", Vec::new());
         let local_tx_id = db
-            .commit_local_write(TxId::generate(), &local)
+            .commit_local_write(TxId::generate(), &local, MAX_INSCRIPTION_SIZE)
             .expect("local write should commit");
         let pending = db
             .pending_publish()
@@ -1550,7 +1560,8 @@ mod tests {
             let tx_id = TxId::generate();
             let original = transaction("CREATE TABLE original(value INTEGER)", vec![]);
 
-            db.commit_local_write(tx_id, &original).unwrap();
+            db.commit_local_write(tx_id, &original, MAX_INSCRIPTION_SIZE)
+                .unwrap();
             let pending = db.pending_publish().unwrap().unwrap();
             db.complete_publish(&checkpoint(1, 1), MsgId::from([1; 32]), &pending)
                 .unwrap();
@@ -1575,6 +1586,7 @@ mod tests {
                 tx_id,
                 &transaction("CREATE TABLE foreign_write(value INTEGER)", vec![]),
                 CapturedFunctionCalls::empty(),
+                MAX_INSCRIPTION_SIZE,
             )
             .unwrap();
             let adopt = blocks_processed(
@@ -1699,7 +1711,7 @@ mod tests {
 
         let local = transaction("CREATE TABLE local_write(value INTEGER)", Vec::new());
         let local_tx_id = db
-            .commit_local_write(TxId::generate(), &local)
+            .commit_local_write(TxId::generate(), &local, MAX_INSCRIPTION_SIZE)
             .expect("local write should commit");
 
         let foreign = encoded_write(&transaction(
@@ -1747,6 +1759,7 @@ mod tests {
             .commit_local_write(
                 TxId::generate(),
                 &transaction("INSERT INTO items VALUES ('local')", Vec::new()),
+                MAX_INSCRIPTION_SIZE,
             )
             .unwrap();
         let foreign = encoded_write(&transaction(
@@ -1848,7 +1861,7 @@ mod tests {
 
         let local = transaction("CREATE TABLE local_write(value INTEGER)", Vec::new());
         let local_tx_id = db
-            .commit_local_write(TxId::generate(), &local)
+            .commit_local_write(TxId::generate(), &local, MAX_INSCRIPTION_SIZE)
             .expect("local write should commit");
 
         let rollback = blocks_processed(
@@ -1876,12 +1889,13 @@ mod tests {
 
         let local = transaction("CREATE TABLE local_write(value INTEGER)", Vec::new());
         let local_tx_id = db
-            .commit_local_write(TxId::generate(), &local)
+            .commit_local_write(TxId::generate(), &local, MAX_INSCRIPTION_SIZE)
             .expect("local write should commit");
         let second_id = db
             .commit_local_write(
                 TxId::generate(),
                 &transaction("INSERT INTO local_write VALUES (1)", Vec::new()),
+                MAX_INSCRIPTION_SIZE,
             )
             .unwrap();
         let pending = db
@@ -1933,7 +1947,7 @@ mod tests {
 
         let local = transaction("CREATE TABLE local_write(value INTEGER)", Vec::new());
         let local_tx_id = db
-            .commit_local_write(TxId::generate(), &local)
+            .commit_local_write(TxId::generate(), &local, MAX_INSCRIPTION_SIZE)
             .expect("local write should commit");
         let pending = db
             .pending_publish()
@@ -1997,7 +2011,7 @@ mod tests {
 
         let local = transaction("CREATE TABLE local_write(value INTEGER)", Vec::new());
         let local_tx_id = db
-            .commit_local_write(TxId::generate(), &local)
+            .commit_local_write(TxId::generate(), &local, MAX_INSCRIPTION_SIZE)
             .expect("local write should commit");
 
         let foreign = encoded_write(&transaction(

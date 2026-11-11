@@ -11,11 +11,7 @@ use crate::{
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
-        Value,
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
-        gas::{
-            Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
-        },
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
@@ -204,18 +200,6 @@ impl ProvableOperation for ChannelConfigOp {
     const CODE: u8 = 0x10;
 }
 
-impl OperationGas<MainnetGasProfile> for ChannelConfigOp {
-    const GAS_COST: Gas = Gas::new(56);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for ChannelConfigOp {
-    fn execution_gas(&self, thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
-        Self::GAS_COST.checked_mul(Value::from(
-            thresholds.configuration_threshold(&self.channel),
-        ))
-    }
-}
-
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<ChannelConfigOp, Unverified, StandardMode>
 {
@@ -359,7 +343,11 @@ mod tests {
 
     use super::*;
     use crate::mantle::{
-        TxHash, gas::test_utils::FixedThresholds,
+        TxHash,
+        gas::{
+            Gas,
+            test_utils::{FixedThresholds, GAS_PROFILE},
+        },
         ops::channel::verification::test_utils::create_channel_multi_sig_proof,
         transactions::tx_list::signed_ops::test_utils::make_channel_state,
     };
@@ -804,7 +792,8 @@ mod tests {
     fn channel_config_op_execution_gas_scales_with_the_threshold() {
         for (threshold, expected) in [(1, 56), (2, 112), (3, 168)] {
             assert_eq!(
-                ChannelConfigOp::sample().execution_gas(&FixedThresholds(threshold)),
+                crate::mantle::OpRef::from(&ChannelConfigOp::sample())
+                    .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(expected))
             );
         }
@@ -813,7 +802,8 @@ mod tests {
     #[test]
     fn channel_config_op_execution_gas_is_zero_against_an_unknown_channel() {
         assert_eq!(
-            ChannelConfigOp::sample().execution_gas(&FixedThresholds(0)),
+            crate::mantle::OpRef::from(&ChannelConfigOp::sample())
+                .execution_gas(&GAS_PROFILE, &FixedThresholds(0)),
             Ok(Gas::new(0))
         );
     }

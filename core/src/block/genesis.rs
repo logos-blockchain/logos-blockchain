@@ -170,7 +170,8 @@ impl GenesisBlock {
     pub fn genesis(genesis_tx: GenesisTx) -> Self {
         let header = Header::genesis(&genesis_tx);
         let signature = Ed25519Signature::from_bytes(&[0; 64]);
-        let transactions = BlockTransactions::from([genesis_tx]);
+        let transactions = BlockTransactions::try_new(vec![genesis_tx], 1)
+            .expect("One transaction is within a maximum of one.");
         Self(Block {
             header,
             signature,

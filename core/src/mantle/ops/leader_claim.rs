@@ -17,7 +17,6 @@ use crate::{
     mantle::{
         Note, Utxo, Value,
         batch::DeferredLeaderClaim,
-        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
             VerifiableOperation,
@@ -246,12 +245,6 @@ impl ProvableOperation for LeaderClaimOp {
     const CODE: u8 = 0x30;
 }
 
-impl OperationGas<MainnetGasProfile> for LeaderClaimOp {
-    const GAS_COST: Gas = Gas::new(580);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for LeaderClaimOp {}
-
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<LeaderClaimOp, Unverified, StandardMode>
 {
@@ -353,7 +346,10 @@ mod tests {
     use crate::{
         mantle::{
             batch::{DeferredProofs, Error as BatchError, test_utils::batch_verify},
-            gas::test_utils::FixedThresholds,
+            gas::{
+                Gas,
+                test_utils::{FixedThresholds, GAS_PROFILE},
+            },
         },
         proofs::leader_claim_proof::LeaderClaimPrivate,
     };
@@ -751,7 +747,8 @@ mod tests {
     fn leader_claim_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
             assert_eq!(
-                LeaderClaimOp::sample().execution_gas(&FixedThresholds(threshold)),
+                crate::mantle::OpRef::from(&LeaderClaimOp::sample())
+                    .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(580))
             );
         }

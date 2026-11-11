@@ -278,8 +278,8 @@ fn evaluate(
     // Calling the function on the replicated connection would recurse into
     // this override. The evaluator connection still has SQLite's built-in.
     let arguments = (0..context.len())
-        .map(|index| context.get_raw(index).into())
-        .collect::<Vec<Value>>();
+        .map(|index| context.get::<Value>(index))
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     let query = definition.query(arguments.len());
 
     lock(evaluator).query_row(&query, params_from_iter(arguments), |row| row.get(0))

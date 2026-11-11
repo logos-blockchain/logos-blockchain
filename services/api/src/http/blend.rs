@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display};
 
-use lb_binary_codec::bincode::{DeserializeOp, SerializeOp};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_blend_service::message::{DataPayload, NetworkInfo, ProxyServiceMessage, ServiceMessage};
 use lb_chain_service::api::CryptarchiaServiceApi;
 use lb_core::{
@@ -250,12 +250,12 @@ pub async fn blend_transaction<BlendService, Transaction, Id, RuntimeServiceId>(
 ) -> Result<Id, overwatch::DynError>
 where
     BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
-    Transaction: SerializeOp,
+    Transaction: BinaryEncode,
     RuntimeServiceId: AsServiceId<BlendService> + Debug + Sync + Display + 'static,
 {
     // Encoded the same way the mempool gossips transactions, so that whichever
     // node exits this one decodes what it expects.
-    let payload = DataPayload::try_from_transaction(&transaction)?;
+    let payload = DataPayload::from_transaction(&transaction);
     let relay = handle.relay::<BlendService>().await?;
 
     // Refused right away if it is larger than a payload body of the current
@@ -283,7 +283,7 @@ pub async fn blend_pending_transactions<BlendService, Transaction, Id, RuntimeSe
 ) -> Result<Vec<Id>, overwatch::DynError>
 where
     BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
-    Transaction: DeserializeOp,
+    Transaction: BinaryDecode<Context = u32>,
     RuntimeServiceId: AsServiceId<BlendService> + Debug + Sync + Display + 'static,
 {
     let relay = handle.relay::<BlendService>().await?;
@@ -301,7 +301,10 @@ where
         .map(|encoded_transaction| {
             // These are transactions this node encoded itself on the way in, so
             // a decoding failure here is this node disagreeing with itself.
-            Ok(id(&Transaction::from_bytes(encoded_transaction)?))
+            Ok(id(&Transaction::decode_all(
+                encoded_transaction,
+                &u32::MAX,
+            )?))
         })
         .collect()
 }

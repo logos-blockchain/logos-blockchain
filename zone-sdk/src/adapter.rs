@@ -22,7 +22,10 @@ use lb_core::{
         },
     },
 };
-use lb_http_api_common::bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody};
+use lb_http_api_common::bodies::{
+    mantle::LimitsResponseBody,
+    wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
+};
 use lb_log_targets::zone_sdk;
 use reqwest::Url;
 use tracing::error;
@@ -58,6 +61,8 @@ pub trait Node {
     async fn consensus_info(&self) -> Result<ChainServiceInfo, Error>;
 
     async fn time_info(&self) -> Result<TimeInfo, Error>;
+
+    async fn limits(&self) -> Result<LimitsResponseBody, Error>;
 
     async fn channel_state(&self, channel_id: ChannelId) -> Result<Option<ChannelState>, Error>;
 
@@ -159,6 +164,10 @@ impl Node for NodeHttpClient {
 
     async fn time_info(&self) -> Result<TimeInfo, Error> {
         self.client.time_info(self.base_url.clone()).await
+    }
+
+    async fn limits(&self) -> Result<LimitsResponseBody, Error> {
+        self.client.limits(self.base_url.clone()).await
     }
 
     async fn channel_state(&self, channel_id: ChannelId) -> Result<Option<ChannelState>, Error> {
@@ -450,8 +459,12 @@ mod tests {
 
         // tx_a mixes three ops so a walker that reused the wrong op's id
         // (or the wrong channel's) would surface here.
-        let our_deposit = deposit_op(channel_id, 1, b"to Alice".into());
-        let foreign_deposit = deposit_op(other_channel, 2, b"to Bob".into());
+        let our_deposit = deposit_op(channel_id, 1, Metadata::new_unchecked(b"to Alice".to_vec()));
+        let foreign_deposit = deposit_op(
+            other_channel,
+            2,
+            Metadata::new_unchecked(b"to Bob".to_vec()),
+        );
         let our_withdraw = withdraw_op(channel_id, 42);
         let tx_a = unverified_tx_with_ops(vec![
             Op::ChannelDeposit(our_deposit.clone()),
@@ -565,7 +578,7 @@ mod tests {
         let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(deposit_op(
             channel_id,
             1,
-            b"to Alice".into(),
+            Metadata::new_unchecked(b"to Alice".to_vec()),
         ))]);
 
         drop(block_to_messages(vec![tx], channel_id, &HashMap::new()));
@@ -583,6 +596,10 @@ mod tests {
 
         async fn time_info(&self) -> Result<TimeInfo, Error> {
             self.0.time_info().await
+        }
+
+        async fn limits(&self) -> Result<LimitsResponseBody, Error> {
+            self.0.limits().await
         }
 
         async fn channel_state(
@@ -647,7 +664,7 @@ mod tests {
     #[tokio::test]
     async fn zone_messages_in_blocks_report_a_deposit_with_its_event() {
         let channel_id = ChannelId::from([0; 32]);
-        let op = deposit_op(channel_id, 1, b"to Alice".into());
+        let op = deposit_op(channel_id, 1, Metadata::new_unchecked(b"to Alice".to_vec()));
         let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(op.clone())]);
         let events = deposit_event(&tx, &op, 1234, Vec::new());
         let node = node_with_block(api_block(1, 0, 1, vec![tx]), Some(events));
@@ -674,7 +691,7 @@ mod tests {
     #[tokio::test]
     async fn zone_messages_in_blocks_fail_without_the_block_events() {
         let channel_id = ChannelId::from([0; 32]);
-        let op = deposit_op(channel_id, 1, b"to Alice".into());
+        let op = deposit_op(channel_id, 1, Metadata::new_unchecked(b"to Alice".to_vec()));
         let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(op)]);
         let node = node_with_block(api_block(1, 0, 1, vec![tx]), None);
 
@@ -688,8 +705,8 @@ mod tests {
     #[tokio::test]
     async fn zone_messages_in_block_fail_without_an_event_of_each_deposit() {
         let channel_id = ChannelId::from([0; 32]);
-        let first = deposit_op(channel_id, 1, b"to Alice".into());
-        let second = deposit_op(channel_id, 2, b"to Bob".into());
+        let first = deposit_op(channel_id, 1, Metadata::new_unchecked(b"to Alice".to_vec()));
+        let second = deposit_op(channel_id, 2, Metadata::new_unchecked(b"to Bob".to_vec()));
         let tx = unverified_tx_with_ops(vec![
             Op::ChannelDeposit(first.clone()),
             Op::ChannelDeposit(second),

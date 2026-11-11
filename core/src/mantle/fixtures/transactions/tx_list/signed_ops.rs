@@ -171,6 +171,9 @@ mod tests {
 
     #[test]
     fn codec_fixtures_round_trip() {
-        lb_binary_codec::canonical::assert_codec_fixtures::<SignedOps<Unverified, StandardMode>>();
+        lb_binary_codec::canonical::assert_codec_fixtures_with::<
+            SignedOps<Unverified, StandardMode>,
+            _,
+        >(|| u32::MAX);
     }
 }

@@ -20,6 +20,7 @@ impl Publication {
     pub fn prepare(
         mut pending: Vec<PendingPublish>,
         max_transactions: NonZeroU16,
+        max_inscription_size: u32,
     ) -> Result<Option<Self>, Error> {
         if pending.is_empty() {
             return Ok(None);
@@ -55,7 +56,7 @@ impl Publication {
         loop {
             let batch = ChannelBatch::new(writes.clone())?;
 
-            match batch.encode() {
+            match batch.encode(max_inscription_size) {
                 Ok(payload) => {
                     pending.truncate(writes.len());
 
@@ -107,7 +108,7 @@ mod tests {
     use super::Publication;
     use crate::{
         PublicationConfig,
-        db::PendingPublish,
+        db::{PendingPublish, tests::MAX_INSCRIPTION_SIZE},
         protocol::{
             CapturedFunctionCalls, ChannelBatch, EncodedWrite, Statement, Transaction, TxId,
         },
@@ -122,6 +123,7 @@ mod tests {
             TxId::generate(),
             &transaction,
             CapturedFunctionCalls::empty(),
+            MAX_INSCRIPTION_SIZE,
         )
         .unwrap();
 
@@ -138,10 +140,13 @@ mod tests {
             queued_write(Value::Integer(2)),
         ];
         let ids: Vec<_> = pending.iter().map(|write| write.tx_id).collect();
-        let publication =
-            Publication::prepare(pending, PublicationConfig::default().max_transactions)
-                .unwrap()
-                .unwrap();
+        let publication = Publication::prepare(
+            pending,
+            PublicationConfig::default().max_transactions,
+            MAX_INSCRIPTION_SIZE,
+        )
+        .unwrap()
+        .unwrap();
         let decoded = ChannelBatch::decode(&publication.payload)
             .unwrap()
             .into_writes();
@@ -162,9 +167,10 @@ mod tests {
             .map(|value| queued_write(Value::Integer(value)))
             .collect();
         let expected: Vec<_> = pending.iter().take(1024).map(|write| write.tx_id).collect();
-        let publication = Publication::prepare(pending, 1024.try_into().unwrap())
-            .unwrap()
-            .unwrap();
+        let publication =
+            Publication::prepare(pending, 1024.try_into().unwrap(), MAX_INSCRIPTION_SIZE)
+                .unwrap()
+                .unwrap();
         let decoded = ChannelBatch::decode(&publication.payload)
             .unwrap()
             .into_writes();
@@ -188,10 +194,13 @@ mod tests {
         }
 
         let first = pending[0].tx_id;
-        let publication =
-            Publication::prepare(pending, PublicationConfig::default().max_transactions)
-                .unwrap()
-                .unwrap();
+        let publication = Publication::prepare(
+            pending,
+            PublicationConfig::default().max_transactions,
+            MAX_INSCRIPTION_SIZE,
+        )
+        .unwrap()
+        .unwrap();
 
         assert_eq!(publication.writes.len(), 1);
         assert_eq!(publication.writes[0].tx_id, first);

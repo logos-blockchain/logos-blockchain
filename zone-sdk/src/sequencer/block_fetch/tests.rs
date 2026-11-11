@@ -76,8 +76,12 @@ fn extract_deposits_returns_matching_amount() {
     let channel_id = ChannelId::from([0; 32]);
     let other_channel = ChannelId::from([1; 32]);
 
-    let deposit_for_us = deposit_op(channel_id, 1, b"to Alice".into());
-    let deposit_other_channel = deposit_op(other_channel, 2, b"to Bob".into());
+    let deposit_for_us = deposit_op(channel_id, 1, Metadata::new_unchecked(b"to Alice".to_vec()));
+    let deposit_other_channel = deposit_op(
+        other_channel,
+        2,
+        Metadata::new_unchecked(b"to Bob".to_vec()),
+    );
     let our_op_id = deposit_for_us.op_id();
 
     let tx = unverified_tx_with_ops(vec![
@@ -99,7 +103,7 @@ fn extract_deposits_returns_matching_amount() {
     assert_eq!(d.tx_hash, tx_hash);
     assert_eq!(d.op_id, our_op_id);
     assert_eq!(d.amount, 1234);
-    assert_eq!(d.metadata, b"to Alice".into());
+    assert_eq!(d.metadata, Metadata::new_unchecked(b"to Alice".to_vec()));
     assert_eq!(d.inputs, deposit_for_us.inputs);
 }
 
@@ -113,7 +117,7 @@ fn extract_finalized_items_panics_if_deposit_events_incomplete() {
     // gap. A panic here surfaces the bug immediately if a future caller
     // violates that invariant — silent skip would drop a real deposit.
     let channel_id = ChannelId::from([0; 32]);
-    let op = deposit_op(channel_id, 1, b"to Alice".into());
+    let op = deposit_op(channel_id, 1, Metadata::new_unchecked(b"to Alice".to_vec()));
     let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(op)]);
     drop(extract_finalized_items(
         std::slice::from_ref(&tx),
@@ -126,9 +130,9 @@ fn extract_finalized_items_panics_if_deposit_events_incomplete() {
 #[test]
 fn extract_deposits_preserves_tx_and_op_order() {
     let channel_id = ChannelId::from([0; 32]);
-    let d1 = deposit_op(channel_id, 1, b"first".into());
-    let d2 = deposit_op(channel_id, 2, b"second".into());
-    let d3 = deposit_op(channel_id, 3, b"third".into());
+    let d1 = deposit_op(channel_id, 1, Metadata::new_unchecked(b"first".to_vec()));
+    let d2 = deposit_op(channel_id, 2, Metadata::new_unchecked(b"second".to_vec()));
+    let d3 = deposit_op(channel_id, 3, Metadata::new_unchecked(b"third".to_vec()));
     let id1 = d1.op_id();
     let id2 = d2.op_id();
     let id3 = d3.op_id();
@@ -162,7 +166,11 @@ fn extract_finalized_items_interleaves_deposit_then_inscription_in_same_tx() {
     // (e.g. LEZ) can validate references from the inscription back to
     // the just-finalized deposit.
     let channel_id = ChannelId::from([0; 32]);
-    let dep = deposit_op(channel_id, 1, b"deposit-meta".into());
+    let dep = deposit_op(
+        channel_id,
+        1,
+        Metadata::new_unchecked(b"deposit-meta".to_vec()),
+    );
     let dep_op_id = dep.op_id();
     let inscribe = InscriptionOp {
         channel_id,
@@ -212,7 +220,11 @@ fn deposit_plus_inscription_is_adopted_as_custom() {
     // race and invalidate the author's deposit), and it is not mirrored
     // for retry — its author recovers it.
     let channel_id = ChannelId::from([0; 32]);
-    let dep = deposit_op(channel_id, 1, b"deposit-meta".into());
+    let dep = deposit_op(
+        channel_id,
+        1,
+        Metadata::new_unchecked(b"deposit-meta".to_vec()),
+    );
     let inscribe = inscribe_op(channel_id, MsgId::root(), b"bridge");
     let msg_id = inscribe.id();
     let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(dep), Op::ChannelInscribe(inscribe)]);
@@ -766,17 +778,15 @@ fn config_in_block_does_not_advance_channel_tip() {
         "the config must not advance the channel tip"
     );
 
-    // shed_off_branch_pending should drop the stale one but not the live one.
-    let shed = state.shed_off_branch_pending(block);
-    let shed_hashes: HashSet<TxHash> = shed.iter().map(PendingTx::tx_hash).collect();
-    assert!(
-        shed_hashes.contains(&pending_stale_hash),
-        "pending chained from I1 lost its position to the mined I2"
+    // The stale one lost its position to the mined I2; the live one goes
+    // with the config landing, which takes the not-yet-mined tail.
+    let shed = state.shed_block(block, channel_id, true, Slot::genesis(), 0);
+    let shed_hashes: HashSet<TxHash> = shed.displaced.iter().map(Displaced::tx_hash).collect();
+    assert_eq!(
+        shed_hashes,
+        HashSet::from([pending_stale_hash, pending_live_hash])
     );
-    assert!(
-        !shed_hashes.contains(&pending_live_hash),
-        "pending chained from the block tip must remain on-branch"
-    );
+    assert!(shed.config_shed, "the config moved the config tip");
 }
 
 #[test]
@@ -819,7 +829,7 @@ async fn canonical_backfill_gap_deposits_are_observed() {
     let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
     let deposit = |n: u32| {
         let tag = u8::try_from(n).unwrap();
-        let op = deposit_op(ch, n, Metadata::try_from(vec![tag]).unwrap());
+        let op = deposit_op(ch, n, Metadata::new_unchecked(vec![tag]));
         let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(op.clone())]);
         let note = DepositNote {
             note_id: NoteId::from(Fr::from(1000 + u64::from(n))),
@@ -858,7 +868,7 @@ async fn deposit_events_failure_on_a_later_gap_block_applies_nothing() {
     let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
     let deposit = |n: u32| {
         let tag = u8::try_from(n).unwrap();
-        let op = deposit_op(ch, n, Metadata::try_from(vec![tag]).unwrap());
+        let op = deposit_op(ch, n, Metadata::new_unchecked(vec![tag]));
         let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(op.clone())]);
         let note = DepositNote {
             note_id: NoteId::from(Fr::from(1000 + u64::from(n))),
@@ -1155,9 +1165,16 @@ async fn drive_with(
         .unwrap();
         let s = state.as_mut().unwrap();
         let tip = current_tip.unwrap();
-        let mut shed = s.shed_bundles_with_missing_inputs(tip, channel_id);
-        shed.extend(s.shed_off_branch_pending(tip));
-        let shed_other = s.shed_off_branch_pending_other(tip);
+        // Split by kind: the assertions check each kind's own order.
+        let mut shed = Vec::new();
+        let mut shed_other = Vec::new();
+        let displaced = s.shed_block(tip, channel_id, true, lib_slot, 0).displaced;
+        for entry in displaced {
+            match entry {
+                Displaced::Own(tx) => shed.push(*tx),
+                Displaced::Other(tx) => shed_other.push(tx),
+            }
+        }
         let common_prefix = common_prefix(s, tip, channel_id, &result.view_before);
         driven.push(Driven {
             result,
@@ -1289,7 +1306,7 @@ async fn fork_block_deposit_is_reported_when_its_branch_turns_canonical() {
     // F <- E: F wins; B2 <- B3: F loses; E <- E2: F wins again.
     let ch = ChannelId::from([0u8; 32]);
     let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
-    let dep = deposit_op(ch, 1, Metadata::try_from(b"d".to_vec()).unwrap());
+    let dep = deposit_op(ch, 1, Metadata::new_unchecked(b"d".to_vec()));
     let d = dep.op_id();
     let dep_tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(dep.clone())]);
     let note = DepositNote {
@@ -1473,7 +1490,7 @@ struct PinFixture {
 fn pin_fixture(ch: ChannelId) -> PinFixture {
     let recreated = NoteId::from(Fr::from(1010u64));
     let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
-    let dep = deposit_op(ch, 1, Metadata::try_from(b"d".to_vec()).unwrap());
+    let dep = deposit_op(ch, 1, Metadata::new_unchecked(b"d".to_vec()));
     let dep_tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(dep.clone())]);
     let pin_op = inscribe_op(ch, MsgId::root(), b"pin");
     let pin_id = pin_op.id();
@@ -1981,8 +1998,14 @@ async fn dropped_tip_event_is_backfilled_before_the_tip_is_adopted() {
         "a, b and c are mined: nothing to resubmit"
     );
     assert!(
-        s.refund_candidates(tip, Slot::from(100), 0, usize::MAX)
-            .is_empty(),
+        s.refund_candidates(
+            tip,
+            Slot::from(100),
+            0,
+            usize::MAX,
+            ChannelId::from([0; 32])
+        )
+        .is_empty(),
         "mined publishes are not re-funded"
     );
 }
@@ -2585,7 +2608,9 @@ async fn finalized_inscription_is_not_reported_orphaned() {
     let s = state.as_mut().unwrap();
     assert_eq!(s.pending_publish_count(), 0);
     assert!(
-        s.shed_off_branch_pending(header_id(3)).is_empty(),
+        s.shed_block(header_id(3), channel_id, true, Slot::genesis(), 0)
+            .displaced
+            .is_empty(),
         "nothing pending to shed: a resurrected finalized entry would be reported orphaned here"
     );
 }
@@ -2604,7 +2629,7 @@ async fn wallet_tracks_deposit_and_transfer_through_finalization() {
     let recreated = NoteId::from(Fr::from(1010u64));
     let out_pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
 
-    let dep = deposit_op(channel_id, 1, Metadata::try_from(b"d".to_vec()).unwrap());
+    let dep = deposit_op(channel_id, 1, Metadata::new_unchecked(b"d".to_vec()));
     let dep_tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(dep.clone())]);
     let b1 = api_block(1, 0, 1, vec![dep_tx.clone()]);
 

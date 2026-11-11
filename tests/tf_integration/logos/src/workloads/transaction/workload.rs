@@ -7,11 +7,12 @@ use std::{
 };
 
 use async_trait::async_trait;
+use lb_config::deployment::GAS_PROFILE;
 use lb_core::{
     era::ForkDigest,
     mantle::{
         Note, OpProof, SignedOps, Utxo,
-        gas::{MainnetGasProfile, TxGasCalculator as _},
+        gas::TxGasCalculator as _,
         ledger::verification_mode::StandardMode,
         ops::OpId as _,
         traits::Hashable as _,
@@ -196,7 +197,12 @@ impl<'a> Submission<'a> {
     }
 
     async fn execute(mut self) -> Result<(), DynError> {
-        let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::default());
+        let gas_context = OpsGasContext::new(
+            HashMap::new(),
+            HashMap::new(),
+            GasPrices::default(),
+            GAS_PROFILE,
+        );
         while let Some(input) = self.plan.pop_front() {
             submit_wallet_transaction(self.ctx, &input, gas_context.clone()).await?;
             if !self.interval.is_zero() {
@@ -295,7 +301,7 @@ fn build_wallet_transaction(
 
     let fee = provisional_tx
         .by_ref()
-        .total_gas_cost::<MainnetGasProfile>(gas_context)?
+        .total_gas_cost(gas_context)?
         .into_inner();
     let output_value = input.utxo.note.value.checked_sub(fee).ok_or_else(|| {
         format!(

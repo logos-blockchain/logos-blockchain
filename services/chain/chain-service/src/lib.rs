@@ -31,7 +31,6 @@ use lb_core::{
     header::{Header, HeaderId},
     mantle::{
         TxHash,
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
         transactions::states::Preverified,
@@ -533,10 +532,9 @@ impl Cryptarchia {
             *block.signature(),
             current_slot,
         )?;
-        let transactions = block
-            .into_transactions()
-            .try_into()
-            .map_err(|err: lb_utils::bounded::BoundedError| Error::InvalidBlock(err.to_string()))?;
+        let transactions =
+            lb_core::block::BlockTransactions::try_new(block.into_transactions(), u16::MAX)
+                .map_err(|err| Error::InvalidBlock(err.to_string()))?;
         BlockWithVerifiedHeader::new(header, transactions)
             .map_err(|err| Error::InvalidBlock(err.to_string()))
     }
@@ -567,7 +565,7 @@ impl Cryptarchia {
         // checking if the block is accepted by the consensus engine.
         let update = self
             .ledger
-            .prepare_update::<_, MainnetGasProfile>(
+            .prepare_update(
                 id,
                 parent,
                 slot,
@@ -753,7 +751,7 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + Unpin
@@ -932,7 +930,7 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + Unpin

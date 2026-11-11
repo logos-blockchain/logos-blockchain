@@ -28,7 +28,7 @@ use super::{
     TARGET,
     block_states::{BlockChannelTx, ChannelTxKind, NoteOp, SharedTx},
     channel_wallet::note_ops_from_txs,
-    state::{ChannelUpdateInfo, PendingBundle, TxState},
+    state::{ChannelUpdateInfo, Displaced, PendingBundle, TxState},
     types::{
         AtomicWithdrawInfo, ChannelTransferInfo, ChannelUpdateTx, ConfigInfo, DepositInfo, Error,
         FinalizedOp, FinalizedTx, InscriptionInfo, PendingTx, PinDepositInfo, WithdrawInfo,
@@ -1034,7 +1034,7 @@ pub(super) fn classify_channel_tx(
                     tx_hash,
                     parent_msg: config.parent(),
                     this_msg: config.id(),
-                    payload: [].into(),
+                    payload: Inscription::empty(),
                     signer: None,
                 });
             }
@@ -1132,6 +1132,17 @@ pub(super) fn classify_shed_other(tx: SharedTx, channel_id: ChannelId) -> Channe
     } else {
         ChannelUpdateTx::Custom(tx)
     }
+}
+
+/// Type a shed's entries for orphan reporting, in the shed's chain order.
+pub(super) fn orphans_from_shed(
+    shed: Vec<Displaced>,
+    channel_id: ChannelId,
+) -> impl Iterator<Item = ChannelUpdateTx> {
+    shed.into_iter().map(move |entry| match entry {
+        Displaced::Own(tx) => orphan_from_shed(*tx),
+        Displaced::Other(tx) => classify_shed_other(tx, channel_id),
+    })
 }
 
 /// True iff this tx contains any op that advances our channel's tip pointer

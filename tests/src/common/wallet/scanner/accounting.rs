@@ -332,7 +332,10 @@ mod tests {
             ledger::{BoundedInputs, Inputs, Outputs, verification_mode::StandardMode},
             ops::{
                 Op,
-                channel::{ChannelId, deposit::DepositOp},
+                channel::{
+                    ChannelId,
+                    deposit::{DepositOp, Metadata},
+                },
                 transfer::TransferOp,
             },
             traits::Hashable as _,
@@ -463,7 +466,7 @@ mod tests {
             [Op::ChannelDeposit(DepositOp {
                 channel_id: ChannelId::from([0; 32]),
                 inputs: BoundedInputs::from(owned.id()).into(),
-                metadata: b"deposit".into(),
+                metadata: Metadata::new_unchecked(b"deposit".to_vec()),
             })],
         );
         let spend = SignedOps::from_ops_with_sample_proofs(ops);
