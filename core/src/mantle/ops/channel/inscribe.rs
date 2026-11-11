@@ -658,7 +658,7 @@ impl<'a> StepVerifier<'a> {
                 .note_sets
                 .get(index)
                 .expect("the note set of a channel exists"),
-            buffer: context.tx_notes.buffer(index).clone(),
+            buffer: context.tx_notes.buffer(index).into_owned(),
             step_nullifiers: HashSet::new(),
             op_id_fr: Fr::from_le_bytes_mod_order(&operation.op_id()),
             index: 0,
