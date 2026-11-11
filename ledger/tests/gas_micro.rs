@@ -19,7 +19,7 @@ mod fixture;
 mod micro;
 
 use cycles::{Case, Counter};
-use lb_core::mantle::note_set::{LEDGER_SET, NoteSet, RECENT_ROOTS_WINDOW};
+use lb_core::mantle::note_set::{LEDGER_SET, NoteSet, RECENT_ROOTS_WINDOW, TxBuffer};
 use lb_groth16::Fr;
 
 fn counter() -> Counter {
@@ -144,6 +144,7 @@ fn end_block_costs_more_with_more_deferred_nullifiers() {
 #[test]
 fn the_ledger_set_holds_its_recent_roots() {
     let expired = NoteSet::empty().commitment_root();
+    let empty = TxBuffer::new();
     for recent_roots in micro::RECENT_ROOTS {
         let (sets, roots, block) = micro::recent_roots_sets(recent_roots);
         let set = sets.get(LEDGER_SET).expect("the ledger set exists");
@@ -151,17 +152,20 @@ fn the_ledger_set_holds_its_recent_roots() {
         assert!(!roots.contains(&set.commitment_root()));
         for root in &roots {
             assert!(
-                set.tx_commitment_root(root, block).is_ok(),
+                set.tx_commitment_root(&empty, root, block).is_ok(),
                 "recent_roots={recent_roots}: {root} is not recent at block {block}"
             );
         }
         // The roots older than the fixture block have expired.
-        assert!(set.tx_commitment_root(&expired, block).is_err());
+        assert!(set.tx_commitment_root(&empty, &expired, block).is_err());
     }
     // The window is full: the oldest root expires at the next block.
     let (sets, roots, block) = micro::recent_roots_sets(RECENT_ROOTS_WINDOW);
     let set = sets.get(LEDGER_SET).expect("the ledger set exists");
-    assert!(set.tx_commitment_root(&roots[0], block + 1).is_err());
+    assert!(
+        set.tx_commitment_root(&empty, &roots[0], block + 1)
+            .is_err()
+    );
 }
 
 #[test]

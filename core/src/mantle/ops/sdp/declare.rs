@@ -16,7 +16,7 @@ use crate::{
             ProviderIndex, VerifiableOperation,
             verification_mode::{GenesisMode, StandardMode, VerificationMode},
         },
-        note_set::{LEDGER_SET, NoteSets, SDP_SET},
+        note_set::{LEDGER_SET, NoteSets, SDP_SET, TxNoteState},
         ops::{OpId, SignedOperation, ZkAndEd25519Proof, zk_transfer::defer_zk_transfer},
         transactions::{
             hash::TxHashView,
@@ -118,6 +118,7 @@ pub struct SDPDeclarePreverificationContext<'a> {
 
 pub struct SDPDeclareVerificationContext<'a> {
     pub note_sets: &'a NoteSets,
+    pub tx_notes: &'a TxNoteState,
     pub block_number: BlockNumber,
     pub tx_hash_view: &'a TxHashView,
     pub declarations: &'a Declarations,
@@ -193,16 +194,16 @@ impl VerifiableOperation<StandardMode>
         )?;
 
         // Validate the inputs against the ledger note set
-        let tx_commitment_root = context
-            .note_sets
-            .get(LEDGER_SET)
-            .expect("the ledger note set always exists")
-            .spendable_tx_root(
-                context.note_sets.tx_roots(),
-                operation.inputs.as_slice(),
-                &operation.commitment_merkle_root,
-                context.block_number,
-            )?;
+        let tx_commitment_root = context.tx_notes.spendable_root(
+            LEDGER_SET,
+            context
+                .note_sets
+                .get(LEDGER_SET)
+                .expect("the ledger note set always exists"),
+            operation.inputs.as_slice(),
+            &operation.commitment_merkle_root,
+            context.block_number,
+        )?;
 
         // Defer the proof verification so that the caller can batch it.
         // Ed25519 verification is done by `preverify`. The declaration creates no
@@ -276,7 +277,9 @@ mod tests {
             batch::DeferredZkTransfer,
             gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
             ledger::{Declarations, ProviderIndex},
-            note_set::{CommitmentMmr, LEDGER_SET, NoteSet, NoteSetError, NoteSets, SDP_SET},
+            note_set::{
+                CommitmentMmr, LEDGER_SET, NoteSet, NoteSetError, NoteSets, SDP_SET, TxNoteState,
+            },
             notes::{
                 self, NoteCommitment, NoteNullifier, derive_note_nonce, derive_note_nullifier,
             },
@@ -359,9 +362,28 @@ mod tests {
             threshold: StakeThreshold,
             note_sets: &NoteSets,
         ) -> Result<DeferredZkTransfer, SdpError> {
+            verify_in_tx(
+                operation,
+                zk_proof,
+                declarations,
+                threshold,
+                note_sets,
+                &TxNoteState::new(),
+            )
+        }
+
+        fn verify_in_tx(
+            operation: SDPDeclareOp,
+            zk_proof: ZkTransferProof,
+            declarations: &Declarations,
+            threshold: StakeThreshold,
+            note_sets: &NoteSets,
+            tx_notes: &TxNoteState,
+        ) -> Result<DeferredZkTransfer, SdpError> {
             preverified(operation, zk_proof, &tx_hash_view()).verify(
                 &SDPDeclareVerificationContext {
                     note_sets,
+                    tx_notes,
                     block_number: 1,
                     tx_hash_view: &tx_hash_view(),
                     declarations,
@@ -483,19 +505,15 @@ mod tests {
 
         #[test]
         fn verify_extends_the_referenced_root_with_the_buffer() {
-            let sets = note_sets();
-            let buffered = sets
-                .get(LEDGER_SET)
-                .unwrap()
-                .clone()
-                .buffer_outputs(&[NoteCommitment(Fr::from(4u64))]);
-            let sets = sets.update(LEDGER_SET, buffered);
-            let deferred = verify_against(
+            let mut tx_notes = TxNoteState::new();
+            tx_notes.buffer_outputs(LEDGER_SET, &[NoteCommitment(Fr::from(4u64))]);
+            let deferred = verify_in_tx(
                 declare_op(1, 1, "/ip4/1.1.1.1/udp/3000"),
                 ZkTransferProof::sample(),
                 &Declarations::new_sync(),
                 0,
-                &sets,
+                &note_sets(),
+                &tx_notes,
             )
             .unwrap();
             let expected = CommitmentMmr::new()
@@ -681,7 +699,6 @@ mod tests {
             let ledger = context.note_sets.get(LEDGER_SET).unwrap();
             assert!(ledger.contains_nullifier(&nullifier(26)));
             assert_eq!(ledger.commitment_root(), empty_root);
-            assert_eq!(ledger.tx_commitment_root(&empty_root, 0), Ok(empty_root)); // nothing buffered
             assert_eq!(
                 context.note_sets.get(SDP_SET).unwrap().commitment_root(),
                 CommitmentMmr::new()

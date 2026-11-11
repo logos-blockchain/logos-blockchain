@@ -194,6 +194,7 @@ impl SignedOp<Preverified, StandardMode> {
                 let channel_inscribe_context = InscriptionValidationContext {
                     channels: helper.get_channels(),
                     note_sets: helper.get_note_sets(),
+                    tx_notes: helper.get_tx_notes(),
                     programs: helper.get_programs(),
                     block_slot: helper.get_block_slot(),
                     block_number: helper.get_block_number(),
@@ -215,6 +216,7 @@ impl SignedOp<Preverified, StandardMode> {
                 let channel_deposit_context = DepositValidationContext {
                     channels: helper.get_channels(),
                     note_sets: helper.get_note_sets(),
+                    tx_notes: helper.get_tx_notes(),
                     block_number: helper.get_block_number(),
                     tx_hash_view,
                 };
@@ -226,6 +228,7 @@ impl SignedOp<Preverified, StandardMode> {
                 let channel_withdraw_context = WithdrawValidationContext {
                     channels: helper.get_channels(),
                     note_sets: helper.get_note_sets(),
+                    tx_notes: helper.get_tx_notes(),
                     block_number: helper.get_block_number(),
                     tx_hash_view,
                 };
@@ -246,6 +249,7 @@ impl SignedOp<Preverified, StandardMode> {
                     };
                 let context = SDPDeclareVerificationContext {
                     note_sets: helper.get_note_sets(),
+                    tx_notes: helper.get_tx_notes(),
                     block_number: helper.get_block_number(),
                     tx_hash_view,
                     declarations,
@@ -290,6 +294,7 @@ impl SignedOp<Preverified, StandardMode> {
             Self::Transfer(op) => {
                 let context = TransferValidationContext {
                     note_sets: helper.get_note_sets(),
+                    tx_notes: helper.get_tx_notes(),
                     block_number: helper.get_block_number(),
                     tx_hash_view,
                 };

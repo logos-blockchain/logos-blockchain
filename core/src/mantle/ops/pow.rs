@@ -19,7 +19,7 @@ use crate::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::StandardMode,
         },
-        note_set::{LEDGER_SET, NoteSetError, NoteSets},
+        note_set::{LEDGER_SET, NoteSetError, NoteSets, TxNoteState},
         notes::{self, derive_note_nonce},
         ops::{NoOpProof, OpId, SignedOperation},
         transactions::states::{Preverified, Unverified, Verified},
@@ -246,7 +246,7 @@ impl OpId for ClaimPowRewardOp {
 
 /// Ledger context needed to execute a [`ClaimPowRewardOp`], and the outcome
 /// carried back out to update the ledger's `PoW` state.
-pub struct ClaimPoWRewardExecutionContext {
+pub struct ClaimPoWRewardExecutionContext<'a> {
     /// `R_PoW`: current balance of the `PoW` reward pool.
     pub reward_pool: PowReward,
     /// `sigma_e`: reward amount paid out by this claim.
@@ -257,11 +257,14 @@ pub struct ClaimPoWRewardExecutionContext {
     pub tx_hash: TxHash,
     /// Note sets, the ledger set extended with the reward note.
     pub note_sets: NoteSets,
+    /// The buffers of the transaction, the ledger buffer extended with the
+    /// reward note.
+    pub tx_notes: &'a mut TxNoteState,
     /// Recorded block slots
     pub block_slots: HashTrieMapSync<Hash, Slot>,
 }
 
-impl ClaimPoWRewardExecutionContext {
+impl ClaimPoWRewardExecutionContext<'_> {
     /// Deduct the paid-out `epoch_reward` from the `reward_pool`.
     /// This should always pass if the verification does it job, but
     /// double-checking is no problem
@@ -314,7 +317,7 @@ impl VerifiableOperation<StandardMode>
 }
 
 impl ExecutableOperation for SignedOperation<ClaimPowRewardOp, Verified, StandardMode> {
-    type Context<'a> = ClaimPoWRewardExecutionContext;
+    type Context<'a> = ClaimPoWRewardExecutionContext<'a>;
     type Error = ClaimPowRewardError;
 
     fn execute<'a>(
@@ -338,13 +341,10 @@ impl ExecutableOperation for SignedOperation<ClaimPowRewardOp, Verified, Standar
             operation.public_key,
         );
         let note_commitment = note.commitment();
-        let ledger = context
-            .note_sets
-            .get(LEDGER_SET)
-            .expect("the ledger set always exists")
-            .clone()
-            .add_tx_outputs(&[note_commitment])?;
-        context.note_sets = context.note_sets.update(LEDGER_SET, ledger);
+        context.note_sets =
+            context
+                .note_sets
+                .add_tx_outputs(context.tx_notes, LEDGER_SET, &[note_commitment])?;
         // decrement current pool
         context.decrement_reward_pool();
         // output event
@@ -782,6 +782,7 @@ mod tests {
         let epoch_reward = 10;
         let tx_hash = TxHash::from([11u8; 32]);
 
+        let mut tx_notes = TxNoteState::new();
         let (ctx, events) = signed_operation
             .execute(ClaimPoWRewardExecutionContext {
                 reward_pool: 1_000,
@@ -789,6 +790,7 @@ mod tests {
                 nullifiers: HashTrieMapSync::new_sync(),
                 tx_hash,
                 note_sets: NoteSets::new(),
+                tx_notes: &mut tx_notes,
                 block_slots: iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
             })
             .expect("claim execution should succeed");
@@ -812,7 +814,12 @@ mod tests {
         let ledger_set = ctx.note_sets.get(LEDGER_SET).unwrap();
         assert_eq!(ledger_set.commitment_root(), expected_root);
         assert_eq!(
-            ledger_set.tx_commitment_root(&CommitmentMmr::new().frontier_root(), 0),
+            ctx.tx_notes.commitment_root(
+                LEDGER_SET,
+                ledger_set,
+                &CommitmentMmr::new().frontier_root(),
+                0
+            ),
             Ok(expected_root)
         );
 
@@ -857,6 +864,7 @@ mod tests {
             nullifiers: HashTrieMapSync::new_sync(),
             tx_hash: TxHash::from([11u8; 32]),
             note_sets: NoteSets::new(),
+            tx_notes: &mut TxNoteState::new(),
             block_slots: iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
         }));
     }

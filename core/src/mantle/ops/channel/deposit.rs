@@ -20,7 +20,7 @@ use crate::{
             VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
         },
-        note_set::{LEDGER_SET, NoteSets},
+        note_set::{LEDGER_SET, NoteSets, TxNoteState},
         notes::{InputNullifiers, OutputCommitments},
         ops::{
             OpId, SignedOperation, ZkTransferProof,
@@ -73,6 +73,7 @@ impl OpId for DepositOp {
 pub struct DepositValidationContext<'a> {
     pub channels: &'a Channels,
     pub note_sets: &'a NoteSets,
+    pub tx_notes: &'a TxNoteState,
     pub block_number: BlockNumber,
     pub tx_hash_view: &'a TxHashView,
 }
@@ -80,6 +81,7 @@ pub struct DepositValidationContext<'a> {
 pub struct DepositExecutionContext<'a> {
     pub channels: &'a Channels,
     pub note_sets: NoteSets,
+    pub tx_notes: &'a mut TxNoteState,
     pub tx_hash: TxHash,
 }
 
@@ -121,16 +123,16 @@ impl VerifiableOperation<StandardMode> for SignedOperation<DepositOp, Preverifie
         context.channels.note_set_index(operation.channel_id)?;
 
         // Validate the inputs against the ledger note set
-        let tx_commitment_root = context
-            .note_sets
-            .get(LEDGER_SET)
-            .expect("the ledger note set always exists")
-            .spendable_tx_root(
-                context.note_sets.tx_roots(),
-                operation.inputs.as_slice(),
-                &operation.commitment_merkle_root,
-                context.block_number,
-            )?;
+        let tx_commitment_root = context.tx_notes.spendable_root(
+            LEDGER_SET,
+            context
+                .note_sets
+                .get(LEDGER_SET)
+                .expect("the ledger note set always exists"),
+            operation.inputs.as_slice(),
+            &operation.commitment_merkle_root,
+            context.block_number,
+        )?;
 
         // Defer the proof verification so that the caller can batch it.
         Ok(defer_zk_transfer(
@@ -161,6 +163,7 @@ impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<DepositOp, 
         // note set, step 5 of the Validate of CHANNEL_DEPOSIT done at execution as
         // for every Operation.
         context.note_sets = context.note_sets.execute_transfer(
+            context.tx_notes,
             LEDGER_SET,
             operation.inputs.as_slice(),
             channel_set,
@@ -295,12 +298,22 @@ mod test {
         channels: &Channels,
         note_sets: &NoteSets,
     ) -> Result<DeferredZkTransfer, Error> {
+        verify_in_tx(operation, channels, note_sets, &TxNoteState::new())
+    }
+
+    fn verify_in_tx(
+        operation: DepositOp,
+        channels: &Channels,
+        note_sets: &NoteSets,
+        tx_notes: &TxNoteState,
+    ) -> Result<DeferredZkTransfer, Error> {
         SignedOperation::<_, Unverified, StandardMode>::new(operation, ZkTransferProof::sample())
             .into_preverified(&())
             .expect("preverify accepts the deposit")
             .verify(&DepositValidationContext {
                 channels,
                 note_sets,
+                tx_notes,
                 block_number: 1,
                 tx_hash_view: &tx_hash_view(),
             })
@@ -396,21 +409,14 @@ mod test {
     #[test]
     fn verify_extends_the_ledger_root_with_the_ledger_buffer_only() {
         let (channels, note_sets) = state();
-        let ledger = note_sets
-            .get(LEDGER_SET)
-            .unwrap()
-            .clone()
-            .buffer_outputs(&[commitment(4)]);
-        let channel = note_sets
-            .get(2)
-            .unwrap()
-            .clone()
-            .buffer_outputs(&[commitment(9)]);
-        let note_sets = note_sets.update(LEDGER_SET, ledger).update(2, channel);
-        let deferred = verify(
+        let mut tx_notes = TxNoteState::new();
+        tx_notes.buffer_outputs(LEDGER_SET, &[commitment(4)]);
+        tx_notes.buffer_outputs(2, &[commitment(9)]);
+        let deferred = verify_in_tx(
             deposit(&[nullifier(2)], &[commitment(3)], root()),
             &channels,
             &note_sets,
+            &tx_notes,
         )
         .unwrap();
         let expected = CommitmentMmr::new()
@@ -451,10 +457,12 @@ mod test {
             SignedOperation::new(operation.clone(), ZkTransferProof::sample()).into_state_trusted();
         let tx_hash = TxHash::from([9u8; 32]);
 
+        let mut tx_notes = TxNoteState::new();
         let (context, events) = signed_operation
             .execute(DepositExecutionContext {
                 channels: &channels,
                 note_sets,
+                tx_notes: &mut tx_notes,
                 tx_hash,
             })
             .expect("the input is unspent");
@@ -469,7 +477,9 @@ mod test {
             .frontier_root();
         assert_eq!(channel.commitment_root(), expected);
         assert_eq!(
-            channel.tx_commitment_root(&CommitmentMmr::new().frontier_root(), 1),
+            context
+                .tx_notes
+                .commitment_root(2, channel, &CommitmentMmr::new().frontier_root(), 1),
             Ok(expected)
         );
         assert_eq!(

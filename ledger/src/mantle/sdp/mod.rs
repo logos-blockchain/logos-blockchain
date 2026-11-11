@@ -732,7 +732,7 @@ mod tests {
         mantle::{
             TxHash,
             ledger::VerifiableOperation as _,
-            note_set::{NoteSet, NoteSetError, SDP_SET},
+            note_set::{NoteSet, NoteSetError, SDP_SET, TxNoteState},
             notes::{NoteCommitment, NoteNullifier, derive_note_nullifier},
             ops::{
                 ZkAndEd25519Proof, ZkTransferProof,
@@ -835,6 +835,7 @@ mod tests {
         .into_state_trusted::<Preverified>()
         .verify(&SDPDeclareVerificationContext {
             note_sets: &NoteSets::new(),
+            tx_notes: &TxNoteState::new(),
             block_number: 0,
             tx_hash_view: &tx_hash_view,
             declarations: ledger

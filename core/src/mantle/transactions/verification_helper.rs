@@ -9,7 +9,7 @@ use crate::{
         VerificationError,
         channel::Channels,
         ledger::{Declarations, ProviderIndex},
-        note_set::NoteSets,
+        note_set::{NoteSets, TxNoteState},
         ops::{
             channel::{ChannelId, ChannelKeyIndex},
             pow::{PowNullifier, PowReward, PowSlotWindows, PowTarget},
@@ -24,6 +24,9 @@ pub trait OperationVerificationHelper {
     fn get_channels(&self) -> &Channels;
 
     fn get_note_sets(&self) -> &NoteSets;
+
+    /// The buffers and roots the previous Operations of the transaction left.
+    fn get_tx_notes(&self) -> &TxNoteState;
 
     fn get_programs(&self) -> &Programs;
 
@@ -107,7 +110,7 @@ pub mod test_utils {
             VerificationError,
             channel::Channels,
             ledger::{Declarations, ProviderIndex},
-            note_set::NoteSets,
+            note_set::{NoteSets, TxNoteState},
             ops::{
                 channel::{ChannelId, ChannelKeyIndex},
                 pow::{
@@ -125,6 +128,7 @@ pub mod test_utils {
         channels: Channels,
         keys: HashMap<(ChannelId, ChannelKeyIndex), UnverifiedEd25519PublicKey>,
         note_sets: NoteSets,
+        tx_notes: TxNoteState,
         programs: Programs,
         block_number: BlockNumber,
         declarations: Declarations,
@@ -150,6 +154,7 @@ pub mod test_utils {
                 channels,
                 keys: keys.into_iter().collect(),
                 note_sets: NoteSets::new(),
+                tx_notes: TxNoteState::new(),
                 programs: Programs::new(),
                 block_number: 0,
                 declarations: Declarations::new_sync(),
@@ -223,6 +228,12 @@ pub mod test_utils {
         }
 
         #[must_use]
+        pub fn with_tx_notes(mut self, tx_notes: TxNoteState) -> Self {
+            self.tx_notes = tx_notes;
+            self
+        }
+
+        #[must_use]
         pub const fn with_block_number(mut self, block_number: BlockNumber) -> Self {
             self.block_number = block_number;
             self
@@ -236,6 +247,10 @@ pub mod test_utils {
 
         fn get_note_sets(&self) -> &NoteSets {
             &self.note_sets
+        }
+
+        fn get_tx_notes(&self) -> &TxNoteState {
+            &self.tx_notes
         }
 
         fn get_programs(&self) -> &Programs {

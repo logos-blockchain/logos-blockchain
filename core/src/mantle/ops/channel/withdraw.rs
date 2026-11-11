@@ -19,7 +19,7 @@ use crate::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
         },
-        note_set::{LEDGER_SET, NoteSetError, NoteSetIndex, NoteSets},
+        note_set::{LEDGER_SET, NoteSetError, NoteSetIndex, NoteSets, TxNoteState},
         notes::{InputNullifiers, OutputCommitments},
         ops::{
             OpId, SignedOperation, ZkTransferProof,
@@ -53,6 +53,7 @@ impl OpId for ChannelWithdrawOp {
 pub struct WithdrawValidationContext<'a> {
     pub channels: &'a Channels,
     pub note_sets: &'a NoteSets,
+    pub tx_notes: &'a TxNoteState,
     pub block_number: BlockNumber,
     pub tx_hash_view: &'a TxHashView,
 }
@@ -182,16 +183,16 @@ impl VerifiableOperation<StandardMode>
         let index = context.channels.note_set_index(operation.channel_id)?;
 
         // Validate the inputs against the channel note set
-        let tx_commitment_root = context
-            .note_sets
-            .get(index)
-            .expect("a channel's note set exists")
-            .spendable_tx_root(
-                context.note_sets.tx_roots(),
-                operation.inputs.as_slice(),
-                &operation.commitment_merkle_root,
-                context.block_number,
-            )?;
+        let tx_commitment_root = context.tx_notes.spendable_root(
+            index,
+            context
+                .note_sets
+                .get(index)
+                .expect("a channel's note set exists"),
+            operation.inputs.as_slice(),
+            &operation.commitment_merkle_root,
+            context.block_number,
+        )?;
 
         // Defer the proof verification so that the caller can batch it. A withdrawal
         // balances exactly.
@@ -329,6 +330,7 @@ mod test {
             .verify(&WithdrawValidationContext {
                 channels,
                 note_sets,
+                tx_notes: &TxNoteState::new(),
                 block_number: 1,
                 tx_hash_view: &tx_hash_view(),
             })
@@ -464,21 +466,10 @@ mod test {
         let channel = note_sets.get(2).unwrap();
         assert!(channel.contains_nullifier(&nullifier(5)));
         assert!(!channel.contains_nullifier(&nullifier(7)));
-        let expected = ledger_before
-            .clone()
-            .execute_adding(&[commitment(50)])
-            .unwrap();
+        let expected = ledger_before.execute_adding(&[commitment(50)]).unwrap();
         assert_eq!(
             note_sets.get(LEDGER_SET).unwrap().commitment_root(),
             expected.commitment_root()
-        );
-        // No transaction is open, so the released outputs are not buffered.
-        assert_eq!(
-            note_sets
-                .get(LEDGER_SET)
-                .unwrap()
-                .tx_commitment_root(&ledger_before.commitment_root(), 1),
-            Ok(ledger_before.commitment_root())
         );
     }
 

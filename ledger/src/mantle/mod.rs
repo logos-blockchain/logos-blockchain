@@ -8,7 +8,7 @@ use lb_core::{
     events::TxEvent,
     mantle::{
         ledger::verification_mode::{GenesisMode, StandardMode},
-        note_set::NoteSets,
+        note_set::{NoteSets, TxNoteState},
         ops::{
             SignedOperation,
             channel::{
@@ -188,12 +188,14 @@ impl LedgerState {
         mut self,
         signed_operation: SignedOperation<InscriptionOp, Verified, StandardMode>,
         note_sets: NoteSets,
+        tx_notes: &mut TxNoteState,
         block_slot: Slot,
     ) -> Result<(Self, NoteSets, Vec<TxEvent>), Error> {
         let (result, events) = signed_operation
             .execute(InscriptionExecutionContext {
                 channels: self.channels,
                 note_sets,
+                tx_notes,
                 block_slot,
             })
             .map_err(|(_signed_operation, error)| error)

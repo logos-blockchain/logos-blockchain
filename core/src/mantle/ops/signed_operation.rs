@@ -182,7 +182,7 @@ mod tests {
             channel::{Channels, Error},
             gas::MainnetGasProfile,
             ledger::verification_mode::StandardMode,
-            note_set::{LEDGER_SET, NoteSets},
+            note_set::{LEDGER_SET, NoteSets, TxNoteState},
             notes::{NoteNullifier, OutputCommitments},
             ops::{
                 ChannelInscribeProof, ZkTransferProof,
@@ -347,6 +347,7 @@ mod tests {
 
         let context = TransferValidationContext {
             note_sets: &note_sets,
+            tx_notes: &TxNoteState::new(),
             block_number: 1,
             tx_hash_view: &tx_hash_view(),
         };

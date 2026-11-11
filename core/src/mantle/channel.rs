@@ -11,7 +11,7 @@ use crate::{
     mantle::{
         gas::ThresholdSource,
         ledger::verification_mode::GenesisMode,
-        note_set::{NoteSetError, NoteSetIndex, NoteSets},
+        note_set::{NoteSetError, NoteSetIndex, NoteSets, TxNoteState},
         notes::{NoteNullifier, ProgramId},
         ops::{
             SignedOperation,
@@ -178,9 +178,11 @@ impl Channels {
         // The Cryptarchia inscription creates the null channel and the distribution
         // inscription follows it; `GenesisTx` checked the null channel, the null key,
         // the parent chain and the absence of steps. The null channel gets no note set.
+        let mut tx_notes = TxNoteState::new();
         let mut context = InscriptionExecutionContext {
             channels: Self::default(),
             note_sets: NoteSets::new(),
+            tx_notes: &mut tx_notes,
             block_slot: Slot::default(),
         };
         let mut all_events = Vec::new();

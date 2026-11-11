@@ -12,7 +12,9 @@ use lb_core::{
         batch::{DeferredProofs, DeferredZkProgramSpend},
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
-        note_set::{LEDGER_SET, NoteSet, NoteSets, RECENT_ROOTS_WINDOW, TxRoots, eligible_leaf},
+        note_set::{
+            LEDGER_SET, NoteSet, NoteSets, RECENT_ROOTS_WINDOW, TxBuffer, TxRoots, eligible_leaf,
+        },
         notes::{InputNullifiers, NoteNullifier, OutputCommitments},
         ops::{
             ChannelInscribeProof, StepProof,
@@ -270,18 +272,18 @@ fn tree_cases() -> Vec<Case> {
     // The ledger calls the cached variant, here with the cache of a new
     // transaction, which holds nothing.
     let root = set.commitment_root();
-    let buffered_set = set
-        .clone()
-        .buffer_outputs(&commitments(BUFFERED[BUFFERED.len() - 1] as usize, 0xbf));
+    let buffer = TxBuffer::new().with(&commitments(BUFFERED[BUFFERED.len() - 1] as usize, 0xbf));
     for buffered in BUFFERED {
-        let buffered_set = buffered_set.clone();
+        let set = set.clone();
+        let buffer = buffer.clone();
         cases.push(case(
             "micro/step_root",
             vec![("buffered", buffered)],
             TxRoots::default,
             move |tx_roots: TxRoots| {
-                let root = buffered_set.cached_step_commitment_root(
+                let root = set.cached_step_commitment_root(
                     &tx_roots,
+                    &buffer,
                     &root,
                     buffered as usize,
                     BLOCK,

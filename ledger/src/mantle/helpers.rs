@@ -4,7 +4,7 @@ use lb_core::{
     mantle::{
         channel::Channels,
         ledger::{Declarations, ProviderIndex},
-        note_set::NoteSets,
+        note_set::{NoteSets, TxNoteState},
         ops::{
             channel::{ChannelId, ChannelKeyIndex},
             pow::{PowNullifier, PowReward, PowSlotWindows, PowTarget},
@@ -27,6 +27,7 @@ use crate::{
 pub struct MantleOperationVerificationHelper<'a> {
     ledger_state: &'a LedgerState,
     cryptarchia_ledger: &'a crate::CryptarchiaLedger,
+    tx_notes: &'a TxNoteState,
     block_number: BlockNumber,
     eras: &'a EraScheduledConfig,
 }
@@ -36,12 +37,14 @@ impl<'a> MantleOperationVerificationHelper<'a> {
     pub const fn new(
         ledger_state: &'a LedgerState,
         cryptarchia_ledger: &'a crate::CryptarchiaLedger,
+        tx_notes: &'a TxNoteState,
         block_number: BlockNumber,
         eras: &'a EraScheduledConfig,
     ) -> Self {
         Self {
             ledger_state,
             cryptarchia_ledger,
+            tx_notes,
             block_number,
             eras,
         }
@@ -55,6 +58,10 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
 
     fn get_note_sets(&self) -> &NoteSets {
         &self.cryptarchia_ledger.note_sets
+    }
+
+    fn get_tx_notes(&self) -> &TxNoteState {
+        self.tx_notes
     }
 
     fn get_programs(&self) -> &Programs {

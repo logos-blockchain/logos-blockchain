@@ -24,7 +24,7 @@ use crate::{
             VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
         },
-        note_set::{LEDGER_SET, NoteSetError, NoteSets},
+        note_set::{LEDGER_SET, NoteSetError, NoteSets, TxNoteState},
         notes::{InputNullifiers, Note, OutputCommitments},
         ops::{
             OpId, SignedOperation, ZkTransferProof,
@@ -94,6 +94,7 @@ pub enum TransferError {
 
 pub struct TransferValidationContext<'a> {
     pub note_sets: &'a NoteSets,
+    pub tx_notes: &'a TxNoteState,
     pub block_number: BlockNumber,
     pub tx_hash_view: &'a TxHashView,
 }
@@ -135,16 +136,16 @@ impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverifi
         let operation = self.operation();
 
         // Validate the inputs against the ledger note set
-        let tx_commitment_root = context
-            .note_sets
-            .get(LEDGER_SET)
-            .expect("the ledger note set always exists")
-            .spendable_tx_root(
-                context.note_sets.tx_roots(),
-                operation.inputs.as_slice(),
-                &operation.commitment_merkle_root,
-                context.block_number,
-            )?;
+        let tx_commitment_root = context.tx_notes.spendable_root(
+            LEDGER_SET,
+            context
+                .note_sets
+                .get(LEDGER_SET)
+                .expect("the ledger note set always exists"),
+            operation.inputs.as_slice(),
+            &operation.commitment_merkle_root,
+            context.block_number,
+        )?;
 
         // Defer the proof verification so that the caller can batch it.
         Ok(defer_zk_transfer(
@@ -158,26 +159,32 @@ impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverifi
     }
 }
 
+pub struct TransferExecutionContext<'a> {
+    pub note_sets: NoteSets,
+    pub tx_notes: &'a mut TxNoteState,
+}
+
 impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<TransferOp, Verified, Mode> {
-    type Context<'a> = NoteSets;
+    type Context<'a> = TransferExecutionContext<'a>;
     type Error = TransferError;
 
     fn execute<'a>(
         &self,
-        note_sets: Self::Context<'a>,
+        mut context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         let operation = self.operation();
 
         // Spend the inputs and add the outputs to the ledger note set, the
         // outputs extending the buffer the next Operations of the
         // transaction are proven against.
-        let note_sets = note_sets.execute_transfer(
+        context.note_sets = context.note_sets.execute_transfer(
+            context.tx_notes,
             LEDGER_SET,
             operation.inputs.as_slice(),
             LEDGER_SET,
             operation.outputs.as_slice(),
         )?;
-        Ok((note_sets, Vec::new()))
+        Ok((context, Vec::new()))
     }
 }
 
@@ -321,11 +328,20 @@ mod test {
         operation: TransferOp,
         note_sets: &NoteSets,
     ) -> Result<DeferredZkTransfer, TransferError> {
+        verify_in_tx(operation, note_sets, &TxNoteState::new())
+    }
+
+    fn verify_in_tx(
+        operation: TransferOp,
+        note_sets: &NoteSets,
+        tx_notes: &TxNoteState,
+    ) -> Result<DeferredZkTransfer, TransferError> {
         SignedOperation::<_, Unverified, StandardMode>::new(operation, ZkTransferProof::sample())
             .into_preverified(&())
             .expect("preverify accepts the transfer")
             .verify(&TransferValidationContext {
                 note_sets,
+                tx_notes,
                 block_number: 1,
                 tx_hash_view: &tx_hash_view(),
             })
@@ -408,14 +424,14 @@ mod test {
 
     #[test]
     fn verify_extends_the_referenced_root_with_the_buffer() {
-        let sets = note_sets();
-        let buffered = sets
-            .get(LEDGER_SET)
-            .unwrap()
-            .clone()
-            .buffer_outputs(&[commitment(4)]);
-        let sets = sets.update(LEDGER_SET, buffered);
-        let deferred = verify(transfer(&[nullifier(2)], &[commitment(3)], root()), &sets).unwrap();
+        let mut tx_notes = TxNoteState::new();
+        tx_notes.buffer_outputs(LEDGER_SET, &[commitment(4)]);
+        let deferred = verify_in_tx(
+            transfer(&[nullifier(2)], &[commitment(3)], root()),
+            &note_sets(),
+            &tx_notes,
+        )
+        .unwrap();
         let expected = CommitmentMmr::new()
             .push(commitment(1))
             .unwrap()
@@ -460,9 +476,14 @@ mod test {
             ZkTransferProof::sample(),
         )
         .into_state_trusted();
-        let (sets, events) = signed_operation
-            .execute(note_sets())
+        let mut tx_notes = TxNoteState::new();
+        let (context, events) = signed_operation
+            .execute(TransferExecutionContext {
+                note_sets: note_sets(),
+                tx_notes: &mut tx_notes,
+            })
             .expect("the input is unspent");
+        let sets = context.note_sets;
         let ledger = sets.get(LEDGER_SET).unwrap();
         let expected = CommitmentMmr::new()
             .push(commitment(1))
@@ -472,7 +493,10 @@ mod test {
             .frontier_root();
         assert!(ledger.contains_nullifier(&nullifier(2)));
         assert_eq!(ledger.commitment_root(), expected);
-        assert_eq!(ledger.tx_commitment_root(&root(), 1), Ok(expected));
+        assert_eq!(
+            tx_notes.commitment_root(LEDGER_SET, ledger, &root(), 1),
+            Ok(expected)
+        );
         assert_eq!(events, []);
     }
 
@@ -512,6 +536,7 @@ mod test {
         .unwrap()
         .verify(&TransferValidationContext {
             note_sets: &sets,
+            tx_notes: &TxNoteState::new(),
             block_number: 1,
             tx_hash_view: &tx_hash_view(),
         })
@@ -527,6 +552,7 @@ mod test {
         .unwrap()
         .verify(&TransferValidationContext {
             note_sets: &sets,
+            tx_notes: &TxNoteState::new(),
             block_number: 1,
             tx_hash_view: &tx_hash_view(),
         })

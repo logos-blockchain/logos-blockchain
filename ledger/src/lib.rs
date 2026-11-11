@@ -31,7 +31,7 @@ use lb_core::{
         batch::DeferredProofs,
         gas::{Gas, GasCost, GasOverflow, GasProfile, tx_terms_gas},
         ledger::verification_mode::StandardMode,
-        note_set::{NoteSetError, NoteSets},
+        note_set::{NoteSetError, NoteSets, TxNoteState},
         notes::{self, NoteCommitment},
         ops::{
             SignedOp,
@@ -852,12 +852,17 @@ impl LedgerState {
         clippy::too_many_lines,
         reason = "This will be refactored in an upcoming PR."
     )]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The transaction-scoped arguments are grouped when this is refactored."
+    )]
     fn try_apply_op<Id, Profile: GasProfile>(
         mut self,
         signed_op: SignedOp<Verified, StandardMode>,
         config: &Config,
         eras: &EraScheduledConfig,
         tx_hash: &TxHash,
+        tx_notes: &mut TxNoteState,
         mut balance: Balance,
         mut tx_events: Vec<TxEvent>,
     ) -> Result<(Self, Balance, Vec<TxEvent>), LedgerError<Id>> {
@@ -867,6 +872,7 @@ impl LedgerState {
                     self.mantle_ledger.try_apply_channel_inscription(
                         signed_operation,
                         self.cryptarchia_ledger.latest_note_sets().clone(),
+                        tx_notes,
                         self.cryptarchia_ledger.slot,
                     )?;
                 self.mantle_ledger = result;
@@ -889,6 +895,7 @@ impl LedgerState {
                     .execute(DepositExecutionContext {
                         channels: self.mantle_ledger.channels(),
                         note_sets: self.cryptarchia_ledger.latest_note_sets().clone(),
+                        tx_notes,
                         tx_hash: *tx_hash,
                     })
                     .map_err(|(_signed_operation, error)| mantle::Error::Channel(error))?;
@@ -972,7 +979,7 @@ impl LedgerState {
                 let events;
                 (self.cryptarchia_ledger, transfer_excess, events) =
                     self.cryptarchia_ledger
-                        .try_apply_transfer::<_, Profile>(signed_operation)?;
+                        .try_apply_transfer::<_, Profile>(signed_operation, tx_notes)?;
                 balance = add_excess(balance, transfer_excess)?;
                 tx_events.extend(events);
             }
@@ -986,6 +993,7 @@ impl LedgerState {
                         nullifiers: self.mantle_ledger.pow.nullifiers().clone(),
                         tx_hash: *tx_hash,
                         note_sets: self.cryptarchia_ledger.latest_note_sets().clone(),
+                        tx_notes,
                         block_slots: self.mantle_ledger.pow.block_slots().clone(),
                     })
                     .map_err(|(_signed_operation, error)| mantle::Error::ClaimPow(error))?;
@@ -1053,8 +1061,9 @@ impl LedgerState {
         Tx: PreverifiedMantleTransaction,
     {
         let config = config_for_slot(eras, self.slot());
-        // The buffers start empty with every Mantle Transaction.
-        self.cryptarchia_ledger = self.cryptarchia_ledger.start_transaction();
+        // The buffers and roots the Operations share, empty for every Mantle
+        // Transaction and dropped with it.
+        let mut tx_notes = TxNoteState::new();
         let mut verified_operations = tx.into_verified_operations();
 
         let mut balance: Balance = 0;
@@ -1069,6 +1078,7 @@ impl LedgerState {
             let helper = MantleOperationVerificationHelper::new(
                 &self.mantle_ledger,
                 &self.cryptarchia_ledger,
+                &tx_notes,
                 self.block_number,
                 eras,
             );
@@ -1094,6 +1104,7 @@ impl LedgerState {
                 config,
                 eras,
                 verified_operations.tx_hash_view().tx_hash(),
+                &mut tx_notes,
                 balance,
                 tx_events,
             )?;
@@ -1131,7 +1142,9 @@ mod tests {
             GenesisTime, Op, OpProof, SignedOps,
             channel::Channels,
             gas::{MainnetGasProfile, TxGasCalculator as _},
-            note_set::{CommitmentMmr, LEDGER_SET, NoteSet, NoteSetUpdate, SDP_SET},
+            note_set::{
+                CommitmentMmr, LEDGER_SET, NoteSet, NoteSetUpdate, SDP_SET, TxBuffer, TxNoteState,
+            },
             notes::{
                 InputNullifiers, NoteNullifier, OutputCommitments, derive_note_nonce,
                 derive_note_nullifier,
@@ -1283,14 +1296,19 @@ mod tests {
             .unwrap();
 
         let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
-        assert!(ledger_set.tx_commitment_root(&old_root, 1028).is_ok());
+        let empty = TxBuffer::new();
+        assert!(
+            ledger_set
+                .tx_commitment_root(&empty, &old_root, 1028)
+                .is_ok()
+        );
         assert_eq!(
-            ledger_set.tx_commitment_root(&old_root, 1029),
+            ledger_set.tx_commitment_root(&empty, &old_root, 1029),
             Err(NoteSetError::UnknownRoot(old_root))
         );
         assert!(
             ledger_set
-                .tx_commitment_root(&ledger_set.commitment_root(), 5000)
+                .tx_commitment_root(&empty, &ledger_set.commitment_root(), 5000)
                 .is_ok()
         );
         let expected = NoteSets::new()
@@ -1336,7 +1354,11 @@ mod tests {
         let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
         assert_eq!(ledger_set.commitment_root(), expected);
         // The recorded root of block 1 includes the leader note.
-        assert!(ledger_set.tx_commitment_root(&expected, 2).is_ok());
+        assert!(
+            ledger_set
+                .tx_commitment_root(&TxBuffer::new(), &expected, 2)
+                .is_ok()
+        );
         assert_eq!(events, []);
         let block_rewards = &state.cryptarchia_ledger.block_rewards;
         assert_eq!(block_rewards.rewards_reserve(), 999_999_904_870_624_049);
@@ -1582,40 +1604,6 @@ mod tests {
                 .rewards_pool(),
             0
         );
-    }
-
-    #[test]
-    fn each_transaction_starts_with_empty_buffers() {
-        let test_config = config();
-        let eras = single_era(test_config.clone());
-        let mut state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
-        let root = state
-            .latest_note_sets()
-            .get(LEDGER_SET)
-            .unwrap()
-            .commitment_root();
-        let buffered = state
-            .latest_note_sets()
-            .get(LEDGER_SET)
-            .unwrap()
-            .clone()
-            .buffer_outputs(&[NoteCommitment(Fr::from(5u64))]);
-        state.cryptarchia_ledger.note_sets = state
-            .cryptarchia_ledger
-            .note_sets
-            .update(LEDGER_SET, buffered);
-        let (signing_key, verifying_key) = create_test_keys();
-
-        let state = create_channel(
-            state,
-            &eras,
-            ChannelId::from([0u8; 32]),
-            &signing_key,
-            verifying_key.into_unverified(),
-        );
-
-        let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
-        assert_eq!(ledger_set.tx_commitment_root(&root, 0), Ok(root));
     }
 
     fn transfer_tx(transfers: Vec<TransferOp>) -> SignedOps<Preverified, StandardMode> {
@@ -1971,9 +1959,11 @@ mod tests {
         let block = update_ledger(&mut ledger, genesis, epoch_length, leader).unwrap();
 
         let state = ledger.state(&block).unwrap();
+        let tx_notes = TxNoteState::new();
         let helper = MantleOperationVerificationHelper::new(
             &state.mantle_ledger,
             &state.cryptarchia_ledger,
+            &tx_notes,
             state.block_number,
             ledger.era_schedule(),
         );
@@ -2158,9 +2148,9 @@ mod tests {
             ledger_set.nullifier_root(),
             NoteSets::new().get(LEDGER_SET).unwrap().nullifier_root()
         );
-        // The buffer is closed: a block 1 transaction sees the recorded root alone.
+        // A block 1 transaction sees the recorded root alone.
         assert_eq!(
-            ledger_set.tx_commitment_root(&ledger_root, 1),
+            ledger_set.tx_commitment_root(&TxBuffer::new(), &ledger_root, 1),
             Ok(ledger_root)
         );
         assert_eq!(
@@ -4548,10 +4538,6 @@ mod tests {
                     .contains_key(&claim_op().get_puzzle_ticket())
             );
             let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
-            assert_eq!(
-                ledger_set.tx_commitment_root(&root_before, 0),
-                Ok(ledger_set.commitment_root())
-            );
             assert_ne!(ledger_set.commitment_root(), root_before);
             assert_eq!(events.len(), 1);
             let TxEventPayload::PoWRewardClaimed { note, .. } = &events[0].payload else {
@@ -4695,12 +4681,14 @@ mod tests {
             let tx_hash = TxHash::from([9u8; 32]);
 
             let eras = single_era(config.clone());
+            let mut tx_notes = TxNoteState::new();
             let (state, _balance, events) = state
                 .try_apply_op::<HeaderId, MainnetGasProfile>(
                     signed_operation.into(),
                     &config,
                     &eras,
                     &tx_hash,
+                    &mut tx_notes,
                     0,
                     Vec::new(),
                 )
@@ -4720,7 +4708,7 @@ mod tests {
 
             let ledger_set = state.latest_note_sets().get(LEDGER_SET).unwrap();
             assert_eq!(
-                ledger_set.tx_commitment_root(&root_before, 0),
+                tx_notes.commitment_root(LEDGER_SET, ledger_set, &root_before, 0),
                 Ok(ledger_set.commitment_root())
             );
             assert_ne!(ledger_set.commitment_root(), root_before);
@@ -4780,6 +4768,7 @@ mod tests {
                     &config,
                     &eras,
                     &tx_hash,
+                    &mut TxNoteState::new(),
                     0,
                     Vec::new(),
                 )
@@ -4790,6 +4779,7 @@ mod tests {
                     &config,
                     &eras,
                     &tx_hash,
+                    &mut TxNoteState::new(),
                     0,
                     Vec::new(),
                 )
