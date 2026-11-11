@@ -48,11 +48,7 @@ impl LogosBlockchainNode {
         let handle = lb_node::api::calls::Handle::new(
             overwatch.handle().clone(),
             deployment.chain_id(),
-            deployment
-                .era_schedule()
-                .iter()
-                .map(|era| era.parameters.fork_digest)
-                .collect(),
+            deployment.fork_digests(),
         );
         Self {
             overwatch,

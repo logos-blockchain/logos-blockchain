@@ -169,6 +169,16 @@ impl DeploymentSettings {
             .chain_id
     }
 
+    /// The fork digest of every era of this deployment, era `n` at position
+    /// `n`.
+    #[must_use]
+    pub fn fork_digests(&self) -> Vec<ForkDigest> {
+        self.era_schedule()
+            .iter()
+            .map(|era| era.parameters.fork_digest)
+            .collect()
+    }
+
     /// When this deployment's chain starts, read off the genesis inscription.
     #[must_use]
     pub fn genesis_time(&self) -> GenesisTime {

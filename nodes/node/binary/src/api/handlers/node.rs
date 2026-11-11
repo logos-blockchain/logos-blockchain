@@ -4,11 +4,10 @@ use axum::{
     response::{IntoResponse as _, Response},
 };
 use lb_api_common::{bodies::chain::ChainIdResponseBody, paths};
-use lb_log_targets::node as targets;
 use lb_tracing::filter::envfilter::EnvFilterConfig;
 use lb_version::BuildVersionInfo;
 
-use crate::api::calls::{self, Handle, node};
+use crate::api::calls::{Handle, node};
 
 #[utoipa::path(
     get,
@@ -35,8 +34,6 @@ pub async fn chain_id(State(handle): State<Handle>) -> Response {
     .into_response()
 }
 
-const LOG_TARGET: &str = targets::api::TRACING;
-
 #[utoipa::path(
     put,
     path = paths::admin::TRACING_FILTER,
@@ -49,9 +46,5 @@ pub async fn reload_tracing_filter(
     State(handle): State<Handle>,
     Json(filter): Json<EnvFilterConfig>,
 ) -> Response {
-    make_request_and_return_response!(async {
-        node::reload_tracing_filter(&handle, filter).await?;
-        tracing::debug!(target: LOG_TARGET, "Tracing filter reloaded");
-        Ok::<_, calls::Error>(())
-    })
+    make_request_and_return_response!(node::reload_tracing_filter(&handle, filter))
 }
