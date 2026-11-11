@@ -15,9 +15,11 @@
 /// # Returns
 ///
 /// An async scope that returns:
-/// - `Ok(())` if all specified services are ready within the timeout.
-/// - `Err(DynError)` if any of the specified services are not ready within the
-///   timeout.
+/// - `Ok(())` once every dependency has reached `Ready` at least once. A
+///   dependency may have changed status before the aggregate wait returns.
+/// - `Err(DynError)` on the first dependency-wait error: an unexpected `Failed`
+///   status under `RestartFriendly` semantics, a timeout, or a closed status
+///   channel. Also returned if a status watcher cannot be obtained.
 ///
 /// # Example
 ///
@@ -64,7 +66,10 @@ macro_rules! wait_until_services_are_ready {
                     .status_watcher::<$service_type>()
                     .await
                     .map_err(::overwatch::DynError::from)?;
-                status_watchers.push((stringify!($service_type), status_watcher));
+                status_watchers.push((
+                    <RuntimeServiceId as ::overwatch::services::AsServiceId<$service_type>>::SERVICE_ID,
+                    status_watcher,
+                ));
             )+
 
             $crate::overwatch::status::macros::wait_for_all_ready(&mut status_watchers, timeout)
@@ -73,37 +78,45 @@ macro_rules! wait_until_services_are_ready {
     }};
 }
 
-use std::time::Duration;
+use std::{
+    fmt::{Debug, Display},
+    time::Duration,
+};
 
 use futures::future::try_join_all;
 use overwatch::services::status::{ServiceStatus, StatusWatcher, WaitForError, WaitPolicy};
 pub use wait_until_services_are_ready;
+
+use super::ServiceStatusEntry;
 
 #[derive(Debug, ::thiserror::Error)]
 #[error(
     "waiting for {failed_service} to become ready failed: {wait_error}; current dependency statuses: {current_statuses:?}"
 )]
 #[doc(hidden)]
-pub struct ServiceReadinessError {
-    pub failed_service: &'static str,
+pub struct ServiceReadinessError<RuntimeServiceId> {
+    pub failed_service: RuntimeServiceId,
     #[source]
     pub wait_error: WaitForError,
-    pub current_statuses: Vec<(&'static str, ServiceStatus)>,
+    pub current_statuses: Vec<ServiceStatusEntry<RuntimeServiceId>>,
 }
 
 #[doc(hidden)]
-pub async fn wait_for_all_ready(
-    status_watchers: &mut [(&'static str, StatusWatcher)],
+pub async fn wait_for_all_ready<RuntimeServiceId>(
+    status_watchers: &mut [(RuntimeServiceId, StatusWatcher)],
     timeout: Option<Duration>,
-) -> Result<(), ::overwatch::DynError> {
+) -> Result<(), ::overwatch::DynError>
+where
+    RuntimeServiceId: Clone + Debug + Display + Send + Sync + 'static,
+{
     let wait_result = try_join_all(status_watchers.iter_mut().map(
-        |(service_name, status_watcher)| {
-            let service_name = *service_name;
+        |(service_id, status_watcher)| {
+            let service_id = service_id.clone();
             async move {
                 status_watcher
                     .wait_with_policy(ServiceStatus::Ready, timeout, WaitPolicy::RestartFriendly)
                     .await
-                    .map_err(|wait_error| (service_name, wait_error))
+                    .map_err(|wait_error| (service_id, wait_error))
             }
         },
     ))
@@ -114,7 +127,9 @@ pub async fn wait_for_all_ready(
         Err((failed_service, wait_error)) => {
             let current_statuses = status_watchers
                 .iter()
-                .map(|(service_name, status_watcher)| (*service_name, status_watcher.current()))
+                .map(|(service_id, status_watcher)| {
+                    ServiceStatusEntry::from_overwatch(service_id.clone(), status_watcher.current())
+                })
                 .collect();
             Err(::overwatch::DynError::from(ServiceReadinessError {
                 failed_service,
@@ -257,7 +272,7 @@ mod tests {
     struct App {
         restartable_service: HeavyService,
         delayed_service: DelayedService,
-        failing_service: FailingService,
+        startup_failure: FailingService,
     }
 
     fn initialize(
@@ -269,7 +284,7 @@ mod tests {
         let settings = AppServiceSettings {
             restartable_service: stop,
             delayed_service: delay,
-            failing_service: fail_when,
+            startup_failure: fail_when,
         };
         OverwatchRunner::<App>::run(settings, Some(runtime_handle))
             .expect("Failed to run overwatch")
@@ -409,20 +424,38 @@ mod tests {
             .expect_err("failed dependency must return an error");
         let readiness_error = error
             .as_ref()
-            .downcast_ref::<super::ServiceReadinessError>()
+            .downcast_ref::<super::ServiceReadinessError<RuntimeServiceId>>()
             .expect("the readiness error should include dependency statuses");
         let expected = WaitForError::ServiceFailed {
             initial_status: ServiceStatus::Starting,
         };
-        assert_eq!(readiness_error.failed_service, "FailingService");
+        assert_eq!(
+            readiness_error.failed_service,
+            RuntimeServiceId::StartupFailure
+        );
         assert_eq!(readiness_error.wait_error, expected);
         assert_eq!(
             readiness_error.current_statuses,
             vec![
-                ("FailingService", ServiceStatus::Failed),
-                ("HeavyService", ServiceStatus::Stopped),
+                super::ServiceStatusEntry::from_overwatch(
+                    RuntimeServiceId::StartupFailure,
+                    ServiceStatus::Failed
+                ),
+                super::ServiceStatusEntry::from_overwatch(
+                    RuntimeServiceId::RestartableService,
+                    ServiceStatus::Stopped
+                ),
             ]
         );
+        let source = std::error::Error::source(readiness_error)
+            .expect("readiness error should preserve its source")
+            .downcast_ref::<WaitForError>()
+            .expect("source should retain the original wait error");
+        assert!(std::ptr::eq(source, &raw const readiness_error.wait_error));
+        let message = readiness_error.to_string();
+        assert!(message.contains("waiting for StartupFailure to become ready failed"));
+        assert!(message.contains("ServiceStatusEntry { id: StartupFailure, status: Failed }"));
+        assert!(message.contains("ServiceStatusEntry { id: RestartableService, status: Stopped }"));
         drop(readiness);
 
         handle.shutdown().await.expect("Overwatch should shut down");

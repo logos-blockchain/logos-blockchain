@@ -449,6 +449,7 @@ where
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + std::fmt::Debug
         + std::fmt::Display
+        + Clone
         + Send
         + Sync
         + 'static,

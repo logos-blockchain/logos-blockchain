@@ -726,6 +726,7 @@ where
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     RuntimeServiceId: Debug
+        + Clone
         + Send
         + Sync
         + Display
