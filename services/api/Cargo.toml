@@ -13,33 +13,8 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait                   = { workspace = true }
-futures                       = { workspace = true }
-lb-binary-codec               = { workspace = true }
-lb-blend-service              = { workspace = true }
-lb-chain-broadcast-service    = { workspace = true }
-lb-chain-leader-service       = { workspace = true }
-lb-chain-service              = { features = ["openapi"], workspace = true }
-lb-core                       = { features = ["openapi"], workspace = true }
-lb-key-management-system-keys = { features = ["openapi"], workspace = true }
-lb-ledger                     = { workspace = true }
-lb-libp2p                     = { workspace = true }
-lb-log-targets                = { workspace = true }
-lb-network-service            = { features = ["openapi"], workspace = true }
-lb-pow-service                = { workspace = true }
-lb-sdp-service                = { features = ["openapi"], workspace = true }
-lb-storage-service            = { workspace = true }
-lb-time-service               = { workspace = true }
-lb-tx-service                 = { features = ["openapi"], workspace = true }
-lb-wallet-service             = { workspace = true }
-overwatch                     = { workspace = true }
-serde                         = { workspace = true }
-thiserror                     = { workspace = true }
-tokio                         = { features = ["net"], workspace = true }
-tokio-stream                  = { workspace = true }
-tracing                       = { workspace = true }
-utoipa                        = { features = ["macros"], workspace = true }
-
-[dev-dependencies]
-serde   = { workspace = true }
-tracing = { workspace = true }
+async-trait    = { workspace = true }
+lb-log-targets = { workspace = true }
+overwatch      = { workspace = true }
+serde          = { workspace = true }
+tracing        = { workspace = true }

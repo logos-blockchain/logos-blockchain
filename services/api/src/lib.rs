@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use lb_log_targets::api;
 use overwatch::{
-    DynError, OpaqueServiceResourcesHandle,
+    OpaqueServiceResourcesHandle,
     overwatch::handle::OverwatchHandle,
     services::{
         AsServiceId, ServiceCore, ServiceData,
@@ -10,7 +10,7 @@ use overwatch::{
     },
 };
 
-pub mod http;
+pub type DynError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 const LOG_TARGET: &str = api::ROOT;
 
