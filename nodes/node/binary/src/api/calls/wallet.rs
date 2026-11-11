@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use lb_api_common::bodies::wallet::{
     aged_notes::{LeaderAgedNoteResponseBody, LeaderAgedNotesResponseBody},
     balance::WalletBalanceResponseBody,
@@ -100,12 +98,12 @@ pub async fn claimable_vouchers(
     handle: &Handle,
     tip: Option<HeaderId>,
 ) -> Result<WalletClaimableVouchersResponseBody, Error> {
-    handle
-        .status_watcher::<WalletService>()
-        .await?
-        .wait_for(ServiceStatus::Ready, Some(Duration::from_millis(100)))
-        .await
-        .map_err(|status| Error::unavailable(format!("Wallet service is not ready: {status:?}")))?;
+    let status = handle.status_watcher::<WalletService>().await?.current();
+    if status != ServiceStatus::Ready {
+        return Err(Error::unavailable(format!(
+            "Wallet service is not ready: {status:?}"
+        )));
+    }
     let TipResponse { tip, response } = wallet_api(handle)
         .await?
         .get_claimable_vouchers(tip)
