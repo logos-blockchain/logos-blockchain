@@ -1,8 +1,12 @@
 # Docker Compose Deployment for Logos Blockchain
 
-The Logos blockchain Docker Compose deployment contains four distinct service types:
+The Compose files in this directory:
 
-- **Logos Blockchain Node Services**: Multiple dynamically spawned Logos blockchain nodes that synchronizes their configuration via cfgsync utility.
+- `compose.yml`: one node built from this checkout, running the standalone one-node network
+  (`nodes/node/standalone-node-config.yaml` and `nodes/node/standalone-deployment-config.yaml`).
+- `compose.setup.yml` and `compose.run.yml`: the devnet and testnet stack, from published images, configured by
+  the `.env.<env>` files.
+- `compose.tracing.yml`: Grafana, Loki, Prometheus and an OpenTelemetry collector.
 
 ## Building
 
@@ -16,13 +20,7 @@ docker compose build
 
 ## Configuring
 
-Configuration of the Docker deployment is accomplished using an `.env` file next to `compose.yml` in this directory. A documented example is in `.env.example`, and each environment has its own file (`.env.devnet`, `.env.testnet`); select one by pointing Compose at it, e.g. `docker compose --env-file .env.devnet up`, or by copying it to the default `.env`.
-
-To adjust the count of Logos blockchain nodes, modify the variable:
-
-```bash
-DOCKER_COMPOSE_LIBP2P_REPLICAS=100
-```
+`compose.yml` takes no configuration. The devnet and testnet stack is configured with an `.env` file in this directory. A documented example is in `.env.example`, and each environment has its own file (`.env.devnet`, `.env.testnet`); select one by pointing Compose at it, e.g. `docker compose --env-file .env.devnet -f compose.setup.yml up`, or by copying it to the default `.env`.
 
 ## Running
 
@@ -44,21 +42,26 @@ Followed by:
 docker compose logs -f logos-blockchain-node
 ```
 
-## Using deployment
+### Container user
 
-Bootstrap node is accessible from the host via `3000` and `18080` ports. To expose other Logos blockchain nodes, please update `logos-blockchain-node` service in the `compose.yml` file with this configuration:
+The node and tools images run as the unprivileged user `logos`, with UID and GID `10001`. A new `node-data`
+volume takes that ownership from the tools image. A volume created before, when the containers ran as root,
+has to be handed over once, with the stack stopped (`docker volume ls` shows its full name):
 
 ```bash
-  logos-blockchain-node-0:
-    ports:
-    - "3001-3010:3000" # Use range depending on the number of Logos blockchain node replicas.
-    - "18081-18190:18080"
+docker run --rm -v <project>_node-data:/node-data debian:trixie-slim chown -R 10001:10001 /node-data
 ```
 
-After running `docker compose up`, the randomly assigned ports can be viewed with `ps` command:
+Files put into the volume from outside, such as a node's `user_config.yaml` and `keystore.yaml`, must belong
+to `10001` too. A node refuses a keystore that users other than its owner can access: keep `keystore.yaml` at
+mode `600`.
+
+## Using deployment
+
+The node of `compose.yml` serves its API inside the container only:
 
 ```bash
-docker compose ps 
+docker compose exec logos-blockchain-node curl -s localhost:8080/cryptarchia/info
 ```
 
 ### Reaching the node API by name
@@ -197,7 +200,6 @@ Shared blueprints reused by every deployment type; not edited per release.
 
 - `deployment/compose.yml`, `deployment/compose.run.yml`, `deployment/compose.setup.yml`, `deployment/compose.tracing.yml`
 - `Dockerfile`, `deployment/Dockerfile`
-- `deployment/cfgsync.yaml`, `deployment/cfgsync/deployment-settings.yaml`
 - `deployment/nginx/*`, `deployment/scripts/*`, `deployment/systemd/*`
 - the `# TEMPLATE` section (`entropy_sources`, `pow_reward_pool`) of each `deployment/ceremony/genesis/<env>/inscribe.yaml`
 
@@ -208,7 +210,7 @@ Per-type blueprints; change only when a network type is re-defined.
   `consensus_excluded_keys.yaml`)
 - The `# DEPLOYMENT TYPE` section of `.env.<env>`
   (`TOOLS_IMAGE_LABEL`, `EXPLORER_IMAGE_LABEL`, `ENV_TITLE_STRING`,
-  `PUBLIC_IP_ADDR`, `DOCKER_COMPOSE_LIBP2P_REPLICAS`, node ports)
+  `PUBLIC_IP_ADDR`, node ports)
 
 ### 3. Per-release info (edited on every release)
 
