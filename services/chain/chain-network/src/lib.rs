@@ -954,7 +954,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, marker::PhantomData};
+    use std::collections::HashSet;
 
     use futures::stream;
     use lb_binary_codec::canonical::BinaryDecodeExt as _;
@@ -1189,7 +1189,7 @@ mod tests {
         assert_eq!(tampered.header().id(), block_id);
 
         let mut orphan_downloader = OrphanBlocksDownloader::<_, usize>::new(
-            NoopNetworkAdapter::<()>::new(),
+            NoopNetworkAdapter::<()>::new(Vec::new()),
             NonZeroUsize::MIN,
             1,
         );
@@ -1205,13 +1205,16 @@ mod tests {
             .expect("genuine proposal must pass");
     }
 
-    /// A network adapter that the orphan downloader holds but never calls here.
+    /// A network adapter that does nothing but serve the orphan downloader
+    /// `download`, whatever it asks for.
     #[derive(Clone)]
-    pub struct NoopNetworkAdapter<Block>(PhantomData<Block>);
+    pub struct NoopNetworkAdapter<Block> {
+        download: Vec<(HeaderId, Block)>,
+    }
 
     impl<Block> NoopNetworkAdapter<Block> {
-        pub const fn new() -> Self {
-            Self(PhantomData)
+        pub const fn new(download: Vec<(HeaderId, Block)>) -> Self {
+            Self { download }
         }
     }
 
@@ -1273,7 +1276,9 @@ mod tests {
             _latest_immutable_block: HeaderId,
             _additional_blocks: HashSet<HeaderId>,
         ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError> {
-            unimplemented!()
+            Ok(Box::new(stream::iter(
+                self.download.clone().into_iter().map(Ok),
+            )))
         }
     }
 

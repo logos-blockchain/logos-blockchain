@@ -1,6 +1,6 @@
-//! Applies blocks one at a time and in order, on a task of its own, so that
-//! however long a block takes, the service keeps taking in what peers and other
-//! services send it.
+//! Applies blocks one at a time, on a task of its own, so that however long a
+//! block takes, the service keeps taking in what peers and other services send
+//! it.
 
 use core::{fmt::Debug, future, pin::Pin};
 use std::time::Instant;
@@ -75,8 +75,8 @@ enum NetworkInput<Tx> {
 }
 
 /// A block from the network being checked, and rebuilt from the mempool if it
-/// came as a proposal. That changes nothing, so it can run while the node's own
-/// blocks are applied.
+/// came as a proposal. That changes nothing, so it can run while other blocks
+/// are applied.
 type Preparation<Tx> = BoxFuture<'static, Prepared<Tx>>;
 
 /// What a [`Preparation`] comes to.
@@ -252,14 +252,18 @@ where
     /// chain recovery take turns after them, so that neither can hold the other
     /// up for good.
     ///
-    /// A block from the network is checked, and rebuilt if it came as a
-    /// proposal, while the node's own blocks and era changes keep going ahead.
-    /// Only applying it takes its turn with them. The next block from the
-    /// network waits for it, so blocks are still applied one at a time and in
-    /// the order they're taken.
+    /// A proposal and a downloaded block are checked, and the proposal rebuilt,
+    /// side by side and while everything else keeps going, so a slow rebuild
+    /// holds up neither the node's own blocks nor chain recovery. Only applying
+    /// a block takes its turn. The next proposal waits for the one being
+    /// prepared, and the next downloaded block for its own, so blocks are still
+    /// applied one at a time, and those from one source in the order they're
+    /// taken.
     async fn run(mut self, mut inputs: Inputs<Cryptarchia::Tx>) {
-        let mut preparation: Option<Preparation<Cryptarchia::Tx>> = None;
+        let mut proposal: Option<Preparation<Cryptarchia::Tx>> = None;
+        let mut orphan: Option<Preparation<Cryptarchia::Tx>> = None;
         loop {
+            let (take_proposal, take_orphan) = (proposal.is_none(), orphan.is_none());
             tokio::select! {
                 biased;
 
@@ -277,8 +281,13 @@ where
 
                 Some(change) = inputs.era_changes.recv() => self.follow_era(change).await,
 
-                Some(prepared) = OptionFuture::from(preparation.as_mut()) => {
-                    preparation = None;
+                Some(prepared) = OptionFuture::from(proposal.as_mut()) => {
+                    proposal = None;
+                    self.apply_prepared(prepared).await;
+                }
+
+                Some(prepared) = OptionFuture::from(orphan.as_mut()) => {
+                    orphan = None;
                     self.apply_prepared(prepared).await;
                 }
 
@@ -286,28 +295,31 @@ where
                     &mut inputs.proposals,
                     &mut inputs.polled_tips,
                     &mut self.orphan_downloader,
-                ), if preparation.is_none() => match input {
-                    NetworkInput::Proposal(proposal) => {
-                        preparation = self.prepare_proposal(proposal);
-                    }
+                    take_proposal,
+                    take_orphan,
+                ) => match input {
+                    NetworkInput::Proposal(received) => proposal = self.prepare_proposal(received),
                     NetworkInput::PolledTip(polled) => self.enqueue_polled_tip(polled),
-                    NetworkInput::Orphan(block) => preparation = Some(self.prepare_orphan(block)),
+                    NetworkInput::Orphan(block) => orphan = Some(self.prepare_orphan(block)),
                 },
             }
         }
     }
 
     /// The next proposal, polled tip or downloaded orphan, picked at random
-    /// among those ready.
+    /// among those ready. Proposals are taken only if `take_proposal`, and
+    /// downloaded blocks only if `take_orphan`.
     async fn next_network_input(
         proposals: &mut mpsc::Receiver<Proposal>,
         polled_tips: &mut mpsc::Receiver<PolledTip>,
         orphan_downloader: &mut Pin<Box<OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>>>,
+        take_proposal: bool,
+        take_orphan: bool,
     ) -> NetworkInput<Cryptarchia::Tx> {
         tokio::select! {
-            Some(proposal) = proposals.recv() => NetworkInput::Proposal(proposal),
+            Some(proposal) = proposals.recv(), if take_proposal => NetworkInput::Proposal(proposal),
             Some(polled) = polled_tips.recv() => NetworkInput::PolledTip(polled),
-            Some(block) = orphan_downloader.next(), if orphan_downloader.should_poll() => {
+            Some(block) = orphan_downloader.next(), if take_orphan && orphan_downloader.should_poll() => {
                 NetworkInput::Orphan(block)
             }
             // Their senders are gone only as the service stops.
@@ -436,9 +448,16 @@ where
     /// Applies a block and handles the outcome.
     async fn apply_block(&mut self, block: Block<Cryptarchia::Tx>, source: BlockSource) {
         let block_id = block.header().id();
-        let result =
-            apply_block_and_reconcile_mempool(block, &self.cryptarchia, &self.mempool).await;
-        self.finish_block(result, block_id, source);
+        match apply_block_and_reconcile_mempool(block, &self.cryptarchia, &self.mempool).await {
+            // A proposal and a downloaded block are prepared side by side, so
+            // the same block can come both ways, and the second to be applied
+            // finds it in the chain. That says nothing against the rest of a
+            // download.
+            Err(Error::Cryptarchia(ApiError::AlreadyApplied(_))) => {
+                debug!(target: LOG_TARGET, ?block_id, "Block applied already");
+            }
+            result => self.finish_block(result, block_id, source),
+        }
     }
 
     fn finish_block(&mut self, result: Result<(), Error>, block_id: HeaderId, source: BlockSource) {
@@ -572,7 +591,7 @@ mod tests {
     };
     use lb_cryptarchia_engine::{Slot, State};
     use lb_time::era::{EraEntriesAfterGenesis, EraTiming};
-    use lb_tx_service::{MempoolMsg, TxsByPrefix};
+    use lb_tx_service::{MempoolMsg, TxsByPrefix, backend::MempoolError};
     use overwatch::services::{
         ServiceData,
         relay::{InboundRelay, Relay},
@@ -587,6 +606,7 @@ mod tests {
 
     type Tx = SignedOps<Preverified, StandardMode>;
     type ApplyReply = oneshot::Sender<Result<AppliedBlock<Tx>, ChainError>>;
+    type LookupReply = oneshot::Sender<Result<TxsByPrefix<Tx>, MempoolError>>;
     type Ingestion = BlockIngestion<Chain, NoopNetworkAdapter<Block<Tx>>, usize>;
 
     struct Chain;
@@ -625,7 +645,9 @@ mod tests {
         mempool: InboundRelay<MempoolMsg<HeaderId, Tx, Tx, TxHash>>,
     }
 
-    fn started() -> Started {
+    /// Ingestion, whose orphan downloader gets `download` for whatever it
+    /// asks.
+    fn started(download: Vec<(HeaderId, Block<Tx>)>) -> Started {
         let Relay {
             inbound_relay: chain,
             outbound_relay: chain_relay,
@@ -639,7 +661,7 @@ mod tests {
         let ingestion = BlockIngestion::new(
             CryptarchiaServiceApi::new(chain_relay),
             MempoolAdapter::new(mempool_relay),
-            OrphanBlocksDownloader::new(NoopNetworkAdapter::new(), NonZeroUsize::MIN, 1),
+            OrphanBlocksDownloader::new(NoopNetworkAdapter::new(download), NonZeroUsize::MIN, 1),
             block_limits(),
         );
         Started {
@@ -674,7 +696,7 @@ mod tests {
             mut chain,
             ingestion,
             mempool: _mempool,
-        } = started();
+        } = started(Vec::new());
         let ((local_blocks, proposals, _polled_tips, _era_changes), inputs) = channels();
         let proposal = block::<Tx>(1);
         let local = block(2);
@@ -704,29 +726,16 @@ mod tests {
         .unwrap()
     }
 
-    /// The node's own block doesn't wait for a proposal still being rebuilt
-    /// from the mempool, and the proposal is applied after it once the mempool
-    /// answers.
-    #[tokio::test]
-    async fn a_local_block_goes_ahead_of_a_proposal_being_rebuilt() {
-        let Started {
-            mut chain,
-            ingestion,
-            mut mempool,
-        } = started();
-        let ((local_blocks, proposals, _polled_tips, _era_changes), inputs) = channels();
-        let transaction = transaction();
-        let proposal = block_carrying(1, vec![transaction.clone()]);
-        let proposal_id = proposal.header().id();
-        let local = block(2);
-        let local_id = local.header().id();
-        let _task: CancellableHandle<()> = spawn("test/ingestion", ingestion.run(inputs)).into();
-
-        proposals.try_send(proposal.to_proposal()).unwrap();
-        let lookup = timeout(REPLY_TIMEOUT, async {
+    /// Leaves queries unanswered, as [`StubChain::next_block`] does, until the
+    /// mempool is asked for a proposal's transactions, and returns that
+    /// request's reply channel, unanswered.
+    async fn transactions_lookup(
+        chain: &mut StubChain,
+        mempool: &mut InboundRelay<MempoolMsg<HeaderId, Tx, Tx, TxHash>>,
+    ) -> LookupReply {
+        timeout(REPLY_TIMEOUT, async {
             loop {
                 tokio::select! {
-                    // Queries go unanswered, as in `StubChain::next_block`.
                     Some(_) = chain.0.recv() => {}
                     Some(request) = mempool.recv() => {
                         if let MempoolMsg::GetTransactionsByPrefixes { reply_channel, .. } = request {
@@ -737,7 +746,29 @@ mod tests {
             }
         })
         .await
-        .expect("The proposal's transaction should be looked up in the mempool.");
+        .expect("The proposal's transactions should be looked up in the mempool.")
+    }
+
+    /// The node's own block doesn't wait for a proposal still being rebuilt
+    /// from the mempool, and the proposal is applied after it once the mempool
+    /// answers.
+    #[tokio::test]
+    async fn a_local_block_goes_ahead_of_a_proposal_being_rebuilt() {
+        let Started {
+            mut chain,
+            ingestion,
+            mut mempool,
+        } = started(Vec::new());
+        let ((local_blocks, proposals, _polled_tips, _era_changes), inputs) = channels();
+        let transaction = transaction();
+        let proposal = block_carrying(1, vec![transaction.clone()]);
+        let proposal_id = proposal.header().id();
+        let local = block(2);
+        let local_id = local.header().id();
+        let _task: CancellableHandle<()> = spawn("test/ingestion", ingestion.run(inputs)).into();
+
+        proposals.try_send(proposal.to_proposal()).unwrap();
+        let lookup = transactions_lookup(&mut chain, &mut mempool).await;
 
         let (resp, _result) = oneshot::channel();
         assert!(
@@ -752,11 +783,39 @@ mod tests {
         assert_eq!(chain.next_block().await.0, proposal_id);
     }
 
-    /// A tip some peer is at, as the tip poller hands it over.
-    fn polled_tip() -> PolledTip {
+    /// Chain recovery goes on while a proposal is still being rebuilt from the
+    /// mempool, and the proposal is applied once the mempool answers.
+    #[tokio::test]
+    async fn recovery_goes_on_while_a_proposal_is_being_rebuilt() {
+        let orphan = block::<Tx>(2);
+        let orphan_id = orphan.header().id();
+        let Started {
+            mut chain,
+            ingestion,
+            mut mempool,
+        } = started(vec![(orphan_id, orphan)]);
+        let ((_local_blocks, proposals, polled_tips, _era_changes), inputs) = channels();
+        let transaction = transaction();
+        let proposal = block_carrying(1, vec![transaction.clone()]);
+        let proposal_id = proposal.header().id();
+        let _task: CancellableHandle<()> = spawn("test/ingestion", ingestion.run(inputs)).into();
+
+        proposals.try_send(proposal.to_proposal()).unwrap();
+        let lookup = transactions_lookup(&mut chain, &mut mempool).await;
+
+        polled_tips.try_send(polled_tip(orphan_id)).unwrap();
+        assert_eq!(chain.next_block().await.0, orphan_id);
+
+        let found: TxsByPrefix<Tx> = Box::pin(stream::iter([transaction]));
+        assert!(lookup.send(Ok(found)).is_ok());
+        assert_eq!(chain.next_block().await.0, proposal_id);
+    }
+
+    /// A peer's tip at `tip`, as the tip poller hands it over.
+    fn polled_tip(tip: HeaderId) -> PolledTip {
         let genesis = HeaderId::from([0; 32]);
         PolledTip {
-            tip: HeaderId::from([1; 32]),
+            tip,
             height: 1,
             local: CryptarchiaInfo {
                 lib: genesis,
@@ -774,13 +833,15 @@ mod tests {
     async fn proposals_that_keep_coming_leave_recovery_its_turn() {
         let ((_, proposals, polled_tips, _), mut inputs) = channels::<Tx>();
         let mut orphan_downloader = Box::pin(OrphanBlocksDownloader::new(
-            NoopNetworkAdapter::new(),
+            NoopNetworkAdapter::new(Vec::new()),
             NonZeroUsize::MIN,
             1,
         ));
         let proposal = block::<Tx>(1).to_proposal();
         while proposals.try_send(proposal.clone()).is_ok() {}
-        polled_tips.try_send(polled_tip()).unwrap();
+        polled_tips
+            .try_send(polled_tip(HeaderId::from([1; 32])))
+            .unwrap();
 
         let tip_taken = async {
             loop {
@@ -788,6 +849,8 @@ mod tests {
                     &mut inputs.proposals,
                     &mut inputs.polled_tips,
                     &mut orphan_downloader,
+                    true,
+                    true,
                 )
                 .await
                 {
