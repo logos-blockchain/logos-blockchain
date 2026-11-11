@@ -12,6 +12,7 @@ use std::{
 pub use blockchain_test_support::runtime_info::{NodeWalletKey, NodeWalletKeyRole};
 use cucumber::World;
 use educe::Educe;
+use lb_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_binary_codec::bincode::DeserializeOp as _;
 use lb_core::{
     era::ForkDigest,
@@ -25,7 +26,6 @@ use lb_core::{
         },
     },
 };
-use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_node::config::RunConfig;

@@ -1,8 +1,8 @@
 use std::num::NonZero;
 
 use futures::StreamExt as _;
+use lb_api_common::queries::{BlockFilter, BlockSortOrder, BlocksStreamQuery};
 use lb_common_http_client::{ApiBlock, Events};
-use lb_http_api_common::queries::{BlockFilter, BlockSortOrder, BlocksStreamQuery};
 use lb_testing_framework::NodeHttpClient;
 
 use super::error::ScannerError;

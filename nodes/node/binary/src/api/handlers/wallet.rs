@@ -4,8 +4,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse as _, Response},
 };
-use lb_core::{era::ForkDigest, header::HeaderId};
-use lb_http_api_common::{
+use lb_api_common::{
     bodies::wallet::{
         fund::WalletFundRequestBody,
         sign::{WalletSignTxEd25519RequestBody, WalletSignTxZkRequestBody},
@@ -13,6 +12,7 @@ use lb_http_api_common::{
     },
     paths,
 };
+use lb_core::{era::ForkDigest, header::HeaderId};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use serde::Deserialize;
 

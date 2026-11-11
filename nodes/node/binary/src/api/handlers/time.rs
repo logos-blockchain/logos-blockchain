@@ -1,5 +1,5 @@
 use axum::{extract::State, response::Response};
-use lb_http_api_common::{TimeInfo, paths};
+use lb_api_common::{TimeInfo, paths};
 
 use crate::api::{
     calls::{Handle, time},

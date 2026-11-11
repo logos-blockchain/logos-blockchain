@@ -1,15 +1,15 @@
 use std::{collections::HashSet, num::NonZero, path::PathBuf, time::Duration};
 
 use futures::StreamExt as _;
-use lb_common_http_client::ProcessedBlockEvent;
-use lb_core::mantle::transactions::hash::TxHash;
-use lb_groth16::fr_to_bytes;
-use lb_http_api_common::bodies::{
+use lb_api_common::bodies::{
     leader::LeaderClaimResponseBody,
     wallet::{
         balance::WalletBalanceResponseBody, claimable_vouchers::WalletClaimableVouchersResponseBody,
     },
 };
+use lb_common_http_client::ProcessedBlockEvent;
+use lb_core::mantle::transactions::hash::TxHash;
+use lb_groth16::fr_to_bytes;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::{
     Hashable as _,

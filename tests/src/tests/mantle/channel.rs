@@ -1,6 +1,10 @@
 use std::{num::NonZero, path::PathBuf, time::Duration};
 
 use futures::StreamExt as _;
+use lb_api_common::bodies::{
+    channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
+    wallet::balance::WalletBalanceResponseBody,
+};
 use lb_common_http_client::ProcessedBlockEvent;
 use lb_core::{
     events::{Event, Events, TxEvent, TxEventPayload},
@@ -16,10 +20,6 @@ use lb_core::{
         traits::Hashable as _,
         transactions::hash::TxHash,
     },
-};
-use lb_http_api_common::bodies::{
-    channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
-    wallet::balance::WalletBalanceResponseBody,
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::config::RunConfig;

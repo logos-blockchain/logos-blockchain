@@ -26,11 +26,13 @@ use axum::{
     middleware::{self, Next},
     response::{IntoResponse as _, Response},
 };
-use lb_http_api_common::settings::{CorsOrigin, HostName};
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use url::Host;
 
-use crate::api::errors::ApiError;
+use crate::api::{
+    errors::ApiError,
+    settings::{CorsOrigin, HostName},
+};
 
 /// Applies the [module](self) rules to every route of `router`.
 ///

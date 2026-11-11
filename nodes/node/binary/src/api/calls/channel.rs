@@ -1,3 +1,4 @@
+use lb_api_common::bodies::channel::{ChannelDepositRequestBody, ChannelDepositResponseBody};
 use lb_core::{
     era::ForkDigest,
     header::HeaderId,
@@ -16,7 +17,6 @@ use lb_core::{
         transactions::{MantleTxBuilder, OpProofs, Ops},
     },
 };
-use lb_http_api_common::bodies::channel::{ChannelDepositRequestBody, ChannelDepositResponseBody};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_wallet_service::TipResponse;
 

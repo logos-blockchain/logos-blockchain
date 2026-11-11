@@ -4,19 +4,7 @@ use common_http_client::{
     ApiBlock, BasicAuthCredentials, CommonHttpClient, Error, Events, ProcessedBlockEvent,
 };
 use futures::Stream;
-use lb_blend_service::message::NetworkInfo as BlendNetworkInfo;
-use lb_chain_service::ChainServiceInfo;
-use lb_core::{
-    era::ForkDigest,
-    header::HeaderId,
-    mantle::{
-        NoteId, SignedOps,
-        ledger::verification_mode::StandardMode,
-        transactions::{genesis_tx::ChainId, hash::TxHash, states::VerificationState},
-    },
-    sdp::{Declaration, DeclarationId, Locator},
-};
-use lb_http_api_common::{
+use lb_api_common::{
     TimeInfo,
     bodies::{
         blend::JoinBlendRequestBody,
@@ -34,6 +22,18 @@ use lb_http_api_common::{
         POW_STOP_MINING,
     },
     queries::BlocksStreamQuery,
+};
+use lb_blend_service::message::NetworkInfo as BlendNetworkInfo;
+use lb_chain_service::ChainServiceInfo;
+use lb_core::{
+    era::ForkDigest,
+    header::HeaderId,
+    mantle::{
+        NoteId, SignedOps,
+        ledger::verification_mode::StandardMode,
+        transactions::{genesis_tx::ChainId, hash::TxHash, states::VerificationState},
+    },
+    sdp::{Declaration, DeclarationId, Locator},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, PeerId};

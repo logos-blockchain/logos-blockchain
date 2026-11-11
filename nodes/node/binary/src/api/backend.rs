@@ -3,8 +3,6 @@
 use axum::{Router, routing};
 use http::StatusCode;
 use lb_api_service::Backend;
-use lb_http_api_common::metrics::http_metrics_middleware;
-pub use lb_http_api_common::settings::AxumBackendSettings;
 use tokio::net::TcpListener;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::{
@@ -16,10 +14,12 @@ use tracing::Level as TracingLevel;
 use utoipa::OpenApi as _;
 use utoipa_swagger_ui::SwaggerUi;
 
+pub use crate::api::settings::AxumBackendSettings;
 use crate::{
     RuntimeServiceId,
     api::{
-        browser_access::restrict_browser_access, calls::Handle, openapi::ApiDoc, routes::api_routes,
+        browser_access::restrict_browser_access, calls::Handle, metrics::http_metrics_middleware,
+        openapi::ApiDoc, routes::api_routes,
     },
 };
 
@@ -77,7 +77,7 @@ impl Backend<RuntimeServiceId> for AxumBackend {
 
         #[cfg(feature = "profiling")]
         let app = {
-            let pprof_routes = lb_http_api_common::pprof::create_pprof_router().layer(
+            let pprof_routes = crate::api::pprof::create_pprof_router().layer(
                 TraceLayer::new_for_http()
                     .on_request(DefaultOnRequest::new().level(TracingLevel::TRACE))
                     .on_response(DefaultOnResponse::new().level(TracingLevel::TRACE)),

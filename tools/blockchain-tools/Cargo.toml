@@ -12,12 +12,12 @@ version.workspace     = true
 [dependencies]
 anyhow                        = { workspace = true }
 clap                          = { features = ["derive", "help", "std", "string"], workspace = true }
+lb-api-common                 = { workspace = true }
 lb-binary-codec               = { workspace = true }
 lb-common-http-client         = { workspace = true }
 lb-config                     = { workspace = true }
 lb-core                       = { workspace = true }
 lb-groth16                    = { workspace = true }
-lb-http-api-common            = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-node                       = { workspace = true }
 lb-sdp-service                = { workspace = true }
