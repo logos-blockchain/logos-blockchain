@@ -394,7 +394,6 @@ pub fn single_key_channel_state() -> ChannelState {
         tip_sequencer_starting_slot: Slot::default(),
         posting_timeframe: 0u32.into(),
         posting_timeout: 0u32.into(),
-        note_set: None,
     }
 }
 

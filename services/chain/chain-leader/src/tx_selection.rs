@@ -185,7 +185,7 @@ mod tests {
         mantle::{
             Note, Op, OpProof,
             gas::TxGasCalculator as _,
-            note_set::{CommitmentMmr, LEDGER_SET},
+            note_set::CommitmentMmr,
             notes::{NoteCommitment, OutputCommitments, derive_note_nullifier},
             ops::{
                 NoOpProof, ZkTransferProof,
@@ -292,11 +292,7 @@ mod tests {
         let funding_key = ZkKey::zero();
         let funding_notes = funding_notes(&funding_key, CANDIDATE_COUNT);
         let ledger_state = LedgerState::from_notes(funding_notes.iter().copied(), &config, 0);
-        let commitment_root = ledger_state
-            .latest_note_sets()
-            .get(LEDGER_SET)
-            .expect("the ledger set exists")
-            .commitment_root();
+        let commitment_root = ledger_state.latest_note_sets().ledger().commitment_root();
         let candidates = gas_heavy_transactions(&funding_notes, &funding_key, commitment_root);
         let gas_context = ledger_state.tx_context().gas_context;
         let individual_gas = candidates[0]

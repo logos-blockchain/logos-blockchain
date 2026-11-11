@@ -125,8 +125,8 @@ mod tests {
             Channels::new().create_channel(channel_id, Slot::from(0u64), keys, NoteSets::new());
         let note_sets = note_sets.end_block(0);
         let commitment_merkle_root = note_sets
-            .get(2)
-            .expect("the channel holds note set 2")
+            .channel(&channel_id)
+            .expect("the channel holds a note set")
             .commitment_root();
 
         let ops = Ops::from([Op::ChannelWithdraw(ChannelWithdrawOp {

@@ -16,7 +16,7 @@ use lb_core::{
         GasProfile, Note, TxHash, Value,
         gas::GasOverflow,
         ledger::verification_mode::StandardMode,
-        note_set::{CommitmentMmr, LEDGER_SET, NoteSetIndex, NoteSetUpdate, SDP_SET},
+        note_set::{CommitmentMmr, NoteSetIndex, NoteSetUpdate},
         notes::{InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments},
         ops::{OpRef, transfer::TransferOp},
         traits::{MantleTx, SignedMantleTx},
@@ -127,11 +127,11 @@ pub fn revealed_notes<'a>(
         | Event::Tx(TxEvent {
             payload: TxEventPayload::PoWRewardClaimed { note, .. },
             ..
-        }) => Some((LEDGER_SET, *note)),
+        }) => Some((NoteSetIndex::Ledger, *note)),
         _ => None,
     });
     let service_notes = ops.filter_map(|op| match op {
-        OpRef::SDPDeclare(declaration) => Some((SDP_SET, declaration.service_note())),
+        OpRef::SDPDeclare(declaration) => Some((NoteSetIndex::Sdp, declaration.service_note())),
         _ => None,
     });
     rewards.chain(service_notes).collect()
@@ -158,8 +158,8 @@ impl WalletState {
         let mut commitments = rpds::HashTrieMapSync::new_sync();
         let mut notes = rpds::HashTrieMapSync::new_sync();
         for (note_set, set_notes) in [
-            (LEDGER_SET, genesis_notes),
-            (SDP_SET, genesis_service_notes),
+            (NoteSetIndex::Ledger, genesis_notes),
+            (NoteSetIndex::Sdp, genesis_service_notes),
         ] {
             commitments.insert_mut(note_set, CommitmentMmr::new());
             let update = NoteSetUpdate {
@@ -191,7 +191,9 @@ impl WalletState {
             .collect::<HashSet<_>>();
         self.notes
             .values()
-            .filter(|owned| owned.note_set == LEDGER_SET && pks.contains(&owned.note.public_key))
+            .filter(|owned| {
+                owned.note_set == NoteSetIndex::Ledger && pks.contains(&owned.note.public_key)
+            })
             .cloned()
             .collect()
     }
@@ -449,7 +451,7 @@ impl WalletState {
     }
 
     fn ledger_root(&self) -> Fr {
-        self.commitments.get(&LEDGER_SET).map_or_else(
+        self.commitments.get(&NoteSetIndex::Ledger).map_or_else(
             || CommitmentMmr::new().frontier_root(),
             CommitmentMmr::frontier_root,
         )
@@ -870,6 +872,10 @@ mod tests {
         }
     }
 
+    fn channel_set() -> NoteSetIndex {
+        NoteSetIndex::Channel(lb_core::mantle::ops::channel::ChannelId::from([2u8; 32]))
+    }
+
     fn appended(note_set: NoteSetIndex, commitments: Vec<NoteCommitment>) -> NoteSetUpdate {
         NoteSetUpdate {
             note_set,
@@ -882,7 +888,7 @@ mod tests {
     fn apply_block_keeps_the_paths_of_owned_notes_valid() {
         let genesis = Note::new(5, Fr::ZERO, pk(9));
         let owned = Note::new(100, Fr::from(1u64), pk(1));
-        let known = known(&[(owned, LEDGER_SET, nullifier(1))]);
+        let known = known(&[(owned, NoteSetIndex::Ledger, nullifier(1))]);
         let state = WalletState::from_genesis(&known, &[genesis], &[], Epoch::new(0)).unwrap();
         let state = state
             .apply_block(
@@ -892,7 +898,7 @@ mod tests {
                     0,
                     0,
                     vec![appended(
-                        LEDGER_SET,
+                        NoteSetIndex::Ledger,
                         vec![owned.commitment(), commitment(7), commitment(8)],
                     )],
                 ),
@@ -908,7 +914,10 @@ mod tests {
             .push(commitment(8))
             .unwrap()
             .frontier_root();
-        assert_eq!(state.commitments[&LEDGER_SET].frontier_root(), root);
+        assert_eq!(
+            state.commitments[&NoteSetIndex::Ledger].frontier_root(),
+            root
+        );
         assert!(
             state.notes[&owned.commitment()]
                 .path
@@ -927,10 +936,10 @@ mod tests {
     #[test]
     fn apply_block_drops_a_note_whose_nullifier_is_inserted() {
         let owned = Note::new(100, Fr::from(1u64), pk(1));
-        let known = known(&[(owned, LEDGER_SET, nullifier(1))]);
+        let known = known(&[(owned, NoteSetIndex::Ledger, nullifier(1))]);
         let state = WalletState::from_genesis(&known, &[owned], &[], Epoch::new(0)).unwrap();
         let spend = NoteSetUpdate {
-            note_set: LEDGER_SET,
+            note_set: NoteSetIndex::Ledger,
             nullifiers: vec![nullifier(1)],
             commitments: vec![commitment(7)],
         };
@@ -944,7 +953,7 @@ mod tests {
     #[test]
     fn epoch_change_rotates_the_aged_paths() {
         let owned = Note::new(100, Fr::from(1u64), pk(1));
-        let known = known(&[(owned, LEDGER_SET, nullifier(1))]);
+        let known = known(&[(owned, NoteSetIndex::Ledger, nullifier(1))]);
         // root of the ledger set holding `owned` then commitment(1)..=commitment(n)
         let root_at = |n: u64| {
             (1..=n)
@@ -966,7 +975,7 @@ mod tests {
                         id,
                         id - 1,
                         epoch,
-                        vec![appended(LEDGER_SET, vec![commitment(v)])],
+                        vec![appended(NoteSetIndex::Ledger, vec![commitment(v)])],
                     ),
                 )
                 .unwrap()
@@ -987,18 +996,28 @@ mod tests {
     #[test]
     fn aged_notes_of_a_later_epoch_are_those_its_first_block_will_use() {
         let owned = Note::new(100, Fr::from(1u64), pk(1));
-        let known = known(&[(owned, LEDGER_SET, nullifier(1))]);
+        let known = known(&[(owned, NoteSetIndex::Ledger, nullifier(1))]);
         let state = WalletState::from_genesis(&known, &[owned], &[], Epoch::new(0)).unwrap();
         let state = state
             .apply_block(
                 &known,
-                &block(1, 0, 1, vec![appended(LEDGER_SET, vec![commitment(1)])]),
+                &block(
+                    1,
+                    0,
+                    1,
+                    vec![appended(NoteSetIndex::Ledger, vec![commitment(1)])],
+                ),
             )
             .unwrap();
         let state = state
             .apply_block(
                 &known,
-                &block(2, 1, 1, vec![appended(LEDGER_SET, vec![commitment(2)])]),
+                &block(
+                    2,
+                    1,
+                    1,
+                    vec![appended(NoteSetIndex::Ledger, vec![commitment(2)])],
+                ),
             )
             .unwrap();
         for epoch in 1..=3 {
@@ -1016,7 +1035,7 @@ mod tests {
     #[test]
     fn notes_of_a_new_channel_set_start_from_an_empty_mmr() {
         let channel_note = Note::new(50, Fr::from(2u64), pk(1));
-        let known = known(&[(channel_note, 2, nullifier(2))]);
+        let known = known(&[(channel_note, channel_set(), nullifier(2))]);
         let state = WalletState::from_genesis(&known, &[], &[], Epoch::new(0)).unwrap();
         let state = state
             .apply_block(
@@ -1025,7 +1044,10 @@ mod tests {
                     1,
                     0,
                     0,
-                    vec![appended(2, vec![commitment(4), channel_note.commitment()])],
+                    vec![appended(
+                        channel_set(),
+                        vec![commitment(4), channel_note.commitment()],
+                    )],
                 ),
             )
             .unwrap();
@@ -1048,8 +1070,8 @@ mod tests {
         let small = Note::new(1, Fr::from(1u64), pk(1));
         let large = Note::new(1000, Fr::from(2u64), pk(1));
         let known = known(&[
-            (small, LEDGER_SET, nullifier(1)),
-            (large, LEDGER_SET, nullifier(2)),
+            (small, NoteSetIndex::Ledger, nullifier(1)),
+            (large, NoteSetIndex::Ledger, nullifier(2)),
         ]);
         let state = WalletState::from_genesis(&known, &[small, large], &[], Epoch::new(0)).unwrap();
         let (_, opening) = state
@@ -1077,7 +1099,7 @@ mod tests {
                 .iter()
                 .chain([&large])
                 .zip(1..)
-                .map(|(note, seed)| (*note, LEDGER_SET, nullifier(seed)))
+                .map(|(note, seed)| (*note, NoteSetIndex::Ledger, nullifier(seed)))
                 .collect::<Vec<_>>(),
         );
         let genesis: Vec<Note> = dust.iter().copied().chain([large]).collect();
@@ -1118,7 +1140,10 @@ mod tests {
         let declaration = SDPDeclareOp::sample();
         assert_eq!(
             revealed_notes(&events, std::iter::once(OpRef::SDPDeclare(&declaration))),
-            vec![(LEDGER_SET, pow), (SDP_SET, declaration.service_note())]
+            vec![
+                (NoteSetIndex::Ledger, pow),
+                (NoteSetIndex::Sdp, declaration.service_note())
+            ]
         );
     }
 
@@ -1136,9 +1161,9 @@ mod tests {
         let to_bob = Note::new(30, Fr::from(2u64), bob);
         let change = Note::new(70, Fr::from(3u64), alice);
         let known = known(&[
-            (intermediate, LEDGER_SET, nullifier(1)),
-            (to_bob, LEDGER_SET, nullifier(2)),
-            (change, LEDGER_SET, nullifier(3)),
+            (intermediate, NoteSetIndex::Ledger, nullifier(1)),
+            (to_bob, NoteSetIndex::Ledger, nullifier(2)),
+            (change, NoteSetIndex::Ledger, nullifier(3)),
         ]);
         let mut wallet =
             Wallet::from_genesis([(alice, 1), (bob, 2)], known, genesis, &[], &[]).unwrap();
@@ -1150,7 +1175,7 @@ mod tests {
             0,
             0,
             vec![NoteSetUpdate {
-                note_set: LEDGER_SET,
+                note_set: NoteSetIndex::Ledger,
                 nullifiers: vec![nullifier(1)],
                 commitments: vec![
                     intermediate.commitment(),
@@ -1206,8 +1231,13 @@ mod tests {
                 .map(|(note, _, _)| *note)
                 .collect::<Vec<_>>()
         };
-        WalletState::from_genesis(&known, &in_set(LEDGER_SET), &in_set(SDP_SET), Epoch::new(0))
-            .unwrap()
+        WalletState::from_genesis(
+            &known,
+            &in_set(NoteSetIndex::Ledger),
+            &in_set(NoteSetIndex::Sdp),
+            Epoch::new(0),
+        )
+        .unwrap()
     }
 
     fn block_id(id: u8) -> HeaderId {
@@ -1237,7 +1267,7 @@ mod tests {
                     id,
                     id - 1,
                     0,
-                    vec![appended(LEDGER_SET, vec![appended_note])],
+                    vec![appended(NoteSetIndex::Ledger, vec![appended_note])],
                 ))
                 .unwrap();
         }
@@ -1248,7 +1278,7 @@ mod tests {
     fn a_spend_survives_a_fork_of_its_tip_block() {
         let alice = pk(1);
         let note = Note::new(10000, Fr::from(1u64), alice);
-        let known = known(&[(note, LEDGER_SET, nullifier(1))]);
+        let known = known(&[(note, NoteSetIndex::Ledger, nullifier(1))]);
         let mut wallet = wallet_on_chain(known.clone(), &[note], &[], 40);
         let context = context(GasPrices::new(1, 1));
         let fund = |wallet: &Wallet<u8>, tip: u8| {
@@ -1276,7 +1306,7 @@ mod tests {
                 41,
                 39,
                 0,
-                vec![appended(LEDGER_SET, vec![commitment(99)])],
+                vec![appended(NoteSetIndex::Ledger, vec![commitment(99)])],
             ))
             .unwrap();
         let openings = funded.openings();
@@ -1335,10 +1365,10 @@ mod tests {
     fn a_note_spent_above_the_root_is_not_spendable() {
         let alice = pk(1);
         let note = Note::new(50_000, Fr::from(1u64), alice);
-        let known = known(&[(note, LEDGER_SET, nullifier(1))]);
+        let known = known(&[(note, NoteSetIndex::Ledger, nullifier(1))]);
         let mut wallet = wallet_on_chain(known, &[note], &[], 40);
         let spend = NoteSetUpdate {
-            note_set: LEDGER_SET,
+            note_set: NoteSetIndex::Ledger,
             nullifiers: vec![nullifier(1)],
             commitments: vec![],
         };
@@ -1365,7 +1395,7 @@ mod tests {
     fn a_note_is_spendable_once_it_is_four_blocks_below_the_tip() {
         let alice = pk(1);
         let note = Note::new(50_000, Fr::from(2u64), alice);
-        let known_notes = known(&[(note, LEDGER_SET, nullifier(2))]);
+        let known_notes = known(&[(note, NoteSetIndex::Ledger, nullifier(2))]);
         let wallet = wallet_on_chain(known_notes, &[], &[(37, note)], 41);
         let context = context(GasPrices::new(1, 1));
         let fund = |tip: u8| {
@@ -1416,8 +1446,8 @@ mod tests {
         // A service note of alice, which `fund_tx` must not spend
         let service_note = Note::new(5000, Fr::from(2u64), alice);
         let wallet_state = wallet_state_of(&[
-            (ledger_note, LEDGER_SET, nullifier(1)),
-            (service_note, SDP_SET, nullifier(2)),
+            (ledger_note, NoteSetIndex::Ledger, nullifier(1)),
+            (service_note, NoteSetIndex::Sdp, nullifier(2)),
         ]);
         let context = context(GasPrices::new(1, 1));
         let change_nonce = Fr::from(3u64);
@@ -1465,7 +1495,7 @@ mod tests {
     fn test_fund_tx_with_priority_fee_percentage() {
         let alice = pk(1);
         let note = Note::new(10000, Fr::from(1u64), alice);
-        let wallet_state = wallet_state_of(&[(note, LEDGER_SET, nullifier(1))]);
+        let wallet_state = wallet_state_of(&[(note, NoteSetIndex::Ledger, nullifier(1))]);
         let context = context(GasPrices::new(1, 1));
         let change_nonce = Fr::from(3u64);
         let tx_builder = MantleTxBuilder::new();
@@ -1527,7 +1557,7 @@ mod tests {
     fn test_fund_tx_cuts_the_fee_margin_down_to_the_max_fee() {
         let alice = pk(1);
         let note = Note::new(10000, Fr::from(1u64), alice);
-        let wallet_state = wallet_state_of(&[(note, LEDGER_SET, nullifier(1))]);
+        let wallet_state = wallet_state_of(&[(note, NoteSetIndex::Ledger, nullifier(1))]);
         let context = context(GasPrices::new(1, 1));
         // The mandatory fee of the transaction funded with a change output.
         let mandatory_fee = wallet_state
@@ -1577,7 +1607,7 @@ mod tests {
         let alice = pk(1);
         // The wallet has a spendable note available...
         let note = Note::new(5000, Fr::from(1u64), alice);
-        let wallet_state = wallet_state_of(&[(note, LEDGER_SET, nullifier(1))]);
+        let wallet_state = wallet_state_of(&[(note, NoteSetIndex::Ledger, nullifier(1))]);
 
         // ...but with zero gas prices a transfer-less transaction owes no fee,
         // so it needs no funding at all.
@@ -1622,7 +1652,13 @@ mod tests {
         let alice = pk(1);
         let wallet_state = wallet_state_of(
             &(1..=4)
-                .map(|i| (Note::new(100, Fr::from(i), alice), LEDGER_SET, nullifier(i)))
+                .map(|i| {
+                    (
+                        Note::new(100, Fr::from(i), alice),
+                        NoteSetIndex::Ledger,
+                        nullifier(i),
+                    )
+                })
                 .collect::<Vec<_>>(),
         );
         let context = context(GasPrices::new(1, 1));
@@ -1684,8 +1720,8 @@ mod tests {
         let service_note = Note::new(5000, Fr::from(1u64), alice);
         let channel_note = Note::new(5000, Fr::from(2u64), alice);
         let known = known(&[
-            (service_note, SDP_SET, nullifier(1)),
-            (channel_note, 2, nullifier(2)),
+            (service_note, NoteSetIndex::Sdp, nullifier(1)),
+            (channel_note, channel_set(), nullifier(2)),
         ]);
         // alice only owns a service note and a channel note, which are not in
         // the ledger set, so `fund_tx` must not spend them
@@ -1693,7 +1729,12 @@ mod tests {
             .unwrap()
             .apply_block(
                 &known,
-                &block(1, 0, 0, vec![appended(2, vec![channel_note.commitment()])]),
+                &block(
+                    1,
+                    0,
+                    0,
+                    vec![appended(channel_set(), vec![channel_note.commitment()])],
+                ),
             )
             .unwrap();
 
@@ -1724,7 +1765,7 @@ mod tests {
         let bob = pk(2);
         let wallet_state = wallet_state_of(&[(
             Note::new(1_000_000, Fr::from(1u64), bob),
-            LEDGER_SET,
+            NoteSetIndex::Ledger,
             nullifier(1),
         )]);
 
@@ -1772,7 +1813,7 @@ mod tests {
         let fund = |value| {
             wallet_state_of(&[(
                 Note::new(value, Fr::from(1u64), alice),
-                LEDGER_SET,
+                NoteSetIndex::Ledger,
                 nullifier(1),
             )])
             .fund_tx::<MainnetGasProfile>(

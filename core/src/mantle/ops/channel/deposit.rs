@@ -20,7 +20,7 @@ use crate::{
             VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
         },
-        note_set::{LEDGER_SET, NoteSets, TxNoteState},
+        note_set::{NoteSetIndex, NoteSets, TxNoteState},
         notes::{InputNullifiers, OutputCommitments},
         ops::{
             OpId, SignedOperation, ZkTransferProof,
@@ -124,11 +124,8 @@ impl VerifiableOperation<StandardMode> for SignedOperation<DepositOp, Preverifie
 
         // Validate the inputs against the ledger note set
         let tx_commitment_root = context.tx_notes.spendable_root(
-            LEDGER_SET,
-            context
-                .note_sets
-                .get(LEDGER_SET)
-                .expect("the ledger note set always exists"),
+            NoteSetIndex::Ledger,
+            context.note_sets.ledger(),
             operation.inputs.as_slice(),
             &operation.commitment_merkle_root,
             context.block_number,
@@ -164,7 +161,7 @@ impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<DepositOp, 
         // for every Operation.
         context.note_sets = context.note_sets.execute_transfer(
             context.tx_notes,
-            LEDGER_SET,
+            NoteSetIndex::Ledger,
             operation.inputs.as_slice(),
             channel_set,
             operation.outputs.as_slice(),
@@ -267,11 +264,11 @@ mod test {
         let (channels, note_sets) =
             Channels::new().create_channel(CHANNEL, Slot::from(0u64), keys(), NoteSets::new());
         let ledger = NoteSet::empty().execute_adding(&[commitment(1)]).unwrap();
-        (channels, note_sets.update(LEDGER_SET, ledger).end_block(0))
+        (channels, note_sets.update_ledger(ledger).end_block(0))
     }
 
     fn root() -> Fr {
-        state().1.get(LEDGER_SET).unwrap().commitment_root()
+        state().1.ledger().commitment_root()
     }
 
     fn deposit(
@@ -410,8 +407,8 @@ mod test {
     fn verify_extends_the_ledger_root_with_the_ledger_buffer_only() {
         let (channels, note_sets) = state();
         let mut tx_notes = TxNoteState::new();
-        tx_notes.buffer_outputs(LEDGER_SET, &[commitment(4)]);
-        tx_notes.buffer_outputs(2, &[commitment(9)]);
+        tx_notes.buffer_outputs(NoteSetIndex::Ledger, &[commitment(4)]);
+        tx_notes.buffer_outputs(NoteSetIndex::Channel(CHANNEL), &[commitment(9)]);
         let deferred = verify_in_tx(
             deposit(&[nullifier(2)], &[commitment(3)], root()),
             &channels,
@@ -432,12 +429,11 @@ mod test {
     fn verify_rejects_a_spent_ledger_input() {
         let (channels, note_sets) = state();
         let spent = note_sets
-            .get(LEDGER_SET)
-            .unwrap()
+            .ledger()
             .clone()
             .execute_spending(&[nullifier(2)])
             .unwrap();
-        let note_sets = note_sets.update(LEDGER_SET, spent);
+        let note_sets = note_sets.update_ledger(spent);
         assert_eq!(
             verify(
                 deposit(&[nullifier(2)], &[commitment(3)], root()),
@@ -467,19 +463,22 @@ mod test {
             })
             .expect("the input is unspent");
 
-        let ledger = context.note_sets.get(LEDGER_SET).unwrap();
+        let ledger = context.note_sets.ledger();
         assert!(ledger.contains_nullifier(&nullifier(2)));
         assert_eq!(ledger.commitment_root(), root());
-        let channel = context.note_sets.get(2).unwrap();
+        let channel = context.note_sets.channel(&CHANNEL).unwrap();
         let expected = CommitmentMmr::new()
             .push(commitment(3))
             .unwrap()
             .frontier_root();
         assert_eq!(channel.commitment_root(), expected);
         assert_eq!(
-            context
-                .tx_notes
-                .commitment_root(2, channel, &CommitmentMmr::new().frontier_root(), 1),
+            context.tx_notes.commitment_root(
+                NoteSetIndex::Channel(CHANNEL),
+                channel,
+                &CommitmentMmr::new().frontier_root(),
+                1
+            ),
             Ok(expected)
         );
         assert_eq!(

@@ -761,7 +761,6 @@ mod tests {
             tip_sequencer_starting_slot: block_slot,
             posting_timeframe: operation.posting_timeframe.clone(),
             posting_timeout: operation.posting_timeout.clone(),
-            note_set: None,
         }
     }
 
@@ -784,14 +783,11 @@ mod tests {
             })
             .expect("configuring a channel never fails");
 
+        assert_eq!(context.channels.channel_state(&channel_id), Some(&expected));
         assert_eq!(
-            context.channels.channel_state(&channel_id),
-            Some(&ChannelState {
-                note_set: Some(2),
-                ..expected
-            })
+            context.note_sets.channel(&channel_id),
+            Some(&NoteSet::empty())
         );
-        assert_eq!(context.note_sets.get(2), Some(&NoteSet::empty()));
         assert_eq!(events, []);
     }
 

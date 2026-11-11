@@ -182,7 +182,7 @@ mod tests {
     use lb_key_management_system_keys::keys::ZkPublicKey;
 
     use super::*;
-    use crate::mantle::{note_set::LEDGER_SET, notes::NoteNullifier};
+    use crate::mantle::notes::NoteNullifier;
 
     /// A `Deposit` payload carrying several notes must survive the events codec
     /// round-trip. The wallet reads these notes off the block-events endpoint,
@@ -245,7 +245,7 @@ mod tests {
     fn block_events_survive_codec_round_trip() {
         let note = Note::new(5, Fr::from(3u64), ZkPublicKey::from(Fr::from(7u64)));
         let update = NoteSetUpdate {
-            note_set: LEDGER_SET,
+            note_set: NoteSetIndex::Ledger,
             nullifiers: vec![NoteNullifier(Fr::ONE)],
             commitments: vec![note.commitment()],
         };

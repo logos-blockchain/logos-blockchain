@@ -14,7 +14,7 @@ use lb_common_http_client::CommonHttpClient;
 use lb_core::mantle::{
     Note, SignedOps, TxHash,
     ledger::verification_mode::StandardMode,
-    note_set::LEDGER_SET,
+    note_set::NoteSetIndex,
     notes::NoteNullifier,
     transactions::{GasPrices, OpProofs, states::Preverified},
 };
@@ -1543,7 +1543,7 @@ pub(crate) async fn import_notes_into_node(
                 node_url.clone(),
                 WalletImportNoteRequestBody {
                     note,
-                    note_set: LEDGER_SET,
+                    note_set: NoteSetIndex::Ledger,
                 },
             )
             .await
@@ -1780,7 +1780,7 @@ mod cache_removal_tests {
     fn owned_note(value: u64, nullifier: u64, public_key: ZkPublicKey) -> OwnedNote {
         OwnedNote {
             note: Note::new(value, Fr::from(nullifier), public_key),
-            note_set: LEDGER_SET,
+            note_set: NoteSetIndex::Ledger,
             nullifier: NoteNullifier(Fr::from(nullifier)),
             path: MerklePath::try_new(0, Vec::new()).expect("an empty path is bounded"),
         }

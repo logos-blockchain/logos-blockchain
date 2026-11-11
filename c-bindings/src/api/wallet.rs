@@ -1059,7 +1059,7 @@ async fn adopt_holder_note(
                     format!("Failed to get channel state: {error}"),
                 )
             })?
-            .and_then(|channel| channel.note_set);
+            .and_then(|_| lb_core::mantle::channel::channel_note_set(channel_id));
     if let Some(note_set) = note_set {
         api.import_note(holder_note, note_set)
             .await

@@ -475,7 +475,7 @@ mod pol_tests {
     use lb_core::{
         mantle::{
             Note, Value,
-            note_set::{CommitmentMmr, LEDGER_SET},
+            note_set::{CommitmentMmr, NoteSetIndex},
             notes::derive_note_nullifier,
         },
         proofs::leader_proof::{LeaderPrivate, check_winning},
@@ -550,7 +550,7 @@ mod pol_tests {
 
         let owned = OwnedNote {
             note,
-            note_set: LEDGER_SET,
+            note_set: NoteSetIndex::Ledger,
             nullifier: derive_note_nullifier(&note.commitment(), &sk.nullifier_key()),
             path: aged_path.clone(),
         };

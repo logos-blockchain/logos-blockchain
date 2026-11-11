@@ -25,7 +25,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use cycles::{Case, Counter};
 use lb_core::{
     events::{BlockEvent, HeaderEvent},
-    mantle::note_set::LEDGER_SET,
     sdp::ServiceType,
 };
 
@@ -318,11 +317,7 @@ fn every_header_case_applies_and_releases_its_withdrawals() {
             .expect("the released outputs are a dimension");
         assert_eq!(shape.released.len() as u64, outputs, "{label}");
         let ledger_set = |state: &logos_blockchain_ledger::LedgerState| {
-            state
-                .latest_note_sets()
-                .get(LEDGER_SET)
-                .expect("the ledger set exists")
-                .clone()
+            state.latest_note_sets().ledger().clone()
         };
         let expected = ledger_set(&shape.state)
             .execute_adding(&shape.released)

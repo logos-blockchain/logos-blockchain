@@ -35,7 +35,7 @@ use lb_core::{
         channel::{SlotTimeframe, SlotTimeout},
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
-        note_set::{LEDGER_SET, NoteSetIndex},
+        note_set::NoteSetIndex,
         notes::{InputNullifiers, NoteCommitment, OutputCommitments},
         ops::{
             ChannelInscribeProof, NoOpProof, ProgramNoteOpening, ProgramProof, ProgramStepProof,
@@ -268,7 +268,7 @@ pub fn root_of(state: &LedgerState, set: NoteSetIndex) -> Fr {
 
 /// The current commitment root of the ledger set of the fixture.
 pub fn ledger_root() -> Fr {
-    root_of(&filled_state().state, LEDGER_SET)
+    root_of(&filled_state().state, NoteSetIndex::Ledger)
 }
 
 /// The current commitment root of the set of the fixture channel.
@@ -867,7 +867,7 @@ static DECLARED: LazyLock<Vec<LedgerState>> = LazyLock::new(|| {
     for counts in DECLARATIONS.windows(2) {
         let mut state = states.last().expect("the fixture").clone();
         for start in (counts[0]..counts[1]).step_by(DECLARATIONS_PER_BLOCK) {
-            let root = root_of(&state, LEDGER_SET);
+            let root = root_of(&state, NoteSetIndex::Ledger);
             let txs: Vec<Vec<u8>> = (start..counts[1].min(start + DECLARATIONS_PER_BLOCK))
                 .map(|index| {
                     signed_by(
@@ -892,7 +892,7 @@ fn sdp_declares() -> Vec<OpShape> {
         .iter()
         .zip(DECLARED.iter())
         .map(|(declarations, state)| {
-            let root = root_of(state, LEDGER_SET);
+            let root = root_of(state, NoteSetIndex::Ledger);
             OpShape {
                 name: "op/sdp_declare",
                 dims: vec![("declarations", *declarations as u64)],
@@ -1141,7 +1141,10 @@ fn sdp_active() -> OpShape {
     for epoch in 1..=2 {
         state = next_epoch(state, config, epoch, &[]);
     }
-    let declare = declaration(kdf_public_key(zk_key.as_fr()), root_of(&state, LEDGER_SET));
+    let declare = declaration(
+        kdf_public_key(zk_key.as_fr()),
+        root_of(&state, NoteSetIndex::Ledger),
+    );
     state = next_epoch(
         state,
         config,

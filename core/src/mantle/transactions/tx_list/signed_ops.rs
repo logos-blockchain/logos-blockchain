@@ -465,8 +465,6 @@ pub mod test_utils {
 
             posting_timeframe: SlotTimeframe::from(0),
             posting_timeout: SlotTimeout::from(0),
-
-            note_set: None,
         }
     }
 }

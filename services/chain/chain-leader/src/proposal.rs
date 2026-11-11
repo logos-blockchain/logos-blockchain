@@ -84,7 +84,7 @@ mod tests {
         mantle::{
             SignedOps,
             ledger::verification_mode::StandardMode,
-            note_set::{CommitmentMmr, LEDGER_SET},
+            note_set::{CommitmentMmr, NoteSetIndex},
             notes::{self, derive_note_nullifier},
             transactions::states::Preverified,
         },
@@ -122,7 +122,7 @@ mod tests {
             .expect("a single staker wins within 1000 slots");
         let mut wallet = pol_wallet_inputs(
             &note,
-            LEDGER_SET,
+            NoteSetIndex::Ledger,
             &derive_note_nullifier(&note.commitment(), &nullifier_key),
             &aged_path,
             &epoch_state.note_sets,

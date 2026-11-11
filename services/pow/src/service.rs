@@ -25,7 +25,7 @@ use lb_core::{
         Note, Op, OpProof, SignedOps, Value,
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
-        note_set::LEDGER_SET,
+        note_set::NoteSetIndex,
         notes::{NoteNullifier, derive_note_nonce},
         ops::{
             NoOpProof, OpId as _, ZkTransferProof,
@@ -1879,7 +1879,7 @@ where
     let mut nullifiers = Vec::with_capacity(claims.len());
     for claim in claims {
         let known = wallet_api
-            .import_note(reward_note(claim, reward_value), LEDGER_SET)
+            .import_note(reward_note(claim, reward_value), NoteSetIndex::Ledger)
             .await?;
         nullifiers.push(known.nullifier);
     }
@@ -1902,7 +1902,7 @@ where
     // The wallet adopts the change once its commitment is appended; a signing
     // failure leaves no opening of a note that never lands.
     for change in change_notes {
-        wallet_api.import_note(change, LEDGER_SET).await?;
+        wallet_api.import_note(change, NoteSetIndex::Ledger).await?;
     }
     Ok(signed_tx)
 }
@@ -2159,7 +2159,7 @@ mod tests {
         mantle::{
             Note, Op, OpProof, OpProofRef, OpRef, SignedOps, Value,
             ledger::verification_mode::StandardMode,
-            note_set::{CommitmentMmr, LEDGER_SET, NoteSetUpdate},
+            note_set::{CommitmentMmr, NoteSetIndex, NoteSetUpdate},
             notes::{NoteCommitment, NoteNullifier, derive_note_nullifier},
             ops::{NoOpProof, ZkTransferProof, pow::ClaimPowRewardOp},
             traits::{Hashable as _, MantleTx as _},
@@ -2257,7 +2257,7 @@ mod tests {
     fn known_note(note: Note) -> KnownNote {
         KnownNote {
             note,
-            note_set: LEDGER_SET,
+            note_set: NoteSetIndex::Ledger,
             nullifier: derive_note_nullifier(
                 &note.commitment(),
                 &secret_key_of(&note.public_key).nullifier_key(),
@@ -2788,7 +2788,7 @@ mod tests {
             parent: HeaderId::from([parent; 32]),
             epoch: Epoch::new(0),
             updates: vec![NoteSetUpdate {
-                note_set: LEDGER_SET,
+                note_set: NoteSetIndex::Ledger,
                 nullifiers: vec![],
                 commitments: vec![NoteCommitment(Fr::from(appended))],
             }],
@@ -2861,7 +2861,7 @@ mod tests {
         let extended = wallet
             .wallet_state_at(HeaderId::from([36; 32]))
             .unwrap()
-            .commitments[&LEDGER_SET]
+            .commitments[&NoteSetIndex::Ledger]
             .push(reward_note(&claims[0], REWARD).commitment())
             .unwrap();
         assert_eq!(witnesses.len(), 1);

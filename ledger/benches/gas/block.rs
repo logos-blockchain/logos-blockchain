@@ -20,7 +20,7 @@ use lb_core::{
         batch::{DeferredProof, DeferredProofs},
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
-        note_set::LEDGER_SET,
+        note_set::NoteSetIndex,
         notes::NoteCommitment,
         ops::{
             StepProof,
@@ -394,7 +394,7 @@ fn withdrawals_header(
 fn sdp_release_header(withdrawals: usize) -> HeaderShape {
     let fixture = filled_state();
     let config = &fixture.config;
-    let root = root_of(&fixture.state, LEDGER_SET);
+    let root = root_of(&fixture.state, NoteSetIndex::Ledger);
     let mut released = Vec::new();
     let mut txs = Vec::new();
     for index in 0..withdrawals {
@@ -481,7 +481,9 @@ fn note_sets_shape(changed: usize) -> BlockShape {
             let channel_state = channels
                 .channel_state(&channel(index))
                 .expect("the channel exists");
-            let set = channel_state.note_set.expect("the channel has a note set");
+            let set = channels
+                .note_set_index(channel(index))
+                .expect("the channel has a note set");
             let root = state
                 .latest_note_sets()
                 .get(set)

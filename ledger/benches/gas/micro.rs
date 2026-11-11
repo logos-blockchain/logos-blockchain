@@ -12,9 +12,7 @@ use lb_core::{
         batch::{DeferredProofs, DeferredZkProgramSpend},
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
-        note_set::{
-            LEDGER_SET, NoteSet, NoteSets, RECENT_ROOTS_WINDOW, TxBuffer, TxRoots, eligible_leaf,
-        },
+        note_set::{NoteSet, NoteSets, RECENT_ROOTS_WINDOW, TxBuffer, TxRoots, eligible_leaf},
         notes::{InputNullifiers, NoteNullifier, OutputCommitments},
         ops::{
             ChannelInscribeProof, StepProof,
@@ -76,14 +74,14 @@ fn with_recent_roots(recent_roots: u64) -> (NoteSets, Vec<Fr>) {
         } else {
             1
         };
-        let ledger = sets.get(LEDGER_SET).expect("the ledger set exists");
+        let ledger = sets.ledger();
         roots.push(ledger.commitment_root());
         let ledger = ledger
             .clone()
             .execute_adding(&commitments(added as usize, 0x4e00 + block))
             .expect("the commitment MMR has room");
         sets = sets
-            .update(LEDGER_SET, ledger)
+            .update_ledger(ledger)
             .end_block(RECENT_ROOTS_WINDOW + block);
     }
     (sets, roots)
@@ -183,11 +181,7 @@ fn random_inputs<const N: usize>(rng: &mut StdRng) -> [Groth16Input; N] {
 }
 
 fn ledger_set() -> &'static NoteSet {
-    filled_state()
-        .state
-        .latest_note_sets()
-        .get(LEDGER_SET)
-        .expect("the ledger set exists")
+    filled_state().state.latest_note_sets().ledger()
 }
 
 fn hash_cases(rng: &mut StdRng) -> Vec<Case> {
@@ -299,14 +293,13 @@ fn tree_cases() -> Vec<Case> {
     for recent_roots in RECENT_ROOTS {
         let (sets, _, last_block) = recent_roots_sets(recent_roots);
         let changed_set = sets
-            .get(LEDGER_SET)
-            .expect("the ledger set exists")
+            .ledger()
             .clone()
             .execute_spending(&nullifiers(1, 0xeb))
             .expect("a fresh nullifier is absent")
             .execute_adding(&commitments(1, 0xeb))
             .expect("the commitment MMR has room");
-        let changed = sets.update(LEDGER_SET, changed_set);
+        let changed = sets.update_ledger(changed_set);
         cases.push(case(
             "micro/end_block_one_set",
             vec![("recent_roots", recent_roots)],
@@ -649,14 +642,13 @@ fn end_block_nullifier_cases() -> Vec<Case> {
     for spent in [0, 1, 2, 4, 16, 64, 256] {
         let (sets, _, last_block) = recent_roots_sets(RECENT_ROOTS_WINDOW);
         let changed_set = sets
-            .get(LEDGER_SET)
-            .expect("the ledger set exists")
+            .ledger()
             .clone()
             .execute_spending(&nullifiers(spent, 0xf1))
             .expect("fresh nullifiers are absent")
             .execute_adding(&commitments(1, 0xf1))
             .expect("the commitment MMR has room");
-        let changed = sets.update(LEDGER_SET, changed_set);
+        let changed = sets.update_ledger(changed_set);
         cases.push(case(
             "micro/end_block_nullifiers",
             vec![("nullifiers", spent as u64)],

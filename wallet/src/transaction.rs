@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use lb_core::mantle::{
     Note, Op, Value,
-    note_set::{CommitmentMmr, LEDGER_SET, NoteSetIndex, SDP_SET},
+    note_set::{CommitmentMmr, NoteSetIndex},
     notes::{NoteCommitment, NoteNullifier, derive_note_nonce},
     ops::{
         OpId as _,
@@ -128,21 +128,21 @@ fn op_effects<'a>(
     Ok(match op {
         Op::Transfer(transfer) => (
             Some(Spend::InSet {
-                note_set: LEDGER_SET,
+                note_set: NoteSetIndex::Ledger,
                 nullifiers: &transfer.inputs,
                 commitment_merkle_root: transfer.commitment_merkle_root,
             }),
             transfer
                 .outputs
                 .iter()
-                .map(|commitment| (LEDGER_SET, *commitment))
+                .map(|commitment| (NoteSetIndex::Ledger, *commitment))
                 .collect(),
         ),
         Op::ChannelDeposit(deposit) => {
             let note_set = channel_note_set(context, &deposit.channel_id)?;
             (
                 Some(Spend::InSet {
-                    note_set: LEDGER_SET,
+                    note_set: NoteSetIndex::Ledger,
                     nullifiers: &deposit.inputs,
                     commitment_merkle_root: deposit.commitment_merkle_root,
                 }),
@@ -165,7 +165,7 @@ fn op_effects<'a>(
         // the SDP set has no buffer
         Op::SDPDeclare(declare) => (
             Some(Spend::InSet {
-                note_set: LEDGER_SET,
+                note_set: NoteSetIndex::Ledger,
                 nullifiers: &declare.inputs,
                 commitment_merkle_root: declare.commitment_merkle_root,
             }),
@@ -182,7 +182,7 @@ fn op_effects<'a>(
                 derive_note_nonce(&claim.op_id(), 0, value, &claim.public_key),
                 claim.public_key,
             );
-            (None, vec![(LEDGER_SET, reward.commitment())])
+            (None, vec![(NoteSetIndex::Ledger, reward.commitment())])
         }
         Op::ChannelInscribe(inscription) if !inscription.mini_blocks.is_empty() => {
             if openings.contains_key(&op_index) {
@@ -247,7 +247,12 @@ fn op_witness(
                 return Err(WalletError::NullifierMismatch { op_index });
             };
             let service_commitment = service.commitment();
-            let (mmr, path) = push(&CommitmentMmr::new(), service_commitment, &mut [], SDP_SET)?;
+            let (mmr, path) = push(
+                &CommitmentMmr::new(),
+                service_commitment,
+                &mut [],
+                NoteSetIndex::Sdp,
+            )?;
             let inputs = input_paths(
                 state,
                 known,
@@ -412,12 +417,12 @@ mod tests {
         let change = Note::new(400, Fr::from(6u64), pk(1));
         let returned = Note::new(500, Fr::from(7u64), pk(1));
         let known = known(&[
-            (owned, LEDGER_SET, nullifier(1)),
-            (service, SDP_SET, nullifier(2)),
-            (exact, LEDGER_SET, nullifier(5)),
+            (owned, NoteSetIndex::Ledger, nullifier(1)),
+            (service, NoteSetIndex::Sdp, nullifier(2)),
+            (exact, NoteSetIndex::Ledger, nullifier(5)),
         ]);
         let state = WalletState::from_genesis(&known, &[owned], &[service], Epoch::new(0)).unwrap();
-        let root = state.commitments[&LEDGER_SET].frontier_root();
+        let root = state.commitments[&NoteSetIndex::Ledger].frontier_root();
 
         let ops = Ops::new_unchecked(vec![
             Op::Transfer(TransferOp::new(
@@ -514,9 +519,9 @@ mod tests {
     fn op_witness_at_needs_no_opening_for_the_other_operations() {
         let owned = Note::new(1_000, Fr::from(1u64), pk(1));
         let foreign = Note::new(70, Fr::from(2u64), pk(2));
-        let known = known(&[(owned, LEDGER_SET, nullifier(1))]);
+        let known = known(&[(owned, NoteSetIndex::Ledger, nullifier(1))]);
         let state = WalletState::from_genesis(&known, &[owned], &[], Epoch::new(0)).unwrap();
-        let root = state.commitments[&LEDGER_SET].frontier_root();
+        let root = state.commitments[&NoteSetIndex::Ledger].frontier_root();
         let ops = Ops::new_unchecked(vec![
             // proven by the caller, with a note the wallet does not know
             Op::Transfer(TransferOp::new(
@@ -577,9 +582,9 @@ mod tests {
             Note::new(200, Fr::from(3u64), pk(1)),
         ];
         let known = known(&[
-            (notes[0], LEDGER_SET, nullifier(1)),
-            (notes[1], LEDGER_SET, nullifier(2)),
-            (notes[2], LEDGER_SET, nullifier(3)),
+            (notes[0], NoteSetIndex::Ledger, nullifier(1)),
+            (notes[1], NoteSetIndex::Ledger, nullifier(2)),
+            (notes[2], NoteSetIndex::Ledger, nullifier(3)),
         ]);
         let state = WalletState::from_genesis(&known, &notes, &[], Epoch::new(0)).unwrap();
         let output = Note::new(350, Fr::from(9u64), pk(2));
@@ -611,7 +616,7 @@ mod tests {
             vec![Op::Transfer(TransferOp::new(
                 [nullifier(2), nullifier(3)].into(),
                 [output.commitment(), change.commitment()].into(),
-                state.commitments[&LEDGER_SET].frontier_root(),
+                state.commitments[&NoteSetIndex::Ledger].frontier_root(),
                 0
             ))]
         );
@@ -625,7 +630,7 @@ mod tests {
         let entries: Vec<_> = notes
             .iter()
             .zip(1..)
-            .map(|(note, i)| (*note, LEDGER_SET, nullifier(i)))
+            .map(|(note, i)| (*note, NoteSetIndex::Ledger, nullifier(i)))
             .collect();
         let known = known(&entries);
         let state = WalletState::from_genesis(&known, &notes, &[], Epoch::new(0)).unwrap();
@@ -651,7 +656,7 @@ mod tests {
     #[test]
     fn a_tx_funded_with_the_fee_margin_survives_one_step_of_each_gas_market() {
         let note = Note::new(10_000_000_000_000, Fr::from(1u64), pk(1));
-        let known = known(&[(note, LEDGER_SET, nullifier(1))]);
+        let known = known(&[(note, NoteSetIndex::Ledger, nullifier(1))]);
         let state = WalletState::from_genesis(&known, &[note], &[], Epoch::new(0)).unwrap();
         let builder = MantleTxBuilder::new()
             .add_ledger_output(Note::new(5, Fr::from(9u64), pk(2)))

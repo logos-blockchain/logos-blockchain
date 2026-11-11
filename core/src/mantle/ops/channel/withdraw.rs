@@ -19,7 +19,7 @@ use crate::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
         },
-        note_set::{LEDGER_SET, NoteSetError, NoteSetIndex, NoteSets, TxNoteState},
+        note_set::{NoteSetError, NoteSetIndex, NoteSets, TxNoteState},
         notes::{InputNullifiers, OutputCommitments},
         ops::{
             OpId, SignedOperation, ZkTransferProof,
@@ -127,11 +127,10 @@ impl PendingWithdrawals {
             let set = set.execute_spending(withdrawal.inputs.as_slice())?;
             note_sets = note_sets.update(withdrawal.note_set_index, set);
             let ledger = note_sets
-                .get(LEDGER_SET)
-                .expect("the ledger note set always exists")
+                .ledger()
                 .clone()
                 .execute_adding(withdrawal.outputs.as_slice())?;
-            note_sets = note_sets.update(LEDGER_SET, ledger);
+            note_sets = note_sets.update_ledger(ledger);
             released.push(withdrawal);
         }
         Ok((Self(pending), note_sets, released))
@@ -257,7 +256,7 @@ mod test {
     use super::*;
     use crate::mantle::{
         gas::test_utils::FixedThresholds,
-        note_set::{CommitmentMmr, NoteSet, SDP_SET},
+        note_set::{CommitmentMmr, NoteSet},
         ops::{
             channel::{NULL_CHANNEL_ID, UnverifiedChannelKeys},
             op_proof::samples::SampleProof as _,
@@ -293,8 +292,8 @@ mod test {
         (
             channels,
             note_sets
-                .update(LEDGER_SET, ledger)
-                .update(2, channel)
+                .update_ledger(ledger)
+                .update_channel(CHANNEL, channel)
                 .end_block(0),
         )
     }
@@ -384,7 +383,7 @@ mod test {
     #[test]
     fn verify_rejects_a_root_of_the_ledger_set() {
         let (channels, note_sets) = state();
-        let ledger_root = note_sets.get(LEDGER_SET).unwrap().commitment_root();
+        let ledger_root = note_sets.ledger().commitment_root();
         assert_eq!(
             verify(withdrawal(ledger_root), &channels, &note_sets).unwrap_err(),
             Error::NoteSet(NoteSetError::UnknownRoot(ledger_root))
@@ -410,7 +409,7 @@ mod test {
             context.pending_withdrawals.iter().collect::<Vec<_>>(),
             vec![&PendingWithdrawal {
                 due: Slot::from(86_410u64),
-                note_set_index: 2,
+                note_set_index: NoteSetIndex::Channel(CHANNEL),
                 inputs: [nullifier(5)].into(),
                 outputs: [commitment(50)].into(),
             }]
@@ -432,7 +431,7 @@ mod test {
     fn pending(due: u64, input: u64, output: u64) -> PendingWithdrawal {
         PendingWithdrawal {
             due: Slot::from(due),
-            note_set_index: 2,
+            note_set_index: NoteSetIndex::Channel(CHANNEL),
             inputs: [nullifier(input)].into(),
             outputs: [commitment(output)].into(),
         }
@@ -443,13 +442,13 @@ mod test {
         let (_, note_sets) = state();
         // A step consumed nullifier(6) before its withdrawal was due.
         let channel = note_sets
-            .get(2)
+            .channel(&CHANNEL)
             .unwrap()
             .clone()
             .execute_spending(&[nullifier(6)])
             .unwrap();
-        let note_sets = note_sets.update(2, channel);
-        let ledger_before = note_sets.get(LEDGER_SET).unwrap().clone();
+        let note_sets = note_sets.update_channel(CHANNEL, channel);
+        let ledger_before = note_sets.ledger().clone();
         let withdrawals = PendingWithdrawals::new()
             .push(pending(100, 5, 50))
             .push(pending(100, 6, 60))
@@ -463,12 +462,12 @@ mod test {
             withdrawals.iter().collect::<Vec<_>>(),
             vec![&pending(101, 7, 70)]
         );
-        let channel = note_sets.get(2).unwrap();
+        let channel = note_sets.channel(&CHANNEL).unwrap();
         assert!(channel.contains_nullifier(&nullifier(5)));
         assert!(!channel.contains_nullifier(&nullifier(7)));
         let expected = ledger_before.execute_adding(&[commitment(50)]).unwrap();
         assert_eq!(
-            note_sets.get(LEDGER_SET).unwrap().commitment_root(),
+            note_sets.ledger().commitment_root(),
             expected.commitment_root()
         );
     }
@@ -501,10 +500,7 @@ mod test {
             .push(commitment(50))
             .unwrap()
             .frontier_root();
-        assert_eq!(
-            note_sets.get(LEDGER_SET).unwrap().commitment_root(),
-            expected
-        );
+        assert_eq!(note_sets.ledger().commitment_root(), expected);
     }
 
     #[test]
@@ -514,7 +510,7 @@ mod test {
         // channel withdrawal due earlier, and one with no input due now.
         let sdp = |due: u64, output: u64| PendingWithdrawal {
             due: Slot::from(due),
-            note_set_index: SDP_SET,
+            note_set_index: NoteSetIndex::Sdp,
             inputs: InputNullifiers::default(),
             outputs: [commitment(output)].into(),
         };

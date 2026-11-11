@@ -732,7 +732,7 @@ mod tests {
         mantle::{
             TxHash,
             ledger::VerifiableOperation as _,
-            note_set::{NoteSet, NoteSetError, SDP_SET, TxNoteState},
+            note_set::{NoteSet, NoteSetError, TxNoteState},
             notes::{NoteCommitment, NoteNullifier, derive_note_nullifier},
             ops::{
                 ZkAndEd25519Proof, ZkTransferProof,
@@ -1543,8 +1543,7 @@ mod tests {
         // A withdrawal of the previous lifecycle cannot replay against this one: it
         // carries no nonce, but the nullifier it consumed is spent.
         let tx_hash_view = TxHashView::from(TxHash::from([99; 32]));
-        let spent = NoteSets::new().update(
-            SDP_SET,
+        let spent = NoteSets::new().update_sdp(
             NoteSet::empty()
                 .execute_spending(&[accepted_withdraw.service_note_nullifier])
                 .unwrap(),
