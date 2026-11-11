@@ -1,8 +1,8 @@
 use std::ptr;
 
-use crate::api::{
-    cryptarchia::{HeaderId, NoteId},
-    types::value::Value,
+use crate::api::types::{
+    hash::{HeaderId, NoteId},
+    value::Value,
 };
 
 /// One wallet-owned UTXO old enough to take part in the leadership lottery.

@@ -2,7 +2,7 @@ use std::ffi::{CString, c_char};
 
 use lb_core::block::Block as CoreBlock;
 
-use crate::api::subscriptions::TxWithId;
+use crate::api::blocks::TxWithId;
 
 #[repr(C)]
 pub struct Block(CString); // JSON representation of a block

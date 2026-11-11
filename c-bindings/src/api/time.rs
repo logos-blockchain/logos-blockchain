@@ -1,9 +1,6 @@
 use std::ptr;
 
 use lb_c_macros::panic_to_error;
-use lb_node::TimeService;
-use lb_time_service::TimeServiceMessage;
-use tokio::sync::oneshot;
 
 use crate::{
     LogosBlockchainNode,
@@ -48,66 +45,37 @@ pub struct EraTiming {
 /// A `Result` containing the [`TimeInfo`] on success, or an
 /// [`OperationStatus`] error on failure.
 pub(crate) fn get_time_info_sync(node: &LogosBlockchainNode) -> StatusResult<TimeInfo> {
-    let runtime_handle = node.get_runtime_handle()?;
-    let overwatch_handle = node.get_overwatch_handle();
-
-    runtime_handle.block_on(async move {
-        let relay = overwatch_handle.relay::<TimeService>().await.map_err(|e| {
-            OperationStatus::error(
-                OperationStatusCode::RelayError,
-                format!("Failed to get relay to TimeService: {e}"),
-            )
-        })?;
-
-        let (sender, receiver) = oneshot::channel();
-        relay
-            .send(TimeServiceMessage::Info { sender })
-            .await
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::ChannelSendError,
-                    format!("Failed to send time info request: {error}"),
-                )
-            })?;
-
-        let service_info = receiver.await.map_err(|e| {
-            OperationStatus::error(
-                OperationStatusCode::ChannelReceiveError,
-                format!("Failed to receive time info response: {e}"),
-            )
-        })?;
-        let era_timings = service_info
-            .era_schedules
-            .iter()
-            .map(|era| {
-                let first_epoch = era.first_epoch.into_inner();
-                Ok(EraTiming {
-                    first_epoch,
-                    slot_duration_ms: u64::try_from(era.parameters.slot_duration.as_millis())
-                        .map_err(|error| {
-                            OperationStatus::error(
-                                OperationStatusCode::ConfigurationError,
-                                format!(
-                                    "The slot duration of the era starting at epoch {first_epoch} does not fit in u64 milliseconds: {error}"
-                                ),
-                            )
-                        })?,
-                    slots_per_epoch: era.parameters.epoch_length.get(),
-                })
+    let info = node.call(
+        "Failed to get time info",
+        lb_node::api::calls::time::info(node.get_overwatch_handle()),
+    )?;
+    let era_timings = info
+        .era_timings
+        .into_iter()
+        .map(|(first_epoch, era)| {
+            Ok(EraTiming {
+                first_epoch,
+                slot_duration_ms: u64::try_from(era.slot_duration.as_millis()).map_err(
+                    |error| {
+                        OperationStatus::error(
+                            OperationStatusCode::ConfigurationError,
+                            format!(
+                                "The slot duration of the era starting at epoch {first_epoch} does not fit in u64 milliseconds: {error}"
+                            ),
+                        )
+                    },
+                )?,
+                slots_per_epoch: era.slots_per_epoch.get(),
             })
-            .collect::<StatusResult<Box<[EraTiming]>>>()?;
-        let era_timings_len = era_timings.len();
-        Ok(TimeInfo {
-            genesis_time_unix: service_info
-                .era_schedules
-                .genesis()
-                .start_time
-                .unix_timestamp(),
-            current_slot: u64::from(service_info.current_slot),
-            current_epoch: u32::from(service_info.current_epoch),
-            era_timings: Box::leak(era_timings).as_mut_ptr(),
-            era_timings_len,
         })
+        .collect::<StatusResult<Box<[EraTiming]>>>()?;
+    let era_timings_len = era_timings.len();
+    Ok(TimeInfo {
+        genesis_time_unix: info.genesis_time.unix_timestamp(),
+        current_slot: info.current_slot,
+        current_epoch: info.current_epoch,
+        era_timings: Box::leak(era_timings).as_mut_ptr(),
+        era_timings_len,
     })
 }
 

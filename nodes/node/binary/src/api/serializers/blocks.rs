@@ -1,4 +1,3 @@
-use lb_api_service::http::mantle::BlockWithChainState;
 use lb_chain_service::Slot;
 use lb_core::{
     block::{Block, SignedHeader},
@@ -12,7 +11,9 @@ use lb_core::{
 use lb_key_management_system_service::keys::Ed25519Signature;
 use serde::Serialize;
 
-use crate::api::serializers::transactions::ApiSignedTransaction;
+use crate::api::{
+    calls::blocks::BlockWithChainState, serializers::transactions::ApiSignedTransaction,
+};
 
 #[derive(Serialize)]
 pub struct ApiBlock<'block> {

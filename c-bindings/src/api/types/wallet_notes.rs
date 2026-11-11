@@ -1,8 +1,8 @@
 use std::ptr;
 
-use crate::api::{
-    cryptarchia::{HeaderId, NoteId},
-    types::value::Value,
+use crate::api::types::{
+    hash::{HeaderId, NoteId},
+    value::Value,
 };
 
 /// A single spendable wallet note (UTXO): its note ID and value.

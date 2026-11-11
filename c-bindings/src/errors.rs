@@ -58,6 +58,16 @@ impl OperationStatus {
         Self { code, message }
     }
 
+    pub(crate) fn from_api_error(context: &str, error: &lb_node::api::calls::Error) -> Self {
+        let code = match error {
+            lb_node::api::calls::Error::NotFound(_) => OperationStatusCode::NotFound,
+            lb_node::api::calls::Error::InvalidInput(_) => OperationStatusCode::ValidationError,
+            lb_node::api::calls::Error::Unavailable(_) => OperationStatusCode::RelayError,
+            lb_node::api::calls::Error::Internal(_) => OperationStatusCode::ServiceError,
+        };
+        Self::error(code, format!("{context}: {error}"))
+    }
+
     /// The status an exported function returns when its body panicked: see
     /// [`panic_to_error`](lb_c_macros::panic_to_error).
     pub(crate) fn from_panic(payload: &(dyn Any + Send)) -> Self {
