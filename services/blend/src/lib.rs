@@ -184,8 +184,6 @@ where
             era_schedule,
         } = settings_handle.notifier().get_updated_settings();
 
-        // Wait for Chain, which becomes ready after recovering blocks, and SDP,
-        // which becomes ready after Chain, without timeout.
         wait_until_services_are_ready!(
             &overwatch_handle,
             None,

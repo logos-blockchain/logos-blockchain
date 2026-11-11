@@ -470,7 +470,6 @@ where
             ..
         } = self;
 
-        // Chain readiness can take until block recovery completes.
         wait_until_services_are_ready!(
             &service_resources_handle.overwatch_handle,
             None,

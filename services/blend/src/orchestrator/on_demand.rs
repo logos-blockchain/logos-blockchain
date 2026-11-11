@@ -3,7 +3,6 @@ use std::{
     time::Duration,
 };
 
-use lb_services_utils::wait_until_services_are_ready;
 use overwatch::{
     overwatch::OverwatchHandle,
     services::{
@@ -44,7 +43,21 @@ where
             target: LOG_TARGET,
             "Waiting until service {service_id:} is ready"
         );
-        if let Err(e) = wait_until_services_are_ready!(&overwatch_handle, None, Service).await {
+        let readiness = async {
+            let mut status_watcher = overwatch_handle.status_watcher::<Service>().await?;
+            status_watcher
+                .wait_with_policy(ServiceStatus::Ready, None, WaitPolicy::FailFast)
+                .await
+                .map(|_| ())
+                .map_err(|wait_error| {
+                    overwatch::overwatch::Error::Any(
+                        format!("Service readiness wait failed: {wait_error}").into(),
+                    )
+                })
+        }
+        .await;
+
+        if let Err(e) = readiness {
             debug!(target: LOG_TARGET, "Failed to wait for service readiness. Shutting it down...");
             kill_service(&overwatch_handle).await;
             return Err(e.into());
