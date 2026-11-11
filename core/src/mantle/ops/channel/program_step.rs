@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use lb_binary_codec::canonical::BinaryCodec;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_poseidon2::Digest as _;
-use lb_program_spend::ZkProgramSpendInputsError;
+use lb_program_spend::check_bounds;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -99,13 +99,7 @@ impl ProgramStep {
         index: usize,
     ) -> Result<(), Error> {
         // The ZkProgramSpend circuit fits the inputs and both output lists together
-        if self.inputs.len() > lb_program_spend::MAX_INPUTS {
-            return Err(ZkProgramSpendInputsError::TooManyInputs(self.inputs.len()).into());
-        }
-        let outputs = self.outputs().len();
-        if outputs > lb_program_spend::MAX_OUTPUTS {
-            return Err(ZkProgramSpendInputsError::TooManyOutputs(outputs).into());
-        }
+        check_bounds(self.inputs.len(), self.outputs().len())?;
         self.check_openings(proof, index)
     }
 
