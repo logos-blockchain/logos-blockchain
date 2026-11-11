@@ -332,6 +332,9 @@ mod test {
             )
             .expect("Standalone user config should deserialize");
             node_config.state.base_folder = state_dir_path;
+            if let Some(file) = node_config.tracing.logger.file.as_mut() {
+                file.directory = log_dir;
+            }
             node_config.api.backend.listen_address = "127.0.0.1:0"
                 .parse()
                 .expect("Local address should be correct");

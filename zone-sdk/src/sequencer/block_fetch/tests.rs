@@ -778,17 +778,15 @@ fn config_in_block_does_not_advance_channel_tip() {
         "the config must not advance the channel tip"
     );
 
-    // shed_off_branch_pending should drop the stale one but not the live one.
-    let shed = state.shed_off_branch_pending(block);
-    let shed_hashes: HashSet<TxHash> = shed.iter().map(PendingTx::tx_hash).collect();
-    assert!(
-        shed_hashes.contains(&pending_stale_hash),
-        "pending chained from I1 lost its position to the mined I2"
+    // The stale one lost its position to the mined I2; the live one goes
+    // with the config landing, which takes the not-yet-mined tail.
+    let shed = state.shed_block(block, channel_id, true, Slot::genesis(), 0);
+    let shed_hashes: HashSet<TxHash> = shed.displaced.iter().map(Displaced::tx_hash).collect();
+    assert_eq!(
+        shed_hashes,
+        HashSet::from([pending_stale_hash, pending_live_hash])
     );
-    assert!(
-        !shed_hashes.contains(&pending_live_hash),
-        "pending chained from the block tip must remain on-branch"
-    );
+    assert!(shed.config_shed, "the config moved the config tip");
 }
 
 #[test]
@@ -1167,9 +1165,16 @@ async fn drive_with(
         .unwrap();
         let s = state.as_mut().unwrap();
         let tip = current_tip.unwrap();
-        let mut shed = s.shed_bundles_with_missing_inputs(tip, channel_id);
-        shed.extend(s.shed_off_branch_pending(tip));
-        let shed_other = s.shed_off_branch_pending_other(tip);
+        // Split by kind: the assertions check each kind's own order.
+        let mut shed = Vec::new();
+        let mut shed_other = Vec::new();
+        let displaced = s.shed_block(tip, channel_id, true, lib_slot, 0).displaced;
+        for entry in displaced {
+            match entry {
+                Displaced::Own(tx) => shed.push(*tx),
+                Displaced::Other(tx) => shed_other.push(tx),
+            }
+        }
         let common_prefix = common_prefix(s, tip, channel_id, &result.view_before);
         driven.push(Driven {
             result,
@@ -1993,8 +1998,14 @@ async fn dropped_tip_event_is_backfilled_before_the_tip_is_adopted() {
         "a, b and c are mined: nothing to resubmit"
     );
     assert!(
-        s.refund_candidates(tip, Slot::from(100), 0, usize::MAX)
-            .is_empty(),
+        s.refund_candidates(
+            tip,
+            Slot::from(100),
+            0,
+            usize::MAX,
+            ChannelId::from([0; 32])
+        )
+        .is_empty(),
         "mined publishes are not re-funded"
     );
 }
@@ -2597,7 +2608,9 @@ async fn finalized_inscription_is_not_reported_orphaned() {
     let s = state.as_mut().unwrap();
     assert_eq!(s.pending_publish_count(), 0);
     assert!(
-        s.shed_off_branch_pending(header_id(3)).is_empty(),
+        s.shed_block(header_id(3), channel_id, true, Slot::genesis(), 0)
+            .displaced
+            .is_empty(),
         "nothing pending to shed: a resurrected finalized entry would be reported orphaned here"
     );
 }
