@@ -168,6 +168,10 @@ fn minimal_user_config() -> UserConfig {
 /// c-bindings reuse via `build_run_config_from_env`).
 #[test]
 #[serial_test::serial]
+#[expect(
+    unsafe_code,
+    reason = "Setting environment variables is unsafe since Rust 2024."
+)]
 fn build_run_config_from_env_applies_environment_overrides() {
     let http_host = "127.0.0.1:8080";
     let state_path = "/tmp/env-override-test-state";
