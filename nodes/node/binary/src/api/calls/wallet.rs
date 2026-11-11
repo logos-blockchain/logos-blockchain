@@ -18,8 +18,9 @@ use lb_wallet_service::{
     TipResponse,
     api::{WalletApi, WalletApiError},
 };
+use overwatch::services::status::ServiceStatus;
 
-use super::{Error, Handle, ensure_ready, mempool, time::fork_digest_in_force};
+use super::{Error, Handle, mempool, time::fork_digest_in_force};
 use crate::{RuntimeServiceId, WalletService};
 
 impl From<WalletApiError> for Error {
@@ -97,7 +98,12 @@ pub async fn claimable_vouchers(
     handle: &Handle,
     tip: Option<HeaderId>,
 ) -> Result<WalletClaimableVouchersResponseBody, Error> {
-    ensure_ready::<WalletService>(handle).await?;
+    let status = handle.status_watcher::<WalletService>().await?.current();
+    if status != ServiceStatus::Ready {
+        return Err(Error::unavailable(format!(
+            "Wallet service is not ready: {status:?}"
+        )));
+    }
     let TipResponse { tip, response } = wallet_api(handle)
         .await?
         .get_claimable_vouchers(tip)
