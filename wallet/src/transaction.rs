@@ -365,21 +365,26 @@ fn input_paths(
         .map(|(note, nullifier)| {
             let commitment = note.commitment();
             let path = path_of(&commitment).ok_or(WalletError::MissingInputPath { op_index })?;
-            let derived = state
-                .notes
-                .get(&commitment)
-                .map(|owned| owned.nullifier)
-                .or_else(|| {
-                    known
-                        .get(&commitment)
-                        .map(|known_note| known_note.nullifier)
-                });
-            if derived != Some(*nullifier) {
+            if known_nullifier(state, known, &commitment) != Some(*nullifier) {
                 return Err(WalletError::NullifierMismatch { op_index });
             }
             Ok((*note, path))
         })
         .collect()
+}
+
+// The nullifier the wallet derived for the note of `commitment`, from its owned
+// notes or else from the openings it knows, if it holds the note.
+fn known_nullifier(
+    state: &WalletState,
+    known: &KnownNotes,
+    commitment: &NoteCommitment,
+) -> Option<NoteNullifier> {
+    state
+        .notes
+        .get(commitment)
+        .map(|owned| owned.nullifier)
+        .or_else(|| known.get(commitment).map(|known_note| known_note.nullifier))
 }
 
 #[cfg(test)]
