@@ -251,8 +251,8 @@ jobs:
       # here, with Cargo starting the test binary through valgrind. Any invalid
       # access or definite leak fails the job.
       #
-      # Valgrind comes from nix: the runner has no passwordless sudo to install
-      # it with, and nix is already there.
+      # Valgrind comes from nix, which the step below installs: the runner image
+      # does not ship it.
       #
       # Valgrind cannot start on Ubuntu's own dynamic loader: it needs a few of
       # its symbols, which Ubuntu strips and ships in `libc6-dbg` (not
@@ -260,6 +260,10 @@ jobs:
       # loader of nix's glibc instead, which keeps them. That glibc is newer
       # than the one the binary was built against, which glibc supports; the
       # remaining libraries (libstdc++, libgcc_s) still come from the system.
+      - name: Install Nix
+        if: steps.changes.outputs.run == 'true'
+        uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086  # Version 31.11.5
+
       - name: Run the FFI safety tests under valgrind
         if: steps.changes.outputs.run == 'true'
         env:
