@@ -46,4 +46,6 @@ serde_yaml       = { workspace = true }
 
 [features]
 openapi = ["dep:utoipa", "lb-utils/openapi"]
-unsafe  = []
+# ZK signature generation; key types and public-key derivation remain available without it.
+prove  = ["lb-zksign/prove"]
+unsafe = []

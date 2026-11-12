@@ -12,7 +12,7 @@ use lb_core::{
     },
 };
 use lb_key_management_system_service::keys::{
-    Ed25519Key, ZkPublicKey, ZkPublicKeys, ZkSignature, secured_key::SecuredKey,
+    Ed25519Key, SecuredKey, ZkPublicKey, ZkPublicKeys, ZkSignature,
 };
 use lb_utils::bounded::BoundedError;
 use lb_wallet::WalletBalance;

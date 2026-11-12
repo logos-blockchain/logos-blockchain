@@ -1,6 +1,7 @@
 //! `ZkSign` verification benchmarks.
 //!
-//! Run with `cargo bench -p logos-blockchain-zksign --bench verify`.
+//! Run with `cargo bench -p logos-blockchain-zksign --features prove --bench
+//! verify`.
 //!
 //! These measure the payoff of verifying a block's `ZkSign` proofs in a single
 //! batch instead of one at a time.

@@ -40,6 +40,27 @@ pub fn derive_kms_enum_key(input: proc_macro::TokenStream) -> proc_macro::TokenS
     .into()
 }
 
+/// Derive signing delegation separately from key representations and operators.
+#[proc_macro_derive(KmsEnumSigningKey)]
+pub fn derive_kms_enum_signing_key(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = syn::parse_macro_input!(input as DeriveInput);
+    let Data::Enum(key_enum) = &input.data else {
+        return Error::new_spanned(
+            input.ident,
+            "KmsEnumSigningKey can only be derived for enums",
+        )
+        .to_compile_error()
+        .into();
+    };
+    if key_enum.variants.is_empty() {
+        return quote! {}.into();
+    }
+    if let Some(err) = validate_variants(&key_enum.variants) {
+        return err.to_compile_error().into();
+    }
+    build_key_enum_impl_signing_key(&input.ident, &key_enum.variants).into()
+}
+
 /// Validate each variant must have exactly one unnamed field (the key type).
 fn validate_variants(key_enum_variants: &Punctuated<Variant, Comma>) -> Option<Error> {
     for variant in key_enum_variants {
@@ -83,7 +104,7 @@ fn build_operators_enum(
         };
         let variant_ident = variant_inner_type.unnamed.first().unwrap();
         quote! {
-        #variant_name(crate::keys::secured_key::BoxedSecureKeyOperator<#
+        #variant_name(crate::keys::BoxedSecureKeyOperator<#
         variant_ident>) }
     });
 
@@ -115,7 +136,7 @@ fn build_operations_impl_for_enum(
 
     quote! {
         #[async_trait::async_trait]
-        impl crate::keys::secured_key::SecureKeyOperator for #enum_ident {
+        impl crate::keys::SecureKeyOperator for #enum_ident {
             type Key = #keys_idents;
             type Error = crate::keys::errors::KeyError;
             async fn execute(self: Box<Self>, key: &Self::Key) -> Result<(), Self::Error> {
@@ -159,7 +180,7 @@ fn build_enum_variant_for_associated_type(
     let wrapped_key = get_wrapped_key_as_ref(key_enum_variant);
     let wrapped_key_type = &wrapped_key.ty;
     let wrapped_key_encoding_type: Type =
-        parse_quote!(<#wrapped_key_type as crate::keys::secured_key::SecuredKey>::#associated_type);
+        parse_quote!(<#wrapped_key_type as crate::keys::SecuredKey>::#associated_type);
 
     let wrapped_type_field = Field {
         attrs: vec![],
@@ -186,29 +207,37 @@ fn build_key_enum_impl_secured_key(
     ident: &Ident,
     key_enum_variants: &Punctuated<Variant, Comma>,
 ) -> TokenStream {
-    let key_enum_impl_secured_key_method_sign =
-        build_key_enum_impl_secured_key_method_sign(key_enum_variants);
-    let key_enum_impl_secured_key_method_sign_multiple =
-        build_key_enum_impl_secured_key_method_sign_multiple(key_enum_variants);
     let key_enum_impl_secured_key_method_as_public_key =
         build_key_enum_impl_secured_key_method_as_public_key(key_enum_variants);
 
     quote! {
-        impl crate::keys::secured_key::SecuredKey for #ident
+        impl crate::keys::SecuredKey for #ident
         {
             type Payload = PayloadEncoding;
             type Signature = SignatureEncoding;
             type PublicKey = PublicKeyEncoding;
             type Error = crate::keys::errors::KeyError;
 
-            #key_enum_impl_secured_key_method_sign
-            #key_enum_impl_secured_key_method_sign_multiple
             #key_enum_impl_secured_key_method_as_public_key
         }
     }
 }
 
-fn build_key_enum_impl_secured_key_method_sign(
+fn build_key_enum_impl_signing_key(
+    ident: &Ident,
+    variants: &Punctuated<Variant, Comma>,
+) -> TokenStream {
+    let sign = build_key_enum_impl_signing_key_method_sign(variants);
+    let sign_multiple = build_key_enum_impl_signing_key_method_sign_multiple(variants);
+    quote! {
+        impl crate::keys::SigningKey for #ident {
+            #sign
+            #sign_multiple
+        }
+    }
+}
+
+fn build_key_enum_impl_signing_key_method_sign(
     key_enum_variants: &Punctuated<Variant, Comma>,
 ) -> TokenStream {
     let sign_arms_ok = key_enum_variants.iter().map(|variant| {
@@ -218,7 +247,7 @@ fn build_key_enum_impl_secured_key_method_sign(
         quote! {
             #(#variant_attributes_cfg)*
             (Self::#variant_ident(key), Self::Payload::#variant_ident(payload)) => {
-                key.sign(payload).map(Self::Signature::#variant_ident)
+                crate::keys::SigningKey::sign(key, payload).map(Self::Signature::#variant_ident)
             }
         }
     });
@@ -237,7 +266,7 @@ fn build_key_enum_impl_secured_key_method_sign(
     }
 }
 
-fn build_key_enum_impl_secured_key_method_sign_multiple(
+fn build_key_enum_impl_signing_key_method_sign_multiple(
     key_enum_variants: &Punctuated<Variant, Comma>,
 ) -> TokenStream {
     let unpack_keys = quote! {
@@ -272,7 +301,7 @@ fn build_key_enum_impl_secured_key_method_sign_multiple(
 
                 let keys = std::iter::once(key_head).chain(key_tails).collect::<Vec<_>>();
 
-                <#wrapped_key as crate::keys::secured_key::SecuredKey>::sign_multiple(
+                <#wrapped_key as crate::keys::SigningKey>::sign_multiple(
                     keys.as_slice(), payload
                 ).map(Self::Signature::#variant_ident)
             }

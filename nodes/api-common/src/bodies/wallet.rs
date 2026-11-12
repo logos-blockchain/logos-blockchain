@@ -276,9 +276,7 @@ pub mod fund {
 
 pub mod sign {
     use lb_core::mantle::transactions::hash::TxHash;
-    use lb_key_management_system_keys::keys::{
-        Ed25519Key, ZkPublicKeys, ZkSignature, secured_key::SecuredKey,
-    };
+    use lb_key_management_system_keys::keys::{Ed25519Key, SecuredKey, ZkPublicKeys, ZkSignature};
     use serde::{Deserialize, Serialize};
 
     #[derive(Serialize, Deserialize)]

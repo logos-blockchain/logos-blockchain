@@ -1,7 +1,7 @@
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_service::{
     backend::preload::KeyId,
-    keys::{Key, secured_key::SecuredKey as _},
+    keys::{Key, SecuredKey as _},
 };
 use lb_node::config::{KmsConfig, kms::serde::PreloadKmsBackendSettings};
 

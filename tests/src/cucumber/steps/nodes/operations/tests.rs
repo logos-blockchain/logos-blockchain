@@ -73,7 +73,7 @@ mod wallet_name_tests {
 
 #[cfg(test)]
 mod scenario_wallet_key_tests {
-    use lb_key_management_system_service::keys::{Ed25519Key, secured_key::SecuredKey as _};
+    use lb_key_management_system_service::keys::{Ed25519Key, SecuredKey as _};
 
     use super::*;
 

@@ -4,7 +4,7 @@ use std::{
 };
 
 pub use lb_key_management_system_keys::keys;
-use lb_key_management_system_keys::keys::secured_key::SecuredKey;
+use lb_key_management_system_keys::keys::SecuredKey;
 pub use lb_key_management_system_operators as operators;
 use lb_log_targets::kms;
 use lb_utils::tokio::task::spawn_blocking;

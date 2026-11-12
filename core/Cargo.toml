@@ -44,12 +44,13 @@ tracing                       = { workspace = true }
 utoipa                        = { features = ["macros"], optional = true, workspace = true }
 
 [dev-dependencies]
-boon       = { workspace = true }
-divan      = { workspace = true }
-hasher     = { workspace = true }
-rand       = { workspace = true }
-serde_json = { features = ["alloc"], workspace = true }
-tokio      = { workspace = true }
+boon                          = { workspace = true }
+divan                         = { workspace = true }
+hasher                        = { workspace = true }
+lb-key-management-system-keys = { features = ["prove"], workspace = true }
+rand                          = { workspace = true }
+serde_json                    = { features = ["alloc"], workspace = true }
+tokio                         = { workspace = true }
 
 [[bench]]
 harness = false

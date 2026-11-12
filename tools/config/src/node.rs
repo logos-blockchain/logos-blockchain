@@ -2,7 +2,7 @@ use std::{collections::HashMap, net::SocketAddr};
 
 use lb_key_management_system_service::{
     backend::preload::KeyId,
-    keys::{Key, secured_key::SecuredKey as _},
+    keys::{Key, SecuredKey as _},
 };
 use lb_node::{
     UserConfig,

@@ -106,11 +106,8 @@ declare_serde_generic_array!(serde_generic_array_u64, U64);
 #[cfg(test)]
 mod tests {
     use lb_binary_codec::bincode::{BoundedSerializeOp as _, SerializeOp};
-    use lb_groth16::{COMPRESSED_PROOF_SIZE, Fr};
-    use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
-    use lb_zksign::{ZkSignPrivateKeysData, ZkSignProof, ZkSignWitnessInputs, prove, verify};
-    use num_bigint::BigUint;
-    use rand_core::RngCore as _;
+    use lb_groth16::COMPRESSED_PROOF_SIZE;
+    use lb_zksign::ZkSignProof;
 
     use crate::keys::zk::Signature;
 
@@ -165,7 +162,7 @@ mod tests {
 
     #[test]
     fn zk_signature_json_roundtrip() {
-        let sig = sig_generator();
+        let sig = Signature::from([0x33; COMPRESSED_PROOF_SIZE]);
 
         let encoded = serde_json::to_string(&sig).unwrap();
         let decoded: Signature = serde_json::from_str(&encoded).unwrap();
@@ -175,7 +172,7 @@ mod tests {
 
     #[test]
     fn zk_signature_yaml_roundtrip() {
-        let sig = sig_generator();
+        let sig = Signature::from([0x33; COMPRESSED_PROOF_SIZE]);
 
         let encoded = serde_yaml::to_string(&sig).unwrap();
         let decoded: Signature = serde_yaml::from_str(&encoded).unwrap();
@@ -191,20 +188,5 @@ mod tests {
 
         assert_eq!(ordinary.len(), COMPRESSED_PROOF_SIZE);
         assert_eq!(bounded.as_ref(), ordinary.as_ref());
-    }
-
-    fn sig_generator() -> Signature {
-        let mut rng = rand::thread_rng();
-        let sks: [Fr; 32] = std::iter::repeat_with(|| BigUint::from(rng.next_u64()).into())
-            .take(32)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-        let sks: ZkSignPrivateKeysData = sks.into();
-        let msg_hash = Poseidon2Bn254Hasher::digest(&[BigUint::from_bytes_le(b"foo_bar").into()]);
-        let input = ZkSignWitnessInputs::from_witness_data_and_message_hash(sks, msg_hash);
-        let (proof, verifier_inputs) = prove(input).unwrap();
-        assert!(verify(&proof, &verifier_inputs).unwrap());
-        Signature::new(proof)
     }
 }

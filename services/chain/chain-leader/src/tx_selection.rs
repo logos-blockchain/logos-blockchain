@@ -193,7 +193,7 @@ mod tests {
             transactions::{OpProofs, Ops, TxList, states::Unverified},
         },
     };
-    use lb_key_management_system_service::keys::ZkKey;
+    use lb_key_management_system_keys::keys::ZkKey;
     use lb_ledger::ConsensusExcludedKeys;
 
     use super::*;

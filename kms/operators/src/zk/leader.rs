@@ -6,7 +6,7 @@ use lb_core::{
 };
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{
-    Ed25519PublicKey, ZkKey, errors::KeyError, secured_key::SecureKeyOperator,
+    Ed25519PublicKey, SecureKeyOperator, ZkKey, errors::KeyError,
 };
 use lb_log_targets::kms;
 use lb_utxotree::MerklePath;

@@ -2,14 +2,17 @@ use core::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 
 use lb_groth16::Fr;
+#[cfg(feature = "prove")]
 use lb_zksign::ZkSignError;
 use num_bigint::BigUint;
 use serde::Deserialize;
 use zeroize::ZeroizeOnDrop;
 
-use crate::keys::{errors::KeyError, secured_key::SecuredKey};
+use crate::keys::{SecuredKey, errors::KeyError};
 
 mod private;
+#[cfg(feature = "prove")]
+mod proving;
 pub use self::private::SecretKey as UnsecuredZkKey;
 mod public;
 pub use self::public::{
@@ -23,6 +26,9 @@ pub use self::signature::Signature;
 ///
 /// It is a secured variant of a [`UnsecuredZkKey`] and used within the set of
 /// supported KMS keys.
+/// Signing is available through
+/// [`SigningKey`](crate::keys::SigningKey) only with the `prove`
+/// feature.
 #[derive(Deserialize, ZeroizeOnDrop, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "unsafe", derive(serde::Serialize))]
 pub struct ZkKey(UnsecuredZkKey);
@@ -43,10 +49,12 @@ impl ZkKey {
         self.0.as_fr()
     }
 
+    #[cfg(feature = "prove")]
     pub fn sign_payload(&self, data: &Fr) -> Result<Signature, ZkSignError> {
         self.0.sign(data)
     }
 
+    #[cfg(feature = "prove")]
     pub fn multi_sign(keys: &[Self], data: &Fr) -> Result<Signature, ZkSignError> {
         UnsecuredZkKey::multi_sign(
             &keys.iter().map(|key| key.0.clone()).collect::<Vec<_>>(),
@@ -108,20 +116,6 @@ impl SecuredKey for ZkKey {
     type Signature = Signature;
     type PublicKey = PublicKey;
     type Error = KeyError;
-
-    fn sign(&self, payload: &Self::Payload) -> Result<Self::Signature, Self::Error> {
-        Ok(self.0.sign(payload)?)
-    }
-
-    fn sign_multiple(
-        keys: &[&Self],
-        payload: &Self::Payload,
-    ) -> Result<Self::Signature, Self::Error> {
-        Ok(UnsecuredZkKey::multi_sign(
-            &keys.iter().map(|key| key.0.clone()).collect::<Vec<_>>(),
-            payload,
-        )?)
-    }
 
     fn as_public_key(&self) -> Self::PublicKey {
         self.0.to_public_key()

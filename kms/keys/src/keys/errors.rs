@@ -2,7 +2,7 @@ use std::any::{type_name, type_name_of_val};
 
 use thiserror::Error;
 
-use crate::keys::secured_key::SecuredKey;
+use crate::keys::SecuredKey;
 
 #[derive(Error, Debug)]
 pub enum KeyError {
