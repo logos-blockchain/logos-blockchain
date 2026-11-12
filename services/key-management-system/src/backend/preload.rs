@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use lb_key_management_system_keys::keys::{
-    Key, KeyOperators, errors::KeyError, secured_key::SecuredKey,
+    Key, KeyOperators, SecuredKey, SigningKey as _, errors::KeyError,
 };
 use serde::Deserialize;
 
@@ -122,7 +122,7 @@ mod tests {
 
     use bytes::{Bytes as RawBytes, Bytes};
     use lb_key_management_system_keys::keys::{
-        Ed25519Key, PayloadEncoding, ZkKey, secured_key::SecureKeyOperator,
+        Ed25519Key, PayloadEncoding, SecureKeyOperator, ZkKey,
     };
     use num_bigint::BigUint;
     use rand::rngs::OsRng;

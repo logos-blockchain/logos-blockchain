@@ -2,13 +2,13 @@ use core::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 
 use bytes::Bytes;
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::SigningKey as DalekSigningKey;
 use lb_binary_codec::canonical::BinaryEncode;
 use rand_core::CryptoRngCore;
 use serde::Deserialize;
 use zeroize::ZeroizeOnDrop;
 
-use crate::keys::{errors::KeyError, secured_key::SecuredKey};
+use crate::keys::{SecuredKey, SigningKey, errors::KeyError};
 
 mod private;
 pub use self::private::{KEY_SIZE as ED25519_SECRET_KEY_SIZE, UnsecuredEd25519Key};
@@ -33,7 +33,7 @@ pub struct Ed25519Key(UnsecuredEd25519Key);
 
 impl Ed25519Key {
     #[must_use]
-    pub const fn new(signing_key: SigningKey) -> Self {
+    pub const fn new(signing_key: DalekSigningKey) -> Self {
         Self(UnsecuredEd25519Key(signing_key))
     }
 
@@ -77,8 +77,8 @@ impl Hash for Ed25519Key {
     }
 }
 
-impl From<SigningKey> for Ed25519Key {
-    fn from(value: SigningKey) -> Self {
+impl From<DalekSigningKey> for Ed25519Key {
+    fn from(value: DalekSigningKey) -> Self {
         Self(UnsecuredEd25519Key::from(value))
     }
 }
@@ -128,6 +128,12 @@ impl SecuredKey for Ed25519Key {
     type PublicKey = PublicKey;
     type Error = KeyError;
 
+    fn as_public_key(&self) -> Self::PublicKey {
+        self.public_key()
+    }
+}
+
+impl SigningKey for Ed25519Key {
     fn sign(&self, payload: &Self::Payload) -> Result<Self::Signature, Self::Error> {
         Ok(self.sign_payload(payload.iter().as_slice()))
     }
@@ -137,9 +143,5 @@ impl SecuredKey for Ed25519Key {
         _payload: &Self::Payload,
     ) -> Result<Self::Signature, Self::Error> {
         unimplemented!("Multi-key signature is not implemented for Ed25519 keys.")
-    }
-
-    fn as_public_key(&self) -> Self::PublicKey {
-        self.public_key()
     }
 }

@@ -42,7 +42,7 @@ use lb_key_management_system_service::{
     backend::{KMSBackend, preload::PreloadKMSBackend},
     keys::{
         ED25519_PUBLIC_KEY_SIZE, Ed25519Key, Ed25519PublicKey, KeyOperators, PayloadEncoding,
-        SignatureEncoding, ZkPublicKey, ZkPublicKeys, ZkSignature, secured_key::SecuredKey,
+        SecuredKey, SignatureEncoding, ZkPublicKey, ZkPublicKeys, ZkSignature,
     },
     operators::zk::voucher::UnsafeVoucherOperator,
 };

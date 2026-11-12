@@ -25,7 +25,7 @@ lb-blend-service              = { workspace = true }
 lb-chain-service              = { workspace = true }
 lb-core                       = { workspace = true }
 lb-groth16                    = { workspace = true }
-lb-key-management-system-keys = { workspace = true }
+lb-key-management-system-keys = { features = ["prove"], workspace = true }
 lb-ledger                     = { workspace = true }
 lb-log-targets                = { workspace = true }
 lb-services-utils             = { workspace = true }

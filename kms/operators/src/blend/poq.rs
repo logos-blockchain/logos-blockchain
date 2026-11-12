@@ -8,10 +8,7 @@ use lb_blend_proofs::{
     },
 };
 use lb_groth16::Fr;
-use lb_key_management_system_keys::keys::{
-    ZkKey,
-    secured_key::{SecureKeyOperator, SecuredKey},
-};
+use lb_key_management_system_keys::keys::{SecureKeyOperator, SecuredKey, ZkKey};
 use lb_log_targets::kms;
 use lb_utils::tokio::task::spawn_blocking;
 use tokio::sync::oneshot;

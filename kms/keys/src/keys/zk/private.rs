@@ -2,14 +2,17 @@ use std::sync::LazyLock;
 
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr, fr_from_bytes_unchecked, fr_from_mod_bytes};
 use lb_poseidon2::{Digest, Poseidon2Bn254Hasher};
-use lb_zksign::{ZkSignError, ZkSignPrivateKeysData, ZkSignWitnessInputs};
+#[cfg(feature = "prove")]
+use lb_zksign::ZkSignError;
 use num_bigint::BigUint;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq as _;
 use zeroize::ZeroizeOnDrop;
 
-use crate::keys::zk::{public::PublicKey, signature::Signature};
+use crate::keys::zk::public::PublicKey;
+#[cfg(feature = "prove")]
+use crate::keys::zk::{Signature, proving};
 
 static KDF: LazyLock<Fr> = LazyLock::new(|| fr_from_bytes_unchecked(b"KDF"));
 
@@ -47,16 +50,14 @@ impl SecretKey {
         self.0
     }
 
+    #[cfg(feature = "prove")]
     pub fn sign(&self, data: &Fr) -> Result<Signature, ZkSignError> {
         Self::multi_sign(std::slice::from_ref(self), data)
     }
 
+    #[cfg(feature = "prove")]
     pub fn multi_sign(keys: &[Self], data: &Fr) -> Result<Signature, ZkSignError> {
-        let sk_inputs = try_from_secret_keys(keys)?;
-        let inputs = ZkSignWitnessInputs::from_witness_data_and_message_hash(sk_inputs, *data);
-
-        let (signature, _) = lb_zksign::prove(inputs).expect("Signature should succeed");
-        Ok(Signature::new(signature))
+        proving::sign_secret_keys(keys, data)
     }
 
     #[must_use]
@@ -84,16 +85,4 @@ impl From<BigUint> for SecretKey {
     fn from(value: BigUint) -> Self {
         Self(value.into())
     }
-}
-
-fn try_from_secret_keys(keys: &[SecretKey]) -> Result<ZkSignPrivateKeysData, ZkSignError> {
-    let len = keys.len();
-    if len > 32 {
-        return Err(ZkSignError::TooManyKeys(len));
-    }
-    let mut buff: [Fr; 32] = [Fr::ZERO; 32];
-    for (i, sk) in keys.iter().enumerate() {
-        buff[i] = sk.clone().into_inner();
-    }
-    Ok(buff.into())
 }

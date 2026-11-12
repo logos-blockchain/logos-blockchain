@@ -1,3 +1,6 @@
+//! Run with `cargo bench -p logos-blockchain-zksign --features prove --bench
+//! prove`.
+
 use lb_groth16::Fr;
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 use logos_blockchain_zksign::{ZkSignPrivateKeysData, ZkSignWitnessInputs, prove};

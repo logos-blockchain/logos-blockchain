@@ -1,7 +1,7 @@
 use core::fmt::{self, Debug, Formatter};
 
 use lb_key_management_system_keys::keys::{
-    Ed25519Key, UnsecuredEd25519Key, errors::KeyError, secured_key::SecureKeyOperator,
+    Ed25519Key, SecureKeyOperator, UnsecuredEd25519Key, errors::KeyError,
 };
 use lb_log_targets::kms;
 use tokio::sync::oneshot;

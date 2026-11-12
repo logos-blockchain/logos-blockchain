@@ -1,6 +1,6 @@
 use lbc_types::native::Witness;
 
-use crate::ZkSignWitnessInputs;
+use super::ZkSignWitnessInputs;
 
 pub fn generate_witness(inputs: ZkSignWitnessInputs) -> Result<Witness, lbp_error::Error> {
     let witness_input: lbc_signature_sys::SignatureWitnessInput = inputs.try_into()?;

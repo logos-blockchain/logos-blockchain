@@ -4,9 +4,7 @@ use color_eyre::eyre::{Result, eyre};
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_service::{
     backend::preload::KeyId,
-    keys::{
-        Ed25519Key, Key, UnsecuredEd25519Key, UnsecuredZkKey, ZkKey, secured_key::SecuredKey as _,
-    },
+    keys::{Ed25519Key, Key, SecuredKey as _, UnsecuredEd25519Key, UnsecuredZkKey, ZkKey},
 };
 use lb_utils::yaml::merge;
 use num_bigint::BigUint;

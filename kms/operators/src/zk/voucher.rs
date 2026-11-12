@@ -1,7 +1,5 @@
 use lb_groth16::Fr;
-use lb_key_management_system_keys::keys::{
-    ZkKey, errors::KeyError, secured_key::SecureKeyOperator,
-};
+use lb_key_management_system_keys::keys::{SecureKeyOperator, ZkKey, errors::KeyError};
 use lb_log_targets::kms;
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher as ZkHasher};
 use tokio::sync::oneshot;

@@ -1,11 +1,11 @@
-use lb_key_management_system_keys::keys::secured_key::{SecureKeyOperator, SecuredKey};
+use lb_key_management_system_keys::keys::{SecureKeyOperator, SecuredKey, SigningKey};
 
 pub mod preload;
 
 #[async_trait::async_trait]
 pub trait KMSBackend {
     type KeyId;
-    type Key: SecuredKey;
+    type Key: SigningKey;
     type KeyOperations: SecureKeyOperator<Key = Self::Key, Error = <Self::Key as SecuredKey>::Error>;
     type Settings;
     type Error;

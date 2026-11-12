@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 async-trait                        = { workspace = true }
-lb-key-management-system-keys      = { workspace = true }
+lb-key-management-system-keys      = { features = ["prove"], workspace = true }
 lb-key-management-system-operators = { workspace = true }
 lb-log-targets                     = { workspace = true }
 lb-tracing                         = { workspace = true }

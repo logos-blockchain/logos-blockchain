@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display};
 
-use lb_key_management_system_keys::keys::secured_key::SecuredKey;
+use lb_key_management_system_keys::keys::SecuredKey;
 use overwatch::{
     DynError,
     services::{AsServiceId, ServiceData, relay::OutboundRelay},

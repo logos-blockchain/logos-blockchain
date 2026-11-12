@@ -20,7 +20,7 @@ use lb_core::{
         transactions::{OpProofs, Ops, TxList, states::Unverified},
     },
 };
-use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
+use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 use num_bigint::BigUint;
 use rand::{RngCore as _, thread_rng};
 use tokio::sync::{mpsc, watch};
@@ -237,7 +237,7 @@ async fn gap_deposits_surface_after_a_failed_backfill_and_a_fork_switch() {
         },
     };
     use lb_groth16::Fr;
-    use lb_key_management_system_service::keys::ZkPublicKey;
+    use lb_key_management_system_keys::keys::ZkPublicKey;
 
     use crate::test_support::{deposit_event, inscribe_op};
 
@@ -1315,7 +1315,7 @@ async fn cold_start_backfills_genesis_slot() {
         mantle::{NoteId, ops::channel::deposit::Metadata},
     };
     use lb_groth16::Fr;
-    use lb_key_management_system_service::keys::ZkPublicKey;
+    use lb_key_management_system_keys::keys::ZkPublicKey;
 
     use crate::test_support::deposit_event;
 
@@ -1752,7 +1752,7 @@ async fn resume_backfill_retires_a_pending_entry_finalized_under_another_hash() 
 
     let m = inscribe_op(channel_id, MsgId::root(), b"m");
     let m_id = m.id();
-    let pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
+    let pk = lb_key_management_system_keys::keys::ZkPublicKey::from(Fr::from(7u64));
     let original = unverified_tx_with_ops(vec![
         Op::ChannelInscribe(m.clone()),
         Op::Transfer(TransferOp::new(

@@ -9,20 +9,29 @@ readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }
 
+[features]
+prove = [
+  "dep:lb-circuits-prover",
+  "dep:lb-log-targets",
+  "dep:lbc-signature-sys",
+  "dep:lbc-types",
+  "dep:lbp-error",
+  "dep:serde-big-array",
+  "dep:tracing",
+]
+
 [dependencies]
-lb-circuits-prover = { workspace = true }
+lb-circuits-prover = { optional = true, workspace = true }
 lb-groth16         = { workspace = true }
-lb-log-targets     = { workspace = true }
-lb-poseidon2       = { workspace = true }
-lbc-signature-sys  = { features = ["prebuilt"], workspace = true }
-lbc-types          = { workspace = true }
-lbp-error          = { workspace = true }
-num-bigint         = { workspace = true }
+lb-log-targets     = { optional = true, workspace = true }
+lbc-signature-sys  = { features = ["prebuilt"], optional = true, workspace = true }
+lbc-types          = { optional = true, workspace = true }
+lbp-error          = { optional = true, workspace = true }
 serde              = { features = ["derive"], workspace = true }
-serde-big-array    = { workspace = true }
+serde-big-array    = { optional = true, workspace = true }
 serde_json         = { workspace = true }
 thiserror          = { workspace = true }
-tracing            = { workspace = true }
+tracing            = { optional = true, workspace = true }
 
 [dev-dependencies]
 divan        = { workspace = true }
@@ -31,12 +40,14 @@ num-bigint   = { workspace = true }
 rand         = { workspace = true }
 
 [[bench]]
-harness = false
-name    = "prove"
+harness           = false
+name              = "prove"
+required-features = ["prove"]
 
 [[bench]]
-harness = false
-name    = "verify"
+harness           = false
+name              = "verify"
+required-features = ["prove"]
 
 [lints]
 workspace = true
