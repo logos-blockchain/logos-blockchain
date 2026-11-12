@@ -21,9 +21,9 @@ jobs:
       matrix:
         platform:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - os: [ self-hosted, Linux ]
+          - os: bladerunner-linux
             label: self-hosted-linux
-          - os: [ self-hosted, macOS ]
+          - os: bladerunner-macos
             label: self-hosted-macos
     runs-on: ${{ matrix.platform.os }}
     steps:
@@ -74,7 +74,7 @@ jobs:
     name: Report failures
     needs: [ features ]
     if: failure() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: [ self-hosted, Linux ]
+    runs-on: bladerunner-linux
     steps:
       - name: Create or update failure issue
         run: |

@@ -32,10 +32,10 @@ jobs:
       matrix:
         platform:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - os: [ self-hosted, Linux ]
+          - os: bladerunner-linux
             label: self-hosted-linux
             peer_label: self-hosted-macos
-          - os: [ self-hosted, macOS ]
+          - os: bladerunner-macos
             label: self-hosted-macos
             peer_label: self-hosted-linux
     runs-on: ${{ matrix.platform.os }}

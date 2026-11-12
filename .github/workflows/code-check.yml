@@ -135,8 +135,8 @@ jobs:
       matrix:
         os:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - [ self-hosted, Linux ]
-          - [ self-hosted, macOS ]
+          - bladerunner-linux
+          - bladerunner-macos
     runs-on: ${{ matrix.os }}
     steps:
       - name: Disable rustup override
@@ -217,7 +217,7 @@ jobs:
         !contains(github.event.pull_request.labels.*.name, 'DO NOT MERGE')
       }}
     # Valgrind is Linux-only, and the node needs more memory than GitHub-hosted runners have.
-    runs-on: [ self-hosted, Linux ]
+    runs-on: bladerunner-linux
     timeout-minutes: 90
     steps:
       - name: Disable rustup override
