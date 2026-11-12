@@ -406,7 +406,10 @@ mod tests {
     use lb_cryptarchia_engine::Epoch;
 
     use super::*;
-    use crate::test_utils::{known, nullifier, pk};
+    use crate::{
+        DEFAULT_FEE_MARGIN_PERCENT,
+        test_utils::{known, nullifier, pk},
+    };
 
     fn free_context() -> OpsContext {
         OpsContext {
@@ -696,6 +699,6 @@ mod tests {
         };
 
         assert!(!still_funded(&fund(0)));
-        assert!(still_funded(&fund(crate::FEE_MARGIN_PERCENT)));
+        assert!(still_funded(&fund(DEFAULT_FEE_MARGIN_PERCENT)));
     }
 }

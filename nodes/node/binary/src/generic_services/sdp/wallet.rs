@@ -140,7 +140,7 @@ where
                 tx_builder.clone(),
                 config.funding_pk,
                 vec![config.funding_pk],
-                lb_wallet_service::FEE_MARGIN_PERCENT,
+                None,
                 Some(config.max_tx_fee),
             )
             .await
@@ -208,7 +208,7 @@ where
                 tx_builder.clone(),
                 config.funding_pk,
                 vec![config.funding_pk],
-                lb_wallet_service::FEE_MARGIN_PERCENT,
+                None,
                 Some(config.max_tx_fee),
             )
             .await
@@ -245,7 +245,7 @@ where
                 tx_builder.clone(),
                 config.funding_pk,
                 vec![config.funding_pk],
-                lb_wallet_service::FEE_MARGIN_PERCENT,
+                None,
                 Some(config.max_tx_fee),
             )
             .await

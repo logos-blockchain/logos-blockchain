@@ -50,14 +50,15 @@ const LOG_TARGET: &str = wallet::CORE;
 /// root yet, so it stays pending until it is.
 pub const SPEND_ROOT_DEPTH: usize = 4;
 
-/// The priority fee percentage the node funds its own transactions with.
+/// The priority fee percentage the node funds its own transactions with,
+/// unless its wallet configuration sets another.
 ///
 /// A step of either gas market raises its price by at most 12.5%: the storage
 /// price once per epoch, the execution base fee once per block. A transaction
 /// funded just before such a step is included after it, so 13% of the
 /// mandatory fee keeps it valid for one step of each market at once. The
 /// reserve it does not use is the priority tip of the transaction.
-pub const FEE_MARGIN_PERCENT: u64 = 13;
+pub const DEFAULT_FEE_MARGIN_PERCENT: u64 = 13;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnedNote {
@@ -1585,7 +1586,7 @@ mod tests {
                     &context,
                     &HashSet::new(),
                     PriorityFee {
-                        percent: FEE_MARGIN_PERCENT,
+                        percent: DEFAULT_FEE_MARGIN_PERCENT,
                         max_fee: Some(GasCost::new(max_fee)),
                     },
                 )

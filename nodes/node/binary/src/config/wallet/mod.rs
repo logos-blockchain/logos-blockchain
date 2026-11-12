@@ -26,6 +26,7 @@ impl ServiceConfig {
             voucher_master_key_id: self.user.voucher_master_key_id,
             recovery_data,
             pending_note_expiry_blocks: self.user.pending_note_expiry_blocks,
+            fee_margin_percent: self.user.fee_margin_percent,
             era_schedule: eras.map(|era| {
                 let EraRuleset::V1(parameters) = &era.parameters.ruleset;
                 WalletEraSettings {

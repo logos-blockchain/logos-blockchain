@@ -142,7 +142,8 @@ where
     }
 
     /// Fund a transaction, reserving `priority_fee_percent` percent of its
-    /// final mandatory fee as a priority reserve. The mandatory fee includes
+    /// final mandatory fee as a priority reserve, or the fee margin of the
+    /// wallet configuration if `None`. The mandatory fee includes
     /// execution and storage cost; only the unused reserve becomes an
     /// effective priority tip. The percentage is not capped at 100. A
     /// `max_tx_fee` cuts the reserve down so the whole fee stays within it,
@@ -153,7 +154,7 @@ where
         tx_builder: MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
-        priority_fee_percent: u64,
+        priority_fee_percent: Option<u64>,
         max_tx_fee: Option<GasCost>,
     ) -> Result<TipResponse<MantleTxBuilder>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
@@ -339,14 +340,7 @@ where
         }
         let mantle_tx_builder = MantleTxBuilder::new().add_ledger_output(note)?;
         let funded_tx_builder = self
-            .fund_tx(
-                tip,
-                mantle_tx_builder,
-                change_pk,
-                funding_pks,
-                crate::FEE_MARGIN_PERCENT,
-                None,
-            )
+            .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks, None, None)
             .await?;
         let TipResponse { tip, response } = self
             .sign_tx(Some(funded_tx_builder.tip), funded_tx_builder.response)
@@ -518,7 +512,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transfer_funds_is_funded_with_the_fee_margin() {
+    async fn transfer_funds_is_funded_with_the_configured_fee_margin() {
         let (msg_sender, mut msg_receiver) = mpsc::channel(1);
         let margin = tokio::spawn(async move {
             while let Some(msg) = msg_receiver.recv().await {
@@ -540,6 +534,6 @@ mod tests {
         // The funding request is answered by no one, so the transfer fails.
         drop(api.transfer_funds(None, key, vec![key], key, 1).await);
 
-        assert_eq!(margin.await.unwrap(), crate::FEE_MARGIN_PERCENT);
+        assert_eq!(margin.await.unwrap(), None);
     }
 }

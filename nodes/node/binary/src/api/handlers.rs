@@ -1161,7 +1161,7 @@ where
                 tx_builder.clone(),
                 req.change_public_key,
                 req.funding_public_keys,
-                lb_wallet_service::FEE_MARGIN_PERCENT,
+                None,
                 Some(req.max_tx_fee),
             )
             .await?;
@@ -2247,7 +2247,7 @@ pub mod wallet {
                     req.tx_builder.clone(),
                     req.change_public_key,
                     req.funding_public_keys,
-                    req.priority_fee_percent,
+                    Some(req.priority_fee_percent),
                     Some(req.max_tx_fee),
                 )
                 .await?;

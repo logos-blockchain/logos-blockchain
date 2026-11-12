@@ -1179,7 +1179,7 @@ pub(crate) fn wallet_fund_tx_sync(
                 request.tx_builder.clone(),
                 request.change_public_key,
                 request.funding_public_keys,
-                request.priority_fee_percent,
+                Some(request.priority_fee_percent),
                 Some(request.max_tx_fee),
             )
             .await

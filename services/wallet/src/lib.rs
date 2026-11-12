@@ -63,7 +63,7 @@ use lb_storage_service::{
 };
 use lb_time::era::{EpochLength, EraSchedule};
 use lb_utils::bounded::BoundedError;
-pub use lb_wallet::FEE_MARGIN_PERCENT;
+pub use lb_wallet::DEFAULT_FEE_MARGIN_PERCENT;
 use lb_wallet::{
     KnownNote, OwnedNote, WalletBalance, WalletBlock, WalletError, WalletState,
     transaction::{OpWitness, WitnessContext, op_witness_at, op_witnesses},
@@ -173,8 +173,9 @@ pub enum WalletMsg {
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
         /// Percentage of the final mandatory fee reserved as a priority-fee
-        /// reserve; only the unused reserve becomes the effective tip.
-        priority_fee_percent: u64,
+        /// reserve; only the unused reserve becomes the effective tip. `None`
+        /// takes the fee margin of the wallet configuration.
+        priority_fee_percent: Option<u64>,
         /// The fee the reserve is cut down to stay within, if any.
         max_tx_fee: Option<GasCost>,
         resp_tx: Sender<Result<TipResponse<MantleTxBuilder>, WalletServiceError>>,
@@ -362,6 +363,8 @@ pub struct WalletServiceSettings {
     /// funding until they are observed spent in a block or this many immutable
     /// blocks have passed since the reservation.
     pub pending_note_expiry_blocks: u64,
+    /// The priority fee percentage the node funds its own transactions with.
+    pub fee_margin_percent: u64,
     pub era_schedule: ServiceEraSchedule,
 }
 
@@ -382,6 +385,11 @@ impl EpochLength for WalletEraSettings {
 #[must_use]
 pub const fn default_pending_note_expiry_blocks() -> u64 {
     10
+}
+
+#[must_use]
+pub const fn default_fee_margin_percent() -> u64 {
+    DEFAULT_FEE_MARGIN_PERCENT
 }
 
 impl StorageRecoverySettings for WalletServiceSettings {
@@ -673,7 +681,7 @@ where
                     funding_pks,
                     &context,
                     PriorityFee {
-                        percent: priority_fee_percent,
+                        percent: priority_fee_percent.unwrap_or_else(|| state.fee_margin_percent()),
                         max_fee: max_tx_fee,
                     },
                 ) {

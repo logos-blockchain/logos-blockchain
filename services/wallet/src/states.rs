@@ -175,6 +175,7 @@ pub struct ServiceState<'u> {
     updater: &'u StateUpdater<Option<RecoveryState>>,
     pending_notes: PendingNotes,
     pending_note_expiry_blocks: u64,
+    fee_margin_percent: u64,
 }
 
 impl<'u> ServiceState<'u> {
@@ -246,7 +247,13 @@ impl<'u> ServiceState<'u> {
             updater,
             pending_notes: PendingNotes::default(),
             pending_note_expiry_blocks: settings.pending_note_expiry_blocks,
+            fee_margin_percent: settings.fee_margin_percent,
         }
+    }
+
+    // the priority fee percentage of a funding that names none
+    pub const fn fee_margin_percent(&self) -> u64 {
+        self.fee_margin_percent
     }
 
     pub const fn lib(&self) -> HeaderId {
@@ -420,7 +427,7 @@ mod tests {
     use lb_groth16::Field as _;
 
     use super::*;
-    use crate::ServiceEraSchedule;
+    use crate::{DEFAULT_FEE_MARGIN_PERCENT, ServiceEraSchedule};
 
     const EXPIRY_BLOCKS: u64 = 4;
 
@@ -566,6 +573,7 @@ mod tests {
             voucher_master_key_id: "voucher-master".into(),
             recovery_data: RecoveryData::default(),
             pending_note_expiry_blocks: 10,
+            fee_margin_percent: DEFAULT_FEE_MARGIN_PERCENT,
             era_schedule: era_schedule(),
         };
         let recovery = RecoveryState {
@@ -637,6 +645,7 @@ mod tests {
             voucher_master_key_id: "voucher-master".into(),
             recovery_data: RecoveryData::default(),
             pending_note_expiry_blocks: 10,
+            fee_margin_percent: DEFAULT_FEE_MARGIN_PERCENT,
             era_schedule: era_schedule(),
         };
 
