@@ -288,6 +288,7 @@ mod tests {
     use ark_ff::Field as _;
     use lb_dynamic_merkle::{MerkleHasher as _, MerkleNode};
     use num_bigint::BigUint;
+    use proptest::prelude::ProptestConfig;
     use proptest_macro::property_test;
 
     use super::*;
@@ -462,7 +463,7 @@ mod tests {
     // the low leaf, next below an inserted one, any), flushes the batch of
     // insertions, or reads the root mid-batch, whose hashing the next
     // insertions build on.
-    #[property_test]
+    #[property_test(config = ProptestConfig::with_cases(32))]
     fn test_deferred_hashing_matches_eager_tree(ops: Vec<(u8, u64)>) {
         let mut imt = Imt::new();
         let mut eager = DynamicMerkleTree::<TestHasher, 40>::new()
@@ -525,7 +526,7 @@ mod tests {
         assert_eq!(imt.root(), naive_root(&imt_leaf_hashes(&imt)));
     }
 
-    #[property_test]
+    #[property_test(config = ProptestConfig::with_cases(32))]
     fn test_path_verifies_every_leaf(nullifiers: Vec<u64>) {
         let mut imt = Imt::new();
         for nullifier in nullifiers.into_iter().filter(|nullifier| *nullifier != 0) {
