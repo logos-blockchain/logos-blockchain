@@ -40,6 +40,7 @@ jobs:
             peer_label: self-hosted-linux
     runs-on: ${{ matrix.platform.os }}
     env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
       # Heavy Rust e2e tests become less stable when nextest oversubscribes the
       # self-hosted runners. Keep these lanes single-job to reduce retries.
       E2E_NEXTEST_JOBS: 1
