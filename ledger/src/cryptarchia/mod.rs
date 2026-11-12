@@ -536,6 +536,25 @@ impl LedgerState {
             .mark_occupied_slots(slot, uncle_slots))
     }
 
+    /// Applies the header of a block being proposed at `slot`, whose proof
+    /// cannot exist before its body is fixed: the epoch state for `slot` and
+    /// the occupied slots, without verifying a proof or folding its entropy
+    /// into the nonce. Neither is read by the transactions of the block,
+    /// which this state only selects; the block is applied with its proof
+    /// once built.
+    pub fn try_apply_proposal_header<Id>(
+        self,
+        slot: Slot,
+        uncle_slots: &UncleSlots,
+        sdp: &SdpLedger,
+        pow: &PowState,
+        eras: &EraScheduledConfig,
+    ) -> Result<Self, LedgerError<Id>> {
+        Ok(self
+            .update_epoch_state(slot, sdp, pow, eras)?
+            .mark_occupied_slots(slot, uncle_slots))
+    }
+
     /// Synthesizes the epoch state for `slot` and apply the proof.
     fn update_epoch_state_and_apply_proof<LeaderProof, Id>(
         self,

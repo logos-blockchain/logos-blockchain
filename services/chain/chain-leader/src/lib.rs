@@ -72,7 +72,7 @@ use crate::{
         leader_wallet_inputs, search_for_winning_slots,
     },
     mempool::MempoolAdapter as _,
-    proposal::{ProposalHeaderProof, assemble_block, block_msg},
+    proposal::{assemble_block, block_msg},
     relays::CryptarchiaConsensusRelays,
 };
 
@@ -700,16 +700,14 @@ where
         let wallet_inputs =
             leader_wallet_inputs(&winning, epoch_state, ledger_state.latest_note_sets())?;
 
-        // The proof is produced once the body is fixed; the block is applied
-        // with its real proof by the chain network.
-        (ledger_state, _) = ledger_state
-            .clone()
-            .try_apply_header::<ProposalHeaderProof, HeaderId>(
-                slot,
-                &ProposalHeaderProof,
-                &uncle_headers.slots(),
-                era_schedule,
-            )?;
+        // The proof is produced once the body is fixed, so the transactions are
+        // selected against the header without it; the block is applied with its
+        // proof by the chain network.
+        (ledger_state, _) = ledger_state.try_apply_proposal_header::<HeaderId>(
+            slot,
+            &uncle_headers.slots(),
+            era_schedule,
+        )?;
         let header_state = ledger_state.clone();
         // Collect all candidate transactions up front so the ones that fail can
         // be retried across multiple rounds.

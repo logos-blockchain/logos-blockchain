@@ -7,39 +7,12 @@ use lb_core::{
         traits::{Hashable, StorageSize},
         transactions::hash::TxHash,
     },
-    proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderProof, LeaderPublic},
+    proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
 };
 use lb_cryptarchia_engine::Slot;
-use lb_groth16::{AdditiveGroup as _, Fr};
+use lb_groth16::Fr;
 
 use crate::Error;
-
-// The proof of a block whose body is not fixed yet, so it cannot be proven: it
-// only lets the proposer apply the header before selecting the transactions,
-// which it runs before the reward of the block is known.
-pub struct ProposalHeaderProof;
-
-impl LeaderProof for ProposalHeaderProof {
-    fn verify(&self, _public_inputs: &LeaderPublic) -> bool {
-        true
-    }
-
-    fn verify_genesis(&self) -> bool {
-        false
-    }
-
-    fn entropy(&self) -> Fr {
-        Fr::ZERO
-    }
-
-    fn reward_commitment(&self) -> NoteCommitment {
-        NoteCommitment(Fr::ZERO)
-    }
-
-    fn reward_value(&self) -> Value {
-        0
-    }
-}
 
 // The PoL msg of the header the block gets: its block ID, over its body root.
 #[must_use]
@@ -88,8 +61,9 @@ mod tests {
             notes::{self, derive_note_nullifier},
             transactions::states::Preverified,
         },
-        proofs::leader_proof::{check_winning, pol_wallet_inputs},
+        proofs::leader_proof::{LeaderProof as _, check_winning, pol_wallet_inputs},
     };
+    use lb_groth16::AdditiveGroup as _;
     use lb_key_management_system_service::keys::{UnsecuredZkKey, ZkPublicKey};
     use lb_ledger::LedgerState;
 

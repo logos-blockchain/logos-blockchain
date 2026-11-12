@@ -61,7 +61,11 @@ use thiserror::Error;
 use crate::{
     block_rewards::{BlockRewardsError, MAX_SUPPLY, REWARDS_RESERVE_GENESIS},
     config::{EraScheduledConfig, RewardPoWConfig, config_for_slot},
-    mantle::{helpers::MantleOperationVerificationHelper, pow::POW_REWARD_POOL_GENESIS},
+    mantle::{
+        helpers::MantleOperationVerificationHelper,
+        pow::{POW_REWARD_POOL_GENESIS, PowState},
+        sdp::SdpLedger,
+    },
     update::{BatchVerifiedUpdate, PreparedUpdate},
 };
 
@@ -324,20 +328,54 @@ impl LedgerState {
     where
         LeaderProof: leader_proof::LeaderProof,
     {
-        let last_epoch_state = self.cryptarchia_ledger.epoch_state().clone();
-        let mut cryptarchia_ledger = self
-            .cryptarchia_ledger
-            .try_apply_header::<LeaderProof, Id>(
+        self.apply_header_with(slot, eras, |cryptarchia_ledger, sdp, pow| {
+            cryptarchia_ledger.try_apply_header::<LeaderProof, Id>(
                 slot,
                 proof,
                 uncle_slots,
-                // TODO: threading SDP here because EpochState is currently embedded in
-                // CryptarchiaLedger.
-                // In the future, we will pull EpochState up into LedgerState.
-                &self.mantle_ledger.sdp,
-                &self.mantle_ledger.pow,
+                sdp,
+                pow,
                 eras,
-            )?;
+            )
+        })
+    }
+
+    /// Applies the header of a block being proposed at `slot`, before its
+    /// proof exists, to select the transactions of the block against: the
+    /// header of [`Self::try_apply_header`] without the proof, so neither
+    /// verifying it nor folding its entropy into the epoch nonce. The proposed
+    /// block is applied with its proof once built.
+    pub fn try_apply_proposal_header<Id>(
+        self,
+        slot: Slot,
+        uncle_slots: &UncleSlots,
+        eras: &EraScheduledConfig,
+    ) -> Result<(Self, Vec<HeaderEvent>), LedgerError<Id>> {
+        self.apply_header_with(slot, eras, |cryptarchia_ledger, sdp, pow| {
+            cryptarchia_ledger.try_apply_proposal_header::<Id>(slot, uncle_slots, sdp, pow, eras)
+        })
+    }
+
+    // The header at `slot`, its leadership step taken by `apply_leadership`.
+    fn apply_header_with<Id>(
+        self,
+        slot: Slot,
+        eras: &EraScheduledConfig,
+        apply_leadership: impl FnOnce(
+            CryptarchiaLedger,
+            &SdpLedger,
+            &PowState,
+        ) -> Result<CryptarchiaLedger, LedgerError<Id>>,
+    ) -> Result<(Self, Vec<HeaderEvent>), LedgerError<Id>> {
+        let last_epoch_state = self.cryptarchia_ledger.epoch_state().clone();
+        // TODO: threading SDP here because EpochState is currently embedded in
+        // CryptarchiaLedger.
+        // In the future, we will pull EpochState up into LedgerState.
+        let mut cryptarchia_ledger = apply_leadership(
+            self.cryptarchia_ledger,
+            &self.mantle_ledger.sdp,
+            &self.mantle_ledger.pow,
+        )?;
         let (mantle_ledger, effect) = self.mantle_ledger.try_apply_header(
             &last_epoch_state,
             cryptarchia_ledger.epoch_state(),
@@ -2257,7 +2295,7 @@ mod tests {
         let (state, _) = LedgerState::from_genesis_tx::<HeaderId>(tx, &config).unwrap();
         assert_eq!(
             state.mantle_ledger().pow,
-            mantle::pow::PowState::from_reward_pool_and_config(50_000_000_000_000_000, &config)
+            PowState::from_reward_pool_and_config(50_000_000_000_000_000, &config)
         );
     }
     #[test]
@@ -3623,6 +3661,37 @@ mod tests {
                 NoteSetIndex::Channel(channel_id)
             )]
         );
+    }
+
+    #[test]
+    fn a_proposal_header_is_the_header_without_its_proof() {
+        let test_config = config();
+        let eras = single_era(test_config.clone());
+        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let slot = Slot::from(1u64);
+        let proof = generate_proof(&state.cryptarchia_ledger, &note(), slot);
+
+        let (mut header, header_events) = state
+            .clone()
+            .try_apply_header::<_, HeaderId>(slot, &proof, &UncleSlots::default(), &eras)
+            .unwrap();
+        let (proposal, proposal_events) = state
+            .clone()
+            .try_apply_proposal_header::<HeaderId>(slot, &UncleSlots::default(), &eras)
+            .unwrap();
+
+        // only the header with its proof folds the proof's entropy into the nonce
+        assert_ne!(
+            header.cryptarchia_ledger.nonce,
+            state.cryptarchia_ledger.nonce
+        );
+        assert_eq!(
+            proposal.cryptarchia_ledger.nonce,
+            state.cryptarchia_ledger.nonce
+        );
+        header.cryptarchia_ledger.nonce = state.cryptarchia_ledger.nonce;
+        assert_eq!(proposal, header);
+        assert_eq!(format!("{proposal_events:?}"), format!("{header_events:?}"));
     }
 
     #[test]
