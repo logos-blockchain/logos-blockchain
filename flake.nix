@@ -13,7 +13,7 @@
 
     # Must stay in sync with the lbc-* tags in Cargo.toml.
     logos-blockchain-circuits = {
-      url = "github:logos-blockchain/logos-blockchain-circuits/v0.7.1";
+      url = "github:logos-blockchain/logos-blockchain-circuits/v0.7.3";
     };
 
     # Must stay in sync with the rust-rapidsnark rev in Cargo.toml.

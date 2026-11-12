@@ -188,11 +188,11 @@ logos-blockchain-zone-tests        = { default-features = false, path = "./tests
 logos-sql                          = { default-features = false, path = "./logos_sql" }
 # When bumping any lbc-* tag, also update the logos-blockchain-circuits flake input tag in flake.nix
 # and run `nix flake lock --update-input logos-blockchain-circuits`.
-lbc-pol-sys                      = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-pol-sys", tag = "v0.7.1" }
-lbc-poq-sys                      = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poq-sys", tag = "v0.7.1" }
-lbc-program-spend-sys            = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-program-spend-sys", tag = "v0.7.1" }
-lbc-transfer-sys                 = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-transfer-sys", tag = "v0.7.1" }
-lbc-types                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-types", tag = "v0.7.1" }
+lbc-pol-sys                      = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-pol-sys", tag = "v0.7.3" }
+lbc-poq-sys                      = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poq-sys", tag = "v0.7.3" }
+lbc-program-spend-sys            = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-program-spend-sys", tag = "v0.7.3" }
+lbc-transfer-sys                 = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-transfer-sys", tag = "v0.7.3" }
+lbc-types                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-types", tag = "v0.7.3" }
 lbp-error                        = { default-features = false, package = "logos-blockchain-proofs-error", path = "./zk/proofs/error" }
 testing-framework-app            = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
 testing-framework-core           = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }

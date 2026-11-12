@@ -1753,7 +1753,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 3.0.9",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -4618,8 +4618,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-build"
-version = "0.7.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.7.1#1d4534e04de2df186e4ac2d85e482a25080e2cc8"
+version = "0.7.3"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.7.3#6ac94979fef0dfb74d909c8422d5a999e3190eef"
 dependencies = [
  "dirs",
  "fd-lock",
@@ -4630,16 +4630,16 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-common"
-version = "0.7.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.7.1#1d4534e04de2df186e4ac2d85e482a25080e2cc8"
+version = "0.7.3"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.7.3#6ac94979fef0dfb74d909c8422d5a999e3190eef"
 dependencies = [
  "logos-blockchain-circuits-types",
 ]
 
 [[package]]
 name = "logos-blockchain-circuits-pol-sys"
-version = "0.7.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.7.1#1d4534e04de2df186e4ac2d85e482a25080e2cc8"
+version = "0.7.3"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.7.3#6ac94979fef0dfb74d909c8422d5a999e3190eef"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4648,8 +4648,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-poq-sys"
-version = "0.7.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.7.1#1d4534e04de2df186e4ac2d85e482a25080e2cc8"
+version = "0.7.3"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.7.3#6ac94979fef0dfb74d909c8422d5a999e3190eef"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4658,8 +4658,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-program-spend-sys"
-version = "0.7.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.7.1#1d4534e04de2df186e4ac2d85e482a25080e2cc8"
+version = "0.7.3"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.7.3#6ac94979fef0dfb74d909c8422d5a999e3190eef"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4675,8 +4675,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-transfer-sys"
-version = "0.7.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.7.1#1d4534e04de2df186e4ac2d85e482a25080e2cc8"
+version = "0.7.3"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.7.3#6ac94979fef0dfb74d909c8422d5a999e3190eef"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4685,8 +4685,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-types"
-version = "0.7.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.7.1#1d4534e04de2df186e4ac2d85e482a25080e2cc8"
+version = "0.7.3"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.7.3#6ac94979fef0dfb74d909c8422d5a999e3190eef"
 dependencies = [
  "bytes",
  "libc",
@@ -8653,7 +8653,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
