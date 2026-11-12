@@ -335,26 +335,7 @@ where
     }
 
     async fn release_retained(&mut self) -> bool {
-        let releases = self.evictor.select_releases(
-            current_timestamp_millis(),
-            &self.removed_items,
-            &self.included_in_canonical,
-        );
-        debug_assert!(
-            releases
-                .iter()
-                .all(|key| self.removed_items.contains_key(key)
-                    || self.included_in_canonical.contains_key(key)),
-            "the evictor must only select retired items for release"
-        );
-        if !self.delete_retained(&releases).await {
-            return false;
-        }
-        for key in &releases {
-            self.removed_items.remove(key);
-            self.included_in_canonical.remove(key);
-        }
-        !releases.is_empty()
+        Self::release_retained(self).await
     }
 
     async fn on_canonical_chain_updated(
@@ -777,6 +758,32 @@ where
             );
         }
         slots
+    }
+
+    /// Release the retired items the evictor selects for release, in
+    /// [`Self::removed_items`] or [`Self::included_in_canonical`]. Returns
+    /// whether any was released.
+    async fn release_retained(&mut self) -> bool {
+        let releases = self.evictor.select_releases(
+            current_timestamp_millis(),
+            &self.removed_items,
+            &self.included_in_canonical,
+        );
+        debug_assert!(
+            releases
+                .iter()
+                .all(|key| self.removed_items.contains_key(key)
+                    || self.included_in_canonical.contains_key(key)),
+            "the evictor must only select retired items for release"
+        );
+        if !self.delete_retained(&releases).await {
+            return false;
+        }
+        for key in &releases {
+            self.removed_items.remove(key);
+            self.included_in_canonical.remove(key);
+        }
+        !releases.is_empty()
     }
 
     /// Delete the bodies of retired `keys`, drop them from the prefix index
