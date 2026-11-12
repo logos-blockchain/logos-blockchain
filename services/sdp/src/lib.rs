@@ -8,10 +8,7 @@ pub mod wallet;
 use std::fmt::{Debug, Display};
 
 use async_trait::async_trait;
-use futures::{
-    future::{BoxFuture, OptionFuture},
-    stream::FuturesUnordered,
-};
+use futures::future::{BoxFuture, OptionFuture};
 use lb_chain_service::{
     ChainServiceInfo, Epoch, ProcessedBlockEvent,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
@@ -310,8 +307,11 @@ where
         // for it: what that one does can depend on what this one comes to, so
         // requests take effect in the order they come.
         let mut submission: Option<PendingSubmission<'_>> = None;
-        // Resubmissions leave the state alone, so they run beside the rest.
-        let mut resubmissions = FuturesUnordered::new();
+        // The resubmission of the tracked activity, which leaves the state
+        // alone and so runs beside the rest. There's one at a time, and it's
+        // dropped once its activity is no longer tracked, so that a superseded
+        // activity can't reach the mempool.
+        let mut resubmission: Option<(Activity, PendingSubmission<'_>)> = None;
 
         self.service_resources_handle.status_updater.notify_ready();
         info!(
@@ -321,6 +321,7 @@ where
         );
 
         loop {
+            self.drop_superseded(&mut resubmission);
             tokio::select! {
                 Some(msg) = self.service_resources_handle.inbound_relay.recv(), if submission.is_none() => {
                     submission = self.handle_message(msg, &wallet_adapter, &mempool_adapter, &chain_api).await;
@@ -329,11 +330,19 @@ where
                     submission = None;
                     self.finish_submission(finished, &chain_api);
                 }
-                Some(finished) = resubmissions.next() => self.finish_submission(finished, &chain_api),
+                Some(finished) = OptionFuture::from(resubmission.as_mut().map(|(_, resubmitting)| resubmitting)) => {
+                    resubmission = None;
+                    self.finish_submission(finished, &chain_api);
+                }
                 Some(event) = new_blocks.next() => match event {
                     Ok(event) => {
-                        let resubmission = self.handle_new_block(event, &wallet_adapter, &mempool_adapter, &chain_api).await;
-                        resubmissions.extend(resubmission);
+                        if let Some(activity) = self.handle_new_block(event).await {
+                            if resubmission.is_none() {
+                                resubmission = Some(self.resubmit(activity, &wallet_adapter, &mempool_adapter, &chain_api));
+                            } else {
+                                trace!(target: LOG_TARGET, "the active message is being resubmitted already");
+                            }
+                        }
                     }
                     // The tracker only needs the latest tip, so a skipped
                     // event costs nothing but is worth knowing about.
@@ -514,25 +523,16 @@ where
         }
     }
 
-    async fn handle_new_block<'adapters>(
-        &mut self,
-        event: ProcessedBlockEvent,
-        wallet_adapter: &'adapters WalletAdapter,
-        mempool_adapter: &'adapters MempoolAdapter,
-        chain_api: &'adapters CryptarchiaServiceApi<ChainService>,
-    ) -> Option<PendingSubmission<'adapters>> {
+    /// Lets the tracker check the active message against the new tip, and
+    /// comes to the activity if it's to be resubmitted.
+    async fn handle_new_block(&mut self, event: ProcessedBlockEvent) -> Option<Activity> {
         let Some(tracker) = self.active_message_tracker.as_mut() else {
             trace!(target: LOG_TARGET, "no active message tracker exists");
             return None;
         };
 
         match tracker.handle_tip(event.tip, event.lib).await {
-            Ok(outcome) => self.handle_active_message_tracker_outcome(
-                outcome,
-                wallet_adapter,
-                mempool_adapter,
-                chain_api,
-            ),
+            Ok(outcome) => self.handle_active_message_tracker_outcome(outcome),
             Err(err) => {
                 error!(target: LOG_TARGET, %err, "active message tracker failed to handle tip");
                 None
@@ -540,24 +540,15 @@ where
         }
     }
 
-    fn handle_active_message_tracker_outcome<'adapters>(
+    fn handle_active_message_tracker_outcome(
         &mut self,
         outcome: intent::Outcome<Activity>,
-        wallet_adapter: &'adapters WalletAdapter,
-        mempool_adapter: &'adapters MempoolAdapter,
-        chain_api: &'adapters CryptarchiaServiceApi<ChainService>,
-    ) -> Option<PendingSubmission<'adapters>> {
+    ) -> Option<Activity> {
         match outcome {
             intent::Outcome::StatusChecked {
                 intent: activity,
                 status,
-            } => self.handle_active_message_status(
-                activity,
-                status,
-                wallet_adapter,
-                mempool_adapter,
-                chain_api,
-            ),
+            } => Self::handle_active_message_status(activity, status),
             intent::Outcome::WaitingforMoreTipChanges => {
                 trace!(target: LOG_TARGET, "active message tracker waiting for more tip changes before status check");
                 None
@@ -571,34 +562,59 @@ where
         }
     }
 
-    fn handle_active_message_status<'adapters>(
-        &self,
-        activity: Activity,
-        status: IntentStatus,
-        wallet_adapter: &'adapters WalletAdapter,
-        mempool_adapter: &'adapters MempoolAdapter,
-        chain_api: &'adapters CryptarchiaServiceApi<ChainService>,
-    ) -> Option<PendingSubmission<'adapters>> {
+    fn handle_active_message_status(activity: Activity, status: IntentStatus) -> Option<Activity> {
         match status {
             IntentStatus::NotApplied => {
-                trace!(target: LOG_TARGET, "active message status: not applied in the tip ledger: resubmitting it");
-                let wallet_config = self.wallet_config.clone();
-                Some(Box::pin(async move {
-                    Self::submit_activity(
-                        activity,
-                        wallet_adapter,
-                        mempool_adapter,
-                        chain_api,
-                        &wallet_config,
-                    )
-                    .await;
-                    Submission::ActivityResubmission
-                }))
+                trace!(target: LOG_TARGET, "active message status: not applied in the tip ledger: it's due for resubmission");
+                Some(activity)
             }
             IntentStatus::Applied => {
                 trace!(target: LOG_TARGET, "active message status: applied in the tip ledger: keep tracking it");
                 None
             }
+        }
+    }
+
+    /// Submits the tracked `activity` again, which the tip ledger hasn't
+    /// applied.
+    fn resubmit<'adapters>(
+        &self,
+        activity: Activity,
+        wallet_adapter: &'adapters WalletAdapter,
+        mempool_adapter: &'adapters MempoolAdapter,
+        chain_api: &'adapters CryptarchiaServiceApi<ChainService>,
+    ) -> (Activity, PendingSubmission<'adapters>) {
+        let wallet_config = self.wallet_config.clone();
+        let resubmitting = activity.clone();
+        (
+            activity,
+            Box::pin(async move {
+                Self::submit_activity(
+                    resubmitting,
+                    wallet_adapter,
+                    mempool_adapter,
+                    chain_api,
+                    &wallet_config,
+                )
+                .await;
+                Submission::ActivityResubmission
+            }),
+        )
+    }
+
+    /// Drops `resubmission` if its activity is no longer tracked: a newer one
+    /// replaced it, or it was withdrawn or finalized.
+    fn drop_superseded(&self, resubmission: &mut Option<(Activity, PendingSubmission<'_>)>) {
+        let tracked = self
+            .active_message_tracker
+            .as_ref()
+            .map(IntentTracker::intent);
+        if resubmission
+            .as_ref()
+            .is_some_and(|(activity, _)| tracked != Some(activity))
+        {
+            debug!(target: LOG_TARGET, "dropping the resubmission of an active message that is no longer tracked");
+            *resubmission = None;
         }
     }
 
@@ -1121,7 +1137,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Activity {
     declaration_id: DeclarationId,
     metadata: ActivityMetadata,
