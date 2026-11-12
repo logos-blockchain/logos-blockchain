@@ -52,6 +52,17 @@ pub enum ApiError {
     },
     #[error("Block {0} has already been applied")]
     AlreadyApplied(HeaderId),
+    /// The header is not valid on its own, so the block is invalid.
+    #[error("Invalid block header: {0}")]
+    InvalidHeader(String),
+    /// The slot of the header is not after its parent's, so the block is
+    /// invalid.
+    #[error("Block slot {block:?} is not after its parent's slot {parent:?}")]
+    InvalidSlot { parent: Slot, block: Slot },
+    /// The proof of leadership in the header is invalid, so the block is
+    /// invalid.
+    #[error("Invalid proof of leadership")]
+    InvalidLeaderProof,
     /// The signature over the header is invalid. The signature is not part of
     /// the header, so only the received copy is invalid, not the block.
     #[error("Invalid header signature")]
@@ -571,6 +582,9 @@ impl From<crate::Error> for ApiError {
                 current_slot,
             },
             crate::Error::AlreadyApplied(block_id) => Self::AlreadyApplied(block_id),
+            crate::Error::InvalidHeader(err) => Self::InvalidHeader(err.to_string()),
+            crate::Error::InvalidSlot { parent, block } => Self::InvalidSlot { parent, block },
+            crate::Error::InvalidLeaderProof => Self::InvalidLeaderProof,
             crate::Error::InvalidSignature => Self::InvalidSignature,
             err @ (crate::Error::InvalidUncle { .. } | crate::Error::TooManyUncles { .. }) => {
                 Self::InvalidUncles(err.to_string())

@@ -96,6 +96,8 @@ pub enum Error {
     InvalidHeader(HeaderError),
     #[error("Invalid header signature")]
     InvalidSignature,
+    #[error("Block slot {block:?} is not after its parent's slot {parent:?}")]
+    InvalidSlot { parent: Slot, block: Slot },
     #[error("Invalid proof of leadership")]
     InvalidLeaderProof,
     #[error("Missing parent while applying block {parent}, {info:?}")]

@@ -87,8 +87,6 @@ pub enum Error {
     Serialisation(#[from] lb_binary_codec::bincode::Error),
     #[error("Invalid block: {0}")]
     InvalidBlock(String),
-    #[error("Header is not valid on its own: {0}")]
-    InvalidHeader(#[from] lb_core::block::HeaderError),
     #[error("Invalid block header signature")]
     InvalidSignature,
     #[error("No combination of candidate transactions reproduces the block root")]
@@ -1370,8 +1368,16 @@ mod tests {
         ] {
             assert!(is_recoverable_apply_error(&Error::Cryptarchia(err)));
         }
-        assert!(!is_recoverable_apply_error(&Error::Cryptarchia(
-            ApiError::Unexpected(String::new())
-        )));
+        for err in [
+            ApiError::InvalidHeader(String::new()),
+            ApiError::InvalidSlot {
+                parent: Slot::new(1),
+                block: Slot::new(1),
+            },
+            ApiError::InvalidLeaderProof,
+            ApiError::Unexpected(String::new()),
+        ] {
+            assert!(!is_recoverable_apply_error(&Error::Cryptarchia(err)));
+        }
     }
 }

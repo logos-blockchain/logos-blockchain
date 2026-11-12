@@ -74,6 +74,7 @@ impl VerifiedBlockHeader {
                     parent,
                     info: Box::new(cryptarchia.info()),
                 },
+                LedgerError::InvalidSlot { parent, block } => Error::InvalidSlot { parent, block },
                 err => Error::Ledger(err),
             })?;
         if !header.leader_proof().verify(&public_inputs) {
