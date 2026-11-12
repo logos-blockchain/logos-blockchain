@@ -505,6 +505,9 @@ impl Cryptarchia {
     }
 
     /// Verifies a block header against the block tree at `current_slot`.
+    ///
+    /// Returns [`Error::AlreadyApplied`] without verifying it, if the block is
+    /// already applied.
     pub fn verify_header(
         &self,
         header: Header,
@@ -512,6 +515,11 @@ impl Cryptarchia {
         signature: Ed25519Signature,
         current_slot: Slot,
     ) -> Result<VerifiedBlockHeader, Error> {
+        let id = header.id();
+        if self.ledger.state(&id).is_some() {
+            return Err(Error::AlreadyApplied(id));
+        }
+
         VerifiedBlockHeader::new(header, uncle_headers, signature, self, current_slot)
     }
 

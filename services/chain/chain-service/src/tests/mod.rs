@@ -437,6 +437,28 @@ fn unknown_parent_is_reported_missing() {
     ));
 }
 
+/// The header of a block that is already applied is reported as such, without
+/// being verified again.
+#[test]
+fn header_of_applied_block_is_reported_already_applied() {
+    let (mut cryptarchia, block) = test_chain_with_next_block();
+    let slot = block.header().slot();
+    cryptarchia
+        .try_apply_block(block.clone(), slot)
+        .expect("the block should be applied");
+
+    let result = cryptarchia.verify_header(
+        block.header().clone(),
+        block.uncle_headers().clone(),
+        *block.signature(),
+        slot,
+    );
+    assert!(matches!(
+        result,
+        Err(Error::AlreadyApplied(id)) if id == block.header().id()
+    ));
+}
+
 /// A copy of a block carrying other transactions than its header commits to
 /// is rejected, even though its header is valid.
 #[test]
