@@ -1,14 +1,13 @@
 use std::{
     borrow::Borrow,
     collections::{HashMap, HashSet},
-    time::Duration,
 };
 
 use lb_core::{
     header::HeaderId,
     mantle::{
         GasProfile, Note, Value,
-        notes::{NoteCommitment, NoteNullifier},
+        notes::NoteNullifier,
         ops::transfer::TransferOp,
         transactions::{
             MantleTxBuilder,
@@ -21,16 +20,13 @@ use lb_groth16::Fr;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_log_targets::wallet;
 use lb_wallet::{KnownNote, KnownNotes, WalletBlock, WalletError, WalletState};
-use overwatch::{DynError, services::state::StateUpdater};
+use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 use crate::{KeyId, WalletServiceError, WalletServiceSettings};
 
 pub type Wallet = lb_wallet::Wallet<KeyId>;
-
-/// How often the persisted state is read while a note is on its way to it.
-const NOTE_PERSISTENCE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Notes handed out as funding for transactions that have been built but not
 /// yet observed on chain. Ephemeral: rebuilt empty on restart; entries are
@@ -129,31 +125,6 @@ impl RecoveryState {
     }
 }
 
-/// Returns once the persisted state, as `load` reads it, knows the note of
-/// `commitment`. The state operator persists the states in order and a later
-/// state knows the notes of an earlier one, so the note stays persisted from
-/// then on.
-pub async fn wait_until_note_persisted<LoadFuture>(
-    load: impl Fn() -> LoadFuture + Send + Sync,
-    commitment: NoteCommitment,
-    timeout: Duration,
-) -> Result<(), WalletServiceError>
-where
-    LoadFuture: Future<Output = Result<Option<RecoveryState>, DynError>> + Send,
-{
-    tokio::time::timeout(timeout, async {
-        loop {
-            let persisted = load().await.map_err(WalletServiceError::PersistedState)?;
-            if persisted.is_some_and(|state| state.known_notes.contains_key(&commitment)) {
-                return Ok(());
-            }
-            tokio::time::sleep(NOTE_PERSISTENCE_POLL_INTERVAL).await;
-        }
-    })
-    .await
-    .map_err(|_| WalletServiceError::NoteNotPersisted(commitment))?
-}
-
 impl overwatch::services::state::ServiceState for RecoveryState {
     type Settings = WalletServiceSettings;
     type Error = WalletServiceError;
@@ -176,6 +147,10 @@ pub struct ServiceState<'u> {
     pending_notes: PendingNotes,
     pending_note_expiry_blocks: u64,
     fee_margin_percent: u64,
+    // The leader reward notes the LIB does not hold yet. Nothing on chain
+    // opens them, so the service writes them to storage itself, and confirmed,
+    // before handing one out.
+    reward_notes: KnownNotes,
 }
 
 impl<'u> ServiceState<'u> {
@@ -248,6 +223,7 @@ impl<'u> ServiceState<'u> {
             pending_notes: PendingNotes::default(),
             pending_note_expiry_blocks: settings.pending_note_expiry_blocks,
             fee_margin_percent: settings.fee_margin_percent,
+            reward_notes: KnownNotes::new(),
         }
     }
 
@@ -279,6 +255,34 @@ impl<'u> ServiceState<'u> {
     pub fn add_known_notes(&mut self, notes: impl IntoIterator<Item = KnownNote>) {
         self.wallet.add_known_notes(notes);
         self.update_state();
+    }
+
+    pub const fn reward_notes(&self) -> &KnownNotes {
+        &self.reward_notes
+    }
+
+    // The reward notes written before a restart, known again.
+    pub fn restore_reward_notes(&mut self, notes: KnownNotes) {
+        self.add_known_notes(notes.values().copied());
+        self.reward_notes = notes;
+    }
+
+    pub fn add_reward_note(&mut self, note: KnownNote) {
+        self.add_known_notes([note]);
+        self.reward_notes.insert(note.note.commitment(), note);
+    }
+
+    // Forgets the reward notes the LIB holds, which the LIB wallet state
+    // persists from then on, and tells whether there were any. A note the LIB
+    // only holds once it is already spent stays.
+    pub fn forget_reward_notes_at_lib(&mut self) -> bool {
+        let Ok(lib_state) = self.wallet.wallet_state_at(self.lib) else {
+            return false;
+        };
+        let count = self.reward_notes.len();
+        self.reward_notes
+            .retain(|commitment, _| !lib_state.notes.contains_key(commitment));
+        self.reward_notes.len() != count
     }
 
     pub fn apply_block(&mut self, block: &WalletBlock) -> Result<(), WalletError> {
@@ -420,10 +424,9 @@ fn known_keys(settings: &WalletServiceSettings) -> impl Iterator<Item = (ZkPubli
 
 #[cfg(test)]
 mod tests {
-    use core::num::NonZero;
-    use std::{collections::VecDeque, sync::Mutex};
+    use core::{num::NonZero, time::Duration};
 
-    use lb_core::mantle::note_set::NoteSetIndex;
+    use lb_core::mantle::{note_set::NoteSetIndex, notes::NoteCommitment};
     use lb_groth16::Field as _;
 
     use super::*;
@@ -470,56 +473,6 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
         assert_eq!(decoded.known_notes, state.known_notes);
         assert_eq!(decoded.next_reward_key_index, 4);
-    }
-
-    #[tokio::test]
-    async fn a_note_counts_as_persisted_once_the_persisted_state_knows_it() {
-        let note = KnownNote {
-            note: Note::new(10, Fr::ONE, ZkPublicKey::new(Fr::from(2u64))),
-            note_set: NoteSetIndex::Ledger,
-            nullifier: NoteNullifier(Fr::from(3u64)),
-        };
-        let commitment = note.note.commitment();
-        let without_note = RecoveryState {
-            lib_wallet_state: None,
-            known_notes: HashMap::new(),
-            next_reward_key_index: 0,
-        };
-        let with_note = RecoveryState {
-            known_notes: HashMap::from([(commitment, note)]),
-            ..without_note.clone()
-        };
-
-        let reads = Mutex::new(VecDeque::from([
-            None,
-            Some(without_note.clone()),
-            Some(with_note),
-        ]));
-        wait_until_note_persisted(
-            || {
-                let read = reads.lock().unwrap().pop_front().flatten();
-                async move { Ok(read) }
-            },
-            commitment,
-            Duration::from_secs(5),
-        )
-        .await
-        .unwrap();
-        assert!(reads.lock().unwrap().is_empty());
-
-        let never = wait_until_note_persisted(
-            || {
-                let read = Some(without_note.clone());
-                async move { Ok(read) }
-            },
-            commitment,
-            Duration::from_millis(50),
-        )
-        .await;
-        assert!(matches!(
-            never,
-            Err(WalletServiceError::NoteNotPersisted(unpersisted)) if unpersisted == commitment
-        ));
     }
 
     #[test]
@@ -672,5 +625,71 @@ mod tests {
         // No panic: the advance is skipped and the LIB stays at a block whose
         // WalletState exists.
         assert_eq!(state.lib(), genesis);
+    }
+
+    #[test]
+    fn reward_notes_are_kept_until_the_lib_holds_them() {
+        use std::sync::Arc;
+
+        use lb_services_utils::overwatch::RecoveryData;
+
+        let settings = WalletServiceSettings {
+            known_keys: HashMap::new(),
+            voucher_master_key_id: "voucher-master".into(),
+            recovery_data: RecoveryData::default(),
+            pending_note_expiry_blocks: 10,
+            fee_margin_percent: DEFAULT_FEE_MARGIN_PERCENT,
+            era_schedule: era_schedule(),
+        };
+        let recovery = RecoveryState {
+            lib_wallet_state: None,
+            known_notes: HashMap::new(),
+            next_reward_key_index: 0,
+        };
+        let known_note = |value| KnownNote {
+            note: Note::new(value, Fr::ONE, ZkPublicKey::new(Fr::from(2u64))),
+            note_set: NoteSetIndex::Ledger,
+            nullifier: NoteNullifier(Fr::from(value)),
+        };
+        // the LIB holds `on_chain`, while `pending` is in a block not final yet
+        let on_chain = known_note(10);
+        let pending = known_note(20);
+        let (sender, _receiver) = tokio::sync::watch::channel(None);
+        let updater = StateUpdater::new(Arc::new(sender));
+        let mut state = ServiceState::from_genesis(
+            recovery,
+            &settings,
+            HeaderId::from([0; 32]),
+            &[on_chain.note],
+            &[],
+            [on_chain],
+            &updater,
+        )
+        .unwrap();
+
+        state.add_reward_note(pending);
+        assert!(!state.forget_reward_notes_at_lib());
+        assert_eq!(
+            state.reward_notes(),
+            &HashMap::from([(pending.note.commitment(), pending)])
+        );
+        assert!(
+            state
+                .wallet()
+                .known_notes()
+                .contains_key(&pending.note.commitment())
+        );
+
+        // restored after a restart, the notes are known again, and the one the
+        // LIB holds is forgotten
+        state.restore_reward_notes(HashMap::from([
+            (on_chain.note.commitment(), on_chain),
+            (pending.note.commitment(), pending),
+        ]));
+        assert!(state.forget_reward_notes_at_lib());
+        assert_eq!(
+            state.reward_notes(),
+            &HashMap::from([(pending.note.commitment(), pending)])
+        );
     }
 }

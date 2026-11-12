@@ -1,11 +1,13 @@
 use std::iter;
 
 use tempfile::TempDir;
+use tokio::sync::oneshot;
 
 use super::{
     handlers::{streamed_immutable_block_ids_reverse_vec, streamed_immutable_block_ids_vec},
     *,
 };
+use crate::StorageMsg;
 
 #[test]
 fn loads_prefix_entries() {
@@ -462,4 +464,51 @@ async fn test_transaction_basic_flow() {
     let empty_stream = backend.get_transactions(iter::once(tx_hash).collect());
     let empty: Vec<_> = empty_stream.collect().await;
     assert_eq!(empty, Vec::<Bytes>::new());
+}
+
+#[tokio::test]
+async fn a_confirmed_store_replies_once_written() {
+    let directory = TempDir::new().unwrap();
+    let settings = RocksBackendSettings {
+        db_path: directory.path().into(),
+        read_only: false,
+        column_family: None,
+    };
+    let mut backend = RocksBackend::new(settings.clone()).unwrap();
+    let (reply_channel, reply) = oneshot::channel();
+    handle_request(
+        StorageMsg::StoreConfirmed {
+            key: Bytes::from_static(b"key"),
+            value: Bytes::from_static(b"value"),
+            reply_channel,
+        },
+        &mut backend,
+    )
+    .await
+    .unwrap();
+    assert_eq!(reply.await.unwrap(), Ok(()));
+    assert_eq!(
+        backend.load(b"key").await.unwrap(),
+        Some(Bytes::from_static(b"value"))
+    );
+    drop(backend);
+
+    // a write the backend refuses is replied with its error
+    let mut read_only = RocksBackend::new(RocksBackendSettings {
+        read_only: true,
+        ..settings
+    })
+    .unwrap();
+    let (reply_channel, reply) = oneshot::channel();
+    let handled = handle_request(
+        StorageMsg::StoreConfirmed {
+            key: Bytes::from_static(b"key"),
+            value: Bytes::from_static(b"other"),
+            reply_channel,
+        },
+        &mut read_only,
+    )
+    .await;
+    assert!(handled.is_err());
+    assert!(reply.await.unwrap().is_err());
 }

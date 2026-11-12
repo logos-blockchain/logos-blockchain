@@ -57,15 +57,12 @@ use lb_services_utils::{
     overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings},
     wait_until_services_are_ready,
 };
-use lb_storage_service::{
-    api::StorageApi,
-    recovery::{StorageRecoveryBackend, recovery_key},
-};
+use lb_storage_service::{api::StorageApi, recovery::StorageRecoveryBackend};
 use lb_time::era::{EpochLength, EraSchedule};
 use lb_utils::bounded::BoundedError;
 pub use lb_wallet::DEFAULT_FEE_MARGIN_PERCENT;
 use lb_wallet::{
-    KnownNote, OwnedNote, WalletBalance, WalletBlock, WalletError, WalletState,
+    KnownNote, KnownNotes, OwnedNote, WalletBalance, WalletBlock, WalletError, WalletState,
     transaction::{OpWitness, WitnessContext, op_witness_at, op_witnesses},
 };
 use overwatch::{
@@ -81,16 +78,15 @@ use tokio::{
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{debug, error, info, trace, warn};
 
-use crate::states::{RecoveryState, ServiceState, Wallet, wait_until_note_persisted};
+use crate::states::{RecoveryState, ServiceState, Wallet};
 
 type KmsBackend = PreloadKMSBackend;
 type KeyId = <KmsBackend as KMSBackend>::KeyId;
 
 const LOG_TARGET: &str = wallet::SERVICE;
 
-/// How long a leader reward note may take to reach the persisted state before
-/// its block is given up.
-const LEADER_REWARD_PERSISTENCE_TIMEOUT: Duration = Duration::from_secs(5);
+/// The storage key of the leader reward notes the LIB does not hold yet.
+const REWARD_NOTES_KEY: &[u8] = b"wallet/reward_notes";
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletServiceError {
@@ -133,10 +129,7 @@ pub enum WalletServiceError {
     #[error("The wallet holds no key for {0:?}")]
     UnknownKey(ZkPublicKey),
 
-    #[error("The note {0:?} did not reach the persisted state of the wallet")]
-    NoteNotPersisted(NoteCommitment),
-
-    #[error("Failed to read the persisted state of the wallet: {0}")]
+    #[error("Failed to read or write the persisted state of the wallet: {0}")]
     PersistedState(DynError),
 
     #[error("blocking task failed: {0}")]
@@ -527,6 +520,7 @@ where
             &kms,
         )
         .await?;
+        state.restore_reward_notes(Self::read_reward_notes(&storage).await?);
         let voucher_master_key_id = settings.voucher_master_key_id;
 
         Self::backfill_missing_blocks(
@@ -1298,10 +1292,11 @@ where
         })
     }
 
-    async fn import_note(
+    // The note with the nullifier the key of the wallet it is under derives.
+    async fn held_note(
         note: Note,
         note_set: NoteSetIndex,
-        state: &mut ServiceState<'_>,
+        state: &ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<KnownNote, WalletServiceError> {
         let key_id = state
@@ -1310,14 +1305,23 @@ where
             .get(&note.public_key)
             .cloned()
             .ok_or(WalletServiceError::UnknownKey(note.public_key))?;
-        let known_note = Self::known_note(kms, key_id, note, note_set).await?;
+        Self::known_note(kms, key_id, note, note_set).await
+    }
+
+    async fn import_note(
+        note: Note,
+        note_set: NoteSetIndex,
+        state: &mut ServiceState<'_>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<KnownNote, WalletServiceError> {
+        let known_note = Self::held_note(note, note_set, state, kms).await?;
         state.add_known_notes([known_note]);
         Ok(known_note)
     }
 
     // A new leader reward note under `public_key`, with a private random nonce.
-    // Nothing on chain opens the note, so it is returned only once the persisted
-    // state knows it: a crash after its block is published cannot lose the reward.
+    // Nothing on chain opens the note, so it is returned only once it is written
+    // to storage: a crash after its block is published cannot lose the reward.
     // A note of value 0 holds nothing to lose, so the wallet does not track it.
     async fn new_leader_reward(
         value: Value,
@@ -1330,15 +1334,28 @@ where
         if value == 0 {
             return Ok(note);
         }
-        Self::import_note(note, NoteSetIndex::Ledger, state, kms).await?;
-        let key = recovery_key(WalletServiceSettings::RECOVERY_KEY_SUFFIX);
-        wait_until_note_persisted(
-            || storage.load::<RecoveryState>(key.clone()),
-            note.commitment(),
-            LEADER_REWARD_PERSISTENCE_TIMEOUT,
-        )
-        .await?;
+        let known_note = Self::held_note(note, NoteSetIndex::Ledger, state, kms).await?;
+        state.add_reward_note(known_note);
+        Self::write_reward_notes(state, storage).await?;
         Ok(note)
+    }
+
+    async fn write_reward_notes(
+        state: &ServiceState<'_>,
+        storage: &StorageApi<Tx>,
+    ) -> Result<(), WalletServiceError> {
+        storage
+            .store_confirmed(Bytes::from_static(REWARD_NOTES_KEY), state.reward_notes())
+            .await
+            .map_err(WalletServiceError::PersistedState)
+    }
+
+    async fn read_reward_notes(storage: &StorageApi<Tx>) -> Result<KnownNotes, WalletServiceError> {
+        storage
+            .load(Bytes::from_static(REWARD_NOTES_KEY))
+            .await
+            .map(Option::unwrap_or_default)
+            .map_err(WalletServiceError::PersistedState)
     }
 
     // Registers the change note `funded` returns to a key of the wallet.
@@ -1714,6 +1731,21 @@ where
 
         let new_immutable_blocks_count = lib_update.pruned_blocks.immutable_blocks.len() as u64;
         state.advance_lib(lib_update.new_lib, new_immutable_blocks_count);
+        Self::forget_reward_notes_at_lib(state, storage).await;
+    }
+
+    // A reward note left in storage is only known again on a restart, so a
+    // failure to forget it is not one of the LIB update.
+    async fn forget_reward_notes_at_lib(state: &mut ServiceState<'_>, storage: &StorageApi<Tx>) {
+        if state.forget_reward_notes_at_lib()
+            && let Err(err) = Self::write_reward_notes(state, storage).await
+        {
+            warn!(
+                target: LOG_TARGET,
+                err = %err,
+                "Failed to forget the reward notes the LIB holds; they stay in storage"
+            );
+        }
     }
 
     #[expect(

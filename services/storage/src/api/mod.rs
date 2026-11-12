@@ -78,6 +78,23 @@ impl<Tx> StorageApi<Tx> {
         Ok(())
     }
 
+    /// Like [`Self::store`], returning once the value is written, with the
+    /// result of the write.
+    pub async fn store_confirmed<Value: Serialize>(
+        &self,
+        key: Bytes,
+        value: Value,
+    ) -> Result<(), DynError> {
+        let value = value.to_bytes()?;
+        self.request(|reply_channel| StorageMsg::StoreConfirmed {
+            key,
+            value,
+            reply_channel,
+        })
+        .await?
+        .map_err(Into::into)
+    }
+
     pub async fn load<Value: DeserializeOwned>(
         &self,
         key: Bytes,

@@ -36,6 +36,11 @@ pub async fn handle_request(
                 .await;
         }
         StorageMsg::Store { key, value } => return handle_store(backend, key, value).await,
+        StorageMsg::StoreConfirmed {
+            key,
+            value,
+            reply_channel,
+        } => return handle_store_confirmed(backend, key, value, reply_channel).await,
         StorageMsg::Remove { key, reply_channel } => {
             return handle_remove(backend, key, reply_channel).await;
         }
@@ -185,6 +190,21 @@ async fn handle_store(
         .store(key, value)
         .await
         .map_err(|e| StorageServiceError::BackendError(e.into()))
+}
+
+async fn handle_store_confirmed(
+    backend: &mut RocksBackend,
+    key: Bytes,
+    value: Bytes,
+    reply_channel: Sender<Result<(), String>>,
+) -> Result<(), StorageServiceError> {
+    let result = handle_store(backend, key, value).await;
+    reply_channel
+        .send(result.as_ref().map_err(ToString::to_string).copied())
+        .map_err(|_| StorageServiceError::ReplyError {
+            message: "Store confirmed".to_owned(),
+        })?;
+    result
 }
 
 /// Handle execute message
