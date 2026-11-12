@@ -800,13 +800,11 @@ where
         let leaf = NullifierLeaf {
             nullifier,
             next_nullifier: low.leaf.next_nullifier,
-            next_index: low.leaf.next_index,
         };
         let low = LowLeaf {
             index: low.index,
             leaf: NullifierLeaf {
                 next_nullifier: nullifier,
-                next_index: index,
                 ..low.leaf
             },
         };

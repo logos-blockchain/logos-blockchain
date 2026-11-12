@@ -470,13 +470,11 @@ pub fn pol_wallet_inputs(
         nullifier_root_aged: aged_set.nullifier_root()?,
         low_leaf_aged_nullifier: low_aged.nullifier,
         low_leaf_aged_next_nullifier: low_aged.next_nullifier,
-        low_leaf_aged_next_index: low_aged.next_index.as_u64(),
         low_leaf_aged_path,
         low_leaf_aged_selectors,
         set_aged_path,
         low_leaf_nullifier: low.nullifier,
         low_leaf_next_nullifier: low.next_nullifier,
-        low_leaf_next_index: low.next_index.as_u64(),
         low_leaf_path,
         low_leaf_selectors,
         commitment_root_latest: latest_set.commitment_root(),
@@ -786,12 +784,8 @@ mod tests {
             sets.ledger().nullifier_root().unwrap()
         );
         assert_eq!(
-            (
-                wallet.low_leaf_nullifier,
-                wallet.low_leaf_next_nullifier,
-                wallet.low_leaf_next_index
-            ),
-            (Fr::ZERO, Fr::ZERO, 0)
+            (wallet.low_leaf_nullifier, wallet.low_leaf_next_nullifier,),
+            (Fr::ZERO, Fr::ZERO)
         );
         assert_eq!(wallet.set_selectors, [false; 40]);
 

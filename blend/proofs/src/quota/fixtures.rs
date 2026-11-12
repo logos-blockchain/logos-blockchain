@@ -176,7 +176,6 @@ pub fn valid_proof_of_leadership_quota_inputs(
         commitment_aged_path_and_selectors: wallet.commitment_aged_path_and_selectors,
         low_leaf_aged_nullifier: wallet.low_leaf_aged_nullifier,
         low_leaf_aged_next_nullifier: wallet.low_leaf_aged_next_nullifier,
-        low_leaf_aged_next_index: wallet.low_leaf_aged_next_index,
         low_leaf_aged_path_and_selectors: wallet.low_leaf_aged_path_and_selectors,
         set_aged_path_and_selectors: wallet.set_aged_path_and_selectors,
         nullifier_key: wallet.pol_nullifier_key,

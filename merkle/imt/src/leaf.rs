@@ -43,15 +43,17 @@ impl AsRef<u64> for LeafIndex {
     }
 }
 
-/// A leaf of the tree, pointing to the leaf of the next greater nullifier
-/// (`next_nullifier` and `next_index` are 0 if there is none).
+/// A leaf of the tree, holding the next greater nullifier (0 if there is none).
+///
+/// The leaves form a sorted list through their next nullifiers. Proving a
+/// nullifier absent takes the low leaf alone, so a leaf does not hold the
+/// position of the next one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
 pub struct NullifierLeaf {
     #[serde(with = "serde_fr")]
     pub nullifier: Fr,
     #[serde(with = "serde_fr")]
     pub next_nullifier: Fr,
-    pub next_index: LeafIndex,
 }
 
 impl NullifierLeaf {
@@ -59,16 +61,10 @@ impl NullifierLeaf {
     pub const SENTINEL: Self = Self {
         nullifier: Fr::ZERO,
         next_nullifier: Fr::ZERO,
-        next_index: LeafIndex::new(0),
     };
 
     #[must_use]
     pub fn hash<Hash: Digest>(&self) -> Fr {
-        Hash::digest(&[
-            *NULLIFIER_IMT_LEAF_V1,
-            self.nullifier,
-            self.next_nullifier,
-            Fr::from(self.next_index.as_u64()),
-        ])
+        Hash::digest(&[*NULLIFIER_IMT_LEAF_V1, self.nullifier, self.next_nullifier])
     }
 }

@@ -145,7 +145,6 @@ pub struct ProofOfLeadershipQuotaInputs {
     pub commitment_aged_path_and_selectors: AgedNotePathAndSelectors,
     pub low_leaf_aged_nullifier: ZkHash,
     pub low_leaf_aged_next_nullifier: ZkHash,
-    pub low_leaf_aged_next_index: u64,
     pub low_leaf_aged_path_and_selectors: AgedLowLeafPathAndSelectors,
     pub set_aged_path_and_selectors: AgedSetPathAndSelectors,
     // The nullifier key derives the public key and the nullifier of the note,

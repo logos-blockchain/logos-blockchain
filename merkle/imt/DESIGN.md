@@ -68,14 +68,14 @@ Decisions taken:
 - `Ledger` keeps a `HashTrieMap<Id, LedgerState>` with one cloned state per
   block (`ledger/src/lib.rs:149`). Forks are correct today only because the
   `rpds` versions are persistent.
-- An insert appends a leaf at `len`, rewrites the low leaf's `next_nullifier` /
-  `next_index`, and rehashes the paths of both leaves. Positions are
+- An insert appends a leaf at `len`, rewrites the low leaf's `next_nullifier`,
+  and rehashes the paths of both leaves. Positions are
   append-only; leaf contents and nodes are not. In a shared KV, every one of
   those keys collides between sibling forks, the appended leaf position
   included: two forks put different nullifiers at the same index, and a
   nullifier of one fork must be invisible to the other. The low leaf rewrite
   is mandated by the spec, since the leaf hash under `NULLIFIER_IMT_LEAF_V1`
-  commits to `next_*`, and the circuits rely on it.
+  commits to `next_nullifier`, and the circuits rely on it.
 - Chain-service persists `lib_ledger_state`
   (`services/chain/chain-service/src/states.rs:14`), which today contains every
   leaf, and on restart replays the blocks from the LIB to the tip.
@@ -170,15 +170,17 @@ pub enum StoredNode {
     Leaf { leaf: NullifierLeaf },             // hash = leaf.hash::<H>()
 }
 
-pub struct NullifierLeaf { pub nullifier: Fr, pub next_nullifier: Fr, pub next_index: LeafIndex }
+pub struct NullifierLeaf { pub nullifier: Fr, pub next_nullifier: Fr }
 ```
 
 - A parent stores the hashes of its children, so a walk from the root to a
   leaf reads exactly H nodes and finds every sibling of the `path` on the way.
-- A leaf node stores the whole `NullifierLeaf`, `next_*` included. Since nodes
+- A leaf node stores the whole `NullifierLeaf`, `next_nullifier` included. Since nodes
   are versioned, rewriting the low leaf just writes a new version of its node,
   and no successor lookup is needed.
-- The leaf hash is unchanged: it hashes `Fr::from(next_index.0)`.
+- A leaf does not hold the position of the next leaf: non-membership takes
+  the low leaf alone (`low < n < low.next_nullifier`), so the leaf hash is
+  `H(DST, nullifier, next_nullifier)`, as in circuits v0.7.3.
 - A finalized tree takes about 2N nodes (about 100 B each) plus N index
   entries (about 50 B each), so **about 250 B raw per nullifier**.
 - Nodes are immutable, so a process-wide LRU `NodeCache` keyed by `NodeKey`
@@ -260,8 +262,8 @@ fully described by its `len` and `root`.
 - `insert(n)`:
   1. Reject zero, a duplicate, or a full tree.
   2. Find the low leaf.
-  3. Stage the rewritten low leaf `{next = n, next_index = len}` and the new
-     leaf `{n, low.next_*}` in `pending.leaves`.
+  3. Stage the rewritten low leaf `{next = n}` and the new leaf
+     `{n, low.next_nullifier}` in `pending.leaves`.
   4. Add `n` to the overlay.
 - `seal()`:
   1. Collect the dirty positions, level by level.
@@ -750,7 +752,7 @@ before we rely on them.
 | Nullifier structure | IMT, height 40 | plain set in a DB, no tree | plain sets in RocksDB column families | IMT, height 40 |
 | Non-membership proof | in the circuit, through the low leaf | none (nodes check the set) | none | in the circuit, through the low leaf |
 | Low-leaf rewrite | yes | n/a | n/a | yes |
-| Leaf | `H(DST, nullifier, next_nullifier, next_index)` | n/a | n/a | `H(value, next_index, next_value)` |
+| Leaf | `H(DST, nullifier, next_nullifier)` | n/a | n/a | `H(value, next_index, next_value)` |
 | Insertion | one at a time, hashing deferred per block | set insert | set insert | batched per tx as a subtree |
 | Fork model | many forks validated and readable up to the LIB | a single active chain; a reorg disconnects and reconnects blocks | non-finalized forks in memory (≤ 100 blocks), finalized state in RocksDB | essentially linear; reorgs unwind blocks; short-lived forks for simulation and block building |
 | Fork isolation | CoW nodes keyed by `(version, level, index)`, plus an overlay for the index | undo data per block, layered coins cache | one in-memory `Chain` per fork | an in-memory fork cache over committed state stored per block |

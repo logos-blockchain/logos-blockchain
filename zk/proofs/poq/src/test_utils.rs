@@ -64,7 +64,6 @@ pub fn leader_witness_data() -> (PoQChainInputsData, PoQCommonInputsData, PoQWal
         ),
         low_leaf_aged_nullifier: fr(&json["pol_low_leaf_nf"]),
         low_leaf_aged_next_nullifier: fr(&json["pol_low_leaf_next_nf"]),
-        low_leaf_aged_next_index: u64_value(&json["pol_low_leaf_next_index"]),
         low_leaf_aged_path_and_selectors: path_and_selectors(
             &json["pol_low_leaf_path"],
             &json["pol_low_leaf_selectors"],

@@ -87,7 +87,6 @@ pub fn leadership_quota_inputs(leader_private: &LeaderPrivate) -> ProofOfLeaders
                 commitment_aged_selectors,
                 low_leaf_aged_nullifier,
                 low_leaf_aged_next_nullifier,
-                low_leaf_aged_next_index,
                 low_leaf_aged_path,
                 low_leaf_aged_selectors,
                 set_aged_path,
@@ -109,7 +108,6 @@ pub fn leadership_quota_inputs(leader_private: &LeaderPrivate) -> ProofOfLeaders
         }),
         low_leaf_aged_nullifier: *low_leaf_aged_nullifier,
         low_leaf_aged_next_nullifier: *low_leaf_aged_next_nullifier,
-        low_leaf_aged_next_index: *low_leaf_aged_next_index,
         low_leaf_aged_path_and_selectors: core::array::from_fn(|i| {
             (low_leaf_aged_path[i], low_leaf_aged_selectors[i])
         }),

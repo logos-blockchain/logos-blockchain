@@ -83,7 +83,6 @@ impl PoQWitnessInputs {
             commitment_aged_path_and_selectors: [(Fr::ZERO, false); _],
             low_leaf_aged_nullifier: Fr::ZERO,
             low_leaf_aged_next_nullifier: Fr::ZERO,
-            low_leaf_aged_next_index: 0,
             low_leaf_aged_path_and_selectors: [(Fr::ZERO, false); _],
             set_aged_path_and_selectors: [(Fr::ZERO, false); _],
             pol_nullifier_key: Fr::ZERO,

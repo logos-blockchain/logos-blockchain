@@ -512,14 +512,12 @@ impl StoreValue for NullifierLeaf {
     fn write(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&fr_to_bytes(&self.nullifier));
         out.extend_from_slice(&fr_to_bytes(&self.next_nullifier));
-        out.extend_from_slice(&self.next_index.as_u64().to_be_bytes());
     }
 
     fn read(reader: &mut Reader<'_>) -> Result<Self, CodecError> {
         Ok(Self {
             nullifier: reader.fr()?,
             next_nullifier: reader.fr()?,
-            next_index: LeafIndex::new(reader.u64()?),
         })
     }
 }
@@ -682,7 +680,6 @@ mod tests {
             leaf: NullifierLeaf {
                 nullifier: -Fr::ONE,
                 next_nullifier: Fr::from(1),
-                next_index: LeafIndex::new(9),
             },
         });
         roundtrip_value(&IndexEntry {

@@ -11,7 +11,7 @@ use lb_poseidon2::{Digest, Fr};
 use lb_utxotree::UtxoMerkleHasher;
 use rpds::{RedBlackTreeMapSync, RedBlackTreeSetSync, VectorSync};
 
-use crate::{LeafIndex, NullifierLeaf};
+use crate::NullifierLeaf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ImtError {
@@ -120,11 +120,9 @@ impl<Hash: Digest, const HEIGHT: usize> IndexedMerkleTree<Hash, HEIGHT> {
         let new_leaf = NullifierLeaf {
             nullifier,
             next_nullifier: low.next_nullifier,
-            next_index: low.next_index,
         };
         let low = NullifierLeaf {
             next_nullifier: nullifier,
-            next_index: LeafIndex::new(n as u64),
             ..*low
         };
 
@@ -226,13 +224,11 @@ impl<Hash: Digest, const HEIGHT: usize> IndexedMerkleTree<Hash, HEIGHT> {
         }
         let mut entries = sorted.iter().peekable();
         while let Some((_, index)) = entries.next() {
-            let (next_nullifier, next_index) = entries
+            let next_nullifier = entries
                 .peek()
-                .map_or((Fr::ZERO, 0), |(next_nullifier, next_index)| {
-                    (**next_nullifier, **next_index)
-                });
+                .map_or(Fr::ZERO, |(next_nullifier, _)| **next_nullifier);
             let leaf = &leaves[*index as usize];
-            if leaf.next_nullifier != next_nullifier || leaf.next_index.as_u64() != next_index {
+            if leaf.next_nullifier != next_nullifier {
                 return Err("leaves do not form the sorted linked list");
             }
         }
@@ -304,11 +300,10 @@ mod tests {
         Fr::from(n)
     }
 
-    fn leaf(nullifier: u64, next_nullifier: u64, next_index: u64) -> NullifierLeaf {
+    fn leaf(nullifier: u64, next_nullifier: u64) -> NullifierLeaf {
         NullifierLeaf {
             nullifier: fr(nullifier),
             next_nullifier: fr(next_nullifier),
-            next_index: LeafIndex::new(next_index),
         }
     }
 
@@ -338,9 +333,15 @@ mod tests {
     // Nullifiers in linked list order, starting after the sentinel.
     fn walk_sorted(imt: &Imt) -> Vec<Fr> {
         let mut nullifiers = Vec::new();
-        let mut current = imt.leaf(0).unwrap();
+        let leaves: Vec<NullifierLeaf> = (0..imt.len() as u64)
+            .map(|index| *imt.leaf(index).unwrap())
+            .collect();
+        let mut current = leaves[0];
         while current.next_nullifier != Fr::ZERO {
-            current = imt.leaf(current.next_index.as_u64()).unwrap();
+            current = *leaves
+                .iter()
+                .find(|leaf| leaf.nullifier == current.next_nullifier)
+                .unwrap();
             nullifiers.push(current.nullifier);
         }
         nullifiers
@@ -367,7 +368,6 @@ mod tests {
         let sentinel = NullifierLeaf {
             nullifier: Fr::ZERO,
             next_nullifier: Fr::ZERO,
-            next_index: LeafIndex::new(0),
         };
         assert_eq!(imt.root(), naive_root(&[sentinel.hash::<ZkHasher>()]));
         assert_ne!(imt.root(), TestHasher::empty_subtree_root(40)); // the sentinel is not an empty position
@@ -382,10 +382,10 @@ mod tests {
             .unwrap()
             .insert(fr(20))
             .unwrap();
-        assert_eq!(*imt.leaf(0).unwrap(), leaf(0, 10, 2));
-        assert_eq!(*imt.leaf(1).unwrap(), leaf(30, 0, 0));
-        assert_eq!(*imt.leaf(2).unwrap(), leaf(10, 20, 3));
-        assert_eq!(*imt.leaf(3).unwrap(), leaf(20, 30, 1));
+        assert_eq!(*imt.leaf(0).unwrap(), leaf(0, 10));
+        assert_eq!(*imt.leaf(1).unwrap(), leaf(30, 0));
+        assert_eq!(*imt.leaf(2).unwrap(), leaf(10, 20));
+        assert_eq!(*imt.leaf(3).unwrap(), leaf(20, 30));
         assert_eq!(imt.root(), naive_root(&imt_leaf_hashes(&imt)));
     }
 

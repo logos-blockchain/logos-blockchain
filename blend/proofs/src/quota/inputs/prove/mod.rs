@@ -90,7 +90,6 @@ fn witness_input_for_proof_type(
                 commitment_aged_path_and_selectors,
                 low_leaf_aged_nullifier,
                 low_leaf_aged_next_nullifier,
-                low_leaf_aged_next_index,
                 low_leaf_aged_path_and_selectors,
                 set_aged_path_and_selectors,
             } = *leadership_quota_private_inputs;
@@ -106,7 +105,6 @@ fn witness_input_for_proof_type(
                 commitment_aged_path_and_selectors,
                 low_leaf_aged_nullifier,
                 low_leaf_aged_next_nullifier,
-                low_leaf_aged_next_index,
                 low_leaf_aged_path_and_selectors,
                 set_aged_path_and_selectors,
             };

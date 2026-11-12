@@ -490,7 +490,6 @@ pub fn dummy_pol_private_inputs() -> ProofOfLeadershipQuotaInputs {
         commitment_aged_path_and_selectors: [(ZkHash::ZERO, false); _],
         low_leaf_aged_nullifier: ZkHash::ZERO,
         low_leaf_aged_next_nullifier: ZkHash::ZERO,
-        low_leaf_aged_next_index: 0,
         low_leaf_aged_path_and_selectors: [(ZkHash::ZERO, false); _],
         set_aged_path_and_selectors: [(ZkHash::ZERO, false); _],
         note_program: ZkHash::ZERO,
