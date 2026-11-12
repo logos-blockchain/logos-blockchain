@@ -119,14 +119,12 @@ pub struct TicketGenerator {
     /// the pool when sizing a new block's search. Kept current by the consumer
     /// through [`TicketGenerator::set_outstanding_tickets`].
     outstanding_tickets: usize,
-    /// Key the rewards of the tickets searched from now on are paid to, bound
-    /// into each ticket. Set through [`TicketGenerator::set_reward_key`]; no
-    /// search starts before.
-    reward_key: Option<ZkPublicKey>,
+    /// Key the rewards of the tickets are paid to, bound into each ticket.
+    reward_key: ZkPublicKey,
 }
 
 impl TicketGenerator {
-    /// Creates a new [`TicketGenerator`].
+    /// Creates a new [`TicketGenerator`] whose tickets pay `reward_key`.
     ///
     /// Subscribes to the chain service's new-block stream and wires the
     /// enrichment pipeline that attaches each block's epoch and ledger state.
@@ -141,6 +139,7 @@ impl TicketGenerator {
         pool: Arc<ThreadPool>,
         max_tickets_per_block: NonZeroUsize,
         era_schedule: ServiceEraSchedule,
+        reward_key: ZkPublicKey,
     ) -> Result<Self, lb_chain_service::api::ApiError>
     where
         CryptarchiaServiceData:
@@ -163,14 +162,8 @@ impl TicketGenerator {
             max_tickets_per_block,
             era_schedule,
             outstanding_tickets: 0,
-            reward_key: None,
+            reward_key,
         })
-    }
-
-    /// Sets the key the rewards of the tickets searched from now on are paid
-    /// to. Searches already running keep the key they were started with.
-    pub const fn set_reward_key(&mut self, reward_key: ZkPublicKey) {
-        self.reward_key = Some(reward_key);
     }
 
     /// Records how many winning tickets the node currently holds unpaid (ready
@@ -438,13 +431,12 @@ impl Stream for TicketGenerator {
                         this.outstanding_tickets,
                     ));
                     if let Some(max_winners) = max_winners
-                        && let Some(reward_key) = this.reward_key
                         && frontier_slot(&this.era_schedule, tip_slot, block_slot) < block_slot
                     {
                         let search = BlockSearch {
                             slot: block_slot,
                             difficulty: pow.reward_difficulty(),
-                            reward_key,
+                            reward_key: this.reward_key,
                             remaining_winners: max_winners,
                         };
                         let stream = new_block_search_stream(
@@ -601,7 +593,7 @@ mod tests {
             max_tickets_per_block,
             era_schedule: era_schedule(&[SLOT_WINDOW]),
             outstanding_tickets: 0,
-            reward_key: None,
+            reward_key: ZkPublicKey::zero(),
         };
 
         let new_pool = test_pool();
@@ -625,7 +617,7 @@ mod tests {
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
             era_schedule: era_schedule(&[SLOT_WINDOW]),
             outstanding_tickets: 0,
-            reward_key: None,
+            reward_key: ZkPublicKey::zero(),
         };
 
         generator.record_winner(block);
@@ -810,7 +802,7 @@ mod tests {
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
             era_schedule: era_schedule(&[SLOT_WINDOW]),
             outstanding_tickets: 0,
-            reward_key: None,
+            reward_key: ZkPublicKey::zero(),
         };
         assert!(matches!(poll_once(&mut generator), Poll::Ready(None)));
     }
@@ -833,7 +825,7 @@ mod tests {
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
             era_schedule: era_schedule(&[SLOT_WINDOW]),
             outstanding_tickets: 0,
-            reward_key: None,
+            reward_key: ZkPublicKey::zero(),
         };
         assert!(matches!(poll_once(&mut generator), Poll::Ready(None)));
     }
@@ -851,7 +843,7 @@ mod tests {
             max_tickets_per_block: NonZeroUsize::new(16).unwrap(),
             era_schedule: era_schedule(&[SLOT_WINDOW]),
             outstanding_tickets: 0,
-            reward_key: None,
+            reward_key: ZkPublicKey::zero(),
         };
         assert!(matches!(poll_once(&mut generator), Poll::Pending));
     }
@@ -876,7 +868,7 @@ mod tests {
             max_tickets_per_block: NonZeroUsize::new(16).unwrap(),
             era_schedule: era_schedule(&[SLOT_WINDOW]),
             outstanding_tickets: 0,
-            reward_key: None,
+            reward_key: ZkPublicKey::zero(),
         };
 
         let Poll::Ready(Some(winner)) = poll_once(&mut generator) else {
@@ -903,7 +895,7 @@ mod tests {
             max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
             era_schedule: era_schedule(&[SLOT_WINDOW]),
             outstanding_tickets: 0,
-            reward_key: None,
+            reward_key: ZkPublicKey::zero(),
         };
 
         // A winner already produced is emitted first...

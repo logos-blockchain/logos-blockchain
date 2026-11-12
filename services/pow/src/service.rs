@@ -381,6 +381,11 @@ impl PoWServiceState {
     const fn outstanding_tickets(&self) -> usize {
         self.ready_to_claim.len() + self.pending_to_claim.len()
     }
+
+    /// Whether any ticket is held whose reward has not been paid yet.
+    const fn has_outstanding_tickets(&self) -> bool {
+        !self.ready_to_claim.is_empty() || !self.pending_to_claim.is_empty()
+    }
 }
 
 impl ServiceState for PoWServiceState {
@@ -566,12 +571,15 @@ where
         let mut search_pool = build_search_pool(settings.mining.max_threads)?;
         let mut mining_settings = settings.mining.clone();
 
-        // Stream of winning PoW tickets, one per solved puzzle.
+        // Stream of winning PoW tickets, one per solved puzzle, each paying a
+        // reward key of the wallet generated for this run of the service.
+        let reward_key = wallet_api.generate_reward_key().await?;
         let mut winning_tickets = TicketGenerator::new::<Tx, _>(
             cryptarchia_api.clone(),
             Arc::clone(&search_pool),
             settings.mining.max_tickets_per_block,
             settings.era_schedule.clone(),
+            reward_key,
         )
         .await?;
 
@@ -615,18 +623,10 @@ where
                 Some(message) = inbound_relay.recv() => {
                     match message {
                         PoWServiceMessage::StartMining => {
-                            // Every mining run pays a fresh reward key of the
-                            // wallet, which the tickets bind as the key paid.
                             if !is_mining {
-                                match wallet_api.generate_reward_key().await {
-                                    Ok(reward_key) => {
-                                        winning_tickets.set_reward_key(reward_key);
-                                        info!(target: LOG_TARGET, "PoW mining started");
-                                        is_mining = true;
-                                    }
-                                    Err(e) => error!(target: LOG_TARGET, "PoW mining not started, no reward key: {e}"),
-                                }
+                                info!(target: LOG_TARGET, "PoW mining started");
                             }
+                            is_mining = true;
                         }
                         PoWServiceMessage::StopMining => {
                             if is_mining {
@@ -1615,7 +1615,7 @@ async fn prune_settled_pending<CryptarchiaService>(
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
 {
-    if state.outstanding_tickets() == 0 {
+    if !state.has_outstanding_tickets() {
         return Ok(0);
     }
     let Some(events) = cryptarchia_api.get_block_events(block_id).await? else {
