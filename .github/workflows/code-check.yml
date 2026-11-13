@@ -135,7 +135,7 @@ jobs:
       matrix:
         os:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - bladerunner-linux
+          - [self-hosted, linux, x64]
           - bladerunner-macos
     runs-on: ${{ matrix.os }}
     env:
@@ -222,7 +222,7 @@ jobs:
         !contains(github.event.pull_request.labels.*.name, 'DO NOT MERGE')
       }}
     # Valgrind is Linux-only, and the node needs more memory than GitHub-hosted runners have.
-    runs-on: bladerunner-linux
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 90
     env:
       CARGO_INCREMENTAL: 0
