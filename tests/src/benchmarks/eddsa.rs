@@ -13,6 +13,10 @@ mod tests {
         clippy::undocumented_unsafe_blocks,
         reason = "This test is just to measure cpu and should be run manually"
     )]
+    #[expect(
+        unsafe_code,
+        reason = "Reads the CPU's cycle counter, with the `_rdtsc` intrinsic."
+    )]
     #[test]
     fn bench_verify_cycles() {
         let iters = 1000u64;

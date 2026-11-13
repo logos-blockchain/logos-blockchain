@@ -210,6 +210,10 @@ pub enum BinaryCompatDialBackError {
     NoConnection,
 }
 
+#[expect(
+    unsafe_code,
+    reason = "libp2p's `autonat::v2::client::Event` has private fields: it is read from a layout-compatible copy."
+)]
 pub fn autonat_failed<'a>() -> TestEvent<'a> {
     // SAFETY: layout and alignment of `BinaryCompatAutonatEvent` is compatible with
     // `autonat::v2::client::Event`
@@ -218,6 +222,10 @@ pub fn autonat_failed<'a>() -> TestEvent<'a> {
     })
 }
 
+#[expect(
+    unsafe_code,
+    reason = "libp2p's `autonat::v2::client::Event` has private fields: it is read from a layout-compatible copy."
+)]
 pub fn autonat_failed_address_mismatch<'a>() -> TestEvent<'a> {
     // SAFETY: layout and alignment of `BinaryCompatAutonatEvent` is compatible with
     // `autonat::v2::client::Event`

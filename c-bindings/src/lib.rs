@@ -2,6 +2,10 @@
     clippy::undocumented_unsafe_blocks,
     reason = "Well, this is gonna be a shit show of unsafe calls..."
 )]
+#![allow(
+    unsafe_code,
+    reason = "The C ABI: every exported function is `extern \"C\"` and takes raw pointers from the caller."
+)]
 
 pub mod api;
 mod callbacks;

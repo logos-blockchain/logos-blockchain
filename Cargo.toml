@@ -468,6 +468,7 @@ tail_expr_drop_order          = { level = "warn" }
 trivial_numeric_casts         = { level = "warn" }
 unit_bindings                 = { level = "warn" }
 unsafe_attr_outside_unsafe    = { level = "warn" }
+unsafe_code                   = { level = "warn" }
 unsafe_op_in_unsafe_fn        = { level = "warn" }
 unstable_features             = { level = "warn" }
 unused_extern_crates          = { level = "warn" }
@@ -485,5 +486,4 @@ missing_debug_implementations          = { level = "allow" }
 missing_docs                           = { level = "allow" }
 trivial_casts                          = { level = "allow" }
 unreachable_pub                        = { level = "allow" }
-unsafe_code                            = { level = "allow" }
 variant_size_differences               = { level = "allow" }

@@ -344,6 +344,10 @@ static PI: LazyLock<Value> = LazyLock::new(|| {
     clippy::undocumented_unsafe_blocks,
     reason = "This test is is just to measure cpu and should be run manually"
 )]
+#[expect(
+    unsafe_code,
+    reason = "Reads the CPU's cycle counter, with the `_rdtsc` intrinsic."
+)]
 #[ignore = "This test is just for calculation the cycles for the above set of proofs. This will be moved to the pertinent proof in the future."]
 #[test]
 fn zk_signature_cpu_cycles() {
