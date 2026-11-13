@@ -152,6 +152,7 @@ mod tests {
                 NodeRuntimeInfo {
                     peer_id: Keypair::generate_ed25519().public().to_peer_id(),
                     slots_per_epoch: NonZero::new(index + 1).unwrap(),
+                    cryptarchia_security_param: None,
                     wallets: Vec::new(),
                 },
             );

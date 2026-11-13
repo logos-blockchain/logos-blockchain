@@ -57,8 +57,8 @@ pub use http_client::NodeHttpClient;
 pub use preparation::SharedDeployment;
 pub(crate) use scenario::apply_wallet_config_to_deployment;
 pub use scenario::{
-    DeploymentPlan, LbcClusterBackend, LbcEnv, LbcK8sManualCluster, LbcManualCluster, LbcScenario,
-    NodePlan, ScenarioBuilder, ScenarioBuilderExt,
+    DeploymentPlan, LbcClusterBackend, LbcEnv, LbcK8sManualCluster, LbcManualCluster,
+    LbcNodeConfig, LbcScenario, NodePlan, ScenarioBuilder, ScenarioBuilderExt,
 };
 pub use snapshot::NodeStateSnapshotStore;
 pub use testing_framework_app::{

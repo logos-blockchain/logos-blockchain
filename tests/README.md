@@ -71,6 +71,14 @@ CI expects `target/release/logos-blockchain-node` to already exist, or
 `LOGOS_BLOCKCHAIN_NODE_BIN` to point at the prebuilt binary. It does not build
 node binaries inside the test process.
 
+Managed Tokio-console builds use a compiler wrapper to enable `--cfg
+tokio_unstable` for dependencies as well as the node. The wrapper composes
+wrappers supplied through `RUSTC_WRAPPER` or `CARGO_BUILD_RUSTC_WRAPPER`, but
+overrides `build.rustc-wrapper` in Cargo configuration files. To use a custom
+Cargo-configured wrapper, prebuild the node with the `testing,tokio-console`
+features and `--cfg tokio_unstable`, then provide its path through
+`LOGOS_BLOCKCHAIN_NODE_BIN`.
+
 ### 1. Run a specific test
 
 _**MacOS or Linux**_

@@ -1,22 +1,18 @@
 use super::{
     CucumberWorld, SdpFundingConfig, Step, StepError, StepResult,
     ensure_fee_sponsorship_and_fork_groups_are_not_mixed, given,
-    rebuild_pending_local_manual_cluster, set_blend_diagnostic_parameter_set,
+    rebuild_pending_local_manual_cluster, set_cucumber_parameter_set,
     set_deployment_config_override, set_user_config_override, when,
 };
 
-#[given(expr = "the cluster uses diagnostic parameter set {string}")]
-#[when(expr = "the cluster uses diagnostic parameter set {string}")]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Cucumber step arguments must use owned types"
-)]
-fn step_set_blend_diagnostic_parameter_set(
+#[given(expr = "the cluster uses parameter set {string}")]
+#[when(expr = "the cluster uses parameter set {string}")]
+async fn step_set_cucumber_parameter_set(
     world: &mut CucumberWorld,
     step: &Step,
     parameter_set_name: String,
 ) -> StepResult {
-    set_blend_diagnostic_parameter_set(world, &step.value, &parameter_set_name)
+    set_cucumber_parameter_set(world, &step.value, &parameter_set_name).await
 }
 
 #[given(expr = "we use IBD peers")]

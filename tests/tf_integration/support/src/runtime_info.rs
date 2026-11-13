@@ -45,6 +45,7 @@ pub struct NodeWalletKey {
 pub struct NodeRuntimeInfo {
     pub peer_id: PeerId,
     pub slots_per_epoch: NonZero<u64>,
+    pub cryptarchia_security_param: Option<NonZero<u32>>,
     pub wallets: Vec<NodeWalletKey>,
 }
 
