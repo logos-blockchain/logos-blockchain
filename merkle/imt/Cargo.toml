@@ -21,12 +21,17 @@ serde             = { features = ["derive"], workspace = true }
 thiserror         = { workspace = true }
 
 [dev-dependencies]
+divan          = { workspace = true }
 lb-kv-store    = { features = ["rocksdb", "testing"], workspace = true }
 num-bigint     = { workspace = true }
 proptest       = { features = ["std"], workspace = true }
 proptest-macro = { workspace = true }
 serde_json     = { features = ["std"], workspace = true }
 tempfile       = { workspace = true }
+
+[[bench]]
+harness = false
+name    = "imt"
 
 [lints]
 workspace = true

@@ -4908,6 +4908,7 @@ name = "logos-blockchain-imt"
 version = "0.0.0"
 dependencies = [
  "ark-ff",
+ "divan",
  "logos-blockchain-dynamic-merkle",
  "logos-blockchain-groth16",
  "logos-blockchain-kv-store",
