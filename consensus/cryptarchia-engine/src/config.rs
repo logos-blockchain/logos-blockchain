@@ -1,7 +1,7 @@
 use std::num::{NonZero, NonZeroU64};
 
 use lb_pol::LotteryConstants;
-use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+use lb_utils::math::{NonNegativeF64, NonNegativeRatio, ProperFraction};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Config {
@@ -11,7 +11,7 @@ pub struct Config {
     /// however only expected to be used during bootstrapping.
     security_param: NonZero<u32>,
     /// `f`, the rate of occupied slots
-    slot_activation_coeff: NonNegativeRatio,
+    slot_activation_coeff: ProperFraction,
     stake_inference_learning_rate: NonNegativeF64,
     /// `W`, the width of the uncle reference window in expected
     /// block-intervals.
@@ -31,7 +31,7 @@ impl<'de> serde::Deserialize<'de> for Config {
         #[derive(serde::Deserialize)]
         struct RawConfig {
             security_param: NonZero<u32>,
-            slot_activation_coeff: NonNegativeRatio,
+            slot_activation_coeff: ProperFraction,
             stake_inference_learning_rate: NonNegativeF64,
             uncle_reference_window_in_block: u32,
             max_uncles: u8,
@@ -54,7 +54,7 @@ impl Config {
     #[must_use]
     pub fn new(
         security_param: NonZero<u32>,
-        slot_activation_coeff: NonNegativeRatio,
+        slot_activation_coeff: ProperFraction,
         stake_inference_learning_rate: NonNegativeF64,
         uncle_reference_window_in_block: u32,
         max_uncles: u8,
@@ -93,7 +93,7 @@ impl Config {
     }
 
     #[must_use]
-    pub const fn slot_activation_coeff(&self) -> NonNegativeRatio {
+    pub const fn slot_activation_coeff(&self) -> ProperFraction {
         self.slot_activation_coeff
     }
 
@@ -145,29 +145,47 @@ pub fn max_allowed_uncle_reference_window_in_block(security_param: NonZero<u32>)
 
 /// `⌊k/4f⌋`: the slots [`Config::s_gen`] measures block density over, which a
 /// configuration must keep above zero.
+///
+/// Computed in integers, as `⌊k · f_den / (4 · f_num)⌋`: a double can fall just
+/// short of the whole number the quotient equals, and its floor then loses a
+/// slot.
 #[must_use]
 pub const fn genesis_density_window(
     security_param: NonZero<u32>,
-    slot_activation_coeff: NonNegativeRatio,
+    slot_activation_coeff: ProperFraction,
 ) -> u64 {
-    ((security_param.get() as f64) / (4.0 * slot_activation_coeff.as_f64())).floor() as u64
+    let NonNegativeRatio {
+        numerator,
+        denominator,
+    } = slot_activation_coeff.get();
+    (security_param.get() as u64 * denominator.get() as u64) / (4 * numerator as u64)
 }
 
 #[must_use]
 pub const fn base_period_length(
     security_param: NonZero<u32>,
-    slot_activation_coeff: NonNegativeRatio,
+    slot_activation_coeff: ProperFraction,
 ) -> NonZero<u64> {
     average_slots_for_blocks(security_param, slot_activation_coeff)
 }
 
+/// `⌊n/f⌋`: the slots in which `n` blocks are expected.
+///
+/// Computed in integers, as `⌊n · f_den / f_num⌋`: a double can fall just
+/// short of the whole number the quotient equals, and its floor then loses a
+/// slot.
 #[must_use]
 pub const fn average_slots_for_blocks(
     num_blocks: NonZero<u32>,
-    slot_activation_coeff: NonNegativeRatio,
+    slot_activation_coeff: ProperFraction,
 ) -> NonZero<u64> {
-    NonZero::new((num_blocks.get() as f64 / slot_activation_coeff.as_f64()).floor() as u64)
-        .expect("base_period_length with proper configuration should never be zero")
+    let NonNegativeRatio {
+        numerator,
+        denominator,
+    } = slot_activation_coeff.get();
+    // Below 1, `f` spreads each block over at least one slot.
+    NonZero::new((num_blocks.get() as u64 * denominator.get() as u64) / numerator as u64)
+        .expect("a block takes at least one slot when `f` is below 1")
 }
 
 /// `N_b`: the number of blocks an epoch of `epoch_length` slots is expected to
@@ -180,27 +198,25 @@ pub const fn average_slots_for_blocks(
 ///
 /// # Panics
 ///
-/// If the configuration yields zero expected blocks per epoch (e.g. an `f` of
-/// zero), since such a chain produces no blocks at all.
+/// If an epoch is too short to expect a block, since such a chain produces no
+/// blocks at all.
 #[must_use]
 #[expect(
     clippy::cast_possible_truncation,
-    reason = "The u128 product is explicitly clamped to u64 before the cast."
+    reason = "Below 1, `f` keeps the quotient below `epoch_length`, a `u64`."
 )]
 pub const fn expected_blocks_per_epoch(
     epoch_length: u64,
-    slot_activation_coeff: NonNegativeRatio,
+    slot_activation_coeff: ProperFraction,
 ) -> NonZero<u64> {
+    let NonNegativeRatio {
+        numerator,
+        denominator,
+    } = slot_activation_coeff.get();
     // Widened so the multiplication cannot wrap: `epoch_length` spans the whole
     // of `u64` and the numerator the whole of `u32`.
-    let blocks = (epoch_length as u128 * slot_activation_coeff.numerator as u128)
-        / slot_activation_coeff.denominator.get() as u128;
-    let blocks = if blocks > u64::MAX as u128 {
-        u64::MAX
-    } else {
-        blocks as u64
-    };
-    NonZero::new(blocks)
+    let blocks = (epoch_length as u128 * numerator as u128) / denominator.get() as u128;
+    NonZero::new(blocks as u64)
         .expect("expected_blocks_per_epoch with proper configuration should never be zero")
 }
 
@@ -214,7 +230,7 @@ mod tests {
     fn test_config() {
         let config = Config::new(
             NonZero::new(10).unwrap(),
-            NonNegativeRatio::new(1, 5.try_into().unwrap()),
+            ProperFraction::new(1, 5.try_into().unwrap()).unwrap(),
             0.1.try_into().unwrap(),
             12,
             4,
@@ -228,6 +244,22 @@ mod tests {
             config.stake_inference_learning_rate().mul(10.0).floor() as u64,
             1,
         );
+    }
+
+    /// `k = 12` and `f = 1/75`: `k/f` is 900 and `k/4f` is 225, which a double
+    /// makes 899.9999999999999 and 224.99999999999997, and their floors 899 and
+    /// 224.
+    #[test]
+    fn the_base_period_and_s_gen_are_exact() {
+        let config = Config::new(
+            NonZero::new(12).unwrap(),
+            ProperFraction::new(1, 75.try_into().unwrap()).unwrap(),
+            0.1.try_into().unwrap(),
+            12,
+            4,
+        );
+        assert_eq!(config.base_period_length(), NonZero::new(900).unwrap());
+        assert_eq!(config.s_gen(), NonZero::new(225).unwrap());
     }
 
     #[test]
@@ -255,7 +287,7 @@ mod tests {
     fn test_zero_uncle_reference_window() {
         let config = Config::new(
             NonZero::new(10).unwrap(),
-            NonNegativeRatio::new(1, 5.try_into().unwrap()),
+            ProperFraction::new(1, 5.try_into().unwrap()).unwrap(),
             0.1.try_into().unwrap(),
             0,
             4,
@@ -267,19 +299,12 @@ mod tests {
     fn test_expected_blocks_per_epoch_is_ten_k() {
         // k = 10, f = 1/5: a base period is 50 slots and the standard 3/3/4
         // split makes the epoch ten of them.
-        let slot_activation_coeff = NonNegativeRatio::new(1, 5.try_into().unwrap());
+        let slot_activation_coeff = ProperFraction::new(1, 5.try_into().unwrap()).unwrap();
         let epoch_length =
             10 * base_period_length(NonZero::new(10).unwrap(), slot_activation_coeff).get();
         assert_eq!(
             expected_blocks_per_epoch(epoch_length, slot_activation_coeff),
             NonZero::new(100).unwrap(),
         );
-    }
-
-    #[test]
-    #[should_panic(expected = "expected_blocks_per_epoch")]
-    fn test_expected_blocks_per_epoch_panics_on_zero_slot_activation_coeff() {
-        let slot_activation_coeff = NonNegativeRatio::new(0, 1.try_into().unwrap());
-        let _ = expected_blocks_per_epoch(1_000, slot_activation_coeff);
     }
 }

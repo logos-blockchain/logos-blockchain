@@ -16,7 +16,7 @@ use lb_core::{
     sdp::{ActivityMetadata, ProviderId, ServiceParameters},
 };
 use lb_log_targets::ledger;
-use lb_utils::math::PositiveF64;
+use lb_utils::math::PositiveRatio;
 use tracing::debug;
 
 use crate::{
@@ -229,10 +229,10 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RewardsParameters {
     pub rounds_per_epoch: NonZeroU64,
-    pub message_frequency_per_round: PositiveF64,
+    pub message_frequency_per_round: PositiveRatio,
     pub cover_replication_factor: u64,
     pub num_blend_layers: NonZeroU64,
     pub data_replication_factor: u64,
@@ -300,7 +300,7 @@ impl RewardsParameters {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, convert::Infallible};
+    use std::{collections::HashMap, convert::Infallible, num::NonZeroU32};
 
     use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
     use lb_blend_proofs::{
@@ -329,7 +329,7 @@ mod tests {
     ) -> RewardsParameters {
         RewardsParameters {
             rounds_per_epoch: rounds_per_epoch.try_into().unwrap(),
-            message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+            message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN).unwrap(),
             cover_replication_factor: 0,
             num_blend_layers: NonZeroU64::new(3).unwrap(),
             minimum_network_size: minimum_network_size.try_into().unwrap(),

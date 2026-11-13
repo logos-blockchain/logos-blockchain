@@ -540,7 +540,7 @@ mod tests {
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::UnsecuredZkKey;
     use lb_pol::LotteryConstants;
-    use lb_utils::math::NonNegativeRatio;
+    use lb_utils::math::ProperFraction;
     use lb_utxotree::UtxoTree;
 
     use super::*;
@@ -575,7 +575,7 @@ mod tests {
         let utxo_merkle_path = utxo_tree.path(&utxo.id()).expect("note must exist in tree");
 
         let (lottery_0, lottery_1) =
-            LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
+            LotteryConstants::new(ProperFraction::new(1, 10.try_into().unwrap()).unwrap())
                 .compute_lottery_values(1000);
 
         // We grind the nonce here to find a winning PoL

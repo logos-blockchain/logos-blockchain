@@ -20,7 +20,6 @@ testing = ["lb-node/testing"]
 hex                              = { workspace = true }
 lb-binary-codec                  = { workspace = true }
 lb-core                          = { workspace = true }
-lb-cryptarchia-engine            = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-libp2p                        = { workspace = true }

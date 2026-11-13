@@ -914,7 +914,7 @@ pub mod tests {
     use lb_key_management_system_keys::keys::{
         Ed25519Key, Ed25519Signature, UnverifiedEd25519PublicKey, ZkKey, ZkSignature,
     };
-    use lb_utils::{bounded::BoundedError, math::PositiveF64};
+    use lb_utils::{bounded::BoundedError, math::PositiveRatio};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
 
@@ -1110,7 +1110,6 @@ pub mod tests {
             ServiceType::BlendNetwork,
             ServiceParameters {
                 inactivity_period: 2.try_into().unwrap(),
-                epoch: 0.into(),
             },
         );
 
@@ -1121,7 +1120,7 @@ pub mod tests {
         };
         let consensus_config = lb_cryptarchia_engine::Config::new(
             NonZero::new(1).unwrap(),
-            NonNegativeRatio::new(1, 10.try_into().unwrap()),
+            ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
             1f64.try_into().expect("1 > 0"),
             12,
             4,
@@ -1136,7 +1135,8 @@ pub mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN)
+                            .unwrap(),
                         cover_replication_factor: 0,
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
@@ -1144,10 +1144,7 @@ pub mod tests {
                         activity_threshold_sensitivity: 1,
                     },
                 },
-                min_stake: lb_core::sdp::MinStake {
-                    threshold: 1,
-                    timestamp: 0,
-                },
+                min_stake: lb_core::sdp::MinStake { threshold: 1 },
             },
             // `alpha = 1/2`, `T_tx = 10`, `k = 4`, with a baseline that is a
             // perfect square so the reference load lands on it exactly.
@@ -1212,10 +1209,9 @@ pub mod tests {
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
-            target_claims_per_block: 100,
+            target_claims_per_block: NonZeroU64::new(100).unwrap(),
             rate_num: 0,
             rate_den: NonZeroU64::MIN,
-            target_claim_per_block: NonZeroU64::MIN,
             pow_share: 0,
             share_den: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(100).expect("100 is non-zero"),
@@ -2319,7 +2315,7 @@ pub mod tests {
         let era_1 = Config {
             consensus_config: lb_cryptarchia_engine::Config::new(
                 NonZero::new(4).unwrap(),
-                NonNegativeRatio::new(1, 5.try_into().unwrap()),
+                ProperFraction::new(1, 5.try_into().unwrap()).unwrap(),
                 0.5f64.try_into().expect("1/2 > 0"),
                 12,
                 4,

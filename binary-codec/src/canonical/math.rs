@@ -1,11 +1,12 @@
 use core::num::NonZero;
 
-use lb_utils::math::{NonNegativeF64, NonNegativeRatio, PositiveF64, ProperFraction};
+use lb_utils::math::{NonNegativeF64, NonNegativeRatio, PositiveRatio, ProperFraction};
 
 use super::{BinaryEncode, codec_fixtures};
 
-// A positive float: its IEEE 754 bits.
-impl BinaryEncode for PositiveF64 {
+// A non-negative float: its IEEE 754 bits. Negative zero is no non-negative
+// float, so zero encodes one way.
+impl BinaryEncode for NonNegativeF64 {
     fn encoded_length(&self) -> usize {
         self.get().to_bits().encoded_length()
     }
@@ -15,31 +16,11 @@ impl BinaryEncode for PositiveF64 {
     }
 }
 
-codec_fixtures!(PositiveF64, encode_only, PositiveF64::try_from(0.5).unwrap() => "000000000000e03f");
-
-// A non-negative float: its IEEE 754 bits, with negative zero written as zero,
-// since the two compare equal and so must encode alike.
-impl BinaryEncode for NonNegativeF64 {
-    fn encoded_length(&self) -> usize {
-        canonical_bits(self.get()).encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        canonical_bits(self.get()).encode_into(out);
-    }
-}
-
-/// The IEEE 754 bits of `value`, with both zeros written as positive zero.
-fn canonical_bits(value: f64) -> u64 {
-    if value == 0.0 { 0 } else { value.to_bits() }
-}
-
 codec_fixtures!(
     NonNegativeF64,
     encode_only,
     NonNegativeF64::try_from(0.5).unwrap() => "000000000000e03f",
-    NonNegativeF64::try_from(0.0).unwrap() => "0000000000000000",
-    NonNegativeF64::try_from(-0.0).unwrap() => "0000000000000000"
+    NonNegativeF64::try_from(0.0).unwrap() => "0000000000000000"
 );
 
 // A ratio: its numerator, then its denominator.
@@ -72,3 +53,16 @@ impl BinaryEncode for ProperFraction {
 }
 
 codec_fixtures!(ProperFraction, encode_only, ProperFraction::new(1, 2.try_into().unwrap()).unwrap() => "0100000002000000");
+
+// A positive ratio: the ratio it is.
+impl BinaryEncode for PositiveRatio {
+    fn encoded_length(&self) -> usize {
+        self.get().encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.get().encode_into(out);
+    }
+}
+
+codec_fixtures!(PositiveRatio, encode_only, PositiveRatio::new(3, 2.try_into().unwrap()).unwrap() => "0300000002000000");

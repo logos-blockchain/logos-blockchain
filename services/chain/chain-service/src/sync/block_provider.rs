@@ -580,7 +580,7 @@ mod tests {
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey};
     use lb_storage_service::{StorageMsg, StorageService, rocksdb::RocksBackendSettings};
-    use lb_utils::math::NonNegativeRatio;
+    use lb_utils::math::ProperFraction;
     use lb_utxotree::UtxoTree;
     use overwatch::{
         derive_services,
@@ -763,7 +763,7 @@ mod tests {
             let (service, storage_relay) = Self::setup_storage().await;
             let cryptarchia = Self::new_cryptarchia(
                 HeaderId::from([0; 32]),
-                NonNegativeRatio::new(1, 10.try_into().unwrap()),
+                ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
             );
             let proof = Self::make_test_proof(&cryptarchia);
             let provider = BlockProvider::new(
@@ -1123,7 +1123,7 @@ mod tests {
 
         fn new_cryptarchia(
             lib: HeaderId,
-            slot_activation_coeff: NonNegativeRatio,
+            slot_activation_coeff: ProperFraction,
         ) -> lb_cryptarchia_engine::Cryptarchia<HeaderId> {
             <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib,

@@ -3120,10 +3120,9 @@ mod tests {
                 minimum_difficulty: ModulusShift::new::<26>(),
                 ema_smoothing_factor: 9,
                 ema_smoothing_precision: NonZeroU64::new(10).expect("10 is non-zero"),
-                target_claims_per_block: 100,
+                target_claims_per_block: NonZeroU64::new(100).expect("100 is non-zero"),
                 rate_num: 0,
                 rate_den: NonZeroU64::MIN,
-                target_claim_per_block: NonZeroU64::MIN,
                 pow_share: 0,
                 share_den: NonZeroU64::MIN,
                 slot_window: NonZeroU64::new(100).expect("100 is non-zero"),
@@ -3131,16 +3130,15 @@ mod tests {
         }
 
         /// A payout rate of `1/100`: `sigma_e = pool / 100`, used to give the
-        /// `PoW` state a nonzero per-claim reward in tests. The denominator is
-        /// `rate_den (1) * target_claim_per_block (10) *
+        /// `PoW` state a nonzero per-claim reward in tests. The rate is `10`
+        /// over `rate_den (1) * target_claims_per_block (100) *
         /// expected_blocks_per_epoch (10, derived from the test consensus
         /// schedule)`.
         fn test_pool_config() -> Config {
             let mut config = config();
             config.pow_config.reward = RewardPoWConfig {
-                rate_num: 1,
+                rate_num: 10,
                 rate_den: NonZeroU64::MIN,
-                target_claim_per_block: NonZeroU64::new(10).expect("10 is non-zero"),
                 ..disabled_reward_config()
             };
             config

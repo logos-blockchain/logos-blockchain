@@ -1,4 +1,7 @@
-use core::{cell::RefCell, num::NonZeroU128};
+use core::{
+    cell::RefCell,
+    num::{NonZeroU32, NonZeroU128},
+};
 use std::{num::NonZeroU64, pin::Pin, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
@@ -39,6 +42,7 @@ use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519K
 use lb_network_service::{backends::NetworkBackend, message::BackendNetworkMsg};
 use lb_poq::{CorePathAndSelectors, KeyIndex};
 use lb_sdp_service::SdpMessage;
+use lb_utils::math::PositiveRatio;
 use overwatch::{
     overwatch::{OverwatchHandle, commands::OverwatchCommand},
     services::{ServiceData, relay::OutboundRelay, state::StateUpdater},
@@ -103,7 +107,7 @@ pub fn settings(
         BlendConfig {
             scheduler: EraSchedulerSettings {
                 cover: EraCoverTrafficSettings {
-                    message_frequency_per_round: 1.0.try_into().unwrap(),
+                    message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN).unwrap(),
                     replication_factor: 0,
                 },
                 delayer: EraMessageDelayerSettings {

@@ -1,4 +1,4 @@
-use core::ops::{Deref, DerefMut};
+use core::ops::Deref;
 use std::num::NonZeroU32;
 
 #[derive(Clone, Copy, PartialEq, PartialOrd, Debug, ::serde::Serialize, ::serde::Deserialize)]
@@ -22,12 +22,6 @@ impl Deref for FiniteF64 {
 
     fn deref(&self) -> &Self::Target {
         &self.0
-    }
-}
-
-impl DerefMut for FiniteF64 {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
     }
 }
 
@@ -56,7 +50,9 @@ impl TryFrom<u64> for FiniteF64 {
     }
 }
 
-/// A wrapper around [`FiniteF64`] that guarantees the value is >= 0.0.
+/// A wrapper around [`FiniteF64`] that guarantees the value is >= 0.0 with its
+/// sign bit clear: negative zero is refused, so that zero has a single
+/// representation.
 #[derive(Clone, Copy, PartialEq, PartialOrd, Debug, ::serde::Serialize, ::serde::Deserialize)]
 pub struct NonNegativeF64(#[serde(deserialize_with = "serde::deserialize_non_negative")] FiniteF64);
 
@@ -75,12 +71,6 @@ impl Deref for NonNegativeF64 {
     }
 }
 
-impl DerefMut for NonNegativeF64 {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 impl TryFrom<f64> for NonNegativeF64 {
     type Error = ();
 
@@ -93,7 +83,7 @@ impl TryFrom<FiniteF64> for NonNegativeF64 {
     type Error = ();
 
     fn try_from(value: FiniteF64) -> Result<Self, Self::Error> {
-        if value.0 >= 0.0 {
+        if value.0.is_sign_positive() {
             Ok(Self(value))
         } else {
             Err(())
@@ -135,12 +125,6 @@ impl Deref for PositiveF64 {
 
     fn deref(&self) -> &Self::Target {
         &self.0
-    }
-}
-
-impl DerefMut for PositiveF64 {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
     }
 }
 
@@ -275,6 +259,14 @@ impl ProperFraction {
     }
 }
 
+impl Deref for ProperFraction {
+    type Target = NonNegativeRatio;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 impl TryFrom<NonNegativeRatio> for ProperFraction {
     type Error = String;
 
@@ -291,6 +283,46 @@ impl TryFrom<NonNegativeRatio> for ProperFraction {
 impl From<ProperFraction> for NonNegativeRatio {
     fn from(fraction: ProperFraction) -> Self {
         fraction.0
+    }
+}
+
+/// A ratio strictly above 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
+#[serde(try_from = "NonNegativeRatio", into = "NonNegativeRatio")]
+pub struct PositiveRatio(NonNegativeRatio);
+
+impl PositiveRatio {
+    /// `numerator / denominator`, if it lies above 0.
+    #[must_use]
+    pub const fn new(numerator: u32, denominator: NonZeroU32) -> Option<Self> {
+        if numerator == 0 {
+            return None;
+        }
+        Some(Self(NonNegativeRatio::new(numerator, denominator)))
+    }
+
+    #[must_use]
+    pub const fn get(self) -> NonNegativeRatio {
+        self.0
+    }
+}
+
+impl TryFrom<NonNegativeRatio> for PositiveRatio {
+    type Error = String;
+
+    fn try_from(ratio: NonNegativeRatio) -> Result<Self, Self::Error> {
+        let NonNegativeRatio {
+            numerator,
+            denominator,
+        } = ratio;
+        Self::new(numerator, denominator)
+            .ok_or_else(|| format!("{numerator}/{denominator} must lie above 0."))
+    }
+}
+
+impl From<PositiveRatio> for NonNegativeRatio {
+    fn from(ratio: PositiveRatio) -> Self {
+        ratio.0
     }
 }
 
@@ -376,6 +408,7 @@ mod tests {
         assert!(NonNegativeF64::try_from(0.0).is_ok());
         assert!(NonNegativeF64::try_from(1.0).is_ok());
         assert!(NonNegativeF64::try_from(-0.1).is_err());
+        assert!(NonNegativeF64::try_from(-0.0).is_err());
     }
 
     #[test]
@@ -450,6 +483,7 @@ mod tests {
             assert!((*ok.value - 0.1).abs() < f64::EPSILON);
 
             assert!(serde_json::from_str::<NonNegative>(r#"{"value": 0.0}"#).is_ok());
+            assert!(serde_json::from_str::<NonNegative>(r#"{"value": -0.0}"#).is_err());
             assert!(serde_json::from_str::<NonNegative>(r#"{"value": -1.0}"#).is_err());
         }
 

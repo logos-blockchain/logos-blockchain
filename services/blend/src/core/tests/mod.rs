@@ -1,4 +1,8 @@
-use core::{iter::once, num::NonZeroU64, time::Duration};
+use core::{
+    iter::once,
+    num::{NonZeroU32, NonZeroU64},
+    time::Duration,
+};
 use std::{collections::VecDeque, sync::Arc};
 
 use futures::{
@@ -21,6 +25,7 @@ use lb_cryptarchia_engine::Era;
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_poq::{CORE_MERKLE_TREE_HEIGHT, Quota};
+use lb_utils::math::PositiveRatio;
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
 use rayon::ThreadPoolBuilder;
@@ -2263,7 +2268,8 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
     // No cover traffic, so the only message that can come out is the proposal.
     // See the `PoW` liveness test for why this quota silences it.
     settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
-    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+    settings.scheduler.cover.message_frequency_per_round =
+        PositiveRatio::new(1, NonZeroU32::new(20).unwrap()).unwrap();
     settings.time.round_duration_in_seconds = FALLBACK_TEST_ROUND_IN_SECONDS;
     let deadline = Duration::from_secs(
         FALLBACK_TEST_ROUND_IN_SECONDS.get() * settings.max_data_message_delay_in_rounds().get(),
@@ -2437,7 +2443,8 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
     // No cover traffic, so the only message that can come out is the proposal.
     // See the `PoW` liveness test for why this quota silences it.
     settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
-    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+    settings.scheduler.cover.message_frequency_per_round =
+        PositiveRatio::new(1, NonZeroU32::new(20).unwrap()).unwrap();
 
     let (inbound_relay, inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
@@ -2583,7 +2590,8 @@ async fn the_previous_epoch_keeps_releasing_under_its_own_epoch() {
     // No cover traffic, so the only message that can come out is the queued
     // transaction. See the `PoW` liveness test for why this quota silences it.
     settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
-    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+    settings.scheduler.cover.message_frequency_per_round =
+        PositiveRatio::new(1, NonZeroU32::new(20).unwrap()).unwrap();
     let (inbound_relay, inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
     let (membership_stream, membership_sender) = new_stream();
@@ -2730,7 +2738,8 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
     // No cover traffic, so the only message that can come out is the one this
     // test expects. See the `PoW` liveness test for why this quota silences it.
     settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
-    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+    settings.scheduler.cover.message_frequency_per_round =
+        PositiveRatio::new(1, NonZeroU32::new(20).unwrap()).unwrap();
 
     let (inbound_relay, inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
@@ -2862,7 +2871,8 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
     // Anything in `(0, 0.1]` gives the same quota, so the halfway point keeps
     // float drift well clear of either rounding boundary.
     settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
-    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+    settings.scheduler.cover.message_frequency_per_round =
+        PositiveRatio::new(1, NonZeroU32::new(20).unwrap()).unwrap();
 
     let (inbound_relay, inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();

@@ -37,7 +37,7 @@ use lb_core::{
 use lb_cryptarchia_engine::{Branch, Cryptarchia, Slot, State, UncleSlots};
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::ZkKey;
-use lb_utils::math::NonNegativeRatio;
+use lb_utils::math::ProperFraction;
 use num_bigint::BigUint;
 use rand::{Rng as _, SeedableRng as _, rngs::StdRng};
 
@@ -180,10 +180,11 @@ fn simulation_config() -> Config {
     let mut config = config();
     config.consensus_config = lb_cryptarchia_engine::Config::new(
         NonZero::new(SECURITY_PARAM).unwrap(),
-        NonNegativeRatio::new(
+        ProperFraction::new(
             SLOT_ACTIVATION_COEFF.0,
             NonZero::new(SLOT_ACTIVATION_COEFF.1).unwrap(),
-        ),
+        )
+        .unwrap(),
         1f64.try_into().expect("1 > 0"),
         UNCLE_REFERENCE_WINDOW_IN_BLOCK,
         4,
