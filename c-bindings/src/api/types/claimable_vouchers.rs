@@ -1,8 +1,8 @@
 use std::ptr;
 
-use crate::api::{
-    cryptarchia::{Hash, HeaderId},
-    types::value::Value,
+use crate::api::types::{
+    hash::{Hash, HeaderId},
+    value::Value,
 };
 
 #[repr(C)]

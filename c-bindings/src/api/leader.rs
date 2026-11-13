@@ -1,26 +1,11 @@
 use lb_c_macros::panic_to_error;
-use lb_chain_leader_service::api::ChainLeaderSerivceApi;
-use lb_node::{
-    RuntimeServiceId,
-    generic_services::{
-        ChainNetworkService, CryptarchiaLeaderService, CryptarchiaService, WalletService,
-    },
-};
 
 use crate::{
-    LogosBlockchainNode, OperationStatus,
-    api::cryptarchia::TxHash,
-    errors::OperationStatusCode,
+    LogosBlockchainNode,
+    api::types::hash::TxHash,
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
 };
-
-type LeaderService = CryptarchiaLeaderService<
-    CryptarchiaService<RuntimeServiceId>,
-    ChainNetworkService<RuntimeServiceId>,
-    WalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>,
-    RuntimeServiceId,
->;
 
 /// Claims available leader rewards.
 ///
@@ -37,30 +22,11 @@ type LeaderService = CryptarchiaLeaderService<
 pub(crate) fn leader_claim_sync(
     node: &LogosBlockchainNode,
 ) -> StatusResult<lb_core::mantle::TxHash> {
-    let runtime_handle = node.get_runtime_handle()?;
-
-    runtime_handle.block_on(async {
-        let relay = node
-            .get_overwatch_handle()
-            .relay::<LeaderService>()
-            .await
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::RelayError,
-                    format!("Failed to get ChainLeader relay: {error}"),
-                )
-            })?;
-
-        ChainLeaderSerivceApi::<LeaderService, RuntimeServiceId>::new(relay)
-            .claim()
-            .await
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::ServiceError,
-                    format!("Failed to claim leader rewards: {error}"),
-                )
-            })
-    })
+    node.call(
+        "Failed to claim leader rewards",
+        lb_node::api::calls::leader::claim(node.get_overwatch_handle()),
+    )
+    .map(|response| response.tx_hash)
 }
 
 pub type FfiLeaderClaimResult = FfiStatusResult<TxHash>;

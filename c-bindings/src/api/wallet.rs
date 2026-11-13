@@ -4,49 +4,49 @@ use std::{
     time::Duration,
 };
 
-use lb_api_service::http::mempool;
 use lb_c_macros::panic_to_error;
 use lb_core::{
     header::HeaderId as CoreHeaderId,
     mantle::{
-        Note, NoteId as CoreNoteId, Op, OpProof, SignedOps,
+        NoteId as CoreNoteId, SignedOps, TxHash,
         gas::GasCost,
-        ledger::{BoundedInputs, Inputs, Outputs, verification_mode::StandardMode},
-        ops::{
-            channel::{
-                ChannelId,
-                deposit::{DepositOp, Metadata},
-            },
-            transfer::TransferOp,
+        ledger::{Inputs, verification_mode::StandardMode},
+        ops::channel::{
+            ChannelId,
+            deposit::{DepositOp, Metadata},
         },
-        traits::Hashable,
-        transactions::{
-            MantleTxBuilder, OpProofs, Ops,
-            states::{Preverified, Unverified},
-        },
+        traits::Hashable as _,
+        transactions::states::Unverified,
     },
 };
 use lb_groth16::{fr_from_bytes, fr_to_bytes};
-use lb_http_api_common::bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody};
+use lb_http_api_common::bodies::{
+    channel::ChannelDepositRequestBody,
+    wallet::{
+        aged_notes::LeaderAgedNotesResponseBody,
+        balance::WalletBalanceResponseBody,
+        claimable_vouchers::WalletClaimableVouchersResponseBody,
+        fund::{WalletFundRequestBody, WalletFundResponseBody},
+        transfer_funds::WalletTransferFundsRequestBody,
+    },
+};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_node::{
     RuntimeServiceId,
+    api::calls::{Error, channel, mempool, wallet},
     generic_services::{CryptarchiaService, WalletService as NodeWalletService},
 };
-use lb_wallet_service::{ClaimableVouchersInfo, LeaderAgedNotesInfo, TipResponse, api::WalletApi};
 use overwatch::services::status::ServiceStatus;
 
 use crate::{
     LogosBlockchainNode,
-    api::{
-        cryptarchia::{Hash, HeaderId, NoteId, get_cryptarchia_info_sync},
-        types::{
-            claimable_vouchers::{ClaimableVoucher, ClaimableVouchers},
-            known_addresses::KnownAddresses,
-            leader_aged_notes::{LeaderAgedNote, LeaderAgedNotes},
-            value::Value,
-            wallet_notes::{WalletNote, WalletNotes},
-        },
+    api::types::{
+        claimable_vouchers::{ClaimableVoucher, ClaimableVouchers},
+        hash::{Hash, HeaderId, NoteId},
+        known_addresses::KnownAddresses,
+        leader_aged_notes::{LeaderAgedNote, LeaderAgedNotes},
+        value::Value,
+        wallet_notes::{WalletNote, WalletNotes},
     },
     errors::{OperationStatus, OperationStatusCode},
     result::{FfiStatusResult, StatusResult},
@@ -59,8 +59,6 @@ pub(crate) type WalletService =
     NodeWalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>;
 
 /// Resolved tip plus the `(note ID, value)` pairs for a wallet address.
-type WalletNotesData = (lb_core::header::HeaderId, Vec<(CoreNoteId, Value)>);
-
 /// Gets the known wallet addresses from the wallet service.
 ///
 /// This is a synchronous wrapper around [`WalletApi::get_known_addresses`].
@@ -76,16 +74,10 @@ type WalletNotesData = (lb_core::header::HeaderId, Vec<(CoreNoteId, Value)>);
 pub(crate) fn get_known_addresses_sync(
     node: &LogosBlockchainNode,
 ) -> StatusResult<Vec<ZkPublicKey>> {
-    let runtime_handle = node.get_runtime_handle()?;
-    runtime_handle.block_on(async {
-        let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
-            node.get_overwatch_handle(),
-        )
-        .await;
-        api.get_known_addresses()
-            .await
-            .map_err(|e| OperationStatus::error(OperationStatusCode::NotFound, format!("{e:?}")))
-    })
+    node.call(
+        "Failed to get known addresses",
+        wallet::known_addresses(node.get_overwatch_handle()),
+    )
 }
 
 pub type FfiKnownAddressesResult = FfiStatusResult<KnownAddresses>;
@@ -276,37 +268,18 @@ pub unsafe extern "C" fn free_known_addresses(addresses: KnownAddresses) -> Oper
 pub(crate) fn get_claimable_vouchers_sync(
     node: &LogosBlockchainNode,
     tip: Option<CoreHeaderId>,
-) -> StatusResult<TipResponse<ClaimableVouchersInfo>> {
-    let runtime_handle = node.get_runtime_handle()?;
-    runtime_handle.block_on(async {
-        let mut status_watcher = node
-            .get_overwatch_handle()
+) -> StatusResult<WalletClaimableVouchersResponseBody> {
+    node.call("Failed to get claimable vouchers", async {
+        let handle = node.get_overwatch_handle();
+        handle
             .status_watcher::<WalletService>()
-            .await
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::ServiceError,
-                    format!("Failed to request wallet service status watcher: {error}"),
-                )
-            })?;
-
-        if let Err(status) = status_watcher
+            .await?
             .wait_for(ServiceStatus::Ready, Some(Duration::from_millis(100)))
             .await
-        {
-            return Err(OperationStatus::error(
-                OperationStatusCode::ServiceError,
-                format!("Wallet service is not ready: {status:?}"),
-            ));
-        }
-
-        let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
-            node.get_overwatch_handle(),
-        )
-        .await;
-        api.get_claimable_vouchers(tip).await.map_err(|error| {
-            OperationStatus::error(OperationStatusCode::DynError, format!("{error:?}"))
-        })
+            .map_err(|status| {
+                Error::unavailable(format!("Wallet service is not ready: {status:?}"))
+            })?;
+        wallet::claimable_vouchers(handle, tip).await
     })
 }
 
@@ -335,17 +308,9 @@ pub unsafe extern "C" fn get_claimable_vouchers(
 ) -> FfiClaimableVouchersResult {
     return_error_if_null_pointer!(node);
     let node = unsafe { &*node };
-    let tip = if optional_tip.is_null() {
-        None
-    } else {
-        Some(CoreHeaderId::from(unsafe { *optional_tip }))
-    };
+    let tip = (!optional_tip.is_null()).then(|| CoreHeaderId::from(unsafe { *optional_tip }));
 
-    let response = unwrap_or_return_error!(get_claimable_vouchers_sync(node, tip));
-    let TipResponse {
-        tip,
-        response: info,
-    } = response;
+    let info = unwrap_or_return_error!(get_claimable_vouchers_sync(node, tip));
     let vouchers: Vec<ClaimableVoucher> = info
         .vouchers
         .into_iter()
@@ -362,7 +327,7 @@ pub unsafe extern "C" fn get_claimable_vouchers(
     let vouchers_ptr = Box::leak(vouchers.into_boxed_slice()).as_mut_ptr();
 
     FfiClaimableVouchersResult::ok(ClaimableVouchers {
-        tip: tip.into(),
+        tip: info.tip.into(),
         vouchers: vouchers_ptr,
         len,
         reward_amount: info.reward_amount,
@@ -416,26 +381,13 @@ pub unsafe extern "C" fn free_claimable_vouchers(vouchers: ClaimableVouchers) ->
 /// [`OperationStatus`] error on failure.
 pub(crate) fn get_balance_sync(
     node: &LogosBlockchainNode,
-    tip: lb_core::header::HeaderId,
+    tip: Option<CoreHeaderId>,
     wallet_address: ZkPublicKey,
-) -> StatusResult<Option<Value>> {
-    let runtime_handle = node.get_runtime_handle()?;
-    runtime_handle
-        .block_on(async {
-            let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
-                node.get_overwatch_handle(),
-            )
-            .await;
-            api.get_balance(Some(tip), wallet_address)
-                .await
-                .map(|tip_response| tip_response.response.map(|balance| balance.balance))
-        })
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!("Failed to get balance: {error}"),
-            )
-        })
+) -> StatusResult<WalletBalanceResponseBody> {
+    node.call(
+        "Failed to get balance",
+        wallet::balance(node.get_overwatch_handle(), tip, wallet_address),
+    )
 }
 
 pub type FfiBalanceResult = FfiStatusResult<Value>;
@@ -469,13 +421,7 @@ pub unsafe extern "C" fn get_balance(
     return_error_if_null_pointer!(node);
     return_error_if_null_pointer!(wallet_address);
     let node = unsafe { &*node };
-    let tip = if optional_tip.is_null() {
-        unwrap_or_return_error!(get_cryptarchia_info_sync(node))
-            .cryptarchia_info
-            .tip
-    } else {
-        lb_core::header::HeaderId::from(unsafe { *optional_tip })
-    };
+    let tip = (!optional_tip.is_null()).then(|| CoreHeaderId::from(unsafe { *optional_tip }));
     let wallet_address_bytes = unsafe { std::slice::from_raw_parts(wallet_address, 32) };
     let wallet_address = unwrap_or_return_error!(
         fr_from_bytes(wallet_address_bytes)
@@ -488,61 +434,8 @@ pub unsafe extern "C" fn get_balance(
             })
     );
 
-    match get_balance_sync(node, tip, wallet_address) {
-        Ok(Some(balance)) => FfiBalanceResult::ok(balance),
-        Ok(None) => FfiBalanceResult::err(OperationStatus::error(
-            OperationStatusCode::NotFound,
-            "Unknown wallet address.",
-        )),
-        Err(status) => FfiBalanceResult::err(status),
-    }
-}
-
-/// Gets the spendable notes (UTXOs) of a wallet address.
-///
-/// This is a synchronous wrapper around [`WalletApi::get_balance`] that, unlike
-/// [`get_balance_sync`], preserves the individual notes rather than collapsing
-/// them into a single total. Callers need the note IDs to build operations that
-/// consume specific notes (e.g. [`channel_deposit_with_notes`]).
-///
-/// # Arguments
-///
-/// - `node`: A [`LogosBlockchainNode`] instance.
-/// - `tip`: The header ID to query the notes at.
-/// - `wallet_address`: The public key of the wallet address to query.
-///
-/// # Returns
-///
-/// A [`Result`] containing the resolved tip and the `(note ID, value)` pairs on
-/// success (or `None` if the address is unknown), or an [`OperationStatus`]
-/// error on failure.
-pub(crate) fn get_wallet_notes_sync(
-    node: &LogosBlockchainNode,
-    tip: lb_core::header::HeaderId,
-    wallet_address: ZkPublicKey,
-) -> StatusResult<Option<WalletNotesData>> {
-    let runtime_handle = node.get_runtime_handle()?;
-    runtime_handle
-        .block_on(async {
-            let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
-                node.get_overwatch_handle(),
-            )
-            .await;
-            api.get_balance(Some(tip), wallet_address)
-                .await
-                .map(|tip_response| {
-                    let resolved_tip = tip_response.tip;
-                    tip_response
-                        .response
-                        .map(|balance| (resolved_tip, balance.notes.into_iter().collect()))
-                })
-        })
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!("Failed to get balance: {error}"),
-            )
-        })
+    let balance = unwrap_or_return_error!(get_balance_sync(node, tip, wallet_address));
+    FfiBalanceResult::ok(balance.balance)
 }
 
 pub type FfiWalletNotesResult = FfiStatusResult<WalletNotes>;
@@ -578,13 +471,7 @@ pub unsafe extern "C" fn get_wallet_notes(
     return_error_if_null_pointer!(node);
     return_error_if_null_pointer!(wallet_address);
     let node = unsafe { &*node };
-    let tip = if optional_tip.is_null() {
-        unwrap_or_return_error!(get_cryptarchia_info_sync(node))
-            .cryptarchia_info
-            .tip
-    } else {
-        lb_core::header::HeaderId::from(unsafe { *optional_tip })
-    };
+    let tip = (!optional_tip.is_null()).then(|| CoreHeaderId::from(unsafe { *optional_tip }));
     let wallet_address_bytes = unsafe { std::slice::from_raw_parts(wallet_address, 32) };
     let wallet_address = unwrap_or_return_error!(
         fr_from_bytes(wallet_address_bytes)
@@ -597,29 +484,22 @@ pub unsafe extern "C" fn get_wallet_notes(
             })
     );
 
-    match get_wallet_notes_sync(node, tip, wallet_address) {
-        Ok(Some((resolved_tip, notes))) => {
-            let notes: Vec<WalletNote> = notes
-                .into_iter()
-                .map(|(id, value)| WalletNote {
-                    id: fr_to_bytes(id.as_fr()),
-                    value,
-                })
-                .collect();
-            let len = notes.len();
-            let notes_ptr = Box::leak(notes.into_boxed_slice()).as_mut_ptr();
-            FfiWalletNotesResult::ok(WalletNotes {
-                tip: resolved_tip.into(),
-                notes: notes_ptr,
-                len,
-            })
-        }
-        Ok(None) => FfiWalletNotesResult::err(OperationStatus::error(
-            OperationStatusCode::NotFound,
-            "Unknown wallet address.",
-        )),
-        Err(status) => FfiWalletNotesResult::err(status),
-    }
+    let balance = unwrap_or_return_error!(get_balance_sync(node, tip, wallet_address));
+    let notes: Vec<WalletNote> = balance
+        .notes
+        .into_iter()
+        .map(|(id, value)| WalletNote {
+            id: fr_to_bytes(id.as_fr()),
+            value,
+        })
+        .collect();
+    let len = notes.len();
+    let notes_ptr = Box::leak(notes.into_boxed_slice()).as_mut_ptr();
+    FfiWalletNotesResult::ok(WalletNotes {
+        tip: balance.tip.into(),
+        notes: notes_ptr,
+        len,
+    })
 }
 
 /// Gets the wallet notes that are aged enough to take part in the leadership
@@ -640,19 +520,11 @@ pub unsafe extern "C" fn get_wallet_notes(
 pub(crate) fn get_leader_aged_notes_sync(
     node: &LogosBlockchainNode,
     tip: Option<CoreHeaderId>,
-) -> StatusResult<TipResponse<LeaderAgedNotesInfo>> {
-    node.get_runtime_handle()?.block_on(async {
-        let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
-            node.get_overwatch_handle(),
-        )
-        .await;
-        api.get_leader_aged_notes_info(tip).await.map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!("Failed to get leader aged notes: {error:?}"),
-            )
-        })
-    })
+) -> StatusResult<LeaderAgedNotesResponseBody> {
+    node.call(
+        "Failed to get leader aged notes",
+        wallet::leader_aged_notes(node.get_overwatch_handle(), tip),
+    )
 }
 
 pub type FfiLeaderAgedNotesResult = FfiStatusResult<LeaderAgedNotes>;
@@ -686,14 +558,9 @@ pub unsafe extern "C" fn get_leader_aged_notes(
 ) -> FfiLeaderAgedNotesResult {
     return_error_if_null_pointer!(node);
     let node = unsafe { &*node };
-    let tip = if optional_tip.is_null() {
-        None
-    } else {
-        Some(CoreHeaderId::from(unsafe { *optional_tip }))
-    };
+    let tip = (!optional_tip.is_null()).then(|| CoreHeaderId::from(unsafe { *optional_tip }));
 
-    let TipResponse { tip, response } =
-        unwrap_or_return_error!(get_leader_aged_notes_sync(node, tip));
+    let response = unwrap_or_return_error!(get_leader_aged_notes_sync(node, tip));
 
     let notes: Vec<LeaderAgedNote> = response
         .notes
@@ -709,7 +576,7 @@ pub unsafe extern "C" fn get_leader_aged_notes(
     let notes_ptr = Box::leak(notes.into_boxed_slice()).as_mut_ptr();
 
     FfiLeaderAgedNotesResult::ok(LeaderAgedNotes {
-        tip: tip.into(),
+        tip: response.tip.into(),
         notes: notes_ptr,
         len,
         total_value: response.total_value,
@@ -834,44 +701,13 @@ impl TransferFundsArguments {
 /// [`OperationStatus`] error on failure.
 pub(crate) fn transfer_funds_sync(
     node: &LogosBlockchainNode,
-    tip: lb_core::header::HeaderId,
-    change_public_key: ZkPublicKey,
-    funding_public_keys: Vec<ZkPublicKey>,
-    recipient_public_key: ZkPublicKey,
-    amount: u64,
-) -> StatusResult<SignedOps<Preverified, StandardMode>> {
-    let runtime_handle = node.get_runtime_handle()?;
-    runtime_handle.block_on(async {
-        let handle = node.get_overwatch_handle();
-        let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(handle).await;
-
-        // The following calls are a rough copy-pate of
-        // `post_transactions_transfer_funds`. TODO: Abstract into a common API
-        let signed_tx = api
-            .transfer_funds(
-                Some(tip),
-                change_public_key,
-                funding_public_keys,
-                recipient_public_key,
-                amount,
-            )
-            .await
-            .map(|tip_response| tip_response.response)
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::DynError,
-                    format!("Failed to transfer funds: {error}"),
-                )
-            })?;
-
-        if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Hashable::hash).await {
-            return Err(OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!("Failed to add transaction to mempool: {error}"),
-            ));
-        }
-        Ok(signed_tx)
-    })
+    request: WalletTransferFundsRequestBody,
+) -> StatusResult<TxHash> {
+    node.call(
+        "Failed to transfer funds",
+        wallet::transfer_funds(node.get_overwatch_handle(), request),
+    )
+    .map(|response| response.hash)
 }
 
 pub type FfiTransferFundsResult = FfiStatusResult<Hash>;
@@ -906,13 +742,8 @@ pub unsafe extern "C" fn transfer_funds(
     unwrap_or_return_error!(unsafe { arguments.validate() });
 
     let node = unsafe { &*node };
-    let tip = if arguments.optional_tip.is_null() {
-        unwrap_or_return_error!(get_cryptarchia_info_sync(node))
-            .cryptarchia_info
-            .tip
-    } else {
-        lb_core::header::HeaderId::from(unsafe { *arguments.optional_tip })
-    };
+    let tip = (!arguments.optional_tip.is_null())
+        .then(|| CoreHeaderId::from(unsafe { *arguments.optional_tip }));
     let change_public_key =
         unwrap_or_return_error!(unsafe { parse_public_key(arguments.change_public_key) });
     let funding_public_keys = {
@@ -935,15 +766,17 @@ pub unsafe extern "C" fn transfer_funds(
         unwrap_or_return_error!(unsafe { parse_public_key(arguments.recipient_public_key) });
     let amount = Value::from(arguments.amount);
 
-    let transaction = unwrap_or_return_error!(transfer_funds_sync(
+    let hash = unwrap_or_return_error!(transfer_funds_sync(
         node,
-        tip,
-        change_public_key,
-        funding_public_keys,
-        recipient_public_key,
-        amount,
+        WalletTransferFundsRequestBody {
+            tip,
+            change_public_key,
+            funding_public_keys,
+            recipient_public_key,
+            amount,
+        },
     ));
-    FfiTransferFundsResult::ok(transaction.hash().0)
+    FfiTransferFundsResult::ok(hash.0)
 }
 
 /// Parses a 32-byte little-endian buffer into a [`ZkPublicKey`].
@@ -1081,78 +914,13 @@ impl ChannelDepositWithNotesArguments {
 /// an [`OperationStatus`] error on failure.
 pub(crate) fn channel_deposit_with_notes_sync(
     node: &LogosBlockchainNode,
-    tip: lb_core::header::HeaderId,
-    deposit: DepositOp,
-    change_public_key: ZkPublicKey,
-    funding_public_keys: Vec<ZkPublicKey>,
-    max_tx_fee: GasCost,
-) -> StatusResult<SignedOps<Preverified, StandardMode>> {
-    let runtime_handle = node.get_runtime_handle()?;
-    runtime_handle.block_on(async {
-        let handle = node.get_overwatch_handle();
-        let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(handle).await;
-
-        // Mirrors the node's `channel_deposit` handler: build -> fund -> check
-        // fee -> sign -> submit.
-        let tx_builder = MantleTxBuilder::new()
-            .push_op(Op::ChannelDeposit(deposit))
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::DynError,
-                    format!("Failed to push deposit op: {error}"),
-                )
-            })?;
-        let TipResponse {
-            tip: funded_tip,
-            response: funded_tx_builder,
-        } = api
-            .fund_tx(
-                Some(tip),
-                tx_builder,
-                change_public_key,
-                funding_public_keys,
-                0,
-            )
-            .await
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::DynError,
-                    format!("Failed to fund tx: {error}"),
-                )
-            })?;
-
-        let tx_fee = funded_tx_builder.tx_fee().map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!("Failed to compute tx fee: {error}"),
-            )
-        })?;
-        if tx_fee > max_tx_fee {
-            return Err(OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!("tx_fee({tx_fee}) exceeds max_tx_fee({max_tx_fee})"),
-            ));
-        }
-
-        let signed_tx = api
-            .sign_tx(Some(funded_tip), funded_tx_builder)
-            .await
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::DynError,
-                    format!("Failed to sign tx: {error}"),
-                )
-            })?
-            .response;
-
-        if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Hashable::hash).await {
-            return Err(OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!("Failed to add transaction to mempool: {error}"),
-            ));
-        }
-        Ok(signed_tx)
-    })
+    request: ChannelDepositRequestBody,
+) -> StatusResult<TxHash> {
+    node.call(
+        "Failed to deposit to channel",
+        channel::deposit(node.get_overwatch_handle(), request),
+    )
+    .map(|response| response.hash)
 }
 
 /// Submits a channel deposit consuming caller-specified notes.
@@ -1188,13 +956,8 @@ pub unsafe extern "C" fn channel_deposit_with_notes(
     unwrap_or_return_error!(unsafe { arguments.validate() });
 
     let node = unsafe { &*node };
-    let tip = if arguments.optional_tip.is_null() {
-        unwrap_or_return_error!(get_cryptarchia_info_sync(node))
-            .cryptarchia_info
-            .tip
-    } else {
-        CoreHeaderId::from(unsafe { *arguments.optional_tip })
-    };
+    let tip = (!arguments.optional_tip.is_null())
+        .then(|| CoreHeaderId::from(unsafe { *arguments.optional_tip }));
 
     let channel_id = {
         let bytes = unsafe { std::slice::from_raw_parts(arguments.channel_id, 32) };
@@ -1266,36 +1029,17 @@ pub unsafe extern "C" fn channel_deposit_with_notes(
     );
     let max_tx_fee = GasCost::new(arguments.max_tx_fee);
 
-    let transaction = unwrap_or_return_error!(channel_deposit_with_notes_sync(
+    let hash = unwrap_or_return_error!(channel_deposit_with_notes_sync(
         node,
-        tip,
-        deposit,
-        change_public_key,
-        funding_public_keys,
-        max_tx_fee,
+        ChannelDepositRequestBody {
+            tip,
+            deposit,
+            change_public_key,
+            funding_public_keys,
+            max_tx_fee,
+        },
     ));
-    FfiChannelDepositResult::ok(transaction.hash().0)
-}
-
-/// Selects notes (largest-first) whose combined value covers `amount`.
-///
-/// Returns the selected note IDs and their combined value, or `None` if the
-/// supplied notes cannot cover `amount`.
-fn select_notes_covering(
-    mut notes: Vec<(CoreNoteId, Value)>,
-    amount: Value,
-) -> Option<(Vec<CoreNoteId>, Value)> {
-    notes.sort_by_key(|(_, value)| std::cmp::Reverse(*value));
-    let mut selected = Vec::new();
-    let mut total: Value = 0;
-    for (id, value) in notes {
-        if total >= amount {
-            break;
-        }
-        selected.push(id);
-        total = total.saturating_add(value);
-    }
-    (total >= amount).then_some((selected, total))
+    FfiChannelDepositResult::ok(hash.0)
 }
 
 /// Arguments for [`channel_deposit`].
@@ -1381,135 +1125,25 @@ impl ChannelDepositArguments {
 /// an [`OperationStatus`] error on failure.
 pub(crate) fn channel_deposit_sync(
     node: &LogosBlockchainNode,
-    tip: lb_core::header::HeaderId,
+    tip: Option<CoreHeaderId>,
     channel_id: ChannelId,
     funding_public_key: ZkPublicKey,
     amount: Value,
     metadata: Metadata,
-) -> StatusResult<SignedOps<Preverified, StandardMode>> {
-    let runtime_handle = node.get_runtime_handle()?;
-    runtime_handle.block_on(async {
-        let handle = node.get_overwatch_handle();
-        let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(handle).await;
-
-        // 1. Fetch the funding key's spendable notes.
-        let balance = api
-            .get_balance(Some(tip), funding_public_key)
-            .await
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::DynError,
-                    format!("Failed to get balance: {error}"),
-                )
-            })?;
-        let notes: Vec<(CoreNoteId, Value)> = balance
-            .response
-            .map(|balance| balance.notes.into_iter().collect())
-            .ok_or_else(|| {
-                OperationStatus::error(OperationStatusCode::NotFound, "Unknown funding address.")
-            })?;
-
-        // 2. Select notes covering the deposit amount.
-        let (selected_ids, selected_total) =
-            select_notes_covering(notes, amount).ok_or_else(|| {
-                OperationStatus::error(
-                    OperationStatusCode::DynError,
-                    "Insufficient funds to cover deposit amount.",
-                )
-            })?;
-        let change = selected_total - amount;
-
-        // 3. Build a transfer whose output[0] is the exact deposit note, with any
-        //    remainder returned as change to the same key.
-        let mut outputs = vec![Note::new(amount, funding_public_key)];
-        if change > 0 {
-            outputs.push(Note::new(change, funding_public_key));
-        }
-        let transfer = TransferOp {
-            inputs: Inputs::try_new(selected_ids).map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::DynError,
-                    format!("Invalid transfer inputs: {error:?}"),
-                )
-            })?,
-            outputs: Outputs::try_new(outputs).map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::DynError,
-                    format!("Invalid transfer outputs: {error:?}"),
-                )
-            })?,
-        };
-
-        // 4. The deposit consumes the freshly-created note at output index 0.
-        let deposit_note_id = transfer
-            .outputs
-            .utxo_by_index(0, &transfer)
-            .ok_or_else(|| {
-                OperationStatus::error(
-                    OperationStatusCode::RuntimeError,
-                    "Transfer did not produce a deposit note.",
-                )
-            })?
-            .id();
-        let deposit = DepositOp {
+) -> StatusResult<TxHash> {
+    node.call(
+        "Failed to deposit to channel",
+        channel::deposit_amount(
+            node.get_overwatch_handle(),
+            node.fork_digests(),
+            tip,
             channel_id,
-            inputs: BoundedInputs::from(deposit_note_id).into(),
+            funding_public_key,
+            amount,
             metadata,
-        };
-
-        // 5. Assemble [transfer, deposit] in order and sign both ops with a single ZK
-        //    signature by the funding key (which owns every input).
-        //
-        //    NOTE: we deliberately sign with `sign_tx_with_zk` (explicit keys)
-        // rather    than the usual `WalletApi::sign_tx`. `sign_tx`
-        // resolves each op's input    public keys from the *committed*
-        // ledger state, but the deposit consumes    the note this same
-        // transaction's transfer creates (it is not on-chain
-        //    yet), so `sign_tx` would fail with `MissingInputNote`. Both the
-        // transfer    inputs and the deposit's input note are owned by
-        // `funding_public_key`, so    one signature over the tx hash
-        // satisfies both op proofs. Do not "simplify"    this to
-        // `sign_tx`.
-        let tx = Ops::new(
-            node.fork_digest_in_force().await?,
-            [Op::Transfer(transfer), Op::ChannelDeposit(deposit)],
-        );
-        let tx_hash = tx.hash();
-        let user_sig = api
-            .sign_tx_with_zk(tx_hash, vec![funding_public_key])
-            .await
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::DynError,
-                    format!("Failed to sign deposit tx: {error}"),
-                )
-            })?;
-        let op_proofs =
-            OpProofs::from([OpProof::ZkSig(user_sig.clone()), OpProof::ZkSig(user_sig)]);
-        let signed_tx = SignedOps::from_parts(tx, op_proofs)
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::DynError,
-                    format!("Failed to assemble signed tx: {error:?}"),
-                )
-            })?
-            .preverify()
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::DynError,
-                    format!("Failed to assemble signed tx: {error:?}"),
-                )
-            })?;
-
-        // 6. Submit to the mempool.
-        if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Hashable::hash).await {
-            return Err(OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!("Failed to add transaction to mempool: {error}"),
-            ));
-        }
-        Ok(signed_tx)
-    })
+        ),
+    )
+    .map(|response| response.hash)
 }
 
 /// Submits an amount-based channel deposit.
@@ -1543,13 +1177,8 @@ pub unsafe extern "C" fn channel_deposit(
     unwrap_or_return_error!(unsafe { arguments.validate() });
 
     let node = unsafe { &*node };
-    let tip = if arguments.optional_tip.is_null() {
-        unwrap_or_return_error!(get_cryptarchia_info_sync(node))
-            .cryptarchia_info
-            .tip
-    } else {
-        lb_core::header::HeaderId::from(unsafe { *arguments.optional_tip })
-    };
+    let tip = (!arguments.optional_tip.is_null())
+        .then(|| CoreHeaderId::from(unsafe { *arguments.optional_tip }));
 
     let channel_id = {
         let bytes = unsafe { std::slice::from_raw_parts(arguments.channel_id, 32) };
@@ -1579,7 +1208,7 @@ pub unsafe extern "C" fn channel_deposit(
         }
     ));
 
-    let transaction = unwrap_or_return_error!(channel_deposit_sync(
+    let hash = unwrap_or_return_error!(channel_deposit_sync(
         node,
         tip,
         channel_id,
@@ -1587,7 +1216,7 @@ pub unsafe extern "C" fn channel_deposit(
         amount,
         metadata,
     ));
-    FfiChannelDepositResult::ok(transaction.hash().0)
+    FfiChannelDepositResult::ok(hash.0)
 }
 
 /// Funds a transaction from the node's wallet.
@@ -1601,84 +1230,10 @@ pub(crate) fn wallet_fund_tx_sync(
     node: &LogosBlockchainNode,
     request: WalletFundRequestBody,
 ) -> StatusResult<WalletFundResponseBody> {
-    let runtime_handle = node.get_runtime_handle()?;
-    runtime_handle.block_on(async {
-        let handle = node.get_overwatch_handle();
-        let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(handle).await;
-
-        let TipResponse {
-            tip,
-            response: funded_tx_builder,
-        } = api
-            .fund_tx(
-                request.tip,
-                request.tx_builder,
-                request.change_public_key,
-                request.funding_public_keys,
-                request.priority_fee_percent,
-            )
-            .await
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::DynError,
-                    format!("Failed to fund tx: {error}"),
-                )
-            })?;
-
-        let tx_fee = funded_tx_builder.tx_fee().map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!("Failed to compute tx fee: {error}"),
-            )
-        })?;
-        if tx_fee > request.max_tx_fee {
-            return Err(OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!(
-                    "tx_fee({tx_fee}) exceeds max_tx_fee({})",
-                    request.max_tx_fee
-                ),
-            ));
-        }
-
-        // Owners of the funding inputs, in input order — the ledger verifies
-        // the transfer proof against this exact list.
-        let funding_note_pks: Vec<ZkPublicKey> = funded_tx_builder
-            .ledger_inputs()
-            .iter()
-            .map(|utxo| utxo.note.pk)
-            .collect();
-
-        let funded_tx = funded_tx_builder
-            .build(node.fork_digest_in_force().await?)
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::DynError,
-                    format!("Failed to build funded tx: {error}"),
-                )
-            })?;
-        let transfer_proof = if funding_note_pks.is_empty() {
-            None
-        } else {
-            let tx_hash = funded_tx.hash();
-            let signature = api
-                .sign_tx_with_zk(tx_hash, funding_note_pks)
-                .await
-                .map_err(|error| {
-                    OperationStatus::error(
-                        OperationStatusCode::DynError,
-                        format!("Failed to sign fee transfer: {error}"),
-                    )
-                })?;
-            Some(OpProof::ZkSig(signature))
-        };
-
-        Ok(WalletFundResponseBody {
-            tip,
-            funded_tx,
-            transfer_proof,
-        })
-    })
+    node.call(
+        "Failed to fund tx",
+        wallet::fund(node.get_overwatch_handle(), node.fork_digests(), request),
+    )
 }
 
 pub type FfiWalletFundResult = FfiStatusResult<*mut c_char>;
@@ -1838,16 +1393,10 @@ pub unsafe extern "C" fn submit_signed_transaction(
     };
 
     let transaction_hash = preverified_tx.hash().0;
-    let runtime_handle = unwrap_or_return_error!(node.get_runtime_handle());
-    let submit_result = runtime_handle.block_on(async {
-        mempool::add_tx(node.get_overwatch_handle(), preverified_tx, Hashable::hash).await
-    });
-    if let Err(error) = submit_result {
-        return FfiSubmitTransactionResult::err(OperationStatus::error(
-            OperationStatusCode::DynError,
-            format!("Failed to add transaction to mempool: {error}"),
-        ));
-    }
+    unwrap_or_return_error!(node.call(
+        "Failed to add transaction to mempool",
+        mempool::add_tx(node.get_overwatch_handle(), preverified_tx),
+    ));
 
     FfiSubmitTransactionResult::ok(transaction_hash)
 }

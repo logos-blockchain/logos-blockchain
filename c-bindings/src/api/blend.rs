@@ -1,6 +1,5 @@
-use std::ffi::{CString, c_char};
+use std::ffi::c_char;
 
-use lb_api_service::http::blend::{JoinError, blend_join_network};
 use lb_blend_service::message::NetworkInfo;
 use lb_c_macros::panic_to_error;
 use lb_core::{
@@ -8,13 +7,12 @@ use lb_core::{
     sdp::{self, Locator},
 };
 use lb_groth16::fr_from_bytes;
-use lb_node::{RuntimeServiceId, generic_services::blend::BlendService};
-use lb_sdp_service::SdpSubmission;
+use lb_node::api::calls::blend::join_network;
 use multiaddr::PeerId;
 
 use crate::{
     LogosBlockchainNode,
-    api::wallet::WalletService,
+    api::node::to_json_c_string,
     errors::{OperationStatus, OperationStatusCode},
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
@@ -102,34 +100,18 @@ pub unsafe extern "C" fn blend_join_as_core_node(
 
     let node = unsafe { &*node };
 
-    let runtime_handle = unwrap_or_return_error!(node.get_runtime_handle());
-    let result: StatusResult<SdpSubmission> = runtime_handle.block_on(async {
-        blend_join_network::<BlendService<RuntimeServiceId>, WalletService, RuntimeServiceId>(
-            node.get_overwatch_handle(),
-            locator,
-            service_note_id,
-        )
-        .await
-        .map_err(|error| {
-            let code = match error {
-                JoinError::Internal(_) => OperationStatusCode::RelayError,
-                JoinError::KeyNotInWallet(_) | JoinError::NoServiceNote { .. } => {
-                    OperationStatusCode::NotFound
-                }
-            };
-            OperationStatus::error(code, format!("Failed to join blend network: {error}"))
-        })
-    });
-
-    result
-        .map(|submission| DeclarationId::from(submission.declaration_id))
-        .into()
+    node.call(
+        "Failed to join blend network",
+        join_network(node.get_overwatch_handle(), locator, service_note_id),
+    )
+    .map(|submission| DeclarationId::from(submission.declaration_id))
+    .into()
 }
 
 /// Gets the current Blend network information.
 ///
 /// This is a synchronous wrapper around the asynchronous
-/// [`blend_info`](lb_api_service::http::blend::blend_info) function.
+/// [`blend_info`](lb_node::api::calls::blend::info) function.
 ///
 /// # Arguments
 ///
@@ -143,20 +125,10 @@ pub unsafe extern "C" fn blend_join_as_core_node(
 pub(crate) fn blend_info_sync(
     node: &LogosBlockchainNode,
 ) -> StatusResult<Option<NetworkInfo<PeerId>>> {
-    let runtime_handle = node.get_runtime_handle()?;
-    let overwatch_handle = node.get_overwatch_handle();
-
-    runtime_handle
-        .block_on(lb_api_service::http::blend::blend_info::<
-            BlendService<RuntimeServiceId>,
-            RuntimeServiceId,
-        >(overwatch_handle))
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::RelayError,
-                format!("Failed to get blend info: {error}"),
-            )
-        })
+    node.call(
+        "Failed to get blend info",
+        lb_node::api::calls::blend::info(node.get_overwatch_handle()),
+    )
 }
 
 pub type FfiBlendInfoResult = FfiStatusResult<*mut c_char>;
@@ -190,19 +162,6 @@ pub unsafe extern "C" fn blend_info(node: *const LogosBlockchainNode) -> FfiBlen
     let node = unsafe { &*node };
     let network_info = unwrap_or_return_error!(blend_info_sync(node));
 
-    let json_network_info =
-        unwrap_or_return_error!(serde_json::to_string(&network_info).map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::RuntimeError,
-                format!("Failed to serialize blend info: {error}"),
-            )
-        }));
-    let json_network_info_c =
-        unwrap_or_return_error!(CString::new(json_network_info).map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::RuntimeError,
-                format!("Failed to create CString: {error}"),
-            )
-        }));
+    let json_network_info_c = unwrap_or_return_error!(to_json_c_string(&network_info));
     FfiBlendInfoResult::ok(json_network_info_c.into_raw())
 }

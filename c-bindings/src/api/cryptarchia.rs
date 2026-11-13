@@ -1,12 +1,10 @@
 use std::ffi::{CString, c_char};
 
 use lb_c_macros::panic_to_error;
-use lb_chain_service::api::CryptarchiaServiceApi;
-use lb_node::{RuntimeServiceId, generic_services::CryptarchiaService};
 
 use crate::{
     LogosBlockchainNode,
-    api::free,
+    api::{free, types::hash::HeaderId},
     errors::{OperationStatus, OperationStatusCode},
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
@@ -30,33 +28,6 @@ impl State {
             lb_chain_service::State::Online => Self::Online,
         }
     }
-}
-
-pub type Hash = [u8; 32];
-pub type HeaderId = Hash;
-pub type TxHash = Hash;
-/// A note (UTXO) identifier, as 32 little-endian bytes. The FFI representation
-/// of [`lb_core::mantle::NoteId`].
-pub type NoteId = Hash;
-
-/// Converts a raw pointer to a `TxHash` into a `lb_core::mantle::TxHash`.
-///
-/// # Parameters
-///
-/// - `tx_hash`: A raw pointer to a `TxHash` (32-byte array).
-///
-/// # Returns
-///
-/// - A `lb_core::mantle::TxHash` if successful, or an
-///   `OperationStatusCode::ValidationError` if the conversion fails.
-///
-/// # Safety
-///
-/// This function is unsafe because it dereferences a raw pointer.
-/// The caller must ensure that the pointer is valid and points to a properly
-/// initialized `TxHash`.
-pub(crate) unsafe fn into_tx_hash(tx_hash: *const TxHash) -> lb_core::mantle::TxHash {
-    lb_core::mantle::TxHash::from(unsafe { *tx_hash })
 }
 
 #[repr(C)]
@@ -85,7 +56,7 @@ impl From<lb_chain_service::ChainServiceInfo> for CryptarchiaInfo {
 /// Gets the current Cryptarchia info.
 ///
 /// This is a synchronous wrapper around the asynchronous
-/// [`cryptarchia_info`](lb_api_service::http::consensus::cryptarchia_info)
+/// [`cryptarchia_info`](lb_node::api::calls::cryptarchia::info)
 /// function.
 ///
 /// # Arguments
@@ -99,18 +70,10 @@ impl From<lb_chain_service::ChainServiceInfo> for CryptarchiaInfo {
 pub(crate) fn get_cryptarchia_info_sync(
     node: &LogosBlockchainNode,
 ) -> StatusResult<lb_chain_service::ChainServiceInfo> {
-    let runtime_handle = node.get_runtime_handle()?;
-
-    let Ok(info) = runtime_handle.block_on(lb_api_service::http::consensus::cryptarchia_info(
-        node.get_overwatch_handle(),
-    )) else {
-        return Err(OperationStatus::error(
-            OperationStatusCode::RelayError,
-            "Failed to get cryptarchia info.",
-        ));
-    };
-
-    Ok(info)
+    node.call(
+        "Failed to get cryptarchia info",
+        lb_node::api::calls::cryptarchia::info(node.get_overwatch_handle()),
+    )
 }
 
 pub type FfiCryptarchiaInfoResult = FfiStatusResult<*mut CryptarchiaInfo>;
@@ -167,110 +130,57 @@ pub unsafe extern "C" fn free_cryptarchia_info(pointer: *mut CryptarchiaInfo) ->
     unsafe { free::<CryptarchiaInfo>(pointer) }
 }
 
-/// Gets a block's events as a JSON string.
+/// Result type for [`get_fork_digest`]. On success, `value` is a pointer to a
+/// NUL-terminated C string holding the fork digest in lowercase hexadecimal.
+pub type FfiGetForkDigestResult = FfiStatusResult<*mut c_char>;
+
+/// Returns the fork digest a transaction signed now must carry: that of the era
+/// the node's clock is in, in lowercase hexadecimal, as a transaction's JSON
+/// carries it.
 ///
-/// This is a synchronous wrapper around the asynchronous
-/// [`CryptarchiaServiceApi::get_block_events`] function.
+/// The fork digest changes when an era starts, so a caller asks for it right
+/// before signing a transaction rather than keeping it.
 ///
 /// # Arguments
 ///
-/// - `node`: A [`LogosBlockchainNode`] instance.
-/// - `header_id`: The 32-byte header ID of the block whose events to fetch.
+/// - `node`: A pointer to the node returned by
+///   [`start_lb_node`](super::lifecycle::start_lb_node).
 ///
 /// # Returns
 ///
-/// A `Result` containing a JSON string of the block's events on success, or an
-/// [`OperationStatus`] error on failure. Returns
-/// [`OperationStatusCode::NotFound`] if no block with the given header ID
-/// exists.
-pub(crate) fn get_block_events_sync(
-    node: &LogosBlockchainNode,
-    header_id: HeaderId,
-) -> StatusResult<CString> {
-    let runtime_handle = node.get_runtime_handle()?;
-    let overwatch_handle = node.get_overwatch_handle();
-
-    let events = runtime_handle.block_on(async move {
-        let api =
-            CryptarchiaServiceApi::<CryptarchiaService<RuntimeServiceId>>::from_overwatch_handle(
-                overwatch_handle,
-            )
-            .await;
-        api.get_block_events(lb_core::header::HeaderId::from(header_id))
-            .await
-            .map_err(|e| {
-                OperationStatus::error(
-                    OperationStatusCode::ServiceError,
-                    format!("Failed to get block events: {e}"),
-                )
-            })
-    })?;
-
-    let events = events.ok_or_else(|| {
-        OperationStatus::error(
-            OperationStatusCode::NotFound,
-            format!("No block found for header id {header_id:?}"),
-        )
-    })?;
-
-    let json = serde_json::to_string(&events).map_err(|e| {
-        OperationStatus::error(
-            OperationStatusCode::RuntimeError,
-            format!("Failed to serialize block events: {e}"),
-        )
-    })?;
-
-    CString::new(json).map_err(|e| {
-        OperationStatus::error(
-            OperationStatusCode::RuntimeError,
-            format!("Failed to create CString: {e}"),
-        )
-    })
-}
-
-/// Result type for `get_block_events`. On success, `value` is a pointer to a
-/// NUL-terminated C string containing the JSON-serialized events.
-pub type FfiGetBlockEventsResult = FfiStatusResult<*mut c_char>;
-
-/// Get a block's events as a JSON string.
-///
-/// Returns the JSON-serialized events emitted by the block with the given
-/// 32-byte header ID.
-///
-/// # Arguments
-///
-/// - `node`: A non-null pointer to a [`LogosBlockchainNode`].
-/// - `header_id`: A non-null pointer to a 32-byte header ID.
-///
-/// # Returns
-///
-/// A [`FfiGetBlockEventsResult`] containing a pointer to an allocated C string
-/// (JSON events) on success, or an [`OperationStatus`] error on failure.
-/// Returns [`OperationStatusCode::NotFound`] if no block with the given header
-/// ID exists.
+/// A [`FfiGetForkDigestResult`] containing a pointer to an allocated C string
+/// on success, or an [`OperationStatus`] error on failure.
 ///
 /// # Safety
 ///
-/// This function is unsafe because it dereferences raw pointers.
-/// The caller must ensure that `node` is non-null and points to a valid
-/// [`LogosBlockchainNode`], and that `header_id` is non-null and points to at
-/// least 32 valid bytes.
+/// `node` must be a valid pointer to a [`LogosBlockchainNode`] that has not
+/// been stopped.
 ///
 /// # Memory Management
 ///
 /// This function allocates memory for the output C string. The caller must
 /// free this memory using the [`free_cstring`](super::free_cstring) function.
+#[must_use]
 #[panic_to_error]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn get_block_events(
+pub unsafe extern "C" fn get_fork_digest(
     node: *const LogosBlockchainNode,
-    header_id: *const HeaderId,
-) -> FfiGetBlockEventsResult {
+) -> FfiGetForkDigestResult {
     return_error_if_null_pointer!(node);
-    return_error_if_null_pointer!(header_id);
-
-    let header_id = unsafe { *header_id };
     let node = unsafe { &*node };
-    let json_cstring = unwrap_or_return_error!(get_block_events_sync(node, header_id));
-    FfiGetBlockEventsResult::ok(json_cstring.into_raw())
+    let fork_digest = unwrap_or_return_error!(node.call(
+        "Failed to get fork digest",
+        lb_node::api::calls::time::fork_digest_in_force(
+            node.get_overwatch_handle(),
+            node.fork_digests(),
+        ),
+    ));
+
+    match CString::new(hex::encode(<[u8; 32]>::from(fork_digest))) {
+        Ok(fork_digest) => FfiGetForkDigestResult::ok(fork_digest.into_raw()),
+        Err(error) => FfiGetForkDigestResult::err(OperationStatus::error(
+            OperationStatusCode::RuntimeError,
+            format!("Failed to create CString: {error}"),
+        )),
+    }
 }

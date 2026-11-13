@@ -1,13 +1,9 @@
 use std::ffi::{CStr, CString};
 
 use lb_core::{era::ForkDigest, mantle::transactions::genesis_tx::ChainId};
-use lb_node::{RuntimeServiceId, TimeService};
-use lb_time_service::TimeServiceMessage;
+use lb_node::RuntimeServiceId;
 use overwatch::overwatch::{Overwatch, OverwatchHandle, ServicePanic};
-use tokio::{
-    runtime::{Handle, Runtime},
-    sync::oneshot,
-};
+use tokio::runtime::{Handle, Runtime};
 
 use crate::{
     errors::{OperationStatus, OperationStatusCode},
@@ -78,47 +74,11 @@ impl LogosBlockchainNode {
         }
     }
 
-    /// The fork digest of the era the node's clock is in, which a transaction
-    /// signed now carries.
-    pub(crate) async fn fork_digest_in_force(&self) -> StatusResult<ForkDigest> {
-        let relay = self
-            .get_overwatch_handle()
-            .relay::<TimeService>()
-            .await
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::RelayError,
-                    format!("Failed to get relay to TimeService: {error}"),
-                )
-            })?;
-        let (sender, receiver) = oneshot::channel();
-        relay
-            .send(TimeServiceMessage::CurrentSlot { sender })
-            .await
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::ChannelSendError,
-                    format!("Failed to send current slot request: {error}"),
-                )
-            })?;
-        let era = receiver
-            .await
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::ChannelReceiveError,
-                    format!("Failed to receive current slot response: {error}"),
-                )
-            })?
-            .era;
-        self.fork_digests
-            .get(usize::from(era.into_inner()))
-            .copied()
-            .ok_or_else(|| {
-                OperationStatus::error(
-                    OperationStatusCode::ConfigurationError,
-                    format!("The deployment has no era {}", era.into_inner()),
-                )
-            })
+    /// The fork digest of every era of the deployment, era `n` at position
+    /// `n`.
+    #[must_use]
+    pub(crate) fn fork_digests(&self) -> &[ForkDigest] {
+        &self.fork_digests
     }
 
     /// The chain ID of the deployment this node runs, borrowed from the node,
@@ -131,6 +91,18 @@ impl LogosBlockchainNode {
     #[must_use]
     pub(crate) const fn get_overwatch_handle(&self) -> &OverwatchHandle<RuntimeServiceId> {
         self.overwatch.handle()
+    }
+
+    /// Runs a call into the node's API to completion, reporting its failure
+    /// as a status that starts with `context`.
+    pub(crate) fn call<Output>(
+        &self,
+        context: &str,
+        call: impl Future<Output = Result<Output, lb_node::api::calls::Error>>,
+    ) -> StatusResult<Output> {
+        self.get_runtime_handle()?
+            .block_on(call)
+            .map_err(|error| OperationStatus::from_api_error(context, &error))
     }
 
     /// The handle the node functions block on.

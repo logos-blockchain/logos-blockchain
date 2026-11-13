@@ -7,10 +7,10 @@ use crate::api::routes::api_routes;
 /// Only the `$doc` half of each row is used; the router half is matched and
 /// discarded, so the handler type parameters it names are never resolved here.
 macro_rules! declare_api_doc {
-    ($( $method:ident $path:expr => $doc:path, $handler:expr ; )*) => {
+    ($( $method:ident $path:expr => $handler:path ; )*) => {
         #[derive(utoipa::OpenApi)]
         #[openapi(
-            paths($($doc),*),
+            paths($($handler),*),
             components(schemas(
                 schema::Status,
                 schema::MempoolMetrics,
@@ -282,7 +282,7 @@ mod schema_conformance_tests {
     /// Covers `Multiaddr` in a request body.
     #[test]
     fn dial_peer_request_body_matches_its_schema() {
-        assert_round_trip_matches_component::<crate::api::handlers::DialPeerRequestBody>(
+        assert_round_trip_matches_component::<crate::api::handlers::network::DialPeerRequestBody>(
             "DialPeerRequestBody",
             serde_json::json!({ "addr": "/ip4/127.0.0.1/tcp/3000" }),
         );

@@ -1,27 +1,10 @@
 #![allow(clippy::needless_for_each, reason = "Utoipa implementation")]
 
-use std::{
-    fmt::{Debug, Display},
-    marker::PhantomData,
-};
-
 use axum::{Router, routing};
 use http::StatusCode;
-use lb_api_service::{Backend, http::consensus::Cryptarchia};
-use lb_chain_broadcast_service::BlockBroadcastService;
-use lb_chain_leader_service::api::ChainLeaderServiceData;
-use lb_chain_service::CryptarchiaConsensus;
-use lb_core::{header::HeaderId, mantle::traits::Hashable};
+use lb_api_service::Backend;
 use lb_http_api_common::metrics::http_metrics_middleware;
 pub use lb_http_api_common::settings::AxumBackendSettings;
-use lb_sdp_service::{
-    mempool::SdpMempoolAdapter, state::SdpStateStorage as SdpStateStorageTrait,
-    wallet::SdpWalletAdapter,
-};
-use lb_storage_service::StorageService;
-use lb_time_service::backends::NtpTimeBackend;
-use lb_tx_service::{TxMempoolService, backend::Mempool};
-use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use tokio::net::TcpListener;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::{
@@ -33,143 +16,25 @@ use tracing::Level as TracingLevel;
 use utoipa::OpenApi as _;
 use utoipa_swagger_ui::SwaggerUi;
 
-use super::handlers::{
-    add_tx, blend_info, blend_pending_transactions, blend_tx, block, block_events,
-    blocks_range_stream, blocks_stream, chain_fork, chain_id, cryptarchia_headers,
-    cryptarchia_info, cryptarchia_lib_stream, dial_peer, get_finalized_sdp_declaration,
-    get_finalized_sdp_declarations, get_gas_prices, get_limits, get_sdp_declarations,
-    get_sdp_snapshot, immutable_blocks, libp2p_info, mantle_metrics, mantle_status, mempool_view,
-    time_info, transaction, version, wallet,
-};
 use crate::{
-    BlendService, PoWService, TracingService, ValidatedTx, WalletService,
+    RuntimeServiceId,
     api::{
-        browser_access::restrict_browser_access,
-        handlers::{
-            blend_join_network, channel, channel_deposit, leader_claim, post_activity,
-            post_declaration, post_set_declaration_id, post_withdrawal, pow_claim,
-            pow_claimable_rewards, pow_start_auto_claim, pow_start_mining, pow_status,
-            pow_stop_auto_claim, pow_stop_mining,
-        },
-        openapi::ApiDoc,
-        routes::api_routes,
-        tracing::reload_tracing_filter,
+        browser_access::restrict_browser_access, calls::Handle, openapi::ApiDoc, routes::api_routes,
     },
 };
 
-/// Builds the axum router from the shared route table.
-///
-/// Only the `$handler` half of each row is used; the `OpenAPI` half is matched
-/// and discarded. Expanded inside `AxumBackend::serve`, where the handler type
-/// parameters are in scope.
 macro_rules! build_router {
-    ($( $method:ident $path:expr => $doc:path, $handler:expr ; )*) => {
+    ($( $method:ident $path:expr => $handler:path ; )*) => {
         Router::new()$(.route($path, routing::$method($handler)))*
     };
 }
 
-type BlockStorageService<RuntimeServiceId> = StorageService<RuntimeServiceId>;
-
-pub struct AxumBackend<
-    TimeBackend,
-    MempoolStorageAdapter,
-    SdpMempool,
-    SdpWallet,
-    SdpStateStorage,
-    ChainLeader,
-> {
+pub struct AxumBackend {
     settings: AxumBackendSettings,
-    _phantom: PhantomData<(
-        TimeBackend,
-        MempoolStorageAdapter,
-        SdpMempool,
-        SdpWallet,
-        SdpStateStorage,
-        ChainLeader,
-    )>,
 }
 
 #[async_trait::async_trait]
-impl<
-    TimeBackend,
-    MempoolStorageAdapter,
-    SdpMempool,
-    SdpWallet,
-    SdpStateStorage,
-    ChainLeader,
-    RuntimeServiceId,
-> Backend<RuntimeServiceId>
-    for AxumBackend<
-        TimeBackend,
-        MempoolStorageAdapter,
-        SdpMempool,
-        SdpWallet,
-        SdpStateStorage,
-        ChainLeader,
-    >
-where
-    TimeBackend: lb_time_service::backends::TimeBackend + Send + 'static,
-    TimeBackend::Settings: Clone + Send + Sync,
-    MempoolStorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
-            RuntimeServiceId,
-            Item = ValidatedTx,
-            Key = <ValidatedTx as Hashable>::Hash,
-            BlockId = HeaderId,
-        > + Send
-        + Sync
-        + Clone
-        + 'static,
-    MempoolStorageAdapter::Error: Debug,
-    SdpMempool: SdpMempoolAdapter + Send + Sync + 'static,
-    SdpWallet: SdpWalletAdapter + Send + Sync + 'static,
-    ChainLeader: ChainLeaderServiceData,
-    SdpStateStorage: SdpStateStorageTrait<RuntimeServiceId> + Send + 'static,
-    RuntimeServiceId: Debug
-        + Sync
-        + Send
-        + Display
-        + Clone
-        + 'static
-        + AsServiceId<Cryptarchia<RuntimeServiceId>>
-        + AsServiceId<crate::TimeService>
-        + AsServiceId<BlockBroadcastService<RuntimeServiceId>>
-        + AsServiceId<
-            lb_network_service::NetworkService<
-                lb_network_service::backends::libp2p::Libp2p,
-                NtpTimeBackend,
-                RuntimeServiceId,
-            >,
-        >
-        + AsServiceId<BlockStorageService<RuntimeServiceId>>
-        + AsServiceId<StorageService<RuntimeServiceId>>
-        + AsServiceId<
-            TxMempoolService<
-                lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
-                    ValidatedTx,
-                    <ValidatedTx as Hashable>::Hash,
-                    RuntimeServiceId,
-                >,
-                Mempool<HeaderId, ValidatedTx, MempoolStorageAdapter, RuntimeServiceId>,
-                MempoolStorageAdapter,
-                NtpTimeBackend,
-                RuntimeServiceId,
-            >,
-        >
-        + AsServiceId<
-            lb_sdp_service::SdpService<
-                SdpMempool,
-                SdpWallet,
-                Cryptarchia<RuntimeServiceId>,
-                SdpStateStorage,
-                RuntimeServiceId,
-            >,
-        >
-        + AsServiceId<WalletService>
-        + AsServiceId<ChainLeader>
-        + AsServiceId<BlendService>
-        + AsServiceId<PoWService>
-        + AsServiceId<TracingService>,
-{
+impl Backend<RuntimeServiceId> for AxumBackend {
     type Error = std::io::Error;
     type Settings = AxumBackendSettings;
 
@@ -177,13 +42,10 @@ where
     where
         Self: Sized,
     {
-        Ok(Self {
-            settings,
-            _phantom: PhantomData,
-        })
+        Ok(Self { settings })
     }
 
-    async fn serve(self, handle: OverwatchHandle<RuntimeServiceId>) -> Result<(), Self::Error> {
+    async fn serve(self, handle: Handle) -> Result<(), Self::Error> {
         let app = api_routes!(build_router)
             .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()));
 
