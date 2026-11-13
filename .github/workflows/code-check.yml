@@ -7,6 +7,9 @@ on:
 
 name: Code checks
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}@${{ github.ref }}
   cancel-in-progress: true
@@ -19,6 +22,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        with:
+          persist-credentials: false
       - name: Install nightly toolchain
         uses: actions-rs/toolchain@88dc2356392166efad76775c878094f4e83ff746  # Version 1.0.6
         with:
@@ -48,6 +53,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -68,6 +75,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        with:
+          persist-credentials: false
       - name: Run workspace dependency policies check
         run: scripts/check-workspace-dependency-policies.sh
 
@@ -82,6 +91,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        with:
+          persist-credentials: false
       - name: Install cargo-machete
         uses: bnjbvr/cargo-machete@9f0895d780783da0089162cae9668f6ec6e896c4  # Version 0.8.0
         # The action's default run omits `--with-metadata`, which can produce false positives.
@@ -102,11 +113,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        with:
+          persist-credentials: false
 
       - name: Set up Cargo cache
         uses: ./.github/actions/setup-cargo-cache
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           key-prefix: code-check/lints/${{ matrix.os }}
 
       - name: Run cargo clippy on workspace
@@ -119,8 +131,51 @@ jobs:
         if: success() || failure()
         uses: ./.github/actions/update-cargo-cache
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           key-prefix: code-check/lints/${{ matrix.os }}
+
+  # Deletes the caches that `lints` superseded. It is a job of its own because deleting caches needs
+  # `actions: write`, which can also start workflows, and `lints` compiles third-party code.
+  prune-lint-caches:
+    name: Prune lint caches
+    needs: lints
+    # Runs where `update-cargo-cache` saves a cache: on master and on pull requests from this repository.
+    # Pull requests from forks get a read-only token, which cannot delete caches.
+    if: >-
+      ${{
+        !cancelled() &&
+        (github.ref == 'refs/heads/master' ||
+         github.event.pull_request.head.repo.full_name == github.repository)
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    env:
+      # The scope that `setup-cargo-cache` and `update-cargo-cache` add after the key prefix.
+      CACHE_SCOPE: ${{ github.event_name == 'pull_request' && format('pr#{0}', github.event.pull_request.number) || 'main' }}
+    steps:
+      - name: Checkout prune action
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # Version 4.2.2
+        with:
+          sparse-checkout: .github/actions/prune-cache
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # The key prefixes are the ones of `lints`. The trailing slash keeps `pr#12` from matching `pr#123`.
+      - name: Prune lint caches (ubuntu-latest)
+        uses: ./.github/actions/prune-cache
+        continue-on-error: true
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          key-prefix: code-check/lints/ubuntu-latest/${{ env.CACHE_SCOPE }}/
+          mode: keep-latest
+
+      - name: Prune lint caches (macos-latest)
+        uses: ./.github/actions/prune-cache
+        continue-on-error: true
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          key-prefix: code-check/lints/macos-latest/${{ env.CACHE_SCOPE }}/
+          mode: keep-latest
 
   tests:
     name: Run test suite
@@ -144,6 +199,8 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        with:
+          persist-credentials: false
 
       # Prune before any builds.
       - name: Prune disk space (cache-aware, self-hosted)
@@ -227,6 +284,7 @@ jobs:
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # The run needs a full build and several minutes under valgrind, so it is
       # skipped unless the bindings themselves changed.

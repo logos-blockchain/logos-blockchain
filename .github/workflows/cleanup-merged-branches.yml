@@ -35,8 +35,7 @@ on:
         default: true
 
 permissions:
-  contents: write
-  pull-requests: read
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}
@@ -46,6 +45,11 @@ jobs:
   cleanup:
     name: Delete merged branches
     runs-on: ubuntu-latest
+    permissions:
+      # Deletes the merged branches.
+      contents: write
+      # Lists the merged and open pull requests.
+      pull-requests: read
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       MIN_AGE_HOURS: 24

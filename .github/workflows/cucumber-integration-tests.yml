@@ -8,6 +8,9 @@ on:
 
 name: Cucumber integration tests
 
+permissions:
+  contents: read
+
 # Ensure only one workflow run per branch/workflow is active at a time.
 # Cancels any in-progress runs for the same group to avoid overlap.
 concurrency:
@@ -23,8 +26,8 @@ jobs:
 
     permissions:
       contents: read
-      actions: write
-      checks: write
+      # Reads the other lane's job status (`check-peer-success`).
+      actions: read
 
     strategy:
       # A failed OS must not cancel the other OS because only one OS needs to pass.
@@ -67,6 +70,7 @@ jobs:
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
         with:
           ref: ${{ github.sha }}
+          persist-credentials: false
 
       # Prune before any builds.
       - name: Prune disk space (cache-aware, self-hosted)
@@ -266,6 +270,8 @@ jobs:
           name: Cucumber-${{ runner.os }}
           path: ${{ github.workspace }}/tests/**/cucumber_tests/temp/cucumber-output-junit.xml
           reporter: java-junit
+          # Writes the report to the job summary. A check run would need `checks: write`.
+          use-actions-summary: true
 
       - name: Clean up build artifacts
         if: success() || failure()
@@ -315,6 +321,7 @@ jobs:
           ref: ${{ github.sha }}
           sparse-checkout: .github/actions/check-any-lane-result
           sparse-checkout-cone-mode: false
+          persist-credentials: false
 
       - name: Check Cucumber result
         if: ${{ github.event_name == 'merge_group' }}
