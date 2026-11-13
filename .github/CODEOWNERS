@@ -9,13 +9,17 @@
 /blend/  @youngjoon-lee @ntn-x2 @danielSanchezQ @davidrusu
 /services/blend @youngjoon-lee @ntn-x2 @danielSanchezQ @davidrusu
 
-# DA
-/da/ @danielSanchezQ @bacv @pradovic @davidrusu
-/services/data-availability @danielSanchezQ @bacv @pradovic @davidrusu
-
 # SDP
-/sdp/ @bacv @pradovic @danielSanchezQ @davidrusu
 /services/sdp @bacv @pradovic @danielSanchezQ @davidrusu
+
+# Binary codec
+/binary-codec/ @danielSanchezQ @hansieodendaal @ntn-x2
+
+# C bindings
+/c-bindings/ @danielSanchezQ @strinnityk
+
+# Deployment
+/deployment/ @bacv @ntn-x2
 
 # This file
 /.github/CODEOWNERS @danielSanchezQ @davidrusu
