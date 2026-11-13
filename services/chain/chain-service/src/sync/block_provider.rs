@@ -603,7 +603,8 @@ mod tests {
         let known_blocks = HashSet::from([ids[1], ids[3], ids[6]]);
         let target_block = *ids.last().unwrap();
 
-        // Should start from the most recent known block (ids[6]) but skip it in result
+        // Should start from the most recent known block (ids[6]) but skip it in
+        // result
         let expected = ids[7..=9].to_vec();
         env.retrieve_and_validate_blocks(target_block, &known_blocks, &expected)
             .await;

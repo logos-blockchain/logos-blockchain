@@ -154,7 +154,8 @@ impl VerifiableOperation<StandardMode>
             });
         }
 
-        // Check the signatures. Don't defer this because ed25519 verification is cheap.
+        // Check the signatures. Don't defer this because ed25519 verification
+        // is cheap.
         for (index, signature) in signatures {
             if channel
                 .accredited_keys

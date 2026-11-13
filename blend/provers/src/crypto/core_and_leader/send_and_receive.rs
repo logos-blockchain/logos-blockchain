@@ -209,8 +209,8 @@ mod test {
 
         processor.set_epoch_private(Box::pin(repeat(private_inputs.clone())), Epoch::new(1));
 
-        // The generator now stores the winning-slot stream; pulling its first item
-        // yields the inputs we provided.
+        // The generator now stores the winning-slot stream; pulling its first
+        // item yields the inputs we provided.
         let first_slot = processor
             .proofs_generator_mut()
             .0

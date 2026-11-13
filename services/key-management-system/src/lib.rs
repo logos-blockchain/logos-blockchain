@@ -142,7 +142,8 @@ where
                 reply_channel,
             } => {
                 let backend = Arc::clone(backend);
-                // A ZK signature is a Groth16 proof, so it can't hold up the service.
+                // A ZK signature is a Groth16 proof, so it can't hold up the
+                // service.
                 spawn_blocking("logos/kms/sign-blocking", move || {
                     Self::handle_sign(signing_strategy, payload, reply_channel, &backend);
                 });

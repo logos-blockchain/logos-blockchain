@@ -397,8 +397,9 @@ fn encapsulate_and_decapsulate_fewer_layers_than_maximum() {
             .unwrap(),
         );
 
-        // Regardless of `used_layers`, the message is the size of a `MAX_LAYERS`
-        // one — the encapsulation count never reaches the wire.
+        // Regardless of `used_layers`, the message is the size of a
+        // `MAX_LAYERS` one — the encapsulation count never reaches the
+        // wire.
         assert_eq!(
             msg.encode().len(),
             msg.encoded_length(),

@@ -76,8 +76,8 @@ impl MerkleTree {
     ///
     /// Keys are internally sorted by their numeric value, as described in the [`PoQ` specification](https://lip.logos.co/blockchain/raw/blend-protocol.html#proof-of-quota).
     pub fn new(mut keys: Vec<ZkPublicKey>) -> Result<Self, Error> {
-        // Sort the input keys by their decimal representation, relying on `Fr`'s
-        // implementation of `PartialOrd`.
+        // Sort the input keys by their decimal representation, relying on
+        // `Fr`'s implementation of `PartialOrd`.
         keys.sort();
         Self::new_from_ordered(keys)
     }
@@ -203,10 +203,10 @@ fn compute_selectors(
     let mut result = [false; CORE_MERKLE_TREE_HEIGHT];
     let mut idx = *index;
 
-    // The selector at each level is determined by the corresponding bit of the leaf
-    // index. Iterating from the last element to the first (leaf → root):
-    // result[CORE_MERKLE_TREE_HEIGHT-1] (leaf level) = bit 0 (LSB) of index
-    // result[0] (root level) = MSB of index
+    // The selector at each level is determined by the corresponding bit of the
+    // leaf index. Iterating from the last element to the first (leaf →
+    // root): result[CORE_MERKLE_TREE_HEIGHT-1] (leaf level) = bit 0 (LSB)
+    // of index result[0] (root level) = MSB of index
     for result_entry in result.iter_mut().take(CORE_MERKLE_TREE_HEIGHT).rev() {
         *result_entry = (idx & 1) == 1;
         idx >>= 1u8;
@@ -265,9 +265,9 @@ mod tests {
 
         let merkle_tree = MerkleTree::new(vec![key_one, key_two]).unwrap();
 
-        // We test that the keys were sorted by their numeric value, which means `100`
-        // comes before `101` even if they were provided in the reverse order in the
-        // input list.
+        // We test that the keys were sorted by their numeric value, which means
+        // `100` comes before `101` even if they were provided in the
+        // reverse order in the input list.
         assert_eq!(merkle_tree.sorted_key_indices.get(&key_one), Some(&1));
         assert_eq!(merkle_tree.sorted_key_indices.get(&key_two), Some(&0));
 
@@ -275,7 +275,8 @@ mod tests {
         merkle_tree
             .verify_proof_for_key(&proof_for_key_one, &key_one)
             .unwrap();
-        // We check that the first key is the right child of the bottom sub-tree...
+        // We check that the first key is the right child of the bottom
+        // sub-tree...
         assert!(proof_for_key_one.last().unwrap().1);
         // ...but the left of all sub-trees above that.
         assert!(
@@ -290,8 +291,8 @@ mod tests {
         merkle_tree
             .verify_proof_for_key(&proof_for_key_two, &key_two)
             .unwrap();
-        // We check that the second key is the left child of the bottom sub-tree and all
-        // sub-trees above that.
+        // We check that the second key is the left child of the bottom sub-tree
+        // and all sub-trees above that.
         assert!(!proof_for_key_two.iter().any(|(_, selector)| *selector));
     }
 
@@ -332,8 +333,8 @@ mod tests {
             .unwrap();
         // Last selector is `false` because it's the left child...
         assert!(!proof_for_key_three.last().unwrap().1);
-        // Second-to-last selector is `true` because it's already in the right sub-tree
-        // at this level (first sub-tree are keys 1 and 2).
+        // Second-to-last selector is `true` because it's already in the right
+        // sub-tree at this level (first sub-tree are keys 1 and 2).
         assert!(proof_for_key_three[proof_for_key_three.len() - 2].1);
         // It's in the left-most sub-tree going above.
         assert!(

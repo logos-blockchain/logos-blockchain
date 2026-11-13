@@ -130,11 +130,11 @@ where
     // before this peer is considered a successful candidate by `select_ok`.
     //
     // Behavior:
-    // - If the first item is any error, returns `Err` so this peer is excluded from
-    //   winner selection.
-    // - Otherwise, returns a reconstructed stream where the first item is put back
-    //   (`iter([first_item]).chain(stream)`) so downstream consumers see the full
-    //   original stream.
+    // - If the first item is any error, returns `Err` so this peer is excluded
+    //   from winner selection.
+    // - Otherwise, returns a reconstructed stream where the first item is put
+    //   back (`iter([first_item]).chain(stream)`) so downstream consumers see
+    //   the full original stream.
     // - If the stream is immediately exhausted (`None`), returns it unchanged.
     fn check_first_block_response_ready(
         first_item: Option<BlockStreamItem<Tx>>,
@@ -303,7 +303,8 @@ where
         Self::subscribe(&relay, topic.as_str()).await;
         tracing::trace!(target: LOG_TARGET, "Starting up...");
         // this wait seems to be helpful in some cases since we give the time
-        // to the network to establish connections before we start sending messages
+        // to the network to establish connections before we start sending
+        // messages
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
         Self {

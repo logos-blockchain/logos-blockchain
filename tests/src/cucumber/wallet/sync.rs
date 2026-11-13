@@ -386,9 +386,9 @@ where
             .filter(|utxo| !used_input_note_ids.contains(&utxo.id()))
             .collect::<Vec<_>>();
 
-        // Prefer smaller UTXOs first. The transaction builder selects sufficient
-        // inputs, so this helps consume smaller/dustier outputs before large
-        // change-like outputs.
+        // Prefer smaller UTXOs first. The transaction builder selects
+        // sufficient inputs, so this helps consume smaller/dustier
+        // outputs before large change-like outputs.
         fresh_available_utxos.sort_by_key(|utxo| utxo.note.value);
 
         last_available_outputs = fresh_available_utxos.len();

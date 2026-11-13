@@ -386,7 +386,8 @@ mod tests {
         )
         .expect("proof generation should succeed");
 
-        // The claim supplies a DIFFERENT nullifier than the one the proof proves.
+        // The claim supplies a DIFFERENT nullifier than the one the proof
+        // proves.
         let bogus_nf = VoucherNullifier::from_secret(VoucherSecret::from(Fr::from(999u64)));
         assert_ne!(bogus_nf, VoucherNullifier::from_secret(voucher_secret));
         let op = LeaderClaimOp {
@@ -716,7 +717,8 @@ mod tests {
         )
         .expect("proof generation should succeed");
 
-        // The claim supplies a DIFFERENT nullifier than the one the proof proves.
+        // The claim supplies a DIFFERENT nullifier than the one the proof
+        // proves.
         let bogus_nf = VoucherNullifier::from_secret(VoucherSecret::from(Fr::from(999u64)));
         assert_ne!(bogus_nf, VoucherNullifier::from_secret(voucher_secret));
         let op = LeaderClaimOp {

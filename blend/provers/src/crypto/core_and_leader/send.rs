@@ -173,9 +173,9 @@ where
     ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
         // Refuse a payload that could never fit before spending anything on it.
         // Only the length check has to happen this early; padding it — an
-        // allocation of the whole body size with a random tail — waits until the
-        // proofs are in hand, so an attempt that comes up short or is cancelled
-        // costs nothing.
+        // allocation of the whole body size with a random tail — waits until
+        // the proofs are in hand, so an attempt that comes up short or
+        // is cancelled costs nothing.
         let body_size = self.message_layout.payload_body_size;
         if payload.len() > usize::from(body_size) {
             return Err(Error::PayloadTooLarge);
@@ -365,8 +365,8 @@ mod test {
 
         processor.set_epoch_private(Box::pin(repeat(new_private_inputs.clone())), Epoch::new(1));
 
-        // The generator now stores the winning-slot stream; pulling its first item
-        // yields the inputs we provided.
+        // The generator now stores the winning-slot stream; pulling its first
+        // item yields the inputs we provided.
         let first_slot = processor.proofs_generator.0.as_mut().unwrap().next().await;
         assert!(first_slot == Some(new_private_inputs));
     }

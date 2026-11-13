@@ -625,8 +625,8 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_blended() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
 
-    // Installed before the service exists, so the shut gate is in place from the
-    // first poll of the stream.
+    // Installed before the service exists, so the shut gate is in place from
+    // the first poll of the stream.
     let pol_gate = PolGate::setup();
 
     let RunningEdgeService {

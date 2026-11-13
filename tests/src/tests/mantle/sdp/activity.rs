@@ -95,8 +95,8 @@ async fn sdp_blend_activity() {
     // value, proving activity messages were submitted and accepted.
     let declarations_after = wait_for_declarations(&node0.client, Duration::from_secs(30)).await;
 
-    // Check if at least one declaration is still present because blocks may have
-    // been produced by only one nodes by coincidence
+    // Check if at least one declaration is still present because blocks may
+    // have been produced by only one nodes by coincidence
     assert!(
         !declarations_after.is_empty(),
         "At least one blend declaration should survive past the inactivity window. Activity proofs may not have been submitted/accepted"
@@ -134,8 +134,9 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
             parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
 
             // Set the epoch length not too long to speed up the test,
-            // but also not too short because we want blend nodes to collect blend
-            // tokens every epoch to keep their declarations alive.
+            // but also not too short because we want blend nodes to collect
+            // blend tokens every epoch to keep their declarations
+            // alive.
             parameters.cryptarchia.epoch_config = EpochConfig {
                 epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
                 epoch_period_nonce_buffer: 1.try_into().unwrap(),

@@ -84,8 +84,8 @@ impl<T, Max, const MIN: usize> ResizableRuntimeBounded<Vec<T>, Max, MIN> {
             return Ok(None);
         }
 
-        // `-1` will never underflow because we already checked that the length is
-        // greater than MIN.
+        // `-1` will never underflow because we already checked that the length
+        // is greater than MIN.
         self.try_remove(self.len() - 1).map(Some)
     }
 
@@ -96,8 +96,8 @@ impl<T, Max, const MIN: usize> ResizableRuntimeBounded<Vec<T>, Max, MIN> {
     /// [`BoundedError::TooFewItems`] when removing the element would violate
     /// `MIN`.
     pub fn try_remove(&mut self, index: usize) -> Result<T, BoundedError> {
-        // This check also guards against an empty vec, `index >= 0` and `self.len() =
-        // 0` will return and error
+        // This check also guards against an empty vec, `index >= 0` and
+        // `self.len() = 0` will return and error
         if index >= self.len() {
             return Err(BoundedError::IndexOutOfBounds {
                 index,

@@ -79,7 +79,8 @@ impl FaucetTask {
                             let address = &wallet_addresses[next_index];
                             last_height = height;
 
-                            // Process only one wallet address per height increase (round-robin).
+                            // Process only one wallet address per height
+                            // increase (round-robin).
                             let post_url = format!("{faucet_url}/{address}");
                             match Self::request_funds(&client, post_url).await {
                                 Ok(tx_hash) => {

@@ -1,3 +1,8 @@
+#![expect(
+    clippy::empty_enums,
+    reason = "zerocopy's `FromBytes` derive generates an empty marker enum per struct field. Remove when updating to a version that fixes this."
+)]
+
 use std::net::Ipv4Addr;
 
 use lb_log_targets::libp2p as lb_log_targets_libp2p;

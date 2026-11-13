@@ -189,8 +189,8 @@ where
         };
         let mut roots = self.roots.clone();
 
-        // Phase 1: merge same-height peaks, updating sibling hashes at each merge
-        // height.
+        // Phase 1: merge same-height peaks, updating sibling hashes at each
+        // merge height.
         while let Some(root) = roots.peek().copied() {
             if last_root.height == root.height {
                 roots.pop_mut();

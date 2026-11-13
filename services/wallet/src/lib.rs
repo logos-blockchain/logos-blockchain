@@ -695,8 +695,9 @@ where
                 };
 
                 // Fetch the tx context (gas prices) fresh at fund time. It is
-                // tip-dependent, so a builder handed to us earlier must be funded
-                // against the current context rather than a stale one.
+                // tip-dependent, so a builder handed to us earlier must be
+                // funded against the current context rather
+                // than a stale one.
                 let context = match Self::ledger_state_at(tip, cryptarchia).await {
                     Ok(ledger) => ledger.tx_context(era_settings.gas_profile),
                     Err(err) => {
@@ -763,7 +764,8 @@ where
                 // passed by value and grew past the `clippy::large_futures`
                 // threshold, by 720 bytes for `PoW` and 112 for the uncle
                 // slots.
-                // TODO: consider passing it by reference so we can remove `Box::pin`.
+                // TODO: consider passing it by reference so we can remove
+                // `Box::pin`.
                 let response = Box::pin(Self::build_leader_claim_tx(
                     request,
                     ledger,
@@ -999,8 +1001,9 @@ where
         ledger: &LedgerState,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<OpProof, WalletServiceError> {
-        // For a new declaration, the note is still in the UTXOs (not yet locked).
-        // We look it up from the UTXO set to get the public key for signing.
+        // For a new declaration, the note is still in the UTXOs (not yet
+        // locked). We look it up from the UTXO set to get the public
+        // key for signing.
         let utxo_tree = ledger.latest_utxos();
         debug!(
             target: LOG_TARGET,
@@ -1325,7 +1328,8 @@ where
     }
 
     /// Derive voucher secret from KMS given master key and index.
-    // TODO: Use secure KMS operator that returns `VoucherCm` and `VoucherNullifier`
+    // TODO: Use secure KMS operator that returns `VoucherCm` and
+    // `VoucherNullifier`
     async fn derive_voucher_from_kms(
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         key_id: KeyId,
@@ -1552,8 +1556,8 @@ where
 
         // The caller knows a more recent tip than the wallet.
         // To resolve this, we do a JIT backfill to try to sync the wallet with
-        // cryptarchia. If we still have not caught up after the backfill, we return an
-        // error to the caller
+        // cryptarchia. If we still have not caught up after the backfill, we
+        // return an error to the caller
         Self::backfill_missing_blocks(tip, state, storage, cryptarchia, era_schedule).await?;
 
         if state.wallet().has_processed_block(tip) {
@@ -1665,8 +1669,9 @@ where
         // The wallet's frontier can lag the chain's LIB: during bootstrap the
         // engine jumps the LIB (e.g. on switch-to-online) without broadcasting
         // intermediate updates, so `new_lib` may be a block the wallet never
-        // applied. Backfill up to it first, mirroring `handle_new_block`, so the
-        // subsequent `advance_lib` finds the `WalletState` it needs.
+        // applied. Backfill up to it first, mirroring `handle_new_block`, so
+        // the subsequent `advance_lib` finds the `WalletState` it
+        // needs.
         if !state.wallet().has_processed_block(lib_update.new_lib) {
             debug!(
                 target: LOG_TARGET,

@@ -644,7 +644,8 @@ mod tests {
 
     // If the SDP snapshot of the target epoch has fewer providers than the
     // minimum network size, all activity messages for the epoch must be
-    // rejected, and no rewards should be calculated at the next epoch transition.
+    // rejected, and no rewards should be calculated at the next epoch
+    // transition.
     #[test]
     fn test_blend_network_too_small() {
         let provider1 = create_provider_id(1);
@@ -917,7 +918,8 @@ mod tests {
         let (new_state, rewards) =
             rewards_tracker.update_epoch(&epoch1, &epoch3, &config, &params, &params);
 
-        // Rewards earned during epoch 1 must be distributed from epoch 0's income pool.
+        // Rewards earned during epoch 1 must be distributed from epoch 0's
+        // income pool.
         assert_eq!(rewards.len(), 1);
         let total_paid: Value = rewards.iter().map(|utxo| utxo.note.value).sum();
         assert_eq!(total_paid, epoch0_income);
@@ -959,7 +961,8 @@ mod tests {
         let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params, &params);
 
-        // provider1 submits an activity proof that is larger than activity threshold.
+        // provider1 submits an activity proof that is larger than activity
+        // threshold.
         let err = rewards_tracker
             .update_active(
                 provider1,
@@ -994,7 +997,8 @@ mod tests {
         let (rewards_tracker, _) = Rewards::<AlwaysFailureProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params, &params);
 
-        // provider1 submits an activity proof, but PoQ/PoSel verification fails.
+        // provider1 submits an activity proof, but PoQ/PoSel verification
+        // fails.
         let err = rewards_tracker
             .update_active(
                 provider1,
@@ -1054,8 +1058,9 @@ mod tests {
         let (rewards_tracker, _) =
             rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params, &params);
 
-        // provider submits an activity proof again, and it should be accepted since the
-        // proof verifier should be updated after epoch update.
+        // provider submits an activity proof again, and it should be accepted
+        // since the proof verifier should be updated after epoch
+        // update.
         rewards_tracker
             .update_active(
                 provider,

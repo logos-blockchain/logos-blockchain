@@ -383,8 +383,8 @@ where
         match initial_block_download_result {
             Ok(_) => {
                 info!(target: LOG_TARGET, "Initial Block Download completed successfully");
-                // Notify chain-service that IBD is complete so it can start the prolonged
-                // bootstrap timer
+                // Notify chain-service that IBD is complete so it can start the
+                // prolonged bootstrap timer
                 if let Err(e) = relays.cryptarchia().notify_ibd_completed().await {
                     error!(target: LOG_TARGET, "Failed to notify chain-service of IBD completion: {e:?}");
                 }
@@ -923,7 +923,8 @@ where
         Ok(None) => Ok(()),
         Err(err) => {
             error!(target: LOG_TARGET, err = ?err, "Failure when checking if block already processed");
-            // block processing is idempotent, so we can safely re-process a block
+            // block processing is idempotent, so we can safely re-process a
+            // block
             Ok(())
         }
     }
@@ -1130,8 +1131,8 @@ async fn reconcile_mempool<Mempool>(
         error!(target: LOG_TARGET, err, "could not notify mempool of canonical chain update");
     }
 
-    // Notify the mempool to trigger evictions and release txs whose block became
-    // immutable.
+    // Notify the mempool to trigger evictions and release txs whose block
+    // became immutable.
     if let Err(err) = mempool
         .notify_processed_block(block_id, block_slot, lib_slot)
         .await

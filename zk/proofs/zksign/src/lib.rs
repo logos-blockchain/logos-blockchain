@@ -74,9 +74,9 @@ pub fn prove(
     Ok((
         CompressedGroth16Proof::try_from(&proof).unwrap_or_else(|e| {
             error!(target: LOG_TARGET, "Fatal CompressedGroth16Proof::try_from: {e}");
-            // We panic here because this should never happen, and if it does, it's a
-            // critical error that we want to be immediately visible during
-            // development and testing.
+            // We panic here because this should never happen, and if it does,
+            // it's a critical error that we want to be immediately
+            // visible during development and testing.
             panic!("Fatal CompressedGroth16Proof::try_from: {e}")
         }),
         verifier_inputs

@@ -207,7 +207,8 @@ impl PreverifiableOperation<StandardMode>
     type Error = Error;
 
     fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
-        // Nothing to check: an ill-formed configuration cannot be built or decoded.
+        // Nothing to check: an ill-formed configuration cannot be built or
+        // decoded.
         Ok(())
     }
 }
@@ -223,11 +224,13 @@ impl VerifiableOperation<StandardMode>
         let operation = self.operation();
         let proof = self.proof();
 
-        // Check that the indexes are unique and there is the same number of proof and
-        // index. This is enforced by the proof structure that enforces it.
+        // Check that the indexes are unique and there is the same number of
+        // proof and index. This is enforced by the proof structure that
+        // enforces it.
 
         if let Some(channel) = context.channels.channels.get(&operation.channel).cloned() {
-            // Check the configuration extends the last configuration of the channel
+            // Check the configuration extends the last configuration of the
+            // channel
             if operation.parent != channel.config_tip_hash {
                 return Err(Error::InvalidParent {
                     channel_id: operation.channel,
@@ -246,7 +249,8 @@ impl VerifiableOperation<StandardMode>
                 });
             }
 
-            // Check the signatures. Don't defer this because ed25519 verification is cheap.
+            // Check the signatures. Don't defer this because ed25519
+            // verification is cheap.
             for (index, signature) in signatures {
                 if channel
                     .accredited_keys
@@ -299,7 +303,8 @@ impl<Mode: VerificationMode> ExecutableOperation
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         let operation = self.operation();
 
-        // if the channel doesn't exist, create it otherwise just update the config
+        // if the channel doesn't exist, create it otherwise just update the
+        // config
         let keys = UnverifiedChannelKeys::new_unchecked(
             operation.keys.iter().map(|k| k.into_unverified()).collect(),
         );

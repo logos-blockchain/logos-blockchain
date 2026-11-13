@@ -54,7 +54,8 @@ mod tests {
 
     #[tokio::test]
     async fn first_ready_stream_yields_first_item_immediately() {
-        // Use an underlying stream that yields the first item nearly immediately.
+        // Use an underlying stream that yields the first item nearly
+        // immediately.
         let stream = UninitializedFirstReadyStream::new(
             IntervalStream::new(interval(Duration::from_secs(1)))
                 .enumerate()

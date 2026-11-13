@@ -303,8 +303,8 @@ impl BinaryDecode for SignedOps<Preverified, StandardMode> {
 }
 
 impl<State: VerificationState, Mode: VerificationMode> Hashable for SignedOps<State, Mode> {
-    //noinspection RsTypeCheck: The type is correct, but the linter is confused by
-    // the closure.
+    //noinspection RsTypeCheck: The type is correct, but the linter is confused
+    // by the closure.
     const HASHER: hashable::Hasher<Self> = tx_hasher;
     type Hash = TxHash;
 
@@ -493,8 +493,8 @@ pub mod test_utils {
         }
     }
 
-    // TODO: The generated channels are bare. We should add more realistic channel
-    // states for testing.
+    // TODO: The generated channels are bare. We should add more realistic
+    // channel states for testing.
     #[must_use]
     pub fn make_channel_state(
         transfer_threshold: ChannelKeyIndex,
@@ -1089,13 +1089,13 @@ mod tests {
 
         let serialized = serde_json::to_string(&helper).unwrap();
 
-        // Deserialization into `SignedMantleTx<Unverified>` should succeed, even with
-        // invalid signature.
+        // Deserialization into `SignedMantleTx<Unverified>` should succeed,
+        // even with invalid signature.
         serde_json::from_str::<SignedOps<Unverified, StandardMode>>(&serialized)
             .expect("Unverified deserialization should succeed");
 
-        // Deserialization into `SignedMantleTx<Preverified>` should fail due to invalid
-        // signature.
+        // Deserialization into `SignedMantleTx<Preverified>` should fail due to
+        // invalid signature.
         let deserialized: Result<SignedOps<Preverified, StandardMode>, _> =
             serde_json::from_str(&serialized);
 

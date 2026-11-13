@@ -84,7 +84,7 @@ impl<S> State<S> {
     where
         C: FnOnce(S) -> T,
     {
-        let Self { state, .. } = self;
+        let Self { state } = self;
         Box::new(State {
             state: next_state_ctor(state),
         })

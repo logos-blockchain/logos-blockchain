@@ -75,8 +75,9 @@ impl GenesisTx {
         if signed_ops.fork_digest != Self::FORK_DIGEST {
             return Err(Error::UnexpectedForkDigest(signed_ops.fork_digest));
         }
-        // Genesis transactions must contain exactly one transfer as the first op,
-        // one inscription as the second op, and then may contain other SDP declarations
+        // Genesis transactions must contain exactly one transfer as the first
+        // op, one inscription as the second op, and then may contain
+        // other SDP declarations
         let genesis_parameters = match signed_ops.op_refs().as_slice() {
             [
                 OpRef::Transfer(transfer),
@@ -163,8 +164,8 @@ fn valid_genesis_inscription(inscription: &InscriptionOp) -> Result<GenesisParam
 }
 
 impl Hashable for GenesisTx {
-    //noinspection RsTypeCheck: The type is correct, but the linter is confused by
-    // the closure.
+    //noinspection RsTypeCheck: The type is correct, but the linter is confused
+    // by the closure.
     const HASHER: hashable::Hasher<Self> = |tx| TxHash(Hasher::digest(tx.as_signing()).into());
     type Hash = TxHash;
 
@@ -648,7 +649,8 @@ mod tests {
 
     #[test]
     fn test_genesis_tx_serde() {
-        // Create a genesis transaction with inscription (no signature proof required)
+        // Create a genesis transaction with inscription (no signature proof
+        // required)
         let signed_mantle_tx = create_trusted_tx(
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([0; 32]),
@@ -674,7 +676,8 @@ mod tests {
 
     #[test]
     fn test_genesis_time_boundaries() {
-        // The u32::MAX unix timestamp is the largest value `GenesisTime` accepts.
+        // The u32::MAX unix timestamp is the largest value `GenesisTime`
+        // accepts.
         let max = OffsetDateTime::from_unix_timestamp(i64::from(u32::MAX)).unwrap();
         assert_eq!(
             GenesisTime::try_from(max).unwrap(),
