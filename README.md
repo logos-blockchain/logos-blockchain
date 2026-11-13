@@ -168,7 +168,9 @@ cargo build -p logos-blockchain-node --all-targets --features testing
 cargo test -p logos-blockchain-tests
 ```
 
-### Multi-Node Local Testnet
+### Standalone Node in Docker
+
+Builds the node from this checkout and runs the standalone one-node network above in a container:
 
 ```bash
 cd deployment
