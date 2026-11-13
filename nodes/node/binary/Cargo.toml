@@ -37,7 +37,7 @@ lb-key-management-system-service = { features = ["unsafe"], workspace = true }
 lb-ledger                        = { workspace = true }
 lb-libp2p                        = { workspace = true }
 lb-log-targets                   = { workspace = true }
-lb-network-service               = { workspace = true }
+lb-network-service               = { features = ["openapi"], workspace = true }
 lb-pol                           = { workspace = true }
 lb-pow-service                   = { workspace = true }
 lb-sdp-service                   = { features = ["openapi"], workspace = true }
@@ -48,7 +48,7 @@ lb-time                          = { workspace = true }
 lb-time-service                  = { features = ["ntp"], workspace = true }
 lb-tracing                       = { workspace = true }
 lb-tracing-service               = { workspace = true }
-lb-tx-service                    = { workspace = true }
+lb-tx-service                    = { features = ["openapi"], workspace = true }
 lb-utils                         = { features = ["time"], workspace = true }
 lb-version                       = { workspace = true }
 lb-wallet-service                = { workspace = true }
