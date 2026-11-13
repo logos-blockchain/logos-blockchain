@@ -32,7 +32,7 @@ jobs:
       matrix:
         platform:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - os: bladerunner-linux
+          - os: [self-hosted, linux, x64]
             label: self-hosted-linux
             peer_label: self-hosted-macos
             max_concurrent_scenarios: "2"
