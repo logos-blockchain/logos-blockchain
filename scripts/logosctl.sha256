@@ -1,0 +1,6 @@
+# SHA-256 of the logosctl release archives that `setup-logos-core.sh` accepts, in `sha256sum` format, one line per
+# Logos Core version and platform. Add a version's archives before the node image uses it: the release page shows the
+# SHA-256 digest of each asset.
+
+294fbcc6409a8851b7471582bdad2dbfaf681b5d1c67dfffec38ada925dc6762  logosctl-0.3.2-x86_64-linux.tar.gz
+e77ccd9c1a7e673c1a5533f2bcda03f84fd04e80f415ac414c378a897e5135fe  logosctl-0.3.2-aarch64-linux.tar.gz

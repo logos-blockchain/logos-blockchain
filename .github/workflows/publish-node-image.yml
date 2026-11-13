@@ -11,6 +11,10 @@ on:
         description: 'LB Node Version'
         required: true
         type: string
+      lb_module_sha256:
+        description: 'LB Module SHA256'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -20,6 +24,7 @@ env:
   IMAGE_NAME: ${{ github.repository_owner }}/logos-blockchain-node
   LC_CORE_VERSION: ${{ inputs.lc_core_version }}
   LB_NODE_VERSION: ${{ inputs.lb_node_version }}
+  LB_MODULE_SHA256: ${{ inputs.lb_module_sha256 }}
   VERSION_TAG: ${{ github.ref_name }}
   LATEST_TAG: ${{ contains(github.ref_name, '-rc.') && 'latest-rc' || 'latest' }}
 
@@ -35,6 +40,14 @@ jobs:
       id-token: write
 
     steps:
+      # Fails before the long multi-platform build, which checks the package against it.
+      - name: Check the module SHA-256
+        run: |
+          if ! [[ "$LB_MODULE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::LB Module SHA256 must be the SHA-256 of the blockchain_module package, as 64 lowercase hexadecimal digits."
+            exit 1
+          fi
+
       - name: Check out the repo
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
         with:
@@ -74,6 +87,7 @@ jobs:
           build-args: |
             LC_CORE_VERSION=${{ env.LC_CORE_VERSION }}
             LB_NODE_VERSION=${{ env.LB_NODE_VERSION }}
+            LB_MODULE_SHA256=${{ env.LB_MODULE_SHA256 }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION_TAG }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}
