@@ -557,7 +557,7 @@ pub unsafe extern "C" fn get_leader_aged_notes(
         .into_iter()
         .map(|note| LeaderAgedNote {
             commitment: fr_to_bytes(&note.commitment.0),
-            note_set: note.note_set,
+            note_set: note.note_set.into(),
             value: note.value,
             public_key: fr_to_bytes(&note.public_key.into()),
         })
