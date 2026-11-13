@@ -13,6 +13,10 @@ inputs:
     description: Absolute path to a built runner executable; defaults to the normal Cargo test runner
     required: false
     default: ""
+  working_directory:
+    description: Directory the supplied executable runs in, relative to the workspace
+    required: false
+    default: tests
   scenario_name:
     description: Optional scenario-name regular expression for the supplied executable, used instead of suite_tag
     required: false
@@ -77,7 +81,7 @@ runs:
       continue-on-error: true
       if: ${{ inputs.executable != '' }}
       shell: bash
-      working-directory: tests
+      working-directory: ${{ inputs.working_directory }}
       env:
         CUCUMBER_LOG_LEVEL: debug
         CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
