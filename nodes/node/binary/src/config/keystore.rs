@@ -1,6 +1,6 @@
-use std::{collections::HashMap, path::Path};
+use std::{collections::HashMap, fs::File, io::Write as _, path::Path};
 
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Result, bail, eyre};
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_service::{
     backend::preload::KeyId,
@@ -11,6 +11,7 @@ use lb_key_management_system_service::{
 use lb_utils::yaml::merge;
 use num_bigint::BigUint;
 use rand::rngs::OsRng;
+use rustix::fs::{Mode, OFlags};
 use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value, to_value};
 use thiserror::Error;
@@ -73,14 +74,38 @@ pub struct Keystore {
 }
 
 impl Keystore {
+    /// Reads the keystore at `path`, refusing it when its group or others can
+    /// access it.
     pub fn load(path: &Path) -> Result<Self> {
-        let yaml = std::fs::read_to_string(path)
-            .map_err(|error| eyre!("Failed to read keystore {}: {error}", path.display()))?;
+        let read_error =
+            |error: std::io::Error| eyre!("Failed to read keystore {}: {error}", path.display());
+
+        let file = File::open(path).map_err(read_error)?;
+        let stat = rustix::fs::fstat(&file).map_err(|errno| read_error(errno.into()))?;
+        let mode = Mode::from_raw_mode(stat.st_mode);
+        if mode.intersects(Mode::RWXG | Mode::RWXO) {
+            bail!(
+                "Other users can access keystore {path} (mode {mode:04o}). Restrict it to its \
+                 owner with `chmod 600 '{path}'`.",
+                path = path.display()
+            );
+        }
+        let yaml = std::io::read_to_string(&file).map_err(read_error)?;
         Ok(serde_yaml::from_str(&yaml)?)
     }
 
+    /// Writes the keystore to `path`. A new keystore is created for its owner
+    /// only (mode 600). An existing one keeps its mode, which [`Self::load`]
+    /// refuses unless only its owner can access it.
     pub fn save(&self, path: &Path) -> Result<()> {
-        Ok(std::fs::write(path, serde_yaml::to_string(self)?)?)
+        let yaml = serde_yaml::to_string(self)?;
+        let file = rustix::fs::open(
+            path,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        )?;
+        File::from(file).write_all(yaml.as_bytes())?;
+        Ok(())
     }
 
     /// The user config values derived from the predefined keys, as a sparse
@@ -276,4 +301,50 @@ fn generate_zk_key_from_random_bytes() -> ZkKey {
     let mut bytes = [0u8; 32];
     rand::RngCore::fill_bytes(&mut OsRng, &mut bytes);
     ZkKey::from(BigUint::from_bytes_le(&bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_writes_a_keystore_only_its_owner_can_access() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("keystore.yaml");
+
+        Keystore::default().save(&path).unwrap();
+
+        let mode = Mode::from_raw_mode(rustix::fs::stat(&path).unwrap().st_mode);
+        assert_eq!(mode, Mode::RUSR | Mode::WUSR);
+        Keystore::load(&path).unwrap();
+    }
+
+    #[test]
+    fn load_refuses_a_keystore_its_group_or_others_can_access() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("keystore.yaml");
+        Keystore::default().save(&path).unwrap();
+
+        for other in [
+            Mode::RGRP,
+            Mode::WGRP,
+            Mode::XGRP,
+            Mode::ROTH,
+            Mode::WOTH,
+            Mode::XOTH,
+        ] {
+            let mode = Mode::RUSR | Mode::WUSR | other;
+            rustix::fs::chmod(&path, mode).unwrap();
+            let Err(error) = Keystore::load(&path) else {
+                panic!("a keystore of mode {mode:04o} was accepted");
+            };
+            assert!(
+                error.to_string().contains(&format!("(mode {mode:04o})")),
+                "{error}"
+            );
+        }
+
+        rustix::fs::chmod(&path, Mode::RUSR).unwrap();
+        Keystore::load(&path).unwrap();
+    }
 }
