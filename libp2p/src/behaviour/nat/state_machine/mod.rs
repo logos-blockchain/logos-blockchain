@@ -18,6 +18,7 @@ pub enum Command {
     ScheduleAutonatClientTest(Multiaddr),
     MapAddress(Multiaddr),
     NewExternalAddrCandidate(Multiaddr),
+    ExternalAddrExpired(Multiaddr),
 }
 
 #[derive(Debug)]

@@ -9,8 +9,9 @@ const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::nat::state_machine::P
 /// The `Public` state represents a state where the node's address is known and
 /// confirmed to be publicly reachable. In this state, the address is
 /// periodically tested by the `autonat` client to ensure it remains valid. If
-/// the address is found to be unreachable, the state machine transitions to the
-/// `TestIfPublic` state to re-evaluate the address.
+/// the address is found to be unreachable, the swarm stops advertising it and
+/// the state machine transitions to the `TestIfPublic` state to re-evaluate the
+/// node's reachability.
 impl OnEvent for State<Public> {
     #[expect(
         clippy::cognitive_complexity,
@@ -25,6 +26,7 @@ impl OnEvent for State<Public> {
                 self
             }
             Event::AutonatClientTestFailed(addr) if self.state.address() == &addr => {
+                command_tx.force_send(Command::ExternalAddrExpired(addr));
                 self.boxed(Public::into_test_if_public)
             }
             Event::AddressMappingFailed(addr) if self.state.address() == &addr => {
@@ -79,7 +81,7 @@ mod tests {
         StateMachine,
         states::{Private, Public, TestIfPublic, TryMapAddress},
         transitions::fixtures::{
-            ADDR, all_events, autonat_failed, autonat_failed_address_mismatch, autonat_ok,
+            ADDR, ADDR_1, all_events, autonat_failed, autonat_failed_address_mismatch, autonat_ok,
             autonat_ok_address_mismatch, default_gateway_changed,
             default_gateway_changed_no_local_address, external_address_confirmed,
             external_address_confirmed_address_mismatch, mapping_failed,
@@ -121,17 +123,21 @@ mod tests {
     }
 
     #[test]
-    fn autonat_client_failed_causes_transition_to_test_if_public() {
+    fn autonat_client_failed_expires_address_and_causes_transition_to_test_if_public() {
         let (tx, mut rx) = unbounded_channel();
         let mut state_machine = StateMachine::new(tx);
-        state_machine.inner = Some(Public::for_test(ADDR.clone()));
+        // Local address ADDR_1, confirmed address ADDR
+        state_machine.inner = Some(Public::for_test_with_addrs(ADDR_1.clone(), ADDR.clone()));
         let event = autonat_failed();
         state_machine.on_test_event(event);
         assert_eq!(
             state_machine.inner.as_ref().unwrap(),
-            &TestIfPublic::for_test(ADDR.clone())
+            &TestIfPublic::for_test(ADDR_1.clone())
         );
-        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
+        assert_eq!(
+            rx.try_recv(),
+            Ok(Command::ExternalAddrExpired(ADDR.clone()))
+        );
     }
 
     #[test]
