@@ -1,7 +1,10 @@
 name: Metadata
 
+# Not `pull_request_target`, which hands pull requests from forks a write token and which GitHub blocks
+# by default in public repositories from 2 December 2026. Pull requests from forks get a read-only token
+# here: their author isn't assigned and their title is checked but not labelled.
 on:
-  pull_request_target:
+  pull_request:
     types: [ opened, synchronize, reopened, edited ]
 
 permissions:
@@ -10,12 +13,13 @@ permissions:
 jobs:
   assign-author:
     name: Assign Author
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     permissions:
       # Assigns the author to the pull request.
       pull-requests: write
     steps:
-      - uses: toshimaru/auto-author-assign@7e15cd70c245ad136377c3fab3479815df10d844  # Version 2.1.1
+      - uses: toshimaru/auto-author-assign@16f0022cf3d7970c106d8d1105f75a1165edb516  # v2.1.1
 
   conventional-commits:
     name: Conventional Commits
@@ -25,8 +29,9 @@ jobs:
       pull-requests: write
     steps:
       - name: Validate and Label
-        uses:  ytanikin/pr-conventional-commits@1.4.0
+        uses: ytanikin/pr-conventional-commits@6ac1cea04190fc076b0e539025501d7e7d241ac1 # 1.4.0
         with:
           task_types: '["feat","fix","docs","test","ci","refactor","perf","chore","revert"]'
           custom_labels: '{"feat": "feature", "fix": "fix", "docs": "documentation", "test": "test", "ci": "CI/CD", "refactor": "refactor", "perf": "performance", "chore": "chore", "revert": "revert", "wip": "WIP"}'
-          add_scope_label: 'true'
+          add_label: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          add_scope_label: ${{ github.event.pull_request.head.repo.full_name == github.repository }}

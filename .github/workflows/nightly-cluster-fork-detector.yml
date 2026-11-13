@@ -38,30 +38,24 @@ jobs:
         run: rustup override unset
 
       - name: Checkout repository
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
 
       - name: Build node binary
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72 # v1.0.1
-        with:
-          command: build
-          args: --locked --release -p logos-blockchain-node
+        run: cargo build --locked --release -p logos-blockchain-node
 
       - name: Run nightly cluster fork detector
         env:
           LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72 # v1.0.1
-        with:
-          command: test
-          args: >-
-            --locked -p logos-blockchain-tests --features testing_framework
-            --test test_testing_framework_fork_detector
-            cluster_fork_detector -- --ignored --nocapture
+        run: >-
+          cargo test --locked -p logos-blockchain-tests --features testing_framework
+          --test test_testing_framework_fork_detector
+          cluster_fork_detector -- --ignored --nocapture
 
       - name: Upload fork detector artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: nightly-cluster-fork-detector-${{ github.run_id }}
           include-hidden-files: true

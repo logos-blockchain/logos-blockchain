@@ -19,24 +19,18 @@ jobs:
     name: Check formatting
     if: ${{ github.event_name != 'merge_group' }}
     runs-on: ubuntu-latest
+    env:
+      # The same version must be used in the `.pre-commit-config.yaml` file
+      RUSTUP_TOOLCHAIN: nightly-2026-08-15
     steps:
       - name: Checkout repository
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           persist-credentials: false
       - name: Install nightly toolchain
-        uses: actions-rs/toolchain@88dc2356392166efad76775c878094f4e83ff746  # Version 1.0.6
-        with:
-          # The same version must be used in the `.pre-commit-config.yaml` file
-          toolchain: nightly-2026-08-15
-          profile: minimal
-          components: rustfmt
-          override: true
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt
       - name: Run cargo fmt
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: fmt
-          args: --all --check
+        run: cargo fmt --all --check
       - name: Install taplo CLI
         run: cargo install taplo-cli --locked --version 0.10.0
       - name: Run taplo lint
@@ -52,12 +46,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
 
       # `cargo-deny`'s action is compiled and run using `musl` but we generally use `gnu` in our local machines.
       # Thus, results may differ from local runs.
@@ -74,11 +68,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           persist-credentials: false
       - name: Run workspace dependency policies check
         run: scripts/check-workspace-dependency-policies.sh
+
+  zizmor:
+    name: Check workflows with zizmor
+    if: ${{ github.event_name != 'merge_group' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+      # Fails on any finding. Accepted ones are listed, with the reason, in `.github/zizmor.yml`.
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
+        with:
+          version: 1.32.0
+          advanced-security: false
+          annotations: true
 
   unused-deps:
     name: Check for unused dependencies
@@ -90,14 +101,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           persist-credentials: false
       - name: Install cargo-machete
-        uses: bnjbvr/cargo-machete@9f0895d780783da0089162cae9668f6ec6e896c4  # Version 0.8.0
-        # The action's default run omits `--with-metadata`, which can produce false positives.
-        # Treat its result as advisory; the metadata-aware run below is authoritative.
-        continue-on-error: true
+        run: cargo install cargo-machete --locked --version 0.8.0
       - name: Run cargo-machete
         run: cargo machete --with-metadata
 
@@ -112,24 +120,21 @@ jobs:
       CARGO_BUILD_WARNINGS: deny
     steps:
       - name: Checkout repository
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           persist-credentials: false
 
       - name: Set up Cargo cache
-        uses: ./.github/actions/setup-cargo-cache
+        uses: $/.github/actions/setup-cargo-cache
         with:
           key-prefix: code-check/lints/${{ matrix.os }}
 
       - name: Run cargo clippy on workspace
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: clippy
-          args: --locked --workspace --all-targets --all-features
+        run: cargo clippy --locked --workspace --all-targets --all-features
 
       - name: Update Cargo cache
         if: success() || failure()
-        uses: ./.github/actions/update-cargo-cache
+        uses: $/.github/actions/update-cargo-cache
         with:
           key-prefix: code-check/lints/${{ matrix.os }}
 
@@ -153,16 +158,9 @@ jobs:
       # The scope that `setup-cargo-cache` and `update-cargo-cache` add after the key prefix.
       CACHE_SCOPE: ${{ github.event_name == 'pull_request' && format('pr#{0}', github.event.pull_request.number) || 'main' }}
     steps:
-      - name: Checkout prune action
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # Version 4.2.2
-        with:
-          sparse-checkout: .github/actions/prune-cache
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-
       # The key prefixes are the ones of `lints`. The trailing slash keeps `pr#12` from matching `pr#123`.
       - name: Prune lint caches (ubuntu-latest)
-        uses: ./.github/actions/prune-cache
+        uses: $/.github/actions/prune-cache
         continue-on-error: true
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -170,7 +168,7 @@ jobs:
           mode: keep-latest
 
       - name: Prune lint caches (macos-latest)
-        uses: ./.github/actions/prune-cache
+        uses: $/.github/actions/prune-cache
         continue-on-error: true
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -198,67 +196,53 @@ jobs:
         run: rustup override unset || true
 
       - name: Checkout repository
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           persist-credentials: false
 
       # Prune before any builds.
       - name: Prune disk space (cache-aware, self-hosted)
-        uses: ./.github/actions/prune-disk-space
+        uses: $/.github/actions/prune-disk-space
 
       - name: Run the node binary with the testing feature to check the one-node config files validity
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: run
-          args: >-
-            --locked -p logos-blockchain-node --features testing
-            -- nodes/node/standalone-node-config.yaml --check-config --deployment nodes/node/standalone-deployment-config.yaml
+        run: >-
+          cargo run --locked -p logos-blockchain-node --features testing
+          -- nodes/node/standalone-node-config.yaml --check-config --deployment nodes/node/standalone-deployment-config.yaml
 
       - name: Install cargo-nextest
         if: ${{ !cancelled() }}
-        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # Version 2.79.11
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
         with:
           tool: cargo-nextest
 
+      # - Benchmarks take more than six hours and would exceed the job timeout.
+      # - End-to-end integration tests run separately in their dedicated workflow.
       - name: Cargo test all except end-to-end integration tests
         timeout-minutes: 90
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: nextest
-          # - Benchmarks take more than six hours and would exceed the job timeout.
-          # - End-to-end integration tests run separately in their dedicated workflow.
-          args: >-
-            run --workspace --locked --lib --bins --examples --tests --retries 2
-            --all-features --no-fail-fast --exclude logos-blockchain-tests
-            --exclude logos-blockchain-zone-tests --exclude logos-blockchain-sql-tests
+        run: >-
+          cargo nextest run --workspace --locked --lib --bins --examples --tests --retries 2
+          --all-features --no-fail-fast --exclude logos-blockchain-tests
+          --exclude logos-blockchain-zone-tests --exclude logos-blockchain-sql-tests
 
       # Run client unit tests here; their Cucumber runners belong to integration CI.
       - name: Run client test support unit tests
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
-        with:
-          command: nextest
-          args: >-
-            run --locked --lib --retries 2 --no-fail-fast
-            -p logos-blockchain-zone-tests -p logos-blockchain-sql-tests
+        run: >-
+          cargo nextest run --locked --lib --retries 2 --no-fail-fast
+          -p logos-blockchain-zone-tests -p logos-blockchain-sql-tests
 
       # The test harness library has unit tests even though its integration
       # targets run in their dedicated workflows.
       - name: Run blockchain test support unit tests
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
-        with:
-          command: nextest
-          args: >-
-            run --locked --lib --retries 2 --no-fail-fast
-            -p logos-blockchain-tests
+        run: >-
+          cargo nextest run --locked --lib --retries 2 --no-fail-fast
+          -p logos-blockchain-tests
 
       - name: Clean up build artifacts
         if: success() || failure()
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: clean
+        run: cargo clean
 
       - name: Upload integration tests results
-        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
           name: integration-test-artifacts-${{ runner.os }}-${{ github.sha }}
@@ -281,7 +265,7 @@ jobs:
         run: rustup override unset || true
 
       - name: Checkout repository
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -301,7 +285,7 @@ jobs:
 
       - name: Prune disk space (cache-aware, self-hosted)
         if: steps.changes.outputs.run == 'true'
-        uses: ./.github/actions/prune-disk-space
+        uses: $/.github/actions/prune-disk-space
 
       # These tests are `#[ignore]`d for the regular runners: they only run
       # here, with Cargo starting the test binary through valgrind. Any invalid
@@ -333,9 +317,7 @@ jobs:
 
       - name: Clean up build artifacts
         if: success() || failure()
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: clean
+        run: cargo clean
 
   # Stable required check for nextest unit tests.
   #

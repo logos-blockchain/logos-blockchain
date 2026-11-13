@@ -43,34 +43,34 @@ runs:
       id: run_suite
       continue-on-error: true
       if: ${{ inputs.executable == '' && inputs.verbose_console != 'true' }}
-      uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
+      shell: bash
       env:
         CUCUMBER_LOG_LEVEL: debug
         CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
         USE_LOCAL_HOST_NTP_TIME_CONFIG: true
         MAX_CUCUMBER_CONCURRENT_SCENARIOS: ${{ inputs.max_concurrent_scenarios }}
-      with:
-        command: test
-        args: >-
-          --locked -p ${{ inputs.package }} --features cucumber
-          --test cucumber -- --tags "${{ inputs.suite_tag }} and not (@broken or @undefined_behaviour)"
+        PACKAGE: ${{ inputs.package }}
+        SUITE_TAG: ${{ inputs.suite_tag }}
+      run: >-
+        cargo test --locked -p "$PACKAGE" --features cucumber
+        --test cucumber -- --tags "$SUITE_TAG and not (@broken or @undefined_behaviour)"
 
     - name: Run cucumber - ${{ inputs.suite_tag }} (verbose)
       id: run_suite_verbose
       continue-on-error: true
       if: ${{ inputs.executable == '' && inputs.verbose_console == 'true' }}
-      uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
+      shell: bash
       env:
         CUCUMBER_LOG_LEVEL: debug
         CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
         USE_LOCAL_HOST_NTP_TIME_CONFIG: true
         CUCUMBER_VERBOSE_CONSOLE: true
         MAX_CUCUMBER_CONCURRENT_SCENARIOS: ${{ inputs.max_concurrent_scenarios }}
-      with:
-        command: test
-        args: >-
-          --locked -p ${{ inputs.package }} --features cucumber
-          --test cucumber -- --tags "${{ inputs.suite_tag }} and not (@broken or @undefined_behaviour)"
+        PACKAGE: ${{ inputs.package }}
+        SUITE_TAG: ${{ inputs.suite_tag }}
+      run: >-
+        cargo test --locked -p "$PACKAGE" --features cucumber
+        --test cucumber -- --tags "$SUITE_TAG and not (@broken or @undefined_behaviour)"
 
     - name: Run cucumber executable - ${{ inputs.suite_name }}
       id: run_external
@@ -99,7 +99,7 @@ runs:
     - name: Upload cucumber logs on failure
       if: ${{ steps.run_suite.outcome == 'failure' || steps.run_suite_verbose.outcome == 'failure' || steps.run_external.outcome == 'failure' }}
       continue-on-error: true
-      uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
         name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}-${{ inputs.suite_name }}
         include-hidden-files: true

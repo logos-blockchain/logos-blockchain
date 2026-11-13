@@ -67,19 +67,19 @@ jobs:
       #   become master if this run passes. This is what we want to validate.
       # - Uses SHA (immutable) rather than branch name (which could move during execution).
       - name: Checkout repository
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
 
       # Prune before any builds.
       - name: Prune disk space (cache-aware, self-hosted)
-        uses: ./.github/actions/prune-disk-space
+        uses: $/.github/actions/prune-disk-space
 
       # Ensure a local NTP server is running for deterministic time sync in cucumber tests
       - name: Verify Local NTP Server
         id: verify_local_ntp
-        uses: ./.github/actions/verify-local-ntp-server
+        uses: $/.github/actions/verify-local-ntp-server
 
       # This cooperative checkpoint is reused before each expensive phase.
       # It does not cancel the workflow. If the other OS has completed the
@@ -91,7 +91,7 @@ jobs:
         # Peer coordination is best-effort. If it is unavailable, this lane
         # must continue and establish its own test result.
         continue-on-error: true
-        uses: ./.github/actions/check-peer-success
+        uses: $/.github/actions/check-peer-success
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           current-label: ${{ matrix.platform.label }}
@@ -101,10 +101,7 @@ jobs:
       # Build release binaries for the cucumber tests.
       - name: Build binaries for cucumber tests
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
-        with:
-          command: build
-          args: --locked --release --all
+        run: cargo build --locked --release --all
         env:
           CARGO_INCREMENTAL: 0  # Disable incremental compilation
 
@@ -113,7 +110,7 @@ jobs:
       - name: Run external Cucumber runner smoke test
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 15
-        uses: ./.github/actions/run-cucumber-suite
+        uses: $/.github/actions/run-cucumber-suite
         env:
           CUCUMBER_RETRIES: "0"
         with:
@@ -134,7 +131,7 @@ jobs:
       - name: Run cucumber suite - smoke
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
-        uses: ./.github/actions/run-cucumber-suite
+        uses: $/.github/actions/run-cucumber-suite
         with:
           suite_tag: "@smoke_ci"
           suite_name: smoke
@@ -147,7 +144,7 @@ jobs:
       - name: Run cucumber suite - cryptarchia
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
-        uses: ./.github/actions/run-cucumber-suite
+        uses: $/.github/actions/run-cucumber-suite
         with:
           suite_tag: "@cryptarchia_ci"
           suite_name: cryptarchia
@@ -160,7 +157,7 @@ jobs:
       - name: Run cucumber suite - blend
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
-        uses: ./.github/actions/run-cucumber-suite
+        uses: $/.github/actions/run-cucumber-suite
         with:
           suite_tag: "@blend_ci"
           suite_name: blend
@@ -173,7 +170,7 @@ jobs:
       - name: Run cucumber suite - transactions
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 120
-        uses: ./.github/actions/run-cucumber-suite
+        uses: $/.github/actions/run-cucumber-suite
         with:
           suite_tag: "@transactions_ci"
           suite_name: transactions
@@ -187,7 +184,7 @@ jobs:
       - name: Run cucumber suite - fees
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
-        uses: ./.github/actions/run-cucumber-suite
+        uses: $/.github/actions/run-cucumber-suite
         with:
           suite_tag: "@fees_ci"
           suite_name: fees
@@ -201,7 +198,7 @@ jobs:
       - name: Run cucumber suite - mempool
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
-        uses: ./.github/actions/run-cucumber-suite
+        uses: $/.github/actions/run-cucumber-suite
         with:
           suite_tag: "@mempool_ci"
           suite_name: mempool
@@ -214,7 +211,7 @@ jobs:
       - name: Run cucumber suite - zone
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
-        uses: ./.github/actions/run-cucumber-suite
+        uses: $/.github/actions/run-cucumber-suite
         with:
           suite_tag: "@zone_ci"
           package: logos-blockchain-zone-tests
@@ -229,7 +226,7 @@ jobs:
       - name: Run cucumber suite - Logos SQL
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
-        uses: ./.github/actions/run-cucumber-suite
+        uses: $/.github/actions/run-cucumber-suite
         with:
           suite_tag: "@logos_sql_ci"
           package: logos-blockchain-sql-tests
@@ -244,7 +241,7 @@ jobs:
       - name: Run cucumber suite - CLI utilities
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
-        uses: ./.github/actions/run-cucumber-suite
+        uses: $/.github/actions/run-cucumber-suite
         with:
           suite_tag: "@cli_ci"
           suite_name: CLI
@@ -255,7 +252,7 @@ jobs:
       - name: Upload cucumber JUnit results
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         continue-on-error: true
-        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cucumber-junit-${{ runner.os }}
           path: ${{ github.workspace }}/tests/**/cucumber_tests/temp/cucumber-output-junit.xml
@@ -265,7 +262,7 @@ jobs:
       - name: Publish cucumber test report
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         continue-on-error: true
-        uses: dorny/test-reporter@v1
+        uses: dorny/test-reporter@3eeb9fc888e82e8be2fb356bbeec2750231672bc # Tag v1: unreleased, after 1.9.1
         with:
           name: Cucumber-${{ runner.os }}
           path: ${{ github.workspace }}/tests/**/cucumber_tests/temp/cucumber-output-junit.xml
@@ -275,9 +272,7 @@ jobs:
 
       - name: Clean up build artifacts
         if: success() || failure()
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: clean
+        run: cargo clean
 
       - name: Clean up cucumber artifacts
         if: success() || failure()
@@ -312,20 +307,9 @@ jobs:
         if: ${{ github.event_name != 'merge_group' }}
         run: echo "Cucumber integration tests run only in the merge queue"
 
-      # A local composite action must be checked out before it can be invoked.
-      # Only the required action directory is fetched.
-      - name: Checkout result action
-        if: ${{ github.event_name == 'merge_group' }}
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # Version 4.2.2
-        with:
-          ref: ${{ github.sha }}
-          sparse-checkout: .github/actions/check-any-lane-result
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-
       - name: Check Cucumber result
         if: ${{ github.event_name == 'merge_group' }}
-        uses: ./.github/actions/check-any-lane-result
+        uses: $/.github/actions/check-any-lane-result
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           result-name: Cucumber
