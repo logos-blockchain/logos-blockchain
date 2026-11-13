@@ -6,7 +6,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures::StreamExt as _;
+use futures::{StreamExt as _, stream::FuturesUnordered};
 pub use lb_blend::message::{crypto::proofs::RealProofsVerifier, encap::ProofsVerifier};
 use lb_blend::scheduling::{
     epoch::{EpochEvent, EpochEventStream},
@@ -297,6 +297,10 @@ where
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
 
+        // A declaration takes a proof, so the loop polls declarations along with
+        // its other inputs, for payloads not to wait for them.
+        let mut declarations = FuturesUnordered::new();
+
         loop {
             tokio::select! {
                 Some(epoch_event) = remaining_membership_stream.next() => {
@@ -319,17 +323,17 @@ where
                 Some(message) = inbound_relay.next() => {
                     match message {
                         ProxyServiceMessage::JoinAsCore { locator, service_note_id, reply } => {
-                            reply.send(
-                                submit_blend_sdp_declaration(
-                                    &sdp_service_api,
-                                    locator,
-                                    service_note_id,
-                                    non_ephemeral_signing_key_public,
-                                    zk_public_key,
-                                )
-                                .await
-                            ).unwrap_or_else(|e| {
-                                debug!(target: LOG_TARGET, "Failed to send JoinAsCore reply: {e:?}");
+                            let declaration = submit_blend_sdp_declaration(
+                                &sdp_service_api,
+                                locator,
+                                service_note_id,
+                                non_ephemeral_signing_key_public,
+                                zk_public_key,
+                            );
+                            declarations.push(async move {
+                                reply.send(declaration.await).unwrap_or_else(|e| {
+                                    debug!(target: LOG_TARGET, "Failed to send JoinAsCore reply: {e:?}");
+                                });
                             });
                         },
                         ProxyServiceMessage::GetZkId { reply } => {
@@ -359,6 +363,7 @@ where
                         },
                     }
                 },
+                Some(()) = declarations.next() => {},
             }
         }
     }

@@ -210,7 +210,9 @@ async fn submit_transaction<Item, Key>(
         return;
     };
 
-    let (reply_channel, receiver) = oneshot::channel();
+    // The mempool logs what it refuses, so its answer isn't waited for: the
+    // dispatch goes out with a release round, which has to stay on time.
+    let (reply_channel, _) = oneshot::channel();
     if let Err(error) = mempool_relay
         .send(MempoolMsg::Add {
             key: transaction.hash(),
@@ -220,15 +222,6 @@ async fn submit_transaction<Item, Key>(
         .await
     {
         tracing::error!(target: LOG_TARGET, "Error submitting a blended transaction to the mempool: {error}");
-        return;
-    }
-
-    let outcome = receiver
-        .await
-        .map_err(|e| format!("the mempool dropped the reply: {e}"))
-        .and_then(|added| added.map_err(|e| format!("the mempool refused it: {e}")));
-    if let Err(reason) = outcome {
-        tracing::debug!(target: LOG_TARGET, "Blended transaction was not added to the mempool: {reason}");
     }
 }
 
