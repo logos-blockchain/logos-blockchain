@@ -162,7 +162,10 @@ pub struct WalletState {
     pub epoch: Epoch,
     /// MMR of all voucher commitments included in the chain
     pub vouchers: MerkleMountainRange<VoucherCm, ZkHasher>,
-    /// All **tracked** voucher merkle paths up to the current block
+    /// All **tracked** voucher merkle paths up to the current block.
+    ///
+    /// The sibling covering the latest vouchers may be stale; see
+    /// [`MerkleMountainRange::push_with_lazy_paths`].
     pub voucher_paths: VoucherPaths,
     /// A snapshot of **tracked** voucher merkle paths,
     /// updated at the first block of each epoch.
@@ -466,38 +469,39 @@ impl WalletState {
     > {
         // Snapshot voucher paths if epoch is advancing
         let snapshot = if block.epoch > self.epoch {
-            self.voucher_paths.clone()
+            self.voucher_paths
+                .iter()
+                .map(|(cm, path)| {
+                    let mut path = path.clone();
+                    self.vouchers.refresh_path(&mut path)?;
+                    Ok((*cm, path))
+                })
+                .collect::<Result<_, WalletError>>()?
         } else {
             self.voucher_paths_snapshot.clone()
         };
 
         // Filter out vouchers that have been claimed/finalized.
         // `known_vouchers` always reflects the latest set of vouchers to be tracked.
-        let (cms, mut paths): (Vec<VoucherCm>, Vec<MerklePath>) = self
-            .voucher_paths
-            .iter()
-            .filter(|(cm, _)| known_vouchers.get(cm).is_some())
-            .map(|(cm, path)| (*cm, path.clone()))
-            .unzip();
+        let mut voucher_paths = self.voucher_paths.clone();
+        for cm in self.voucher_paths.keys() {
+            if known_vouchers.get(cm).is_none() {
+                voucher_paths.remove_mut(cm);
+            }
+        }
 
-        // Push the new voucher to the MMR and update all tracked paths
+        // Push the new voucher to the MMR and update the tracked paths it settles
         let (vouchers, new_path) = self
             .vouchers
-            .push_with_paths(block.voucher_cm, &mut paths)
+            .push_with_lazy_paths(block.voucher_cm, &mut voucher_paths)
             .map_err(|error| match error {
                 lb_mmr::PushWithPathsError::MmrFull(_) => WalletError::VoucherMmrFull,
                 lb_mmr::PushWithPathsError::InvalidTrackedPath(error) => error.into(),
             })?;
 
-        // Rebuild the tracked voucher paths map with updated paths.
-        let mut voucher_paths = rpds::HashTrieMapSync::new_sync();
-        for (cm, path) in cms.into_iter().zip(paths) {
-            voucher_paths = voucher_paths.insert(cm, path);
-        }
-
         // Track the new voucher's path if it is owned by us
         if known_vouchers.get(&block.voucher_cm).is_some() {
-            voucher_paths = voucher_paths.insert(block.voucher_cm, new_path);
+            voucher_paths.insert_mut(block.voucher_cm, new_path);
         }
 
         Ok((vouchers, voucher_paths, snapshot))
@@ -778,7 +782,12 @@ where
         tip: HeaderId,
         cm: &VoucherCm,
     ) -> Result<Option<MerklePath>, WalletError> {
-        Ok(self.wallet_state_at(tip)?.voucher_paths.get(cm).cloned())
+        let state = self.wallet_state_at(tip)?;
+        let Some(mut path) = state.voucher_paths.get(cm).cloned() else {
+            return Ok(None);
+        };
+        state.vouchers.refresh_path(&mut path)?;
+        Ok(Some(path))
     }
 
     pub fn balance(
