@@ -462,6 +462,9 @@ where
                     ServiceMessage::GetPendingTransactions { reply } => {
                         drop(reply.send(pending_transactions.iter().cloned().collect()));
                     }
+                    ServiceMessage::GetCoreStatus { reply } => {
+                        let _ = reply.send(None);
+                    }
                 }
             }
             // A queued transaction leaves as soon as a `PoW` solution backs it, awaited

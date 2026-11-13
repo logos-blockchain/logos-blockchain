@@ -97,7 +97,6 @@ impl EpochBlendingTokenCollector {
         self.epoch
     }
 
-    #[cfg(any(test, feature = "unsafe-test-functions"))]
     #[must_use]
     pub const fn tokens(&self) -> &HashSet<BlendingToken> {
         &self.tokens
