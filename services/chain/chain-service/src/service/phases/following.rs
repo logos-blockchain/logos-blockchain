@@ -8,7 +8,7 @@ use lb_core::mantle::{
     traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
     transactions::states::Preverified,
 };
-use lb_cryptarchia_sync::{ProviderResponse, TipResponse};
+use lb_cryptarchia_sync::{ProviderResponse, Tip};
 use lb_network_service::message::ChainSyncEvent;
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::{debug, error, info, trace};
@@ -98,7 +98,7 @@ where
             }
             ChainSyncEvent::TipRequest { reply_sender } => {
                 let tip = self.cryptarchia.tip_branch();
-                let response = ProviderResponse::Available(TipResponse::Tip {
+                let response = ProviderResponse::Available(Tip {
                     tip: tip.id(),
                     slot: tip.slot(),
                     height: tip.length(),
