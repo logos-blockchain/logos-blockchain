@@ -2,26 +2,34 @@ use std::fmt::{Debug, Display};
 
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_blend_service::message::{DataPayload, NetworkInfo, ProxyServiceMessage, ServiceMessage};
-use lb_chain_service::api::CryptarchiaServiceApi;
+use lb_chain_service::{
+    BlendRewards, State,
+    api::{CryptarchiaServiceApi, CryptarchiaServiceData},
+};
 use lb_core::{
     mantle::{NoteId, Value},
     sdp::{Locator, ServiceType},
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_network_service::backends::libp2p::PeerId;
-use lb_sdp_service::SdpSubmission;
+use lb_sdp_service::{
+    SdpService, SdpServiceApi, SdpSubmission, mempool::SdpMempoolAdapter, state::SdpStateStorage,
+};
 use lb_wallet_service::{
     TipResponse,
     api::{WalletApi, WalletServiceData},
 };
-use overwatch::services::{AsServiceId, ServiceData};
+use overwatch::{
+    overwatch::OverwatchHandle,
+    services::{AsServiceId, ServiceData},
+};
 use tokio::sync::oneshot;
 
 use crate::http::{DynError, consensus::Cryptarchia};
 
 pub async fn blend_info<BlendService, RuntimeServiceId>(
-    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-) -> Result<Option<NetworkInfo<PeerId>>, overwatch::DynError>
+    handle: &OverwatchHandle<RuntimeServiceId>,
+) -> Result<Option<NetworkInfo<PeerId>>, DynError>
 where
     BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
     RuntimeServiceId: AsServiceId<BlendService> + Debug + Sync + Display + 'static,
@@ -32,16 +40,14 @@ where
     relay
         .send(ServiceMessage::GetNetworkInfo { reply: sender }.into())
         .await
-        .map_err(|error| overwatch::DynError::from(error.to_string()))?;
+        .map_err(|error| DynError::from(error.to_string()))?;
 
-    receiver
-        .await
-        .map_err(|e| Box::new(e) as overwatch::DynError)
+    receiver.await.map_err(|e| Box::new(e) as DynError)
 }
 
 pub async fn blend_zk_id<BlendService, RuntimeServiceId>(
-    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-) -> Result<ZkPublicKey, overwatch::DynError>
+    handle: &OverwatchHandle<RuntimeServiceId>,
+) -> Result<ZkPublicKey, DynError>
 where
     BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
     RuntimeServiceId: AsServiceId<BlendService> + Debug + Sync + Display + 'static,
@@ -52,11 +58,9 @@ where
     relay
         .send(ProxyServiceMessage::GetZkId { reply: sender })
         .await
-        .map_err(|error| overwatch::DynError::from(error.to_string()))?;
+        .map_err(|error| DynError::from(error.to_string()))?;
 
-    receiver
-        .await
-        .map_err(|e| Box::new(e) as overwatch::DynError)
+    receiver.await.map_err(|e| Box::new(e) as DynError)
 }
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -133,7 +137,7 @@ pub enum JoinError {
 /// collateral or, when `None`, the smallest unlocked note held by this node's
 /// blend ZK key that meets the minimum stake.
 pub async fn blend_join_network<BlendService, WalletService, RuntimeServiceId>(
-    handle: &overwatch::overwatch::OverwatchHandle<RuntimeServiceId>,
+    handle: &OverwatchHandle<RuntimeServiceId>,
     locator: Locator,
     service_note_id: Option<NoteId>,
 ) -> Result<SdpSubmission, JoinError>
@@ -157,7 +161,7 @@ where
 }
 
 async fn held_service_note<BlendService, WalletService, RuntimeServiceId>(
-    handle: &overwatch::overwatch::OverwatchHandle<RuntimeServiceId>,
+    handle: &OverwatchHandle<RuntimeServiceId>,
 ) -> Result<NoteId, JoinError>
 where
     BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
@@ -211,7 +215,7 @@ where
 }
 
 async fn join_as_core<BlendService, RuntimeServiceId>(
-    handle: &overwatch::overwatch::OverwatchHandle<RuntimeServiceId>,
+    handle: &OverwatchHandle<RuntimeServiceId>,
     locator: Locator,
     service_note_id: NoteId,
 ) -> Result<SdpSubmission, DynError>
@@ -229,11 +233,9 @@ where
             reply: sender,
         })
         .await
-        .map_err(|error| overwatch::DynError::from(error.to_string()))?;
+        .map_err(|error| DynError::from(error.to_string()))?;
 
-    let result = receiver
-        .await
-        .map_err(|e| Box::new(e) as overwatch::DynError)??;
+    let result = receiver.await.map_err(|e| Box::new(e) as DynError)??;
 
     Ok(result)
 }
@@ -244,10 +246,10 @@ where
 /// Returns the transaction's id. Getting one back means the transaction was
 /// accepted for blending, not that it was sent.
 pub async fn blend_transaction<BlendService, Transaction, Id, RuntimeServiceId>(
-    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
+    handle: &OverwatchHandle<RuntimeServiceId>,
     transaction: Transaction,
     id: impl Fn(&Transaction) -> Id,
-) -> Result<Id, overwatch::DynError>
+) -> Result<Id, DynError>
 where
     BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
     Transaction: BinaryEncode,
@@ -264,7 +266,7 @@ where
     relay
         .send(ProxyServiceMessage::Blend { payload, reply })
         .await
-        .map_err(|error| overwatch::DynError::from(error.to_string()))?;
+        .map_err(|error| DynError::from(error.to_string()))?;
     accepted.await??;
 
     Ok(id(&transaction))
@@ -278,9 +280,9 @@ where
 // TODO: Have Blend hand back transactions rather than bytes, so that this can
 // report their ids without decoding them again.
 pub async fn blend_pending_transactions<BlendService, Transaction, Id, RuntimeServiceId>(
-    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
+    handle: &OverwatchHandle<RuntimeServiceId>,
     id: impl Fn(&Transaction) -> Id,
-) -> Result<Vec<Id>, overwatch::DynError>
+) -> Result<Vec<Id>, DynError>
 where
     BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
     Transaction: BinaryDecode<Context = u32>,
@@ -292,11 +294,11 @@ where
     relay
         .send(ServiceMessage::GetPendingTransactions { reply: sender }.into())
         .await
-        .map_err(|error| overwatch::DynError::from(error.to_string()))?;
+        .map_err(|error| DynError::from(error.to_string()))?;
 
     receiver
         .await
-        .map_err(|e| Box::new(e) as overwatch::DynError)?
+        .map_err(Box::new)?
         .iter()
         .map(|encoded_transaction| {
             // These are transactions this node encoded itself on the way in, so
@@ -307,6 +309,55 @@ where
             )?))
         })
         .collect()
+}
+
+/// Gets this node's Blend rewards at the tip.
+///
+/// # Errors
+///
+/// Fails right away if the chain is not `Online`, and if the node has no Blend
+/// declaration in the ledger.
+pub async fn blend_rewards<
+    MempoolAdapter,
+    WalletAdapter,
+    ChainService,
+    StateStorage,
+    RuntimeServiceId,
+>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+) -> Result<BlendRewards, DynError>
+where
+    MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
+    ChainService: CryptarchiaServiceData<Tx: Send> + Send + Sync + 'static,
+    StateStorage: SdpStateStorage<RuntimeServiceId>,
+    RuntimeServiceId: Send
+        + Sync
+        + Debug
+        + Display
+        + 'static
+        + AsServiceId<ChainService>
+        + AsServiceId<
+            SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>,
+        >,
+{
+    let chain_api = CryptarchiaServiceApi::<ChainService>::from_overwatch_handle(handle).await;
+    if chain_api.info().await?.cryptarchia_info.state != State::Online {
+        return Err(DynError::from("The node is not online yet."));
+    }
+
+    let sdp_api = SdpServiceApi::<
+        SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>,
+    >::from_overwatch_handle(handle)
+    .await;
+    let Some(participation) = sdp_api.get_participation().await? else {
+        return Err(DynError::from("The node has no Blend declaration."));
+    };
+
+    let rewards = chain_api
+        .get_blend_rewards(participation.declaration_id())
+        .await?
+        .ok_or_else(|| DynError::from("The node has no Blend declaration in the ledger."))?;
+    Ok(rewards)
 }
 
 #[cfg(test)]
