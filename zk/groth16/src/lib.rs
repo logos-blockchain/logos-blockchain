@@ -20,6 +20,7 @@ use ark_ff::{BigInteger as _, PrimeField as _};
 pub use circuit_integer::{CircuitInteger, CircuitIntegerOutOfRange};
 pub use modulus_shift::{ModulusShift, ModulusShiftOutOfRange};
 use num_bigint::BigUint;
+pub use verification_key::verification_keys_match;
 pub use verifier::{VerificationError, groth16_batch_verify, groth16_verify};
 
 pub const GROTH16_SAFE_BYTES_SIZE: usize = 31;

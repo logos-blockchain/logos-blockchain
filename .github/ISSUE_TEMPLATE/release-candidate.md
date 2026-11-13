@@ -43,6 +43,7 @@ Most of the template content is the same or very similar to what is in `release.
 - [ ] Re-generate the workspace `Cargo.lock` file with `cargo update -w`
 - [ ] Verify the `Cargo.lock` is now up to date with `cargo update -w --locked`
 - [ ] Verify the `HEAD` of the release branch has green CI ✅
+- [ ] Check that `scripts/logosctl.sha256` pins the `x86_64-linux` and `aarch64-linux` archives of the latest Logos Core release (A.B.C), which the node image will use. If not, add them: the release page shows the SHA-256 digest of each asset
 - [ ] Commit the changes, and tag them with `X.Y.Z-rc.N`
 - [ ] Push the commit and the tag
 - [ ] Manually trigger the [Logos Blockchain tools build workflow][build-logos-tools-docker-workflow] from the `X.Y.Z-rc.N` tag on GitHub specifying the `devnet` image tag. Leave "Optional version tag" empty.
@@ -74,7 +75,7 @@ Most of the template content is the same or very similar to what is in `release.
 - [ ] Manually trigger the [logos-blockchain-module-workflow] workflow with the `Force build` option selected from the `blockchain-module-X.Y.Z-rc.N` branch
 - [ ] Post the link to the workflow run to this issue for easier review
 - [ ] Wait for the workflow to complete before moving on to the next step
-- [ ] Manually trigger the [node Docker image build workflow][node-docker-build-workflow] from the `X.Y.Z-rc.N` tag. Use latest (A.B.C) Logos Core release for `LC Core Version` and `X.Y.Z-rc.N` for `LB Node Version`.
+- [ ] Manually trigger the [node Docker image build workflow][node-docker-build-workflow] from the `X.Y.Z-rc.N` tag. Use latest (A.B.C) Logos Core release for `LC Core Version`, `X.Y.Z-rc.N` for `LB Node Version`, and for `LB Module SHA256` the `sha256` that the [module index][module-index] lists for `blockchain_module` `X.Y.Z-rc.N`. Post that SHA-256 to this issue too.
 - [ ] Post the link to the workflow run to this issue for easier review
 - [ ] Wait for the workflow to complete before moving on to the next section
 
@@ -113,6 +114,7 @@ Most of the template content is the same or very similar to what is in `release.
 [release-bundling-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/prepare-release.yml
 [github-release-candidate-section]: #release-candidate-publication
 [node-docker-build-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/publish-node-image.yml
+[module-index]: https://github.com/logos-blockchain/blockchain-modules-release/releases/download/index/index.json
 [logos-blockchain-module]: https://github.com/logos-blockchain/logos-blockchain-module
 [blockchain-modules-release]: https://github.com/logos-blockchain/blockchain-modules-release
 [logos-blockchain-module-workflow]: https://github.com/logos-blockchain/blockchain-modules-release/actions/workflows/blockchain-module.yml
