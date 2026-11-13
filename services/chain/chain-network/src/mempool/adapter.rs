@@ -6,7 +6,7 @@ use lb_core::{
     mantle::transactions::hash::{TxHash, TxHashPrefix},
 };
 use lb_cryptarchia_engine::{Era, Slot};
-use lb_tx_service::{MempoolMsg, TxsWithCommonPrefix};
+use lb_tx_service::{MempoolMsg, TxsByPrefix};
 use overwatch::services::relay::OutboundRelay;
 use tokio::sync::oneshot;
 
@@ -66,15 +66,18 @@ where
         Ok(())
     }
 
-    async fn get_transactions_by_prefix(
+    async fn get_transactions_by_prefixes<Prefixes>(
         &self,
-        prefix: TxHashPrefix,
-    ) -> Result<TxsWithCommonPrefix<Tx>, overwatch::DynError> {
+        prefixes: Prefixes,
+    ) -> Result<TxsByPrefix<Tx>, overwatch::DynError>
+    where
+        Prefixes: IntoIterator<Item = TxHashPrefix> + Send,
+    {
         let (resp_tx, resp_rx) = oneshot::channel();
 
         self.mempool_relay
-            .send(MempoolMsg::GetTransactionsByPrefix {
-                prefix,
+            .send(MempoolMsg::GetTransactionsByPrefixes {
+                prefixes: prefixes.into_iter().collect(),
                 reply_channel: resp_tx,
             })
             .await

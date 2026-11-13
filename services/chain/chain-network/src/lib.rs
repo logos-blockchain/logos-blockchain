@@ -8,6 +8,7 @@ mod sync;
 
 use core::{fmt::Debug, num::NonZeroUsize, pin::pin};
 use std::{
+    collections::HashMap,
     fmt::Display,
     hash::Hash,
     time::{Duration, Instant},
@@ -1134,9 +1135,9 @@ where
 /// cryptographically negligible case of a prefix matching the wrong
 /// transaction.
 ///
-/// The caller must have validated the header first: this walks the mempool once
-/// per reference, so an unauthenticated proposal has to be discarded before it
-/// gets here. The block is held to `block_limits`, those of the era of the
+/// The caller must have validated the header first: this reads the mempool for
+/// every reference, so an unauthenticated proposal has to be discarded before
+/// it gets here. The block is held to `block_limits`, those of the era of the
 /// proposal's slot: the proposal's uncle headers were decoded under them, which
 /// the rebuilt block keeps, and its transactions are held to them here. The
 /// data of their Operations was decoded under the era that admitted them, so
@@ -1149,10 +1150,7 @@ async fn reconstruct_block_from_proposal<Item>(
 where
     Item: SignedMantleTx<Preverified, StandardMode> + StorageSize + Clone + Send + Sync + 'static,
 {
-    let mut transactions = Vec::with_capacity(proposal.mempool_transactions().len());
-    for (index, prefix) in proposal.mempool_transactions().iter().copied().enumerate() {
-        transactions.push(resolve_reference(index, prefix, mempool).await?);
-    }
+    let transactions = resolve_references(proposal.mempool_transactions(), mempool).await?;
 
     Block::reconstruct(
         proposal.header().clone(),
@@ -1165,7 +1163,8 @@ where
     .map_err(|_| Error::NoMatchingReconstruction)
 }
 
-/// The single local transaction a reference means.
+/// The single local transaction each reference means, in the order of the
+/// references. The first one that doesn't resolve is the one reported.
 ///
 /// A reference resolves only when the match is unique. Zero matches means the
 /// transaction has not reached this mempool; two or more would be a prefix
@@ -1174,38 +1173,51 @@ where
 /// the match is unique when it exists, the result does not depend on the order
 /// in which the mempool is scanned.
 ///
-/// Two candidates are taken so that "collides" is distinguishable from
-/// "resolves" without draining the stream.
-async fn resolve_reference<Item>(
-    index: usize,
-    prefix: TxHashPrefix,
+/// The references go to the mempool together, in one round trip, and what it
+/// finds comes back in no particular order.
+async fn resolve_references<Item>(
+    references: &[TxHashPrefix],
     mempool: &impl MempoolAdapterTrait<Item>,
-) -> Result<Item, Error>
+) -> Result<Vec<Item>, Error>
 where
-    Item: Hashable<Hash = TxHash> + Send + Sync + 'static,
+    Item: Hashable<Hash = TxHash> + Clone + Send + Sync + 'static,
 {
-    let mut candidates: Vec<Item> = mempool
-        .get_transactions_by_prefix(prefix)
-        .await
-        .map_err(|e| Error::Mempool(format!("Failed to resolve reference {index}: {e}")))?
-        .take(2)
-        // We collect into a `Vec` since we are only taking at most 2 elements.
-        .collect()
-        .await;
-
-    match candidates.len() {
-        0 => {
-            metrics::consensus_observe_proposal_missing_txs(1);
-            Err(Error::UnresolvedReference { index, prefix })
-        }
-        1 => Ok(candidates.remove(0)),
-        _ => Err(Error::CollidingReference { index, prefix }),
+    if references.is_empty() {
+        return Ok(Vec::new());
     }
+
+    let mut matches = mempool
+        .get_transactions_by_prefixes(references.iter().copied())
+        .await
+        .map_err(|e| Error::Mempool(format!("Failed to resolve references: {e}")))?;
+    let mut candidates: HashMap<TxHashPrefix, Vec<Item>> = HashMap::new();
+    while let Some(item) = matches.next().await {
+        candidates
+            .entry(item.hash().prefix())
+            .or_default()
+            .push(item);
+    }
+
+    references
+        .iter()
+        .copied()
+        .enumerate()
+        .map(
+            |(index, prefix)| match candidates.get(&prefix).map(Vec::as_slice) {
+                Some([item]) => Ok(item.clone()),
+                Some([_, _, ..]) => Err(Error::CollidingReference { index, prefix }),
+                None | Some([]) => {
+                    metrics::consensus_observe_proposal_missing_txs(1);
+                    Err(Error::UnresolvedReference { index, prefix })
+                }
+            },
+        )
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashSet;
 
     use futures::stream;
     use lb_binary_codec::canonical::BinaryDecodeExt as _;
@@ -1224,14 +1236,14 @@ mod tests {
         backends::mock::Mock,
         message::{BackendNetworkMsg, ChainSyncEvent},
     };
-    use lb_tx_service::TxsWithCommonPrefix;
+    use lb_tx_service::TxsByPrefix;
     use overwatch::services::relay::OutboundRelay;
 
     use super::*;
     use crate::network::BoxedStream;
 
     /// A transaction that is nothing but its hash, which is all
-    /// [`resolve_reference`] looks at.
+    /// [`resolve_references`] looks at.
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct HashOnlyTx(TxHash);
 
@@ -1271,10 +1283,17 @@ mod tests {
             unimplemented!("resolution never processes blocks")
         }
 
-        async fn get_transactions_by_prefix(
+        async fn get_transactions_by_prefixes<Prefixes>(
             &self,
-            _prefix: TxHashPrefix,
-        ) -> Result<TxsWithCommonPrefix<HashOnlyTx>, DynError> {
+            prefixes: Prefixes,
+        ) -> Result<TxsByPrefix<HashOnlyTx>, DynError>
+        where
+            Prefixes: IntoIterator<Item = TxHashPrefix> + Send,
+        {
+            assert!(
+                prefixes.into_iter().next().is_some(),
+                "there was nothing to look up"
+            );
             Ok(Box::pin(stream::iter(self.0.clone())))
         }
     }
@@ -1294,25 +1313,52 @@ mod tests {
         vec![HashOnlyTx(TxHash(first)), HashOnlyTx(TxHash(second))]
     }
 
+    fn prefix_of(byte: u8) -> TxHashPrefix {
+        TxHash([byte; 32]).prefix()
+    }
+
+    /// An empty block has no reason to wait on a busy mempool.
     #[tokio::test]
-    async fn a_reference_resolves_to_its_one_matching_transaction() {
+    async fn a_proposal_without_references_leaves_the_mempool_alone() {
+        let resolved: Vec<HashOnlyTx> = resolve_references(&[], &FixedCandidates(Vec::new()))
+            .await
+            .expect("there is nothing to resolve");
+
+        assert_eq!(resolved, vec![]);
+    }
+
+    #[tokio::test]
+    async fn references_resolve_in_their_own_order() {
+        let mempool = FixedCandidates(vec![tx(8), tx(7)]);
+
+        let resolved = resolve_references(&[prefix_of(7), prefix_of(8)], &mempool)
+            .await
+            .expect("unique matches resolve");
+
+        assert_eq!(resolved, [tx(7), tx(8)]);
+    }
+
+    /// A proposal that refers to one transaction twice is for
+    /// `Block::reconstruct` to judge, not for resolution.
+    #[tokio::test]
+    async fn two_references_to_one_transaction_both_resolve() {
         let mempool = FixedCandidates(vec![tx(7)]);
 
-        let resolved = resolve_reference(0, TxHash([7u8; 32]).prefix(), &mempool)
+        let resolved = resolve_references(&[prefix_of(7), prefix_of(7)], &mempool)
             .await
             .expect("a unique match resolves");
 
-        assert_eq!(resolved, tx(7));
+        assert_eq!(resolved, [tx(7), tx(7)]);
     }
 
     #[tokio::test]
     async fn a_reference_matching_nothing_locally_is_unresolved() {
-        let mempool = FixedCandidates(Vec::new());
-        let prefix = TxHash([7u8; 32]).prefix();
+        let mempool = FixedCandidates(vec![tx(1)]);
+        let prefix = prefix_of(7);
 
         assert!(matches!(
-            resolve_reference(3, prefix, &mempool).await,
-            Err(Error::UnresolvedReference { index: 3, prefix: p }) if p == prefix
+            resolve_references(&[prefix_of(1), prefix], &mempool).await,
+            Err(Error::UnresolvedReference { index: 1, prefix: p }) if p == prefix
         ));
     }
 
@@ -1329,11 +1375,26 @@ mod tests {
             "the pair must collide"
         );
 
+        let mempool = FixedCandidates([candidates, vec![tx(1)]].concat());
+
+        assert!(matches!(
+            resolve_references(&[prefix_of(1), prefix], &mempool).await,
+            Err(Error::CollidingReference { index: 1, prefix: p }) if p == prefix
+        ));
+    }
+
+    /// Which reference gets reported can't depend on the mempool's order, as
+    /// two validators holding the same mempool have to decide alike.
+    #[tokio::test]
+    async fn the_first_reference_that_does_not_resolve_is_the_one_reported() {
+        let candidates = colliding_pair();
+        let colliding = candidates[0].hash().prefix();
+        let missing = prefix_of(7);
         let mempool = FixedCandidates(candidates);
 
         assert!(matches!(
-            resolve_reference(1, prefix, &mempool).await,
-            Err(Error::CollidingReference { index: 1, prefix: p }) if p == prefix
+            resolve_references(&[missing, colliding], &mempool).await,
+            Err(Error::UnresolvedReference { index: 0, prefix: p }) if p == missing
         ));
     }
 

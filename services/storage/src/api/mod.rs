@@ -9,7 +9,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures::{StreamExt as _, future::join_all, stream::BoxStream};
+use futures::{StreamExt as _, stream::BoxStream};
 use lb_binary_codec::{
     bincode::{DeserializeOp as _, SerializeOp as _},
     canonical::{BinaryDecode, BinaryEncode, DecodeError},
@@ -70,6 +70,21 @@ impl<Tx> StorageApi<Tx> {
             .relay::<StorageService<RuntimeServiceId>>()
             .await
             .map(Self::new)
+    }
+
+    /// Removes blocks and all that's stored for them, in one write. Blocks that
+    /// aren't there make no difference.
+    pub async fn remove_blocks<Ids>(&self, ids: Ids) -> Result<(), DynError>
+    where
+        Ids: IntoIterator<Item = HeaderId>,
+    {
+        let header_ids = ids.into_iter().collect();
+        self.request(|response_tx| StorageMsg::RemoveBlocks {
+            header_ids,
+            response_tx,
+        })
+        .await?
+        .map_err(Into::into)
     }
 
     pub async fn store<Value: Serialize>(&self, key: Bytes, value: Value) -> Result<(), DynError> {
@@ -192,9 +207,19 @@ impl<Tx> StorageApi<Tx> {
 }
 
 impl<Tx: Serialize + Hashable<Hash: Into<TxHash>>> StorageApi<Tx> {
-    /// Store an item under its externally supplied transaction hash.
-    pub async fn store_transaction(&self, hash: TxHash, transaction: Tx) -> Result<(), DynError> {
-        let transactions = [(hash, transaction.to_bytes()?)].into();
+    /// Store items under their externally supplied transaction hashes, in one
+    /// write.
+    pub async fn store_keyed_transactions<Transactions>(
+        &self,
+        transactions: Transactions,
+    ) -> Result<(), DynError>
+    where
+        Transactions: IntoIterator<Item = (TxHash, Tx)>,
+    {
+        let transactions = transactions
+            .into_iter()
+            .map(|(hash, transaction)| transaction.to_bytes().map(|bytes| (hash, bytes)))
+            .collect::<Result<_, _>>()?;
         self.relay
             .send(StorageMsg::StoreTransactions { transactions })
             .await?;
@@ -251,28 +276,6 @@ where
             .map(|bytes| decode_stored_block(&bytes))
             .transpose()
             .map_err(Into::into)
-    }
-
-    pub async fn remove_block(&self, id: HeaderId) -> Result<Option<Block<Tx>>, DynError> {
-        let bytes = self
-            .request(|response_tx| StorageMsg::RemoveBlock {
-                header_id: id,
-                response_tx,
-            })
-            .await?;
-        bytes
-            .map(|bytes| decode_stored_block(&bytes))
-            .transpose()
-            .map_err(Into::into)
-    }
-
-    pub async fn remove_blocks(
-        &self,
-        ids: impl Iterator<Item = HeaderId>,
-    ) -> impl Iterator<Item = Result<Option<Block<Tx>>, DynError>> {
-        join_all(ids.map(|id| self.remove_block(id)))
-            .await
-            .into_iter()
     }
 }
 
