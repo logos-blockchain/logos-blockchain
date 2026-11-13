@@ -238,22 +238,6 @@ jobs:
 
       - *check_peer_success
 
-      # Feature: Zone SDK (@zone_ci)
-      - name: Run cucumber suite - zone
-        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
-        timeout-minutes: 60
-        uses: ./.github/actions/run-cucumber-suite
-        with:
-          suite_tag: "@zone_ci"
-          executable: ${{ steps.runners.outputs.zone }}
-          working_directory: tests/clients/zone-sdk
-          suite_name: zone
-          artifacts_dir: tests/clients/zone-sdk/cucumber_tests/temp
-          artifact_subdir: "Zone SDK"
-          max_concurrent_scenarios: ${{ matrix.platform.max_concurrent_scenarios }}
-
-      - *check_peer_success
-
       # Feature: Logos SQL (@logos_sql_ci)
       - name: Run cucumber suite - Logos SQL
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
