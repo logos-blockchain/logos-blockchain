@@ -46,11 +46,11 @@ where
         for _ in 0..len {
             let (next, item) = T::decode(rest, context)?;
 
-            // If we decode once without consuming any input bail out to avoid hanging for
-            // too long.
-            // TODO: This logic can be made a compile-time check once generics become more
-            // powerful and we get const generics expressions. For now, we just check it at
-            // runtime.
+            // If we decode once without consuming any input bail out to avoid
+            // hanging for too long.
+            // TODO: This logic can be made a compile-time check once generics
+            // become more powerful and we get const generics
+            // expressions. For now, we just check it at runtime.
             if next.len() == rest.len() && MAX > ZERO_LENGTH_ELEMENT_MAX {
                 return Err(DecodeError::zero_length_element::<T>(
                     MAX,
@@ -221,7 +221,8 @@ mod tests {
         let original: U16Codec = U16Codec::new_unchecked(vec![0x0102, 0x0304, 0xABCD]);
 
         let bytes = original.encode_to_vec();
-        // 1-byte length prefix (3) (MAX == 4) followed by three little-endian `u16`s.
+        // 1-byte length prefix (3) (MAX == 4) followed by three little-endian
+        // `u16`s.
         assert_eq!(bytes, vec![3, 0x02, 0x01, 0x04, 0x03, 0xCD, 0xAB]);
 
         let (rest, decoded) = U16Codec::decode(&bytes).unwrap();

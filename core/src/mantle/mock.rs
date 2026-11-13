@@ -40,8 +40,8 @@ impl<M: Serialize + DeserializeOwned + Clone> MockTransaction<M> {
 }
 
 impl<M: Serialize + DeserializeOwned + Clone> Hashable for MockTransaction<M> {
-    //noinspection RsTypeCheck: The type is correct, but the linter is confused by
-    // the closure.
+    //noinspection RsTypeCheck: The type is correct, but the linter is confused
+    // by the closure.
     const HASHER: Hasher<Self> = Self::id;
     type Hash = MockTxId;
 

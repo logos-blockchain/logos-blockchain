@@ -59,7 +59,8 @@ pub fn from_logos_yaml(source: &str) -> Result<String, DynError> {
         }
     }
 
-    // Nimbos validates its native schema; preserve everything we do not translate.
+    // Nimbos validates its native schema; preserve everything we do not
+    // translate.
     Ok(serde_yaml::to_string(&output)?)
 }
 
@@ -85,7 +86,8 @@ mod tests {
     use super::from_logos_yaml;
 
     // Structural fixture for conversion, not a runnable genesis. Cryptographic
-    // values are opaque here: the adapter must preserve them, not recompute them.
+    // values are opaque here: the adapter must preserve them, not recompute
+    // them.
     const LOGOS_INPUT: &str = "
 # Settings outside the translated fields must also survive conversion.
 additional_settings: { value: preserved }

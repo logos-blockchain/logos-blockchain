@@ -197,11 +197,11 @@ where
         // accepting what it is not being read. libp2p-quic's default receive
         // window is 10 MB per stream, which at Blend's frame size is some five
         // hundred unread messages — twenty-five rounds of share — so a node
-        // would go on absorbing at full rate long after it stopped reading. The window
-        // is instead sized to a few rounds of one connection's share: enough
-        // that a neighbour sending at the rate the protocol expects never
-        // stalls, and that the `η` rounds it may hold a message for are not
-        // spent waiting on flow control.
+        // would go on absorbing at full rate long after it stopped reading. The
+        // window is instead sized to a few rounds of one connection's
+        // share: enough that a neighbour sending at the rate the
+        // protocol expects never stalls, and that the `η` rounds it may
+        // hold a message for are not spent waiting on flow control.
         let (dns_config, dns_options) = system_dns_config();
         let mut swarm = SwarmBuilder::with_existing_identity(keypair)
             .with_tokio()
@@ -226,8 +226,9 @@ where
             })
             .expect("Blend Behaviour should be built")
             .with_swarm_config(|cfg| {
-                // The idle timeout starts ticking once there are no active streams on a
-                // connection. We want the connection to be closed as soon as
+                // The idle timeout starts ticking once there are no active
+                // streams on a connection. We want the
+                // connection to be closed as soon as
                 // all streams are dropped.
                 cfg.with_idle_connection_timeout(Duration::ZERO)
             })
@@ -271,8 +272,8 @@ where
 
         let negotiated_peers = self.behaviour().blend.with_core().negotiated_peers().keys();
 
-        // We need to clone else we would not be able to call `self.dial` below, which
-        // requires access to `&mut self`.
+        // We need to clone else we would not be able to call `self.dial` below,
+        // which requires access to `&mut self`.
         let current_membership = self.current_epoch_info.membership.clone();
 
         let exclude_peers: HashSet<PeerId> = negotiated_peers
@@ -303,18 +304,20 @@ where
 
         let no_more_peers_to_dial = peers_to_dial.peek().is_none();
 
-        // When no membership peer is eligible to be dialed but we still have peers
-        // we gave up on earlier in this dial cycle (the exhausted ones, or
-        // `except`), we want to clear that memory and retry the whole membership
-        // from scratch. Rather than doing so immediately — which spins at
-        // event-loop speed when every peer keeps rejecting us (e.g. a node locked
-        // out after an epoch transition because all peers are already at their
-        // maximum peering degree) — we schedule a single delayed retry. When there
-        // are none, there is genuinely nobody left to dial (everyone is already
-        // negotiated, in-flight, or blocked), so we stop.
-        // Peers abandoned as unrecoverable count as "tried this cycle" too:
-        // without them a membership made entirely of undialable peers would
-        // look like "nobody left to dial" and stop silently.
+        // When no membership peer is eligible to be dialed but we still have
+        // peers we gave up on earlier in this dial cycle (the exhausted
+        // ones, or `except`), we want to clear that memory and retry
+        // the whole membership from scratch. Rather than doing so
+        // immediately — which spins at event-loop speed when every peer
+        // keeps rejecting us (e.g. a node locked out after an epoch
+        // transition because all peers are already at their
+        // maximum peering degree) — we schedule a single delayed retry. When
+        // there are none, there is genuinely nobody left to dial
+        // (everyone is already negotiated, in-flight, or blocked), so
+        // we stop. Peers abandoned as unrecoverable count as "tried
+        // this cycle" too: without them a membership made entirely of
+        // undialable peers would look like "nobody left to dial" and
+        // stop silently.
         let gave_up_on_peers = !except.is_empty()
             || self
                 .peer_dials
@@ -440,8 +443,8 @@ where
     fn retry_or_give_up(&mut self, peer_id: PeerId, attempt: DialAttempt) {
         // Blacklisting a peer closes the connection this node was still shaking
         // hands on, and a connection with a refused peer is refused once
-        // established, both of which surface here as a dial failure. Do not retry
-        // with that peer anymore.
+        // established, both of which surface here as a dial failure. Do not
+        // retry with that peer anymore.
         if self.is_peer_refused(&peer_id) {
             tracing::debug!(target: LOG_TARGET, "Not retrying refused peer {peer_id:?}. Dialing another peer instead.");
             self.check_and_dial_new_peers();
@@ -554,8 +557,8 @@ where
         self.check_and_dial_new_peers_except(&HashSet::from([peer_id]));
     }
 
-    // Report metrics and log. Re-connections are handled once the blacklisted peer
-    // is actually disconnected.
+    // Report metrics and log. Re-connections are handled once the blacklisted
+    // peer is actually disconnected.
     fn handle_blacklisted_peer(&self, peer_id: PeerId, reason: BlacklistReason) {
         tracing::debug!(target: LOG_TARGET, "Blacklisted peer {peer_id:?} for reason {reason:?}.");
         metrics::core_peer_blacklisted(reason);
@@ -701,8 +704,8 @@ where
                     target: LOG_TARGET,
                     "Dialing error for peer: {peer_id:?} on connection: {connection_id:?}. Error: {error:?}"
                 );
-                // We don't retry if `peer_id` is `None` or if we've achieved the maximum number
-                // of retries for this peer.
+                // We don't retry if `peer_id` is `None` or if we've achieved
+                // the maximum number of retries for this peer.
                 let Some(peer_id) = peer_id else {
                     self.check_and_dial_new_peers();
                     return;
@@ -995,8 +998,9 @@ where
             .with_core_mut()
             .publish_message_with_validated_header(msg, epoch)
         {
-            // `InvalidEpoch` is expected: the message is verified off-task, so its
-            // epoch can stop being served before the outcome comes back.
+            // `InvalidEpoch` is expected: the message is verified off-task, so
+            // its epoch can stop being served before the outcome
+            // comes back.
             match &e {
                 SendError::InvalidEpoch => {
                     tracing::trace!(target: LOG_TARGET, "Dropping message received from an edge node for epoch {epoch:?}, which is no longer served.");
@@ -1030,12 +1034,14 @@ where
             .with_core_mut()
             .forward_message_with_verified_public_header(msg, except, epoch)
         {
-            // If we have a single connection, then we will always hit the `NoPeers` error.
-            // In this case it's ok not to log such error, since this function is only
-            // called on FORWARDED messages, not on PUBLISHED ones, for which we want to
-            // know if that is the issue. `InvalidEpoch` is expected too: verification
-            // runs off this task, so the epoch transition the message belonged to can
-            // complete before the result comes back.
+            // If we have a single connection, then we will always hit the
+            // `NoPeers` error. In this case it's ok not to log such
+            // error, since this function is only
+            // called on FORWARDED messages, not on PUBLISHED ones, for which we
+            // want to know if that is the issue. `InvalidEpoch` is
+            // expected too: verification runs off this task, so the
+            // epoch transition the message belonged to can complete
+            // before the result comes back.
             if !matches!(e, SendError::NoPeers | SendError::InvalidEpoch) {
                 Self::log_blend_send_failure(
                     epoch,
@@ -1085,10 +1091,12 @@ where
     fn handle_blend_edge_behaviour_event(&mut self, blend_event: CoreToEdgeEvent) {
         match blend_event {
             lb_blend::network::core::with_edge::behaviour::Event::Message { message, epoch } => {
-                // The epoch is the one the message was verified under, which is not
-                // necessarily the current one, so it is used for both the peers it goes
-                // to and the processor the service decapsulates it with.
-                // Forward message received from edge node to all the core nodes.
+                // The epoch is the one the message was verified under, which is
+                // not necessarily the current one, so it is
+                // used for both the peers it goes to and the
+                // processor the service decapsulates it with.
+                // Forward message received from edge node to all the core
+                // nodes.
                 self.publish_received_edge_message(&message, epoch);
                 // Bubble up to service for decapsulation and delaying.
                 self.report_message_to_service(message, epoch, metrics::InboundMessageType::Edge);

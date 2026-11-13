@@ -95,8 +95,8 @@ impl MantleTxBuilder {
         self.extend_ops([op])
     }
 
-    // TODO: Change this to a `Result` if trying to push too many ops in the genesis
-    // block.
+    // TODO: Change this to a `Result` if trying to push too many ops in the
+    // genesis block.
     pub fn extend_ops(mut self, ops: impl IntoIterator<Item = Op>) -> Result<Self, TxBuilderError> {
         for op in ops {
             self.ops
@@ -312,8 +312,8 @@ impl MantleTxBuilder {
         &self.channel_multi_sig_proofs
     }
 
-    // TODO: Change this to a `Result` if genesis tx already contains max number of
-    // ops.
+    // TODO: Change this to a `Result` if genesis tx already contains max number
+    // of ops.
     /// The transaction, to be signed under the fork digest `fork_digest`,
     /// with the pending transfer as its last operation.
     pub fn build(mut self, fork_digest: ForkDigest) -> Result<Ops, TxBuilderError> {

@@ -57,8 +57,9 @@ pub fn spawn_poq_verification<Verifier>(
     let sender_signing_key = *message.signing_key();
     pending_verifications.push(Box::pin(async move {
         let verification_result = spawn_blocking("logos/blend/verify-poq", move || {
-            // The verification error is rendered here because it is not `Send`, so it
-            // cannot cross back to the task polling this behaviour as-is.
+            // The verification error is rendered here because it is not `Send`,
+            // so it cannot cross back to the task polling this
+            // behaviour as-is.
             message
                 .verify_proof_of_quota(&*verifier)
                 .map_err(|e| format!("{e:?}"))

@@ -1,7 +1,7 @@
 use core::{
     error,
     fmt::{self, Display, Formatter},
-    mem::{self},
+    mem,
     num::{NonZeroU64, NonZeroU128, NonZeroUsize},
     time::Duration,
 };
@@ -955,12 +955,13 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         (peer_id, connection_id): (PeerId, ConnectionId),
         direction: ConnectionDirection,
     ) {
-        // We need to check if we still have available connection slots, as it is
-        // possible, especially upon epoch transition, that more than the maximum
-        // allowed number of peers are trying to connect to us. So once the stream is
-        // actually upgraded, we downgrade it again if we do not have space left for it.
-        // By not adding the new connection to the map of negotiated peers, the swarm
-        // will not be notified about this dropped connection, which is what we want.
+        // We need to check if we still have available connection slots, as it
+        // is possible, especially upon epoch transition, that more than
+        // the maximum allowed number of peers are trying to connect to
+        // us. So once the stream is actually upgraded, we downgrade it
+        // again if we do not have space left for it. By not adding the
+        // new connection to the map of negotiated peers, the swarm will
+        // not be notified about this dropped connection, which is what we want.
         // Only an accepted connection can have lost its room since it was
         // admitted: this node opens one only when a slot is free, and holds
         // that slot for as long as the handshake runs.
@@ -1021,8 +1022,9 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
                 )
             });
         if existing_connection.direction == new_direction {
-            // Same connection direction (in case it was not caught at connection
-            // establishment time), we ignore the new connection.
+            // Same connection direction (in case it was not caught at
+            // connection establishment time), we ignore the new
+            // connection.
             self.handle_connected_peer_duplicate_connection(
                 (peer_id, new_connection_id),
                 new_direction,
@@ -1071,14 +1073,14 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
                     "Currently established connection with peer {peer_id:?} not found in storage of established connections.",
                 )
             });
-        // If the current connection is incoming, we close it if our peer ID is higher
-        // than theirs.
+        // If the current connection is incoming, we close it if our peer ID is
+        // higher than theirs.
         tracing::trace!(target: LOG_TARGET, "Connection with already connected peer {peer_id:?} found with the following details: {existing_connection_details:?}.");
         let should_close_established = if existing_connection_details.direction.is_incoming() {
             self.local_peer_id.to_base58() > peer_id.to_base58()
         } else {
-            // If the current connection is outgoing, we close it if our peer ID is lower
-            // than theirs.
+            // If the current connection is outgoing, we close it if our peer ID
+            // is lower than theirs.
             self.local_peer_id.to_base58() <= peer_id.to_base58()
         };
 
@@ -1099,8 +1101,8 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             self.close_connection(existing_connection, CloseReason::ReverseDirectionPreferred);
             self.notify_about_connection_upgrade_success(peer_id, existing_connection_direction);
         } else {
-            // Notify the new connection handler to drop the substreams, and we do not
-            // alter the storage.
+            // Notify the new connection handler to drop the substreams, and we
+            // do not alter the storage.
             self.close_connection(
                 (peer_id, new_connection_id),
                 CloseReason::ReverseDirectionPreferred,
@@ -1204,8 +1206,8 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             .insert_or_extend(peer_id, reason, self.current_round);
         self.close_every_connection_with(&peer_id);
 
-        // We need to not re-report the peer as blacklisted if it's just an extension of
-        // an existing entry.
+        // We need to not re-report the peer as blacklisted if it's just an
+        // extension of an existing entry.
         if !outcome.is_first_offence() {
             return;
         }
@@ -1413,9 +1415,10 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
                 sender,
                 epoch,
             } => {
-                // Only now that the `PoQ` has verified may the message claim its
-                // nullifier in the cache, so a copy arriving later is not verified
-                // again. It goes into the cache of the epoch it verified against.
+                // Only now that the `PoQ` has verified may the message claim
+                // its nullifier in the cache, so a copy
+                // arriving later is not verified again. It goes
+                // into the cache of the epoch it verified against.
                 if epoch == self.current_epoch_info.1 {
                     self.message_cache.mark_message_as_processed(&message);
                 } else if let Some(old_epoch) = &mut self.old_epoch
@@ -1491,8 +1494,9 @@ where
             // No matter what error it is, we can attribute it to the sender, so
             // we blacklist it.
             self.blacklist_peer(from_peer_id, receive_error.into());
-            // Nevertheless, bytes that did not amount to a message are not a delivery: a
-            // neighbour cannot hold its slot by sending garbage.
+            // Nevertheless, bytes that did not amount to a message are not a
+            // delivery: a neighbour cannot hold its slot by sending
+            // garbage.
             return false;
         }
 
@@ -1539,24 +1543,26 @@ where
     ) -> Result<THandler<Self>, ConnectionDenied> {
         if let Some(refusal) = self.refusal_reason(&peer_id) {
             tracing::debug!(target: LOG_TARGET, "Inbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded: {refusal}.");
-            // We don't return a dummy handler, which relies on the swarm timeout
-            // configuration to close the connection. We prevent the connection from being
-            // established at all.
+            // We don't return a dummy handler, which relies on the swarm
+            // timeout configuration to close the connection. We
+            // prevent the connection from being established at all.
             return Err(ConnectionDenied::new(refusal));
         }
 
-        // A connection offered above either bound is refused: the maximum the node
-        // holds at all, and the share of that maximum it lets other nodes fill.
+        // A connection offered above either bound is refused: the maximum the
+        // node holds at all, and the share of that maximum it lets
+        // other nodes fill.
         if !self.can_accept_connection() {
             tracing::trace!(target: LOG_TARGET, "Inbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded since we are already holding as many connections as we accept.");
             return Ok(Either::Right(DummyConnectionHandler));
         }
 
         // If there is already an established or pending inbound connection with
-        // the given peer, do not try to upgrade the new one as we already have an
-        // inbound connection. Otherwise, we let the connection upgrade, and we will
-        // close one of the two connections depending on the comparison result of
-        // local and remote peer IDs.
+        // the given peer, do not try to upgrade the new one as we already have
+        // an inbound connection. Otherwise, we let the connection
+        // upgrade, and we will close one of the two connections
+        // depending on the comparison result of local and remote peer
+        // IDs.
         if self.has_connection_with_peer(&peer_id, ConnectionDirection::Incoming) {
             tracing::trace!(target: LOG_TARGET, "Inbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded since there is already an inbound connection established or pending.");
             return Ok(Either::Right(DummyConnectionHandler));
@@ -1608,15 +1614,15 @@ where
     ) -> Result<THandler<Self>, ConnectionDenied> {
         if let Some(refusal) = self.refusal_reason(&peer_id) {
             tracing::debug!(target: LOG_TARGET, "Outbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded: {refusal}.");
-            // We don't return a dummy handler, which relies on the swarm timeout
-            // configuration to close the connection. We prevent the connection from being
-            // established at all.
+            // We don't return a dummy handler, which relies on the swarm
+            // timeout configuration to close the connection. We
+            // prevent the connection from being established at all.
             return Err(ConnectionDenied::new(refusal));
         }
 
-        // Only the overall maximum applies to a connection the node opened itself:
-        // the share reserved for accepted connections exists to protect this
-        // direction, not to limit it.
+        // Only the overall maximum applies to a connection the node opened
+        // itself: the share reserved for accepted connections exists to
+        // protect this direction, not to limit it.
         if self.available_connection_slots() == 0 {
             tracing::trace!(target: LOG_TARGET, "Outbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded since we are already at maximum peering capacity.");
             return Ok(self.refuse_outgoing_connection_attempt(
@@ -1625,10 +1631,11 @@ where
             ));
         }
 
-        // If there is already an established outbound connection with the given peer,
-        // do not try to upgrade the new one as we already have an outbound connection.
-        // Otherwise, we let the connection upgrade, and we will close one of the two
-        // connections depending on the comparison result of local and remote peer IDs.
+        // If there is already an established outbound connection with the given
+        // peer, do not try to upgrade the new one as we already have an
+        // outbound connection. Otherwise, we let the connection
+        // upgrade, and we will close one of the two connections
+        // depending on the comparison result of local and remote peer IDs.
         if self.has_connection_with_peer(&peer_id, ConnectionDirection::Outgoing) {
             tracing::trace!(target: LOG_TARGET, "Outbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded since there is already an outbound connection established.");
             return Ok(self.refuse_outgoing_connection_attempt(
@@ -1724,9 +1731,10 @@ where
 
             if negotiated_connection_id == connection_id {
                 peer_details_entry.remove();
-                // A neighbour this node closed for not being live starts its count
-                // over, after its refusal. One that dropped the connection itself
-                // resumes where it left off instead.
+                // A neighbour this node closed for not being live starts its
+                // count over, after its refusal. One that
+                // dropped the connection itself resumes where
+                // it left off instead.
                 if self
                     .not_live_refusals
                     .is_refused_at(&peer_id, self.current_round)
@@ -1815,7 +1823,8 @@ where
 
         // Verifications complete off this task, so their outcome is picked up
         // here: this is where a message becomes visible to the swarm, and hence
-        // relayable, and where a peer that failed to prove its quota is dropped.
+        // relayable, and where a peer that failed to prove its quota is
+        // dropped.
         while let Poll::Ready(Some(outcome)) = self.pending_poq_verifications.poll_next_unpin(cx) {
             self.handle_poq_verification_outcome(outcome);
             if let Some(event) = self.events.pop_front() {

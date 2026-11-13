@@ -200,9 +200,10 @@ impl WalletState {
                     service_notes = service_notes.insert(note_id);
                 }
 
-                // A channel note keeps the depositor's key but is owned by the channel:
-                // keep it in `utxos` so it stays eligible for PoL,
-                // and mark it so wallet-driven spending gates it out.
+                // A channel note keeps the depositor's key but is owned by the
+                // channel: keep it in `utxos` so it stays
+                // eligible for PoL, and mark it so
+                // wallet-driven spending gates it out.
                 if channels.is_channel_note(&note_id) {
                     channel_notes = channel_notes.insert(note_id);
                 }
@@ -245,7 +246,8 @@ impl WalletState {
         excluded_notes: &HashSet<NoteId>,
         priority_fee_percent: u64,
     ) -> Result<MantleTxBuilder, WalletError> {
-        // Get all UTXOs owned by the provided PKs, excluding the following notes:
+        // Get all UTXOs owned by the provided PKs, excluding the following
+        // notes:
         // - Notes that are being consumed/locked by the tx
         // - Notes that are already service notes in Ledger
         // - Notes currently owned by a channel (deposited)
@@ -306,9 +308,11 @@ impl WalletState {
                     return Ok(funded_tx_builder);
                 }
                 Ordering::Greater => {
-                    // We have enough balance, but we need to introduce a change note.
-                    // The change note will slightly increase the storage cost of the tx so there is
-                    // a chance that we will not be able to fund the tx with the change note.
+                    // We have enough balance, but we need to introduce a change
+                    // note. The change note will slightly
+                    // increase the storage cost of the tx so there is
+                    // a chance that we will not be able to fund the tx with the
+                    // change note.
                     if let Some(tx_with_change) =
                         funded_tx_builder.return_change(context, change_pk, priority_fee_percent)?
                     {
@@ -361,8 +365,9 @@ impl WalletState {
         for op in &block.header_ops {
             match op {
                 HeaderOp::Unlock(note_id) => {
-                    // When unlocking notes, we don't check if the notes are owned
-                    // by the wallet because they will be ignored automatically.
+                    // When unlocking notes, we don't check if the notes are
+                    // owned by the wallet because they will
+                    // be ignored automatically.
                     service_notes.remove_mut(note_id);
                 }
                 HeaderOp::SdpReward(utxo) => {
@@ -371,13 +376,15 @@ impl WalletState {
             }
         }
 
-        // Apply each tx & op in source order, as the same as how ledger processes them.
+        // Apply each tx & op in source order, as the same as how ledger
+        // processes them.
         for tx in &block.txs {
             for op in &tx.ops {
                 match op {
                     WalletOp::Transfer(transfer) => {
-                        // When removing spent notes, we don't check if the notes are owned
-                        // by the wallet because they will be ignored automatically.
+                        // When removing spent notes, we don't check if the
+                        // notes are owned by the wallet
+                        // because they will be ignored automatically.
                         for input_id in transfer.inputs.iter() {
                             remove_spent_utxo(input_id, &mut utxos, &mut pk_index);
                         }
@@ -386,9 +393,11 @@ impl WalletState {
                         }
                     }
                     WalletOp::ChannelDeposit(op) => {
-                        // The deposit consumes its inputs and re-creates them as channel notes
-                        // under a new NoteId, so drop the inputs and insert the re-created notes.
-                        // They keep the same key, so they're still eligible for PoL.
+                        // The deposit consumes its inputs and re-creates them
+                        // as channel notes under a new
+                        // NoteId, so drop the inputs and insert the re-created
+                        // notes. They keep the same
+                        // key, so they're still eligible for PoL.
                         for (output_index, input) in op.inputs.iter().enumerate() {
                             let note = utxos.get(input).map(|utxo| utxo.note);
                             remove_spent_utxo(input, &mut utxos, &mut pk_index);
@@ -412,8 +421,9 @@ impl WalletState {
                         }
                     }
                     WalletOp::ChannelWithdraw(op) => {
-                        // Drop the channel-note marker so they're spendable again.
-                        // They still stay in `utxos`.
+                        // Drop the channel-note marker so they're spendable
+                        // again. They still stay in
+                        // `utxos`.
                         for input_id in op.inputs.iter() {
                             channel_notes.remove_mut(input_id);
                         }
@@ -472,7 +482,8 @@ impl WalletState {
         };
 
         // Filter out vouchers that have been claimed/finalized.
-        // `known_vouchers` always reflects the latest set of vouchers to be tracked.
+        // `known_vouchers` always reflects the latest set of vouchers to be
+        // tracked.
         let (cms, mut paths): (Vec<VoucherCm>, Vec<MerklePath>) = self
             .voucher_paths
             .iter()
@@ -1117,7 +1128,8 @@ mod tests {
         // v1 is tracked but not yet claimable (no epoch transition yet)
         assert_tracked_but_not_snapshotted_voucher(&wallet, block_1.id, &v1_cm);
 
-        // Block 2 (epoch 2) -- epoch transition snapshots v1's path as claimable
+        // Block 2 (epoch 2) -- epoch transition snapshots v1's path as
+        // claimable
         //  - alice spends 100 NMO utxo, sending 20 NMO to bob and 80 to herself
         // - voucher v2 is ours -> should be tracked
         let alice_100_nmo_utxo = transfer1.outputs.utxo_by_index(0, &transfer1).unwrap();
@@ -1153,7 +1165,8 @@ mod tests {
         // v2 is ours, but not yet snapshotted
         assert_tracked_but_not_snapshotted_voucher(&wallet, block_2.id, &v2_cm);
 
-        // Query the balance of for each pk at different points in the blockchain
+        // Query the balance of for each pk at different points in the
+        // blockchain
         assert_eq!(wallet.balance(genesis, alice).unwrap(), None);
         assert_eq!(wallet.balance(genesis, bob).unwrap(), None);
 
@@ -1173,8 +1186,9 @@ mod tests {
         );
 
         // Block 3 (still, epoch 2)
-        // - alice deposits the 80 NMO note into a channel. The note stays in the wallet
-        //   (still eligible for PoL) but is marked as a channel note.
+        // - alice deposits the 80 NMO note into a channel. The note stays in
+        //   the wallet (still eligible for PoL) but is marked as a channel
+        //   note.
         // - voucher v3 is not ours -> should not be tracked
         let alice_80_nmo_utxo = transfer2.outputs.utxo_by_index(1, &transfer2).unwrap();
 
@@ -1366,8 +1380,9 @@ mod tests {
     //     let genesis = HeaderId::from([0; 32]);
     //     let ledger = LedgerState::from_utxos([], &ledger_config());
     //     let (voucher_cm, _voucher_nf) = voucher(1, 0);
-    //     let alice_withdraw_utxo = Utxo::new(tx_hash(1), 0, Note::new(42, alice));
-    //     let bob_withdraw_utxo = Utxo::new(tx_hash(1), 1, Note::new(7, bob));
+    //     let alice_withdraw_utxo = Utxo::new(tx_hash(1), 0, Note::new(42,
+    // alice));     let bob_withdraw_utxo = Utxo::new(tx_hash(1), 1,
+    // Note::new(7, bob));
     //
     //     let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
     //         [(alice, 1)],
@@ -1460,7 +1475,8 @@ mod tests {
 
         let mut wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
-        // Lock `utxo1` deliberately to ensure that `fund_tx` excludes service notes
+        // Lock `utxo1` deliberately to ensure that `fund_tx` excludes service
+        // notes
         wallet_state.service_notes = wallet_state.service_notes.insert(utxo1.id());
 
         let context = OpsContext {
@@ -1626,7 +1642,8 @@ mod tests {
         // 5000) and therefore no change note was added.
         assert_eq!(0, funded_tx_builder.net_balance());
 
-        // The empty transfer is dropped, so the built tx carries no transfer op.
+        // The empty transfer is dropped, so the built tx carries no transfer
+        // op.
         let funded_tx = funded_tx_builder.build(FORK_DIGEST).unwrap();
         assert!(
             !funded_tx.iter().any(|op| matches!(op, Op::Transfer(_))),
@@ -1723,7 +1740,8 @@ mod tests {
 
         let mut wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
-        // Lock `utxo` deliberately to ensure that `fund_tx` excludes service notes
+        // Lock `utxo` deliberately to ensure that `fund_tx` excludes service
+        // notes
         wallet_state.service_notes = wallet_state.service_notes.insert(utxo.id());
 
         // Use non-zero gas prices so the transaction actually owes a fee and
@@ -1815,8 +1833,8 @@ mod tests {
                 .into_inner()
         );
 
-        // We can fund the tx if the note value is exactly the gas cost without change
-        // note
+        // We can fund the tx if the note value is exactly the gas cost without
+        // change note
         let wallet_state = WalletState::from_ledger(
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(
@@ -1856,8 +1874,8 @@ mod tests {
 
         for value in 787..=826 {
             // this region of note values will fail to fund the tx.
-            // We can fund the tx if the note value is exactly the gas cost without change
-            // note
+            // We can fund the tx if the note value is exactly the gas cost
+            // without change note
             let wallet_state = WalletState::from_ledger(
                 &HashMap::from_iter([(alice, 1)]),
                 &LedgerState::from_utxos(
@@ -1877,7 +1895,8 @@ mod tests {
             );
         }
 
-        // We can fund the tx if the note value exceeds gas cost with change note
+        // We can fund the tx if the note value exceeds gas cost with change
+        // note
         let wallet_state = WalletState::from_ledger(
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(

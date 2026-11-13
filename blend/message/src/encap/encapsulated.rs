@@ -366,16 +366,17 @@ impl EncapsulatedPrivateHeader {
     }
 
     // Randomize the private header, then fill the last `inputs.len()` blending
-    // headers in the reconstructable way, so that the corresponding signatures can
-    // be verified later. Plus, encapsulate those last `inputs.len()` headers.
+    // headers in the reconstructable way, so that the corresponding signatures
+    // can be verified later. Plus, encapsulate those last `inputs.len()`
+    // headers.
     //
     // The private header always holds `num_layers` (`ß_max`) blending headers,
     // however many times the message is actually encapsulated. When the sender
     // encapsulates fewer times, the leading `ß_max - inputs.len()` headers are
     // filled with non-reconstructable random bytes, so the encapsulation count
     // leaks neither through the message size (constant) nor through the header
-    // contents. This follows steps 2-4 of the Message Initialization section of the
-    // spec: <https://github.com/logos-co/logos-lips/blob/master/docs/blockchain/raw/message-encapsulation.md>.
+    // contents. This follows steps 2-4 of the Message Initialization section of
+    // the spec: <https://github.com/logos-co/logos-lips/blob/master/docs/blockchain/raw/message-encapsulation.md>.
     //
     // Example: for `num_layers` 3 and 2 inputs,
     // BlendingHeaders[0]: RANDOM
@@ -383,9 +384,10 @@ impl EncapsulatedPrivateHeader {
     // BlendingHeaders[2]:               Enc(inputs[0], RND(inputs[0]))
     //
     // Notation:
-    // - RANDOM: Pseudo-random bytes generated from fresh entropy, reconstructable
-    //   by nobody
-    // - RND(seed): Pseudo-random bytes generated from `seed` with the `HEADER` DST
+    // - RANDOM: Pseudo-random bytes generated from fresh entropy,
+    //   reconstructable by nobody
+    // - RND(seed): Pseudo-random bytes generated from `seed` with the `HEADER`
+    //   DST
     // - Enc(key, data): Encrypt `data` by XOR-ing with RND(key)
     fn from_inputs(inputs: &[EncapsulationInput], num_layers: usize) -> Self {
         let unused_layers = num_layers.saturating_sub(inputs.len());
@@ -420,8 +422,8 @@ impl EncapsulatedPrivateHeader {
     }
 
     /// Encapsulates the private header.
-    // TODO: Use two different types for encapsulated and unencapsulated blending
-    // headers?
+    // TODO: Use two different types for encapsulated and unencapsulated
+    // blending headers?
     fn encapsulate(
         mut self,
         shared_key: &SharedKey,
@@ -436,8 +438,8 @@ impl EncapsulatedPrivateHeader {
 
         // Replace the first blending header with the new one.
         // We don't distinguish between locally-generated (valid)
-        // `BlendingHeader`s and received (unverified) ones, so we use regular `PoQ` and
-        // `PoSel` instead of their verified counterparts.
+        // `BlendingHeader`s and received (unverified) ones, so we use regular
+        // `PoQ` and `PoSel` instead of their verified counterparts.
         self.replace_first(EncapsulatedBlendingHeader::initialize(&BlendingHeader {
             signing_pubkey,
             proof_of_quota: *proof_of_quota.as_ref(),
@@ -464,8 +466,8 @@ impl EncapsulatedPrivateHeader {
     where
         Verifier: ProofsVerifier,
     {
-        // We call a bunch of `.expect()`s in the following code, so we need to check we
-        // are dealing with a message with at least one layer.
+        // We call a bunch of `.expect()`s in the following code, so we need to
+        // check we are dealing with a message with at least one layer.
         if self.0.is_empty() {
             return Err(Error::EmptyEncapsulationInputs);
         }
@@ -494,7 +496,8 @@ impl EncapsulatedPrivateHeader {
                 Error::ProofOfSelectionVerificationFailed(selection::Error::Verification)
             })?;
 
-        // Build a new public header with the values in the first blending header.
+        // Build a new public header with the values in the first blending
+        // header.
         let public_header = PublicHeader::new(signing_pubkey, &proof_of_quota, signature);
 
         // Shift blending headers one leftward.

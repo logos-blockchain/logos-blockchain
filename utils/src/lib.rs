@@ -183,8 +183,9 @@ pub mod serde {
         deserializer: D,
     ) -> Result<[u8; N], D::Error> {
         if deserializer.is_human_readable() {
-            // This path intentionally accepts both the hex string and byte-array
-            // representations, so it must dispatch through `deserialize_any`.
+            // This path intentionally accepts both the hex string and
+            // byte-array representations, so it must dispatch
+            // through `deserialize_any`.
             deserializer.deserialize_any(FixedBytesVisitor::<N>)
         } else {
             deserialize_human_unreadable_bytes_array(deserializer)

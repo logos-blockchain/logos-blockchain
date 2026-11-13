@@ -40,9 +40,10 @@ impl Signature {
 
 impl BinaryEncode for Signature {
     fn encoded_length(&self) -> usize {
-        // The compressed Groth16 proof is a fixed-size blob; return the constant
-        // rather than serializing the proof just to measure it (the trait
-        // contract requires `encoded_length` to neither allocate nor encode).
+        // The compressed Groth16 proof is a fixed-size blob; return the
+        // constant rather than serializing the proof just to measure it
+        // (the trait contract requires `encoded_length` to neither
+        // allocate nor encode).
         COMPRESSED_PROOF_SIZE
     }
 

@@ -74,9 +74,9 @@ pub fn prove(inputs: PoQWitnessInputs) -> Result<(PoQProof, PoQVerifierInput), P
     Ok((
         CompressedGroth16Proof::try_from(&proof).unwrap_or_else(|e| {
             error!(target: LOG_TARGET, "Fatal CompressedGroth16Proof::try_from: {e}");
-            // We panic here because this should never happen, and if it does, it's a
-            // critical error that we want to be immediately visible during
-            // development and testing.
+            // We panic here because this should never happen, and if it does,
+            // it's a critical error that we want to be immediately
+            // visible during development and testing.
             panic!("Fatal CompressedGroth16Proof::try_from: {e}")
         }),
         verifier_inputs
@@ -293,8 +293,8 @@ mod tests {
         // Test that verifying with the inputs returned by `prove` works.
         assert!(verify(&proof, inputs).unwrap());
 
-        // Test that verifying with the reconstructed inputs inside the verifier context
-        // works.
+        // Test that verifying with the reconstructed inputs inside the verifier
+        // context works.
         let recomputed_verify_inputs = PoQVerifierInputData {
             core_quota: common_data.core_quota,
             core_root: chain_data.core_root,
@@ -507,8 +507,8 @@ mod tests {
         // Test that verifying with the inputs returned by `prove` works.
         assert!(verify(&proof, inputs).unwrap());
 
-        // Test that verifying with the reconstructed inputs inside the verifier context
-        // works.
+        // Test that verifying with the reconstructed inputs inside the verifier
+        // context works.
         let recomputed_verify_inputs = PoQVerifierInputData {
             core_quota: common_data.core_quota,
             core_root: chain_data.core_root,
@@ -585,8 +585,8 @@ mod tests {
         // Test that verifying with the inputs returned by `prove` works.
         assert!(verify(&proof, inputs).unwrap());
 
-        // Test that verifying with the reconstructed inputs inside the verifier context
-        // works.
+        // Test that verifying with the reconstructed inputs inside the verifier
+        // context works.
         let recomputed_verify_inputs = PoQVerifierInputData {
             core_quota: common_data.core_quota,
             core_root: chain_data.core_root,

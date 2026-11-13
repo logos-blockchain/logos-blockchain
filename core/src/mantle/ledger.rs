@@ -316,7 +316,8 @@ impl Inputs {
         self.validate_uniqueness()?;
         self.validate_not_in_service_and_present(service_notes, utxos)?;
         for input in &self.0 {
-            // A channel note is owned by a channel and cannot be spent directly.
+            // A channel note is owned by a channel and cannot be spent
+            // directly.
             if channels.is_channel_note(input) {
                 return Err(InputsError::ChannelNote(*input));
             }

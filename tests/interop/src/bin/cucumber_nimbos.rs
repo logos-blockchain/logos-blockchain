@@ -2,7 +2,7 @@
 //!
 //! Set `NIMBOS_NODE_BIN` and `NIMBOS_CIRCUITS_DIR`, then run:
 //! ```text
-//! cargo run -p blockchain-test-interop --bin cucumber_nimbos \
+//! cargo run -p blockchain-test-interop --bin cucumber-nimbos \
 //!   -- --name '^Two nodes happy path$'
 //! ```
 //! The suite supplies shared network inputs. Genesis and API incompatibilities

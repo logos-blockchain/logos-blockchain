@@ -175,8 +175,8 @@ impl BehaviourBuilder {
         let round_duration = self
             .round_duration_in_seconds
             .unwrap_or_else(|| 1.try_into().unwrap());
-        // A window long enough that no connection in a test goes stale by accident.
-        // Tests that exercise liveness set their own.
+        // A window long enough that no connection in a test goes stale by
+        // accident. Tests that exercise liveness set their own.
         let liveness_window = self
             .liveness_window_in_rounds
             .unwrap_or_else(|| 1_000_000.try_into().unwrap());

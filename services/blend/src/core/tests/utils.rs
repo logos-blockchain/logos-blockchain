@@ -46,10 +46,7 @@ use overwatch::{
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
 use rayon::ThreadPoolBuilder;
-use tokio::sync::{
-    broadcast::{self},
-    mpsc, watch,
-};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 
 use crate::{
@@ -211,14 +208,15 @@ where
         new_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>,
         _new_era: Option<Era>,
     ) {
-        // Notify tests that the backend rotated to a new epoch, carrying the new
-        // epoch and membership size so tests can assert the new membership was
-        // propagated to the backend.
+        // Notify tests that the backend rotated to a new epoch, carrying the
+        // new epoch and membership size so tests can assert the new
+        // membership was propagated to the backend.
         let BackendEpochInfo {
             membership, epoch, ..
         } = new_epoch_info;
         // Ignore send errors: not all tests subscribe to backend events, and
-        // `rotate_epoch` is also called right before a retirement (no subscriber).
+        // `rotate_epoch` is also called right before a retirement (no
+        // subscriber).
         let _ = self.event_sender.send(TestBlendBackendEvent::EpochRotated {
             epoch,
             membership_size: membership.size(),

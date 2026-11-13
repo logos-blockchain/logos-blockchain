@@ -36,7 +36,7 @@ pub fn log_and_exit_hook(panic_info: &PanicHookInfo) {
         io::stderr(),
         "A panic occurred: {}{}",
         payload.unwrap_or("<non-string payload>"),
-        location.map(|l| format!(" at {l}")).unwrap_or_default()
+        location.map_or_default(|l| format!(" at {l}"))
     ));
 
     #[cfg(feature = "dhat-heap")]

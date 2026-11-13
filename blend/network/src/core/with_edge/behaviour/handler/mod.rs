@@ -158,10 +158,10 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
     }
 
     // We need this override because the Swarm is configured with a keepalive
-    // timeout of `0`, which causes connections with edge nodes to be dropped before
-    // there is even an active stream. So we manage the keepalive state ourselves,
-    // by marking the connection as stale if the connection handler is dropped for
-    // any reason.
+    // timeout of `0`, which causes connections with edge nodes to be dropped
+    // before there is even an active stream. So we manage the keepalive
+    // state ourselves, by marking the connection as stale if the connection
+    // handler is dropped for any reason.
     fn connection_keep_alive(&self) -> bool {
         !matches!(self.state, Some(ConnectionState::Dropped(_)))
     }

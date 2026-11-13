@@ -106,13 +106,12 @@ pub fn build_fee_horizon(
     epochs_headroom: u32,
     live_prices: GasPrices,
 ) -> Result<TransactionFeeHorizon, FeeProjectionError> {
-    let prepared_at_epoch =
-        Epoch::new(u32::try_from(slot / slots_per_epoch.get()).map_err(|_| {
-            FeeProjectionError::EpochOverflow {
-                prepared_at: Epoch::new(0),
-                headroom: epochs_headroom,
-            }
-        })?);
+    let prepared_at_epoch = Epoch::new(u32::try_from(slot / slots_per_epoch).map_err(|_| {
+        FeeProjectionError::EpochOverflow {
+            prepared_at: Epoch::new(0),
+            headroom: epochs_headroom,
+        }
+    })?);
     let valid_through_epoch = prepared_at_epoch
         .into_inner()
         .checked_add(epochs_headroom)

@@ -92,8 +92,8 @@ pub fn start_nodes_order_respecting_dependencies(
         }
     }
 
-    // Step 2: Iteratively find nodes whose peer dependencies are already included
-    // in the start list
+    // Step 2: Iteratively find nodes whose peer dependencies are already
+    // included in the start list
     while !remaining.is_empty() {
         let mut made_progress = false;
 
@@ -354,8 +354,8 @@ pub async fn start_node(
         })?;
     }
 
-    // All nodes are required to be network ready responsive, and bootstrap nodes
-    // must be `Mode::OnLine` for IBD of other peers to succeed
+    // All nodes are required to be network ready responsive, and bootstrap
+    // nodes must be `Mode::OnLine` for IBD of other peers to succeed
     if !immediate_start {
         let control = world.cluster.local_control()?;
         ensure_node_ready(

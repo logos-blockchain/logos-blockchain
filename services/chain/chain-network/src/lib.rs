@@ -399,8 +399,8 @@ where
         match initial_block_download_result {
             Ok(_) => {
                 info!(target: LOG_TARGET, "Initial Block Download completed successfully");
-                // Notify chain-service that IBD is complete so it can start the prolonged
-                // bootstrap timer
+                // Notify chain-service that IBD is complete so it can start the
+                // prolonged bootstrap timer
                 if let Err(e) = relays.cryptarchia().notify_ibd_completed().await {
                     error!(target: LOG_TARGET, "Failed to notify chain-service of IBD completion: {e:?}");
                 }
@@ -438,7 +438,8 @@ where
         // polling cadence / lag threshold from the era's active slot
         // coefficient `f`, every era's now so that one they can't be derived
         // for is reported at startup. In such an era, or when polling is
-        // disabled, the watchdog stays inert and slot ticks only drive the eras.
+        // disabled, the watchdog stays inert and slot ticks only drive the
+        // eras.
         let tip_poll_params = sync_config.tip_poll.enabled.then(|| {
             era_schedule.map(|era| {
                 match TipPollParams::derive(&sync_config.tip_poll, era.parameters.slot_activation_coeff) {
@@ -925,7 +926,8 @@ where
         Ok(None) => Ok(()),
         Err(err) => {
             error!(target: LOG_TARGET, err = ?err, "Failure when checking if block already processed");
-            // block processing is idempotent, so we can safely re-process a block
+            // block processing is idempotent, so we can safely re-process a
+            // block
             Ok(())
         }
     }
@@ -1111,8 +1113,8 @@ where
         error!(target: LOG_TARGET, err, "could not notify mempool of canonical chain update");
     }
 
-    // Notify the mempool to trigger evictions and release txs whose block became
-    // immutable.
+    // Notify the mempool to trigger evictions and release txs whose block
+    // became immutable.
     if let Err(err) = mempool
         .notify_processed_block(block_id, block_slot, lib_slot)
         .await
@@ -1373,7 +1375,8 @@ mod tests {
             verify_proposal_and_cache_rejected(&tampered, &mut orphan_downloader),
             Err(Error::InvalidSignature)
         ));
-        // check that the rejected block was not cached in the orphan downloader.
+        // check that the rejected block was not cached in the orphan
+        // downloader.
         assert!(!orphan_downloader.has_rejected_block(&block_id));
 
         verify_proposal_and_cache_rejected(&genuine, &mut orphan_downloader)
@@ -1444,8 +1447,8 @@ mod tests {
 
     /// A dummy leader proof carrying only `leader_key`
     fn leader_proof(leader_key: &Ed25519PublicKey) -> Groth16LeaderProof {
-        // Layout: `proof (128B) || entropy_contribution (32B) || leader_key (32B) ||
-        // voucher_cm (32B)`
+        // Layout: `proof (128B) || entropy_contribution (32B) || leader_key
+        // (32B) || voucher_cm (32B)`
         let bytes = [&[0u8; 160][..], leader_key.as_bytes(), &[0u8; 32]].concat();
         Groth16LeaderProof::decode_all(&bytes).expect("leader proof bytes must decode")
     }

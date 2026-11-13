@@ -232,7 +232,8 @@ impl ChannelState {
         let timeframe_elapsed = tip_sequencer_duration.checked_div(posting_timeframe); // None if timeframe == 0
 
         // Timeout-based rotation takes priority when timed out.
-        // Falls back to timeframe-based rotation, then to the current sequencer.
+        // Falls back to timeframe-based rotation, then to the current
+        // sequencer.
         let index = sequencers_timed_out
             .filter(|_| is_timed_out)
             .or(timeframe_elapsed)

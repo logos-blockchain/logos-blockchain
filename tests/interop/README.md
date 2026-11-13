@@ -65,7 +65,7 @@ the current adapter to its own repository also remains an option.
 
 ## External-runner CI smoke test
 
-The `cucumber_external_smoke` executable uses real Logos binaries through
+The `cucumber-external-smoke` executable uses real Logos binaries through
 `LocalImplementation::External`. Its factory uses the same prepared Logos app
 as the normal runner, without regenerating configuration or replacing keys and
 genesis.
@@ -80,7 +80,7 @@ scenario does not test block production.
 
 ```sh
 export LOGOS_BLOCKCHAIN_NODE_BIN=/path/to/logos-blockchain-node
-cargo run -p blockchain-test-interop --bin cucumber_external_smoke -- \
+cargo run -p blockchain-test-interop --bin cucumber-external-smoke -- \
   --name '^Two nodes connect at runtime$'
 ```
 
@@ -97,7 +97,7 @@ select an existing Cucumber scenario:
 ```sh
 export NIMBOS_NODE_BIN=/path/to/logos_chain_node
 export NIMBOS_CIRCUITS_DIR=/path/to/circuits
-cargo run -p blockchain-test-interop --bin cucumber_nimbos -- \
+cargo run -p blockchain-test-interop --bin cucumber-nimbos -- \
   --name '^Two nodes happy path$'
 ```
 

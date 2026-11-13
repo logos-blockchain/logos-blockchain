@@ -24,8 +24,9 @@ use crate::provers::{
 async fn pow_proof_generation() {
     // The `PoW` fixture and the core fixture do not share public inputs, so the
     // generator is built with the former and only its `PoW` branch is exercised
-    // here. Core and leadership generation is covered by the wrapped generator's
-    // own tests; `core_proofs_are_delegated` covers the delegation itself.
+    // here. Core and leadership generation is covered by the wrapped
+    // generator's own tests; `core_proofs_are_delegated` covers the
+    // delegation itself.
     let public_inputs = {
         let mut public_inputs = valid_proof_of_work_inputs(Quota::ONE);
         // The wrapped core generator starts proving as soon as it is built, and

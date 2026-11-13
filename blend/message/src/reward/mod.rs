@@ -210,7 +210,8 @@ mod tests {
 
         // Insert one more tokens.
         // Now,`total_core_quota` tokens have been collected.
-        // So, we can expect that always one of them can be picked as an activity proof.
+        // So, we can expect that always one of them can be picked as an
+        // activity proof.
         let signing_key: u8 = i.try_into().unwrap();
         let proof: u8 = i.try_into().unwrap();
         let token = blending_token(signing_key, proof, proof);

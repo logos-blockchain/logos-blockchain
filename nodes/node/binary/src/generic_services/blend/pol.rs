@@ -354,7 +354,8 @@ mod tests {
         keep_polling(&mut epochs).await;
         drop(epoch_info);
 
-        // No epoch follows, so the epochs end once the dropped one's scan stops.
+        // No epoch follows, so the epochs end once the dropped one's scan
+        // stops.
         let next_epoch = timeout(Duration::from_secs(5), epochs.next())
             .await
             .expect("Dropping the epoch should stop its scan.");

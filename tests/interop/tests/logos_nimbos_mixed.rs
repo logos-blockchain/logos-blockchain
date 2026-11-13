@@ -77,7 +77,8 @@ where
         .ok_or("missing Nimbos deployment")?;
     let peer_ids = [nimbos.peer_id(0)?, nimbos.peer_id(1)?];
 
-    // Nimbos network/info is currently a stub; observe the connection from Logos.
+    // Nimbos network/info is currently a stub; observe the connection from
+    // Logos.
     check_peer_connections(&logos, &peer_ids).await?;
 
     let names = cluster.nimbos.node_names();

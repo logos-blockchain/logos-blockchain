@@ -55,7 +55,8 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         }
         validate_service_scoped_uniqueness(self, provider_index)?;
 
-        // A channel note cannot be used as collateral for a service declaration.
+        // A channel note cannot be used as collateral for a service
+        // declaration.
         if channels.is_channel_note(&self.service_note_id) {
             return Err(SdpError::ChannelNote(self.service_note_id));
         }
@@ -192,7 +193,8 @@ impl VerifiableOperation<StandardMode>
 
         // Defer the proof verification, so that the caller can batch it.
         // Ed25519 verification is done by `preverify`.
-        // Ensure service note exists and ownership over the service note and `zk_id`.
+        // Ensure service note exists and ownership over the service note and
+        // `zk_id`.
         let note = utxo.note;
         let inputs = public_inputs_from_pks(
             (*context.tx_hash_view.as_fr()).into(),

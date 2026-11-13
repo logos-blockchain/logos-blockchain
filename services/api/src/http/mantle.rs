@@ -394,8 +394,9 @@ where
     let mut retried = false;
 
     loop {
-        // This function only serves the mutable window. Once we hit LIB we are below
-        // the requested mutable range and should stop without loading the body.
+        // This function only serves the mutable window. Once we hit LIB we are
+        // below the requested mutable range and should stop without
+        // loading the body.
         if current_id == chain_info.lib {
             break;
         }
@@ -410,8 +411,9 @@ where
                 .into());
             }
 
-            // Retry once from the latest tip if the original tip is not yet available.
-            // The original LIB remains the anchor for this request.
+            // Retry once from the latest tip if the original tip is not yet
+            // available. The original LIB remains the anchor for
+            // this request.
             let refreshed_info = cryptarchia_info::<RuntimeServiceId>(handle).await?;
             current_id = refreshed_info.cryptarchia_info.tip;
             retried = true;
@@ -536,8 +538,8 @@ where
 
     let immutable_slot_to = slot_to.min(chain_info.lib_slot);
     let has_immutable_range = slot_from <= immutable_slot_to;
-    // Mutable window starts strictly above LIB; LIB itself is served via immutable
-    // index.
+    // Mutable window starts strictly above LIB; LIB itself is served via
+    // immutable index.
     let mutable_slot_from = (chain_info.lib_slot.strict_add(1.into())).max(slot_from);
     let has_mutable_range = !immutable_only && mutable_slot_from <= slot_to;
 

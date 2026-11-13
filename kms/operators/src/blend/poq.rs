@@ -68,8 +68,9 @@ impl SecureKeyOperator for PoQOperator {
                 core_sk: *key.as_fr(),
             },
         );
-        // spawn a blocking task as this computation is heavy atm because it needs of an
-        // external binary. Not awaited, so that the KMS can serve others meanwhile.
+        // spawn a blocking task as this computation is heavy atm because it
+        // needs of an external binary. Not awaited, so that the KMS can
+        // serve others meanwhile.
         spawn_blocking("logos/blend/core-poq-blocking", move || {
             let poq_result = VerifiedProofOfQuota::new(&public_inputs, private_inputs);
             drop(response_channel.send(poq_result).inspect_err(|_| {

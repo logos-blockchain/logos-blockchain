@@ -185,7 +185,8 @@ where
             era_schedule,
         } = settings_handle.notifier().get_updated_settings();
 
-        // Wait for services (except Chain and SDP) to become ready, with timeout
+        // Wait for services (except Chain and SDP) to become ready, with
+        // timeout
         wait_until_services_are_ready!(
             &overwatch_handle,
             Some(Duration::from_mins(1)),
@@ -225,9 +226,9 @@ where
             panic!("Non-ephemeral signing key must be an Ed25519 key");
         };
 
-        // Wait until the chain becomes Online mode before subscribing to memberships.
-        // Chain service provides the correct epoch state only after the chain becomes
-        // Online.
+        // Wait until the chain becomes Online mode before subscribing to
+        // memberships. Chain service provides the correct epoch state
+        // only after the chain becomes Online.
         let chain_api =
             CryptarchiaServiceApi::<<EdgeService as EdgeServiceComponents>::ChainService>::from_overwatch_handle(
                 overwatch_handle,

@@ -45,8 +45,7 @@ impl BlockFeed {
     #[must_use]
     pub fn snapshot(&self) -> BlockFeedSnapshot {
         self.latest_observation()
-            .map(|observation| observation.snapshot)
-            .unwrap_or_default()
+            .map_or_default(|observation| observation.snapshot)
     }
 
     /// Returns retained non-empty event history.

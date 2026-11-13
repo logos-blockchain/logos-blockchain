@@ -7,7 +7,7 @@ use std::{collections::HashMap, error::Error};
 
 use lb_cryptarchia_sync::ChainSyncError;
 use lb_utils::net::MAX_WIRE_MESSAGE_SIZE;
-use libp2p::{PeerId, StreamProtocol, autonat, identify, identity, kad, swarm::NetworkBehaviour};
+use libp2p::{PeerId, StreamProtocol, autonat, identify, identity, kad};
 use rand::RngCore;
 use thiserror::Error;
 
@@ -19,6 +19,8 @@ pub mod chainsync;
 pub mod gossipsub;
 pub mod kademlia;
 pub mod nat;
+
+pub use composed::{Behaviour, BehaviourEvent};
 
 pub(crate) struct BehaviourConfig {
     pub gossipsub_config: libp2p::gossipsub::Config,
@@ -42,16 +44,28 @@ pub enum BehaviourError {
     ChainSyncError(#[from] ChainSyncError),
 }
 
-#[derive(NetworkBehaviour)]
-pub struct Behaviour<Rng: Clone + Send + RngCore + 'static> {
-    pub(crate) gossipsub: libp2p::gossipsub::Behaviour,
-    // todo: support persistent store if needed
-    pub(crate) kademlia: kad::Behaviour<kad::store::MemoryStore>,
-    pub(crate) identify: identify::Behaviour,
-    pub(crate) chain_sync: lb_cryptarchia_sync::Behaviour,
-    // The spec makes it mandatory to run an autonat server for a public node.
-    pub(crate) autonat_server: autonat::v2::server::Behaviour<Rng>,
-    pub(crate) nat: nat::Behaviour<Rng>,
+// A module of its own so the expectation covers only the derived code.
+#[expect(
+    unreachable_code,
+    reason = "The `NetworkBehaviour` derive forwards `chain_sync`'s `Infallible` handler events. Remove when updating to a version that fixes this."
+)]
+mod composed {
+    use libp2p::{autonat, identify, kad, swarm::NetworkBehaviour};
+    use rand::RngCore;
+
+    use super::nat;
+
+    #[derive(NetworkBehaviour)]
+    pub struct Behaviour<Rng: Clone + Send + RngCore + 'static> {
+        pub(crate) gossipsub: libp2p::gossipsub::Behaviour,
+        // todo: support persistent store if needed
+        pub(crate) kademlia: kad::Behaviour<kad::store::MemoryStore>,
+        pub(crate) identify: identify::Behaviour,
+        pub(crate) chain_sync: lb_cryptarchia_sync::Behaviour,
+        // The spec makes it mandatory to run an autonat server for a public node.
+        pub(crate) autonat_server: autonat::v2::server::Behaviour<Rng>,
+        pub(crate) nat: nat::Behaviour<Rng>,
+    }
 }
 
 impl<Rng: Clone + Send + RngCore + 'static> Behaviour<Rng> {

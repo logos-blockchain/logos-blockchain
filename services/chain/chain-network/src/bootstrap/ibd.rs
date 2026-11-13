@@ -197,9 +197,9 @@ where
 
         // Use `timeout` because `downloader.next()` can stall forever if a
         // download fails and leaves the queue empty.
-        // The timeout lets us re-check `should_poll` and exit cleanly in that case.
-        // Also, the timeout is useful to give the node time for peer discovery
-        // before starting the next IBD round.
+        // The timeout lets us re-check `should_poll` and exit cleanly in that
+        // case. Also, the timeout is useful to give the node time for
+        // peer discovery before starting the next IBD round.
         // TODO: improve `OrphanBlocksDownloader` to simplify this.
         while downloader.should_poll() {
             match tokio::time::timeout(Duration::from_secs(1), downloader.next()).await {

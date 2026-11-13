@@ -557,9 +557,10 @@ async fn execute_continuous_next_wallet_user_wallet_inner(
             dependent_state.clear_last_burst_diagnostics();
         }
         if scanner_group_id.is_some() {
-            // The scanner's tracked reservations already exclude pending inputs.
-            // Keep this set round-local so mined or explicitly retired UTXOs can
-            // be selected again once they are available on the canonical chain.
+            // The scanner's tracked reservations already exclude pending
+            // inputs. Keep this set round-local so mined or
+            // explicitly retired UTXOs can be selected again once
+            // they are available on the canonical chain.
             used_input_note_ids.clear();
         }
         log_next_wallet_round_started(
@@ -2556,8 +2557,9 @@ mod continuous_workload_reservation_tests {
                 },
             );
         }
-        // Stop preparation at fee-policy validation after the executor's initial
-        // maintenance pass, without requiring live nodes or submitting a batch.
+        // Stop preparation at fee-policy validation after the executor's
+        // initial maintenance pass, without requiring live nodes or
+        // submitting a batch.
         let command = ManualCommand::ContinuousNextWalletUserWallets {
             cycles: 1,
             num_transactions: 1,

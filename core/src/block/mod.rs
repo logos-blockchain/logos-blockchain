@@ -817,8 +817,8 @@ mod tests {
     struct TestMantleTx<const SIZE: usize>;
 
     impl<const SIZE: usize> Hashable for TestMantleTx<SIZE> {
-        //noinspection RsTypeCheck: The type is correct, but the linter is confused by
-        // the closure.
+        //noinspection RsTypeCheck: The type is correct, but the linter is
+        // confused by the closure.
         const HASHER: hashable::Hasher<Self> = |_tx| TxHash::from([0u8; 32]);
         type Hash = TxHash;
 
@@ -929,8 +929,8 @@ mod tests {
         let proof = create_proof();
         let key = Ed25519Key::from_bytes(&[0; 32]);
 
-        // Create a valid NON-genesis block first so we can reuse a valid signature
-        // shape.
+        // Create a valid NON-genesis block first so we can reuse a valid
+        // signature shape.
         let valid = Block::create(
             parent_block,
             Slot::from(1u64),
@@ -942,8 +942,8 @@ mod tests {
         )
         .expect("valid non-genesis block");
 
-        // Rebuild header at genesis slot and sign it so signature itself is still
-        // consistent.
+        // Rebuild header at genesis slot and sign it so signature itself is
+        // still consistent.
         let genesis_header = Header::new(
             parent_block,
             *valid.header().body_root(),

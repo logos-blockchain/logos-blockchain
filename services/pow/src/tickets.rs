@@ -260,9 +260,10 @@ where
             };
             // Take the epoch state (and its nonce) from the block's own ledger
             // state: it is the epoch the block was applied under, which is
-            // exactly what the puzzle ticket must be built against. Querying the
-            // chain service for the tip slot instead fails, because the epoch
-            // state can only be computed for a slot strictly after the tip.
+            // exactly what the puzzle ticket must be built against. Querying
+            // the chain service for the tip slot instead fails,
+            // because the epoch state can only be computed for a
+            // slot strictly after the tip.
             let epoch_state = ledger_state.epoch_state().clone();
             Some((epoch_state, ledger_state, event))
         }
@@ -302,8 +303,8 @@ fn new_block_search_stream(
     let results = stream::iter(tasks).buffer_unordered(max_tickets_per_block.get());
     let winners = tokio_stream::StreamExt::filter_map(results, |maybe_winner| maybe_winner)
         .take(remaining_winners.get());
-    // Tag every winner with the block's slot so the consumer can track the reward
-    // window.
+    // Tag every winner with the block's slot so the consumer can track the
+    // reward window.
     Box::pin(winners.map(move |ticket| (slot, ticket)))
 }
 
@@ -322,8 +323,8 @@ async fn search_winner_ticket(
 ) -> Option<(UnsecuredZkKey, ClaimPowRewardOp)> {
     let (response_sender, response_receiver) = oneshot::channel();
     let pool_task = move || {
-        // Skip the work if the search was dropped while this attempt was queued, e.g.
-        // settings change
+        // Skip the work if the search was dropped while this attempt was
+        // queued, e.g. settings change
         if response_sender.is_closed() {
             return;
         }
@@ -345,8 +346,8 @@ async fn search_winner_ticket(
             trace!(target: LOG_TARGET, "Dropping ticket result: its search was dropped");
         }
     };
-    // Ticket computation is heavy, we have a custom separated threadpool for this
-    // tasks
+    // Ticket computation is heavy, we have a custom separated threadpool for
+    // this tasks
     pool.spawn(pool_task);
     // await response on the channel
     response_receiver.await.ok().flatten()
@@ -387,8 +388,8 @@ impl Stream for TicketGenerator {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         loop {
-            // 1. Emit any winner an active search has already produced, tagged with the
-            //    cached tip.
+            // 1. Emit any winner an active search has already produced, tagged
+            //    with the cached tip.
             if let Poll::Ready(Some((block_id, (block_slot, (secret_key, claim))))) =
                 this.tickets_search.poll_next_unpin(cx)
             {
@@ -542,7 +543,8 @@ mod tests {
             &era_schedule(&[SLOT_WINDOW]),
         );
 
-        // The slot-5 search aged out; the slot-10 one is still within the window.
+        // The slot-5 search aged out; the slot-10 one is still within the
+        // window.
         assert_eq!(tickets_search.len(), 1);
         assert!(!tickets_search.contains_key(&old_block));
         assert!(tickets_search.contains_key(&recent_block));
@@ -625,7 +627,8 @@ mod tests {
 
     #[test]
     fn prune_judges_each_search_by_the_window_of_its_era() {
-        // Era 0 has a window of 100 slots, and era 1, from slot 100, a window of
+        // Era 0 has a window of 100 slots, and era 1, from slot 100, a window
+        // of
         // 10. At slot 150, the search for a block at slot 60, in era 0, is
         // still within its window, while the one for a block at slot 120, in
         // era 1, aged out at slot 130.

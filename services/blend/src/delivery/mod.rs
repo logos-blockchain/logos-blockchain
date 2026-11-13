@@ -37,9 +37,9 @@ pub async fn broadcast_undelivered_messages<Dispatcher, UndeliveredPayloads, Run
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
     UndeliveredPayloads: ExactSizeIterator<Item = DataPayload> + Send,
 {
-    // TODO: Once we switch to a well-defined API for blending payloads, we can and
-    // should show the relevant details for each payload that failed. E.g., for
-    // blocks we could log the block ID.
+    // TODO: Once we switch to a well-defined API for blending payloads, we can
+    // and should show the relevant details for each payload that failed.
+    // E.g., for blocks we could log the block ID.
     tracing::warn!(
         target: LOG_TARGET,
         "The Blend network did not deliver {} locally-originated payload(s) within the delivery deadline; broadcasting them directly.",

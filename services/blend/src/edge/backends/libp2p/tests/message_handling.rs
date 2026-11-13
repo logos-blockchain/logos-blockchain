@@ -157,7 +157,8 @@ async fn replication_factor() {
         }
     }
 
-    // Verify that only 2 out of 3 (unconnected) core swarms receive the message.
+    // Verify that only 2 out of 3 (unconnected) core swarms receive the
+    // message.
     assert_eq!(received_messages, 2);
     assert!(!swarm_1_message_received || !swarm_2_message_received || !swarm_3_message_received);
 }

@@ -56,9 +56,9 @@ async fn edge_drops_message_after_exhausting_attempts() {
     );
     assert_eq!(*dial_attempt_1_record.message(), message.clone());
 
-    // Poll through all 3 dial attempts (each fails with OutgoingConnectionError).
-    // The single chosen peer is retried with exponential backoff; we never fall
-    // back to a different peer.
+    // Poll through all 3 dial attempts (each fails with
+    // OutgoingConnectionError). The single chosen peer is retried with
+    // exponential backoff; we never fall back to a different peer.
     for _ in 0..3 {
         swarm
             .poll_next_until(|event| {
@@ -86,7 +86,8 @@ async fn edge_redial_uses_exponential_backoff() {
     let empty_multiaddr: Multiaddr = Protocol::Memory(0).into();
 
     // Use max_dial_attempts=3 so we get two backoff intervals to verify:
-    // attempt 1 -> fail -> 2s delay -> attempt 2 -> fail -> 4s delay -> attempt 3
+    // attempt 1 -> fail -> 2s delay -> attempt 2 -> fail -> 4s delay -> attempt
+    // 3
     let EdgeTestSwarm { mut swarm, .. } =
         EdgeSwarmBuilder::new(Membership::new_without_local(from_ref(&Node {
             address: empty_multiaddr,
@@ -192,7 +193,8 @@ async fn stalled_send_does_not_block_command_processing() {
 /// fault.
 #[test(tokio::test)]
 async fn edge_does_not_retry_unrecoverable_dial_failure() {
-    // A real listening swarm, whose address we will pair with the wrong peer id.
+    // A real listening swarm, whose address we will pair with the wrong peer
+    // id.
     let (mut identities, nodes) = new_nodes_with_empty_address(1);
     let CoreTestSwarm {
         swarm: mut listening_swarm,

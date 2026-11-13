@@ -52,7 +52,8 @@ impl Settings {
         self.try_connection_share_per_round()?;
         self.try_edge_node_connection_timeout(slot_duration)?;
         // Computed now rather than when an epoch starts, where it would stop
-        // every node. The smallest network Blend runs on gives the largest quota.
+        // every node. The smallest network Blend runs on gives the largest
+        // quota.
         let minimum_network_size = NonZeroU64::from(self.common.minimum_network_size).get();
         core_quota(
             self.rounds_per_epoch(slots_per_epoch, slot_duration),

@@ -359,7 +359,8 @@ mod tests {
         let ([sender_a, sender_b, sender_c], source) = controlled_source();
         let mut buffered = BufferedOrdered::new(source, 3);
 
-        // `c` is done, but `a` and `b` before it are not, so nothing is yielded.
+        // `c` is done, but `a` and `b` before it are not, so nothing is
+        // yielded.
         sender_c.send('c').unwrap();
         assert_eq!(buffered.next().now_or_never(), None);
 

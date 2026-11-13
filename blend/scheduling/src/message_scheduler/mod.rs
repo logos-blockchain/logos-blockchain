@@ -188,14 +188,16 @@ where
         Self,
         OldEpochMessageScheduler<Rng, ProcessedMessage, DataMessage>,
     ) {
-        // Data messages queued but not released before the epoch ended stay with the
-        // old epoch's scheduler, alongside the processed messages it already drains,
-        // so each epoch's scheduler owns that epoch's traffic. They were encapsulated
-        // with the old epoch's `PoQ`, which only verifies against that epoch's public
-        // inputs: carrying them into the new epoch would publish them under the new
-        // epoch's number, and the receiver would reject the proof and close us as
-        // malicious. They go out to the old epoch's peers instead, and whatever is
-        // still queued when the transition period expires is dropped with them.
+        // Data messages queued but not released before the epoch ended stay
+        // with the old epoch's scheduler, alongside the processed
+        // messages it already drains, so each epoch's scheduler owns
+        // that epoch's traffic. They were encapsulated with the old
+        // epoch's `PoQ`, which only verifies against that epoch's public
+        // inputs: carrying them into the new epoch would publish them under the
+        // new epoch's number, and the receiver would reject the proof
+        // and close us as malicious. They go out to the old epoch's
+        // peers instead, and whatever is still queued when the
+        // transition period expires is dropped with them.
         let new_scheduler = Self::new(new_epoch_info, self.release_delayer.rng().clone(), settings);
         (new_scheduler, self.consume())
     }
@@ -266,8 +268,9 @@ where
         } = &mut *self;
 
         poll_round_info(CURRENT_EPOCH, round_clock, data_messages, cx, |cx| {
-            // We poll the sub-streams and return the right result accordingly. Both are
-            // polled unconditionally so that both register their waker.
+            // We poll the sub-streams and return the right result accordingly.
+            // Both are polled unconditionally so that both register
+            // their waker.
             let cover_traffic_output = cover_traffic.poll_next_unpin(cx);
             let release_delayer_output = release_delayer.poll_next_unpin(cx);
 
@@ -358,8 +361,9 @@ where
         } = &mut *self;
 
         poll_round_info(OLD_EPOCH, round_clock, data_messages, cx, |cx| {
-            // The old epoch generates no cover traffic, so the only thing that can come
-            // due besides the leftover data messages is a batch of processed messages.
+            // The old epoch generates no cover traffic, so the only thing that
+            // can come due besides the leftover data messages is a
+            // batch of processed messages.
             release_delayer
                 .poll_next_unpin(cx)
                 .map(|messages| messages.map(RoundReleaseType::OnlyProcessedMessages))

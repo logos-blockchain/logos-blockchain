@@ -23,7 +23,8 @@ codec_fixtures!(Tuple, Self(0xAB, 0x0403_0201) => "ab01020304");
 fn derived_named_struct_round_trips() {
     let value = Named { a: 9, b: 0xBEEF };
     let bytes = value.encode_to_vec();
-    // fields in declaration order: `a` (1 byte) then little-endian `b` (2 bytes).
+    // fields in declaration order: `a` (1 byte) then little-endian `b` (2
+    // bytes).
     assert_eq!(bytes, vec![9, 0xEF, 0xBE]);
     assert_eq!(value.encoded_length(), 3);
 

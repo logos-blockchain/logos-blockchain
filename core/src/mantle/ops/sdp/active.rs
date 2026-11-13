@@ -64,7 +64,8 @@ impl VerifiableOperation<StandardMode> for SignedOperation<SDPActiveOp, Preverif
 
         // Check the declaration hasn't been withdrawn.
         // The report attesting `withdraw_at - 1` is due during `withdraw_at`,
-        // so the message is valid while the current epoch is at most `withdraw_at`.
+        // so the message is valid while the current epoch is at most
+        // `withdraw_at`.
         if let Some(withdraw_at) = declaration.withdraw_at
             && withdraw_at < context.epoch
         {

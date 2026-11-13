@@ -310,8 +310,8 @@ mod tests {
         };
 
         let (cryptarchia_engine, pruned_blocks) = {
-            // Boostrapping mode since we are pursposefully adding old forks to test the
-            // recovery mechanism.
+            // Boostrapping mode since we are pursposefully adding old forks to
+            // test the recovery mechanism.
             let mut cryptarchia = lb_cryptarchia_engine::Cryptarchia::<_>::from_genesis(
                 genesis_header_id,
                 Arc::new(
@@ -327,8 +327,8 @@ mod tests {
             //    \    \    \
             //      b6   b7   b8
             //
-            // Add 3 more blocks to canonical chain. `b0`, `b1`, `b2`, and `b3` represent
-            // the canonical chain now.
+            // Add 3 more blocks to canonical chain. `b0`, `b1`, `b2`, and `b3`
+            // represent the canonical chain now.
             cryptarchia
                 .receive_block(
                     [1; 32].into(),
@@ -388,7 +388,8 @@ mod tests {
                     UncleSlots::default(),
                 )
                 .expect("Block 7 to be added successfully on top of block 1.");
-            // Add a single-block fork from the second block after genesis (block `2`)
+            // Add a single-block fork from the second block after genesis
+            // (block `2`)
             cryptarchia
                 .receive_block(
                     [8; 32].into(),

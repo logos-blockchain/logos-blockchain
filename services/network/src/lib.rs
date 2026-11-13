@@ -142,8 +142,9 @@ where
     ) {
         match msg {
             BackendNetworkMsg::<Backend, _>::Process(msg) => {
-                // split sending in two steps to help the compiler understand we do not
-                // need to hold an instance of &I (which is not send) across an await point
+                // split sending in two steps to help the compiler understand we
+                // do not need to hold an instance of &I (which
+                // is not send) across an await point
                 let send = backend.process(msg);
                 send.await;
             }

@@ -167,8 +167,8 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         )
         .unwrap();
 
-        // Keep the dialing history since swarm.connect doesn't return the result
-        // synchronously
+        // Keep the dialing history since swarm.connect doesn't return the
+        // result synchronously
         let pending_dials = HashMap::<ConnectionId, Dial>::new();
 
         Self {
@@ -301,7 +301,8 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                             "Evicting stale address after WrongPeerId (expected {peer_id:?}, obtained {obtained}): {dial_addr}"
                         );
                         self.remove_kademlia_address_for_dial(peer_id, dial_addr);
-                        // Drop any matching pending dial so it is not also retried.
+                        // Drop any matching pending dial so it is not also
+                        // retried.
                         self.pending_dials.remove(&connection_id);
                     }
                     error => {
@@ -539,7 +540,8 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
 
         match self.swarm.connect(&dial.addr) {
             Ok(connection_id) => {
-                // Dialing has been scheduled. The result will be notified as a SwarmEvent.
+                // Dialing has been scheduled. The result will be notified as a
+                // SwarmEvent.
                 self.pending_dials.insert(connection_id, dial);
             }
             Err(e) => {
@@ -1411,7 +1413,8 @@ mod tests {
                     .collect::<Vec<_>>();
 
                 if routing_table.len() >= NODE_COUNT - 1 {
-                    // This node's routing table is fully populated, mark for removal
+                    // This node's routing table is fully populated, mark for
+                    // removal
                     indices_to_remove.push(idx);
                     tracing::info!(
                         target: LOG_TARGET,
@@ -1561,8 +1564,9 @@ mod tests {
             OsRng,
         );
 
-        // A peer learned via discovery (Kademlia/Identify), i.e. NOT through our
-        // own `connect()` call, so there is no `pending_dials` entry for it.
+        // A peer learned via discovery (Kademlia/Identify), i.e. NOT through
+        // our own `connect()` call, so there is no `pending_dials`
+        // entry for it.
         let expected_peer = PeerId::random();
         let remote_addr = format!(
             "/ip4/127.0.0.1/udp/{}/quic-v1",

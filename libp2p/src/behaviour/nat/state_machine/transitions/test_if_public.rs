@@ -89,8 +89,8 @@ mod tests {
         let mut state_machine = StateMachine::new(tx);
         state_machine.inner = Some(TestIfPublic::for_test(ADDR.clone()));
         state_machine.on_test_event(external_address_confirmed_address_mismatch());
-        // Transitions to Public with the confirmed address (ADDR_1), keeping the
-        // local address (ADDR)
+        // Transitions to Public with the confirmed address (ADDR_1), keeping
+        // the local address (ADDR)
         assert_eq!(
             state_machine.inner.as_ref().unwrap(),
             &Public::for_test_with_addrs(ADDR.clone(), ADDR_1.clone())
@@ -119,7 +119,8 @@ mod tests {
         let (tx, mut rx) = unbounded_channel();
         let mut state_machine = StateMachine::new(tx);
         state_machine.inner = Some(TestIfPublic::for_test(ADDR.clone()));
-        // AutoNAT tested the address a peer observed (ADDR_1), not the local one.
+        // AutoNAT tested the address a peer observed (ADDR_1), not the local
+        // one.
         state_machine.on_test_event(autonat_failed_address_mismatch());
         assert_eq!(
             state_machine.inner.as_ref().unwrap(),

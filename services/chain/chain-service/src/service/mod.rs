@@ -112,22 +112,19 @@ impl SdpQuerySource for Cryptarchia {
         &self,
         state_id: HeaderId,
     ) -> HashMap<DeclarationId, Self::Declaration> {
-        self.ledger
-            .state(&state_id)
-            .map(|ledger_state| {
-                ledger_state
-                    .mantle_ledger()
-                    .sdp
-                    .declarations()
-                    .iter()
-                    .flat_map(|(_, declarations)| {
-                        declarations
-                            .iter()
-                            .map(|(id, declaration)| (*id, declaration.clone()))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+        self.ledger.state(&state_id).map_or_default(|ledger_state| {
+            ledger_state
+                .mantle_ledger()
+                .sdp
+                .declarations()
+                .iter()
+                .flat_map(|(_, declarations)| {
+                    declarations
+                        .iter()
+                        .map(|(id, declaration)| (*id, declaration.clone()))
+                })
+                .collect()
+        })
     }
 
     fn finalized_declaration_at(
@@ -491,23 +488,22 @@ where
             }
             Query::GetSdpSnapshot { reply_channel } => {
                 let tip = self.cryptarchia.tip();
-                let declarations = self
-                    .cryptarchia
-                    .ledger
-                    .state(&tip)
-                    .map(|ledger_state| {
-                        ledger_state
-                            .epoch_state()
-                            .active_declarations
-                            .iter()
-                            .flat_map(|(_, declarations)| {
-                                declarations
-                                    .iter()
-                                    .map(|(id, declaration)| (*id, declaration.clone()))
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let declarations =
+                    self.cryptarchia
+                        .ledger
+                        .state(&tip)
+                        .map_or_default(|ledger_state| {
+                            ledger_state
+                                .epoch_state()
+                                .active_declarations
+                                .iter()
+                                .flat_map(|(_, declarations)| {
+                                    declarations
+                                        .iter()
+                                        .map(|(id, declaration)| (*id, declaration.clone()))
+                                })
+                                .collect()
+                        });
                 reply_channel.send(declarations).unwrap_or_else(|_| {
                     error!(target: LOG_TARGET, "Could not send SDP snapshot through channel");
                 });
@@ -767,14 +763,12 @@ fn log_blend_snapshot_provider_decisions(
     let active_blend_declarations = active_declarations.for_service(&ServiceType::BlendNetwork);
 
     if tracing::enabled!(target: LOG_TARGET, tracing::Level::DEBUG) {
-        let active_provider_ids: Vec<_> = active_blend_declarations
-            .map(|active| {
-                active
-                    .values()
-                    .map(|declaration| format!("{:?}", declaration.provider_id))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let active_provider_ids: Vec<_> = active_blend_declarations.map_or_default(|active| {
+            active
+                .values()
+                .map(|declaration| format!("{:?}", declaration.provider_id))
+                .collect()
+        });
         debug!(
             target: LOG_TARGET,
             diagnostic = BLEND_REACHABILITY,
@@ -810,8 +804,9 @@ fn log_blend_snapshot_provider_decisions(
             }
             None => {
                 // The frozen EpochState retains only included declarations. The
-                // historical active fields for an excluded provider are therefore
-                // unavailable here and must not be reconstructed from the current
+                // historical active fields for an excluded provider are
+                // therefore unavailable here and must not be
+                // reconstructed from the current
                 // ledger declaration.
                 trace!(
                     target: LOG_TARGET,
@@ -1247,7 +1242,8 @@ where
         }
         if current == branch.parent() {
             debug!(target: LOG_TARGET, ?to_ancestor, "reached genesis while looking for ancestor from memory");
-            // Return collected blocks and an error since we couldn't reach `to_ancestor`.
+            // Return collected blocks and an error since we couldn't reach
+            // `to_ancestor`.
             return Box::pin(stream::iter(in_memory).chain(stream::once(async move {
                 Err(Error::ParentIdNotFound(current))
             })));
@@ -1429,9 +1425,9 @@ fn immutable_blocks_index(
     new_lib_slot: Slot,
 ) -> BTreeMap<Slot, HeaderId> {
     let mut immutable_blocks = pruned_blocks.immutable_blocks().clone();
-    // The new LIB is also immutable and should be immediately queryable by slot.
-    // prune_immutable_blocks() only returns blocks older than the new LIB,
-    // so we explicitly add the new LIB here.
+    // The new LIB is also immutable and should be immediately queryable by
+    // slot. prune_immutable_blocks() only returns blocks older than the new
+    // LIB, so we explicitly add the new LIB here.
     if prev_lib.is_none_or(|prev| prev != new_lib) {
         immutable_blocks.insert(new_lib_slot, new_lib);
     }
