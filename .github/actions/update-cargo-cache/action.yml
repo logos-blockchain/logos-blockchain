@@ -1,15 +1,14 @@
 name: Update Cargo Cache
 
 inputs:
-  github-token:
-    description: Valid GitHub token to interact with GitHub REST API
-    required: true
   key-prefix:
     description: Prefix for the cache key.
     required: true
 
 description: Update Cargo Cache for Rust projects
 
+# The caches this action supersedes are deleted by a separate job of the calling workflow, with `prune-cache`:
+# deleting caches needs `actions: write`, which the jobs that compile code must not hold.
 runs:
   using: composite
   steps:
@@ -84,23 +83,3 @@ runs:
 
         # Must be in sync with the keys used in the `setup-cargo-cache` workflow.
         key: ${{ inputs.key-prefix }}/pr#${{ github.event.pull_request.number }}/${{ github.sha }}
-
-    - name: Delete retrieved cache (main)
-      if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-      uses: ./.github/actions/prune-cache
-      continue-on-error: true
-      with:
-        github-token: ${{ inputs.github-token }}
-        # Must be in sync with the keys used in the `setup-cargo-cache` workflow.
-        key-prefix: ${{ inputs.key-prefix }}/main
-        mode: keep-latest
-
-    - name: Delete retrieved cache (PR)
-      if: github.event_name == 'pull_request'
-      uses: ./.github/actions/prune-cache
-      continue-on-error: true
-      with:
-        github-token: ${{ inputs.github-token }}
-        # Must be in sync with the keys used in the `setup-cargo-cache` workflow.
-        key-prefix: ${{ inputs.key-prefix }}/pr#${{ github.event.pull_request.number }}
-        mode: keep-latest

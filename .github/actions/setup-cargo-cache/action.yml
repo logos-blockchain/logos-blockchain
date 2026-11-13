@@ -1,9 +1,6 @@
 name: Setup Cargo Cache
 
 inputs:
-  github-token:
-    description: Valid GitHub token to interact with GitHub REST API
-    required: true
   key-prefix:
     description: Prefix for the cache key.
     required: true

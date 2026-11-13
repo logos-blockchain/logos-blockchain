@@ -46,6 +46,7 @@ jobs:
           ref: master
           path: repo
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Collect merge-group snapshot
         id: collect_snapshot
@@ -98,6 +99,7 @@ jobs:
           ref: master
           path: repo
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Collect completed merge-group workflow timings
         env:

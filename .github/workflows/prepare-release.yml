@@ -11,6 +11,9 @@ on:
           - release
           - release-candidate
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}@${{ github.ref_name }}
   cancel-in-progress: true
@@ -80,6 +83,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        with:
+          persist-credentials: false
 
       - name: Add the target triple
         run: rustup target add ${{ matrix.platform.target_triple }}
@@ -103,6 +108,9 @@ jobs:
       - configure-version
       - build
     runs-on: ubuntu-latest
+    permissions:
+      # Creates the draft release.
+      contents: write
     env:
       VERSION: ${{ needs.configure-version.outputs.version }}
       IS_PRERELEASE: ${{ needs.configure-version.outputs.is_prerelease }}
@@ -112,6 +120,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        with:
+          persist-credentials: false
 
       - name: Prepare release body with the module version, bootstrap peers, and release candidate-specific disclaimers
         run: |
@@ -178,6 +188,9 @@ jobs:
       - configure-version
       - create-draft-release
     runs-on: ubuntu-latest
+    permissions:
+      # Uploads the binaries to the draft release.
+      contents: write
     strategy:
       matrix:
         platform:
