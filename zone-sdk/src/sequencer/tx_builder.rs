@@ -1,5 +1,6 @@
 use std::num::NonZero;
 
+use lb_api_common::bodies::wallet::fund::WalletFundRequestBody;
 use lb_core::{
     mantle::{
         SignedOps, TxHash,
@@ -18,7 +19,6 @@ use lb_core::{
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature, IndexedSignatures},
 };
-use lb_http_api_common::bodies::wallet::fund::WalletFundRequestBody;
 use lb_key_management_system_service::keys::{
     Ed25519Key, Ed25519Signature, UnverifiedEd25519PublicKey,
 };

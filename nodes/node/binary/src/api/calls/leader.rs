@@ -1,5 +1,5 @@
+use lb_api_common::bodies::leader::LeaderClaimResponseBody;
 use lb_chain_leader_service::api::{ApiError as LeaderApiError, ChainLeaderSerivceApi};
-use lb_http_api_common::bodies::leader::LeaderClaimResponseBody;
 
 use super::{Error, Handle};
 use crate::{CryptarchiaLeaderService, RuntimeServiceId};

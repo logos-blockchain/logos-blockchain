@@ -6,13 +6,13 @@ use std::{
 };
 
 use futures::stream::{self, StreamExt as _};
-use lb_common_http_client::{ApiBlock, CommonHttpClient, ProcessedBlockEvent};
-use lb_core::header::HeaderId;
-use lb_http_api_common::{
+use lb_api_common::{
     DEFAULT_NUMBER_OF_BLOCKS_TO_STREAM, MAX_BLOCKS_STREAM_BLOCKS, MAX_BLOCKS_STREAM_CHUNK_SIZE,
     paths::BLOCKS_RANGE_STREAM,
     queries::{BlockFilter, BlockSortOrder, BlocksStreamQuery},
 };
+use lb_common_http_client::{ApiBlock, CommonHttpClient, ProcessedBlockEvent};
+use lb_core::header::HeaderId;
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig as TfTopologyConfig,

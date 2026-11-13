@@ -2,6 +2,10 @@ use std::{collections::HashMap, pin::Pin};
 
 use async_trait::async_trait;
 use futures::{Stream, stream};
+use lb_api_common::bodies::{
+    mantle::LimitsResponseBody,
+    wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
+};
 use lb_common_http_client::{
     ApiBlock, BlockInfo, ChainServiceInfo, CommonHttpClient, Error, Event, Events,
     ProcessedBlockEvent, Slot, TimeInfo, TxEventPayload,
@@ -21,10 +25,6 @@ use lb_core::{
             states::{Unverified, VerificationState},
         },
     },
-};
-use lb_http_api_common::bodies::{
-    mantle::LimitsResponseBody,
-    wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
 };
 use lb_log_targets::zone_sdk;
 use reqwest::Url;

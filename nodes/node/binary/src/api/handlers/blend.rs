@@ -1,6 +1,6 @@
 use axum::{Json, extract::State, response::Response};
+use lb_api_common::{bodies::blend::JoinBlendRequestBody, paths};
 use lb_core::mantle::TxHash;
-use lb_http_api_common::{bodies::blend::JoinBlendRequestBody, paths};
 
 use crate::{
     ValidatedTx,

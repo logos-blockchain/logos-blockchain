@@ -5,6 +5,7 @@
 use std::{collections::HashSet, time::Duration};
 
 use cucumber::{gherkin::Step, then, when};
+use lb_api_common::bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody};
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
     Note, Op, OpProof, SignedOps, TxHash,
@@ -16,7 +17,6 @@ use lb_core::mantle::{
     traits::Hashable as _,
     transactions::{OpProofs, builder::MantleTxBuilder},
 };
-use lb_http_api_common::bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody};
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use lb_testing_framework::NodeHttpClient;
 use tracing::info;

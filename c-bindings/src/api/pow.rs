@@ -3,9 +3,9 @@ use std::{
     ptr,
 };
 
+use lb_api_common::bodies::pow::PoWClaimRequestBody;
 use lb_c_macros::panic_to_error;
 use lb_groth16::fr_to_bytes;
-use lb_http_api_common::bodies::pow::PoWClaimRequestBody;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_pow_service::{AutoClaimSettings, AutoClaimTick, PoWMiningSettings};
 use serde::de::DeserializeOwned;

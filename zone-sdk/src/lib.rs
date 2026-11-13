@@ -79,10 +79,10 @@ mod test_support;
 
 // Logos blockchain crates a zone builds against, re-exported so a zone can
 // depend on this crate alone and move to a new node version with one bump.
+pub use lb_api_common as http_api_common;
 pub use lb_binary_codec as binary_codec;
 pub use lb_common_http_client as common_http_client;
 pub use lb_core as core;
-pub use lb_http_api_common as http_api_common;
 pub use lb_key_management_system_service as key_management_system_service;
 #[cfg(feature = "testing")]
 pub use lb_testing_framework as testing_framework;
@@ -101,6 +101,10 @@ pub use testing_framework_core;
 /// ([`ZoneMessage`], [`ZoneBlock`], [`Deposit`], [`Withdraw`]) live at the
 /// crate root.
 pub mod node_types {
+    pub use lb_api_common::bodies::{
+        mantle::LimitsResponseBody,
+        wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
+    };
     pub use lb_common_http_client::{
         ApiBlock, BlockInfo, ChainServiceInfo, Error, Events, ProcessedBlockEvent, Slot, TimeInfo,
     };
@@ -115,10 +119,6 @@ pub mod node_types {
             ops::channel::{ChannelId, MsgId, deposit::Metadata, inscribe::Inscription},
             transactions::states::Unverified,
         },
-    };
-    pub use lb_http_api_common::bodies::{
-        mantle::LimitsResponseBody,
-        wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
     };
 }
 

@@ -3,8 +3,8 @@ use axum::{
     extract::{Path, State},
     response::{IntoResponse as _, Response},
 };
+use lb_api_common::paths;
 use lb_core::sdp::{DeclarationId, ServiceType};
-use lb_http_api_common::paths;
 
 use crate::api::{
     calls::{Handle, sdp},

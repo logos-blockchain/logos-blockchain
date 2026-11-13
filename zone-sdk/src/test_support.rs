@@ -11,6 +11,10 @@ use std::{
 
 use async_trait::async_trait;
 use futures::StreamExt as _;
+use lb_api_common::bodies::{
+    mantle::LimitsResponseBody,
+    wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
+};
 use lb_common_http_client::{
     ApiBlock, ApiHeader, BlockInfo, ChainServiceInfo, CryptarchiaInfo, EraTiming, Events, PhaseTag,
     ProcessedBlockEvent, Slot, State, TimeInfo,
@@ -38,10 +42,6 @@ use lb_core::{
     proofs::leader_proof::Groth16LeaderProof,
 };
 use lb_groth16::Fr;
-use lb_http_api_common::bodies::{
-    mantle::LimitsResponseBody,
-    wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
-};
 use lb_key_management_system_service::keys::Ed25519Key;
 use tokio::sync::{mpsc, watch};
 

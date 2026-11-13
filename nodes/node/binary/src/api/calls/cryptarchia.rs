@@ -1,9 +1,9 @@
+use lb_api_common::bodies::mantle::{GasPricesResponseBody, LimitsResponseBody};
 use lb_chain_service::{
     ChainServiceInfo,
     api::{ApiError as ChainApiError, CryptarchiaServiceApi},
 };
 use lb_core::header::HeaderId;
-use lb_http_api_common::bodies::mantle::{GasPricesResponseBody, LimitsResponseBody};
 use lb_ledger::LedgerState;
 use lb_time_service::TimeServiceMessage;
 

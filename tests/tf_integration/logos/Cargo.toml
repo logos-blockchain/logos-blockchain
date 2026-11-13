@@ -21,12 +21,12 @@ common-http-client               = { workspace = true }
 flate2                           = { features = ["rust_backend"], workspace = true }
 futures                          = { workspace = true }
 hex                              = { workspace = true }
+lb-api-common                    = { workspace = true }
 lb-binary-codec                  = { workspace = true }
 lb-blend-service                 = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-config                        = { features = ["testing"], workspace = true }
 lb-core                          = { workspace = true }
-lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-libp2p                        = { workspace = true }
 lb-network-service               = { workspace = true }

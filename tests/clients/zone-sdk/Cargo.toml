@@ -15,10 +15,10 @@ workspace = true
 [dependencies]
 cucumber                         = { features = ["macros", "output-junit"], workspace = true }
 futures                          = { workspace = true }
+lb-api-common                    = { workspace = true }
 lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
 lb-groth16                       = { workspace = true }
-lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-testing-framework             = { workspace = true }
 lb-utils                         = { workspace = true }

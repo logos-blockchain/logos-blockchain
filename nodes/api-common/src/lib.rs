@@ -4,17 +4,8 @@ use std::collections::BTreeMap;
 use time::UtcDateTime;
 
 pub mod bodies;
-pub mod metrics;
 pub mod paths;
-#[cfg(feature = "profiling")]
-pub mod pprof;
 pub mod queries;
-pub mod settings;
-
-#[cfg(all(feature = "profiling", target_os = "windows"))]
-compile_error!(
-    "The `profiling` feature is not supported on Windows since `pprof` is not available."
-);
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct TimeInfo {
@@ -73,3 +64,14 @@ pub const MAX_BLOCKS_STREAM_BLOCKS: usize = 630_720_000;
 /// This is a safe default number of blocks to present the canonical chain
 /// at the tip but not too much to overburden a client.
 pub const DEFAULT_NUMBER_OF_BLOCKS_TO_STREAM: usize = 100;
+
+#[must_use]
+pub const fn default_max_body_size() -> usize {
+    // This has to allow for JSON object bytes, which is larger than the actual
+    // payload data size. Typical JSON overhead for binary data:
+    // - Base64 encoding: ~1.33× (33% increase).
+    // - JSON structure (quotes, braces, commas): adds 10-20% typically.
+    // - Combined realistic overhead: ~1.5-1.6× for Base64-encoded binary data in
+    //   JSON.
+    10 * 1024 * 1024
+}

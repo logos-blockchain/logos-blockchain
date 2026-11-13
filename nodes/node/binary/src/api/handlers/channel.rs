@@ -3,8 +3,8 @@ use axum::{
     extract::{Path, State},
     response::Response,
 };
+use lb_api_common::{bodies::channel::ChannelDepositRequestBody, paths};
 use lb_core::mantle::ops::channel::ChannelId;
-use lb_http_api_common::{bodies::channel::ChannelDepositRequestBody, paths};
 
 use crate::api::{
     calls::{Handle, channel},

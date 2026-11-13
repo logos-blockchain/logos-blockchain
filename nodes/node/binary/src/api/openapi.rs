@@ -18,8 +18,8 @@ macro_rules! declare_api_doc {
                 // Referenced by `BlocksStreamQuery`'s `IntoParams` derive.
                 // utoipa collects schemas reached through request and response
                 // bodies automatically, but not through query parameters.
-                lb_http_api_common::queries::BlockFilter,
-                lb_http_api_common::queries::BlockSortOrder
+                lb_api_common::queries::BlockFilter,
+                lb_api_common::queries::BlockSortOrder
             )),
             tags()
         )]
@@ -268,9 +268,7 @@ mod schema_conformance_tests {
     /// Covers `Locator` and `NoteId`, both documented as `String`.
     #[test]
     fn join_blend_request_body_matches_its_schema() {
-        assert_round_trip_matches_component::<
-            lb_http_api_common::bodies::blend::JoinBlendRequestBody,
-        >(
+        assert_round_trip_matches_component::<lb_api_common::bodies::blend::JoinBlendRequestBody>(
             "JoinBlendRequestBody",
             serde_json::json!({
                 "locator": "/ip4/127.0.0.1/tcp/3000",

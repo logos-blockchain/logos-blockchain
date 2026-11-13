@@ -38,7 +38,7 @@ pub enum ServiceNoteError {
 
 /// Picks the smallest unlocked note that meets `threshold`, so the least
 /// collateral is locked and larger notes stay free.
-pub fn select_service_note<Id: Copy>(
+fn select_service_note<Id: Copy>(
     notes: &[(Id, Value)],
     is_locked: impl Fn(Id) -> bool,
     threshold: Value,

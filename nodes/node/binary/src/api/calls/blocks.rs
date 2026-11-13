@@ -3,9 +3,18 @@ use std::{fmt::Display, num::NonZeroUsize};
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockInfo};
 use lb_chain_service::{CryptarchiaInfo, ProcessedBlockEvent, Slot};
-use lb_core::{block::Block, events::Events, header::HeaderId, mantle::transactions::hash::TxHash};
+use lb_core::{
+    block::Block,
+    events::Events,
+    header::HeaderId,
+    mantle::{
+        traits::{Hashable, StorageSize, hashable},
+        transactions::hash::TxHash,
+    },
+};
 use lb_log_targets::api;
 use lb_storage_service::api::StorageApi;
+use serde::Serialize;
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::warn;
 
@@ -43,6 +52,55 @@ pub async fn lib_block_stream(
         .map(|result| result.map_err(|e| Box::new(e) as DynError));
 
     Ok(stream)
+}
+
+/// A transaction with its hash beside it, as `id`.
+#[derive(Serialize)]
+#[serde(rename = "SignedMantleTx")]
+#[derive(Clone)]
+pub struct TxWithId {
+    id: TxHash,
+    #[serde(flatten)]
+    tx: UnvalidatedTx,
+}
+
+impl Hashable for TxWithId {
+    //noinspection RsTypeCheck: The type is correct, but the linter is confused by
+    // the closure.
+    const HASHER: hashable::Hasher<Self> = |tx| <UnvalidatedTx as Hashable>::HASHER(&tx.tx);
+    type Hash = <UnvalidatedTx as Hashable>::Hash;
+
+    fn as_signing(&self) -> Vec<u8> {
+        self.tx.as_signing()
+    }
+}
+
+impl StorageSize for TxWithId {
+    fn storage_size(&self) -> usize {
+        self.tx.storage_size()
+    }
+}
+
+/// The blocks the node processes, forks included, each transaction carrying
+/// its hash as `id`.
+pub async fn get_new_blocks_with_tx_ids_stream(
+    handle: &Handle,
+) -> Result<impl Stream<Item = Block<TxWithId>> + Send + use<>, Error> {
+    Ok(get_new_blocks_stream(handle).await?.map(|event| {
+        let block = event.block;
+        let transactions = block.transactions().map_ref(|tx| TxWithId {
+            id: tx.hash(),
+            tx: tx.clone(),
+        });
+        Block::reconstruct(
+            block.header().clone(),
+            block.uncle_headers().clone(),
+            transactions,
+            *block.signature(),
+            u32::MAX,
+        )
+        .expect("Block should always build from valid block")
+    }))
 }
 
 async fn get_processed_blocks_event_stream(
@@ -263,7 +321,7 @@ async fn fetch_and_load_immutable_blocks(
     load_blocks_with_chain_state_by_ids(storage, header_ids, chain_info, remaining).await
 }
 
-pub async fn get_blocks_in_slot_range_with_snapshot(
+pub(super) async fn get_blocks_in_slot_range_with_snapshot(
     handle: &Handle,
     slot_from: Slot,
     slot_to: Slot,

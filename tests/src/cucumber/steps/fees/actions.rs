@@ -9,6 +9,13 @@ use std::{
 
 use cucumber::gherkin::Step;
 use futures::{StreamExt as _, future::join_all};
+use lb_api_common::{
+    bodies::wallet::{
+        fund::{WalletFundRequestBody, WalletFundResponseBody},
+        transfer_funds::WalletTransferFundsRequestBody,
+    },
+    queries::{BlockFilter, BlockSortOrder, BlocksStreamQuery},
+};
 use lb_common_http_client::ApiBlock;
 use lb_config::deployment::GAS_PROFILE;
 use lb_core::{
@@ -23,13 +30,6 @@ use lb_core::{
             tx_list::ops::OpsGasContext,
         },
     },
-};
-use lb_http_api_common::{
-    bodies::wallet::{
-        fund::{WalletFundRequestBody, WalletFundResponseBody},
-        transfer_funds::WalletTransferFundsRequestBody,
-    },
-    queries::{BlockFilter, BlockSortOrder, BlocksStreamQuery},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_testing_framework::{NodeHttpClient, configs::wallet::WalletAccount};

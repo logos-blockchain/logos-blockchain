@@ -839,13 +839,13 @@ dependencies = [
  "flate2",
  "futures",
  "hex",
+ "logos-blockchain-api-common",
  "logos-blockchain-binary-codec",
  "logos-blockchain-blend-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-common-http-client",
  "logos-blockchain-config",
  "logos-blockchain-core",
- "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-libp2p",
  "logos-blockchain-network-service",
@@ -4133,6 +4133,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
+name = "logos-blockchain-api-common"
+version = "0.0.0"
+dependencies = [
+ "logos-blockchain-core",
+ "logos-blockchain-key-management-system-keys",
+ "serde",
+ "serde_urlencoded",
+ "serde_with",
+ "time",
+ "url",
+ "utoipa",
+ "validator",
+]
+
+[[package]]
 name = "logos-blockchain-api-service"
 version = "0.0.0"
 dependencies = [
@@ -4407,18 +4422,17 @@ dependencies = [
  "cbindgen",
  "futures",
  "hex",
+ "logos-blockchain-api-common",
  "logos-blockchain-blend-service",
  "logos-blockchain-c-macros",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
- "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-libp2p",
  "logos-blockchain-network-service",
  "logos-blockchain-node",
  "logos-blockchain-pow-service",
- "logos-blockchain-storage-service",
  "logos-blockchain-utils",
  "logos-blockchain-version",
  "multiaddr",
@@ -4652,11 +4666,11 @@ dependencies = [
  "futures",
  "hex",
  "log",
+ "logos-blockchain-api-common",
  "logos-blockchain-chain-broadcast-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
- "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-log-targets",
  "logos-blockchain-sdp-service",
@@ -4789,9 +4803,9 @@ dependencies = [
  "axum 0.8.9",
  "clap",
  "hex",
+ "logos-blockchain-api-common",
  "logos-blockchain-common-http-client",
  "logos-blockchain-groth16",
- "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
  "reqwest 0.12.28",
  "serde_json",
@@ -4817,27 +4831,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
-]
-
-[[package]]
-name = "logos-blockchain-http-api-common"
-version = "0.0.0"
-dependencies = [
- "axum 0.8.9",
- "logos-blockchain-core",
- "logos-blockchain-key-management-system-keys",
- "logos-blockchain-log-targets",
- "logos-blockchain-tracing",
- "pprof",
- "serde",
- "serde_urlencoded",
- "serde_with",
- "time",
- "tokio",
- "tracing",
- "url",
- "utoipa",
- "validator",
 ]
 
 [[package]]
@@ -5075,6 +5068,7 @@ dependencies = [
  "http",
  "humantime",
  "libp2p",
+ "logos-blockchain-api-common",
  "logos-blockchain-api-service",
  "logos-blockchain-binary-codec",
  "logos-blockchain-blend",
@@ -5086,7 +5080,6 @@ dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
- "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-ledger",
  "logos-blockchain-libp2p",
@@ -5109,6 +5102,7 @@ dependencies = [
  "num-bigint",
  "nutype",
  "overwatch",
+ "pprof",
  "rand 0.8.8",
  "regex",
  "serde",
@@ -5360,6 +5354,7 @@ dependencies = [
  "hex",
  "humantime",
  "libp2p",
+ "logos-blockchain-api-common",
  "logos-blockchain-binary-codec",
  "logos-blockchain-chain-service",
  "logos-blockchain-common-http-client",
@@ -5367,7 +5362,6 @@ dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-faucet",
  "logos-blockchain-groth16",
- "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-libp2p",
  "logos-blockchain-log-targets",
@@ -5442,12 +5436,12 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "logos-blockchain-api-common",
  "logos-blockchain-binary-codec",
  "logos-blockchain-common-http-client",
  "logos-blockchain-config",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
- "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-node",
  "logos-blockchain-sdp-service",
@@ -5618,10 +5612,10 @@ name = "logos-blockchain-wallet-http-client"
 version = "0.0.0"
 dependencies = [
  "hex",
+ "logos-blockchain-api-common",
  "logos-blockchain-binary-codec",
  "logos-blockchain-common-http-client",
  "logos-blockchain-core",
- "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
  "url",
 ]
@@ -5687,11 +5681,11 @@ dependencies = [
  "blockchain-test-logos",
  "futures",
  "hex",
+ "logos-blockchain-api-common",
  "logos-blockchain-binary-codec",
  "logos-blockchain-common-http-client",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
- "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-log-targets",
  "logos-blockchain-time",
@@ -5716,10 +5710,10 @@ dependencies = [
  "blockchain-test-logos",
  "cucumber",
  "futures",
+ "logos-blockchain-api-common",
  "logos-blockchain-common-http-client",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
- "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-tests",
  "logos-blockchain-utils",
