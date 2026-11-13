@@ -4,18 +4,22 @@ use educe::Educe;
 use lb_core::header::HeaderId;
 use lb_cryptarchia_sync::{BlocksProviderResponse, TipProviderResponse};
 use tokio::sync::{mpsc::Sender, oneshot};
-use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 
 use crate::backends::NetworkBackend;
 
 #[derive(Debug)]
 pub enum NetworkMsg<Payload, PubSubEvent, ChainSyncEvent> {
     Process(Payload),
+    /// Subscribe to the events of `topics`, on a channel of their own.
     SubscribeToPubSub {
+        topics: HashSet<String>,
         sender: oneshot::Sender<BroadcastStream<PubSubEvent>>,
     },
+    /// Take the chain sync requests, on a bounded channel of their own, in
+    /// place of whoever took them before.
     SubscribeToChainSync {
-        sender: oneshot::Sender<BroadcastStream<ChainSyncEvent>>,
+        sender: oneshot::Sender<ReceiverStream<ChainSyncEvent>>,
     },
 }
 

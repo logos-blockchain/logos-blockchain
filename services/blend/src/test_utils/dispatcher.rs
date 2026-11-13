@@ -7,7 +7,7 @@ use overwatch::{
     services::{ServiceData, relay::OutboundRelay},
 };
 use tokio::sync::{broadcast, mpsc};
-use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
+use tokio_stream::wrappers::{BroadcastStream, ReceiverStream, errors::BroadcastStreamRecvError};
 
 use crate::{
     core::dispatcher::PayloadDispatcher,
@@ -108,11 +108,14 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for TestNetworkBackend {
 
     async fn complete_era_transition(&mut self, _ended_era: Era) {}
 
-    async fn subscribe_to_pubsub(&mut self) -> BroadcastStream<Self::PubSubEvent> {
+    async fn subscribe_to_pubsub(
+        &mut self,
+        _topics: std::collections::HashSet<String>,
+    ) -> BroadcastStream<Self::PubSubEvent> {
         BroadcastStream::new(broadcast::channel(CHANNEL_SIZE).0.subscribe())
     }
 
-    async fn subscribe_to_chainsync(&mut self) -> BroadcastStream<Self::ChainSyncEvent> {
-        BroadcastStream::new(broadcast::channel(CHANNEL_SIZE).0.subscribe())
+    async fn subscribe_to_chainsync(&mut self) -> ReceiverStream<Self::ChainSyncEvent> {
+        ReceiverStream::new(mpsc::channel(CHANNEL_SIZE).1)
     }
 }

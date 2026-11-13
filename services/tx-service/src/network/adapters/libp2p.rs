@@ -9,7 +9,7 @@ use lb_network_service::{
 };
 use lb_time::{Era, era::EraSchedule};
 use overwatch::services::relay::OutboundRelay;
-use tokio_stream::StreamExt as _;
+use tokio_stream::{StreamExt as _, wrappers::errors::BroadcastStreamRecvError};
 
 use crate::network::NetworkAdapter;
 
@@ -152,6 +152,12 @@ where
         // the messages of every era's topic, each decoded under the limit of
         // that era, and follows the adapter from era to era, without requiring
         // any actions from consumers on era changes.
+        let topics = self
+            .settings
+            .era_schedule
+            .iter()
+            .map(|era| era.parameters.topic.clone())
+            .collect();
         let max_op_data_sizes: HashMap<TopicHash, u32> = self
             .settings
             .era_schedule
@@ -166,7 +172,7 @@ where
         let id = self.settings.id;
         let (sender, receiver) = tokio::sync::oneshot::channel();
         self.network_relay
-            .send(NetworkMsg::SubscribeToPubSub { sender })
+            .send(NetworkMsg::SubscribeToPubSub { topics, sender })
             .await
             .expect("Network backend should be ready");
 
@@ -181,7 +187,10 @@ where
                     }
                 }
             }
-            Err(_) => None,
+            Err(BroadcastStreamRecvError::Lagged(n)) => {
+                tracing::error!(target: LOG_TARGET, "lagged messages: {n}");
+                None
+            }
         })))
     }
 

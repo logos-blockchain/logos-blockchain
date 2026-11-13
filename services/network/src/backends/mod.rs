@@ -1,6 +1,8 @@
+use std::collections::HashSet;
+
 use lb_time::Era;
 use overwatch::overwatch::handle::OverwatchHandle;
-use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 
 use super::Debug;
 
@@ -23,6 +25,11 @@ pub trait NetworkBackend<RuntimeServiceId> {
     async fn rotate_era(&mut self, era: Era);
     async fn complete_era_transition(&mut self, ended_era: Era);
 
-    async fn subscribe_to_pubsub(&mut self) -> BroadcastStream<Self::PubSubEvent>;
-    async fn subscribe_to_chainsync(&mut self) -> BroadcastStream<Self::ChainSyncEvent>;
+    async fn subscribe_to_pubsub(
+        &mut self,
+        topics: HashSet<String>,
+    ) -> BroadcastStream<Self::PubSubEvent>;
+    /// The chain sync requests, which go to the latest subscriber only: every
+    /// request is answered once.
+    async fn subscribe_to_chainsync(&mut self) -> ReceiverStream<Self::ChainSyncEvent>;
 }

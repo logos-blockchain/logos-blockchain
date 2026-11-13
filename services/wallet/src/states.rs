@@ -32,17 +32,41 @@ pub struct ClaimableVouchers {
     pub pending: Vec<Voucher>,
 }
 
+/// One reservation of a voucher or a note, told apart from a later one of the
+/// same: a signing that outlives its reservation must not give back the next.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ReservationId(u64);
+
+impl ReservationId {
+    /// Moves on to a new reservation, and returns it.
+    const fn advance(&mut self) -> Self {
+        self.0 += 1;
+        *self
+    }
+}
+
+/// The reservations a signing holds, as they stood when it started.
+pub struct HeldReservations {
+    claim: Option<(VoucherNullifier, ReservationId)>,
+    notes: Vec<(NoteId, ReservationId)>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PendingClaim {
     immutable_blocks_since_reservation: u64,
     /// The number of new immutable blocks after which the pending claim is
     /// released, so the voucher can be claimed again.
     max_immutable_blocks_since_reservation: u64,
+    /// Not persisted, as no signing outlives a restart.
+    #[serde(skip)]
+    id: ReservationId,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct PendingClaims {
     claims: HashMap<VoucherNullifier, PendingClaim>,
+    #[serde(skip)]
+    last_id: ReservationId,
 }
 
 impl PendingClaims {
@@ -62,6 +86,7 @@ impl PendingClaims {
             PendingClaim {
                 immutable_blocks_since_reservation: 0,
                 max_immutable_blocks_since_reservation,
+                id: self.last_id.advance(),
             },
         );
     }
@@ -73,6 +98,17 @@ impl PendingClaims {
                 ?nullifier,
                 "Released pending claim reservation"
             );
+        }
+    }
+
+    fn reservation(&self, nullifier: &VoucherNullifier) -> Option<ReservationId> {
+        self.claims.get(nullifier).map(|claim| claim.id)
+    }
+
+    /// Releases `nullifier` if it's still under reservation `id`.
+    fn release_held(&mut self, nullifier: VoucherNullifier, id: ReservationId) {
+        if self.reservation(&nullifier) == Some(id) {
+            self.release(nullifier);
         }
     }
 
@@ -136,18 +172,32 @@ impl PendingClaims {
 /// having no reservation at all.
 #[derive(Debug, Default)]
 struct PendingNotes {
-    notes: HashMap<NoteId, u64>,
+    notes: HashMap<NoteId, PendingNote>,
+    last_id: ReservationId,
+}
+
+#[derive(Debug)]
+struct PendingNote {
+    immutable_blocks_since_reservation: u64,
+    id: ReservationId,
 }
 
 impl PendingNotes {
     fn reserve(&mut self, note_ids: impl IntoIterator<Item = NoteId>) {
+        let id = self.last_id.advance();
         for note_id in note_ids {
             debug!(
                 target: wallet::SERVICE,
                 ?note_id,
                 "Reserved pending note"
             );
-            self.notes.insert(note_id, 0);
+            self.notes.insert(
+                note_id,
+                PendingNote {
+                    immutable_blocks_since_reservation: 0,
+                    id,
+                },
+            );
         }
     }
 
@@ -160,6 +210,17 @@ impl PendingNotes {
                     "Released pending note reservation"
                 );
             }
+        }
+    }
+
+    fn reservation(&self, note_id: &NoteId) -> Option<ReservationId> {
+        self.notes.get(note_id).map(|note| note.id)
+    }
+
+    /// Releases `note_id` if it's still under reservation `id`.
+    fn release_held(&mut self, note_id: NoteId, id: ReservationId) {
+        if self.reservation(&note_id) == Some(id) {
+            self.release([note_id]);
         }
     }
 
@@ -181,26 +242,26 @@ impl PendingNotes {
             return;
         }
 
-        self.notes
-            .retain(|note_id, immutable_blocks_since_reservation| {
-                *immutable_blocks_since_reservation =
-                    immutable_blocks_since_reservation.saturating_add(new_immutable_blocks_count);
+        self.notes.retain(|note_id, note| {
+            note.immutable_blocks_since_reservation = note
+                .immutable_blocks_since_reservation
+                .saturating_add(new_immutable_blocks_count);
 
-                let expired =
-                    *immutable_blocks_since_reservation >= max_immutable_blocks_since_reservation;
+            let expired =
+                note.immutable_blocks_since_reservation >= max_immutable_blocks_since_reservation;
 
-                if expired {
-                    debug!(
-                        target: wallet::SERVICE,
-                        ?note_id,
-                        immutable_blocks_since_reservation,
-                        max_immutable_blocks_since_reservation,
-                        "Removing pending note reservation after LIB progress"
-                    );
-                }
+            if expired {
+                debug!(
+                    target: wallet::SERVICE,
+                    ?note_id,
+                    immutable_blocks_since_reservation = note.immutable_blocks_since_reservation,
+                    max_immutable_blocks_since_reservation,
+                    "Removing pending note reservation after LIB progress"
+                );
+            }
 
-                !expired
-            });
+            !expired
+        });
     }
 }
 
@@ -412,6 +473,36 @@ impl<'u> ServiceState<'u> {
         self.pending_notes.release(note_ids);
     }
 
+    /// The reservations `claim` and `notes` are under now, for a signing to
+    /// give back if the requester doesn't end up with its transaction.
+    pub fn held_reservations(
+        &self,
+        claim: Option<VoucherNullifier>,
+        notes: impl IntoIterator<Item = NoteId>,
+    ) -> HeldReservations {
+        HeldReservations {
+            claim: claim.and_then(|nullifier| {
+                Some((nullifier, self.pending_claims.reservation(&nullifier)?))
+            }),
+            notes: notes
+                .into_iter()
+                .filter_map(|note_id| Some((note_id, self.pending_notes.reservation(&note_id)?)))
+                .collect(),
+        }
+    }
+
+    /// Gives back what `held` still holds. A reservation made since, after
+    /// `held`'s expired, belongs to another transaction.
+    pub fn give_back(&mut self, held: HeldReservations) {
+        let HeldReservations { claim, notes } = held;
+        if let Some((nullifier, id)) = claim {
+            self.pending_claims.release_held(nullifier, id);
+        }
+        for (note_id, id) in notes {
+            self.pending_notes.release_held(note_id, id);
+        }
+    }
+
     fn update_state(&self) {
         let lib_wallet_state = self
             .wallet()
@@ -428,7 +519,7 @@ impl<'u> ServiceState<'u> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use lb_core::era::{AcceptedForkDigests, ForkDigest};
     use lb_groth16::{Field as _, Fr};
     use lb_ledger::ConsensusExcludedKeys;
@@ -454,7 +545,7 @@ mod tests {
     const EXPIRY_BLOCKS: u64 = 4;
 
     /// A schedule of one era, with epochs of 100 slots and a `k` of 5.
-    fn era_schedule() -> ServiceEraSchedule {
+    pub fn era_schedule() -> ServiceEraSchedule {
         use std::time::Duration;
 
         use lb_time::era::{EraEntriesAfterGenesis, EraSchedule, EraTiming};
@@ -556,11 +647,48 @@ mod tests {
         assert!(pending_notes.note_ids().is_empty());
     }
 
+    /// A signing that outlives its reservation leaves the one made since for
+    /// another transaction alone.
+    #[test]
+    fn a_held_note_is_given_back_only_under_its_own_reservation() {
+        let note_id = NoteId::from(Fr::ONE);
+        let mut pending_notes = PendingNotes::default();
+        pending_notes.reserve([note_id]);
+        let held = pending_notes.reservation(&note_id).unwrap();
+
+        pending_notes.evict_expired(EXPIRY_BLOCKS, EXPIRY_BLOCKS);
+        pending_notes.reserve([note_id]);
+        pending_notes.release_held(note_id, held);
+        assert!(pending_notes.note_ids().contains(&note_id));
+
+        let held = pending_notes.reservation(&note_id).unwrap();
+        pending_notes.release_held(note_id, held);
+        assert!(pending_notes.note_ids().is_empty());
+    }
+
+    /// As for notes, a claim's signing only gives back its own reservation.
+    #[test]
+    fn a_held_claim_is_given_back_only_under_its_own_reservation() {
+        let nullifier = VoucherNullifier::default();
+        let mut pending_claims = PendingClaims::default();
+        pending_claims.reserve(nullifier, EXPIRY_BLOCKS);
+        let held = pending_claims.reservation(&nullifier).unwrap();
+
+        pending_claims.evict_expired(EXPIRY_BLOCKS);
+        pending_claims.reserve(nullifier, EXPIRY_BLOCKS);
+        pending_claims.release_held(nullifier, held);
+        assert!(pending_claims.is_reserved(&nullifier));
+
+        let held = pending_claims.reservation(&nullifier).unwrap();
+        pending_claims.release_held(nullifier, held);
+        assert!(!pending_claims.is_reserved(&nullifier));
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "A ledger config, spelled out field by field."
     )]
-    fn ledger_config() -> lb_ledger::Config {
+    pub fn ledger_config() -> lb_ledger::Config {
         use std::sync::Arc;
 
         use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};

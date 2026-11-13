@@ -157,8 +157,4 @@ where
     pub const fn mempool_adapter(&self) -> &MempoolAdapter<Mempool::Item> {
         &self.mempool_adapter
     }
-
-    pub const fn mempool_adapter_mut(&mut self) -> &mut MempoolAdapter<Mempool::Item> {
-        &mut self.mempool_adapter
-    }
 }

@@ -38,7 +38,8 @@ lb-wallet                        = { workspace = true }
 overwatch                        = { workspace = true }
 
 [dev-dependencies]
-time = { workspace = true }
+time  = { workspace = true }
+tokio = { features = ["macros", "rt", "time"], workspace = true }
 
 [lints]
 workspace = true

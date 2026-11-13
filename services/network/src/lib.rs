@@ -147,8 +147,8 @@ where
                 let send = backend.process(msg);
                 send.await;
             }
-            BackendNetworkMsg::<Backend, _>::SubscribeToPubSub { sender } => sender
-                .send(backend.subscribe_to_pubsub().await)
+            BackendNetworkMsg::<Backend, _>::SubscribeToPubSub { topics, sender } => sender
+                .send(backend.subscribe_to_pubsub(topics).await)
                 .unwrap_or_else(|_| {
                     tracing::warn!(
                         target: LOG_TARGET,

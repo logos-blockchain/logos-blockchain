@@ -61,13 +61,9 @@ where
     }
 
     async fn process_block(&mut self, block: Block<Cryptarchia::Tx>) -> Result<(), Error> {
-        crate::apply_block_and_reconcile_mempool::<_, Mempool>(
-            block,
-            &self.cryptarchia,
-            &self.mempool_adapter,
-        )
-        .await
-        .map_err(Error::from)
+        crate::apply_block_and_reconcile_mempool(block, &self.cryptarchia, &self.mempool_adapter)
+            .await
+            .map_err(Error::from)
     }
 
     async fn has_processed_block(&self, block_id: HeaderId) -> Result<bool, Error> {
@@ -382,7 +378,7 @@ mod tests {
     use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
     use overwatch::{overwatch::OverwatchHandle, services::relay::OutboundRelay};
-    use tokio_stream::wrappers::BroadcastStream;
+    use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 
     use super::*;
     use crate::network::BoxedStream;
@@ -940,11 +936,14 @@ mod tests {
             unimplemented!()
         }
 
-        async fn subscribe_to_pubsub(&mut self) -> BroadcastStream<Self::PubSubEvent> {
+        async fn subscribe_to_pubsub(
+            &mut self,
+            _topics: HashSet<String>,
+        ) -> BroadcastStream<Self::PubSubEvent> {
             unimplemented!()
         }
 
-        async fn subscribe_to_chainsync(&mut self) -> BroadcastStream<Self::ChainSyncEvent> {
+        async fn subscribe_to_chainsync(&mut self) -> ReceiverStream<Self::ChainSyncEvent> {
             unimplemented!()
         }
     }
