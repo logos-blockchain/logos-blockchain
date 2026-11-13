@@ -132,9 +132,9 @@ where
     ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
         // Refuse a payload that could never fit before spending anything on it.
         // Only the length check has to happen this early; padding it — an
-        // allocation of the whole body size with a random tail — waits until the
-        // proofs are in hand, so an attempt that comes up short or is cancelled
-        // costs nothing.
+        // allocation of the whole body size with a random tail — waits until
+        // the proofs are in hand, so an attempt that comes up short or
+        // is cancelled costs nothing.
         let body_size = self.message_layout.payload_body_size;
         if payload.len() > usize::from(body_size) {
             return Err(Error::PayloadTooLarge);

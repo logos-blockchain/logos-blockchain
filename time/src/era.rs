@@ -332,7 +332,7 @@ where
         let elapsed_era_epochs = slot
             .into_inner()
             .strict_sub(era_at_slot.first_slot.into_inner())
-            / era_at_slot.parameters.epoch_length().get();
+            / era_at_slot.parameters.epoch_length();
         let epoch = u64::from(era_at_slot.first_epoch.into_inner()).strict_add(elapsed_era_epochs);
         Epoch::new(u32::try_from(epoch).expect("the epoch of a slot must fit an epoch number"))
     }

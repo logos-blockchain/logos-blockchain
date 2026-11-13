@@ -234,7 +234,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_external_address_is_confirmed_by_autonat_server() {
-        const _500MS: Duration = Duration::from_millis(500);
+        const TIMEOUT: Duration = Duration::from_millis(500);
         drop(
             tracing_subscriber::fmt()
                 .with_env_filter(EnvFilter::from_default_env())
@@ -250,7 +250,7 @@ mod tests {
 
         let client_addr_clone = client_addr.clone();
 
-        let client_task = timeout(_500MS, async move {
+        let client_task = timeout(TIMEOUT, async move {
             let confirmed = client
                 .wait(|e| match e {
                     SwarmEvent::ExternalAddrConfirmed { address } => Some(address),
@@ -275,7 +275,7 @@ mod tests {
             assert!(result.is_ok());
         });
 
-        let server_task = timeout(_500MS, async move {
+        let server_task = timeout(TIMEOUT, async move {
             let autonat::v2::server::Event {
                 tested_addr,
                 result,

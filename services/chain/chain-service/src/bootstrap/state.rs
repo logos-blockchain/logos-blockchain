@@ -35,7 +35,8 @@ fn check_offline_grace_period(
     match now.duration_since(last_state.timestamp) {
         Ok(elapsed) => {
             if elapsed > config.grace_period {
-                // Node has been offline longer than grace period, force bootstrap
+                // Node has been offline longer than grace period, force
+                // bootstrap
                 lb_cryptarchia_engine::State::Bootstrapping
             } else {
                 // Within grace period, use the last known state

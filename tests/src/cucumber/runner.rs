@@ -190,7 +190,8 @@ where
     let failed = world
         .after(move |feature, _rule, scenario, scenario_finished, world| {
             Box::pin(async move {
-                // Runs after the scenario has completed; useful for capturing final state/logs.
+                // Runs after the scenario has completed; useful for capturing
+                // final state/logs.
                 println!(
                     "\nFinished - {}: {} ({}: {})\n",
                     scenario.keyword, scenario.name, feature.keyword, feature.name,
@@ -227,9 +228,9 @@ fn selected_deployer() -> DeployerKind {
     // and context rather than provisioning one itself. To use custom images,
     // set `LOGOS_BLOCKCHAIN_K8S_NODE_IMAGE` for node pods and optionally
     // `LOGOS_BLOCKCHAIN_K8S_BOOTSTRAP_IMAGE` for the cfgsync/bootstrap pod.
-    // If those are unset, the runner falls back to `LOGOS_BLOCKCHAIN_TESTNET_IMAGE`
-    // or the default local node and cfgsync images built by the runtime
-    // docker scripts under
+    // If those are unset, the runner falls back to
+    // `LOGOS_BLOCKCHAIN_TESTNET_IMAGE` or the default local node and
+    // cfgsync images built by the runtime docker scripts under
     // `tests/tf_integration/logos/assets/runtime/scripts/docker`.
     if is_truthy_env(CUCUMBER_DEPLOYER_K8S) {
         return DeployerKind::K8s;

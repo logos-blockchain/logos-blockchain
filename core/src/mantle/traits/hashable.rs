@@ -19,8 +19,8 @@ pub trait Hashable {
 }
 
 impl<T: Hashable> Hashable for &T {
-    //noinspection RsTypeCheck: The type is correct, but the linter is confused by
-    // the closure.
+    //noinspection RsTypeCheck: The type is correct, but the linter is confused
+    // by the closure.
     const HASHER: Hasher<Self> = |tx| T::HASHER(tx);
     type Hash = T::Hash;
 

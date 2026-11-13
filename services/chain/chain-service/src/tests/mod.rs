@@ -82,8 +82,8 @@ fn cryptarchia_switch_to_online() {
     let mut block_ids = vec![genesis_id];
     let mut slot = Slot::new(1);
     while block_ids.len() < 4 {
-        // TODO: Use a mock proof system instead of expensive real proof generation,
-        // by refactoring `Cryptarchia`.
+        // TODO: Use a mock proof system instead of expensive real proof
+        // generation, by refactoring `Cryptarchia`.
         let (block, _) = try_build_block(
             &cryptarchia,
             *block_ids.last().unwrap(),
@@ -99,7 +99,8 @@ fn cryptarchia_switch_to_online() {
         let (pruned_blocks, reorged_blocks, _) = cryptarchia
             .try_apply_block(block, block_header_slot)
             .unwrap();
-        // No block should be pruned since LIB is not updated during Bootstrapping
+        // No block should be pruned since LIB is not updated during
+        // Bootstrapping
         assert!(pruned_blocks.is_empty());
         assert!(reorged_blocks.is_empty());
 

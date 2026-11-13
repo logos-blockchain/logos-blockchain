@@ -131,8 +131,9 @@ where
             .with_behaviour(|_| libp2p_stream::Behaviour::new())
             .expect("Behaviour should be built")
             .with_swarm_config(|cfg| {
-                // We cannot use zero as that would immediately close a connection with an edge
-                // node before they have a chance to upgrade the stream and send the message.
+                // We cannot use zero as that would immediately close a
+                // connection with an edge node before they have
+                // a chance to upgrade the stream and send the message.
                 cfg.with_idle_connection_timeout(Duration::from_secs(1))
             })
             .build();

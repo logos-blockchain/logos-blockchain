@@ -321,24 +321,20 @@ fn render_process_list(processes: &[ProcessSnapshot]) -> String {
 fn render_process_summary(process: &ProcessSnapshot) -> String {
     let cpu = process
         .cpu_usage_percent
-        .map(|value| format!("{value:.1}"))
-        .unwrap_or_default();
-    let rss = process
-        .rss_bytes
-        .map(|value| value.to_string())
-        .unwrap_or_default();
+        .map_or_default(|value| format!("{value:.1}"));
+    let rss = process.rss_bytes.map_or_default(|value| value.to_string());
 
     format!("{}#{}#{}#{}", process.name, process.pid, cpu, rss)
 }
 
 fn format_opt_f64(value: Option<f64>) -> String {
-    value.map(|value| value.to_string()).unwrap_or_default()
+    value.map_or_default(|value| value.to_string())
 }
 
 fn format_opt_u64(value: Option<u64>) -> String {
-    value.map(|value| value.to_string()).unwrap_or_default()
+    value.map_or_default(|value| value.to_string())
 }
 
 fn format_opt_usize(value: Option<usize>) -> String {
-    value.map(|value| value.to_string()).unwrap_or_default()
+    value.map_or_default(|value| value.to_string())
 }

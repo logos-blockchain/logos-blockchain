@@ -121,7 +121,8 @@ mod tests {
         let result = inference
             .total_stake_inference::<PRECISION>(total_stake_estimate, measured_block_density);
 
-        // total stake should decrease because blocks more than expected were produced
+        // total stake should decrease because blocks more than expected were
+        // produced
         assert!(
             result > total_stake_estimate,
             "result({result}) must be > total_stake_estimate({total_stake_estimate})"

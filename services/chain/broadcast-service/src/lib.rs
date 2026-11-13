@@ -79,8 +79,9 @@ where
                     }
                 }
                 BlockBroadcastMsg::SubscribeToFinalizedBlocks { result_sender } => {
-                    // TODO: This naively broadcast what was sent from the chain service. In case
-                    // of LIB branch change (might happend during bootstrapping), blocks should be
+                    // TODO: This naively broadcast what was sent from the chain
+                    // service. In case of LIB branch change
+                    // (might happend during bootstrapping), blocks should be
                     // rebroadcasted from the last common header_id.
                     if let Err(err) = result_sender.send(self.finalized_blocks.subscribe()) {
                         error!(target: LOG_TARGET, "Could not subscribe to new blocks channel: {err:?}");

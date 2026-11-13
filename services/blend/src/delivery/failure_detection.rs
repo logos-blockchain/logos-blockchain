@@ -129,8 +129,9 @@ impl Stream for FailureDetector {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
-            // Take what the broadcasting channel has for us before looking at the clock,
-            // so that a payload delivered by now is never the one now reveals.
+            // Take what the broadcasting channel has for us before looking at
+            // the clock, so that a payload delivered by now is
+            // never the one now reveals.
             while !self.payload_broadcasts.is_done() {
                 match self.payload_broadcasts.poll_next_unpin(cx) {
                     Poll::Pending => break,
@@ -239,8 +240,8 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_payload_is_never_revealed_before_its_full_deadline_has_elapsed() {
         let (mut detection, start, _channel) = watching();
-        // Half a round in: the worst case for a count of rounds, and the case an
-        // inclusive comparison against the round number gets wrong.
+        // Half a round in: the worst case for a count of rounds, and the case
+        // an inclusive comparison against the round number gets wrong.
         let released_at = start + ROUND * 2 + ROUND / 2;
         let _turned = until(&mut detection, start, 2).await;
         tokio::time::sleep_until(released_at).await;
@@ -348,8 +349,8 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_round_in_which_nothing_expires_does_not_wake_the_loop() {
-        // The channel is held open: an idle sender is one that can still see the
-        // broadcasting channel, not one that has lost it.
+        // The channel is held open: an idle sender is one that can still see
+        // the broadcasting channel, not one that has lost it.
         let (mut detection, _start, _channel) = watching();
         assert!(
             tokio::time::timeout(ROUND * 40, detection.next())

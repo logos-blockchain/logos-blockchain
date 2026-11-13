@@ -173,7 +173,8 @@ fn build_run_config_from_env_applies_environment_overrides() {
     let state_path = "/tmp/env-override-test-state";
 
     // SAFETY: The test is serialized via `#[serial]`, and the variables are
-    // removed again before any assertion runs, so no other thread observes them.
+    // removed again before any assertion runs, so no other thread observes
+    // them.
     unsafe { std::env::set_var("HTTP_HOST", http_host) };
     // SAFETY: see above.
     unsafe { std::env::set_var("STATE_PATH", state_path) };

@@ -156,7 +156,8 @@ mod tests {
             let reply = reply_receiver.await.unwrap();
             assert_eq!(reply, 100);
 
-            // Now that the service ponged `max_pong_count` times, it should stop itself.
+            // Now that the service ponged `max_pong_count` times, it should
+            // stop itself.
             assert!(
                 mode.wait_until_stopped_or_kill(Duration::from_secs(1))
                     .await
@@ -194,8 +195,9 @@ mod tests {
             let reply = reply_receiver.await.unwrap();
             assert_eq!(reply, 100);
 
-            // The service shouldn't stop itself since it didn't receive `max_pong_count`
-            // pings yet. Expect that it is forcefully killed after the timeout.
+            // The service shouldn't stop itself since it didn't receive
+            // `max_pong_count` pings yet. Expect that it is
+            // forcefully killed after the timeout.
             assert!(
                 !mode
                     .wait_until_stopped_or_kill(Duration::from_secs(1))
@@ -257,7 +259,6 @@ mod tests {
                         ref settings_handle,
                         ..
                     },
-                ..
             } = self;
 
             let max_pong_count = settings_handle.notifier().get_updated_settings();

@@ -85,7 +85,8 @@ async fn a_connection_that_delivers_nothing_is_closed() {
         }
     }
 
-    // From here neither side sends anything, so the observation window runs out.
+    // From here neither side sends anything, so the observation window runs
+    // out.
     let mut closed = false;
     let timeout = sleep(window() * 5);
     tokio::pin!(timeout);
@@ -139,7 +140,8 @@ async fn a_neighbour_closed_as_not_live_is_refused_for_a_window_then_settles_afr
         .connect_and_wait_for_upgrade(&mut listening_swarm)
         .await;
 
-    // Nothing is ever sent, so the window runs out and the connection is closed.
+    // Nothing is ever sent, so the window runs out and the connection is
+    // closed.
     timeout(window() * 5, async {
         loop {
             select! {

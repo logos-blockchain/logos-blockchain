@@ -61,8 +61,8 @@ async fn collect_readiness_failures(
     nodes: &[Node<LbcEnv>],
     expected_peer_counts: &[usize],
 ) -> Vec<String> {
-    // A single-node topology is stable immediately once health/readiness endpoint
-    // is up.
+    // A single-node topology is stable immediately once health/readiness
+    // endpoint is up.
     if nodes.len() <= 1 {
         return Vec::new();
     }

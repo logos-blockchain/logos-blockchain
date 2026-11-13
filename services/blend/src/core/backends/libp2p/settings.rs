@@ -42,7 +42,8 @@ pub struct Libp2pBlendBackendEraSettings {
 impl Libp2pBlendBackendSettings {
     pub fn peering_degree_check_clock(&self) -> Pin<Box<dyn Stream<Item = ()> + Send>> {
         let Some(interval_duration) = self.peering_degree_check_interval else {
-            // If no interval is configured, return a stream that never yields anything.
+            // If no interval is configured, return a stream that never yields
+            // anything.
             return Box::pin(pending());
         };
         let mut interval = interval_at(

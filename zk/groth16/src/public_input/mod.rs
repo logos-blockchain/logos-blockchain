@@ -45,7 +45,8 @@ impl TryFrom<InputDeser> for Input<Bn254> {
 
 impl From<&Input<Bn254>> for InputDeser {
     fn from(value: &Input<Bn254>) -> Self {
-        // Have to branch here, as by default it's an empty string, but we want "0"
+        // Have to branch here, as by default it's an empty string, but we want
+        // "0"
         if value.0.is_zero() {
             return Self("0".to_owned());
         }

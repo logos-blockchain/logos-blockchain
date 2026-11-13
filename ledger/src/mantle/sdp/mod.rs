@@ -1142,7 +1142,8 @@ mod tests {
             .map(|(sdp_ledger, _)| sdp_ledger)
             .unwrap();
 
-        // Withdraw at epoch 1: `withdrawn = 1 + SNAPSHOT_FINALIZATION_DELAY = 3`.
+        // Withdraw at epoch 1: `withdrawn = 1 + SNAPSHOT_FINALIZATION_DELAY =
+        // 3`.
         let withdraw_op = SDPWithdrawOp {
             declaration_id,
             nonce: Nonce::new(Epoch::new(0), 1),
@@ -1234,8 +1235,9 @@ mod tests {
             .unwrap();
         assert!(declarations.contains_key(&declaration_id));
 
-        // Move forward to epoch 4 where the provider can submit an activity message.
-        // (The provider is expected to provide the service from epoch 3)
+        // Move forward to epoch 4 where the provider can submit an activity
+        // message. (The provider is expected to provide the service
+        // from epoch 3)
         let epoch2 = next_epoch_state(2.into(), &ledger, &config);
         (ledger, _) = ledger
             .try_apply_header(&config, &config, &epoch1, &epoch2)
@@ -1297,8 +1299,8 @@ mod tests {
         (ledger, _) = ledger
             .try_apply_header(&config, &config, &epoch6, &epoch7)
             .unwrap();
-        // Nevertheless, the declaration should be still present because no withdrawal
-        // message was submitted.
+        // Nevertheless, the declaration should be still present because no
+        // withdrawal message was submitted.
         let declarations = ledger
             .get_declarations_by_service(ServiceType::BlendNetwork)
             .unwrap();

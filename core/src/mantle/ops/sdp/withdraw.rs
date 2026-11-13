@@ -73,7 +73,8 @@ impl VerifiableOperation<StandardMode>
         let declaration = context.declaration;
         validate_declaration_id(operation.declaration_id, declaration)?;
 
-        // Check that the declaration hasn't been already scheduled to be withdrawn.
+        // Check that the declaration hasn't been already scheduled to be
+        // withdrawn.
         if let Some(withdraw_at) = declaration.withdraw_at {
             return Err(SdpError::DeclarationWithdrawn {
                 declaration_id: operation.declaration_id,
@@ -102,8 +103,8 @@ impl VerifiableOperation<StandardMode>
         validate_nonce(operation.nonce, declaration)?;
 
         // Defer the proof verification so that the caller can batch it.
-        // Ensure service note pk and zk_id attached to this declaration authorized this
-        // Operation.
+        // Ensure service note pk and zk_id attached to this declaration
+        // authorized this Operation.
         let inputs = public_inputs_from_pks(
             (*context.tx_hash_view.as_fr()).into(),
             &[note.pk, declaration.zk_id],
@@ -134,9 +135,10 @@ impl<Mode: VerificationMode> ExecutableOperation
         // Delay the withdrawal by `SNAPSHOT_FINALIZATION_DELAY` epochs
         // to prevent "stake-less service provision".
         // Otherwise, providers can continue providing the service even after
-        // withdrawal because SDP uses the snapshot from `SNAPSHOT_FINALIZATION_DELAY`
-        // epochs ago.
-        // The note will be unlocked once the withdrawn epoch set here is reached.
+        // withdrawal because SDP uses the snapshot from
+        // `SNAPSHOT_FINALIZATION_DELAY` epochs ago.
+        // The note will be unlocked once the withdrawn epoch set here is
+        // reached.
         declaration.withdraw_at = Some(context.epoch.strict_add(sdp::SNAPSHOT_FINALIZATION_DELAY));
         declaration.nonce = operation.nonce;
 

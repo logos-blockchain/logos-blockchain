@@ -206,8 +206,8 @@ where
             overwatch_handle.relay::<PreloadKmsService<_>>().await?,
         );
 
-        // TODO: This will go once we do not need to pass the secret key anymore, i.e.,
-        // when we have libp2p integration with KMS.
+        // TODO: This will go once we do not need to pass the secret key
+        // anymore, i.e., when we have libp2p integration with KMS.
         let non_ephemeral_signing_key = {
             let (sender, receiver) = oneshot::channel();
             kms.execute(
@@ -372,9 +372,9 @@ where
 
     notify_ready();
 
-    // No need to wait for the PoL stream to return an element. We just move on and
-    // will have a `None` handler until secret info for an epoch is passed to this
-    // service.
+    // No need to wait for the PoL stream to return an element. We just move on
+    // and will have a `None` handler until secret info for an epoch is
+    // passed to this service.
     let mut secret_pol_info_stream = PolInfoProvider::subscribe(overwatch_handle)
         .await
         .expect("Should not fail to subscribe to secret PoL info stream.");

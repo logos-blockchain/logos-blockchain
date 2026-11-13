@@ -18,7 +18,8 @@ use crate::core::{
 async fn edge_peer_not_supporting_blend() {
     let mut dummy_swarm = TestSwarm::new_ephemeral(|_| dummy::Behaviour);
     let mut blend_swarm = TestSwarm::new_ephemeral(|_| {
-        // Add random peer to membership so the dummy swarm is considered an edge node.
+        // Add random peer to membership so the dummy swarm is considered an
+        // edge node.
         BehaviourBuilder::new(PeerId::random()).build()
     });
 
@@ -75,7 +76,8 @@ async fn incoming_connection_with_maximum_peering_degree() {
     let mut edge_swarm_1 = TestSwarm::new_ephemeral(|_| StreamBehaviour::new());
     let mut edge_swarm_2 = TestSwarm::new_ephemeral(|_| StreamBehaviour::new());
     let mut blend_swarm = TestSwarm::new_ephemeral(|_| {
-        // Add random peer to membership so the two swarms are considered edge nodes.
+        // Add random peer to membership so the two swarms are considered edge
+        // nodes.
         BehaviourBuilder::new(PeerId::random())
             // We increase the timeout to send a message so that the swarm will close the rejected
             // connection before the behaviour closes the second connection due to inactivity.
@@ -96,9 +98,9 @@ async fn incoming_connection_with_maximum_peering_degree() {
     edge_swarm_2.connect(&mut blend_swarm).await;
 
     let mut edge_swarm_connection_2_closed = false;
-    // We verify that the additional connection is closed, and that the old one is
-    // kept alive (since we set a timeout of 13 seconds while the default swarm has
-    // a timeout of 10 seconds).
+    // We verify that the additional connection is closed, and that the old one
+    // is kept alive (since we set a timeout of 13 seconds while the default
+    // swarm has a timeout of 10 seconds).
     loop {
         select! {
             () = sleep(Duration::from_secs(12)) => {
@@ -178,8 +180,8 @@ async fn concurrent_incoming_connection_and_maximum_peering_degree_reached() {
 
     let mut dialer_swarm_1_dropped = false;
     let mut dialer_swarm_2_dropped = false;
-    // We need to hold a reference to the stream so that the estbalished connection
-    // is not dropped pro-actively and we can test this logic.
+    // We need to hold a reference to the stream so that the estbalished
+    // connection is not dropped pro-actively and we can test this logic.
     let s1: Arc<Mutex<Option<Stream>>> = Arc::new(Mutex::new(None));
     let s2: Arc<Mutex<Option<Stream>>> = Arc::new(Mutex::new(None));
     loop {

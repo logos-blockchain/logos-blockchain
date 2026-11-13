@@ -316,11 +316,12 @@ impl<'u> ServiceState<'u> {
         pruned_nullifiers: impl IntoIterator<Item = VoucherNullifier>,
     ) {
         // The wallet must already hold a `WalletState` for `new_lib`, otherwise
-        // `update_state` cannot persist the recovery state. The service backfills
-        // up to `new_lib` before calling us; if it still isn't present (e.g. the
-        // block is not yet in storage) we skip advancing rather than panicking,
-        // keeping `self.lib` pointing at a block whose state exists. A later
-        // block application or LIB update advances the LIB once the gap is filled.
+        // `update_state` cannot persist the recovery state. The service
+        // backfills up to `new_lib` before calling us; if it still
+        // isn't present (e.g. the block is not yet in storage) we skip
+        // advancing rather than panicking, keeping `self.lib` pointing
+        // at a block whose state exists. A later block application or
+        // LIB update advances the LIB once the gap is filled.
         if !self.wallet.has_processed_block(new_lib) {
             warn!(
                 target: wallet::SERVICE,

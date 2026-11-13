@@ -72,8 +72,8 @@ impl BinaryEncode for OpRefs<'_> {
 }
 
 impl Hashable for OpRefs<'_> {
-    //noinspection RsTypeCheck: The type is correct, but the linter is confused by
-    // the closure.
+    //noinspection RsTypeCheck: The type is correct, but the linter is confused
+    // by the closure.
     const HASHER: hashable::Hasher<Self> = tx_hasher;
     type Hash = TxHash;
 

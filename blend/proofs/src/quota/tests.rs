@@ -387,8 +387,8 @@ fn different_keys_same_index() {
         .unwrap()
         .key_nullifier();
 
-    // We test that different keys with the same index produce the same nullifier,
-    // so it's not possible to "cheat" the system by using different keys for the
-    // same index.
+    // We test that different keys with the same index produce the same
+    // nullifier, so it's not possible to "cheat" the system by using
+    // different keys for the same index.
     assert_eq!(key_nullifier_poq_key_1, key_nullifier_poq_key_2);
 }

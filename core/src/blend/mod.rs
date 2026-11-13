@@ -17,8 +17,8 @@ pub fn core_quota(
     cover_replication_factor: u64,
     membership_size: usize,
 ) -> Result<Quota, CircuitIntegerOutOfRange> {
-    // `C`: Expected number of cover messages that are generated during an epoch by
-    // the core nodes.
+    // `C`: Expected number of cover messages that are generated during an epoch
+    // by the core nodes.
     let expected_number_of_epoch_messages =
         rounds_per_epoch.get() as f64 * message_frequency_per_round.get();
 
@@ -27,8 +27,8 @@ pub fn core_quota(
     let blending_operations_per_message =
         num_blend_layers.get() as f64 * (1.0 + cover_replication_factor as f64);
 
-    // `Q_c`: Messaging allowance that can be used by a core node during a single
-    // epoch, `Q_c = ceil(C * (ß_c + R_c * ß_c) / N)`.
+    // `Q_c`: Messaging allowance that can be used by a core node during a
+    // single epoch, `Q_c = ceil(C * (ß_c + R_c * ß_c) / N)`.
     let quota_integer = NonZeroU64::try_from(
         ((expected_number_of_epoch_messages * blending_operations_per_message)
             / membership_size as f64)

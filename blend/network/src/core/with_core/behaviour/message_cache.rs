@@ -59,9 +59,9 @@ impl MessageCache {
         &mut self,
         message: &EncapsulatedMessageWithVerifiedPublicHeader,
     ) {
-        // Forwarded messages are also considered received (i.e. we ignore them if we
-        // receive them later on), so we only mark the message as received if it
-        // is not already marked as processed.
+        // Forwarded messages are also considered received (i.e. we ignore them
+        // if we receive them later on), so we only mark the message as
+        // received if it is not already marked as processed.
         let Entry::Vacant(entry) = self.messages.entry(message.id()) else {
             return;
         };

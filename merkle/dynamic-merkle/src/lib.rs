@@ -1062,7 +1062,8 @@ mod tests {
         let (tree, _) = tree.insert(fr_from_rng(&mut rand::thread_rng()));
         let (tree, _) = tree.insert(fr_from_rng(&mut rand::thread_rng()));
 
-        // Remove items at positions 3, 1, 4 (creating free positions in that order)
+        // Remove items at positions 3, 1, 4 (creating free positions in that
+        // order)
         let tree = tree.remove(3);
         let tree = tree.remove(1);
         let tree = tree.remove(4);
@@ -1072,7 +1073,8 @@ mod tests {
         let (tree, index1) = tree.insert(fr_from_rng(&mut rand::thread_rng()));
         assert_eq!(index1, 1, "Should select smallest free position first");
 
-        // Next insertion should use the next smallest free position (position 3)
+        // Next insertion should use the next smallest free position (position
+        // 3)
         let (tree, index2) = tree.insert(fr_from_rng(&mut rand::thread_rng()));
         assert_eq!(index2, 3, "Should select next smallest free position");
 
@@ -1101,8 +1103,9 @@ mod tests {
         // Verify the path can reconstruct the root
         verify_path(item, &path, tree.root());
 
-        // For a single item at index 0, we go down the left subtree at every level
-        // So all siblings should be Right nodes with empty subtree hashes
+        // For a single item at index 0, we go down the left subtree at every
+        // level So all siblings should be Right nodes with empty
+        // subtree hashes
         for (height, node) in path.iter().enumerate() {
             assert!(matches!(node, MerkleNode::Right(_)));
             let sibling_hash = TestHasher::empty_subtree_root(height);
@@ -1139,11 +1142,13 @@ mod tests {
         assert_eq!(path0.len(), TREE_HEIGHT_EXCEPT_ROOT);
         verify_path(item0, &path0, tree.root());
 
-        // Test path for idx1 (second item, right sibling of idx0 at the leaf level)
+        // Test path for idx1 (second item, right sibling of idx0 at the leaf
+        // level)
         let path1 = tree.path(idx1).unwrap();
         assert_eq!(path1.len(), TREE_HEIGHT_EXCEPT_ROOT);
         verify_path(item1, &path1, tree.root());
-        // For idx1, the first sibling (at leaf level) should be idx0 (left sibling)
+        // For idx1, the first sibling (at leaf level) should be idx0 (left
+        // sibling)
         assert!(matches!(path1.first().unwrap(), MerkleNode::Left(_)));
         assert_eq!(*path1.first().unwrap().item(), item0);
 

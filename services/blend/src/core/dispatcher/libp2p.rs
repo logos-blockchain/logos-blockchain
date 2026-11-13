@@ -182,8 +182,9 @@ where
 
     observe_items_ignoring_lags(BroadcastStream::new(received), StreamType::Proposals)
         .map(|proposal| {
-            // Encoded the way it was handed to Blend, so that the two are the same
-            // bytes and comparing them is all the sender has to do.
+            // Encoded the way it was handed to Blend, so that the two are the
+            // same bytes and comparing them is all the sender has
+            // to do.
             DataPayload::from_proposal(&proposal)
         })
         .boxed()
@@ -254,8 +255,9 @@ where
 
     observe_items_ignoring_lags(BroadcastStream::new(accepted), StreamType::Transactions)
         .map(|transaction| {
-            // Encoded the way it was handed to Blend, so that the two are the same
-            // bytes and comparing them is all the sender has to do.
+            // Encoded the way it was handed to Blend, so that the two are the
+            // same bytes and comparing them is all the sender has
+            // to do.
             DataPayload::from_transaction(&transaction)
         })
         .boxed()

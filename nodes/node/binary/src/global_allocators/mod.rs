@@ -11,3 +11,8 @@ pub mod dhat_heap;
     not(target_env = "msvc")
 ))]
 pub mod jemalloc;
+
+// With both features enabled, `dhat-heap` takes over and nothing references
+// jemalloc, so mark the dependency as used.
+#[cfg(all(feature = "jemalloc", feature = "dhat-heap", not(target_env = "msvc")))]
+use tikv_jemallocator as _;

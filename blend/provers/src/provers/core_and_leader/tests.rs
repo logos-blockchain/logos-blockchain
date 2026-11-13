@@ -74,8 +74,8 @@ async fn proof_generation() {
     let (leadership_public_inputs, leadership_private_inputs) =
         valid_proof_of_leader_inputs(leadership_quota);
 
-    // We override all the settings since we fixtures for core and leadership proofs
-    // use a different set of public inputs.
+    // We override all the settings since we fixtures for core and leadership
+    // proofs use a different set of public inputs.
     core_and_leader_proofs_generator.override_settings(CoreProofsGeneratorSettings {
         common: ProofsGeneratorSettings {
             local_node_index: None,
@@ -139,8 +139,8 @@ async fn epoch_private_info() {
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs.clone()),
     );
 
-    // Switch to leadership inputs before wiring leader private epoch info, because
-    // we use fixtures that yield different public inputs.
+    // Switch to leadership inputs before wiring leader private epoch info,
+    // because we use fixtures that yield different public inputs.
     core_and_leader_proofs_generator.override_settings(CoreProofsGeneratorSettings {
         common: ProofsGeneratorSettings {
             local_node_index: None,
@@ -207,8 +207,8 @@ async fn epoch_private_info() {
         })
         .unwrap();
 
-    // We override all the settings since we fixtures for core and leadership proofs
-    // use a different set of public inputs.
+    // We override all the settings since we fixtures for core and leadership
+    // proofs use a different set of public inputs.
     core_and_leader_proofs_generator.override_settings(CoreProofsGeneratorSettings {
         common: ProofsGeneratorSettings {
             local_node_index: None,

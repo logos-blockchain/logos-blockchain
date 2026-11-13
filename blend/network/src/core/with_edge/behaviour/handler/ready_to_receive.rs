@@ -80,8 +80,8 @@ impl StateTrait for ReadyToReceiveState {
     }
 
     // If the timer elapses, moves the state machine to `DroppedState` with a
-    // timeout error. Otherwise, it moves it to `ReceivingState` with the `recv_msg`
-    // future to fetch the first message from the stream.
+    // timeout error. Otherwise, it moves it to `ReceivingState` with the
+    // `recv_msg` future to fetch the first message from the stream.
     fn poll(mut self, cx: &mut Context<'_>) -> PollResult<ConnectionState> {
         let Poll::Pending = self.timeout_timer.poll_unpin(cx) else {
             tracing::debug!(target: LOG_TARGET, "Timeout reached without starting the reception of the message. Closing the connection.");

@@ -291,8 +291,8 @@ pub async fn poll_all_nodes_and_update_consensus_cache<S: ::std::hash::BuildHash
                 header_hash: info.cryptarchia_info.tip.encode_hex(),
             }),
             Err(e) => {
-                // If both `consensus_info` and `network_info` fail, assume the node is no
-                // longer responsive.
+                // If both `consensus_info` and `network_info` fail, assume the
+                // node is no longer responsive.
                 if let Err(e2) = poll_network_info(
                     nodes_info.get_mut(&node_name).expect("Failed to get node"),
                     &node_name,

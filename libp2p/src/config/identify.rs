@@ -43,8 +43,8 @@ impl Settings {
     ) -> identify::Config {
         let mut config = identify::Config::new(protocol_name.to_string(), public_key);
 
-        // Apply only the settings that were specified, leaving libp2p defaults for the
-        // rest
+        // Apply only the settings that were specified, leaving libp2p defaults
+        // for the rest
         if let Some(agent_version) = &self.agent_version {
             config = config.with_agent_version(agent_version.clone());
         }

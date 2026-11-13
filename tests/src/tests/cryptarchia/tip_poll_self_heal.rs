@@ -18,7 +18,7 @@
 //! cargo build -p logos-blockchain-node --release \
 //!   --features testing-disable-proposal-publish
 //! LOGOS_BLOCKCHAIN_NODE_BIN=$(pwd)/target/release/logos-blockchain-node \
-//!   cargo test -p logos-blockchain-tests --features tip_poll_self_heal \
+//!   cargo test -p logos-blockchain-tests --features tip-poll-self-heal \
 //!   --test test_cryptarchia_tip_poll_self_heal -- --nocapture
 //! ```
 
@@ -93,7 +93,8 @@ fn config(mut config: RunConfig) -> RunConfig {
         .sync
         .tip_poll
         .lag_threshold_blocks = NonZeroU64::new(1).unwrap();
-    // Catch-up downloads must reach as many peers as possible to speed up the test
+    // Catch-up downloads must reach as many peers as possible to speed up the
+    // test
     let network = &mut config.user.cryptarchia.network.network;
     network.max_connected_peers_to_try_download = NODE_COUNT;
     network.max_discovered_peers_to_try_download = NODE_COUNT;

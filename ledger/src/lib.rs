@@ -555,8 +555,9 @@ impl LedgerState {
             CryptarchiaLedger::from_utxos(utxos, config, consensus_excluded_keys, Fr::ZERO);
         let mantle_ledger =
             MantleLedger::new(config, pow_reward_pool, cryptarchia_ledger.epoch_state());
-        // Seed the genesis epoch-state membership snapshots from the genesis SDP
-        // ledger, which only exists after the mantle ledger is built.
+        // Seed the genesis epoch-state membership snapshots from the genesis
+        // SDP ledger, which only exists after the mantle ledger is
+        // built.
         let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(&mantle_ledger.sdp, config);
         Self {
             block_number: 0,
@@ -597,8 +598,9 @@ impl LedgerState {
             cryptarchia_ledger.latest_utxos(),
             cryptarchia_ledger.epoch_state(),
         )?;
-        // Seed the genesis epoch-state membership snapshots from the genesis SDP
-        // ledger (which carries the genesis declarations applied above).
+        // Seed the genesis epoch-state membership snapshots from the genesis
+        // SDP ledger (which carries the genesis declarations applied
+        // above).
         let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(&mantle_ledger.sdp, config);
         Ok((
             Self {
@@ -1664,7 +1666,8 @@ mod tests {
         .unwrap();
         let config_tx = create_config_tx(config_op.clone(), &signing_key);
 
-        // Inscriptions keep extending the channel, none of them moves the config tip
+        // Inscriptions keep extending the channel, none of them moves the
+        // config tip
         for byte in [4u8, 5, 6] {
             let inscribe = InscriptionOp {
                 channel_id,
@@ -2005,7 +2008,8 @@ mod tests {
         deferred_proofs.verify().unwrap();
 
         assert_eq!(tx_balance, 0);
-        // The note is released from the channel and remains spendable in the ledger.
+        // The note is released from the channel and remains spendable in the
+        // ledger.
         assert!(
             !new_state
                 .mantle_ledger()
@@ -2503,7 +2507,8 @@ mod tests {
             ))
         ));
 
-        // Writing into an empty channel with a parent != MsgId::root() should also fail
+        // Writing into an empty channel with a parent != MsgId::root() should
+        // also fail
         let empty_channel_id = ChannelId::from([8; 32]);
         let empty_inscribe = InscriptionOp {
             channel_id: empty_channel_id,
@@ -2788,8 +2793,8 @@ mod tests {
     }
 
     // TODO: Update this test to work with the new SDP API
-    // This test needs to be rewritten to use the new SDP ledger API which no longer
-    // exposes get_declaration() or uses declaration_id() methods.
+    // This test needs to be rewritten to use the new SDP ledger API which no
+    // longer exposes get_declaration() or uses declaration_id() methods.
     // #[test]
     // #[expect(clippy::, reason = "Test function.")]
     #[test]
@@ -2817,7 +2822,8 @@ mod tests {
             vec![output_note],
             std::slice::from_ref(&sk),
         );
-        // Pays 2925 fees = 2705 execution base fee + 0 execution tip + 220 storage
+        // Pays 2925 fees = 2705 execution base fee + 0 execution tip + 220
+        // storage
         let gas_context = OpsGasContext::from_channels(
             &Channels::new(),
             ledger.get_gas_prices(),
@@ -2832,8 +2838,8 @@ mod tests {
         let result = ledger
             .clone()
             .try_apply_block_contents::<_, HeaderId>(&eras, std::iter::once(tx.clone()));
-        // The `unwrap` should succeed because the user pays at least the base fee of
-        // 2705
+        // The `unwrap` should succeed because the user pays at least the base
+        // fee of 2705
         let _apply_result = result.unwrap();
 
         ledger.cryptarchia_ledger = ledger.cryptarchia_ledger.set_execution_base_fee(10.into());
@@ -2842,8 +2848,8 @@ mod tests {
             .try_apply_block_contents::<_, HeaderId>(&eras, std::iter::once(tx))
             .err()
             .unwrap();
-        // The transaction should be rejected because the price indicated for execution
-        // doesn't cover the base fee that cost 27 050
+        // The transaction should be rejected because the price indicated for
+        // execution doesn't cover the base fee that cost 27 050
         assert_eq!(err, LedgerError::InsufficientBalance);
     }
 
@@ -2924,13 +2930,13 @@ mod tests {
         let result = ledger
             .clone()
             .try_apply_block_contents::<_, HeaderId>(&eras, std::iter::once(tx));
-        // The `unwrap` should succeed because the user pays at least the base fee of
-        // 794
+        // The `unwrap` should succeed because the user pays at least the base
+        // fee of 794
         let (no_priority_fee_ledger, events, _) = result.unwrap();
         assert_eq!(events, []);
 
-        // The tx ays 1794 fees = 590 execution base fee + 1000 execution tip + 204
-        // storage
+        // The tx ays 1794 fees = 590 execution base fee + 1000 execution tip +
+        // 204 storage
         output_note.value = utxo.note.value - fees.into_inner() - 1000;
         let tx = create_tx(
             vec![utxo.id()],
@@ -2941,8 +2947,8 @@ mod tests {
         .unwrap();
 
         let result = ledger.try_apply_block_contents::<_, HeaderId>(&eras, std::iter::once(tx));
-        // The `unwrap` should succeed because the user pays at least the base fee of
-        // 794
+        // The `unwrap` should succeed because the user pays at least the base
+        // fee of 794
         let (priority_fee_ledger, events, _) = result.unwrap();
 
         assert_eq!(
@@ -3026,7 +3032,8 @@ mod tests {
                 Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
             )
             .into_state_trusted();
-            // Skip `op.validate` in this test to avoid having to generate a valid proof
+            // Skip `op.validate` in this test to avoid having to generate a
+            // valid proof
             let (result, _events) = signed_operation
                 .execute(LeaderClaimExecutionContext {
                     nullifiers: leaders.nullifiers_cloned(),
@@ -3072,7 +3079,8 @@ mod tests {
         let preverified_signed_operation = signed_operation.into_state_trusted::<Preverified>();
         let executable_signed_operation = preverified_signed_operation.clone().into_state_trusted();
 
-        // Skip `op.validate` in this test to avoid having to generate a valid proof
+        // Skip `op.validate` in this test to avoid having to generate a valid
+        // proof
         let (result, _events) = executable_signed_operation
             .execute(LeaderClaimExecutionContext {
                 nullifiers: leaders.nullifiers_cloned(),
@@ -3280,10 +3288,11 @@ mod tests {
 
         #[test]
         fn claim_tx_validation_rejects_disabled_rewards() {
-            // End-to-end through `try_apply_tx_operations`: with `sigma_e` forced to
-            // zero the claim fails the §5.6 safety cutoff. This exercises
-            // the full wiring: preverification, the stateful
-            // `ClaimPowReward` arm and the helper-built context.
+            // End-to-end through `try_apply_tx_operations`: with `sigma_e`
+            // forced to zero the claim fails the §5.6 safety
+            // cutoff. This exercises the full wiring:
+            // preverification, the stateful `ClaimPowReward` arm
+            // and the helper-built context.
             let config = config();
             let mut state = LedgerState::from_utxos(
                 [utxo()],
@@ -3350,9 +3359,10 @@ mod tests {
 
         #[test]
         fn claim_tx_end_to_end_pays_the_reward() {
-            // The full §5.3 pipeline through `try_apply_tx_operations`: preverification,
-            // helper-built validation context (pool, window, epoch nonce,
-            // difficulty, double-claim) and execution.
+            // The full §5.3 pipeline through `try_apply_tx_operations`:
+            // preverification, helper-built validation context
+            // (pool, window, epoch nonce, difficulty, double-claim)
+            // and execution.
             let (state, config) = claim_accepting_state();
             let pool_before = state.mantle_ledger.pow.reward_pool();
             let epoch_reward = state.mantle_ledger.pow.epoch_reward();
@@ -3574,8 +3584,8 @@ mod tests {
         fn claim_execution_alone_has_no_double_claim_guard() {
             // `try_apply_op` is execute-only by design (like the other op
             // arms): the double-claim check lives in
-            // `ClaimPowRewardOp::validate`, which `try_apply_tx_operations` runs via
-            // `verify_stateful_op` before execution (see
+            // `ClaimPowRewardOp::validate`, which `try_apply_tx_operations`
+            // runs via `verify_stateful_op` before execution (see
             // `claim_tx_double_claim_is_rejected`). Calling the execution
             // path directly therefore pays the same solution twice — pinned
             // here to document that the guard lives in validation, not
@@ -3634,7 +3644,8 @@ mod tests {
                 .compute_block_rewards::<HeaderId>(1_000.into(), 0.into(), &config)
                 .expect("reward computation should succeed");
 
-            // `from_utxos` starts at block number 0, so the fees land at window index 0.
+            // `from_utxos` starts at block number 0, so the fees land at window
+            // index 0.
             assert_eq!(
                 state.cryptarchia_ledger.get_fee_from_index(0),
                 GasCost::from(900)

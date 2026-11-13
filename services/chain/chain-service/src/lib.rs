@@ -530,8 +530,9 @@ impl Cryptarchia {
         let transactions = block.into_transactions();
 
         // Apply the block to the ledger, and batch-verify ZK proofs.
-        // This ledger update is not finalized yet, and will be committed only after
-        // checking if the block is accepted by the consensus engine.
+        // This ledger update is not finalized yet, and will be committed only
+        // after checking if the block is accepted by the consensus
+        // engine.
         let update = self
             .ledger
             .prepare_update(
@@ -800,8 +801,8 @@ where
         .await
         .expect("The chain can't be recovered from storage. Remove the chain data, and sync from genesis");
 
-        // These are blocks that have been pruned by the cryptarchia engine but have not
-        // yet been deleted from the storage layer.
+        // These are blocks that have been pruned by the cryptarchia engine but
+        // have not yet been deleted from the storage layer.
         let storage_blocks_to_remove = delete_stale_blocks_from_storage(
             pruned_blocks.stale_blocks().copied(),
             &self.state.storage_blocks_to_remove,
@@ -830,8 +831,9 @@ where
 
         let chain_online_notifier = ChainOnlineNotifier::new(*cryptarchia.state());
 
-        // Mark the service as ready. The service is operational and can handle requests
-        // even while in bootstrap mode waiting for IBD+PBP to complete.
+        // Mark the service as ready. The service is operational and can handle
+        // requests even while in bootstrap mode waiting for IBD+PBP to
+        // complete.
         self.notify_service_ready();
 
         let Self {
@@ -955,9 +957,9 @@ where
             .await?;
 
         let mut blocks = Vec::new();
-        // `load_block_ids_from_storage` walks from tip back to LIB and includes LIB.
-        // Replay recovery blocks in LIB->tip order, skipping LIB because Cryptarchia
-        // is already initialized from it.
+        // `load_block_ids_from_storage` walks from tip back to LIB and includes
+        // LIB. Replay recovery blocks in LIB->tip order, skipping LIB
+        // because Cryptarchia is already initialized from it.
         for id in ids.into_iter().rev().skip(1) {
             let block = storage
                 .get_block(&id)
@@ -975,7 +977,8 @@ where
         storage: StorageApi<Tx>,
     ) -> RecoveryBlocks<Tx> {
         if tip == lib {
-            // Cryptarchia already starts from LIB, so there is no branch to replay.
+            // Cryptarchia already starts from LIB, so there is no branch to
+            // replay.
             return RecoveryBlocks {
                 blocks: Vec::new(),
                 fell_back_to_lib: false,

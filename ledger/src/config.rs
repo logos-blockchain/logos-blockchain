@@ -420,7 +420,8 @@ impl RewardPoWConfig {
             "PoW share must not exceed its denominator; guaranteed by RewardPoWConfig::validate"
         );
 
-        // Convert u64 values to u128 to avoid overflow. Safe to use `strict_mul`.
+        // Convert u64 values to u128 to avoid overflow. Safe to use
+        // `strict_mul`.
         let share = u128::from(collected_fees).strict_mul(u128::from(self.pow_share))
             / NonZeroU128::from(self.share_den);
         Value::try_from(share).expect("share cannot exceed collected_fees")

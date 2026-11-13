@@ -1854,8 +1854,9 @@ async fn test_initialize_recovers_matching_saved_state() {
             u64::from(minimal_network_size).try_into().unwrap(),
             0,
         );
-        // More than one layer, so the emission slots the recovery state counts and the
-        // key indices the generator resumes from cannot be confused for each other.
+        // More than one layer, so the emission slots the recovery state counts
+        // and the key indices the generator resumes from cannot be
+        // confused for each other.
         settings.num_blend_layers = 3.try_into().unwrap();
         (settings, local_node)
     };
@@ -1883,7 +1884,8 @@ async fn test_initialize_recovers_matching_saved_state() {
         dummy_overwatch_resources();
     let (sdp_relay_1, _sdp_relay_receiver) = sdp_relay();
 
-    // Build a pre-populated saved state with matching epoch and some spent quota.
+    // Build a pre-populated saved state with matching epoch and some spent
+    // quota.
     let public_info = new_epoch_info(initial_epoch, membership.clone(), &settings);
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let saved_state = ServiceState::with_epoch(
@@ -1940,17 +1942,17 @@ async fn test_initialize_recovers_matching_saved_state() {
         "Matching epoch: spent_quota should be restored from saved state"
     );
     assert_eq!(recovered_checkpoint.last_seen_epoch(), initial_epoch);
-    // A transaction still waiting for a `PoW` solution has not been encapsulated
-    // and so belongs to no epoch: a restart must not lose it.
+    // A transaction still waiting for a `PoW` solution has not been
+    // encapsulated and so belongs to no epoch: a restart must not lose it.
     assert_eq!(
         recovered_checkpoint.pending_transactions().front(),
         Some(&b"transaction".to_vec()),
         "Matching epoch: a queued transaction should be restored from saved state"
     );
-    // The restored quota is also what tells the core proof generator where to pick
-    // up — it is counted in proofs, and the generator hands out one per key index.
-    // Re-proving an index re-derives a key nullifier this node already put on the
-    // wire, and peers drop that as a duplicate.
+    // The restored quota is also what tells the core proof generator where to
+    // pick up — it is counted in proofs, and the generator hands out one
+    // per key index. Re-proving an index re-derives a key nullifier this
+    // node already put on the wire, and peers drop that as a duplicate.
     assert_eq!(
         recorded_starting_core_key_indices(),
         vec![Quota::new::<15>()],
@@ -2063,8 +2065,8 @@ async fn test_initialize_submits_activity_proof_for_the_previous_epoch() {
         u64::from(minimal_network_size).try_into().unwrap(),
         0,
     );
-    // A long epoch makes the core quota, and with it the activity threshold, high
-    // enough for a single token to clear it.
+    // A long epoch makes the core quota, and with it the activity threshold,
+    // high enough for a single token to clear it.
     settings.time.rounds_per_epoch = 648_000.try_into().unwrap();
 
     // Saved under epoch 0; the node comes back up in epoch 1.
@@ -2522,8 +2524,8 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
         .await;
     });
 
-    // The gate is shut, so the leadership branch has nothing to give: this is the
-    // window the proposal used to die in.
+    // The gate is shut, so the leadership branch has nothing to give: this is
+    // the window the proposal used to die in.
     inbound_message_sender
         .send(ServiceMessage::Blend(DataPayload::BlockProposal(
             b"proposal".to_vec(),

@@ -880,12 +880,10 @@ fn initial_peers_for_dynamic_node(
     match network_params.libp2p_network_layout {
         Libp2pNetworkLayout::Star => peer_ports
             .first()
-            .map(|port| vec![lb_libp2p::multiaddr(Ipv4Addr::LOCALHOST, *port)])
-            .unwrap_or_default(),
+            .map_or_default(|port| vec![lb_libp2p::multiaddr(Ipv4Addr::LOCALHOST, *port)]),
         Libp2pNetworkLayout::Chain => peer_ports
             .last()
-            .map(|port| vec![lb_libp2p::multiaddr(Ipv4Addr::LOCALHOST, *port)])
-            .unwrap_or_default(),
+            .map_or_default(|port| vec![lb_libp2p::multiaddr(Ipv4Addr::LOCALHOST, *port)]),
         Libp2pNetworkLayout::Full => peer_ports
             .iter()
             .map(|port| lb_libp2p::multiaddr(Ipv4Addr::LOCALHOST, *port))

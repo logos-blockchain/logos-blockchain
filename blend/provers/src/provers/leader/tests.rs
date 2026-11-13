@@ -56,8 +56,8 @@ async fn proof_generation() {
             .unwrap();
     }
 
-    // Next proof should still return `Some` since leadership proofs do not have a
-    // maximum cap.
+    // Next proof should still return `Some` since leadership proofs do not have
+    // a maximum cap.
     timeout(
         Duration::from_secs(20),
         leader_proofs_generator.get_next_proof(),

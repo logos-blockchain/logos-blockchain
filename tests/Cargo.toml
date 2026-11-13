@@ -16,9 +16,11 @@ workspace = true
 [dev-dependencies]
 divan       = { workspace = true }
 lb-core     = { features = ["test-utils"], workspace = true }
+lb-faucet   = { workspace = true }
 lb-groth16  = { workspace = true }
 lb-mmr      = { workspace = true }
 lb-utxotree = { workspace = true }
+serial_test = { workspace = true }
 
 [dependencies]
 async-trait                      = { workspace = true }
@@ -38,7 +40,6 @@ lb-chain-service                 = { workspace = true }
 lb-common-http-client            = { workspace = true }
 lb-config                        = { workspace = true }
 lb-core                          = { workspace = true }
-lb-faucet                        = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { workspace = true }
@@ -62,7 +63,6 @@ rpds                             = { workspace = true }
 serde                            = { features = ["derive"], workspace = true }
 serde_json                       = { workspace = true }
 serde_yaml                       = { workspace = true }
-serial_test                      = { workspace = true }
 strum                            = { features = ["derive", "std"], workspace = true }
 strum_macros                     = { workspace = true }
 tempfile                         = { workspace = true }
@@ -77,10 +77,10 @@ tracing-subscriber               = { features = ["env-filter", "fmt"], workspace
 
 [features]
 cucumber             = []
-cucumber_stand_alone = []
-mantle_sdp           = []
-testing_framework    = []
-tip_poll_self_heal   = []
+cucumber-stand-alone = []
+mantle-sdp           = []
+testing-framework    = []
+tip-poll-self-heal   = []
 
 [[test]]
 name = "test_cli_restart"
@@ -93,7 +93,7 @@ path = "src/tests/cryptarchia/blocks_streaming.rs"
 [[test]]
 name              = "test_cryptarchia_tip_poll_self_heal"
 path              = "src/tests/cryptarchia/tip_poll_self_heal.rs"
-required-features = ["tip_poll_self_heal"]
+required-features = ["tip-poll-self-heal"]
 
 [[test]]
 name = "test_mantle_chain_start"
@@ -110,12 +110,12 @@ path = "src/tests/mantle/faucet.rs"
 [[test]]
 name              = "test_mantle_sdp_ops"
 path              = "src/tests/mantle/sdp/ops.rs"
-required-features = ["mantle_sdp"]
+required-features = ["mantle-sdp"]
 
 [[test]]
 name              = "test_mantle_sdp_blend"
 path              = "src/tests/mantle/sdp/activity.rs"
-required-features = ["mantle_sdp"]
+required-features = ["mantle-sdp"]
 
 [[test]]
 name = "test_mantle_leader"
@@ -124,32 +124,32 @@ path = "src/tests/mantle/leader.rs"
 [[test]]
 name              = "test_testing_framework_smoke_local"
 path              = "src/tests/testing_framework/smoke_local.rs"
-required-features = ["testing_framework"]
+required-features = ["testing-framework"]
 
 [[test]]
 name              = "test_testing_framework_external_urls_inscription"
 path              = "src/tests/testing_framework/external_urls_inscription.rs"
-required-features = ["testing_framework"]
+required-features = ["testing-framework"]
 
 [[test]]
 name              = "test_testing_framework_fork_detector"
 path              = "src/tests/testing_framework/fork_detector.rs"
-required-features = ["testing_framework"]
+required-features = ["testing-framework"]
 
 [[test]]
 name              = "test_testing_framework_k8s_smoke"
 path              = "src/tests/testing_framework/k8s_smoke.rs"
-required-features = ["testing_framework"]
+required-features = ["testing-framework"]
 
 [[test]]
 name              = "test_testing_framework_cucumber_smoke_local"
 path              = "cucumber_tests/stand_alone_tests/cucumber_smoke_local.rs"
-required-features = ["cucumber_stand_alone"]
+required-features = ["cucumber-stand-alone"]
 
 [[test]]
 name              = "test_testing_framework_cucumber_smoke_k8s"
 path              = "cucumber_tests/stand_alone_tests/cucumber_smoke_k8s.rs"
-required-features = ["cucumber_stand_alone"]
+required-features = ["cucumber-stand-alone"]
 
 [[test]]
 harness           = false                        # Cucumber will have its own main() function to run tests.

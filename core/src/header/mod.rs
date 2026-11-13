@@ -435,17 +435,17 @@ mod body_root_test_vectors {
             hex::encode(merkle::calculate_transactions_root(&txs))
         );
 
-        // 3. `body_root` over vector 2's transactions and no uncles. This is the value
-        //    vector 5's header carries.
+        // 3. `body_root` over vector 2's transactions and no uncles. This is
+        //    the value vector 5's header carries.
         let body_root = crate::block::body_root(&UncleHeaders::empty(), &txs);
         println!("================================================================");
         println!("vector 3  : body_root without uncles, over vector 2's transactions");
         println!("{:20}: 00 (empty list)", "uncle_headers");
         println!("{:20}: {}", "body_root", hex::encode(body_root.0));
 
-        // 4. The same transactions with two carried uncles. Nothing downstream consumes
-        //    this vector; it is here so that another implementation can check its
-        //    `uncle_headers` encoding, signatures included.
+        // 4. The same transactions with two carried uncles. Nothing downstream
+        //    consumes this vector; it is here so that another implementation
+        //    can check its `uncle_headers` encoding, signatures included.
         let uncles =
             UncleHeaders::try_new(vec![uncle(0x66), uncle(0x77)], VECTOR_MAX_UNCLES).unwrap();
         println!("================================================================");
@@ -464,10 +464,10 @@ mod body_root_test_vectors {
             hex::encode(crate::block::body_root(&uncles, &txs).0)
         );
 
-        // 5. HeaderId reusing vector 3's body_root. Every field is given a distinct
-        //    value so that a field-transposition bug in another implementation cannot
-        //    be masked by shared bytes. The proof is a synthetic (non-verifying) proof
-        //    built only to exercise the hash.
+        // 5. HeaderId reusing vector 3's body_root. Every field is given a
+        //    distinct value so that a field-transposition bug in another
+        //    implementation cannot be masked by shared bytes. The proof is a
+        //    synthetic (non-verifying) proof built only to exercise the hash.
         let parent_block = HeaderId([0x11u8; 32]);
         let slot = Slot::from(42u64);
         let proof = Groth16LeaderProof::from_parts(
@@ -480,8 +480,8 @@ mod body_root_test_vectors {
         let header_id = header.id();
 
         // Self-check: recompute the preimage from the public accessors and make
-        // sure it matches `Header::id()` (the exact byte layout is documented in
-        // the module-level comment).
+        // sure it matches `Header::id()` (the exact byte layout is documented
+        // in the module-level comment).
         let proof = header.leader_proof();
         let mut h = Hasher::new();
         h.update(b"BLOCK_ID_V1");
@@ -499,7 +499,8 @@ mod body_root_test_vectors {
         );
 
         println!("================================================================");
-        // Field labels match the names in the `block_id`/`Header` specification.
+        // Field labels match the names in the `block_id`/`Header`
+        // specification.
         println!("vector 5  : HeaderId (block_id) reusing vector 3's body_root");
         println!("{:20}: {}", "parent_block", hex::encode(parent_block.0));
         println!("{:20}: {}", "slot", u64::from(slot));

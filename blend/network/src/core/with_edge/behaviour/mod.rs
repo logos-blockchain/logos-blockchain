@@ -271,8 +271,8 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
             return;
         };
 
-        // Verify the `PoQ` before the message is reported to the swarm, and hence
-        // before it can be published to the core nodes.
+        // Verify the `PoQ` before the message is reported to the swarm, and
+        // hence before it can be published to the core nodes.
         spawn_poq_verification(
             &self.pending_poq_verifications,
             validated_message,
@@ -327,15 +327,15 @@ where
         _: &Multiaddr,
         remote_addr: &Multiaddr,
     ) -> Result<THandler<Self>, ConnectionDenied> {
-        // If the new peer makes the set of incoming connections too large, do not try
-        // to upgrade the connection.
+        // If the new peer makes the set of incoming connections too large, do
+        // not try to upgrade the connection.
         if self.upgraded_edge_peers.len() >= self.max_incoming_connections {
             tracing::trace!(target: LOG_TARGET, "Connected peer {peer:?} with addr {remote_addr:?} on connection {connection_id:?} will not be upgraded since we are already at maximum incoming connection capacity.");
             return Ok(Either::Right(DummyConnectionHandler));
         }
 
-        // Allow only inbound connections from edge nodes, if the Blend network is large
-        // enough.
+        // Allow only inbound connections from edge nodes, if the Blend network
+        // is large enough.
         if !self.is_network_large_enough() {
             tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with peer {peer:?} with addr {remote_addr:?} because membership size is too small.");
             return Ok(Either::Right(DummyConnectionHandler));
@@ -368,8 +368,9 @@ where
         _: Endpoint,
         _: PortUse,
     ) -> Result<THandler<Self>, ConnectionDenied> {
-        // No outbound sub-stream at all, since substreams with core nodes are handled
-        // elsewhere, and substreams with edge nodes are not allowed.
+        // No outbound sub-stream at all, since substreams with core nodes are
+        // handled elsewhere, and substreams with edge nodes are not
+        // allowed.
         Ok(Either::Right(DummyConnectionHandler))
     }
 

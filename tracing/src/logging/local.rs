@@ -220,7 +220,8 @@ where
 {
     let (non_blocking, guard) = tracing_appender::non_blocking(writer);
 
-    // Push the guard to the global list so flush_appenders() works for JSON logs
+    // Push the guard to the global list so flush_appenders() works for JSON
+    // logs
     APPENDER_GUARDS
         .lock()
         .unwrap_or_else(PoisonError::into_inner)

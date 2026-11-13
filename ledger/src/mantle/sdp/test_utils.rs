@@ -38,8 +38,8 @@ pub fn generate_activity_proof(
 ) -> ActivityProof {
     let activity_epoch = target_epoch_state.epoch();
     let zk_id = provider_zk_key.to_public_key();
-    // Build a Merkle tree with a single leaf corresponding to the provider's zk_id.
-    // This function works only for single-provider snapshots.
+    // Build a Merkle tree with a single leaf corresponding to the provider's
+    // zk_id. This function works only for single-provider snapshots.
     let merkle_tree = MerkleTree::new(vec![zk_id.into_inner()]).unwrap();
     let core_path_and_selectors = merkle_tree.get_proof_for_key(&zk_id.into_inner()).unwrap();
 
@@ -76,8 +76,8 @@ pub fn generate_activity_proof(
         blend_params.activity_threshold_sensitivity,
     )
     .unwrap();
-    // `current_epoch_state.nonce()` equals `current_epoch_state.epoch_randomness()`
-    // in the rewards module.
+    // `current_epoch_state.nonce()` equals
+    // `current_epoch_state.epoch_randomness()` in the rewards module.
     let epoch_randomness = (*current_epoch_state.nonce()).into();
 
     // Ephemeral signing key (separate from the provider's identity key —

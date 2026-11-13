@@ -1419,8 +1419,8 @@ pub(crate) fn channel_deposit_sync(
             })?;
         let change = selected_total - amount;
 
-        // 3. Build a transfer whose output[0] is the exact deposit note, with any
-        //    remainder returned as change to the same key.
+        // 3. Build a transfer whose output[0] is the exact deposit note, with
+        //    any remainder returned as change to the same key.
         let mut outputs = vec![Note::new(amount, funding_public_key)];
         if change > 0 {
             outputs.push(Note::new(change, funding_public_key));
@@ -1457,8 +1457,8 @@ pub(crate) fn channel_deposit_sync(
             metadata,
         };
 
-        // 5. Assemble [transfer, deposit] in order and sign both ops with a single ZK
-        //    signature by the funding key (which owns every input).
+        // 5. Assemble [transfer, deposit] in order and sign both ops with a
+        //    single ZK signature by the funding key (which owns every input).
         //
         //    NOTE: we deliberately sign with `sign_tx_with_zk` (explicit keys)
         // rather    than the usual `WalletApi::sign_tx`. `sign_tx`

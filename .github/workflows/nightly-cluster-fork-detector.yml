@@ -50,7 +50,7 @@ jobs:
         with:
           command: test
           args: >-
-            --locked -p logos-blockchain-tests --features testing_framework
+            --locked -p logos-blockchain-tests --features testing-framework
             --test test_testing_framework_fork_detector
             cluster_fork_detector -- --ignored --nocapture
 

@@ -371,10 +371,11 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
         );
 
         // Hand the subscriber a *lazy* stream over this epoch's slot range. No
-        // slot is scanned until the subscriber drives the stream, and it decides
-        // how far ahead to pre-compute, so the whole epoch is never materialized
-        // here. A scan made stale by an epoch rollover is implicitly abandoned:
-        // the subscriber just stops polling it once it moves to the next epoch.
+        // slot is scanned until the subscriber drives the stream, and it
+        // decides how far ahead to pre-compute, so the whole epoch is
+        // never materialized here. A scan made stale by an epoch
+        // rollover is implicitly abandoned: the subscriber just stops
+        // polling it once it moves to the next epoch.
         let winning_slots_stream = epoch_winning_slots_stream(
             &era_schedule,
             epoch_state,
@@ -395,8 +396,8 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
             return;
         }
 
-        // Wait for the first tick of the next epoch to produce a new winning slot
-        // stream and pass it to consumers.
+        // Wait for the first tick of the next epoch to produce a new winning
+        // slot stream and pass it to consumers.
         current_slot_tick = next_epoch_tick(&mut slot_timer, epoch).await;
     }
 
@@ -954,7 +955,8 @@ mod pol_tests {
             let latest_path = latest_tree
                 .path(&utxo.id())
                 .ok_or(PrivateInputsError::LatestNoteNotFound)?;
-            // Generate a random one-time Ed25519 key for P_LEAD (as per PoL spec)
+            // Generate a random one-time Ed25519 key for P_LEAD (as per PoL
+            // spec)
             let leader_signing_key = Ed25519Key::generate(&mut OsRng);
             let leader_pk = leader_signing_key.public_key();
             let leader_private = LeaderPrivate::new(

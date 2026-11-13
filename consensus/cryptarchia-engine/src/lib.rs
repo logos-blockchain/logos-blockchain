@@ -114,8 +114,9 @@ where
                 cmax = chain;
             }
         } else {
-            // The chain is forking too much, we need to pay a bit more attention
-            // In particular, select the chain that is the densest after the fork
+            // The chain is forking too much, we need to pay a bit more
+            // attention In particular, select the chain that is the
+            // densest after the fork
             let density_slot = Slot::from(u64::from(lowest_common_ancestor.slot) + s_gen.get());
             let cmax_density = branches.walk_back_before(cmax, density_slot).length;
             let candidate_density = branches.walk_back_before(chain, density_slot).length;
@@ -518,7 +519,8 @@ where
         } else {
             // It's safer to compute LCA here, not in `fork_choice`,
             // because `fork_choice` may walk through multiple candidates
-            // whose pairwise LCAs don't lie on `old_local_chain`'s parent chain.
+            // whose pairwise LCAs don't lie on `old_local_chain`'s parent
+            // chain.
             let lca = self
                 .branches
                 .lca(&old_local_chain, &self.local_chain)
@@ -626,13 +628,15 @@ where
                 as Box<dyn Iterator<Item = ForkDivergenceInfo<Id>>>;
         };
         Box::new(self.non_canonical_forks().filter_map(move |fork| {
-            // We calculate LCA once and store it in `ForkInfo` so it can be consumed
-            // elsewhere without the need to re-calculate it.
+            // We calculate LCA once and store it in `ForkInfo` so it can be
+            // consumed elsewhere without the need to re-calculate
+            // it.
             let lca = self
                 .branches
                 .lca(local_chain, fork)
                 .expect("local chain and fork must have a common ancestor");
-            // If the fork is diverged deeper than `deepest_div_block`, it's prunable.
+            // If the fork is diverged deeper than `deepest_div_block`, it's
+            // prunable.
             (lca.length < deepest_div_block).then_some(ForkDivergenceInfo {
                 tip: fork.clone(),
                 lca: lca.clone(),
@@ -660,8 +664,9 @@ where
         let mut removed_blocks = vec![];
         while current_tip != lca.id {
             let Some(branch) = self.branches.branches.get(&current_tip).cloned() else {
-                // If tip is not in branch set, it means this tip was sharing part of its
-                // history with another fork that has already been removed.
+                // If tip is not in branch set, it means this tip was sharing
+                // part of its history with another fork that
+                // has already been removed.
                 break;
             };
             self.branches.branches.remove_mut(&current_tip);
@@ -781,8 +786,8 @@ where
             let mut candidates =
                 self.uncle_candidates(slot, window_start, &ancestors, &occupied_slots);
             candidates.retain(|(_, uncle)| uncle.slot >= era.first_slot);
-            // Oldest parent first, because the slot window moves and the oldest candidates
-            // are the closest to expiring.
+            // Oldest parent first, because the slot window moves and the oldest
+            // candidates are the closest to expiring.
             // One uncle per slot, breaking ties by the uncle's slot and ID.
             candidates
                 .sort_unstable_by_key(|(parent_slot, uncle)| (*parent_slot, uncle.slot, uncle.id));
@@ -1165,8 +1170,8 @@ pub mod tests {
             [(0.into(), hash(&0u64))].into(),
         );
 
-        // Try to add a fork from b0, but it should fail with `Error::MissingParent`.
-        //   pruned
+        // Try to add a fork from b0, but it should fail with
+        // `Error::MissingParent`.   pruned
         //   ||
         // (b0 --) b1(LIB) - b2
         //     \
@@ -1179,8 +1184,8 @@ pub mod tests {
 
     #[test]
     fn test_fork_choice() {
-        // by setting a low k we trigger the density choice rule, and the shorter chain
-        // is denser after the fork
+        // by setting a low k we trigger the density choice rule, and the
+        // shorter chain is denser after the fork
         let config = config_with(10);
         let s_gen = config.s_gen().get();
         let initial_height = 49;
@@ -1192,7 +1197,8 @@ pub mod tests {
         let mut short_p = engine.tip();
         // the node sees first the short chain.
         for slot in initial_height..(initial_height + s_gen) {
-            // build chain not too dense because we'll build a denser chain later
+            // build chain not too dense because we'll build a denser chain
+            // later
             if slot % 2 == 0 {
                 let new_block = hash(&format!("short-{slot}"));
                 let (_, reorged_blocks) = engine
@@ -1204,7 +1210,8 @@ pub mod tests {
         }
         assert_eq!(engine.tip(), short_p);
 
-        // then it receives a longer chain which is however less dense after the fork
+        // then it receives a longer chain which is however less dense after the
+        // fork
         for slot in initial_height..(initial_height + s_gen) {
             if slot % 3 == 0 {
                 let new_block = hash(&format!("long-{slot}"));
@@ -1216,8 +1223,8 @@ pub mod tests {
             }
             assert_eq!(engine.tip(), short_p);
         }
-        // even if the long chain is much longer, it will never be accepted as it's not
-        // dense enough
+        // even if the long chain is much longer, it will never be accepted as
+        // it's not dense enough
         for slot in (initial_height + s_gen)..(initial_height + 2 * s_gen) {
             let new_block = hash(&format!("long-{slot}"));
             let (_, reorged_blocks) = engine
@@ -1354,8 +1361,8 @@ pub mod tests {
         );
     }
 
-    // It tests that nothing is pruned when the pruning depth is greater than the
-    // canonical chain length.
+    // It tests that nothing is pruned when the pruning depth is greater than
+    // the canonical chain length.
     #[test]
     fn pruning_too_back_in_time() {
         // Create a chain with 50+1 blocks with k=50.
@@ -1521,8 +1528,8 @@ pub mod tests {
             create_canonical_chain_over(25.try_into().unwrap(), eras).online();
         assert_eq!(cryptarchia.lib(), hash(&14u64));
 
-        // A longer fork off b21 is 3 blocks deep from the tip, beyond the k=2 of
-        // the era of the common ancestor, so it is not adopted.
+        // A longer fork off b21 is 3 blocks deep from the tip, beyond the k=2
+        // of the era of the common ancestor, so it is not adopted.
         let mut parent = hash(&21u64);
         for i in 0..4u64 {
             let block = hash(&format!("a-{i}"));
@@ -1843,8 +1850,8 @@ mod uncle_tests {
         //  |-- u1(7)
         //  |-------- u2(8)
         //
-        // Only u3 is selected. Other uncles are excluded because of the following
-        // reasons:
+        // Only u3 is selected. Other uncles are excluded because of the
+        // following reasons:
         // - u1's parent is older than the window.
         // - u2's parent is older than the window.
         // - u4 is out of the window.
@@ -1882,8 +1889,9 @@ mod uncle_tests {
         //  |
         //  |----- u1(9)
         //
-        // With `uncle_reference_window_in_slot = 1`, a proposal at slot 11 can only
-        // reference slot 10. It means that no uncle can be selected.
+        // With `uncle_reference_window_in_slot = 1`, a proposal at slot 11 can
+        // only reference slot 10. It means that no uncle can be
+        // selected.
         let [g, b1, b2, u1, u2, u3] = [0u64, 1, 2, 3, 4, 5];
         let window = 1;
         let engine = build_tree(
@@ -2003,7 +2011,8 @@ mod uncle_tests {
         //  |-- u1(1)
         //
         // `u1` is selected with a window that reaches `g`, but never with
-        // `uncle_reference_window_in_slot = 0`, which disables uncle references.
+        // `uncle_reference_window_in_slot = 0`, which disables uncle
+        // references.
         let [g, b1, u1] = [0u64, 1, 2];
         let blocks = [(b1, g, 2.into()), (u1, g, 1.into())];
 
@@ -2180,8 +2189,8 @@ mod uncle_tests {
         //          |--------------- u2(5)
         //
         // The order of the selected uncles should be: [u2, u1, u3].
-        // - The parent slot(3) of u1 and u2 is smaller than the parent slot(4) of u3
-        //   and u4.
+        // - The parent slot(3) of u1 and u2 is smaller than the parent slot(4)
+        //   of u3 and u4.
         // - u2's slot(5) is smaller than u1's slot(6).
         // - u3's ID(3) is smaller than u4's ID(4).
         let [g, b1, b2, u1, u2, u3, u4] = [0u64, 1u64, 2, 3, 4, 5, 6];
@@ -2215,8 +2224,8 @@ mod uncle_tests {
     }
 
     fn config_with_max_uncles(uncle_reference_window_in_slot: u32, max_uncles: u8) -> Config {
-        // Pick `f` just below 1, so that `uncle_reference_window_in_block` equals
-        // `uncle_reference_window_in_slot`.
+        // Pick `f` just below 1, so that `uncle_reference_window_in_block`
+        // equals `uncle_reference_window_in_slot`.
         let f_numerator = uncle_reference_window_in_slot + 1;
         let f_denominator = NonZeroU32::new(uncle_reference_window_in_slot + 2).unwrap();
         let uncle_reference_window_in_block =

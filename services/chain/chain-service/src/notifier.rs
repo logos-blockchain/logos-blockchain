@@ -21,8 +21,8 @@ impl ChainOnlineNotifier {
     pub fn notify(&self) {
         debug!(target: LOG_TARGET, "Notifying chain online subscribers");
 
-        // NOTE: Use `send_replace` to always make a new value available for future
-        // receivers, even if no receiver currently exists
+        // NOTE: Use `send_replace` to always make a new value available for
+        // future receivers, even if no receiver currently exists
         let prev_value = self.channel.send_replace(true);
         assert!(
             !prev_value, // must be `false`
