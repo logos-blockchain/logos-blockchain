@@ -55,6 +55,28 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "is_prerelease=$([[ "$RELEASE_TYPE" == "release-candidate" ]] && echo true || echo false)" >> $GITHUB_OUTPUT
 
+      # Only an annotated tag carries a signature. GitHub verifies it against the keys registered on the tagger's account.
+      - name: Check that the tag is signed
+        if: ${{ github.ref_name != env.TEST_TAG_NAME }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          TAG_REF=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG_NAME" --jq '.object.type + " " + .object.sha')
+          read -r TAG_TYPE TAG_SHA <<< "$TAG_REF"
+          if [[ "$TAG_TYPE" != "tag" ]]; then
+            echo "::error::'$TAG_NAME' is a lightweight tag. Release tags must be signed and annotated: git tag -s $TAG_NAME -m $TAG_NAME"
+            exit 1
+          fi
+
+          VERIFICATION=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$TAG_SHA" --jq '(.verification.verified | tostring) + " " + .verification.reason')
+          read -r VERIFIED REASON <<< "$VERIFICATION"
+          if [[ "$VERIFIED" != "true" ]]; then
+            echo "::error::GitHub does not verify the signature of '$TAG_NAME' ($REASON). Sign it with a key registered on your GitHub account."
+            exit 1
+          fi
+          echo "'$TAG_NAME' is signed, and GitHub verifies its signature."
+
   build:
     name: "Build and tar binaries for ${{ matrix.platform.os-display }} (${{ matrix.platform.arch }})"
     needs: configure-version
@@ -102,6 +124,8 @@ jobs:
           path: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar.gz
           if-no-files-found: error
 
+  # Puts the archives that `build` made into a draft release, with their `SHA256SUMS` and build provenance. It builds
+  # nothing, so its write permissions never share a job with compiled code.
   create-draft-release:
     name: Create draft release
     needs:
@@ -109,13 +133,14 @@ jobs:
       - build
     runs-on: ubuntu-latest
     permissions:
-      # Creates the draft release.
+      # Creates the draft release and uploads its assets.
       contents: write
+      # Attests the build provenance of the archives.
+      attestations: write
+      id-token: write
     env:
       VERSION: ${{ needs.configure-version.outputs.version }}
       IS_PRERELEASE: ${{ needs.configure-version.outputs.is_prerelease }}
-    outputs:
-      upload_url: ${{ steps.create-draft-release.outputs.upload_url }}
 
     steps:
       - name: Checkout
@@ -170,56 +195,34 @@ jobs:
             mv "${OUTPUT}.tmp" "$OUTPUT"
           fi
 
-      - name: Create Draft Release
-        uses: actions/create-release@4c11c9fe1dcd9636620a16455165783b20fc7ea0  # Version 1.1.4
-        id: create-draft-release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ env.VERSION }}
-          release_name: Logos Blockchain Node ${{ env.VERSION }}
-          body_path: .github/release/release-content.generated.md
-          draft: true
-          prerelease: ${{ env.IS_PRERELEASE }}
-
-  upload-binaries:
-    name: Upload binaries to release
-    needs:
-      - configure-version
-      - create-draft-release
-    runs-on: ubuntu-latest
-    permissions:
-      # Uploads the binaries to the draft release.
-      contents: write
-    strategy:
-      matrix:
-        platform:
-          - os: linux
-            arch: x86_64
-          - os: linux
-            arch: aarch64
-          - os: macos
-            arch: aarch64
-    env:
-      UPLOAD_URL: ${{ needs.create-draft-release.outputs.upload_url }}
-      BINARY_NAME: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}
-      DOWNLOAD_DIRECTORY: binaries
-
-    steps:
-      - name: Download artifact
+      - name: Download the archives
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # Version 4.2.1
         with:
-          name: ${{ env.BINARY_NAME }}
-          path: ${{ env.DOWNLOAD_DIRECTORY }}
+          pattern: logos-blockchain-node-*-${{ env.VERSION }}
+          path: ${{ runner.temp }}/archives
           merge-multiple: true
 
-      - name: Upload ${{ matrix.platform.os }} (${{ matrix.platform.arch }}) to release
-        uses: actions/upload-release-asset@ef2adfe8cb8ebfa540930c452c576b3819990faa  # Version 1.0.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: ${{ env.DOWNLOAD_DIRECTORY }}/${{ env.BINARY_NAME }}.tar.gz
-          asset_name: ${{ env.BINARY_NAME }}.tar.gz
-          asset_content_type: application/gzip
+      - name: Write SHA256SUMS
+        working-directory: ${{ runner.temp }}/archives
+        run: |
+          sha256sum -- *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
 
+      - name: Attest the build provenance of the archives
+        uses: actions/attest-build-provenance@9d3beef6515cb82652d066f999b94affc15acfac # Version 2.2.3
+        with:
+          subject-path: ${{ runner.temp }}/archives/*.tar.gz
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRERELEASE=()
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            PRERELEASE=(--prerelease)
+          fi
+
+          gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --draft "${PRERELEASE[@]}" \
+            --title "Logos Blockchain Node $VERSION" \
+            --notes-file .github/release/release-content.generated.md \
+            "$RUNNER_TEMP"/archives/*.tar.gz "$RUNNER_TEMP/archives/SHA256SUMS"
