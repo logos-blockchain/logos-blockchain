@@ -117,14 +117,7 @@ impl PendingWithdrawals {
                 .clone();
             // A step consumed one of its notes before it was due: the withdrawal is
             // dropped.
-            let mut consumed = false;
-            for nullifier in &withdrawal.inputs {
-                if set.contains_nullifier(nullifier)? {
-                    consumed = true;
-                    break;
-                }
-            }
-            if consumed {
+            if set.contains_any_nullifier(&withdrawal.inputs)? {
                 continue;
             }
             let set = set.execute_spending(withdrawal.inputs.as_slice())?;

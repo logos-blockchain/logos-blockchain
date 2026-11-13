@@ -439,6 +439,19 @@ impl NoteSet {
         Ok(self.nullifiers.contains(&nullifier.0)?)
     }
 
+    /// Whether any of `nullifiers` is spent.
+    pub fn contains_any_nullifier(
+        &self,
+        nullifiers: &[NoteNullifier],
+    ) -> Result<bool, NoteSetError> {
+        for nullifier in nullifiers {
+            if self.contains_nullifier(nullifier)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     // The inputs are not empty, distinct and unspent. The root they are proven
     // against is checked recent by `tx_commitment_root`.
     pub fn assert_spendable(&self, inputs: &[NoteNullifier]) -> Result<(), NoteSetError> {
