@@ -28,7 +28,7 @@ impl PoCWitnessInputs {
     }
 }
 impl TryFrom<PoCWitnessInputs> for lbc_poc_sys::PocWitnessInput<'_> {
-    type Error = lbp_error::Error;
+    type Error = lb_proofs_error::Error;
 
     fn try_from(value: PoCWitnessInputs) -> Result<Self, Self::Error> {
         let inputs_json: PoCInputsJson = value.into();

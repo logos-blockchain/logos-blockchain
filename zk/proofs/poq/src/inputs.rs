@@ -92,7 +92,7 @@ impl PoQWitnessInputs {
 }
 
 impl TryFrom<PoQWitnessInputs> for lbc_poq_sys::PoqWitnessInput<'_> {
-    type Error = lbp_error::Error;
+    type Error = lb_proofs_error::Error;
 
     fn try_from(value: PoQWitnessInputs) -> Result<Self, Self::Error> {
         let inputs_json: PoQInputsJson = value.into();

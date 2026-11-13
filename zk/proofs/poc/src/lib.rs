@@ -48,7 +48,7 @@ pub use wallet_inputs::{PoCWalletInputs, PoCWalletInputsData, VOUCHER_MERKLE_PAT
 pub use crate::inputs::{PoCVerifierInput, PoCVerifierInputJson};
 
 pub type PoCProof = CompressedGroth16Proof;
-pub type ProveError = lbp_error::Error;
+pub type ProveError = lb_proofs_error::Error;
 
 const LOG_TARGET: &str = proofs::POC;
 

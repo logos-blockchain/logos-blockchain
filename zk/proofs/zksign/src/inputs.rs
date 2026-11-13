@@ -19,7 +19,7 @@ impl ZkSignWitnessInputs {
 }
 
 impl TryFrom<ZkSignWitnessInputs> for lbc_signature_sys::SignatureWitnessInput<'_> {
-    type Error = lbp_error::Error;
+    type Error = lb_proofs_error::Error;
 
     fn try_from(value: ZkSignWitnessInputs) -> Result<Self, Self::Error> {
         let inputs_json: ZkSignWitnessInputsJson = (&value).into();

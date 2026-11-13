@@ -31,7 +31,7 @@ pub enum ZkSignError {
 #[derive(Debug, thiserror::Error)]
 pub enum ProveError {
     #[error(transparent)]
-    Prove(#[from] lbp_error::Error),
+    Prove(#[from] lb_proofs_error::Error),
     #[error(transparent)]
     VerifierInputsJson(ZkSignVerifierInputsJsonTryFromError),
 }
@@ -63,14 +63,14 @@ pub fn prove(
         lbc_signature_sys::artifacts::PROVING_KEY,
         witness.as_ref(),
     )
-    .map_err(lbp_error::Error::from)?;
+    .map_err(lb_proofs_error::Error::from)?;
     let proof: Groth16ProofJsonDeser =
-        serde_json::from_str(&result.proof).map_err(lbp_error::Error::from)?;
+        serde_json::from_str(&result.proof).map_err(lb_proofs_error::Error::from)?;
     let verifier_inputs: ZkSignVerifierInputsJson =
-        serde_json::from_str(&result.public_signals).map_err(lbp_error::Error::from)?;
+        serde_json::from_str(&result.public_signals).map_err(lb_proofs_error::Error::from)?;
     let proof: Groth16Proof = proof
         .try_into()
-        .map_err(lbp_error::Error::Groth16JsonProof)?;
+        .map_err(lb_proofs_error::Error::Groth16JsonProof)?;
     Ok((
         CompressedGroth16Proof::try_from(&proof).unwrap_or_else(|e| {
             error!(target: LOG_TARGET, "Fatal CompressedGroth16Proof::try_from: {e}");
