@@ -458,9 +458,9 @@ impl Sim {
     }
 }
 
-fn keys_with_tag(store: &MemKv, tag: u8) -> BTreeSet<Vec<u8>> {
+fn keys_with_tag(store: &MemKv, tag: &[u8]) -> BTreeSet<Vec<u8>> {
     store
-        .scan_prefix(&[tag])
+        .scan_prefix(tag)
         .unwrap()
         .into_iter()
         .map(|entry| entry.key.to_vec())

@@ -43,7 +43,7 @@ pub struct IndexedMerkleTree<Hash: Digest, const HEIGHT: usize> {
     leaves: VectorSync<NullifierLeaf>,
     // nullifier to leaf index, the sentinel under 0
     sorted: RedBlackTreeMapSync<Fr, u64>,
-    // leaves written since the last flush, whose hashes `tree` does not hold
+    // leaves written since `tree` was hashed, whose hashes it does not hold
     unhashed: RedBlackTreeSetSync<u64>,
     // `tree` with the unhashed leaves hashed in, computed at the first read
     hashed: OnceLock<DynamicMerkleTree<UtxoMerkleHasher<Hash>, HEIGHT>>,
@@ -128,15 +128,21 @@ impl<Hash: Digest, const HEIGHT: usize> IndexedMerkleTree<Hash, HEIGHT> {
             ..*low
         };
 
+        // The hashing a read already did is kept: only the two leaves written
+        // here are left to hash.
+        let (tree, unhashed) = self.hashed.get().map_or_else(
+            || (self.tree.clone(), self.unhashed.clone()),
+            |hashed| (hashed.clone(), RedBlackTreeSetSync::new_sync()),
+        );
         Ok(Self {
-            tree: self.tree.clone(),
+            tree,
             leaves: self
                 .leaves
                 .set(low_index as usize, low)
                 .expect("low leaf is in the tree")
                 .push_back(new_leaf),
             sorted: self.sorted.insert(nullifier, n as u64),
-            unhashed: self.unhashed.insert(low_index).insert(n as u64),
+            unhashed: unhashed.insert(low_index).insert(n as u64),
             hashed: OnceLock::new(),
         })
     }
@@ -453,8 +459,9 @@ mod tests {
 
     // Each op inserts a nullifier picked by its kind (below every one, above
     // every one, next to one inserted earlier in the batch so that leaf is
-    // the low leaf, next below an inserted one, any) or flushes the batch
-    // of insertions.
+    // the low leaf, next below an inserted one, any), flushes the batch of
+    // insertions, or reads the root mid-batch, whose hashing the next
+    // insertions build on.
     #[property_test]
     fn test_deferred_hashing_matches_eager_tree(ops: Vec<(u8, u64)>) {
         let mut imt = Imt::new();
@@ -465,7 +472,7 @@ mod tests {
         let mut batch: Vec<u64> = Vec::new();
         for (kind, value) in ops {
             let pick = |nullifiers: &[u64]| nullifiers[value as usize % nullifiers.len()];
-            let nullifier = match kind % 6 {
+            let nullifier = match kind % 7 {
                 0 => inserted.iter().min().map_or(value, |min| min / 2),
                 1 => inserted
                     .iter()
@@ -477,6 +484,10 @@ mod tests {
                     imt = imt.flush();
                     assert_same_tree(&imt, &eager);
                     batch.clear();
+                    continue;
+                }
+                5 => {
+                    assert_eq!(imt.root(), eager.root());
                     continue;
                 }
                 _ => value,
@@ -492,7 +503,7 @@ mod tests {
                 continue;
             }
             let (low_index, _) = imt.low_leaf(&fr(nullifier)).unwrap();
-            if kind % 6 == 2 && batch.contains(&(nullifier - 1)) {
+            if kind % 7 == 2 && batch.contains(&(nullifier - 1)) {
                 assert_eq!(imt.leaf(low_index).unwrap().nullifier, fr(nullifier - 1));
             }
             imt = imt.insert(fr(nullifier)).unwrap();

@@ -1,10 +1,13 @@
 //! The keys and values the tree stores, and their byte encodings.
 //!
-//! Integers are big-endian so that the byte order of the keys is their
-//! numeric order, and a [`Version`] comes first wherever a whole version is
-//! deleted by prefix.
+//! Every key starts with a readable tag naming its kind, and no tag is the
+//! prefix of another. Integers are big-endian so that the byte order of the
+//! keys is their numeric order, and a [`Version`] comes first wherever a whole
+//! version is deleted by prefix. Field elements are their `fr_to_bytes`, but
+//! in a nullifier key, which is big-endian so that the index is sorted by
+//! nullifier.
 
-use lb_groth16::{fr_from_bytes, fr_to_bytes};
+use lb_groth16::{fr_from_bytes_unchecked, fr_to_bytes};
 use lb_poseidon2::Fr;
 
 use crate::{LeafIndex, NullifierLeaf};
@@ -189,14 +192,14 @@ pub enum CodecError {
     Truncated(usize),
     #[error("{0} trailing bytes")]
     Trailing(usize),
+    #[error("not a key tagged {}", String::from_utf8_lossy(expected))]
+    KeyTag { expected: &'static [u8] },
     #[error("tag {found} where {expected} was expected")]
     Tag { expected: u8, found: u8 },
-    #[error("{0} is not a field element")]
-    InvalidFr(String),
 }
 
 pub trait StoreKey: Sized {
-    const TAG: u8;
+    const TAG: &'static [u8];
 
     fn write_fields(&self, out: &mut Vec<u8>);
 
@@ -204,20 +207,16 @@ pub trait StoreKey: Sized {
 
     #[must_use]
     fn encode(&self) -> Vec<u8> {
-        let mut out = vec![Self::TAG];
+        let mut out = Self::TAG.to_vec();
         self.write_fields(&mut out);
         out
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
-        let mut reader = Reader::new(bytes);
-        let found = reader.u8()?;
-        if found != Self::TAG {
-            return Err(CodecError::Tag {
-                expected: Self::TAG,
-                found,
-            });
-        }
+        let fields = bytes.strip_prefix(Self::TAG).ok_or(CodecError::KeyTag {
+            expected: Self::TAG,
+        })?;
+        let mut reader = Reader::new(fields);
         let key = Self::read_fields(&mut reader)?;
         reader.finish()?;
         Ok(key)
@@ -272,9 +271,13 @@ impl<'a> Reader<'a> {
     }
 
     fn fr(&mut self) -> Result<Fr, CodecError> {
+        Ok(fr_from_bytes_unchecked(&self.take::<32>()?))
+    }
+
+    fn fr_be(&mut self) -> Result<Fr, CodecError> {
         let mut bytes = self.take::<32>()?;
         bytes.reverse();
-        fr_from_bytes(&bytes).map_err(|error| CodecError::InvalidFr(error.to_string()))
+        Ok(fr_from_bytes_unchecked(&bytes))
     }
 
     const fn finish(&self) -> Result<(), CodecError> {
@@ -286,9 +289,8 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// The 32 big-endian bytes of `fr`, whose byte order is the integer order.
-#[must_use]
-pub fn fr_be_bytes(fr: &Fr) -> [u8; 32] {
+// The 32 big-endian bytes of `fr`, whose byte order is the integer order.
+fn fr_be_bytes(fr: &Fr) -> [u8; 32] {
     let mut bytes = fr_to_bytes(fr);
     bytes.reverse();
     bytes
@@ -322,7 +324,7 @@ impl NodeKey {
     /// The prefix of every node the block of `version` wrote.
     #[must_use]
     pub fn version_prefix(version: Version) -> Vec<u8> {
-        let mut out = vec![Self::TAG];
+        let mut out = Self::TAG.to_vec();
         out.extend_from_slice(&version.0.to_be_bytes());
         out
     }
@@ -332,7 +334,7 @@ impl StaleKey {
     /// The prefix of every node the block of `replaced_by` replaced.
     #[must_use]
     pub fn version_prefix(replaced_by: Version) -> Vec<u8> {
-        let mut out = vec![Self::TAG];
+        let mut out = Self::TAG.to_vec();
         out.extend_from_slice(&replaced_by.0.to_be_bytes());
         out
     }
@@ -341,12 +343,12 @@ impl StaleKey {
 impl GcKey {
     #[must_use]
     pub fn prefix() -> Vec<u8> {
-        vec![Self::TAG]
+        Self::TAG.to_vec()
     }
 }
 
 impl StoreKey for GcKey {
-    const TAG: u8 = b'G';
+    const TAG: &'static [u8] = b"gc/";
 
     fn write_fields(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.end_len.to_be_bytes());
@@ -364,19 +366,19 @@ impl StoreKey for GcKey {
 impl NullifierKey {
     #[must_use]
     pub fn prefix() -> Vec<u8> {
-        vec![Self::TAG]
+        Self::TAG.to_vec()
     }
 }
 
 impl LiveVersionKey {
     #[must_use]
     pub fn prefix() -> Vec<u8> {
-        vec![Self::TAG]
+        Self::TAG.to_vec()
     }
 }
 
 impl StoreKey for NodeKey {
-    const TAG: u8 = b'H';
+    const TAG: &'static [u8] = b"node/";
 
     fn write_fields(&self, out: &mut Vec<u8>) {
         write_node_key(*self, out);
@@ -388,7 +390,7 @@ impl StoreKey for NodeKey {
 }
 
 impl StoreKey for StaleKey {
-    const TAG: u8 = b'S';
+    const TAG: &'static [u8] = b"stale/";
 
     fn write_fields(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.replaced_by.0.to_be_bytes());
@@ -404,7 +406,7 @@ impl StoreKey for StaleKey {
 }
 
 impl StoreKey for NullifierKey {
-    const TAG: u8 = b'N';
+    const TAG: &'static [u8] = b"nullifier/";
 
     fn write_fields(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&fr_be_bytes(&self.nullifier));
@@ -412,13 +414,13 @@ impl StoreKey for NullifierKey {
 
     fn read_fields(reader: &mut Reader<'_>) -> Result<Self, CodecError> {
         Ok(Self {
-            nullifier: reader.fr()?,
+            nullifier: reader.fr_be()?,
         })
     }
 }
 
 impl StoreKey for BlockVersionKey {
-    const TAG: u8 = b'B';
+    const TAG: &'static [u8] = b"block_version/";
 
     fn write_fields(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.block_id.0);
@@ -432,7 +434,7 @@ impl StoreKey for BlockVersionKey {
 }
 
 impl StoreKey for LiveVersionKey {
-    const TAG: u8 = b'L';
+    const TAG: &'static [u8] = b"live_version/";
 
     fn write_fields(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.version.0.to_be_bytes());
@@ -446,7 +448,7 @@ impl StoreKey for LiveVersionKey {
 }
 
 impl StoreKey for MetaKey {
-    const TAG: u8 = b'M';
+    const TAG: &'static [u8] = b"base";
 
     fn write_fields(&self, _out: &mut Vec<u8>) {}
 
@@ -456,7 +458,7 @@ impl StoreKey for MetaKey {
 }
 
 impl StoreKey for NextVersionKey {
-    const TAG: u8 = b'C';
+    const TAG: &'static [u8] = b"next_version";
 
     fn write_fields(&self, _out: &mut Vec<u8>) {}
 
@@ -480,7 +482,7 @@ const SOME_VERSION: u8 = 1;
 
 impl StoreValue for Child {
     fn write(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&fr_be_bytes(&self.hash));
+        out.extend_from_slice(&fr_to_bytes(&self.hash));
         match self.version {
             None => out.push(NO_VERSION),
             Some(version) => {
@@ -508,8 +510,8 @@ impl StoreValue for Child {
 
 impl StoreValue for NullifierLeaf {
     fn write(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&fr_be_bytes(&self.nullifier));
-        out.extend_from_slice(&fr_be_bytes(&self.next_nullifier));
+        out.extend_from_slice(&fr_to_bytes(&self.nullifier));
+        out.extend_from_slice(&fr_to_bytes(&self.next_nullifier));
         out.extend_from_slice(&self.next_index.as_u64().to_be_bytes());
     }
 
@@ -707,7 +709,7 @@ mod tests {
         .encode();
         assert!(matches!(
             StaleKey::decode(&encoded),
-            Err(CodecError::Tag { .. })
+            Err(CodecError::KeyTag { .. })
         ));
         assert!(matches!(
             NodeKey::decode(&encoded[..encoded.len() - 1]),
@@ -718,11 +720,6 @@ mod tests {
         assert!(matches!(
             NodeKey::decode(&long),
             Err(CodecError::Trailing(1))
-        ));
-        // the modulus is not a field element
-        assert!(matches!(
-            NullifierKey::decode(&[b"N".as_slice(), &[0xff; 32]].concat()),
-            Err(CodecError::InvalidFr(_))
         ));
     }
 
