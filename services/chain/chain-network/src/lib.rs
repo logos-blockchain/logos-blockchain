@@ -16,14 +16,11 @@ use std::{
 use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
 use futures::StreamExt as _;
 use lb_chain_service::{
-    AppliedBlock,
+    AppliedBlock, BlockWithVerifiedHeader, VerifiedBlockHeader,
     api::{ApiError, CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    block::{
-        Block, BlockLimits, BlockTransactions, Proposal, verify_header_alone,
-        verify_header_signature,
-    },
+    block::{Block, BlockLimits, BlockTransactions, Proposal},
     header::HeaderId,
     mantle::{
         ledger::verification_mode::StandardMode,
@@ -90,8 +87,6 @@ pub enum Error {
     Serialisation(#[from] lb_binary_codec::bincode::Error),
     #[error("Invalid block: {0}")]
     InvalidBlock(String),
-    #[error("Header is not valid on its own: {0}")]
-    InvalidHeader(#[from] lb_core::block::HeaderError),
     #[error("Invalid block header signature")]
     InvalidSignature,
     #[error("No combination of candidate transactions reproduces the block root")]
@@ -679,15 +674,29 @@ where
             }
         }
 
-        // Check the proposal before any mempool scanning.
-        if let Err(e) = verify_proposal_and_cache_rejected(&proposal, orphan_downloader) {
-            metrics::consensus_observe_proposal_reconstruct_err("network", &e);
-            return;
-        }
+        // Verify the whole header before any mempool scanning.
+        let header = match relays
+            .cryptarchia()
+            .verify_header(
+                proposal.header().clone(),
+                proposal.uncle_headers().clone(),
+                *proposal.signature(),
+            )
+            .await
+            .map_err(Error::from)
+        {
+            Ok(header) => header,
+            Err(e) => {
+                metrics::consensus_observe_proposal_reconstruct_err("network", &e);
+                Self::handle_proposal_processing_error(e, block_id, orphan_downloader);
+                return;
+            }
+        };
 
         let reconstruct_started_at = Instant::now();
         let block = match reconstruct_block_from_proposal(
-            proposal,
+            header,
+            proposal.mempool_transactions(),
             era_schedule.at_slot(block_slot).parameters.block_limits,
             relays.mempool_adapter(),
         )
@@ -766,7 +775,7 @@ where
     }
 
     async fn apply_reconstructed_block(
-        block: Block<Mempool::Item>,
+        block: BlockWithVerifiedHeader<Mempool::Item>,
         orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
         relays: &ChainNetworkRelays<
             Cryptarchia,
@@ -783,7 +792,13 @@ where
         let block_id = block.header().id();
         let started_at = Instant::now();
 
-        match Self::apply_block(block, relays).await {
+        match apply_block_with_verified_header_and_reconcile_mempool::<_, Mempool>(
+            block,
+            relays.cryptarchia(),
+            relays.mempool_adapter(),
+        )
+        .await
+        {
             Ok(()) => {
                 metrics::consensus_observe_apply_block_ok(started_at.elapsed());
                 orphan_downloader.remove_orphan(&block_id);
@@ -938,48 +953,6 @@ enum DoNotProcessBlock {
     AlreadyApplied,
 }
 
-/// Verifies the proposal header and signature without mempool scanning.
-///
-/// If the proposal header is invalid, cache the block ID as rejected in the
-/// orphan downloader, so that we don't waste time downloading the block later.
-///
-/// If the signature is invalid, do not cache the block ID as rejected, because
-/// a genuine proposal with the same block ID may arrive later, and it should be
-/// accepted. The block ID does not commit to the signature.
-fn verify_proposal_and_cache_rejected<NetAdapter, RuntimeServiceId>(
-    proposal: &Proposal,
-    orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
-) -> Result<(), Error>
-where
-    NetAdapter: NetworkAdapter<RuntimeServiceId> + Send + Sync + Clone + 'static,
-    NetAdapter::Block: Clone + Send + Sync + 'static,
-    RuntimeServiceId: Send + Sync + 'static,
-{
-    match verify_proposal(proposal) {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            let block_id = proposal.header().id();
-            if matches!(e, Error::InvalidSignature) {
-                error!(target: LOG_TARGET, %e, ?block_id, "invalid proposal signature: not caching block ID as rejected in orphan downloader");
-            } else {
-                error!(target: LOG_TARGET, %e, ?block_id, "invalid proposal header: caching block ID as rejected in orphan downloader");
-                orphan_downloader.insert_rejected_block(proposal.header().id());
-            }
-            Err(e)
-        }
-    }
-}
-
-/// Verifies the proposal header and signature without mempool scanning.
-fn verify_proposal(proposal: &Proposal) -> Result<(), Error> {
-    verify_header_alone(proposal.header())?;
-
-    Ok(verify_header_signature(
-        proposal.header(),
-        proposal.signature(),
-    )?)
-}
-
 async fn is_after_lib<Cryptarchia>(
     cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
     block_id: HeaderId,
@@ -1025,6 +998,9 @@ fn is_at_or_before_lib(block_slot: Slot, lib_slot: Slot) -> bool {
 /// - `CommsFailure`: relay failure has nothing to do with block validity; a
 ///   blanket "reject" here would poison the cache whenever chain-service is
 ///   temporarily unreachable.
+/// - `InvalidSignature` / `InvalidUncles` / `InvalidBody`: they condemn only
+///   the received copy, since the block ID commits to none of the signature,
+///   the uncles and the transactions. A genuine copy may arrive later.
 ///
 /// Other apply errors (e.g. validation failures surfaced as
 /// `ApiError::Unexpected`) are treated as terminal for the orphan pipeline.
@@ -1035,7 +1011,10 @@ const fn is_recoverable_apply_error(err: &Error) -> bool {
             ApiError::ParentMissing { .. }
                 | ApiError::FutureBlock { .. }
                 | ApiError::AlreadyApplied(_)
-                | ApiError::CommsFailure(_),
+                | ApiError::CommsFailure(_)
+                | ApiError::InvalidSignature
+                | ApiError::InvalidUncles(_)
+                | ApiError::InvalidBody(_),
         ),
     )
 }
@@ -1065,7 +1044,7 @@ async fn notify_mempool_of_highest_block<Cryptarchia, Mempool>(
     }
 }
 
-/// Try to add a [`Block`] to [`Cryptarchia`].
+/// Try to add a [`Block`] to [`Cryptarchia`], verifying its header first.
 /// A [`Block`] is only added if it's valid
 #[expect(clippy::allow_attributes_without_reason)]
 #[instrument(
@@ -1081,20 +1060,77 @@ async fn apply_block_and_reconcile_mempool<Cryptarchia, Mempool>(
 ) -> Result<(), Error>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + StorageSize + Debug + Clone + Send,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
 {
     trace!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().id());
 
+    let header = cryptarchia
+        .verify_header(
+            block.header().clone(),
+            block.uncle_headers().clone(),
+            *block.signature(),
+        )
+        .await?;
+    // The count of the transactions was held to the block's era when the block
+    // was decoded, and the ledger holds it to that era again when applying it.
+    let transactions = BlockTransactions::try_new(block.into_transactions(), u16::MAX)?;
+    let block = BlockWithVerifiedHeader::new(header, transactions)
+        .map_err(|e| Error::Cryptarchia(ApiError::InvalidBody(e.to_string())))?;
+    apply_block_with_verified_header_and_reconcile_mempool::<_, Mempool>(
+        block,
+        cryptarchia,
+        mempool,
+    )
+    .await
+}
+
+/// Try to add a [`BlockWithVerifiedHeader`] to [`Cryptarchia`], as
+/// [`apply_block_and_reconcile_mempool`] does for a [`Block`].
+#[instrument(
+    target = LOG_TARGET,
+    level = "debug",
+    skip(block, cryptarchia, mempool),
+    fields(block_id = %block.header().id(), tx_count = block.transactions().len())
+)]
+async fn apply_block_with_verified_header_and_reconcile_mempool<Cryptarchia, Mempool>(
+    block: BlockWithVerifiedHeader<Cryptarchia::Tx>,
+    cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
+    mempool: &MempoolAdapter<Mempool::Item>,
+) -> Result<(), Error>
+where
+    Cryptarchia: CryptarchiaServiceData,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send,
+    Mempool:
+        RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
+{
     let block_id = block.header().id();
     let block_slot = block.header().slot();
-    let AppliedBlock {
+    let applied = cryptarchia.apply_block(block).await?;
+    reconcile_mempool::<Mempool>(applied, block_id, block_slot, mempool).await;
+    Ok(())
+}
+
+/// Lets the mempool follow how applying a block changed the canonical chain.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "the logging macros of the two mempool notifications count as branches"
+)]
+async fn reconcile_mempool<Mempool>(
+    AppliedBlock {
         tip,
         newly_canonical_txs,
         reorged_txs,
         lib_slot,
-    } = cryptarchia.apply_block(block).await?;
+    }: AppliedBlock<Mempool::Item>,
+    block_id: HeaderId,
+    block_slot: Slot,
+    mempool: &MempoolAdapter<Mempool::Item>,
+) where
+    Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash> + Send + Sync,
+    Mempool::Item: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send + 'static,
+{
     debug!(
         target: LOG_TARGET, ?block_id, ?tip,
         retired_txs = newly_canonical_txs.len(), reinserted_txs = reorged_txs.len(),
@@ -1119,48 +1155,44 @@ where
     {
         error!(target: LOG_TARGET, err, "could not notify mempool of processed block");
     }
-
-    Ok(())
 }
 
-/// Reconstruct a `Block` from a `Proposal` by resolving its reference prefixes
-/// against the local mempool.
+/// Reconstruct a block from the verified header of a proposal by resolving
+/// the proposal's reference prefixes against the local mempool.
 ///
 /// A reference is a 16-byte prefix of the transaction hash. Two distinct hashes
 /// cannot be found or manufactured to share one at any feasible cost, so every
 /// reference resolves to exactly one local transaction and resolution never
 /// branches. `header.body_root` still commits to the full hashes and
-/// `Block::reconstruct` checks it, which is what catches the residual,
-/// cryptographically negligible case of a prefix matching the wrong
+/// [`BlockWithVerifiedHeader::new`] checks it, which is what catches the
+/// residual, cryptographically negligible case of a prefix matching the wrong
 /// transaction.
 ///
-/// The caller must have validated the header first: this walks the mempool once
-/// per reference, so an unauthenticated proposal has to be discarded before it
-/// gets here. The block is held to `block_limits`, those of the era of the
-/// proposal's slot: the proposal's uncle headers were decoded under them, which
-/// the rebuilt block keeps, and its transactions are held to them here. The
-/// data of their Operations was decoded under the era that admitted them, so
-/// the ledger holds that to the block's era when it applies the block.
+/// Taking a [`VerifiedBlockHeader`] means the header was validated first: this
+/// walks the mempool once per reference, so an unauthenticated proposal has to
+/// be discarded before it gets here. The block is held to the transaction
+/// count of `block_limits`, those of the era of the proposal's slot: the
+/// proposal's uncle headers were decoded under them, which the rebuilt block
+/// keeps. The ledger holds the transactions, and the data of their Operations,
+/// to the block's era when it applies the block.
 async fn reconstruct_block_from_proposal<Item>(
-    proposal: Proposal,
+    header: VerifiedBlockHeader,
+    references: &[TxHashPrefix],
     block_limits: BlockLimits,
     mempool: &impl MempoolAdapterTrait<Item>,
-) -> Result<Block<Item>, Error>
+) -> Result<BlockWithVerifiedHeader<Item>, Error>
 where
     Item: SignedMantleTx<Preverified, StandardMode> + StorageSize + Clone + Send + Sync + 'static,
 {
-    let mut transactions = Vec::with_capacity(proposal.mempool_transactions().len());
-    for (index, prefix) in proposal.mempool_transactions().iter().copied().enumerate() {
+    let mut transactions = Vec::with_capacity(references.len());
+    for (index, prefix) in references.iter().copied().enumerate() {
         transactions.push(resolve_reference(index, prefix, mempool).await?);
     }
 
-    Block::reconstruct(
-        proposal.header().clone(),
-        proposal.uncle_headers().clone(),
+    BlockWithVerifiedHeader::new(
+        header,
         BlockTransactions::try_new(transactions, block_limits.max_transactions)
             .map_err(|_| Error::NoMatchingReconstruction)?,
-        *proposal.signature(),
-        block_limits.max_transactions_size,
     )
     .map_err(|_| Error::NoMatchingReconstruction)
 }
@@ -1205,30 +1237,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
 
     use futures::stream;
-    use lb_binary_codec::canonical::BinaryDecodeExt as _;
     use lb_core::{
-        block::{TxInBlock, UncleHeaders},
-        mantle::{
-            traits::Hasher,
-            transactions::{Ops, hash::REFERENCE_PREFIX_BYTES},
-        },
-        proofs::leader_proof::Groth16LeaderProof,
+        block::TxInBlock,
+        mantle::{traits::Hasher, transactions::hash::REFERENCE_PREFIX_BYTES},
     };
     use lb_cryptarchia_engine::Era;
-    use lb_cryptarchia_sync::TipResponse;
-    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, Ed25519Signature};
-    use lb_network_service::{
-        backends::mock::Mock,
-        message::{BackendNetworkMsg, ChainSyncEvent},
-    };
     use lb_tx_service::TxsWithCommonPrefix;
-    use overwatch::services::relay::OutboundRelay;
 
     use super::*;
-    use crate::network::BoxedStream;
 
     /// A transaction that is nothing but its hash, which is all
     /// [`resolve_reference`] looks at.
@@ -1337,116 +1356,28 @@ mod tests {
         ));
     }
 
-    /// A block ID rejected due to a tampered signature must not be cached by
-    /// the orphan downloader, because the genuine proposal (with the same ID)
-    /// may arrive later and must be accepted.
+    /// Failures in what the block ID does not commit to (the signature, the
+    /// uncles and the transactions) condemn only the received copy, so they
+    /// must not get the block ID rejected: a genuine copy may arrive later.
     #[test]
-    fn tampered_signature_block_is_not_cached_by_orphan_downloader() {
-        let leader_key = Ed25519Key::from_bytes(&[1; 32]);
-        let genuine = Block::create(
-            HeaderId::from([0; 32]),
-            Slot::new(1),
-            UncleHeaders::empty(),
-            leader_proof(&leader_key.public_key()),
-            BlockTransactions::<Ops>::empty(),
-            u32::MAX,
-            &leader_key,
-        )
-        .expect("block must be created")
-        .to_proposal();
-
-        let mut signature = genuine.signature().to_bytes();
-        signature[0] ^= 1;
-        let tampered = Proposal {
-            signature: Ed25519Signature::from_bytes(&signature),
-            ..genuine.clone()
-        };
-        let block_id = genuine.header().id();
-        // The tampered proposal has the same block ID as the genuine one,
-        // because the block ID doesn't commit to the signature.
-        assert_eq!(tampered.header().id(), block_id);
-
-        let mut orphan_downloader =
-            OrphanBlocksDownloader::<_, usize>::new(NoopNetworkAdapter, NonZeroUsize::MIN, 1);
-
-        assert!(matches!(
-            verify_proposal_and_cache_rejected(&tampered, &mut orphan_downloader),
-            Err(Error::InvalidSignature)
-        ));
-        // check that the rejected block was not cached in the orphan downloader.
-        assert!(!orphan_downloader.has_rejected_block(&block_id));
-
-        verify_proposal_and_cache_rejected(&genuine, &mut orphan_downloader)
-            .expect("genuine proposal must pass");
-    }
-
-    /// A network adapter that the orphan downloader holds but never calls here.
-    #[derive(Clone)]
-    struct NoopNetworkAdapter;
-
-    #[async_trait::async_trait]
-    impl<RuntimeServiceId: Send + Sync> NetworkAdapter<RuntimeServiceId> for NoopNetworkAdapter {
-        type Backend = Mock;
-        type Settings = ();
-        type PeerId = ();
-        type Block = ();
-        type Proposal = ();
-
-        async fn new(
-            _settings: Self::Settings,
-            _current_era: Era,
-            _network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
-        ) -> Self {
-            unimplemented!()
+    fn signature_uncle_and_body_failures_do_not_condemn_the_block() {
+        for err in [
+            ApiError::InvalidSignature,
+            ApiError::InvalidUncles(String::new()),
+            ApiError::InvalidBody(String::new()),
+        ] {
+            assert!(is_recoverable_apply_error(&Error::Cryptarchia(err)));
         }
-
-        async fn rotate_era(&mut self, _era: Era) {}
-
-        async fn complete_era_transition(&mut self, _ended_era: Era) {}
-
-        async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
-            unimplemented!()
+        for err in [
+            ApiError::InvalidHeader(String::new()),
+            ApiError::InvalidSlot {
+                parent: Slot::new(1),
+                block: Slot::new(1),
+            },
+            ApiError::InvalidLeaderProof,
+            ApiError::Unexpected(String::new()),
+        ] {
+            assert!(!is_recoverable_apply_error(&Error::Cryptarchia(err)));
         }
-
-        async fn chainsync_events_stream(&self) -> Result<BoxedStream<ChainSyncEvent>, DynError> {
-            unimplemented!()
-        }
-
-        async fn request_tip(&self, _peer: Self::PeerId) -> Result<TipResponse, DynError> {
-            unimplemented!()
-        }
-
-        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<TipResponse> {
-            unimplemented!()
-        }
-
-        async fn request_blocks_from_peer(
-            &self,
-            _peer: Self::PeerId,
-            _target_block: HeaderId,
-            _local_tip: HeaderId,
-            _latest_immutable_block: HeaderId,
-            _additional_blocks: HashSet<HeaderId>,
-        ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError> {
-            unimplemented!()
-        }
-
-        async fn request_blocks_from_peers(
-            &self,
-            _target_block: HeaderId,
-            _local_tip: HeaderId,
-            _latest_immutable_block: HeaderId,
-            _additional_blocks: HashSet<HeaderId>,
-        ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError> {
-            unimplemented!()
-        }
-    }
-
-    /// A dummy leader proof carrying only `leader_key`
-    fn leader_proof(leader_key: &Ed25519PublicKey) -> Groth16LeaderProof {
-        // Layout: `proof (128B) || entropy_contribution (32B) || leader_key (32B) ||
-        // voucher_cm (32B)`
-        let bytes = [&[0u8; 160][..], leader_key.as_bytes(), &[0u8; 32]].concat();
-        Groth16LeaderProof::decode_all(&bytes).expect("leader proof bytes must decode")
     }
 }

@@ -27,7 +27,7 @@ use lb_core::{
         traits::{Hashable, MantleTx, SignedMantleTx, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
     },
-    proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
+    proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderProof as _},
     sdp::blend::PolEpochState,
 };
 use lb_cryptarchia_engine::Slot;
@@ -677,14 +677,13 @@ where
                 UncleHeaders::empty()
             });
 
-        (ledger_state, _) = ledger_state
-            .clone()
-            .try_apply_header::<Groth16LeaderProof, HeaderId>(
-                slot,
-                &proof,
-                &uncle_headers.slots(),
-                era_schedule,
-            )?;
+        (ledger_state, _) = ledger_state.clone().try_apply_header::<HeaderId>(
+            slot,
+            &proof.entropy(),
+            *proof.voucher_cm(),
+            &uncle_headers.slots(),
+            era_schedule,
+        )?;
         // Collect all candidate transactions up front so the ones that fail can
         // be retried across multiple rounds.
         let TransactionSelection {
