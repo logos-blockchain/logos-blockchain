@@ -10,20 +10,23 @@ use lb_core::mantle::{
     traits::{Hashable, MantleTx},
 };
 use lb_cryptarchia_engine::Slot;
+use lb_time::Era;
 pub use powclaim::{PowClaimEvictionSettings, PowClaimPolicy};
-pub use ttl::TtlPolicy;
+pub use ttl::{TtlPolicy, TtlSettings};
 
 use crate::backend::{AdmissionTime, IncludedItem};
 
 /// The clock eviction policies see.
 ///
 /// The pool has no clock of its own: wall-clock time is sampled on every
-/// pool operation, and the slot only advances when the chain reports a
-/// processed block.
+/// pool operation, the era only changes when the pool rotates to the next
+/// one, and the slot only advances when the chain reports a processed block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PolicyClock {
     /// Unix timestamp in milliseconds.
     pub now_millis: u64,
+    /// The era in force, as the pool last rotated to.
+    pub era: Era,
     /// Highest slot of any processed block, `None` until the first one.
     pub slot: Option<Slot>,
 }

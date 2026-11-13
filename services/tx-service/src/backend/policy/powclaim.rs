@@ -303,6 +303,7 @@ mod tests {
     fn clock(slot: Option<u64>) -> PolicyClock {
         PolicyClock {
             now_millis: 0,
+            era: lb_time::Era::genesis(),
             slot: slot.map(Slot::from),
         }
     }

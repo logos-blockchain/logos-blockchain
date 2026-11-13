@@ -193,7 +193,6 @@ mod tests {
             Duration::from_hours(24)
         );
         assert_eq!(loaded.api.backend.timeout, Duration::from_secs(30));
-        assert_eq!(loaded.mempool.tx_ttl, Some(Duration::from_hours(1)));
         assert_eq!(loaded.tracing.logger.file.unwrap().prefix, None);
 
         // Upgraded, it loads as it is.
