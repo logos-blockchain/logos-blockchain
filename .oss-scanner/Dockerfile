@@ -1,6 +1,6 @@
 # Image for Anthropic's OSS scanner (https://github.com/anthropics/oss-scanner).
 
-FROM rust:1.99.0-bookworm
+FROM rust:1.100.0-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive
 

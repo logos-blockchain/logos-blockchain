@@ -485,3 +485,15 @@ trivial_casts                          = { level = "allow" }
 unreachable_pub                        = { level = "allow" }
 unsafe_code                            = { level = "allow" }
 variant_size_differences               = { level = "allow" }
+
+[workspace.lints.cargo]
+
+# Pedantic and allowed pedantic warnings (new lints will warn by default)
+pedantic = { level = "warn", priority = -1 }
+
+# Restriction and allowed restriction warnings (new lints will warn by default)
+restriction = { level = "warn", priority = -1 }
+
+# We use kebab case for features and package names, so we allow the non-snake lint
+non_snake_case_features = { level = "allow" }
+non_snake_case_packages = { level = "allow" }
