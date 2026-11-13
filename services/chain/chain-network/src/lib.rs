@@ -7,11 +7,7 @@ mod relays;
 mod sync;
 
 use core::{fmt::Debug, num::NonZeroUsize, pin::pin};
-use std::{
-    fmt::Display,
-    hash::Hash,
-    time::{Duration, Instant},
-};
+use std::{fmt::Display, hash::Hash, time::Instant};
 
 use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
 use futures::StreamExt as _;
@@ -328,20 +324,13 @@ where
             .notifier()
             .get_updated_settings();
 
-        // Wait for services (except Chain) to become ready, with timeout
-        wait_until_services_are_ready!(
-            &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_mins(1)),
-            NetworkService<_, _, _>,
-            TxMempoolService<_, _, _, _, _>,
-            TimeService<_, _>
-        )
-        .await?;
-        // Wait for Chain service to become ready, without timeout
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
             None,
-            Cryptarchia // becomes ready after recoverying blocks
+            NetworkService<_, _, _>,
+            TxMempoolService<_, _, _, _, _>,
+            TimeService<_, _>,
+            Cryptarchia
         )
         .await?;
 

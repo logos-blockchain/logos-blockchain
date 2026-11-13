@@ -42,7 +42,7 @@ pub struct PolInfoProvider;
 impl<RuntimeServiceId> PolInfoProviderTrait<RuntimeServiceId> for PolInfoProvider
 where
     RuntimeServiceId:
-        AsServiceId<CryptarchiaLeaderService> + Debug + Display + Send + Sync + 'static,
+        AsServiceId<CryptarchiaLeaderService> + Clone + Debug + Display + Send + Sync + 'static,
 {
     type Stream = Box<dyn Stream<Item = PolEpochInfo> + Send + Unpin>;
 

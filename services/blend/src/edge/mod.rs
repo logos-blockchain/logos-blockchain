@@ -11,7 +11,6 @@ use std::{
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
-    time::Duration,
 };
 
 use backends::BlendBackend;
@@ -195,7 +194,7 @@ where
 
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             TimeService<_, _>,
             PreloadKmsService<_>,
             NetworkService<Dispatcher::Backend, _, _>
