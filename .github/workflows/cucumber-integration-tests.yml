@@ -32,18 +32,22 @@ jobs:
       matrix:
         platform:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - os: [ self-hosted, Linux ]
+          - os: bladerunner-linux
             label: self-hosted-linux
             peer_label: self-hosted-macos
-          - os: [ self-hosted, macOS ]
+            max_concurrent_scenarios: "2"
+          - os: bladerunner-macos
             label: self-hosted-macos
             peer_label: self-hosted-linux
+            max_concurrent_scenarios: "3"
     runs-on: ${{ matrix.platform.os }}
     env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
       # Heavy Rust integration tests become less stable when oversubscribing the
       # self-hosted runners. Keep these lanes single-job to reduce retries.
       E2E_NEXTEST_JOBS: 1
-      LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
+      CARGO_INCREMENTAL: 0
+      LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/ci-release/logos-blockchain-node
       PEER_SUCCEEDED: "false"
 
     steps:
@@ -100,9 +104,30 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
-          args: --locked --release --all
+          args: >-
+            --locked --profile ci-release
+            -p logos-blockchain-node -p blockchain-test-interop
+            --bin logos-blockchain-node --bin cucumber_external_smoke
+
+      - name: Build cucumber runners
+        id: runners
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
+        shell: bash
         env:
-          CARGO_INCREMENTAL: 0  # Disable incremental compilation
+          CARGO_PROFILE_DEV_DEBUG: line-tables-only
+        run: |
+          set -euo pipefail
+
+          cargo test --locked --no-run --message-format=json-render-diagnostics \
+            -p logos-blockchain-tests -p logos-blockchain-zone-tests -p logos-blockchain-sql-tests \
+            --features cucumber --test cucumber > "$RUNNER_TEMP/cucumber-runners.json"
+
+          for runner in tests=tests zone=tests/clients/zone-sdk sql=tests/clients/logos-sql; do
+            jq -r --arg name "${runner%%=*}" --arg manifest "$GITHUB_WORKSPACE/${runner#*=}/Cargo.toml" '
+              select(.reason == "compiler-artifact" and .target.name == "cucumber" and .manifest_path == $manifest)
+              | "\($name)=\(.executable)"
+            ' "$RUNNER_TEMP/cucumber-runners.json"
+          done >> "$GITHUB_OUTPUT"
 
       - *check_peer_success
 
@@ -113,7 +138,7 @@ jobs:
         env:
           CUCUMBER_RETRIES: "0"
         with:
-          executable: ${{ github.workspace }}/target/release/cucumber_external_smoke
+          executable: ${{ github.workspace }}/target/ci-release/cucumber_external_smoke
           scenario_name: '^Two nodes connect at runtime$'
           suite_tag: "@smoke_ci"
           suite_name: external-runner
@@ -133,9 +158,10 @@ jobs:
         uses: ./.github/actions/run-cucumber-suite
         with:
           suite_tag: "@smoke_ci"
+          executable: ${{ steps.runners.outputs.tests }}
           suite_name: smoke
           artifact_subdir: Smoke
-          max_concurrent_scenarios: "1"
+          max_concurrent_scenarios: ${{ matrix.platform.max_concurrent_scenarios }}
 
       - *check_peer_success
 
@@ -146,9 +172,10 @@ jobs:
         uses: ./.github/actions/run-cucumber-suite
         with:
           suite_tag: "@cryptarchia_ci"
+          executable: ${{ steps.runners.outputs.tests }}
           suite_name: cryptarchia
           artifact_subdir: Cryptarchia
-          max_concurrent_scenarios: "1"
+          max_concurrent_scenarios: ${{ matrix.platform.max_concurrent_scenarios }}
 
       - *check_peer_success
 
@@ -159,9 +186,10 @@ jobs:
         uses: ./.github/actions/run-cucumber-suite
         with:
           suite_tag: "@blend_ci"
+          executable: ${{ steps.runners.outputs.tests }}
           suite_name: blend
           artifact_subdir: Blend
-          max_concurrent_scenarios: "1"
+          max_concurrent_scenarios: ${{ matrix.platform.max_concurrent_scenarios }}
 
       - *check_peer_success
 
@@ -172,10 +200,11 @@ jobs:
         uses: ./.github/actions/run-cucumber-suite
         with:
           suite_tag: "@transactions_ci"
+          executable: ${{ steps.runners.outputs.tests }}
           suite_name: transactions
           artifact_subdir: Transactions
           verbose_console: "true"
-          max_concurrent_scenarios: "1"
+          max_concurrent_scenarios: ${{ matrix.platform.max_concurrent_scenarios }}
 
       - *check_peer_success
 
@@ -186,10 +215,11 @@ jobs:
         uses: ./.github/actions/run-cucumber-suite
         with:
           suite_tag: "@fees_ci"
+          executable: ${{ steps.runners.outputs.tests }}
           suite_name: fees
           artifact_subdir: Fees
           verbose_console: "true"
-          max_concurrent_scenarios: "1"
+          max_concurrent_scenarios: ${{ matrix.platform.max_concurrent_scenarios }}
 
       - *check_peer_success
 
@@ -200,24 +230,11 @@ jobs:
         uses: ./.github/actions/run-cucumber-suite
         with:
           suite_tag: "@mempool_ci"
+          executable: ${{ steps.runners.outputs.tests }}
           suite_name: mempool
           artifact_subdir: "Mempool lifecycle"
           verbose_console: "true"
-
-      - *check_peer_success
-
-      # Feature: Zone SDK (@zone_ci)
-      - name: Run cucumber suite - zone
-        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
-        timeout-minutes: 60
-        uses: ./.github/actions/run-cucumber-suite
-        with:
-          suite_tag: "@zone_ci"
-          package: logos-blockchain-zone-tests
-          suite_name: zone
-          artifacts_dir: tests/clients/zone-sdk/cucumber_tests/temp
-          artifact_subdir: "Zone SDK"
-          max_concurrent_scenarios: "1"
+          max_concurrent_scenarios: ${{ matrix.platform.max_concurrent_scenarios }}
 
       - *check_peer_success
 
@@ -228,11 +245,12 @@ jobs:
         uses: ./.github/actions/run-cucumber-suite
         with:
           suite_tag: "@logos_sql_ci"
-          package: logos-blockchain-sql-tests
+          executable: ${{ steps.runners.outputs.sql }}
+          working_directory: tests/clients/logos-sql
           suite_name: logos-sql
           artifacts_dir: tests/clients/logos-sql/cucumber_tests/temp
           artifact_subdir: "Logos SQL"
-          max_concurrent_scenarios: "1"
+          max_concurrent_scenarios: ${{ matrix.platform.max_concurrent_scenarios }}
 
       - *check_peer_success
 
@@ -243,9 +261,10 @@ jobs:
         uses: ./.github/actions/run-cucumber-suite
         with:
           suite_tag: "@cli_ci"
+          executable: ${{ steps.runners.outputs.tests }}
           suite_name: CLI
           artifact_subdir: CLI
-          max_concurrent_scenarios: "1"
+          max_concurrent_scenarios: ${{ matrix.platform.max_concurrent_scenarios }}
 
       # Upload JUnit test results only for a lane that ran to completion.
       - name: Upload cucumber JUnit results
