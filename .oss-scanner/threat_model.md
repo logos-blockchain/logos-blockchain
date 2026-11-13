@@ -39,7 +39,7 @@ Most:
 
 Least:
 
-- Client-side libraries: `zone-sdk/`, `logos_sql/`, `wallet-http-client/`. In scope, at a lower priority.
+- Client-side libraries: `wallet-http-client/`. In scope, at a lower priority. The Zone SDK and Logos SQL live in [logos-zone-sdk](https://github.com/logos-blockchain/logos-zone-sdk).
 - Operator and testnet tooling: `tools/`, `deployment/` (the testnet faucet among it), `scripts/`.
 - Tests: `tests/`, benches and `#[cfg(test)]` code.
 

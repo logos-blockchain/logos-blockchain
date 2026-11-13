@@ -60,7 +60,6 @@ members = [
   "kms/operators",
   "ledger",
   "libp2p",
-  "logos_sql",
   "merkle/blake2btree",
   "merkle/dynamic-merkle",
   "merkle/tree",
@@ -88,8 +87,6 @@ members = [
   "services/utils",
   "services/wallet",
   "tests",
-  "tests/clients/logos-sql",
-  "tests/clients/zone-sdk",
   "tests/interop",
   "tests/tf_integration/logos",
   "tests/tf_integration/nimbos",
@@ -112,7 +109,6 @@ members = [
   "zk/proofs/pol",
   "zk/proofs/poq",
   "zk/proofs/zksign",
-  "zone-sdk",
 ]
 resolver = "2"
 
@@ -187,10 +183,7 @@ lb-version                         = { default-features = false, package = "logo
 lb-wallet                          = { default-features = false, package = "logos-blockchain-wallet", path = "./wallet" }
 lb-wallet-service                  = { default-features = false, package = "logos-blockchain-wallet-service", path = "./services/wallet" }
 lb-zksign                          = { default-features = false, package = "logos-blockchain-zksign", path = "./zk/proofs/zksign" }
-lb-zone-sdk                        = { default-features = false, package = "logos-blockchain-zone-sdk", path = "./zone-sdk" }
 logos-blockchain-tests             = { default-features = false, path = "./tests" }
-logos-blockchain-zone-tests        = { default-features = false, path = "./tests/clients/zone-sdk" }
-logos-sql                          = { default-features = false, path = "./logos_sql" }
 # When bumping any lbc-* tag, also update the logos-blockchain-circuits flake input tag in flake.nix
 # and run `nix flake lock --update-input logos-blockchain-circuits`.
 lbc-poc-sys                      = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poc-sys", tag = "v0.5.7" }
@@ -227,7 +220,6 @@ blake2                             = { default-features = false, version = "0.10
 boon                               = { default-features = false, version = "0.6" }
 bytes                              = { default-features = false, version = "1.3" }
 cbindgen                           = { default-features = false, version = "0.29" }
-chacha20poly1305                   = { default-features = false, version = "0.10.1" }
 chrono                             = { default-features = false, version = "0.4" }
 clap                               = { default-features = false, version = "4" }
 color-eyre                         = { default-features = false, version = "0.6.0" }
@@ -293,7 +285,6 @@ reqwest                            = { default-features = false, version = "0.12
 rocksdb                            = { default-features = false, version = "0.24" }
 rpds                               = { default-features = false, version = "1" }
 rs-merkle-tree                     = { default-features = false, version = "0.1" }
-rusqlite                           = { default-features = false, version = "0.41" }
 tar                                = { default-features = false, version = "0.4.46" }
 # Must stay in sync with the rust-rapidsnark flake input in flake.nix.
 rust-rapidsnark       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git", rev = "e91187f8ccb5bbfc7bb00dac88169112428da78f" } # feat/nixify

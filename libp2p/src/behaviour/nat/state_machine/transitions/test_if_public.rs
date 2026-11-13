@@ -6,31 +6,37 @@ use crate::behaviour::nat::state_machine::{
 
 const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::nat::state_machine::TEST_IF_PUBLIC;
 
-/// The `TestIfPublic` state is responsible for testing if the provided address
-/// is public. If the address is confirmed as public, it transitions to the
-/// `Public` state. If the address is not public, it transitions to the
-/// `TryMapAddress` state to attempt mapping the address to some public-facing
-/// address on the NAT-box.
+/// The `TestIfPublic` state is responsible for testing if the node is publicly
+/// reachable. If `AutoNAT` confirms an address, it transitions to the `Public`
+/// state. If not, it transitions to the `TryMapAddress` state to attempt
+/// mapping the local address to some public-facing address on the NAT-box.
 ///
-/// Any `ExternalAddressConfirmed` event — regardless of whether it matches the
-/// current `addr_to_test` — causes a direct transition to `Public`. The swarm
-/// confirms an external address only once, so there is no second confirmation
-/// to wait for. The `Public` state will verify reachability via periodic
-/// autonat probes and demote back if the address turns out to be unreachable.
+/// `AutoNAT` tests the addresses at which other peers observe the node, which
+/// behind a NAT are the NAT's and not the local address, and no address is
+/// confirmed in this state. So any `ExternalAddressConfirmed` event causes a
+/// direct transition to `Public`, and any `AutonatClientTestFailed` event means
+/// that the node is not reachable as it is. The swarm confirms an external
+/// address only once, so there is no second confirmation to wait for. The
+/// `Public` state will verify reachability via periodic autonat probes and
+/// demote back if the address turns out to be unreachable.
 impl OnEvent for State<TestIfPublic> {
     fn on_event(self: Box<Self>, event: Event, command_tx: &CommandTx) -> Box<dyn OnEvent> {
         match event {
             Event::ExternalAddressConfirmed(addr) => {
                 tracing::debug!(
                     target: LOG_TARGET,
-                    "State<TestIfPublic>: External address {addr} confirmed (was testing {}), promoting to Public.",
-                    self.state.addr_to_test(),
+                    "State<TestIfPublic>: External address {addr} confirmed, promoting to Public.",
                 );
                 command_tx.force_send(Command::ScheduleAutonatClientTest(addr.clone()));
-                self.boxed(|state| state.retarget(addr).into_public())
+                self.boxed(|state| state.into_public(addr))
             }
-            Event::AutonatClientTestFailed(addr) if self.state.addr_to_test() == &addr => {
-                command_tx.force_send(Command::MapAddress(addr));
+            Event::AutonatClientTestFailed(addr) => {
+                tracing::debug!(
+                    target: LOG_TARGET,
+                    "State<TestIfPublic>: AutoNAT could not reach {addr}, mapping {}.",
+                    self.state.local_address(),
+                );
+                command_tx.force_send(Command::MapAddress(self.state.local_address().clone()));
                 self.boxed(TestIfPublic::into_try_map_address)
             }
             Event::DefaultGatewayChanged { local_address, .. } => {
@@ -83,10 +89,11 @@ mod tests {
         let mut state_machine = StateMachine::new(tx);
         state_machine.inner = Some(TestIfPublic::for_test(ADDR.clone()));
         state_machine.on_test_event(external_address_confirmed_address_mismatch());
-        // Transitions to Public with the confirmed address (ADDR_1)
+        // Transitions to Public with the confirmed address (ADDR_1), keeping the
+        // local address (ADDR)
         assert_eq!(
             state_machine.inner.as_ref().unwrap(),
-            &Public::for_test(ADDR_1.clone())
+            &Public::for_test_with_addrs(ADDR.clone(), ADDR_1.clone())
         );
         assert_eq!(
             rx.try_recv(),
@@ -108,16 +115,17 @@ mod tests {
     }
 
     #[test]
-    fn autonat_failed_address_mismatch_is_ignored() {
+    fn autonat_failed_for_observed_address_maps_local_address() {
         let (tx, mut rx) = unbounded_channel();
         let mut state_machine = StateMachine::new(tx);
         state_machine.inner = Some(TestIfPublic::for_test(ADDR.clone()));
+        // AutoNAT tested the address a peer observed (ADDR_1), not the local one.
         state_machine.on_test_event(autonat_failed_address_mismatch());
         assert_eq!(
             state_machine.inner.as_ref().unwrap(),
-            &TestIfPublic::for_test(ADDR.clone())
+            &TryMapAddress::for_test(ADDR.clone())
         );
-        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
+        assert_eq!(rx.try_recv(), Ok(Command::MapAddress(ADDR.clone())));
     }
 
     #[test]

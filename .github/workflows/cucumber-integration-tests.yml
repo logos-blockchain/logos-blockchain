@@ -119,10 +119,10 @@ jobs:
           set -euo pipefail
 
           cargo test --locked --no-run --message-format=json-render-diagnostics \
-            -p logos-blockchain-tests -p logos-blockchain-zone-tests -p logos-blockchain-sql-tests \
+            -p logos-blockchain-tests \
             --features cucumber --test cucumber > "$RUNNER_TEMP/cucumber-runners.json"
 
-          for runner in tests=tests zone=tests/clients/zone-sdk sql=tests/clients/logos-sql; do
+          for runner in tests=tests; do
             jq -r --arg name "${runner%%=*}" --arg manifest "$GITHUB_WORKSPACE/${runner#*=}/Cargo.toml" '
               select(.reason == "compiler-artifact" and .target.name == "cucumber" and .manifest_path == $manifest)
               | "\($name)=\(.executable)"
@@ -238,22 +238,6 @@ jobs:
 
       - *check_peer_success
 
-      # Feature: Logos SQL (@logos_sql_ci)
-      - name: Run cucumber suite - Logos SQL
-        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
-        timeout-minutes: 60
-        uses: ./.github/actions/run-cucumber-suite
-        with:
-          suite_tag: "@logos_sql_ci"
-          executable: ${{ steps.runners.outputs.sql }}
-          working_directory: tests/clients/logos-sql
-          suite_name: logos-sql
-          artifacts_dir: tests/clients/logos-sql/cucumber_tests/temp
-          artifact_subdir: "Logos SQL"
-          max_concurrent_scenarios: ${{ matrix.platform.max_concurrent_scenarios }}
-
-      - *check_peer_success
-
       # Feature: CLI utility binary (@cli_ci)
       - name: Run cucumber suite - CLI utilities
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
@@ -294,7 +278,7 @@ jobs:
 
       - name: Clean up cucumber artifacts
         if: success() || failure()
-        run: rm -rf ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts ${{ github.workspace }}/tests/clients/zone-sdk/cucumber_tests/temp/cucumber_artefacts ${{ github.workspace }}/tests/clients/logos-sql/cucumber_tests/temp/cucumber_artefacts
+        run: rm -rf ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts
 
       # This step is the unambiguous signal consumed by the peer lane and the
       # required result job. A cooperatively stopped lane skips this step.

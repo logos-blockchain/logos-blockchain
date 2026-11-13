@@ -1,5 +1,5 @@
 use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{IpAddr, SocketAddr},
     num::NonZeroU16,
 };
 
@@ -11,9 +11,12 @@ use tokio::time::timeout;
 use crate::{
     behaviour::nat::address_mapper::{
         errors::AddressMapperError,
-        protocols::pcp_core::{
-            client::{PcpClient, PcpConfig},
-            wire::Protocol as WireProtocol,
+        protocols::{
+            build_public_address,
+            pcp_core::{
+                client::{PcpClient, PcpConfig},
+                wire::Protocol as WireProtocol,
+            },
         },
     },
     config::NatMappingSettings,
@@ -66,11 +69,11 @@ impl PcpProtocol {
         })?
         .map_err(|e| AddressMapperError::PortMappingFailed(e.to_string()))?;
 
-        let external_addr = build_external_multiaddr(
+        let external_addr = build_public_address(
+            address,
             mapping.external_address(),
-            mapping.external_port(),
-            protocol,
-        );
+            mapping.external_port().get(),
+        )?;
 
         tracing::info!(
             target: LOG_TARGET,
@@ -109,21 +112,4 @@ fn parse_multiaddr(address: &Multiaddr) -> Result<(SocketAddr, WireProtocol), Ad
     }
 
     Ok((SocketAddr::new(ip, port), protocol))
-}
-
-/// Build external multiaddr from PCP mapping result
-fn build_external_multiaddr(
-    external_ip: Ipv4Addr,
-    external_port: NonZeroU16,
-    protocol: WireProtocol,
-) -> Multiaddr {
-    let mut addr = Multiaddr::empty();
-    addr.push(Protocol::Ip4(external_ip));
-
-    match protocol {
-        WireProtocol::Tcp => addr.push(Protocol::Tcp(external_port.get())),
-        WireProtocol::Udp => addr.push(Protocol::Udp(external_port.get())),
-    }
-
-    addr
 }
