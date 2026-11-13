@@ -1,4 +1,5 @@
 use std::{
+    net::Ipv4Addr,
     task::{Context, Poll},
     time::Duration,
 };
@@ -12,9 +13,10 @@ use lb_log_targets::libp2p as lb_log_targets_libp2p;
 use libp2p::{
     Multiaddr, PeerId, autonat,
     core::{Endpoint, transport::PortUse},
+    multiaddr::Protocol,
     swarm::{
-        ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, THandler, THandlerInEvent,
-        THandlerOutEvent, ToSwarm,
+        ConnectionDenied, ConnectionId, ExpiredListenAddr, FromSwarm, NetworkBehaviour,
+        NewListenAddr, THandler, THandlerInEvent, THandlerOutEvent, ToSwarm,
     },
 };
 use rand::RngCore;
@@ -63,8 +65,8 @@ where
     next_autonat_client_tick: Fuse<OptionFuture<Task>>,
     /// Interval for the above ticker.
     autonat_client_tick_interval: Duration,
-    /// Current local address that is being managed
-    local_address: Option<Multiaddr>,
+    /// The swarm's listen addresses, in the order the swarm reported them.
+    listen_addresses: Vec<Multiaddr>,
 }
 
 pub type NatBehaviour<Rng> = InnerNatBehaviour<Rng, ProtocolManager, SystemGatewayDetector>;
@@ -109,9 +111,38 @@ where
             command_rx,
             next_autonat_client_tick: OptionFuture::default().fuse(),
             autonat_client_tick_interval,
-            local_address: None,
+            listen_addresses: Vec::new(),
         }
     }
+}
+
+impl<Rng, Mapper, Detector> InnerNatBehaviour<Rng, Mapper, Detector>
+where
+    Rng: RngCore + 'static,
+    Detector: GatewayDetector,
+{
+    /// The first listen address on the network interface that holds the
+    /// default route, the only kind of address that the default gateway can
+    /// map. With an unspecified listen IP, the swarm reports one listen address
+    /// per interface, usually loopback first.
+    fn gateway_facing_listen_address(&self) -> Option<&Multiaddr> {
+        let interface_addresses = Detector::default_interface_addresses()
+            .inspect_err(|e| {
+                tracing::warn!(target: LOG_TARGET, "Failed to find the default interface: {e}");
+            })
+            .ok()?;
+        first_address_on(&self.listen_addresses, &interface_addresses)
+    }
+}
+
+/// The first of `listen_addresses` whose IP is one of `interface_addresses`.
+fn first_address_on<'listen>(
+    listen_addresses: &'listen [Multiaddr],
+    interface_addresses: &[Ipv4Addr],
+) -> Option<&'listen Multiaddr> {
+    listen_addresses.iter().find(|address| {
+        matches!(address.iter().next(), Some(Protocol::Ip4(ip)) if interface_addresses.contains(&ip))
+    })
 }
 
 impl<Rng, Mapper, Detector> NetworkBehaviour for InnerNatBehaviour<Rng, Mapper, Detector>
@@ -184,11 +215,21 @@ where
     }
 
     fn on_swarm_event(&mut self, event: FromSwarm) {
-        if let FromSwarm::NewListenAddr(addr_event) = &event {
-            self.local_address = Some(addr_event.addr.clone());
+        match event {
+            FromSwarm::NewListenAddr(NewListenAddr { addr, .. }) => {
+                self.listen_addresses.push(addr.clone());
+                // The state machine only tracks the address it can map.
+                if self.gateway_facing_listen_address() == Some(addr) {
+                    self.state_machine.on_event(event);
+                }
+            }
+            FromSwarm::ExpiredListenAddr(ExpiredListenAddr { addr, .. }) => {
+                self.listen_addresses
+                    .retain(|listen_address| listen_address != addr);
+            }
+            _ => self.state_machine.on_event(event),
         }
 
-        self.state_machine.on_event(event);
         self.autonat_client_behaviour.on_swarm_event(event);
     }
 
@@ -208,8 +249,8 @@ where
     ) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
         if let Poll::Ready(to_swarm) = self.autonat_client_behaviour.poll(cx) {
             // Forward all autonat results to the state machine unconditionally.
-            // The state machine's own guard clauses filter by the address it is
-            // currently tracking.
+            // The state machine decides which tested addresses matter in its
+            // current state.
             if let ToSwarm::GenerateEvent(event) = &to_swarm {
                 self.state_machine.on_event(event);
             }
@@ -242,11 +283,12 @@ where
                         "Gateway changed from {old_gateway:?} to {new_gateway:?}, triggering address re-mapping",
                     );
 
+                    let local_address = self.gateway_facing_listen_address().cloned();
                     self.state_machine
                         .on_event(&address_mapper::Event::DefaultGatewayChanged {
                             old_gateway,
                             new_gateway,
-                            local_address: self.local_address.clone(),
+                            local_address,
                         });
                 }
             }
@@ -270,9 +312,36 @@ where
                 Command::NewExternalAddrCandidate(addr) => {
                     return Poll::Ready(ToSwarm::NewExternalAddrCandidate(addr));
                 }
+                Command::ExternalAddrExpired(addr) => {
+                    return Poll::Ready(ToSwarm::ExternalAddrExpired(addr));
+                }
             }
         }
 
         Poll::Pending
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_listen_address_on_the_default_interface_is_selected() {
+        // What the swarm reports for an unspecified listen IP: loopback first,
+        // then a bridge, then the interface that holds the default route.
+        let listen_addresses: Vec<Multiaddr> = [
+            "/ip4/127.0.0.1/udp/3000/quic-v1",
+            "/ip4/172.17.0.1/udp/3000/quic-v1",
+            "/ip4/192.168.1.10/udp/3000/quic-v1",
+        ]
+        .map(|address| address.parse().unwrap())
+        .into();
+
+        assert_eq!(
+            first_address_on(&listen_addresses, &[Ipv4Addr::new(192, 168, 1, 10)]),
+            Some(&listen_addresses[2])
+        );
+        assert_eq!(first_address_on(&listen_addresses, &[]), None);
     }
 }
