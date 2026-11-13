@@ -35,17 +35,23 @@ logosctl module load blockchain_module
   MODULE_SHA256_PENDING
   ```
 
-- **Node binaries** attached to this release: check an archive against `SHA256SUMS`, then check that this repository's release workflow built it, with the [GitHub CLI](https://cli.github.com/):
+- **Node binaries** attached to this release: check an archive against `SHA256SUMS`, then check that this repository's release workflow built it from this release's tag, with the [GitHub CLI](https://cli.github.com/):
 
   ```bash
   sha256sum --ignore-missing -c SHA256SUMS  # on macOS: shasum -a 256 --ignore-missing -c SHA256SUMS
-  gh attestation verify logos-blockchain-node-<os>-<arch>-{{BLOCKCHAIN_MODULE_VERSION}}.tar.gz --repo logos-blockchain/logos-blockchain
+  gh attestation verify "logos-blockchain-node-<os>-<arch>-{{BLOCKCHAIN_MODULE_VERSION}}.tar.gz" \
+    --repo logos-blockchain/logos-blockchain \
+    --signer-workflow logos-blockchain/logos-blockchain/.github/workflows/prepare-release.yml \
+    --source-ref refs/tags/{{BLOCKCHAIN_MODULE_VERSION}}
   ```
 
-- **Docker image**: check that this repository's image workflow built it:
+- **Docker image**: check that this repository's image workflow built it from this release's tag:
 
   ```bash
-  gh attestation verify oci://ghcr.io/logos-blockchain/logos-blockchain-node:{{BLOCKCHAIN_MODULE_VERSION}} --repo logos-blockchain/logos-blockchain
+  gh attestation verify oci://ghcr.io/logos-blockchain/logos-blockchain-node:{{BLOCKCHAIN_MODULE_VERSION}} \
+    --repo logos-blockchain/logos-blockchain \
+    --signer-workflow logos-blockchain/logos-blockchain/.github/workflows/publish-node-image.yml \
+    --source-ref refs/tags/{{BLOCKCHAIN_MODULE_VERSION}}
   ```
 
 ### ⚙️ Initialize Your Node
