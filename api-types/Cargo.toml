@@ -1,0 +1,20 @@
+[package]
+categories  = { workspace = true }
+description = "Logos blockchain HTTP API route paths and query schemas"
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-api-types"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+serde            = { features = ["alloc", "derive"], workspace = true }
+serde_urlencoded = { workspace = true }
+url              = { workspace = true }
+utoipa           = { features = ["macros"], workspace = true }
+validator        = { features = ["derive"], workspace = true }
