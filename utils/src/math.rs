@@ -254,6 +254,46 @@ impl NonNegativeRatio {
     }
 }
 
+/// A fraction strictly between 0 and 1: a proper fraction other than zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
+#[serde(try_from = "NonNegativeRatio", into = "NonNegativeRatio")]
+pub struct ProperFraction(NonNegativeRatio);
+
+impl ProperFraction {
+    /// `numerator / denominator`, if it lies strictly between 0 and 1.
+    #[must_use]
+    pub const fn new(numerator: u32, denominator: NonZeroU32) -> Option<Self> {
+        if numerator == 0 || numerator >= denominator.get() {
+            return None;
+        }
+        Some(Self(NonNegativeRatio::new(numerator, denominator)))
+    }
+
+    #[must_use]
+    pub const fn get(self) -> NonNegativeRatio {
+        self.0
+    }
+}
+
+impl TryFrom<NonNegativeRatio> for ProperFraction {
+    type Error = String;
+
+    fn try_from(ratio: NonNegativeRatio) -> Result<Self, Self::Error> {
+        let NonNegativeRatio {
+            numerator,
+            denominator,
+        } = ratio;
+        Self::new(numerator, denominator)
+            .ok_or_else(|| format!("{numerator}/{denominator} must lie strictly between 0 and 1."))
+    }
+}
+
+impl From<ProperFraction> for NonNegativeRatio {
+    fn from(fraction: ProperFraction) -> Self {
+        fraction.0
+    }
+}
+
 mod serde {
     use serde::Deserialize as _;
 
@@ -361,6 +401,14 @@ mod tests {
         assert!(F64Ge1::try_from(FiniteF64::MAX_REPRESENTABLE_U64 + 1).is_err());
     }
 
+    #[test]
+    fn proper_fraction_basic() {
+        assert!(ProperFraction::new(1, 2.try_into().unwrap()).is_some());
+        assert!(ProperFraction::new(0, 2.try_into().unwrap()).is_none());
+        assert!(ProperFraction::new(2, 2.try_into().unwrap()).is_none());
+        assert!(ProperFraction::new(3, 2.try_into().unwrap()).is_none());
+    }
+
     mod serde_tests {
         use ::serde::Deserialize;
 
@@ -381,6 +429,10 @@ mod tests {
         #[derive(Debug, Deserialize)]
         struct Ge1 {
             value: F64Ge1,
+        }
+        #[derive(Debug, Deserialize)]
+        struct Fraction {
+            value: ProperFraction,
         }
 
         #[test]
@@ -416,6 +468,23 @@ mod tests {
             assert!((*ok.value - 1.0).abs() < f64::EPSILON);
 
             assert!(serde_json::from_str::<F64Ge1>(r#"{"value": 1.1}"#).is_err());
+        }
+
+        #[test]
+        fn deser_proper_fraction() {
+            let ok: Fraction =
+                serde_json::from_str(r#"{"value": {"numerator": 1, "denominator": 8}}"#).unwrap();
+            assert_eq!(
+                ok.value,
+                ProperFraction::new(1, 8.try_into().unwrap()).unwrap()
+            );
+
+            for (numerator, denominator) in [(0, 8), (8, 8)] {
+                let json = format!(
+                    r#"{{"value": {{"numerator": {numerator}, "denominator": {denominator}}}}}"#
+                );
+                assert!(serde_json::from_str::<Fraction>(&json).is_err());
+            }
         }
     }
 }

@@ -8,7 +8,6 @@ use crate::{
         Note,
         batch::DeferredZkSig,
         channel::Channels,
-        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
             ProviderIndex, Utxos, VerifiableOperation,
@@ -164,12 +163,6 @@ impl ProvableOperation for SDPDeclareOp {
     const CODE: u8 = 0x20;
 }
 
-impl OperationGas<MainnetGasProfile> for SDPDeclareOp {
-    const GAS_COST: Gas = Gas::new(646);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for SDPDeclareOp {}
-
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<SDPDeclareOp, Unverified, StandardMode>
 {
@@ -291,7 +284,10 @@ mod tests {
     use crate::{
         mantle::{
             TxHash, Utxo,
-            gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
+            gas::{
+                Gas,
+                test_utils::{FixedThresholds, GAS_PROFILE},
+            },
             ledger::{Declarations, ProviderIndex},
             ops::{channel::ChannelId, op_proof::samples::SampleProof as _},
         },
@@ -816,7 +812,8 @@ mod tests {
         fn sdp_declare_op_execution_gas_does_not_scale_with_the_threshold() {
             for threshold in [0, 1, 3] {
                 assert_eq!(
-                    SDPDeclareOp::sample().execution_gas(&FixedThresholds(threshold)),
+                    crate::mantle::OpRef::from(&SDPDeclareOp::sample())
+                        .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                     Ok(Gas::new(646))
                 );
             }

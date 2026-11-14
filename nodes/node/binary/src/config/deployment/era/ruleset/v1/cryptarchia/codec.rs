@@ -1,193 +1,21 @@
-//! The canonical encoding of the cryptarchia era parameters.
+//! The fixtures of the canonical encoding of the cryptarchia era parameters.
 
 use core::num::{NonZero, NonZeroU32, NonZeroU64};
 
-use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
-use lb_core::sdp::{InactivityPeriod, MinStake};
+use lb_binary_codec::canonical::codec_fixtures;
+use lb_core::{
+    mantle::gas::{Gas, GasProfile},
+    sdp::{InactivityPeriod, MinStake},
+};
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::ModulusShift;
-use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+use lb_utils::math::{NonNegativeF64, NonNegativeRatio, ProperFraction};
 
 use super::{
-    BlendPoWConfig, EpochConfig, PoWConfig, RewardPoWConfig, SdpConfig, ServiceParameters,
-    Settings, SlotActivationCoeff,
+    BlendPoWConfig, BlockRewardsConfig, EpochConfig, ExecutionMarketConfig, MaxGasPerBlock,
+    PoWConfig, RewardPoWConfig, SdpConfig, ServiceParameters, Settings, SlotActivationCoeff,
+    StorageMarketConfig,
 };
-
-impl BinaryEncode for Settings {
-    fn encoded_length(&self) -> usize {
-        let Self {
-            epoch_config,
-            security_param,
-            slot_activation_coeff,
-            learning_rate,
-            uncle_reference_window_in_block,
-            max_uncles,
-            sdp_config,
-            pow_config,
-        } = self;
-
-        epoch_config.encoded_length()
-            + security_param.encoded_length()
-            + slot_activation_coeff.encoded_length()
-            + learning_rate.encoded_length()
-            + uncle_reference_window_in_block.encoded_length()
-            + max_uncles.encoded_length()
-            + sdp_config.encoded_length()
-            + pow_config.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self {
-            epoch_config,
-            security_param,
-            slot_activation_coeff,
-            learning_rate,
-            uncle_reference_window_in_block,
-            max_uncles,
-            sdp_config,
-            pow_config,
-        } = self;
-
-        epoch_config.encode_into(out);
-        security_param.encode_into(out);
-        slot_activation_coeff.encode_into(out);
-        learning_rate.encode_into(out);
-        uncle_reference_window_in_block.encode_into(out);
-        max_uncles.encode_into(out);
-        sdp_config.encode_into(out);
-        pow_config.encode_into(out);
-    }
-}
-
-// A slot activation coefficient: the ratio it wraps.
-impl BinaryEncode for SlotActivationCoeff {
-    fn encoded_length(&self) -> usize {
-        let Self(coeff) = self;
-        coeff.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self(coeff) = self;
-        coeff.encode_into(out);
-    }
-}
-
-impl BinaryEncode for EpochConfig {
-    fn encoded_length(&self) -> usize {
-        let Self {
-            epoch_stake_distribution_stabilization,
-            epoch_period_nonce_buffer,
-            epoch_period_nonce_stabilization,
-        } = self;
-
-        epoch_stake_distribution_stabilization.encoded_length()
-            + epoch_period_nonce_buffer.encoded_length()
-            + epoch_period_nonce_stabilization.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self {
-            epoch_stake_distribution_stabilization,
-            epoch_period_nonce_buffer,
-            epoch_period_nonce_stabilization,
-        } = self;
-
-        epoch_stake_distribution_stabilization.encode_into(out);
-        epoch_period_nonce_buffer.encode_into(out);
-        epoch_period_nonce_stabilization.encode_into(out);
-    }
-}
-
-impl BinaryEncode for SdpConfig {
-    fn encoded_length(&self) -> usize {
-        let Self {
-            service_params,
-            min_stake,
-        } = self;
-
-        service_params.encoded_length() + min_stake.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self {
-            service_params,
-            min_stake,
-        } = self;
-
-        service_params.encode_into(out);
-        min_stake.encode_into(out);
-    }
-}
-
-impl BinaryEncode for ServiceParameters {
-    fn encoded_length(&self) -> usize {
-        let Self {
-            inactivity_period,
-            epoch,
-        } = self;
-
-        inactivity_period.encoded_length() + epoch.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self {
-            inactivity_period,
-            epoch,
-        } = self;
-
-        inactivity_period.encode_into(out);
-        epoch.encode_into(out);
-    }
-}
-
-impl BinaryEncode for PoWConfig {
-    fn encoded_length(&self) -> usize {
-        let Self { blend, reward } = self;
-
-        blend.encoded_length() + reward.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self { blend, reward } = self;
-
-        blend.encode_into(out);
-        reward.encode_into(out);
-    }
-}
-
-impl BinaryEncode for BlendPoWConfig {
-    fn encoded_length(&self) -> usize {
-        let Self {
-            base_difficulty,
-            target_transactions_per_block,
-            max_step,
-            damping_num,
-            damping_den_offset,
-        } = self;
-
-        base_difficulty.encoded_length()
-            + target_transactions_per_block.encoded_length()
-            + max_step.encoded_length()
-            + damping_num.encoded_length()
-            + damping_den_offset.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self {
-            base_difficulty,
-            target_transactions_per_block,
-            max_step,
-            damping_num,
-            damping_den_offset,
-        } = self;
-
-        base_difficulty.encode_into(out);
-        target_transactions_per_block.encode_into(out);
-        max_step.encode_into(out);
-        damping_num.encode_into(out);
-        damping_den_offset.encode_into(out);
-    }
-}
 
 pub fn fixture_settings() -> Settings {
     Settings {
@@ -197,8 +25,40 @@ pub fn fixture_settings() -> Settings {
         learning_rate: NonNegativeF64::try_from(18.0).unwrap(),
         uncle_reference_window_in_block: 19,
         max_uncles: 24,
+        max_transactions: NonZero::new(52).unwrap(),
+        max_transactions_size: 71,
         sdp_config: fixture_sdp_config(),
         pow_config: fixture_pow_config(),
+        execution_market: ExecutionMarketConfig {
+            max_gas_per_block: MaxGasPerBlock::new(43).unwrap(),
+            fee_adjustment_rate: ProperFraction::new(44, 45.try_into().unwrap()).unwrap(),
+            ema_smoothing_factor: ProperFraction::new(46, 47.try_into().unwrap()).unwrap(),
+        },
+        storage_market: StorageMarketConfig {
+            max_adjustment_factor: ProperFraction::new(48, 49.try_into().unwrap()).unwrap(),
+            ema_smoothing_factor: ProperFraction::new(50, 51.try_into().unwrap()).unwrap(),
+        },
+        block_rewards: BlockRewardsConfig::new(
+            53,
+            NonZero::new(54).unwrap(),
+            55,
+            NonNegativeRatio::new(56, NonZeroU32::new(57).unwrap()),
+            ProperFraction::new(58, NonZeroU32::new(59).unwrap()).unwrap(),
+        )
+        .unwrap(),
+        gas_profile: GasProfile {
+            transfer: Gas::new(60),
+            channel_config: Gas::new(61),
+            channel_inscribe: Gas::new(62),
+            channel_deposit: Gas::new(63),
+            channel_withdraw: Gas::new(64),
+            channel_transfer: Gas::new(65),
+            sdp_declare: Gas::new(66),
+            sdp_withdraw: Gas::new(67),
+            sdp_active: Gas::new(68),
+            leader_claim: Gas::new(69),
+            claim_pow_reward: Gas::new(70),
+        },
     }
 }
 
@@ -262,11 +122,16 @@ const fn fixture_blend_pow_config() -> BlendPoWConfig {
 }
 
 pub const SETTINGS_HEX: &str = "
-    0c 0d 0e 0f000000 10000000 11000000 0000000000003240 13000000 18 14000000 15000000
+    0c 0d 0e 0f000000 10000000 11000000 0000000000003240 13000000 18 3400 47000000 14000000 15000000
     1600000000000000 1700000000000000 19000000 1a00000000000000
     1b00000000000000 1c000000 1d000000 20000000
     2100000000000000 2200000000000000 2300000000000000 2400000000000000 2500000000000000
     2600000000000000 2700000000000000 2800000000000000 2900000000000000
+    2b00000000000000 2c000000 2d000000 2e000000 2f000000 30000000 31000000 32000000 33000000
+    3500000000000000 3600000000000000 3700000000000000 38000000 39000000 3a000000 3b000000
+    3c00000000000000 3d00000000000000 3e00000000000000 3f00000000000000 4000000000000000
+    4100000000000000 4200000000000000 4300000000000000 4400000000000000 4500000000000000
+    4600000000000000
 ";
 const SDP_CONFIG_HEX: &str = "14000000 15000000 1600000000000000 1700000000000000";
 const POW_CONFIG_HEX: &str = "

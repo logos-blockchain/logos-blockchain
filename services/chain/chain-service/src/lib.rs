@@ -30,7 +30,6 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         TxHash,
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
         transactions::states::Preverified,
@@ -535,7 +534,7 @@ impl Cryptarchia {
         // checking if the block is accepted by the consensus engine.
         let update = self
             .ledger
-            .prepare_update::<_, _, MainnetGasProfile>(
+            .prepare_update(
                 id,
                 parent,
                 slot,
@@ -720,7 +719,7 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + Unpin
@@ -900,7 +899,7 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + Unpin

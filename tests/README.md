@@ -155,24 +155,7 @@ Filtering based on test names can be done using the `--name` option. For example
 cargo test -p logos-blockchain-tests --release --features cucumber --test cucumber -- --name "Idle smoke"
 ```
 
-ZoneSDK and Logos SQL have separate test crates under `tests/clients`. Each owns its scenarios, client state and runner. Both reuse the node setup and reporting; SQL also reuses ZoneSDK's channel setup and steps. From the workspace root:
-
-```bash
-cargo test -p logos-blockchain-zone-tests --features cucumber --test cucumber -- --tags "@zone_ci"
-cargo test -p logos-blockchain-sql-tests --features cucumber --test cucumber -- --tags "@logos_sql_ci"
-```
-
-Artifacts are saved under each crate's `cucumber_tests/temp` directory. The settlement benchmark belongs to `logos-blockchain-sql-tests`; run it with `--release` and `--tags "@logos_sql_benchmark"`.
-
-The password-manager scenario drives the actual example executable:
-
-```bash
-cargo build -p logos-sql --example password_manager
-cargo test -p logos-blockchain-sql-tests --features cucumber --test cucumber -- --tags "@password_manager"
-```
-
-Set `PASSWORD_MANAGER_BIN` to an absolute executable path when using a different build directory or profile.
-The scenario saves the application's stdout and stderr alongside its database in the scenario artifacts.
+Zone SDK and SQL tests now live in [logos-zone-sdk](https://github.com/logos-blockchain/logos-zone-sdk). That repository reuses this repository's node test support.
 
 For more information on running Cucumber tests, refer to https://github.com/cucumber-rs/cucumber or 
 https://cucumber.io/docs.

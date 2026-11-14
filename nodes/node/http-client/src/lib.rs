@@ -4,7 +4,6 @@ use futures::{Stream, StreamExt as _, TryStreamExt as _};
 pub use lb_chain_broadcast_service::BlockInfo;
 pub use lb_chain_service::{ChainServiceInfo, CryptarchiaInfo, PhaseTag, Slot, State};
 use lb_core::{
-    block::MAX_BLOCK_TRANSACTIONS_SIZE,
     era::ForkDigest,
     header::{ContentId, HeaderId},
     mantle::{
@@ -25,7 +24,7 @@ use lb_http_api_common::{
     bodies::{
         blend::JoinBlendRequestBody,
         chain::{ChainForkResponseBody, ChainIdResponseBody},
-        mantle::GasPricesResponseBody,
+        mantle::{GasPricesResponseBody, LimitsResponseBody},
         wallet::{
             aged_notes::LeaderAgedNotesResponseBody,
             balance::WalletBalanceResponseBody,
@@ -38,8 +37,9 @@ use lb_http_api_common::{
         BLEND_DISPERSE_TRANSACTION, BLEND_JOIN_NETWORK, BLEND_PENDING_TRANSACTIONS, BLOCK_EVENTS,
         BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHAIN_FORK, CHAIN_ID, CHANNEL,
         CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_AGED_NOTES, LEADER_CLAIM_VOUCHERS,
-        MANTLE_GAS_PRICES, MANTLE_SDP_FINALIZED_DECLARATION, MANTLE_SDP_FINALIZED_DECLARATIONS,
-        MEMPOOL_ADD_TX, NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
+        MANTLE_GAS_PRICES, MANTLE_LIMITS, MANTLE_SDP_FINALIZED_DECLARATION,
+        MANTLE_SDP_FINALIZED_DECLARATIONS, MEMPOOL_ADD_TX, NODE_VERSION, SDP_POST_DECLARATION,
+        TIME_INFO,
         wallet::{BALANCE, FUND, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
@@ -48,6 +48,7 @@ use lb_http_api_common::{
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
 use lb_log_targets::http_client;
 pub use lb_sdp_service::SdpSubmission;
+use lb_utils::net::MAX_WIRE_MESSAGE_SIZE;
 use lb_version::BuildVersionInfo;
 use log::warn;
 use reqwest::{Client, ClientBuilder, RequestBuilder, StatusCode, Url};
@@ -492,6 +493,14 @@ impl CommonHttpClient {
             .await
     }
 
+    /// Get what a transaction must fit in the era of the node's current slot.
+    pub async fn limits(&self, base_url: Url) -> Result<LimitsResponseBody, Error> {
+        let request_url = base_url
+            .join(MANTLE_LIMITS.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.get::<(), LimitsResponseBody>(request_url, None).await
+    }
+
     /// Get time service info derived from deployment settings.
     pub async fn time_info(&self, base_url: Url) -> Result<TimeInfo, Error> {
         let request_url = base_url
@@ -676,8 +685,10 @@ impl CommonHttpClient {
     fn parse_processed_blocks_range_event_stream(
         response: reqwest::Response,
     ) -> impl Stream<Item = ProcessedBlockEvent> {
-        // NDJSON event upper bound; margin above max serialized single event line
-        const MAX_NDJSON_LINE_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 3 / 2;
+        // NDJSON event upper bound; margin above max serialized single event
+        // line. The client knows no era, so it allows a block as large as the
+        // largest network message.
+        const MAX_NDJSON_LINE_BYTES: usize = MAX_WIRE_MESSAGE_SIZE * 3 / 2;
         const LOG_LINE_PREVIEW_CHARS: usize = 256;
 
         let byte_stream = response.bytes_stream().map_err(std::io::Error::other);

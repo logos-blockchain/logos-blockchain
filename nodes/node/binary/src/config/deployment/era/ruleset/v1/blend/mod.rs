@@ -4,7 +4,9 @@ use core::{
     time::Duration,
 };
 
+use lb_binary_codec::canonical::BinaryEncode;
 use lb_blend_service::settings::EraTimingSettings;
+use lb_core::blend::core_quota;
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_utils::math::PositiveF64;
 use nutype::nutype;
@@ -24,16 +26,21 @@ pub(crate) mod codec;
 const TARGET_PEERING_DEGREE: RangeInclusive<u32> = 3..=5;
 
 /// Deployment-specific Blend settings.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, BinaryEncode)]
 pub struct Settings {
     pub common: CommonSettings,
     pub core: CoreSettings,
 }
 
 impl Settings {
-    /// Checks the settings an era runs Blend with, in slots of `slot_duration`,
-    /// refusing the first value found invalid.
-    pub(super) fn validate(&self, slot_duration: &Duration) -> Result<(), InvalidDeployment> {
+    /// Checks the settings an era runs Blend with, in epochs of
+    /// `slots_per_epoch` slots of `slot_duration`, refusing the first value
+    /// found invalid.
+    pub(super) fn validate(
+        &self,
+        slots_per_epoch: u64,
+        slot_duration: &Duration,
+    ) -> Result<(), InvalidDeployment> {
         let degree = self.core.target_peering_degree.get();
         ensure!(
             TARGET_PEERING_DEGREE.contains(&degree),
@@ -44,6 +51,22 @@ impl Settings {
         // `r_E = 2V/3 − Φ_CC · r₁ ≥ r₁`.
         self.try_connection_share_per_round()?;
         self.try_edge_node_connection_timeout(slot_duration)?;
+        // Computed now rather than when an epoch starts, where it would stop
+        // every node. The smallest network Blend runs on gives the largest quota.
+        let minimum_network_size = NonZeroU64::from(self.common.minimum_network_size).get();
+        core_quota(
+            self.rounds_per_epoch(slots_per_epoch, slot_duration),
+            self.core.scheduler.cover.message_frequency_per_round,
+            self.common.num_blend_layers,
+            self.core.scheduler.cover.replication_factor.get(),
+            minimum_network_size as usize,
+        )
+        .map_err(|error| {
+            InvalidDeployment::new(format!(
+                "The core quota of a network of {minimum_network_size} nodes must fit the `PoQ` \
+                 circuit: {error}."
+            ))
+        })?;
         Ok(())
     }
 
@@ -71,12 +94,13 @@ impl Settings {
     /// from that node, so one with the fewest connections, `Φ_CC − 1`, each as
     /// likely to bring a message first, delivers `(Φ_CC − 2) / (Φ_CC − 1)` of
     /// them. Only `W` is rounded. The deployment checks that `Φ_CC` is at
-    /// least 3 when it loads, so `Φ_CC − 2` is never zero. No deployment
-    /// replicates cover messages, so `R_C` is `0`.
+    /// least 3 when it loads, so `Φ_CC − 2` is never zero.
     #[must_use]
     pub const fn rounds_per_observation_window(&self) -> NonZeroU128 {
         let peering_degree = self.core.target_peering_degree.get() as f64;
-        let cover_messages_per_round = self.core.scheduler.cover.message_frequency_per_round.get()
+        let cover = &self.core.scheduler.cover;
+        let cover_messages_per_round = cover.message_frequency_per_round.get()
+            * (1.0 + cover.replication_factor.get() as f64)
             * self.common.num_blend_layers.get() as f64;
         let expected_deliveries = self.core.expected_deliveries_per_observation_window.get() as f64;
         let rounds = expected_deliveries * (peering_degree - 1.0)
@@ -209,6 +233,7 @@ impl Settings {
             activity_threshold_sensitivity: self.core.activity_threshold_sensitivity,
             data_replication_factor: self.common.data_replication_factor,
             message_frequency_per_round: self.core.scheduler.cover.message_frequency_per_round,
+            cover_replication_factor: self.core.scheduler.cover.replication_factor.get(),
             minimum_network_size: self.common.minimum_network_size.into(),
             num_blend_layers: self.common.num_blend_layers,
             rounds_per_epoch: self.rounds_per_epoch(
@@ -219,7 +244,7 @@ impl Settings {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, BinaryEncode)]
 pub struct CommonSettings {
     /// `ß_c`: expected number of blending operations for each locally generated
     /// message.
@@ -246,7 +271,7 @@ impl From<MinimumNetworkSize> for NonZeroU64 {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, BinaryEncode)]
 pub struct CoreSettings {
     pub scheduler: SchedulerSettings,
     /// `Φ_CC`: the peering degree a core node maintains with other core nodes.
@@ -269,19 +294,65 @@ pub struct CoreSettings {
     pub activity_threshold_sensitivity: u64,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, BinaryEncode)]
 pub struct SchedulerSettings {
     pub cover: CoverTrafficSettings,
     pub delayer: MessageDelayerSettings,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, BinaryEncode)]
 pub struct CoverTrafficSettings {
     /// `F_c`: frequency at which cover messages are generated per round.
     pub message_frequency_per_round: PositiveF64,
+    /// `R_c`: the redundancy of cover messages. A core node's quota, and so the
+    /// cover messages it sends, grow to `1 + R_c` times what `F_c` gives.
+    pub replication_factor: CoverReplicationFactor,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+/// `R_c`: the redundancy of cover messages, which is 0. Nothing in the code
+/// currently replicates a cover message, so a factor would only raise the
+/// quota.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, BinaryEncode)]
+#[serde(try_from = "u64", into = "u64")]
+pub struct CoverReplicationFactor(u64);
+
+impl CoverReplicationFactor {
+    /// `factor`, if it is 0.
+    #[must_use]
+    pub const fn new(factor: u64) -> Option<Self> {
+        if factor == 0 {
+            Some(Self(factor))
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl TryFrom<u64> for CoverReplicationFactor {
+    type Error = String;
+
+    fn try_from(factor: u64) -> Result<Self, Self::Error> {
+        Self::new(factor).ok_or_else(|| {
+            format!(
+                "The cover replication factor, {factor}, must be 0: cover messages are not \
+                 replicated."
+            )
+        })
+    }
+}
+
+impl From<CoverReplicationFactor> for u64 {
+    fn from(factor: CoverReplicationFactor) -> Self {
+        factor.0
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, BinaryEncode)]
 pub struct MessageDelayerSettings {
     /// ∆max: maximal delay time between two release rounds.
     pub maximum_release_delay_in_rounds: NonZeroU64,
@@ -293,7 +364,7 @@ mod tests {
 
     use lb_utils::math::PositiveF64;
 
-    use super::Settings;
+    use super::{CoverReplicationFactor, Settings};
     use crate::config::DeploymentSettings;
 
     /// The default deployment's Blend settings, with `λ`, `Φ_CC`, `F_C` and
@@ -364,6 +435,18 @@ mod tests {
                 .rounds_per_observation_window()
                 .get(),
             27
+        );
+    }
+
+    #[test]
+    fn a_cover_replication_factor_does_not_deserialize() {
+        let error = serde_yaml::from_str::<CoverReplicationFactor>("1")
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("The cover replication factor, 1, must be 0"),
+            "{error}"
         );
     }
 }

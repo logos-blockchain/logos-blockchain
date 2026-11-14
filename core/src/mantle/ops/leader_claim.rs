@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use lb_binary_codec::{
     bincode::BoundedSerializeOp,
-    canonical::{BinaryCodec, BinaryEncode as _},
+    canonical::{BinaryDecode, BinaryEncode},
 };
 use lb_groth16::{FR_BYTES_SIZE, fr_from_bytes, fr_to_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -17,7 +17,6 @@ use crate::{
     mantle::{
         Note, Utxo, Value,
         batch::DeferredLeaderClaim,
-        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
             VerifiableOperation,
@@ -42,23 +41,59 @@ static VOUCHER_NF: LazyLock<Fr> = LazyLock::new(|| {
     fr_from_bytes(b"VOUCHER_NF").expect("BigUint should load from constant string")
 });
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize, BinaryCodec)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Hash,
+    Default,
+    Serialize,
+    Deserialize,
+    BinaryEncode,
+    BinaryDecode,
+)]
 pub struct RewardsRoot(#[serde(with = "serde_fr")] ZkHash);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct VoucherSecret(#[serde(with = "serde_fr")] pub Fr);
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Hash,
+    Serialize,
+    Deserialize,
+    BinaryEncode,
+    BinaryDecode,
+)]
 pub struct VoucherNullifier(#[serde(with = "serde_fr")] ZkHash);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize, BinaryCodec)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Hash,
+    Default,
+    Serialize,
+    Deserialize,
+    BinaryEncode,
+    BinaryDecode,
+)]
 pub struct VoucherCm(#[serde(with = "serde_fr")] ZkHash);
 
 impl BoundedSerializeOp for VoucherCm {
     type Bytes = [u8; FR_BYTES_SIZE];
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct LeaderClaimOp {
     pub rewards_root: RewardsRoot,
     pub voucher_nullifier: VoucherNullifier,
@@ -210,12 +245,6 @@ impl ProvableOperation for LeaderClaimOp {
     const CODE: u8 = 0x30;
 }
 
-impl OperationGas<MainnetGasProfile> for LeaderClaimOp {
-    const GAS_COST: Gas = Gas::new(580);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for LeaderClaimOp {}
-
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<LeaderClaimOp, Unverified, StandardMode>
 {
@@ -317,7 +346,10 @@ mod tests {
     use crate::{
         mantle::{
             batch::{DeferredProofs, Error as BatchError, test_utils::batch_verify},
-            gas::test_utils::FixedThresholds,
+            gas::{
+                Gas,
+                test_utils::{FixedThresholds, GAS_PROFILE},
+            },
         },
         proofs::leader_claim_proof::LeaderClaimPrivate,
     };
@@ -715,7 +747,8 @@ mod tests {
     fn leader_claim_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
             assert_eq!(
-                LeaderClaimOp::sample().execution_gas(&FixedThresholds(threshold)),
+                crate::mantle::OpRef::from(&LeaderClaimOp::sample())
+                    .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(580))
             );
         }

@@ -102,6 +102,12 @@ impl ServiceConfig {
                             .scheduler
                             .cover
                             .message_frequency_per_round,
+                        replication_factor: deployment
+                            .core
+                            .scheduler
+                            .cover
+                            .replication_factor
+                            .get(),
                     },
                     delayer: EraMessageDelayerSettings {
                         maximum_release_delay_in_rounds: deployment
@@ -163,6 +169,7 @@ impl ServiceConfig {
                 dispatcher: Libp2pBroadcastSettings {
                     topic: fork.to_string_with_name("cryptarchia"),
                     max_proposal_size: cryptarchia_deployment.max_proposal_size(),
+                    max_op_data_size: cryptarchia_deployment.max_op_data_size(),
                 },
             }
         });

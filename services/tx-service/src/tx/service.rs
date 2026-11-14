@@ -13,13 +13,10 @@ use std::{
     time::Duration,
 };
 
-use futures::StreamExt as _;
+use futures::{StreamExt as _, future};
 use lb_core::{
-    block::{MAX_BLOCK_TRANSACTIONS_SIZE, TxInBlock},
-    mantle::{
-        traits::{Hashable, StorageSize},
-        transactions::hash::PrefixedKey,
-    },
+    block::TxInBlock,
+    mantle::{traits::Hashable, transactions::hash::PrefixedKey},
 };
 use lb_cryptarchia_engine::Slot;
 use lb_log_targets::mempool;
@@ -191,7 +188,7 @@ where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
     StorageAdapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     <Pool as RecoverableMempool>::RecoveryState: Debug + Send + Sync,
-    Pool::Item: Hashable<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
+    Pool::Item: Hashable<Hash = Pool::Key> + Clone + Send + 'static,
     Pool::Key: PrefixedKey<Prefix: Send + Sync>,
     Pool::Settings: Clone + Sync + Send,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item, Key = Pool::Key>
@@ -329,7 +326,7 @@ impl<Pool, NetworkAdapter, RecoveryBackend, StorageAdapter, TimeBackend, Runtime
 where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
     StorageAdapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    Pool::Item: Hashable<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
+    Pool::Item: Hashable<Hash = Pool::Key> + Clone + Send + 'static,
     Pool::Key: PrefixedKey<Prefix: Send + Sync>,
     Pool::Settings: Clone,
     NetworkAdapter:
@@ -351,25 +348,56 @@ where
         NetworkAdapter::Settings: Send + Sync,
     {
         loop {
-            tokio::select! {
-                // Queue for relay messages
-                Some(relay_msg) = self.service_resources_handle.inbound_relay.recv() => {
+            match next_event(
+                era_events,
+                &mut self.service_resources_handle.inbound_relay,
+                network_items,
+            )
+            .await
+            {
+                Event::Era(era_event) => {
+                    Self::handle_era_event(pool, network_adapter, era_event).await;
+                }
+                Event::Inbound(Inbound::Relay(relay_msg)) => {
                     let state_updater = self.service_resources_handle.state_updater.clone();
-                    Self::handle_mempool_message(pool, relay_msg, network_adapter, state_updater, accepted_items_channel_sender).await;
+                    Self::handle_mempool_message(
+                        pool,
+                        relay_msg,
+                        network_adapter,
+                        state_updater,
+                        accepted_items_channel_sender,
+                    )
+                    .await;
                 }
-                Some((key, item)) = network_items.next() => {
-                    Self::handle_network_item(pool, key, item, &self.service_resources_handle.state_updater, accepted_items_channel_sender).await;
+                Event::Inbound(Inbound::Network(key, item)) => {
+                    Self::handle_network_item(
+                        pool,
+                        key,
+                        item,
+                        &self.service_resources_handle.state_updater,
+                        accepted_items_channel_sender,
+                    )
+                    .await;
                 }
-                Some(era_event) = era_events.next() => match era_event {
-                    EraEvent::NewEra { era, .. } => {
-                        pool.rotate_era(era).await;
-                        network_adapter.rotate_era(era).await;
-                    }
-                    EraEvent::TransitionPeriodExpired(transition_end) => {
-                        pool.complete_era_transition(transition_end.era()).await;
-                        network_adapter.complete_era_transition(transition_end.era()).await;
-                    }
-                },
+            }
+        }
+    }
+
+    async fn handle_era_event(
+        pool: &mut Pool,
+        network_adapter: &mut NetworkAdapter,
+        era_event: EraEvent,
+    ) {
+        match era_event {
+            EraEvent::NewEra { era, .. } => {
+                pool.rotate_era(era).await;
+                network_adapter.rotate_era(era).await;
+            }
+            EraEvent::TransitionPeriodExpired(transition_end) => {
+                pool.complete_era_transition(transition_end.era()).await;
+                network_adapter
+                    .complete_era_transition(transition_end.era())
+                    .await;
             }
         }
     }
@@ -491,11 +519,6 @@ where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
     {
-        if let Err(error) = Self::validate_item_for_mempool(&item) {
-            Self::handle_add_error(error, reply_channel);
-            return;
-        }
-
         match pool.add_item(key, item.clone()).await {
             Ok(_id) => {
                 Self::notify_about_accepted_item(accepted_items_channel_sender, item.clone());
@@ -629,18 +652,6 @@ where
         }
     }
 
-    fn validate_item_for_mempool(item: &Pool::Item) -> Result<(), MempoolError> {
-        let size = item.storage_size();
-        if size > MAX_BLOCK_TRANSACTIONS_SIZE {
-            return Err(MempoolError::ItemTooLarge {
-                size,
-                max: MAX_BLOCK_TRANSACTIONS_SIZE,
-            });
-        }
-
-        Ok(())
-    }
-
     async fn handle_network_item(
         pool: &mut Pool,
         key: Pool::Key,
@@ -651,14 +662,6 @@ where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
     {
-        if let Err(err) = Self::validate_item_for_mempool(&item) {
-            tracing::debug!(
-                target: LOG_TARGET,
-                "could not add network item to the pool due to: {err}"
-            );
-            return;
-        }
-
         let accepted_item = item.clone();
         if let Err(e) = pool.add_item(key, item).await {
             Self::handle_network_add_error(e);
@@ -698,5 +701,93 @@ where
                 );
             }
         }
+    }
+}
+
+/// An event of the mempool's event loop.
+#[derive(Debug, PartialEq, Eq)]
+enum Event<Msg, Key, Item> {
+    Era(EraEvent),
+    Inbound(Inbound<Msg, Key, Item>),
+}
+
+/// A relay message or network item reaching the mempool's event loop.
+#[derive(Debug, PartialEq, Eq)]
+enum Inbound<Msg, Key, Item> {
+    Relay(Msg),
+    Network(Key, Item),
+}
+
+/// The next event of the mempool's event loop.
+///
+/// An era event is returned before any relay message or network item, so as to
+/// switch to a new era before processing them. It is safe to drain era events
+/// first because they are not frequent.
+async fn next_event<Msg, Key, Item>(
+    era_events: &mut (impl futures::Stream<Item = EraEvent> + Unpin + ?Sized),
+    inbound_relay: &mut (impl futures::Stream<Item = Msg> + Unpin + ?Sized),
+    network_items: &mut (impl futures::Stream<Item = (Key, Item)> + Unpin + ?Sized),
+) -> Event<Msg, Key, Item> {
+    tokio::select! {
+        biased; // to drain `era_events` first
+        Some(era_event) = era_events.next() => Event::Era(era_event),
+        inbound = next_inbound(inbound_relay, network_items) => Event::Inbound(inbound),
+    }
+}
+
+/// The next relay message or network item, whichever arrives first, with no
+/// priority between the two.
+async fn next_inbound<Msg, Key, Item>(
+    inbound_relay: &mut (impl futures::Stream<Item = Msg> + Unpin + ?Sized),
+    network_items: &mut (impl futures::Stream<Item = (Key, Item)> + Unpin + ?Sized),
+) -> Inbound<Msg, Key, Item> {
+    tokio::select! {
+        Some(msg) = inbound_relay.next() => Inbound::Relay(msg),
+        Some((key, item)) = network_items.next() => Inbound::Network(key, item),
+        // To avoid panic when both streams are closed, we await a pending future which never ends.
+        else => future::pending().await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::{FutureExt as _, stream};
+    use lb_time::Era;
+
+    use super::*;
+
+    fn new_era(era: u16) -> EraEvent {
+        EraEvent::NewEra {
+            era: Era::new(era),
+            first_slot: Slot::from(u64::from(era) * 100),
+        }
+    }
+
+    #[tokio::test]
+    async fn every_arrived_era_event_comes_before_any_inbound() {
+        // Era events must be read before any other inbound events.
+        let num_era_events = 10usize;
+        let mut era_events = stream::iter((1..=num_era_events as u16).map(new_era));
+        let mut inbound_relay = stream::iter(["relay"]);
+        let mut network_items = stream::iter([(1u8, "network")]);
+
+        let mut events = Vec::new();
+        while let Some(event) =
+            next_event(&mut era_events, &mut inbound_relay, &mut network_items).now_or_never()
+        {
+            events.push(event);
+        }
+
+        assert_eq!(events.len(), num_era_events + 2);
+        assert!(
+            events[..num_era_events]
+                .iter()
+                .all(|event| matches!(event, Event::Era(_)))
+        );
+        assert!(
+            events[num_era_events..]
+                .iter()
+                .all(|event| matches!(event, Event::Inbound(_)))
+        );
     }
 }

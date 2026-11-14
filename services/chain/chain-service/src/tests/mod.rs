@@ -12,7 +12,7 @@ use lb_core::{
     mantle::{
         Note, Op, OpProof, SignedOps, Utxo,
         channel::Channels,
-        gas::{MainnetGasProfile, TxGasCalculator as _},
+        gas::TxGasCalculator as _,
         ledger::{BoundedInputs, Outputs, verification_mode::StandardMode},
         ops::{
             leader_claim::{VoucherCm, VoucherSecret},
@@ -34,7 +34,10 @@ use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 use lb_ledger::{
     ConsensusExcludedKeys, LedgerState,
-    config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
+    config::{
+        BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig,
+        config_for_slot,
+    },
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
 use lb_storage_service::{
@@ -705,7 +708,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         &zk_key,
         Slot::new(1),
         UncleHeaders::empty(),
-        BlockTransactions::from([tx1.clone()]),
+        BlockTransactions::try_new(vec![tx1.clone()], u16::MAX).unwrap(),
     )
     .unwrap();
     fork_view
@@ -718,7 +721,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         &zk_key,
         f1.header().slot().strict_add(1.into()),
         UncleHeaders::empty(),
-        BlockTransactions::from([tx2.clone()]),
+        BlockTransactions::try_new(vec![tx2.clone()], u16::MAX).unwrap(),
     )
     .unwrap();
 
@@ -730,7 +733,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         &zk_key,
         Slot::new(1),
         UncleHeaders::empty(),
-        BlockTransactions::from([tx1.clone(), tx3.clone()]),
+        BlockTransactions::try_new(vec![tx1.clone(), tx3.clone()], u16::MAX).unwrap(),
     )
     .unwrap();
 
@@ -794,7 +797,8 @@ fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
         &zk_key,
         Slot::new(1),
         UncleHeaders::empty(),
-        BlockTransactions::from([transfer_tx_with_fake_sig(utxo, &fake_key)]),
+        BlockTransactions::try_new(vec![transfer_tx_with_fake_sig(utxo, &fake_key)], u16::MAX)
+            .unwrap(),
     )
     .expect("should find a winning slot");
 
@@ -814,10 +818,14 @@ fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
 /// Creates a transfer tx with a fake sig.
 fn transfer_tx_with_fake_sig(utxo: Utxo, fake_key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
     let mut output_note = Note::new(1, fake_key.to_public_key());
-    let gas_context = OpsGasContext::from_channels(&Channels::new(), GasPrices::default());
+    let gas_context = OpsGasContext::from_channels(
+        &Channels::new(),
+        GasPrices::default(),
+        ledger_config(NonZero::new(1).unwrap()).gas_profile,
+    );
     let fees = transfer_tx(utxo, output_note, fake_key)
         .op_refs()
-        .total_gas_cost::<MainnetGasProfile>(&gas_context)
+        .total_gas_cost(&gas_context)
         .unwrap();
     output_note.value = utxo.note.value - fees.into_inner();
 
@@ -1022,6 +1030,7 @@ fn ledger_config_with_uncles(
                 blend: rewards::blend::RewardsParameters {
                     rounds_per_epoch: epoch_length.try_into().unwrap(),
                     message_frequency_per_round: 1.0.try_into().unwrap(),
+                    cover_replication_factor: 0,
                     num_blend_layers: 3.try_into().unwrap(),
                     minimum_network_size: 1.try_into().unwrap(),
                     data_replication_factor: 0,
@@ -1032,6 +1041,43 @@ fn ledger_config_with_uncles(
                 threshold: 1,
                 timestamp: 0,
             },
+        },
+        max_transactions: 1024,
+        max_transactions_size: 2 * 1024 * 1024,
+        max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+        execution_market: lb_ledger::config::ExecutionMarketConfig {
+            max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+            fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                .unwrap(),
+            ema_smoothing_factor: lb_utils::math::ProperFraction::new(9, 10.try_into().unwrap())
+                .unwrap(),
+        },
+        storage_market: lb_ledger::config::StorageMarketConfig {
+            max_adjustment_factor: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                .unwrap(),
+            ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
+                .unwrap(),
+        },
+        block_rewards: lb_ledger::config::BlockRewardsConfig::new(
+            3_000_000_000,
+            120_000_000.try_into().unwrap(),
+            10_512,
+            NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+            lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+        )
+        .unwrap(),
+        gas_profile: lb_core::mantle::gas::GasProfile {
+            transfer: 590.into(),
+            channel_config: 56.into(),
+            channel_inscribe: 56.into(),
+            channel_deposit: 590.into(),
+            channel_withdraw: 56.into(),
+            channel_transfer: 56.into(),
+            sdp_declare: 646.into(),
+            sdp_withdraw: 590.into(),
+            sdp_active: 590.into(),
+            leader_claim: 580.into(),
+            claim_pow_reward: 1.into(),
         },
         pow_config: PoWConfig {
             blend: BlendPoWConfig {
@@ -1115,6 +1161,7 @@ pub fn try_build_block_with_transactions(
             uncle_headers,
             proof,
             transactions,
+            config_for_slot(cryptarchia.ledger.era_schedule(), slot.into()).max_transactions_size,
             &signing_key,
         )
         .unwrap();
@@ -1219,7 +1266,7 @@ pub fn utxo() -> (ZkKey, Utxo) {
 
 pub fn spawn_storage_service(mut rx: mpsc::Receiver<StorageMsg>) -> (JoinHandle<()>, TempDir) {
     let db_dir = TempDir::new().unwrap();
-    let mut backend = RocksBackend::new(RocksBackendSettings {
+    let backend = RocksBackend::new(RocksBackendSettings {
         db_path: db_dir.path().join("db"),
         read_only: false,
         column_family: None,
@@ -1228,7 +1275,7 @@ pub fn spawn_storage_service(mut rx: mpsc::Receiver<StorageMsg>) -> (JoinHandle<
 
     let handle = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            StorageService::<TestRuntimeServiceId>::handle_storage_message(msg, &mut backend).await;
+            StorageService::<TestRuntimeServiceId>::handle_storage_message(msg, &backend);
         }
     });
 

@@ -2,8 +2,6 @@ use lb_core::mantle::gas::{Gas, GasCost};
 
 use crate::LedgerError;
 
-pub const EXECUTION_GAS_LIMIT: Gas = Gas::new(3_193_460);
-
 /// Gas consumed and fees paid by applied transactions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GasAndFees {
@@ -25,21 +23,26 @@ impl Default for GasAndFees {
 }
 
 impl GasAndFees {
-    /// Adds one transaction's gas and fees, enforcing the execution gas limit.
-    /// An oversized transaction is distinguished from exhausted capacity.
-    pub fn checked_add<Id>(self, transaction: Self) -> Result<Self, LedgerError<Id>> {
-        if transaction.execution_gas > EXECUTION_GAS_LIMIT {
+    /// Adds one transaction's gas and fees, enforcing the block's execution
+    /// gas limit, `max_gas_per_block`. An oversized transaction is
+    /// distinguished from exhausted capacity.
+    pub fn checked_add<Id>(
+        self,
+        transaction: Self,
+        max_gas_per_block: Gas,
+    ) -> Result<Self, LedgerError<Id>> {
+        if transaction.execution_gas > max_gas_per_block {
             return Err(LedgerError::TooMuchTransactionExecutionGas {
                 gas: transaction.execution_gas,
-                limit: EXECUTION_GAS_LIMIT,
+                limit: max_gas_per_block,
             });
         }
 
         let execution_gas = self.execution_gas.checked_add(transaction.execution_gas)?;
-        if execution_gas > EXECUTION_GAS_LIMIT {
+        if execution_gas > max_gas_per_block {
             return Err(LedgerError::TooMuchExecutionGas {
                 gas: execution_gas,
-                limit: EXECUTION_GAS_LIMIT,
+                limit: max_gas_per_block,
             });
         }
 
@@ -56,6 +59,8 @@ impl GasAndFees {
 mod tests {
     use super::*;
 
+    const MAX_GAS_PER_BLOCK: Gas = Gas::new(3_193_460);
+
     fn with_execution_gas(execution_gas: Gas) -> GasAndFees {
         GasAndFees {
             execution_gas,
@@ -65,34 +70,34 @@ mod tests {
 
     #[test]
     fn rejects_a_transaction_that_exceeds_the_block_limit() {
-        let excessive_gas = EXECUTION_GAS_LIMIT
+        let excessive_gas = MAX_GAS_PER_BLOCK
             .checked_add(Gas::new(1))
             .expect("the test gas value should not overflow");
         let transaction = with_execution_gas(excessive_gas);
 
         assert_eq!(
-            GasAndFees::default().checked_add::<()>(transaction),
+            GasAndFees::default().checked_add::<()>(transaction, MAX_GAS_PER_BLOCK),
             Err(LedgerError::TooMuchTransactionExecutionGas {
                 gas: excessive_gas,
-                limit: EXECUTION_GAS_LIMIT,
+                limit: MAX_GAS_PER_BLOCK,
             })
         );
     }
 
     #[test]
     fn distinguishes_exhausted_block_capacity_from_an_oversized_transaction() {
-        let accumulated = with_execution_gas(EXECUTION_GAS_LIMIT);
+        let accumulated = with_execution_gas(MAX_GAS_PER_BLOCK);
         let transaction = with_execution_gas(Gas::new(1));
 
-        let cumulative_gas = EXECUTION_GAS_LIMIT
+        let cumulative_gas = MAX_GAS_PER_BLOCK
             .checked_add(transaction.execution_gas)
             .expect("the test gas value should not overflow");
 
         assert_eq!(
-            accumulated.checked_add::<()>(transaction),
+            accumulated.checked_add::<()>(transaction, MAX_GAS_PER_BLOCK),
             Err(LedgerError::TooMuchExecutionGas {
                 gas: cumulative_gas,
-                limit: EXECUTION_GAS_LIMIT,
+                limit: MAX_GAS_PER_BLOCK,
             })
         );
     }

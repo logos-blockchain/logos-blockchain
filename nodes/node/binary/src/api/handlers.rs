@@ -42,7 +42,7 @@ use lb_http_api_common::{
         blend::JoinBlendRequestBody,
         chain::{ChainForkResponseBody, ChainIdResponseBody},
         channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
-        mantle::GasPricesResponseBody,
+        mantle::{GasPricesResponseBody, LimitsResponseBody},
         wallet::{
             balance::WalletBalanceResponseBody,
             claimable_vouchers::{
@@ -1720,6 +1720,55 @@ where
             .into_response()
         }
         Ok(None) => ApiError::NotFound("Ledger state not found for block".into()).into_response(),
+        Err(error) => ApiError::internal(error).into_response(),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = paths::MANTLE_LIMITS,
+    responses(
+        (status = 200, description = "Get what a transaction must fit in the era of the current slot"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn get_limits<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    RuntimeServiceId: AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + AsServiceId<TimeService>
+        + Debug
+        + Sync
+        + Display
+        + Send
+        + 'static,
+{
+    let relay = match handle.relay::<TimeService>().await {
+        Ok(relay) => relay,
+        Err(error) => {
+            return ApiError::internal(error).into_response();
+        }
+    };
+    let (sender, receiver) = oneshot::channel();
+    if let Err(error) = relay.send(TimeServiceMessage::CurrentSlot { sender }).await {
+        return ApiError::internal(error).into_response();
+    }
+    let slot = match receiver.await {
+        Ok(tick) => tick.slot,
+        Err(error) => {
+            return ApiError::internal(error).into_response();
+        }
+    };
+
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(&handle)
+            .await;
+    match chain_api.get_ledger_config(slot).await {
+        Ok(config) => Json(LimitsResponseBody {
+            max_op_data_size: config.max_op_data_size,
+        })
+        .into_response(),
         Err(error) => ApiError::internal(error).into_response(),
     }
 }

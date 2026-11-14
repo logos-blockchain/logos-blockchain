@@ -17,7 +17,7 @@ use crate::{
                 channel_transfer::ChannelTransferOp,
                 config::ChannelConfigOp,
                 deposit::{DepositOp, Metadata},
-                inscribe::InscriptionOp,
+                inscribe::{Inscription, InscriptionOp},
                 withdraw::ChannelWithdrawOp,
             },
             leader_claim::LeaderClaimOp,
@@ -56,7 +56,7 @@ pub static CHANNEL_CONFIG: LazyLock<ChannelConfigOp> = LazyLock::new(|| {
 
 pub static INSCRIPTION: LazyLock<InscriptionOp> = LazyLock::new(|| InscriptionOp {
     channel_id: ChannelId::from([0x20u8; 32]),
-    inscription: b"fixture".into(),
+    inscription: Inscription::new_unchecked(b"fixture".to_vec()),
     parent: MsgId::from([0x21u8; 32]),
     signer: Ed25519Key::from_bytes(&[0x22u8; 32])
         .public_key()
@@ -66,8 +66,7 @@ pub static INSCRIPTION: LazyLock<InscriptionOp> = LazyLock::new(|| InscriptionOp
 pub static DEPOSIT: LazyLock<DepositOp> = LazyLock::new(|| DepositOp {
     channel_id: ChannelId::from([0x30u8; 32]),
     inputs: BoundedInputs::from(NoteId(Fr::from(0x31u64))).into(),
-    metadata: Metadata::try_from(b"fixture-metadata".to_vec())
-        .expect("the metadata is within bounds"),
+    metadata: Metadata::new_unchecked(b"fixture-metadata".to_vec()),
 });
 
 pub static CHANNEL_WITHDRAW: LazyLock<ChannelWithdrawOp> = LazyLock::new(|| ChannelWithdrawOp {

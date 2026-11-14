@@ -1,11 +1,13 @@
 use core::{
-    num::{NonZero, NonZeroU32, NonZeroU64},
+    num::{NonZero, NonZeroU16, NonZeroU32, NonZeroU64},
     ops::Deref,
 };
 
+use lb_binary_codec::canonical::BinaryEncode;
 use lb_chain_service::Epoch;
 use lb_core::{
-    block::Proposal,
+    block::{Block, BlockLimits, Proposal},
+    mantle::gas::{Gas, GasProfile},
     sdp::{InactivityPeriod, MinStake, ServiceType},
 };
 use lb_cryptarchia_engine::{
@@ -15,15 +17,23 @@ use lb_cryptarchia_engine::{
 };
 use lb_groth16::ModulusShift;
 use lb_ledger::cryptarchia::STAKE_INFERENCE_PRECISION;
-use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+use lb_libp2p::cryptarchia_sync::max_blocks_response_bincode_size;
+use lb_pow_service::single_claim_tx_size;
+use lb_utils::{
+    math::{NonNegativeF64, NonNegativeRatio},
+    net::MAX_WIRE_MESSAGE_SIZE,
+};
 use serde::{Deserialize, Serialize};
 use strum::{EnumCount as _, IntoEnumIterator as _};
 
-use crate::config::deployment::{InvalidDeployment, ensure};
+use crate::{
+    ValidatedTx,
+    config::deployment::{InvalidDeployment, ensure},
+};
 
 pub(crate) mod codec;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, BinaryEncode)]
 pub struct Settings {
     pub epoch_config: EpochConfig,
     pub security_param: NonZeroU32,
@@ -33,8 +43,18 @@ pub struct Settings {
     pub uncle_reference_window_in_block: u32,
     /// The most uncles a block may reference.
     pub max_uncles: u8,
+    /// The most transactions a block may hold: at least one, or no block of
+    /// the era could carry any.
+    pub max_transactions: NonZeroU16,
+    /// The most bytes a block's transactions may take in their canonical
+    /// encoding.
+    pub max_transactions_size: u32,
     pub sdp_config: SdpConfig,
     pub pow_config: PoWConfig,
+    pub execution_market: ExecutionMarketConfig,
+    pub storage_market: StorageMarketConfig,
+    pub block_rewards: BlockRewardsConfig,
+    pub gas_profile: GasProfile,
 }
 
 impl Settings {
@@ -72,6 +92,46 @@ impl Settings {
             );
         }
 
+        self.validate_sizes()?;
+
+        // An Operation that costs more than a block may consume could never be
+        // included, the protocol's own (reward claims, SDP activity) included.
+        let max_gas_per_block = Gas::from(self.execution_market.max_gas_per_block);
+        let GasProfile {
+            transfer,
+            channel_config,
+            channel_inscribe,
+            channel_deposit,
+            channel_withdraw,
+            channel_transfer,
+            sdp_declare,
+            sdp_withdraw,
+            sdp_active,
+            leader_claim,
+            claim_pow_reward,
+        } = self.gas_profile;
+        for (operation, gas) in [
+            ("a transfer", transfer),
+            ("a channel configuration, per key", channel_config),
+            ("a channel inscription", channel_inscribe),
+            ("a channel deposit", channel_deposit),
+            ("a channel withdrawal, per key", channel_withdraw),
+            ("a channel transfer, per key", channel_transfer),
+            ("an SDP declaration", sdp_declare),
+            ("an SDP withdrawal", sdp_withdraw),
+            ("an SDP activity", sdp_active),
+            ("a leader claim", leader_claim),
+            ("a PoW reward claim", claim_pow_reward),
+        ] {
+            ensure!(
+                gas <= max_gas_per_block,
+                "The execution gas of {operation}, {}, exceeds the {} a block may consume, so no \
+                 block could include it.",
+                gas.into_inner(),
+                max_gas_per_block.into_inner()
+            );
+        }
+
         let BlendPoWConfig {
             damping_num,
             damping_den_offset,
@@ -85,6 +145,48 @@ impl Settings {
         self.pow_config.reward.validate().map_err(|error| {
             InvalidDeployment::new(format!("Invalid PoW reward parameters: {error}."))
         })
+    }
+
+    /// Checks that the era's largest proposal fits a Blend payload and its
+    /// largest block a chain sync message, and that a `PoW` reward claim fits
+    /// both a payload and a block.
+    fn validate_sizes(&self) -> Result<(), InvalidDeployment> {
+        // Blend pads every message of the era to its largest proposal, in a
+        // payload whose size is a `u16`, and publishes reward claims in it.
+        let max_proposal_size = self.max_proposal_size();
+        let payload_body_size = u16::try_from(max_proposal_size).map_err(|_| {
+            InvalidDeployment::new(format!(
+                "The largest block proposal of the era, {max_proposal_size} bytes with {} uncles \
+                 and {} transactions, does not fit a Blend payload of at most {} bytes.",
+                self.max_uncles,
+                self.max_transactions,
+                u16::MAX
+            ))
+        })?;
+        let claim_size = single_claim_tx_size();
+        ensure!(
+            claim_size <= u64::from(payload_body_size),
+            "A Blend payload of {payload_body_size} bytes, the era's largest proposal, cannot \
+             carry a PoW reward claim of {claim_size} bytes."
+        );
+        ensure!(
+            claim_size <= u64::from(self.max_transactions_size),
+            "A block whose transactions take at most {} bytes cannot carry a PoW reward claim of \
+             {claim_size} bytes.",
+            self.max_transactions_size
+        );
+
+        // A node syncs the era's blocks one per chain sync message.
+        let max_block_size = self.max_block_size();
+        ensure!(
+            max_blocks_response_bincode_size(max_block_size) <= MAX_WIRE_MESSAGE_SIZE,
+            "The largest block of the era, {max_block_size} bytes with {} uncles and {} bytes of \
+             transactions, does not fit a chain sync message of at most {MAX_WIRE_MESSAGE_SIZE} \
+             bytes.",
+            self.max_uncles,
+            self.max_transactions_size
+        );
+        Ok(())
     }
 
     /// `⌊0.6k⌋`: the widest uncle reference window `W` the era allows, in
@@ -122,11 +224,38 @@ impl Settings {
         expected_blocks_per_epoch(self.slots_per_epoch(), self.slot_activation_coeff.get())
     }
 
+    /// The most uncles, transactions and transaction bytes a block of the era
+    /// may hold.
+    #[must_use]
+    pub const fn block_limits(&self) -> BlockLimits {
+        BlockLimits {
+            max_uncles: self.max_uncles,
+            max_transactions: self.max_transactions.get(),
+            max_transactions_size: self.max_transactions_size,
+        }
+    }
+
+    /// The most bytes of data an Operation of the era may carry, an inscription
+    /// or a deposit's metadata: seven eighths of what a block's transactions
+    /// may, leaving room for the rest of its transaction.
+    #[must_use]
+    pub const fn max_op_data_size(&self) -> u32 {
+        (self.max_transactions_size as u64 * 7 / 8) as u32
+    }
+
+    /// The size of the largest block of the era: one that references as many
+    /// uncles as the era allows, with transactions taking all the bytes it
+    /// allows them.
+    #[must_use]
+    pub fn max_block_size(&self) -> usize {
+        Block::<ValidatedTx>::max_encoded_size(self.block_limits())
+    }
+
     /// The size of the largest block proposal of the era: one that references
-    /// as many uncles as the era allows.
+    /// as many uncles and transactions as the era allows.
     #[must_use]
     pub fn max_proposal_size(&self) -> usize {
-        Proposal::max_encoded_size(self.max_uncles)
+        Proposal::max_encoded_size(self.block_limits())
     }
 
     #[must_use]
@@ -146,7 +275,7 @@ impl Settings {
 /// Below 1, so that the lottery's `ln(1 - f)` is finite, and at least the
 /// inverse of the precision the total stake inference measures it with, so that
 /// the expected density it divides by is not zero.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, BinaryEncode)]
 #[serde(try_from = "NonNegativeRatio", into = "NonNegativeRatio")]
 pub struct SlotActivationCoeff(NonNegativeRatio);
 
@@ -193,7 +322,7 @@ impl From<SlotActivationCoeff> for NonNegativeRatio {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryEncode)]
 pub struct EpochConfig {
     // The stake distribution is always taken at the beginning of the previous epoch.
     // This parameters controls how many slots to wait for it to be stabilized
@@ -210,7 +339,7 @@ pub struct EpochConfig {
 // The same as `lb_ledger::mantle::sdp::Config`, minus the
 // `service_rewards_params` values, which are taken from the Blend deployment
 // config instead.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, BinaryEncode)]
 pub struct SdpConfig {
     /// The parameters of each service type, at the position of the byte the
     /// type encodes as, which is the order [`ServiceType`] declares them in.
@@ -228,20 +357,20 @@ impl SdpConfig {
 }
 
 // The same as `lb_core::sdp::ServiceParameters`.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, BinaryEncode)]
 pub struct ServiceParameters {
     pub inactivity_period: InactivityPeriod,
     pub epoch: Epoch,
 }
 
 // The same as `lb_ledger::config::PoWConfig`.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, BinaryEncode)]
 pub struct PoWConfig {
     pub blend: BlendPoWConfig,
     pub reward: RewardPoWConfig,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, BinaryEncode)]
 pub struct BlendPoWConfig {
     pub base_difficulty: ModulusShift,
     pub target_transactions_per_block: NonZeroU64,
@@ -254,3 +383,9 @@ pub struct BlendPoWConfig {
 // directly: deserializing the deployment config runs its invariant checks
 // (`RewardPoWConfig::validate`), rejecting an invalid config at load time.
 pub use lb_ledger::config::RewardPoWConfig;
+// The markets' parameters are used verbatim too, so the ledger types are reused
+// the same way: their field types refuse a rate outside (0, 1) and a gas limit
+// without a target.
+pub use lb_ledger::config::{
+    BlockRewardsConfig, ExecutionMarketConfig, MaxGasPerBlock, StorageMarketConfig,
+};

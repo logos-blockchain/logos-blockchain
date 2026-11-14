@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use lb_config::deployment::GAS_PROFILE;
 use lb_core::{
     era::ForkDigest,
     mantle::{
@@ -50,8 +51,13 @@ impl WalletTransactionIntent {
 
     pub fn transfer(receivers: &[(ZkPublicKey, u64)]) -> Result<Self, WalletTransactionError> {
         let empty_context = OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::default()),
-            ..OpsContext::default()
+            gas_context: OpsGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::default(),
+                GAS_PROFILE,
+            ),
+            leader_reward_amount: 0,
         };
         let mut tx_builder = MantleTxBuilder::new();
 
@@ -76,7 +82,8 @@ impl WalletTransactionIntent {
 
     #[must_use]
     pub fn with_gas_prices(mut self, gas_prices: GasPrices) -> Self {
-        self.context.gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), gas_prices);
+        self.context.gas_context =
+            OpsGasContext::new(HashMap::new(), HashMap::new(), gas_prices, GAS_PROFILE);
         self
     }
 
@@ -133,8 +140,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[0x42; 32]);
         let inscription = InscriptionOp {
             channel_id: ChannelId::from([0x24; 32]),
-            inscription: Inscription::try_from(1u64.to_le_bytes().to_vec())
-                .expect("small fixed-width payload"),
+            inscription: Inscription::new_unchecked(1u64.to_le_bytes().to_vec()),
             parent: MsgId::root(),
             signer: signing_key.public_key().into_unverified(),
         };

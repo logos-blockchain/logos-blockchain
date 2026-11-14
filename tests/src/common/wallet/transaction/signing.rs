@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use lb_core::mantle::{
     NoteId, Op, OpProof, OpRef, SignedOps, TxHash,
-    gas::{MainnetGasProfile, TxGasCalculator as _},
+    gas::TxGasCalculator as _,
     traits::Hashable as _,
     transactions::{OpProofs, Ops, tx_list::ops::OpsContext},
 };
@@ -32,7 +32,7 @@ pub(super) fn sign_prepared_wallet_transaction(
     let signed_tx = SignedOps::from_parts(mantle_tx, op_proofs)?.preverify()?;
     let mandatory_fee_at_preparation = signed_tx
         .op_refs()
-        .total_gas_cost::<MainnetGasProfile>(&context.gas_context)?
+        .total_gas_cost(&context.gas_context)?
         .into_inner();
     let output_total = signed_tx
         .op_refs()
@@ -165,8 +165,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[0x42; 32]);
         let operation = InscriptionOp {
             channel_id: ChannelId::from([0x24; 32]),
-            inscription: Inscription::try_from(1u64.to_le_bytes().to_vec())
-                .expect("small fixed-width payload"),
+            inscription: Inscription::new_unchecked(1u64.to_le_bytes().to_vec()),
             parent: MsgId::root(),
             signer: signing_key.public_key().into_unverified(),
         };

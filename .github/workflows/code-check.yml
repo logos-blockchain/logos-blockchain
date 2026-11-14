@@ -135,9 +135,15 @@ jobs:
       matrix:
         os:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - [ self-hosted, Linux ]
-          - [ self-hosted, macOS ]
+          - bladerunner-linux
+          - bladerunner-macos
     runs-on: ${{ matrix.os }}
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+      # allows `sccache` to cache the workspace crates.
+      CARGO_INCREMENTAL: 0
+      # line tables are enough for backtraces.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - name: Disable rustup override
         run: rustup override unset || true
@@ -157,8 +163,19 @@ jobs:
             --locked -p logos-blockchain-node --features testing
             -- nodes/node/standalone-node-config.yaml --check-config --deployment nodes/node/standalone-deployment-config.yaml
 
-      - name: Install cargo-nextest
+      - name: Check for a preinstalled cargo-nextest
+        id: nextest
         if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          if cargo nextest --version; then
+            echo "installed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "installed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install cargo-nextest
+        if: ${{ !cancelled() && steps.nextest.outputs.installed != 'true' }}
         uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # Version 2.79.11
         with:
           tool: cargo-nextest
@@ -173,20 +190,8 @@ jobs:
           args: >-
             run --workspace --locked --lib --bins --examples --tests --retries 2
             --all-features --no-fail-fast --exclude logos-blockchain-tests
-            --exclude logos-blockchain-zone-tests --exclude logos-blockchain-sql-tests
 
-      # Run client unit tests here; their Cucumber runners belong to integration CI.
-      - name: Run client test support unit tests
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
-        with:
-          command: nextest
-          args: >-
-            run --locked --lib --retries 2 --no-fail-fast
-            -p logos-blockchain-zone-tests -p logos-blockchain-sql-tests
-
-      # The test harness library has unit tests even though its integration
-      # targets run in their dedicated workflows.
-      - name: Run blockchain test support unit tests
+      - name: Run test support unit tests
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: nextest
@@ -217,8 +222,10 @@ jobs:
         !contains(github.event.pull_request.labels.*.name, 'DO NOT MERGE')
       }}
     # Valgrind is Linux-only, and the node needs more memory than GitHub-hosted runners have.
-    runs-on: [ self-hosted, Linux ]
+    runs-on: bladerunner-linux
     timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: 0
     steps:
       - name: Disable rustup override
         run: rustup override unset || true
@@ -226,16 +233,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
         with:
-          fetch-depth: 0
+          fetch-depth: 2
 
       # The run needs a full build and several minutes under valgrind, so it is
       # skipped unless the bindings themselves changed.
       - name: Check whether the C bindings changed
         id: changes
-        env:
-          BASE_REF: ${{ github.base_ref }}
         run: |
-          if git diff --quiet "origin/$BASE_REF...HEAD" -- c-bindings .github/workflows/code-check.yml; then
+          if git diff --quiet HEAD^1 HEAD -- c-bindings .github/workflows/code-check.yml; then
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
             echo "run=true" >> "$GITHUB_OUTPUT"
@@ -249,8 +254,8 @@ jobs:
       # here, with Cargo starting the test binary through valgrind. Any invalid
       # access or definite leak fails the job.
       #
-      # Valgrind comes from nix: the runner has no passwordless sudo to install
-      # it with, and nix is already there.
+      # Valgrind comes from nix, which the step below installs: the runner image
+      # does not ship it.
       #
       # Valgrind cannot start on Ubuntu's own dynamic loader: it needs a few of
       # its symbols, which Ubuntu strips and ships in `libc6-dbg` (not
@@ -258,6 +263,10 @@ jobs:
       # loader of nix's glibc instead, which keeps them. That glibc is newer
       # than the one the binary was built against, which glibc supports; the
       # remaining libraries (libstdc++, libgcc_s) still come from the system.
+      - name: Install Nix
+        if: steps.changes.outputs.run == 'true'
+        uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086  # Version 31.11.5
+
       - name: Run the FFI safety tests under valgrind
         if: steps.changes.outputs.run == 'true'
         env:

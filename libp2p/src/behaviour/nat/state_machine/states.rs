@@ -23,43 +23,37 @@ impl Uninitialized {
         clippy::unused_self,
         reason = "The aim of the pattern is to consume self."
     )]
-    pub const fn into_test_if_public(self, addr_to_test: Multiaddr) -> TestIfPublic {
-        TestIfPublic { addr_to_test }
+    pub const fn into_test_if_public(self, local_address: Multiaddr) -> TestIfPublic {
+        TestIfPublic { local_address }
     }
 }
 
-/// We are aware of an external address candidate and we want to test if it is
-/// public.
+/// We know a local address that the default gateway can map, and we want to
+/// test if the node is publicly reachable without a mapping.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestIfPublic {
-    addr_to_test: Multiaddr,
+    /// The listen address to map if the node is not publicly reachable.
+    local_address: Multiaddr,
 }
 
 impl TestIfPublic {
-    pub fn into_public(self) -> Public {
-        let Self { addr_to_test } = self;
+    pub fn into_public(self, address: Multiaddr) -> Public {
+        let Self { local_address } = self;
         Public {
-            address: addr_to_test,
+            local_address,
+            address,
         }
     }
 
     pub fn into_try_map_address(self) -> TryMapAddress {
-        let Self { addr_to_test } = self;
+        let Self { local_address } = self;
         TryMapAddress {
-            addr_to_map: addr_to_test,
+            addr_to_map: local_address,
         }
     }
 
-    #[expect(
-        clippy::unused_self,
-        reason = "The aim of the pattern is to consume self."
-    )]
-    pub fn retarget(self, addr_to_test: Multiaddr) -> Self {
-        Self { addr_to_test }
-    }
-
-    pub const fn addr_to_test(&self) -> &Multiaddr {
-        &self.addr_to_test
+    pub const fn local_address(&self) -> &Multiaddr {
+        &self.local_address
     }
 }
 
@@ -152,16 +146,16 @@ impl TestIfMappedPublic {
 /// confirmed by the `autonat` client.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Public {
+    /// The listen address to map if the node loses its public reachability.
+    local_address: Multiaddr,
     /// The address that was confirmed to be publicly reachable
     address: Multiaddr,
 }
 
 impl Public {
     pub fn into_test_if_public(self) -> TestIfPublic {
-        let Self { address } = self;
-        TestIfPublic {
-            addr_to_test: address,
-        }
+        let Self { local_address, .. } = self;
+        TestIfPublic { local_address }
     }
 
     #[expect(
@@ -173,9 +167,9 @@ impl Public {
     }
 
     pub fn into_try_map_address(self) -> TryMapAddress {
-        let Self { address } = self;
+        let Self { local_address, .. } = self;
         TryMapAddress {
-            addr_to_map: address,
+            addr_to_map: local_address,
         }
     }
 
@@ -197,12 +191,8 @@ pub struct MappedPublic {
 
 impl MappedPublic {
     pub fn into_test_if_public(self) -> TestIfPublic {
-        let Self {
-            external_address, ..
-        } = self;
-        TestIfPublic {
-            addr_to_test: external_address,
-        }
+        let Self { local_address, .. } = self;
+        TestIfPublic { local_address }
     }
 
     pub fn into_private(self) -> Private {
@@ -215,6 +205,10 @@ impl MappedPublic {
         TryMapAddress {
             addr_to_map: local_address,
         }
+    }
+
+    pub const fn local_address(&self) -> &Multiaddr {
+        &self.local_address
     }
 
     pub const fn external_address(&self) -> &Multiaddr {
@@ -236,7 +230,7 @@ impl Private {
     )]
     pub fn into_test_if_public(self, new_addr: Multiaddr) -> TestIfPublic {
         TestIfPublic {
-            addr_to_test: new_addr,
+            local_address: new_addr,
         }
     }
 
@@ -267,7 +261,9 @@ pub mod test_utils {
     impl TestIfPublic {
         pub(crate) fn for_test(addr: Multiaddr) -> Box<dyn OnEvent> {
             Box::new(State::<Self> {
-                state: Self { addr_to_test: addr },
+                state: Self {
+                    local_address: addr,
+                },
             })
         }
     }
@@ -296,8 +292,18 @@ pub mod test_utils {
 
     impl Public {
         pub(crate) fn for_test(addr: Multiaddr) -> Box<dyn OnEvent> {
+            Self::for_test_with_addrs(addr.clone(), addr)
+        }
+
+        pub(crate) fn for_test_with_addrs(
+            local_address: Multiaddr,
+            address: Multiaddr,
+        ) -> Box<dyn OnEvent> {
             Box::new(State::<Self> {
-                state: Self { address: addr },
+                state: Self {
+                    local_address,
+                    address,
+                },
             })
         }
     }

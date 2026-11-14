@@ -7,7 +7,10 @@ pub mod withdraw;
 
 use std::fmt::{Display, Formatter};
 
-use lb_binary_codec::{bincode::BoundedSerializeOp, canonical::BinaryCodec};
+use lb_binary_codec::{
+    bincode::BoundedSerializeOp,
+    canonical::{BinaryDecode, BinaryEncode},
+};
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnverifiedEd25519PublicKey};
 use lb_utils::bounded::NonEmptyBoundedVec;
 
@@ -15,21 +18,12 @@ use crate::utils::serde_bytes_newtype;
 
 pub type ChannelKeyIndex = u16;
 
-/// Maximum payload size, in bytes, of a Mantle operation data field
-/// (`MAX_OPERATION_DATA_SIZE` in the Mantle Transaction Encoding spec).
-///
-/// The spec requires this to be exactly `1_835_008` bytes, which is
-/// `MAX_BLOCK_TRANSACTIONS_SIZE * 7 / 8` and leaves room for the rest of a
-/// block's transactions. The bound excludes the length prefix. Channel
-/// inscription data and channel deposit metadata both use this limit.
-pub const MAX_OPERATION_DATA_SIZE: usize = 1_835_008;
-
 pub const CHANNEL_MAX_KEYS: usize = u16::MAX as usize;
 type ChannelKeys<Key> = NonEmptyBoundedVec<Key, CHANNEL_MAX_KEYS>;
 pub type VerifiedChannelKeys = ChannelKeys<Ed25519PublicKey>;
 pub type UnverifiedChannelKeys = ChannelKeys<UnverifiedEd25519PublicKey>;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, BinaryCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, BinaryEncode, BinaryDecode)]
 pub struct ChannelId([u8; 32]);
 serde_bytes_newtype!(ChannelId, 32);
 
@@ -45,7 +39,7 @@ impl Display for ChannelId {
 }
 
 /// The id of the previous message in the channel
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, BinaryCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, BinaryEncode, BinaryDecode)]
 pub struct MsgId([u8; 32]);
 serde_bytes_newtype!(MsgId, 32);
 

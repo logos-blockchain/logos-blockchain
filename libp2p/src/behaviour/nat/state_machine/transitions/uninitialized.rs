@@ -4,8 +4,10 @@ use crate::behaviour::nat::state_machine::{
 
 /// The `Uninitialized` state is the starting point of the NAT state machine. In
 /// this state, the state machine is waiting for a listening address
-/// to be provided. Once it receives a listening address, it transitions to the
-/// `TestIfPublic` state to verify if the address is public or not.
+/// to be provided: the first one on the network interface that holds the
+/// default route, the only kind the default gateway can map. Once it receives
+/// it, it transitions to the `TestIfPublic` state to verify if the node is
+/// public or not.
 impl OnEvent for State<Uninitialized> {
     fn on_event(self: Box<Self>, event: Event, _: &CommandTx) -> Box<dyn OnEvent> {
         match event {
