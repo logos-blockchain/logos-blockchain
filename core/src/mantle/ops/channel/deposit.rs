@@ -232,6 +232,51 @@ mod test {
         transactions::tx_list::signed_ops::test_utils::make_channel_state,
     };
 
+    /// The most metadata bytes a deposit may carry: the Mantle Transaction
+    /// Encoding spec's `MAX_OPERATION_DATA_SIZE`, which an era's limits give
+    /// its Operations as `max_transactions_size * 7 / 8`.
+    const MAX_METADATA_SIZE: u32 = 1_835_008;
+
+    /// A deposit encoding with no inputs and a metadata length prefix of
+    /// `metadata_len`, followed by `metadata_len` bytes of metadata.
+    fn encoded_deposit_with_metadata_len(metadata_len: usize) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        // ChannelId
+        encoded.extend_from_slice(&[0x42; 32]);
+        // Input count
+        encoded.push(0);
+        // Metadata length prefix and payload
+        let metadata_len_prefix =
+            u32::try_from(metadata_len).expect("metadata length must fit in a u32 prefix");
+        encoded.extend_from_slice(&metadata_len_prefix.to_le_bytes());
+        encoded.resize(encoded.len() + metadata_len, 0x01);
+        encoded
+    }
+
+    #[test]
+    fn decode_accepts_metadata_at_the_spec_limit() {
+        let encoded =
+            encoded_deposit_with_metadata_len(usize::try_from(MAX_METADATA_SIZE).unwrap());
+
+        let (_, deposit) = DepositOp::decode(&encoded, &MAX_METADATA_SIZE).unwrap();
+
+        assert_eq!(
+            deposit.metadata.len(),
+            usize::try_from(MAX_METADATA_SIZE).unwrap()
+        );
+    }
+
+    #[test]
+    fn decode_rejects_metadata_above_the_spec_limit() {
+        let encoded =
+            encoded_deposit_with_metadata_len(usize::try_from(MAX_METADATA_SIZE).unwrap() + 1);
+
+        assert!(matches!(
+            DepositOp::decode(&encoded, &MAX_METADATA_SIZE),
+            Err(DecodeError::LengthOutOfBounds { .. })
+        ));
+    }
+
     #[test]
     fn preverify_rejects_empty_inputs() {
         let deposit = DepositOp {
