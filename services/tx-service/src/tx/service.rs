@@ -10,7 +10,6 @@ use std::{
     iter,
     marker::PhantomData,
     pin::Pin,
-    time::Duration,
 };
 
 use futures::{StreamExt as _, future};
@@ -201,6 +200,7 @@ where
     TimeBackend: lb_time_service::backends::TimeBackend,
     RuntimeServiceId: Display
         + Debug
+        + Clone
         + Sync
         + Send
         + 'static
@@ -231,7 +231,7 @@ where
         // clock is in, and follow the eras the clock enters after it.
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             TimeService<TimeBackend, RuntimeServiceId>
         )
         .await?;
@@ -295,7 +295,7 @@ where
 
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             NetworkService<_, _, _>
         )
         .await?;
