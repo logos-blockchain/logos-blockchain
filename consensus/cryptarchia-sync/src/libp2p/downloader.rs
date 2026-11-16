@@ -7,7 +7,7 @@ use tokio::{sync::oneshot, time, time::Duration};
 use tracing::{debug, warn};
 
 use crate::{
-    BlocksRequest, TipResponse,
+    BlocksRequest, Tip, TipResponse,
     libp2p::{
         behaviour::{BlocksResponseReader, BoxedStream, TipResponseReader},
         errors::{ChainSyncError, ChainSyncErrorKind},
@@ -38,7 +38,7 @@ impl Downloader {
         peer_id: PeerId,
         control: &mut Control,
         protocol_name: StreamProtocol,
-        reply_sender: oneshot::Sender<Result<TipResponse, ChainSyncError>>,
+        reply_sender: oneshot::Sender<Result<Tip, ChainSyncError>>,
     ) -> Result<TipResponseReader, ChainSyncError> {
         let mut stream = open_stream(peer_id, control, protocol_name).await?;
 
@@ -82,7 +82,7 @@ impl Downloader {
             })?
             .map_err(|e| ChainSyncError::from((peer_id, e)))
             .and_then(|response| match response {
-                tip @ TipResponse::Tip { .. } => Ok(tip),
+                TipResponse::Tip(tip) => Ok(tip),
                 TipResponse::Failure(reason) => Err(ChainSyncError {
                     peer: peer_id,
                     kind: ChainSyncErrorKind::RequestTipError(reason),

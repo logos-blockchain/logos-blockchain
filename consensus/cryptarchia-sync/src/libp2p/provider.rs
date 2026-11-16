@@ -62,15 +62,11 @@ impl Provider {
             }
         });
 
-        let send_result = match response {
-            ProviderResponse::Available(tip) => {
-                send_message(peer_id, &mut libp2p_stream, &tip).await
-            }
-            ProviderResponse::Unavailable { reason } => {
-                let response = TipResponse::Failure(reason);
-                send_message(peer_id, &mut libp2p_stream, &response).await
-            }
+        let response = match response {
+            ProviderResponse::Available(tip) => TipResponse::Tip(tip),
+            ProviderResponse::Unavailable { reason } => TipResponse::Failure(reason),
         };
+        let send_result = send_message(peer_id, &mut libp2p_stream, &response).await;
 
         drop(close_stream(peer_id, libp2p_stream).await);
 

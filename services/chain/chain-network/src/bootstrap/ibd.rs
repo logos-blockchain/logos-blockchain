@@ -18,10 +18,9 @@ use lb_core::{
         transactions::{hash::TxHash, states::Preverified},
     },
 };
-use lb_cryptarchia_sync::TipResponse;
+use lb_cryptarchia_sync::Tip;
 use lb_log_targets::chain;
 use lb_tx_service::backend::RecoverableMempool;
-use overwatch::DynError;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
@@ -298,12 +297,10 @@ where
     I: IntoIterator<Item = NetAdapter::PeerId>,
 {
     let tips: HashSet<HeaderId> = join_all(peers.into_iter().map(async |peer| {
-        let result: Result<HeaderId, DynError> = match network.request_tip(peer).await {
-            Ok(TipResponse::Tip { tip, .. }) => Ok(tip),
-            Ok(TipResponse::Failure(reason)) => Err(DynError::from(reason)),
-            Err(e) => Err(e),
-        };
-        result
+        network
+            .request_tip(peer)
+            .await
+            .map(|Tip { tip, .. }| tip)
             .inspect_err(|e| warn!(target: LOG_TARGET, "failed to fetch tip from {peer:?}: {e}"))
             .ok()
     }))
@@ -381,7 +378,7 @@ mod tests {
     };
     use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
-    use overwatch::{overwatch::OverwatchHandle, services::relay::OutboundRelay};
+    use overwatch::{DynError, overwatch::OverwatchHandle, services::relay::OutboundRelay};
     use tokio_stream::wrappers::BroadcastStream;
 
     use super::*;
@@ -849,14 +846,14 @@ mod tests {
             unimplemented!()
         }
 
-        async fn request_tip(&self, peer: Self::PeerId) -> Result<TipResponse, DynError> {
+        async fn request_tip(&self, peer: Self::PeerId) -> Result<Tip, DynError> {
             let tip = self
                 .providers
                 .iter()
                 .find_map(|(id, p)| (*id == peer).then(|| p.next_tip()))
                 .expect("test setup: peer must exist in providers");
             match tip {
-                Ok(tip) => Ok(TipResponse::Tip {
+                Ok(tip) => Ok(Tip {
                     tip: tip.id,
                     slot: tip.slot,
                     height: tip.height,
@@ -865,7 +862,7 @@ mod tests {
             }
         }
 
-        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<TipResponse> {
+        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<Tip> {
             Box::new(stream::empty())
         }
 

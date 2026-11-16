@@ -2,7 +2,7 @@ use std::{collections::HashSet, fmt::Debug};
 
 use lb_libp2p::{
     PeerId,
-    cryptarchia_sync::{BoxedStream, ChainSyncError, HeaderId, SerialisedBlock, TipResponse},
+    cryptarchia_sync::{BoxedStream, ChainSyncError, HeaderId, SerialisedBlock, Tip},
 };
 use lb_log_targets::network_service;
 use rand::RngCore;
@@ -20,7 +20,7 @@ pub enum ChainSyncCommand {
     },
     RequestTip {
         peer: PeerId,
-        reply_sender: oneshot::Sender<Result<TipResponse, ChainSyncError>>,
+        reply_sender: oneshot::Sender<Result<Tip, ChainSyncError>>,
     },
     DownloadBlocks {
         peer: PeerId,

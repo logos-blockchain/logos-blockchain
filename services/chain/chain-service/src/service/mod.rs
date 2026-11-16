@@ -1470,30 +1470,23 @@ pub fn persist_recovery_state(
     }
 }
 
-// TODO: use `send_chain_sync_rejection` for both, after checking callers
 async fn reject_chain_sync_event(event: ChainSyncEvent) {
     debug!(target: LOG_TARGET, "rejecting chainsync event");
     match event {
         ChainSyncEvent::BlocksRequest { reply_sender, .. } => {
-            let response = ProviderResponse::Unavailable {
-                reason: BlocksUnavailableReason::Unknown,
-            };
-            if let Err(err) = reply_sender.send(response).await {
-                error!(target: LOG_TARGET, %err, "failed to send chain sync response");
-            }
+            send_chain_sync_rejection(reply_sender, BlocksUnavailableReason::Unknown).await;
         }
         ChainSyncEvent::TipRequest { reply_sender } => {
-            send_chain_sync_rejection(reply_sender).await;
+            send_chain_sync_rejection(reply_sender, TipResponseFailureReason::NodeNotOnline).await;
         }
     }
 }
 
-async fn send_chain_sync_rejection<ResponseType>(
-    sender: mpsc::Sender<ProviderResponse<ResponseType, TipResponseFailureReason>>,
+async fn send_chain_sync_rejection<ResponseType, Reason>(
+    sender: mpsc::Sender<ProviderResponse<ResponseType, Reason>>,
+    reason: Reason,
 ) {
-    let response = ProviderResponse::Unavailable {
-        reason: TipResponseFailureReason::NodeNotOnline,
-    };
+    let response = ProviderResponse::Unavailable { reason };
     if let Err(err) = sender.send(response).await {
         error!(target: LOG_TARGET, %err, "failed to send chain sync response");
     }

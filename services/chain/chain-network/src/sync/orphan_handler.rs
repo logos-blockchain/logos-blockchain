@@ -517,7 +517,7 @@ mod tests {
     };
 
     use futures::stream;
-    use lb_cryptarchia_sync::TipResponse;
+    use lb_cryptarchia_sync::Tip;
     use lb_network_service::{
         backends::mock::Mock,
         message::{BackendNetworkMsg, ChainSyncEvent},
@@ -689,11 +689,11 @@ mod tests {
             unimplemented!()
         }
 
-        async fn request_tip(&self, _peer: Self::PeerId) -> Result<TipResponse, DynError> {
+        async fn request_tip(&self, _peer: Self::PeerId) -> Result<Tip, DynError> {
             unimplemented!()
         }
 
-        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<TipResponse> {
+        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<Tip> {
             Box::new(stream::empty())
         }
 
