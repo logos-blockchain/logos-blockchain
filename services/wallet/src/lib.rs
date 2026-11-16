@@ -420,6 +420,7 @@ where
         + AsServiceId<Kms>
         + std::fmt::Debug
         + std::fmt::Display
+        + Clone
         + Send
         + Sync
         + 'static,
@@ -441,19 +442,12 @@ where
             ..
         } = self;
 
-        // Wait for services (except Chain) to become ready.
         wait_until_services_are_ready!(
             &service_resources_handle.overwatch_handle,
             None,
             lb_storage_service::StorageService<_>,
-            Kms
-        )
-        .await?;
-        // Wait for Chain service to become ready, without timeout
-        wait_until_services_are_ready!(
-            &service_resources_handle.overwatch_handle,
-            None,
-            Cryptarchia // becomes ready after recoverying blocks
+            Kms,
+            Cryptarchia
         )
         .await?;
 

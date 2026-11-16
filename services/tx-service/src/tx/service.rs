@@ -178,6 +178,7 @@ where
     RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
     RuntimeServiceId: Display
         + Debug
+        + Clone
         + Sync
         + Send
         + 'static

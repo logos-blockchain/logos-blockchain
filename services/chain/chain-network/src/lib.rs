@@ -299,20 +299,13 @@ where
             .notifier()
             .get_updated_settings();
 
-        // Wait for services (except Chain) to become ready.
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
             None,
             NetworkService<_, _>,
             TxMempoolService<_, _, _, _>,
-            TimeService<_, _>
-        )
-        .await?;
-        // Wait for Chain service to become ready, without timeout
-        wait_until_services_are_ready!(
-            &self.service_resources_handle.overwatch_handle,
-            None,
-            Cryptarchia // becomes ready after recoverying blocks
+            TimeService<_, _>,
+            Cryptarchia
         )
         .await?;
 
