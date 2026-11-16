@@ -147,11 +147,12 @@ logos-blockchain/
 ├── services/             Overwatch services (chain, blend, wallet, API, …)
 ├── nodes/node/           Node binary — wires everything together
 ├── wallet/               Wallet logic (UTXO selection, key management)
-├── zone-sdk/             SDK for building zone sequencers & indexers
 ├── c-bindings/           C-compatible dynamic library + header
 ├── deployment/              Docker Compose testnets, faucet, L2 demo
 └── tests/                Integration & Cucumber BDD tests
 ```
+
+Zone SDK and SQL are maintained in [logos-zone-sdk](https://github.com/logos-blockchain/logos-zone-sdk).
 
 ---
 
