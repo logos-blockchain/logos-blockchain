@@ -155,6 +155,23 @@ jobs:
       - name: Prune disk space (cache-aware, self-hosted)
         uses: ./.github/actions/prune-disk-space
 
+      # Self-hosted runners keep Cargo's git checkouts between jobs. Remove a
+      # malformed cached circuits checkout so Cargo can recreate the locked
+      # revision before it tries to parse the types manifest.
+      - name: Repair incomplete circuits Cargo checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          shopt -s nullglob
+          for manifest in "$cargo_home"/git/checkouts/logos-blockchain-circuits-*/*/rust/logos-blockchain-circuits-types/Cargo.toml; do
+            if ! grep -Eq '^[[:space:]]*\[(package|workspace)\]' "$manifest"; then
+              checkout="${manifest%/rust/logos-blockchain-circuits-types/Cargo.toml}"
+              echo "Removing incomplete circuits Cargo checkout: $checkout"
+              rm -rf -- "$checkout"
+            fi
+          done
+
       - name: Run the node binary with the testing feature to check the one-node config files validity
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
@@ -249,6 +266,24 @@ jobs:
       - name: Prune disk space (cache-aware, self-hosted)
         if: steps.changes.outputs.run == 'true'
         uses: ./.github/actions/prune-disk-space
+
+      # Self-hosted runners keep Cargo's git checkouts between jobs. Remove a
+      # malformed cached circuits checkout so Cargo can recreate the locked
+      # revision before it tries to parse the types manifest.
+      - name: Repair incomplete circuits Cargo checkout
+        if: steps.changes.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          shopt -s nullglob
+          for manifest in "$cargo_home"/git/checkouts/logos-blockchain-circuits-*/*/rust/logos-blockchain-circuits-types/Cargo.toml; do
+            if ! grep -Eq '^[[:space:]]*\[(package|workspace)\]' "$manifest"; then
+              checkout="${manifest%/rust/logos-blockchain-circuits-types/Cargo.toml}"
+              echo "Removing incomplete circuits Cargo checkout: $checkout"
+              rm -rf -- "$checkout"
+            fi
+          done
 
       # These tests are `#[ignore]`d for the regular runners: they only run
       # here, with Cargo starting the test binary through valgrind. Any invalid
