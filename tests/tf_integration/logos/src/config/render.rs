@@ -5,12 +5,8 @@ use std::time::Duration;
 use lb_config::create_general_configs_from_prepared_network;
 use lb_key_management_system_service::keys::Key;
 
-use super::{
-    Config,
-    deployment::{NODE_BINARY_PROFILE, TopologyBuildError},
-    prepared_deployment::PreparedDeployment,
-};
-use crate::{DeploymentPlan, NodePlan, env::replace_default_env};
+use super::{Config, deployment::TopologyBuildError, prepared_deployment::PreparedDeployment};
+use crate::{DeploymentPlan, NodePlan};
 
 const PROLONGED_BOOTSTRAP_PERIOD: Duration = Duration::from_secs(5);
 
@@ -33,11 +29,6 @@ pub fn build_plan(prepared: PreparedDeployment) -> Result<DeploymentPlan, Topolo
         &wallet_keys,
     );
     let nodes = build_node_plans(prepared.config.n_nodes, network.node_ids(), &configs)?;
-
-    let _unused = replace_default_env(
-        NODE_BINARY_PROFILE,
-        prepared.config.node_binary_profile.to_string(),
-    );
 
     Ok(DeploymentPlan::new(prepared.config, nodes))
 }

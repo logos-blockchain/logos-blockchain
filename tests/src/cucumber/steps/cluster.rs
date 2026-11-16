@@ -1,5 +1,6 @@
 use std::{collections::HashMap, hash::BuildHasher, time::Duration};
 
+use lb_core::sdp::ServiceType;
 use lb_libp2p::{Multiaddr, PeerId, Protocol};
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig,
@@ -67,12 +68,26 @@ fn prepare_manual_cluster_deployment(
         .with_allow_zero_value_genesis_tokens(true)
         .with_test_context(world.lifecycle.test_context.clone())
         .with_sdp_funding_config(world.cluster.sdp_funding_config)
-        .with_node_binary_profile(if world.tokio_console_profile_enabled() {
-            NodeBinaryProfile::TokioConsole
-        } else {
-            NodeBinaryProfile::Normal
-        });
+        .with_resolved_node_binary_profile(
+            world
+                .lifecycle
+                .node_binary_profile
+                .clone()
+                .unwrap_or_else(|| {
+                    NodeBinaryProfile::from_env_or(if world.tokio_console_profile_enabled() {
+                        NodeBinaryProfile::TokioConsole
+                    } else {
+                        NodeBinaryProfile::Normal
+                    })
+                }),
+        );
     let mut config = apply_blend_core_nodes(world, config, nodes_count)?;
+    if let Some(parameter_set) = world.cluster.cucumber_parameter_set {
+        config = config.with_parameter_set(parameter_set);
+    }
+    if let Some(schedule) = world.startup.era_boundary_schedule {
+        config = config.with_era_boundary_schedule(schedule);
+    }
     config = config.with_genesis_time(genesis_time);
 
     for genesis_token in &world.chain.genesis_tokens {
@@ -123,6 +138,23 @@ fn prepare_manual_cluster_deployment(
             message: format!("failed to build manual cluster: {e}"),
         })?;
 
+    let declared_blend_providers = deployment.network().map_or(0, |network| {
+        network
+            .genesis
+            .genesis_tx()
+            .sdp_declarations()
+            .filter(|declaration| declaration.operation().service_type == ServiceType::BlendNetwork)
+            .count()
+    });
+    let expected_blend_providers = world.cluster.blend_core_nodes.unwrap_or(nodes_count);
+    if declared_blend_providers != expected_blend_providers {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "generated deployment declares {declared_blend_providers} Blend providers, expected {expected_blend_providers}"
+            ),
+        });
+    }
+
     if let Some(genesis_block) = deployment.config().genesis_block.clone() {
         world.chain.genesis_block_utxos =
             crate::cucumber::steps::nodes::genesis_block_utxos(genesis_block.genesis_tx());
@@ -167,11 +199,19 @@ fn prepare_devnet_manual_cluster_deployment(
         .with_allow_zero_value_genesis_tokens(true)
         .with_test_context(world.lifecycle.test_context.clone())
         .with_sdp_funding_config(world.cluster.sdp_funding_config)
-        .with_node_binary_profile(if world.tokio_console_profile_enabled() {
-            NodeBinaryProfile::TokioConsole
-        } else {
-            NodeBinaryProfile::Normal
-        });
+        .with_resolved_node_binary_profile(
+            world
+                .lifecycle
+                .node_binary_profile
+                .clone()
+                .unwrap_or_else(|| {
+                    NodeBinaryProfile::from_env_or(if world.tokio_console_profile_enabled() {
+                        NodeBinaryProfile::TokioConsole
+                    } else {
+                        NodeBinaryProfile::Normal
+                    })
+                }),
+        );
     let config = apply_blend_core_nodes(world, config, nodes_count)?;
 
     let config = config.with_genesis_time(genesis_time);
@@ -436,6 +476,7 @@ pub async fn insert_started_node_info<S: BuildHasher>(
             name: logical_node_name.to_owned(),
             runtime_name: started_node.name,
             client: started_node.client,
+            cryptarchia_security_param: None,
             chain_info: HashMap::new(),
             wallet_info,
             runtime_dir: std::path::PathBuf::new(),

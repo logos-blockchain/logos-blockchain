@@ -3,7 +3,7 @@ use std::{
     fs,
     io::Write as _,
     net::SocketAddr,
-    num::{NonZero, NonZeroU32, NonZeroU64},
+    num::NonZeroU64,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
@@ -17,8 +17,9 @@ use lb_core::sdp::{ProviderId, ServiceType};
 use lb_http_api_common::TimeInfo;
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_node::config::DeploymentSettings;
-use lb_testing_framework::{NodeHttpClient, USER_CONFIG_FILE};
-use lb_utils::math::NonNegativeRatio;
+use lb_testing_framework::{
+    NodeHttpClient, USER_CONFIG_FILE, configs::deployment::CucumberParameterSet,
+};
 use time::OffsetDateTime;
 use tokio::time::{Instant, sleep, timeout};
 use tracing::{info, warn};
@@ -26,7 +27,7 @@ use tracing::{info, warn};
 use crate::cucumber::{
     TARGET,
     error::{StepError, StepResult},
-    steps::nodes::config_override::set_deployment_config_override,
+    steps::cluster::rebuild_pending_local_manual_cluster,
     utils::{peer_id_from_node_yaml, user_config_from_node_yaml},
     world::{BlendDiagnosticPhase, CucumberWorld},
 };
@@ -165,115 +166,6 @@ fn diagnostic_node_sort_number(node_name: &str) -> Option<u32> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct BlendDiagnosticParameterSet {
-    name: &'static str,
-    security_parameter: u32,
-    slot_duration_secs: u64,
-    epoch_stake_distribution_stabilization: u8,
-    epoch_period_nonce_buffer: u8,
-    epoch_period_nonce_stabilization: u8,
-    slot_activation_coeff_denominator: u32,
-}
-
-impl BlendDiagnosticParameterSet {
-    fn from_name(name: &str) -> Option<Self> {
-        match name {
-            // No undue blend behaviour is expected with these parameters when running happy-path
-            // scenarios, so they are suitable for clean control tests when epoch have
-            // to complete in the shortest possible time.
-            "clean_control" => Some(Self {
-                name: "clean_control",
-                security_parameter: 10,
-                slot_duration_secs: 1,
-                epoch_stake_distribution_stabilization: 1,
-                epoch_period_nonce_buffer: 1,
-                epoch_period_nonce_stabilization: 1,
-                slot_activation_coeff_denominator: 10,
-            }),
-            // An accelerated approximation of the rebooted testnet: 1-second slots,
-            // phases 3/3/4, and f=1/30, but k=10 and 3,000-slot epochs rather than the
-            // deployment's k=1000 and 300,000-slot epochs.
-            "testnet_representative" => Some(Self {
-                name: "testnet_representative",
-                security_parameter: 10,
-                slot_duration_secs: 1,
-                epoch_stake_distribution_stabilization: 3,
-                epoch_period_nonce_buffer: 3,
-                epoch_period_nonce_stabilization: 4,
-                slot_activation_coeff_denominator: 30,
-            }),
-            // These parameters will invoke undue blend behaviour in a very short time, and are
-            // suitable for testing blend diagnostic measurements in a more extreme
-            // setting.
-            "fast_repro" => Some(Self {
-                name: "fast_repro",
-                security_parameter: 3,
-                slot_duration_secs: 1,
-                epoch_stake_distribution_stabilization: 1,
-                epoch_period_nonce_buffer: 1,
-                epoch_period_nonce_stabilization: 1,
-                slot_activation_coeff_denominator: 10,
-            }),
-            _ => None,
-        }
-    }
-
-    const fn security_param(self) -> NonZeroU32 {
-        NonZero::new(self.security_parameter)
-            .expect("named Blend diagnostic security parameter must be non-zero")
-    }
-
-    /// The default W, narrowed to the widest that the set's `k` allows, which
-    /// limits pruning-related instability while retaining uncle references.
-    fn uncle_reference_window_in_block(self) -> u32 {
-        let mut cryptarchia = DeploymentSettings::default()
-            .genesis_era_parameters()
-            .cryptarchia
-            .clone();
-        cryptarchia.security_param = self.security_param();
-        cryptarchia
-            .uncle_reference_window_in_block
-            .min(cryptarchia.widest_uncle_reference_window())
-    }
-
-    fn apply_to(&self, settings: &mut DeploymentSettings) {
-        settings
-            .update_genesis_era_parameters(|parameters| {
-                parameters.cryptarchia.security_param = self.security_param();
-                parameters.cryptarchia.uncle_reference_window_in_block =
-                    self.uncle_reference_window_in_block();
-                parameters.time.slot_duration_in_seconds = NonZero::new(self.slot_duration_secs)
-                    .expect("named Blend diagnostic slot duration must be non-zero");
-                let epoch_config = &mut parameters.cryptarchia.epoch_config;
-                epoch_config.epoch_stake_distribution_stabilization =
-                    NonZero::new(self.epoch_stake_distribution_stabilization)
-                        .expect("named Blend diagnostic phase must be non-zero");
-                epoch_config.epoch_period_nonce_buffer =
-                    NonZero::new(self.epoch_period_nonce_buffer)
-                        .expect("named Blend diagnostic phase must be non-zero");
-                epoch_config.epoch_period_nonce_stabilization =
-                    NonZero::new(self.epoch_period_nonce_stabilization)
-                        .expect("named Blend diagnostic phase must be non-zero");
-                parameters.cryptarchia.slot_activation_coeff = NonNegativeRatio::new(
-                    1,
-                    NonZeroU32::new(self.slot_activation_coeff_denominator).expect(
-                        "named Blend diagnostic slot coefficient denominator must be non-zero",
-                    ),
-                )
-                .try_into()
-                .expect("named Blend diagnostic slot activation coefficient must be valid");
-            })
-            .expect("The changed deployment must be valid.");
-    }
-
-    fn effective_deployment_settings(self) -> DeploymentSettings {
-        let mut settings = DeploymentSettings::default();
-        self.apply_to(&mut settings);
-        settings
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DiagnosticGeometry {
     base_period_length: u64,
     slots_per_epoch: u64,
@@ -366,73 +258,35 @@ fn boundary_slot_for_length(slots_per_epoch: u64, epoch: u32) -> u64 {
 
 #[expect(
     clippy::too_many_lines,
-    reason = "Diagnostic setup keeps all named parameter overrides together"
+    reason = "Profile selection and its resolved diagnostic evidence stay together"
 )]
-pub fn set_blend_diagnostic_parameter_set(
+pub async fn set_cucumber_parameter_set(
     world: &mut CucumberWorld,
     step: &str,
     parameter_set_name: &str,
 ) -> StepResult {
-    let parameter_set = BlendDiagnosticParameterSet::from_name(parameter_set_name).ok_or_else(|| {
+    let parameter_set = CucumberParameterSet::from_name(parameter_set_name).ok_or_else(|| {
         StepError::InvalidArgument {
             message: format!(
-                "unknown diagnostic parameter set `{parameter_set_name}`; expected `clean_control`, `testnet_representative`, or `fast_repro`"
+                "unknown Cucumber parameter set `{parameter_set_name}`; expected `cucumber_fixture`, `fast_repro`, or `testnet_representative`"
             ),
         }
     })?;
 
-    let security_parameter = NonZero::new(parameter_set.security_parameter).ok_or_else(|| {
-        StepError::InvalidArgument {
-            message: format!(
-                "diagnostic parameter set `{parameter_set_name}` has an invalid security parameter"
-            ),
+    if !world.nodes_info.is_empty() && world.cluster.cucumber_parameter_set != Some(parameter_set) {
+        return Err(StepError::LogicalError {
+            message: "cannot change the Cucumber parameter set after nodes have started".into(),
+        });
+    }
+
+    if world.cluster.cucumber_parameter_set != Some(parameter_set) {
+        let previous = world.cluster.cucumber_parameter_set;
+        world.cluster.cucumber_parameter_set = Some(parameter_set);
+        if let Err(error) = rebuild_pending_local_manual_cluster(world).await {
+            world.cluster.cucumber_parameter_set = previous;
+            return Err(error);
         }
-    })?;
-    world.set_cryptarchia_security_param(security_parameter);
-    set_deployment_config_override(
-        world,
-        step,
-        "eras.0.cryptarchia.uncle_reference_window_in_block",
-        &parameter_set.uncle_reference_window_in_block().to_string(),
-    )?;
-    set_deployment_config_override(
-        world,
-        step,
-        "eras.0.time.slot_duration_in_seconds",
-        &parameter_set.slot_duration_secs.to_string(),
-    )?;
-    set_deployment_config_override(
-        world,
-        step,
-        "eras.0.cryptarchia.epoch_config.epoch_stake_distribution_stabilization",
-        &parameter_set
-            .epoch_stake_distribution_stabilization
-            .to_string(),
-    )?;
-    set_deployment_config_override(
-        world,
-        step,
-        "eras.0.cryptarchia.epoch_config.epoch_period_nonce_buffer",
-        &parameter_set.epoch_period_nonce_buffer.to_string(),
-    )?;
-    set_deployment_config_override(
-        world,
-        step,
-        "eras.0.cryptarchia.epoch_config.epoch_period_nonce_stabilization",
-        &parameter_set.epoch_period_nonce_stabilization.to_string(),
-    )?;
-    set_deployment_config_override(
-        world,
-        step,
-        "eras.0.cryptarchia.slot_activation_coeff.numerator",
-        "1",
-    )?;
-    set_deployment_config_override(
-        world,
-        step,
-        "eras.0.cryptarchia.slot_activation_coeff.denominator",
-        &parameter_set.slot_activation_coeff_denominator.to_string(),
-    )?;
+    }
 
     let settings = parameter_set.effective_deployment_settings();
     let geometry = DiagnosticGeometry::from_settings(&settings);
@@ -440,8 +294,9 @@ pub fn set_blend_diagnostic_parameter_set(
     info!(
         target: TARGET,
         diagnostic = BLEND_REACHABILITY,
-        event = "blend_diagnostic_parameter_set",
-        parameter_set = parameter_set.name,
+        event = "cucumber_parameter_set",
+        gherkin_step = step,
+        parameter_set = parameter_set.name(),
         security_parameter = settings.genesis_era_parameters().cryptarchia.security_param.get(),
         uncle_reference_window_in_block = settings
             .genesis_era_parameters()
@@ -475,8 +330,8 @@ pub fn set_blend_diagnostic_parameter_set(
             .slot_activation_coeff
             .denominator
             .get(),
-        "Blend diagnostic parameters: {}: k={}, W={}, phases={}/{}/{}, f=1/{}, slots_per_epoch={}",
-        parameter_set.name,
+        "Cucumber parameters: {}: k={}, W={}, phases={}/{}/{}, f={}/{}, slots_per_epoch={}",
+        parameter_set.name(),
         settings.genesis_era_parameters().cryptarchia.security_param.get(),
         settings
             .genesis_era_parameters()
@@ -497,6 +352,7 @@ pub fn set_blend_diagnostic_parameter_set(
             .epoch_config
             .epoch_period_nonce_stabilization
             .get(),
+        settings.genesis_era_parameters().cryptarchia.slot_activation_coeff.numerator,
         settings
             .genesis_era_parameters()
             .cryptarchia
@@ -509,9 +365,10 @@ pub fn set_blend_diagnostic_parameter_set(
     append_timeline_record(
         world,
         &serde_json::json!({
-            "event": "blend_diagnostic_parameter_set",
+            "event": "cucumber_parameter_set",
+            "gherkin_step": step,
             "timestamp": OffsetDateTime::now_utc().to_string(),
-            "parameter_set": parameter_set.name,
+            "parameter_set": parameter_set.name(),
             "security_parameter": settings.genesis_era_parameters().cryptarchia.security_param.get(),
             "uncle_reference_window_in_block": settings
                 .genesis_era_parameters()
@@ -1713,12 +1570,12 @@ mod tests {
             expected_geometry,
         ) in [
             (
-                "clean_control",
-                10,
-                6,
-                (1, 1, 1),
-                10,
-                (100, 300, 200, 100, 250, 299),
+                "cucumber_fixture",
+                8,
+                4,
+                (3, 3, 4),
+                2,
+                (16, 160, 96, 64, 128, 159),
             ),
             (
                 "testnet_representative",
@@ -1731,7 +1588,7 @@ mod tests {
             ("fast_repro", 3, 1, (1, 1, 1), 10, (30, 90, 60, 30, 75, 89)),
         ] {
             let parameter_set =
-                BlendDiagnosticParameterSet::from_name(name).expect("profile should be known");
+                CucumberParameterSet::from_name(name).expect("profile should be known");
             let settings = parameter_set.effective_deployment_settings();
 
             assert_eq!(
@@ -1842,25 +1699,41 @@ mod tests {
 
     #[test]
     fn unknown_named_parameter_set_is_rejected() {
-        assert!(BlendDiagnosticParameterSet::from_name("accelerated").is_none());
-        assert!(BlendDiagnosticParameterSet::from_name("unknown").is_none());
+        assert!(CucumberParameterSet::from_name("clean_control").is_none());
+        assert!(CucumberParameterSet::from_name("accelerated").is_none());
+        assert!(CucumberParameterSet::from_name("unknown").is_none());
     }
 
-    #[test]
-    fn uncle_reference_window_is_the_widest_the_set_allows() {
-        // `⌊0.6k⌋`, the widest W that `k` allows.
-        for (name, expected_window) in [
-            ("clean_control", 6),
-            ("testnet_representative", 6),
-            ("fast_repro", 1),
-        ] {
-            assert_eq!(
-                BlendDiagnosticParameterSet::from_name(name)
-                    .unwrap()
-                    .uncle_reference_window_in_block(),
-                expected_window
-            );
-        }
+    #[tokio::test]
+    async fn parameter_selection_reports_unknown_names_and_rejects_changes_after_start() {
+        let mut world = CucumberWorld::default();
+        let error = set_cucumber_parameter_set(&mut world, "test-step", "clean_control")
+            .await
+            .expect_err("removed profile name must fail");
+        assert!(error.to_string().contains("cucumber_fixture"));
+        assert!(error.to_string().contains("testnet_representative"));
+
+        let fixture = CucumberParameterSet::from_name("cucumber_fixture").unwrap();
+        world.cluster.cucumber_parameter_set = Some(fixture);
+        world.nodes_info.insert(
+            "NODE_1".to_owned(),
+            crate::cucumber::world::NodeInfo {
+                name: "NODE_1".to_owned(),
+                runtime_name: "NODE_1".to_owned(),
+                client: NodeHttpClient::new("127.0.0.1:1".parse().unwrap()),
+                cryptarchia_security_param: None,
+                chain_info: std::collections::HashMap::new(),
+                wallet_info: std::collections::HashMap::new(),
+                runtime_dir: PathBuf::new(),
+                immediate_start: false,
+            },
+        );
+
+        let error = set_cucumber_parameter_set(&mut world, "test-step", "fast_repro")
+            .await
+            .expect_err("profile changes after node startup must fail");
+        assert!(error.to_string().contains("after nodes have started"));
+        assert_eq!(world.cluster.cucumber_parameter_set, Some(fixture));
     }
 
     #[test]

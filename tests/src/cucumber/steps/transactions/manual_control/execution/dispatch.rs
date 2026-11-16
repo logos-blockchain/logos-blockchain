@@ -528,14 +528,7 @@ async fn execute_continuous_next_wallet_user_wallet_inner(
     };
     let reservation_retirement = match scanner_group_id.as_deref() {
         Some(scanner_group_id) => {
-            let security_parameter = world
-                .startup
-                .manual_node_config_overrides
-                .cryptarchia_security_param
-                .ok_or_else(|| StepError::LogicalError {
-                    message: "continuous Blend workload has no effective Cryptarchia security parameter for reservation aging".to_owned(),
-                })?
-                .get();
+            let security_parameter = effective_security_parameter(world)?;
             Some(ContinuousWorkloadRetirementContext {
                 scanner_group_id,
                 security_parameter,
@@ -709,6 +702,28 @@ async fn execute_continuous_next_wallet_user_wallet_inner(
     }
 
     Ok((included_transaction_count, outstanding_transaction_count))
+}
+
+fn effective_security_parameter(world: &CucumberWorld) -> Result<u32, StepError> {
+    let mut parameter = None;
+    for node in world.nodes_info.values() {
+        let resolved = node.cryptarchia_security_param;
+        let value = resolved.or(world.startup.manual_node_config_overrides.cryptarchia_security_param)
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!("node `{}` has no effective Cryptarchia security parameter for reservation aging", node.name),
+            })?.get();
+        if parameter.is_some_and(|previous| previous != value) {
+            return Err(StepError::LogicalError {
+                message:
+                    "continuous Blend workload nodes have different Cryptarchia security parameters"
+                        .to_owned(),
+            });
+        }
+        parameter = Some(value);
+    }
+    parameter.ok_or_else(|| StepError::LogicalError {
+        message: "continuous Blend workload has no running node for reservation aging".to_owned(),
+    })
 }
 
 const MAX_BLOCK_TRANSACTIONS: usize = 1_024;
@@ -2319,6 +2334,91 @@ mod continuous_workload_reservation_tests {
         execute_continuous_next_wallet_user_wallet_with_cancellation,
         maintain_continuous_workload_reservations, verify_next_wallet_round_completion,
     };
+
+    #[test]
+    fn workload_reads_effective_profile_and_deployment_override() {
+        use lb_testing_framework::configs::deployment::CucumberParameterSet;
+        for (name, expected) in [
+            ("cucumber_fixture", 8),
+            ("fast_repro", 3),
+            ("testnet_representative", 10),
+        ] {
+            let mut settings = CucumberParameterSet::from_name(name)
+                .expect("profile")
+                .effective_deployment_settings();
+            let mut world = test_world_with_runtime_parameter(
+                settings
+                    .genesis_era_parameters()
+                    .cryptarchia
+                    .security_param
+                    .get(),
+            );
+            assert_eq!(
+                super::effective_security_parameter(&world).expect("effective parameter"),
+                expected
+            );
+            settings
+                .update_genesis_era_parameters(|parameters| {
+                    parameters.cryptarchia.security_param = std::num::NonZeroU32::new(30).unwrap();
+                })
+                .expect("valid override");
+            world
+                .nodes_info
+                .get_mut("NODE_1")
+                .unwrap()
+                .cryptarchia_security_param =
+                Some(settings.genesis_era_parameters().cryptarchia.security_param);
+            world
+                .startup
+                .manual_node_config_overrides
+                .cryptarchia_security_param = std::num::NonZeroU32::new(12);
+            assert_eq!(
+                super::effective_security_parameter(&world).expect("explicit override"),
+                30
+            );
+        }
+    }
+
+    #[test]
+    fn background_workload_reads_the_same_effective_deployment() {
+        let mut world = test_world_with_runtime_parameter(10);
+        world.wallet_registry.wallet_info.insert(
+            "wallet".into(),
+            WalletInfo {
+                wallet_name: "wallet".into(),
+                node_name: "NODE_1".into(),
+                wallet_type: WalletType::User {
+                    wallet_account: WalletAccount::deterministic(1, 1, true).unwrap(),
+                },
+            },
+        );
+        let background = world
+            .background_workload_view(&["NODE_1".to_owned()])
+            .expect("background view");
+        assert_eq!(super::effective_security_parameter(&world).unwrap(), 10);
+        assert_eq!(
+            super::effective_security_parameter(&background).unwrap(),
+            10
+        );
+    }
+
+    fn test_world_with_runtime_parameter(parameter: u32) -> CucumberWorld {
+        let mut world = CucumberWorld::default();
+        world.nodes_info.insert(
+            "NODE_1".into(),
+            crate::cucumber::world::NodeInfo {
+                name: "NODE_1".into(),
+                runtime_name: "node-0".into(),
+                client: lb_testing_framework::NodeHttpClient::new("127.0.0.1:1".parse().unwrap()),
+                cryptarchia_security_param: std::num::NonZeroU32::new(parameter),
+                chain_info: HashMap::new(),
+                wallet_info: HashMap::new(),
+                runtime_dir: std::path::PathBuf::new(),
+                immediate_start: false,
+            },
+        );
+        world
+    }
     use crate::{
         common::wallet::{
             TrackedWalletKeys, WalletOutputState, WalletReservedInputs,
@@ -2543,6 +2643,19 @@ mod continuous_workload_reservation_tests {
             .startup
             .manual_node_config_overrides
             .cryptarchia_security_param = std::num::NonZeroU32::new(10);
+        world.nodes_info.insert(
+            "NODE_9".into(),
+            crate::cucumber::world::NodeInfo {
+                name: "NODE_9".into(),
+                runtime_name: "node-0".into(),
+                client: lb_testing_framework::NodeHttpClient::new("127.0.0.1:1".parse().unwrap()),
+                cryptarchia_security_param: None,
+                chain_info: HashMap::new(),
+                wallet_info: HashMap::new(),
+                runtime_dir: directory.path().to_owned(),
+                immediate_start: false,
+            },
+        );
         for (index, name) in [(1, "wallet"), (2, "recipient")] {
             world.wallet_registry.wallet_info.insert(
                 name.to_owned(),

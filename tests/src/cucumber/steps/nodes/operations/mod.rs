@@ -7,7 +7,6 @@ use std::{
 };
 
 use cucumber::gherkin::Table;
-use futures::future::try_join_all;
 use hex::ToHex as _;
 use lb_chain_service::{ChainServiceInfo, CryptarchiaInfo, PhaseTag};
 use lb_config::kms::key_id_for_preload_backend;
@@ -25,7 +24,7 @@ use reqwest::{Client, Url};
 use testing_framework_core::scenario::{
     ClusterWaitHandle, NodeControl, NodeLaunchOptions, PeerSelection, StartNodeOptions,
 };
-use tokio::time::{Instant as TokioInstant, sleep, timeout};
+use tokio::time::{sleep, timeout};
 use tracing::{info, warn};
 
 use crate::cucumber::{
@@ -48,9 +47,8 @@ use crate::cucumber::{
     },
     wallet::snapshot::{create_and_save_all_wallets_snapshot, restore_wallet_snapshot_if_present},
     world::{
-        ChainInfoMap, ConfigOverride, CucumberWorld, ManualNodeConfigOverrides, NodeInfo,
-        NodeWalletKey, NodeWalletKeyRole, PublicCryptarchiaEndpointPeer, WalletInfo, WalletInfoMap,
-        WalletType,
+        ConfigOverride, CucumberWorld, ManualNodeConfigOverrides, NodeInfo, NodeWalletKey,
+        NodeWalletKeyRole, PublicCryptarchiaEndpointPeer, WalletInfo, WalletInfoMap, WalletType,
     },
 };
 
@@ -61,25 +59,6 @@ const CHAIN_SYNC_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const CHAIN_SYNC_STATUS_LOG_INTERVAL: Duration = Duration::from_mins(2);
 
 // Returns the root directory for a named snapshot.
-
-enum AlignmentStatus {
-    MissingChainInfo,
-    Fork,
-    Aligned,
-}
-
-#[derive(Debug, Clone)]
-struct ConsensusSnapshot {
-    node_name: String,
-    height: u64,
-    header_hash: String,
-}
-
-#[derive(Debug, Clone)]
-struct MaybeSnapshot {
-    height: u64,
-    header_hash: Option<String>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SyncTargetStats {
@@ -107,7 +86,8 @@ pub use blend_relay::{
     restore_all_blend_reachability, set_blend_reachability,
 };
 pub use consensus::{
-    ensure_all_nodes_agree_on_lib, nodes_converged, poll_all_nodes_and_update_consensus_cache,
+    CanonicalConvergence, ensure_all_nodes_agree_on_lib, nodes_converged,
+    wait_for_canonical_convergence,
 };
 pub use lifecycle::{
     restart_node, start_node, start_nodes_order_respecting_dependencies, stop_all_nodes, stop_node,

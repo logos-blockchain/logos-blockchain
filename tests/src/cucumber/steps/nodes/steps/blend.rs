@@ -401,14 +401,21 @@ async fn step_all_nodes_reached_min_height_and_converged(
     max_diff_height: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    nodes_converged(
+    let convergence = wait_for_canonical_convergence(
         world,
         &step.value,
         Some(min_height),
         max_diff_height,
         time_out_seconds,
     )
-    .await
+    .await?;
+    if world.startup.era_boundary_schedule.is_some() {
+        crate::cucumber::steps::nodes::era_boundaries::record_canonical_convergence(
+            world,
+            &convergence,
+        )?;
+    }
+    Ok(())
 }
 
 #[when(expr = "all nodes agree on LIB in {int} seconds")]

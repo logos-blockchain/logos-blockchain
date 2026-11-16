@@ -32,8 +32,12 @@ use lb_node::config::RunConfig;
 use lb_testing_framework::{
     LbcClusterBackend, LbcEnv, LbcK8sManualCluster, LbcScenario, NodeHttpClient, ScenarioBuilder,
     ScenarioBuilderExt as _,
-    configs::{deployment::SdpFundingConfig, wallet::WalletAccount},
-    env::set_default_env,
+    configs::{
+        deployment::{
+            CucumberParameterSet, EraBoundarySchedule, NodeBinaryProfile, SdpFundingConfig,
+        },
+        wallet::WalletAccount,
+    },
     get_reserved_available_udp_port, workloads,
 };
 use testing_framework_core::{
@@ -244,6 +248,8 @@ pub struct ScenarioLifecycle {
     /// Resolved genesis time for this Cucumber scenario attempt. It is set in
     /// the scenario hook and reused by every deployment build or rebuild.
     pub genesis_time: Option<GenesisTime>,
+    pub node_binary_profile: Option<NodeBinaryProfile>,
+    pub explicit_genesis_time: bool,
     /// Base directory for scenario artifacts like logs and generated configs.
     pub scenario_base_dir: PathBuf,
     /// Cucumber scenario name used in scenario-local diagnostic artifacts.
@@ -273,6 +279,12 @@ pub struct ChainParameters {
     /// Manual: Header id of the locally generated genesis block, when the
     /// cluster deployment carries one.
     pub genesis_block_id: Option<HeaderId>,
+    /// A finalized source-era block whose ancestry must survive the transition.
+    pub era_boundary_finalized_anchor: Option<HeaderId>,
+    /// Node prepared with an empty local runtime before joining an active era.
+    pub era_boundary_fresh_late_joiner: Option<String>,
+    /// Runtime directories present before a late joiner is launched.
+    pub era_boundary_late_joiner_prior_runtime_dirs: Vec<String>,
     /// Manual: List of genesis tokens allocated to wallets accounts.
     pub genesis_tokens: Vec<GenesisTokens>,
     /// Effective epoch length, populated from the first launched node's
@@ -317,6 +329,8 @@ pub struct ClusterState {
     /// Manual: Number of leading nodes declared as blend providers in the
     /// generated deployment. Defaults to all nodes when unset.
     pub blend_core_nodes: Option<usize>,
+    /// Selected shared Cryptarchia parameter profile for generated deployments.
+    pub cucumber_parameter_set: Option<CucumberParameterSet>,
     /// Manual: Mapping of logical node names to their corresponding libp2p peer
     /// IDs.
     pub node_peer_ids: HashMap<String, PeerId>,
@@ -496,6 +510,8 @@ pub struct NodeStartupConfig {
     /// Manual: If set, nodes use a `DeploymentSettings` loaded from disk
     /// bypassing generated genesis/test deployment.
     pub deployment_config_override_path: Option<PathBuf>,
+    /// Optional consecutive-era fixture for normal era-boundary Cucumber tests.
+    pub era_boundary_schedule: Option<EraBoundarySchedule>,
     /// Manual: Whether to have dynamically started nodes join the external
     /// network
     pub join_external_network: Option<bool>,
@@ -1119,6 +1135,8 @@ pub struct NodeInfo {
     /// Name assigned to the node by TF.
     pub runtime_name: String,
     pub client: NodeHttpClient,
+    /// Security parameter in the effective configuration used at startup.
+    pub cryptarchia_security_param: Option<NonZero<u32>>,
     /// Chain height vs. hash at that height
     pub chain_info: ChainInfoMap,
     /// The wallets associated with this node.
@@ -1530,7 +1548,7 @@ impl CucumberWorld {
         self.ensure_expected_deployer(expected)?;
 
         if expected.requires_local_node_binary() && self.cluster.implementation.is_logos() {
-            Self::ensure_local_node_binary()?;
+            self.ensure_local_node_binary()?;
         }
 
         Ok(())
@@ -1603,7 +1621,7 @@ impl CucumberWorld {
         Ok(())
     }
 
-    fn ensure_local_node_binary() -> Result<(), StepError> {
+    fn ensure_local_node_binary(&self) -> Result<(), StepError> {
         if host_node_binary_from_env_var_available() {
             return Ok(());
         }
@@ -1612,12 +1630,13 @@ impl CucumberWorld {
             return Ok(());
         }
 
+        if self.lifecycle.node_binary_profile == Some(NodeBinaryProfile::TokioConsole) {
+            // The profiling build is resolved independently from the CI release binary.
+            return Ok(());
+        }
+
         let default_binary = ci_node_binary_path().ok_or_else(missing_node_binary_error)?;
-        warn_if_overriding_invalid_node_binary(&default_binary);
-        let default_binary_display = default_binary.display().to_string();
-
-        set_default_env(LOGOS_BLOCKCHAIN_NODE_BIN, &default_binary_display);
-
+        warn_if_invalid_node_binary_override(&default_binary);
         Ok(())
     }
 
@@ -2171,14 +2190,14 @@ fn ci_node_binary_path() -> Option<PathBuf> {
     None
 }
 
-fn warn_if_overriding_invalid_node_binary(path: &Path) {
+fn warn_if_invalid_node_binary_override(path: &Path) {
     if env::var_os(LOGOS_BLOCKCHAIN_NODE_BIN).is_none() {
         return;
     }
 
     warn!(
         target: TARGET,
-        "'{LOGOS_BLOCKCHAIN_NODE_BIN:?}' does not point to a valid file, overriding it to '{}'.",
+        "'{LOGOS_BLOCKCHAIN_NODE_BIN:?}' does not point to a valid file; falling back to '{}'.",
         path.display()
     );
 }

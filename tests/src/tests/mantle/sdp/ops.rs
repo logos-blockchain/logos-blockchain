@@ -357,8 +357,8 @@ async fn start_sdp_manual_cluster(
                 .with_persist_dir(node0_persist_dir)
                 .create_patch({
                     let slots_per_epoch = Arc::clone(&slots_per_epoch);
-                    move |config| {
-                        let config = patch_sdp_manual_cluster_config(config);
+                    move |mut config: lb_testing_framework::LbcNodeConfig| {
+                        config.run_config = patch_sdp_manual_cluster_config(config.run_config);
                         slots_per_epoch.store(
                             config
                                 .deployment

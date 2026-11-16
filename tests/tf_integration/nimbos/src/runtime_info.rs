@@ -5,9 +5,18 @@ use crate::{NimbosConfig, NimbosEnv};
 
 impl NodeRuntimeInfoProvider for NimbosEnv {
     fn runtime_info(config: &NimbosConfig) -> Result<NodeRuntimeInfo, DynError> {
+        let deployment: serde_yaml::Value =
+            serde_yaml::from_str(&config.deployment.deployment_yaml)?;
+        let security_param = deployment
+            .get("cryptarchia")
+            .and_then(|cryptarchia| cryptarchia.get("security_param"))
+            .and_then(serde_yaml::Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .and_then(std::num::NonZeroU32::new);
         Ok(NodeRuntimeInfo {
             peer_id: config.network_key.public().to_peer_id(),
             slots_per_epoch: config.deployment.slots_per_epoch,
+            cryptarchia_security_param: security_param,
             // Node-local wallets are not provisioned by this adapter. Scenario
             // wallets use the accounts and funding in the shared genesis.
             wallets: Vec::new(),
@@ -85,6 +94,7 @@ cryptarchia:
             assert_eq!(info.peer_id, launched_key.public().to_peer_id());
             assert_eq!(info.peer_id, deployment.peer_id(index).unwrap());
             assert_eq!(info.slots_per_epoch.get(), 18);
+            assert_eq!(info.cryptarchia_security_param.unwrap().get(), 3);
             assert_eq!(info.wallets, Vec::<NodeWalletKey>::new());
             identities.push(info.peer_id);
         }
