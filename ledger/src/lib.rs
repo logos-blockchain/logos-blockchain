@@ -429,11 +429,15 @@ where
         &self.era_schedule
     }
 
-    /// Follows the LIB to `lib` once the consensus pruned the `pruned` blocks:
-    /// the state of `lib` becomes the finalized base of the store, and the
-    /// states of the pruned blocks are removed, with everything the stale ones
-    /// wrote. The nodes no kept state reads anymore are then deleted (see
-    /// [`nullifier_storage::retention_floors`]).
+    /// Moves the LIB up to `lib` after the consensus pruned the `pruned`
+    /// blocks.
+    ///
+    /// - The states of the pruned blocks are deleted from memory.
+    /// - The tree nodes written by pruned forks are deleted from the DB.
+    /// - The trees of `lib` become the base of the DB: the trees all later
+    ///   blocks build on.
+    /// - Old tree nodes that no remaining state reads are then deleted (see
+    ///   [`nullifier_storage::retention_floors`]).
     ///
     /// The pruned blocks must be every block that is not `lib` or one of its
     /// descendants, as [`lb_cryptarchia_engine::Cryptarchia`] prunes them.
