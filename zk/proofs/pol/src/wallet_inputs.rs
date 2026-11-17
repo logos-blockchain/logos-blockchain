@@ -1,6 +1,7 @@
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr, Groth16Input, Groth16InputDeser};
 use num_bigint::BigUint;
 use serde::Serialize;
+use serde_with::serde_as;
 
 // TODO: These consts should live in a common crate shared among circuits.
 // Depth of the commitment MMR, the nullifier IMT and the eligible tree.
@@ -66,34 +67,41 @@ pub struct PolWalletInputsData {
     pub reward_nonce: Fr,
 }
 
+#[serde_as]
 #[derive(Serialize)]
 pub struct PolWalletInputsJson {
     #[serde(rename = "value")]
     note_value: Groth16InputDeser,
-    // serde serializes arrays only up to length 32
     #[serde(rename = "nonce")]
     note_nonce: Groth16InputDeser,
     #[serde(rename = "program")]
     note_program: Groth16InputDeser,
     #[serde(rename = "data")]
     note_data: Groth16InputDeser,
-    set_selectors: Vec<Groth16InputDeser>,
+    #[serde_as(as = "[_; NOTE_SET_TREE_DEPTH]")]
+    set_selectors: [Groth16InputDeser; NOTE_SET_TREE_DEPTH],
     #[serde(rename = "cm_aged_path")]
-    commitment_aged_path: Vec<Groth16InputDeser>,
+    #[serde_as(as = "[_; NOTE_SET_TREE_DEPTH]")]
+    commitment_aged_path: [Groth16InputDeser; NOTE_SET_TREE_DEPTH],
     #[serde(rename = "cm_aged_selectors")]
-    commitment_aged_selectors: Vec<Groth16InputDeser>,
+    #[serde_as(as = "[_; NOTE_SET_TREE_DEPTH]")]
+    commitment_aged_selectors: [Groth16InputDeser; NOTE_SET_TREE_DEPTH],
     #[serde(rename = "nf_root_aged")]
     nullifier_root_aged: Groth16InputDeser,
-    set_aged_path: Vec<Groth16InputDeser>,
+    #[serde_as(as = "[_; NOTE_SET_TREE_DEPTH]")]
+    set_aged_path: [Groth16InputDeser; NOTE_SET_TREE_DEPTH],
     #[serde(rename = "low_leaf_nf")]
     low_leaf_nullifier: Groth16InputDeser,
     #[serde(rename = "low_leaf_next_nf")]
     low_leaf_next_nullifier: Groth16InputDeser,
-    low_leaf_path: Vec<Groth16InputDeser>,
-    low_leaf_selectors: Vec<Groth16InputDeser>,
+    #[serde_as(as = "[_; NOTE_SET_TREE_DEPTH]")]
+    low_leaf_path: [Groth16InputDeser; NOTE_SET_TREE_DEPTH],
+    #[serde_as(as = "[_; NOTE_SET_TREE_DEPTH]")]
+    low_leaf_selectors: [Groth16InputDeser; NOTE_SET_TREE_DEPTH],
     #[serde(rename = "cm_root_latest")]
     commitment_root_latest: Groth16InputDeser,
-    set_latest_path: Vec<Groth16InputDeser>,
+    #[serde_as(as = "[_; NOTE_SET_TREE_DEPTH]")]
+    set_latest_path: [Groth16InputDeser; NOTE_SET_TREE_DEPTH],
     #[serde(rename = "nf_sk")]
     nullifier_key: Groth16InputDeser,
     #[serde(rename = "staking_sk")]
@@ -130,17 +138,17 @@ impl From<&PolWalletInputs> for PolWalletInputsJson {
             note_nonce: note_nonce.into(),
             note_program: note_program.into(),
             note_data: note_data.into(),
-            set_selectors: set_selectors.iter().map(Into::into).collect(),
-            commitment_aged_path: commitment_aged_path.iter().map(Into::into).collect(),
-            commitment_aged_selectors: commitment_aged_selectors.iter().map(Into::into).collect(),
+            set_selectors: set_selectors.each_ref().map(Into::into),
+            commitment_aged_path: commitment_aged_path.each_ref().map(Into::into),
+            commitment_aged_selectors: commitment_aged_selectors.each_ref().map(Into::into),
             nullifier_root_aged: nullifier_root_aged.into(),
-            set_aged_path: set_aged_path.iter().map(Into::into).collect(),
+            set_aged_path: set_aged_path.each_ref().map(Into::into),
             low_leaf_nullifier: low_leaf_nullifier.into(),
             low_leaf_next_nullifier: low_leaf_next_nullifier.into(),
-            low_leaf_path: low_leaf_path.iter().map(Into::into).collect(),
-            low_leaf_selectors: low_leaf_selectors.iter().map(Into::into).collect(),
+            low_leaf_path: low_leaf_path.each_ref().map(Into::into),
+            low_leaf_selectors: low_leaf_selectors.each_ref().map(Into::into),
             commitment_root_latest: commitment_root_latest.into(),
-            set_latest_path: set_latest_path.iter().map(Into::into).collect(),
+            set_latest_path: set_latest_path.each_ref().map(Into::into),
             nullifier_key: nullifier_key.into(),
             staking_secret_key: staking_secret_key.into(),
             reward_public_key: reward_public_key.into(),

@@ -1,6 +1,7 @@
 use lb_groth16::{AdditiveGroup as _, Fr, Groth16Input, Groth16InputDeser};
 use lb_zktransfer::{InputPathAndSelectors, TX_COMMITMENT_TREE_DEPTH};
 use serde::Serialize;
+use serde_with::serde_as;
 
 use crate::{MAX_INPUTS, MAX_OUTPUTS};
 
@@ -73,14 +74,17 @@ pub struct ZkProgramSpendWalletInputsData {
     pub outputs: [ZkProgramSpendOutputNoteData; MAX_OUTPUTS],
 }
 
+#[serde_as]
 #[derive(Serialize)]
 pub struct ZkProgramSpendWalletInputsJson {
     inputs_stake_pk: [Groth16InputDeser; MAX_INPUTS],
     inputs_nonce: [Groth16InputDeser; MAX_INPUTS],
     inputs_value: [Groth16InputDeser; MAX_INPUTS],
     inputs_data: [Groth16InputDeser; MAX_INPUTS],
-    inputs_selectors: Vec<Vec<Groth16InputDeser>>,
-    inputs_path: Vec<Vec<Groth16InputDeser>>,
+    #[serde_as(as = "[[_; TX_COMMITMENT_TREE_DEPTH]; MAX_INPUTS]")]
+    inputs_selectors: [[Groth16InputDeser; TX_COMMITMENT_TREE_DEPTH]; MAX_INPUTS],
+    #[serde_as(as = "[[_; TX_COMMITMENT_TREE_DEPTH]; MAX_INPUTS]")]
+    inputs_path: [[Groth16InputDeser; TX_COMMITMENT_TREE_DEPTH]; MAX_INPUTS],
     outputs_pk: [Groth16InputDeser; MAX_OUTPUTS],
     outputs_stake_pk: [Groth16InputDeser; MAX_OUTPUTS],
     outputs_nonce: [Groth16InputDeser; MAX_OUTPUTS],
@@ -111,13 +115,8 @@ impl From<&ZkProgramSpendWalletInputs> for ZkProgramSpendWalletInputsJson {
             inputs_value: inputs_value.map(|value| (&value).into()),
             inputs_data: inputs_data.map(|data| (&data).into()),
             inputs_selectors: inputs_path_and_selectors
-                .iter()
-                .map(|path| path.iter().map(|(_, selector)| selector.into()).collect())
-                .collect(),
-            inputs_path: inputs_path_and_selectors
-                .iter()
-                .map(|path| path.iter().map(|(node, _)| node.into()).collect())
-                .collect(),
+                .map(|path| path.map(|(_, selector)| (&selector).into())),
+            inputs_path: inputs_path_and_selectors.map(|path| path.map(|(node, _)| (&node).into())),
             outputs_pk: outputs_pk.map(|pk| (&pk).into()),
             outputs_stake_pk: outputs_stake_pk.map(|stake_pk| (&stake_pk).into()),
             outputs_nonce: outputs_nonce.map(|nonce| (&nonce).into()),

@@ -2,6 +2,7 @@ use lb_groth16::{AdditiveGroup as _, Field as _, Fr, Groth16Input, Groth16InputD
 use lb_pol::NOTE_SET_TREE_DEPTH;
 use num_bigint::BigUint;
 use serde::Serialize;
+use serde_with::serde_as;
 
 // note commitment in its set MMR, from the leaf level up
 pub type AgedNotePathAndSelectors = [(Fr, bool); NOTE_SET_TREE_DEPTH];
@@ -45,33 +46,39 @@ pub struct PoQWalletInputsData {
     pub pol_staking_secret_key: Fr,
 }
 
+#[serde_as]
 #[derive(Serialize)]
 pub struct PoQWalletInputsJson {
     #[serde(rename = "pol_sl")]
     pol_slot: Groth16InputDeser,
     #[serde(rename = "pol_note_value")]
     note_value: Groth16InputDeser,
-    // serde serializes arrays only up to length 32
     #[serde(rename = "pol_note_nonce")]
     note_nonce: Groth16InputDeser,
     pol_note_program: Groth16InputDeser,
     pol_note_data: Groth16InputDeser,
     #[serde(rename = "pol_cm_aged_path")]
-    commitment_aged_path: Vec<Groth16InputDeser>,
+    #[serde_as(as = "[_; NOTE_SET_TREE_DEPTH]")]
+    commitment_aged_path: [Groth16InputDeser; NOTE_SET_TREE_DEPTH],
     #[serde(rename = "pol_cm_aged_selectors")]
-    commitment_aged_selectors: Vec<Groth16InputDeser>,
+    #[serde_as(as = "[_; NOTE_SET_TREE_DEPTH]")]
+    commitment_aged_selectors: [Groth16InputDeser; NOTE_SET_TREE_DEPTH],
     #[serde(rename = "pol_low_leaf_nf")]
     low_leaf_nullifier: Groth16InputDeser,
     #[serde(rename = "pol_low_leaf_next_nf")]
     low_leaf_next_nullifier: Groth16InputDeser,
     #[serde(rename = "pol_low_leaf_path")]
-    low_leaf_path: Vec<Groth16InputDeser>,
+    #[serde_as(as = "[_; NOTE_SET_TREE_DEPTH]")]
+    low_leaf_path: [Groth16InputDeser; NOTE_SET_TREE_DEPTH],
     #[serde(rename = "pol_low_leaf_selectors")]
-    low_leaf_selectors: Vec<Groth16InputDeser>,
+    #[serde_as(as = "[_; NOTE_SET_TREE_DEPTH]")]
+    low_leaf_selectors: [Groth16InputDeser; NOTE_SET_TREE_DEPTH],
     #[serde(rename = "pol_set_aged_path")]
-    set_aged_path: Vec<Groth16InputDeser>,
+    #[serde_as(as = "[_; NOTE_SET_TREE_DEPTH]")]
+    set_aged_path: [Groth16InputDeser; NOTE_SET_TREE_DEPTH],
     #[serde(rename = "pol_set_selectors")]
-    set_selectors: Vec<Groth16InputDeser>,
+    #[serde_as(as = "[_; NOTE_SET_TREE_DEPTH]")]
+    set_selectors: [Groth16InputDeser; NOTE_SET_TREE_DEPTH],
     pol_nullifier_key: Groth16InputDeser,
     pol_staking_secret_key: Groth16InputDeser,
 }
@@ -99,31 +106,25 @@ impl From<PoQWalletInputs> for PoQWalletInputsJson {
             pol_note_program: (&pol_note_program).into(),
             pol_note_data: (&pol_note_data).into(),
             commitment_aged_path: pol_commitment_aged_path_and_selectors
-                .iter()
-                .map(|(path, _)| path.into())
-                .collect(),
+                .each_ref()
+                .map(|(path, _)| path.into()),
             commitment_aged_selectors: pol_commitment_aged_path_and_selectors
-                .iter()
-                .map(|(_, selector)| selector.into())
-                .collect(),
+                .each_ref()
+                .map(|(_, selector)| selector.into()),
             low_leaf_nullifier: (&pol_low_leaf_nullifier).into(),
             low_leaf_next_nullifier: (&pol_low_leaf_next_nullifier).into(),
             low_leaf_path: pol_low_leaf_path_and_selectors
-                .iter()
-                .map(|(path, _)| path.into())
-                .collect(),
+                .each_ref()
+                .map(|(path, _)| path.into()),
             low_leaf_selectors: pol_low_leaf_path_and_selectors
-                .iter()
-                .map(|(_, selector)| selector.into())
-                .collect(),
+                .each_ref()
+                .map(|(_, selector)| selector.into()),
             set_aged_path: pol_set_aged_path_and_selectors
-                .iter()
-                .map(|(path, _)| path.into())
-                .collect(),
+                .each_ref()
+                .map(|(path, _)| path.into()),
             set_selectors: pol_set_aged_path_and_selectors
-                .iter()
-                .map(|(_, selector)| selector.into())
-                .collect(),
+                .each_ref()
+                .map(|(_, selector)| selector.into()),
             pol_nullifier_key: (&pol_nullifier_key).into(),
             pol_staking_secret_key: (&pol_staking_secret_key).into(),
         }
