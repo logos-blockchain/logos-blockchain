@@ -20,6 +20,7 @@ lbp-error          = { workspace = true }
 num-bigint         = { workspace = true }
 serde              = { features = ["derive"], workspace = true }
 serde_json         = { workspace = true }
+serde_with         = { features = ["macros"], workspace = true }
 tracing            = { workspace = true }
 
 [dev-dependencies]
