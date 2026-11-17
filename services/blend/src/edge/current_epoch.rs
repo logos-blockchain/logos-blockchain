@@ -222,7 +222,7 @@ where
                 lottery_0: awaiting.info.lottery_0,
                 lottery_1: awaiting.info.lottery_1,
                 pol_epoch_nonce: awaiting.info.nonce,
-                pol_ledger_aged: awaiting.info.aged,
+                pol_eligible_aged: awaiting.info.aged,
                 message_quota: settings.epoch_leadership_quota(),
             },
             pow: PowInputs {

@@ -130,7 +130,7 @@ mod tests {
                 zk_root: ZkHash::ZERO,
             },
             leader: LeaderInputs {
-                pol_ledger_aged: ZkHash::ZERO,
+                pol_eligible_aged: ZkHash::ZERO,
                 pol_epoch_nonce: ZkHash::ZERO,
                 message_quota: Quota::ONE,
                 lottery_0: Fr::ZERO,

@@ -367,12 +367,16 @@ mod tests {
     use lb_core::{
         block::Proposal,
         era::{AcceptedForkDigests, ForkDigest},
+        mantle::gas::GasProfile,
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::{EpochConfig, Era, Slot, UncleSlots};
     use lb_ledger::{
-        ConsensusExcludedKeys, LedgerState,
-        config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
+        LedgerState,
+        config::{
+            BlendPoWConfig, EmissionRatio, EraScheduledConfig, ModulusShift, PoWConfig,
+            RewardPoWConfig,
+        },
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_network_service::{
@@ -953,10 +957,11 @@ mod tests {
         let ledger_config = ledger_config();
         lb_chain_service::Cryptarchia::from_genesis(
             [GENESIS_ID; 32].into(),
-            LedgerState::from_utxos(empty(), &ledger_config, 0, &ConsensusExcludedKeys::empty()),
+            LedgerState::from_notes(empty(), &ledger_config, 0),
             single_era(ledger_config),
             lb_cryptarchia_engine::State::Bootstrapping,
         )
+        .unwrap()
     }
 
     /// `config` as the only era, from genesis.
@@ -1042,7 +1047,7 @@ mod tests {
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
             execution_market: lb_ledger::config::ExecutionMarketConfig {
-                max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_137_798).unwrap(),
                 fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
                     .unwrap(),
                 ema_smoothing_factor: lb_utils::math::ProperFraction::new(
@@ -1061,26 +1066,14 @@ mod tests {
                     .unwrap(),
             },
             block_rewards: lb_ledger::config::BlockRewardsConfig::new(
-                3_000_000_000,
-                120_000_000.try_into().unwrap(),
+                3_000_000_000_000_000_000,
+                120_000_000_000_000_000.try_into().unwrap(),
                 10_512,
-                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
                 lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
-            gas_profile: lb_core::mantle::gas::GasProfile {
-                transfer: 590.into(),
-                channel_config: 56.into(),
-                channel_inscribe: 56.into(),
-                channel_deposit: 590.into(),
-                channel_withdraw: 56.into(),
-                channel_transfer: 56.into(),
-                sdp_declare: 646.into(),
-                sdp_withdraw: 590.into(),
-                sdp_active: 590.into(),
-                leader_claim: 580.into(),
-                claim_pow_reward: 1.into(),
-            },
+            gas_profile: GasProfile::MAINNET,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),

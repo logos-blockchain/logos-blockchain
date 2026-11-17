@@ -11,7 +11,7 @@ use super::{
     execute_mempool_next_wallet_user_wallet, info, parse_wallet_output_state,
     perform_manual_step_control, then, timeout, verify_min_outputs_all_user_wallets, warn, when,
 };
-use crate::cucumber::steps::nodes::diagnostics::BlendDiagnosticEventLogger;
+use crate::cucumber::{steps::nodes::diagnostics::BlendDiagnosticEventLogger, utils::lgo_to_units};
 
 const CONTINUOUS_LOAD_REFERENCE_NODE: &str = "NODE_9";
 const CONTINUOUS_LOAD_CLOCK_QUERY_TIMEOUT: Duration = Duration::from_millis(1_500);
@@ -93,9 +93,9 @@ async fn step_continuous_user_wallets(
         world,
         &step.value,
         coin_split_outputs,
-        coin_split_value,
+        lgo_to_units(coin_split_value),
         transactions,
-        value,
+        lgo_to_units(value),
         cycles,
         epochs_headroom,
     )
@@ -158,11 +158,17 @@ async fn step_coin_split_transactions_for_each_user_wallet(
     outputs: usize,
     value: u64,
 ) -> StepResult {
-    execute_coin_splits_all_user_wallets(world, &step.value, splits_per_wallet, outputs, value)
-        .await
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-        })?;
+    execute_coin_splits_all_user_wallets(
+        world,
+        &step.value,
+        splits_per_wallet,
+        outputs,
+        lgo_to_units(value),
+    )
+    .await
+    .inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
 
     Ok(())
 }
@@ -240,7 +246,7 @@ async fn step_mempool_next_wallet_rounds(
         &step.value,
         rounds,
         transactions_per_wallet,
-        value,
+        lgo_to_units(value),
         epochs_headroom,
         dependent_mode,
     )
@@ -296,7 +302,7 @@ async fn step_perform_stress_continuous_cycles_next_user_wallet(
         &ManualCommand::ContinuousNextWalletUserWallets {
             cycles,
             num_transactions,
-            value,
+            value: lgo_to_units(value),
             epochs_headroom,
         },
     )
@@ -370,7 +376,7 @@ fn start_continuous_next_wallet_load(
     let command = ManualCommand::ContinuousNextWalletUserWallets {
         cycles: 1,
         num_transactions,
-        value,
+        value: lgo_to_units(value),
         epochs_headroom,
     };
     let transactions_per_round = wallet_count * num_transactions;

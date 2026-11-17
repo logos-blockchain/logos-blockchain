@@ -12,6 +12,9 @@ pub(crate) mod utils;
 mod verification_key;
 mod verifier;
 
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
+
 use std::error::Error;
 
 pub use ark_bn254::{Bn254, Fr};
@@ -20,6 +23,7 @@ use ark_ff::{BigInteger as _, PrimeField as _};
 pub use circuit_integer::{CircuitInteger, CircuitIntegerOutOfRange};
 pub use modulus_shift::{ModulusShift, ModulusShiftOutOfRange};
 use num_bigint::BigUint;
+pub use verification_key::CompressedVerificationKey;
 pub use verifier::{VerificationError, groth16_batch_verify, groth16_verify};
 
 pub const GROTH16_SAFE_BYTES_SIZE: usize = 31;
@@ -33,8 +37,10 @@ pub type Groth16Proof = proof::Proof<Bn254>;
 pub type CompressedGroth16Proof = CompressedProof<Bn254>;
 pub type Groth16ProofJsonDeser = proof::ProofJsonDeser;
 pub type Groth16VerificationKey = verification_key::VerificationKey<Bn254>;
+pub type CompressedGroth16VerificationKey = CompressedVerificationKey<Bn254>;
 pub type Groth16PreparedVerificationKey = verification_key::PreparedVerificationKey<Bn254>;
 pub type Groth16VerificationKeyJsonDeser = verification_key::VerificationKeyJsonDeser;
+pub type Groth16AlphaBeta = ark_bn254::Fq12;
 pub type Groth16Input = public_input::Input<Bn254>;
 pub type Groth16InputDeser = public_input::InputDeser;
 

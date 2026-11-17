@@ -112,18 +112,17 @@ where
 {
     let (result_sender, result_receiver) = oneshot::channel();
 
-    kms_api
-        .execute(
-            key_id,
-            KeyOperators::Zk(Box::new(PoQOperator::new(
-                *core_path_and_selectors,
-                *public_inputs,
-                key_index,
-                result_sender,
-            ))),
-        )
-        .await
-        .map_err(|error| quota::Error::InvalidInput(Box::new(error)))?;
+    Box::pin(kms_api.execute(
+        key_id,
+        KeyOperators::Zk(Box::new(PoQOperator::new(
+            *core_path_and_selectors,
+            *public_inputs,
+            key_index,
+            result_sender,
+        ))),
+    ))
+    .await
+    .map_err(|error| quota::Error::InvalidInput(Box::new(error)))?;
 
     result_receiver
         .await

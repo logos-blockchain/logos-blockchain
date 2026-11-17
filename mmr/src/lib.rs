@@ -7,12 +7,14 @@ use rpds::StackSync;
 
 mod path;
 
-pub use path::{MerklePath, MerklePathError, is_left_child};
+pub use path::{MerklePath, MerklePathError, PathAndSelector, is_left_child};
 use path::{update_paths_above_merge, update_paths_at_merge};
 
 const EMPTY_VALUE: Fr = Fr::ZERO;
 /// Largest supported MMR height, including leaves at height one.
-pub(crate) const ACCEPTABLE_MAX_HEIGHT: u8 = 33;
+pub(crate) const ACCEPTABLE_MAX_HEIGHT: u8 = 41;
+/// Default MMR height, including leaves at height one.
+pub(crate) const DEFAULT_MAX_HEIGHT: u8 = 33;
 /// Largest globally valid number of sibling hashes in an MMR path.
 pub(crate) const MAX_MERKLE_PATH_SIBLINGS: usize = ACCEPTABLE_MAX_HEIGHT as usize - 1;
 
@@ -30,7 +32,7 @@ pub(crate) const MAX_MERKLE_PATH_SIBLINGS: usize = ACCEPTABLE_MAX_HEIGHT as usiz
 /// find multiple copes of the same nodes in the deserialized output. If you
 /// need to preserve structural sharing, you should use a custom serialization.
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct MerkleMountainRange<T, Hash, const MAX_HEIGHT: u8 = ACCEPTABLE_MAX_HEIGHT> {
+pub struct MerkleMountainRange<T, Hash, const MAX_HEIGHT: u8 = DEFAULT_MAX_HEIGHT> {
     roots: StackSync<Root>,
     #[serde(skip)]
     _hash: std::marker::PhantomData<(T, Hash)>,
@@ -407,7 +409,45 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "unsupported MMR height 0; expected a height in 1..=33")]
+    fn test_depth_40_empty_root_matches_naive() {
+        let mmr = <MerkleMountainRange<TestFr, ZkHasher, 41>>::new();
+        let mut root = Fr::ZERO;
+        for _ in 0..40 {
+            root = <ZkHasher as Digest>::compress(&[root, root]);
+        }
+        assert_eq!(mmr.frontier_root(), root);
+    }
+
+    #[test]
+    fn path_and_selectors_set_the_selector_on_a_right_child() {
+        // leaf 5 = 0b101: right child at levels 0 and 2, left child at level 1
+        let siblings: Vec<Fr> = (1..=4u64).map(Fr::from).collect();
+        let path = MerklePath::try_new(5, siblings).unwrap();
+        let levels: Vec<(Fr, bool)> = (0..4)
+            .map(|level| path.path_and_selectors(level).into())
+            .collect();
+        assert_eq!(
+            levels,
+            vec![
+                (Fr::from(1u64), true),
+                (Fr::from(2u64), false),
+                (Fr::from(3u64), true),
+                (Fr::from(4u64), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_depth_40_path_has_40_siblings() {
+        let (mmr, path) = <MerkleMountainRange<TestFr, ZkHasher, 41>>::new()
+            .push_with_paths(TestFr::from(b"a".as_ref()), &mut [])
+            .unwrap();
+        assert_eq!(path.siblings().len(), 40);
+        assert!(path.verify::<ZkHasher>(leaf(b"a"), mmr.frontier_root()));
+    }
+
+    #[test]
+    #[should_panic(expected = "unsupported MMR height 0; expected a height in 1..=41")]
     fn test_zero_height_is_rejected() {
         drop(<MerkleMountainRange<TestFr, ZkHasher, 0>>::new());
     }

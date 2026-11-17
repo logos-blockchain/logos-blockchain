@@ -15,7 +15,7 @@ use thiserror::Error;
 /// Implementors are zero-sized "strategy" markers: they carry no state and only
 /// decide how a `(key, item)` pair maps to the leaf payload stored in the
 /// underlying [`DynamicMerkleTree`], and which hasher backs it. See the
-/// `blake2btree` and `utxotree` crates for concrete extractors.
+/// `blake2btree` crate for a concrete extractor.
 pub trait LeafExtractor<Key, Item> {
     /// The hashing backend of the underlying [`DynamicMerkleTree`].
     type Hasher: MerkleHasher;
@@ -30,7 +30,7 @@ pub trait LeafExtractor<Key, Item> {
 ///
 /// The way an item is committed to (the leaf payload and the hasher) is
 /// supplied by a [`LeafExtractor`] `Leaf`, so the same orchestration serves
-/// different Merkle flavours (e.g. `Blake2bTree`, or `UtxoTree`).
+/// different Merkle flavours (e.g. `Blake2bTree`).
 ///
 /// Removed items are replaced with an empty leaf, which prevents the whole tree
 /// from being reordered, and their position is recorded for future insertions.

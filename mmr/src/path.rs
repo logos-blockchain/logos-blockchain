@@ -95,6 +95,34 @@ impl MerklePath {
     pub fn siblings(&self) -> &[Fr] {
         self.siblings.as_slice()
     }
+
+    /// The sibling at `level`, 0 being the bottom, and the selector of the
+    /// path there, the shape the circuits take a path in.
+    ///
+    /// # Panics
+    ///
+    /// If the path has no sibling at `level`.
+    #[must_use]
+    pub fn path_and_selectors(&self, level: usize) -> PathAndSelector {
+        PathAndSelector {
+            sibling: self.siblings[level],
+            selector: !is_left_child(self.leaf_index, level + 1),
+        }
+    }
+}
+
+/// A level of a [`MerklePath`]: the sibling hash, and the selector, set when
+/// the path goes through the right child.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PathAndSelector {
+    pub sibling: Fr,
+    pub selector: bool,
+}
+
+impl From<PathAndSelector> for (Fr, bool) {
+    fn from(PathAndSelector { sibling, selector }: PathAndSelector) -> Self {
+        (sibling, selector)
+    }
 }
 
 /// A malformed or incompatible MMR path.

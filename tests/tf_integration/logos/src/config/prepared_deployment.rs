@@ -85,7 +85,8 @@ fn shared_inputs(
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{ops::OpRef, traits::MantleTx as _};
+    use lb_config::{consensus::BLEND_DECLARATION_AMOUNT, funding::GENESIS_STAKE_SUPPLY};
+    use lb_core::mantle::{ops::OpRef, traits::MantleTx as _, transactions::UNITS_PER_LGO};
     use lb_key_management_system_service::keys::Key;
     use lb_libp2p::identity::ed25519;
     use lb_sdp_service::DeclarationConfig;
@@ -101,7 +102,7 @@ mod tests {
 
     #[test]
     fn prepared_network_survives_native_rendering() {
-        let wallet = WalletAccount::deterministic(0, 500_000, false).unwrap();
+        let wallet = WalletAccount::deterministic(0, 500_000 * UNITS_PER_LGO, false).unwrap();
         let prepared = DeploymentBuilder::new(TopologyConfig::with_node_numbers(2))
             .with_wallet_config(WalletConfig::new(vec![wallet.clone()]))
             .prepare()
@@ -109,43 +110,54 @@ mod tests {
         let shared = prepared.shared_inputs().unwrap();
         let network = prepared.network().unwrap();
         let genesis_id = network.genesis.header().id();
-        let transfer = network.genesis.genesis_tx().transfer().operation();
+        let transfer = network.genesis.genesis_tx().distribution();
         assert_eq!(
             transfer
-                .outputs
                 .iter()
-                .find(|note| note.pk == wallet.public_key())
+                .find(|note| note.public_key == wallet.public_key())
                 .unwrap()
                 .value,
             wallet.value
         );
-        for key in &network.consensus.regular_note_keys {
-            assert_eq!(
+        // The leaders hold the stake the other outputs and the declarations leave.
+        let leader_stake = network
+            .consensus
+            .regular_note_keys
+            .iter()
+            .map(|key| {
                 transfer
-                    .outputs
                     .iter()
-                    .find(|note| note.pk == key.to_public_key())
+                    .find(|note| note.public_key == key.to_public_key())
                     .unwrap()
-                    .value,
-                2_500_000
-            );
-        }
+                    .value
+            })
+            .sum::<u64>();
+        let others = transfer
+            .iter()
+            .map(|note| note.value)
+            .sum::<u64>()
+            .checked_sub(leader_stake)
+            .unwrap();
+        assert_eq!(
+            leader_stake + others + 2 * BLEND_DECLARATION_AMOUNT,
+            GENESIS_STAKE_SUPPLY
+        );
         let declarations = network
             .genesis
             .genesis_tx()
             .op_refs()
             .into_iter()
             .filter_map(|op| match op {
-                OpRef::SDPDeclare(declaration) => {
-                    Some((declaration.id(), declaration.service_note_id))
-                }
+                OpRef::SDPDeclare(declaration) => Some(declaration.clone()),
                 _ => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(declarations.len(), 2);
-        for (i, (_, note_id)) in declarations.iter().enumerate() {
-            assert_eq!(*note_id, network.consensus.blend_notes[i].note_id);
-        }
+        assert!(
+            declarations
+                .iter()
+                .all(|declaration| declaration.inputs.is_empty())
+        );
 
         let plan = build_plan(prepared).unwrap();
         assert_eq!(
@@ -180,7 +192,7 @@ mod tests {
                     .declaration
                     .as_ref()
                     .map(DeclarationConfig::id),
-                Some(declarations[i].0)
+                Some(declarations[i].id())
             );
             let wallet_key = Key::Zk(wallet.secret_key.clone());
             let wallet_key_id = lb_config::kms::key_id_for_preload_backend(&wallet_key);

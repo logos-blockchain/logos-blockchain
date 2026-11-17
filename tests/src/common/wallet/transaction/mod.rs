@@ -13,8 +13,7 @@ mod signed;
 mod signing;
 
 pub use builder_funding::{
-    estimate_workload_fee_requirements, extend_wallet_funding_inputs,
-    fund_builder_from_wallet_source, wallet_state_from_utxos,
+    estimate_workload_fee_requirements, extend_wallet_funding_inputs, random_nonce,
 };
 pub use error::WalletTransactionError;
 pub use intent::WalletTransactionIntent;

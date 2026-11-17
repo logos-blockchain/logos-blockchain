@@ -1,7 +1,7 @@
 //! Signed wallet transaction plus reservation and fee accounting metadata.
 
 use lb_core::mantle::{
-    SignedOps,
+    Note, SignedOps,
     ledger::verification_mode::StandardMode,
     transactions::{hash::TxHash, states::Preverified},
 };
@@ -11,6 +11,8 @@ use crate::common::wallet::WalletReservedInputs;
 pub struct SignedWalletTransaction {
     signed_tx: SignedOps<Preverified, StandardMode>,
     tx_hash: TxHash,
+    // the openings of the notes the transaction creates
+    outputs: Vec<Note>,
     reserved_inputs: WalletReservedInputs,
     paid_fee: u64,
     mandatory_fee_at_preparation: u64,
@@ -21,6 +23,7 @@ impl SignedWalletTransaction {
     pub(super) const fn new(
         signed_tx: SignedOps<Preverified, StandardMode>,
         tx_hash: TxHash,
+        outputs: Vec<Note>,
         reserved_inputs: WalletReservedInputs,
         paid_fee: u64,
         mandatory_fee_at_preparation: u64,
@@ -28,6 +31,7 @@ impl SignedWalletTransaction {
         Self {
             signed_tx,
             tx_hash,
+            outputs,
             reserved_inputs,
             paid_fee,
             mandatory_fee_at_preparation,
@@ -37,6 +41,11 @@ impl SignedWalletTransaction {
     #[must_use]
     pub const fn signed_tx(&self) -> &SignedOps<Preverified, StandardMode> {
         &self.signed_tx
+    }
+
+    #[must_use]
+    pub fn outputs(&self) -> &[Note] {
+        &self.outputs
     }
 
     #[must_use]

@@ -92,7 +92,6 @@ pub fn subscribe_to_new_blocks_sync(
                                 block.header().clone(),
                                 block.uncle_headers().clone(),
                                 txs_with_id,
-                                *block.signature(),
                                 u32::MAX,
                             )
                             .expect("Block should always build from valid block");

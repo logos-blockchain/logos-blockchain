@@ -3,10 +3,9 @@ use std::sync::Arc;
 use lb_chain_network_service::network::adapters::libp2p::{
     LibP2pAdapterEraSettings, LibP2pAdapterSettings,
 };
-use lb_core::{
-    block::genesis::GenesisBlock, mantle::traits::GenesisTx as _, sdp::ServiceParameters,
-};
+use lb_core::{block::genesis::GenesisBlock, sdp::ServiceParameters};
 use lb_cryptarchia_engine::{EpochConfig, EraSchedule};
+use lb_kv_store::KvStoreSettings;
 use lb_ledger::mantle::sdp::ServiceRewardsParameters;
 use lb_libp2p::{PeerId, protocol_name::ProtocolScope};
 use lb_services_utils::overwatch::RecoveryData;
@@ -14,7 +13,12 @@ use lb_services_utils::overwatch::RecoveryData;
 use crate::config::{
     cryptarchia::serde::Config,
     deployment::{EraDefinition, era::ruleset::EraRuleset},
+    state::Config as StateConfig,
 };
+
+/// The folder of the nullifier store, in the state folder of the node, next to
+/// the storage service's database.
+pub const NULLIFIER_STORE_FOLDER: &str = "nullifiers";
 
 pub mod serde;
 
@@ -84,15 +88,16 @@ impl ServiceConfig {
         }
     }
 
-    /// The settings of the chain service and the leader: the user's, the
-    /// ledger config of every era of `eras`, which both share, and for the
-    /// leader the consensus-excluded keys of `genesis_block`.
+    /// The settings of the chain service and the leader: the user's, and the
+    /// ledger config of every era of `eras`, which both share. The chain
+    /// service keeps its nullifier store in the state folder of `state`.
     #[must_use]
     pub fn into_cryptarchia_services_settings(
         self,
         eras: &EraSchedule<EraDefinition>,
         genesis_block: &GenesisBlock,
         recovery_data: &RecoveryData,
+        state: &StateConfig,
     ) -> (
         lb_chain_service::CryptarchiaSettings,
         lb_chain_leader_service::LeaderSettings,
@@ -125,16 +130,15 @@ impl ServiceConfig {
                     batch_size: user.service.sync.block_provider.batch_size,
                 },
             },
+            nullifier_store: KvStoreSettings {
+                path: state.base_folder.join(NULLIFIER_STORE_FOLDER),
+                sync_writes: false,
+            },
         };
         let chain_leader_settings = lb_chain_leader_service::LeaderSettings {
             era_schedule,
-            consensus_excluded_keys: genesis_block
-                .genesis_tx()
-                .genesis_parameters()
-                .consensus_excluded_keys,
             wallet_config: lb_chain_leader_service::LeaderWalletConfig {
                 funding_pk: user.leader.wallet.funding_pk,
-                max_tx_fee: user.leader.wallet.max_tx_fee,
             },
         };
         (chain_service_settings, chain_leader_settings)
@@ -142,7 +146,7 @@ impl ServiceConfig {
 }
 
 /// The ledger config of an era.
-fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
+pub(crate) fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
     let EraRuleset::V1(parameters) = &era.ruleset;
     let deployment = &parameters.cryptarchia;
     let blend_rewards_params = parameters.blend_reward_params();

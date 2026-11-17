@@ -11,19 +11,18 @@ use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     crypto::ZkHasher,
     mantle::{
-        ConsensusExcludedKeys, Note,
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp},
+        transactions::GenesisAllocation,
     },
 };
 use lb_node::config::deployment::DeploymentSettings;
-use lb_sdp_service::DeclarationConfig;
 use lb_utils::yaml::{
     INCLUDE_TAG, OnUnknownKeys, deserialize_value_at_path, deserialize_value_from_reader,
 };
 use logos_blockchain_tools::{
     apply_dotted_kv,
     genesis::{
-        distribution::{self, ConsensusExcludedKey, StakeHolderInfo},
+        distribution::{self, ProviderInfo, StakeHolderInfo},
         inscription::{self, InscribeParams},
     },
     overwrite_yaml, set_at_path,
@@ -82,14 +81,10 @@ pub struct CeremonyArgs {
     #[arg(long, value_name = "FILE")]
     pub stake_holders: PathBuf,
 
-    /// Provider definitions for SDP declarations.
+    /// Provider definitions for SDP declarations, each with the amount it
+    /// declares.
     #[arg(long, value_name = "FILE")]
     pub providers: PathBuf,
-
-    /// Consensus-excluded key definition, for the stake distribution and the
-    /// genesis parameters.
-    #[arg(long, value_name = "FILE")]
-    pub consensus_excluded_keys: PathBuf,
 
     /// The genesis template: the eras of the deployment, each keyed by the
     /// epoch it starts at. The ceremony generates the rest of the deployment
@@ -136,12 +131,12 @@ struct ConfigArgs {
 
 #[derive(Parser, Debug)]
 struct BlockArgs {
-    /// YAML file containing the list of genesis notes.
-    /// Each entry must have `value` (u64) and `pk` (hex-encoded `ZkPublicKey`).
-    /// At least one note is required.
+    /// YAML file containing the list of genesis allocations.
+    /// Each entry must have `value` (u64) and `public_key` (hex-encoded
+    /// `ZkPublicKey`). At least one allocation is required.
     ///
     /// Example:
-    ///   - value: 100000 pk: eb3158fd...
+    ///   - value: 100000 `public_key`: eb3158fd...
     #[arg(long, value_name = "FILE")]
     notes: PathBuf,
 
@@ -160,7 +155,9 @@ struct BlockArgs {
 
     /// YAML file containing the list of `SDPDeclareOps`.
     /// Each entry must have `service_type`, `locators`, `provider_id`,
-    /// `zk_id`, and `service_note_id` fields.
+    /// `zk_id`, `note_pk`, `note_stake_pk`, `inputs` (empty),
+    /// `commitment_merkle_root` and
+    /// `amount` fields.
     /// At least one declaration is required.
     #[arg(long, value_name = "FILE")]
     declarations: PathBuf,
@@ -186,13 +183,10 @@ struct DistributeArgs {
     #[arg(long, value_name = "FILE")]
     stake_holders: PathBuf,
 
-    /// YAML file containing provider info.
+    /// YAML file containing provider info, each entry with the amount it
+    /// declares.
     #[arg(long, value_name = "FILE")]
     providers: PathBuf,
-
-    /// YAML file containing consensus-excluded key info.
-    #[arg(long, value_name = "FILE")]
-    consensus_excluded_keys: PathBuf,
 
     /// Write notes output to FILE instead of stdout.
     #[arg(long, short, value_name = "FILE")]
@@ -208,15 +202,11 @@ struct DistributeArgs {
 
 #[derive(Parser, Debug)]
 struct InscribeArgs {
-    /// YAML file containing genesis parameters (`chain_id`, `genesis_time`,
-    /// `entropy_sources` and `pow_reward_pool`). `entropy_sources` should be a
-    /// list of hex-encoded 32-byte strings.
+    /// YAML file containing genesis parameters (`chain_id`, `genesis_time` and
+    /// `entropy_sources`). `entropy_sources` should be a list of hex-encoded
+    /// 32-byte strings.
     #[arg(long, value_name = "FILE")]
     params: PathBuf,
-
-    /// YAML file containing the consensus-excluded key info.
-    #[arg(long, value_name = "FILE")]
-    consensus_excluded_keys: PathBuf,
 
     /// Write the serialized `InscriptionOp` to FILE instead of stdout.
     #[arg(long, short, value_name = "FILE")]
@@ -248,23 +238,18 @@ const ERA_FILES_DIR: &str = "era/schedule";
 // ─────────────────────────────────────────────────────
 
 fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
-    let excluded_key: ConsensusExcludedKey = load_yaml_file(&args.consensus_excluded_keys)?;
     let inscribe_params: InscribeParams = load_yaml_file(&args.inscription_params)?;
     let inscription_op = inscription::inscribe::<ZkHasher>(
         inscribe_params.chain_id,
         inscribe_params.genesis_time,
         inscribe_params.entropy_sources,
-        inscribe_params.pow_reward_pool,
-        ConsensusExcludedKeys::from(excluded_key.zk_id),
     );
 
     let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
-    let providers: Vec<DeclarationConfig> = load_yaml_file(&args.providers)?;
-    let (transfer_op, declarations) =
-        distribution::distribute(stakeholders, providers, &excluded_key)
-            .map_err(|e| anyhow::anyhow!(e))
-            .context("Failed to calculate distribution during ceremony")?;
-    let notes: Vec<Note> = transfer_op.notes().collect();
+    let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
+    let (notes, declarations) = distribution::distribute(stakeholders, providers)
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("Failed to calculate distribution during ceremony")?;
 
     let mut config_value = load_genesis_template(args.template.as_ref())?;
     for raw in &args.overrides {
@@ -430,7 +415,7 @@ fn apply_override(config: &mut Value, s: &str) -> Result<()> {
 // ──────────────────────────────────────────────────────
 
 fn run_block(args: &BlockArgs) -> Result<()> {
-    let notes: Vec<Note> = load_yaml_file(&args.notes)?;
+    let notes: Vec<GenesisAllocation> = load_yaml_file(&args.notes)?;
     let inscription: InscriptionOp = load_yaml_file(&args.inscription)?;
     let declarations: Vec<SDPDeclareOp> = load_yaml_file(&args.declarations)?;
 
@@ -463,7 +448,7 @@ fn run_block(args: &BlockArgs) -> Result<()> {
 /// Drive the [`GenesisBlockBuilder`] typestate machine with the supplied
 /// components and return the finished [`GenesisBlock`].
 fn build_genesis_block(
-    notes: Vec<Note>,
+    notes: Vec<GenesisAllocation>,
     inscription: InscriptionOp,
     declarations: Vec<SDPDeclareOp>,
 ) -> Result<GenesisBlock> {
@@ -498,14 +483,11 @@ fn build_genesis_block(
 
 fn run_distribute(args: &DistributeArgs) -> Result<()> {
     let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
-    let providers: Vec<DeclarationConfig> = load_yaml_file(&args.providers)?;
-    let excluded_key: ConsensusExcludedKey = load_yaml_file(&args.consensus_excluded_keys)?;
+    let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
 
-    let (transfer_op, declarations) =
-        distribution::distribute(stakeholders, providers, &excluded_key)
-            .map_err(|e| anyhow::anyhow!(e))
-            .context("Failed to calculate distribution")?;
-    let notes: Vec<Note> = transfer_op.notes().collect();
+    let (notes, declarations) = distribution::distribute(stakeholders, providers)
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("Failed to calculate distribution")?;
 
     let notes_value = struct_to_yaml_value(&notes)?;
     let declarations_value = struct_to_yaml_value(&declarations)?;
@@ -521,14 +503,11 @@ fn run_distribute(args: &DistributeArgs) -> Result<()> {
 
 fn run_inscribe(args: &InscribeArgs) -> Result<()> {
     let params: InscribeParams = load_yaml_file(&args.params)?;
-    let excluded_key: ConsensusExcludedKey = load_yaml_file(&args.consensus_excluded_keys)?;
 
     let op = inscription::inscribe::<ZkHasher>(
         params.chain_id,
         params.genesis_time,
         params.entropy_sources,
-        params.pow_reward_pool,
-        ConsensusExcludedKeys::from(excluded_key.zk_id),
     );
 
     let op_value = struct_to_yaml_value(&op)?;
@@ -561,12 +540,17 @@ fn struct_to_yaml_value<T: serde::Serialize>(value: &T) -> Result<Value> {
 
 fn ensure_valid_deployment_settings(value: &Value) -> Result<()> {
     let yaml = serde_yaml::to_string(value)?;
+    let settings = deserialize_value_from_reader::<DeploymentSettings, _>(
+        yaml.as_bytes(),
+        OnUnknownKeys::Fail,
+    )
+    .context("generated config is not a valid DeploymentSettings value")?;
+    // The node rejects a genesis block the ledger does not accept, so it is
+    // reported here rather than when a node starts.
     drop(
-        deserialize_value_from_reader::<DeploymentSettings, _>(
-            yaml.as_bytes(),
-            OnUnknownKeys::Fail,
-        )
-        .context("generated config is not a valid DeploymentSettings value")?,
+        settings
+            .genesis_ledger_state()
+            .map_err(|error| anyhow::anyhow!("the ledger rejects the genesis block: {error}"))?,
     );
     Ok(())
 }

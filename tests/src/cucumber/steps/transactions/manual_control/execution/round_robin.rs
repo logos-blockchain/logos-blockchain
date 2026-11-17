@@ -1,6 +1,6 @@
 use super::{
     BTreeMap, BuildHasher, CucumberWorld, Duration, GasPrices, HashSet, Instant, ManualCommand,
-    NoteId, SignedUserWalletSubmission, StepError, TARGET, TransactionFeePolicy, TxHash,
+    NoteNullifier, SignedUserWalletSubmission, StepError, TARGET, TransactionFeePolicy, TxHash,
     WalletSendReadiness, WalletUtxos, build_cycle_fee_policy, extend_note_id_set,
     extend_tx_hash_set, get_best_node_info, info, log_phase_counts,
     prepare_coin_splits_all_wallets_with_utxo_cache, sleep, sync, utils,
@@ -64,7 +64,7 @@ async fn prepare_and_submit_round_robin_transactions(
     value: u64,
     available_utxos: &mut WalletUtxos,
     epochs_headroom: u32,
-) -> Result<(HashSet<TxHash>, HashSet<NoteId>), StepError> {
+) -> Result<(HashSet<TxHash>, HashSet<NoteNullifier>), StepError> {
     let preparation_started = Instant::now();
     let policy = build_cycle_fee_policy(world, step, &wallet_names[0], epochs_headroom).await?;
 
@@ -145,7 +145,7 @@ async fn prepare_and_submit_round_robin_transactions(
         }),
     );
 
-    let mut cycle_used_input_note_ids: HashSet<NoteId> = HashSet::new();
+    let mut cycle_used_input_note_ids: HashSet<NoteNullifier> = HashSet::new();
     for submission in &signed_submissions {
         extend_note_id_set(
             &mut cycle_used_input_note_ids,
@@ -202,7 +202,7 @@ async fn manage_round_robin_coin_splits_with_utxo_cache(
     coin_split_value: u64,
     epochs_headroom: u32,
     available_utxos: &mut WalletUtxos,
-) -> Result<HashSet<NoteId>, StepError> {
+) -> Result<HashSet<NoteNullifier>, StepError> {
     let policy = build_cycle_fee_policy(world, step, &wallet_names[0], epochs_headroom).await?;
 
     let (split_tx_hashes, split_used_input_note_ids) =
@@ -242,7 +242,7 @@ async fn refresh_round_robin_sender_cache_entries<S: BuildHasher + Sync>(
     required_available: u64,
     readiness: WalletSendReadiness,
     available_utxos: &mut WalletUtxos,
-    used_input_note_ids: &HashSet<NoteId, S>,
+    used_input_note_ids: &HashSet<NoteNullifier, S>,
 ) -> Result<(), StepError> {
     for sender in wallet_names {
         sync::wait_wallet_send_ready(
@@ -299,7 +299,7 @@ pub(super) async fn execute_continuous_round_robin(
         destructure_round_robin_command(command)?;
     let wallet_names = all_user_wallets(world)?;
 
-    let mut used_input_note_ids: HashSet<NoteId> = HashSet::new();
+    let mut used_input_note_ids: HashSet<NoteNullifier> = HashSet::new();
     let mut all_round_robin_tx_hashes = HashSet::new();
     let mut available_utxos = WalletUtxos::new();
     for cycle in 0..cycles {
@@ -480,7 +480,7 @@ async fn perform_coin_splits_for_round_robin_with_utxo_cache(
     cycle: usize,
     available_utxos: &mut WalletUtxos,
     policy: &TransactionFeePolicy,
-) -> Result<(HashSet<TxHash>, HashSet<NoteId>), StepError> {
+) -> Result<(HashSet<TxHash>, HashSet<NoteNullifier>), StepError> {
     info!(target: TARGET, "CONTINUOUS ROUND ROBIN cycle {} B: Perform coin splits all wallets", cycle + 1);
 
     let (signed_submissions, prepared_split_counts) =
@@ -503,7 +503,7 @@ async fn perform_coin_splits_for_round_robin_with_utxo_cache(
         &prepared_split_counts,
     );
 
-    let mut split_used_input_note_ids: HashSet<NoteId> = HashSet::new();
+    let mut split_used_input_note_ids: HashSet<NoteNullifier> = HashSet::new();
     for submission in &signed_submissions {
         extend_note_id_set(
             &mut split_used_input_note_ids,

@@ -292,8 +292,9 @@ pub type FfiPoWClaimResult = FfiStatusResult<Hash>;
 ///
 /// - `node`: A non-null pointer to a [`LogosBlockchainNode`] instance.
 /// - `claim_address`: A pointer to the 32-byte little-endian public key the
-///   rewards are paid to, or null to pay whichever auto-claim target is
-///   currently furthest below its threshold.
+///   rewards are paid to, which must be one of the node wallet's keys, or null
+///   to pay whichever auto-claim target is currently furthest below its
+///   threshold.
 ///
 /// # Returns
 ///

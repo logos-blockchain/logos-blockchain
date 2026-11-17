@@ -245,27 +245,27 @@ mod tests {
 
     #[test]
     fn a_largest_proposal_beyond_a_blend_payload_is_refused() {
-        // 1,803 bytes with 4 uncles, then 16 per transaction: 65,547 bytes.
+        // 1,368 bytes with 4 uncles, then 16 per transaction: 65,544 bytes.
         let reason = rejection(|parameters| {
             parameters.cryptarchia.max_uncles = 4;
-            parameters.cryptarchia.max_transactions = NonZero::new(3_984).unwrap();
+            parameters.cryptarchia.max_transactions = NonZero::new(4_011).unwrap();
         });
         assert!(
-            reason.contains("65547 bytes with 4 uncles and 3984 transactions"),
+            reason.contains("65544 bytes with 4 uncles and 4011 transactions"),
             "{reason}"
         );
     }
 
     #[test]
     fn a_largest_block_beyond_a_chain_sync_message_is_refused() {
-        // 1,803 bytes with 4 uncles besides the transactions, in a response
+        // 1,368 bytes with 4 uncles besides the transactions, in a response
         // framed by 12 more: 16 MiB and a byte.
         let reason = rejection(|parameters| {
             parameters.cryptarchia.max_uncles = 4;
-            parameters.cryptarchia.max_transactions_size = 16_775_402;
+            parameters.cryptarchia.max_transactions_size = 16_775_837;
         });
         assert!(
-            reason.contains("16777205 bytes with 4 uncles and 16775402 bytes of transactions"),
+            reason.contains("16777205 bytes with 4 uncles and 16775837 bytes of transactions"),
             "{reason}"
         );
     }

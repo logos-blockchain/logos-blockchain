@@ -181,8 +181,8 @@ mod tests {
 /// Types whose schema is generated alongside their `serde` impl — the
 /// `serde_bytes_newtype!` family — are covered by `lb-core`'s own tests. What
 /// remains here are the foreign types whose schema is a hand-written claim the
-/// compiler cannot check: `Slot`, `State`, `PeerId`, `Multiaddr`, `Locator`
-/// and `NoteId`.
+/// compiler cannot check: `Slot`, `State`, `PeerId`, `Multiaddr` and
+/// `Locator`.
 ///
 /// Each case starts from a representative JSON instance, so the test asserts
 /// both that the documented shape deserializes into the Rust type and that
@@ -265,7 +265,7 @@ mod schema_conformance_tests {
         );
     }
 
-    /// Covers `Locator` and `NoteId`, both documented as `String`.
+    /// Covers `Locator`, documented as `String`, and the stake amount.
     #[test]
     fn join_blend_request_body_matches_its_schema() {
         assert_round_trip_matches_component::<
@@ -274,7 +274,7 @@ mod schema_conformance_tests {
             "JoinBlendRequestBody",
             serde_json::json!({
                 "locator": "/ip4/127.0.0.1/tcp/3000",
-                "service_note_id": HASH,
+                "amount": 1000,
             }),
         );
     }

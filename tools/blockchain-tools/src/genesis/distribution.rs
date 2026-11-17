@@ -2,14 +2,12 @@ use std::collections::HashSet;
 
 use lb_core::{
     mantle::{
-        Note, Utxo, Value as NoteValue,
-        ledger::{Inputs, Outputs},
-        ops::{sdp::SDPDeclareOp, transfer::TransferOp},
+        Value as NoteValue, note_set::CommitmentMmr, notes::InputNullifiers,
+        ops::sdp::SDPDeclareOp, transactions::GenesisAllocation,
     },
-    sdp::ServiceType,
+    sdp::{Locators, ProviderId, ServiceType},
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_sdp_service::DeclarationConfig;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -19,108 +17,74 @@ pub struct StakeHolderInfo {
     pub stake: NoteValue,
 }
 
-/// `ConsensusExcludedKey` is used to register a consensus-excluded key with
-/// its value.
-#[derive(Clone, Debug, Deserialize)]
-pub struct ConsensusExcludedKey {
+/// An initial service provider and the amount it declares. The amount counts in
+/// the maximum supply and is not taken from any distributed note.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct ProviderInfo {
+    pub provider_id: ProviderId,
     pub zk_id: ZkPublicKey,
-    pub funds: NoteValue,
-}
-
-pub struct GenesisTransferOp {
-    transfer_op: TransferOp,
-}
-
-impl GenesisTransferOp {
-    pub fn new(
-        stake_holders: impl Iterator<Item = StakeHolderInfo>,
-        excluded_key: &ConsensusExcludedKey,
-    ) -> Self {
-        let mut notes: Vec<Note> = stake_holders
-            .map(|stake_holder| Note::new(stake_holder.stake, stake_holder.zk_id))
-            .collect();
-
-        notes.push(Note::new(excluded_key.funds, excluded_key.zk_id));
-
-        let outputs = Outputs::try_new(notes)
-            .expect("genesis distribution outputs must fit transfer output bounds");
-        let transfer_op = TransferOp::new(Inputs::empty(), outputs);
-
-        Self { transfer_op }
-    }
-
-    pub fn notes(&self) -> impl Iterator<Item = Note> {
-        self.transfer_op.utxos().map(|u| u.note)
-    }
-
-    pub fn utxos(&self) -> impl Iterator<Item = Utxo> {
-        self.transfer_op.utxos()
-    }
-
-    #[must_use]
-    pub fn utxo_by_index(&self, index: usize) -> Option<Utxo> {
-        self.transfer_op.utxo_by_index(index)
-    }
+    /// The public key and the staking key the service note of the declaration
+    /// and the rewards of the provider are created under.
+    pub note_pk: ZkPublicKey,
+    pub note_stake_pk: ZkPublicKey,
+    pub locators: Locators,
+    pub service_type: ServiceType,
+    pub amount: NoteValue,
 }
 
 #[derive(Error, Debug)]
 pub enum DistributionError {
-    #[error("Provider with ZK ID {0:?} is not a registered stakeholder")]
-    ProviderNotStakeHolder(Box<DeclarationConfig>),
-
-    #[error("Note already used for service {0:?}")]
-    NoteAlreadyUsedForService(ServiceType),
+    #[error("Provider {0:?} declared twice for service {1:?}")]
+    DuplicateProvider(ZkPublicKey, ServiceType),
 }
 
-/// `distribute` stake to stake holders.
-/// Provider has to be a stakeholder, because stake holders note id will be used
-/// as a service note.
+/// The Transfer outputs and the `SDP_DECLARE` Operations of a genesis block.
+/// Initial Service Declarations: a declaration consumes no note, so it has no
+/// inputs and references the empty commitment root.
 pub fn distribute<S, P>(
     stake_holders: S,
     providers: P,
-    excluded_key: &ConsensusExcludedKey,
-) -> Result<(GenesisTransferOp, Vec<SDPDeclareOp>), DistributionError>
+) -> Result<(Vec<GenesisAllocation>, Vec<SDPDeclareOp>), DistributionError>
 where
-    S: IntoIterator<Item = StakeHolderInfo> + Clone,
-    P: IntoIterator<Item = DeclarationConfig>,
+    S: IntoIterator<Item = StakeHolderInfo>,
+    P: IntoIterator<Item = ProviderInfo>,
 {
-    let stake_holder_keys: HashSet<ZkPublicKey> =
-        stake_holders.clone().into_iter().map(|s| s.zk_id).collect();
-
-    let transfer_op = GenesisTransferOp::new(stake_holders.into_iter(), excluded_key);
+    let allocations: Vec<GenesisAllocation> = stake_holders
+        .into_iter()
+        .map(|stake_holder| GenesisAllocation {
+            value: stake_holder.stake,
+            public_key: stake_holder.zk_id,
+        })
+        .collect();
     let mut declarations = Vec::new();
-    let mut used_services = HashSet::new();
+    let mut declared = HashSet::new();
 
     for provider in providers {
-        if !stake_holder_keys.contains(&provider.zk_id) {
-            return Err(DistributionError::ProviderNotStakeHolder(Box::new(
-                provider,
-            )));
-        }
-
-        if !used_services.insert((provider.zk_id, provider.service_type)) {
-            return Err(DistributionError::NoteAlreadyUsedForService(
+        if !declared.insert((provider.zk_id, provider.service_type)) {
+            return Err(DistributionError::DuplicateProvider(
+                provider.zk_id,
                 provider.service_type,
             ));
         }
-
-        if let Some(utxo) = transfer_op.utxos().find(|u| u.note.pk == provider.zk_id) {
-            declarations.push(SDPDeclareOp {
-                service_type: provider.service_type,
-                locators: provider.locators,
-                provider_id: provider.provider_id,
-                zk_id: provider.zk_id,
-                service_note_id: utxo.id(),
-            });
-        }
+        declarations.push(SDPDeclareOp {
+            service_type: provider.service_type,
+            locators: provider.locators,
+            provider_id: provider.provider_id,
+            zk_id: provider.zk_id,
+            note_pk: provider.note_pk,
+            note_stake_pk: provider.note_stake_pk,
+            inputs: InputNullifiers::default(),
+            commitment_merkle_root: CommitmentMmr::new().frontier_root(),
+            amount: provider.amount,
+        });
     }
 
-    Ok((transfer_op, declarations))
+    Ok((allocations, declarations))
 }
 
 #[cfg(test)]
 mod tests {
-    use lb_core::sdp::{Locator, ProviderId};
+    use lb_core::sdp::Locator;
     use lb_key_management_system_keys::keys::Ed25519PublicKey;
     use num_bigint::BigUint;
 
@@ -134,116 +98,88 @@ mod tests {
         ProviderId(Ed25519PublicKey::from_bytes(&[byte; 32]).unwrap())
     }
 
-    #[test]
-    fn test_successful_distribution() {
-        let zk_id_1 = mock_zk_pk(1);
-        let zk_id_2 = mock_zk_pk(2);
-
-        let stake_holders = vec![
-            StakeHolderInfo {
-                zk_id: zk_id_1,
-                stake: 1000,
-            },
-            StakeHolderInfo {
-                zk_id: zk_id_2,
-                stake: 2000,
-            },
-        ];
-
-        let providers = vec![DeclarationConfig {
+    fn provider(zk_id: ZkPublicKey, amount: NoteValue) -> ProviderInfo {
+        ProviderInfo {
             provider_id: mock_provider_id(10),
-            zk_id: zk_id_1,
+            zk_id,
+            note_pk: zk_id,
+            note_stake_pk: zk_id,
             locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
             service_type: ServiceType::BlendNetwork,
-        }];
-
-        let excluded_key = ConsensusExcludedKey {
-            zk_id: mock_zk_pk(3),
-            funds: 100_000,
-        };
-
-        let result = distribute(stake_holders, providers, &excluded_key);
-
-        assert!(result.is_ok());
-        let (transfer_op, declarations) = result.unwrap();
-        let notes = transfer_op.notes().collect::<Vec<_>>();
-
-        assert_eq!(notes.len(), 3);
-        assert_eq!(notes[0].pk, zk_id_1);
-        assert_eq!(notes[1].pk, zk_id_2);
-
-        assert_eq!(declarations.len(), 1);
-        assert_eq!(declarations[0].zk_id, zk_id_1);
-        assert_eq!(
-            declarations[0].service_note_id,
-            transfer_op.utxo_by_index(0).unwrap().id(),
-        );
-    }
-
-    #[test]
-    fn test_error_unauthorized_provider() {
-        let stake_holders = vec![StakeHolderInfo {
-            zk_id: mock_zk_pk(1),
-            stake: 1000,
-        }];
-
-        let providers = vec![DeclarationConfig {
-            provider_id: mock_provider_id(10),
-            zk_id: mock_zk_pk(2),
-            locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
-            service_type: ServiceType::BlendNetwork,
-        }];
-
-        let excluded_key = ConsensusExcludedKey {
-            zk_id: mock_zk_pk(3),
-            funds: 100_000,
-        };
-
-        let result = distribute(stake_holders, providers, &excluded_key);
-
-        assert!(matches!(
-            result,
-            Err(DistributionError::ProviderNotStakeHolder(_))
-        ));
-
-        if let Err(DistributionError::ProviderNotStakeHolder(info)) = result {
-            assert_eq!(info.zk_id, mock_zk_pk(2));
+            amount,
         }
     }
 
     #[test]
-    fn test_error_already_used() {
-        let zk_id = mock_zk_pk(1);
-        let stake_holders = vec![StakeHolderInfo { zk_id, stake: 5000 }];
-
-        // Two providers trying to use the same note for the same ServiceType.
-        let providers = vec![
-            DeclarationConfig {
-                provider_id: mock_provider_id(10),
-                zk_id,
-                locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
-                service_type: ServiceType::BlendNetwork,
+    fn declarations_consume_no_note_and_declare_their_amount() {
+        let zk_id_1 = mock_zk_pk(1);
+        let zk_id_2 = mock_zk_pk(2);
+        let stake_holders = vec![
+            StakeHolderInfo {
+                zk_id: zk_id_1,
+                stake: 1_000,
             },
-            DeclarationConfig {
-                provider_id: mock_provider_id(11),
-                zk_id,
-                locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
-                service_type: ServiceType::BlendNetwork,
+            StakeHolderInfo {
+                zk_id: zk_id_2,
+                stake: 2_000,
             },
         ];
 
-        let excluded_key = ConsensusExcludedKey {
-            zk_id: mock_zk_pk(3),
-            funds: 100_000,
-        };
+        let (allocations, declarations) =
+            distribute(stake_holders, vec![provider(mock_zk_pk(9), 500)]).unwrap();
 
-        let result = distribute(stake_holders, providers, &excluded_key);
+        assert_eq!(allocations.len(), 2);
+        assert_eq!(
+            allocations[0],
+            GenesisAllocation {
+                value: 1_000,
+                public_key: zk_id_1
+            }
+        );
+        assert_eq!(allocations[1].public_key, zk_id_2);
+
+        assert_eq!(declarations.len(), 1);
+        assert_eq!(declarations[0].zk_id, mock_zk_pk(9));
+        assert!(declarations[0].inputs.is_empty());
+        assert_eq!(
+            declarations[0].commitment_merkle_root,
+            CommitmentMmr::new().frontier_root()
+        );
+        assert_eq!(declarations[0].amount, 500);
+    }
+
+    #[test]
+    fn a_provider_declared_twice_for_a_service_is_rejected() {
+        let zk_id = mock_zk_pk(1);
+        let result = distribute(Vec::new(), vec![provider(zk_id, 500), provider(zk_id, 500)]);
 
         assert!(matches!(
             result,
-            Err(DistributionError::NoteAlreadyUsedForService(
+            Err(DistributionError::DuplicateProvider(
+                key,
                 ServiceType::BlendNetwork
-            ))
+            )) if key == zk_id
         ));
+    }
+
+    #[test]
+    fn a_provider_entry_requires_its_amount() {
+        let without_amount = "\
+provider_id: aa70aafc48536ae13168ed4845981a40cbd2dc1c38df88d04c46250e9ad65ce0
+zk_id: 852efb444db8c3c811625850df39425f43aeffc69571192c0be9f72523256e0a
+note_pk: 852efb444db8c3c811625850df39425f43aeffc69571192c0be9f72523256e0a
+note_stake_pk: 852efb444db8c3c811625850df39425f43aeffc69571192c0be9f72523256e0a
+locators:
+  - /ip4/127.0.0.1/udp/3400/quic-v1
+service_type: BN
+";
+        assert!(serde_yaml::from_str::<ProviderInfo>(without_amount).is_err());
+        let with_amount = format!("{without_amount}amount: 1000000000\n");
+        assert_eq!(
+            serde_yaml::from_str::<ProviderInfo>(&with_amount)
+                .unwrap()
+                .amount,
+            1_000_000_000
+        );
     }
 }

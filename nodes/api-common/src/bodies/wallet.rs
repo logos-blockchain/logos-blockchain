@@ -1,5 +1,5 @@
 pub mod balance {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     use axum::{
         http::StatusCode,
@@ -7,7 +7,7 @@ pub mod balance {
     };
     use lb_core::{
         header::HeaderId,
-        mantle::{NoteId, Value},
+        mantle::{Value, notes::NoteCommitment},
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_log_targets::api;
@@ -20,7 +20,11 @@ pub mod balance {
     pub struct WalletBalanceResponseBody {
         pub tip: HeaderId,
         pub balance: Value,
-        pub notes: HashMap<NoteId, Value>,
+        pub notes: HashMap<NoteCommitment, Value>,
+        /// The ones of `notes` younger than the root a spend from `tip` names,
+        /// which no spend can use yet. They count in `balance`. A note reserved
+        /// for an in-flight transaction is not listed.
+        pub pending_notes: HashSet<NoteCommitment>,
         pub address: ZkPublicKey,
     }
 
@@ -42,64 +46,6 @@ pub mod balance {
     }
 }
 
-pub mod claimable_vouchers {
-    use axum::{
-        http::StatusCode,
-        response::{IntoResponse, Response},
-    };
-    use lb_core::{
-        header::HeaderId,
-        mantle::{
-            Value,
-            ops::leader_claim::{VoucherCm, VoucherNullifier},
-        },
-    };
-    use lb_log_targets::api;
-    use serde::{Deserialize, Serialize};
-    use tracing::error;
-
-    const LOG_TARGET: &str = api::http::wallet::CLAIMABLE_VOUCHERS;
-
-    #[derive(Serialize, Deserialize)]
-    pub struct ClaimableVoucherInfoResponseBody {
-        pub commitment: VoucherCm,
-        pub nullifier: VoucherNullifier,
-    }
-
-    #[derive(Serialize, Deserialize)]
-    pub struct WalletClaimableVouchersResponseBody {
-        pub tip: HeaderId,
-        pub vouchers: Vec<ClaimableVoucherInfoResponseBody>,
-        /// What a single voucher pays out at `tip`.
-        ///
-        /// The reward pool is split evenly across every unclaimed voucher on
-        /// the chain, so this is the same for each entry in `vouchers` and it
-        /// moves as other leaders claim. It is a snapshot at `tip`, not a
-        /// guarantee of what a claim submitted now will settle for.
-        pub reward_amount: Value,
-        /// `reward_amount` times the number of `vouchers`: what this wallet
-        /// could claim in total at `tip`.
-        pub total_claimable: Value,
-    }
-
-    impl IntoResponse for WalletClaimableVouchersResponseBody {
-        fn into_response(self) -> Response {
-            let json = serde_json::to_string(&self).unwrap_or_else(|e| {
-                error!(
-                    target: LOG_TARGET,
-                    "WalletClaimableVouchersResponseBody serialization failed: {e}"
-                );
-                // We panic here because this should never happen, and if it does, it's a
-                // critical error that we want to be immediately visible during
-                // development and testing.
-                panic!("WalletClaimableVouchersResponseBody serialization failed: {e}")
-            });
-
-            (StatusCode::OK, json).into_response()
-        }
-    }
-}
-
 pub mod aged_notes {
     use axum::{
         http::StatusCode,
@@ -107,7 +53,7 @@ pub mod aged_notes {
     };
     use lb_core::{
         header::HeaderId,
-        mantle::{NoteId, Value},
+        mantle::{Value, note_set::NoteSetIndex, notes::NoteCommitment},
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_log_targets::api;
@@ -116,11 +62,13 @@ pub mod aged_notes {
 
     const LOG_TARGET: &str = api::http::wallet::AGED_NOTES;
 
-    /// One wallet-owned UTXO old enough to take part in the leadership
+    /// One wallet-owned note old enough to take part in the leadership
     /// lottery.
     #[derive(Serialize, Deserialize)]
     pub struct LeaderAgedNoteResponseBody {
-        pub note_id: NoteId,
+        pub commitment: NoteCommitment,
+        /// The note set holding the note.
+        pub note_set: NoteSetIndex,
         pub value: Value,
         /// The wallet address holding the note.
         pub public_key: ZkPublicKey,
@@ -134,9 +82,6 @@ pub mod aged_notes {
     /// empty `notes` means this node cannot win a slot at `tip`: either it
     /// owns no notes, or none of them have aged into the current epoch's
     /// snapshot yet.
-    ///
-    /// The set is reported unfiltered. The leader service additionally skips
-    /// the UTXOs of the keys in `consensus_excluded_keys`.
     #[derive(Serialize, Deserialize)]
     pub struct LeaderAgedNotesResponseBody {
         pub tip: HeaderId,
@@ -173,10 +118,7 @@ pub mod transfer_funds {
     };
     use lb_core::{
         header::HeaderId,
-        mantle::{
-            SignedOps, Value, ledger::verification_mode::StandardMode, traits::Hashable as _,
-            transactions::states::VerificationState,
-        },
+        mantle::{Note, TxHash, Value},
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_log_targets::api;
@@ -196,15 +138,10 @@ pub mod transfer_funds {
 
     #[derive(Serialize, Deserialize)]
     pub struct WalletTransferFundsResponseBody {
-        pub hash: lb_core::mantle::transactions::TxHash,
-    }
-
-    impl<State: VerificationState> From<SignedOps<State, StandardMode>>
-        for WalletTransferFundsResponseBody
-    {
-        fn from(value: SignedOps<State, StandardMode>) -> Self {
-            Self { hash: value.hash() }
-        }
+        pub hash: TxHash,
+        /// The note paid to the recipient. A recipient whose wallet is not this
+        /// node's imports it to spend it.
+        pub recipient_note: Note,
     }
 
     impl IntoResponse for WalletTransferFundsResponseBody {
@@ -243,7 +180,9 @@ pub mod fund {
         pub tx_builder: MantleTxBuilder,
         pub change_public_key: ZkPublicKey,
         pub funding_public_keys: Vec<ZkPublicKey>,
-        /// Absolute hard cap on the final funded transaction fee.
+        /// Absolute hard cap on the final funded transaction fee. The priority
+        /// reserve is cut down to stay within it, so only a mandatory fee above
+        /// it refuses the request.
         pub max_tx_fee: GasCost,
         /// Percentage of the final mandatory fee reserved as a priority fee.
         /// The percentage applies to the complete mandatory fee (execution
@@ -267,18 +206,16 @@ pub mod fund {
         /// The funded transaction, with the fee transfer appended as the last
         /// op. All ops are still unsigned.
         pub funded_tx: Ops,
-        /// Proof for the appended fee transfer, signed over the funded
-        /// transaction hash. `None` if funding required no transfer (zero
-        /// fee and no inputs pulled in).
+        /// `ZkTransfer` proof for the appended fee transfer, bound to the
+        /// funded transaction hash. `None` if funding required no transfer
+        /// (zero fee and no inputs pulled in).
         pub transfer_proof: Option<OpProof>,
     }
 }
 
 pub mod sign {
     use lb_core::mantle::transactions::hash::TxHash;
-    use lb_key_management_system_keys::keys::{
-        Ed25519Key, ZkPublicKeys, ZkSignature, secured_key::SecuredKey,
-    };
+    use lb_key_management_system_keys::keys::{Ed25519Key, secured_key::SecuredKey};
     use serde::{Deserialize, Serialize};
 
     #[derive(Serialize, Deserialize)]
@@ -291,15 +228,37 @@ pub mod sign {
     pub struct WalletSignTxEd25519ResponseBody {
         pub sig: <Ed25519Key as SecuredKey>::Signature,
     }
+}
 
+pub mod import {
+    use lb_core::mantle::{Note, note_set::NoteSetIndex};
+    use serde::{Deserialize, Serialize};
+
+    /// A note paid to this node's wallet by a transaction it did not build.
+    /// The wallet learns its opening and follows it in `note_set`.
     #[derive(Serialize, Deserialize)]
-    pub struct WalletSignTxZkRequestBody {
-        pub tx_hash: TxHash,
-        pub pks: ZkPublicKeys,
+    pub struct WalletImportNoteRequestBody {
+        pub note: Note,
+        pub note_set: NoteSetIndex,
     }
+}
 
-    #[derive(Serialize, Deserialize)]
-    pub struct WalletSignTxZkResponseBody {
-        pub sig: ZkSignature,
+#[cfg(test)]
+mod tests {
+    use lb_core::mantle::{Note, note_set::NoteSetIndex};
+    use lb_groth16::Fr;
+    use lb_key_management_system_keys::keys::ZkPublicKey;
+
+    use super::import::WalletImportNoteRequestBody;
+
+    #[test]
+    fn import_note_body_round_trips() {
+        let body = WalletImportNoteRequestBody {
+            note: Note::new(5, Fr::from(3u64), ZkPublicKey::new(Fr::from(7u64))),
+            note_set: NoteSetIndex::Ledger,
+        };
+        let decoded: WalletImportNoteRequestBody =
+            serde_json::from_str(&serde_json::to_string(&body).unwrap()).unwrap();
+        assert_eq!((decoded.note, decoded.note_set), (body.note, body.note_set));
     }
 }

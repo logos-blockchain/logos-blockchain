@@ -18,6 +18,7 @@ use crate::cucumber::{
             parse_u64_cell,
         },
     },
+    utils::lgo_to_units,
     world::CucumberWorld,
 };
 
@@ -171,7 +172,7 @@ async fn step_submit_underfunded_self_transfer(
         &wallet_name,
         &node_name,
         transaction_alias,
-        -i128::from(shortfall),
+        -i128::from(lgo_to_units(shortfall)),
     )
     .await
 }
@@ -194,7 +195,7 @@ async fn step_prepare_self_transfer_with_tip(
         &wallet_name,
         &node_name,
         transaction_alias,
-        i128::from(tip),
+        i128::from(lgo_to_units(tip)),
     )
     .await
 }
@@ -251,7 +252,7 @@ async fn step_prepared_transaction_tip_absorbed_fee_increase(
         world,
         step,
         &transaction_alias,
-        original_tip,
+        lgo_to_units(original_tip),
         &node_name,
     )
     .await
@@ -259,20 +260,20 @@ async fn step_prepared_transaction_tip_absorbed_fee_increase(
 
 #[then(
     expr = "transaction {string} prepared with a {int}% priority fee reserve remains funded \
-            with a smaller reserve at current prices on node {string}"
+            at current prices and at the peak recorded storage price on node {string}"
 )]
 #[expect(
     clippy::needless_pass_by_ref_mut,
     reason = "cucumber step entrypoints must take `&mut World`"
 )]
-async fn step_prepared_transaction_percentage_reserve_absorbed_fee_increase(
+async fn step_prepared_transaction_percentage_reserve_covers_repriced_fee(
     world: &mut CucumberWorld,
     step: &Step,
     transaction_alias: String,
     configured_percent: u64,
     node_name: String,
 ) -> StepResult {
-    assertions::prepared_transaction_percentage_reserve_absorbed_fee_increase(
+    assertions::prepared_transaction_percentage_reserve_covers_repriced_fee(
         world,
         step,
         &transaction_alias,
@@ -364,7 +365,7 @@ async fn step_concurrently_fund_transfers(world: &mut CucumberWorld, step: &Step
     let requests = parse_table_rows(step, HEADERS, "Concurrent transfer", |row| match row {
         [amount, funding_wallets, recipient_wallet, node, alias] => {
             Ok(actions::ConcurrentTransferRequest {
-                amount: parse_u64_cell(amount, "amount")?,
+                amount: lgo_to_units(parse_u64_cell(amount, "amount")?),
                 funding_wallets: parse_list_cell(
                     funding_wallets,
                     "funding_wallets",

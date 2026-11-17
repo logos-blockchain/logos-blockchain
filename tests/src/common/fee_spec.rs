@@ -11,9 +11,9 @@
 //! - [Storage Markets]
 //! - [Gas Cost Determination]
 //!
-//! [Execution Market]: https://github.com/logos-co/logos-lips/blob/38916aa474164ac4acd81e62d19715e17626be17/docs/blockchain/raw/execution-market.md
+//! [Execution Market]: https://github.com/logos-co/logos-lips/blob/fe5a31d6da3dda6833d0a282e121d9633ec73c99/docs/blockchain/raw/execution-market.md
 //! [Storage Markets]: https://github.com/logos-co/logos-lips/blob/38916aa474164ac4acd81e62d19715e17626be17/docs/blockchain/raw/storage-markets.md
-//! [Gas Cost Determination]: https://github.com/logos-co/logos-lips/blob/38916aa474164ac4acd81e62d19715e17626be17/docs/blockchain/raw/analysis-gas-cost-determination.md
+//! [Gas Cost Determination]: https://github.com/logos-co/logos-lips/blob/fe5a31d6da3dda6833d0a282e121d9633ec73c99/docs/blockchain/raw/analysis-gas-cost-determination.md
 
 use std::collections::{HashMap, HashSet};
 
@@ -21,15 +21,19 @@ use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_common_http_client::ApiBlock;
 use lb_config::deployment::GAS_PROFILE;
 use lb_core::{
+    crypto::ZkHasher,
     era::ForkDigest,
     mantle::{
-        Note, SignedOps, Utxo,
+        Note, OpProof, SignedOps,
         gas::TxGasCalculator as _,
         ledger::verification_mode::{StandardMode, VerificationMode},
-        ops::OpRef,
+        note_set::NoteSetIndex,
+        notes::derive_note_nullifier,
+        ops::{OpRef, ZkTransferProof, transfer::test_utils::prove_transfer},
         traits::Hashable as _,
         transactions::{
-            GasPrices, MantleTxBuilder,
+            GasPrices, MantleTxBuilder, OpProofs,
+            builder::FundingNote,
             codec::minimum_signed_transaction_size,
             states::{Preverified, VerificationState},
             tx_list::ops::{OpsContext, OpsGasContext},
@@ -37,21 +41,36 @@ use lb_core::{
     },
 };
 use lb_testing_framework::configs::wallet::WalletAccount;
+use lb_wallet::{KnownNote, KnownNotes, WalletState};
 
-use crate::common::wallet::transfer_proofs_for_funded_wallet_tx;
+use crate::common::wallet::{GenesisNotes, random_nonce};
 
-/// Execution Market v1.1.0: base fee starts at 1.
-pub const SPEC_GENESIS_EXECUTION_PRICE: u128 = 1;
-/// Execution Market v1.1.0: EMA keeps 9/10 of history per block.
+/// Execution Market v1.3.0: base fee starts at 1 LGO, `10^9` units.
+pub const SPEC_GENESIS_EXECUTION_PRICE: u128 = 1_000_000_000;
+/// Execution Market v1.3.0: EMA keeps 9/10 of history per block.
 pub const SPEC_EMA_PREV_WEIGHT: u128 = 9;
-/// Execution Market v1.1.0: EMA denominator.
+/// Execution Market v1.3.0: EMA denominator.
 pub const SPEC_EMA_DENOMINATOR: u128 = 10;
-/// Execution Market v1.1.0: `7 * G_target`, with `G_target = 1_596_730`.
-pub const SPEC_BASE_FEE_NUMERATOR: u128 = 11_177_110;
-/// Execution Market v1.1.0: `8 * G_target`.
-pub const SPEC_BASE_FEE_DENOMINATOR: u128 = 12_773_840;
-/// Gas Cost Determination v1.5.1: a transfer costs 590 gas.
-pub const SPEC_TRANSFER_GAS: u64 = 590;
+/// Execution Market v1.3.2: `7 * G_target`, with `G_target = 1_568_899`.
+pub const SPEC_BASE_FEE_NUMERATOR: u128 = 10_982_293;
+/// Execution Market v1.3.2: `8 * G_target`.
+pub const SPEC_BASE_FEE_DENOMINATOR: u128 = 12_551_192;
+/// Gas Cost Determination 2.0.0: the Transfer Operation costs 10 gas.
+pub const SPEC_TRANSFER_GAS: u64 = 10;
+/// Gas Cost Determination 2.0.0: verifying the proof of a spend.
+pub const SPEC_PROOF_GAS: u64 = 4_177;
+/// Gas Cost Determination 2.0.0: extending the root of a spend over a
+/// non-empty buffer.
+pub const SPEC_ROOT_GAS: u64 = 2_332;
+/// Gas Cost Determination 2.0.0: each commitment of the buffer the root is
+/// extended over.
+pub const SPEC_BUFFERED_GAS: u64 = 60;
+/// Gas Cost Determination 2.0.0: each nullifier of a spend.
+pub const SPEC_NULLIFIER_GAS: u64 = 1_758;
+/// Gas Cost Determination 2.0.0: each commitment of a spend.
+pub const SPEC_COMMITMENT_GAS: u64 = 58;
+/// Gas Cost Determination 2.0.0: each 1000 bytes of a transaction, floored.
+pub const SPEC_KB_GAS: u64 = 30;
 
 /// Computes a percentage reserve with checked widened arithmetic and integer
 /// ceiling, matching the transaction funding rule.
@@ -107,7 +126,9 @@ pub struct GasPriceRecord {
 
 /// Execution gas of one block, from the spec's per-op table.
 ///
-/// Only ops the fee scenarios create are mapped.
+/// Each Transfer costs its Operation gas plus the spend of its notes over the
+/// commitments the transaction buffered before it, and each transaction adds
+/// its bytes. Only ops the fee scenarios create are mapped.
 ///
 /// # Errors
 ///
@@ -117,9 +138,24 @@ pub fn spec_block_execution_gas(block: &ApiBlock) -> Result<u64, String> {
     let mut total = 0;
 
     for tx in &block.transactions {
+        let mut buffered = 0u64;
+        // The referenced root and buffered count of the proofs extending a root,
+        // each extension paid once by the transaction.
+        let mut extended_roots = HashSet::new();
         for op in tx.op_refs() {
             match op {
-                OpRef::Transfer(_) => total += SPEC_TRANSFER_GAS,
+                OpRef::Transfer(transfer) => {
+                    let inputs = transfer.inputs.len() as u64;
+                    let outputs = transfer.outputs.len() as u64;
+                    if buffered > 0 {
+                        extended_roots.insert((transfer.commitment_merkle_root, buffered));
+                    }
+                    total += SPEC_TRANSFER_GAS
+                        + SPEC_PROOF_GAS
+                        + SPEC_NULLIFIER_GAS * inputs
+                        + SPEC_COMMITMENT_GAS * outputs;
+                    buffered += outputs;
+                }
                 other => {
                     return Err(format!(
                         "unexpected operation {} in a fee-scenario block; extend the spec \
@@ -129,48 +165,72 @@ pub fn spec_block_execution_gas(block: &ApiBlock) -> Result<u64, String> {
                 }
             }
         }
+        total += extended_roots
+            .iter()
+            .map(|(_, buffered)| SPEC_ROOT_GAS + SPEC_BUFFERED_GAS * buffered)
+            .sum::<u64>();
+        // Transfers change no channel or SDP note set, so the transaction
+        // adds only its bytes on top.
+        total += SPEC_KB_GAS * tx.encode().len() as u64 / 1000;
     }
 
     Ok(total)
 }
 
-/// Builds a signed self-transfer paying its mandatory fee plus `tip`.
+/// Builds a signed self-transfer paying its mandatory fee plus `tip`, with the
+/// openings of the notes it creates.
 ///
 /// A negative `tip` deliberately underfunds it. Spends the account's genesis
-/// note. The fee is recomputed until stable because the encoded size, and
-/// with it the storage fee, depends on the output value.
+/// note with a `ZkTransfer` against the genesis ledger set root. The fee is
+/// recomputed until stable because the encoded size, and with it the storage
+/// fee, depends on the output value.
 ///
 /// # Panics
 ///
 /// Panics on broken test setup, e.g. the account owns no genesis note.
 #[must_use]
 pub fn self_transfer_paying_fee_at(
-    genesis_utxos: &[Utxo],
+    genesis: &GenesisNotes,
     account: &WalletAccount,
     prices: &GasPrices,
     tip: i128,
     fork_digest: ForkDigest,
-) -> SignedOps<Preverified, StandardMode> {
+) -> (SignedOps<Preverified, StandardMode>, Vec<Note>) {
     const MAX_FEE_CONVERGENCE_ATTEMPTS: usize = 32;
 
-    let utxo = genesis_utxos
+    let secret_key = *account.secret_key.as_fr();
+    let note = genesis
+        .notes
         .iter()
-        .find(|utxo| utxo.note.pk == account.public_key())
+        .find(|note| note.public_key == account.public_key())
         .copied()
         .expect("account should own a genesis note");
+    let nullifier = derive_note_nullifier(&note.commitment(), &account.secret_key.nullifier_key());
+    let known = KnownNotes::from([(
+        note.commitment(),
+        KnownNote {
+            note,
+            note_set: NoteSetIndex::Ledger,
+            nullifier,
+        },
+    )]);
+    let owned = WalletState::from_genesis(&known, &genesis.notes, &genesis.service_notes, 0.into())
+        .expect("genesis notes should fit their note sets")
+        .notes_owned_by_pks([account.public_key()])
+        .pop()
+        .expect("account should own a genesis note");
+    let root = owned.path.root::<ZkHasher>(note.commitment().0);
 
-    let gas_context =
-        OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone(), GAS_PROFILE);
     let context = OpsContext {
-        gas_context,
-        leader_reward_amount: 0,
+        gas_context: OpsGasContext::new(HashMap::new(), prices.clone(), GAS_PROFILE),
     };
+    let output_nonce = random_nonce();
 
     let builder_with_output = |output_value: u64| {
         MantleTxBuilder::new()
-            .add_ledger_input(utxo)
+            .extend_funding_inputs(root, [FundingNote { note, nullifier }])
             .expect("input should fit")
-            .add_ledger_output(Note::new(output_value, account.public_key()))
+            .add_ledger_output(Note::new(output_value, output_nonce, account.public_key()))
             .expect("output should fit")
     };
 
@@ -184,13 +244,12 @@ pub fn self_transfer_paying_fee_at(
     };
 
     let output_for_fee = |fee: i128| {
-        u64::try_from(i128::from(utxo.note.value) - fee - tip)
-            .expect("output value should be positive")
+        u64::try_from(i128::from(note.value) - fee - tip).expect("output value should be positive")
     };
 
     // The fee depends on the encoded size, which depends on the output value,
     // which depends on the fee - so recompute until the fee stops changing.
-    let mut fee = fee_for_output(utxo.note.value);
+    let mut fee = fee_for_output(note.value);
     let mut seen_fees = HashSet::new();
     let mut converged = false;
 
@@ -225,16 +284,28 @@ pub fn self_transfer_paying_fee_at(
         "the built transaction must carry exactly the requested tip"
     );
 
+    let outputs = builder
+        .openings()
+        .into_values()
+        .next()
+        .expect("the self-transfer should have a funding opening")
+        .outputs;
     let mantle_tx = builder
         .build(fork_digest)
         .expect("transaction should build");
-    let op_proofs = transfer_proofs_for_funded_wallet_tx(&mantle_tx, &account.secret_key)
-        .expect("transfer proofs should build");
+    let proof = prove_transfer(
+        &[(note, secret_key, owned.path)],
+        &outputs,
+        root,
+        mantle_tx.hash().to_fr(),
+    );
+    let op_proofs = OpProofs::from([OpProof::ZkTransfer(ZkTransferProof::new(proof))]);
 
-    SignedOps::from_parts(mantle_tx, op_proofs)
+    let signed_tx = SignedOps::from_parts(mantle_tx, op_proofs)
         .expect("signed transaction should build")
         .preverify()
-        .expect("signed transaction should be valid")
+        .expect("signed transaction should be valid");
+    (signed_tx, outputs)
 }
 
 /// The storage fee is charged on a predicted size; it has to match the real
@@ -247,8 +318,7 @@ pub fn check_size_prediction<State: VerificationState, Mode: VerificationMode>(
     tx: &SignedOps<State, Mode>,
     prices: &GasPrices,
 ) -> Result<(), String> {
-    let gas_context =
-        OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone(), GAS_PROFILE);
+    let gas_context = OpsGasContext::new(HashMap::new(), prices.clone(), GAS_PROFILE);
     let predicted = minimum_signed_transaction_size(&tx.op_refs(), &gas_context) as u64;
     let actual = tx.encode().len() as u64;
     if predicted == actual {
@@ -260,36 +330,26 @@ pub fn check_size_prediction<State: VerificationState, Mode: VerificationMode>(
     }
 }
 
-/// Net balance (inputs minus outputs) of a transaction - the amount it
-/// burns. Inputs are valued against the genesis UTXO set.
+/// Net balance of a transaction, the amount it burns: the excess of each
+/// Transfer is its inputs minus its outputs.
 ///
 /// # Errors
 ///
-/// Errors on inputs that are not genesis notes; the fee scenarios only spend
-/// genesis notes.
-pub fn net_balance_against<State: VerificationState, Mode: VerificationMode>(
-    genesis_utxos: &[Utxo],
+/// Errors when the excess total overflows.
+pub fn net_balance<State: VerificationState, Mode: VerificationMode>(
     tx: &SignedOps<State, Mode>,
 ) -> Result<u64, String> {
-    let mut input_sum = 0u64;
-    let mut output_sum = 0u64;
-    for op in tx.op_refs() {
-        if let OpRef::Transfer(transfer) = op {
-            for input in transfer.inputs.iter() {
-                let utxo = genesis_utxos
-                    .iter()
-                    .find(|utxo| utxo.id() == *input)
-                    .ok_or_else(|| {
-                        format!("transaction {:?} spends a non-genesis note", tx.hash())
-                    })?;
-                input_sum += utxo.note.value;
-            }
-            for note in transfer.outputs.iter() {
-                output_sum += note.value;
-            }
-        }
-    }
-    Ok(input_sum - output_sum)
+    tx.op_refs()
+        .into_iter()
+        .filter_map(|op| match op {
+            OpRef::Transfer(transfer) => Some(transfer.excess_value),
+            _ => None,
+        })
+        .try_fold(0u64, |total, excess| {
+            total
+                .checked_add(excess)
+                .ok_or_else(|| format!("transaction {:?} excess overflowed", tx.hash()))
+        })
 }
 
 /// Surplus balance left after charging a transaction at `prices`.
@@ -302,13 +362,11 @@ pub fn net_balance_against<State: VerificationState, Mode: VerificationMode>(
 /// Returns an error when the transaction's balance or gas cost cannot be
 /// calculated.
 pub fn fee_surplus_at<State: VerificationState, Mode: VerificationMode>(
-    genesis_utxos: &[Utxo],
     tx: &SignedOps<State, Mode>,
     prices: &GasPrices,
 ) -> Result<i128, String> {
-    let paid = net_balance_against(genesis_utxos, tx)?;
-    let gas_context =
-        OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone(), GAS_PROFILE);
+    let paid = net_balance(tx)?;
+    let gas_context = OpsGasContext::new(HashMap::new(), prices.clone(), GAS_PROFILE);
     let required = tx
         .op_refs()
         .total_gas_cost(&gas_context)

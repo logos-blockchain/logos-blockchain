@@ -2,8 +2,9 @@ pub mod deserialize;
 
 use core::fmt::{self, Debug, Formatter};
 
-use ark_bn254::Bn254;
-use ark_ec::pairing::Pairing;
+use ark_bn254::{Bn254, Fq};
+use ark_ec::{AffineRepr as _, pairing::Pairing};
+use ark_ff::{BigInt, PrimeField as _};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize as _, SerializationError};
 use generic_array::{ArrayLength, GenericArray, typenum::Unsigned as _};
 
@@ -27,6 +28,35 @@ pub trait CompressSize: Pairing {
 }
 
 pub const COMPRESSED_PROOF_SIZE: usize = 128;
+
+const COORDINATE_SIZE: usize = 32;
+/// The flags of a compressed point, the two top bits of its last byte.
+const FLAGS: u8 = 0b11 << 6;
+const INFINITY_FLAG: u8 = 1 << 6;
+
+fn coordinate_limbs(coordinate: &[u8]) -> BigInt<4> {
+    let mut limbs = [0u64; 4];
+    let (chunks, _) = coordinate.as_chunks::<8>();
+    for (limb, bytes) in limbs.iter_mut().zip(chunks) {
+        *limb = u64::from_le_bytes(*bytes);
+    }
+    BigInt::new(limbs)
+}
+
+pub fn flagged_coordinate_is_canonical(coordinate: &[u8]) -> bool {
+    let last_byte = coordinate[COORDINATE_SIZE - 1];
+    if last_byte & INFINITY_FLAG != 0 {
+        return false;
+    }
+    let mut limbs = coordinate_limbs(coordinate);
+    limbs.0[3] &= !(u64::from(FLAGS) << 56);
+    limbs < Fq::MODULUS
+}
+
+pub fn g2_coordinates_are_canonical(point: &[u8]) -> bool {
+    let (c0, c1) = point.split_at(COORDINATE_SIZE);
+    coordinate_limbs(c0) < Fq::MODULUS && flagged_coordinate_is_canonical(c1)
+}
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CompressedProof<E: CompressSize> {
@@ -79,6 +109,30 @@ impl CompressedProof<Bn254> {
         bytes[g1 + g2..].copy_from_slice(&self.pi_c);
 
         bytes
+    }
+
+    /// Mantle Transaction Encoding: a decoder rejects a point with bit 6 set
+    /// and a coordinate not less than the modulus of the base field. This
+    /// reads the bytes alone, four comparisons of 256 bits. Whether the
+    /// points are on their curve and in their subgroup is left to
+    /// [`Proof::try_from`], where the proof is verified and the points
+    /// decompressed.
+    pub fn check_encoding(&self) -> Result<(), SerializationError> {
+        let valid = flagged_coordinate_is_canonical(&self.pi_a)
+            && g2_coordinates_are_canonical(&self.pi_b)
+            && flagged_coordinate_is_canonical(&self.pi_c);
+        if valid {
+            Ok(())
+        } else {
+            Err(SerializationError::InvalidData)
+        }
+    }
+
+    /// [`Self::from_bytes`], rejecting what [`Self::check_encoding`] rejects.
+    pub fn try_from_bytes(bytes: &[u8; COMPRESSED_PROOF_SIZE]) -> Result<Self, SerializationError> {
+        let proof = Self::from_bytes(bytes);
+        proof.check_encoding()?;
+        Ok(proof)
     }
 
     /// Type-level length bound: accepts exactly G1 + G2 + G1 bytes.
@@ -153,6 +207,8 @@ impl<E: Pairing + CompressSize> TryFrom<&Proof<E>> for CompressedProof<E> {
     }
 }
 
+// Deserialization checks every point is on its curve and in its prime order
+// subgroup. The point at infinity has no encoding, and is rejected here.
 impl<E: Pairing + CompressSize> TryFrom<&CompressedProof<E>> for Proof<E> {
     type Error = SerializationError;
     fn try_from(value: &CompressedProof<E>) -> Result<Self, SerializationError> {
@@ -160,10 +216,97 @@ impl<E: Pairing + CompressSize> TryFrom<&CompressedProof<E>> for Proof<E> {
         let a = <E::G1Affine as CanonicalDeserialize>::deserialize_compressed(&pi_a[..])?;
         let b = <E::G2Affine as CanonicalDeserialize>::deserialize_compressed(&pi_b[..])?;
         let c = <E::G1Affine as CanonicalDeserialize>::deserialize_compressed(&pi_c[..])?;
+        if a.is_zero() || b.is_zero() || c.is_zero() {
+            return Err(SerializationError::InvalidData);
+        }
         Ok(Self {
             pi_a: a,
             pi_b: b,
             pi_c: c,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ark_bn254::{G1Affine, G2Affine};
+    use ark_ff::BigInteger as _;
+
+    use super::*;
+
+    fn generators() -> Proof<Bn254> {
+        Proof {
+            pi_a: G1Affine::generator(),
+            pi_b: G2Affine::generator(),
+            pi_c: G1Affine::generator(),
+        }
+    }
+
+    /// Every encoding the check rejects, decompression rejects as well, so the
+    /// check only moves the rejection to the decoder.
+    #[test]
+    fn the_encoding_check_rejects_only_what_decompression_rejects() {
+        let modulus: [u8; 32] = Fq::MODULUS.to_bytes_le().try_into().unwrap();
+        let real = CompressedProof::<Bn254>::try_from(&generators())
+            .unwrap()
+            .to_bytes();
+        for start in [0, 32, 64, 96] {
+            let mut bytes = real;
+            bytes[start..start + 32].copy_from_slice(&modulus);
+            let proof = CompressedProof::<Bn254>::from_bytes(&bytes);
+            assert!(proof.check_encoding().is_err(), "modulus at {start}");
+            assert!(
+                Proof::<Bn254>::try_from(&proof).is_err(),
+                "modulus at {start}"
+            );
+        }
+        for last_byte in [31, 95, 127] {
+            let mut bytes = real;
+            bytes[last_byte] |= INFINITY_FLAG;
+            let proof = CompressedProof::<Bn254>::from_bytes(&bytes);
+            assert!(proof.check_encoding().is_err(), "bit 6 at {last_byte}");
+            assert!(
+                Proof::<Bn254>::try_from(&proof).is_err(),
+                "bit 6 at {last_byte}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_proof_decodes() {
+        let compressed = CompressedProof::<Bn254>::try_from(&generators()).unwrap();
+        assert_eq!(Proof::try_from(&compressed).unwrap(), generators());
+    }
+
+    #[test]
+    fn the_point_at_infinity_is_rejected_at_every_position() {
+        let compressed = CompressedProof::<Bn254>::try_from(&generators()).unwrap();
+        let mut pi_a = compressed;
+        pi_a.pi_a.as_mut_slice().fill(0);
+        pi_a.pi_a.as_mut_slice()[31] = 1 << 6;
+        let mut pi_b = compressed;
+        pi_b.pi_b.as_mut_slice().fill(0);
+        pi_b.pi_b.as_mut_slice()[63] = 1 << 6;
+        let mut pi_c = compressed;
+        pi_c.pi_c.as_mut_slice().fill(0);
+        pi_c.pi_c.as_mut_slice()[31] = 1 << 6;
+        for proof in [pi_a, pi_b, pi_c] {
+            assert!(Proof::<Bn254>::try_from(&proof).is_err());
+        }
+    }
+
+    #[test]
+    fn the_point_at_infinity_is_rejected_whatever_its_coordinate_and_with_both_flags() {
+        let compressed = CompressedProof::<Bn254>::try_from(&generators()).unwrap();
+        let mut any_coordinate = compressed;
+        any_coordinate.pi_a.as_mut_slice().fill(0);
+        any_coordinate.pi_a.as_mut_slice()[0] = 5;
+        any_coordinate.pi_a.as_mut_slice()[31] = 1 << 6;
+        let mut both_flags = compressed;
+        both_flags.pi_a.as_mut_slice().fill(0);
+        both_flags.pi_a.as_mut_slice()[31] = 0b11 << 6;
+        for proof in [any_coordinate, both_flags] {
+            assert!(Proof::<Bn254>::try_from(&proof).is_err());
+        }
     }
 }

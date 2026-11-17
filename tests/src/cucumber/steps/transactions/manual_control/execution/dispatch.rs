@@ -1,13 +1,14 @@
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
-use lb_core::{header::HeaderId, mantle::Utxo};
+use lb_core::header::HeaderId;
+use lb_wallet::OwnedNote;
 
 use super::{
-    BTreeMap, BuildHasher, CucumberWorld, Duration, HashSet, ManualCommand, NoteId, StepError,
-    TARGET, TxHash, WalletOutputState, WalletSendReadiness, WalletUtxos, all_user_wallets,
-    build_cycle_fee_policy, clear_all_wallet_encumbrances, clear_wallet_encumbrances,
-    create_snapshot_all_nodes_with_wallet_state, create_snapshot_node_with_wallet_state,
-    current_available_utxos_for_user_wallets,
+    BTreeMap, BuildHasher, CucumberWorld, Duration, HashSet, ManualCommand, NoteNullifier,
+    StepError, TARGET, TxHash, WalletOutputState, WalletSendReadiness, WalletUtxos,
+    all_user_wallets, build_cycle_fee_policy, clear_all_wallet_encumbrances,
+    clear_wallet_encumbrances, create_snapshot_all_nodes_with_wallet_state,
+    create_snapshot_node_with_wallet_state, current_available_utxos_for_user_wallets,
     dependent::{DependentBurstDiagnostics, DependentTransactionLoadState, shuffle_if_dependent},
     drain_all_node_wallets, execute_coin_split, execute_coin_split_with_utxo_cache,
     execute_continuous_round_robin, execute_drain, execute_send, export_funds, extend_note_id_set,
@@ -748,7 +749,7 @@ struct ContinuousWorkloadRetirementContext<'a> {
 #[derive(Debug, Clone)]
 struct ContinuousWorkloadReservation {
     wallet_name: String,
-    inputs: Vec<Utxo>,
+    inputs: Vec<OwnedNote>,
     reserved_height: u64,
     reserved_tip: Option<HeaderId>,
     eligible_for_retirement: bool,
@@ -771,7 +772,7 @@ pub struct ContinuousWorkloadReservations {
 struct ReservationRetirementCandidate {
     tx_hash: TxHash,
     wallet_name: String,
-    inputs: Vec<Utxo>,
+    inputs: Vec<OwnedNote>,
 }
 
 #[derive(Debug, Default)]
@@ -794,7 +795,7 @@ impl ContinuousWorkloadReservations {
         &mut self,
         tx_hash: TxHash,
         wallet_name: String,
-        inputs: Vec<Utxo>,
+        inputs: Vec<OwnedNote>,
         reserved_height: u64,
         reserved_tip: Option<HeaderId>,
     ) {
@@ -871,7 +872,7 @@ impl ContinuousWorkloadReservations {
                     reservation
                         .inputs
                         .iter()
-                        .map(Utxo::id)
+                        .map(|input| input.nullifier)
                         .collect::<HashSet<_>>(),
                 )
             })
@@ -908,10 +909,10 @@ impl ContinuousWorkloadReservations {
                 .iter()
                 .filter(|input| {
                     !active_note_ids.iter().any(|(other_hash, note_ids)| {
-                        other_hash != tx_hash && note_ids.contains(&input.id())
+                        other_hash != tx_hash && note_ids.contains(&input.nullifier)
                     })
                 })
-                .copied()
+                .cloned()
                 .collect::<Vec<_>>();
             if inputs.is_empty() {
                 continue;
@@ -929,7 +930,7 @@ impl ContinuousWorkloadReservations {
     fn mark_retired(
         &mut self,
         candidate: &ReservationRetirementCandidate,
-        released_inputs: &[Utxo],
+        released_inputs: &[OwnedNote],
         current_height: u64,
     ) {
         self.active.remove(&candidate.tx_hash);
@@ -1301,7 +1302,7 @@ fn maintain_continuous_workload_reservations(
         let note_ids = candidate
             .inputs
             .iter()
-            .map(Utxo::id)
+            .map(|input| input.nullifier)
             .collect::<HashSet<_>>();
         let released_inputs = world
             .with_wallets_mut(|wallets| {
@@ -1546,12 +1547,12 @@ async fn execute_ring_send_round_with_utxo_cache<S: BuildHasher + Sync>(
     round_number: usize,
     epochs_headroom: u32,
     available_utxos: &mut WalletUtxos,
-    used_input_note_ids: &HashSet<NoteId, S>,
+    used_input_note_ids: &HashSet<NoteNullifier, S>,
     dependent_state: Option<&DependentTransactionLoadState>,
     mempool_diagnostics: bool,
     reservation_retirement: Option<ContinuousWorkloadRetirementContext<'_>>,
     workload_reservations: &mut ContinuousWorkloadReservations,
-) -> Result<(HashSet<TxHash>, HashSet<NoteId>), StepError> {
+) -> Result<(HashSet<TxHash>, HashSet<NoteNullifier>), StepError> {
     let policy = build_cycle_fee_policy(world, step, &wallet_names[0], epochs_headroom).await?;
     let mode = if dependent_state.is_some() {
         "CONTINUOUS DEPENDENT NEXT WALLET"
@@ -1688,7 +1689,7 @@ async fn execute_ring_send_round_with_utxo_cache<S: BuildHasher + Sync>(
         "Built next-wallet workload UTXO indexes once for the round"
     );
 
-    let mut cycle_used_input_note_ids: HashSet<NoteId> = HashSet::new();
+    let mut cycle_used_input_note_ids: HashSet<NoteNullifier> = HashSet::new();
     for submission in &signed_submissions {
         extend_note_id_set(
             &mut cycle_used_input_note_ids,
@@ -2323,10 +2324,13 @@ mod continuous_workload_reservation_tests {
 
     use lb_core::{
         header::HeaderId,
-        mantle::{Note, TxHash, Utxo},
+        mantle::{Note, TxHash, note_set::NoteSetIndex, notes::NoteNullifier},
     };
-    use lb_key_management_system_service::keys::ZkPublicKey;
+    use lb_groth16::Fr;
+    use lb_key_management_system_service::keys::{UnsecuredZkKey, ZkPublicKey};
+    use lb_mmr::MerklePath;
     use lb_testing_framework::configs::wallet::WalletAccount;
+    use lb_wallet::OwnedNote;
 
     use super::{
         ContinuousRoundCompletion, ContinuousWorkloadReservations,
@@ -2430,12 +2434,13 @@ mod continuous_workload_reservation_tests {
             world::{CucumberWorld, WalletInfo, WalletType},
         },
     };
-    fn input(value: u64, index: usize) -> Utxo {
-        Utxo::new(
-            [u8::try_from(index).expect("test input index fits u8"); 32],
-            index,
-            Note::new(value, ZkPublicKey::zero()),
-        )
+    fn input(value: u64, index: u64) -> OwnedNote {
+        OwnedNote {
+            note: Note::new(value, Fr::from(index), ZkPublicKey::zero()),
+            note_set: NoteSetIndex::Ledger,
+            nullifier: NoteNullifier(Fr::from(index)),
+            path: MerklePath::try_new(0, Vec::new()).expect("an empty path is bounded"),
+        }
     }
 
     fn block_id(seed: u8) -> HeaderId {
@@ -2465,7 +2470,13 @@ mod continuous_workload_reservation_tests {
         let input = input(25, 1);
         let anchor = block_id(10);
         let mut reservations = ContinuousWorkloadReservations::default();
-        reservations.register(tx_hash, "wallet".to_owned(), vec![input], 100, Some(anchor));
+        reservations.register(
+            tx_hash,
+            "wallet".to_owned(),
+            vec![input.clone()],
+            100,
+            Some(anchor),
+        );
 
         let (active, candidates) = reservations.observe_canonical_chain(
             105,
@@ -2564,7 +2575,7 @@ mod continuous_workload_reservation_tests {
         reservations.register(
             shared_hash,
             "wallet".to_owned(),
-            vec![shared_input],
+            vec![shared_input.clone()],
             100,
             Some(anchor),
         );
@@ -2594,14 +2605,14 @@ mod continuous_workload_reservation_tests {
         reservations.register(
             first_hash,
             "wallet".to_owned(),
-            vec![shared_input],
+            vec![shared_input.clone()],
             100,
             Some(anchor),
         );
         reservations.register(
             second_hash,
             "wallet".to_owned(),
-            vec![shared_input],
+            vec![shared_input.clone()],
             100,
             Some(anchor),
         );
@@ -2688,9 +2699,12 @@ mod continuous_workload_reservation_tests {
             .with_wallets_mut(|wallets| {
                 wallets.replace_current_wallets_utxos([(
                     "wallet".into(),
-                    vec![stale_input, unrelated_input],
+                    vec![stale_input.clone(), unrelated_input.clone()],
                 )]);
-                for (hash, input) in [(outstanding, stale_input), (unrelated, unrelated_input)] {
+                for (hash, input) in [
+                    (outstanding, stale_input.clone()),
+                    (unrelated, unrelated_input.clone()),
+                ] {
                     wallets.record_wallet_reservation(
                         "wallet",
                         hash,
@@ -2725,7 +2739,10 @@ mod continuous_workload_reservation_tests {
             security_parameter: 10,
         };
         let mut reservations = ContinuousWorkloadReservations::default();
-        for (hash, input) in [(outstanding, stale_input), (unrelated, unrelated_input)] {
+        for (hash, input) in [
+            (outstanding, stale_input.clone()),
+            (unrelated, unrelated_input.clone()),
+        ] {
             reservations.register(
                 hash,
                 "wallet".to_owned(),
@@ -2754,6 +2771,7 @@ mod continuous_workload_reservation_tests {
             group.applied_height = u64::from(height);
             group.target_height = Some(group.applied_height);
             group.applied_tip = Some(block_id(height));
+            group.target_tip = group.applied_tip;
             world
                 .scanner
                 .state
@@ -2810,7 +2828,7 @@ mod continuous_workload_reservation_tests {
                     wallets
                         .current_wallet_states([TrackedWalletKeys::new(
                             "wallet",
-                            [ZkPublicKey::zero()],
+                            [UnsecuredZkKey::new(Fr::from(0u64))],
                         )])
                         .into_values()
                         .next()

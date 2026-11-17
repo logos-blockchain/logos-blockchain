@@ -10,18 +10,18 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[cfg(any(test, feature = "test-utils"))]
 use crate::mantle::ops::{
     channel::{
-        channel_transfer::ChannelTransferOp, config::ChannelConfigOp, deposit::DepositOp,
-        inscribe::InscriptionOp, withdraw::ChannelWithdrawOp,
+        config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
+        withdraw::ChannelWithdrawOp,
     },
-    leader_claim::LeaderClaimOp,
     pow::ClaimPowRewardOp,
+    program::ProgramRegisterOp,
     sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     transfer::TransferOp,
 };
 use crate::{
     era::ForkDigest,
     mantle::{
-        Op, OpRef, TxHash, Value,
+        Op, OpRef, TxHash,
         channel::Channels,
         gas::{Gas, GasCost, GasOverflow, GasProfile, TxGasCalculator},
         ops::channel::{ChannelId, ChannelKeyIndex},
@@ -29,7 +29,7 @@ use crate::{
         transactions::{
             GasPrices,
             codec::minimum_signed_transaction_size,
-            thresholds::RunningThresholds,
+            thresholds::TxGasState,
             tx_list::{
                 OpRefs,
                 common::{TxBoundedVec, TxList},
@@ -44,7 +44,6 @@ use crate::{
 /// under.
 #[derive(Debug, Clone)]
 pub struct OpsGasContext {
-    transfer_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
     configuration_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
     gas_prices: GasPrices,
     gas_profile: GasProfile,
@@ -53,22 +52,15 @@ pub struct OpsGasContext {
 impl OpsGasContext {
     #[must_use]
     pub const fn new(
-        transfer_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
         configuration_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
         gas_prices: GasPrices,
         gas_profile: GasProfile,
     ) -> Self {
         Self {
-            transfer_thresholds,
             configuration_thresholds,
             gas_prices,
             gas_profile,
         }
-    }
-
-    #[must_use]
-    pub fn transfer_threshold(&self, channel_id: &ChannelId) -> Option<ChannelKeyIndex> {
-        self.transfer_thresholds.get(channel_id).copied()
     }
 
     #[must_use]
@@ -82,22 +74,12 @@ impl OpsGasContext {
         base_prices: GasPrices,
         gas_profile: GasProfile,
     ) -> Self {
-        let transfer_thresholds = value
-            .channels
-            .iter()
-            .map(|(channel_id, channel)| (*channel_id, channel.transfer_threshold))
-            .collect();
         let configuration_thresholds = value
             .channels
             .iter()
             .map(|(channel_id, channel)| (*channel_id, channel.configuration_threshold))
             .collect();
-        Self::new(
-            transfer_thresholds,
-            configuration_thresholds,
-            base_prices,
-            gas_profile,
-        )
+        Self::new(configuration_thresholds, base_prices, gas_profile)
     }
 
     #[must_use]
@@ -109,7 +91,6 @@ impl OpsGasContext {
 #[derive(Debug, Clone)]
 pub struct OpsContext {
     pub gas_context: OpsGasContext,
-    pub leader_reward_amount: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,17 +123,16 @@ impl Ops {
         Self::new(
             ForkDigest::new([0x11; 32]),
             [
-                Op::Transfer(TransferOp::sample()),               // 0x00
-                Op::ChannelConfig(ChannelConfigOp::sample()),     // 0x10
-                Op::ChannelInscribe(InscriptionOp::sample()),     // 0x11
-                Op::ChannelDeposit(DepositOp::sample()),          // 0x12
-                Op::ChannelWithdraw(ChannelWithdrawOp::sample()), // 0x13
-                Op::ChannelTransfer(ChannelTransferOp::sample()), // 0x14
-                Op::SDPDeclare(SDPDeclareOp::sample()),           // 0x20
-                Op::SDPWithdraw(SDPWithdrawOp::sample()),         // 0x21
-                Op::SDPActive(SDPActiveOp::sample()),             // 0x22
-                Op::LeaderClaim(LeaderClaimOp::sample()),         // 0x30
-                Op::ClaimPowReward(ClaimPowRewardOp::sample()),   // 0x40
+                Op::Transfer(TransferOp::sample()),                     // 0x00
+                Op::ProgramRegister(ProgramRegisterOp::sample()),       // 0x01
+                Op::ChannelConfig(ChannelConfigOp::sample()),           // 0x10
+                Op::ChannelInscribe(InscriptionOp::sample_with_step()), // 0x11
+                Op::ChannelDeposit(DepositOp::sample()),                // 0x12
+                Op::ChannelWithdraw(ChannelWithdrawOp::sample()),       // 0x13
+                Op::SDPDeclare(SDPDeclareOp::sample()),                 // 0x20
+                Op::SDPWithdraw(SDPWithdrawOp::sample()),               // 0x21
+                Op::SDPActive(SDPActiveOp::sample()),                   // 0x22
+                Op::ClaimPowReward(ClaimPowRewardOp::sample()),         // 0x30
             ],
         )
     }
@@ -206,17 +186,22 @@ impl TxGasCalculator for OpRefs<'_> {
     fn execution_gas_consumption(&self, context: &Self::Context) -> Result<Gas, GasOverflow> {
         // The thresholds carry across the fold: an Operation is priced against
         // the ones in force before it, then moves them for the ones after.
-        self.iter()
-            .try_fold(
-                (RunningThresholds::new(context), Gas::new(0)),
-                |(mut thresholds, total), op| {
-                    let total =
-                        total.checked_add(op.execution_gas(&context.gas_profile, &thresholds)?)?;
-                    thresholds.apply(*op);
-                    Ok((thresholds, total))
-                },
-            )
-            .map(|(_, total)| total)
+        let (state, operations_gas) = self.iter().try_fold(
+            (TxGasState::new(context), Gas::new(0)),
+            |(mut state, total), op| {
+                let total = total.checked_add(op.execution_gas(&context.gas_profile, &state)?)?;
+                state.apply(*op);
+                Ok((state, total))
+            },
+        )?;
+        // The transaction itself, once: its bytes, the note sets it changed and the
+        // root extensions its proofs share.
+        operations_gas
+            .checked_add(context.gas_profile.tx_terms_gas(
+                minimum_signed_transaction_size(self, context),
+                state.changed_note_sets(),
+            )?)?
+            .checked_add(state.root_extensions_gas(&context.gas_profile)?)
     }
 
     fn storage_gas_consumption(&self, context: &Self::Context) -> Result<Gas, GasOverflow> {
@@ -460,22 +445,27 @@ mod tests {
     use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 
     use super::*;
-    use crate::mantle::{fixtures::ops::op_values::FORK_DIGEST, gas::test_utils::GAS_PROFILE};
+    use crate::mantle::fixtures::ops::op_values::FORK_DIGEST;
+
+    const GAS_PROFILE: GasProfile = GasProfile::MAINNET;
 
     const CONFIGURATION_THRESHOLD: ChannelKeyIndex = 3;
-    const TRANSFER_THRESHOLD: ChannelKeyIndex = 2;
 
     #[test]
     fn total_gas_cost_sums_execution_and_storage() {
         let ops = Ops::new(FORK_DIGEST, [Op::ChannelInscribe(InscriptionOp::sample())]);
-        let context = OpsGasContext::new(
-            HashMap::new(),
-            HashMap::new(),
-            GasPrices::new(2, 3),
-            GAS_PROFILE,
-        );
+        let context = OpsGasContext::new(HashMap::new(), GasPrices::new(2, 3), GAS_PROFILE);
+        let size = minimum_signed_transaction_size(&ops.by_ref(), &context);
+        let terms = GAS_PROFILE.tx_terms_gas(size, 1).unwrap();
 
-        assert_eq!(ops.by_ref().total_gas_cost(&context), Ok(GasCost::new(739)));
+        assert_eq!(
+            ops.by_ref().total_gas_cost(&context),
+            // The inscription costs 26 + 557 execution gas at price 2, plus the bytes
+            // of the transaction and the note set of the channel it creates.
+            Ok(GasCost::new(
+                2 * (583 + terms.into_inner()) + 3 * size as u64
+            ))
+        );
     }
 
     #[test]
@@ -489,68 +479,66 @@ mod tests {
             ],
         );
         let context = OpsGasContext::new(
-            [(ChannelWithdrawOp::sample().channel_id, TRANSFER_THRESHOLD)].into(),
             [(ChannelConfigOp::sample().channel(), CONFIGURATION_THRESHOLD)].into(),
             GasPrices::new(1, 0),
             GAS_PROFILE,
         );
+        let terms = GAS_PROFILE
+            .tx_terms_gas(minimum_signed_transaction_size(&ops.by_ref(), &context), 1)
+            .unwrap();
 
         assert_eq!(
             ops.by_ref().execution_gas_consumption(&context),
-            Ok(Gas::from(168 + 590 + 112))
+            // The config: 24 + 3 * 557. The deposit and the withdrawal of the samples
+            // spend 1 input and 1 output with nothing buffered:
+            // 26 + 4177 + 1758 + 58 and 33 + 8961 + 4177 + 1758 + 58, the
+            // withdrawal paying the update of its channel set on release. The
+            // transaction adds its bytes and the note set of the deposit channel.
+            Ok(Gas::from(1_695 + 6_019 + 14_987)
+                .checked_add(terms)
+                .unwrap())
         );
     }
 
     #[test]
-    fn execution_gas_consumption_charges_nothing_for_a_channel_the_context_does_not_hold() {
-        let ops = Ops::new(
-            FORK_DIGEST,
-            [
-                Op::ChannelConfig(ChannelConfigOp::sample()),
-                Op::ChannelWithdraw(ChannelWithdrawOp::sample()),
-                Op::ChannelTransfer(ChannelTransferOp::sample()),
-            ],
-        );
+    fn execution_gas_consumption_charges_only_the_base_cost_for_a_channel_the_context_does_not_hold()
+     {
+        let ops = Ops::new(FORK_DIGEST, [Op::ChannelConfig(ChannelConfigOp::sample())]);
+        let context = OpsGasContext::new(HashMap::new(), GasPrices::default(), GAS_PROFILE);
+        // The config creates the channel, so the transaction changes its note set.
+        let terms = GAS_PROFILE
+            .tx_terms_gas(minimum_signed_transaction_size(&ops.by_ref(), &context), 1)
+            .unwrap();
 
         assert_eq!(
-            ops.by_ref().execution_gas_consumption(&OpsGasContext::new(
-                HashMap::new(),
-                HashMap::new(),
-                GasPrices::default(),
-                GAS_PROFILE
-            )),
-            Ok(Gas::from(0))
+            ops.by_ref().execution_gas_consumption(&context),
+            Ok(Gas::from(24).checked_add(terms).unwrap())
         );
     }
 
     #[test]
-    fn execution_gas_consumption_charges_the_flat_cost_of_an_op_without_a_channel() {
+    fn execution_gas_consumption_charges_the_spend_of_an_op_without_a_channel() {
         let ops = Ops::new(FORK_DIGEST, [Op::ChannelDeposit(DepositOp::sample())]);
+        let context = OpsGasContext::new(HashMap::new(), GasPrices::default(), GAS_PROFILE);
+        let terms = GAS_PROFILE
+            .tx_terms_gas(minimum_signed_transaction_size(&ops.by_ref(), &context), 1)
+            .unwrap();
 
         assert_eq!(
-            ops.by_ref().execution_gas_consumption(&OpsGasContext::new(
-                HashMap::new(),
-                HashMap::new(),
-                GasPrices::default(),
-                GAS_PROFILE
-            )),
-            Ok(Gas::from(590))
+            ops.by_ref().execution_gas_consumption(&context),
+            // 26 + 4177 + 1758 + 58, and the note set of the channel it changes
+            Ok(Gas::from(6_019).checked_add(terms).unwrap())
         );
     }
 
     #[test]
     fn storage_gas_cost_prices_the_signed_size() {
         let ops = Ops::new(FORK_DIGEST, [Op::ChannelInscribe(InscriptionOp::sample())]);
-        let context = OpsGasContext::new(
-            HashMap::new(),
-            HashMap::new(),
-            GasPrices::new(2, 3),
-            GAS_PROFILE,
-        );
+        let context = OpsGasContext::new(HashMap::new(), GasPrices::new(2, 3), GAS_PROFILE);
 
         assert_eq!(
             ops.by_ref().storage_gas_cost(&context),
-            Ok(GasCost::new(627))
+            Ok(GasCost::new(633))
         );
     }
 
@@ -560,7 +548,6 @@ mod tests {
             Ops::new(FORK_DIGEST, TxList::empty())
                 .by_ref()
                 .storage_gas_consumption(&OpsGasContext::new(
-                    HashMap::new(),
                     HashMap::new(),
                     GasPrices::default(),
                     GAS_PROFILE
@@ -576,11 +563,10 @@ mod tests {
         assert_eq!(
             ops.by_ref().storage_gas_consumption(&OpsGasContext::new(
                 HashMap::new(),
-                HashMap::new(),
                 GasPrices::default(),
                 GAS_PROFILE
             )),
-            Ok(Gas::new(209))
+            Ok(Gas::new(211))
         );
     }
 

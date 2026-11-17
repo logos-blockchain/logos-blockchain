@@ -31,13 +31,13 @@ pub fn calculate_transactions_root<T: Hashable<Hash = TxHash>>(transactions: &[T
 
 #[cfg(test)]
 mod tests {
-    use lb_key_management_system_keys::keys::ZkPublicKey;
+    use lb_groth16::{AdditiveGroup as _, Fr};
 
     use super::*;
     use crate::mantle::{
-        Note, Op,
+        Op,
         fixtures::ops::op_values::FORK_DIGEST,
-        ledger::{Inputs, Outputs},
+        notes::{InputNullifiers, NoteCommitment},
         ops::transfer::TransferOp,
         transactions::tx_list::Ops,
     };
@@ -46,11 +46,10 @@ mod tests {
         Ops::new(
             FORK_DIGEST,
             [Op::Transfer(TransferOp::new(
-                Inputs::empty(),
-                Outputs::new([Note {
-                    value: seed.into(),
-                    pk: ZkPublicKey::zero(),
-                }]),
+                InputNullifiers::default(),
+                [NoteCommitment(Fr::from(u64::from(seed)))].into(),
+                Fr::ZERO,
+                0,
             ))],
         )
     }

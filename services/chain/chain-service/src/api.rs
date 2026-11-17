@@ -6,9 +6,9 @@ use std::{
 
 use futures::{Stream, TryStreamExt as _};
 use lb_core::{
-    block::{Block, UncleHeaders},
+    block::{Block, UncleHeaders, genesis::GenesisBlock},
     events::Events,
-    header::HeaderId,
+    header::{Header, HeaderId},
     sdp::{Declaration, DeclarationId},
 };
 use lb_cryptarchia_engine::Slot;
@@ -51,10 +51,38 @@ pub enum ApiError {
     },
     #[error("Block {0} has already been applied")]
     AlreadyApplied(HeaderId),
+    #[error("Invalid proof of leadership in block {0}")]
+    InvalidLeaderProof(HeaderId),
+    #[error("Invalid Operation proof in block {0}")]
+    InvalidOperationProof(HeaderId),
     #[error("Failed to establish connection to chain-service: {0}")]
     CommsFailure(String),
     #[error("Unexpected Error: {0}")]
     Unexpected(String),
+}
+
+pub(crate) fn apply_block_api_error(err: crate::Error, id: HeaderId) -> ApiError {
+    match err {
+        crate::Error::ParentMissing { parent, info } => ApiError::ParentMissing { parent, info },
+        crate::Error::FutureBlock {
+            block_slot,
+            current_slot,
+        } => ApiError::FutureBlock {
+            block_slot,
+            current_slot,
+        },
+        crate::Error::AlreadyApplied(block_id) => ApiError::AlreadyApplied(block_id),
+        crate::Error::Ledger(lb_ledger::LedgerError::InvalidProof) => {
+            ApiError::InvalidLeaderProof(id)
+        }
+        crate::Error::BatchDeferredProofVerification(_) => ApiError::InvalidOperationProof(id),
+        crate::Error::Ledger(lb_ledger::LedgerError::VerificationError(err))
+            if err.is_operation_proof_failure() =>
+        {
+            ApiError::InvalidOperationProof(id)
+        }
+        err => ApiError::Unexpected(format!("Failure while applying block: {err:?}")),
+    }
 }
 
 pub struct CryptarchiaServiceApi<Cryptarchia>
@@ -119,6 +147,22 @@ where
 
         rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetInfo"))
+        })
+    }
+
+    /// Get the genesis block of the starting state
+    pub async fn get_genesis_block(&self) -> Result<GenesisBlock, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(Query::GetGenesisBlock { reply_channel }.into())
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending GetGenesisBlock"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetGenesisBlock"))
         })
     }
 
@@ -228,6 +272,33 @@ where
         rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetLedgerState"))
         })
+    }
+
+    /// Check a proposal header against the chain, leaving the chain untouched.
+    pub async fn verify_proposal_header(&self, header: Header) -> Result<(), ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        let header_id = header.id();
+        self.relay
+            .send(
+                Query::VerifyProposalHeader {
+                    header: Box::new(header),
+                    reply_channel,
+                }
+                .into(),
+            )
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending VerifyProposalHeader"))
+            })?;
+
+        rx.await
+            .map_err(|relay_error| {
+                ApiError::CommsFailure(format!(
+                    "{relay_error} while receiving VerifyProposalHeader"
+                ))
+            })?
+            .map_err(|err| apply_block_api_error(err, header_id))
     }
 
     /// The ledger config of the era of `slot`.
@@ -445,6 +516,7 @@ where
     ) -> Result<AppliedBlock<Cryptarchia::Tx>, ApiError> {
         let (reply_channel, rx) = oneshot::channel();
 
+        let id = block.header().id();
         let boxed_block = Box::new(block);
         self.relay
             .send(ConsensusMsg::ApplyBlock {
@@ -458,20 +530,7 @@ where
             .map_err(|relay_error| {
                 ApiError::CommsFailure(format!("{relay_error} while receiving ApplyBlock resp"))
             })?
-            .map_err(|err| match err {
-                crate::Error::ParentMissing { parent, info } => {
-                    ApiError::ParentMissing { parent, info }
-                }
-                crate::Error::FutureBlock {
-                    block_slot,
-                    current_slot,
-                } => ApiError::FutureBlock {
-                    block_slot,
-                    current_slot,
-                },
-                crate::Error::AlreadyApplied(block_id) => ApiError::AlreadyApplied(block_id),
-                err => ApiError::Unexpected(format!("Failure while applying block: {err:?}")),
-            })
+            .map_err(|err| apply_block_api_error(err, id))
     }
 
     /// Forward a chain sync event to the chain service.

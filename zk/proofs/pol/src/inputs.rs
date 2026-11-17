@@ -78,20 +78,21 @@ impl From<PolWitnessInputs> for PolInputsJson {
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct PolVerifierInputJson([Groth16InputDeser; 9]);
+pub struct PolVerifierInputJson([Groth16InputDeser; 10]);
 
 /// Public inputs of the POL verifier circuit as returned by the prover.
 /// These inputs are the ones that need to be fed into the verifier.
 pub struct PolVerifierInput {
     pub entropy_contribution: Groth16Input,
+    pub reward_commitment: Groth16Input,
     pub slot_number: Groth16Input,
     pub epoch_nonce: Groth16Input,
     pub lottery_0: Groth16Input,
     pub lottery_1: Groth16Input,
-    pub aged_root: Groth16Input,
-    pub latest_root: Groth16Input,
-    pub leader_pk1: Groth16Input,
-    pub leader_pk2: Groth16Input,
+    pub eligible_aged: Groth16Input,
+    pub eligible_latest: Groth16Input,
+    pub msg: Groth16Input,
+    pub reward_value: Groth16Input,
 }
 
 impl TryFrom<PolVerifierInputJson> for PolVerifierInput {
@@ -100,42 +101,45 @@ impl TryFrom<PolVerifierInputJson> for PolVerifierInput {
     fn try_from(value: PolVerifierInputJson) -> Result<Self, Self::Error> {
         let [
             entropy_contribution,
+            reward_commitment,
             slot_number,
             epoch_nonce,
             lottery_0,
             lottery_1,
-            aged_root,
-            latest_root,
-            leader_pk1,
-            leader_pk2,
+            eligible_aged,
+            eligible_latest,
+            msg,
+            reward_value,
         ] = value.0;
         Ok(Self {
             entropy_contribution: entropy_contribution.try_into()?,
+            reward_commitment: reward_commitment.try_into()?,
             slot_number: slot_number.try_into()?,
             epoch_nonce: epoch_nonce.try_into()?,
             lottery_0: lottery_0.try_into()?,
             lottery_1: lottery_1.try_into()?,
-            aged_root: aged_root.try_into()?,
-            latest_root: latest_root.try_into()?,
-            leader_pk1: leader_pk1.try_into()?,
-            leader_pk2: leader_pk2.try_into()?,
+            eligible_aged: eligible_aged.try_into()?,
+            eligible_latest: eligible_latest.try_into()?,
+            msg: msg.try_into()?,
+            reward_value: reward_value.try_into()?,
         })
     }
 }
 
 impl PolVerifierInput {
     #[must_use]
-    pub const fn to_inputs(&self) -> [Fr; 9] {
+    pub const fn to_inputs(&self) -> [Fr; 10] {
         [
             self.entropy_contribution.into_inner(),
+            self.reward_commitment.into_inner(),
             self.slot_number.into_inner(),
             self.epoch_nonce.into_inner(),
             self.lottery_0.into_inner(),
             self.lottery_1.into_inner(),
-            self.aged_root.into_inner(),
-            self.latest_root.into_inner(),
-            self.leader_pk1.into_inner(),
-            self.leader_pk2.into_inner(),
+            self.eligible_aged.into_inner(),
+            self.eligible_latest.into_inner(),
+            self.msg.into_inner(),
+            self.reward_value.into_inner(),
         ]
     }
 
@@ -143,24 +147,27 @@ impl PolVerifierInput {
     #[expect(clippy::too_many_arguments, reason = "all needed")]
     pub fn new(
         entropy_contribution: Fr,
+        reward_commitment: Fr,
         slot_number: u64,
         epoch_nonce: Fr,
-        aged_root: Fr,
-        latest_root: Fr,
+        eligible_aged: Fr,
+        eligible_latest: Fr,
         lottery_0: Fr,
         lottery_1: Fr,
-        leader_pk: (Fr, Fr),
+        msg: Fr,
+        reward_value: u64,
     ) -> Self {
         Self {
             entropy_contribution: entropy_contribution.into(),
+            reward_commitment: reward_commitment.into(),
             slot_number: Fr::from(slot_number).into(),
             epoch_nonce: epoch_nonce.into(),
             lottery_0: lottery_0.into(),
             lottery_1: lottery_1.into(),
-            aged_root: aged_root.into(),
-            latest_root: latest_root.into(),
-            leader_pk1: leader_pk.0.into(),
-            leader_pk2: leader_pk.1.into(),
+            eligible_aged: eligible_aged.into(),
+            eligible_latest: eligible_latest.into(),
+            msg: msg.into(),
+            reward_value: Fr::from(reward_value).into(),
         }
     }
 }

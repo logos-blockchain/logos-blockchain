@@ -28,7 +28,7 @@ impl From<Inputs> for PoQWitnessInputs {
         let chain_input_data = PoQChainInputsData {
             core_root: value.public.core.zk_root,
             pol_epoch_nonce: value.public.leader.pol_epoch_nonce,
-            pol_ledger_aged: value.public.leader.pol_ledger_aged,
+            pol_eligible_aged: value.public.leader.pol_eligible_aged,
             lottery_0: value.public.leader.lottery_0,
             lottery_1: value.public.leader.lottery_1,
         };
@@ -80,21 +80,33 @@ fn witness_input_for_proof_type(
         }
         ProofType::LeadershipQuota(leadership_quota_private_inputs) => {
             let ProofOfLeadershipQuotaInputs {
-                aged_path_and_selectors,
                 note_value,
-                output_number,
                 slot,
-                secret_key,
-                transaction_hash,
+                nullifier_key,
+                staking_secret_key,
+                note_nonce,
+                note_program,
+                note_data,
+                commitment_aged_path_and_selectors,
+                low_leaf_aged_nullifier,
+                low_leaf_aged_next_nullifier,
+                low_leaf_aged_path_and_selectors,
+                set_aged_path_and_selectors,
             } = *leadership_quota_private_inputs;
 
             let wallet_input_data = PoQWalletInputsData {
-                aged_path_and_selectors,
                 note_value,
-                output_number,
                 slot,
-                pol_secret_key: secret_key,
-                transaction_hash,
+                pol_nullifier_key: nullifier_key,
+                pol_staking_secret_key: staking_secret_key,
+                note_nonce,
+                note_program,
+                note_data,
+                commitment_aged_path_and_selectors,
+                low_leaf_aged_nullifier,
+                low_leaf_aged_next_nullifier,
+                low_leaf_aged_path_and_selectors,
+                set_aged_path_and_selectors,
             };
             PoQWitnessInputs::from_leader_data(
                 chain_input_data,

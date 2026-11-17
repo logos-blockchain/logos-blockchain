@@ -4,10 +4,10 @@ use lb_config::deployment::GAS_PROFILE;
 use lb_core::mantle::{
     OpProof,
     ops::{
-        Op,
+        ChannelInscribeProof, Op,
         channel::{
             ChannelId, MsgId,
-            inscribe::{Inscription, InscriptionOp},
+            inscribe::{Inscription, InscriptionOp, MiniBlocks},
         },
     },
     transactions::{
@@ -27,14 +27,12 @@ pub fn build_inscription_tx_builder(
     let tx_context = OpsContext {
         gas_context: OpsGasContext::new(
             HashMap::new(),
-            HashMap::new(),
             GasPrices {
                 execution_base_gas_price: GENESIS_EXECUTION_GAS_PRICE,
                 storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
             },
             GAS_PROFILE,
         ),
-        leader_reward_amount: 0,
     };
 
     let tx_builder = MantleTxBuilder::new()
@@ -43,6 +41,7 @@ pub fn build_inscription_tx_builder(
             inscription,
             parent: parent.unwrap_or_else(MsgId::root),
             signer: signing_key.public_key().into_unverified(),
+            mini_blocks: MiniBlocks::default(),
         }))
         .expect("inscription test builder should fit op bounds");
 
@@ -51,10 +50,12 @@ pub fn build_inscription_tx_builder(
 
 #[must_use]
 pub fn inscription_signature_proof(tx_hash: TxHash, signing_key: &Ed25519Key) -> OpProof {
-    OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
-        &signing_key
-            .sign_payload(tx_hash.as_signing_bytes())
-            .to_bytes(),
+    OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(
+        Ed25519Signature::from_bytes(
+            &signing_key
+                .sign_payload(tx_hash.as_signing_bytes())
+                .to_bytes(),
+        ),
     ))
 }
 

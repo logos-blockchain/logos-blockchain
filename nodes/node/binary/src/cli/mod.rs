@@ -20,8 +20,8 @@ use crate::{
         ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, LogArgs,
         NetworkArgs, RunConfig, SdpArgs, StateArgs, UserConfig, api::serde::AxumBackendSettings,
         apply_default_log_filter, blend::serde::core::BackendConfig as BlendCoreConfig,
-        network::serde::SwarmConfig, update_api, update_blend, update_cryptarchia, update_network,
-        update_sdp, update_state, update_tracing,
+        check_leader_funding_key, check_pow_claim_targets, network::serde::SwarmConfig, update_api,
+        update_blend, update_cryptarchia, update_network, update_sdp, update_state, update_tracing,
     },
 };
 
@@ -280,7 +280,14 @@ pub struct GetPeerIdArgs {
 
 /// Applies CLI overrides from `args` to `user_config` and returns a
 /// `RunConfig` ready to start the node.
-pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<RunConfig> {
+pub fn build_run_config(user_config: UserConfig, args: CliArgs) -> Result<RunConfig> {
+    let run_config = apply_cli_args(user_config, args)?;
+    check_leader_funding_key(&run_config.user)?;
+    check_pow_claim_targets(&run_config.user)?;
+    Ok(run_config)
+}
+
+fn apply_cli_args(mut user_config: UserConfig, args: CliArgs) -> Result<RunConfig> {
     let CliArgs {
         log: log_args,
         api: api_args,
@@ -320,14 +327,16 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
 /// flattened into [`CliArgs`] carries `#[clap(env = "...")]` attributes, so
 /// parsing an argv containing only the program name populates them purely from
 /// their environment variables (leaving `command`/`config` unset). The
-/// resulting overrides are then folded onto `user_config` via
-/// [`build_run_config`], guaranteeing the bindings stay in lockstep with the
-/// binary's supported env vars.
+/// resulting overrides are then folded onto `user_config` the way
+/// [`build_run_config`] does, guaranteeing the bindings stay in lockstep with
+/// the binary's supported env vars. An embedder starting a node calls
+/// [`check_leader_funding_key`] and [`check_pow_claim_targets`] on the result;
+/// a query reading the deployment has no use for those keys.
 ///
 /// `try_parse_from` (rather than `parse_from`) is used so an invalid env value
 /// returns an error instead of terminating the host process — required in an
 /// FFI context.
 pub fn build_run_config_from_env(user_config: UserConfig) -> Result<RunConfig> {
     let cli_args = CliArgs::try_parse_from(["lb-node"])?;
-    build_run_config(user_config, cli_args)
+    apply_cli_args(user_config, cli_args)
 }

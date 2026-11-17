@@ -68,7 +68,7 @@ cryptarchia:
       rate_den: 10
       target_claim_per_block: 1
       # `pow_share / share_den` of the fees each block collects is
-      # diverted to the pow reward pool at the epoch boundary.
+      # credited to the pow reward pool by that block.
       pow_share: 10
       share_den: 100
       # Acceptance window in slots; must match the mining service. Ten
@@ -87,7 +87,7 @@ cryptarchia:
   # whose half is the target, the fee adjustment rate φ and the EMA smoothing
   # factor q.
   execution_market:
-    max_gas_per_block: 3193460
+    max_gas_per_block: 3137798
     fee_adjustment_rate:
       numerator: 1
       denominator: 8
@@ -107,28 +107,40 @@ cryptarchia:
   # weight of the pooled fees, a block's emission in full, and the Blend nodes'
   # share of a reward, the leader taking the rest.
   block_rewards:
-    stake_target: 3000000000
-    emission_factor_scale: 120000000
+    stake_target: 3000000000000000000
+    emission_factor_scale: 120000000000000000
     fee_average_numerator: 10512
     max_emission_per_block:
-      numerator: 62500
+      numerator: 62500000000000
       denominator: 657
     blend_share:
       numerator: 6
       denominator: 10
-  # The execution gas of each Operation; the channel configuration, withdrawal
-  # and transfer cost theirs per key of the channel's threshold.
+  # The execution gas of each Operation and the measured components of
+  # RFC-506 an Operation and a transaction add for what they carry, on a
+  # Raspberry Pi 5.
   gas_profile:
-    transfer: 590
-    channel_config: 56
-    channel_inscribe: 56
-    channel_deposit: 590
-    channel_withdraw: 56
-    channel_transfer: 56
-    sdp_declare: 646
-    sdp_withdraw: 590
-    sdp_active: 590
-    leader_claim: 580
-    claim_pow_reward: 1
+    transfer: 10
+    program_register: 15114
+    channel_config: 24
+    channel_inscribe: 26
+    channel_deposit: 26
+    channel_withdraw: 33
+    sdp_declare: 1693
+    sdp_withdraw: 0
+    sdp_active: 15117
+    claim_pow_reward: 1506
+    kilobyte: 30
+    note_set: 8961
+    proof: 4177
+    root: 2332
+    buffered: 60
+    nullifier: 1758
+    commitment: 58
+    signature: 557
+    user_step: 28
+    program_deposit: 144
+    program_step: 13528
+    opening: 470
 time:
   slot_duration_in_seconds: 1

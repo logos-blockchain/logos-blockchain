@@ -12,10 +12,10 @@ use lb_core::{
         SignedOps,
         ledger::verification_mode::StandardMode,
         ops::{
-            Op, OpProof,
+            ChannelInscribeProof, Op, OpProof,
             channel::{
                 ChannelId, MsgId,
-                inscribe::{Inscription, InscriptionOp},
+                inscribe::{Inscription, InscriptionOp, MiniBlocks},
             },
         },
         traits::Hashable as _,
@@ -373,6 +373,7 @@ fn build_inscription_transaction(
         inscription: build_payload(channel, payload_bytes),
         parent: channel.parent,
         signer: channel.signing_key.public_key().into_unverified(),
+        mini_blocks: MiniBlocks::default(),
     };
     let msg_id = op.id();
 
@@ -381,7 +382,9 @@ fn build_inscription_transaction(
 
     let ed25519_signature = channel.signing_key.sign_payload(tx_hash.as_signing_bytes());
 
-    let op_proofs_wrapper = OpProofs::from([OpProof::Ed25519Sig(ed25519_signature)]);
+    let op_proofs_wrapper = OpProofs::from([OpProof::ChannelInscribe(
+        ChannelInscribeProof::without_steps(ed25519_signature),
+    )]);
     let signed_tx = SignedOps::from_parts(mantle_tx, op_proofs_wrapper)
         .map_err(|error| InscriptionWorkloadError::SignedTransactionBuild(error.to_string()))?
         .preverify()

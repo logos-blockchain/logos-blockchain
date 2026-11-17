@@ -9,7 +9,7 @@
 //! - sequential path: every tx's proof is verified one by one.
 //! - batched path: all tx proofs are batched together and verified in one go.
 //!
-//! The benchmarks use only `Transfer` operations that include a ZK signature,
+//! The benchmarks use only `Transfer` operations that include a `ZkTransfer`,
 //! because the ZK cost of other operations is not so different from `Transfer`.
 //!
 //! Multi-block scenarios are also included. But, since the multi-block batching
@@ -28,26 +28,34 @@ use lb_core::{
     era::{AcceptedForkDigests, ForkDigest},
     header::HeaderId,
     mantle::{
-        Note, Op, OpProof, SignedOps, Utxo,
+        Op, OpProof, SignedOps,
         batch::DeferredProofs,
-        ledger::{BoundedInputs, Outputs, verification_mode::StandardMode},
-        ops::transfer::TransferOp,
+        gas::GasProfile,
+        ledger::verification_mode::StandardMode,
+        note_set::CommitmentMmr,
+        notes::{self, derive_note_nullifier},
+        ops::{
+            ZkTransferProof,
+            transfer::{TransferOp, test_utils::prove_transfer},
+        },
         traits::Hashable as _,
         transactions::{OpProofs, Ops, states::Preverified},
     },
     sdp::{MinStake, ServiceParameters, ServiceType},
 };
 use lb_cryptarchia_engine::EpochConfig;
+use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::ZkKey;
+use lb_mmr::MerklePath;
 use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
-use lb_zksign::verify;
 use logos_blockchain_ledger::{
-    Config, ConsensusExcludedKeys, LedgerState,
-    config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
+    Config, LedgerState,
+    config::{
+        BlendPoWConfig, EmissionRatio, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig,
+    },
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
-use num_bigint::BigUint;
 use time::OffsetDateTime;
 
 fn main() {
@@ -179,27 +187,50 @@ static TX_POOL: LazyLock<TxPool> = LazyLock::new(|| {
     let n_txs = *single_block::TXS_PER_BLOCK.last().unwrap();
 
     let keys: Vec<ZkKey> = (0..n_txs)
-        .map(|i| ZkKey::from(BigUint::from(i as u64 + 1)))
+        .map(|i| ZkKey::new(Fr::from(i as u64 + 1)))
         .collect();
-    let utxos: Vec<Utxo> = keys
+    let notes: Vec<notes::Note> = keys
         .iter()
         .enumerate()
-        .map(|(i, key)| Utxo {
-            op_id: [i as u8; 32],
-            output_index: i,
-            // Assign a large value to withstand gas cost increases.
-            note: Note::new(1_000_000, key.to_public_key()),
+        // Assign a large value to withstand gas cost increases.
+        .map(|(i, key)| {
+            notes::Note::new(10_000_000_000_000, Fr::from(i as u64), key.to_public_key())
         })
         .collect();
 
-    let txs = utxos
+    // Each push updates the paths of the earlier notes in place.
+    let mut mmr = CommitmentMmr::new();
+    let mut paths: Vec<MerklePath> = Vec::with_capacity(n_txs);
+    for note in &notes {
+        let (pushed, path) = mmr
+            .push_with_paths(note.commitment(), &mut paths)
+            .expect("the commitment MMR has room");
+        mmr = pushed;
+        paths.push(path);
+    }
+    let root = mmr.frontier_root();
+
+    let genesis = LedgerState::from_notes(notes.iter().copied(), &config, 0);
+    assert_eq!(genesis.latest_note_sets().ledger().commitment_root(), root);
+
+    let txs = notes
         .iter()
         .zip(&keys)
-        .map(|(utxo, key)| build_tx(*utxo, key))
+        .zip(paths)
+        .enumerate()
+        .map(|(i, ((note, key), path))| {
+            build_tx(
+                *note,
+                *key.as_fr(),
+                path,
+                root,
+                Fr::from((i + n_txs) as u64),
+            )
+        })
         .collect();
 
     TxPool {
-        genesis: LedgerState::from_utxos(utxos, &config, 0, &ConsensusExcludedKeys::empty()),
+        genesis,
         eras: single_era(config),
         txs,
     }
@@ -219,9 +250,10 @@ fn apply_sequential(
     txs: impl Iterator<Item = SignedOps<Preverified, StandardMode>>,
 ) -> LedgerState {
     let (state, deferred) = apply(state, txs);
-    for deferred_proof in deferred.zk_sigs() {
+    for deferred_proof in deferred.zk_transfers() {
         assert!(
-            verify(deferred_proof.proof(), deferred_proof.inputs()).expect("proof should verify")
+            lb_zktransfer::verify(deferred_proof.proof(), deferred_proof.inputs())
+                .expect("proof should verify")
         );
     }
     state
@@ -231,24 +263,53 @@ fn apply(
     state: &LedgerState,
     txs: impl Iterator<Item = SignedOps<Preverified, StandardMode>>,
 ) -> (LedgerState, DeferredProofs) {
-    let (state, _, deferred) = state
+    let (state, gas_and_fees, _, deferred) = state
         .clone()
-        .try_apply_block_contents::<_, HeaderId>(&TX_POOL.eras, txs)
+        .try_apply_block_transactions::<_, HeaderId>(&TX_POOL.eras, txs)
+        .expect("block should apply");
+    let reward_value = state
+        .leader_reward::<HeaderId>(&gas_and_fees, &TX_POOL.eras)
+        .expect("block should apply");
+    let (state, _) = state
+        .try_finish_block::<HeaderId>(
+            &TX_POOL.eras,
+            &gas_and_fees,
+            notes::NoteCommitment(Fr::ZERO),
+            reward_value,
+        )
         .expect("block should apply");
     (state, deferred)
 }
 
-/// Builds a transaction with a `Transfer` operation that spends `utxo` and
-/// sends the very little amount to `key`.
-fn build_tx(utxo: Utxo, key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
+/// Builds a transaction with a `Transfer` operation that spends `note` and
+/// sends the very little amount back to its public key.
+fn build_tx(
+    note: notes::Note,
+    secret_key: Fr,
+    path: MerklePath,
+    root: Fr,
+    output_nonce: Fr,
+) -> SignedOps<Preverified, StandardMode> {
+    let output = notes::Note::new(1, output_nonce, note.public_key);
     let transfer_op = TransferOp::new(
-        BoundedInputs::from(utxo.id()).into(),
+        [derive_note_nullifier(
+            &note.commitment(),
+            &ZkKey::new(secret_key).nullifier_key(),
+        )]
+        .into(),
+        [output.commitment()].into(),
+        root,
         // Most of the tx's value goes as a tip, to withstand gas cost increases.
-        Outputs::new([Note::new(1, key.to_public_key())]),
+        9_999_999_999_999,
     );
     let ops = Ops::new(ForkDigest::new([0x11; 32]), [Op::Transfer(transfer_op)]);
-    let signature = ZkKey::multi_sign(std::slice::from_ref(key), &ops.hash().to_fr()).unwrap();
-    let op_proofs = OpProofs::from([OpProof::ZkSig(signature)]);
+    let proof = prove_transfer(
+        &[(note, secret_key, path)],
+        &[output],
+        root,
+        ops.hash().to_fr(),
+    );
+    let op_proofs = OpProofs::from([OpProof::ZkTransfer(ZkTransferProof::new(proof))]);
 
     SignedOps::from_parts(ops, op_proofs)
         .expect("transaction should build")
@@ -270,10 +331,6 @@ fn single_era(config: Config) -> EraScheduledConfig {
     .map(move |_| config.clone())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "A ledger config, spelled out field by field."
-)]
 fn config() -> Config {
     let epoch_config = EpochConfig {
         epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
@@ -320,7 +377,7 @@ fn config() -> Config {
         max_transactions_size: 2 * 1024 * 1024,
         max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
         execution_market: logos_blockchain_ledger::config::ExecutionMarketConfig {
-            max_gas_per_block: logos_blockchain_ledger::config::MaxGasPerBlock::new(3_193_460)
+            max_gas_per_block: logos_blockchain_ledger::config::MaxGasPerBlock::new(3_137_798)
                 .unwrap(),
             fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
                 .unwrap(),
@@ -334,26 +391,14 @@ fn config() -> Config {
                 .unwrap(),
         },
         block_rewards: logos_blockchain_ledger::config::BlockRewardsConfig::new(
-            3_000_000_000,
-            120_000_000.try_into().unwrap(),
+            3_000_000_000_000_000_000,
+            120_000_000_000_000_000.try_into().unwrap(),
             10_512,
-            NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+            EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
             lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
         )
         .unwrap(),
-        gas_profile: lb_core::mantle::gas::GasProfile {
-            transfer: 590.into(),
-            channel_config: 56.into(),
-            channel_inscribe: 56.into(),
-            channel_deposit: 590.into(),
-            channel_withdraw: 56.into(),
-            channel_transfer: 56.into(),
-            sdp_declare: 646.into(),
-            sdp_withdraw: 590.into(),
-            sdp_active: 590.into(),
-            leader_claim: 580.into(),
-            claim_pow_reward: 1.into(),
-        },
+        gas_profile: GasProfile::MAINNET,
         pow_config: PoWConfig {
             blend: BlendPoWConfig {
                 base_difficulty: ModulusShift::new::<234>(),

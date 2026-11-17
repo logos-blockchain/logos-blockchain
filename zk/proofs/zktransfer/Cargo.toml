@@ -1,0 +1,28 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-zktransfer"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[dependencies]
+lb-circuits-prover = { workspace = true }
+lb-groth16         = { workspace = true }
+lb-log-targets     = { workspace = true }
+lbc-transfer-sys   = { features = ["prebuilt"], workspace = true }
+lbc-types          = { workspace = true }
+lbp-error          = { workspace = true }
+serde              = { features = ["derive", "std"], workspace = true }
+serde_json         = { workspace = true }
+thiserror          = { workspace = true }
+tracing            = { workspace = true }
+
+[features]
+test-utils = []
+
+[lints]
+workspace = true

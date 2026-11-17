@@ -13,7 +13,7 @@ pub(super) fn pol_state_matches(
 ) -> bool {
     pol_info.epoch == blend_epoch
         && pol_info.state.nonce == blend_leadership_public_inputs.pol_epoch_nonce
-        && pol_info.state.aged_utxo_root == blend_leadership_public_inputs.pol_ledger_aged
+        && pol_info.state.eligible_aged == blend_leadership_public_inputs.pol_eligible_aged
         && pol_info.state.lottery_0 == blend_leadership_public_inputs.lottery_0
         && pol_info.state.lottery_1 == blend_leadership_public_inputs.lottery_1
 }
@@ -39,8 +39,8 @@ pub(super) fn log_pol_state_handoff(
                 pol_source_lib_slot = u64::from(pol_info.state.source.lib_slot),
                 pol_nonce = ?pol_info.state.nonce,
                 blend_nonce = ?blend_leadership_public_inputs.pol_epoch_nonce,
-                pol_aged_utxo_root = ?pol_info.state.aged_utxo_root,
-                blend_aged_utxo_root = ?blend_leadership_public_inputs.pol_ledger_aged,
+                pol_eligible_aged = ?pol_info.state.eligible_aged,
+                blend_eligible_aged = ?blend_leadership_public_inputs.pol_eligible_aged,
                 pol_lottery_0 = ?pol_info.state.lottery_0,
                 blend_lottery_0 = ?blend_leadership_public_inputs.lottery_0,
                 pol_lottery_1 = ?pol_info.state.lottery_1,

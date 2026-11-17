@@ -167,13 +167,14 @@ mod tests {
 
     use lb_core::{
         era::{AcceptedForkDigests, ForkDigest},
-        mantle::{Note, Utxo},
+        mantle::{Note, gas::GasProfile},
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
+    use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_ledger::{
-        ConsensusExcludedKeys, Intent,
-        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
+        Intent,
+        config::{BlendPoWConfig, EmissionRatio, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
@@ -181,19 +182,7 @@ mod tests {
     use super::*;
 
     /// The costs of the deployments' current gas profile.
-    const GAS_PROFILE: lb_core::mantle::gas::GasProfile = lb_core::mantle::gas::GasProfile {
-        transfer: lb_core::mantle::gas::Gas::new(590),
-        channel_config: lb_core::mantle::gas::Gas::new(56),
-        channel_inscribe: lb_core::mantle::gas::Gas::new(56),
-        channel_deposit: lb_core::mantle::gas::Gas::new(590),
-        channel_withdraw: lb_core::mantle::gas::Gas::new(56),
-        channel_transfer: lb_core::mantle::gas::Gas::new(56),
-        sdp_declare: lb_core::mantle::gas::Gas::new(646),
-        sdp_withdraw: lb_core::mantle::gas::Gas::new(590),
-        sdp_active: lb_core::mantle::gas::Gas::new(590),
-        leader_claim: lb_core::mantle::gas::Gas::new(580),
-        claim_pow_reward: lb_core::mantle::gas::Gas::new(1),
-    };
+    const GAS_PROFILE: GasProfile = GasProfile::MAINNET;
 
     #[tokio::test]
     async fn unchanged_tip_never_trigger_status_check() {
@@ -511,14 +500,14 @@ mod tests {
     }
 
     fn lib_ledger_state() -> LedgerState {
-        ledger_state([Utxo::new([0; 32], 0, Note::new(1, ZkPublicKey::zero()))])
+        ledger_state([Note::new(1, Fr::ZERO, ZkPublicKey::zero())])
     }
 
     fn tip_ledger_state() -> LedgerState {
         ledger_state([])
     }
 
-    fn ledger_state(utxos: impl IntoIterator<Item = Utxo>) -> LedgerState {
+    fn ledger_state(notes: impl IntoIterator<Item = Note>) -> LedgerState {
         let consensus_config = lb_cryptarchia_engine::Config::new(
             NonZero::new(2).unwrap(),
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
@@ -533,8 +522,8 @@ mod tests {
         };
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
-        LedgerState::from_utxos(
-            utxos,
+        LedgerState::from_notes(
+            notes,
             &lb_ledger::Config {
                 epoch_config,
                 consensus_config,
@@ -569,7 +558,7 @@ mod tests {
                 max_transactions_size: 2 * 1024 * 1024,
                 max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
                 execution_market: lb_ledger::config::ExecutionMarketConfig {
-                    max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                    max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_137_798).unwrap(),
                     fee_adjustment_rate: lb_utils::math::ProperFraction::new(
                         1,
                         8.try_into().unwrap(),
@@ -594,10 +583,10 @@ mod tests {
                     .unwrap(),
                 },
                 block_rewards: lb_ledger::config::BlockRewardsConfig::new(
-                    3_000_000_000,
-                    120_000_000.try_into().unwrap(),
+                    3_000_000_000_000_000_000,
+                    120_000_000_000_000_000.try_into().unwrap(),
                     10_512,
-                    NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                    EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
                     lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
                 )
                 .unwrap(),
@@ -615,7 +604,6 @@ mod tests {
                 accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
             },
             0,
-            &ConsensusExcludedKeys::empty(),
         )
     }
 }

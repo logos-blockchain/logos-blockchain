@@ -5,6 +5,7 @@ use super::{
     transaction_is_not_included_in_seconds, transaction_is_rejected_during_preverification,
     wait_wallet_send_ready, warn, when,
 };
+use crate::cucumber::utils::lgo_to_units;
 
 #[when(
     expr = "I send {int} transactions of {int} LGO each from wallet {string} to wallet {string}"
@@ -17,6 +18,7 @@ async fn step_send_multiple_transactions_to_single_wallet(
     sender_wallet_name: String,
     receiver_wallet_name: String,
 ) -> StepResult {
+    let output_value = lgo_to_units(output_value);
     let sender_wallet = world.resolve_wallet(&sender_wallet_name).inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step.value);
     })?;
@@ -114,7 +116,7 @@ async fn step_submit_funded_transfer_transaction(
         world,
         &step.value,
         transaction_alias,
-        amount,
+        lgo_to_units(amount),
         sender_wallet_name,
         receiver_wallet_name,
     )
@@ -148,6 +150,7 @@ async fn step_send_single_transaction_multiple_outputs_to_single_wallet(
     sender_wallet_name: String,
     receiver_wallet_name: String,
 ) -> StepResult {
+    let output_value = lgo_to_units(output_value);
     let sender_wallet = world.resolve_wallet(&sender_wallet_name).inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step.value);
     })?;

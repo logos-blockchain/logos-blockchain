@@ -63,7 +63,7 @@ impl Debug for CoreInputs {
 #[cfg_attr(test, derive(Default))]
 pub struct LeaderInputs {
     #[serde(with = "lb_groth16::serde::serde_fr")]
-    pub pol_ledger_aged: ZkHash,
+    pub pol_eligible_aged: ZkHash,
     #[serde(with = "lb_groth16::serde::serde_fr")]
     pub pol_epoch_nonce: ZkHash,
     pub message_quota: Quota,
@@ -77,8 +77,8 @@ impl Debug for LeaderInputs {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("LeaderInputs")
             .field(
-                "pol_ledger_aged",
-                &hex::encode(fr_to_bytes(&self.pol_ledger_aged)),
+                "pol_eligible_aged",
+                &hex::encode(fr_to_bytes(&self.pol_eligible_aged)),
             )
             .field(
                 "pol_epoch_nonce",

@@ -6,7 +6,6 @@ use std::{
 };
 
 use cucumber::{gherkin::Step, given, then, when};
-use lb_binary_codec::bincode::DeserializeOp as _;
 use lb_common_http_client::CommonHttpClient;
 use lb_config::kms::key_id_for_preload_backend;
 use lb_core::mantle::GenesisTime;
@@ -26,7 +25,6 @@ use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
 use crate::{
-    common::wallet::WalletUtxos,
     cucumber::{
         error::{StepError, StepResult},
         steps::{
@@ -55,19 +53,12 @@ use crate::{
                 verify_reponsive_and_network_ready_with_timeout, wait_all_nodes_responive,
                 wait_for_all_nodes_to_be_synced_to_chain, wait_for_canonical_convergence,
             },
-            transactions::utils::{
-                create_and_submit_transaction_hashes_with_utxo_cache,
-                wait_for_transactions_inclusion,
-            },
         },
         utils::{
-            blend_core_locator_from_node_yaml, blend_core_zk_pk_from_node_yaml,
+            blend_core_locator_from_node_yaml, blend_core_zk_id_from_node_yaml,
             resolve_literal_or_env,
         },
-        wallet::{
-            snapshot::prepare_wallet_snapshot_restore_if_present,
-            sync::{WalletSendReadiness, wait_wallet_send_ready},
-        },
+        wallet::snapshot::prepare_wallet_snapshot_restore_if_present,
         world::{
             ConfigOverride, CucumberWorld, GenesisTokens, ManualClusterKind, ManualClusterSpec,
             NodeSnapshot, PublicCryptarchiaEndpointPeer,

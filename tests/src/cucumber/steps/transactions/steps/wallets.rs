@@ -2,6 +2,7 @@ use super::{
     CucumberWorld, Step, StepResult, WalletOutputState, log_wallet_balances, then,
     wait_for_wallet_output_state, when,
 };
+use crate::cucumber::utils::lgo_to_units;
 
 #[when(expr = "wallet {string} has {int} or more outputs in {int} seconds")]
 #[then(expr = "wallet {string} has {int} or more outputs in {int} seconds")]
@@ -110,7 +111,7 @@ async fn step_wallet_has_at_least_value(
         wallet_name,
         None,
         None,
-        Some(&min_token_value),
+        Some(&lgo_to_units(min_token_value)),
         None,
         time_out_seconds,
         WalletOutputState::OnChain,
@@ -133,8 +134,8 @@ async fn step_wallet_has_exact_value(
         wallet_name,
         None,
         None,
-        Some(&token_value),
-        Some(&token_value),
+        Some(&lgo_to_units(token_value)),
+        Some(&lgo_to_units(token_value)),
         time_out_seconds,
         WalletOutputState::OnChain,
     )
@@ -157,7 +158,7 @@ async fn step_wallet_has_at_most_value(
         None,
         None,
         None,
-        Some(&max_token_value),
+        Some(&lgo_to_units(max_token_value)),
         time_out_seconds,
         WalletOutputState::OnChain,
     )
@@ -180,7 +181,7 @@ async fn step_wallet_has_at_least_coins_and_value(
         wallet_name,
         Some(&min_coin_count),
         None,
-        Some(&min_token_value),
+        Some(&lgo_to_units(min_token_value)),
         None,
         time_out_seconds,
         WalletOutputState::OnChain,
@@ -205,7 +206,7 @@ async fn step_wallet_has_at_most_coins_and_value(
         None,
         Some(&max_coin_count),
         None,
-        Some(&max_token_value),
+        Some(&lgo_to_units(max_token_value)),
         time_out_seconds,
         WalletOutputState::OnChain,
     )
@@ -228,8 +229,8 @@ async fn step_wallet_has_exact_coins_and_value(
         wallet_name,
         Some(&coin_count),
         Some(&coin_count),
-        Some(&token_value),
-        Some(&token_value),
+        Some(&lgo_to_units(token_value)),
+        Some(&lgo_to_units(token_value)),
         time_out_seconds,
         WalletOutputState::OnChain,
     )

@@ -39,6 +39,11 @@ pub fn handle_request(msg: StorageMsg, backend: &RocksBackend) -> Result<(), Sto
             );
         }
         StorageMsg::Store { key, value } => return handle_store(backend, key, value),
+        StorageMsg::StoreConfirmed {
+            key,
+            value,
+            reply_channel,
+        } => return handle_store_confirmed(backend, key, value, reply_channel),
         StorageMsg::Remove { key, reply_channel } => {
             return handle_remove(backend, &key, reply_channel);
         }
@@ -181,6 +186,21 @@ fn handle_store(
     backend
         .store(key, value)
         .map_err(|e| StorageServiceError::BackendError(e.into()))
+}
+
+fn handle_store_confirmed(
+    backend: &RocksBackend,
+    key: Bytes,
+    value: Bytes,
+    reply_channel: Sender<Result<(), String>>,
+) -> Result<(), StorageServiceError> {
+    let result = handle_store(backend, key, value);
+    reply_channel
+        .send(result.as_ref().map_err(ToString::to_string).copied())
+        .map_err(|_| StorageServiceError::ReplyError {
+            message: "Store confirmed".to_owned(),
+        })?;
+    result
 }
 
 /// Handle execute message

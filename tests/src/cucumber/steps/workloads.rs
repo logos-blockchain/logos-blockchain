@@ -1,10 +1,10 @@
 use cucumber::given;
 
-use crate::cucumber::{error::StepResult, world::CucumberWorld};
+use crate::cucumber::{error::StepResult, utils::lgo_to_units, world::CucumberWorld};
 
 #[given(expr = "wallets total funds is {int} split across {int} users")]
 fn wallets_total_funds(world: &mut CucumberWorld, total_funds: u64, users: usize) -> StepResult {
-    world.set_wallets(total_funds, users)
+    world.set_wallets(lgo_to_units(total_funds), users)
 }
 
 #[given(expr = "run duration is {int} seconds")]

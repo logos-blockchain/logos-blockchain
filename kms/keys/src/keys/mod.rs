@@ -15,10 +15,7 @@ pub use crate::keys::{
         UnsecuredEd25519Key, UnverifiedPublicKey as UnverifiedEd25519PublicKey,
         UnverifiedX25519PublicKey, X25519PrivateKey,
     },
-    zk::{
-        MAX_ZK_SIGNING_KEYS, PublicKey as ZkPublicKey, PublicKeys as ZkPublicKeys,
-        Signature as ZkSignature, UnsecuredZkKey, ZkKey, public_inputs_from_pks,
-    },
+    zk::{PK0, PublicKey as ZkPublicKey, UnsecuredZkKey, ZkKey, ZkTransferPayload, kdf_public_key},
 };
 
 /// Entity that gathers all keys provided by the KMS crate.

@@ -15,7 +15,7 @@ use lb_blend_proofs::{
     selection::VerifiedProofOfSelection,
 };
 use lb_core::{blend::core_quota, sdp::blend::ActivityProof};
-use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, kdf_public_key};
 
 use crate::{EpochState, mantle::sdp::rewards::blend::RewardsParameters};
 
@@ -37,7 +37,7 @@ pub fn generate_activity_proof(
     blend_params: &RewardsParameters,
 ) -> ActivityProof {
     let activity_epoch = target_epoch_state.epoch();
-    let zk_id = provider_zk_key.to_public_key();
+    let zk_id = kdf_public_key(provider_zk_key.as_fr());
     // Build a Merkle tree with a single leaf corresponding to the provider's zk_id.
     // This function works only for single-provider snapshots.
     let merkle_tree = MerkleTree::new(vec![zk_id.into_inner()]).unwrap();
@@ -60,7 +60,7 @@ pub fn generate_activity_proof(
     // snapshot's `proof_verifier` was constructed with these values, so any
     // proof must reproduce them exactly.
     let leader_inputs = LeaderInputs {
-        pol_ledger_aged: target_epoch_state.utxos.root(),
+        pol_eligible_aged: target_epoch_state.eligible_root(),
         pol_epoch_nonce: *target_epoch_state.nonce(),
         message_quota,
         lottery_0: target_epoch_state.lottery_0,

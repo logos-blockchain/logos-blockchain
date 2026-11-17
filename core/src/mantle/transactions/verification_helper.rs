@@ -3,27 +3,34 @@ use lb_key_management_system_keys::keys::UnverifiedEd25519PublicKey;
 use rpds::HashTrieMapSync;
 
 use crate::{
-    crypto::{Hash, ZkHash},
+    block::BlockNumber,
+    crypto::Hash,
     mantle::{
         VerificationError,
         channel::Channels,
-        ledger::{Declarations, ProviderIndex, Utxos},
+        ledger::{Declarations, ProviderIndex},
+        note_set::{NoteSets, TxNoteState},
         ops::{
             channel::{ChannelId, ChannelKeyIndex},
-            leader_claim::{RewardsRoot, VoucherNullifier},
             pow::{PowNullifier, PowReward, PowSlotWindows, PowTarget},
             sdp::SdpError,
         },
+        programs::Programs,
     },
-    sdp::{Declaration, DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
+    sdp::{Declaration, DeclarationId, MinStake, ServiceType},
 };
 
 pub trait OperationVerificationHelper {
     fn get_channels(&self) -> &Channels;
 
-    fn get_service_notes(&self) -> &ServiceNotes;
+    fn get_note_sets(&self) -> &NoteSets;
 
-    fn get_utxos(&self) -> &Utxos;
+    /// The buffers and roots the previous Operations of the transaction left.
+    fn get_tx_notes(&self) -> &TxNoteState;
+
+    fn get_programs(&self) -> &Programs;
+
+    fn get_block_number(&self) -> BlockNumber;
 
     fn get_declarations_by_service(
         &self,
@@ -54,15 +61,6 @@ pub trait OperationVerificationHelper {
 
     fn get_block_slot(&self) -> Slot;
 
-    fn get_nullifiers(&self) -> &rpds::HashTrieSetSync<VoucherNullifier>;
-
-    fn get_claimable_vouchers_root(&self) -> &RewardsRoot;
-
-    fn get_channel_transfer_threshold(
-        &self,
-        channel_id: &ChannelId,
-    ) -> Result<ChannelKeyIndex, VerificationError>;
-
     fn get_key_from_channel_at_index(
         &self,
         channel_id: &ChannelId,
@@ -88,14 +86,6 @@ pub trait OperationVerificationHelper {
     /// `R_PoW`: current balance of the `PoW` reward pool.
     fn get_pow_reward_pool(&self) -> PowReward;
 
-    /// Randomness nonce of the current epoch, against which a claim's
-    /// `epoch_nonce` is matched.
-    fn get_current_epoch_nonce(&self) -> ZkHash;
-
-    /// Randomness nonce of the epoch preceding [`Self::get_epoch`], also
-    /// accepted for claims mined just before an epoch boundary.
-    fn get_previous_epoch_nonce(&self) -> ZkHash;
-
     /// Slots of the blocks a claim may anchor to, keyed by block hash;
     /// used for the window-of-acceptance check.
     fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot>;
@@ -111,45 +101,45 @@ pub mod test_utils {
 
     use lb_cryptarchia_engine::{Epoch, Slot};
     use lb_key_management_system_keys::keys::UnverifiedEd25519PublicKey;
-    use rpds::{HashTrieMapSync, HashTrieSetSync};
+    use rpds::HashTrieMapSync;
 
     use crate::{
-        crypto::{Hash, ZkHash},
+        block::BlockNumber,
+        crypto::Hash,
         mantle::{
-            Utxo, VerificationError,
+            VerificationError,
             channel::Channels,
-            ledger::{Declarations, ProviderIndex, Utxos},
+            ledger::{Declarations, ProviderIndex},
+            note_set::{NoteSets, TxNoteState},
             ops::{
                 channel::{ChannelId, ChannelKeyIndex},
-                leader_claim::{RewardsRoot, VoucherNullifier},
                 pow::{
                     PowNullifier, PowReward, PowSlotWindows, PowTarget, test_utils::slot_windows,
                 },
                 sdp::SdpError,
             },
+            programs::Programs,
             transactions::OperationVerificationHelper,
         },
-        sdp::{Declaration, DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
+        sdp::{Declaration, DeclarationId, MinStake, ServiceType},
     };
 
     pub struct TestOperationVerificationHelper {
         channels: Channels,
         keys: HashMap<(ChannelId, ChannelKeyIndex), UnverifiedEd25519PublicKey>,
-        service_notes: ServiceNotes,
-        utxos: Utxos,
+        note_sets: NoteSets,
+        tx_notes: TxNoteState,
+        programs: Programs,
+        block_number: BlockNumber,
         declarations: Declarations,
         provider_index: ProviderIndex,
         min_stake: MinStake,
         epoch: Epoch,
         block_slot: Slot,
-        nullifiers: HashTrieSetSync<VoucherNullifier>,
-        claimable_vouchers_root: RewardsRoot,
         pow_reward_difficulty: PowTarget,
         pow_nullifiers: HashTrieMapSync<PowNullifier, Slot>,
         epoch_pow_reward: PowReward,
         pow_reward_pool: PowReward,
-        current_epoch_nonce: ZkHash,
-        previous_epoch_nonce: ZkHash,
         blocks_slot: HashTrieMapSync<Hash, Slot>,
         pow_slot_windows: PowSlotWindows,
     }
@@ -163,8 +153,10 @@ pub mod test_utils {
             Self {
                 channels,
                 keys: keys.into_iter().collect(),
-                service_notes: ServiceNotes::new(),
-                utxos: Utxos::new(),
+                note_sets: NoteSets::new(),
+                tx_notes: TxNoteState::new(),
+                programs: Programs::new(),
+                block_number: 0,
                 declarations: Declarations::new_sync(),
                 provider_index: ProviderIndex::new_sync(),
                 min_stake: MinStake {
@@ -173,25 +165,13 @@ pub mod test_utils {
                 },
                 epoch: Epoch::from(0u32),
                 block_slot: Slot::from(0u64),
-                nullifiers: HashTrieSetSync::new_sync(),
-                claimable_vouchers_root: RewardsRoot::default(),
                 pow_reward_difficulty: PowTarget::default(),
                 pow_nullifiers: HashTrieMapSync::new_sync(),
                 epoch_pow_reward: 0,
                 pow_reward_pool: 0,
-                current_epoch_nonce: ZkHash::default(),
-                previous_epoch_nonce: ZkHash::default(),
                 blocks_slot: HashTrieMapSync::new_sync(),
                 pow_slot_windows: slot_windows(100, []),
             }
-        }
-
-        #[must_use]
-        pub fn with_utxos(mut self, utxos: impl IntoIterator<Item = Utxo>) -> Self {
-            for utxo in utxos {
-                self.utxos = self.utxos.insert(utxo.id(), utxo).0;
-            }
-            self
         }
 
         #[must_use]
@@ -233,18 +213,29 @@ pub mod test_utils {
         }
 
         #[must_use]
-        pub const fn with_epoch_nonces(mut self, previous: ZkHash, current: ZkHash) -> Self {
-            self.previous_epoch_nonce = previous;
-            self.current_epoch_nonce = current;
-            self
-        }
-
-        #[must_use]
         pub fn with_blocks_slot(
             mut self,
             blocks_slot: impl IntoIterator<Item = (Hash, Slot)>,
         ) -> Self {
             self.blocks_slot = blocks_slot.into_iter().collect();
+            self
+        }
+
+        #[must_use]
+        pub fn with_note_sets(mut self, note_sets: NoteSets) -> Self {
+            self.note_sets = note_sets;
+            self
+        }
+
+        #[must_use]
+        pub fn with_tx_notes(mut self, tx_notes: TxNoteState) -> Self {
+            self.tx_notes = tx_notes;
+            self
+        }
+
+        #[must_use]
+        pub const fn with_block_number(mut self, block_number: BlockNumber) -> Self {
+            self.block_number = block_number;
             self
         }
     }
@@ -254,12 +245,20 @@ pub mod test_utils {
             &self.channels
         }
 
-        fn get_service_notes(&self) -> &ServiceNotes {
-            &self.service_notes
+        fn get_note_sets(&self) -> &NoteSets {
+            &self.note_sets
         }
 
-        fn get_utxos(&self) -> &Utxos {
-            &self.utxos
+        fn get_tx_notes(&self) -> &TxNoteState {
+            &self.tx_notes
+        }
+
+        fn get_programs(&self) -> &Programs {
+            &self.programs
+        }
+
+        fn get_block_number(&self) -> BlockNumber {
+            self.block_number
         }
 
         fn get_declarations_by_service(
@@ -306,27 +305,6 @@ pub mod test_utils {
             self.block_slot
         }
 
-        fn get_nullifiers(&self) -> &HashTrieSetSync<VoucherNullifier> {
-            &self.nullifiers
-        }
-
-        fn get_claimable_vouchers_root(&self) -> &RewardsRoot {
-            &self.claimable_vouchers_root
-        }
-
-        fn get_channel_transfer_threshold(
-            &self,
-            channel_id: &ChannelId,
-        ) -> Result<ChannelKeyIndex, VerificationError> {
-            self.channels
-                .channels
-                .get(channel_id)
-                .ok_or(VerificationError::ChannelNotFound {
-                    channel_id: *channel_id,
-                })
-                .map(|channel| channel.transfer_threshold)
-        }
-
         fn get_key_from_channel_at_index(
             &self,
             channel_id: &ChannelId,
@@ -354,14 +332,6 @@ pub mod test_utils {
 
         fn get_pow_reward_pool(&self) -> PowReward {
             self.pow_reward_pool
-        }
-
-        fn get_current_epoch_nonce(&self) -> ZkHash {
-            self.current_epoch_nonce
-        }
-
-        fn get_previous_epoch_nonce(&self) -> ZkHash {
-            self.previous_epoch_nonce
         }
 
         fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot> {

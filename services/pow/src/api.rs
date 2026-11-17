@@ -95,9 +95,11 @@ where
     /// claimable tickets, returning the id of the submitted transaction (or
     /// `None` when there is nothing to claim).
     ///
-    /// `claim_address` names the key the rewards are paid to. Passing `None`
-    /// defers to the auto-claim configuration, using whichever target is
-    /// currently furthest below its threshold, and fails when none is.
+    /// `claim_address` names the key the rewards are paid to, one of the
+    /// wallet's keys, since only the wallet learns the note a claim returns
+    /// them in. Passing `None` defers to the auto-claim configuration, using
+    /// whichever target is currently furthest below its threshold, and fails
+    /// when none is.
     pub async fn claim(
         &self,
         claim_address: Option<ZkPublicKey>,

@@ -3,9 +3,10 @@ use lb_core::{
         SignedOps,
         gas::{GasCost, GasOverflow},
         ledger::verification_mode::StandardMode,
+        notes::NoteCommitment,
         transactions::{MantleTxBuilder, TxBuilderError, states::Preverified},
     },
-    sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
+    sdp::ActiveMessage,
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use overwatch::{
@@ -13,10 +14,17 @@ use overwatch::{
     services::{ServiceData, relay::OutboundRelay},
 };
 
+use crate::{DeclarationRequest, RuntimeDeclaration};
+
 #[derive(Debug, thiserror::Error)]
 pub enum SdpWalletError {
     #[error(transparent)]
     WalletApi(DynError),
+    #[error(
+        "The wallet does not hold the service note {0:?}: it is spent, or it is under a key the \
+         wallet does not know, and then only the holder of that key can prove the withdrawal"
+    )]
+    ServiceNoteNotHeld(NoteCommitment),
     #[error("Transaction fee exceeded the configured max fee. tx_fee={tx_fee} > max_fee={max_fee}")]
     TxFeeExceedsMaxFee { max_fee: GasCost, tx_fee: GasCost },
     #[error(transparent)]
@@ -44,7 +52,7 @@ pub trait SdpWalletAdapter {
     async fn declare_tx(
         &self,
         tx_builder: MantleTxBuilder,
-        declaration: DeclarationMessage,
+        declaration: DeclarationRequest,
         config: &SdpWalletConfig,
     ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError>;
 
@@ -55,10 +63,12 @@ pub trait SdpWalletAdapter {
         config: &SdpWalletConfig,
     ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError>;
 
+    // The wallet spends the service note `declaration.service_note` back to
+    // `config.funding_pk`.
     async fn withdraw_tx(
         &self,
         tx_builder: MantleTxBuilder,
-        withdraw: WithdrawMessage,
+        declaration: &RuntimeDeclaration,
         config: &SdpWalletConfig,
     ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError>;
 }

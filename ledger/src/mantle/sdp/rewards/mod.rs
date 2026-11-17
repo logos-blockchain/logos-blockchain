@@ -4,11 +4,14 @@ mod test_utils;
 
 use std::collections::HashMap;
 
-use lb_binary_codec::bincode::SerializeOp as _;
+use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_core::{
     crypto::{Digest, Hash, Hasher},
-    mantle::{Note, Utxo, Value},
-    sdp::{ActivityMetadata, ProviderId, ServiceParameters, ServiceType},
+    mantle::{
+        Value,
+        notes::{Note, derive_note_nonce},
+    },
+    sdp::{ActivityMetadata, Declaration, ProviderId, ServiceParameters, ServiceType},
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -66,10 +69,14 @@ pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
         config: &ServiceParameters,
         last_params: &Self::Params,
         params: &Self::Params,
-    ) -> (Self, Vec<Utxo>);
+    ) -> (Self, Vec<Note>);
 
     #[must_use]
     fn add_income(&self, income: Value) -> Self;
+
+    // The income earned in the current epoch, which `blend_rewards_pending` also
+    // holds.
+    fn pending_income(&self) -> Value;
 }
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
@@ -98,34 +105,50 @@ pub enum Error {
 /// Creates a deterministic transaction hash for reward distribution.
 ///
 /// The hash is computed from the service type and the epoch number, ensuring
-/// all nodes produce identical transaction hashes for reward notes.
+/// all nodes produce identical transaction hashes for reward notes. Service
+/// Reward Distribution: `hash(ServiceType || epoch_number)`, with `ServiceType`
+/// its canonical one-byte discriminant.
 fn create_reward_op_id(epoch: Epoch, service_type: ServiceType) -> Hash {
     let mut hasher = Hasher::default();
     let epoch_u8 = epoch.into_inner().to_le_bytes().to_vec();
-    let service_type_u8 = service_type
-        .to_bytes()
-        .expect("conversion to bytes should succeed")
-        .to_vec();
-    <Hasher as Digest>::update(&mut hasher, &service_type_u8);
+    <Hasher as Digest>::update(&mut hasher, service_type.encode_to_vec());
     <Hasher as Digest>::update(&mut hasher, &epoch_u8);
 
     hasher.finalize().into()
 }
 
-/// Distributes rewards as UTXOs, sorted by `zk_id` for determinism.
+/// The keys the rewards of a validator are created under: those of the
+/// service note of its declaration, `zk_id` being only its Proof of Quota
+/// identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RewardKeys {
+    pub note_pk: ZkPublicKey,
+    pub note_stake_pk: ZkPublicKey,
+}
+
+impl From<&Declaration> for RewardKeys {
+    fn from(declaration: &Declaration) -> Self {
+        Self {
+            note_pk: declaration.note_pk,
+            note_stake_pk: declaration.note_stake_pk,
+        }
+    }
+}
+
+/// Distributes rewards as notes, sorted by `zk_id` for determinism.
 ///
 /// Creates reward notes that are:
 /// - Deterministic: Sorted by `zk_id` in ascending order
-/// - One note per `zk_id`
+/// - One note per `zk_id`, under the keys of its declaration
 /// - Filters out 0-value rewards
 fn distribute_rewards(
-    rewards: HashMap<ZkPublicKey, RewardAmount>,
+    rewards: HashMap<ZkPublicKey, (RewardAmount, RewardKeys)>,
     epoch: Epoch,
     service_type: ServiceType,
-) -> Vec<Utxo> {
-    let mut sorted_rewards: Vec<(ZkPublicKey, RewardAmount)> = rewards
+) -> Vec<Note> {
+    let mut sorted_rewards: Vec<(ZkPublicKey, (RewardAmount, RewardKeys))> = rewards
         .into_iter()
-        .filter(|(_, amount)| *amount > 0)
+        .filter(|(_, (amount, _))| *amount > 0)
         .collect();
     sorted_rewards.sort_by_key(|(zk_id, _)| *zk_id);
 
@@ -134,8 +157,66 @@ fn distribute_rewards(
     sorted_rewards
         .into_iter()
         .enumerate()
-        .map(|(output_index, (zk_id, reward_amount))| {
-            Utxo::new(op_id, output_index, Note::new(reward_amount, zk_id))
+        .map(|(output_number, (_, (reward_amount, keys)))| Note {
+            stake_public_key: keys.note_stake_pk,
+            ..Note::new(
+                reward_amount,
+                derive_note_nonce(&op_id, output_number, reward_amount, &keys.note_pk),
+                keys.note_pk,
+            )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_groth16::Fr;
+
+    use super::*;
+
+    /// Service Reward Distribution: the `op_id` is `hash(ServiceType ||
+    /// epoch_number)`, the one-byte discriminant of the service, then the 4
+    /// bytes of the epoch.
+    #[test]
+    fn reward_op_id_hashes_the_one_byte_service_type_and_the_four_byte_epoch() {
+        let mut hasher = Hasher::default();
+        <Hasher as Digest>::update(&mut hasher, [0x00, 0x07, 0x00, 0x00, 0x00]);
+        let expected: Hash = hasher.finalize().into();
+        assert_eq!(
+            create_reward_op_id(Epoch::new(7), ServiceType::BlendNetwork),
+            expected
+        );
+    }
+
+    #[test]
+    fn reward_notes_go_to_the_keys_of_the_service_note_in_zk_id_order() {
+        let low = ZkPublicKey::new(Fr::from(1u64));
+        let high = ZkPublicKey::new(Fr::from(2u64));
+        let unpaid = ZkPublicKey::new(Fr::from(3u64));
+        let keys = |n: u64| RewardKeys {
+            note_pk: ZkPublicKey::new(Fr::from(n)),
+            note_stake_pk: ZkPublicKey::new(Fr::from(n + 1)),
+        };
+        let epoch = Epoch::new(7);
+        let paid = distribute_rewards(
+            HashMap::from([
+                (high, (20, keys(20))),
+                (unpaid, (0, keys(30))),
+                (low, (10, keys(10))),
+            ]),
+            epoch,
+            ServiceType::BlendNetwork,
+        );
+        let op_id = create_reward_op_id(epoch, ServiceType::BlendNetwork);
+        // Under note_pk and note_stake_pk, the nonce derived over the note_pk.
+        let note = |value, output_number, keys: RewardKeys| Note {
+            stake_public_key: keys.note_stake_pk,
+            ..Note::new(
+                value,
+                derive_note_nonce(&op_id, output_number, value, &keys.note_pk),
+                keys.note_pk,
+            )
+        };
+        assert_eq!(paid, vec![note(10, 0, keys(10)), note(20, 1, keys(20))]);
+    }
 }

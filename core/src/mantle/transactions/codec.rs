@@ -6,8 +6,9 @@ use crate::{
     mantle::{
         OpRef,
         gas::ThresholdSource as _,
+        ops::ChannelInscribeProof,
         transactions::{
-            thresholds::RunningThresholds,
+            thresholds::TxGasState,
             tx_list::{OpRefs, ops::OpsGasContext},
         },
     },
@@ -24,11 +25,13 @@ pub fn minimum_signed_transaction_size(op_refs: &OpRefs<'_>, context: &OpsGasCon
     let encoded_ops_size = op_refs.encoded_length();
 
     let (_, ops_proofs_size) = op_refs.iter().fold(
-        (RunningThresholds::new(context), 0),
+        (TxGasState::new(context), 0),
         |(mut thresholds, total), op| {
             let proof_size = match op {
-                // Ed25519SigProof = Ed25519Signature
-                OpRef::ChannelInscribe(_) => ED25519_SIGNATURE_SIZE,
+                // ChannelInscribeOpProof = Ed25519Signature *StepProof
+                OpRef::ChannelInscribe(operation) => {
+                    ChannelInscribeProof::encoded_length_for(operation)
+                }
 
                 // ChannelMultiSigProof
                 //
@@ -38,27 +41,20 @@ pub fn minimum_signed_transaction_size(op_refs: &OpRefs<'_>, context: &OpsGasCon
                     thresholds.configuration_threshold(&operation.channel()),
                 ),
 
-                // ZkAndEd25519SigsProof = ZkSignature Ed25519Signature
-                OpRef::SDPDeclare(_) => COMPRESSED_PROOF_SIZE + ED25519_SIGNATURE_SIZE,
+                // ZkTransferAndEd25519SigProof = ZkTransfer Ed25519Signature
+                OpRef::SDPDeclare(_) | OpRef::SDPWithdraw(_) => {
+                    COMPRESSED_PROOF_SIZE + ED25519_SIGNATURE_SIZE
+                }
 
-                // ZkSigProof = ZkSignature = ProofOfClaimProof = Groth16
-                OpRef::SDPWithdraw(_)
-                | OpRef::SDPActive(_)
-                | OpRef::LeaderClaim(_)
-                | OpRef::Transfer(_)
-                | OpRef::ChannelDeposit(_) => COMPRESSED_PROOF_SIZE,
+                // Ed25519SigProof = Ed25519Signature
+                OpRef::SDPActive(_) => ED25519_SIGNATURE_SIZE,
 
-                // ChannelMultiSigProof
-                OpRef::ChannelWithdraw(operation) => calculate_channel_multi_sig_proof_byte_size(
-                    thresholds.transfer_threshold(&operation.channel_id),
-                ),
+                // ZkTransferProof = ZkTransfer = Groth16Proof
+                OpRef::Transfer(_) | OpRef::ChannelDeposit(_) | OpRef::ChannelWithdraw(_) => {
+                    COMPRESSED_PROOF_SIZE
+                }
 
-                // ChannelMultiSigProof
-                OpRef::ChannelTransfer(operation) => calculate_channel_multi_sig_proof_byte_size(
-                    thresholds.transfer_threshold(&operation.channel_id),
-                ),
-
-                OpRef::ClaimPowReward(_) => 0, // no proof
+                OpRef::ClaimPowReward(_) | OpRef::ProgramRegister(_) => 0, // no proof
             };
             thresholds.apply(*op);
             (thresholds, total + proof_size)
@@ -72,14 +68,14 @@ pub fn minimum_signed_transaction_size(op_refs: &OpRefs<'_>, context: &OpsGasCon
 mod tests {
     use std::{collections::HashMap, num::NonZero};
 
-    use ark_ff::AdditiveGroup as _;
+    use ark_ff::{AdditiveGroup as _, Field as _};
     use lb_binary_codec::canonical::{BinaryDecode as _, DecodeError};
     use lb_blend_proofs::{
         quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
         selection::VerifiedProofOfSelection,
     };
     use lb_groth16::{CompressedGroth16Proof, Fr};
-    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey};
+    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey};
     use lb_utils::bounded::BoundedError;
     use multiaddr::Multiaddr;
     use num_bigint::BigUint;
@@ -87,36 +83,36 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
-            Note, NoteId, Op, OpProof, Utxo,
+            Op, OpProof,
             fixtures::ops::op_values::FORK_DIGEST,
-            gas::test_utils::GAS_PROFILE,
-            ledger::{
-                BoundedInputs, BoundedOutputs, Inputs, Outputs, verification_mode::StandardMode,
-            },
+            gas::GasProfile,
+            ledger::verification_mode::StandardMode,
+            notes::{InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments},
             ops::{
-                ZkAndEd25519Proof,
+                StepProof, ZkAndEd25519Proof, ZkTransferProof,
                 channel::{
                     ChannelId, MsgId,
                     config::ChannelConfigOp,
-                    inscribe::{Inscription, InscriptionOp},
+                    inscribe::{self, Inscription, InscriptionOp, MiniBlocks, Step, UserStep},
                     withdraw::ChannelWithdrawOp,
                 },
-                leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
+                op_proof::samples::SampleProof as _,
                 sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
                 transfer::TransferOp,
             },
             traits::{Hashable as _, MantleTx as _},
-            transactions::{GasPrices, OpProofs, SignedOps, TxList, tx_list::Ops},
+            transactions::{
+                GasPrices, OpProofs, SignedOps, TxList, states::Unverified, tx_list::Ops,
+            },
         },
-        proofs::{
-            channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
-            leader_claim_proof::Groth16LeaderClaimProof,
-        },
+        proofs::channel_multi_sig_proof::ChannelMultiSigProof,
         sdp::{
             ActivityMetadata, DeclarationId, Locator, MAX_LOCATOR_BYTE_SIZE, Nonce, ProviderId,
             ServiceType, blend::ActivityProof,
         },
     };
+
+    const GAS_PROFILE: GasProfile = GasProfile::MAINNET;
 
     fn dbg_test_vector(actual: &str, expected: &str) {
         println!("{:32} {:32}", "actual", "expected");
@@ -151,15 +147,17 @@ mod tests {
             FORK_DIGEST,
             [Op::ChannelInscribe(InscriptionOp {
                 channel_id: ChannelId::from([0xAA; 32]),
-                inscription: Inscription::new_unchecked(b"hello".to_vec()),
+                inscription: b"hello".into(),
                 parent: MsgId::from([0xBB; 32]),
                 signer: signing_key.public_key().into_unverified(),
+                mini_blocks: MiniBlocks::default(),
             })],
         );
 
         let tx_hash = tx.hash();
-        let inscribe_sig =
-            OpProof::Ed25519Sig(signing_key.sign_payload(tx_hash.as_signing_bytes()));
+        let inscribe_sig = OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(
+            signing_key.sign_payload(tx_hash.as_signing_bytes()),
+        ));
         let op_proofs = OpProofs::from([inscribe_sig]);
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(tx, op_proofs).unwrap();
 
@@ -176,8 +174,9 @@ mod tests {
             + "68656c6c6f"                                                       // Inscription
             + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" // Parent (32Byte)
             + "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c" // Signer (32Byte)
-            + "8f88bb21e98b642d9407ec6d7502ba3e383d31e22e042c1427e999cc824e46a4" // Signature (64Byte)
-            + "887c4fa622d60790c3c4162eb51e3a06ba21ef6d389a37c6ad8f315e6b218206";
+            + "0000"                                                             // StepCount
+            + "792ef3ce43ed5872656c85944909a7d9a4d0c429cba489ec207efdba7459c69a" // Signature (64Byte)
+            + "73f38bdb757d074ee13dbeb99fe17cbace7b56b0c565e3d3528b5bc29d198706";
 
         // ENCODING
         let encoded = hex::encode(signed_tx.encode());
@@ -200,9 +199,10 @@ mod tests {
             TxList::new_unchecked(vec![
                 Op::ChannelInscribe(InscriptionOp {
                     channel_id: ChannelId::from([0x11; 32]),
-                    inscription: Inscription::new_unchecked(b"first".to_vec()),
+                    inscription: b"first".into(),
                     parent: MsgId::from([0x00; 32]),
                     signer: signing_key.public_key().into_unverified(),
+                    mini_blocks: MiniBlocks::default(),
                 }),
                 Op::ChannelConfig(
                     ChannelConfigOp::new(
@@ -212,7 +212,6 @@ mod tests {
                         1.into(),
                         2.into(),
                         NonZero::<u16>::MIN,
-                        NonZero::new(4).unwrap(),
                     )
                     .unwrap(),
                 ),
@@ -229,7 +228,7 @@ mod tests {
         // Encode and decode roundtrip test (no hardcoded test vector since signatures
         // are deterministic)
         let op_proofs = OpProofs::from([
-            OpProof::Ed25519Sig(sig),
+            OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(sig)),
             OpProof::ChannelMultiSigProof(config_proof),
         ]);
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(tx, op_proofs).unwrap();
@@ -242,8 +241,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_large_payload_encoding_decoding() {
-        // Test payload sizes from 512kB up to 2MiB in 512kB increments
-        const MAX_SIZE: usize = 2 * 1024 * 1024;
+        // Test payload sizes from a tenth of the inscription maximum up to it
+        const MAX_SIZE: usize = inscribe::MAX_BYTES;
         const CHUNK_SIZE: usize = MAX_SIZE / 10;
 
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
@@ -261,6 +260,7 @@ mod tests {
                     inscription: large_inscription,
                     parent: MsgId::from([0xBB; 32]),
                     signer: signing_key.public_key().into_unverified(),
+                    mini_blocks: MiniBlocks::default(),
                 };
 
                 let tx = Ops::new(
@@ -270,17 +270,15 @@ mod tests {
 
                 let tx_hash = tx.hash();
                 let op_sig = signing_key.sign_payload(tx_hash.as_signing_bytes());
-                let op_proofs = OpProofs::from([OpProof::Ed25519Sig(op_sig)]);
+                let op_proofs = OpProofs::from([OpProof::ChannelInscribe(
+                    ChannelInscribeProof::without_steps(op_sig),
+                )]);
                 let signed_ops = SignedOps::<_, StandardMode>::from_parts(tx, op_proofs).unwrap();
 
                 let encoded = signed_ops.encode();
 
-                let gas_context = OpsGasContext::new(
-                    HashMap::new(),
-                    HashMap::new(),
-                    GasPrices::new(0, 0),
-                    GAS_PROFILE,
-                );
+                let gas_context =
+                    OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
                 let predicted_size =
                     minimum_signed_transaction_size(&signed_ops.op_refs(), &gas_context);
                 assert_eq!(
@@ -314,11 +312,12 @@ mod tests {
     #[test]
     fn test_encode_decode_roundtrip_with_transfer() {
         // Create a MantleTx with ledger inputs and outputs
-        let pk = ZkPublicKey::from(BigUint::from(42u64));
-        let note = Note::new(1000, pk);
-        let note_id = NoteId(BigUint::from(123u64).into());
-        let transfer_op =
-            TransferOp::new(BoundedInputs::from(note_id).into(), Outputs::new([note]));
+        let transfer_op = TransferOp::new(
+            [NoteNullifier(Fr::from(123u64))].into(),
+            [NoteCommitment(Fr::from(1000u64))].into(),
+            Fr::from(5u64),
+            6,
+        );
 
         let original_tx = Ops::new(
             FORK_DIGEST,
@@ -342,12 +341,7 @@ mod tests {
         let mantle_tx = Ops::new(FORK_DIGEST, TxList::new_unchecked(vec![]));
 
         // Predict size
-        let gas_context = OpsGasContext::new(
-            HashMap::new(),
-            HashMap::new(),
-            GasPrices::new(0, 0),
-            GAS_PROFILE,
-        );
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get actual size
@@ -367,6 +361,7 @@ mod tests {
             inscription: Inscription::new_unchecked(b"hello world".to_vec()),
             parent: MsgId::from([0xBB; 32]),
             signer: signing_key.public_key().into_unverified(),
+            mini_blocks: MiniBlocks::default(),
         };
 
         let mantle_tx = Ops::new(
@@ -375,23 +370,78 @@ mod tests {
         );
 
         // Predict size
-        let gas_context = OpsGasContext::new(
-            HashMap::new(),
-            HashMap::new(),
-            GasPrices::new(0, 0),
-            GAS_PROFILE,
-        );
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get actual size
         let tx_hash = mantle_tx.hash();
         let op_sig = signing_key.sign_payload(tx_hash.as_signing_bytes());
-        let op_proofs = OpProofs::from([OpProof::Ed25519Sig(op_sig)]);
+        let op_proofs = OpProofs::from([OpProof::ChannelInscribe(
+            ChannelInscribeProof::without_steps(op_sig),
+        )]);
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();
         let encoded = signed_tx.encode();
         let actual_size = encoded.len();
 
         assert_eq!(predicted_size, actual_size);
+    }
+
+    #[test]
+    fn minimum_size_counts_one_zk_transfer_per_step() {
+        let step = UserStep {
+            inputs: [NoteNullifier(Fr::ONE)].into(),
+            outputs: OutputCommitments::default(),
+            commitment_merkle_root: Fr::ZERO,
+            inscription: Inscription::default(),
+        };
+        let ops = Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelInscribe(InscriptionOp {
+                mini_blocks: [inscribe::MiniBlock::from([
+                    Step::User(step.clone()),
+                    Step::User(step),
+                ])]
+                .into(),
+                ..InscriptionOp::sample()
+            })],
+        );
+        let proof = ChannelInscribeProof::new(
+            Ed25519Signature::zero(),
+            vec![
+                StepProof::ZkTransfer(ZkTransferProof::sample()),
+                StepProof::ZkTransfer(ZkTransferProof::sample()),
+            ],
+        );
+        let signed = SignedOps::<Unverified, StandardMode>::from_parts(
+            ops.clone(),
+            OpProofs::from([OpProof::ChannelInscribe(proof)]),
+        )
+        .unwrap();
+        assert_eq!(
+            minimum_signed_transaction_size(
+                &ops.by_ref(),
+                &OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE)
+            ),
+            signed.encode().len()
+        );
+    }
+
+    #[test]
+    fn minimum_size_counts_the_proofs_and_openings_of_a_program_step() {
+        let operation = InscriptionOp::sample_with_step();
+        let ops = Ops::new(FORK_DIGEST, [Op::ChannelInscribe(operation.clone())]);
+        let proof = Op::ChannelInscribe(operation).sample_proof();
+        assert_eq!(proof.encode().len(), 64 + 128 + 128 + (128 + 128 + 104));
+        let signed =
+            SignedOps::<Unverified, StandardMode>::from_parts(ops.clone(), OpProofs::from([proof]))
+                .unwrap();
+        assert_eq!(
+            minimum_signed_transaction_size(
+                &ops.by_ref(),
+                &OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE)
+            ),
+            signed.encode().len()
+        );
     }
 
     #[test]
@@ -412,7 +462,6 @@ mod tests {
             0.into(),
             0.into(),
             NonZero::<u16>::MIN,
-            NonZero::<u16>::MIN,
         )
         .unwrap();
 
@@ -422,12 +471,7 @@ mod tests {
         );
 
         // Predict size
-        let gas_context = OpsGasContext::new(
-            HashMap::new(),
-            HashMap::new(),
-            GasPrices::new(0, 0),
-            GAS_PROFILE,
-        );
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get the actual size.
@@ -448,15 +492,6 @@ mod tests {
         let locator1: Multiaddr = "/ip4/127.0.0.1/tcp/8080".parse().unwrap();
         let locator2: Multiaddr = "/ip6/::1/tcp/9090".parse().unwrap();
 
-        let service_note_sk = ZkKey::from(BigUint::from(1u64));
-        let service_note = Utxo {
-            op_id: [1u8; 32],
-            output_index: 12,
-            note: Note {
-                value: 500,
-                pk: service_note_sk.to_public_key(),
-            },
-        };
         let sdp_declare_op = SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
             locators: vec![
@@ -467,7 +502,11 @@ mod tests {
             .unwrap(),
             provider_id: ProviderId(signing_key.public_key()),
             zk_id: zk_sk.to_public_key(),
-            service_note_id: service_note.id(),
+            note_pk: zk_sk.to_public_key(),
+            note_stake_pk: zk_sk.to_public_key(),
+            inputs: [NoteNullifier(Fr::from(500u64))].into(),
+            commitment_merkle_root: Fr::ZERO,
+            amount: 500,
         };
 
         let mantle_tx = Ops::new(
@@ -476,18 +515,12 @@ mod tests {
         );
 
         // Predict size
-        let gas_context = OpsGasContext::new(
-            HashMap::new(),
-            HashMap::new(),
-            GasPrices::new(0, 0),
-            GAS_PROFILE,
-        );
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get actual size
-        let tx_hash = mantle_tx.hash();
         let proof = ZkAndEd25519Proof {
-            zk_sig: ZkKey::multi_sign(&[service_note_sk, zk_sk], &tx_hash.to_fr()).unwrap(),
+            zk_proof: ZkTransferProof::sample(),
             ed25519_sig: Ed25519Signature::from_bytes(&[0u8; 64]),
         };
         let op_proofs = OpProofs::from([OpProof::ZkAndEd25519Sigs(proof)]);
@@ -502,7 +535,9 @@ mod tests {
     fn test_minimum_signed_mantle_tx_size_with_sdp_withdraw() {
         let sdp_withdraw_op = SDPWithdrawOp {
             declaration_id: DeclarationId([0x11; 32]),
-            nonce: Nonce::new(0.into(), 42),
+            service_note_nullifier: NoteNullifier(Fr::from(123u64)),
+            outputs: [NoteCommitment(Fr::from(124u64))].into(),
+            excess_value: 1,
         };
 
         let mantle_tx = Ops::new(
@@ -510,21 +545,12 @@ mod tests {
             TxList::new_unchecked(vec![Op::SDPWithdraw(sdp_withdraw_op)]),
         );
 
-        let tx_hash = mantle_tx.hash();
-
         // Predict size
-        let gas_context = OpsGasContext::new(
-            HashMap::new(),
-            HashMap::new(),
-            GasPrices::new(0, 0),
-            GAS_PROFILE,
-        );
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get actual size
-        let op_proofs = OpProofs::from([OpProof::ZkSig(
-            ZkKey::multi_sign(&[ZkKey::zero()], &tx_hash.to_fr()).unwrap(),
-        )]);
+        let op_proofs = OpProofs::from([OpProof::ZkAndEd25519Sigs(ZkAndEd25519Proof::sample())]);
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();
         let encoded = signed_tx.encode();
         let actual_size = encoded.len();
@@ -556,18 +582,12 @@ mod tests {
             TxList::new_unchecked(vec![Op::SDPActive(sdp_active_op)]),
         );
 
-        let gas_context = OpsGasContext::new(
-            HashMap::new(),
-            HashMap::new(),
-            GasPrices::new(0, 0),
-            GAS_PROFILE,
-        );
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
-        let tx_hash = mantle_tx.hash();
-        let op_proofs = OpProofs::from([OpProof::ZkSig(
-            ZkKey::multi_sign(&[ZkKey::zero()], &tx_hash.to_fr()).unwrap(),
-        )]);
+        let op_proofs = OpProofs::from([OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
+            &[0u8; 64],
+        ))]);
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();
 
         let encoded = signed_tx.encode();
@@ -585,6 +605,7 @@ mod tests {
             inscription: Inscription::new_unchecked(b"test".to_vec()),
             parent: MsgId::from([0xBB; 32]),
             signer: signing_key.public_key().into_unverified(),
+            mini_blocks: MiniBlocks::default(),
         };
 
         let config_op = ChannelConfigOp::new(
@@ -593,7 +614,6 @@ mod tests {
             signing_key.public_key().into(),
             0.into(),
             0.into(),
-            NonZero::<u16>::MIN,
             NonZero::<u16>::MIN,
         )
         .unwrap();
@@ -622,12 +642,7 @@ mod tests {
         );
 
         // Predict size
-        let gas_context = OpsGasContext::new(
-            HashMap::new(),
-            HashMap::new(),
-            GasPrices::new(0, 0),
-            GAS_PROFILE,
-        );
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         let tx_hash = mantle_tx.hash();
@@ -636,9 +651,9 @@ mod tests {
         // ChannelConfig creates the channel here, so its proof has no signatures.
         let config_proof = ChannelMultiSigProof::empty();
         let op_proofs = OpProofs::from([
-            OpProof::Ed25519Sig(op_sig),
+            OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(op_sig)),
             OpProof::ChannelMultiSigProof(config_proof),
-            OpProof::ZkSig(ZkKey::zero().sign_payload(&tx_hash.to_fr()).unwrap()),
+            OpProof::Ed25519Sig(op_sig),
         ]);
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();
         let encoded = signed_tx.encode();
@@ -649,21 +664,13 @@ mod tests {
 
     #[test]
     fn test_minimum_signed_mantle_tx_size_with_ledger_inputs_outputs() {
-        let pk1 = ZkPublicKey::from(BigUint::from(100u64));
-        let pk2 = ZkPublicKey::from(BigUint::from(200u64));
-
-        let note1 = Note::new(1000, pk1);
-        let note2 = Note::new(2000, pk2);
-
-        let note_id1 = NoteId(BigUint::from(111u64).into());
-        let note_id2 = NoteId(BigUint::from(222u64).into());
-        let note_id3 = NoteId(BigUint::from(333u64).into());
-
         let transfer_op = TransferOp::new(
-            BoundedInputs::try_from_iter([note_id1, note_id2, note_id3])
-                .unwrap()
+            [111u64, 222, 333]
+                .map(|n| NoteNullifier(Fr::from(n)))
                 .into(),
-            Outputs::new([note1, note2]),
+            [1000u64, 2000].map(|n| NoteCommitment(Fr::from(n))).into(),
+            Fr::ZERO,
+            0,
         );
 
         let mantle_tx = Ops::new(
@@ -672,17 +679,11 @@ mod tests {
         );
 
         // Predict size
-        let gas_context = OpsGasContext::new(
-            HashMap::new(),
-            HashMap::new(),
-            GasPrices::new(0, 0),
-            GAS_PROFILE,
-        );
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get actual size
-        let op_proofs =
-            OpProofs::from([OpProof::ZkSig(ZkKey::multi_sign(&[], &Fr::ZERO).unwrap())]);
+        let op_proofs = OpProofs::from([OpProof::ZkTransfer(ZkTransferProof::sample())]);
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();
         let encoded = signed_tx.encode();
         let actual_size = encoded.len();
@@ -702,6 +703,7 @@ mod tests {
             ),
             parent: MsgId::from([0x22; 32]),
             signer: signing_key1.public_key().into_unverified(),
+            mini_blocks: MiniBlocks::default(),
         };
 
         let config_op = ChannelConfigOp::new(
@@ -711,15 +713,15 @@ mod tests {
             0.into(),
             0.into(),
             NonZero::<u16>::MIN,
-            NonZero::<u16>::MIN,
         )
         .unwrap();
 
-        let service_note_sk = ZkKey::from(BigUint::from(1u64));
-        let transfer_op = TransferOp {
-            inputs: BoundedInputs::from(NoteId(BigUint::from(777u64).into())).into(),
-            outputs: Outputs::new([Note::new(5000, service_note_sk.to_public_key())]),
-        };
+        let transfer_op = TransferOp::new(
+            [NoteNullifier(Fr::from(777u64))].into(),
+            [NoteCommitment(Fr::from(5000u64))].into(),
+            Fr::ZERO,
+            0,
+        );
 
         let locator: Multiaddr = "/dns4/example.com/tcp/443".parse().unwrap();
         let zk_sk = ZkKey::zero();
@@ -728,11 +730,11 @@ mod tests {
             locators: Locator::new_unchecked(locator).into(),
             provider_id: ProviderId(signing_key1.public_key()),
             zk_id: zk_sk.to_public_key(),
-            service_note_id: transfer_op
-                .outputs
-                .utxo_by_index(0, &transfer_op)
-                .unwrap()
-                .id(),
+            note_pk: zk_sk.to_public_key(),
+            note_stake_pk: zk_sk.to_public_key(),
+            inputs: [NoteNullifier(Fr::from(500u64))].into(),
+            commitment_merkle_root: Fr::ZERO,
+            amount: 500,
         };
 
         let mantle_tx = Ops::new(
@@ -746,12 +748,7 @@ mod tests {
         );
 
         // Predict size
-        let gas_context = OpsGasContext::new(
-            HashMap::new(),
-            HashMap::new(),
-            GasPrices::new(0, 0),
-            GAS_PROFILE,
-        );
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get the actual size.
@@ -760,14 +757,14 @@ mod tests {
         let op_ed25519_sig = signing_key1.sign_payload(tx_hash.as_signing_bytes());
         let config_proof = ChannelMultiSigProof::empty();
         let zk_and_ed25519_proof = ZkAndEd25519Proof {
-            zk_sig: ZkKey::multi_sign(&[service_note_sk, zk_sk], &tx_hash.to_fr()).unwrap(),
+            zk_proof: ZkTransferProof::sample(),
             ed25519_sig: op_ed25519_sig,
         };
         let op_proofs = OpProofs::from([
-            OpProof::Ed25519Sig(op_ed25519_sig),
+            OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(op_ed25519_sig)),
             OpProof::ChannelMultiSigProof(config_proof),
             OpProof::ZkAndEd25519Sigs(zk_and_ed25519_proof),
-            OpProof::ZkSig(ZkKey::multi_sign(&[], &Fr::ZERO).unwrap()),
+            OpProof::ZkTransfer(ZkTransferProof::sample()),
         ]);
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();
         let encoded = signed_tx.encode();
@@ -777,74 +774,19 @@ mod tests {
     }
 
     #[test]
-    fn test_minimum_signed_mantle_tx_size_with_leader_claim() {
-        let leader_claim_op = LeaderClaimOp {
-            rewards_root: RewardsRoot::default(),
-            voucher_nullifier: VoucherNullifier::default(),
-            pk: ZkPublicKey::from(BigUint::from(0u64)),
-        };
-
-        let mantle_tx = Ops::new(
-            FORK_DIGEST,
-            TxList::new_unchecked(vec![Op::LeaderClaim(leader_claim_op)]),
-        );
-
-        let empty_gas_context = OpsGasContext::new(
-            HashMap::new(),
-            HashMap::new(),
-            GasPrices::new(0, 0),
-            GAS_PROFILE,
-        );
-        let predicted_size =
-            minimum_signed_transaction_size(&mantle_tx.op_refs(), &empty_gas_context);
-
-        let poc_proof =
-            Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
-
-        // Construct directly to skip proof verification (dummy proof won't verify)
-        let op_proofs = OpProofs::from([OpProof::PoC(poc_proof)]);
-        let signed_tx = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();
-
-        let encoded = signed_tx.encode();
-        assert_eq!(predicted_size, encoded.len());
-    }
-
-    #[test]
-    fn test_encode_decode_leader_claim_op() {
-        let leader_claim_op = LeaderClaimOp {
-            rewards_root: RewardsRoot::default(),
-            voucher_nullifier: VoucherNullifier::default(),
-            pk: ZkPublicKey::from(BigUint::from(0u64)),
-        };
-        let op = Op::LeaderClaim(leader_claim_op);
-
-        let encoded = op.encode();
-        let (remaining, decoded_op) = Op::decode(&encoded, &u32::MAX).unwrap();
-        assert_eq!(remaining, b"");
-        assert_eq!(decoded_op, op);
-    }
-
-    #[test]
     fn test_encode_decode_channel_withdraw_tx() {
-        let signing_key = Ed25519Key::from_bytes(&[21u8; 32]);
         let mantle_tx = Ops::new(
             FORK_DIGEST,
             TxList::new_unchecked(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id: ChannelId::from([0xAB; 32]),
-                inputs: BoundedInputs::try_from_iter([
-                    NoteId(BigUint::from(100u64).into()),
-                    NoteId(BigUint::from(200u64).into()),
-                ])
-                .unwrap()
-                .into(),
+                inputs: [NoteNullifier(Fr::ZERO)].into(),
+                commitment_merkle_root: Fr::ZERO,
+                outputs: OutputCommitments::default(),
             })]),
         );
-        let tx_hash = mantle_tx.hash();
-        let proof = ChannelMultiSigProof::new(IndexedSignatures::from((
-            0,
-            signing_key.sign_payload(tx_hash.as_signing_bytes()),
-        )));
-        let op_proofs = OpProofs::from([OpProof::ChannelMultiSigProof(proof)]);
+        let op_proofs = OpProofs::from([OpProof::ZkTransfer(ZkTransferProof::new(
+            CompressedGroth16Proof::from_bytes(&[0u8; 128]),
+        ))]);
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();
 
         let encoded = signed_tx.encode();
@@ -898,7 +840,6 @@ mod tests {
                     Ed25519Key::from_bytes(&[1; 32]).public_key().into(),
                     0.into(),
                     0.into(),
-                    NonZero::<u16>::MIN,
                     NonZero::<u16>::MIN,
                 )
                 .unwrap()
@@ -954,6 +895,9 @@ mod tests {
         let sk = Ed25519Key::from_bytes(&[0x44; 32]);
         let pk = sk.public_key();
         valid_input.extend_from_slice(&pk.to_bytes());
+
+        // Step count (u16), no step
+        valid_input.extend_from_slice(&0u16.to_le_bytes());
 
         // Should succeed (though signature validation might fail later)
         let result = InscriptionOp::decode(&valid_input, &MAX_INSCRIPTION_SIZE);
@@ -1086,7 +1030,11 @@ mod tests {
             locators: Locator::new_unchecked(invalid_locator).into(),
             provider_id: ProviderId(Ed25519Key::from_bytes(&[1; 32]).public_key()),
             zk_id: ZkKey::zero().to_public_key(),
-            service_note_id: NoteId(BigUint::from(111u64).into()),
+            note_pk: ZkKey::zero().to_public_key(),
+            note_stake_pk: ZkKey::zero().to_public_key(),
+            inputs: [NoteNullifier(Fr::from(500u64))].into(),
+            commitment_merkle_root: Fr::ZERO,
+            amount: 500,
         };
 
         let encoded = op.encode();
@@ -1100,8 +1048,8 @@ mod tests {
 
     #[test]
     fn test_encode_decode_max_inputs() {
-        let inputs = (0..u8::MAX).map(|index| NoteId(BigUint::from(index).into()));
-        let inputs: Inputs = BoundedInputs::try_from_iter(inputs).unwrap().into();
+        let inputs = (0..u8::MAX).map(|index| NoteNullifier(BigUint::from(index).into()));
+        let inputs = InputNullifiers::try_from_iter(inputs).unwrap();
 
         // Encode should succeed
         let encoded = inputs.encode();
@@ -1111,7 +1059,7 @@ mod tests {
         );
 
         // Decode should succeed and produce the same number of inputs
-        let result = BoundedInputs::decode(&encoded, &());
+        let result = InputNullifiers::decode(&encoded, &());
         assert!(result.is_ok(), "Should decode max input count");
         let (_, decoded_inputs) = result.unwrap();
         assert_eq!(
@@ -1123,9 +1071,9 @@ mod tests {
 
     #[test]
     fn test_encode_decode_max_outputs() {
-        let note = Note::new(1000, ZkPublicKey::from(BigUint::from(42u64)));
+        let note = NoteCommitment(BigUint::from(42u64).into());
         let outputs = [note; u8::MAX as usize];
-        let outputs = BoundedOutputs::from(outputs);
+        let outputs = OutputCommitments::from(outputs);
 
         // Encode should succeed
         let encoded = outputs.encode();
@@ -1135,7 +1083,7 @@ mod tests {
         );
 
         // Decode should succeed and produce the same number of outputs
-        let result = BoundedOutputs::decode(&encoded, &());
+        let result = OutputCommitments::decode(&encoded, &());
         assert!(result.is_ok(), "Should decode max output count");
         let (_, decoded_outputs) = result.unwrap();
         assert_eq!(
@@ -1154,12 +1102,12 @@ mod tests {
         // Add MAX_INPUT_COUNT distinct field elements (each 32 bytes, little
         // endian)
         for index in 0..u8::MAX {
-            let mut note_id = [0x01; 32];
-            note_id[0] = index;
-            valid_input.extend_from_slice(&note_id);
+            let mut note_nullifier = [0x01; 32];
+            note_nullifier[0] = index;
+            valid_input.extend_from_slice(&note_nullifier);
         }
 
-        let result = BoundedInputs::decode(&valid_input, &());
+        let result = InputNullifiers::decode(&valid_input, &());
         assert!(result.is_ok(), "Should accept max input count");
         let (_, inputs) = result.unwrap();
         assert_eq!(inputs.len(), u8::MAX as usize);
@@ -1167,13 +1115,12 @@ mod tests {
         // Test that output_count = MAX_OUTPUT_COUNT works
         let mut valid_output = u8::MAX.to_le_bytes().to_vec();
 
-        // Add MAX_OUTPUT_COUNT notes (each: 8 bytes value + 32 bytes key)
+        // Add MAX_OUTPUT_COUNT note commitments (each 32 bytes)
         for _ in 0..u8::MAX {
-            valid_output.extend_from_slice(&42u64.to_le_bytes()); // value
-            valid_output.extend_from_slice(&[0x02; 32]); // public key
+            valid_output.extend_from_slice(&[0x02; 32]);
         }
 
-        let result = BoundedOutputs::decode(&valid_output, &());
+        let result = OutputCommitments::decode(&valid_output, &());
         assert!(result.is_ok(), "Should accept max output count");
         let (_, outputs) = result.unwrap();
         assert_eq!(outputs.len(), u8::MAX as usize);

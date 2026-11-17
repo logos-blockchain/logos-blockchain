@@ -1,10 +1,6 @@
 use core::num::{NonZero, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU128};
 
-use lb_core::{
-    block::genesis::GenesisBlock,
-    mantle::gas::{Gas, GasProfile},
-    sdp::NumberOfEpochs,
-};
+use lb_core::{block::genesis::GenesisBlock, mantle::gas::GasProfile, sdp::NumberOfEpochs};
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::ModulusShift;
 use lb_node::config::deployment::{
@@ -18,7 +14,7 @@ use lb_node::config::deployment::{
                 MinimumNetworkSize, SchedulerSettings, Settings as BlendDeploymentSettings,
             },
             cryptarchia::{
-                BlockRewardsConfig, EpochConfig, MaxGasPerBlock, ServiceParameters,
+                BlockRewardsConfig, EmissionRatio, EpochConfig, MaxGasPerBlock, ServiceParameters,
                 Settings as CryptarchiaDeploymentSettings,
             },
             time::Settings as TimeDeploymentSettings,
@@ -86,7 +82,7 @@ const REWARD_POW_SLOT_WINDOW: u64 = 100;
 
 /// `G_max`: the most execution gas a block may consume, whose half is the
 /// target the execution base fee steers blocks towards.
-const EXECUTION_MARKET_MAX_GAS_PER_BLOCK: MaxGasPerBlock = MaxGasPerBlock::new(3_193_460).unwrap();
+const EXECUTION_MARKET_MAX_GAS_PER_BLOCK: MaxGasPerBlock = MaxGasPerBlock::new(3_137_798).unwrap();
 /// `φ`: how fast the execution base fee follows demand.
 const EXECUTION_MARKET_FEE_ADJUSTMENT_RATE: ProperFraction =
     ProperFraction::new(1, NonZeroU32::new(8).unwrap()).unwrap();
@@ -100,31 +96,20 @@ const STORAGE_MARKET_MAX_ADJUSTMENT_FACTOR: ProperFraction =
 /// `β`: the weight of the latest epoch in the moving average of storage usage.
 const STORAGE_MARKET_EMA_SMOOTHING_FACTOR: ProperFraction =
     ProperFraction::new(1, NonZeroU32::new(2).unwrap()).unwrap();
-/// What each Operation costs, the channel ones per key of their threshold.
+/// What each Operation costs, and the components of RFC-506 an Operation and a
+/// transaction add for what they carry.
 ///
 /// The schedule of the e2e deployment, which its clients price transactions
 /// under.
-pub const GAS_PROFILE: GasProfile = GasProfile {
-    transfer: Gas::new(590),
-    channel_config: Gas::new(56),
-    channel_inscribe: Gas::new(56),
-    channel_deposit: Gas::new(590),
-    channel_withdraw: Gas::new(56),
-    channel_transfer: Gas::new(56),
-    sdp_declare: Gas::new(646),
-    sdp_withdraw: Gas::new(590),
-    sdp_active: Gas::new(590),
-    leader_claim: Gas::new(580),
-    claim_pow_reward: Gas::new(1),
-};
+pub const GAS_PROFILE: GasProfile = GasProfile::MAINNET;
 /// The block rewards: the stake target, the scale of the emission's weight, the
 /// weight of the pooled fees, a block's emission in full, and the Blend nodes'
 /// share.
 const BLOCK_REWARDS: BlockRewardsConfig = BlockRewardsConfig::new(
-    3_000_000_000,
-    NonZeroU64::new(120_000_000).unwrap(),
+    3_000_000_000_000_000_000,
+    NonZeroU64::new(120_000_000_000_000_000).unwrap(),
     10_512,
-    NonNegativeRatio::new(62_500, NonZeroU32::new(657).unwrap()),
+    EmissionRatio::new(62_500_000_000_000, NonZeroU64::new(657).unwrap()),
     ProperFraction::new(6, NonZeroU32::new(10).unwrap()).unwrap(),
 )
 .unwrap();

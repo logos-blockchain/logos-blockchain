@@ -1,20 +1,32 @@
-pub mod channel_transfer;
 pub mod config;
 pub mod deposit;
 pub mod inscribe;
+pub mod program_step;
 pub mod verification;
 pub mod withdraw;
 
 use std::fmt::{Display, Formatter};
 
+use ark_ff::PrimeField as _;
 use lb_binary_codec::{
     bincode::BoundedSerializeOp,
     canonical::{BinaryDecode, BinaryEncode},
 };
+use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnverifiedEd25519PublicKey};
 use lb_utils::bounded::NonEmptyBoundedVec;
 
-use crate::utils::serde_bytes_newtype;
+use crate::{
+    crypto::{Digest as _, Hasher},
+    utils::serde_bytes_newtype,
+};
+
+/// `MAX_OPERATION_DATA_SIZE` of Mantle Transaction Encoding.
+///
+/// It bounds the inscriptions of a `ChannelInscribe` and of its steps
+/// together, and the inscription of a `ChannelDeposit`, excluding their
+/// `UINT32` length prefixes.
+pub const MAX_OPERATION_DATA_SIZE: usize = 1_835_008;
 
 pub type ChannelKeyIndex = u16;
 
@@ -26,6 +38,22 @@ pub type UnverifiedChannelKeys = ChannelKeys<UnverifiedEd25519PublicKey>;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, BinaryEncode, BinaryDecode)]
 pub struct ChannelId([u8; 32]);
 serde_bytes_newtype!(ChannelId, 32);
+
+pub const NULL_CHANNEL_ID: ChannelId = ChannelId([0; 32]);
+
+/// The identifier a holder binds the `ZkTransfer` of its step to: the
+/// BLAKE2b-256 hash, under `dst`, of the channel and of the encoded step, its
+/// kind byte included, reduced modulo `p` as an `op_id` is. No circuit
+/// recomputes it, so it need not be a `zkhash`.
+fn step_id(dst: &[u8], channel_id: &ChannelId, kind: u8, step: &impl BinaryEncode) -> Fr {
+    let mut hasher = Hasher::new();
+    hasher.update(dst);
+    hasher.update(channel_id.0);
+    hasher.update([kind]);
+    hasher.update(step.encode());
+    let digest: [u8; 32] = hasher.finalize().into();
+    Fr::from_le_bytes_mod_order(&digest)
+}
 
 impl BoundedSerializeOp for ChannelId {
     type Bytes = [u8; 32];

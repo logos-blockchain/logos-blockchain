@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::keys::UnsecuredZkKey;
 
 use super::state::TrackedWalletKeys;
 use crate::common::wallet::{WalletChainSourceId, WalletId, wallet_id_for_chain_source};
@@ -23,23 +23,23 @@ impl TrackedWalletKeysBySource {
         &mut self,
         source_id: impl Into<WalletChainSourceId>,
         wallet_id: impl Into<WalletId>,
-        wallet_pk: ZkPublicKey,
+        wallet_key: UnsecuredZkKey,
     ) {
         self.by_source
             .entry(source_id.into())
             .or_default()
-            .push(TrackedWalletKeys::new(wallet_id, [wallet_pk]));
+            .push(TrackedWalletKeys::new(wallet_id, [wallet_key]));
     }
 
     pub fn add_wallet_for_each_source(
         &mut self,
         base_wallet_id: impl AsRef<str>,
-        wallet_pk: ZkPublicKey,
+        wallet_key: &UnsecuredZkKey,
     ) {
         for (source_id, wallet_keys) in &mut self.by_source {
             wallet_keys.push(TrackedWalletKeys::new(
                 wallet_id_for_chain_source(base_wallet_id.as_ref(), source_id),
-                [wallet_pk],
+                [wallet_key.clone()],
             ));
         }
     }

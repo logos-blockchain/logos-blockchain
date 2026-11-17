@@ -20,6 +20,7 @@ use crate::{
             ServiceConfig as BlendServiceConfig,
             serde::{Config as BlendConfig, RequiredValues as BlendRequiredValues},
         },
+        check_leader_funding_key, check_pow_claim_targets,
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaRequiredValues,
         },
@@ -28,6 +29,7 @@ use crate::{
         migrations::ConfigVersion,
         network::serde::nat,
         parse_log_filter_layer,
+        pow::serde::ClaimTarget,
         sdp::{
             ServiceConfig as SdpServiceConfig,
             serde::{Config as SdpConfig, RequiredValues as SdpRequiredValues},
@@ -146,7 +148,7 @@ fn parse_config_path() {
 
 /// Builds a minimal, valid [`UserConfig`] for override tests.
 fn minimal_user_config() -> UserConfig {
-    UserConfig::with_required_values(ConfigRequiredValues {
+    let mut config = UserConfig::with_required_values(ConfigRequiredValues {
         blend: BlendConfig::with_required_values(BlendRequiredValues {
             non_ephemeral_signing_key_id: "non_ephemeral_signing_key_id".into(),
             secret_key_kms_id: "secret_key_kms_id".into(),
@@ -160,7 +162,39 @@ fn minimal_user_config() -> UserConfig {
         wallet: WalletConfig::with_required_values(WalletRequiredValues {
             voucher_master_key_id: "voucher_master_key_id".into(),
         }),
-    })
+    });
+    config
+        .wallet
+        .known_keys
+        .insert("funding_key_id".into(), ZkPublicKey::zero());
+    config
+}
+
+#[test]
+fn a_leader_funding_key_the_wallet_does_not_track_is_refused() {
+    let mut config = minimal_user_config();
+    assert!(check_leader_funding_key(&config).is_ok());
+
+    config.wallet.known_keys.clear();
+    let error = check_leader_funding_key(&config).unwrap_err().to_string();
+    assert!(error.contains("wallet.known_keys"), "{error}");
+    // in the hex encoding the config and the CLI use
+    assert!(error.contains(&"0".repeat(64)), "{error}");
+}
+
+#[test]
+fn a_pow_claim_target_the_wallet_does_not_track_is_refused() {
+    let mut config = minimal_user_config();
+    config.pow.auto_claim.targets = vec![ClaimTarget {
+        public_key: ZkPublicKey::zero(),
+        threshold: 1,
+    }];
+    assert!(check_pow_claim_targets(&config).is_ok());
+
+    config.wallet.known_keys.clear();
+    let error = check_pow_claim_targets(&config).unwrap_err().to_string();
+    assert!(error.contains("pow.auto_claim.targets"), "{error}");
+    assert!(error.contains(&"0".repeat(64)), "{error}");
 }
 
 /// Environment variables applied on top of the YAML config must reach the

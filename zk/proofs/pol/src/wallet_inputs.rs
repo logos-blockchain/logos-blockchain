@@ -3,79 +3,148 @@ use num_bigint::BigUint;
 use serde::Serialize;
 
 // TODO: These consts should live in a common crate shared among circuits.
-pub const AGED_NOTE_MERKLE_TREE_HEIGHT: usize = 32;
-pub type AgedNotePath = [Fr; AGED_NOTE_MERKLE_TREE_HEIGHT];
-pub type AgedSelectorPath = [bool; AGED_NOTE_MERKLE_TREE_HEIGHT];
-pub const LATEST_NOTE_MERKLE_TREE_HEIGHT: usize = 32;
-pub type LatestNotePath = [Fr; LATEST_NOTE_MERKLE_TREE_HEIGHT];
-pub type LatestSelectorPath = [bool; LATEST_NOTE_MERKLE_TREE_HEIGHT];
+// Depth of the commitment MMR, the nullifier IMT and the eligible tree.
+pub const NOTE_SET_TREE_DEPTH: usize = 40;
 
 /// Public inputs of the POL cirmcom circuit as circuit field values.
 #[derive(Clone, Debug)]
 pub struct PolWalletInputs {
     note_value: Groth16Input,
-    transaction_hash: Groth16Input,
-    output_number: Groth16Input,
-    aged_path: [Groth16Input; AGED_NOTE_MERKLE_TREE_HEIGHT], // leaf-to-root
-    aged_selectors: [Groth16Input; AGED_NOTE_MERKLE_TREE_HEIGHT], // root-to-leaf
-    latest_path: [Groth16Input; LATEST_NOTE_MERKLE_TREE_HEIGHT], // leaf-to-root
-    latest_selectors: [Groth16Input; LATEST_NOTE_MERKLE_TREE_HEIGHT], // root-to-leaf
-    secret_key: Groth16Input,
+    // every path and selector list from the leaf level up
+    note_nonce: Groth16Input,
+    note_program: Groth16Input,
+    note_data: Groth16Input,
+    set_selectors: [Groth16Input; NOTE_SET_TREE_DEPTH],
+    commitment_aged_path: [Groth16Input; NOTE_SET_TREE_DEPTH],
+    commitment_aged_selectors: [Groth16Input; NOTE_SET_TREE_DEPTH],
+    nullifier_root_aged: Groth16Input,
+    set_aged_path: [Groth16Input; NOTE_SET_TREE_DEPTH],
+    low_leaf_nullifier: Groth16Input,
+    low_leaf_next_nullifier: Groth16Input,
+    low_leaf_path: [Groth16Input; NOTE_SET_TREE_DEPTH],
+    low_leaf_selectors: [Groth16Input; NOTE_SET_TREE_DEPTH],
+    commitment_root_latest: Groth16Input,
+    set_latest_path: [Groth16Input; NOTE_SET_TREE_DEPTH],
+    nullifier_key: Groth16Input,
+    staking_secret_key: Groth16Input,
+    reward_public_key: Groth16Input,
+    reward_nonce: Groth16Input,
 }
 
 /// Private inputs of the POL cirmcom circuit to be provided by the wallet.
 #[derive(Clone, Debug)]
 pub struct PolWalletInputsData {
     pub note_value: u64,
-    pub transaction_hash: Fr,
-    pub output_number: u64,
-    pub aged_path: AgedNotePath,              // leaf-to-root
-    pub aged_selectors: AgedSelectorPath,     // root-to-leaf
-    pub latest_path: LatestNotePath,          // leaf-to-root
-    pub latest_selectors: LatestSelectorPath, // root-to-leaf
-    pub secret_key: Fr,
+    // every path and selector list from the leaf level up
+    pub note_nonce: Fr,
+    // the program and the data of the note, 0 for a user note
+    pub note_program: Fr,
+    pub note_data: Fr,
+    pub set_selectors: [bool; NOTE_SET_TREE_DEPTH],
+    pub commitment_aged_path: [Fr; NOTE_SET_TREE_DEPTH],
+    pub commitment_aged_selectors: [bool; NOTE_SET_TREE_DEPTH],
+    pub nullifier_root_aged: Fr,
+    // the low leaf of the note nullifier in the frozen IMT of its set, which the
+    // PoQ leader branch proves and the PoL does not read
+    pub low_leaf_aged_nullifier: Fr,
+    pub low_leaf_aged_next_nullifier: Fr,
+    pub low_leaf_aged_path: [Fr; NOTE_SET_TREE_DEPTH],
+    pub low_leaf_aged_selectors: [bool; NOTE_SET_TREE_DEPTH],
+    pub set_aged_path: [Fr; NOTE_SET_TREE_DEPTH],
+    pub low_leaf_nullifier: Fr,
+    pub low_leaf_next_nullifier: Fr,
+    pub low_leaf_path: [Fr; NOTE_SET_TREE_DEPTH],
+    pub low_leaf_selectors: [bool; NOTE_SET_TREE_DEPTH],
+    pub commitment_root_latest: Fr,
+    pub set_latest_path: [Fr; NOTE_SET_TREE_DEPTH],
+    // the nullifier key derives the public key and the nullifier of the note,
+    // the staking secret key its staking key, the ticket and the entropy
+    pub nullifier_key: Fr,
+    pub staking_secret_key: Fr,
+    // the note of the leader reward, the proof derives its commitment
+    pub reward_public_key: Fr,
+    pub reward_nonce: Fr,
 }
 
 #[derive(Serialize)]
 pub struct PolWalletInputsJson {
-    #[serde(rename = "v")]
+    #[serde(rename = "value")]
     note_value: Groth16InputDeser,
-    #[serde(rename = "note_tx_hash")]
-    transaction_hash: Groth16InputDeser,
-    #[serde(rename = "note_output_number")]
-    output_number: Groth16InputDeser,
-    #[serde(rename = "noteid_aged_path")]
-    aged_path: [Groth16InputDeser; AGED_NOTE_MERKLE_TREE_HEIGHT], // leaf-to-root
-    #[serde(rename = "noteid_aged_selectors")]
-    aged_selectors: [Groth16InputDeser; AGED_NOTE_MERKLE_TREE_HEIGHT], // root-to-leaf
-    #[serde(rename = "noteid_latest_path")]
-    latest_path: [Groth16InputDeser; LATEST_NOTE_MERKLE_TREE_HEIGHT], // leaf-to-root
-    #[serde(rename = "noteid_latest_selectors")]
-    latest_selectors: [Groth16InputDeser; LATEST_NOTE_MERKLE_TREE_HEIGHT], // root-to-leaf
-    secret_key: Groth16InputDeser,
+    // serde serializes arrays only up to length 32
+    #[serde(rename = "nonce")]
+    note_nonce: Groth16InputDeser,
+    #[serde(rename = "program")]
+    note_program: Groth16InputDeser,
+    #[serde(rename = "data")]
+    note_data: Groth16InputDeser,
+    set_selectors: Vec<Groth16InputDeser>,
+    #[serde(rename = "cm_aged_path")]
+    commitment_aged_path: Vec<Groth16InputDeser>,
+    #[serde(rename = "cm_aged_selectors")]
+    commitment_aged_selectors: Vec<Groth16InputDeser>,
+    #[serde(rename = "nf_root_aged")]
+    nullifier_root_aged: Groth16InputDeser,
+    set_aged_path: Vec<Groth16InputDeser>,
+    #[serde(rename = "low_leaf_nf")]
+    low_leaf_nullifier: Groth16InputDeser,
+    #[serde(rename = "low_leaf_next_nf")]
+    low_leaf_next_nullifier: Groth16InputDeser,
+    low_leaf_path: Vec<Groth16InputDeser>,
+    low_leaf_selectors: Vec<Groth16InputDeser>,
+    #[serde(rename = "cm_root_latest")]
+    commitment_root_latest: Groth16InputDeser,
+    set_latest_path: Vec<Groth16InputDeser>,
+    #[serde(rename = "nf_sk")]
+    nullifier_key: Groth16InputDeser,
+    #[serde(rename = "staking_sk")]
+    staking_secret_key: Groth16InputDeser,
+    reward_public_key: Groth16InputDeser,
+    reward_nonce: Groth16InputDeser,
 }
 impl From<&PolWalletInputs> for PolWalletInputsJson {
     fn from(
         PolWalletInputs {
             note_value,
-            transaction_hash,
-            output_number,
-            aged_path,
-            aged_selectors,
-            latest_path,
-            latest_selectors,
-            secret_key,
+            note_nonce,
+            note_program,
+            note_data,
+            set_selectors,
+            commitment_aged_path,
+            commitment_aged_selectors,
+            nullifier_root_aged,
+            set_aged_path,
+            low_leaf_nullifier,
+            low_leaf_next_nullifier,
+            low_leaf_path,
+            low_leaf_selectors,
+            commitment_root_latest,
+            set_latest_path,
+            nullifier_key,
+            staking_secret_key,
+            reward_public_key,
+            reward_nonce,
         }: &PolWalletInputs,
     ) -> Self {
         Self {
             note_value: note_value.into(),
-            transaction_hash: transaction_hash.into(),
-            output_number: output_number.into(),
-            aged_path: aged_path.map(|path| (&path).into()),
-            aged_selectors: aged_selectors.map(|selector| (&selector).into()),
-            latest_path: latest_path.map(|path| (&path).into()),
-            latest_selectors: latest_selectors.map(|selector| (&selector).into()),
-            secret_key: secret_key.into(),
+            note_nonce: note_nonce.into(),
+            note_program: note_program.into(),
+            note_data: note_data.into(),
+            set_selectors: set_selectors.iter().map(Into::into).collect(),
+            commitment_aged_path: commitment_aged_path.iter().map(Into::into).collect(),
+            commitment_aged_selectors: commitment_aged_selectors.iter().map(Into::into).collect(),
+            nullifier_root_aged: nullifier_root_aged.into(),
+            set_aged_path: set_aged_path.iter().map(Into::into).collect(),
+            low_leaf_nullifier: low_leaf_nullifier.into(),
+            low_leaf_next_nullifier: low_leaf_next_nullifier.into(),
+            low_leaf_path: low_leaf_path.iter().map(Into::into).collect(),
+            low_leaf_selectors: low_leaf_selectors.iter().map(Into::into).collect(),
+            commitment_root_latest: commitment_root_latest.into(),
+            set_latest_path: set_latest_path.iter().map(Into::into).collect(),
+            nullifier_key: nullifier_key.into(),
+            staking_secret_key: staking_secret_key.into(),
+            reward_public_key: reward_public_key.into(),
+            reward_nonce: reward_nonce.into(),
         }
     }
 }
@@ -84,26 +153,50 @@ impl From<PolWalletInputsData> for PolWalletInputs {
     fn from(
         PolWalletInputsData {
             note_value,
-            transaction_hash,
-            output_number,
-            aged_path,
-            aged_selectors,
-            latest_path,
-            latest_selectors,
-            secret_key,
+            note_nonce,
+            note_program,
+            note_data,
+            set_selectors,
+            commitment_aged_path,
+            commitment_aged_selectors,
+            nullifier_root_aged,
+            set_aged_path,
+            low_leaf_nullifier,
+            low_leaf_next_nullifier,
+            low_leaf_path,
+            low_leaf_selectors,
+            commitment_root_latest,
+            set_latest_path,
+            nullifier_key,
+            staking_secret_key,
+            reward_public_key,
+            reward_nonce,
+            ..
         }: PolWalletInputsData,
     ) -> Self {
         Self {
             note_value: Groth16Input::new(Fr::from(BigUint::from(note_value))),
-            transaction_hash: transaction_hash.into(),
-            output_number: Groth16Input::new(Fr::from(BigUint::from(output_number))),
-            aged_path: aged_path.map(Into::into),
-            aged_selectors: aged_selectors
+            note_nonce: note_nonce.into(),
+            note_program: note_program.into(),
+            note_data: note_data.into(),
+            set_selectors: set_selectors
                 .map(|selector| Groth16Input::new(if selector { Fr::ONE } else { Fr::ZERO })),
-            latest_path: latest_path.map(Into::into),
-            latest_selectors: latest_selectors
+            commitment_aged_path: commitment_aged_path.map(Into::into),
+            commitment_aged_selectors: commitment_aged_selectors
                 .map(|selector| Groth16Input::new(if selector { Fr::ONE } else { Fr::ZERO })),
-            secret_key: secret_key.into(),
+            nullifier_root_aged: nullifier_root_aged.into(),
+            set_aged_path: set_aged_path.map(Into::into),
+            low_leaf_nullifier: low_leaf_nullifier.into(),
+            low_leaf_next_nullifier: low_leaf_next_nullifier.into(),
+            low_leaf_path: low_leaf_path.map(Into::into),
+            low_leaf_selectors: low_leaf_selectors
+                .map(|selector| Groth16Input::new(if selector { Fr::ONE } else { Fr::ZERO })),
+            commitment_root_latest: commitment_root_latest.into(),
+            set_latest_path: set_latest_path.map(Into::into),
+            nullifier_key: nullifier_key.into(),
+            staking_secret_key: staking_secret_key.into(),
+            reward_public_key: reward_public_key.into(),
+            reward_nonce: reward_nonce.into(),
         }
     }
 }

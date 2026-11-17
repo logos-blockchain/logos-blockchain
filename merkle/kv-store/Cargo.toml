@@ -1,0 +1,27 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-kv-store"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[features]
+# A `KvStore` on a RocksDB database of its own.
+rocksdb = ["dep:rocksdb"]
+# Exposes the conformance suite to the crates implementing `KvStore`.
+testing = []
+
+[dependencies]
+bytes     = { workspace = true }
+rocksdb   = { features = ["bindgen-runtime"], optional = true, workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -6,6 +6,7 @@ use lb_core::{
     mantle::{traits::Hashable, transactions::hash::TxHash},
 };
 use lb_key_management_system_service::backend::preload::PreloadKMSBackend;
+use lb_kv_store::RocksKv;
 use lb_sdp_service::{SdpSettings, state::SdpState};
 use lb_storage_service::recovery::StorageRecoveryBackend;
 use lb_time_service::backends::NtpTimeBackend;
@@ -54,7 +55,7 @@ pub type MempoolBackend<RuntimeServiceId> = Mempool<
 >;
 
 pub type CryptarchiaService<RuntimeServiceId> =
-    CryptarchiaConsensus<ValidatedTx, NtpTimeBackend, RuntimeServiceId>;
+    CryptarchiaConsensus<ValidatedTx, NtpTimeBackend, RocksKv, RuntimeServiceId>;
 
 pub type ChainNetworkService<RuntimeServiceId> = lb_chain_network_service::ChainNetwork<
     CryptarchiaService<RuntimeServiceId>,

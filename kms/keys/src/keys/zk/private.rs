@@ -2,18 +2,34 @@ use std::sync::LazyLock;
 
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr, fr_from_bytes_unchecked, fr_from_mod_bytes};
 use lb_poseidon2::{Digest, Poseidon2Bn254Hasher};
-use lb_zksign::{ZkSignError, ZkSignPrivateKeysData, ZkSignWitnessInputs};
+use lb_zktransfer::{
+    ZkTransferProof, ZkTransferSecretKeysError, ZkTransferWitnessInputsData,
+    prove as prove_zk_transfer,
+};
 use num_bigint::BigUint;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq as _;
 use zeroize::ZeroizeOnDrop;
 
-use crate::keys::zk::{public::PublicKey, signature::Signature};
+use crate::keys::{
+    errors::KeyError,
+    zk::{ZkTransferPayload, public::PublicKey},
+};
+
+fn prove(witness: ZkTransferWitnessInputsData) -> Result<ZkTransferProof, KeyError> {
+    prove_zk_transfer(witness.into())
+        .map(|(proof, _)| proof)
+        .map_err(|e| KeyError::ZkTransferProve(e.to_string()))
+}
 
 static KDF: LazyLock<Fr> = LazyLock::new(|| fr_from_bytes_unchecked(b"KDF"));
+static NF_KDF_V1: LazyLock<Fr> = LazyLock::new(|| fr_from_bytes_unchecked(b"NF_KDF_V1"));
 
 /// A ZK secret key exposing methods to retrieve its inner secret value.
+///
+/// It is the spending secret key of the notes under its public key: it derives
+/// their nullifier key, which derives their public key and their nullifiers.
 ///
 /// To be used in contexts where a KMS-like key is required, but it's not
 /// possible to go through the KMS roundtrip of executing operators.
@@ -47,21 +63,42 @@ impl SecretKey {
         self.0
     }
 
-    pub fn sign(&self, data: &Fr) -> Result<Signature, ZkSignError> {
-        Self::multi_sign(std::slice::from_ref(self), data)
+    // keys[i] proves the i-th input
+    pub fn prove_transfer(
+        keys: &[Self],
+        payload: ZkTransferPayload,
+    ) -> Result<ZkTransferProof, KeyError> {
+        let secret_keys: Vec<Fr> = keys.iter().map(|key| key.0).collect();
+        let witness = payload
+            .with_secret_keys(&secret_keys)
+            .map_err(|ZkTransferSecretKeysError::KeyCount { inputs, keys }| {
+                KeyError::UnsupportedMultisignatureSize(inputs, keys)
+            })?
+            .build();
+        prove(witness)
     }
 
-    pub fn multi_sign(keys: &[Self], data: &Fr) -> Result<Signature, ZkSignError> {
-        let sk_inputs = try_from_secret_keys(keys)?;
-        let inputs = ZkSignWitnessInputs::from_witness_data_and_message_hash(sk_inputs, *data);
-
-        let (signature, _) = lb_zksign::prove(inputs).expect("Signature should succeed");
-        Ok(Signature::new(signature))
+    // This key proves every input, the notes of a single holder.
+    pub fn prove_transfer_alone(
+        &self,
+        payload: ZkTransferPayload,
+    ) -> Result<ZkTransferProof, KeyError> {
+        prove(payload.with_secret_key(self.0).build())
     }
 
+    /// The nullifier key `nf_sk = zkhash(NF_KDF_V1, spending_sk)`, which
+    /// derives the public key and the nullifiers of the notes. A wallet
+    /// uses it as the staking secret key of its notes, so a node handed it
+    /// leads with them without being able to spend them.
+    #[must_use]
+    pub fn nullifier_key(&self) -> Fr {
+        <Poseidon2Bn254Hasher as Digest>::compress(&[*NF_KDF_V1, self.0])
+    }
+
+    /// The public key `zkhash(KDF, nf_sk)`, derived from the nullifier key.
     #[must_use]
     pub fn to_public_key(&self) -> PublicKey {
-        PublicKey::new(<Poseidon2Bn254Hasher as Digest>::compress(&[*KDF, self.0]))
+        kdf_public_key(&self.nullifier_key())
     }
 
     #[must_use]
@@ -71,6 +108,22 @@ impl SecretKey {
         Self(fr_from_mod_bytes(&bytes))
     }
 }
+
+/// The key `zkhash(KDF, secret)` of a secret.
+///
+/// It is the public key of a nullifier key, the staking key of a staking
+/// secret key and the `zk_id` of a quota secret key. With the nullifier key as
+/// staking secret key, the default of a wallet, the staking key of a note is
+/// its public key.
+#[must_use]
+pub fn kdf_public_key(secret: &Fr) -> PublicKey {
+    PublicKey::new(<Poseidon2Bn254Hasher as Digest>::compress(&[*KDF, *secret]))
+}
+
+/// `PK0`, the public key of the spending secret key `0`, which holds every
+/// program note: everyone knows its nullifier key `NF_SK0`, so only the proof
+/// of its program moves a program note.
+pub static PK0: LazyLock<PublicKey> = LazyLock::new(|| SecretKey(Fr::ZERO).to_public_key());
 
 impl PartialEq for SecretKey {
     fn eq(&self, other: &Self) -> bool {
@@ -84,16 +137,4 @@ impl From<BigUint> for SecretKey {
     fn from(value: BigUint) -> Self {
         Self(value.into())
     }
-}
-
-fn try_from_secret_keys(keys: &[SecretKey]) -> Result<ZkSignPrivateKeysData, ZkSignError> {
-    let len = keys.len();
-    if len > 32 {
-        return Err(ZkSignError::TooManyKeys(len));
-    }
-    let mut buff: [Fr; 32] = [Fr::ZERO; 32];
-    for (i, sk) in keys.iter().enumerate() {
-        buff[i] = sk.clone().into_inner();
-    }
-    Ok(buff.into())
 }

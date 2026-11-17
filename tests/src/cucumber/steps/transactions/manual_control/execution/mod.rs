@@ -47,11 +47,11 @@ use std::{
 };
 
 use lb_core::mantle::{
-    NoteId, Utxo,
+    notes::NoteNullifier,
     transactions::{GasPrices, hash::TxHash},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
-use lb_wallet::WalletError;
+use lb_wallet::{OwnedNote, WalletError};
 use serde::Serialize;
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};

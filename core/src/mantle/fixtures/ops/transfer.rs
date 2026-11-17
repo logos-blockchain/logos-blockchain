@@ -2,18 +2,16 @@ use lb_binary_codec::canonical::codec_fixtures;
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
 
 use crate::mantle::{
-    Note, NoteId,
     fixtures::ops::op_values::{TRANSFER, TRANSFER_PAYLOAD_HEX},
-    ledger::{BoundedInputs, Inputs},
+    notes::{InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments},
     ops::transfer::TransferOp,
 };
 
 codec_fixtures!(
     TransferOp,
-    Self { inputs: Inputs::empty(), outputs: [].into() } => "0000",
-    Self { inputs: BoundedInputs::from(NoteId::from(Fr::ONE)).into(), outputs: [].into() } => "01010000000000000000000000000000000000000000000000000000000000000000",
-    Self { inputs: Inputs::empty(), outputs: [Note { value: 0, pk: Fr::ZERO.into() }].into() } => "000100000000000000000000000000000000000000000000000000000000000000000000000000000000",
-    Self { inputs: BoundedInputs::from(NoteId::from(Fr::ZERO)).into(), outputs: [Note { value: 0, pk: Fr::ONE.into() }].into() } => "0100000000000000000000000000000000000000000000000000000000000000000100000000000000000100000000000000000000000000000000000000000000000000000000000000",
-    Self { inputs: BoundedInputs::from(NoteId::from(Fr::ZERO)).into(), outputs: [Note { value: 0, pk: Fr::ZERO.into() }].into() } => "0100000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    Self { inputs: InputNullifiers::default(), outputs: OutputCommitments::default(), commitment_merkle_root: Fr::ZERO, excess_value: 0 } => "000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    Self { inputs: [NoteNullifier(Fr::ONE)].into(), outputs: OutputCommitments::default(), commitment_merkle_root: Fr::ZERO, excess_value: 0 } => "0101000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    Self { inputs: InputNullifiers::default(), outputs: [NoteCommitment(Fr::ONE)].into(), commitment_merkle_root: Fr::ZERO, excess_value: 0 } => "0001010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    Self { inputs: InputNullifiers::default(), outputs: OutputCommitments::default(), commitment_merkle_root: Fr::ONE, excess_value: 2 } => "000001000000000000000000000000000000000000000000000000000000000000000200000000000000",
     TRANSFER.clone() => TRANSFER_PAYLOAD_HEX,
 );

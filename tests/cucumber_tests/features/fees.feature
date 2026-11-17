@@ -26,6 +26,9 @@ Feature: Fees
     Then gas prices on node "NODE_1" at the genesis block equal the genesis gas prices
     When I fund a transaction paying 10 LGO from node "NODE_1" wallet to wallet "WALLET_PAYMENT" as "FUNDED_PAYMENT"
     Then transaction "FUNDED_PAYMENT" is included on node "NODE_1" in 120 seconds
+    # The node funds from the change of the payment, which it spends 4 blocks deep
+    When I record node "NODE_1" height as "PAYMENT_HEIGHT"
+    Then node "NODE_1" reaches 4 blocks beyond recorded height "PAYMENT_HEIGHT" in 120 seconds
     When I fund an inscription transaction from wallet "WALLET_INSCRIPTION" via node "NODE_1" as "FUNDED_INSCRIPTION"
     Then transaction "FUNDED_INSCRIPTION" is included on node "NODE_1" in 120 seconds
     Then I stop all nodes
@@ -39,8 +42,11 @@ Feature: Fees
   # use zero tip because tips do not drive prices. A separate transaction is
   # prepared through /wallet/fund with a percentage reserve before the
   # storage-price update and submitted afterwards to show that the effective
-  # reserve absorbs the higher mandatory fee. The acceptance reserve is 50%
-  # because genesis storage price 1 can double to 2 under integer pricing.
+  # reserve absorbs the higher mandatory fee. The genesis prices of 10^9 units
+  # per gas follow the clamps exactly, so storage moves by 12.5% per epoch
+  # while execution decays over the near empty blocks: the reserve is checked
+  # against the peak recorded storage price at the execution price the
+  # transaction was prepared at, and against the current prices.
   @fees_ci
   Scenario: Execution and storage gas prices respond according to the fee market rules
     Given the cluster uses cryptarchia security parameter 3
@@ -68,7 +74,7 @@ Feature: Fees
     And recorded gas prices cross a 60-slot epoch boundary
     And recorded execution gas prices follow the execution market spec reference
     And recorded storage gas prices respond to network usage
-    And transaction "BUFFERED" prepared with a 50% priority fee reserve remains funded with a smaller reserve at current prices on node "NODE_1"
+    And transaction "BUFFERED" prepared with a 50% priority fee reserve remains funded at current prices and at the peak recorded storage price on node "NODE_1"
     When I submit prepared transaction "BUFFERED" via node "NODE_1"
     Then transaction "BUFFERED" is included on node "NODE_1" in 60 seconds
     Then I stop all nodes

@@ -3,8 +3,9 @@
 //! 0.3.2 wrote every duration as serde's `{secs, nanos}` or as a
 //! `"<secs>.<9 digit nanos>"` string, a few as bare integers, some under
 //! unit-suffixed keys; they are all humantime strings (`5s`, `250ms`) now.
-//! Kademlia's `caching` became `cache_size`, `enable_open_metrics` is gone and
-//! the built-in log filter 0.3.2 wrote into every config is no longer written.
+//! Kademlia's `caching` became `cache_size`, `enable_open_metrics` and the
+//! leader wallet's `max_tx_fee` are gone and the built-in log filter 0.3.2
+//! wrote into every config is no longer written.
 //!
 //! 0.3.2 also wrote every default into the config. Those still the default are
 //! dropped when the upgraded config is written sparse; those that aren't,
@@ -105,6 +106,11 @@ pub fn migrate(config: &mut Value) -> Result<()> {
         // Dropped rather than translated: 0.3.2 wrote its `false` default into
         // every config, and upgraded nodes get the new always-on default.
         metrics.remove("enable_open_metrics");
+    }
+    if let Some(wallet) = mapping_at(config, &["cryptarchia", "leader", "wallet"]) {
+        // The fee cap of the leader's reward claims, which a leader no longer
+        // makes: its reward is a note of the block it proposes.
+        wallet.remove("max_tx_fee");
     }
     humanize_std_durations(config);
     for (section, old, new, unit_ms) in INTEGER_DURATIONS {

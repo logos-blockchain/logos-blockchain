@@ -14,9 +14,9 @@ use std::sync::LazyLock;
 
 pub use builder::{MantleTxBuilder, TxBuilderError};
 pub use errors::VerificationError;
-pub use gas::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GasPrices};
+pub use gas::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GasPrices, UNITS_PER_LGO};
 pub use genesis_tx::{
-    ConsensusExcludedKeys, GENESIS_REQUIRED_OPS, GenesisDeclarations, GenesisParameters,
+    Distribution, GENESIS_REQUIRED_OPS, GenesisAllocation, GenesisDeclarations, GenesisParameters,
     GenesisTime, GenesisTx, MAX_GENESIS_DECLARATIONS,
 };
 pub use hash::TxHash;

@@ -1,82 +1,76 @@
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
-use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
+use lb_groth16::{Fr, serde::serde_fr};
+use lb_mmr::MerklePath;
+use lb_zktransfer::{
+    ZkTransferInputsError, ZkTransferOutputNoteData, ZkTransferUnsignedInput,
+    ZkTransferWitnessBuilder,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+#[cfg(any(test, feature = "test-utils"))]
+use crate::mantle::notes::{NoteCommitment, NoteNullifier};
 use crate::{
+    block::BlockNumber,
     events::TxEvent,
     mantle::{
-        batch::DeferredZkSig,
-        channel::Channels,
+        batch::DeferredZkTransfer,
+        gas::{Gas, GasOverflow, GasProfile, OpGasCalculator, OpGasContext},
         ledger::{
-            self, ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation,
-            Utxo, Utxos, VerifiableOperation,
+            ExecutableOperation, PreverifiableOperation, ProvableOperation, Value,
+            VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
         },
-        ops::{OpId, SignedOperation},
+        note_set::{NoteSetError, NoteSetIndex, NoteSets, TxNoteState},
+        notes::{InputNullifiers, Note, OutputCommitments},
+        ops::{
+            OpId, SignedOperation, ZkTransferProof,
+            zk_transfer::{defer_zk_transfer, preverify_zk_transfer},
+        },
         transactions::{
             hash::TxHashView,
             states::{Preverified, Unverified, Verified},
         },
     },
-    sdp::service_notes::ServiceNotes,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct TransferOp {
-    pub inputs: Inputs,
-    pub outputs: Outputs,
+    pub inputs: InputNullifiers,
+    pub outputs: OutputCommitments,
+    #[serde(with = "serde_fr")]
+    pub commitment_merkle_root: Fr,
+    pub excess_value: Value,
 }
 
 impl TransferOp {
     #[must_use]
-    pub const fn new(inputs: Inputs, outputs: Outputs) -> Self {
-        Self { inputs, outputs }
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.inputs.is_empty() && self.outputs.is_empty()
-    }
-
-    pub fn utxos(&self) -> impl Iterator<Item = Utxo> {
-        self.outputs.utxos(self)
-    }
-
-    #[must_use]
-    pub fn utxo_by_index(&self, index: usize) -> Option<Utxo> {
-        self.outputs.utxo_by_index(index, self)
-    }
-
-    pub fn balance(&self, utxos: &Utxos) -> Result<i128, TransferError> {
-        let mut balance: i128 = 0;
-        let input_amount = self.inputs.amount(utxos)?;
-        let output_amount = self.outputs.amount()?;
-        balance = balance
-            .checked_add(i128::from(input_amount))
-            .ok_or(TransferError::BalanceOverflow)?;
-        balance = balance
-            .checked_sub(i128::from(output_amount))
-            .ok_or(TransferError::BalanceOverflow)?;
-        Ok(balance)
+    pub const fn new(
+        inputs: InputNullifiers,
+        outputs: OutputCommitments,
+        commitment_merkle_root: Fr,
+        excess_value: Value,
+    ) -> Self {
+        Self {
+            inputs,
+            outputs,
+            commitment_merkle_root,
+            excess_value,
+        }
     }
 
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
-        use lb_groth16::Fr;
-        use lb_key_management_system_keys::keys::ZkPublicKey;
-
-        use crate::mantle::{Note, NoteId};
-
         Self::new(
-            ledger::BoundedInputs::try_from_iter([NoteId(Fr::from(1u64)), NoteId(Fr::from(2u64))])
-                .unwrap()
-                .into(),
-            Outputs::new([
-                Note::new(3, ZkPublicKey::from(Fr::from(4u64))),
-                Note::new(5, ZkPublicKey::from(Fr::from(6u64))),
-            ]),
+            [NoteNullifier(Fr::from(1u64)), NoteNullifier(Fr::from(2u64))].into(),
+            [
+                NoteCommitment(Fr::from(3u64)),
+                NoteCommitment(Fr::from(4u64)),
+            ]
+            .into(),
+            Fr::from(5u64),
+            6,
         )
     }
 }
@@ -89,26 +83,35 @@ impl OpId for TransferOp {
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum TransferError {
-    #[error("Inputs error: {0}")]
-    Inputs(#[from] ledger::InputsError),
-    #[error("Outputs error: {0}")]
-    Outputs(#[from] ledger::OutputsError),
-    #[error("Applying this transaction would cause a balance overflow")]
-    BalanceOverflow,
-    #[error("Invalid transfer ZkSignature")]
-    InvalidProof,
+    #[error(transparent)]
+    NoteSet(#[from] NoteSetError),
+    #[error(transparent)]
+    ZkTransferInputs(#[from] ZkTransferInputsError),
 }
 
 pub struct TransferValidationContext<'a> {
-    pub service_notes: &'a ServiceNotes,
-    pub channels: &'a Channels,
-    pub utxos: &'a Utxos,
+    pub note_sets: &'a NoteSets,
+    pub tx_notes: &'a TxNoteState,
+    pub block_number: BlockNumber,
     pub tx_hash_view: &'a TxHashView,
 }
 
 impl ProvableOperation for TransferOp {
-    type Proof = ZkSignature;
+    type Proof = ZkTransferProof;
     const CODE: u8 = 0x00;
+}
+
+impl OpGasCalculator for TransferOp {
+    // The Operation, plus the spend of its notes.
+    fn execution_gas(
+        &self,
+        profile: &GasProfile,
+        _context: &impl OpGasContext,
+    ) -> Result<Gas, GasOverflow> {
+        profile
+            .transfer
+            .checked_add(profile.spend_gas(self.inputs.len(), self.outputs.len())?)
+    }
 }
 
 impl PreverifiableOperation<StandardMode>
@@ -119,369 +122,469 @@ impl PreverifiableOperation<StandardMode>
 
     fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
         let operation = self.operation();
-
-        // Ensure the inputs is non-empty
-        operation.inputs.preverify()?;
-
-        // Validate Outputs
-        operation.outputs.validate()?;
-
-        Ok(())
+        preverify_zk_transfer(&operation.inputs, operation.outputs.len())
     }
 }
 
 impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverified, StandardMode> {
-    type DeferredProof = DeferredZkSig;
+    type DeferredProof = DeferredZkTransfer;
     type Context<'a> = TransferValidationContext<'a>;
     type Error = TransferError;
 
     fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
-        // Validate Inputs
-        operation.inputs.validate_not_in_channel(
-            context.service_notes,
-            context.channels,
-            context.utxos,
+        // Validate the inputs against the ledger note set
+        let tx_commitment_root = context.tx_notes.spendable_root(
+            context.note_sets.ledger(),
+            operation.inputs.as_slice(),
+            &operation.commitment_merkle_root,
+            context.block_number,
         )?;
 
         // Defer the proof verification so that the caller can batch it.
-        let pks = operation.inputs.get_pk(context.utxos)?;
-        let inputs = public_inputs_from_pks((*context.tx_hash_view.as_fr()).into(), &pks)
-            .map_err(|_| TransferError::InvalidProof)?;
-        Ok(DeferredZkSig::new(*self.proof().as_proof(), inputs))
+        Ok(defer_zk_transfer(
+            self.proof(),
+            &operation.inputs,
+            &operation.outputs,
+            operation.excess_value,
+            tx_commitment_root,
+            *context.tx_hash_view.as_fr(),
+        )?)
     }
 }
 
+pub struct TransferExecutionContext<'a> {
+    pub note_sets: NoteSets,
+    pub tx_notes: &'a mut TxNoteState,
+}
+
 impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<TransferOp, Verified, Mode> {
-    type Context<'a> = Utxos;
+    type Context<'a> = TransferExecutionContext<'a>;
     type Error = TransferError;
 
     fn execute<'a>(
         &self,
-        mut utxos: Self::Context<'a>,
+        mut context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         let operation = self.operation();
 
-        // Remove inputs from the ledger
-        utxos = operation.inputs.execute(utxos)?;
+        // Spend the inputs and add the outputs to the ledger note set, the
+        // outputs extending the buffer the next Operations of the
+        // transaction are proven against.
+        context.note_sets = context.note_sets.execute_transfer(
+            context.tx_notes,
+            NoteSetIndex::Ledger,
+            operation.inputs.as_slice(),
+            NoteSetIndex::Ledger,
+            operation.outputs.as_slice(),
+        )?;
+        Ok((context, Vec::new()))
+    }
+}
 
-        // Add outputs from the ledger
-        utxos = operation.outputs.execute(utxos, self.operation());
-        Ok((utxos, Vec::new()))
+/// The witness of a `ZkTransfer` from note openings and their paths in the
+/// commitment MMR, without the secret keys of the inputs, which their holders
+/// add.
+///
+/// # Panics
+///
+/// If the circuit does not fit the notes: at most 4 inputs and 8 outputs.
+#[must_use]
+pub fn transfer_witness(
+    inputs: &[(Note, MerklePath)],
+    outputs: &[Note],
+    tx_commitment_root: Fr,
+    msg: Fr,
+) -> ZkTransferWitnessBuilder {
+    inputs
+        .iter()
+        .try_fold(
+            ZkTransferWitnessBuilder::new(tx_commitment_root, msg),
+            |builder, (note, path)| {
+                builder.input(ZkTransferUnsignedInput {
+                    stake_public_key: *note.stake_public_key.as_fr(),
+                    nonce: note.nonce,
+                    value: note.value,
+                    path_and_selectors: core::array::from_fn(|h| path.path_and_selectors(h).into()),
+                })
+            },
+        )
+        .and_then(|builder| {
+            outputs.iter().try_fold(builder, |builder, note| {
+                builder.output(ZkTransferOutputNoteData {
+                    public_key: *note.public_key.as_fr(),
+                    stake_public_key: *note.stake_public_key.as_fr(),
+                    nonce: note.nonce,
+                    value: note.value,
+                })
+            })
+        })
+        .expect("a ZkTransfer spends at most 4 notes and creates at most 8")
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils {
+    use lb_groth16::Fr;
+    use lb_mmr::MerklePath;
+
+    use super::transfer_witness;
+    use crate::mantle::notes::Note;
+
+    /// Proves a `ZkTransfer` from note openings and their commitment MMR
+    /// paths. Each input is a note, its secret key and its path in the
+    /// commitment MMR.
+    #[must_use]
+    pub fn prove_transfer(
+        inputs: &[(Note, Fr, MerklePath)],
+        outputs: &[Note],
+        tx_commitment_root: Fr,
+        msg: Fr,
+    ) -> lb_zktransfer::ZkTransferProof {
+        let openings: Vec<(Note, MerklePath)> = inputs
+            .iter()
+            .map(|(note, _, path)| (*note, path.clone()))
+            .collect();
+        let secret_keys: Vec<Fr> = inputs
+            .iter()
+            .map(|(_, secret_key, _)| *secret_key)
+            .collect();
+        let witness = transfer_witness(&openings, outputs, tx_commitment_root, msg)
+            .with_secret_keys(&secret_keys)
+            .expect("one secret key per input")
+            .build();
+        lb_zktransfer::prove(witness.into())
+            .expect("the witness proves")
+            .0
     }
 }
 
 #[cfg(test)]
 mod test {
-    use lb_groth16::{CompressedGroth16Proof, Fr};
-    use lb_key_management_system_keys::keys::{ZkKey, ZkPublicKey, ZkSignature};
-    use num_bigint::BigUint;
+    use lb_groth16::{AdditiveGroup as _, Field as _, Groth16Input};
+    use lb_key_management_system_keys::keys::{ZkKey, ZkPublicKey};
 
-    use crate::{
-        mantle::{
-            Note, NoteId, TxHash, Utxo,
-            batch::{DeferredZkSig, Error as BatchError, test_utils::batch_verify},
-            channel::Channels,
-            gas::{
-                Gas,
-                test_utils::{FixedThresholds, GAS_PROFILE},
-            },
-            ledger::{
-                self, BoundedInputs, Inputs, InputsError, Outputs, PreverifiableOperation as _,
-                ProvableOperation, Utxos, VerifiableOperation as _,
-                verification_mode::StandardMode,
-            },
-            ops::{
-                OpId as _, SignedOperation,
-                channel::ChannelId,
-                op_proof::samples::SampleProof as _,
-                transfer::{TransferError, TransferOp, TransferValidationContext},
-            },
-            transactions::{hash::TxHashView, states::Unverified},
-        },
-        sdp::service_notes::ServiceNotes,
+    use super::{test_utils::prove_transfer, *};
+    use crate::mantle::{
+        TxHash, gas::test_utils::FixedThresholds, note_set::CommitmentMmr,
+        notes::derive_note_nullifier, ops::op_proof::samples::SampleProof as _,
     };
-
-    #[test]
-    fn preverify_rejects_empty_inputs() {
-        let pk = ZkPublicKey::from(Fr::from(BigUint::from(0u8)));
-        let transfer = TransferOp {
-            inputs: Inputs::empty(),
-            outputs: Outputs::new([Note::new(100, pk)]),
-        };
-        let proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
-        let signed_operation = SignedOperation::new(transfer, proof);
-
-        assert_eq!(
-            signed_operation.preverify(&()),
-            Err(TransferError::Inputs(InputsError::EmptyInputs))
-        );
-    }
-
-    #[test]
-    fn preverify_rejects_a_zero_value_output() {
-        let pk = ZkPublicKey::from(Fr::from(BigUint::from(0u8)));
-        let transfer = TransferOp {
-            inputs: BoundedInputs::from(NoteId(Fr::from(BigUint::from(1u8)))).into(),
-            outputs: Outputs::new([Note::new(0, pk)]),
-        };
-        let proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
-        let signed_operation = SignedOperation::new(transfer, proof);
-
-        assert_eq!(
-            signed_operation.preverify(&()),
-            Err(TransferError::Outputs(ledger::OutputsError::ZeroValueNote))
-        );
-    }
-
-    #[test]
-    fn utxos_and_utxo_by_index() {
-        let pk0 = ZkPublicKey::from(Fr::from(BigUint::from(0u8)));
-        let pk1 = ZkPublicKey::from(Fr::from(BigUint::from(1u8)));
-        let pk2 = ZkPublicKey::from(Fr::from(BigUint::from(2u8)));
-        let transfer = TransferOp {
-            inputs: BoundedInputs::from(NoteId(BigUint::from(0u8).into())).into(),
-            outputs: Outputs::new([
-                Note::new(100, pk0),
-                Note::new(200, pk1),
-                Note::new(300, pk2),
-            ]),
-        };
-        assert_eq!(
-            transfer.utxo_by_index(0),
-            Some(Utxo {
-                op_id: transfer.op_id(),
-                output_index: 0,
-                note: Note::new(100, pk0),
-            })
-        );
-        assert_eq!(
-            transfer.utxo_by_index(1),
-            Some(Utxo {
-                op_id: transfer.op_id(),
-                output_index: 1,
-                note: Note::new(200, pk1),
-            })
-        );
-        assert_eq!(
-            transfer.utxo_by_index(2),
-            Some(Utxo {
-                op_id: transfer.op_id(),
-                output_index: 2,
-                note: Note::new(300, pk2),
-            })
-        );
-
-        assert!(transfer.utxo_by_index(3).is_none());
-    }
-
-    fn input_key() -> ZkKey {
-        ZkKey::from(BigUint::from(1u8))
-    }
-
-    fn unrelated_key() -> ZkKey {
-        ZkKey::from(BigUint::from(7u8))
-    }
-
-    fn deferred_proof_signed_by(signers: &[ZkKey]) -> DeferredZkSig {
-        let input_utxo = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            note: Note::new(10_000, input_key().to_public_key()),
-        };
-        let (utxos, _) = Utxos::new().insert(input_utxo.id(), input_utxo);
-        let operation = TransferOp::new(
-            BoundedInputs::from(input_utxo.id()).into(),
-            Outputs::new([Note::new(
-                10_000,
-                ZkPublicKey::from(Fr::from(BigUint::from(2u8))),
-            )]),
-        );
-        let tx_hash_view = TxHashView::from(TxHash::from([9u8; 32]));
-        let proof =
-            ZkKey::multi_sign(signers, tx_hash_view.as_fr()).expect("signing should succeed");
-
-        SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
-            .into_preverified(&())
-            .expect("preverify should accept a well-formed transfer")
-            .verify(&TransferValidationContext {
-                service_notes: &ServiceNotes::new(),
-                channels: &Channels::new(),
-                utxos: &utxos,
-                tx_hash_view: &tx_hash_view,
-            })
-            .expect("verify leaves the proof to the batch")
-    }
-
-    #[test]
-    fn deferred_proof_is_accepted() {
-        assert!(batch_verify(deferred_proof_signed_by(&[input_key()])).is_ok());
-    }
-
-    #[test]
-    fn wrong_deferred_proof_is_rejected() {
-        assert!(matches!(
-            batch_verify(deferred_proof_signed_by(&[unrelated_key()])),
-            Err(BatchError::InvalidZkSignatures)
-        ));
-    }
-
-    #[test]
-    fn verify_rejects_an_input_missing_from_the_ledger() {
-        let input_key = ZkKey::from(BigUint::from(1u8));
-        let input_utxo = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            note: Note::new(10_000, input_key.to_public_key()),
-        };
-
-        let operation = TransferOp::new(
-            BoundedInputs::from(input_utxo.id()).into(),
-            Outputs::new([Note::new(
-                10_000,
-                ZkPublicKey::from(Fr::from(BigUint::from(2u8))),
-            )]),
-        );
-
-        let tx_hash_view = TxHashView::from(TxHash::from([9u8; 32]));
-        let proof =
-            ZkKey::multi_sign(&[input_key], tx_hash_view.as_fr()).expect("signing should succeed");
-
-        let signed_operation =
-            SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
-                .into_preverified(&())
-                .expect("preverify should accept a well-formed transfer");
-
-        assert_eq!(
-            signed_operation
-                .verify(&TransferValidationContext {
-                    service_notes: &ServiceNotes::new(),
-                    channels: &Channels::new(),
-                    utxos: &Utxos::new(),
-                    tx_hash_view: &tx_hash_view,
-                })
-                .unwrap_err(),
-            TransferError::Inputs(InputsError::InexistingNote(input_utxo.id()))
-        );
-    }
-
-    #[test]
-    fn verify_rejects_an_input_owned_by_a_channel() {
-        let input_key = ZkKey::from(BigUint::from(1u8));
-        let input_utxo = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            note: Note::new(10_000, input_key.to_public_key()),
-        };
-        let (utxos, _) = Utxos::new().insert(input_utxo.id(), input_utxo);
-
-        let operation = TransferOp::new(
-            BoundedInputs::from(input_utxo.id()).into(),
-            Outputs::new([Note::new(
-                10_000,
-                ZkPublicKey::from(Fr::from(BigUint::from(2u8))),
-            )]),
-        );
-
-        let tx_hash_view = TxHashView::from(TxHash::from([9u8; 32]));
-        let proof =
-            ZkKey::multi_sign(&[input_key], tx_hash_view.as_fr()).expect("signing should succeed");
-
-        let signed_operation =
-            SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
-                .into_preverified(&())
-                .expect("preverify should accept a well-formed transfer");
-
-        let channels = Channels::new()
-            .register_channel_note(&input_utxo.id(), &ChannelId::from([21u8; 32]))
-            .expect("the note is not owned by another channel");
-
-        assert_eq!(
-            signed_operation
-                .verify(&TransferValidationContext {
-                    service_notes: &ServiceNotes::new(),
-                    channels: &channels,
-                    utxos: &utxos,
-                    tx_hash_view: &tx_hash_view,
-                })
-                .unwrap_err(),
-            TransferError::Inputs(InputsError::ChannelNote(input_utxo.id()))
-        );
-    }
-
-    #[test]
-    fn execute_rejects_an_input_missing_from_the_ledger() {
-        let missing_note = NoteId(Fr::from(BigUint::from(3u8)));
-        let operation = TransferOp::new(
-            BoundedInputs::from(missing_note).into(),
-            Outputs::new([Note::new(
-                10_000,
-                ZkPublicKey::from(Fr::from(BigUint::from(2u8))),
-            )]),
-        );
-
-        let signed_operation: SignedOperation<_, _, StandardMode> = SignedOperation::new(
-            operation,
-            <TransferOp as ProvableOperation>::Proof::sample(),
-        )
-        .into_state_trusted();
-
-        assert_eq!(
-            signed_operation
-                .execute(Utxos::new())
-                .map(|_| ())
-                .map_err(|(_, error)| error),
-            Err(TransferError::Inputs(InputsError::InexistingNote(
-                missing_note
-            )))
-        );
-    }
-
-    #[test]
-    fn execute_removes_the_inputs_and_adds_the_outputs() {
-        let input_key = ZkKey::from(BigUint::from(1u8));
-        let input_utxo = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            note: Note::new(10_000, input_key.to_public_key()),
-        };
-        let (utxos, _) = Utxos::new().insert(input_utxo.id(), input_utxo);
-
-        let operation = TransferOp::new(
-            BoundedInputs::from(input_utxo.id()).into(),
-            Outputs::new([Note::new(
-                10_000,
-                ZkPublicKey::from(Fr::from(BigUint::from(2u8))),
-            )]),
-        );
-        let output_utxo = operation
-            .utxo_by_index(0)
-            .expect("the operation declares one output");
-
-        let signed_operation: SignedOperation<_, _, StandardMode> = SignedOperation::new(
-            operation,
-            <TransferOp as ProvableOperation>::Proof::sample(),
-        )
-        .into_state_trusted();
-
-        let (utxos, events) = signed_operation
-            .execute(utxos)
-            .expect("the input is in the ledger");
-
-        assert!(!utxos.contains(&input_utxo.id()));
-        assert_eq!(utxos.get(&output_utxo.id()), Some(output_utxo));
-        assert_eq!(events, []);
-    }
 
     #[test]
     fn transfer_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
+            // 2 inputs, 2 outputs, nothing buffered: 10 + 4177 + 2 * 1758 + 2 * 58
             assert_eq!(
-                crate::mantle::OpRef::from(&TransferOp::sample())
-                    .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
-                Ok(Gas::new(590))
+                TransferOp::sample()
+                    .execution_gas(&GasProfile::MAINNET, &FixedThresholds(threshold)),
+                Ok(Gas::new(7_819))
             );
         }
+    }
+
+    fn commitment(n: u64) -> NoteCommitment {
+        NoteCommitment(Fr::from(n))
+    }
+
+    fn nullifier(n: u64) -> NoteNullifier {
+        NoteNullifier(Fr::from(n))
+    }
+
+    // The ledger set holds commitment(1), recorded at the end of block 0.
+    fn note_sets() -> NoteSets {
+        let ledger = NoteSets::new()
+            .ledger()
+            .clone()
+            .execute_adding(&[commitment(1)])
+            .unwrap();
+        NoteSets::new().update_ledger(ledger).end_block(0).unwrap()
+    }
+
+    fn root() -> Fr {
+        note_sets().ledger().commitment_root()
+    }
+
+    fn transfer(
+        inputs: &[NoteNullifier],
+        outputs: &[NoteCommitment],
+        commitment_merkle_root: Fr,
+    ) -> TransferOp {
+        TransferOp::new(
+            InputNullifiers::try_from_iter(inputs.iter().copied()).unwrap(),
+            OutputCommitments::try_from_iter(outputs.iter().copied()).unwrap(),
+            commitment_merkle_root,
+            6,
+        )
+    }
+
+    fn tx_hash_view() -> TxHashView {
+        TxHashView::from(TxHash::from([9u8; 32]))
+    }
+
+    fn verify(
+        operation: TransferOp,
+        note_sets: &NoteSets,
+    ) -> Result<DeferredZkTransfer, TransferError> {
+        verify_in_tx(operation, note_sets, &TxNoteState::new())
+    }
+
+    fn verify_in_tx(
+        operation: TransferOp,
+        note_sets: &NoteSets,
+        tx_notes: &TxNoteState,
+    ) -> Result<DeferredZkTransfer, TransferError> {
+        SignedOperation::<_, Unverified, StandardMode>::new(operation, ZkTransferProof::sample())
+            .into_preverified(&())
+            .expect("preverify accepts the transfer")
+            .verify(&TransferValidationContext {
+                note_sets,
+                tx_notes,
+                block_number: 1,
+                tx_hash_view: &tx_hash_view(),
+            })
+    }
+
+    #[test]
+    fn preverify_rejects_empty_inputs() {
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            transfer(&[], &[commitment(2)], root()),
+            ZkTransferProof::sample(),
+        );
+        assert_eq!(
+            signed_operation.preverify(&()),
+            Err(TransferError::NoteSet(NoteSetError::EmptyInputs))
+        );
+    }
+
+    #[test]
+    fn preverify_rejects_more_than_four_inputs() {
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            transfer(
+                &[
+                    nullifier(1),
+                    nullifier(2),
+                    nullifier(3),
+                    nullifier(4),
+                    nullifier(5),
+                ],
+                &[],
+                root(),
+            ),
+            ZkTransferProof::sample(),
+        );
+        assert_eq!(
+            signed_operation.preverify(&()),
+            Err(TransferError::ZkTransferInputs(
+                ZkTransferInputsError::TooManyInputs(5)
+            ))
+        );
+    }
+
+    #[test]
+    fn preverify_rejects_more_than_eight_outputs() {
+        let outputs: Vec<NoteCommitment> = (1..=9).map(commitment).collect();
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            transfer(&[nullifier(1)], &outputs, root()),
+            ZkTransferProof::sample(),
+        );
+        assert_eq!(
+            signed_operation.preverify(&()),
+            Err(TransferError::ZkTransferInputs(
+                ZkTransferInputsError::TooManyOutputs(9)
+            ))
+        );
+    }
+
+    #[test]
+    fn verify_defers_the_zk_transfer_public_inputs() {
+        let deferred = verify(
+            transfer(&[nullifier(2)], &[commitment(3)], root()),
+            &note_sets(),
+        )
+        .unwrap();
+        let public = deferred.inputs();
+        assert_eq!(
+            public.inputs.map(Groth16Input::into_inner),
+            [Fr::from(2u64), Fr::ZERO, Fr::ZERO, Fr::ZERO]
+        );
+        assert_eq!(
+            public.inputs_active.map(Groth16Input::into_inner),
+            [Fr::ONE, Fr::ZERO, Fr::ZERO, Fr::ZERO]
+        );
+        assert_eq!(public.outputs[0].into_inner(), Fr::from(3u64));
+        assert_eq!(public.outputs[1].into_inner(), Fr::ZERO);
+        assert_eq!(public.excess_value.into_inner(), Fr::from(6u64));
+        assert_eq!(public.tx_commitment_root.into_inner(), root());
+        assert_eq!(public.msg.into_inner(), *tx_hash_view().as_fr());
+        assert_eq!(deferred.proof(), ZkTransferProof::sample().as_proof());
+    }
+
+    #[test]
+    fn verify_extends_the_referenced_root_with_the_buffer() {
+        let mut tx_notes = TxNoteState::new();
+        tx_notes.buffer_outputs(NoteSetIndex::Ledger, &[commitment(4)]);
+        let deferred = verify_in_tx(
+            transfer(&[nullifier(2)], &[commitment(3)], root()),
+            &note_sets(),
+            &tx_notes,
+        )
+        .unwrap();
+        let expected = CommitmentMmr::new()
+            .push(commitment(1))
+            .unwrap()
+            .push(commitment(4))
+            .unwrap()
+            .frontier_root();
+        assert_eq!(deferred.inputs().tx_commitment_root.into_inner(), expected);
+    }
+
+    #[test]
+    fn verify_rejects_an_unknown_root() {
+        assert_eq!(
+            verify(
+                transfer(&[nullifier(2)], &[commitment(3)], Fr::from(5u64)),
+                &note_sets()
+            )
+            .unwrap_err(),
+            TransferError::NoteSet(NoteSetError::UnknownRoot(Fr::from(5u64)))
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_spent_input() {
+        let sets = note_sets();
+        let spent = sets
+            .ledger()
+            .clone()
+            .execute_spending(&[nullifier(2)])
+            .unwrap();
+        let sets = sets.update_ledger(spent);
+        assert_eq!(
+            verify(transfer(&[nullifier(2)], &[commitment(3)], root()), &sets).unwrap_err(),
+            TransferError::NoteSet(NoteSetError::AlreadySpent(nullifier(2)))
+        );
+    }
+
+    #[test]
+    fn execute_spends_adds_and_buffers() {
+        let signed_operation: SignedOperation<_, _, StandardMode> = SignedOperation::new(
+            transfer(&[nullifier(2)], &[commitment(3)], root()),
+            ZkTransferProof::sample(),
+        )
+        .into_state_trusted();
+        let mut tx_notes = TxNoteState::new();
+        let (context, events) = signed_operation
+            .execute(TransferExecutionContext {
+                note_sets: note_sets(),
+                tx_notes: &mut tx_notes,
+            })
+            .expect("the input is unspent");
+        let sets = context.note_sets;
+        let ledger = sets.ledger();
+        let expected = CommitmentMmr::new()
+            .push(commitment(1))
+            .unwrap()
+            .push(commitment(3))
+            .unwrap()
+            .frontier_root();
+        assert!(ledger.contains_nullifier(&nullifier(2)).unwrap());
+        assert_eq!(ledger.commitment_root(), expected);
+        assert_eq!(tx_notes.commitment_root(ledger, &root(), 1), Ok(expected));
+        assert_eq!(events, []);
+    }
+
+    #[test]
+    fn verify_builds_the_public_inputs_a_real_proof_satisfies() {
+        let secret_key = Fr::from(1u64);
+        let input = Note::new(
+            1_000,
+            Fr::from(11u64),
+            ZkKey::new(secret_key).to_public_key(),
+        );
+        let (mmr, path) = CommitmentMmr::new()
+            .push_with_paths(input.commitment(), &mut [])
+            .unwrap();
+        let ledger = NoteSets::new()
+            .ledger()
+            .clone()
+            .execute_adding(&[input.commitment()])
+            .unwrap();
+        let sets = NoteSets::new().update_ledger(ledger).end_block(0).unwrap();
+        let root = sets.ledger().commitment_root();
+        assert_eq!(root, mmr.frontier_root());
+        let output = Note::new(994, Fr::from(12u64), ZkPublicKey::new(Fr::from(2u64)));
+        let nullifier =
+            derive_note_nullifier(&input.commitment(), &ZkKey::new(secret_key).nullifier_key());
+        let proof = prove_transfer(
+            &[(input, secret_key, path)],
+            &[output],
+            root,
+            *tx_hash_view().as_fr(),
+        );
+
+        let operation = TransferOp::new([nullifier].into(), [output.commitment()].into(), root, 6);
+        let deferred = SignedOperation::<_, Unverified, StandardMode>::new(
+            operation,
+            ZkTransferProof::new(proof),
+        )
+        .into_preverified(&())
+        .unwrap()
+        .verify(&TransferValidationContext {
+            note_sets: &sets,
+            tx_notes: &TxNoteState::new(),
+            block_number: 1,
+            tx_hash_view: &tx_hash_view(),
+        })
+        .unwrap();
+        assert!(lb_zktransfer::verify(deferred.proof(), deferred.inputs()).unwrap());
+
+        let overpaid = TransferOp::new([nullifier].into(), [output.commitment()].into(), root, 7);
+        let deferred = SignedOperation::<_, Unverified, StandardMode>::new(
+            overpaid,
+            ZkTransferProof::new(proof),
+        )
+        .into_preverified(&())
+        .unwrap()
+        .verify(&TransferValidationContext {
+            note_sets: &sets,
+            tx_notes: &TxNoteState::new(),
+            block_number: 1,
+            tx_hash_view: &tx_hash_view(),
+        })
+        .unwrap();
+        assert!(!lb_zktransfer::verify(deferred.proof(), deferred.inputs()).unwrap());
+    }
+
+    #[test]
+    fn transfer_witness_leaves_the_secret_keys_to_their_holders() {
+        let input = Note::new(1_000, Fr::from(11u64), ZkPublicKey::new(Fr::from(2u64)));
+        let (mmr, path) = CommitmentMmr::new()
+            .push(NoteCommitment(Fr::from(4u64)))
+            .unwrap()
+            .push_with_paths(input.commitment(), &mut [])
+            .unwrap();
+        let output = Note::new(994, Fr::from(12u64), ZkPublicKey::new(Fr::from(3u64)));
+        let witness = transfer_witness(
+            &[(input, path)],
+            &[output],
+            mmr.frontier_root(),
+            Fr::from(77u64),
+        );
+        assert_eq!(witness.inputs_len(), 1);
+        let witness = witness.with_secret_key(Fr::from(5u64)).build();
+        assert_eq!(witness.wallet.inputs[0].secret_key, Fr::from(5u64));
+        assert_eq!(
+            witness.wallet.inputs[0].path_and_selectors[0],
+            (Fr::from(4u64), true)
+        );
+        assert_eq!(witness.chain.inputs_active, [true, false, false, false]);
+        assert_eq!(
+            witness.chain.outputs_active,
+            [true, false, false, false, false, false, false, false]
+        );
+        assert_eq!(
+            (witness.chain.tx_commitment_root, witness.chain.msg),
+            (mmr.frontier_root(), Fr::from(77u64))
+        );
     }
 }

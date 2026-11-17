@@ -12,9 +12,9 @@ use crate::cucumber::{
     steps::{
         mempool::{
             actions::{
-                prepare_transfer_transaction, submit_prepared_transaction_through_blend,
-                submit_prepared_transaction_to_nodes, try_submit_invalid_transaction,
-                wait_for_mempool_recovery_flush,
+                prepare_genesis_anchored_transfer_transaction, prepare_transfer_transaction,
+                submit_prepared_transaction_through_blend, submit_prepared_transaction_to_nodes,
+                try_submit_invalid_transaction, wait_for_mempool_recovery_flush,
             },
             assertions::{
                 assert_transaction_not_pending_on_all_nodes, assert_transaction_pending_on_nodes,
@@ -23,6 +23,7 @@ use crate::cucumber::{
         },
         nodes::diagnostics::BlendDiagnosticEventLogger,
     },
+    utils::lgo_to_units,
     world::CucumberWorld,
 };
 
@@ -485,7 +486,29 @@ async fn step_prepare_transfer_transaction(
         world,
         &step.value,
         transaction_alias,
-        amount,
+        lgo_to_units(amount),
+        sender_wallet_name,
+        receiver_wallet_name,
+    )
+    .await
+}
+
+#[when(
+    expr = "I prepare transfer transaction {string} of {int} LGO from wallet {string} to wallet {string} proven at the genesis block"
+)]
+async fn step_prepare_genesis_anchored_transfer_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    transaction_alias: String,
+    amount: u64,
+    sender_wallet_name: String,
+    receiver_wallet_name: String,
+) -> StepResult {
+    prepare_genesis_anchored_transfer_transaction(
+        world,
+        &step.value,
+        transaction_alias,
+        lgo_to_units(amount),
         sender_wallet_name,
         receiver_wallet_name,
     )

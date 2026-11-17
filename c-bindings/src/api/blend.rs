@@ -1,20 +1,15 @@
 use std::ffi::{CString, c_char};
 
-use lb_api_service::http::blend::{JoinError, blend_join_network};
+use lb_api_service::http::blend::blend_join_network;
 use lb_blend_service::message::NetworkInfo;
 use lb_c_macros::panic_to_error;
-use lb_core::{
-    mantle::NoteId,
-    sdp::{self, Locator},
-};
-use lb_groth16::fr_from_bytes;
+use lb_core::sdp::{self, Locator};
 use lb_node::{RuntimeServiceId, generic_services::blend::BlendService};
 use lb_sdp_service::SdpSubmission;
 use multiaddr::PeerId;
 
 use crate::{
     LogosBlockchainNode,
-    api::wallet::WalletService,
     errors::{OperationStatus, OperationStatusCode},
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
@@ -30,16 +25,6 @@ impl From<sdp::DeclarationId> for DeclarationId {
     fn from(id: sdp::DeclarationId) -> Self {
         Self(id.0)
     }
-}
-
-unsafe fn parse_service_note_id(ptr: *const u8) -> Result<NoteId, OperationStatus> {
-    let bytes = unsafe { std::slice::from_raw_parts(ptr, KEY_SIZE) };
-    fr_from_bytes(bytes).map(NoteId).map_err(|_| {
-        OperationStatus::error(
-            OperationStatusCode::ValidationError,
-            "Invalid `service_note_id` bytes.",
-        )
-    })
 }
 
 unsafe fn parse_locator(ptr: *const c_char) -> Result<Locator, OperationStatus> {
@@ -68,9 +53,7 @@ unsafe fn parse_locator(ptr: *const c_char) -> Result<Locator, OperationStatus> 
 ///
 /// - `node`: A non-null pointer to a running [`LogosBlockchainNode`] instance.
 /// - `locator`: A non-null pointer to a locator C string.
-/// - `service_note_id`: A pointer to 32 bytes representing the service note ID,
-///   or null to let the node pick the smallest unlocked note held by its blend
-///   ZK key that meets the minimum stake.
+/// - `amount`: The stake of the declaration, funded by the node's wallet.
 ///
 /// # Returns
 ///
@@ -80,44 +63,33 @@ unsafe fn parse_locator(ptr: *const c_char) -> Result<Locator, OperationStatus> 
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers.
-/// `service_note_id` must be null or point to 32 readable bytes.
 #[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn blend_join_as_core_node(
     node: *const LogosBlockchainNode,
     locator: *const c_char,
-    service_note_id: *const u8,
+    amount: u64,
 ) -> FfiStatusResult<DeclarationId> {
     return_error_if_null_pointer!(node);
     return_error_if_null_pointer!(locator);
 
     let locator = unwrap_or_return_error!(unsafe { parse_locator(locator) });
-    let service_note_id = if service_note_id.is_null() {
-        None
-    } else {
-        Some(unwrap_or_return_error!(unsafe {
-            parse_service_note_id(service_note_id)
-        }))
-    };
 
     let node = unsafe { &*node };
 
     let runtime_handle = unwrap_or_return_error!(node.get_runtime_handle());
     let result: StatusResult<SdpSubmission> = runtime_handle.block_on(async {
-        blend_join_network::<BlendService<RuntimeServiceId>, WalletService, RuntimeServiceId>(
+        blend_join_network::<BlendService<RuntimeServiceId>, RuntimeServiceId>(
             node.get_overwatch_handle(),
             locator,
-            service_note_id,
+            amount,
         )
         .await
         .map_err(|error| {
-            let code = match error {
-                JoinError::Internal(_) => OperationStatusCode::RelayError,
-                JoinError::KeyNotInWallet(_) | JoinError::NoServiceNote { .. } => {
-                    OperationStatusCode::NotFound
-                }
-            };
-            OperationStatus::error(code, format!("Failed to join blend network: {error}"))
+            OperationStatus::error(
+                OperationStatusCode::RelayError,
+                format!("Failed to join blend network: {error}"),
+            )
         })
     });
 

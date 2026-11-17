@@ -14,6 +14,7 @@ use core::fmt::Debug;
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::Display,
+    marker::PhantomData,
     pin::Pin,
     sync::Arc,
 };
@@ -26,7 +27,7 @@ use lb_core::{
     block::{Block, TxInBlock, UncleHeaders, genesis::GenesisBlock},
     era::ForkDigest,
     events::Events,
-    header::HeaderId,
+    header::{Header, HeaderId},
     mantle::{
         TxHash,
         ledger::verification_mode::StandardMode,
@@ -37,8 +38,12 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Branch, EraSchedule, PrunedBlocks, ReorgedBlocks, UncleSlots};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
+use lb_kv_store::{DynKvStore, ErasedKv, KvStoreSettings, OpenKvStore};
 pub use lb_ledger::EpochState;
-use lb_ledger::{LedgerState, config::EraScheduledConfig};
+use lb_ledger::{
+    LedgerError, LedgerState, Restored, config::EraScheduledConfig,
+    nullifier_storage::NullifierStorage,
+};
 use lb_log_targets::chain;
 use lb_network_service::message::ChainSyncEvent;
 use lb_services_utils::{
@@ -100,7 +105,7 @@ pub enum Error {
     #[error("Block {0} has already been applied")]
     AlreadyApplied(HeaderId),
     #[error("Ledger error: {0}")]
-    Ledger(#[from] lb_ledger::LedgerError<HeaderId>),
+    Ledger(#[from] LedgerError<HeaderId>),
     #[error("Consensus error: {0}")]
     Consensus(#[from] lb_cryptarchia_engine::Error<HeaderId>),
     #[error("Serialization error: {0}")]
@@ -123,6 +128,31 @@ pub enum Error {
     TooManyUncles { count: usize, max: u8 },
     #[error("Batch deferred proof verification error: {0}")]
     BatchDeferredProofVerification(#[from] lb_core::mantle::batch::Error),
+    #[error(
+        "The saved chain state starts from the LIB {0}, but the nullifier store holds no anchor to read it from: remove the chain data, and sync from genesis"
+    )]
+    NoAnchor(HeaderId),
+}
+
+/// What the anchor of the nullifier store keeps of the LIB block (see
+/// [`lb_ledger::Anchor`]): what the consensus needs to start from it again.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LibInfo {
+    pub parent: HeaderId,
+    pub slot: Slot,
+    pub length: u64,
+    pub uncle_slots: UncleSlots,
+}
+
+impl LibInfo {
+    fn of(branch: &Branch<HeaderId>) -> Self {
+        Self {
+            parent: branch.parent(),
+            slot: branch.slot(),
+            length: branch.length(),
+            uncle_slots: branch.uncle_slots().clone(),
+        }
+    }
 }
 
 struct InitializedCryptarchia {
@@ -170,6 +200,10 @@ pub enum Query {
     Info {
         reply_channel: oneshot::Sender<ChainServiceInfo>,
     },
+    /// Returns the genesis block of the starting state.
+    GetGenesisBlock {
+        reply_channel: oneshot::Sender<GenesisBlock>,
+    },
     NewBlockSubscribe {
         sender: oneshot::Sender<broadcast::Receiver<ProcessedBlockEvent>>,
     },
@@ -190,6 +224,11 @@ pub enum Query {
     GetLedgerState {
         block_id: HeaderId,
         reply_channel: oneshot::Sender<Option<LedgerState>>,
+    },
+    /// Checks a proposal header against the chain, leaving the chain untouched.
+    VerifyProposalHeader {
+        header: Box<Header>,
+        reply_channel: oneshot::Sender<Result<(), Error>>,
     },
     /// Returns the ledger config of the era of `slot`.
     GetLedgerConfigAtSlot {
@@ -367,55 +406,67 @@ pub(crate) struct TryApplyBlockOutcome {
 }
 
 impl Cryptarchia {
-    /// Creates the chain with the genesis block as its only block.
-    #[must_use]
+    /// Creates the chain with the genesis block as its only block. The genesis
+    /// state becomes the finalized base of the store of its nullifier trees,
+    /// with its anchor.
     pub fn from_genesis(
         genesis_id: HeaderId,
         genesis_ledger_state: LedgerState,
         era_schedule: Arc<EraScheduledConfig>,
         state: State,
-    ) -> Self {
-        Self::from_lib(
-            genesis_id,
+    ) -> Result<Self, Error> {
+        let info = LibInfo {
+            parent: genesis_id,
+            slot: Slot::genesis(),
+            length: 0,
+            uncle_slots: UncleSlots::default(),
+        };
+        let ledger = <lb_ledger::Ledger<_>>::new_anchored(
             genesis_id,
             genesis_ledger_state,
-            genesis_id,
             era_schedule,
-            state,
-            Slot::genesis(),
-            0,
-            UncleSlots::default(),
-        )
+            &info,
+        )?;
+        Ok(Self::with_ledger(
+            ledger, genesis_id, &info, genesis_id, state,
+        ))
     }
 
-    /// Initialize a new [`Cryptarchia`] instance.
+    /// Creates the chain with the LIB of the anchor of a nullifier store as
+    /// its only block (see [`lb_ledger::Ledger::restore`]).
     #[must_use]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "TODO: define Lib struct to reduce args"
-    )]
-    pub fn from_lib(
-        lib_id: HeaderId,
-        lib_parent: HeaderId,
-        lib_ledger_state: LedgerState,
+    pub fn from_restored(
+        restored: Restored<HeaderId, LibInfo>,
         genesis_id: HeaderId,
-        era_schedule: Arc<EraScheduledConfig>,
         state: State,
-        lib_slot: Slot,
-        lib_length: u64,
-        lib_uncle_slots: UncleSlots,
+    ) -> Self {
+        let Restored { ledger, lib, info } = restored;
+        Self::with_ledger(ledger, lib, &info, genesis_id, state)
+    }
+
+    // The consensus starts from `lib`, under the eras of the ledger.
+    fn with_ledger(
+        ledger: lb_ledger::Ledger<HeaderId>,
+        lib: HeaderId,
+        info: &LibInfo,
+        genesis_id: HeaderId,
+        state: State,
     ) -> Self {
         Self {
             consensus: <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
-                lib_id,
-                lib_parent,
-                Arc::new(era_schedule.map(|era| era.parameters.consensus_config.clone())),
+                lib,
+                info.parent,
+                Arc::new(
+                    ledger
+                        .era_schedule()
+                        .map(|era| era.parameters.consensus_config.clone()),
+                ),
                 state,
-                lib_slot,
-                lib_length,
-                lib_uncle_slots,
+                info.slot,
+                info.length,
+                info.uncle_slots.clone(),
             ),
-            ledger: <lb_ledger::Ledger<_>>::new(lib_id, lib_ledger_state, era_schedule),
+            ledger,
             genesis_id,
         }
     }
@@ -478,7 +529,7 @@ impl Cryptarchia {
     {
         let outcome =
             self.try_apply_block_with_state_retention(block, current_slot, BlockOrigin::Network)?;
-        self.prune_ledger_states(outcome.pruned_blocks.all());
+        self.prune_ledger_states(&outcome.pruned_blocks);
         Ok((
             outcome.pruned_blocks,
             outcome.reorged_blocks,
@@ -524,7 +575,7 @@ impl Cryptarchia {
         }
 
         let block_uncle_headers_slots = block.uncle_headers().slots();
-        let leader_proof = header.leader_proof().clone();
+        let leader_header = header.clone();
 
         let transactions = block.into_transactions();
 
@@ -537,12 +588,12 @@ impl Cryptarchia {
                 id,
                 parent,
                 slot,
-                &leader_proof,
+                &leader_header,
                 &block_uncle_headers_slots,
                 transactions.into_iter(),
             )
             .map_err(|err| match err {
-                lb_ledger::LedgerError::ParentNotFound(parent) => Error::ParentMissing {
+                LedgerError::ParentNotFound(parent) => Error::ParentMissing {
                     parent,
                     info: Box::new(self.info()),
                 },
@@ -561,7 +612,9 @@ impl Cryptarchia {
                 err => Error::Consensus(err),
             })?;
 
-        let events = self.ledger.commit_update(update);
+        // Only a storage failure fails a commit, which leaves the consensus ahead
+        // of the ledger: the block is known but not its state.
+        let events = self.ledger.commit_update(update)?;
 
         metrics::emit_consensus_metrics(&self.consensus, &self.ledger);
         metrics::emit_block_imported_metric();
@@ -571,6 +624,42 @@ impl Cryptarchia {
             newly_canonical_blocks: outcome.newly_canonical_blocks,
             events,
         })
+    }
+
+    /// Checks a proposal header against the chain, leaving the chain untouched:
+    /// it is new, not from a future slot, its slot follows its parent's and its
+    /// proof of leadership holds against the state of its parent.
+    pub(crate) fn verify_proposal_header(
+        &self,
+        header: &Header,
+        current_slot: Slot,
+    ) -> Result<(), Error> {
+        let id = header.id();
+        let parent = header.parent();
+        let slot = header.slot();
+
+        if self.ledger.state(&id).is_some() {
+            return Err(Error::AlreadyApplied(id));
+        }
+
+        if slot > current_slot {
+            return Err(Error::FutureBlock {
+                block_slot: slot,
+                current_slot,
+            });
+        }
+
+        let parent_state = self
+            .ledger
+            .state(&parent)
+            .ok_or_else(|| Error::ParentMissing {
+                parent,
+                info: Box::new(self.info()),
+            })?;
+
+        parent_state
+            .verify_proof_of_leadership(slot, header, self.ledger.era_schedule())
+            .map_err(Error::Ledger)
     }
 
     fn epoch_state_for_slot(&self, slot: Slot) -> Result<EpochState, Error> {
@@ -598,27 +687,37 @@ impl Cryptarchia {
     }
 
     /// Remove the ledger states associated with blocks that have been pruned by
-    /// the [`lb_cryptarchia_engine::Cryptarchia`].
+    /// the [`lb_cryptarchia_engine::Cryptarchia`], making the state of the
+    /// current LIB the finalized base of the nullifier trees.
     ///
     /// Details on which blocks are pruned can be found in the
     /// [`lb_cryptarchia_engine::Cryptarchia::receive_block`].
-    pub(crate) fn prune_ledger_states<'a>(
-        &'a mut self,
-        blocks: impl Iterator<Item = &'a HeaderId>,
-    ) {
-        let mut pruned_states_count = 0usize;
-        for block in blocks {
-            if self.ledger.prune_state_at(block) {
-                pruned_states_count = pruned_states_count.saturating_add(1);
-            } else {
-                error!(
-                   target: LOG_TARGET,
-                    "Failed to prune ledger state for block {:?} which should exist.",
-                    block
-                );
+    /// Prunes the ledger states of the `pruned_blocks`, and makes the LIB the
+    /// finalized base of the nullifier store, with its anchor.
+    pub(crate) fn prune_ledger_states(&mut self, pruned_blocks: &PrunedBlocks<HeaderId>) {
+        let info = LibInfo::of(self.lib_branch());
+        match self
+            .ledger
+            .apply_pruning_anchored(self.lib(), pruned_blocks, &info)
+        {
+            Ok(pruned_states_count) => {
+                if pruned_states_count != pruned_blocks.len() {
+                    error!(
+                        target: LOG_TARGET,
+                        "Pruned {pruned_states_count} ledger states out of {} pruned blocks.",
+                        pruned_blocks.len()
+                    );
+                }
+                log_pruned_ledger_states(pruned_states_count);
             }
+            // A failed write leaves the states in place, and the next pruning
+            // finalizes the newer LIB.
+            Err(err) => error!(
+                target: LOG_TARGET,
+                "Failed to prune the ledger states of {} pruned blocks: {err}",
+                pruned_blocks.len()
+            ),
         }
-        log_pruned_ledger_states(pruned_states_count);
     }
 
     fn online(self) -> (Self, PrunedBlocks<HeaderId>) {
@@ -630,7 +729,7 @@ impl Cryptarchia {
         };
 
         // Prune the ledger states of all the pruned blocks.
-        cryptarchia.prune_ledger_states(pruned_blocks.all());
+        cryptarchia.prune_ledger_states(&pruned_blocks);
 
         (cryptarchia, pruned_blocks)
     }
@@ -656,6 +755,9 @@ pub struct CryptarchiaSettings {
     pub bootstrap: BootstrapConfig,
     pub sync: SyncConfig,
     pub recovery_data: RecoveryData,
+    /// Where the store of the nullifier trees, of the type the service is
+    /// declared with, keeps them.
+    pub nullifier_store: KvStoreSettings,
 }
 
 impl StorageRecoverySettings for CryptarchiaSettings {
@@ -681,7 +783,10 @@ impl From<GenesisBlock> for StartingState {
 }
 
 #[expect(clippy::allow_attributes_without_reason)]
-pub struct CryptarchiaConsensus<Tx, TimeBackend, RuntimeServiceId>
+/// The chain service. `NullifierStore` is the store of the nullifier trees of
+/// the ledger states, which the service opens from
+/// [`CryptarchiaSettings::nullifier_store`].
+pub struct CryptarchiaConsensus<Tx, TimeBackend, NullifierStore, RuntimeServiceId>
 where
     Tx: PreverifiedMantleTransaction + Clone + Eq + Debug,
     TimeBackend: lb_time_service::backends::TimeBackend,
@@ -690,10 +795,13 @@ where
     new_block_subscription_sender: broadcast::Sender<ProcessedBlockEvent>,
     lib_subscription_sender: broadcast::Sender<LibUpdate>,
     state: <Self as ServiceData>::State,
+    // opened at `init`, erased to the type the ledger keeps
+    nullifier_store: DynKvStore,
+    nullifier_store_type: PhantomData<fn() -> NullifierStore>,
 }
 
-impl<Tx, TimeBackend, RuntimeServiceId> ServiceData
-    for CryptarchiaConsensus<Tx, TimeBackend, RuntimeServiceId>
+impl<Tx, TimeBackend, NullifierStore, RuntimeServiceId> ServiceData
+    for CryptarchiaConsensus<Tx, TimeBackend, NullifierStore, RuntimeServiceId>
 where
     Tx: PreverifiedMantleTransaction + Clone + Eq + Debug,
     TimeBackend: lb_time_service::backends::TimeBackend,
@@ -706,9 +814,10 @@ where
 }
 
 #[async_trait::async_trait]
-impl<Tx, TimeBackend, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for CryptarchiaConsensus<Tx, TimeBackend, RuntimeServiceId>
+impl<Tx, TimeBackend, NullifierStore, RuntimeServiceId> ServiceCore<RuntimeServiceId>
+    for CryptarchiaConsensus<Tx, TimeBackend, NullifierStore, RuntimeServiceId>
 where
+    NullifierStore: OpenKvStore,
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
         + StorageSize
@@ -742,12 +851,21 @@ where
     ) -> Result<Self, DynError> {
         let (new_block_subscription_sender, _) = broadcast::channel(16);
         let (lib_subscription_sender, _) = broadcast::channel(16);
+        let nullifier_store = Self::open_nullifier_store(
+            &service_resources_handle
+                .settings_handle
+                .notifier()
+                .get_updated_settings()
+                .nullifier_store,
+        )?;
 
         Ok(Self {
             service_resources_handle,
             new_block_subscription_sender,
             lib_subscription_sender,
             state: initial_state,
+            nullifier_store,
+            nullifier_store_type: PhantomData,
         })
     }
 
@@ -756,6 +874,7 @@ where
         let relays: CryptarchiaConsensusRelays<Tx> =
             CryptarchiaConsensusRelays::from_service_resources_handle::<
                 TimeBackend,
+                NullifierStore,
                 RuntimeServiceId,
             >(&self.service_resources_handle)
             .await;
@@ -766,11 +885,7 @@ where
             starting_state,
             sync: sync_config,
             ..
-        } = self
-            .service_resources_handle
-            .settings_handle
-            .notifier()
-            .get_updated_settings();
+        } = self.settings();
 
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
@@ -790,6 +905,8 @@ where
             fell_back_to_lib,
         } = Self::initialize_cryptarchia(
             &self.state,
+            &self.nullifier_store,
+            &starting_state,
             &bootstrap_config,
             Arc::new(era_schedule.map(|era| era.parameters.0.clone())),
             &relays,
@@ -888,7 +1005,8 @@ where
     }
 }
 
-impl<Tx, TimeBackend, RuntimeServiceId> CryptarchiaConsensus<Tx, TimeBackend, RuntimeServiceId>
+impl<Tx, TimeBackend, NullifierStore, RuntimeServiceId>
+    CryptarchiaConsensus<Tx, TimeBackend, NullifierStore, RuntimeServiceId>
 where
     Tx: PreverifiedMantleTransaction
         + SignedMantleTx<Preverified, StandardMode>
@@ -907,6 +1025,27 @@ where
     TimeBackend: lb_time_service::backends::TimeBackend,
     RuntimeServiceId: Display + AsServiceId<Self> + 'static,
 {
+    fn settings(&self) -> CryptarchiaSettings {
+        self.service_resources_handle
+            .settings_handle
+            .notifier()
+            .get_updated_settings()
+    }
+
+    fn open_nullifier_store(settings: &KvStoreSettings) -> Result<DynKvStore, DynError>
+    where
+        NullifierStore: OpenKvStore,
+    {
+        NullifierStore::open(settings)
+            .map(ErasedKv::into_dyn)
+            .map_err(|error| {
+                DynError::from(format!(
+                    "failed to open the nullifier store at {}: {error}",
+                    settings.path.display()
+                ))
+            })
+    }
+
     fn notify_service_ready(&self) {
         self.service_resources_handle.status_updater.notify_ready();
         info!(
@@ -1033,8 +1172,14 @@ where
         clippy::cognitive_complexity,
         reason = "TODO: address this in a dedicated refactor"
     )]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the recovery needs each of them; TODO: group the relays and senders"
+    )]
     async fn initialize_cryptarchia(
         recovery_state: &CryptarchiaConsensusState,
+        nullifier_store: &DynKvStore,
+        starting_state: &StartingState,
         bootstrap_config: &BootstrapConfig,
         era_schedule: Arc<EraScheduledConfig>,
         relays: &CryptarchiaConsensusRelays<Tx>,
@@ -1047,22 +1192,20 @@ where
             "recovering Cryptarchia",
         );
 
-        let lib_id = recovery_state.lib;
-        let genesis_id = recovery_state.genesis_id;
-        let state = choose_engine_state(
-            lib_id,
-            genesis_id,
-            bootstrap_config,
-            recovery_state.last_engine_state.as_ref(),
-        );
-
-        let mut cryptarchia = Self::cryptarchia_from_recovered_lib(
+        let mut cryptarchia = Self::cryptarchia_from_store(
             recovery_state,
+            nullifier_store,
+            starting_state,
+            bootstrap_config,
             era_schedule,
-            state,
-            relays.storage(),
-        )
-        .await?;
+        )?;
+        let lib_id = cryptarchia.lib();
+        if lib_id != recovery_state.lib {
+            info!(
+                target: LOG_TARGET, saved_lib = ?recovery_state.lib, lib = ?lib_id,
+                "starting from the LIB of the nullifier store, newer than the saved one",
+            );
+        }
 
         // Stream the already applied state.
         let init_tip = cryptarchia.tip_branch();
@@ -1100,10 +1243,10 @@ where
             "found {} stored blocks to replay during chain recovery",
             blocks.len()
         );
+        let n_blocks = blocks.len();
 
         // Phase 2: Apply each block in lib->tip order.
         let mut pruned_blocks = PrunedBlocks::new();
-        let n_blocks = blocks.len();
         for (i, block) in blocks.into_iter().enumerate() {
             let block_id = block.header().id();
             let outcome = process_block(
@@ -1123,6 +1266,13 @@ where
             pruned_blocks.extend(&outcome.pruned_blocks);
         }
 
+        // What the blocks not replayed wrote in the nullifier store: forks lost
+        // with the stop, or blocks of a pruning the stop interrupted.
+        let discarded = cryptarchia.ledger.discard_lost_blocks()?;
+        if discarded > 0 {
+            info!(target: LOG_TARGET, "discarded the nullifier trees of {discarded} blocks not replayed");
+        }
+
         info!(
             target: LOG_TARGET, tip_height = cryptarchia.consensus.tip_branch().length(), lib_height = cryptarchia.consensus.lib_branch().length(),
             "{n_blocks} blocks replayed. Chain recovery finished",
@@ -1135,47 +1285,58 @@ where
         })
     }
 
-    /// Creates [`Cryptarchia`] with the recovered LIB as its only block.
+    /// Creates [`Cryptarchia`] with the LIB of the nullifier store as its only
+    /// block: the LIB its anchor names, at which the store is finalized. The
+    /// saved state's LIB is usually older, since the state is saved on a
+    /// timer, and the store may no longer hold the trees it read.
     ///
-    /// A non-genesis LIB gets its parent from storage, so that header
-    /// traversals can continue from storage past LIB.
+    /// A store without anchor was never finalized: it starts from genesis,
+    /// cleared of what a stop before the first finalization left in it.
     ///
     /// # Errors
     ///
-    /// Returns an error if the parent of a non-genesis LIB is not found in
-    /// storage.
-    async fn cryptarchia_from_recovered_lib(
+    /// Returns [`Error::NoAnchor`] if the store has no anchor while the saved
+    /// state starts above genesis: the trees of its LIB are gone.
+    fn cryptarchia_from_store(
         recovery_state: &CryptarchiaConsensusState,
+        nullifier_store: &DynKvStore,
+        starting_state: &StartingState,
+        bootstrap_config: &BootstrapConfig,
         era_schedule: Arc<EraScheduledConfig>,
-        state: State,
-        storage: &StorageApi<Tx>,
     ) -> Result<Cryptarchia, Error> {
-        let lib_id = recovery_state.lib;
         let genesis_id = recovery_state.genesis_id;
-        if lib_id == genesis_id {
-            return Ok(Cryptarchia::from_genesis(
+        let engine_state = |lib| {
+            choose_engine_state(
+                lib,
                 genesis_id,
-                recovery_state.lib_ledger_state.clone(),
-                era_schedule,
-                state,
-            ));
+                bootstrap_config,
+                recovery_state.last_engine_state.as_ref(),
+            )
+        };
+        if let Some(restored) =
+            lb_ledger::Ledger::restore(nullifier_store, Arc::clone(&era_schedule))?
+        {
+            let state = engine_state(restored.lib);
+            return Ok(Cryptarchia::from_restored(restored, genesis_id, state));
         }
-
-        let lib_parent = storage
-            .get_block_parent(&lib_id)
-            .await
-            .ok_or(Error::ParentIdNotFound(lib_id))?;
-        Ok(Cryptarchia::from_lib(
-            lib_id,
-            lib_parent,
-            recovery_state.lib_ledger_state.clone(),
+        if recovery_state.lib != genesis_id {
+            return Err(Error::NoAnchor(recovery_state.lib));
+        }
+        NullifierStorage::clear(nullifier_store).map_err(LedgerError::from)?;
+        let StartingState::Genesis { genesis_block } = starting_state;
+        let (genesis_state, _events) = LedgerState::from_genesis_tx(
+            genesis_block.genesis_tx().clone(),
+            era_schedule.genesis().parameters,
+        )?;
+        let genesis_state = genesis_state
+            .with_nullifier_store(nullifier_store)
+            .map_err(LedgerError::from)?;
+        Cryptarchia::from_genesis(
             genesis_id,
+            genesis_state,
             era_schedule,
-            state,
-            recovery_state.lib_block_slot,
-            recovery_state.lib_block_length,
-            recovery_state.lib_block_uncle_slots.clone(),
-        ))
+            engine_state(genesis_id),
+        )
     }
 }
 

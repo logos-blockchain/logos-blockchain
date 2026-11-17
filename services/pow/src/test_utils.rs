@@ -5,10 +5,7 @@ use std::{
     time::Duration,
 };
 
-use lb_core::{
-    era::ForkDigest,
-    mantle::gas::{Gas, GasProfile},
-};
+use lb_core::{era::ForkDigest, mantle::gas::GasProfile};
 use lb_time::era::{EraEntriesAfterGenesis, EraSchedule, EraTiming};
 use time::OffsetDateTime;
 
@@ -19,22 +16,10 @@ pub const SLOTS_PER_EPOCH: u64 = 100;
 
 /// The size of a Blend payload body in the eras [`era_schedule`] builds: the
 /// largest block proposal of an era that allows four uncles.
-pub const PAYLOAD_BODY_SIZE: usize = 18_187;
+pub const PAYLOAD_BODY_SIZE: usize = 17_752;
 
 /// The costs of the deployments' current gas profile.
-pub const GAS_PROFILE: GasProfile = GasProfile {
-    transfer: Gas::new(590),
-    channel_config: Gas::new(56),
-    channel_inscribe: Gas::new(56),
-    channel_deposit: Gas::new(590),
-    channel_withdraw: Gas::new(56),
-    channel_transfer: Gas::new(56),
-    sdp_declare: Gas::new(646),
-    sdp_withdraw: Gas::new(590),
-    sdp_active: Gas::new(590),
-    leader_claim: Gas::new(580),
-    claim_pow_reward: Gas::new(1),
-};
+pub const GAS_PROFILE: GasProfile = GasProfile::MAINNET;
 
 /// A schedule with an era per reward window of `reward_windows`, era `i`
 /// starting at epoch `i` with the reward window `reward_windows[i]`, rewards

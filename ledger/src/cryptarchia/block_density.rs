@@ -89,6 +89,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        config::EmissionRatio,
         mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters},
         test_utils::{FORK_DIGEST, single_era},
     };
@@ -191,7 +192,7 @@ mod tests {
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
             execution_market: crate::config::ExecutionMarketConfig {
-                max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                max_gas_per_block: crate::config::MaxGasPerBlock::new(3_137_798).unwrap(),
                 fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
                     .unwrap(),
                 ema_smoothing_factor: lb_utils::math::ProperFraction::new(
@@ -210,10 +211,10 @@ mod tests {
                     .unwrap(),
             },
             block_rewards: crate::config::BlockRewardsConfig::new(
-                3_000_000_000,
-                120_000_000.try_into().unwrap(),
+                3_000_000_000_000_000_000,
+                120_000_000_000_000_000.try_into().unwrap(),
                 10_512,
-                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
                 lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
             )
             .unwrap(),

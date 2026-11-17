@@ -61,20 +61,4 @@ where
 
         Ok(())
     }
-
-    async fn post_tx(&self, tx: Tx) -> Result<(), overwatch::DynError> {
-        let (reply_channel, receiver) = oneshot::channel();
-        self.mempool_relay
-            .send(MempoolMsg::Add {
-                key: tx.hash(),
-                payload: tx,
-                reply_channel,
-            })
-            .await
-            .map_err(|error| format!("Failed to send MempoolMsg::Add: {error}"))?;
-
-        receiver
-            .await?
-            .map_err(|e| format!("Failed to post transaction to mempool: {e}").into())
-    }
 }

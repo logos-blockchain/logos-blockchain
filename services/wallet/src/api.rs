@@ -1,21 +1,24 @@
+use std::collections::HashSet;
+
+use lb_chain_service::Epoch;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Note, SignedOps, Value,
+        Note, OpProof, SignedOps, Value,
         gas::GasCost,
         ledger::verification_mode::StandardMode,
-        ops::leader_claim::{RewardsRoot, VoucherCm},
+        note_set::NoteSetIndex,
+        notes::{NoteCommitment, NoteNullifier},
         transactions::{
-            MantleTxBuilder, TxBuilderError, hash::TxHash, states::Preverified,
+            MantleTxBuilder, Ops, TxBuilderError, hash::TxHash, states::Preverified,
             tx_list::ops::OpsContext,
         },
     },
 };
-use lb_key_management_system_service::keys::{
-    Ed25519Key, ZkPublicKey, ZkPublicKeys, ZkSignature, secured_key::SecuredKey,
-};
+use lb_groth16::Fr;
+use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, secured_key::SecuredKey};
 use lb_utils::bounded::BoundedError;
-use lb_wallet::WalletBalance;
+use lb_wallet::{KnownNote, OwnedNote, WalletBalance};
 use overwatch::{
     overwatch::OverwatchHandle,
     services::{
@@ -26,8 +29,8 @@ use overwatch::{
 use tokio::sync::oneshot::{self, error::RecvError};
 
 use crate::{
-    ClaimableVouchersInfo, LeaderAgedNotesInfo, TipResponse, UtxoWithKeyId, WalletMsg,
-    WalletServiceError, WalletServiceSettings,
+    AgedNote, LeaderAgedNotesInfo, TipResponse, WalletMsg, WalletServiceError,
+    WalletServiceSettings,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -86,6 +89,17 @@ where
     }
 }
 
+/// The notes `after` spends that `before`, the builder it was built from, does
+/// not: the inputs a split or a funding added.
+#[must_use]
+pub fn added_nullifiers(before: &MantleTxBuilder, after: &MantleTxBuilder) -> Vec<NoteNullifier> {
+    let before = before.nullifiers_consumed().collect::<HashSet<_>>();
+    after
+        .nullifiers_consumed()
+        .filter(|nullifier| !before.contains(nullifier))
+        .collect()
+}
+
 impl<Wallet, RuntimeServiceId> WalletApi<Wallet, RuntimeServiceId>
 where
     Wallet: WalletServiceData,
@@ -128,16 +142,20 @@ where
     }
 
     /// Fund a transaction, reserving `priority_fee_percent` percent of its
-    /// final mandatory fee as a priority reserve. The mandatory fee includes
+    /// final mandatory fee as a priority reserve, or the fee margin of the
+    /// wallet configuration if `None`. The mandatory fee includes
     /// execution and storage cost; only the unused reserve becomes an
-    /// effective priority tip. The percentage is not capped at 100.
+    /// effective priority tip. The percentage is not capped at 100. A
+    /// `max_tx_fee` cuts the reserve down so the whole fee stays within it,
+    /// never below the mandatory fee.
     pub async fn fund_tx(
         &self,
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
-        priority_fee_percent: u64,
+        priority_fee_percent: Option<u64>,
+        max_tx_fee: Option<GasCost>,
     ) -> Result<TipResponse<MantleTxBuilder>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
@@ -148,6 +166,7 @@ where
                 change_pk,
                 funding_pks,
                 priority_fee_percent,
+                max_tx_fee,
                 resp_tx,
             })
             .await?;
@@ -155,28 +174,143 @@ where
         Ok(rx.await??)
     }
 
-    pub async fn build_leader_claim_tx(
+    /// The built Operations and the proof of their funding Transfer, `None`
+    /// when the builder does not fund them.
+    pub async fn prove_funding(
         &self,
-        tip: HeaderId,
-        rewards_root: RewardsRoot,
-        reward_amount: Value,
-        funding_pk: ZkPublicKey,
-        max_tx_fee: GasCost,
-    ) -> Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletApiError> {
+        tip: Option<HeaderId>,
+        tx_builder: MantleTxBuilder,
+    ) -> Result<TipResponse<(Ops, Option<OpProof>)>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
-            .send(WalletMsg::BuildLeaderClaimTx {
+            .send(WalletMsg::ProveFunding {
                 tip,
-                rewards_root,
-                reward_amount,
-                funding_pk,
-                max_tx_fee,
+                tx_builder,
                 resp_tx,
             })
             .await?;
 
         Ok(rx.await??)
+    }
+
+    /// Pushes a Transfer giving `owner` a note of exactly `value`, which a
+    /// later Operation of the transaction can spend.
+    pub async fn prepare_exact_note(
+        &self,
+        tip: Option<HeaderId>,
+        tx_builder: MantleTxBuilder,
+        value: Value,
+        owner: ZkPublicKey,
+        funding_pks: Vec<ZkPublicKey>,
+    ) -> Result<TipResponse<(MantleTxBuilder, KnownNote)>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+
+        self.relay
+            .send(WalletMsg::PrepareExactNote {
+                tip,
+                tx_builder,
+                value,
+                owner,
+                funding_pks,
+                resp_tx,
+            })
+            .await?;
+
+        Ok(rx.await??)
+    }
+
+    pub async fn owned_note(
+        &self,
+        tip: Option<HeaderId>,
+        commitment: NoteCommitment,
+    ) -> Result<TipResponse<Option<OwnedNote>>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+
+        self.relay
+            .send(WalletMsg::OwnedNote {
+                tip,
+                commitment,
+                resp_tx,
+            })
+            .await?;
+
+        Ok(rx.await??)
+    }
+
+    pub async fn generate_reward_key(&self) -> Result<ZkPublicKey, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::GenerateRewardKey { resp_tx })
+            .await?;
+        Ok(rx.await??)
+    }
+
+    // A leader reward note of `value` under `public_key`, with a private random
+    // nonce, returned once the persisted state of the wallet knows it.
+    pub async fn new_leader_reward(
+        &self,
+        value: Value,
+        public_key: ZkPublicKey,
+    ) -> Result<Note, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::NewLeaderReward {
+                value,
+                public_key,
+                resp_tx,
+            })
+            .await?;
+        Ok(rx.await??)
+    }
+
+    pub async fn import_note(
+        &self,
+        note: Note,
+        note_set: NoteSetIndex,
+    ) -> Result<KnownNote, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::ImportNote {
+                note,
+                note_set,
+                resp_tx,
+            })
+            .await?;
+        Ok(rx.await??)
+    }
+
+    /// The ledger set root every spend from `tip` names. See
+    /// [`lb_wallet::Wallet::spend_root`].
+    pub async fn spend_root(
+        &self,
+        tip: Option<HeaderId>,
+    ) -> Result<TipResponse<Fr>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::SpendRoot { tip, resp_tx })
+            .await?;
+        Ok(rx.await??)
+    }
+
+    /// Releases the notes of `nullifiers`, which the wallet reserved for a
+    /// split or a funding of a transaction that will not be submitted, so
+    /// that they fund the next request. A caller only releases the notes
+    /// its own request reserved, since a reservation is keyed by the note
+    /// alone. If the release does not reach the wallet, the notes stay
+    /// reserved until their reservation expires.
+    pub async fn release_pending_notes(&self, nullifiers: Vec<NoteNullifier>) {
+        if let Err(err) = self
+            .relay
+            .send(WalletMsg::ReleasePendingNotes { nullifiers })
+            .await
+        {
+            tracing::warn!(
+                target: crate::LOG_TARGET,
+                ?err,
+                "Failed to release the pending notes of a transaction"
+            );
+        }
     }
 
     pub async fn get_tx_context(
@@ -190,6 +324,8 @@ where
         Ok(rx.await??)
     }
 
+    /// The signed transfer of `amount` to `recipient_pk`, and the note it
+    /// creates for the sender to hand over.
     pub async fn transfer_funds(
         &self,
         tip: Option<HeaderId>,
@@ -197,13 +333,22 @@ where
         funding_pks: Vec<ZkPublicKey>,
         recipient_pk: ZkPublicKey,
         amount: Value,
-    ) -> Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletApiError> {
-        let mantle_tx_builder =
-            MantleTxBuilder::new().add_ledger_output(Note::new(amount, recipient_pk))?;
+    ) -> Result<TipResponse<(SignedOps<Preverified, StandardMode>, Note)>, WalletApiError> {
+        let note = Note::new(amount, crate::random_nonce(), recipient_pk);
+        if self.get_known_addresses().await?.contains(&recipient_pk) {
+            self.import_note(note, NoteSetIndex::Ledger).await?;
+        }
+        let mantle_tx_builder = MantleTxBuilder::new().add_ledger_output(note)?;
         let funded_tx_builder = self
-            .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks, 0)
+            .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks, None, None)
             .await?;
-        self.sign_tx(tip, funded_tx_builder.response).await
+        let TipResponse { tip, response } = self
+            .sign_tx(Some(funded_tx_builder.tip), funded_tx_builder.response)
+            .await?;
+        Ok(TipResponse {
+            tip,
+            response: (response, note),
+        })
     }
 
     pub async fn sign_tx(
@@ -242,33 +387,19 @@ where
         Ok(rx.await??)
     }
 
-    pub async fn sign_tx_with_zk(
-        &self,
-        tx_hash: TxHash,
-        pks: impl IntoIterator<Item = ZkPublicKey>,
-    ) -> Result<ZkSignature, WalletApiError> {
-        let pks = ZkPublicKeys::try_from_iter(pks)?;
-        let (resp_tx, rx) = oneshot::channel();
-
-        self.relay
-            .send(WalletMsg::SignTxWithZk {
-                tx_hash,
-                pks,
-                resp_tx,
-            })
-            .await?;
-
-        Ok(rx.await??)
-    }
-
     pub async fn get_leader_aged_notes(
         &self,
         tip: Option<HeaderId>,
-    ) -> Result<TipResponse<Vec<UtxoWithKeyId>>, WalletApiError> {
+        epoch: Epoch,
+    ) -> Result<TipResponse<Vec<AgedNote>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
-            .send(WalletMsg::GetLeaderAgedNotes { tip, resp_tx })
+            .send(WalletMsg::GetLeaderAgedNotes {
+                tip,
+                epoch,
+                resp_tx,
+            })
             .await?;
 
         Ok(rx.await??)
@@ -292,25 +423,6 @@ where
 
         Ok(rx.await??)
     }
-
-    pub async fn generate_new_voucher(&self) -> Result<VoucherCm, WalletApiError> {
-        let (resp_tx, rx) = oneshot::channel();
-        self.relay
-            .send(WalletMsg::GenerateNewVoucherSecret { resp_tx })
-            .await?;
-        Ok(rx.await??)
-    }
-
-    pub async fn get_claimable_vouchers(
-        &self,
-        tip: Option<HeaderId>,
-    ) -> Result<TipResponse<ClaimableVouchersInfo>, WalletApiError> {
-        let (resp_tx, rx) = oneshot::channel();
-        self.relay
-            .send(WalletMsg::GetClaimableVouchers { tip, resp_tx })
-            .await?;
-        Ok(rx.await??)
-    }
 }
 
 #[cfg(test)]
@@ -318,6 +430,7 @@ mod tests {
     use std::fmt::{self, Display, Formatter};
 
     use lb_core::mantle::{
+        gas::GasProfile,
         ops::channel::{ChannelId, ChannelKeyIndex},
         transactions::{GasPrices, tx_list::ops::OpsGasContext},
     };
@@ -369,23 +482,9 @@ mod tests {
                     let context = OpsContext {
                         gas_context: OpsGasContext::new(
                             std::iter::once((expected_channel_id, expected_threshold)).collect(),
-                            std::collections::HashMap::new(),
                             expected_gas_prices,
-                            lb_core::mantle::gas::GasProfile {
-                                transfer: 590.into(),
-                                channel_config: 56.into(),
-                                channel_inscribe: 56.into(),
-                                channel_deposit: 590.into(),
-                                channel_withdraw: 56.into(),
-                                channel_transfer: 56.into(),
-                                sdp_declare: 646.into(),
-                                sdp_withdraw: 590.into(),
-                                sdp_active: 590.into(),
-                                leader_claim: 580.into(),
-                                claim_pow_reward: 1.into(),
-                            },
+                            GasProfile::MAINNET,
                         ),
-                        leader_reward_amount: 0,
                     };
                     drop(resp_tx.send(Ok(context)));
                     break;
@@ -401,15 +500,42 @@ mod tests {
             .expect("gas context should round-trip through the wallet API");
 
         assert_eq!(
-            context.gas_context.transfer_threshold(&expected_channel_id),
+            context
+                .gas_context
+                .configuration_threshold(&expected_channel_id),
             Some(expected_threshold)
         );
         assert_eq!(
             context
                 .gas_context
-                .transfer_threshold(&ChannelId::from([1u8; 32])),
+                .configuration_threshold(&ChannelId::from([1u8; 32])),
             None
         );
-        assert_eq!(context.leader_reward_amount, 0);
+    }
+
+    #[tokio::test]
+    async fn transfer_funds_is_funded_with_the_configured_fee_margin() {
+        let (msg_sender, mut msg_receiver) = mpsc::channel(1);
+        let margin = tokio::spawn(async move {
+            while let Some(msg) = msg_receiver.recv().await {
+                match msg {
+                    WalletMsg::GetKnownAddresses { resp_tx } => drop(resp_tx.send(Ok(Vec::new()))),
+                    WalletMsg::FundTx {
+                        priority_fee_percent,
+                        ..
+                    } => return priority_fee_percent,
+                    _ => {}
+                }
+            }
+            panic!("the transfer should be funded");
+        });
+
+        let api =
+            WalletApi::<DummyWallet, TestRuntimeServiceId>::new(OutboundRelay::new(msg_sender));
+        let key = ZkPublicKey::new(Fr::from(1u64));
+        // The funding request is answered by no one, so the transfer fails.
+        drop(api.transfer_funds(None, key, vec![key], key, 1).await);
+
+        assert_eq!(margin.await.unwrap(), None);
     }
 }

@@ -2,7 +2,7 @@ use core::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 
 use lb_groth16::Fr;
-use lb_zksign::ZkSignError;
+use lb_zktransfer::{Unsigned, ZkTransferProof, ZkTransferWitnessBuilder};
 use num_bigint::BigUint;
 use serde::Deserialize;
 use zeroize::ZeroizeOnDrop;
@@ -10,13 +10,14 @@ use zeroize::ZeroizeOnDrop;
 use crate::keys::{errors::KeyError, secured_key::SecuredKey};
 
 mod private;
-pub use self::private::SecretKey as UnsecuredZkKey;
+pub use self::private::{PK0, SecretKey as UnsecuredZkKey, kdf_public_key};
 mod public;
-pub use self::public::{
-    MAX_ZK_SIGNING_KEYS, PublicKey, PublicKeys, inputs_from_pks as public_inputs_from_pks,
-};
-mod signature;
-pub use self::signature::Signature;
+pub use self::public::PublicKey;
+
+// The input secret keys are set by the KMS.
+// The witness of a transfer without the secret keys of its inputs, which the
+// keys of the KMS complete.
+pub type ZkTransferPayload = ZkTransferWitnessBuilder<Unsigned>;
 
 /// An hardened ZK secret key that only exposes methods to retrieve public
 /// information.
@@ -43,15 +44,10 @@ impl ZkKey {
         self.0.as_fr()
     }
 
-    pub fn sign_payload(&self, data: &Fr) -> Result<Signature, ZkSignError> {
-        self.0.sign(data)
-    }
-
-    pub fn multi_sign(keys: &[Self], data: &Fr) -> Result<Signature, ZkSignError> {
-        UnsecuredZkKey::multi_sign(
-            &keys.iter().map(|key| key.0.clone()).collect::<Vec<_>>(),
-            data,
-        )
+    /// The nullifier key of the notes of this spending secret key.
+    #[must_use]
+    pub fn nullifier_key(&self) -> Fr {
+        self.0.nullifier_key()
     }
 
     #[must_use]
@@ -104,26 +100,84 @@ impl From<UnsecuredZkKey> for ZkKey {
 
 #[async_trait::async_trait]
 impl SecuredKey for ZkKey {
-    type Payload = Fr;
-    type Signature = Signature;
+    type Payload = ZkTransferPayload;
+    type Signature = ZkTransferProof;
     type PublicKey = PublicKey;
     type Error = KeyError;
 
+    // Every input is proven with this key.
     fn sign(&self, payload: &Self::Payload) -> Result<Self::Signature, Self::Error> {
-        Ok(self.0.sign(payload)?)
+        self.0.prove_transfer_alone(payload.clone())
     }
 
+    // The i-th input is proven with the i-th key.
     fn sign_multiple(
         keys: &[&Self],
         payload: &Self::Payload,
     ) -> Result<Self::Signature, Self::Error> {
-        Ok(UnsecuredZkKey::multi_sign(
+        UnsecuredZkKey::prove_transfer(
             &keys.iter().map(|key| key.0.clone()).collect::<Vec<_>>(),
-            payload,
-        )?)
+            payload.clone(),
+        )
     }
 
     fn as_public_key(&self) -> Self::PublicKey {
         self.0.to_public_key()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_groth16::{AdditiveGroup as _, Fr};
+    use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
+    use lb_zktransfer::{
+        prove,
+        test_utils::{sample_unsigned_witness, sample_witness_data},
+        verify,
+    };
+    use num_bigint::BigUint;
+
+    use super::{PK0, ZkKey, kdf_public_key};
+    use crate::keys::{errors::KeyError, secured_key::SecuredKey as _};
+
+    #[test]
+    fn the_public_key_derives_from_the_nullifier_key_the_default_staking_secret_key() {
+        let key = ZkKey::new(Fr::from(7u64));
+        // NF_KDF_V1 as a little-endian integer
+        let nf_kdf = Fr::from(910_114_230_080_953_599_566u128);
+        assert_eq!(
+            key.nullifier_key(),
+            Poseidon2Bn254Hasher::compress(&[nf_kdf, Fr::from(7u64)])
+        );
+        // A wallet stakes with the nullifier key, so its notes have one key.
+        assert_eq!(kdf_public_key(&key.nullifier_key()), key.to_public_key());
+        assert_ne!(kdf_public_key(key.as_fr()), key.to_public_key());
+    }
+
+    #[test]
+    fn program_notes_are_held_by_the_key_of_the_spending_secret_key_0() {
+        // PK0 as the circuits fix it
+        let pk0 = BigUint::parse_bytes(
+            b"972202553888197888567329063379813321440011391652189983173398887118271398762",
+            10,
+        )
+        .unwrap();
+        assert_eq!(*PK0.as_fr(), Fr::from(pk0));
+        assert_eq!(*PK0, ZkKey::new(Fr::ZERO).to_public_key());
+    }
+
+    #[test]
+    fn sign_multiple_proves_the_transfer_with_one_key_per_active_input() {
+        let (_, public) = prove(sample_witness_data().into()).unwrap();
+        let (payload, secret_keys) = sample_unsigned_witness();
+        let keys: Vec<ZkKey> = secret_keys.into_iter().map(ZkKey::new).collect();
+        assert_eq!(keys.len(), 2);
+
+        let proof = ZkKey::sign_multiple(&[&keys[0], &keys[1]], &payload).unwrap();
+        assert!(verify(&proof, &public).unwrap());
+        assert!(matches!(
+            ZkKey::sign_multiple(&[&keys[0]], &payload),
+            Err(KeyError::UnsupportedMultisignatureSize(2, 1))
+        ));
     }
 }

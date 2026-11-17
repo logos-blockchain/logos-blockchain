@@ -10,7 +10,7 @@ use lb_groth16::fr_from_bytes;
 use lb_http_api_common::settings::{CorsOrigin, HostName};
 use lb_key_management_system_service::{
     backend::preload::KeyId,
-    keys::{Key, UnsecuredZkKey, ZkPublicKey},
+    keys::{Key, UnsecuredZkKey, ZkPublicKey, kdf_public_key},
 };
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use lb_tracing::{
@@ -288,6 +288,17 @@ impl UserConfig {
             return Err("Blend ZK signing key must be Zk".to_owned());
         };
         Ok((key_id.to_owned(), secret_key.to_public_key()))
+    }
+
+    /// The `zk_id` of the Blend key, `zkhash(KDF, core_sk)`, which the node
+    /// declares and proves in the Proof of Quota. It is not the public key of
+    /// the notes of the key, which `blend_zk_key` gives.
+    pub fn blend_zk_id(&self) -> Result<ZkPublicKey, String> {
+        let key_id = &self.blend.core.zk.secret_key_kms_id;
+        let Some(Key::Zk(secret_key)) = self.kms.backend.keys.get(key_id) else {
+            return Err(format!("Blend ZK key '{key_id}' not found in KMS"));
+        };
+        Ok(kdf_public_key(secret_key.as_fr()))
     }
 }
 
@@ -681,6 +692,65 @@ pub const fn update_cryptarchia(
     if let Some(pk) = funding_pk {
         cryptarchia.set_funding_pk(pk);
     }
+}
+
+/// Refuses a leader funding key the wallet does not track.
+///
+/// Leader rewards are paid to that key, and the wallet records a reward note
+/// only under a key it tracks, so a node without it would lose every slot it
+/// wins. Run on the final config, so that it covers the file, the keystore, the
+/// CLI argument and the environment variable alike.
+pub fn check_leader_funding_key(user_config: &UserConfig) -> Result<()> {
+    let funding_pk = user_config.cryptarchia.leader.wallet.funding_pk;
+    if user_config
+        .wallet
+        .known_keys
+        .values()
+        .any(|known_pk| *known_pk == funding_pk)
+    {
+        return Ok(());
+    }
+    let funding_pk = serde_yaml::to_string(&funding_pk)?;
+    let funding_pk = funding_pk.trim();
+    Err(eyre!(
+        "the leader funding key {funding_pk} (`cryptarchia.leader.wallet.funding_pk`, \
+         `--cryptarchia-funding-pk` or `CRYPTARCHIA_FUNDING_PK`) is not in `wallet.known_keys`: \
+         leader rewards are paid to it, and the node would lose every slot it wins"
+    ))
+}
+
+/// Refuses a `PoW` auto-claim target that is not a key of the config's wallet.
+///
+/// The wallet reports no balance for a key it does not track, so such a target
+/// would always look furthest below its threshold and absorb every claim. Run
+/// on the final config, like [`check_leader_funding_key`]. A key the wallet
+/// only registers at runtime, such as a reward key, is not in the config and
+/// is refused as well.
+pub fn check_pow_claim_targets(user_config: &UserConfig) -> Result<()> {
+    let untracked = user_config
+        .pow
+        .auto_claim
+        .targets
+        .iter()
+        .map(|target| target.public_key)
+        .filter(|public_key| {
+            !user_config
+                .wallet
+                .known_keys
+                .values()
+                .any(|known_pk| known_pk == public_key)
+        })
+        .map(|public_key| Ok(serde_yaml::to_string(&public_key)?.trim().to_owned()))
+        .collect::<Result<Vec<_>>>()?;
+    if untracked.is_empty() {
+        return Ok(());
+    }
+    Err(eyre!(
+        "the PoW auto-claim targets {} (`pow.auto_claim.targets`) are not in \
+         `wallet.known_keys`: a target must be a wallet key of the config, since the wallet \
+         reports no balance for any other key and such a target would absorb every claim",
+        untracked.join(", ")
+    ))
 }
 
 pub const fn update_sdp(sdp: &mut SdpConfig, sdp_args: SdpArgs) {

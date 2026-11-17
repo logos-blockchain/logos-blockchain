@@ -94,34 +94,56 @@ impl Settings {
 
         self.validate_sizes()?;
 
-        // An Operation that costs more than a block may consume could never be
-        // included, the protocol's own (reward claims, SDP activity) included.
+        // A cost above what a block may consume could never be paid, by the
+        // protocol's own Operations (reward claims, SDP activity) included.
         let max_gas_per_block = Gas::from(self.execution_market.max_gas_per_block);
         let GasProfile {
             transfer,
+            program_register,
             channel_config,
             channel_inscribe,
             channel_deposit,
             channel_withdraw,
-            channel_transfer,
             sdp_declare,
             sdp_withdraw,
             sdp_active,
-            leader_claim,
             claim_pow_reward,
+            kilobyte,
+            note_set,
+            proof,
+            root,
+            buffered,
+            nullifier,
+            commitment,
+            signature,
+            user_step,
+            program_deposit,
+            program_step,
+            opening,
         } = self.gas_profile;
         for (operation, gas) in [
             ("a transfer", transfer),
-            ("a channel configuration, per key", channel_config),
+            ("a program registration", program_register),
+            ("a channel configuration", channel_config),
             ("a channel inscription", channel_inscribe),
             ("a channel deposit", channel_deposit),
-            ("a channel withdrawal, per key", channel_withdraw),
-            ("a channel transfer, per key", channel_transfer),
+            ("a channel withdrawal", channel_withdraw),
             ("an SDP declaration", sdp_declare),
             ("an SDP withdrawal", sdp_withdraw),
             ("an SDP activity", sdp_active),
-            ("a leader claim", leader_claim),
             ("a PoW reward claim", claim_pow_reward),
+            ("a kilobyte of a transaction", kilobyte),
+            ("a note set a transaction changes", note_set),
+            ("a spend proof", proof),
+            ("a commitment root extension", root),
+            ("a buffered commitment a root extends over", buffered),
+            ("a nullifier", nullifier),
+            ("a commitment", commitment),
+            ("a signature check", signature),
+            ("a user step", user_step),
+            ("a program deposit", program_deposit),
+            ("a program step", program_step),
+            ("a program note opening", opening),
         ] {
             ensure!(
                 gas <= max_gas_per_block,
@@ -387,5 +409,5 @@ pub use lb_ledger::config::RewardPoWConfig;
 // the same way: their field types refuse a rate outside (0, 1) and a gas limit
 // without a target.
 pub use lb_ledger::config::{
-    BlockRewardsConfig, ExecutionMarketConfig, MaxGasPerBlock, StorageMarketConfig,
+    BlockRewardsConfig, EmissionRatio, ExecutionMarketConfig, MaxGasPerBlock, StorageMarketConfig,
 };

@@ -9,6 +9,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::ModulusShift;
+use lb_ledger::config::EmissionRatio;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio, ProperFraction};
 
 use super::{
@@ -42,22 +43,33 @@ pub fn fixture_settings() -> Settings {
             53,
             NonZero::new(54).unwrap(),
             55,
-            NonNegativeRatio::new(56, NonZeroU32::new(57).unwrap()),
+            EmissionRatio::new(56, NonZeroU64::new(57).unwrap()),
             ProperFraction::new(58, NonZeroU32::new(59).unwrap()).unwrap(),
         )
         .unwrap(),
         gas_profile: GasProfile {
             transfer: Gas::new(60),
-            channel_config: Gas::new(61),
-            channel_inscribe: Gas::new(62),
-            channel_deposit: Gas::new(63),
-            channel_withdraw: Gas::new(64),
-            channel_transfer: Gas::new(65),
+            program_register: Gas::new(61),
+            channel_config: Gas::new(62),
+            channel_inscribe: Gas::new(63),
+            channel_deposit: Gas::new(64),
+            channel_withdraw: Gas::new(65),
             sdp_declare: Gas::new(66),
             sdp_withdraw: Gas::new(67),
             sdp_active: Gas::new(68),
-            leader_claim: Gas::new(69),
-            claim_pow_reward: Gas::new(70),
+            claim_pow_reward: Gas::new(69),
+            kilobyte: Gas::new(70),
+            note_set: Gas::new(71),
+            proof: Gas::new(72),
+            root: Gas::new(73),
+            buffered: Gas::new(74),
+            nullifier: Gas::new(75),
+            commitment: Gas::new(76),
+            signature: Gas::new(77),
+            user_step: Gas::new(78),
+            program_deposit: Gas::new(79),
+            program_step: Gas::new(80),
+            opening: Gas::new(81),
         },
     }
 }
@@ -128,10 +140,13 @@ pub const SETTINGS_HEX: &str = "
     2100000000000000 2200000000000000 2300000000000000 2400000000000000 2500000000000000
     2600000000000000 2700000000000000 2800000000000000 2900000000000000
     2b00000000000000 2c000000 2d000000 2e000000 2f000000 30000000 31000000 32000000 33000000
-    3500000000000000 3600000000000000 3700000000000000 38000000 39000000 3a000000 3b000000
+    3500000000000000 3600000000000000 3700000000000000 3800000000000000 3900000000000000
+    3a000000 3b000000
     3c00000000000000 3d00000000000000 3e00000000000000 3f00000000000000 4000000000000000
     4100000000000000 4200000000000000 4300000000000000 4400000000000000 4500000000000000
-    4600000000000000
+    4600000000000000 4700000000000000 4800000000000000 4900000000000000 4a00000000000000
+    4b00000000000000 4c00000000000000 4d00000000000000 4e00000000000000 4f00000000000000
+    5000000000000000 5100000000000000
 ";
 const SDP_CONFIG_HEX: &str = "14000000 15000000 1600000000000000 1700000000000000";
 const POW_CONFIG_HEX: &str = "

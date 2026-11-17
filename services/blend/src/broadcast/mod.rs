@@ -135,10 +135,10 @@ where
         let kms = KmsServiceApi::<PreloadKmsService<_>, RuntimeServiceId>::new(
             overwatch_handle.relay::<PreloadKmsService<_>>().await?,
         );
-        let PublicKeyEncoding::Ed25519(signing_public_key) = kms
-            .public_key(non_ephemeral_signing_key_id)
-            .await
-            .expect("KMS does not have key with the specified ID.")
+        let PublicKeyEncoding::Ed25519(signing_public_key) =
+            Box::pin(kms.public_key(non_ephemeral_signing_key_id))
+                .await
+                .expect("KMS does not have key with the specified ID.")
         else {
             panic!("Non-ephemeral signing key must be an Ed25519 key");
         };

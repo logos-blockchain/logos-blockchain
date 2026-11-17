@@ -6,7 +6,6 @@ use std::{
 };
 
 use lb_common_http_client::Slot;
-use lb_core::mantle::Utxo;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
@@ -16,12 +15,16 @@ use lb_testing_framework::{
     unregister_system_monitor_output_file,
 };
 use lb_utils::math::NonNegativeRatio;
+use lb_wallet::SPEND_ROOT_DEPTH;
 use reqwest::Url;
 use tempfile::TempDir;
 use testing_framework_core::scenario::{DynError, PeerSelection, StartNodeOptions, StartedNode};
 use tokio::time::error::Elapsed;
 
-use crate::cucumber::defaults::{E2E_ARTIFACTS_DIR, E2E_KEEP_LOGS, E2E_TESTS_BASE_DIR_OVERRIDE};
+use crate::{
+    common::wallet::GenesisNotes,
+    cucumber::defaults::{E2E_ARTIFACTS_DIR, E2E_KEEP_LOGS, E2E_TESTS_BASE_DIR_OVERRIDE},
+};
 
 pub struct LocalManualClusterHarnessBase {
     scenario_base_dir: PathBuf,
@@ -293,6 +296,43 @@ pub async fn wait_for_height(
     .await
 }
 
+/// Waits until a note of the current tip of `client` is deep enough for its
+/// wallet to spend.
+pub async fn wait_for_spend_depth(client: &NodeHttpClient, duration: Duration) {
+    let height = client
+        .consensus_info()
+        .await
+        .expect("consensus info request should not fail")
+        .cryptarchia_info
+        .height;
+    wait_for_height(client, height + SPEND_ROOT_DEPTH as u64, duration)
+        .await
+        .expect("a note of the tip should reach the spend depth");
+}
+
+/// Waits until every note of `pk` in the wallet of `client` is deep enough to
+/// spend, on the chain the node follows when it answers: a reorg can move a
+/// note to a later block after the tip got deep enough.
+pub async fn wait_for_spendable(client: &NodeHttpClient, pk: ZkPublicKey, duration: Duration) {
+    let pk_hex = hex::encode(lb_groth16::fr_to_bytes(&pk.into()));
+    let url = api_url(client, &format!("wallet/{pk_hex}/balance"));
+    tokio::time::timeout(duration, async {
+        loop {
+            if let Ok(response) = reqwest::Client::new().get(url.clone()).send().await
+                && response.status().is_success()
+                && let Ok(body) = response.json::<serde_json::Value>().await
+                && body["balance"].as_u64().unwrap_or(0) > 0
+                && body["pending_notes"].as_array().is_some_and(Vec::is_empty)
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .expect("the notes of the key should become spendable");
+}
+
 pub async fn wait_for_nodes_height(
     nodes: &[&NodeHttpClient],
     target_height: u64,
@@ -361,16 +401,16 @@ pub fn api_url(node: &NodeHttpClient, path: &str) -> Url {
         .expect("manual-cluster client base URL should join API path")
 }
 
-/// UTXOs created by the genesis transfer of the deployment's genesis block.
+/// Notes created by the deployment's genesis block.
 #[must_use]
-pub fn genesis_wallet_utxos(config: &TopologyConfig) -> Vec<Utxo> {
+pub fn genesis_wallet_notes(config: &TopologyConfig) -> GenesisNotes {
     let genesis_tx = config
         .genesis_block
         .as_ref()
         .expect("manual-cluster deployment should include genesis tx")
         .genesis_tx();
 
-    genesis_tx.transfer().operation().utxos().collect()
+    GenesisNotes::from_genesis_tx(genesis_tx)
 }
 
 #[must_use]

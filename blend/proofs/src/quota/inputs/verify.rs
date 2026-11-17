@@ -46,7 +46,7 @@ impl From<Inputs> for PoQVerifierInput {
             pow_quota: value.prove_inputs.pow.pow_quota,
             pow_blend_difficulty: value.prove_inputs.pow.pow_blend_difficulty,
             pol_epoch_nonce: value.prove_inputs.leader.pol_epoch_nonce,
-            pol_ledger_aged: value.prove_inputs.leader.pol_ledger_aged,
+            pol_eligible_aged: value.prove_inputs.leader.pol_eligible_aged,
             lottery_0: value.prove_inputs.leader.lottery_0,
             lottery_1: value.prove_inputs.leader.lottery_1,
         }

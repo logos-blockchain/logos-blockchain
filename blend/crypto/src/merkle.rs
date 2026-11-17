@@ -203,11 +203,10 @@ fn compute_selectors(
     let mut result = [false; CORE_MERKLE_TREE_HEIGHT];
     let mut idx = *index;
 
-    // The selector at each level is determined by the corresponding bit of the leaf
-    // index. Iterating from the last element to the first (leaf → root):
-    // result[CORE_MERKLE_TREE_HEIGHT-1] (leaf level) = bit 0 (LSB) of index
-    // result[0] (root level) = MSB of index
-    for result_entry in result.iter_mut().take(CORE_MERKLE_TREE_HEIGHT).rev() {
+    // The selectors follow the path nodes, from the leaf level up: the selector of
+    // a level is the bit of the leaf index at that level, starting from the least
+    // significant, set when the path node is on the left.
+    for result_entry in &mut result {
         *result_entry = (idx & 1) == 1;
         idx >>= 1u8;
     }
@@ -275,13 +274,13 @@ mod tests {
         merkle_tree
             .verify_proof_for_key(&proof_for_key_one, &key_one)
             .unwrap();
-        // We check that the first key is the right child of the bottom sub-tree...
-        assert!(proof_for_key_one.last().unwrap().1);
+        // We check that the first key is the right child of the bottom sub-tree, whose
+        // selector comes first...
+        assert!(proof_for_key_one.first().unwrap().1);
         // ...but the left of all sub-trees above that.
         assert!(
             !proof_for_key_one
                 .iter()
-                .rev()
                 .skip(1)
                 .any(|(_, selector)| *selector)
         );
@@ -311,11 +310,10 @@ mod tests {
         merkle_tree
             .verify_proof_for_key(&proof_for_key_one, &key_one)
             .unwrap();
-        assert!(proof_for_key_one.last().unwrap().1);
+        assert!(proof_for_key_one.first().unwrap().1);
         assert!(
             !proof_for_key_one
                 .iter()
-                .rev()
                 .skip(1)
                 .any(|(_, selector)| *selector)
         );
@@ -330,16 +328,15 @@ mod tests {
         merkle_tree
             .verify_proof_for_key(&proof_for_key_three, &key_three)
             .unwrap();
-        // Last selector is `false` because it's the left child...
-        assert!(!proof_for_key_three.last().unwrap().1);
-        // Second-to-last selector is `true` because it's already in the right sub-tree
-        // at this level (first sub-tree are keys 1 and 2).
-        assert!(proof_for_key_three[proof_for_key_three.len() - 2].1);
+        // The leaf level selector is `false` because it's the left child...
+        assert!(!proof_for_key_three[0].1);
+        // The next one is `true` because it's already in the right sub-tree at this
+        // level (first sub-tree are keys 1 and 2).
+        assert!(proof_for_key_three[1].1);
         // It's in the left-most sub-tree going above.
         assert!(
             !proof_for_key_three
                 .iter()
-                .rev()
                 .skip(2)
                 .any(|(_, selector)| *selector)
         );

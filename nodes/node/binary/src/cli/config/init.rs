@@ -10,8 +10,9 @@ use crate::{
     UserConfig,
     cli::InitArgs,
     config::{
-        changed_values, keystore::Keystore, update_api, update_blend, update_cryptarchia,
-        update_network, update_sdp, update_state, update_tracing, with_version,
+        changed_values, check_leader_funding_key, check_pow_claim_targets, keystore::Keystore,
+        update_api, update_blend, update_cryptarchia, update_network, update_sdp, update_state,
+        update_tracing, with_version,
     },
 };
 
@@ -45,6 +46,8 @@ pub fn run(mut args: InitArgs) -> Result<()> {
     let mut config = defaults.clone();
     let output = args.output.clone();
     apply(&mut config, args)?;
+    check_leader_funding_key(&config)?;
+    check_pow_claim_targets(&config)?;
 
     let overrides = with_version(
         changed_values(

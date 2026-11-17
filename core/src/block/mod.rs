@@ -5,15 +5,11 @@ mod uncle;
 
 use core::fmt::Debug;
 
-use lb_binary_codec::{
-    bincode::SerializeOp as _,
-    canonical::{BinaryDecode, BinaryEncode, DecodeError},
-};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_cryptarchia_engine::Slot;
-use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 use lb_utils::bounded::{BoundedError, UpperRuntimeBoundedVec};
 use serde::{Deserialize, Serialize};
-pub use uncle::{SignedHeader, UncleHeaders};
+pub use uncle::UncleHeaders;
 
 use crate::{
     crypto::{Digest as _, Hasher},
@@ -22,7 +18,7 @@ use crate::{
         traits::{Hashable, StorageSize},
         transactions::hash::{TxHash, TxHashPrefix},
     },
-    proofs::leader_proof::{Groth16LeaderProof, LeaderProof as _},
+    proofs::leader_proof::Groth16LeaderProof,
     utils::merkle,
 };
 
@@ -45,14 +41,10 @@ pub struct BlockLimits {
 pub enum Error {
     #[error("Failed to serialize: {0}")]
     Serialisation(#[from] lb_binary_codec::bincode::Error),
-    #[error("Invalid block signature")]
-    Signature,
     #[error("Failed to verify header alone: {0}")]
     Header(#[from] HeaderError),
     #[error("Body root mismatch: calculated body does not match header")]
     BodyRootMismatch,
-    #[error("Signing key does not match the leader key in proof of leadership")]
-    KeyMismatch,
     #[error(transparent)]
     BoundedError(#[from] BoundedError),
     #[error("Total storage size {size} exceeds maximum of {max} bytes")]
@@ -71,7 +63,6 @@ pub struct Proposal {
     pub header: Header,
     pub uncle_headers: UncleHeaders,
     pub references: References,
-    pub signature: Ed25519Signature,
 }
 
 impl BinaryDecode for Proposal {
@@ -85,14 +76,12 @@ impl BinaryDecode for Proposal {
         let (input, header) = Header::decode(input, &())?;
         let (input, uncle_headers) = UncleHeaders::decode(input, &limits.max_uncles)?;
         let (input, references) = References::decode(input, &limits.max_transactions)?;
-        let (input, signature) = Ed25519Signature::decode(input, &())?;
         Ok((
             input,
             Self {
                 header,
                 uncle_headers,
                 references,
-                signature,
             },
         ))
     }
@@ -156,7 +145,6 @@ impl References {
 #[serde(bound(serialize = "Tx: Clone + Serialize"))]
 pub struct Block<Tx> {
     header: Header,
-    signature: Ed25519Signature,
     uncle_headers: UncleHeaders,
     transactions: BlockTransactions<Tx>,
 }
@@ -172,7 +160,6 @@ where
         #[derive(Deserialize)]
         struct RawBlock<Tx> {
             header: Header,
-            signature: Ed25519Signature,
             uncle_headers: UncleHeaders,
             transactions: BlockTransactions<Tx>,
         }
@@ -182,14 +169,8 @@ where
         // Serde reads blocks a node serves through its API, already checked
         // against their era by that node, so it holds them to no era: their
         // transactions to the most bytes an era's limit can be.
-        Self::reconstruct(
-            raw.header,
-            raw.uncle_headers,
-            raw.transactions,
-            raw.signature,
-            u32::MAX,
-        )
-        .map_err(serde::de::Error::custom)
+        Self::reconstruct(raw.header, raw.uncle_headers, raw.transactions, u32::MAX)
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -200,21 +181,16 @@ where
     fn encoded_length(&self) -> usize {
         let Self {
             header,
-            signature,
             uncle_headers,
             transactions,
         } = self;
 
-        header.encoded_length()
-            + uncle_headers.encoded_length()
-            + transactions.encoded_length()
-            + signature.encoded_length()
+        header.encoded_length() + uncle_headers.encoded_length() + transactions.encoded_length()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         let Self {
             header,
-            signature,
             uncle_headers,
             transactions,
         } = self;
@@ -222,7 +198,6 @@ where
         header.encode_into(out);
         uncle_headers.encode_into(out);
         transactions.encode_into(out);
-        signature.encode_into(out);
     }
 }
 
@@ -244,15 +219,8 @@ where
         let (input, header) = Header::decode(input, &())?;
         let (input, uncle_headers) = UncleHeaders::decode(input, max_uncles)?;
         let (input, transactions) = BlockTransactions::<Tx>::decode(input, transactions_context)?;
-        let (input, signature) = Ed25519Signature::decode(input, &())?;
-        let block = Self::reconstruct(
-            header,
-            uncle_headers,
-            transactions,
-            signature,
-            *max_transactions_size,
-        )
-        .map_err(|error| DecodeError::invalid_value::<Self>(error.to_string()))?;
+        let block = Self::reconstruct(header, uncle_headers, transactions, *max_transactions_size)
+            .map_err(|error| DecodeError::invalid_value::<Self>(error.to_string()))?;
         Ok((input, block))
     }
 }
@@ -269,7 +237,6 @@ impl Proposal {
         Header::CANONICAL_ENCODED_SIZE
             + UncleHeaders::max_encoded_size(limits.max_uncles)
             + References::max_encoded_size(limits.max_transactions)
-            + Ed25519Signature::CANONICAL_ENCODED_SIZE
     }
 
     #[must_use]
@@ -292,11 +259,6 @@ impl Proposal {
     pub fn mempool_transactions(&self) -> &[TxHashPrefix] {
         &self.references.mempool_transactions
     }
-
-    #[must_use]
-    pub const fn signature(&self) -> &Ed25519Signature {
-        &self.signature
-    }
 }
 
 /// Validated transaction payload for blocks: at most as many transactions as
@@ -317,7 +279,6 @@ impl<Tx> Block<Tx> {
         proof_of_leadership: Groth16LeaderProof,
         transactions: BlockTransactions<Tx>,
         max_transactions_size: u32,
-        signing_key: &Ed25519Key,
     ) -> Result<Self, Error>
     where
         Tx: Hashable<Hash = TxHash> + StorageSize,
@@ -325,12 +286,6 @@ impl<Tx> Block<Tx> {
         // 1. Non-genesis blocks only
         if slot == Slot::genesis() {
             return Err(HeaderError::GenesisSlot.into());
-        }
-
-        // 2. Expected leader public key
-        let expected_leader_public_key = proof_of_leadership.leader_key();
-        if expected_leader_public_key != signing_key.public_key().as_unverified() {
-            return Err(Error::KeyMismatch);
         }
 
         // 3. Body root & header
@@ -341,13 +296,9 @@ impl<Tx> Block<Tx> {
             proof_of_leadership,
         );
 
-        // 4. Signature over the header
-        let signature = header.sign(signing_key)?;
-
         // 5. New block
         let block = Self {
             header,
-            signature,
             uncle_headers,
             transactions,
         };
@@ -364,7 +315,6 @@ impl<Tx> Block<Tx> {
         header: Header,
         uncle_headers: UncleHeaders,
         transactions: BlockTransactions<Tx>,
-        signature: Ed25519Signature,
         max_transactions_size: u32,
     ) -> Result<Self, Error>
     where
@@ -372,7 +322,6 @@ impl<Tx> Block<Tx> {
     {
         let block = Self {
             header,
-            signature,
             uncle_headers,
             transactions,
         };
@@ -394,9 +343,6 @@ impl<Tx> Block<Tx> {
         // 3. Body root matches the carried uncle headers and transactions
         self.validate_body_root()?;
 
-        // 4. Signature is valid over the header bytes
-        verify_header_signature(&self.header, &self.signature)?;
-
         Ok(self)
     }
 
@@ -409,7 +355,6 @@ impl<Tx> Block<Tx> {
             + UncleHeaders::max_encoded_size(limits.max_uncles)
             + size_of::<u16>()
             + limits.max_transactions_size as usize
-            + Ed25519Signature::CANONICAL_ENCODED_SIZE
     }
 
     fn validate_total_transactions_size(&self, max_transactions_size: u32) -> Result<usize, Error>
@@ -471,11 +416,6 @@ impl<Tx> Block<Tx> {
     }
 
     #[must_use]
-    pub const fn signature(&self) -> &Ed25519Signature {
-        &self.signature
-    }
-
-    #[must_use]
     pub fn to_proposal(self) -> Proposal
     where
         Tx: Hashable<Hash = TxHash>,
@@ -484,7 +424,6 @@ impl<Tx> Block<Tx> {
             header: self.header,
             uncle_headers: self.uncle_headers,
             references: References::from_block_transactions(&self.transactions),
-            signature: self.signature,
         }
     }
 }
@@ -510,16 +449,6 @@ pub fn verify_header_alone(header: &Header) -> Result<(), HeaderError> {
     Ok(())
 }
 
-/// Verifies the signature of block header.
-pub fn verify_header_signature(header: &Header, signature: &Ed25519Signature) -> Result<(), Error> {
-    let header_bytes = header.to_bytes()?;
-    header
-        .leader_proof()
-        .leader_key()
-        .verify(&header_bytes, signature)
-        .map_err(|_| Error::Signature)
-}
-
 /// The commitment to a block body: its uncle headers and its txs
 #[must_use]
 pub fn body_root<Tx: Hashable<Hash = TxHash>>(
@@ -537,23 +466,14 @@ pub fn body_root<Tx: Hashable<Hash = TxHash>>(
 mod tests {
     use std::iter;
 
-    use lb_groth16::Fr;
-    use lb_key_management_system_keys::keys::UnsecuredZkKey;
-    use lb_pol::LotteryConstants;
-    use lb_utils::math::NonNegativeRatio;
-    use lb_utxotree::UtxoTree;
+    use lb_groth16::{AdditiveGroup as _, Fr};
+    use lb_key_management_system_keys::keys::ZkPublicKey;
 
     use super::*;
-    use crate::{
-        crypto::ZkHasher,
-        mantle::{
-            fixtures::ops::op_values::FORK_DIGEST,
-            ledger::{Note, Utxo},
-            ops::leader_claim::VoucherCm,
-            traits::hashable,
-            transactions::{Ops, TxList},
-        },
-        proofs::leader_proof::{LeaderPrivate, LeaderPublic},
+    use crate::mantle::{
+        fixtures::ops::op_values::FORK_DIGEST,
+        traits::hashable,
+        transactions::{Ops, TxList},
     };
 
     /// The most uncles the tests' blocks may reference.
@@ -564,62 +484,14 @@ mod tests {
     pub const TEST_MAX_TRANSACTIONS_SIZE: u32 = 2 * 1024 * 1024;
 
     pub fn create_proof() -> Groth16LeaderProof {
-        let leader_sk = UnsecuredZkKey::zero();
-        let utxo = Utxo {
-            op_id: [0u8; 32],
-            output_index: 0,
-            note: Note::new(1000, leader_sk.to_public_key()),
-        };
-        let utxo_tree = UtxoTree::<_, _, ZkHasher>::new().insert(utxo.id(), utxo).0;
-        let utxo_tree_root = utxo_tree.root();
-        let utxo_merkle_path = utxo_tree.path(&utxo.id()).expect("note must exist in tree");
-
-        let (lottery_0, lottery_1) =
-            LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
-                .compute_lottery_values(1000);
-
-        // We grind the nonce here to find a winning PoL
-        let public_inputs = {
-            let mut nonce = 0;
-            while nonce < 1000 {
-                let inputs = LeaderPublic::new(
-                    utxo_tree_root,
-                    utxo_tree_root,
-                    Fr::from(nonce),
-                    0,
-                    lottery_0,
-                    lottery_1,
-                );
-
-                if inputs.check_winning(utxo.note.value, *utxo.id().as_fr(), *leader_sk.as_fr()) {
-                    break;
-                }
-
-                nonce += 1;
-            }
-            LeaderPublic::new(
-                utxo_tree_root,
-                utxo_tree_root,
-                Fr::from(nonce),
-                0,
-                lottery_0,
-                lottery_1,
-            )
-        };
-
-        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
-        let verifying_key = signing_key.public_key();
-
-        let private_inputs = LeaderPrivate::new(
-            public_inputs,
-            utxo,
-            &utxo_merkle_path, // aged path
-            &utxo_merkle_path, // latest path
-            *leader_sk.as_fr(),
-            &verifying_key,
+        let (_, private_inputs) = crate::proofs::leader_proof::test_utils::note_set_leader_inputs(
+            Fr::from(7u64),
+            1000,
+            Fr::from(11u64),
+            Fr::ZERO,
+            &crate::mantle::Note::new(0, Fr::ZERO, ZkPublicKey::zero()),
         );
-        Groth16LeaderProof::prove(private_inputs, VoucherCm::default())
-            .expect("Proof generation should succeed")
+        Groth16LeaderProof::prove(private_inputs).expect("Proof generation should succeed")
     }
 
     fn create_tx(count: usize) -> Vec<Ops> {
@@ -649,61 +521,10 @@ mod tests {
     }
 
     #[test]
-    fn test_block_signature_validation() {
-        let parent_block = [0u8; 32].into();
-        let slot = Slot::from(42u64);
-        let proof_of_leadership = create_proof();
-        let transactions = BlockTransactions::<Ops>::empty();
-
-        let valid_signing_key = Ed25519Key::from_bytes(&[0; 32]);
-        let valid_block = Block::create(
-            parent_block,
-            slot,
-            UncleHeaders::empty(),
-            proof_of_leadership,
-            transactions.clone(),
-            TEST_MAX_TRANSACTIONS_SIZE,
-            &valid_signing_key,
-        )
-        .expect("Valid block should be created");
-
-        let header = valid_block.header().clone();
-        let valid_signature = *valid_block.signature();
-
-        let _reconstructed_block = Block::reconstruct(
-            header.clone(),
-            UncleHeaders::empty(),
-            transactions.clone(),
-            valid_signature,
-            TEST_MAX_TRANSACTIONS_SIZE,
-        )
-        .expect("Should reconstruct block with valid signature");
-
-        let wrong_signing_key = Ed25519Key::from_bytes(&[1u8; 32]);
-        let invalid_signature = header
-            .sign(&wrong_signing_key)
-            .expect("Signing should work");
-
-        let invalid_block_result = Block::reconstruct(
-            header,
-            UncleHeaders::empty(),
-            transactions,
-            invalid_signature,
-            TEST_MAX_TRANSACTIONS_SIZE,
-        );
-
-        assert!(
-            invalid_block_result.is_err(),
-            "Should not reconstruct block with invalid signature"
-        );
-    }
-
-    #[test]
     fn test_block_transaction_count_validation() {
         let parent_block = [0u8; 32].into();
         let slot = Slot::from(42u64);
         let proof_of_leadership = create_proof();
-        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
 
         let transactions = BlockTransactions::empty();
         let _valid_block: Block<Ops> = Block::create(
@@ -713,7 +534,6 @@ mod tests {
             proof_of_leadership.clone(),
             transactions,
             TEST_MAX_TRANSACTIONS_SIZE,
-            &signing_key,
         )
         .expect("Valid block should be created");
 
@@ -729,7 +549,6 @@ mod tests {
             proof_of_leadership,
             transactions,
             TEST_MAX_TRANSACTIONS_SIZE,
-            &signing_key,
         )
         .expect("Valid block should be created");
 
@@ -753,7 +572,6 @@ mod tests {
     #[test]
     fn proposal_references_preserve_transaction_hash_prefixes_and_order() {
         let parent_block = [0u8; 32].into();
-        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
         let transactions = BlockTransactions::<IndexedTestMantleTx>::try_new(
             vec![
                 IndexedTestMantleTx { index: 1 },
@@ -775,7 +593,6 @@ mod tests {
             create_proof(),
             transactions,
             TEST_MAX_TRANSACTIONS_SIZE,
-            &signing_key,
         )
         .unwrap()
         .to_proposal();
@@ -789,7 +606,6 @@ mod tests {
     #[test]
     fn proposal_accepts_maximum_transaction_references() {
         let parent_block = [0u8; 32].into();
-        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
         let block = Block::create(
             parent_block,
             Slot::from(42u64),
@@ -801,7 +617,6 @@ mod tests {
             )
             .unwrap(),
             TEST_MAX_TRANSACTIONS_SIZE,
-            &signing_key,
         )
         .unwrap();
 
@@ -838,7 +653,6 @@ mod tests {
         let parent_block = [0u8; 32].into();
         let slot = Slot::from(42u64);
         let proof_of_leadership = create_proof();
-        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
 
         let transactions = BlockTransactions::empty();
         let _valid_block: Block<Ops> = Block::create(
@@ -848,7 +662,6 @@ mod tests {
             proof_of_leadership.clone(),
             transactions,
             TEST_MAX_TRANSACTIONS_SIZE,
-            &signing_key,
         )
         .expect("Valid block should be created");
 
@@ -865,7 +678,6 @@ mod tests {
             proof_of_leadership.clone(),
             transactions,
             TEST_MAX_TRANSACTIONS_SIZE,
-            &signing_key,
         )
         .expect("Valid block should be created");
 
@@ -883,7 +695,6 @@ mod tests {
             proof_of_leadership,
             oversized,
             TEST_MAX_TRANSACTIONS_SIZE,
-            &signing_key,
         );
 
         assert!(invalid_transaction_inputs_result.is_err());
@@ -905,7 +716,6 @@ mod tests {
 
         // Build a syntactically valid non-genesis block first.
         let txs = BlockTransactions::<Ops>::empty();
-        let key = Ed25519Key::from_bytes(&[0; 32]);
         let block_result = Block::create(
             parent_block,
             Slot::from(0u64),
@@ -913,7 +723,6 @@ mod tests {
             proof,
             txs,
             TEST_MAX_TRANSACTIONS_SIZE,
-            &key,
         )
         .unwrap_err();
 
@@ -927,10 +736,8 @@ mod tests {
     fn test_reconstruct_rejects_genesis_slot() {
         let parent_block = [0u8; 32].into();
         let proof = create_proof();
-        let key = Ed25519Key::from_bytes(&[0; 32]);
 
-        // Create a valid NON-genesis block first so we can reuse a valid signature
-        // shape.
+        // Create a valid NON-genesis block first so we can reuse its body root.
         let valid = Block::create(
             parent_block,
             Slot::from(1u64),
@@ -938,27 +745,21 @@ mod tests {
             proof.clone(),
             BlockTransactions::<Ops>::empty(),
             TEST_MAX_TRANSACTIONS_SIZE,
-            &key,
         )
         .expect("valid non-genesis block");
 
-        // Rebuild header at genesis slot and sign it so signature itself is still
-        // consistent.
+        // Rebuild the header at the genesis slot.
         let genesis_header = Header::new(
             parent_block,
             *valid.header().body_root(),
             Slot::genesis(),
             proof,
         );
-        let genesis_signature = genesis_header
-            .sign(&key)
-            .expect("header signing should succeed");
 
         let err = Block::reconstruct(
             genesis_header,
             UncleHeaders::empty(),
             BlockTransactions::<Ops>::empty(),
-            genesis_signature,
             TEST_MAX_TRANSACTIONS_SIZE,
         )
         .expect_err("genesis slot must be rejected by reconstruct path");
@@ -973,7 +774,7 @@ mod tests {
 
         let proof = create_proof();
         let uncles = (0..TEST_MAX_UNCLES)
-            .map(|slot| signed_uncle(u64::from(slot), &proof))
+            .map(|slot| uncle_header(u64::from(slot), &proof))
             .collect();
         let proposal = Block::create(
             [0u8; 32].into(),
@@ -986,7 +787,6 @@ mod tests {
             )
             .unwrap(),
             TEST_MAX_TRANSACTIONS_SIZE,
-            &Ed25519Key::from_bytes(&[0; 32]),
         )
         .expect("valid block")
         .to_proposal();
@@ -999,14 +799,35 @@ mod tests {
         assert_eq!(proposal.encoded_length(), max_size);
         assert_eq!(proposal.encode().len(), max_size);
         // Under 4 uncles, the size Blend pads every payload to.
-        assert_eq!(max_size, 18_187);
+        assert_eq!(max_size, 17_752);
+    }
+
+    #[test]
+    fn maximum_proposal_size_follows_the_header() {
+        let limits = BlockLimits {
+            max_uncles: TEST_MAX_UNCLES,
+            max_transactions: TEST_MAX_TRANSACTIONS,
+            max_transactions_size: TEST_MAX_TRANSACTIONS_SIZE,
+        };
+        assert_eq!(
+            UncleHeaders::max_encoded_size(TEST_MAX_UNCLES),
+            1 + usize::from(TEST_MAX_UNCLES) * Header::CANONICAL_ENCODED_SIZE
+        );
+        // 273 byte header, 4 uncle headers, 1024 references.
+        assert_eq!(
+            Proposal::max_encoded_size(limits),
+            273 + 1 + 4 * 273 + 16_386
+        );
+        assert_eq!(Groth16LeaderProof::CANONICAL_ENCODED_SIZE, 200);
+        assert_eq!(Header::CANONICAL_ENCODED_SIZE, 273);
+        assert_eq!(Proposal::max_encoded_size(limits), 17_752);
     }
 
     #[test]
     fn body_root_accepts_carried_uncle_headers() {
         let proof = create_proof();
         let uncles = UncleHeaders::try_new(
-            vec![signed_uncle(1, &proof), signed_uncle(2, &proof)],
+            vec![uncle_header(1, &proof), uncle_header(2, &proof)],
             TEST_MAX_UNCLES,
         )
         .unwrap();
@@ -1019,7 +840,7 @@ mod tests {
     #[test]
     fn body_root_rejects_dropped_uncle_header() {
         let proof = create_proof();
-        let uncles = UncleHeaders::try_new(vec![signed_uncle(1, &proof)], TEST_MAX_UNCLES).unwrap();
+        let uncles = UncleHeaders::try_new(vec![uncle_header(1, &proof)], TEST_MAX_UNCLES).unwrap();
         let mut block = block_with_uncles(uncles, proof);
 
         block.uncle_headers = UncleHeaders::empty();
@@ -1033,12 +854,12 @@ mod tests {
     #[test]
     fn body_root_rejects_substituted_uncle_header() {
         let proof = create_proof();
-        let uncles = UncleHeaders::try_new(vec![signed_uncle(1, &proof)], TEST_MAX_UNCLES).unwrap();
+        let uncles = UncleHeaders::try_new(vec![uncle_header(1, &proof)], TEST_MAX_UNCLES).unwrap();
         let mut block = block_with_uncles(uncles, proof.clone());
 
         // Same count, but a different header than the one committed to.
         block.uncle_headers =
-            UncleHeaders::try_new(vec![signed_uncle(2, &proof)], TEST_MAX_UNCLES).unwrap();
+            UncleHeaders::try_new(vec![uncle_header(2, &proof)], TEST_MAX_UNCLES).unwrap();
 
         assert!(matches!(
             block.into_verified(TEST_MAX_TRANSACTIONS_SIZE),
@@ -1049,7 +870,7 @@ mod tests {
     #[test]
     fn body_root_rejects_reordered_uncle_headers() {
         let proof = create_proof();
-        let (first, second) = (signed_uncle(1, &proof), signed_uncle(2, &proof));
+        let (first, second) = (uncle_header(1, &proof), uncle_header(2, &proof));
         let mut block = block_with_uncles(
             UncleHeaders::try_new(vec![first.clone(), second.clone()], TEST_MAX_UNCLES).unwrap(),
             proof,
@@ -1063,43 +884,13 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn body_root_rejects_tampered_uncle_signature() {
-        let proof = create_proof();
-        let uncle = signed_uncle(1, &proof);
-        let mut block = block_with_uncles(
-            UncleHeaders::try_new(vec![uncle.clone()], TEST_MAX_UNCLES).unwrap(),
-            proof,
-        );
-
-        // Replace only the signature, leaving the header it signs untouched.
-        let other_signature = uncle
-            .header()
-            .sign(&Ed25519Key::from_bytes(&[1; 32]))
-            .expect("header signing should succeed");
-        block.uncle_headers = UncleHeaders::try_new(
-            vec![SignedHeader::new(uncle.header().clone(), other_signature)],
-            TEST_MAX_UNCLES,
-        )
-        .unwrap();
-
-        assert!(matches!(
-            block.into_verified(TEST_MAX_TRANSACTIONS_SIZE),
-            Err(Error::BodyRootMismatch)
-        ));
-    }
-
-    fn signed_uncle(slot: u64, proof: &Groth16LeaderProof) -> SignedHeader {
-        let header = Header::new(
+    fn uncle_header(slot: u64, proof: &Groth16LeaderProof) -> Header {
+        Header::new(
             HeaderId::from([9u8; 32]),
             ContentId::from([9u8; 32]),
             Slot::from(slot),
             proof.clone(),
-        );
-        let signature = header
-            .sign(&Ed25519Key::from_bytes(&[0; 32]))
-            .expect("header signing should succeed");
-        SignedHeader::new(header, signature)
+        )
     }
 
     fn block_with_uncles(uncle_headers: UncleHeaders, proof: Groth16LeaderProof) -> Block<Ops> {
@@ -1110,7 +901,6 @@ mod tests {
             proof,
             BlockTransactions::empty(),
             TEST_MAX_TRANSACTIONS_SIZE,
-            &Ed25519Key::from_bytes(&[0; 32]),
         )
         .expect("block creation should succeed")
     }

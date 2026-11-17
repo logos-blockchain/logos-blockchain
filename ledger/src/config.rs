@@ -13,13 +13,13 @@ use lb_cryptarchia_engine::{Epoch, EraSchedule, Slot};
 pub use lb_groth16::ModulusShift;
 use lb_pol::LotteryConstants;
 use lb_time::era::EpochLength;
-use lb_utils::math::{NonNegativeRatio, ProperFraction};
+use lb_utils::math::ProperFraction;
+
+use crate::block_rewards::{MAX_SUPPLY, POOLED_FEES_WINDOW};
 
 /// The config of every era: each block is applied under the config of the era
 /// of its slot, and each epoch is settled under the config of its era.
 pub type EraScheduledConfig = EraSchedule<Config>;
-
-pub use lb_core::mantle::ConsensusExcludedKeys;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Config {
@@ -180,7 +180,7 @@ pub struct PoWConfig {
 ///
 /// Covers the reward-difficulty (`d_reward`) EMA controller, the per-epoch
 /// payout rate, and the claim acceptance window. The pool the payout draws on
-/// starts with the genesis parameters' `pow_reward_pool`.
+/// starts with `POW_REWARD_POOL_GENESIS`.
 /// There is deliberately no `Default`: every value must be supplied by the
 /// deployment configuration. A `rate_num` of `0` disables claiming entirely;
 /// the shipped deployments enable it.
@@ -224,7 +224,7 @@ pub struct RewardPoWConfig {
     /// [`Config::expected_blocks_per_epoch`].
     pub target_claim_per_block: NonZeroU64,
     /// `POW_SHARE`: numerator of the share of each block's collected fees
-    /// diverted to the `PoW` reward pool. `0` disables refilling.
+    /// diverted to the `PoW` reward pool. `0` disables the credit.
     /// Must not exceed [`Self::share_den`].
     pub pow_share: u64,
     /// `SHARE_DEN`: denominator of the share of each block's collected fees
@@ -636,30 +636,70 @@ codec_fixtures!(
     } => STORAGE_MARKET_CONFIG_HEX
 );
 
+/// A block's release in full, `numerator / denominator` units of `10^-9` LGO:
+/// wider than a `NonNegativeRatio`, whose `u32` numerator holds less than
+/// one release.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmissionRatio {
+    pub numerator: u64,
+    pub denominator: NonZeroU64,
+}
+
+impl EmissionRatio {
+    #[must_use]
+    pub const fn new(numerator: u64, denominator: NonZeroU64) -> Self {
+        Self {
+            numerator,
+            denominator,
+        }
+    }
+}
+
+// The numerator, then the denominator.
+impl BinaryEncode for EmissionRatio {
+    fn encoded_length(&self) -> usize {
+        self.numerator.encoded_length() + self.denominator.get().encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.numerator.encode_into(out);
+        self.denominator.get().encode_into(out);
+    }
+}
+
+/// The encoding of the fixture below, one field per group.
+const EMISSION_RATIO_HEX: &str = "3800000000000000 3900000000000000";
+
+codec_fixtures!(
+    EmissionRatio,
+    encode_only,
+    EmissionRatio::new(56, NonZeroU64::new(57).unwrap()) => EMISSION_RATIO_HEX
+);
+
 /// How each block is rewarded, per the
 /// [block rewards](https://lip.logos.co/blockchain/raw/block-rewards.html).
 ///
-/// A block's reward mixes an emission from the reserve with the fee the block
-/// pooled: the further the stake falls short of its target, and the more fees
-/// the window pooled, the more of it is emission. The reward is split between
-/// the Blend nodes and the block's leader.
+/// A block's reward mixes a release from the rewards reserve with a payout from
+/// the rewards pool: the further the stake falls short of its target, and the
+/// more fees the window pooled, the more of it is release. The reward is split
+/// between the Blend nodes and the block's leader.
 ///
-/// Its values keep every step of a reward within a `u128`, whatever the fees.
+/// Its values keep every step of a reward within an `i128`, for any fees the
+/// supply cap allows.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(try_from = "BlockRewardsFields", into = "BlockRewardsFields")]
 pub struct BlockRewardsConfig {
-    /// `STAKE_TARGET`: the total stake the emission steers towards.
+    /// `STAKE_TARGET`: the total stake the release steers towards.
     stake_target: Value,
     /// `A_SCALE`: the shortfall from the stake target at which a block's
-    /// emission is in full, and the scale of the emission's weight in a
+    /// release is in full, and the scale of the release's weight `A_t` in a
     /// reward.
     emission_factor_scale: NonZeroU64,
     /// `FEE_AVG_NUMERATOR`: how much each unit of the fees pooled over the
-    /// window adds to the emission's weight.
+    /// window adds to the release's weight.
     fee_average_numerator: u64,
-    /// `INFLATION_NUMERATOR / INFLATION_DENOMINATOR`, `I_max · S_cap · Δt / f`:
-    /// a block's emission in full.
-    max_emission_per_block: NonNegativeRatio,
+    /// `I_max · S_cap · Δt`: a block's release in full.
+    max_emission_per_block: EmissionRatio,
     /// The Blend nodes' share of a reward, the leader taking the rest with the
     /// tips.
     blend_share: ProperFraction,
@@ -671,33 +711,35 @@ struct BlockRewardsFields {
     stake_target: Value,
     emission_factor_scale: NonZeroU64,
     fee_average_numerator: u64,
-    max_emission_per_block: NonNegativeRatio,
+    max_emission_per_block: EmissionRatio,
     blend_share: ProperFraction,
 }
 
 impl BlockRewardsConfig {
-    /// The block rewards of these values, unless a reward could overflow a
-    /// `u128` at some fee: the emission's denominator, the scale and the
-    /// share's denominator must multiply to at most `u128::MAX / Value::MAX`.
+    /// The block rewards of these values, unless a step of a reward could
+    /// overflow an `i128` while the window pools at most
+    /// [`POOLED_FEES_WINDOW`] times the supply cap.
     #[must_use]
     pub const fn new(
         stake_target: Value,
         emission_factor_scale: NonZeroU64,
         fee_average_numerator: u64,
-        max_emission_per_block: NonNegativeRatio,
+        max_emission_per_block: EmissionRatio,
         blend_share: ProperFraction,
     ) -> Option<Self> {
-        // A reward's numerator reaches the emission's denominator times the
-        // scale times a block's fee, at most a `Value`, and the split then
-        // multiplies it by less than the share's denominator.
-        let bound = match (max_emission_per_block.denominator.get() as u128)
-            .checked_mul(emission_factor_scale.get() as u128)
-        {
-            Some(bound) => bound.checked_mul(blend_share.get().denominator.get() as u128),
+        let pooled_fees = POOLED_FEES_WINDOW as i128 * MAX_SUPPLY as i128;
+        let scale = emission_factor_scale.get() as i128;
+        // The release's weight, its release and the pool's payout.
+        let weight = match (fee_average_numerator as i128).checked_mul(pooled_fees) {
+            Some(fees) => fees.checked_add(stake_target as i128),
             None => None,
         };
-        match bound {
-            Some(bound) if bound <= u128::MAX / Value::MAX as u128 => Some(Self {
+        let release = (max_emission_per_block.numerator as i128).checked_mul(scale);
+        let release_denominator =
+            (max_emission_per_block.denominator.get() as i128).checked_mul(scale);
+        let payout = scale.checked_mul(pooled_fees);
+        match (weight, release, release_denominator, payout) {
+            (Some(_), Some(_), Some(_), Some(_)) => Some(Self {
                 stake_target,
                 emission_factor_scale,
                 fee_average_numerator,
@@ -708,53 +750,34 @@ impl BlockRewardsConfig {
         }
     }
 
-    /// A block's rewards, to the Blend nodes then to its leader, before its
-    /// tips: `pooled_fees` sums the fees pooled over the window, `block_fee`,
-    /// the block's own, included, and `total_stake` is the inferred total
-    /// stake.
-    pub(crate) fn rewards(
-        &self,
-        pooled_fees: u128,
-        block_fee: Value,
-        total_stake: Value,
-    ) -> (Value, Value) {
-        let Self {
-            stake_target,
-            emission_factor_scale,
-            fee_average_numerator,
-            max_emission_per_block,
-            blend_share,
-        } = *self;
-        let scale = NonZeroU128::from(emission_factor_scale);
-        // `A_t'`: the emission's weight in the reward, out of `scale`.
-        let emission_weight = u128::from(stake_target)
-            .saturating_add(u128::from(fee_average_numerator).saturating_mul(pooled_fees))
-            .saturating_sub(u128::from(total_stake))
-            .min(scale.get());
-        let emission_denominator = NonZeroU128::from(max_emission_per_block.denominator);
-        let reward_numerator = u128::from(max_emission_per_block.numerator) * emission_weight
-            + emission_denominator.get() * (scale.get() - emission_weight) * u128::from(block_fee);
-        let NonNegativeRatio {
-            numerator: blend_numerator,
-            denominator: share_denominator,
-        } = blend_share.get();
-        let share_denominator = NonZeroU128::from(share_denominator);
-        // The reward's denominator, split: within a `u128`, as `Self::new`
-        // checks, so the product never saturates.
-        let denominator = emission_denominator
-            .saturating_mul(scale)
-            .saturating_mul(share_denominator);
-        let share = |numerator: u128| {
-            Value::try_from(reward_numerator * numerator / denominator).expect(
-                "A reward is at most the larger of a block's emission in full and its fee, both \
-                 within a Value.",
-            )
-        };
-        let blend_numerator = u128::from(blend_numerator);
-        (
-            share(blend_numerator),
-            share(share_denominator.get() - blend_numerator),
-        )
+    /// `STAKE_TARGET`.
+    #[must_use]
+    pub const fn stake_target(&self) -> Value {
+        self.stake_target
+    }
+
+    /// `A_SCALE`.
+    #[must_use]
+    pub const fn emission_factor_scale(&self) -> NonZeroU64 {
+        self.emission_factor_scale
+    }
+
+    /// `FEE_AVG_NUMERATOR`.
+    #[must_use]
+    pub const fn fee_average_numerator(&self) -> u64 {
+        self.fee_average_numerator
+    }
+
+    /// A block's release in full.
+    #[must_use]
+    pub const fn max_emission_per_block(&self) -> EmissionRatio {
+        self.max_emission_per_block
+    }
+
+    /// The Blend nodes' share of a reward.
+    #[must_use]
+    pub const fn blend_share(&self) -> ProperFraction {
+        self.blend_share
     }
 }
 
@@ -779,12 +802,10 @@ impl TryFrom<BlockRewardsFields> for BlockRewardsConfig {
         )
         .ok_or_else(|| {
             format!(
-                "The block rewards' emission denominator, {}, scale, {emission_factor_scale}, and \
-                 Blend share denominator, {}, must multiply to at most {}, or a reward could \
-                 overflow.",
-                max_emission_per_block.denominator,
-                blend_share.get().denominator,
-                u128::MAX / u128::from(Value::MAX)
+                "The block rewards' stake target, {stake_target}, scale, {emission_factor_scale}, \
+                 fee average numerator, {fee_average_numerator}, and emission per block, {}/{}, \
+                 let a reward overflow an i128.",
+                max_emission_per_block.numerator, max_emission_per_block.denominator
             )
         })
     }
@@ -845,8 +866,8 @@ impl BinaryEncode for BlockRewardsConfig {
 }
 
 /// The encoding of the fixture below, one field per group.
-const BLOCK_REWARDS_CONFIG_HEX: &str =
-    "3500000000000000 3600000000000000 3700000000000000 38000000 39000000 3a000000 3b000000";
+const BLOCK_REWARDS_CONFIG_HEX: &str = "3500000000000000 3600000000000000 3700000000000000 3800000000000000 3900000000000000 3a000000 \
+     3b000000";
 
 codec_fixtures!(
     BlockRewardsConfig,
@@ -855,7 +876,7 @@ codec_fixtures!(
         53,
         NonZeroU64::new(54).unwrap(),
         55,
-        NonNegativeRatio::new(56, NonZeroU32::new(57).unwrap()),
+        EmissionRatio::new(56, NonZeroU64::new(57).unwrap()),
         ProperFraction::new(58, NonZeroU32::new(59).unwrap()).unwrap(),
     )
     .unwrap() => BLOCK_REWARDS_CONFIG_HEX
@@ -878,8 +899,8 @@ mod tests {
 
     use crate::{
         config::{
-            BlendPoWConfig, PoWConfig, RewardPoWConfig, RewardPoWConfigError, nonce_snapshot,
-            stake_distribution_snapshot,
+            BlendPoWConfig, EmissionRatio, PoWConfig, RewardPoWConfig, RewardPoWConfigError,
+            nonce_snapshot, stake_distribution_snapshot,
         },
         mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters},
         test_utils::{FORK_DIGEST, single_era},
@@ -1076,7 +1097,7 @@ mod tests {
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
             execution_market: crate::config::ExecutionMarketConfig {
-                max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                max_gas_per_block: crate::config::MaxGasPerBlock::new(3_137_798).unwrap(),
                 fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
                     .unwrap(),
                 ema_smoothing_factor: lb_utils::math::ProperFraction::new(
@@ -1095,10 +1116,10 @@ mod tests {
                     .unwrap(),
             },
             block_rewards: crate::config::BlockRewardsConfig::new(
-                3_000_000_000,
-                120_000_000.try_into().unwrap(),
+                3_000_000_000_000_000_000,
+                120_000_000_000_000_000.try_into().unwrap(),
                 10_512,
-                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
                 lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
@@ -1179,7 +1200,7 @@ mod tests {
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
             execution_market: crate::config::ExecutionMarketConfig {
-                max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                max_gas_per_block: crate::config::MaxGasPerBlock::new(3_137_798).unwrap(),
                 fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
                     .unwrap(),
                 ema_smoothing_factor: lb_utils::math::ProperFraction::new(
@@ -1198,10 +1219,10 @@ mod tests {
                     .unwrap(),
             },
             block_rewards: crate::config::BlockRewardsConfig::new(
-                3_000_000_000,
-                120_000_000.try_into().unwrap(),
+                3_000_000_000_000_000_000,
+                120_000_000_000_000_000.try_into().unwrap(),
                 10_512,
-                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
                 lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
@@ -1298,7 +1319,7 @@ mod tests {
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
             execution_market: crate::config::ExecutionMarketConfig {
-                max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                max_gas_per_block: crate::config::MaxGasPerBlock::new(3_137_798).unwrap(),
                 fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
                     .unwrap(),
                 ema_smoothing_factor: lb_utils::math::ProperFraction::new(
@@ -1317,10 +1338,10 @@ mod tests {
                     .unwrap(),
             },
             block_rewards: crate::config::BlockRewardsConfig::new(
-                3_000_000_000,
-                120_000_000.try_into().unwrap(),
+                3_000_000_000_000_000_000,
+                120_000_000_000_000_000.try_into().unwrap(),
                 10_512,
-                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
                 lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
             )
             .unwrap(),

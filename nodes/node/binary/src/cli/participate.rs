@@ -1,13 +1,10 @@
 use std::{net::Ipv4Addr, num::NonZeroU16};
 
 use color_eyre::eyre::{Result, bail, eyre};
-use lb_core::{
-    mantle::NoteId,
-    sdp::{DeclarationId, DeclarationMessage, Locator, Locators, ProviderId, ServiceType},
-};
-use lb_groth16::{AdditiveGroup as _, Fr};
-use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
+use lb_core::sdp::{DeclarationId, Locator, Locators, ProviderId, ServiceType};
+use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey, kdf_public_key};
 use lb_libp2p::{Multiaddr, Protocol};
+use lb_sdp_service::DeclarationRequest;
 use serde::Serialize;
 
 use super::ParticipateArgs;
@@ -30,6 +27,8 @@ struct ParticipationData {
 struct BlendParticipationData {
     provider_id: Ed25519PublicKey,
     zk_id: ZkPublicKey,
+    note_pk: ZkPublicKey,
+    note_stake_pk: ZkPublicKey,
     locators: Locators,
     service_type: ServiceType,
     declaration_id: DeclarationId,
@@ -92,22 +91,30 @@ fn build_blend_data(
         .and_then(|resolved_ip_addr| resolve_locator_port(resolved_ip_addr, external_port))?;
     let locators = Locators::from(Locator::try_from(locator_addr).map_err(|e| eyre!("{e}"))?);
     let (_, blend_key) = keystore.get_zk(KeyTitle::BLEND_ZK)?;
+    // The zk_id is derived from the quota secret key itself, which the Proof of
+    // Quota proves, and the service note is under the public key of the notes of
+    // the same key, which the wallet spends.
+    let zk_id = kdf_public_key(blend_key.as_fr());
 
     // Declaration ID is not required for the genesis ceremony, but it is still
-    // useful for looking the declaration up once it is on chain. The service
-    // note is not part of the ID, so a zero one is fine here.
-    let declaration_id = DeclarationMessage {
+    // useful for looking the declaration up once it is on chain. The stake is
+    // not part of the ID, so a zero one is fine here.
+    let declaration_id = DeclarationRequest {
         service_type: ServiceType::BlendNetwork,
         locators: locators.clone(),
         provider_id: ProviderId(provider_id),
-        zk_id: blend_key.to_public_key(),
-        service_note_id: NoteId::from(Fr::ZERO),
+        zk_id,
+        note_pk: blend_key.to_public_key(),
+        note_stake_pk: blend_key.to_public_key(),
+        amount: 0,
     }
     .id();
 
     Ok(Some(BlendParticipationData {
         provider_id,
-        zk_id: blend_key.to_public_key(),
+        zk_id,
+        note_pk: blend_key.to_public_key(),
+        note_stake_pk: blend_key.to_public_key(),
         locators,
         service_type: ServiceType::BlendNetwork,
         declaration_id,

@@ -1,21 +1,20 @@
 use std::collections::{HashMap, HashSet};
 
-use lb_core::mantle::{Note, ledger::Outputs, ops::transfer::TransferOp};
+use lb_core::mantle::transactions::{Distribution, GenesisAllocation};
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
+pub use lb_ledger::GENESIS_STAKE_SUPPLY;
 
-use crate::consensus::{GENESIS_TRANSFER_OUTPUT_LIMIT, SdpFundingConfig, ServiceNote};
+use crate::consensus::{GENESIS_DISTRIBUTION_LIMIT, SdpFundingConfig};
 
-/// Adds scenario wallets and adjusts leader stake and SDP funding before
-/// genesis is signed. This operates on protocol data, without native node
-/// configuration.
+/// Adds scenario wallets and adjusts SDP funding before genesis is signed. This
+/// operates on protocol data, without native node configuration.
 pub fn fund_wallets(
-    transfer: &mut TransferOp,
-    leader_keys: &[ZkPublicKey],
+    transfer: &mut Distribution,
     funding_keys: &[ZkPublicKey],
     wallets: &[(ZkKey, u64)],
     sdp_funding: SdpFundingConfig,
 ) {
-    if wallets.is_empty() || leader_keys.is_empty() {
+    if wallets.is_empty() {
         return;
     }
 
@@ -26,74 +25,66 @@ pub fn fund_wallets(
         wallets.len(),
         sdp_funding,
     );
-    let total = wallets.iter().map(|(_, value)| *value).sum();
-    let stake = leader_stake_amount(total, leader_keys.len());
-
-    for output in &mut transfer.outputs {
-        if leader_keys.contains(&output.pk) {
-            output.value = stake;
-        }
-    }
     for (key, value) in wallets {
         transfer
-            .outputs
-            .try_push(Note::new(*value, key.to_public_key()))
-            .expect("wallet account outputs must fit transfer output bounds");
+            .try_push(GenesisAllocation {
+                value: *value,
+                public_key: key.to_public_key(),
+            })
+            .expect("wallet account outputs must fit the genesis distribution");
     }
 }
 
-/// Funding can move outputs or change the transfer ID. Refresh references
-/// before building provider declarations or handing notes to an adapter.
-pub fn refresh_service_note(note: &mut ServiceNote, transfer: &TransferOp) {
-    let (index, output) = transfer
-        .outputs
+/// Gives the notes of the leaders, evenly, what the other outputs and the
+/// `declared` amounts leave of [`GENESIS_STAKE_SUPPLY`].
+///
+/// The block then follows the supply rule of Mantle Ledger Initialization and
+/// the lottery elects the leaders.
+pub fn fill_leader_stake(transfer: &mut Distribution, leader_keys: &[ZkPublicKey], declared: u64) {
+    let others = transfer
         .iter()
-        .enumerate()
-        .find(|(_, output)| output.pk == note.pk)
-        .expect("service note must be present in genesis");
-    note.output_index = index;
-    note.note = *output;
-    note.note_id = transfer
-        .utxo_by_index(index)
-        .expect("service output must exist")
-        .id();
-}
-
-#[must_use]
-pub fn leader_stake_amount(total_wallet_funds: u64, n_participants: usize) -> u64 {
-    if total_wallet_funds == 0 {
-        return 100_000;
+        .filter(|output| !leader_keys.contains(&output.public_key))
+        .map(|output| output.value)
+        .try_fold(declared, u64::checked_add)
+        .expect("the outputs of a test genesis do not overflow");
+    let stake = GENESIS_STAKE_SUPPLY
+        .checked_sub(others)
+        .expect("the outputs of a test genesis fit in the supply");
+    let leaders = transfer
+        .iter()
+        .filter(|output| leader_keys.contains(&output.public_key))
+        .count();
+    assert!(leaders > 0, "a test genesis needs a leader note");
+    let leaders = u64::try_from(leaders).expect("the leader count fits in u64");
+    let mut remainder = stake % leaders;
+    for output in transfer.iter_mut() {
+        if leader_keys.contains(&output.public_key) {
+            output.value = stake / leaders + u64::from(remainder > 0);
+            remainder = remainder.saturating_sub(1);
+        }
     }
-
-    let n = n_participants.max(1) as u64;
-    let scaled = total_wallet_funds
-        .saturating_mul(10)
-        .saturating_div(n)
-        .max(1);
-    scaled.max(100_000)
 }
 
 fn fit_sdp_funding_outputs_to_genesis_capacity(
-    transfer_op: &mut TransferOp,
+    transfer_op: &mut Distribution,
     funding_keys: &HashSet<ZkPublicKey>,
     additional_wallet_outputs: usize,
     sdp_funding_config: SdpFundingConfig,
 ) {
     let n_participants = funding_keys.len();
     let current_sdp_outputs = transfer_op
-        .outputs
         .iter()
-        .filter(|note| funding_keys.contains(&note.pk))
+        .filter(|note| funding_keys.contains(&note.public_key))
         .count();
-    let non_sdp_outputs = transfer_op.outputs.len() - current_sdp_outputs;
+    let non_sdp_outputs = transfer_op.len() - current_sdp_outputs;
     let required_non_sdp_outputs = non_sdp_outputs
         .checked_add(additional_wallet_outputs)
         .expect("genesis output count overflow while fitting SDP funding outputs");
-    let available_for_sdp = GENESIS_TRANSFER_OUTPUT_LIMIT
+    let available_for_sdp = GENESIS_DISTRIBUTION_LIMIT
         .checked_sub(required_non_sdp_outputs)
         .unwrap_or_else(|| {
             panic!(
-                "genesis transfer output capacity exhausted before SDP funding outputs: limit={GENESIS_TRANSFER_OUTPUT_LIMIT}, non_sdp_outputs={non_sdp_outputs}, additional_wallet_outputs={additional_wallet_outputs}",
+                "genesis distribution capacity exhausted before SDP funding outputs: limit={GENESIS_DISTRIBUTION_LIMIT}, non_sdp_outputs={non_sdp_outputs}, additional_wallet_outputs={additional_wallet_outputs}",
             )
         });
     let max_sdp_notes_per_node = available_for_sdp / n_participants;
@@ -105,7 +96,7 @@ fn fit_sdp_funding_outputs_to_genesis_capacity(
 
     assert!(
         selected_sdp_notes_per_node > 0,
-        "genesis transfer output capacity cannot provide one SDP funding note per node: limit={GENESIS_TRANSFER_OUTPUT_LIMIT}, node_count={n_participants}, non_sdp_outputs={non_sdp_outputs}, additional_wallet_outputs={additional_wallet_outputs}",
+        "genesis distribution capacity cannot provide one SDP funding note per node: limit={GENESIS_DISTRIBUTION_LIMIT}, node_count={n_participants}, non_sdp_outputs={non_sdp_outputs}, additional_wallet_outputs={additional_wallet_outputs}",
     );
     assert!(
         current_sdp_outputs >= required_sdp_outputs,
@@ -115,15 +106,14 @@ fn fit_sdp_funding_outputs_to_genesis_capacity(
     let mut retained_per_key = HashMap::new();
     if current_sdp_outputs > required_sdp_outputs {
         let retained_notes = transfer_op
-            .outputs
             .iter()
             .copied()
             .filter_map(|mut note| {
-                if !funding_keys.contains(&note.pk) {
+                if !funding_keys.contains(&note.public_key) {
                     return Some(note);
                 }
 
-                let retained = retained_per_key.entry(note.pk).or_insert(0);
+                let retained = retained_per_key.entry(note.public_key).or_insert(0);
                 if *retained >= selected_sdp_notes_per_node {
                     return None;
                 }
@@ -136,12 +126,12 @@ fn fit_sdp_funding_outputs_to_genesis_capacity(
                 Some(note)
             })
             .collect::<Vec<_>>();
-        transfer_op.outputs = Outputs::try_new(retained_notes)
-            .expect("trimmed genesis transfer outputs must fit the output bound");
+        *transfer_op = Distribution::try_from(retained_notes)
+            .expect("trimmed genesis distribution must fit its bound");
     } else {
-        for note in &mut transfer_op.outputs {
-            if funding_keys.contains(&note.pk) {
-                let retained = retained_per_key.entry(note.pk).or_insert(0);
+        for note in transfer_op.iter_mut() {
+            if funding_keys.contains(&note.public_key) {
+                let retained = retained_per_key.entry(note.public_key).or_insert(0);
                 note.value = sdp_funding_note_value(
                     sdp_funding_config,
                     *retained,

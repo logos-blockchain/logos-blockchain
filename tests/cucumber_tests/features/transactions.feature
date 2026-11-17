@@ -22,9 +22,9 @@ Feature: Transactions
     # Now we can split the funds in the user wallets
     When wallet "WALLET_1A" has 1000 or more LGO in 120 seconds
     And wallet "WALLET_2A" has 1000 or more LGO in 120 seconds
-    And I perform 1 coin split transactions for each user wallet with 7 outputs of 100 LGO each
-    When wallet "WALLET_1A" has 8 or more outputs in 120 seconds
-    And wallet "WALLET_2A" has 8 or more outputs in 120 seconds
+    And I perform 1 coin split transactions for each user wallet with 6 outputs of 100 LGO each
+    When wallet "WALLET_1A" has 7 or more outputs in 120 seconds
+    And wallet "WALLET_2A" has 7 or more outputs in 120 seconds
     # Now we can send multiple outputs back to the funding wallets
     When I send 5 transactions of 100 LGO each from wallet "WALLET_1A" to wallet "NODE_1_WALLET_FUNDING"
     And I send 5 transactions of 100 LGO each from wallet "WALLET_2A" to wallet "NODE_2_WALLET_FUNDING"
@@ -48,10 +48,10 @@ Feature: Transactions
     # Funding wallets have allocated funds at scenario start, so we can send transactions to user wallets
     When I drain all node "NODE_1" wallets into "WALLET_1A"
     When wallet "WALLET_1A" has 20000 or more LGO in 10 seconds
-    When I do a coin split for "WALLET_1A" of 250 UTXOs valued at 1 LGO tokens each
-    When wallet "WALLET_1A" has 250 or more outputs in 120 seconds
-    When I do a coin split for "WALLET_1A" of 250 UTXOs valued at 1 LGO tokens each
-    When wallet "WALLET_1A" has 500 or more outputs in 120 seconds
+    When I do a coin split for "WALLET_1A" of 6 UTXOs valued at 1 LGO tokens each
+    When wallet "WALLET_1A" has 6 or more outputs in 120 seconds
+    When I do a coin split for "WALLET_1A" of 6 UTXOs valued at 1 LGO tokens each
+    When wallet "WALLET_1A" has 12 or more outputs in 120 seconds
     When I log wallet balances for all wallets
     # Now we can drain all user wallets to node wallets again
     When I drain wallet "WALLET_1A" into "NODE_1_WALLET_FUNDING"
@@ -231,9 +231,9 @@ Feature: Transactions
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When all nodes have at least 2 blocks and converged to within 1 blocks in 300 seconds
-    And I perform 2 coin split transactions for each user wallet with 10 outputs of 4000 LGO each
-    And I verify each wallet has minimum 20 outputs "available" in 300 seconds
-    And I perform 3 stress continuous cycles with 20 transactions of 1000 LGO to the next user wallet with 0 epochs headroom
+    And I perform 2 coin split transactions for each user wallet with 6 outputs of 4000 LGO each
+    And I verify each wallet has minimum 12 outputs "available" in 300 seconds
+    And I perform 3 stress continuous cycles with 12 transactions of 1000 LGO to the next user wallet with 0 epochs headroom
     Then I stop all nodes
 
   @transactions_ci
@@ -249,16 +249,16 @@ Feature: Transactions
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When node "NODE_1" is at height 2 in 300 seconds
     # Coin split
-    And I do a coin split for "WALLET_1A" of 25 UTXOs valued at 1000 LGO tokens each
-    And I do a coin split for "WALLET_1A" of 25 UTXOs valued at 1000 LGO tokens each
-    And I do a coin split for "WALLET_1A" of 25 UTXOs valued at 1000 LGO tokens each
-    And I do a coin split for "WALLET_1A" of 25 UTXOs valued at 1000 LGO tokens each
+    And I do a coin split for "WALLET_1A" of 6 UTXOs valued at 1000 LGO tokens each
+    And I do a coin split for "WALLET_1A" of 6 UTXOs valued at 1000 LGO tokens each
+    And I do a coin split for "WALLET_1A" of 6 UTXOs valued at 1000 LGO tokens each
+    And I do a coin split for "WALLET_1A" of 6 UTXOs valued at 1000 LGO tokens each
     # Many small transfers to other wallet
-    When wallet "WALLET_1A" has 100 or more outputs in 240 seconds
-    And I send 50 transactions of 1000 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
-    When wallet "WALLET_2A" has 50 or more outputs in 240 seconds
+    When wallet "WALLET_1A" has 24 or more outputs in 240 seconds
+    And I send 12 transactions of 1000 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
+    When wallet "WALLET_2A" has 12 or more outputs in 240 seconds
     # All outputs accounted for
-    When wallet "WALLET_1A" has 70000 or less LGO in 180 seconds
+    When wallet "WALLET_1A" has 100000 or less LGO in 180 seconds
     When wallet "WALLET_1A" has 0 or less encumbered outputs in 60 seconds
     Then I stop all nodes
 
@@ -332,10 +332,10 @@ Feature: Transactions
     Then I stop all nodes
 
   @transactions_ci
-  Scenario: Large coin split followed by large coin join transaction succeed
+  Scenario: Largest coin split followed by largest coin join transaction succeed
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 10          | 25000        |
+      | 1             | 1           | 6000         |
       | 2             | 0           | 0            |
     And we have a sponsored genesis fee account with 4 tokens of 20000 value each
     And I have a cluster with capacity of 2 nodes
@@ -344,19 +344,19 @@ Feature: Transactions
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When node "NODE_1" is at height 2 in 240 seconds
-    # Coin split (This will use multiple inputs to create many outputs)
-    # Maximum number of outputs per transaction is 255 (as per encoding limits)
-    And I do a coin split for "WALLET_1A" of 250 UTXOs valued at 1000 LGO tokens each
+    # A ZkTransfer creates at most 8 notes: 6 split notes, the sender change and
+    # the fee sponsor change
+    And I do a coin split for "WALLET_1A" of 6 UTXOs valued at 1000 LGO tokens each
     # Do a transfer to the other wallet
-    When wallet "WALLET_1A" has 250 or more outputs in 180 seconds
+    When wallet "WALLET_1A" has 6 or more outputs in 180 seconds
     And I send 1 transactions of 1000 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
     When wallet "WALLET_2A" has 1 or more outputs in 180 seconds
     When wallet "WALLET_1A" has 1 or more outputs and 1000 or more LGO in 10 seconds
-    # Coin join all outputs back to one output
-    # Maximum number of inputs per transaction is 255 (as per encoding limits)
-    And I send 1 transactions of 249000 LGO each from wallet "WALLET_1A" to wallet "WALLET_1A"
+    # A ZkTransfer spends at most 4 notes: 3 notes of the wallet joined into
+    # one and the fee sponsor note
+    And I send 1 transactions of 3000 LGO each from wallet "WALLET_1A" to wallet "WALLET_1A"
     When wallet "WALLET_1A" has 0 or less encumbered outputs in 60 seconds
-    When wallet "WALLET_1A" has exactly 1 outputs and 249000 LGO in 20 seconds
+    When wallet "WALLET_1A" has exactly 3 outputs and 5000 LGO in 20 seconds
     And tracked wallet fees equal sponsored fee account spent fees
     Then I stop all nodes
 
@@ -364,7 +364,7 @@ Feature: Transactions
   Scenario: Transaction with multiple inputs and multiple outputs
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 3           | 100000       |
+      | 1             | 3           | 2500         |
       | 2             | 0           | 0            |
     And we have a sponsored genesis fee account with 2 tokens of 20000 value each
     And I have a cluster with capacity of 2 nodes
@@ -373,12 +373,12 @@ Feature: Transactions
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When node "NODE_1" is at height 2 in 240 seconds
-    # Maximum number of outputs per transaction is 255 (as per encoding limits)
-    # The wallet has 3 x 100000 = 300000 LGO outputs, so this transaction is valid and should be mined; it
-    # should use all 3x its outputs and create 250 new outputs of 1000 LGO each.
-    And I send one transaction with 250 outputs of 1000 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
-    When wallet "WALLET_2A" has 250 or more outputs in 60 seconds
-    And wallet "WALLET_1A" has exactly 50000 LGO in 20 seconds
+    # A ZkTransfer spends at most 4 notes and creates at most 8. The wallet has
+    # 3 x 2500 = 7500 LGO, so this transaction spends its 3 notes and the fee
+    # sponsor note, and creates 6 notes of 1000 LGO and the two changes.
+    And I send one transaction with 6 outputs of 1000 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
+    When wallet "WALLET_2A" has 6 or more outputs in 60 seconds
+    And wallet "WALLET_1A" has exactly 1500 LGO in 20 seconds
     And tracked wallet fees equal sponsored fee account spent fees
     Then I stop all nodes
 
@@ -433,7 +433,7 @@ Feature: Transactions
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
       | NODE_3    | 3             | WALLET_3A   | NODE_1       |
     When node "NODE_1" is at height 2 in 240 seconds
-    And wallet "WALLET_1A" sends 10 notes of 40000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+    And wallet "WALLET_1A" sends 6 notes of 40000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
     And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 240 seconds
     And I fund 200 transactions paying 100 LGO from node "NODE_1" wallet to wallet "WALLET_2A" retrying every 1 seconds for 600 seconds each as prefix "SOAK"
     Then all transactions with prefix "SOAK" are finalized on node "NODE_1" in 900 seconds

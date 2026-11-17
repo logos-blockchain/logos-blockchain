@@ -13,6 +13,7 @@ use futures::{
 use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use lb_blend_service::epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait};
 use lb_chain_leader_service::{LeaderMsg, WinningPolEpochSlots, WinningPolSlotStream};
+use lb_core::proofs::leader_proof::LeaderPrivate;
 use lb_pol::{PolChainInputsData, PolWalletInputsData, PolWitnessInputsData};
 use lb_services_utils::wait_until_services_are_ready;
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
@@ -184,7 +185,7 @@ async fn scan_for_winning_slots(
             return;
         };
         if found_slots
-            .send(leadership_quota_inputs(leader_private.input()))
+            .send(leadership_quota_inputs(&leader_private))
             .await
             .is_err()
         {
@@ -194,31 +195,48 @@ async fn scan_for_winning_slots(
     }
 }
 
-/// The Blend leadership-quota inputs of a winning slot.
-fn leadership_quota_inputs(inputs: &PolWitnessInputsData) -> ProofOfLeadershipQuotaInputs {
+/// The `PoQ` leader inputs a winning [`LeaderPrivate`] gives.
+#[must_use]
+pub fn leadership_quota_inputs(leader_private: &LeaderPrivate) -> ProofOfLeadershipQuotaInputs {
     let PolWitnessInputsData {
         wallet:
             PolWalletInputsData {
-                aged_path,
-                aged_selectors,
                 note_value,
-                output_number,
-                secret_key,
-                transaction_hash,
+                note_nonce,
+                note_program,
+                note_data,
+                set_selectors,
+                commitment_aged_path,
+                commitment_aged_selectors,
+                low_leaf_aged_nullifier,
+                low_leaf_aged_next_nullifier,
+                low_leaf_aged_path,
+                low_leaf_aged_selectors,
+                set_aged_path,
+                nullifier_key,
+                staking_secret_key,
                 ..
             },
         chain: PolChainInputsData { slot_number, .. },
-    } = inputs;
-
-    let aged_path_and_selectors = core::array::from_fn(|i| (aged_path[i], aged_selectors[i]));
+    } = leader_private.input();
 
     ProofOfLeadershipQuotaInputs {
-        aged_path_and_selectors,
-        note_value: *note_value,
-        output_number: *output_number,
-        secret_key: *secret_key,
         slot: *slot_number,
-        transaction_hash: *transaction_hash,
+        note_value: *note_value,
+        note_nonce: *note_nonce,
+        note_program: *note_program,
+        note_data: *note_data,
+        commitment_aged_path_and_selectors: core::array::from_fn(|i| {
+            (commitment_aged_path[i], commitment_aged_selectors[i])
+        }),
+        low_leaf_aged_nullifier: *low_leaf_aged_nullifier,
+        low_leaf_aged_next_nullifier: *low_leaf_aged_next_nullifier,
+        low_leaf_aged_path_and_selectors: core::array::from_fn(|i| {
+            (low_leaf_aged_path[i], low_leaf_aged_selectors[i])
+        }),
+        set_aged_path_and_selectors: core::array::from_fn(|i| (set_aged_path[i], set_selectors[i])),
+        nullifier_key: *nullifier_key,
+        staking_secret_key: *staking_secret_key,
     }
 }
 
@@ -235,16 +253,16 @@ mod tests {
     use lb_chain_leader_service::{WinningPolEpochSlots, WinningSlotFuture};
     use lb_core::{
         header::HeaderId,
-        mantle::{Utxo, ledger::Note},
-        proofs::leader_proof::{LeaderPrivate, LeaderPublic},
+        mantle::Note,
+        proofs::leader_proof::{LeaderPrivate, test_utils::note_set_leader_inputs},
     };
     use lb_cryptarchia_engine::{Epoch, Slot};
     use lb_groth16::{AdditiveGroup as _, Fr};
-    use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
-    use lb_ledger::UtxoTree;
+    use lb_key_management_system_service::keys::ZkPublicKey;
+    use lb_pol::PolWitnessInputsData;
     use tokio::{sync::oneshot, task::yield_now, time::timeout};
 
-    use super::{ScannedEpochs, WINNING_SLOTS_LOOKAHEAD_COUNT};
+    use super::{ScannedEpochs, WINNING_SLOTS_LOOKAHEAD_COUNT, leadership_quota_inputs};
 
     const EPOCH_SLOTS: u64 = 100;
 
@@ -256,7 +274,7 @@ mod tests {
             epoch: Epoch::new(1),
             state: PolEpochState {
                 nonce: Fr::ZERO,
-                aged_utxo_root: Fr::ZERO,
+                eligible_aged: Fr::ZERO,
                 lottery_0: Fr::ZERO,
                 lottery_1: Fr::ZERO,
                 source: PolEpochStateSource {
@@ -273,19 +291,18 @@ mod tests {
     /// An epoch whose every slot wins, each waiting on a wakeup as a KMS round
     /// trip does, counting in `scanned` how many have been scanned.
     fn winning_epoch(scanned: &Arc<AtomicUsize>) -> WinningPolEpochSlots {
-        let note = Utxo::new([0; 32], 0, Note::new(1, ZkPublicKey::zero()));
-        let path = UtxoTree::new()
-            .insert(note.id(), note)
-            .0
-            .path(&note.id())
-            .expect("The note should be in the tree it was just inserted into.");
-        let leader_pk = Ed25519Key::from_bytes(&[1; 32]).public_key();
+        // A leader winning slot 0, standing in for the winner of every slot.
+        let (_, winner) = note_set_leader_inputs(
+            Fr::from(7u64),
+            1000,
+            Fr::from(11u64),
+            Fr::ZERO,
+            &Note::new(0, Fr::ZERO, ZkPublicKey::zero()),
+        );
         let scanned = Arc::clone(scanned);
 
-        handoff(stream::iter(0..EPOCH_SLOTS).map(move |slot| {
-            let public = LeaderPublic::new(Fr::ZERO, Fr::ZERO, Fr::ZERO, slot, Fr::ZERO, Fr::ZERO);
-            let leader_private =
-                LeaderPrivate::new(public, note, &path, &path, Fr::ZERO, &leader_pk);
+        handoff(stream::iter(0..EPOCH_SLOTS).map(move |_| {
+            let leader_private = winner.clone();
             let scanned = Arc::clone(&scanned);
             let winning_slot: WinningSlotFuture = Box::pin(async move {
                 yield_now().await;
@@ -396,6 +413,57 @@ mod tests {
                 .next()
                 .await
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn leadership_quota_inputs_take_the_aged_half_of_the_pol_witness() {
+        let (_, private) = note_set_leader_inputs(
+            Fr::from(7u64),
+            1000,
+            Fr::from(11u64),
+            Fr::ZERO,
+            &Note::new(0, Fr::ZERO, ZkPublicKey::zero()),
+        );
+        let PolWitnessInputsData { wallet, chain } = private.input().clone();
+        let inputs = leadership_quota_inputs(&private);
+        assert_eq!(
+            (
+                inputs.slot,
+                inputs.note_value,
+                inputs.note_nonce,
+                inputs.nullifier_key,
+                inputs.staking_secret_key
+            ),
+            (
+                chain.slot_number,
+                1000,
+                Fr::from(11u64),
+                wallet.nullifier_key,
+                wallet.staking_secret_key
+            )
+        );
+        assert_eq!(
+            inputs.low_leaf_aged_nullifier,
+            wallet.low_leaf_aged_nullifier
+        );
+        assert_eq!(
+            inputs.low_leaf_aged_path_and_selectors[0],
+            (
+                wallet.low_leaf_aged_path[0],
+                wallet.low_leaf_aged_selectors[0]
+            )
+        );
+        assert_eq!(
+            inputs.commitment_aged_path_and_selectors[0],
+            (
+                wallet.commitment_aged_path[0],
+                wallet.commitment_aged_selectors[0]
+            )
+        );
+        assert_eq!(
+            inputs.set_aged_path_and_selectors[0],
+            (wallet.set_aged_path[0], wallet.set_selectors[0])
         );
     }
 }

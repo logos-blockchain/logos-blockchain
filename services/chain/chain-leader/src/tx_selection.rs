@@ -1,7 +1,7 @@
 use lb_core::{
     header::HeaderId,
     mantle::{
-        SignedOps,
+        SignedOps, Value,
         batch::DeferredProofs,
         ledger::verification_mode::StandardMode,
         traits::{Hashable, StorageSize as _},
@@ -75,6 +75,19 @@ pub struct TransactionSelection {
     pub(super) ledger_state: LedgerState,
     pub(super) selected_txs: Vec<SignedOps<Preverified, StandardMode>>,
     pub(super) invalid_tx_hashes: Vec<TxHash>,
+}
+
+/// The leader reward of the block of `txs`, run as Block Execution does on the
+/// state with its header applied. The block may hold fewer transactions than
+/// the selection, which the block limits truncate.
+pub fn block_leader_reward(
+    header_state: LedgerState,
+    txs: &[SignedOps<Preverified, StandardMode>],
+    era_schedule: &EraScheduledConfig,
+) -> Result<Value, lb_ledger::LedgerError<HeaderId>> {
+    let (state, gas_and_fees, _, _) = header_state
+        .try_apply_block_transactions::<_, HeaderId>(era_schedule, txs.iter().cloned())?;
+    state.leader_reward(&gas_and_fees, era_schedule)
 }
 
 #[expect(
@@ -185,111 +198,152 @@ mod tests {
     use lb_core::{
         era::ForkDigest,
         mantle::{
-            Note, Op, OpProof, Utxo,
+            Note, Op, OpProof,
             gas::TxGasCalculator as _,
-            ledger::{Inputs, Outputs},
-            ops::transfer::TransferOp,
+            note_set::CommitmentMmr,
+            notes::{NoteCommitment, OutputCommitments, derive_note_nullifier},
+            ops::{
+                NoOpProof, ZkTransferProof,
+                program::ProgramRegisterOp,
+                transfer::{TransferOp, test_utils::prove_transfer},
+            },
+            programs::ProgramVerificationKey,
             traits::StorageSize,
             transactions::{OpProofs, Ops, TxList, states::Unverified},
         },
     };
+    use lb_groth16::{AdditiveGroup as _, Fr, test_utils::three_input_setup};
     use lb_key_management_system_service::keys::ZkKey;
-    use lb_ledger::ConsensusExcludedKeys;
+    use lb_ledger::Config;
 
     use super::*;
     use crate::{leadership, txs_for_block};
 
-    fn transfer_heavy_transaction(
-        transaction_index: usize,
-        funding_key: &ZkKey,
-        transfer_count: usize,
-    ) -> (Vec<Utxo>, SignedOps<Preverified, StandardMode>) {
-        let funding_utxos = (0..transfer_count)
-            .map(|transfer_index| {
-                let utxo_index = transaction_index * transfer_count + transfer_index;
-                let mut op_id = [0; 32];
-                op_id[..size_of::<usize>()].copy_from_slice(&utxo_index.to_le_bytes());
-                Utxo::new(op_id, 0, Note::new(10_000_000, funding_key.to_public_key()))
+    fn funding_notes(funding_key: &ZkKey, count: usize) -> Vec<Note> {
+        (0..count)
+            .map(|note_index| {
+                Note::new(
+                    10_000_000_000_000_000,
+                    Fr::from(note_index as u64),
+                    funding_key.to_public_key(),
+                )
             })
-            .collect::<Vec<_>>();
-        let ops = TxList::try_from_iter(funding_utxos.iter().map(|utxo| {
-            Op::Transfer(TransferOp::new(
-                Inputs::try_new(vec![utxo.id()]).unwrap(),
-                Outputs::try_new(Vec::new()).unwrap(),
-            ))
-        }))
-        .map(|ops| Ops::new(ForkDigest::new([0x11; 32]), ops))
-        .unwrap();
-        let tx_hash = ops.hash();
-        let signature =
-            ZkKey::multi_sign(std::slice::from_ref(funding_key), &tx_hash.to_fr()).unwrap();
-        let proofs = OpProofs::try_from_iter(
-            std::iter::repeat_with(|| OpProof::ZkSig(signature.clone())).take(transfer_count),
-        )
-        .unwrap();
-        let transaction = SignedOps::<Unverified, StandardMode>::from_parts(ops, proofs)
-            .unwrap()
-            .preverify()
-            .unwrap();
+            .collect()
+    }
 
-        (funding_utxos, transaction)
+    // Program registrations per transaction: each one costs 15114 gas plus its
+    // bytes, so that six transactions fit in the block Execution Gas limit of
+    // 3_137_798 and a seventh does not.
+    const PROGRAM_REGISTRATIONS_PER_TX: usize = 32;
+
+    // Each transaction pays its fees with one Transfer and fills its execution
+    // gas with Program registrations, which carry no proof, so only one
+    // ZkTransfer is proven per transaction.
+    fn gas_heavy_transactions(
+        funding_notes: &[Note],
+        funding_key: &ZkKey,
+        commitment_root: Fr,
+    ) -> Vec<SignedOps<Preverified, StandardMode>> {
+        let verification_key = ProgramVerificationKey::try_from(&three_input_setup(1).0).unwrap();
+        let mut mmr = CommitmentMmr::new();
+        let mut paths = Vec::new();
+        for note in funding_notes {
+            let (next, path) = mmr.push_with_paths(note.commitment(), &mut paths).unwrap();
+            mmr = next;
+            paths.push(path);
+        }
+        assert_eq!(mmr.frontier_root(), commitment_root);
+
+        funding_notes
+            .iter()
+            .zip(paths)
+            .map(|(note, path)| {
+                let ops = TxList::try_from_iter(
+                    std::iter::once(Op::Transfer(TransferOp::new(
+                        [derive_note_nullifier(
+                            &note.commitment(),
+                            &funding_key.nullifier_key(),
+                        )]
+                        .into(),
+                        OutputCommitments::default(),
+                        commitment_root,
+                        note.value,
+                    )))
+                    .chain(std::iter::repeat_n(
+                        Op::ProgramRegister(ProgramRegisterOp {
+                            verification_key: verification_key.clone(),
+                        }),
+                        PROGRAM_REGISTRATIONS_PER_TX,
+                    )),
+                )
+                .map(|ops| Ops::new(ForkDigest::new([0x11; 32]), ops))
+                .unwrap();
+                let transfer_proof = prove_transfer(
+                    &[(*note, *funding_key.as_fr(), path)],
+                    &[],
+                    commitment_root,
+                    ops.hash().to_fr(),
+                );
+                let proofs = OpProofs::try_from_iter(
+                    std::iter::once(OpProof::ZkTransfer(ZkTransferProof::new(transfer_proof)))
+                        .chain(std::iter::repeat_n(
+                            OpProof::None(NoOpProof),
+                            PROGRAM_REGISTRATIONS_PER_TX,
+                        )),
+                )
+                .unwrap();
+                SignedOps::<Unverified, StandardMode>::from_parts(ops, proofs)
+                    .unwrap()
+                    .preverify()
+                    .unwrap()
+            })
+            .collect()
     }
 
     #[test]
     fn a_transaction_larger_than_a_block_of_the_era_carries_is_invalid() {
-        let funding_key = ZkKey::zero();
-        let (funding_utxos, transaction) = transfer_heavy_transaction(0, &funding_key, 1);
-        let size = transaction.storage_size() as u32;
+        let funding_key = ZkKey::from(Fr::from(7u64));
+        let funding_notes = funding_notes(&funding_key, 1);
         let select = |max_transactions_size| {
-            let config = lb_ledger::Config {
+            let config = Config {
                 max_transactions_size,
                 ..leadership::test_config()
             };
-            let ledger_state = LedgerState::from_utxos(
-                funding_utxos.clone(),
-                &config,
-                0,
-                &ConsensusExcludedKeys::empty(),
-            );
-            select_transactions(
-                ledger_state,
-                vec![transaction.clone()],
-                &leadership::single_era(config),
+            let ledger_state = LedgerState::from_notes(funding_notes.iter().copied(), &config, 0);
+            let commitment_root = ledger_state.latest_note_sets().ledger().commitment_root();
+            let transaction =
+                gas_heavy_transactions(&funding_notes, &funding_key, commitment_root).remove(0);
+            (
+                select_transactions(
+                    ledger_state,
+                    vec![transaction.clone()],
+                    &leadership::single_era(config),
+                ),
+                transaction,
             )
         };
 
-        let fitting = select(size);
+        let (_, transaction) = select(u32::MAX);
+        let size = transaction.storage_size() as u32;
+        let (fitting, _) = select(size);
         assert_eq!(fitting.selected_txs.len(), 1);
         assert_eq!(fitting.invalid_tx_hashes, []);
-        let oversized = select(size - 1);
+        let (oversized, _) = select(size - 1);
         assert_eq!(oversized.selected_txs, []);
         assert_eq!(oversized.invalid_tx_hashes, [transaction.hash()]);
     }
 
     #[tokio::test]
     async fn gas_limited_selection_returns_canonically_applicable_prefix() {
-        const CANDIDATE_COUNT: usize = 22;
-        const TRANSFERS_PER_TRANSACTION: usize = 255;
+        const CANDIDATE_COUNT: usize = 7;
 
         let config = leadership::test_config();
         let eras = leadership::single_era(config.clone());
         let funding_key = ZkKey::zero();
-        let (funding_utxos, candidates): (Vec<_>, Vec<_>) = (0..CANDIDATE_COUNT)
-            .map(|transaction_index| {
-                transfer_heavy_transaction(
-                    transaction_index,
-                    &funding_key,
-                    TRANSFERS_PER_TRANSACTION,
-                )
-            })
-            .unzip();
-
-        let ledger_state = LedgerState::from_utxos(
-            funding_utxos.into_iter().flatten(),
-            &config,
-            0,
-            &ConsensusExcludedKeys::empty(),
-        );
+        let funding_notes = funding_notes(&funding_key, CANDIDATE_COUNT);
+        let ledger_state = LedgerState::from_notes(funding_notes.iter().copied(), &config, 0);
+        let commitment_root = ledger_state.latest_note_sets().ledger().commitment_root();
+        let candidates = gas_heavy_transactions(&funding_notes, &funding_key, commitment_root);
         let gas_context = ledger_state.tx_context(config.gas_profile).gas_context;
         let individual_gas = candidates[0]
             .op_refs()
@@ -311,7 +365,12 @@ mod tests {
         );
         let all_candidates_result = ledger_state
             .clone()
-            .try_apply_block_contents::<_, HeaderId>(&eras, candidates.iter().cloned());
+            .try_apply_block_contents::<_, HeaderId>(
+                &eras,
+                NoteCommitment(Fr::ZERO),
+                0,
+                candidates.iter().cloned(),
+            );
         let all_candidates_error = all_candidates_result.err();
         assert!(
             matches!(
@@ -333,8 +392,22 @@ mod tests {
         )
         .await;
         assert_eq!(block_txs.len(), CANDIDATE_COUNT - 1);
+        // A block holding a prefix of the selection, cut by hand here, pays the
+        // reward of what it holds.
+        let selected_reward =
+            block_leader_reward(ledger_state.clone(), block_txs.as_slice(), &eras)
+                .expect("the selection must run");
+        let block_txs = &block_txs.as_slice()[..CANDIDATE_COUNT - 2];
+        let reward_value = block_leader_reward(ledger_state.clone(), block_txs, &eras)
+            .expect("the selected prefix must run");
+        assert_ne!(reward_value, selected_reward);
         let _apply_result = ledger_state
-            .try_apply_block_contents::<_, HeaderId>(&eras, block_txs.into_iter())
+            .try_apply_block_contents::<_, HeaderId>(
+                &eras,
+                NoteCommitment(Fr::ZERO),
+                reward_value,
+                block_txs.iter().cloned(),
+            )
             .expect("the selected prefix must pass canonical application");
     }
 }

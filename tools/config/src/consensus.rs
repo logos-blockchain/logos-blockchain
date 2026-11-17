@@ -4,52 +4,48 @@ use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
-        ConsensusExcludedKeys, GenesisParameters, GenesisTime, Note, NoteId, OpProof, Utxo,
-        ops::{
-            Op, OpId as _, ZkAndEd25519Proof,
-            channel::{
-                ChannelId, MsgId,
-                inscribe::{Inscription, InscriptionOp},
-            },
-            transfer::TransferOp,
+        GenesisParameters, GenesisTime,
+        note_set::CommitmentMmr,
+        notes::InputNullifiers,
+        ops::channel::{
+            ChannelId, MsgId,
+            inscribe::{Inscription, InscriptionOp, MiniBlocks},
         },
-        transactions::{GenesisTx, OpProofs, Ops, TxList},
+        transactions::{Distribution, GenesisAllocation, UNITS_PER_LGO},
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
-use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
+use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_service::keys::{
-    Ed25519Key, Ed25519Signature, UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey, ZkSignature,
+    Ed25519Key, UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey, kdf_public_key,
 };
-use lb_node::{Hashable as _, SignedOps};
 use num_bigint::BigUint;
 
-use crate::unique::unique_test_context;
+use crate::{funding::fill_leader_stake, unique::unique_test_context};
 
 pub const SHORT_PROLONGED_BOOTSTRAP_PERIOD: Duration = Duration::from_secs(1);
 
 pub const EMPTY_CHANNEL_ID: [u8; 32] = [0; 32];
 pub const EMPTY_ED25519_PUBLIC_KEY: [u8; 32] = [0; 32];
-const EMPTY_GROTH16_PROOF_BYTES: [u8; 128] = [0u8; 128];
 
 const LEADER_KEY_PREFIX: &[u8] = b"ld";
-const BLEND_KEY_PREFIX: &[u8] = b"bn";
 const SDP_KEY_PREFIX: &[u8] = b"sdp";
 const KEY_MATERIAL_LEN: usize = 16;
 
-const REGULAR_NOTE_VALUE: u64 = 100_000;
-const BLEND_NOTE_VALUE: u64 = 1;
+const REGULAR_NOTE_VALUE: u64 = 100_000 * UNITS_PER_LGO;
+/// The amount each Blend provider of a test chain declares at genesis.
+pub const BLEND_DECLARATION_AMOUNT: u64 = 1;
 /// Funds SDP declare/activity transaction fees at non-zero gas prices; an
-/// activity transaction costs roughly 400-1000 at genesis prices.
-const DEFAULT_SDP_FUNDING_VALUE_PER_NODE: u64 = 10_000;
+/// activity transaction costs roughly 400-1000 LGO at genesis prices.
+const DEFAULT_SDP_FUNDING_VALUE_PER_NODE: u64 = 10_000 * UNITS_PER_LGO;
 const DEFAULT_SDP_FUNDING_NOTES_PER_NODE: usize = 1;
 
-/// Test-tool mirror of the genesis transfer-output bound.
+/// Test-tool mirror of the bound of the genesis distribution.
 ///
-/// The bound is the transaction output bound used by `BoundedOutputs` in the
-/// release core. Keeping this value in test tooling avoids exporting a
+/// The bound is the note list bound used by `Distribution` in the release
+/// core. Keeping this value in test tooling avoids exporting a
 /// production constant solely for fixture validation.
-pub const GENESIS_TRANSFER_OUTPUT_LIMIT: usize = u8::MAX as usize;
+pub const GENESIS_DISTRIBUTION_LIMIT: usize = u8::MAX as usize;
 
 /// Controls how much SDP funding is allocated to each generated node and how
 /// many outputs are used to hold that funding.
@@ -88,7 +84,9 @@ pub struct ProviderInfo {
     pub provider_sk: Ed25519Key,
     pub zk_sk: ZkKey,
     pub locator: Locator,
-    pub note: ServiceNote,
+    /// The amount the provider declares. A genesis declaration consumes no
+    /// note.
+    pub amount: u64,
 }
 
 impl ProviderInfo {
@@ -97,8 +95,17 @@ impl ProviderInfo {
         ProviderId(self.provider_sk.public_key())
     }
 
+    // The zk_id is derived from the quota secret key itself, which the Proof of
+    // Quota proves.
     #[must_use]
     pub fn zk_id(&self) -> ZkPublicKey {
+        kdf_public_key(self.zk_sk.as_fr())
+    }
+
+    // The public key of the notes of the same key, so the node withdraws its
+    // service note.
+    #[must_use]
+    pub fn note_pk(&self) -> ZkPublicKey {
         self.zk_sk.to_public_key()
     }
 }
@@ -108,28 +115,24 @@ impl ProviderInfo {
 #[derive(Clone, Debug)]
 pub struct GeneralConsensusConfig {
     pub known_key: ZkKey,
-    pub blend_note: ServiceNote,
     pub funding_sk: ZkKey,
     pub funding_pk: ZkPublicKey,
     pub other_keys: Vec<ZkKey>,
     pub prolonged_bootstrap_period: Duration,
 }
 
+// The key of a genesis service note, with its secret key.
 #[derive(Clone, Debug)]
 pub struct ServiceNote {
     pub pk: ZkPublicKey,
     pub sk: ZkKey,
-    pub note: Note,
-    pub note_id: NoteId,
-    pub output_index: usize,
 }
 
 #[derive(Clone)]
 pub struct BaseConsensusMaterial {
     pub regular_note_keys: Vec<ZkKey>,
-    pub blend_notes: Vec<ServiceNote>,
     pub sdp_notes: Vec<ServiceNote>,
-    pub utxos: Vec<Utxo>,
+    pub allocations: Vec<GenesisAllocation>,
 }
 
 fn select_sdp_funding_notes_per_node(
@@ -142,17 +145,15 @@ fn select_sdp_funding_notes_per_node(
         "SDP funding allocation requires at least one node"
     );
 
-    let fixed_node_outputs = node_count
-        .checked_mul(2)
-        .expect("node count overflow while calculating genesis outputs");
+    let fixed_node_outputs = node_count;
     let required_outputs = fixed_node_outputs
         .checked_add(additional_wallet_outputs)
         .expect("genesis output count overflow while calculating SDP funding capacity");
-    let available_for_sdp = GENESIS_TRANSFER_OUTPUT_LIMIT
+    let available_for_sdp = GENESIS_DISTRIBUTION_LIMIT
         .checked_sub(required_outputs)
         .unwrap_or_else(|| {
             panic!(
-                "genesis transfer output capacity exhausted: limit={GENESIS_TRANSFER_OUTPUT_LIMIT}, node_count={node_count}, fixed_node_outputs={fixed_node_outputs}, additional_wallet_outputs={additional_wallet_outputs}",
+                "genesis distribution capacity exhausted: limit={GENESIS_DISTRIBUTION_LIMIT}, node_count={node_count}, fixed_node_outputs={fixed_node_outputs}, additional_wallet_outputs={additional_wallet_outputs}",
             )
         });
     let max_sdp_notes_per_node = available_for_sdp / node_count;
@@ -161,7 +162,7 @@ fn select_sdp_funding_notes_per_node(
 
     assert!(
         selected_sdp_notes_per_node > 0,
-        "genesis transfer output capacity cannot provide one SDP funding note per node: limit={GENESIS_TRANSFER_OUTPUT_LIMIT}, node_count={node_count}, fixed_node_outputs={fixed_node_outputs}, additional_wallet_outputs={additional_wallet_outputs}",
+        "genesis distribution capacity cannot provide one SDP funding note per node: limit={GENESIS_DISTRIBUTION_LIMIT}, node_count={node_count}, fixed_node_outputs={fixed_node_outputs}, additional_wallet_outputs={additional_wallet_outputs}",
     );
 
     let selected_as_u64 = u64::try_from(selected_sdp_notes_per_node)
@@ -176,20 +177,17 @@ fn select_sdp_funding_notes_per_node(
         .expect("genesis output count overflow after SDP funding allocation");
 
     assert!(
-        projected_genesis_outputs <= GENESIS_TRANSFER_OUTPUT_LIMIT,
-        "projected genesis transfer outputs exceed capacity: projected={projected_genesis_outputs}, limit={GENESIS_TRANSFER_OUTPUT_LIMIT}",
+        projected_genesis_outputs <= GENESIS_DISTRIBUTION_LIMIT,
+        "projected genesis distribution exceeds capacity: projected={projected_genesis_outputs}, limit={GENESIS_DISTRIBUTION_LIMIT}",
     );
 
     println!(
-        "SDP funding allocation genesis_transfer_output_limit={GENESIS_TRANSFER_OUTPUT_LIMIT} node_count={node_count} fixed_node_outputs={fixed_node_outputs} additional_wallet_outputs={additional_wallet_outputs} requested_sdp_notes_per_node={} selected_sdp_notes_per_node={selected_sdp_notes_per_node} sdp_note_value={base_sdp_note_value} sdp_value_remainder={sdp_value_remainder} total_sdp_funding_per_node={}",
+        "SDP funding allocation genesis_distribution_limit={GENESIS_DISTRIBUTION_LIMIT} node_count={node_count} fixed_node_outputs={fixed_node_outputs} additional_wallet_outputs={additional_wallet_outputs} requested_sdp_notes_per_node={} selected_sdp_notes_per_node={selected_sdp_notes_per_node} sdp_note_value={base_sdp_note_value} sdp_value_remainder={sdp_value_remainder} total_sdp_funding_per_node={}",
         sdp_funding_config.target_notes_per_node, sdp_funding_config.total_value_per_node,
     );
 
     selected_sdp_notes_per_node
 }
-
-/// The balance the `PoW` reward pool of a test chain starts with.
-const GENESIS_POW_REWARD_POOL: u64 = 1_000_000_000;
 
 fn inscription_for_current_test(
     test_context: Option<&str>,
@@ -204,24 +202,23 @@ fn inscription_for_current_test(
                 chain_id,
                 start_time: genesis_time,
                 epoch_nonce: Fr::ZERO,
-                pow_reward_pool: GENESIS_POW_REWARD_POOL,
-                consensus_excluded_keys: ConsensusExcludedKeys::empty(),
             }
             .encode_to_vec(),
         ),
         parent: MsgId::root(),
         signer: UnverifiedEd25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY).unwrap(),
+        mini_blocks: MiniBlocks::default(),
     }
 }
 
 #[must_use]
 pub fn create_genesis_block(
-    utxos: &[Utxo],
+    allocations: &[GenesisAllocation],
     test_context: Option<&str>,
     genesis_time: GenesisTime,
 ) -> GenesisBlock {
-    // Create transfer op with the utxos as outputs
-    let mut outputs = utxos.iter().map(|u| u.note);
+    // The distribution of the allocations
+    let mut outputs = allocations.iter().copied();
     #[expect(
         clippy::option_if_let_else,
         reason = "Moving notes inside of consuming lambda function is harder to read"
@@ -231,7 +228,7 @@ pub fn create_genesis_block(
         for note in outputs {
             genesis_builder = genesis_builder
                 .try_add_note(note)
-                .expect("note count must fit in genesis transfer outputs");
+                .expect("note count must fit in the genesis distribution");
         }
         genesis_builder
     } else {
@@ -295,7 +292,15 @@ pub fn create_consensus_configs_with_additional_wallet_outputs_and_sdp_funding_c
             additional_wallet_outputs,
             sdp_funding_config,
         );
-    let genesis_block = create_genesis_block(&material.utxos, test_context, genesis_time);
+    let mut allocations = Distribution::try_from(material.allocations.clone())
+        .expect("the allocations fit the genesis distribution");
+    let leader_keys = material
+        .regular_note_keys
+        .iter()
+        .map(ZkKey::to_public_key)
+        .collect::<Vec<_>>();
+    fill_leader_stake(&mut allocations, &leader_keys, 0);
+    let genesis_block = create_genesis_block(allocations.as_slice(), test_context, genesis_time);
 
     (
         configs_from_material(&material, prolonged_bootstrap_period),
@@ -313,7 +318,6 @@ pub(crate) fn configs_from_material(
         .enumerate()
         .map(|(i, key)| GeneralConsensusConfig {
             known_key: key.clone(),
-            blend_note: material.blend_notes[i].clone(),
             funding_sk: material.sdp_notes[i].sk.clone(),
             funding_pk: material.sdp_notes[i].pk,
             other_keys: Vec::new(),
@@ -346,12 +350,10 @@ pub fn create_base_consensus_material_with_additional_wallet_outputs_and_sdp_fun
     sdp_funding_config: SdpFundingConfig,
 ) -> BaseConsensusMaterial {
     let mut regular_note_keys = Vec::new();
-    let mut blend_notes = Vec::new();
     let mut sdp_notes = Vec::new();
-    let utxos = create_utxos(
+    let allocations = create_allocations(
         ids,
         &mut regular_note_keys,
-        &mut blend_notes,
         &mut sdp_notes,
         additional_wallet_outputs,
         sdp_funding_config,
@@ -359,20 +361,18 @@ pub fn create_base_consensus_material_with_additional_wallet_outputs_and_sdp_fun
 
     BaseConsensusMaterial {
         regular_note_keys,
-        blend_notes,
         sdp_notes,
-        utxos,
+        allocations,
     }
 }
 
-fn create_utxos(
+fn create_allocations(
     ids: &[[u8; 32]],
     regular_note_keys: &mut Vec<ZkKey>,
-    blend_notes: &mut Vec<ServiceNote>,
     sdp_notes: &mut Vec<ServiceNote>,
     additional_wallet_outputs: usize,
     sdp_funding_config: SdpFundingConfig,
-) -> Vec<Utxo> {
+) -> Vec<GenesisAllocation> {
     if ids.is_empty() {
         return Vec::new();
     }
@@ -397,127 +397,78 @@ fn create_utxos(
         usize::try_from(sdp_funding_config.total_value_per_node % sdp_notes_per_node_u64)
             .expect("SDP funding value remainder should fit in usize");
 
-    let mut utxos = Vec::new();
-    let mut output_index = 0;
+    let mut allocations = Vec::new();
 
     for &id in ids {
         let sk_data = derive_key_material(LEADER_KEY_PREFIX, &id);
         let sk = ZkKey::from(BigUint::from_bytes_le(&sk_data));
         let pk = sk.to_public_key();
         regular_note_keys.push(sk);
-        utxos.push(Utxo {
-            note: Note::new(REGULAR_NOTE_VALUE, pk),
-            op_id: [0u8; 32],
-            output_index: 0,
+        allocations.push(GenesisAllocation {
+            value: REGULAR_NOTE_VALUE,
+            public_key: pk,
         });
-        output_index += 1;
-
-        let sk_blend_data = derive_key_material(BLEND_KEY_PREFIX, &id);
-        let sk_blend = ZkKey::from(BigUint::from_bytes_le(&sk_blend_data));
-        let pk_blend = sk_blend.to_public_key();
-        let note_blend = Note::new(BLEND_NOTE_VALUE, pk_blend);
-        let utxo = Utxo {
-            note: note_blend,
-            op_id: [0u8; 32],
-            output_index: 0,
-        };
-        blend_notes.push(ServiceNote {
-            pk: pk_blend,
-            sk: sk_blend,
-            note: note_blend,
-            note_id: utxo.id(),
-            output_index,
-        });
-        utxos.push(utxo);
-        output_index += 1;
 
         let sk_sdp_data = derive_key_material(SDP_KEY_PREFIX, &id);
         let sk_sdp = ZkKey::from(BigUint::from_bytes_le(&sk_sdp_data));
         let pk_sdp = sk_sdp.to_public_key();
         for sdp_note_index in 0..sdp_notes_per_node {
             let note_value = base_sdp_note_value + u64::from(sdp_note_index < sdp_value_remainder);
-            let note_sdp = Note::new(note_value, pk_sdp);
-            let utxo = Utxo {
-                note: note_sdp,
-                op_id: [0u8; 32],
-                output_index,
+            let allocation = GenesisAllocation {
+                value: note_value,
+                public_key: pk_sdp,
             };
             if sdp_note_index == 0 {
                 sdp_notes.push(ServiceNote {
                     pk: pk_sdp,
                     sk: sk_sdp.clone(),
-                    note: note_sdp,
-                    note_id: utxo.id(),
-                    output_index,
                 });
             }
-            utxos.push(utxo);
-            output_index += 1;
+            allocations.push(allocation);
         }
     }
 
-    utxos
+    allocations
 }
 
 #[must_use]
 pub fn create_genesis_block_with_declarations(
-    transfer_op: TransferOp,
-    providers: Vec<ProviderInfo>,
+    allocations: Distribution,
+    providers: &[ProviderInfo],
     test_context: Option<&str>,
     genesis_time: GenesisTime,
 ) -> GenesisBlock {
     let inscription = inscription_for_current_test(test_context, genesis_time);
-    let transfer_id = transfer_op.op_id();
 
-    let mut ops = vec![Op::Transfer(transfer_op), Op::ChannelInscribe(inscription)];
-
-    for provider in &providers {
-        let utxo = Utxo {
-            op_id: transfer_id,
-            output_index: provider.note.output_index,
-            note: provider.note.note,
-        };
-        let declaration = DeclarationMessage {
+    let declarations = providers
+        .iter()
+        .map(|provider| DeclarationMessage {
             service_type: provider.service_type,
             locators: provider.locator.clone().into(),
             provider_id: provider.provider_id(),
             zk_id: provider.zk_id(),
-            service_note_id: utxo.id(),
-        };
-        ops.push(Op::SDPDeclare(declaration));
+            note_pk: provider.note_pk(),
+            note_stake_pk: provider.note_pk(),
+            inputs: InputNullifiers::default(),
+            commitment_merkle_root: CommitmentMmr::new().frontier_root(),
+            amount: provider.amount,
+        })
+        .collect::<Vec<_>>();
+
+    let genesis_builder = GenesisBlockBuilder::new()
+        .try_add_notes(allocations)
+        .expect("allocations must fit in the genesis distribution")
+        .set_inscription(inscription);
+    if declarations.is_empty() {
+        return genesis_builder
+            .build()
+            .expect("Genesis block should build properly");
     }
-
-    let mantle_tx = Ops::new(GenesisTx::FORK_DIGEST, TxList::new_unchecked(ops));
-    let mantle_tx_hash = mantle_tx.hash();
-    let mut ops_proofs = OpProofs::from([
-        OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
-            &EMPTY_GROTH16_PROOF_BYTES,
-        ))),
-        OpProof::Ed25519Sig(Ed25519Signature::zero()),
-    ]);
-
-    for provider in providers {
-        let zk_sig =
-            ZkKey::multi_sign(&[provider.note.sk, provider.zk_sk], &mantle_tx_hash.to_fr())
-                .unwrap();
-        let ed25519_sig = provider
-            .provider_sk
-            .sign_payload(mantle_tx_hash.as_signing_bytes());
-        let proof = ZkAndEd25519Proof {
-            zk_sig,
-            ed25519_sig,
-        };
-        ops_proofs
-            .try_push(OpProof::ZkAndEd25519Sigs(proof))
-            .expect("genesis transaction proofs are bounded");
-    }
-
-    let signed_mantle_tx = SignedOps::from_parts_trusted(mantle_tx, ops_proofs).unwrap();
-
-    // TODO: Maybe use the builder instead of trusting the signed mantle tx
-    GenesisBlockBuilder::new()
-        .with_genesis_tx(GenesisTx::from_tx(signed_mantle_tx).expect("Genesis tx should build"))
+    genesis_builder
+        .add_declarations(declarations)
+        .expect("declarations must fit in the genesis transaction")
         .build()
+        .expect("Genesis block should build properly")
 }
 
 #[cfg(test)]
@@ -526,17 +477,17 @@ mod tests {
 
     use super::*;
 
-    fn sdp_outputs(material: &BaseConsensusMaterial) -> Vec<Note> {
+    fn sdp_outputs(material: &BaseConsensusMaterial) -> Vec<GenesisAllocation> {
         let funding_keys = material
             .sdp_notes
             .iter()
             .map(|note| note.pk)
             .collect::<HashSet<_>>();
         material
-            .utxos
+            .allocations
             .iter()
-            .filter(|utxo| funding_keys.contains(&utxo.note.pk))
-            .map(|utxo| utxo.note)
+            .filter(|allocation| funding_keys.contains(&allocation.public_key))
+            .copied()
             .collect()
     }
 
@@ -546,10 +497,17 @@ mod tests {
         let material = create_base_consensus_material_with_additional_wallet_outputs(&ids, 0);
 
         let outputs = sdp_outputs(&material);
-        assert_eq!(SdpFundingConfig::default().total_value_per_node, 10_000);
+        assert_eq!(
+            SdpFundingConfig::default().total_value_per_node,
+            10_000 * UNITS_PER_LGO
+        );
         assert_eq!(SdpFundingConfig::default().target_notes_per_node, 1);
         assert_eq!(outputs.len(), ids.len());
-        assert!(outputs.iter().all(|note| note.value == 10_000));
+        assert!(
+            outputs
+                .iter()
+                .all(|note| note.value == 10_000 * UNITS_PER_LGO)
+        );
     }
 
     #[test]
@@ -582,8 +540,8 @@ mod tests {
             );
 
         let outputs = sdp_outputs(&material);
-        assert_eq!(outputs.len(), ids.len() * 3);
-        for provider_outputs in outputs.chunks(3) {
+        assert_eq!(outputs.len(), ids.len() * 4);
+        for provider_outputs in outputs.chunks(4) {
             assert_eq!(
                 provider_outputs.iter().map(|note| note.value).sum::<u64>(),
                 10_000_000

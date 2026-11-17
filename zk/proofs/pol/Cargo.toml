@@ -27,9 +27,13 @@ tracing            = { workspace = true }
 [dev-dependencies]
 divan = { workspace = true }
 
+[features]
+test-utils = []
+
 [[bench]]
-harness = false
-name    = "prove"
+harness           = false
+name              = "prove"
+required-features = ["test-utils"]
 
 [lints]
 workspace = true

@@ -1,14 +1,15 @@
 use crate::mantle::{
     GenesisParameters,
     ledger::verification_mode::GenesisMode,
-    ops::{SignedOperation, channel::inscribe::InscriptionOp, transfer::TransferOp},
+    notes::Note,
+    ops::{SignedOperation, channel::inscribe::InscriptionOp},
     traits::{Hashable, MantleTx},
     transactions::{GenesisDeclarations, hash::TxHash, states::Verified},
 };
 
 pub struct GenesisOps {
-    pub transfer: SignedOperation<TransferOp, Verified, GenesisMode>,
     pub inscription: SignedOperation<InscriptionOp, Verified, GenesisMode>,
+    pub distribution_inscription: SignedOperation<InscriptionOp, Verified, GenesisMode>,
     pub declarations: GenesisDeclarations,
 }
 
@@ -17,4 +18,6 @@ pub struct GenesisOps {
 pub trait GenesisTx: Hashable<Hash = TxHash> + MantleTx {
     fn into_genesis_ops(self) -> GenesisOps;
     fn genesis_parameters(&self) -> GenesisParameters;
+    /// The initial notes, created from the distribution inscription.
+    fn initial_notes(&self) -> Vec<Note>;
 }

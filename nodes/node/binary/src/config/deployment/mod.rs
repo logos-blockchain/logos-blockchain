@@ -11,6 +11,7 @@ use lb_core::{
         transactions::genesis_tx::{ChainId, GenesisTime},
     },
 };
+use lb_ledger::{LedgerError, LedgerState};
 use lb_time::{
     Epoch, Slot,
     era::{EpochLength, EraEntriesAfterGenesis, SlotDuration},
@@ -23,6 +24,7 @@ use era::GENESIS_EPOCH;
 pub use era::{EraDeclarations, EraScheduleError};
 
 use crate::config::{
+    cryptarchia::ledger_config_for_era,
     deployment::era::ruleset::{EraRuleset, v1},
     time::check_transition_periods,
 };
@@ -158,6 +160,15 @@ impl DeploymentSettings {
     #[must_use]
     pub const fn genesis_block(&self) -> &GenesisBlock {
         &self.genesis_block
+    }
+
+    /// The ledger state this deployment's chain starts from: its genesis block
+    /// applied under the genesis era's parameters, or why the ledger rejects
+    /// it.
+    pub fn genesis_ledger_state(&self) -> Result<LedgerState, LedgerError<HeaderId>> {
+        let config = ledger_config_for_era(self.eras.genesis().parameters);
+        LedgerState::from_genesis_tx(self.genesis_block.genesis_tx().clone(), &config)
+            .map(|(state, _events)| state)
     }
 
     /// The chain this deployment targets, read off the genesis inscription.
@@ -413,6 +424,15 @@ mod tests {
     #[test]
     fn default_initialization() {
         drop(DeploymentSettings::default());
+    }
+
+    // The block must satisfy the ledger, the supply rule of Mantle Ledger
+    // Initialization included, or the node refuses to start.
+    #[test]
+    fn the_ledger_accepts_the_default_genesis_block() {
+        DeploymentSettings::default()
+            .genesis_ledger_state()
+            .expect("the ledger accepts the default genesis block");
     }
 
     #[test]

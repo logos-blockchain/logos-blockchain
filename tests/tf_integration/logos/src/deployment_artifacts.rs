@@ -13,7 +13,9 @@ use crate::{
     NodePlan,
     config::{
         deployment_settings_for_topology,
-        node_configs::consensus::{ProviderInfo, create_genesis_block_with_declarations},
+        node_configs::consensus::{
+            BLEND_DECLARATION_AMOUNT, ProviderInfo, create_genesis_block_with_declarations,
+        },
     },
     internal::DeploymentPlan,
 };
@@ -85,10 +87,10 @@ fn deployment_settings(
         hostnames,
         topology.config().blend_core_nodes,
     )?;
-    let transfer_op = genesis_block.genesis_tx().transfer().operation().clone();
+    let transfer_op = genesis_block.genesis_tx().distribution().clone();
     let genesis_block = create_genesis_block_with_declarations(
         transfer_op,
-        providers,
+        &providers,
         topology.config.test_context.as_deref(),
         topology.config().genesis_time(),
     );
@@ -129,7 +131,7 @@ fn collect_runtime_blend_providers(
             provider_sk: provider_sk.clone(),
             zk_sk: zk_sk.clone(),
             locator,
-            note: node.general.consensus_config.blend_note.clone(),
+            amount: BLEND_DECLARATION_AMOUNT,
         });
     }
 

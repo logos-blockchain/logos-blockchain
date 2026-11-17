@@ -17,12 +17,18 @@ use rpds::HashTrieMapSync;
 
 use crate::{
     EpochState,
+    block_rewards::MAX_SUPPLY,
     config::{Config, RewardPoWConfig},
     mantle::pow::{
         difficulty::compute_new_reward_difficulty,
         tx_density::{ClosedEpochLoad, TxDensity},
     },
 };
+
+/// `POW_REWARD_POOL_GENESIS`: the balance the pool starts with, five
+/// thousandths of the maximum supply (Initial Proof of Work Reward Pool in the
+/// genesis spec).
+pub const POW_REWARD_POOL_GENESIS: PowReward = MAX_SUPPLY / 1000 * 5;
 
 /// `PoW` state of the mantle ledger.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -37,19 +43,15 @@ pub struct PowState {
 /// State of the `PoW` role that mints token rewards.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RewardPowState {
-    /// `R_PoW`: reserve funding `PoW` rewards. Credited at each epoch boundary
-    /// with the `PoW` share (`beta`) of every block's collected fees, summed
-    /// over the epoch's blocks. Drained by `sigma_e` as rewards are
-    /// claimed.
+    /// `R_PoW`: reserve funding `PoW` rewards. Credited by each block with the
+    /// `PoW` share (`beta`) of its collected fees. Drained by `sigma_e` as
+    /// rewards are claimed.
     reward_pool: PowReward,
     /// `sigma_e`: reward per claim, fixed for the epoch.
     epoch_reward: PowReward,
     /// `d_reward`: the REWARD threshold, retargeted every block
     #[serde(with = "serde_fr")]
     reward_difficulty: PowTarget,
-    /// Rewards collected during the current epoch, added to the
-    /// `reward_pool` at the next epoch boundary.
-    refill_rewards: PowReward,
     /// Spent `PoW` solutions, retained only for the acceptance window.
     /// Values are the slot of the block the claim anchored to, used to trim
     /// them once the window of that block's era expires: from then on the
@@ -79,9 +81,9 @@ pub struct BlendPowState {
 
 impl PowState {
     /// Create the genesis `PoW` state: the pool seeded with `pow_reward_pool`,
-    /// the per-claim reward derived from it as at every refill, so that claims
-    /// pay from the first epoch, difficulty taken straight from the configured
-    /// exponent, and no claims or seen blocks yet.
+    /// the per-claim reward derived from it as at every epoch boundary, so that
+    /// claims pay from the first epoch, difficulty taken straight from the
+    /// configured exponent, and no claims or seen blocks yet.
     #[must_use]
     pub fn from_reward_pool_and_config(pow_reward_pool: PowReward, config: &Config) -> Self {
         Self {
@@ -89,7 +91,6 @@ impl PowState {
                 reward_pool: pow_reward_pool,
                 epoch_reward: compute_epoch_pow_reward(pow_reward_pool, config),
                 reward_difficulty: PowTarget::from(config.pow_config.reward.minimum_difficulty),
-                refill_rewards: 0,
                 nullifiers: HashTrieMapSync::new_sync(),
                 block_slots: HashTrieMapSync::new_sync(),
             },
@@ -130,30 +131,20 @@ impl PowState {
         self.reward.reward_pool = context.reward_pool;
     }
 
-    /// Move the epoch's collected `refill_rewards` into the `reward_pool`
-    /// and recompute the per-claim `epoch_reward` from it.
-    pub(crate) fn add_rewards_to_pool(
+    /// Recompute the per-claim `epoch_reward` from the `reward_pool`.
+    pub(crate) fn update_epoch_reward(&mut self, config: &Config) {
+        self.reward.epoch_reward = compute_epoch_pow_reward(self.reward.reward_pool, config);
+    }
+
+    /// Credit the `reward_pool` with the `PoW` share of a block's fees. The
+    /// `epoch_reward` stays as it is until the next epoch boundary.
+    pub(crate) fn credit_reward_pool(
         &mut self,
-        config: &Config,
+        reward: PowReward,
     ) -> Result<(), PowRewardPoolOverflow> {
         self.reward.reward_pool = self
             .reward
             .reward_pool
-            .checked_add(self.reward.refill_rewards)
-            .ok_or(PowRewardPoolOverflow)?;
-        self.reward.refill_rewards = 0;
-        self.reward.epoch_reward = compute_epoch_pow_reward(self.reward.reward_pool, config);
-        Ok(())
-    }
-
-    /// Add `reward` to the current epoch's pending `refill_rewards`.
-    pub(crate) fn add_reward_refill_rewards(
-        &mut self,
-        reward: PowReward,
-    ) -> Result<(), PowRewardPoolOverflow> {
-        self.reward.refill_rewards = self
-            .reward
-            .refill_rewards
             .checked_add(reward)
             .ok_or(PowRewardPoolOverflow)?;
         Ok(())
@@ -219,27 +210,27 @@ impl PowState {
         self.blend.tx_density.last_closed_epoch_load()
     }
 
-    /// Apply an epoch transition: on epoch change, refill the reward pool from
-    /// the rewards collected during `previous_epoch`, and close that epoch's
-    /// transaction totals so the Blend retarget can read them.
-    pub(crate) fn try_apply_header(
+    /// Apply an epoch transition: on epoch change, recompute the per-claim
+    /// reward from the pool, and close `previous_epoch`'s transaction totals
+    /// so the Blend retarget can read them.
+    pub(crate) fn apply_header(
         &self,
         previous_epoch: &EpochState,
         next_epoch: &EpochState,
         config: &Config,
-    ) -> Result<Self, PowRewardPoolOverflow> {
+    ) -> Self {
         if previous_epoch.epoch >= next_epoch.epoch {
-            return Ok(self.clone());
+            return self.clone();
         }
         let mut new_self = self.clone();
-        new_self.add_rewards_to_pool(config)?;
+        new_self.update_epoch_reward(config);
         // Once per epoch crossed, so epochs skipped entirely close as empty
         // and are read as no load — matching how the other per-epoch
         // rotations treat them.
         for _ in u32::from(previous_epoch.epoch)..u32::from(next_epoch.epoch) {
             new_self.blend.tx_density.close_epoch();
         }
-        Ok(new_self)
+        new_self
     }
 }
 
@@ -249,6 +240,12 @@ impl PowState {
     /// genesis initial-difficulty seeding that is not implemented yet.
     pub(crate) const fn set_reward_difficulty(&mut self, difficulty: PowTarget) {
         self.reward.reward_difficulty = difficulty;
+    }
+
+    /// Test-only: set the pool directly, standing in for the claims that
+    /// drained it.
+    pub(crate) const fn set_reward_pool(&mut self, reward_pool: PowReward) {
+        self.reward.reward_pool = reward_pool;
     }
 }
 
@@ -283,7 +280,10 @@ mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
     use lb_core::{
-        mantle::{ledger::Utxos, transactions::hash::TxHash},
+        mantle::{
+            note_set::{NoteSets, TxNoteState},
+            transactions::hash::TxHash,
+        },
         sdp::Declarations,
     };
     use lb_cryptarchia_engine::Epoch;
@@ -292,7 +292,6 @@ mod tests {
 
     use super::*;
     use crate::{
-        UtxoTree,
         config::{ModulusShift, pow_slot_windows},
         test_utils::schedule,
     };
@@ -325,7 +324,7 @@ mod tests {
             epoch: epoch.into(),
             nonce: Fr::ZERO,
             blend_pow_difficulty: PowTarget::ZERO,
-            utxos: UtxoTree::default(),
+            note_sets: NoteSets::new(),
             total_stake: 0,
             lottery_0: Fr::ZERO,
             lottery_1: Fr::ZERO,
@@ -449,72 +448,21 @@ mod tests {
     }
 
     #[test]
-    fn add_rewards_to_pool_moves_refill_and_computes_reward() {
+    fn credit_reward_pool_keeps_the_epoch_reward_until_the_boundary() {
+        let config = test_pool_config();
         let mut state = pow_state();
-        state.add_reward_refill_rewards(1_000).unwrap();
-        state.add_rewards_to_pool(&test_pool_config()).unwrap();
+        state.update_epoch_reward(&config);
+        let epoch_reward = state.epoch_reward();
 
+        state.credit_reward_pool(1_000).unwrap();
         assert_eq!(state.reward_pool(), POW_REWARD_POOL_GENESIS + 1_000);
+        assert_eq!(state.epoch_reward(), epoch_reward);
+
+        let new_state = state.apply_header(&epoch_state(0), &epoch_state(1), &config);
+        assert_eq!(new_state.reward_pool(), POW_REWARD_POOL_GENESIS + 1_000);
         assert_eq!(
-            state.epoch_reward(),
+            new_state.epoch_reward(),
             (POW_REWARD_POOL_GENESIS + 1_000) / 100
-        );
-    }
-
-    #[test]
-    fn add_rewards_to_pool_accumulates_across_multiple_refills() {
-        let mut state = pow_state();
-        state.add_reward_refill_rewards(400).unwrap();
-        state.add_reward_refill_rewards(600).unwrap();
-        state.add_rewards_to_pool(&test_pool_config()).unwrap();
-
-        assert_eq!(state.reward_pool(), POW_REWARD_POOL_GENESIS + 1_000);
-    }
-
-    #[test]
-    fn add_rewards_to_pool_is_noop_on_pool_when_no_refill_is_pending() {
-        let mut state = pow_state();
-        state.add_reward_refill_rewards(1_000).unwrap();
-        state.add_rewards_to_pool(&test_pool_config()).unwrap();
-        // Refill was reset by the call above: applying again must not add
-        // anything further to the pool.
-        state.add_rewards_to_pool(&test_pool_config()).unwrap();
-
-        assert_eq!(state.reward_pool(), POW_REWARD_POOL_GENESIS + 1_000);
-        assert_eq!(
-            state.epoch_reward(),
-            (POW_REWARD_POOL_GENESIS + 1_000) / 100
-        );
-    }
-
-    #[test]
-    fn add_rewards_to_pool_recomputes_reward_from_new_pool_each_time() {
-        let mut state = pow_state();
-        state.add_reward_refill_rewards(1_000).unwrap();
-        state.add_rewards_to_pool(&test_pool_config()).unwrap();
-        assert_eq!(
-            state.epoch_reward(),
-            (POW_REWARD_POOL_GENESIS + 1_000) / 100
-        );
-
-        state.add_reward_refill_rewards(9_000).unwrap();
-        state.add_rewards_to_pool(&test_pool_config()).unwrap();
-
-        assert_eq!(state.reward_pool(), POW_REWARD_POOL_GENESIS + 10_000);
-        assert_eq!(
-            state.epoch_reward(),
-            (POW_REWARD_POOL_GENESIS + 10_000) / 100
-        );
-    }
-
-    #[test]
-    fn refill_rewards_overflow_is_an_error() {
-        let mut state = pow_state();
-        state.add_reward_refill_rewards(u64::MAX).unwrap();
-
-        assert_eq!(
-            state.add_reward_refill_rewards(1),
-            Err(PowRewardPoolOverflow)
         );
     }
 
@@ -523,132 +471,61 @@ mod tests {
         // The pool starts at the genesis endowment, so adding u64::MAX to it
         // overflows.
         let mut state = pow_state();
-        state.add_reward_refill_rewards(u64::MAX).unwrap();
 
         assert_eq!(
-            state.add_rewards_to_pool(&test_pool_config()),
+            state.credit_reward_pool(u64::MAX),
             Err(PowRewardPoolOverflow)
         );
     }
 
     #[test]
-    fn try_apply_header_rejects_reward_pool_overflow() {
+    fn apply_header_is_noop_when_epoch_does_not_advance() {
         let mut state = pow_state();
-        state.add_reward_refill_rewards(u64::MAX).unwrap();
-
-        assert_eq!(
-            state.try_apply_header(&epoch_state(0), &epoch_state(1), &ledger_config()),
-            Err(PowRewardPoolOverflow)
-        );
-    }
-
-    #[test]
-    fn try_apply_header_is_noop_when_epoch_does_not_advance() {
-        let mut state = pow_state();
-        state.add_reward_refill_rewards(500).unwrap();
+        state.credit_reward_pool(500).unwrap();
         let same_epoch = epoch_state(3);
 
-        let unchanged = state
-            .try_apply_header(&same_epoch, &same_epoch, &ledger_config())
-            .unwrap();
+        let unchanged = state.apply_header(&same_epoch, &same_epoch, &test_pool_config());
 
         assert_eq!(unchanged, state);
-        assert_eq!(unchanged.reward_pool(), POW_REWARD_POOL_GENESIS);
+        assert_eq!(unchanged.reward_pool(), POW_REWARD_POOL_GENESIS + 500);
     }
 
     #[test]
-    fn try_apply_header_is_noop_when_epoch_goes_backwards() {
+    fn apply_header_is_noop_when_epoch_goes_backwards() {
         let mut state = pow_state();
-        state.add_reward_refill_rewards(500).unwrap();
+        state.credit_reward_pool(500).unwrap();
         let earlier = epoch_state(1);
         let later = epoch_state(5);
 
         // `next_epoch` behind `previous_epoch`, e.g. a stale/reorged branch.
-        let unchanged = state
-            .try_apply_header(&later, &earlier, &ledger_config())
-            .unwrap();
+        let unchanged = state.apply_header(&later, &earlier, &test_pool_config());
 
         assert_eq!(unchanged, state);
     }
 
     #[test]
-    fn try_apply_header_does_not_mutate_the_receiver() {
+    fn apply_header_does_not_mutate_the_receiver() {
         let mut state = pow_state();
-        state.add_reward_refill_rewards(500).unwrap();
+        state.credit_reward_pool(500).unwrap();
         let original = state.clone();
-        let previous = epoch_state(0);
-        let next = epoch_state(1);
 
-        drop(state.try_apply_header(&previous, &next, &ledger_config()));
+        drop(state.apply_header(&epoch_state(0), &epoch_state(1), &ledger_config()));
 
         assert_eq!(state, original);
     }
 
     #[test]
-    fn try_apply_header_moves_pending_refill_into_pool_on_advance() {
-        let mut state = pow_state();
-        state.add_reward_refill_rewards(500).unwrap();
-        let previous = epoch_state(0);
-        let next = epoch_state(1);
-
-        let new_state = state
-            .try_apply_header(&previous, &next, &ledger_config())
-            .unwrap();
-
-        assert_eq!(new_state.reward_pool(), POW_REWARD_POOL_GENESIS + 500);
-    }
-
-    #[test]
-    fn try_apply_header_leaves_reward_claiming_disabled() {
+    fn apply_header_leaves_reward_claiming_disabled() {
         // With the default reward config (claiming disabled, `rate_num = 0`),
         // `epoch_reward` is zeroed at the first transition even though the
         // pool is well funded.
         let mut state = pow_state();
-        state.add_reward_refill_rewards(1_000_000).unwrap();
-        let previous = epoch_state(0);
-        let next = epoch_state(1);
+        state.credit_reward_pool(1_000_000).unwrap();
 
-        let new_state = state
-            .try_apply_header(&previous, &next, &ledger_config())
-            .unwrap();
+        let new_state = state.apply_header(&epoch_state(0), &epoch_state(1), &ledger_config());
 
         assert_eq!(new_state.reward_pool(), POW_REWARD_POOL_GENESIS + 1_000_000);
         assert_eq!(new_state.epoch_reward(), 0);
-    }
-
-    #[test]
-    fn try_apply_header_across_multiple_epoch_jump_applies_once() {
-        let mut state = pow_state();
-        state.add_reward_refill_rewards(500).unwrap();
-        let previous = epoch_state(0);
-        let next = epoch_state(5);
-
-        let new_state = state
-            .try_apply_header(&previous, &next, &ledger_config())
-            .unwrap();
-
-        assert_eq!(new_state.reward_pool(), POW_REWARD_POOL_GENESIS + 500);
-    }
-
-    #[test]
-    fn try_apply_header_preserves_pending_refill_across_noop_transitions() {
-        // A no-op transition (same epoch) must not drop a refill that
-        // hasn't been credited to the pool yet.
-        let mut state = pow_state();
-        state.add_reward_refill_rewards(200).unwrap();
-        let same = epoch_state(2);
-        let mut state = state
-            .try_apply_header(&same, &same, &ledger_config())
-            .unwrap();
-
-        state.add_reward_refill_rewards(300).unwrap();
-        let previous = epoch_state(2);
-        let next = epoch_state(3);
-        let new_state = state
-            .try_apply_header(&previous, &next, &ledger_config())
-            .unwrap();
-
-        assert_eq!(new_state.reward_pool(), POW_REWARD_POOL_GENESIS + 500);
     }
 
     #[test]
@@ -689,7 +566,8 @@ mod tests {
             epoch_reward: 0,
             nullifiers,
             tx_hash: TxHash::from([7u8; 32]),
-            utxos: Utxos::new(),
+            note_sets: NoteSets::new(),
+            tx_notes: &mut TxNoteState::new(),
             block_slots: HashTrieMapSync::new_sync(),
         });
 
@@ -742,7 +620,8 @@ mod tests {
             epoch_reward: 0,
             nullifiers: HashTrieMapSync::new_sync().insert(nullifier, Slot::from(anchor)),
             tx_hash: TxHash::from([7u8; 32]),
-            utxos: Utxos::new(),
+            note_sets: NoteSets::new(),
+            tx_notes: &mut TxNoteState::new(),
             block_slots: HashTrieMapSync::new_sync(),
         });
 
@@ -757,8 +636,8 @@ mod tests {
     #[test]
     fn update_from_claim_execution_result_replaces_pool_and_nullifiers() {
         let mut state = pow_state();
-        state.add_reward_refill_rewards(1_000).unwrap();
-        state.add_rewards_to_pool(&test_pool_config()).unwrap();
+        state.credit_reward_pool(1_000).unwrap();
+        state.update_epoch_reward(&test_pool_config());
         let epoch_reward = (POW_REWARD_POOL_GENESIS + 1_000) / 100;
         assert_eq!(state.reward_pool(), POW_REWARD_POOL_GENESIS + 1_000);
         assert_eq!(state.epoch_reward(), epoch_reward);
@@ -770,7 +649,8 @@ mod tests {
             epoch_reward,
             nullifiers: nullifiers.clone(),
             tx_hash: TxHash::from([7u8; 32]),
-            utxos: Utxos::new(),
+            note_sets: NoteSets::new(),
+            tx_notes: &mut TxNoteState::new(),
             block_slots: HashTrieMapSync::new_sync(),
         };
 
@@ -788,13 +668,15 @@ mod tests {
     fn claim_result(
         reward_pool: PowReward,
         nullifier: PowNullifier,
-    ) -> ClaimPoWRewardExecutionContext {
+        tx_notes: &mut TxNoteState,
+    ) -> ClaimPoWRewardExecutionContext<'_> {
         ClaimPoWRewardExecutionContext {
             reward_pool,
             epoch_reward: 0,
             nullifiers: HashTrieMapSync::new_sync().insert(nullifier, Slot::from(7u64)),
             tx_hash: TxHash::from([7u8; 32]),
-            utxos: Utxos::new(),
+            note_sets: NoteSets::new(),
+            tx_notes,
             block_slots: HashTrieMapSync::new_sync(),
         }
     }
@@ -802,62 +684,51 @@ mod tests {
     #[test]
     fn epoch_reward_tapers_as_claims_drain_the_pool() {
         // Spec §5.6: sigma_e is recomputed at each boundary from the pool as
-        // claims left it, so a drained pool pays a smaller per-claim reward
+        // claims and credits left it, so a drained pool pays a smaller per-claim reward
         // in the next epoch, tapering to zero (the safety cutoff's input).
         let mut state = pow_state();
-        state.add_reward_refill_rewards(1_000).unwrap();
-        state.add_rewards_to_pool(&test_pool_config()).unwrap();
+        state.credit_reward_pool(1_000).unwrap();
+        state.update_epoch_reward(&test_pool_config());
         assert_eq!(
             state.epoch_reward(),
             (POW_REWARD_POOL_GENESIS + 1_000) / 100
         );
 
         // Claims drain the pool down to 990.
-        state.update_from_claim_execution_result(&claim_result(990, PowNullifier::from(Fr::ONE)));
-        state.add_rewards_to_pool(&test_pool_config()).unwrap();
+        state.update_from_claim_execution_result(&claim_result(
+            990,
+            PowNullifier::from(Fr::ONE),
+            &mut TxNoteState::new(),
+        ));
+        state.update_epoch_reward(&test_pool_config());
         assert_eq!(state.epoch_reward(), 9);
 
         // Drained below the payout rate, sigma_e floors to zero and the
         // safety cutoff (§5.6 `pow_reward_enabled`) would disable claiming.
-        state.update_from_claim_execution_result(&claim_result(99, PowNullifier::from(Fr::ONE)));
-        state.add_rewards_to_pool(&test_pool_config()).unwrap();
+        state.update_from_claim_execution_result(&claim_result(
+            99,
+            PowNullifier::from(Fr::ONE),
+            &mut TxNoteState::new(),
+        ));
+        state.update_epoch_reward(&test_pool_config());
         assert_eq!(state.epoch_reward(), 0);
     }
 
     #[test]
-    fn claim_execution_result_does_not_clobber_pending_refill() {
-        // Spec §5.8: within an epoch the spendable pool is touched only by
-        // claim draws; the refill accrues on the side and lands whole at the
-        // boundary. A claim applied after refills have accrued must not
-        // discard them.
-        let mut state = pow_state();
-        state.add_reward_refill_rewards(1_000).unwrap();
-        state.add_rewards_to_pool(&test_pool_config()).unwrap();
-
-        // Mid-epoch: block rewards accrue, then a claim drains the pool.
-        state.add_reward_refill_rewards(500).unwrap();
-        state.update_from_claim_execution_result(&claim_result(990, PowNullifier::from(Fr::ONE)));
-
-        // Boundary: the refill is credited on top of the post-claim pool,
-        // and sigma_e is snapshotted from the refilled pool (§5.6 ordering).
-        state.add_rewards_to_pool(&test_pool_config()).unwrap();
-        assert_eq!(state.reward_pool(), 1_490);
-        assert_eq!(state.epoch_reward(), 14);
-    }
-
-    #[test]
-    fn try_apply_header_carries_nullifiers_forward() {
+    fn apply_header_carries_nullifiers_forward() {
         // Spec §5.5/§5.1.1: spent solutions must stay rejected while their
         // block_hash is inside the acceptance window, which spans epoch
         // boundaries. Nullifier pruning by window age is not implemented
         // yet, so today the whole set must survive a transition untouched.
         let nullifier = PowNullifier::from(Fr::ONE);
         let mut state = pow_state();
-        state.update_from_claim_execution_result(&claim_result(0, nullifier));
+        state.update_from_claim_execution_result(&claim_result(
+            0,
+            nullifier,
+            &mut TxNoteState::new(),
+        ));
 
-        let new_state = state
-            .try_apply_header(&epoch_state(0), &epoch_state(1), &ledger_config())
-            .unwrap();
+        let new_state = state.apply_header(&epoch_state(0), &epoch_state(1), &ledger_config());
 
         assert!(new_state.nullifiers().contains_key(&nullifier));
     }
@@ -866,13 +737,15 @@ mod tests {
     fn pow_state_serde_round_trip() {
         // PowState is consensus state carried per block; `reward_difficulty`
         // serializes through the custom `serde_fr` codec and the nullifier
-        // set through rpds. A round trip must reproduce the state exactly,
-        // including a pending (not yet credited) refill.
+        // set through rpds. A round trip must reproduce the state exactly.
         let mut state = pow_state();
-        state.add_reward_refill_rewards(1_000).unwrap();
-        state.add_rewards_to_pool(&test_pool_config()).unwrap();
-        state.update_from_claim_execution_result(&claim_result(990, PowNullifier::from(Fr::ONE)));
-        state.add_reward_refill_rewards(123).unwrap();
+        state.credit_reward_pool(1_000).unwrap();
+        state.update_epoch_reward(&test_pool_config());
+        state.update_from_claim_execution_result(&claim_result(
+            990,
+            PowNullifier::from(Fr::ONE),
+            &mut TxNoteState::new(),
+        ));
 
         let json = serde_json::to_string(&state).expect("PowState should serialize");
         let restored: PowState = serde_json::from_str(&json).expect("PowState should deserialize");

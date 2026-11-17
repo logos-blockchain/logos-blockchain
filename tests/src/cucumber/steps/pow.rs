@@ -1,14 +1,19 @@
 use std::{collections::HashSet, time::Duration};
 
 use cucumber::{gherkin::Step, then, when};
-use lb_core::mantle::{OpRef, traits::Hashable as _, transactions::hash::TxHash};
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_core::{
+    events::{Event, TxEvent, TxEventPayload},
+    mantle::{OpRef, traits::Hashable as _, transactions::hash::TxHash},
+};
 use lb_testing_framework::NodeHttpClient;
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
 use crate::{
-    common::{chain::scan_chain_until, wallet::WalletOutputState},
+    common::{
+        chain::scan_chain_until,
+        wallet::{WalletOutputState, scanner::block_source::block_events},
+    },
     cucumber::{
         error::{StepError, StepResult},
         steps::TARGET,
@@ -306,19 +311,16 @@ async fn step_record_wallet_balance(
 
     info!(
         target: TARGET,
-        "Recorded balance of wallet `{wallet_name}` as `{baseline_label}` = {value} LGO"
+        "Recorded balance of wallet `{wallet_name}` as `{baseline_label}` = {value} units"
     );
     Ok(())
 }
 
-/// Sums the values of a transaction's transfer outputs paid to `claim_address`,
-/// by locating the transaction on the chain served by `node`. This is the exact
-/// amount the reward-claim transaction credited to that account.
-async fn claim_reward_credited_to(
-    node: &NodeHttpClient,
-    tx_hash: TxHash,
-    claim_address: ZkPublicKey,
-) -> Result<u64, StepError> {
+/// The amount a reward-claim transaction credited to its claim address, by
+/// locating the transaction on the chain served by `node`: the reward notes
+/// its claims mint, whose openings their events reveal, less the fee its
+/// transfers pay out of them before returning the rest to the claim address.
+async fn claim_reward_credited(node: &NodeHttpClient, tx_hash: TxHash) -> Result<u64, StepError> {
     let tip = node.consensus_info().await?.cryptarchia_info.tip;
     let mut scanned_blocks = HashSet::new();
 
@@ -330,25 +332,45 @@ async fn claim_reward_credited_to(
             async move { node.block(&header_id).await.ok().flatten() }
         },
         |block| {
-            let tx = block.transactions.iter().find(|tx| tx.hash() == tx_hash)?;
-            let credited = tx
-                .op_refs_iter()
-                .filter_map(|op| match op {
-                    OpRef::Transfer(transfer) => Some(transfer),
-                    _ => None,
+            block
+                .transactions
+                .iter()
+                .find(|tx| tx.hash() == tx_hash)
+                .map(|tx| {
+                    let fee: u64 = tx
+                        .op_refs()
+                        .iter()
+                        .filter_map(|op| match op {
+                            OpRef::Transfer(transfer) => Some(transfer.excess_value),
+                            _ => None,
+                        })
+                        .sum();
+                    (block.header.id, fee)
                 })
-                .flat_map(|transfer| transfer.outputs.iter())
-                .filter(|note| note.pk == claim_address)
-                .map(|note| note.value)
-                .sum::<u64>();
-            Some(credited)
         },
     )
     .await;
 
-    credited.ok_or_else(|| StepError::LogicalError {
+    let (block_id, fee) = credited.ok_or_else(|| StepError::LogicalError {
         message: format!("claim transaction {tx_hash:?} was not found on the chain"),
-    })
+    })?;
+    let events = block_events(node, block_id)
+        .await
+        .map_err(|error| StepError::LogicalError {
+            message: format!("events of the claim block {block_id} not readable: {error}"),
+        })?;
+    let rewards: u64 = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Tx(TxEvent {
+                tx_hash: event_tx_hash,
+                payload: TxEventPayload::PoWRewardClaimed { note, .. },
+                ..
+            }) if *event_tx_hash == tx_hash => Some(note.value),
+            _ => None,
+        })
+        .sum();
+    Ok(rewards.saturating_sub(fee))
 }
 
 /// Counts the `ClaimPowReward` ops the landed claim transaction carried.
@@ -453,12 +475,11 @@ async fn step_wallet_balance_increased_by_claim_reward(
         .ok_or_else(|| StepError::LogicalError {
             message: format!("wallet '{wallet_name}' not found in world state"),
         })?;
-    // The reward beneficiary is this wallet's public key, which is the address
-    // the claim request named.
-    let claim_address = wallet.public_key()?;
+    // This wallet's public key is the address the claim request named, which
+    // the claim's transfers return the rewards to.
     let node = world.resolve_node_http_client(&wallet.node_name)?;
 
-    let reward = claim_reward_credited_to(&node, tx_hash, claim_address).await?;
+    let reward = claim_reward_credited(&node, tx_hash).await?;
     if reward == 0 {
         return Err(StepError::LogicalError {
             message: format!(
@@ -475,8 +496,8 @@ async fn step_wallet_balance_increased_by_claim_reward(
         if latest == expected {
             info!(
                 target: TARGET,
-                "Wallet `{wallet_name}` grew from {baseline} to {latest} LGO, exactly the \
-                {reward} LGO credited by claim `{claim_alias}`"
+                "Wallet `{wallet_name}` grew from {baseline} to {latest} units, exactly the \
+                {reward} units credited by claim `{claim_alias}`"
             );
             return Ok(());
         }

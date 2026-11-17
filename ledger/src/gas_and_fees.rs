@@ -59,7 +59,7 @@ impl GasAndFees {
 mod tests {
     use super::*;
 
-    const MAX_GAS_PER_BLOCK: Gas = Gas::new(3_193_460);
+    const MAX_GAS_PER_BLOCK: Gas = Gas::new(3_137_798);
 
     fn with_execution_gas(execution_gas: Gas) -> GasAndFees {
         GasAndFees {

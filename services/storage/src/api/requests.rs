@@ -31,6 +31,13 @@ pub enum StorageMsg {
         key: Bytes,
         value: Bytes,
     },
+    /// A [`Self::Store`] answered once the value is written, with the result of
+    /// the write.
+    StoreConfirmed {
+        key: Bytes,
+        value: Bytes,
+        reply_channel: Sender<Result<(), String>>,
+    },
     Remove {
         key: Bytes,
         reply_channel: Sender<Option<Bytes>>,
@@ -108,6 +115,7 @@ impl StorageMsg {
             | Self::ScanImmutableBlockIdsReverse { .. }
             | Self::GetTransactions { .. } => true,
             Self::Store { .. }
+            | Self::StoreConfirmed { .. }
             | Self::Remove { .. }
             | Self::Execute { .. }
             | Self::StoreBlockData { .. }
@@ -139,6 +147,9 @@ impl Debug for StorageMsg {
             }
             Self::Store { key, value } => {
                 write!(f, "Store {{ {key:?}, {value:?}}}")
+            }
+            Self::StoreConfirmed { key, value, .. } => {
+                write!(f, "StoreConfirmed {{ {key:?}, {value:?}}}")
             }
             Self::Remove { key, .. } => {
                 write!(f, "Remove {{ {key:?} }}")

@@ -26,8 +26,10 @@ use std::{num::NonZero, sync::Arc};
 use lb_core::{
     crypto::{Digest as _, Hasher},
     mantle::{
-        Note, SignedOps, Utxo, Value,
+        Note, SignedOps, Value,
         ledger::verification_mode::StandardMode,
+        note_set::NoteSets,
+        ops::channel::withdraw::PendingWithdrawals,
         transactions::{
             GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, states::Preverified,
         },
@@ -42,11 +44,12 @@ use num_bigint::BigUint;
 use rand::{Rng as _, SeedableRng as _, rngs::StdRng};
 
 use crate::{
-    Config, Ledger, WINDOW_SIZE,
+    Config, Ledger,
+    block_rewards::BlockRewards,
     cryptarchia::{
-        EpochState, LedgerState, UtxoTree,
+        EpochState, LedgerState,
         block_density::BlockDensity,
-        tests::{GENESIS_POW_REWARD_POOL, config, generate_proof},
+        tests::{GENESIS_POW_REWARD_POOL, computed_reward_value, config, generate_proof},
     },
     mantle::sdp::SdpLedger,
     test_utils::single_era,
@@ -192,28 +195,24 @@ fn simulation_config() -> Config {
 }
 
 /// The note of the only leader, holding [`TOTAL_STAKE`].
-fn leader_utxo() -> Utxo {
-    Utxo {
-        op_id: [0u8; 32],
-        output_index: 0,
-        note: Note::new(
-            TOTAL_STAKE,
-            ZkKey::from(BigUint::from(0u64)).to_public_key(),
-        ),
-    }
+fn leader_utxo() -> Note {
+    Note::new(
+        TOTAL_STAKE,
+        Fr::ZERO,
+        ZkKey::from(BigUint::from(0u64)).to_public_key(),
+    )
 }
 
 /// A ledger holding a single leader whose note is the entire stake.
-fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
-    let total_stake = leader_utxo.note.value;
+fn genesis_ledger(config: &Config, leader_utxo: Note) -> Ledger<HeaderId> {
+    let total_stake = leader_utxo.value;
     let (lottery_0, lottery_1) = config
         .lottery_constants()
         .compute_lottery_values(total_stake);
-    let utxos: UtxoTree = std::iter::once((leader_utxo.id(), leader_utxo)).collect();
     let epoch_state = EpochState {
         epoch: 0.into(),
         nonce: Fr::ZERO,
-        utxos: utxos.clone(),
+        note_sets: NoteSets::new(),
         total_stake,
         lottery_0,
         lottery_1,
@@ -221,9 +220,9 @@ fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
         blend_pow_difficulty: Fr::ZERO,
     };
     let cryptarchia_ledger = LedgerState {
-        utxos,
+        note_sets: NoteSets::new(),
+        pending_withdrawals: PendingWithdrawals::new(),
         nonce: Fr::ZERO,
-        previous_epoch_nonce: Fr::ZERO,
         slot: 0.into(),
         next_epoch_state: EpochState {
             epoch: 1.into(),
@@ -231,7 +230,7 @@ fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
         },
         block_density: BlockDensity::from_genesis_config(config),
         epoch_state,
-        fee_window: [0.into(); WINDOW_SIZE],
+        block_rewards: BlockRewards::genesis(),
         average_execution_gas: 0.into(),
         execution_base_fee: GENESIS_EXECUTION_GAS_PRICE,
         storage_gas_ema: 0.into(),
@@ -247,7 +246,7 @@ fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
         ),
         cryptarchia_ledger,
     };
-    Ledger::new(GENESIS, state, Arc::new(single_era(config.clone())))
+    Ledger::new(GENESIS, state, Arc::new(single_era(config.clone()))).unwrap()
 }
 
 fn block_id(parent: HeaderId, slot: Slot) -> HeaderId {
@@ -341,16 +340,16 @@ fn apply_block(
     engine: &mut Cryptarchia<HeaderId>,
     parent: HeaderId,
     slot: Slot,
-    leader_utxo: Utxo,
+    leader_utxo: Note,
     uncle_slots: UncleSlots,
 ) {
     let block = apply_block_to_ledger(ledger, parent, slot, leader_utxo, &uncle_slots);
     let (pruned, _) = engine
         .receive_block(block, parent, slot, uncle_slots)
         .expect("engine update");
-    for pruned_block in pruned.all() {
-        ledger.prune_state_at(pruned_block);
-    }
+    ledger
+        .apply_pruning(engine.lib(), &pruned)
+        .expect("the pruned states are removed");
 }
 
 /// Applies a block to the real ledger, by generating a dummy proof.
@@ -358,7 +357,7 @@ fn apply_block_to_ledger(
     ledger: &mut Ledger<HeaderId>,
     parent: HeaderId,
     slot: Slot,
-    utxo: Utxo,
+    utxo: Note,
     uncle_slots: &UncleSlots,
 ) -> HeaderId {
     let parent_state = ledger
@@ -374,7 +373,9 @@ fn apply_block_to_ledger(
         )
         .expect("epoch state update");
     let id = block_id(parent, slot);
-    let proof = generate_proof(&parent_state, &utxo, slot);
+    let mut proof = generate_proof(&parent_state, &utxo, slot);
+    proof.reward_value = computed_reward_value(ledger, parent, slot, &proof, uncle_slots, [])
+        .expect("the reward of the block");
     let update = ledger
         .prepare_update(
             id,
@@ -387,6 +388,6 @@ fn apply_block_to_ledger(
         .expect("ledger update")
         .verify_batch_proofs()
         .expect("batch proof verification");
-    ledger.commit_update(update);
+    ledger.commit_update(update).unwrap();
     id
 }

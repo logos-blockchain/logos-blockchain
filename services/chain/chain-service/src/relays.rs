@@ -37,9 +37,9 @@ impl<Tx> CryptarchiaConsensusRelays<Tx> {
     }
 
     #[expect(clippy::allow_attributes_without_reason)]
-    pub async fn from_service_resources_handle<TimeBackend, RuntimeServiceId>(
+    pub async fn from_service_resources_handle<TimeBackend, NullifierStore, RuntimeServiceId>(
         service_resources_handle: &OpaqueServiceResourcesHandle<
-            CryptarchiaConsensus<Tx, TimeBackend, RuntimeServiceId>,
+            CryptarchiaConsensus<Tx, TimeBackend, NullifierStore, RuntimeServiceId>,
             RuntimeServiceId,
         >,
     ) -> Self

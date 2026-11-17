@@ -6,20 +6,23 @@ use lb_binary_codec::{
     bincode::BoundedSerializeOp,
     canonical::{BinaryDecode, BinaryEncode, DecodeError},
 };
+use lb_dynamic_merkle::{MerkleNode, MerklePath};
 use lb_groth16::{COMPRESSED_PROOF_SIZE, FR_BYTES_SIZE, Fr, fr_from_bytes, serde::serde_fr};
-use lb_key_management_system_keys::keys::{
-    ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, UnverifiedEd25519PublicKey, ZkPublicKey,
-};
+use lb_imt::store::LowLeaf;
+use lb_key_management_system_keys::keys::kdf_public_key;
 use lb_log_targets::proofs;
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
-use lb_utxotree::MerklePath;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
 
 use crate::{
-    mantle::{ledger::Utxo, ops::leader_claim::VoucherCm},
-    proofs::merkle::merkle_path_to_witness,
+    crypto::ZkHasher,
+    mantle::{
+        Value,
+        note_set::{NoteSet, NoteSetError, NoteSetIndex, NoteSets},
+        notes::{self, NoteCommitment, NoteNullifier},
+    },
 };
 
 const LOG_TARGET: &str = proofs::LEADER;
@@ -30,16 +33,12 @@ pub struct Groth16LeaderProof {
     proof: lb_pol::PoLProof,
     #[serde(with = "serde_fr")]
     entropy_contribution: Fr,
-    // We cannot use the verified one because a key of `0`s is used in the genesis block, and that
-    // would fail verification during deserialization.
-    leader_key: UnverifiedEd25519PublicKey,
-    voucher_cm: VoucherCm,
+    reward_commitment: NoteCommitment,
+    reward_value: Value,
 }
 
-const GROTH16_LEADER_PROOF_BINCODE_SIZE: usize = COMPRESSED_PROOF_SIZE
-    + FR_BYTES_SIZE
-    + <UnverifiedEd25519PublicKey as BoundedSerializeOp>::MAX_ENCODED_SIZE
-    + <VoucherCm as BoundedSerializeOp>::MAX_ENCODED_SIZE;
+const GROTH16_LEADER_PROOF_BINCODE_SIZE: usize =
+    COMPRESSED_PROOF_SIZE + FR_BYTES_SIZE + FR_BYTES_SIZE + size_of::<Value>();
 
 impl BoundedSerializeOp for Groth16LeaderProof {
     type Bytes = [u8; GROTH16_LEADER_PROOF_BINCODE_SIZE];
@@ -53,8 +52,8 @@ impl Debug for Groth16LeaderProof {
                 &format_args!("{} bytes", size_of::<lb_pol::PoLProof>()),
             )
             .field("entropy_contribution", &self.entropy_contribution)
-            .field("leader_key", &self.leader_key)
-            .field("voucher_cm", &self.voucher_cm)
+            .field("reward_commitment", &self.reward_commitment)
+            .field("reward_value", &self.reward_value)
             .finish()
     }
 }
@@ -67,8 +66,8 @@ impl BinaryEncode for Groth16LeaderProof {
     fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.proof.to_bytes());
         self.entropy_contribution.encode_into(out);
-        self.leader_key.encode_into(out);
-        self.voucher_cm.encode_into(out);
+        self.reward_commitment.encode_into(out);
+        self.reward_value.encode_into(out);
     }
 }
 
@@ -80,16 +79,22 @@ impl BinaryDecode for Groth16LeaderProof {
         (): &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
         let (rest, proof_bytes) = <[u8; COMPRESSED_PROOF_SIZE]>::decode(input, &())?;
+        let proof = lb_pol::PoLProof::try_from_bytes(&proof_bytes).map_err(|error| {
+            DecodeError::InvalidValue {
+                type_name: "PoLProof",
+                message: error.to_string().into(),
+            }
+        })?;
         let (rest, entropy_contribution) = Fr::decode(rest, &())?;
-        let (rest, leader_key) = UnverifiedEd25519PublicKey::decode(rest, &())?;
-        let (rest, voucher_cm) = VoucherCm::decode(rest, &())?;
+        let (rest, reward_commitment) = NoteCommitment::decode(rest, &())?;
+        let (rest, reward_value) = Value::decode(rest, &())?;
         Ok((
             rest,
             Self {
-                proof: lb_pol::PoLProof::from_bytes(&proof_bytes),
+                proof,
                 entropy_contribution,
-                leader_key,
-                voucher_cm,
+                reward_commitment,
+                reward_value,
             },
         ))
     }
@@ -103,22 +108,21 @@ pub enum Error {
 
 impl Groth16LeaderProof {
     /// The fixed-size canonical representation of a proof of leadership.
-    pub const CANONICAL_ENCODED_SIZE: usize = COMPRESSED_PROOF_SIZE
-        + FR_BYTES_SIZE
-        + ED25519_PUBLIC_KEY_SIZE
-        + VoucherCm::CANONICAL_ENCODED_SIZE;
+    pub const CANONICAL_ENCODED_SIZE: usize =
+        COMPRESSED_PROOF_SIZE + FR_BYTES_SIZE + FR_BYTES_SIZE + size_of::<Value>();
 
-    pub fn prove(witness: LeaderPrivate, voucher_cm: VoucherCm) -> Result<Self, Error> {
+    pub fn prove(witness: LeaderPrivate) -> Result<Self, Error> {
         let start_t = std::time::Instant::now();
-        let leader_key = witness.pk;
-        let (proof, entropy_contribution) = Self::generate_proof(witness)?;
+        let reward_value = witness.input.chain.reward_value;
+        let (proof, verif_inputs) =
+            lb_pol::prove(witness.input.into()).map_err(Error::PoLProofFailed)?;
         tracing::debug!(target: LOG_TARGET, "groth16 prover time: {:.2?}", start_t.elapsed(),);
 
         Ok(Self {
             proof,
-            entropy_contribution,
-            leader_key: leader_key.into_unverified(),
-            voucher_cm,
+            entropy_contribution: verif_inputs.entropy_contribution.into_inner(),
+            reward_commitment: NoteCommitment(verif_inputs.reward_commitment.into_inner()),
+            reward_value,
         })
     }
 
@@ -127,15 +131,9 @@ impl Groth16LeaderProof {
         Self {
             proof: lb_pol::PoLProof::from_bytes(&[0u8; 128]),
             entropy_contribution: Fr::ZERO,
-            leader_key: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
-            voucher_cm: VoucherCm::default(),
+            reward_commitment: NoteCommitment(Fr::ZERO),
+            reward_value: 0,
         }
-    }
-
-    fn generate_proof(private: LeaderPrivate) -> Result<(lb_pol::PoLProof, Fr), Error> {
-        let (proof, verif_inputs) =
-            lb_pol::prove(private.input.into()).map_err(Error::PoLProofFailed)?;
-        Ok((proof, verif_inputs.entropy_contribution.into_inner()))
     }
 
     #[must_use]
@@ -153,14 +151,14 @@ impl Groth16LeaderProof {
     pub(crate) const fn from_parts(
         proof: lb_pol::PoLProof,
         entropy_contribution: Fr,
-        leader_key: Ed25519PublicKey,
-        voucher_cm: VoucherCm,
+        reward_commitment: NoteCommitment,
+        reward_value: Value,
     ) -> Self {
         Self {
             proof,
             entropy_contribution,
-            leader_key: leader_key.into_unverified(),
-            voucher_cm,
+            reward_commitment,
+            reward_value,
         }
     }
 }
@@ -174,25 +172,33 @@ pub trait LeaderProof {
     /// Get the entropy used in the proof.
     fn entropy(&self) -> Fr;
 
-    fn leader_key(&self) -> &UnverifiedEd25519PublicKey;
+    /// The commitment of the note paying the leader reward of the block.
+    fn reward_commitment(&self) -> NoteCommitment;
 
-    fn voucher_cm(&self) -> &VoucherCm;
+    /// The value of that note, which must be the computed leader reward.
+    fn reward_value(&self) -> Value;
 }
 
-impl LeaderProof for Groth16LeaderProof {
-    fn verify(&self, public_inputs: &LeaderPublic) -> bool {
-        let leader_pk = ed25519_pk_to_fr_tuple(self.leader_key());
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "the former `LeaderProof` impl, kept in place for a minimal diff"
+)]
+impl Groth16LeaderProof {
+    #[must_use]
+    pub fn verify(&self, public_inputs: &LeaderPublic, msg: Fr) -> bool {
         lb_pol::verify(
             &self.proof,
             &lb_pol::PolVerifierInput::new(
                 self.entropy(),
+                self.reward_commitment.0,
                 public_inputs.slot,
                 public_inputs.epoch_nonce,
                 public_inputs.aged_root,
                 public_inputs.latest_root,
                 public_inputs.lottery_0,
                 public_inputs.lottery_1,
-                leader_pk,
+                msg,
+                self.reward_value,
             ),
         )
         .unwrap_or_else(|e| {
@@ -201,24 +207,28 @@ impl LeaderProof for Groth16LeaderProof {
         })
     }
 
-    fn verify_genesis(&self) -> bool {
+    #[must_use]
+    pub fn verify_genesis(&self) -> bool {
         let expected_genesis = Self::genesis();
         self.proof == expected_genesis.proof
             && self.entropy_contribution == expected_genesis.entropy_contribution
-            && self.leader_key == expected_genesis.leader_key
-            && self.voucher_cm == expected_genesis.voucher_cm
+            && self.reward_commitment == expected_genesis.reward_commitment
+            && self.reward_value == expected_genesis.reward_value
     }
 
-    fn entropy(&self) -> Fr {
+    #[must_use]
+    pub const fn entropy(&self) -> Fr {
         self.entropy_contribution
     }
 
-    fn leader_key(&self) -> &UnverifiedEd25519PublicKey {
-        &self.leader_key
+    #[must_use]
+    pub const fn reward_commitment(&self) -> NoteCommitment {
+        self.reward_commitment
     }
 
-    fn voucher_cm(&self) -> &VoucherCm {
-        &self.voucher_cm
+    #[must_use]
+    pub const fn reward_value(&self) -> Value {
+        self.reward_value
     }
 }
 
@@ -237,17 +247,20 @@ pub struct LeaderPublic {
     pub latest_root: Fr,
 }
 
-/// Check if the given note is owned by the leader and wins the lottery with
-/// the given public inputs.
+/// Check if the given note leads and wins the lottery with the given keys.
+///
+/// The nullifier key derives the public key of the note and the staking secret
+/// key its staking key and the ticket. A program note leads like a user note.
 #[must_use]
 pub fn check_winning(
-    utxo: Utxo,
+    note: &notes::Note,
     public_inputs: LeaderPublic,
-    publib_key: &ZkPublicKey,
-    secret_key: Fr,
+    nullifier_key: Fr,
+    staking_secret_key: Fr,
 ) -> bool {
-    utxo.note.pk == *publib_key
-        && public_inputs.check_winning(utxo.note.value, utxo.id().0, secret_key)
+    note.public_key == kdf_public_key(&nullifier_key)
+        && note.stake_public_key == kdf_public_key(&staking_secret_key)
+        && public_inputs.check_winning(note.value, note.commitment().0, staking_secret_key)
 }
 
 impl LeaderPublic {
@@ -270,6 +283,7 @@ impl LeaderPublic {
         }
     }
 
+    // The ticket is derived from the staking secret key of the note.
     #[must_use]
     pub fn check_winning(&self, value: u64, note_id: Fr, sk: Fr) -> bool {
         let threshold =
@@ -294,59 +308,182 @@ static LEAD_V1: LazyLock<Fr> =
 #[derive(Debug, Clone)]
 pub struct LeaderPrivate {
     input: lb_pol::PolWitnessInputsData,
-    pk: Ed25519PublicKey,
 }
 
 impl LeaderPrivate {
     #[must_use]
-    pub fn new(
+    pub const fn new(
         public: LeaderPublic,
-        note: Utxo,
-        aged_path: &MerklePath<Fr>,
-        latest_path: &MerklePath<Fr>,
-        secret_key: Fr,
-        leader_pk: &Ed25519PublicKey,
+        wallet: lb_pol::PolWalletInputsData,
+        msg: Fr,
+        reward_value: Value,
     ) -> Self {
-        let public_key = *leader_pk;
-        let leader_pk = ed25519_pk_to_fr_tuple(leader_pk.as_unverified());
         let chain = lb_pol::PolChainInputsData {
             slot_number: public.slot,
             epoch_nonce: public.epoch_nonce,
             lottery_0: public.lottery_0,
             lottery_1: public.lottery_1,
-            aged_root: public.aged_root,
-            latest_root: public.latest_root,
-            leader_pk,
-        };
-        let (aged_path, aged_selector) = merkle_path_to_witness(aged_path);
-        let (latest_path, latest_selector) = merkle_path_to_witness(latest_path);
-        let wallet = lb_pol::PolWalletInputsData {
-            note_value: note.note.value,
-            transaction_hash: Fr::from_le_bytes_mod_order(note.op_id.as_ref()),
-            output_number: note.output_index as u64,
-            aged_path,
-            aged_selectors: aged_selector,
-            latest_path,
-            latest_selectors: latest_selector,
-            secret_key,
+            eligible_aged: public.aged_root,
+            eligible_latest: public.latest_root,
+            msg,
+            reward_value,
         };
         let input = lb_pol::PolWitnessInputsData::from_chain_and_wallet_data(chain, wallet);
-        Self {
-            input,
-            pk: public_key,
-        }
+        Self { input }
     }
 
     #[must_use]
     pub const fn input(&self) -> &lb_pol::PolWitnessInputsData {
         &self.input
     }
+
+    /// The entropy contribution the proof outputs,
+    /// `zkhash(NONCE_CONTRIB_V1, slot, commitment, staking_sk)`. The block ID
+    /// covers it and the proof is bound to the block ID, so the leader computes
+    /// it before proving.
+    #[must_use]
+    pub fn entropy_contribution(&self) -> Fr {
+        let wallet = &self.input.wallet;
+        let note = notes::Note {
+            value: wallet.note_value,
+            nonce: wallet.note_nonce,
+            public_key: kdf_public_key(&wallet.nullifier_key),
+            stake_public_key: kdf_public_key(&wallet.staking_secret_key),
+            program: wallet.note_program,
+            data: wallet.note_data,
+        };
+        Poseidon2Bn254Hasher::digest(&[
+            *NONCE_CONTRIB_V1,
+            Fr::from(self.input.chain.slot_number),
+            note.commitment().0,
+            wallet.staking_secret_key,
+        ])
+    }
+
+    /// The witness bound to `msg`, the block ID of the header it proves.
+    #[must_use]
+    pub const fn with_msg(mut self, msg: Fr) -> Self {
+        self.input.chain.msg = msg;
+        self
+    }
 }
+
+static NONCE_CONTRIB_V1: LazyLock<Fr> = LazyLock::new(|| {
+    fr_from_bytes(b"NONCE_CONTRIB_V1").expect("BigUint should load from constant string")
+});
 
 impl From<LeaderPrivate> for lb_pol::PolWitnessInputsData {
     fn from(value: LeaderPrivate) -> Self {
         value.input
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum LeaderWitnessError {
+    #[error("Note set {0} is unknown")]
+    UnknownNoteSet(NoteSetIndex),
+    #[error("The aged path does not lead to the aged commitment root of note set {0}")]
+    AgedPathMismatch(NoteSetIndex),
+    #[error("The note is spent in the latest note set")]
+    Spent,
+    #[error("Note set error: {0}")]
+    NoteSet(#[from] NoteSetError),
+}
+
+// The low leaf of `nullifier` in `set` and its path, or `Spent` if the set
+// holds `nullifier`.
+fn low_leaf_witness(
+    set: &NoteSet,
+    nullifier: &NoteNullifier,
+) -> Result<(LowLeaf, MerklePath<Fr, { lb_pol::NOTE_SET_TREE_DEPTH }>), LeaderWitnessError> {
+    let nullifiers = set.nullifiers();
+    let low = nullifiers
+        .low_leaf(&nullifier.0)
+        .map_err(NoteSetError::from)?
+        .ok_or(LeaderWitnessError::Spent)?;
+    let path = nullifiers
+        .path(low.index)
+        .map_err(NoteSetError::from)?
+        .expect("the low leaf is in the tree");
+    Ok((low, path))
+}
+
+fn nodes_and_selectors(
+    path: &MerklePath<Fr, { lb_pol::NOTE_SET_TREE_DEPTH }>,
+) -> (
+    [Fr; lb_pol::NOTE_SET_TREE_DEPTH],
+    [bool; lb_pol::NOTE_SET_TREE_DEPTH],
+) {
+    (
+        core::array::from_fn(|level| *path[level].item()),
+        core::array::from_fn(|level| matches!(path[level], MerkleNode::Left(_))),
+    )
+}
+
+// The wallet half of a PoL witness. The nullifier key and the staking secret
+// key are left 0 for the KMS to fill, the key and the nonce of the reward note
+// for the proposer to set once the block is built.
+pub fn pol_wallet_inputs(
+    note: &notes::Note,
+    note_set: NoteSetIndex,
+    nullifier: &NoteNullifier,
+    commitment_aged_path: &lb_mmr::MerklePath,
+    aged: &NoteSets,
+    latest: &NoteSets,
+) -> Result<lb_pol::PolWalletInputsData, LeaderWitnessError> {
+    let unknown = || LeaderWitnessError::UnknownNoteSet(note_set);
+    let aged_set = aged.get(note_set).ok_or_else(unknown)?;
+    let latest_set = latest.get(note_set).ok_or_else(unknown)?;
+
+    let mismatch = || LeaderWitnessError::AgedPathMismatch(note_set);
+    if !commitment_aged_path.verify::<ZkHasher>(note.commitment().0, aged_set.commitment_root()) {
+        return Err(mismatch());
+    }
+    let commitment_aged_selectors =
+        core::array::from_fn(|level| commitment_aged_path.path_and_selectors(level).selector);
+    let commitment_aged_path = commitment_aged_path
+        .siblings()
+        .try_into()
+        .map_err(|_| mismatch())?;
+
+    let (LowLeaf { leaf: low, .. }, low_path) = low_leaf_witness(latest_set, nullifier)?;
+    let (low_leaf_path, low_leaf_selectors) = nodes_and_selectors(&low_path);
+
+    // The same low leaf at the freeze of the stake distribution, for the PoQ.
+    let (LowLeaf { leaf: low_aged, .. }, low_aged_path) = low_leaf_witness(aged_set, nullifier)?;
+    let (low_leaf_aged_path, low_leaf_aged_selectors) = nodes_and_selectors(&low_aged_path);
+
+    // Both eligible trees hold the set at the same index, so the selectors agree.
+    let (set_aged_path, set_selectors) =
+        nodes_and_selectors(&aged.eligible_path(note_set).ok_or_else(unknown)?);
+    let (set_latest_path, _) =
+        nodes_and_selectors(&latest.eligible_path(note_set).ok_or_else(unknown)?);
+
+    Ok(lb_pol::PolWalletInputsData {
+        note_value: note.value,
+        note_nonce: note.nonce,
+        note_program: note.program,
+        note_data: note.data,
+        set_selectors,
+        commitment_aged_path,
+        commitment_aged_selectors,
+        nullifier_root_aged: aged_set.nullifier_root()?,
+        low_leaf_aged_nullifier: low_aged.nullifier,
+        low_leaf_aged_next_nullifier: low_aged.next_nullifier,
+        low_leaf_aged_path,
+        low_leaf_aged_selectors,
+        set_aged_path,
+        low_leaf_nullifier: low.nullifier,
+        low_leaf_next_nullifier: low.next_nullifier,
+        low_leaf_path,
+        low_leaf_selectors,
+        commitment_root_latest: latest_set.commitment_root(),
+        set_latest_path,
+        nullifier_key: Fr::ZERO,
+        staking_secret_key: Fr::ZERO,
+        reward_public_key: Fr::ZERO,
+        reward_nonce: Fr::ZERO,
+    })
 }
 
 mod proof_serde {
@@ -368,28 +505,123 @@ mod proof_serde {
     {
         let proof_array =
             lb_utils::serde::deserialize_bytes_array::<{ COMPRESSED_PROOF_SIZE }, D>(deserializer)?;
-        Ok(lb_pol::PoLProof::from_bytes(&proof_array))
+        lb_pol::PoLProof::try_from_bytes(&proof_array).map_err(serde::de::Error::custom)
     }
 }
 
-fn ed25519_pk_to_fr_tuple(pk: &UnverifiedEd25519PublicKey) -> (Fr, Fr) {
-    let pk_bytes = pk.as_bytes();
-    // Convert each half of the public key to Fr so that they alwasy fit
-    (
-        fr_from_bytes(&pk_bytes[0..16]).unwrap(),
-        fr_from_bytes(&pk_bytes[16..32]).unwrap(),
-    )
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils {
+    use lb_key_management_system_keys::keys::UnsecuredZkKey;
+    use lb_pol::LotteryConstants;
+    use lb_utils::math::NonNegativeRatio;
+
+    use super::*;
+    use crate::mantle::{
+        note_set::CommitmentMmr,
+        notes::{Note, derive_note_nullifier},
+    };
+
+    #[must_use]
+    pub fn note_set_leader_inputs(
+        secret_key: Fr,
+        value: u64,
+        nonce: Fr,
+        msg: Fr,
+        reward: &Note,
+    ) -> (LeaderPublic, LeaderPrivate) {
+        // The wallet default: the nullifier key is the staking secret key.
+        let key = UnsecuredZkKey::new(secret_key);
+        let nullifier_key = key.nullifier_key();
+        let note = Note::new(value, nonce, key.to_public_key());
+        let commitment = note.commitment();
+
+        let (mmr, commitment_path) = CommitmentMmr::new()
+            .push_with_paths(commitment, &mut [])
+            .expect("the commitment MMR is empty");
+
+        let sets = NoteSets::new();
+        let ledger = sets
+            .ledger()
+            .clone()
+            .execute_adding(&[commitment])
+            .expect("the commitment MMR is not full");
+        let sets = sets
+            .update_ledger(ledger)
+            .end_block(1)
+            .expect("a new tree is hashed without reading the store");
+        let set = sets.ledger();
+        assert_eq!(set.commitment_root(), mmr.frontier_root());
+
+        let nullifier = derive_note_nullifier(&commitment, &nullifier_key);
+
+        let eligible = sets.eligible_root();
+        let (lottery_0, lottery_1) =
+            LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
+                .compute_lottery_values(value);
+        let public = (0..10_000u64)
+            .map(|epoch_nonce| {
+                LeaderPublic::new(
+                    eligible,
+                    eligible,
+                    Fr::from(epoch_nonce),
+                    0,
+                    lottery_0,
+                    lottery_1,
+                )
+            })
+            .find(|public| public.check_winning(value, commitment.0, nullifier_key))
+            .expect("a winning epoch nonce below 10000");
+
+        let wallet = lb_pol::PolWalletInputsData {
+            nullifier_key,
+            staking_secret_key: nullifier_key,
+            reward_public_key: *reward.public_key.as_fr(),
+            reward_nonce: reward.nonce,
+            ..pol_wallet_inputs(
+                &note,
+                NoteSetIndex::Ledger,
+                &nullifier,
+                &commitment_path,
+                &sets,
+                &sets,
+            )
+            .expect("the note is in the ledger set and unspent")
+        };
+        (
+            public,
+            LeaderPrivate::new(public, wallet, msg, reward.value),
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::str::FromStr as _;
 
+    use ark_ff::Field as _;
+    use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
     use lb_pol::LotteryConstants;
     use lb_utils::math::NonNegativeRatio;
     use rand::RngCore as _;
 
     use super::*;
+    use crate::mantle::{note_set::CommitmentMmr, notes::derive_note_nullifier};
+
+    #[test]
+    fn a_proof_flagging_the_point_at_infinity_does_not_decode() {
+        let mut bytes = Groth16LeaderProof::from_parts(
+            lb_pol::PoLProof::from_bytes(&[0u8; 128]),
+            Fr::from(1u64),
+            NoteCommitment(Fr::from(1u64)),
+            1,
+        )
+        .encode_to_vec();
+        bytes[31] |= 0x40;
+        assert!(matches!(
+            Groth16LeaderProof::decode(&bytes, &()),
+            Err(DecodeError::InvalidValue { .. })
+        ));
+    }
 
     /// Compute the Hoeffding sample size:
     ///     n >= (1 / (2 * eps^2)) * ln(2/alpha)
@@ -486,5 +718,158 @@ mod tests {
             let (public, note_id, sk) = rand_inputs(&constants);
             public.check_winning(1, note_id, sk)
         });
+    }
+
+    #[test]
+    fn test_prove_and_verify_with_note_set_witness() {
+        let msg = Fr::from(99u64);
+        let reward = notes::Note::new(500, Fr::from(13u64), ZkPublicKey::new(Fr::from(17u64)));
+        let (public, private) =
+            test_utils::note_set_leader_inputs(Fr::from(7u64), 1000, Fr::from(11u64), msg, &reward);
+        // The leader computes the entropy contribution before proving, to bind the
+        // proof to the block ID that covers it.
+        let entropy_contribution = private.entropy_contribution();
+        let proof = Groth16LeaderProof::prove(private).unwrap();
+        assert!(proof.verify(&public, msg));
+        assert_eq!(proof.entropy(), entropy_contribution);
+        // The circuit derives the commitment of the node's note, under its value.
+        assert_eq!(proof.reward_commitment(), reward.commitment());
+        assert_eq!(proof.reward_value(), 500);
+
+        let wrong_latest = LeaderPublic {
+            latest_root: Fr::ONE,
+            ..public
+        };
+        assert!(!proof.verify(&wrong_latest, msg));
+        assert!(!proof.verify(&public, msg + Fr::ONE));
+    }
+
+    #[test]
+    fn pol_wallet_inputs_reads_the_aged_and_latest_note_sets() {
+        let secret_key = Fr::from(7u64);
+        let note = notes::Note::new(
+            1000,
+            Fr::from(11u64),
+            UnsecuredZkKey::new(secret_key).to_public_key(),
+        );
+        let commitment = note.commitment();
+        let (_, path) = CommitmentMmr::new()
+            .push_with_paths(commitment, &mut [])
+            .unwrap();
+        let sets = NoteSets::new();
+        let ledger = sets.ledger().clone().execute_adding(&[commitment]).unwrap();
+        let sets = sets.update_ledger(ledger).end_block(1).unwrap();
+        let nullifier = derive_note_nullifier(
+            &commitment,
+            &UnsecuredZkKey::new(secret_key).nullifier_key(),
+        );
+
+        let wallet =
+            pol_wallet_inputs(&note, NoteSetIndex::Ledger, &nullifier, &path, &sets, &sets)
+                .unwrap();
+        assert_eq!(
+            (wallet.nullifier_key, wallet.staking_secret_key),
+            (Fr::ZERO, Fr::ZERO)
+        );
+        assert_eq!(
+            (wallet.note_value, wallet.note_nonce),
+            (1000, Fr::from(11u64))
+        );
+        assert_eq!(
+            wallet.commitment_root_latest,
+            sets.ledger().commitment_root()
+        );
+        assert_eq!(
+            wallet.nullifier_root_aged,
+            sets.ledger().nullifier_root().unwrap()
+        );
+        assert_eq!(
+            (wallet.low_leaf_nullifier, wallet.low_leaf_next_nullifier,),
+            (Fr::ZERO, Fr::ZERO)
+        );
+        assert_eq!(wallet.set_selectors, [false; 40]);
+
+        let spent_set = sets
+            .ledger()
+            .clone()
+            .execute_spending(&[nullifier])
+            .unwrap();
+        let latest = sets.clone().update_ledger(spent_set).end_block(2).unwrap();
+        assert_eq!(
+            pol_wallet_inputs(
+                &note,
+                NoteSetIndex::Ledger,
+                &nullifier,
+                &path,
+                &sets,
+                &latest
+            )
+            .unwrap_err(),
+            LeaderWitnessError::Spent
+        );
+
+        let (_, foreign) = CommitmentMmr::new()
+            .push(NoteCommitment(Fr::from(5u64)))
+            .unwrap()
+            .push_with_paths(commitment, &mut [])
+            .unwrap();
+        assert_eq!(
+            pol_wallet_inputs(
+                &note,
+                NoteSetIndex::Ledger,
+                &nullifier,
+                &foreign,
+                &sets,
+                &sets
+            )
+            .unwrap_err(),
+            LeaderWitnessError::AgedPathMismatch(NoteSetIndex::Ledger)
+        );
+        assert_eq!(
+            pol_wallet_inputs(
+                &note,
+                NoteSetIndex::Channel(crate::mantle::ops::channel::ChannelId::from([7; 32])),
+                &nullifier,
+                &path,
+                &sets,
+                &sets
+            )
+            .unwrap_err(),
+            LeaderWitnessError::UnknownNoteSet(NoteSetIndex::Channel(
+                crate::mantle::ops::channel::ChannelId::from([7; 32])
+            ))
+        );
+    }
+
+    #[test]
+    fn check_winning_requires_the_nullifier_key_and_the_staking_secret_key_of_the_note() {
+        let key = UnsecuredZkKey::new(Fr::from(7u64));
+        let nullifier_key = key.nullifier_key();
+        let note = notes::Note::new(1000, Fr::from(11u64), key.to_public_key());
+        // A threshold of p - 1000: almost every ticket wins.
+        let public = LeaderPublic::new(Fr::ONE, Fr::ONE, Fr::from(3u64), 5, -Fr::ONE, Fr::ZERO);
+        // The wallet default: the nullifier key is the staking secret key.
+        assert!(check_winning(&note, public, nullifier_key, nullifier_key));
+        // The spending secret key does not lead.
+        assert!(!check_winning(&note, public, *key.as_fr(), *key.as_fr()));
+
+        // A note staked under another key leads with its staking secret key only.
+        let staking_secret_key = Fr::from(9u64);
+        let staked = notes::Note {
+            stake_public_key: kdf_public_key(&staking_secret_key),
+            ..note
+        };
+        assert!(!check_winning(
+            &staked,
+            public,
+            nullifier_key,
+            nullifier_key
+        ));
+        assert!(check_winning(
+            &staked,
+            public,
+            nullifier_key,
+            staking_secret_key
+        ));
     }
 }
