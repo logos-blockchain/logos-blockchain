@@ -58,7 +58,7 @@ use lb_kv_store::{Bytes, DynKvStore};
 use lb_log_targets::{diagnostic::BLEND_REACHABILITY, ledger};
 use mantle::LedgerState as MantleLedger;
 use nullifier_storage::{
-    ANCHOR_KEY, NullifierStorage, PrunedVersions, attach_state, move_state, rebase_state,
+    LIB_STATE_KEY, NullifierStorage, PrunedVersions, attach_state, move_state, rebase_state,
 };
 use rpds::HashTrieMapSync;
 use thiserror::Error;
@@ -161,8 +161,8 @@ pub enum LedgerError<Id> {
     WrongRewardValue { header: Value, computed: Value },
     #[error("The state of the LIB {0:?} could not be found")]
     LibNotFound(Id),
-    #[error("The anchor of the nullifier store could not be encoded or decoded: {0}")]
-    Anchor(String),
+    #[error("The LIB state of the nullifier store could not be encoded or decoded: {0}")]
+    LibState(String),
 }
 
 fn block_id<Id: Into<BlockHash>>(id: Id) -> BlockId {
@@ -173,36 +173,36 @@ fn block_id<Id: Into<BlockHash>>(id: Id) -> BlockId {
 /// LIB, the state of the LIB, and what the consensus keeps of the LIB block
 /// (`info`).
 ///
-/// [`Ledger::new_anchored`] and [`Ledger::apply_pruning_anchored`] write it in
-/// the batch that finalizes the LIB, so it describes the finalized base of the
-/// store at every moment, while a state saved elsewhere may lag behind it.
-/// [`Ledger::restore`] reads it back.
+/// [`Ledger::new_with_lib_state`] and [`Ledger::apply_pruning_with_lib_state`]
+/// write it in the batch that finalizes the LIB, so it describes the finalized
+/// base of the store at every moment, while a state saved elsewhere may lag
+/// behind it. [`Ledger::restore`] reads it back.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Anchor<Id, Info> {
+pub struct LibState<Id, Info> {
     pub lib: Id,
     pub state: LedgerState,
     pub info: Info,
 }
 
-// The encoding of an anchor, borrowed from what it is made of.
+// The encoding of a LIB state, borrowed from what it is made of.
 #[derive(serde::Serialize)]
-#[serde(rename = "Anchor")]
-struct AnchorRef<'a, Id, Info> {
+#[serde(rename = "LibState")]
+struct LibStateRef<'a, Id, Info> {
     lib: &'a Id,
     state: &'a LedgerState,
     info: &'a Info,
 }
 
-fn encode_anchor<Id: serde::Serialize, Info: serde::Serialize>(
+fn encode_lib_state<Id: serde::Serialize, Info: serde::Serialize>(
     lib: &Id,
     state: &LedgerState,
     info: &Info,
 ) -> Result<Bytes, LedgerError<Id>> {
-    lb_binary_codec::bincode::SerializeOp::to_bytes(&AnchorRef { lib, state, info })
-        .map_err(|error| LedgerError::Anchor(error.to_string()))
+    lb_binary_codec::bincode::SerializeOp::to_bytes(&LibStateRef { lib, state, info })
+        .map_err(|error| LedgerError::LibState(error.to_string()))
 }
 
-/// A ledger restored from the anchor of its store (see [`Ledger::restore`]).
+/// A ledger restored from the LIB state of its store (see [`Ledger::restore`]).
 pub struct Restored<Id: Eq + Hash, Info> {
     pub ledger: Ledger<Id>,
     pub lib: Id,
@@ -258,9 +258,9 @@ where
         Self::with_root(id, state, era_schedule, |_, _| Ok(None))
     }
 
-    /// Like [`Self::new`], writing the [`Anchor`] of the root with `info` in
+    /// Like [`Self::new`], writing the [`LibState`] of the root with `info` in
     /// the batch that finalizes it.
-    pub fn new_anchored<Info: serde::Serialize>(
+    pub fn new_with_lib_state<Info: serde::Serialize>(
         id: Id,
         state: LedgerState,
         era_schedule: Arc<EraScheduledConfig>,
@@ -270,15 +270,15 @@ where
         Id: Into<BlockHash> + serde::Serialize,
     {
         Self::with_root(id, state, era_schedule, |id, state| {
-            encode_anchor(id, state, info).map(Some)
+            encode_lib_state(id, state, info).map(Some)
         })
     }
 
-    /// The ledger whose root is the LIB of the anchor of `store`, its state
-    /// attached to the store, or `None` if the store has no anchor. The blocks
-    /// above the LIB are applied again with [`Self::commit_update`], which
-    /// reuses their versions, then [`Self::discard_lost_blocks`] deletes what
-    /// the others wrote.
+    /// The ledger whose root is the LIB recorded in the LIB state of `store`,
+    /// its state attached to the store, or `None` if the store has no LIB
+    /// state. The blocks above the LIB are applied again with
+    /// [`Self::commit_update`], which reuses their versions, then
+    /// [`Self::discard_lost_blocks`] deletes what the others wrote.
     pub fn restore<Info: serde::de::DeserializeOwned>(
         store: &DynKvStore,
         era_schedule: Arc<EraScheduledConfig>,
@@ -286,12 +286,12 @@ where
     where
         Id: Into<BlockHash> + serde::de::DeserializeOwned,
     {
-        let Some(bytes) = NullifierStorage::read_anchor(store)? else {
+        let Some(bytes) = NullifierStorage::read_lib_state(store)? else {
             return Ok(None);
         };
-        let Anchor { lib, state, info } =
-            <Anchor<Id, Info> as lb_binary_codec::bincode::DeserializeOp>::from_bytes(&bytes)
-                .map_err(|error| LedgerError::Anchor(error.to_string()))?;
+        let LibState { lib, state, info } =
+            <LibState<Id, Info> as lb_binary_codec::bincode::DeserializeOp>::from_bytes(&bytes)
+                .map_err(|error| LedgerError::LibState(error.to_string()))?;
         let mut state = state;
         state.cryptarchia_ledger = attach_state(state.cryptarchia_ledger, store)?;
         let ledger = Self::with_root(lib, state, era_schedule, |_, _| Ok(None))?;
@@ -299,12 +299,12 @@ where
     }
 
     // The ledger whose root is `state`, made the finalized base of its store
-    // in one batch with the anchor `anchor` encodes, if any.
+    // in one batch with the LIB state `lib_state_bytes` encodes, if any.
     fn with_root(
         id: Id,
         mut state: LedgerState,
         era_schedule: Arc<EraScheduledConfig>,
-        anchor: impl FnOnce(&Id, &LedgerState) -> Result<Option<Bytes>, LedgerError<Id>>,
+        lib_state_bytes: impl FnOnce(&Id, &LedgerState) -> Result<Option<Bytes>, LedgerError<Id>>,
     ) -> Result<Self, LedgerError<Id>>
     where
         Id: Into<BlockHash>,
@@ -319,8 +319,8 @@ where
         let storage = NullifierStorage::new(Arc::clone(state.latest_note_sets().store()));
         let (root, mut batch) = storage.make_root(block_id(id), state.cryptarchia_ledger)?;
         state.cryptarchia_ledger = root;
-        if let Some(bytes) = anchor(&id, &state)? {
-            batch.put(Bytes::from_static(ANCHOR_KEY), bytes);
+        if let Some(bytes) = lib_state_bytes(&id, &state)? {
+            batch.put(Bytes::from_static(LIB_STATE_KEY), bytes);
         }
         storage.write(batch)?;
         storage.collect_garbage(
@@ -443,9 +443,9 @@ where
         self.prune_with(lib, pruned, |_, _| Ok(None))
     }
 
-    /// Like [`Self::apply_pruning`], writing the [`Anchor`] of `lib` with
+    /// Like [`Self::apply_pruning`], writing the [`LibState`] of `lib` with
     /// `info` in the batch that finalizes it.
-    pub fn apply_pruning_anchored<Info: serde::Serialize>(
+    pub fn apply_pruning_with_lib_state<Info: serde::Serialize>(
         &mut self,
         lib: Id,
         pruned: &PrunedBlocks<Id>,
@@ -455,7 +455,7 @@ where
         Id: Into<BlockHash> + serde::Serialize,
     {
         self.prune_with(lib, pruned, |lib, state| {
-            encode_anchor(lib, state, info).map(Some)
+            encode_lib_state(lib, state, info).map(Some)
         })
     }
 
@@ -463,7 +463,7 @@ where
         &mut self,
         lib: Id,
         pruned: &PrunedBlocks<Id>,
-        anchor: impl FnOnce(&Id, &LedgerState) -> Result<Option<Bytes>, LedgerError<Id>>,
+        lib_state_bytes: impl FnOnce(&Id, &LedgerState) -> Result<Option<Bytes>, LedgerError<Id>>,
     ) -> Result<usize, LedgerError<Id>>
     where
         Id: Into<BlockHash>,
@@ -495,8 +495,8 @@ where
             cryptarchia_ledger: lib_ledger,
             ..lib_state
         };
-        if let Some(bytes) = anchor(&lib, &lib_state)? {
-            batch.put(Bytes::from_static(ANCHOR_KEY), bytes);
+        if let Some(bytes) = lib_state_bytes(&lib, &lib_state)? {
+            batch.put(Bytes::from_static(LIB_STATE_KEY), bytes);
         }
         self.storage.write(batch)?;
 
