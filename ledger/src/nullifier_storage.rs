@@ -12,8 +12,8 @@
 //! - **Pruning** ([`NullifierStorage::prune`]), once the LIB advances, in one
 //!   batch: the note sets of the new LIB become the finalized base of the
 //!   store, everything the blocks of the pruned stale forks wrote is deleted
-//!   from the sets they listed, and the versions of the pruned blocks and of
-//!   the LIB are forgotten.
+//!   from the note sets that they listed, and the versions of the pruned blocks
+//!   and of the LIB are forgotten.
 //! - **Garbage collection** ([`NullifierStorage::collect_garbage`]), right
 //!   after: the nodes the finalized blocks replaced are deleted once no state
 //!   still kept reads them. See [`retention_floors`].
@@ -41,11 +41,11 @@ use crate::cryptarchia::LedgerState as CryptarchiaLedger;
 /// note sets (see [`lb_core::mantle::note_set::note_set_namespace`]).
 pub const VERSIONS_NAMESPACE: &[u8] = b"V";
 
-/// The namespace of the note sets each committed block wrote to, by version,
-/// so that pruning the block deletes its writes in those sets alone.
+/// Which note sets each block wrote to, by version. Pruning a block deletes its
+/// writes from those note sets only.
 pub const WRITTEN_SETS_NAMESPACE: &[u8] = b"W";
 
-// The key of the sets the block of `version` wrote to.
+// The key of the written note sets of `version`.
 fn written_sets_key(version: Version) -> Vec<u8> {
     version.0.to_be_bytes().to_vec()
 }
@@ -110,13 +110,12 @@ impl NullifierStorage {
         write(store, batch)
     }
 
-    // The writes of the registry, as writes of the store.
+    // Prefixes the registry's writes with its namespace.
     fn versions_batch(&self, writes: WriteBatch) -> WriteBatch {
         self.versions_store.namespace_batch(writes)
     }
 
-    // The writes forgetting the version of `block_id` and the sets it wrote to,
-    // if it has a version.
+    // Forgets the version of `block_id` and the note sets that it wrote to.
     fn release(&self, block_id: BlockId, batch: &mut WriteBatch) -> Result<(), NoteSetError> {
         if let Some(version) = self.versions.lookup(block_id)? {
             batch.append(self.versions_batch(
@@ -127,14 +126,14 @@ impl NullifierStorage {
         Ok(())
     }
 
-    // The writes forgetting the sets the block of `version` wrote to.
+    // Deletes the written note sets of `version`.
     fn forget_written_sets(&self, version: Version) -> WriteBatch {
         let mut writes = WriteBatch::new();
         writes.delete(written_sets_key(version));
         self.written_sets_store.namespace_batch(writes)
     }
 
-    // The writes recording that the block of `version` wrote to `sets`.
+    // Saves the written note sets of `version`.
     fn record_written_sets(
         &self,
         version: Version,
@@ -150,7 +149,7 @@ impl NullifierStorage {
         Ok(self.written_sets_store.namespace_batch(writes))
     }
 
-    /// The note sets the block of `version` wrote to, none if it wrote nothing.
+    /// The note sets that the block of `version` wrote to.
     pub fn written_sets(&self, version: Version) -> Result<Vec<NoteSetIndex>, NoteSetError> {
         let Some(bytes) = self
             .written_sets_store
@@ -164,9 +163,7 @@ impl NullifierStorage {
         })
     }
 
-    /// Commits the state of block `block_id`, written in the store before it
-    /// is returned. A block replayed at restart gets the version it had, and
-    /// writes the same nodes again.
+    /// Saves the new nullifiers of block `block_id` under its version.
     pub fn commit(
         &self,
         block_id: BlockId,
@@ -275,7 +272,7 @@ impl NullifierStorage {
     ) -> Result<(), NoteSetError> {
         let floors = retention_floors(kept);
         let mut batch = WriteBatch::new();
-        // Only the sets of the LIB have a finalized base, and so replaced nodes
+        // Only the note sets of the LIB have a finalized base, and so replaced nodes
         // waiting for the collection.
         for (index, _) in lib.note_sets.nullifier_lens() {
             if let Some(floor) = floors.get(&index) {
@@ -298,8 +295,8 @@ impl NullifierStorage {
 ///
 /// The floor is computed from every kept state, not from the LIB alone, so
 /// that it does not depend on the snapshots of the descendants being at least
-/// as long as those of the LIB. A set a state does not hold yet, a channel set
-/// created after its snapshot was taken, does not bound the floor of that set.
+/// as long as those of the LIB. A note set that a state does not have yet (e.g.
+/// a newer channel) does not lower its floor.
 pub fn retention_floors<'a>(
     kept: impl IntoIterator<Item = &'a CryptarchiaLedger>,
 ) -> HashMap<NoteSetIndex, u64> {
@@ -383,10 +380,9 @@ fn has_pending(state: &CryptarchiaLedger) -> bool {
         .any(|note_sets| note_sets.has_pending())
 }
 
-// Commits the note sets of `state` under `version`. The epoch snapshots are
-// those of the parent state, committed already, except in a genesis state,
-// where they are the note sets of the state itself and committed with them.
-// The returned sets are those of the state; their writes cover the snapshots.
+// Saves the new nullifiers of `state` under `version`. Epoch snapshots were
+// saved by earlier blocks, except at genesis, where they are the same as the
+// state's note sets.
 fn commit_state(
     state: CryptarchiaLedger,
     version: Version,
@@ -458,12 +454,12 @@ mod tests {
         ChannelId::from([n; 32])
     }
 
-    // The set of the channel created in the tests.
+    // The note set of the channel created in the tests.
     fn channel_set() -> NoteSetIndex {
         NoteSetIndex::Channel(channel(2))
     }
 
-    // A block creating the set of `channel`.
+    // A block creating the note set of `channel`.
     fn create_channel(channel: ChannelId) -> impl FnOnce(LedgerState) -> LedgerState {
         move |mut state| {
             state.cryptarchia_ledger.note_sets = state
@@ -491,7 +487,7 @@ mod tests {
             .collect()
     }
 
-    // The nullifier tree of `set` reads as `oracle` does.
+    // The nullifier tree of the note set `set` reads as `oracle` does.
     fn check_set(name: &str, set: &NoteSet, oracle: &Oracle, probes: &[u64]) {
         let tree = set.nullifiers();
         assert_eq!(tree.len(), oracle.len() as u64, "len of {name}");
@@ -550,8 +546,8 @@ mod tests {
     }
 
     /// A ledger and the consensus engine driving its pruning, with what each
-    /// set of each kept block should hold. Each finalization writes a LIB state
-    /// whose info is the first byte of the id of the LIB.
+    /// note set of each kept block should hold. Each finalization writes a LIB
+    /// state whose info is the first byte of the id of the LIB.
     struct Chain {
         ledger: Ledger<Id>,
         engine: Cryptarchia<Id>,
@@ -635,7 +631,7 @@ mod tests {
         }
 
         // Applies a block on `parent`: `amend` to its state, then the spending of
-        // `spent` in each set. Then prunes what the consensus prunes.
+        // `spent` in each note set. Then prunes what the consensus prunes.
         fn extend_with(
             &mut self,
             parent: Id,
@@ -717,7 +713,7 @@ mod tests {
             versions.lookup(BlockId(id)).unwrap().unwrap()
         }
 
-        // The keys the block of `version` wrote in the set `index`.
+        // The keys that the block of `version` wrote in the note set `index`.
         fn written(&self, index: NoteSetIndex, version: Version) -> usize {
             let set_store = Prefixed::new(Arc::clone(&self.store), note_set_namespace(index));
             let nodes = set_store
@@ -1083,7 +1079,7 @@ mod tests {
         let floors = retention_floors([chain.state(&b2)]);
         // the sentinel only, in the genesis tree its epoch snapshot still holds
         assert_eq!(floors[&LEDGER_SET], 1);
-        // a channel set no snapshot holds yet: its only tree, the sentinel
+        // a channel note set that no snapshot holds yet: its only tree, the sentinel
         assert_eq!(floors[&channel_set()], 1);
 
         let b3 = chain.extend_with(b2, &[], |mut state| {
@@ -1092,7 +1088,7 @@ mod tests {
         });
         // the sentinel and 10, in the snapshots of block 1
         assert_eq!(retention_floors([chain.state(&b3)])[&LEDGER_SET], 2);
-        // the floor of a set is the shortest tree among every kept state
+        // the floor of a note set is the shortest tree among every kept state
         assert_eq!(
             retention_floors([chain.state(&b3), chain.state(&b2)])[&LEDGER_SET],
             1

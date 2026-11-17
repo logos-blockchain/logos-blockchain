@@ -853,11 +853,11 @@ fn set_store(store: &DynKvStore, index: NoteSetIndex) -> NoteSetStore {
     Prefixed::new(Arc::clone(store), note_set_namespace(index))
 }
 
-/// The sets of a commit, the writes of their blocks, and the sets written to.
+/// The note sets committed by a block.
 pub struct CommittedSets {
     pub sets: NoteSets,
     pub writes: WriteBatch,
-    /// The sets with a block written, whose namespaces the writes touch.
+    /// The note sets that `writes` writes to.
     pub written_sets: Vec<NoteSetIndex>,
 }
 
@@ -1240,9 +1240,8 @@ impl NoteSets {
         })
     }
 
-    /// Writes the block the sets are at the end of under `version`. The
-    /// returned sets must not be used before the returned writes are applied
-    /// to [`Self::store`]. A set with no pending block writes nothing.
+    /// Saves the new nullifiers of each note set under `version`. Apply
+    /// `writes` before using the returned note sets.
     pub fn commit(&self, version: Version) -> Result<CommittedSets, NoteSetError> {
         self.map_nullifiers(|nullifiers| {
             let Committed { imt, writes } = nullifiers.commit(version)?;
@@ -1268,8 +1267,7 @@ impl NoteSets {
             .sets)
     }
 
-    /// The writes deleting what the block of `version` wrote in the sets
-    /// `written_sets` of `store`, once its fork is pruned.
+    /// Deletes what the block of `version` wrote, when its fork is pruned.
     #[must_use]
     pub fn discard_writes(
         store: &DynKvStore,

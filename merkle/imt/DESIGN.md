@@ -501,7 +501,7 @@ each makes the suite fail.
   the set rather than by its eligible leaf: `note_set_namespace(index)` is
   `L` for the ledger set, `S` for the SDP set and `C ‖ channel_id` (32 bytes)
   for a channel set. No namespace is a prefix of another. The
-  `VersionRegistry` lives in `V`, and the sets each block wrote to in `W`
+  `VersionRegistry` lives in `V`, and the note sets each block wrote to in `W`
   (see the ledger below), both shared by every set.
   - `NoteSets::new()` keeps a `MemKv` of its own: tests, benches and the node
     until phase 5. `NoteSets::with_store(store)` takes the store.
@@ -524,7 +524,7 @@ each makes the suite fail.
   store (`Prefixed::namespace_batch`): `NoteSets::commit(version)`,
   `finalize(block_id)`, `rebase()`, and the static `discard_writes(store,
   written, version)` and `collect_garbage(store, index, floor_len)`.
-  `commit` also returns the sets it wrote to (`CommittedSets::written_sets`).
+  `commit` also returns the note sets it wrote to (`CommittedSets::written_sets`).
 - `PartialEq`: a tree compares by `len` and root (`Imt` hashes a pending
   block not sealed yet). `NoteSets` ignores its store; `NoteSet` and
   `NoteSets` are no longer `Eq`, nor is `EpochState`.
@@ -532,7 +532,7 @@ each makes the suite fail.
 ### Ledger (`ledger/src/lib.rs`, `ledger/src/nullifier_storage.rs`)
 
 - `NullifierStorage` holds the store, the `VersionRegistry`, and under `W`
-  the sets each committed block wrote to, keyed by its version. The ledger
+  the note sets each committed block wrote to, keyed by its version. The ledger
   takes the store from the note sets of its root state.
 - `Ledger::new(id, state, eras)` becomes fallible. The root state becomes the
   finalized base of the store, committed first if it has a pending block, as
@@ -540,7 +540,7 @@ each makes the suite fail.
   note sets, committed with them.
 - `commit_update(update)` becomes fallible. It allocates the version of the
   block, commits the three note sets of the state, writes one batch with the
-  registry entry and the record of the sets it wrote to, and only then keeps
+  registry entry and the record of the note sets it wrote to, and only then keeps
   the state. The epoch snapshots of a
   block are those of its parent, committed already.
 - `prune_state_at` is replaced by `apply_pruning(lib, &PrunedBlocks)`, a
@@ -663,7 +663,7 @@ holding the trees (core, ledger) depend on the trait only.
      recomputed nodes are byte-identical, so the writes are idempotent.
   3. Discard every block in `BlockVersionKey` that the replay did not apply
      again (forks lost at the restart, or a crash before a pruning batch):
-     `Ledger::discard_lost_blocks`, each in the sets it recorded under `W`,
+     `Ledger::discard_lost_blocks`, each in the note sets it recorded under `W`,
      so a lost fork's channel set needs no state to be cleaned up.
 
   Without an anchor, a node whose saved LIB is the genesis clears the store
