@@ -14,7 +14,7 @@ mod update;
 #[cfg(test)]
 mod test_utils;
 
-use std::{hash::Hash, sync::Arc};
+use std::{hash::Hash, mem::replace, sync::Arc};
 
 pub use config::Config;
 pub use cryptarchia::EpochState;
@@ -60,7 +60,7 @@ use mantle::LedgerState as MantleLedger;
 use nullifier_storage::{
     LIB_STATE_KEY, NullifierStorage, PrunedVersions, attach_state, move_state, rebase_state,
 };
-use rpds::HashTrieMapSync;
+use rpds::{HashTrieMapSync, HashTrieSetSync};
 use thiserror::Error;
 
 use crate::{
@@ -226,6 +226,38 @@ pub struct Ledger<Id: Eq + Hash> {
     /// era of its slot, and each epoch is settled under the config of its era.
     era_schedule: Arc<EraScheduledConfig>,
     storage: NullifierStorage,
+    pending_pruning: PendingPruning<Id>,
+}
+
+// Consensus reports each pruned block once. Keep its storage work until the
+// finalization batch succeeds, even if consensus advances the LIB meanwhile.
+#[derive(Clone)]
+struct PendingPruning<Id: Eq + Hash> {
+    stale: HashTrieSetSync<Id>,
+    immutable: HashTrieSetSync<Id>,
+}
+
+impl<Id: Eq + Hash + Copy> PendingPruning<Id> {
+    fn new() -> Self {
+        Self {
+            stale: HashTrieSetSync::new_sync(),
+            immutable: HashTrieSetSync::new_sync(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.stale.is_empty() && self.immutable.is_empty()
+    }
+
+    fn extend(&mut self, lib: Id, pruned: &PrunedBlocks<Id>) {
+        for block in pruned.stale_blocks() {
+            self.stale.insert_mut(*block);
+        }
+        for block in pruned.immutable_blocks().values() {
+            self.immutable.insert_mut(*block);
+        }
+        self.immutable.insert_mut(lib);
+    }
 }
 
 impl<Id: Eq + Hash + core::fmt::Debug> core::fmt::Debug for Ledger<Id> {
@@ -339,6 +371,7 @@ where
             states: HashTrieMapSync::new_sync().insert(id, state),
             era_schedule,
             storage,
+            pending_pruning: PendingPruning::new(),
         })
     }
 
@@ -441,7 +474,7 @@ where
     ///
     /// The pruned blocks must be every block that is not `lib` or one of its
     /// descendants, as [`lb_cryptarchia_engine::Cryptarchia`] prunes them.
-    /// Nothing happens when nothing is pruned: the LIB did not move.
+    /// Failed pruning work is retried even when no new blocks are pruned.
     ///
     /// Returns the number of states removed.
     pub fn prune(&mut self, lib: Id, pruned: &PrunedBlocks<Id>) -> Result<usize, LedgerError<Id>>
@@ -476,19 +509,28 @@ where
     where
         Id: Into<BlockHash>,
     {
-        if pruned.is_empty() {
+        if pruned.is_empty() && self.pending_pruning.is_empty() {
             return Ok(0);
         }
+        self.pending_pruning.extend(lib, pruned);
         let lib_state = self
             .states
             .get(&lib)
             .ok_or(LedgerError::LibNotFound(lib))?
             .clone();
-        let stale: Vec<BlockId> = pruned.stale_blocks().copied().map(block_id).collect();
-        let immutable: Vec<BlockId> = pruned
-            .immutable_blocks()
-            .values()
+        let stale: Vec<BlockId> = self
+            .pending_pruning
+            .stale
+            .iter()
             .copied()
+            .map(block_id)
+            .collect();
+        let immutable: Vec<BlockId> = self
+            .pending_pruning
+            .immutable
+            .iter()
+            .copied()
+            .filter(|block| *block != lib)
             .map(block_id)
             .collect();
         let (lib_ledger, mut batch) = self.storage.prune(
@@ -508,9 +550,12 @@ where
         }
         self.storage.write(batch)?;
 
+        // Registry releases and the LIB state have committed. Later rebase or GC
+        // failures must not leave this completed work pending.
+        let completed = replace(&mut self.pending_pruning, PendingPruning::new());
         let mut removed = 0usize;
-        for block in pruned.all() {
-            if self.states.remove_mut(block) {
+        for block in completed.stale.iter().chain(completed.immutable.iter()) {
+            if *block != lib && self.states.remove_mut(block) {
                 removed = removed.saturating_add(1);
             }
         }

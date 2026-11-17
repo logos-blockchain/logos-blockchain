@@ -700,17 +700,11 @@ impl Cryptarchia {
             .prune_with_lib_state(self.lib(), pruned_blocks, &info)
         {
             Ok(pruned_states_count) => {
-                if pruned_states_count != pruned_blocks.len() {
-                    error!(
-                        target: LOG_TARGET,
-                        "Pruned {pruned_states_count} ledger states out of {} pruned blocks.",
-                        pruned_blocks.len()
-                    );
-                }
+                // The count can include work retried from earlier updates.
                 log_pruned_ledger_states(pruned_states_count);
             }
-            // A failed write leaves the states in place, and the next pruning
-            // finalizes the newer LIB.
+            // A failed finalization write leaves its work pending in the
+            // ledger. A later call retries it, possibly with a newer LIB.
             Err(err) => error!(
                 target: LOG_TARGET,
                 "Failed to prune the ledger states of {} pruned blocks: {err}",
