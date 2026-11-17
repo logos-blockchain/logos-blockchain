@@ -264,7 +264,7 @@ where
 
     /// Returns the wallet's notes at `tip` (or at the current tip when `tip` is
     /// `None`) that are in `aged_utxos`, the aged UTXO set of the epoch the
-    /// caller leads in, along with the key ids needed to prove leadership.
+    /// caller leads in.
     pub async fn get_leader_aged_notes(
         &self,
         tip: Option<HeaderId>,

@@ -477,18 +477,6 @@ where
                         }
                         .expect("A message was encapsulated, so the payload it carries is queued.");
                         current_epoch.send(message).await;
-                        // Paired with `blend_proposal_submitted`, this shows how long a
-                        // proposal waited in the queue for a leadership proof.
-                        if let DataPayload::BlockProposal(encoded_proposal) = &payload {
-                            debug!(
-                                target: LOG_TARGET,
-                                event = "blend_proposal_released",
-                                timestamp_unix_ms = crate::message::proposal_diagnostic_timestamp_unix_ms(),
-                                proposal_digest = %crate::message::proposal_diagnostic_digest_from_encoded(encoded_proposal),
-                                epoch = u32::from(current_epoch.epoch()),
-                                "Released a block proposal copy from the Blend queue"
-                            );
-                        }
                         if let Some(failure_detection) = failure_detection.as_mut() {
                             let delivery_deadline = era.parameters.max_data_message_delay();
                             let deadline = Instant::now().checked_add(delivery_deadline).expect("The delivery deadline overflowed the clock.");
