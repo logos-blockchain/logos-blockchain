@@ -303,9 +303,11 @@ where
         Ok(Some(Restored { ledger, lib, info }))
     }
 
-    // A ledger with `state` as its LIB. Its trees become the base of the store,
-    // and the [`LibState`] that `lib_state_bytes` encodes, if any, is written in
-    // the same batch.
+    // Creates a ledger with `state` as its LIB, and saves the nullifier trees of
+    // `state` in the DB as the base: the trees all later blocks build on.
+    //
+    // `lib_state_bytes` encodes the [`LibState`] to save in the same atomic
+    // write, or returns `None` if it is already saved.
     fn with_lib(
         id: Id,
         mut state: LedgerState,
