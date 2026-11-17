@@ -61,7 +61,9 @@ fn find_repo_git_dir() -> Option<PathBuf> {
 }
 
 fn emit_rerun_if_changed(path: &Path) {
-    println!("cargo:rerun-if-changed={}", path.to_string_lossy());
+    if path.exists() {
+        println!("cargo:rerun-if-changed={}", path.to_string_lossy());
+    }
 }
 
 fn emit_git_watchers(git_dir: &Path) {

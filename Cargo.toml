@@ -21,6 +21,15 @@ opt-level     = 3
 [profile.bench]
 inherits = "release"
 
+[profile.ci-release]
+codegen-units = 16
+inherits      = "release"
+lto           = "off"
+
+[profile.ci-release.package."*"]
+codegen-units = 16
+opt-level     = 3
+
 [profile.release-profiling]
 debug    = true      # Include debug symbols for profiling
 inherits = "release"
