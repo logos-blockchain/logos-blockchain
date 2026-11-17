@@ -60,9 +60,9 @@ pub struct WithdrawExecutionContext<'a> {
     pub channels: &'a Channels,
     pub pending_withdrawals: PendingWithdrawals,
     pub block_slot: Slot,
+    /// The withdrawal delay of the era of `block_slot`.
+    pub withdraw_delay: Slot,
 }
-
-pub const WITHDRAW_DELAY: u64 = 86_400; // slots
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PendingWithdrawal {
@@ -74,7 +74,8 @@ pub struct PendingWithdrawal {
 
 // The channel and SDP withdrawals waiting for their due slot, in posting order.
 // An SDP withdrawal is due at the start of an epoch and a channel withdrawal
-// `WITHDRAW_DELAY` slots after its posting, so posting order is not due order.
+// the withdrawal delay of its era after its posting, so posting order is not
+// due order.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PendingWithdrawals(rpds::QueueSync<PendingWithdrawal>);
 
@@ -216,7 +217,7 @@ impl<Mode: VerificationMode> ExecutableOperation
 
         // The inputs are spent and the outputs created when the withdrawal is
         // released.
-        let due = context.block_slot.strict_add(Slot::from(WITHDRAW_DELAY));
+        let due = context.block_slot.strict_add(context.withdraw_delay);
         context.pending_withdrawals = context.pending_withdrawals.push(PendingWithdrawal {
             due,
             note_set_index,
@@ -248,7 +249,7 @@ mod test {
 
     use super::*;
     use crate::mantle::{
-        gas::test_utils::FixedThresholds,
+        gas::test_utils::{FixedThresholds, GAS_PROFILE},
         note_set::CommitmentMmr,
         ops::{
             channel::{NULL_CHANNEL_ID, UnverifiedChannelKeys},
@@ -296,7 +297,7 @@ mod test {
             note_sets
                 .update_ledger(ledger)
                 .update_channel(channel)
-                .end_block(0)
+                .end_block(0, 1024)
                 .unwrap(),
         )
     }
@@ -405,6 +406,7 @@ mod test {
                 channels: &channels,
                 pending_withdrawals: PendingWithdrawals::new(),
                 block_slot: Slot::from(10u64),
+                withdraw_delay: Slot::from(86_400u64),
             })
             .expect("the channel has a note set");
 
@@ -426,7 +428,7 @@ mod test {
             // 1 input, 1 output, nothing buffered: 33 + 8961 + 4177 + 1758 + 58
             assert_eq!(
                 ChannelWithdrawOp::sample()
-                    .execution_gas(&GasProfile::MAINNET, &FixedThresholds(threshold)),
+                    .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(14_987))
             );
         }

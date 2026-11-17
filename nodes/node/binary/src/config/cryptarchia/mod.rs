@@ -155,6 +155,8 @@ pub(crate) fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
         max_transactions: deployment.max_transactions.get(),
         max_transactions_size: deployment.max_transactions_size,
         max_op_data_size: deployment.max_op_data_size(),
+        root_window: deployment.root_window,
+        channel_withdraw_delay: deployment.channel_withdraw_delay.get().into(),
         epoch_config: EpochConfig {
             epoch_period_nonce_buffer: deployment.epoch_config.epoch_period_nonce_buffer,
             epoch_period_nonce_stabilization: deployment

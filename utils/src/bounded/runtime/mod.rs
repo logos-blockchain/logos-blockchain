@@ -26,7 +26,9 @@ use serde::{Serialize, Serializer};
 use crate::bounded::{BoundedError, BoundedLen};
 
 pub mod resizable;
-pub use resizable::{ResizableRuntimeBounded, ResizableRuntimeBoundedVec};
+pub use resizable::{
+    ResizableRuntimeBounded, ResizableRuntimeBoundedVec, ResizableRuntimeBoundedVecDeque,
+};
 pub mod vec;
 pub use vec::{NonEmptyRuntimeBoundedVec, RuntimeBoundedVec, UpperRuntimeBoundedVec};
 

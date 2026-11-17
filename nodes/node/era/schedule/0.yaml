@@ -32,6 +32,8 @@ cryptarchia:
   max_uncles: 4
   max_transactions: 1024
   max_transactions_size: 2097152
+  root_window: 1024
+  channel_withdraw_delay: 86400
   pow_config:
     blend:
       base_difficulty: 19
@@ -75,6 +77,7 @@ cryptarchia:
   block_rewards:
     stake_target: 3000000000000000000
     emission_factor_scale: 120000000000000000
+    pooled_fees_window: 120
     fee_average_numerator: 10512
     max_emission_per_block:
       numerator: 62500000000000

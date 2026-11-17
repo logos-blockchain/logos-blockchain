@@ -167,7 +167,10 @@ mod tests {
 
     use lb_core::{
         era::{AcceptedForkDigests, ForkDigest},
-        mantle::{Note, gas::GasProfile},
+        mantle::{
+            Note,
+            gas::{Gas, GasProfile},
+        },
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
     use lb_groth16::{AdditiveGroup as _, Fr};
@@ -182,7 +185,30 @@ mod tests {
     use super::*;
 
     /// The costs of the deployments' current gas profile.
-    const GAS_PROFILE: GasProfile = GasProfile::MAINNET;
+    const GAS_PROFILE: GasProfile = GasProfile {
+        transfer: Gas::new(10),
+        program_register: Gas::new(15114),
+        channel_config: Gas::new(24),
+        channel_inscribe: Gas::new(26),
+        channel_deposit: Gas::new(26),
+        channel_withdraw: Gas::new(33),
+        sdp_declare: Gas::new(1693),
+        sdp_withdraw: Gas::new(0),
+        sdp_active: Gas::new(15117),
+        claim_pow_reward: Gas::new(1506),
+        kilobyte: Gas::new(30),
+        note_set: Gas::new(8961),
+        proof: Gas::new(4177),
+        root: Gas::new(2332),
+        buffered: Gas::new(60),
+        nullifier: Gas::new(1758),
+        commitment: Gas::new(58),
+        signature: Gas::new(557),
+        user_step: Gas::new(28),
+        program_deposit: Gas::new(144),
+        program_step: Gas::new(13528),
+        opening: Gas::new(470),
+    };
 
     #[tokio::test]
     async fn unchanged_tip_never_trigger_status_check() {
@@ -557,6 +583,8 @@ mod tests {
                 max_transactions: 1024,
                 max_transactions_size: 2 * 1024 * 1024,
                 max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+                root_window: 1024,
+                channel_withdraw_delay: 86_400.into(),
                 execution_market: lb_ledger::config::ExecutionMarketConfig {
                     max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_137_798).unwrap(),
                     fee_adjustment_rate: lb_utils::math::ProperFraction::new(
@@ -585,6 +613,7 @@ mod tests {
                 block_rewards: lb_ledger::config::BlockRewardsConfig::new(
                     3_000_000_000_000_000_000,
                     120_000_000_000_000_000.try_into().unwrap(),
+                    120.try_into().unwrap(),
                     10_512,
                     EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
                     lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),

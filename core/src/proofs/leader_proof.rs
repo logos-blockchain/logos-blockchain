@@ -547,7 +547,7 @@ pub mod test_utils {
             .expect("the commitment MMR is not full");
         let sets = sets
             .update_ledger(ledger)
-            .end_block(1)
+            .end_block(1, 1024)
             .expect("a new tree is hashed without reading the store");
         let set = sets.ledger();
         assert_eq!(set.commitment_root(), mmr.frontier_root());
@@ -758,7 +758,7 @@ mod tests {
             .unwrap();
         let sets = NoteSets::new();
         let ledger = sets.ledger().clone().execute_adding(&[commitment]).unwrap();
-        let sets = sets.update_ledger(ledger).end_block(1).unwrap();
+        let sets = sets.update_ledger(ledger).end_block(1, 1024).unwrap();
         let nullifier = derive_note_nullifier(
             &commitment,
             &UnsecuredZkKey::new(secret_key).nullifier_key(),
@@ -794,7 +794,11 @@ mod tests {
             .clone()
             .execute_spending(&[nullifier])
             .unwrap();
-        let latest = sets.clone().update_ledger(spent_set).end_block(2).unwrap();
+        let latest = sets
+            .clone()
+            .update_ledger(spent_set)
+            .end_block(2, 1024)
+            .unwrap();
         assert_eq!(
             pol_wallet_inputs(
                 &note,

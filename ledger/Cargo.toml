@@ -33,7 +33,6 @@ num-bigint                    = { workspace = true }
 rand                          = { workspace = true }
 rpds                          = { workspace = true }
 serde                         = { features = ["derive"], workspace = true }
-serde_arrays                  = { workspace = true }
 thiserror                     = { workspace = true }
 tracing                       = { workspace = true }
 
@@ -76,6 +75,3 @@ required-features = ["test-utils"]
 
 [features]
 test-utils = []
-
-[package.metadata.cargo-machete]
-ignored = ["serde_arrays"]

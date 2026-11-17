@@ -423,7 +423,7 @@ mod tests {
     use super::*;
     use crate::mantle::{
         fixtures::ops::op_values::FORK_DIGEST,
-        gas::GasProfile,
+        gas::test_utils::GAS_PROFILE,
         ops::channel::{
             ChannelId,
             deposit::{DepositOp, Metadata},
@@ -432,8 +432,6 @@ mod tests {
         },
         transactions::{GasPrices, tx_list::ops::OpsGasContext},
     };
-
-    const GAS_PROFILE: GasProfile = GasProfile::MAINNET;
 
     fn funding_note(value: Value, nonce: u64, nullifier: u64) -> FundingNote {
         FundingNote {

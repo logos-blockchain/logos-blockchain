@@ -11,7 +11,7 @@ use lb_core::{
         Op, OpProof, SignedOps,
         batch::{DeferredProofs, DeferredZkProgramSpend},
         ledger::verification_mode::StandardMode,
-        note_set::{NoteSet, NoteSets, RECENT_ROOTS_WINDOW, TxBuffer, TxRoots, eligible_leaf},
+        note_set::{NoteSet, NoteSets, TxBuffer, TxRoots, eligible_leaf},
         notes::{InputNullifiers, NoteNullifier, OutputCommitments},
         ops::{
             ChannelInscribeProof, StepProof,
@@ -38,7 +38,10 @@ use rand::{Rng as _, SeedableRng as _, rngs::StdRng};
 
 use crate::{
     cycles::{Case, Counter, ROUNDS, in_turn},
-    fixture::{FORK_DIGEST, HeaderId, commitments, filled_state, nullifiers, program_key, signed},
+    fixture::{
+        FORK_DIGEST, HeaderId, ROOT_WINDOW, commitments, filled_state, nullifiers, program_key,
+        signed,
+    },
 };
 
 const BATCH_SIZES: [u64; 9] = [1, 2, 4, 8, 16, 32, 64, 128, 256];
@@ -53,14 +56,14 @@ const DIFFERENCE_RUNS: usize = 5;
 const BLOCK: u64 = 1;
 /// The recent roots of the ledger set when a block changing it closes: one, a
 /// few hundred and the whole window a live chain holds.
-pub const RECENT_ROOTS: [u64; 3] = [1, 256, RECENT_ROOTS_WINDOW];
+pub const RECENT_ROOTS: [u64; 3] = [1, 256, ROOT_WINDOW];
 
 static RECENT_ROOT_SETS: LazyLock<Vec<(NoteSets, Vec<Fr>)>> =
     LazyLock::new(|| RECENT_ROOTS.map(with_recent_roots).into());
 
 // The note sets of the fixture after `recent_roots` blocks changing the ledger
 // set, and the roots of the ledger set they superseded, oldest first. Each
-// block adds one commitment, the first `RECENT_ROOTS_WINDOW - recent_roots`
+// block adds one commitment, the first `ROOT_WINDOW - recent_roots`
 // more, so that the ledger set ends at one length for every count and its root
 // hashes as many peaks. The blocks are numbered from the one after the window,
 // at which the roots superseded by the block the fixture closed have expired.
@@ -69,7 +72,7 @@ fn with_recent_roots(recent_roots: u64) -> (NoteSets, Vec<Fr>) {
     let mut roots = Vec::new();
     for block in 1..=recent_roots {
         let added = if block == 1 {
-            1 + RECENT_ROOTS_WINDOW - recent_roots
+            1 + ROOT_WINDOW - recent_roots
         } else {
             1
         };
@@ -81,7 +84,7 @@ fn with_recent_roots(recent_roots: u64) -> (NoteSets, Vec<Fr>) {
             .expect("the commitment MMR has room");
         sets = sets
             .update_ledger(ledger)
-            .end_block(RECENT_ROOTS_WINDOW + block)
+            .end_block(ROOT_WINDOW + block, ROOT_WINDOW)
             .expect("the note sets live in memory, which cannot fail");
     }
     (sets, roots)
@@ -96,7 +99,7 @@ pub fn recent_roots_sets(recent_roots: u64) -> (NoteSets, Vec<Fr>, BlockNumber) 
         .position(|count| *count == recent_roots)
         .expect("a measured count of recent roots");
     let (sets, roots) = RECENT_ROOT_SETS[position].clone();
-    (sets, roots, RECENT_ROOTS_WINDOW + recent_roots)
+    (sets, roots, ROOT_WINDOW + recent_roots)
 }
 
 pub fn micro_cases() -> Vec<Case> {
@@ -310,7 +313,7 @@ fn tree_cases() -> Vec<Case> {
             move || changed.clone(),
             move |note_sets: NoteSets| {
                 note_sets
-                    .end_block(last_block + 1)
+                    .end_block(last_block + 1, ROOT_WINDOW)
                     .expect("the note sets live in memory, which cannot fail")
             },
         ));
@@ -333,7 +336,7 @@ fn inscription(payload: usize) -> Op {
     let fixture = filled_state();
     Op::ChannelInscribe(InscriptionOp {
         channel_id: fixture.channel,
-        inscription: Inscription::try_new(vec![0xa5; payload]).expect("the payload fits"),
+        inscription: Inscription::new_unchecked(vec![0xa5; payload]),
         parent: MsgId::root(),
         signer: fixture.channel_key.public_key().into_unverified(),
         mini_blocks: MiniBlocks::default(),
@@ -483,7 +486,7 @@ fn applied_program_spend() -> DeferredZkProgramSpend {
         FORK_DIGEST,
         [Op::ChannelInscribe(InscriptionOp {
             channel_id: fixture.channel,
-            inscription: [1].into(),
+            inscription: Inscription::new_unchecked(vec![1]),
             parent: tip,
             signer: fixture.channel_key.public_key().into_unverified(),
             mini_blocks,
@@ -660,7 +663,7 @@ fn pol_case(rng: &mut StdRng) -> Case {
 fn end_block_nullifier_cases() -> Vec<Case> {
     let mut cases = Vec::new();
     for spent in [0, 1, 2, 4, 16, 64, 256] {
-        let (sets, _, last_block) = recent_roots_sets(RECENT_ROOTS_WINDOW);
+        let (sets, _, last_block) = recent_roots_sets(ROOT_WINDOW);
         let changed_set = sets
             .ledger()
             .clone()
@@ -675,7 +678,7 @@ fn end_block_nullifier_cases() -> Vec<Case> {
             move || changed.clone(),
             move |note_sets: NoteSets| {
                 note_sets
-                    .end_block(last_block + 1)
+                    .end_block(last_block + 1, ROOT_WINDOW)
                     .expect("the note sets live in memory, which cannot fail")
             },
         ));

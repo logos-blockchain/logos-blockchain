@@ -1,6 +1,10 @@
 use core::num::{NonZero, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU128};
 
-use lb_core::{block::genesis::GenesisBlock, mantle::gas::GasProfile, sdp::NumberOfEpochs};
+use lb_core::{
+    block::genesis::GenesisBlock,
+    mantle::gas::{Gas, GasProfile},
+    sdp::NumberOfEpochs,
+};
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::ModulusShift;
 use lb_node::config::deployment::{
@@ -51,6 +55,8 @@ const UNCLE_REFERENCE_WINDOW_IN_BLOCK: u32 = 12;
 const MAX_UNCLES: u8 = 4;
 const MAX_TRANSACTIONS: NonZeroU16 = NonZeroU16::new(1024).unwrap();
 const MAX_TRANSACTIONS_SIZE: u32 = 2 * 1024 * 1024;
+const ROOT_WINDOW: u64 = 1024;
+const CHANNEL_WITHDRAW_DELAY: NonZeroU64 = NonZeroU64::new(86_400).unwrap();
 const SLOT_ACTIVATION_COEFF_NUMERATOR: u32 = 1;
 const SLOT_ACTIVATION_COEFF_DENOMINATOR: u32 = 10;
 const EPOCH_STAKE_DISTRIBUTION_STABILIZATION: u8 = 3;
@@ -97,17 +103,41 @@ const STORAGE_MARKET_MAX_ADJUSTMENT_FACTOR: ProperFraction =
 const STORAGE_MARKET_EMA_SMOOTHING_FACTOR: ProperFraction =
     ProperFraction::new(1, NonZeroU32::new(2).unwrap()).unwrap();
 /// What each Operation costs, and the components of RFC-506 an Operation and a
-/// transaction add for what they carry.
+/// transaction add for what they carry, as measured on a Raspberry Pi 5.
 ///
 /// The schedule of the e2e deployment, which its clients price transactions
 /// under.
-pub const GAS_PROFILE: GasProfile = GasProfile::MAINNET;
+pub const GAS_PROFILE: GasProfile = GasProfile {
+    transfer: Gas::new(10),
+    program_register: Gas::new(15114),
+    channel_config: Gas::new(24),
+    channel_inscribe: Gas::new(26),
+    channel_deposit: Gas::new(26),
+    channel_withdraw: Gas::new(33),
+    sdp_declare: Gas::new(1693),
+    sdp_withdraw: Gas::new(0),
+    sdp_active: Gas::new(15117),
+    claim_pow_reward: Gas::new(1506),
+    kilobyte: Gas::new(30),
+    note_set: Gas::new(8961),
+    proof: Gas::new(4177),
+    root: Gas::new(2332),
+    buffered: Gas::new(60),
+    nullifier: Gas::new(1758),
+    commitment: Gas::new(58),
+    signature: Gas::new(557),
+    user_step: Gas::new(28),
+    program_deposit: Gas::new(144),
+    program_step: Gas::new(13528),
+    opening: Gas::new(470),
+};
 /// The block rewards: the stake target, the scale of the emission's weight, the
 /// weight of the pooled fees, a block's emission in full, and the Blend nodes'
 /// share.
 const BLOCK_REWARDS: BlockRewardsConfig = BlockRewardsConfig::new(
     3_000_000_000_000_000_000,
     NonZeroU64::new(120_000_000_000_000_000).unwrap(),
+    NonZeroU16::new(120).unwrap(),
     10_512,
     EmissionRatio::new(62_500_000_000_000, NonZeroU64::new(657).unwrap()),
     ProperFraction::new(6, NonZeroU32::new(10).unwrap()).unwrap(),
@@ -182,6 +212,8 @@ pub fn e2e_deployment_settings_with_genesis_block(
                 max_uncles: MAX_UNCLES,
                 max_transactions: MAX_TRANSACTIONS,
                 max_transactions_size: MAX_TRANSACTIONS_SIZE,
+                root_window: ROOT_WINDOW,
+                channel_withdraw_delay: CHANNEL_WITHDRAW_DELAY,
                 slot_activation_coeff: NonNegativeRatio::new(
                     SLOT_ACTIVATION_COEFF_NUMERATOR,
                     NonZero::new(SLOT_ACTIVATION_COEFF_DENOMINATOR).unwrap(),

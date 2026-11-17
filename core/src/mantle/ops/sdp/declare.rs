@@ -264,7 +264,10 @@ mod tests {
         mantle::{
             TxHash,
             batch::DeferredZkTransfer,
-            gas::{Gas, GasProfile, OpGasCalculator as _, test_utils::FixedThresholds},
+            gas::{
+                Gas, OpGasCalculator as _,
+                test_utils::{FixedThresholds, GAS_PROFILE},
+            },
             ledger::{Declarations, ProviderIndex},
             note_set::{CommitmentMmr, NoteSet, NoteSetError, NoteSetIndex, NoteSets, TxNoteState},
             notes::{
@@ -286,7 +289,10 @@ mod tests {
             .clone()
             .execute_adding(&[NoteCommitment(Fr::from(1u64))])
             .unwrap();
-        NoteSets::new().update_ledger(ledger).end_block(0).unwrap()
+        NoteSets::new()
+            .update_ledger(ledger)
+            .end_block(0, 1024)
+            .unwrap()
     }
 
     fn root() -> Fr {
@@ -613,7 +619,10 @@ mod tests {
                 .clone()
                 .execute_adding(&[input.commitment()])
                 .unwrap();
-            let sets = NoteSets::new().update_ledger(ledger).end_block(0).unwrap();
+            let sets = NoteSets::new()
+                .update_ledger(ledger)
+                .end_block(0, 1024)
+                .unwrap();
             let root = mmr.frontier_root();
             let nullifier =
                 derive_note_nullifier(&input.commitment(), &ZkKey::new(secret_key).nullifier_key());
@@ -708,8 +717,7 @@ mod tests {
             // 1693 + 557 + 4177 + 1758 + 58
             for threshold in [0, 1, 3] {
                 assert_eq!(
-                    SDPDeclareOp::sample()
-                        .execution_gas(&GasProfile::MAINNET, &FixedThresholds(threshold)),
+                    SDPDeclareOp::sample().execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                     Ok(Gas::new(8_243))
                 );
             }

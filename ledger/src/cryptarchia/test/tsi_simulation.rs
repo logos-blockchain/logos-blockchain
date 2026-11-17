@@ -230,7 +230,7 @@ fn genesis_ledger(config: &Config, leader_utxo: Note) -> Ledger<HeaderId> {
         },
         block_density: BlockDensity::from_genesis_config(config),
         epoch_state,
-        block_rewards: BlockRewards::genesis(),
+        block_rewards: BlockRewards::genesis(config.block_rewards.pooled_fees_window()),
         average_execution_gas: 0.into(),
         execution_base_fee: GENESIS_EXECUTION_GAS_PRICE,
         storage_gas_ema: 0.into(),
