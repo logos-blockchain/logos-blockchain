@@ -2189,8 +2189,8 @@ mod uncle_tests {
         //          |--------------- u2(5)
         //
         // The order of the selected uncles should be: [u2, u1, u3].
-        // - The parent slot(3) of u1 and u2 is smaller than the parent slot(4)
-        //   of u3 and u4.
+        // - The parent slot(3) of u1 and u2 is smaller than the parent slot(4) of u3
+        //   and u4.
         // - u2's slot(5) is smaller than u1's slot(6).
         // - u3's ID(3) is smaller than u4's ID(4).
         let [g, b1, b2, u1, u2, u3, u4] = [0u64, 1u64, 2, 3, 4, 5, 6];

@@ -349,10 +349,10 @@ pub(super) async fn execute_continuous_round_robin(
             world,
             step,
             &wallet_names,
-            num_transactions as u64 * value,
+            num_transactions as u64 * coin_split_value,
             WalletSendReadiness::EligibleUtxoBatch {
                 min_required_outputs: num_transactions,
-                min_value_per_transaction: value,
+                min_value_per_transaction: coin_split_value,
             },
             &mut available_utxos,
             &used_input_note_ids,

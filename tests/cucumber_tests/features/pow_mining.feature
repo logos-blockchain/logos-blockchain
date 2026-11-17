@@ -11,7 +11,7 @@ Feature: PoW mining
   # names, plus an unrelated second wallet to show only one mining wallet is
   # configured.
   #
-  # Two deployment tweaks make mining observable in a short test:
+  # PoW settings make mining observable in a short test:
   #   * A nonzero `rate_num` enables the reward payout (the shipped configs
   #     disable it with `rate_num = 0`), paying from the pool the genesis
   #     block seeds, 1 000 000 000 on test chains.
@@ -33,18 +33,19 @@ Feature: PoW mining
     And I have a cluster with capacity of 3 nodes
     And the first 2 nodes are declared as blend providers
     And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
-    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "1"
+     # Give proposals more time to propagate and keep the slot-based reward
+    # window open longer in wall-clock time while nodes converge and claim.
+    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "3"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "2"
     # Fund the pool for exactly one claim (pool == per-claim reward): with the
     # difficulty eased to the field maximum the miner finds tickets extremely
     # fast, and the claim is capped to `reward_pool / reward` tickets — so a
     # single-ticket cap keeps the reward-claim transaction small and fast. The
-    # per-claim reward is `pool * rate_num / (rate_den * target_claims_per_block
-    # * N_b)`, with `N_b` = 200 expected blocks per epoch here (`k` = 20,
-    # `f` = 1/2) and a million target claims per block, so a `rate_num` of
-    # 200 000 000 pays out the whole pool in one claim.
-    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_num" as "200000000"
+    # The test deployment has `k` = 20; with `f` = 1/2 it gives `N_b` = 200
+    # expected blocks per epoch, so `rate_num` = 200 pays the whole pool in
+    # one claim.
+    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_num" as "200"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.minimum_difficulty" as "1"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.ema_smoothing_factor" as "1"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.ema_smoothing_precision" as "1000000000000000000"
@@ -53,8 +54,7 @@ Feature: PoW mining
     # and blend and hold no wallet resources.
     And I start node "NODE_1"
     And I start peer node "NODE_2" connected to node "NODE_1"
-    # Let the two-node chain advance so the reward difficulty eases to a
-    # mineable target before the miner joins.
+    # Let the two-node chain advance before the miner joins.
     When node "NODE_1" is at height 5 in 300 seconds
     # The miner joins the running network with its wallet resources; WALLET_MINER
     # (account 1) is the mining wallet the claim request pays.
@@ -63,6 +63,7 @@ Feature: PoW mining
       | NODE_3    | 1             | WALLET_MINER | true             | NODE_1       |
       | NODE_3    | 2             | OTHER_WALLET | false            | NODE_1       |
     And node "NODE_3" is at height 6 in 180 seconds
+    And all nodes converged to within 0 blocks in 360 seconds
     # Record the miner's balance, then mine and claim; assert the balance grew.
     And I record the balance of wallet "WALLET_MINER" as "MINER_BASELINE"
     And I start mining on node "NODE_3"
@@ -78,6 +79,7 @@ Feature: PoW mining
     When I start mining on node "NODE_3"
     Then node "NODE_3" reports PoW mining on
     When I stop mining on node "NODE_3"
+    When all nodes converged to within 0 blocks in 360 seconds
     And I claim PoW rewards on node "NODE_3" as "POW_CLAIM_TX" within 120 seconds
     Then transaction "POW_CLAIM_TX" is included on node "NODE_1" in 120 seconds
     # The balance grows by exactly the reward the claim transaction paid to the
@@ -102,17 +104,14 @@ Feature: PoW mining
     And I have a cluster with capacity of 3 nodes
     And the first 2 nodes are declared as blend providers
     And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
-    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "1"
+    # Give proposals more time to propagate and keep the slot-based reward
+    # window open longer in wall-clock time while nodes converge and claim.
+    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "3"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "2"
-    # Funds 1000 claims, so `reward_pool / reward` no longer caps the batch and
-    # the node's own per-transaction limits decide how many tickets it takes:
-    # the per-claim reward is `pool * rate_num / (rate_den *
-    # target_claims_per_block * N_b)`, with `N_b` = 200 expected blocks per
-    # epoch here (`k` = 20, `f` = 1/2) and a million target claims per block,
-    # so a `rate_num` of 1 000 000 over a `rate_den` of 5 pays a thousandth of
-    # the pool per claim.
-    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_num" as "1000000"
+    # Funds 250 claims, enough to exceed the transaction operation cap (255
+    # total ops) without creating an unnecessarily large persisted backlog.
+    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_num" as "4"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_den" as "5"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.minimum_difficulty" as "1"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.ema_smoothing_factor" as "1"
@@ -126,12 +125,14 @@ Feature: PoW mining
       | NODE_3    | 1             | WALLET_MINER | true             | NODE_1       |
       | NODE_3    | 2             | OTHER_WALLET | false            | NODE_1       |
     And node "NODE_3" is at height 6 in 180 seconds
+    When all nodes converged to within 0 blocks in 360 seconds
     And I record the balance of wallet "WALLET_MINER" as "MINER_BASELINE"
     And I start mining on node "NODE_3"
     # Mine until the ready set is far past any per-transaction cap, so the
     # batch the node builds is the largest one it believes it may build.
-    And node "NODE_3" has at least 500 claimable PoW rewards within 120 seconds
+    And node "NODE_3" has at least 250 claimable PoW rewards within 120 seconds
     And I stop mining on node "NODE_3"
+    When all nodes converged to within 0 blocks in 360 seconds
     And I claim PoW rewards on node "NODE_3" as "POW_CLAIM_TX" within 120 seconds
     Then transaction "POW_CLAIM_TX" is included on node "NODE_1" in 120 seconds
     # The claim must have batched the backlog rather than quietly falling back
@@ -152,7 +153,9 @@ Feature: PoW mining
     And I have a cluster with capacity of 3 nodes
     And the first 2 nodes are declared as blend providers
     And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
-    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "1"
+     # Give proposals more time to propagate and keep the slot-based reward
+    # window open longer in wall-clock time while nodes converge and claim.
+    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "3"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "2"
     # One claim pays out the whole pool, as in the first scenario.
