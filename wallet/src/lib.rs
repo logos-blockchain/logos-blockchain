@@ -77,7 +77,31 @@ pub struct KnownNote {
     pub nullifier: NoteNullifier,
 }
 
+impl KnownNote {
+    // Whether the note is adopted when its commitment is appended to
+    // `note_set`: it is a note of the set, not spent in it yet.
+    fn is_adoptable_in(
+        &self,
+        note_set: NoteSetIndex,
+        spent: &rpds::HashTrieSetSync<SpentNullifier>,
+    ) -> bool {
+        self.note_set == note_set
+            && !spent.contains(&SpentNullifier {
+                note_set,
+                nullifier: self.nullifier,
+            })
+    }
+}
+
 pub type KnownNotes = HashMap<NoteCommitment, KnownNote>;
+
+/// The nullifier of an owned note inserted into its set: the note is spent in
+/// that set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SpentNullifier {
+    pub note_set: NoteSetIndex,
+    pub nullifier: NoteNullifier,
+}
 
 /// A lightweight projection of a `Block<Tx>` carrying only what the wallet
 /// needs to follow the note sets the block changed.
@@ -150,7 +174,7 @@ pub struct WalletState {
     // The nullifiers of the owned notes spent in each set. A spent note is not
     // adopted again when its commitment is appended to the set once more: the
     // copy has the same nullifier, so it can't be spent.
-    pub spent: rpds::HashTrieSetSync<(NoteSetIndex, NoteNullifier)>,
+    pub spent: rpds::HashTrieSetSync<SpentNullifier>,
 }
 
 impl WalletState {
@@ -508,7 +532,7 @@ fn current_paths(
 fn apply_update(
     commitments: &mut rpds::HashTrieMapSync<NoteSetIndex, CommitmentMmr>,
     notes: &mut rpds::HashTrieMapSync<NoteCommitment, OwnedNote>,
-    spent: &mut rpds::HashTrieSetSync<(NoteSetIndex, NoteNullifier)>,
+    spent: &mut rpds::HashTrieSetSync<SpentNullifier>,
     known: &KnownNotes,
     update: &NoteSetUpdate,
 ) -> Result<(), WalletError> {
@@ -537,9 +561,10 @@ fn apply_update(
                     PushWithPathsError::InvalidTrackedPath(error) => error.into(),
                 })?;
         mmr = next;
-        if let Some(known_note) = known.get(commitment).filter(|known| {
-            known.note_set == note_set && !spent.contains(&(note_set, known.nullifier))
-        }) {
+        if let Some(known_note) = known
+            .get(commitment)
+            .filter(|known| known.is_adoptable_in(note_set, spent))
+        {
             owned.push(*known_note);
             paths.push(path);
         }
@@ -563,7 +588,10 @@ fn apply_update(
     for nullifier in &update.nullifiers {
         if let Some(commitment) = by_nullifier.get(nullifier) {
             notes.remove_mut(commitment);
-            spent.insert_mut((note_set, *nullifier));
+            spent.insert_mut(SpentNullifier {
+                note_set,
+                nullifier: *nullifier,
+            });
         }
     }
     Ok(())
