@@ -129,13 +129,13 @@ pub enum Error {
     #[error("Batch deferred proof verification error: {0}")]
     BatchDeferredProofVerification(#[from] lb_core::mantle::batch::Error),
     #[error(
-        "The saved chain state starts from the LIB {0}, but the nullifier store holds no LIB state to read it from: remove the chain data, and sync from genesis"
+        "The saved chain state starts from the LIB {0}, but the nullifier store has no saved LIB state: remove the chain data, and sync from genesis"
     )]
     NoLibState(HeaderId),
 }
 
-/// What the LIB state of the nullifier store keeps of the LIB block (see
-/// [`lb_ledger::LibState`]): what the consensus needs to start from it again.
+/// What the consensus needs about the LIB block to restart from it, saved in
+/// the [`lb_ledger::LibState`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LibInfo {
     pub parent: HeaderId,
@@ -406,9 +406,8 @@ pub(crate) struct TryApplyBlockOutcome {
 }
 
 impl Cryptarchia {
-    /// Creates the chain with the genesis block as its only block. The genesis
-    /// state becomes the finalized base of the store of its nullifier trees,
-    /// with its LIB state.
+    /// Creates the chain with the genesis block as its only block, and saves
+    /// the genesis state as the LIB state of the nullifier store.
     pub fn from_genesis(
         genesis_id: HeaderId,
         genesis_ledger_state: LedgerState,
@@ -432,8 +431,8 @@ impl Cryptarchia {
         ))
     }
 
-    /// Creates the chain with the LIB recorded in the LIB state of a nullifier
-    /// store as its only block (see [`lb_ledger::Ledger::restore`]).
+    /// Creates the chain from a LIB state read from the nullifier store, with
+    /// that LIB as its only block (see [`lb_ledger::Ledger::restore`]).
     #[must_use]
     pub fn from_restored(
         restored: Restored<HeaderId, LibInfo>,
@@ -692,8 +691,8 @@ impl Cryptarchia {
     ///
     /// Details on which blocks are pruned can be found in the
     /// [`lb_cryptarchia_engine::Cryptarchia::receive_block`].
-    /// Prunes the ledger states of the `pruned_blocks`, and makes the LIB the
-    /// finalized base of the nullifier store, with its LIB state.
+    /// Prunes the ledger states of the `pruned_blocks`, moves the base of the
+    /// nullifier store to the LIB, and saves the LIB state.
     pub(crate) fn prune_ledger_states(&mut self, pruned_blocks: &PrunedBlocks<HeaderId>) {
         let info = LibInfo::of(self.lib_branch());
         match self
@@ -1285,18 +1284,18 @@ where
         })
     }
 
-    /// Creates [`Cryptarchia`] with the LIB of the nullifier store as its only
-    /// block: the LIB its LIB state records, at which the store is finalized.
-    /// The saved state's LIB is usually older, since the state is saved on
-    /// a timer, and the store may no longer hold the trees it read.
+    /// Creates [`Cryptarchia`] from the LIB state saved in the nullifier store,
+    /// with that LIB as its only block. The LIB in `recovery_state` may be
+    /// older, since it is saved on a timer, and the store may have deleted
+    /// its trees.
     ///
-    /// A store without LIB state was never finalized: it starts from genesis,
-    /// cleared of what a stop before the first finalization left in it.
+    /// A store without a LIB state never moved its base: the chain starts from
+    /// genesis, after clearing what the store holds.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::NoLibState`] if the store has no LIB state while the
-    /// saved state starts above genesis: the trees of its LIB are gone.
+    /// Returns [`Error::NoLibState`] if the store has no LIB state while
+    /// `recovery_state` starts above genesis: the trees of its LIB are gone.
     fn cryptarchia_from_store(
         recovery_state: &CryptarchiaConsensusState,
         nullifier_store: &DynKvStore,

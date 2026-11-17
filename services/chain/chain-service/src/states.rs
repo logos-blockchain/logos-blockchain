@@ -50,10 +50,9 @@ pub fn saved_tip_era(recovery_data: &RecoveryData) -> Result<Option<TipEra>, Dyn
 
 /// The state the chain service saves on a timer, to restart from.
 ///
-/// The state of the LIB is not in it: the nullifier store keeps it, in the
-/// LIB state written with every finalization of its LIB (see
-/// [`lb_ledger::LibState`]), the LIB the restart starts from. The LIB saved
-/// here may be older.
+/// It does not hold the ledger state of the LIB: that is the
+/// [`lb_ledger::LibState`] saved in the nullifier store each time the LIB
+/// moves, which a restart starts from. The LIB saved here may be older.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CryptarchiaConsensusState {
     pub(crate) tip: HeaderId,

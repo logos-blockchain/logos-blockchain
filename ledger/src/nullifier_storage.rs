@@ -23,10 +23,10 @@
 //! stake distribution freeze. They are all canonical states once their block is
 //! final, the snapshots reading the store below its finalized base.
 //!
-//! Every finalization may also write a LIB state under [`LIB_STATE_KEY`], in
-//! its batch: what a restart needs to read the store again, starting from its
-//! base (see [`crate::LibState`]). The store and the LIB state never disagree,
-//! whatever the moment the node stops.
+//! Each time the base moves to a new LIB, the [`crate::LibState`] (the LIB and
+//! its ledger state) may also be written under [`LIB_STATE_KEY`], in the same
+//! batch. A restart reads it to start from the LIB, so it always matches the
+//! trees in the store, whenever the node stops.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -50,8 +50,9 @@ fn written_key(version: Version) -> Vec<u8> {
     version.0.to_be_bytes().to_vec()
 }
 
-/// The key of the LIB state of the finalized base, next to the namespaces of
-/// the note sets and of the [`VersionRegistry`].
+/// The key of the saved [`crate::LibState`]. It differs from the first byte of
+/// every other key: the note sets (`L`, `S`, `C`), [`VERSIONS_NAMESPACE`] and
+/// [`WRITTEN_NAMESPACE`].
 pub const LIB_STATE_KEY: &[u8] = b"A";
 
 /// The store of the nullifier trees of a ledger, and the versions of its
@@ -97,13 +98,13 @@ impl NullifierStorage {
         write(&self.store, batch)
     }
 
-    /// The LIB state written with the last finalization, if any.
+    /// The [`crate::LibState`] saved with the last move of the base, if any.
     pub fn read_lib_state(store: &DynKvStore) -> Result<Option<Bytes>, NoteSetError> {
         store.get(LIB_STATE_KEY).map_err(storage_error)
     }
 
-    /// Deletes everything `store` holds, as when what it holds has no LIB state
-    /// to be read again from.
+    /// Deletes everything in `store`. Used when `store` has no LIB state, so
+    /// nothing in it can be read again.
     pub fn clear(store: &DynKvStore) -> Result<(), NoteSetError> {
         let mut batch = WriteBatch::new();
         batch.delete_prefix(Bytes::new());
@@ -184,12 +185,13 @@ impl NullifierStorage {
         Ok(state)
     }
 
-    /// Makes the state of block `block_id`, the LIB of a ledger, the finalized
-    /// base of the store: committed first if it has a pending block, as the
-    /// genesis state does. A state restored from the store already is its base.
+    /// Makes the trees of the state of block `block_id` the base of the store:
+    /// the trees every later block builds on. Changes the state has not
+    /// written yet, as a genesis state has, are written first. A state
+    /// restored from the store already is the base.
     ///
-    /// Returns the batch finalizing it, for the caller to write, then collect
-    /// the garbage.
+    /// Returns the write batch, for the caller to write before collecting the
+    /// garbage.
     pub fn finalize_base(
         &self,
         block_id: BlockId,
@@ -319,8 +321,8 @@ pub fn retention_floors<'a>(
     floors
 }
 
-/// The note sets of `state`, decoded from a LIB state, attached to `store`:
-/// those of the state itself must be its finalized base.
+/// Connects the note sets of `state`, read from a saved LIB state, to the trees
+/// in `store`. The trees of `state` itself must be the base of `store`.
 pub fn attach_state(
     state: CryptarchiaLedger,
     store: &DynKvStore,

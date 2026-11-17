@@ -161,7 +161,7 @@ pub enum LedgerError<Id> {
     WrongRewardValue { header: Value, computed: Value },
     #[error("The state of the LIB {0:?} could not be found")]
     LibNotFound(Id),
-    #[error("The LIB state of the nullifier store could not be encoded or decoded: {0}")]
+    #[error("The LIB state could not be encoded or decoded: {0}")]
     LibState(String),
 }
 
@@ -169,14 +169,17 @@ fn block_id<Id: Into<BlockHash>>(id: Id) -> BlockId {
     BlockId(id.into())
 }
 
-/// What a restart needs to read the nullifier store of a ledger again: its
-/// LIB, the state of the LIB, and what the consensus keeps of the LIB block
-/// (`info`).
+/// The LIB, its ledger state, and what the consensus keeps of the LIB block
+/// (`info`), saved in the nullifier store so that a restarted node can start
+/// from the LIB.
 ///
-/// [`Ledger::new_with_lib_state`] and [`Ledger::apply_pruning_with_lib_state`]
-/// write it in the batch that finalizes the LIB, so it describes the finalized
-/// base of the store at every moment, while a state saved elsewhere may lag
-/// behind it. [`Ledger::restore`] reads it back.
+/// The nullifier trees are kept in the store, not in [`LedgerState`], and the
+/// store deletes old tree nodes each time the LIB moves. The LIB state is
+/// written in the same batch as that move, so after a restart it always
+/// matches the trees in the store.
+///
+/// Written by [`Ledger::new_with_lib_state`] and
+/// [`Ledger::apply_pruning_with_lib_state`], read by [`Ledger::restore`].
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LibState<Id, Info> {
     pub lib: Id,
@@ -184,7 +187,7 @@ pub struct LibState<Id, Info> {
     pub info: Info,
 }
 
-// The encoding of a LIB state, borrowed from what it is made of.
+// Serializes as a [`LibState`] without cloning its fields.
 #[derive(serde::Serialize)]
 #[serde(rename = "LibState")]
 struct LibStateRef<'a, Id, Info> {
@@ -202,7 +205,8 @@ fn encode_lib_state<Id: serde::Serialize, Info: serde::Serialize>(
         .map_err(|error| LedgerError::LibState(error.to_string()))
 }
 
-/// A ledger restored from the LIB state of its store (see [`Ledger::restore`]).
+/// A ledger rebuilt from the LIB state saved in its store (see
+/// [`Ledger::restore`]).
 pub struct Restored<Id: Eq + Hash, Info> {
     pub ledger: Ledger<Id>,
     pub lib: Id,
@@ -211,9 +215,10 @@ pub struct Restored<Id: Eq + Hash, Info> {
 
 /// The states of the blocks the chain holds: the LIB and the blocks above it.
 ///
-/// The nullifier trees of the states are kept in the store of the LIB state
-/// (see [`nullifier_storage`]): [`Self::commit_update`] writes each block, and
-/// [`Self::apply_pruning`] finalizes the LIB and removes the pruned blocks.
+/// The nullifier trees of the states are kept in the nullifier store, not in
+/// memory (see [`nullifier_storage`]): [`Self::commit_update`] writes the trees
+/// of each block, and [`Self::apply_pruning`] moves the LIB up and deletes the
+/// pruned blocks.
 #[derive(Clone)]
 pub struct Ledger<Id: Eq + Hash> {
     states: HashTrieMapSync<Id, LedgerState>,
@@ -243,10 +248,9 @@ impl<Id> Ledger<Id>
 where
     Id: Eq + Hash + Copy,
 {
-    /// A ledger whose LIB is the state of block `id`. Its nullifier
-    /// trees are kept in the store of its note sets: the state becomes the
-    /// finalized base of that store, committed first if it has a pending
-    /// block, as a genesis state does.
+    /// A ledger with the state of block `id` as its LIB. The nullifier trees of
+    /// the state become the base of the nullifier store: the trees every later
+    /// block builds on.
     pub fn new(
         id: Id,
         state: LedgerState,
@@ -258,8 +262,8 @@ where
         Self::with_lib(id, state, era_schedule, |_, _| Ok(None))
     }
 
-    /// Like [`Self::new`], writing the [`LibState`] of the LIB with `info` in
-    /// the batch that finalizes it.
+    /// Like [`Self::new`], and also saves the [`LibState`] with `info`, in the
+    /// same write as the base.
     pub fn new_with_lib_state<Info: serde::Serialize>(
         id: Id,
         state: LedgerState,
@@ -274,11 +278,12 @@ where
         })
     }
 
-    /// The ledger whose LIB is the one recorded in the LIB state of `store`,
-    /// its state attached to the store, or `None` if the store has no LIB
-    /// state. The blocks above the LIB are applied again with
-    /// [`Self::commit_update`], which reuses their versions, then
-    /// [`Self::discard_lost_blocks`] deletes what the others wrote.
+    /// Rebuilds the ledger from the [`LibState`] saved in `store`, with its LIB
+    /// as the only block, or returns `None` if `store` has none.
+    ///
+    /// The caller then applies the blocks above the LIB again with
+    /// [`Self::commit_update`], which reuses what they already wrote, and calls
+    /// [`Self::discard_lost_blocks`] to delete what other blocks wrote.
     pub fn restore<Info: serde::de::DeserializeOwned>(
         store: &DynKvStore,
         era_schedule: Arc<EraScheduledConfig>,
@@ -298,8 +303,9 @@ where
         Ok(Some(Restored { ledger, lib, info }))
     }
 
-    // The ledger whose LIB state is `state`, made the finalized base of its store
-    // in one batch with the LIB state `lib_state_bytes` encodes, if any.
+    // A ledger with `state` as its LIB. Its trees become the base of the store,
+    // and the [`LibState`] that `lib_state_bytes` encodes, if any, is written in
+    // the same batch.
     fn with_lib(
         id: Id,
         mut state: LedgerState,
@@ -443,8 +449,8 @@ where
         self.prune_with(lib, pruned, |_, _| Ok(None))
     }
 
-    /// Like [`Self::apply_pruning`], writing the [`LibState`] of `lib` with
-    /// `info` in the batch that finalizes it.
+    /// Like [`Self::apply_pruning`], and also saves the [`LibState`] of `lib`
+    /// with `info`, in the same write that moves the base to `lib`.
     pub fn apply_pruning_with_lib_state<Info: serde::Serialize>(
         &mut self,
         lib: Id,
