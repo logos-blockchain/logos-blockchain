@@ -170,7 +170,7 @@ fn block_id<Id: Into<BlockHash>>(id: Id) -> BlockId {
 }
 
 /// The LIB, its ledger state, and what the consensus keeps of the LIB block
-/// (`info`), saved in the nullifier DB (RocksDB) so that a restarted node can
+/// (`info`), saved in the nullifier DB (`RocksDB`) so that a restarted node can
 /// start from the LIB.
 ///
 /// The nullifier trees are kept in the DB, not in [`LedgerState`], and the
