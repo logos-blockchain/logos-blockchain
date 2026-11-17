@@ -4,10 +4,11 @@
 use std::{collections::HashMap, time::Duration};
 
 use cucumber::gherkin::Step;
+use lb_config::deployment::GAS_PROFILE;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        gas::{GasCost, GasPrice, MainnetGasProfile, TxGasCalculator as _},
+        gas::{GasCost, GasPrice, TxGasCalculator as _},
         transactions::{GasPrices, tx_list::ops::OpsGasContext},
     },
 };
@@ -194,7 +195,7 @@ pub async fn prepared_transaction_percentage_reserve_covers_repriced_fee(
     let mandatory_fee_at = |prices: GasPrices| {
         signed_tx
             .op_refs()
-            .total_gas_cost::<MainnetGasProfile>(&OpsGasContext::new(HashMap::new(), prices))
+            .total_gas_cost(&OpsGasContext::new(HashMap::new(), prices, GAS_PROFILE))
             .map(GasCost::into_inner)
             .map_err(|source| StepError::StepFail {
                 message: format!(

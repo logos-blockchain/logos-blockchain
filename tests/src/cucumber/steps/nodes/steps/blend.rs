@@ -12,8 +12,8 @@ use super::{
     Duration, Instant, OffsetDateTime, PathBuf, Step, StepError, StepResult, TARGET,
     USER_CONFIG_FILE, ZkPublicKey, apply_blend_reachability_set, blend_core_locator_from_node_yaml,
     blend_core_zk_id_from_node_yaml, ensure_all_nodes_agree_on_lib, get_cryptarchia_info_all_nodes,
-    given, info, nodes_converged, restore_all_blend_reachability, set_blend_reachability, sleep,
-    stop_all_nodes, then, wait_for_all_nodes_to_be_synced_to_chain, warn, when,
+    given, info, restore_all_blend_reachability, set_blend_reachability, sleep, stop_all_nodes,
+    then, wait_for_all_nodes_to_be_synced_to_chain, wait_for_canonical_convergence, warn, when,
 };
 
 const BLEND_CHURN_TASK: &str = "epoch-driven Blend provider churn";
@@ -408,14 +408,21 @@ async fn step_all_nodes_reached_min_height_and_converged(
     max_diff_height: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    nodes_converged(
+    let convergence = wait_for_canonical_convergence(
         world,
         &step.value,
         Some(min_height),
         max_diff_height,
         time_out_seconds,
     )
-    .await
+    .await?;
+    if world.startup.era_boundary_schedule.is_some() {
+        crate::cucumber::steps::nodes::era_boundaries::record_canonical_convergence(
+            world,
+            &convergence,
+        )?;
+    }
+    Ok(())
 }
 
 #[when(expr = "all nodes agree on LIB in {int} seconds")]

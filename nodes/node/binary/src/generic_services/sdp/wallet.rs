@@ -1,4 +1,5 @@
 use lb_core::{
+    era::ForkDigest,
     mantle::{
         Note, Op, SignedOps,
         ledger::verification_mode::StandardMode,
@@ -268,7 +269,8 @@ where
 // The ledger set root the exact note split, the last Operation of
 // `tx_builder`, is proven against.
 pub fn split_root(tx_builder: &MantleTxBuilder) -> Result<Fr, DynError> {
-    match tx_builder.clone().build()?.last() {
+    // Only the Operations are read, so any fork digest builds them.
+    match tx_builder.clone().build(ForkDigest::new([0; 32]))?.last() {
         Some(Op::Transfer(split)) => Ok(split.commitment_merkle_root),
         _ => Err("the exact note split is missing".into()),
     }

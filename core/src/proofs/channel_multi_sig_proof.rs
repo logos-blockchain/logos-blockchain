@@ -52,7 +52,7 @@ pub const MAX_SIGNATURES: usize = u16::MAX as usize;
 pub type IndexedSignatures =
     UpperBoundedBTreeMap<ChannelKeyIndex, Ed25519Signature, MAX_SIGNATURES>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryEncode)]
 pub struct ChannelMultiSigProof {
     signatures: IndexedSignatures,
 }
@@ -85,16 +85,6 @@ impl ChannelMultiSigProof {
         .expect("`signature_count` is bounded by `MAX_SIGNATURES`");
 
         Self::new(signatures)
-    }
-}
-
-impl BinaryEncode for ChannelMultiSigProof {
-    fn encoded_length(&self) -> usize {
-        self.signatures.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.signatures.encode_into(out);
     }
 }
 

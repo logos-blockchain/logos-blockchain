@@ -128,6 +128,25 @@ pub struct TimeServiceEraSettings {
     pub transition_slots: u64,
 }
 
+impl TimeServiceEraSettings {
+    /// How many slots of the next era, which runs under `next_era`, this era's
+    /// transition period lasts once the next era starts: this era's transition
+    /// slots at its own slot duration, rounded up to whole slots of the next
+    /// era. `None` if they do not fit in a `u64`.
+    #[must_use]
+    pub fn transition_period_in_slots_of(&self, next_era: &Self) -> Option<u64> {
+        // In nanoseconds, so that slots of any length, sub-second ones included,
+        // are measured exactly.
+        let transition_period_in_nanos = self
+            .timing
+            .slot_duration
+            .as_nanos()
+            .checked_mul(u128::from(self.transition_slots))?;
+        u64::try_from(transition_period_in_nanos.div_ceil(next_era.timing.slot_duration.as_nanos()))
+            .ok()
+    }
+}
+
 impl SlotDuration for TimeServiceEraSettings {
     fn slot_duration(&self) -> Duration {
         self.timing.slot_duration

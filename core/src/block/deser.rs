@@ -3,7 +3,10 @@ mod tests {
     use lb_cryptarchia_engine::Slot;
 
     use crate::{
-        block::{Block, BlockTransactions, UncleHeaders, tests::create_proof},
+        block::{
+            Block, BlockTransactions, UncleHeaders,
+            tests::{TEST_MAX_TRANSACTIONS_SIZE, create_proof},
+        },
         mantle::transactions::Ops,
     };
 
@@ -14,6 +17,7 @@ mod tests {
             UncleHeaders::empty(),
             create_proof(),
             BlockTransactions::empty(),
+            TEST_MAX_TRANSACTIONS_SIZE,
         )
         .expect("block creation should succeed")
     }

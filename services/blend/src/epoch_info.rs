@@ -31,6 +31,12 @@ impl Debug for PolEpochInfo {
 
 #[async_trait]
 pub trait PolInfoProvider<RuntimeServiceId> {
+    /// Each epoch's secret `PoL` info, as the epoch is handed over.
+    ///
+    /// Polling it may also scan the epochs' slots for wins, the work that fills
+    /// their winning-slot streams. That load is the consumer's, so a consumer
+    /// polls the stream for as long as it holds it, not only when it expects a
+    /// new epoch.
     type Stream: Stream<Item = PolEpochInfo>;
 
     async fn subscribe(

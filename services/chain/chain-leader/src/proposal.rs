@@ -41,13 +41,21 @@ pub fn assemble_block<Tx>(
     slot: Slot,
     uncles: UncleHeaders,
     txs: BlockTransactions<Tx>,
+    max_transactions_size: u32,
     private: LeaderPrivate,
 ) -> Result<Block<Tx>, Error>
 where
     Tx: Hashable<Hash = TxHash> + StorageSize,
 {
     let proof = Groth16LeaderProof::prove(private)?;
-    Ok(Block::create(parent, slot, uncles, proof, txs)?)
+    Ok(Block::create(
+        parent,
+        slot,
+        uncles,
+        proof,
+        txs,
+        max_transactions_size,
+    )?)
 }
 
 #[cfg(test)]
@@ -126,7 +134,8 @@ mod tests {
             &unbound.entropy_contribution(),
         );
         let private = unbound.with_msg(msg);
-        let block = assemble_block(parent, slot, UncleHeaders::empty(), txs, private).unwrap();
+        let block =
+            assemble_block(parent, slot, UncleHeaders::empty(), txs, u32::MAX, private).unwrap();
 
         assert!(block.header().verify(&public));
         let proof = block.header().leader_proof().clone();
@@ -139,6 +148,7 @@ mod tests {
             slot,
             UncleHeaders::empty(),
             BlockTransactions::<SignedOps<Preverified, StandardMode>>::empty(),
+            u32::MAX,
             LeaderPrivate::new(public, wallet, msg, reward.value),
         )
         .unwrap();

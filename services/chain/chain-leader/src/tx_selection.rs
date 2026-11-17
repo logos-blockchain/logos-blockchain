@@ -3,13 +3,15 @@ use lb_core::{
     mantle::{
         SignedOps, Value,
         batch::DeferredProofs,
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
-        traits::Hashable,
+        traits::{Hashable, StorageSize as _},
         transactions::{hash::TxHash, states::Preverified},
     },
 };
-use lb_ledger::{GasAndFees, LedgerState, config::EraScheduledConfig};
+use lb_ledger::{
+    GasAndFees, LedgerState,
+    config::{EraScheduledConfig, config_for_slot},
+};
 
 use crate::LOG_TARGET;
 
@@ -45,10 +47,13 @@ impl BlockBuilder {
             ledger_state,
             gas_and_fees,
         } = self;
+        let max_gas_per_block = config_for_slot(era_schedule, ledger_state.slot())
+            .execution_market
+            .max_gas_per_block;
         let (ledger_state, tx_gas_and_fees, _events, deferred_proofs) =
-            ledger_state
-                .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(era_schedule, tx)?;
-        let gas_and_fees = gas_and_fees.checked_add::<HeaderId>(tx_gas_and_fees)?;
+            ledger_state.try_apply_transaction::<_, HeaderId>(era_schedule, tx)?;
+        let gas_and_fees =
+            gas_and_fees.checked_add::<HeaderId>(tx_gas_and_fees, max_gas_per_block.into())?;
 
         Ok((
             Self {
@@ -81,10 +86,7 @@ pub fn block_leader_reward(
     era_schedule: &EraScheduledConfig,
 ) -> Result<Value, lb_ledger::LedgerError<HeaderId>> {
     let (state, gas_and_fees, _, _) = header_state
-        .try_apply_block_transactions::<_, HeaderId, MainnetGasProfile>(
-            era_schedule,
-            txs.iter().cloned(),
-        )?;
+        .try_apply_block_transactions::<_, HeaderId>(era_schedule, txs.iter().cloned())?;
     state.leader_reward(&gas_and_fees, era_schedule)
 }
 
@@ -97,6 +99,8 @@ pub fn select_transactions(
     mut pending: Vec<SignedOps<Preverified, StandardMode>>,
     era_schedule: &EraScheduledConfig,
 ) -> TransactionSelection {
+    let max_transactions_size =
+        config_for_slot(era_schedule, ledger_state.slot()).max_transactions_size as usize;
     let mut block_builder = BlockBuilder::new(ledger_state);
     let mut selected_txs = Vec::new();
     let mut invalid_tx_hashes = Vec::new();
@@ -111,6 +115,17 @@ pub fn select_transactions(
         let mut still_pending = Vec::with_capacity(pending.len());
 
         for tx in std::mem::take(&mut pending) {
+            // A transaction admitted under an era that allowed more bytes may
+            // be larger than any block of this one could carry.
+            if tx.storage_size() > max_transactions_size {
+                tracing::trace!(
+                    target: LOG_TARGET,
+                    tx = ?tx.hash(),
+                    "transaction larger than the era allows a block's transactions",
+                );
+                invalid_tx_hashes.push(tx.hash());
+                continue;
+            }
             match block_builder.clone().try_add_transaction(&tx, era_schedule) {
                 Ok((next_block_builder, deferred_proofs)) => match deferred_proofs.verify() {
                     Ok(()) => {
@@ -181,7 +196,7 @@ pub fn select_transactions(
 mod tests {
     use futures::stream;
     use lb_core::{
-        block::MAX_BLOCK_TRANSACTIONS_SIZE,
+        era::ForkDigest,
         mantle::{
             Note, Op, OpProof,
             gas::TxGasCalculator as _,
@@ -194,11 +209,12 @@ mod tests {
             },
             programs::ProgramVerificationKey,
             traits::StorageSize,
-            transactions::{OpProofs, Ops, states::Unverified},
+            transactions::{OpProofs, Ops, TxList, states::Unverified},
         },
     };
     use lb_groth16::{AdditiveGroup as _, Fr, test_utils::three_input_setup};
     use lb_key_management_system_service::keys::ZkKey;
+    use lb_ledger::Config;
 
     use super::*;
     use crate::{leadership, txs_for_block};
@@ -242,7 +258,7 @@ mod tests {
             .iter()
             .zip(paths)
             .map(|(note, path)| {
-                let ops = Ops::try_from_iter(
+                let ops = TxList::try_from_iter(
                     std::iter::once(Op::Transfer(TransferOp::new(
                         [derive_note_nullifier(
                             &note.commitment(),
@@ -260,6 +276,7 @@ mod tests {
                         PROGRAM_REGISTRATIONS_PER_TX,
                     )),
                 )
+                .map(|ops| Ops::new(ForkDigest::new([0x11; 32]), ops))
                 .unwrap();
                 let transfer_proof = prove_transfer(
                     &[(*note, *funding_key.as_fr(), path)],
@@ -283,6 +300,39 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn a_transaction_larger_than_a_block_of_the_era_carries_is_invalid() {
+        let funding_key = ZkKey::from(Fr::from(7u64));
+        let funding_notes = funding_notes(&funding_key, 1);
+        let select = |max_transactions_size| {
+            let config = Config {
+                max_transactions_size,
+                ..leadership::test_config()
+            };
+            let ledger_state = LedgerState::from_notes(funding_notes.iter().copied(), &config, 0);
+            let commitment_root = ledger_state.latest_note_sets().ledger().commitment_root();
+            let transaction =
+                gas_heavy_transactions(&funding_notes, &funding_key, commitment_root).remove(0);
+            (
+                select_transactions(
+                    ledger_state,
+                    vec![transaction.clone()],
+                    &leadership::single_era(config),
+                ),
+                transaction,
+            )
+        };
+
+        let (_, transaction) = select(u32::MAX);
+        let size = transaction.storage_size() as u32;
+        let (fitting, _) = select(size);
+        assert_eq!(fitting.selected_txs.len(), 1);
+        assert_eq!(fitting.invalid_tx_hashes, []);
+        let (oversized, _) = select(size - 1);
+        assert_eq!(oversized.selected_txs, []);
+        assert_eq!(oversized.invalid_tx_hashes, [transaction.hash()]);
+    }
+
     #[tokio::test]
     async fn gas_limited_selection_returns_canonically_applicable_prefix() {
         const CANDIDATE_COUNT: usize = 7;
@@ -294,15 +344,15 @@ mod tests {
         let ledger_state = LedgerState::from_notes(funding_notes.iter().copied(), &config, 0);
         let commitment_root = ledger_state.latest_note_sets().ledger().commitment_root();
         let candidates = gas_heavy_transactions(&funding_notes, &funding_key, commitment_root);
-        let gas_context = ledger_state.tx_context().gas_context;
+        let gas_context = ledger_state.tx_context(config.gas_profile).gas_context;
         let individual_gas = candidates[0]
             .op_refs()
-            .execution_gas_consumption::<MainnetGasProfile>(&gas_context)
+            .execution_gas_consumption(&gas_context)
             .unwrap();
         assert!(candidates.iter().all(|candidate| {
             candidate
                 .op_refs()
-                .execution_gas_consumption::<MainnetGasProfile>(&gas_context)
+                .execution_gas_consumption(&gas_context)
                 .unwrap()
                 == individual_gas
         }));
@@ -311,11 +361,11 @@ mod tests {
                 .iter()
                 .map(StorageSize::storage_size)
                 .sum::<usize>()
-                <= MAX_BLOCK_TRANSACTIONS_SIZE
+                <= config.max_transactions_size as usize
         );
         let all_candidates_result = ledger_state
             .clone()
-            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
+            .try_apply_block_contents::<_, HeaderId>(
                 &eras,
                 NoteCommitment(Fr::ZERO),
                 0,
@@ -334,7 +384,13 @@ mod tests {
         assert_eq!(selection.selected_txs.len(), CANDIDATE_COUNT - 1);
         assert_eq!(selection.invalid_tx_hashes, []);
 
-        let block_txs = txs_for_block(stream::iter(selection.selected_txs)).await;
+        let config = config_for_slot(&eras, ledger_state.slot());
+        let block_txs = txs_for_block(
+            stream::iter(selection.selected_txs),
+            config.max_transactions,
+            config.max_transactions_size,
+        )
+        .await;
         assert_eq!(block_txs.len(), CANDIDATE_COUNT - 1);
         // A block holding a prefix of the selection, cut by hand here, pays the
         // reward of what it holds.
@@ -346,7 +402,7 @@ mod tests {
             .expect("the selected prefix must run");
         assert_ne!(reward_value, selected_reward);
         let _apply_result = ledger_state
-            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
+            .try_apply_block_contents::<_, HeaderId>(
                 &eras,
                 NoteCommitment(Fr::ZERO),
                 reward_value,

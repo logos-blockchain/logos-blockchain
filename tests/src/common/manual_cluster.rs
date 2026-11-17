@@ -196,8 +196,13 @@ fn fast_chain_config(mut config: RunConfig) -> RunConfig {
             parameters.time.slot_duration_in_seconds = NonZero::new(2).expect("nonzero");
             parameters.cryptarchia.security_param = NonZero::new(3).expect("nonzero");
             parameters.cryptarchia.slot_activation_coeff =
-                NonNegativeRatio::new(1, 2.try_into().expect("nonzero"));
-        });
+                NonNegativeRatio::new(1, 2.try_into().expect("nonzero"))
+                    .try_into()
+                    .expect("1/2 is a valid slot activation coefficient");
+            // The widest uncle reference window k allows, ⌊0.6k⌋.
+            parameters.cryptarchia.uncle_reference_window_in_block = 1;
+        })
+        .expect("The changed deployment must be valid.");
     config
 }
 
@@ -224,7 +229,13 @@ where
                     StartNodeOptions::default()
                         .with_peers(peers)
                         .with_persist_dir(scenario_base_dir.join(format!("node-{node_index}")))
-                        .create_patch(config_patch.clone()),
+                        .create_patch({
+                            let config_patch = config_patch.clone();
+                            move |mut config: lb_testing_framework::LbcNodeConfig| {
+                                config.run_config = config_patch(config.run_config)?;
+                                Ok(config)
+                            }
+                        }),
                 ),
             )
             .await

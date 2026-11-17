@@ -6,17 +6,21 @@ use std::{
 };
 
 use async_trait::async_trait;
-use lb_core::mantle::{
-    Note, OpProof, SignedOps,
-    gas::{MainnetGasProfile, TxGasCalculator as _},
-    ledger::verification_mode::StandardMode,
-    note_set::CommitmentMmr,
-    notes::derive_note_nullifier,
-    ops::{ZkTransferProof, transfer::test_utils::prove_transfer},
-    traits::{GenesisTx as _, Hashable as _},
-    transactions::{
-        GasPrices, MantleTxBuilder, OpProofs, builder::FundingNote, states::Preverified,
-        tx_list::ops::OpsGasContext,
+use lb_config::deployment::GAS_PROFILE;
+use lb_core::{
+    era::ForkDigest,
+    mantle::{
+        Note, OpProof, SignedOps,
+        gas::TxGasCalculator as _,
+        ledger::verification_mode::StandardMode,
+        note_set::CommitmentMmr,
+        notes::derive_note_nullifier,
+        ops::{ZkTransferProof, transfer::test_utils::prove_transfer},
+        traits::{GenesisTx as _, Hashable as _},
+        transactions::{
+            GasPrices, MantleTxBuilder, OpProofs, builder::FundingNote, states::Preverified,
+            tx_list::ops::OpsGasContext,
+        },
     },
 };
 use lb_groth16::Fr;
@@ -33,7 +37,9 @@ use tracing::debug;
 
 use super::expectation::TxInclusionExpectation;
 use crate::{
-    DeploymentPlan, NodeHttpClient, config::wallet::WalletAccount, workloads::LbcRunContextExt as _,
+    DeploymentPlan, NodeHttpClient,
+    config::wallet::WalletAccount,
+    workloads::{LbcRunContextExt as _, fork_digest_in_force},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -203,7 +209,7 @@ impl<'a> Submission<'a> {
     }
 
     async fn execute(mut self) -> Result<(), DynError> {
-        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::default());
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::default(), GAS_PROFILE);
         while let Some(input) = self.plan.pop_front() {
             submit_wallet_transaction(self.ctx, &input, gas_context.clone()).await?;
             if !self.interval.is_zero() {
@@ -219,7 +225,8 @@ async fn submit_wallet_transaction(
     input: &WalletInput,
     gas_context: OpsGasContext,
 ) -> Result<(), DynError> {
-    let signed_tx = Arc::new(build_wallet_transaction(input, &gas_context)?);
+    let fork_digest = fork_digest_in_force(ctx).await?;
+    let signed_tx = Arc::new(build_wallet_transaction(input, fork_digest, &gas_context)?);
     submit_transaction_via_cluster(ctx, signed_tx).await
 }
 
@@ -286,6 +293,7 @@ fn cluster_client_exhausted_error() -> DynError {
 
 fn build_wallet_transaction(
     input: &WalletInput,
+    fork_digest: ForkDigest,
     gas_context: &OpsGasContext,
 ) -> Result<SignedOps<Preverified, StandardMode>, DynError> {
     let receiver = input.account.public_key();
@@ -306,12 +314,12 @@ fn build_wallet_transaction(
     };
 
     let provisional_tx = self_transfer(input.note.note.value)?
-        .build()
+        .build(fork_digest)
         .map_err(|err| format!("failed to build provisional tx: {err}"))?;
 
     let fee = provisional_tx
         .by_ref()
-        .total_gas_cost::<MainnetGasProfile>(gas_context)?
+        .total_gas_cost(gas_context)?
         .into_inner();
     let output_value = input.note.note.value.checked_sub(fee).ok_or_else(|| {
         format!(
@@ -323,7 +331,7 @@ fn build_wallet_transaction(
     let tx_builder = self_transfer(output_value)?;
     let openings = tx_builder.openings();
     let tx = tx_builder
-        .build()
+        .build(fork_digest)
         .map_err(|err| format!("failed to build tx: {err}"))?;
     let outputs = openings
         .into_values()

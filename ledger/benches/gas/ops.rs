@@ -33,7 +33,6 @@ use lb_core::{
         Note, Op, OpProof, SignedOps, Value,
         batch::DeferredProofs,
         channel::{SlotTimeframe, SlotTimeout},
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         note_set::NoteSetIndex,
         notes::{InputNullifiers, NoteCommitment, OutputCommitments},
@@ -55,7 +54,7 @@ use lb_core::{
         },
         programs::ProgramVerificationKey,
         traits::Hashable as _,
-        transactions::{GasPrices, OpProofs, Ops, states::Unverified},
+        transactions::{GasPrices, OpProofs, Ops, TxList, states::Unverified},
     },
     proofs::{
         channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
@@ -177,12 +176,13 @@ pub fn execute(
     config: &EraScheduledConfig,
     bytes: &[u8],
 ) -> Result<Applied, String> {
-    let tx = SignedOps::<Unverified, StandardMode>::decode_all(bytes, &())
+    let max_op_data_size = crate::fixture::parameters(config).max_op_data_size;
+    let tx = SignedOps::<Unverified, StandardMode>::decode_all(bytes, &max_op_data_size)
         .map_err(|error| format!("decode: {error}"))?
         .preverify()
         .map_err(|error| format!("preverify: {error}"))?;
     state
-        .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(config, &tx)
+        .try_apply_transaction::<_, HeaderId>(config, &tx)
         .map_err(|error| format!("apply: {error}"))
 }
 
@@ -233,7 +233,7 @@ pub fn zk_transfer(index: usize) -> ZkTransferProof {
 /// The encoding of `ops`, each with the proof `prove` gives it from the hash
 /// of the transaction.
 pub fn encode(ops: Vec<Op>, prove: impl Fn(usize, &Op, &[u8]) -> OpProof) -> Vec<u8> {
-    let ops = Ops::new_unchecked(ops);
+    let ops = Ops::new(crate::fixture::FORK_DIGEST, TxList::new_unchecked(ops));
     let tx_hash = ops.hash();
     let proofs = ops
         .iter()
@@ -953,7 +953,7 @@ fn claim_pow() -> OpShape {
     let genesis = Note::new(1, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
     let state = LedgerState::from_notes([genesis], &parameters, 1_000_000_000)
         .with_gas_prices(&GasPrices::new(0, 0))
-        .with_latest_note_sets(fixture.state.latest_note_sets().clone());
+        .with_genesis_note_sets(fixture.state.latest_note_sets().clone());
     let config = crate::fixture::single_era(parameters);
     let ledger = Ledger::new(ANCHOR, state, Arc::new(config.clone()))
         .expect("the anchor state commits to the in-memory store of its note sets");
@@ -1070,8 +1070,10 @@ fn activity_proof(
         blend.rounds_per_epoch,
         blend.message_frequency_per_round,
         blend.num_blend_layers,
+        blend.cover_replication_factor,
         1,
-    );
+    )
+    .expect("the fixture quota fits the circuit");
     let layers = blend.num_blend_layers.get();
     let message_quota = Quota::try_new(layers + layers * blend.data_replication_factor)
         .expect("the leader quota fits the circuit");

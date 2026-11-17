@@ -6,7 +6,7 @@ use std::{
 use lb_core::{
     header::HeaderId,
     mantle::{
-        GasProfile, Note, Value,
+        Note, Value,
         notes::{NoteCommitment, NoteNullifier},
         ops::transfer::TransferOp,
         transactions::{
@@ -391,7 +391,7 @@ impl<'u> ServiceState<'u> {
         clippy::too_many_arguments,
         reason = "thin passthrough to `Wallet::fund_tx` plus the reservations"
     )]
-    pub fn fund_tx<G: GasProfile>(
+    pub fn fund_tx(
         &mut self,
         tip: HeaderId,
         tx_builder: &MantleTxBuilder,
@@ -401,7 +401,7 @@ impl<'u> ServiceState<'u> {
         context: &OpsContext,
         priority_fee: impl Into<PriorityFee>,
     ) -> Result<MantleTxBuilder, WalletError> {
-        let funded = self.wallet.fund_tx::<G>(
+        let funded = self.wallet.fund_tx(
             tip,
             tx_builder,
             change_pk,
@@ -482,7 +482,10 @@ fn known_keys(settings: &WalletServiceSettings) -> impl Iterator<Item = (ZkPubli
 mod tests {
     use core::{num::NonZero, time::Duration};
 
-    use lb_core::mantle::note_set::NoteSetIndex;
+    use lb_core::{
+        era::ForkDigest,
+        mantle::{gas::GasProfile, note_set::NoteSetIndex},
+    };
     use lb_groth16::Field as _;
 
     use super::*;
@@ -510,6 +513,8 @@ mod tests {
         .map(|_| WalletEraSettings {
             epoch_length: timing.epoch_length,
             security_param: NonZero::new(5).unwrap(),
+            fork_digest: ForkDigest::new([0x11; 32]),
+            gas_profile: GasProfile::MAINNET,
         })
     }
 
@@ -599,7 +604,6 @@ mod tests {
 
         use lb_core::mantle::{
             Op,
-            gas::MainnetGasProfile,
             transactions::{GasPrices, tx_list::ops::OpsGasContext},
         };
         use lb_services_utils::overwatch::RecoveryData;
@@ -637,11 +641,15 @@ mod tests {
             .unwrap();
         let funding_pk = ZkPublicKey::new(Fr::ONE);
         let context = OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(1, 1)),
+            gas_context: OpsGasContext::new(
+                HashMap::new(),
+                GasPrices::new(1, 1),
+                GasProfile::MAINNET,
+            ),
         };
 
         state
-            .fund_tx::<MainnetGasProfile>(
+            .fund_tx(
                 genesis,
                 &tx_builder,
                 funding_pk,

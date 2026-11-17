@@ -1,4 +1,4 @@
-use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Fr, serde::serde_fr};
 use serde::{Deserialize, Serialize};
@@ -11,10 +11,7 @@ use crate::{
     mantle::{
         batch::DeferredZkTransfer,
         channel::{Channels, Error},
-        gas::{
-            EXECUTION_NOTE_SET_GAS, Gas, GasOverflow, MainnetGasProfile, OpGasCalculator,
-            OpGasContext, OperationGas, spend_gas,
-        },
+        gas::{Gas, GasOverflow, GasProfile, OpGasCalculator, OpGasContext},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
@@ -35,7 +32,7 @@ use crate::{
 
 // ChannelWithdraw = ChannelId InputNullifiers OutputCommitments
 // CommitmentMerkleRoot, plain field-order concat.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct ChannelWithdrawOp {
     pub channel_id: ChannelId,
     pub inputs: InputNullifiers,
@@ -138,17 +135,18 @@ impl ProvableOperation for ChannelWithdrawOp {
     const CODE: u8 = 0x13;
 }
 
-impl OperationGas<MainnetGasProfile> for ChannelWithdrawOp {
-    const GAS_COST: Gas = Gas::new(33);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for ChannelWithdrawOp {
+impl OpGasCalculator for ChannelWithdrawOp {
     // The Operation, the update of its channel note set when the withdrawal is
     // released, and the spend of its notes.
-    fn execution_gas(&self, _context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
-        Self::GAS_COST
-            .checked_add(EXECUTION_NOTE_SET_GAS)?
-            .checked_add(spend_gas(self.inputs.len(), self.outputs.len())?)
+    fn execution_gas(
+        &self,
+        profile: &GasProfile,
+        _context: &impl OpGasContext,
+    ) -> Result<Gas, GasOverflow> {
+        profile
+            .channel_withdraw
+            .checked_add(profile.note_set)?
+            .checked_add(profile.spend_gas(self.inputs.len(), self.outputs.len())?)
     }
 }
 
@@ -427,7 +425,8 @@ mod test {
         for threshold in [0, 1, 3] {
             // 1 input, 1 output, nothing buffered: 33 + 8961 + 4177 + 1758 + 58
             assert_eq!(
-                ChannelWithdrawOp::sample().execution_gas(&FixedThresholds(threshold)),
+                ChannelWithdrawOp::sample()
+                    .execution_gas(&GasProfile::MAINNET, &FixedThresholds(threshold)),
                 Ok(Gas::new(14_987))
             );
         }

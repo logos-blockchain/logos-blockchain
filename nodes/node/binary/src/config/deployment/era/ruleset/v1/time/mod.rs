@@ -1,10 +1,11 @@
 use core::{num::NonZero, time::Duration};
 
+use lb_binary_codec::canonical::BinaryEncode;
 use serde::{Deserialize, Serialize};
 
 pub(crate) mod codec;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, BinaryEncode)]
 pub struct Settings {
     pub slot_duration_in_seconds: NonZero<u64>,
 }

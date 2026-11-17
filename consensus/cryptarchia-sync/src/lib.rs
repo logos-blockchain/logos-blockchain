@@ -1,6 +1,6 @@
 pub mod config;
 mod libp2p;
-pub use libp2p::messages::BlocksRequest;
+pub use libp2p::messages::{BlocksRequest, max_blocks_response_bincode_size};
 mod messages;
 pub use messages::{SerialisedBlock, TipResponse, TipResponseFailureReason};
 

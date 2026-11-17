@@ -1,6 +1,6 @@
-use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::{Fr, serde::serde_fr};
-use lb_utils::bounded::UpperBoundedVec;
+use lb_utils::bounded::UpperRuntimeBoundedVec;
 use serde::{Deserialize, Serialize};
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -11,10 +11,7 @@ use crate::{
     mantle::{
         batch::DeferredZkTransfer,
         channel::{Channels, Error},
-        gas::{
-            Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OpGasContext, OperationGas,
-            spend_gas,
-        },
+        gas::{Gas, GasOverflow, GasProfile, OpGasCalculator, OpGasContext},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Value,
             VerifiableOperation,
@@ -24,7 +21,7 @@ use crate::{
         notes::{InputNullifiers, OutputCommitments},
         ops::{
             OpId, SignedOperation, ZkTransferProof,
-            channel::{ChannelId, MAX_OPERATION_DATA_SIZE},
+            channel::ChannelId,
             zk_transfer::{defer_zk_transfer, preverify_zk_transfer},
         },
         transactions::{
@@ -34,9 +31,15 @@ use crate::{
     },
 };
 
-pub type Metadata = UpperBoundedVec<u8, { MAX_OPERATION_DATA_SIZE }>;
+/// The bytes a deposit attaches, at most as many as the era it is decoded under
+/// allows.
+///
+/// The length is checked against the era's maximum, a `u32`, when the metadata
+/// is built or decoded. Serde reads it without an era, under the largest
+/// maximum of the type.
+pub type Metadata = UpperRuntimeBoundedVec<u8, u32>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode)]
 pub struct DepositOp {
     pub channel_id: ChannelId,
     pub inputs: InputNullifiers,
@@ -46,6 +49,35 @@ pub struct DepositOp {
     pub excess_value: Value,
     // The zone message of the channel deposit, the `Inscription` of the encoding.
     pub metadata: Metadata,
+}
+
+// Every field in declaration order.
+impl BinaryDecode for DepositOp {
+    /// The most bytes the era the deposit is decoded under allows its metadata.
+    type Context = u32;
+
+    fn decode<'input>(
+        input: &'input [u8],
+        max_metadata_size: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, channel_id) = ChannelId::decode(input, &())?;
+        let (input, inputs) = InputNullifiers::decode(input, &())?;
+        let (input, outputs) = OutputCommitments::decode(input, &())?;
+        let (input, commitment_merkle_root) = Fr::decode(input, &())?;
+        let (input, excess_value) = Value::decode(input, &())?;
+        let (input, metadata) = Metadata::decode(input, &(*max_metadata_size, ()))?;
+        Ok((
+            input,
+            Self {
+                channel_id,
+                inputs,
+                outputs,
+                commitment_merkle_root,
+                excess_value,
+                metadata,
+            },
+        ))
+    }
 }
 
 impl DepositOp {
@@ -58,8 +90,7 @@ impl DepositOp {
             outputs: [NoteCommitment(Fr::from(0x27u64))].into(),
             commitment_merkle_root: Fr::from(0x26u64),
             excess_value: 0x28,
-            metadata: Metadata::try_from(b"channel-deposit-inscription".to_vec())
-                .expect("Metadata is within bounds."),
+            metadata: Metadata::new_unchecked(b"channel-deposit-inscription".to_vec()),
         }
     }
 }
@@ -90,14 +121,16 @@ impl ProvableOperation for DepositOp {
     const CODE: u8 = 0x12;
 }
 
-impl OperationGas<MainnetGasProfile> for DepositOp {
-    const GAS_COST: Gas = Gas::new(26);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for DepositOp {
+impl OpGasCalculator for DepositOp {
     // The Operation, plus the spend of its notes.
-    fn execution_gas(&self, _context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
-        Self::GAS_COST.checked_add(spend_gas(self.inputs.len(), self.outputs.len())?)
+    fn execution_gas(
+        &self,
+        profile: &GasProfile,
+        _context: &impl OpGasContext,
+    ) -> Result<Gas, GasOverflow> {
+        profile
+            .channel_deposit
+            .checked_add(profile.spend_gas(self.inputs.len(), self.outputs.len())?)
     }
 }
 
@@ -182,7 +215,6 @@ impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<DepositOp, 
 
 #[cfg(test)]
 mod test {
-    use lb_binary_codec::canonical::{BinaryDecode as _, DecodeError};
     use lb_cryptarchia_engine::Slot;
     use lb_groth16::AdditiveGroup as _;
     use lb_key_management_system_keys::keys::Ed25519Key;
@@ -215,7 +247,7 @@ mod test {
     #[test]
     fn decoder_accepts_metadata_at_the_limit() {
         let bytes = deposit_bytes(1_835_008, 1_835_008);
-        let (rest, op) = DepositOp::decode(&bytes, &()).unwrap();
+        let (rest, op) = DepositOp::decode(&bytes, &1_835_008).unwrap();
         assert_eq!(rest, [0u8; 0]);
         assert_eq!(op.metadata.len(), 1_835_008);
     }
@@ -223,7 +255,7 @@ mod test {
     #[test]
     fn decoder_rejects_a_declared_metadata_length_above_the_limit() {
         assert!(matches!(
-            DepositOp::decode(&deposit_bytes(1_835_009, 0), &()),
+            DepositOp::decode(&deposit_bytes(1_835_009, 0), &1_835_008),
             Err(DecodeError::LengthOutOfBounds { .. })
         ));
     }
@@ -233,7 +265,8 @@ mod test {
         for threshold in [0, 1, 3] {
             // 1 input, 1 output, nothing buffered: 26 + 4177 + 1758 + 58
             assert_eq!(
-                DepositOp::sample().execution_gas(&FixedThresholds(threshold)),
+                DepositOp::sample()
+                    .execution_gas(&GasProfile::MAINNET, &FixedThresholds(threshold)),
                 Ok(Gas::new(6_019))
             );
         }

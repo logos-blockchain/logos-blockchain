@@ -9,7 +9,8 @@ use crate::mantle::{
     fixtures::{
         ops::op_values::{
             ALL_OPS_COLUMN_HEX, CHANNEL_CONFIG, CHANNEL_WITHDRAW, CLAIM_POW_REWARD, DEPOSIT,
-            INSCRIPTION, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, TRANSFER,
+            FORK_DIGEST, FORK_DIGEST_HEX, INSCRIPTION, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW,
+            TRANSFER,
         },
         proofs::proof_values::{
             CHANNEL_MULTI_SIG, CHANNEL_MULTI_SIG_HEX, ED25519_SIG, ED25519_SIG_HEX,
@@ -28,7 +29,7 @@ use crate::mantle::{
         transfer::TransferOp,
     },
     transactions::{
-        SignedOps,
+        SignedOps, TxList,
         states::{Unverified, VerificationState},
     },
 };
@@ -39,6 +40,8 @@ impl<State: VerificationState, Mode: VerificationMode> lb_binary_codec::canonica
 }
 
 const TWO_OPS_HEX: &str = concat!(
+    // Fork digest.
+    "1111111111111111111111111111111111111111111111111111111111111111",
     // Count. One, for both columns.
     "02",
     // Op 0: Transfer.
@@ -96,14 +99,18 @@ fn two_ops<State: VerificationState, Mode: VerificationMode>() -> SignedOps<Stat
         ChannelInscribeProof::without_steps(Ed25519Signature::from_bytes(&[0xBBu8; 64])),
     );
 
-    SignedOps::from([
-        SignedOp::Transfer(transfer.into_state_trusted()),
-        SignedOp::ChannelInscribe(inscription.into_state_trusted()),
-    ])
+    SignedOps {
+        fork_digest: FORK_DIGEST,
+        ops: TxList::from([
+            SignedOp::Transfer(transfer.into_state_trusted()),
+            SignedOp::ChannelInscribe(inscription.into_state_trusted()),
+        ]),
+    }
 }
 
 fn all_ops_hex() -> String {
     [
+        FORK_DIGEST_HEX,
         ALL_OPS_COLUMN_HEX,
         ZK_TRANSFER_HEX,
         CHANNEL_MULTI_SIG_HEX,
@@ -127,7 +134,7 @@ fn all_ops<State: VerificationState, Mode: VerificationMode>() -> SignedOps<Stat
         };
     }
 
-    SignedOps::from([
+    let ops = TxList::from([
         signed!(Transfer, TRANSFER, *ZK_TRANSFER),
         signed!(ChannelConfig, CHANNEL_CONFIG, CHANNEL_MULTI_SIG.clone()),
         signed!(
@@ -148,7 +155,11 @@ fn all_ops<State: VerificationState, Mode: VerificationMode>() -> SignedOps<Stat
         signed!(SDPWithdraw, SDP_WITHDRAW, ZK_AND_ED25519_SIGS.clone()),
         signed!(SDPActive, SDP_ACTIVE, *ED25519_SIG),
         signed!(ClaimPowReward, CLAIM_POW_REWARD, NoOpProof),
-    ])
+    ]);
+    SignedOps {
+        fork_digest: FORK_DIGEST,
+        ops,
+    }
 }
 
 impl<State: VerificationState, Mode: VerificationMode> lb_binary_codec::canonical::CodecExamples
@@ -157,8 +168,11 @@ impl<State: VerificationState, Mode: VerificationMode> lb_binary_codec::canonica
     fn fixtures() -> CodecFixtures<Self> {
         [
             lb_binary_codec::canonical::CodecFixture {
-                value: Self::empty(),
-                bytes: Cow::Borrowed(&[0x00]),
+                value: Self {
+                    fork_digest: FORK_DIGEST,
+                    ops: TxList::empty(),
+                },
+                bytes: Cow::Owned(decode_fixture_hex(&format!("{FORK_DIGEST_HEX}00"))),
             },
             lb_binary_codec::canonical::CodecFixture {
                 value: two_ops(),
@@ -182,6 +196,9 @@ mod tests {
 
     #[test]
     fn codec_fixtures_round_trip() {
-        lb_binary_codec::canonical::assert_codec_fixtures::<SignedOps<Unverified, StandardMode>>();
+        lb_binary_codec::canonical::assert_codec_fixtures_with::<
+            SignedOps<Unverified, StandardMode>,
+            _,
+        >(|| u32::MAX);
     }
 }

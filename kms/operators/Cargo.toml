@@ -27,9 +27,10 @@ tokio                         = { features = ["rt"], workspace = true }
 tracing                       = { workspace = true }
 
 [dev-dependencies]
-lb-core = { features = ["test-utils"], workspace = true }
-rand    = { features = ["std", "std_rng"], workspace = true }
-tokio   = { features = ["macros", "rt"], workspace = true }
+lb-blend-proofs = { features = ["unsafe-test-functions"], workspace = true }
+lb-core         = { features = ["test-utils"], workspace = true }
+rand            = { features = ["std", "std_rng"], workspace = true }
+tokio           = { features = ["macros", "rt", "time"], workspace = true }
 
 [features]
 tokio-task-names = ["lb-utils/tokio-task-names"]

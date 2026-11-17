@@ -1,7 +1,7 @@
 use std::{num::NonZeroU64, sync::LazyLock};
 
 use ark_ff::Zero as _;
-use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_cryptarchia_engine::{EraSchedule, Slot};
 use lb_groth16::{Fr, fr_from_bytes, fr_from_mod_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -14,7 +14,7 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         TxHash, Value,
-        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
+        gas::{Gas, GasOverflow, GasProfile, OpGasCalculator, OpGasContext},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::StandardMode,
@@ -40,7 +40,19 @@ pub type PowSlotWindows = EraSchedule<NonZeroU64>;
 
 /// Nullifier of a spent `PoW` solution, recorded on claim to prevent the same
 /// solution from being claimed twice.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Hash,
+    Serialize,
+    Deserialize,
+    BinaryEncode,
+    BinaryDecode,
+)]
 pub struct PowNullifier(#[serde(with = "serde_fr")] ZkHash);
 
 impl PowNullifier {
@@ -87,7 +99,7 @@ impl From<PowNullifier> for ZkHash {
 /// reward difficulty during validation. It hashes no epoch nonce: its block is
 /// at most the acceptance window old, so its hash binds the claim to the chain
 /// and makes the ticket unpredictable before that block exists.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct ClaimPowRewardOp {
     /// Hash of the block the puzzle solution is anchored to.
     pub block_hash: Hash,
@@ -280,11 +292,15 @@ impl ProvableOperation for ClaimPowRewardOp {
     const CODE: u8 = 0x30;
 }
 
-impl OperationGas<MainnetGasProfile> for ClaimPowRewardOp {
-    const GAS_COST: Gas = Gas::new(1506);
+impl OpGasCalculator for ClaimPowRewardOp {
+    fn execution_gas(
+        &self,
+        profile: &GasProfile,
+        _context: &impl OpGasContext,
+    ) -> Result<Gas, GasOverflow> {
+        Ok(profile.claim_pow_reward)
+    }
 }
-
-impl OpGasCalculator<MainnetGasProfile> for ClaimPowRewardOp {}
 
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<ClaimPowRewardOp, Unverified, StandardMode>
@@ -870,7 +886,8 @@ mod tests {
     fn claim_pow_reward_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
             assert_eq!(
-                ClaimPowRewardOp::sample().execution_gas(&FixedThresholds(threshold)),
+                ClaimPowRewardOp::sample()
+                    .execution_gas(&GasProfile::MAINNET, &FixedThresholds(threshold)),
                 Ok(Gas::new(1506))
             );
         }

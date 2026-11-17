@@ -1,21 +1,57 @@
+use std::ops::Deref;
+
 use lb_binary_codec::canonical::BinaryEncode;
 use serde::{Serialize, Serializer};
 
-use crate::mantle::{
-    OpRef, TxHash,
-    traits::{Hashable, hashable},
-    transactions::{
-        MANTLE_TX_HASH_V1_BYTES,
-        tx_list::{Ops, common::TxList, hash::tx_hasher},
+use crate::{
+    era::ForkDigest,
+    mantle::{
+        OpRef, TxHash,
+        traits::{Hashable, hashable},
+        transactions::{
+            MANTLE_TX_HASH_V1_BYTES,
+            tx_list::{Ops, common::TxList, hash::tx_hasher, ops::MantleTxSerde},
+        },
     },
 };
 
-pub type OpRefs<'a> = TxList<OpRef<'a>>;
+/// An unsigned transaction whose operations are borrowed: what its hash, its
+/// gas and its size are computed over.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpRefs<'a> {
+    fork_digest: ForkDigest,
+    ops: TxList<OpRef<'a>>,
+}
 
 impl<'a> OpRefs<'a> {
     #[must_use]
+    pub(crate) fn new(fork_digest: ForkDigest, ops: impl Into<TxList<OpRef<'a>>>) -> Self {
+        Self {
+            fork_digest,
+            ops: ops.into(),
+        }
+    }
+
+    #[must_use]
     pub fn get(&self, index: usize) -> Option<OpRef<'a>> {
         self.as_slice().get(index).copied()
+    }
+}
+
+impl<'a> Deref for OpRefs<'a> {
+    type Target = TxList<OpRef<'a>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.ops
+    }
+}
+
+impl<'a> IntoIterator for OpRefs<'a> {
+    type Item = OpRef<'a>;
+    type IntoIter = <TxList<OpRef<'a>> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.ops.into_iter()
     }
 }
 
@@ -27,10 +63,11 @@ impl<'a> From<&'a Ops> for OpRefs<'a> {
 
 impl BinaryEncode for OpRefs<'_> {
     fn encoded_length(&self) -> usize {
-        self.0.encoded_length()
+        self.fork_digest.encoded_length() + self.ops.0.encoded_length()
     }
     fn encode_into(&self, out: &mut Vec<u8>) {
-        self.0.encode_into(out);
+        self.fork_digest.encode_into(out);
+        self.ops.0.encode_into(out);
     }
 }
 
@@ -56,7 +93,11 @@ impl Serialize for OpRefs<'_> {
         S: Serializer,
     {
         if serializer.is_human_readable() {
-            self.inner().serialize(serializer)
+            MantleTxSerde {
+                fork_digest: self.fork_digest,
+                ops: self.inner(),
+            }
+            .serialize(serializer)
         } else {
             let bytes = self.encode();
             serializer.serialize_bytes(&bytes)
@@ -89,13 +130,12 @@ mod tests {
     }
 
     #[test]
-    fn serialize_to_json() {
+    fn serialize_to_json_like_the_ops_it_borrows() {
         let ops = Ops::sample();
-        let op_refs = OpRefs::from(&ops);
 
         assert_eq!(
-            serde_json::to_value(&op_refs).expect("the human-readable arm serializes"),
-            serde_json::to_value(op_refs.inner()).expect("the inner column serializes")
+            serde_json::to_value(OpRefs::from(&ops)).expect("the human-readable arm serializes"),
+            serde_json::to_value(&ops).expect("the owned transaction serializes")
         );
     }
 

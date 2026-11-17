@@ -13,8 +13,6 @@ use crate::mantle::ops::{
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
-        GasProfile,
-        gas::Gas,
         ledger::ProvableOperation as _,
         ops::{
             OPERATION_ID_V1, OpRef,
@@ -104,7 +102,7 @@ impl<'de> Deserialize<'de> for Op {
             OpDe::deserialize(deserializer).map(Self::from)
         } else {
             let bytes = <Vec<u8>>::deserialize(deserializer)?;
-            Self::decode(&bytes, &())
+            Self::decode(&bytes, &u32::MAX)
                 .map(|(_, op)| op)
                 .map_err(serde::de::Error::custom)
         }
@@ -123,22 +121,23 @@ impl BinaryEncode for Op {
 }
 
 impl BinaryDecode for Op {
-    type Context = ();
+    /// The most bytes of data an Operation may carry in the era it is decoded
+    /// under: an inscription, or a deposit's metadata.
+    type Context = u32;
 
     fn decode<'input>(
         input: &'input [u8],
-        (): &Self::Context,
+        max_op_data_size: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
         let (input, opcode) = u8::decode(input, &())?;
 
         match opcode {
-            InscriptionOp::CODE => InscriptionOp::decode(input, &())
+            InscriptionOp::CODE => InscriptionOp::decode(input, max_op_data_size)
                 .map(|(rest, op)| (rest, Self::ChannelInscribe(op))),
             ChannelConfigOp::CODE => ChannelConfigOp::decode(input, &())
                 .map(|(rest, op)| (rest, Self::ChannelConfig(op))),
-            DepositOp::CODE => {
-                DepositOp::decode(input, &()).map(|(rest, op)| (rest, Self::ChannelDeposit(op)))
-            }
+            DepositOp::CODE => DepositOp::decode(input, max_op_data_size)
+                .map(|(rest, op)| (rest, Self::ChannelDeposit(op))),
             ChannelWithdrawOp::CODE => ChannelWithdrawOp::decode(input, &())
                 .map(|(rest, op)| (rest, Self::ChannelWithdraw(op))),
             SDPDeclareOp::CODE => {
@@ -171,11 +170,6 @@ impl Op {
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         self.by_ref().as_str()
-    }
-
-    #[must_use]
-    pub fn gas_cost<Profile: GasProfile>(&self) -> Gas {
-        self.by_ref().gas_cost::<Profile>()
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -279,7 +273,7 @@ mod tests {
     #[test]
     fn decode_rejects_the_retired_channel_transfer_opcode() {
         assert_eq!(
-            Op::decode(&[0x14], &()).unwrap_err(),
+            Op::decode(&[0x14], &u32::MAX).unwrap_err(),
             DecodeError::unknown_discriminant::<Op>(0x14)
         );
     }
@@ -291,7 +285,7 @@ mod tests {
         // 0x40 was LEADER_CLAIM, followed by its 96 byte payload.
         let mut bytes = vec![0u8; 97];
         bytes[0] = 0x40;
-        assert!(Op::decode(&bytes, &()).is_err());
+        assert!(Op::decode(&bytes, &u32::MAX).is_err());
     }
 
     #[expect(clippy::match_same_arms, reason = "Clarity")]
@@ -380,7 +374,7 @@ mod tests {
     #[test]
     fn execution_gas_follows_the_mantle_gas_table() {
         use crate::mantle::{
-            gas::{Gas, MainnetGasProfile, test_utils::FixedThresholds},
+            gas::{Gas, GasProfile, test_utils::FixedThresholds},
             ops::{
                 channel::{
                     config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
@@ -416,7 +410,7 @@ mod tests {
         ] {
             assert_eq!(
                 op.by_ref()
-                    .execution_gas::<MainnetGasProfile>(&FixedThresholds(2)),
+                    .execution_gas(&GasProfile::MAINNET, &FixedThresholds(2)),
                 Ok(Gas::new(gas)),
                 "{}",
                 op.as_str()
@@ -455,7 +449,7 @@ mod tests {
             [0x00, 0x01, 0x10, 0x11, 0x12, 0x13, 0x20, 0x21, 0x22, 0x30]
         );
         for opcode in 0..=u8::MAX {
-            let unknown = Op::decode(&[opcode], &()).err()
+            let unknown = Op::decode(&[opcode], &u32::MAX).err()
                 == Some(DecodeError::unknown_discriminant::<Op>(u64::from(opcode)));
             assert_eq!(unknown, !table.contains(&opcode), "opcode {opcode:#04x}");
         }
@@ -468,7 +462,10 @@ mod tests {
         let op = Op::ProgramRegister(crate::mantle::ops::program::ProgramRegisterOp::sample());
         let bytes = op.encode();
         assert_eq!((bytes[0], bytes.len()), (0x01, 1 + 352));
-        assert_eq!(Op::decode(&bytes, &()).unwrap(), (&[][..], op.clone()));
+        assert_eq!(
+            Op::decode(&bytes, &u32::MAX).unwrap(),
+            (&[][..], op.clone())
+        );
         assert_eq!(
             op.sample_proof(),
             OpProof::None(crate::mantle::ops::NoOpProof)
@@ -491,9 +488,9 @@ mod tests {
         let modulus = "010000f093f5e1439170b97948e833285d588181b64550b829a031e1724e6430";
         let below = "000000f093f5e1439170b97948e833285d588181b64550b829a031e1724e6430";
 
-        assert!(Op::decode(&transfer(modulus), &()).is_err());
+        assert!(Op::decode(&transfer(modulus), &u32::MAX).is_err());
         let below = transfer(below);
-        let (rest, op) = Op::decode(&below, &()).unwrap();
+        let (rest, op) = Op::decode(&below, &u32::MAX).unwrap();
         assert_eq!(rest, [0u8; 0]);
         assert!(matches!(op, Op::Transfer(_)));
     }

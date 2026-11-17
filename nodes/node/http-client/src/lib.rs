@@ -4,7 +4,7 @@ use futures::{Stream, StreamExt as _, TryStreamExt as _};
 pub use lb_chain_broadcast_service::BlockInfo;
 pub use lb_chain_service::{ChainServiceInfo, CryptarchiaInfo, PhaseTag, Slot, State};
 use lb_core::{
-    block::MAX_BLOCK_TRANSACTIONS_SIZE,
+    era::ForkDigest,
     header::{ContentId, HeaderId},
     mantle::{
         SignedOps, channel::ChannelState, ledger::verification_mode::StandardMode,
@@ -23,8 +23,8 @@ use lb_http_api_common::{
     MAX_BLOCKS_STREAM_BLOCKS, MAX_BLOCKS_STREAM_CHUNK_SIZE,
     bodies::{
         blend::JoinBlendRequestBody,
-        chain::ChainIdResponseBody,
-        mantle::GasPricesResponseBody,
+        chain::{ChainForkResponseBody, ChainIdResponseBody},
+        mantle::{GasPricesResponseBody, LimitsResponseBody},
         wallet::{
             aged_notes::LeaderAgedNotesResponseBody,
             balance::WalletBalanceResponseBody,
@@ -40,10 +40,10 @@ use lb_http_api_common::{
     },
     paths::{
         BLEND_DISPERSE_TRANSACTION, BLEND_JOIN_NETWORK, BLEND_PENDING_TRANSACTIONS, BLOCK_EVENTS,
-        BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHAIN_ID, CHANNEL,
+        BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHAIN_FORK, CHAIN_ID, CHANNEL,
         CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_AGED_NOTES, MANTLE_GAS_PRICES,
-        MANTLE_SDP_FINALIZED_DECLARATION, MANTLE_SDP_FINALIZED_DECLARATIONS, MEMPOOL_ADD_TX,
-        NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
+        MANTLE_LIMITS, MANTLE_SDP_FINALIZED_DECLARATION, MANTLE_SDP_FINALIZED_DECLARATIONS,
+        MEMPOOL_ADD_TX, NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
         wallet::{
             ADDRESS, BALANCE, FUND, IMPORT_DELIVERY_MESSAGES, IMPORT_NOTE,
             TRANSACTIONS_TRANSFER_FUNDS, TRANSACTIONS_TRANSFER_FUNDS_TO_ADDRESS,
@@ -56,6 +56,7 @@ use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_log_targets::http_client;
 use lb_sdp_service::DeclarationRequest;
 pub use lb_sdp_service::SdpSubmission;
+use lb_utils::net::MAX_WIRE_MESSAGE_SIZE;
 use lb_version::BuildVersionInfo;
 use log::warn;
 use reqwest::{Client, ClientBuilder, RequestBuilder, StatusCode, Url};
@@ -349,7 +350,7 @@ impl CommonHttpClient {
         base_url: Url,
         service_type: ServiceType,
     ) -> Result<Option<HashMap<DeclarationId, Declaration>>, Error> {
-        let service_discriminant: u8 = *service_type.as_ref();
+        let service_discriminant = u8::from(service_type);
         let path = MANTLE_SDP_FINALIZED_DECLARATIONS
             .trim_start_matches('/')
             .replace(":service_type", &service_discriminant.to_string());
@@ -456,6 +457,15 @@ impl CommonHttpClient {
             .map(|body| body.chain_id)
     }
 
+    pub async fn chain_fork(&self, base_url: Url) -> Result<ForkDigest, Error> {
+        let request_url = base_url
+            .join(CHAIN_FORK.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.get::<(), ChainForkResponseBody>(request_url, None)
+            .await
+            .map(|body| body.fork_digest)
+    }
+
     /// Get consensus info (tip, height, etc.)
     pub async fn consensus_info(&self, base_url: Url) -> Result<ChainServiceInfo, Error> {
         let request_url = base_url
@@ -483,6 +493,14 @@ impl CommonHttpClient {
 
         self.get::<(), GasPricesResponseBody>(request_url, None)
             .await
+    }
+
+    /// Get what a transaction must fit in the era of the node's current slot.
+    pub async fn limits(&self, base_url: Url) -> Result<LimitsResponseBody, Error> {
+        let request_url = base_url
+            .join(MANTLE_LIMITS.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.get::<(), LimitsResponseBody>(request_url, None).await
     }
 
     /// Get time service info derived from deployment settings.
@@ -669,8 +687,10 @@ impl CommonHttpClient {
     fn parse_processed_blocks_range_event_stream(
         response: reqwest::Response,
     ) -> impl Stream<Item = ProcessedBlockEvent> {
-        // NDJSON event upper bound; margin above max serialized single event line
-        const MAX_NDJSON_LINE_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 3 / 2;
+        // NDJSON event upper bound; margin above max serialized single event
+        // line. The client knows no era, so it allows a block as large as the
+        // largest network message.
+        const MAX_NDJSON_LINE_BYTES: usize = MAX_WIRE_MESSAGE_SIZE * 3 / 2;
         const LOG_LINE_PREVIEW_CHARS: usize = 256;
 
         let byte_stream = response.bytes_stream().map_err(std::io::Error::other);

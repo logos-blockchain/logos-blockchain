@@ -4,7 +4,7 @@ mod stake;
 mod test;
 
 use std::{
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroU128},
     sync::{Arc, LazyLock},
 };
 
@@ -15,7 +15,7 @@ use lb_core::{
     events::TxEvent,
     mantle::{
         Value,
-        gas::{Gas, GasOverflow, GasPrice, GasProfile},
+        gas::{Gas, GasOverflow, GasPrice},
         ledger::verification_mode::StandardMode,
         note_set::{NoteSetError, NoteSetUpdate, NoteSets, TxNoteState},
         notes::{self, NoteCommitment},
@@ -33,10 +33,18 @@ use lb_core::{
 use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
 use lb_groth16::{Fr, fr_from_bytes};
 use lb_log_targets::ledger;
+use lb_utils::math::{NonNegativeRatio, ProperFraction};
 
+/// The precision the total stake inference scales the slot activation
+/// coefficient and the learning rate by, truncating each: it cannot measure a
+/// coefficient below its inverse, which truncates to zero.
+pub use self::stake::PRECISION as STAKE_INFERENCE_PRECISION;
 use crate::{
     block_rewards::{BlockRewards, BlockRewardsError},
-    config::{EraScheduledConfig, config_for_epoch, nonce_snapshot, stake_distribution_snapshot},
+    config::{
+        BlockRewardsConfig, EraScheduledConfig, ExecutionMarketConfig, StorageMarketConfig,
+        config_for_epoch, nonce_snapshot, stake_distribution_snapshot,
+    },
     cryptarchia::{
         block_density::BlockDensity,
         stake::{PRECISION, StakeInference},
@@ -48,26 +56,6 @@ use crate::{
 };
 
 const LOG_TARGET: &str = ledger::cryptarchia::ROOT;
-
-// corresponds to the denominator of q
-const EXECUTION_MARKET_EMA_DENOMINATOR: u128 = 10;
-// Corresponds to the numerator of q
-const EXECUTION_MARKET_EMA_PREV_WEIGHT: u128 = 9;
-// Corresponds to 7 * G_target with G_target = 1_568_899, half the limit rounded
-// down, because the numerator is 1 + phi (G_avg - G_target)
-const EXECUTION_MARKET_BASE_FEE_NUMERATOR: u128 = 10_982_293;
-// Corresponds to 8 * G_target with G_target = 1_568_899, half the limit rounded
-// down, because the denominator is 1 + phi (G_avg - G_target)
-const EXECUTION_MARKET_BASE_FEE_DENOMINATOR: u128 = 12_551_192;
-
-// Corresponds to the denominator of 1/beta
-const STORAGE_MARKET_EMA_DENOMINATOR: u128 = 2;
-// Corresponds to the denominator of 1+ alpha and 1-alpha
-const STORAGE_MARKET_CLAMP_DENOMINATOR: u128 = 8;
-// Corresponds to the numerator of 1-alpha
-const STORAGE_MARKET_CLAMP_DOWN_NUMERATOR: u128 = 7;
-// Corresponds to the numerator of 1+alpha
-const STORAGE_MARKET_CLAMP_UP_NUMERATOR: u128 = 9;
 
 use super::{Config, LedgerError, mantle};
 
@@ -351,6 +339,7 @@ impl LedgerState {
                 self.storage_gas_price,
                 self.storage_gas_consumed_in_epoch,
                 self.storage_gas_ema,
+                &config_for_epoch(eras, current_epoch).storage_market,
             );
             Ok(Self {
                 slot,
@@ -388,10 +377,16 @@ impl LedgerState {
                 self.storage_gas_price,
                 self.storage_gas_consumed_in_epoch,
                 self.storage_gas_ema,
+                &config_for_epoch(eras, current_epoch).storage_market,
             );
-            // Then for the empty epochs
-            for _ in u32::from(next_epoch_state.epoch())..u32::from(new_epoch) {
-                (new_price, new_ema) = update_storage_market(new_price, 0.into(), new_ema);
+            // Then for the empty epochs, each under its era
+            for skipped_epoch in u32::from(next_epoch_state.epoch())..u32::from(new_epoch) {
+                (new_price, new_ema) = update_storage_market(
+                    new_price,
+                    0.into(),
+                    new_ema,
+                    &config_for_epoch(eras, Epoch::new(skipped_epoch)).storage_market,
+                );
             }
 
             tracing::warn!(
@@ -456,20 +451,28 @@ impl LedgerState {
     }
 
     #[must_use]
-    pub fn update_execution_market(self, block_execution_gas_consumed: Gas) -> Self {
-        // First update the `average_execution_gas`
-        let avg_numerator = u128::from(block_execution_gas_consumed.into_inner())
-            + EXECUTION_MARKET_EMA_PREV_WEIGHT
-                * u128::from(self.average_execution_gas.into_inner());
+    pub fn update_execution_market(
+        self,
+        block_execution_gas_consumed: Gas,
+        market: &ExecutionMarketConfig,
+    ) -> Self {
+        // First update the `average_execution_gas`:
+        // `G_avg[s] = (1 - q)·G[s] + q·G_avg[s - 1]`.
+        let (q_numerator, q_denominator) = ratio_parts(market.ema_smoothing_factor);
+        let avg_numerator = (q_denominator.get() - q_numerator)
+            * u128::from(block_execution_gas_consumed.into_inner())
+            + q_numerator * u128::from(self.average_execution_gas.into_inner());
         let new_average_execution_gas: Gas =
-            ((avg_numerator / EXECUTION_MARKET_EMA_DENOMINATOR) as Value).into();
+            ((avg_numerator / q_denominator.get()) as Value).into();
 
-        // Then update the `execution_base_fee` using the new average
+        // Then update the `execution_base_fee` using the new average:
+        // `b[s + 1] = b[s]·(1 + φ·(G_avg[s] - G_target) / G_target)`.
+        let (phi_numerator, phi_denominator) = ratio_parts(market.fee_adjustment_rate);
+        let target = u128::from(market.max_gas_per_block.target().into_inner());
         let fee_numerator = u128::from(self.execution_base_fee.into_inner())
-            * (EXECUTION_MARKET_BASE_FEE_NUMERATOR
-                + u128::from(new_average_execution_gas.into_inner()));
-        let new_base_fee =
-            (fee_numerator.div_ceil(EXECUTION_MARKET_BASE_FEE_DENOMINATOR) as Value).into();
+            * ((phi_denominator.get() - phi_numerator) * target
+                + phi_numerator * u128::from(new_average_execution_gas.into_inner()));
+        let new_base_fee = (fee_numerator.div_ceil(phi_denominator.get() * target) as Value).into();
 
         Self {
             average_execution_gas: new_average_execution_gas,
@@ -589,7 +592,7 @@ impl LedgerState {
         Ok(())
     }
 
-    pub fn try_apply_transfer<Id, Profile: GasProfile>(
+    pub fn try_apply_transfer<Id>(
         mut self,
         signed_operation: SignedOperation<TransferOp, Verified, StandardMode>,
         tx_notes: &mut TxNoteState,
@@ -706,10 +709,13 @@ impl LedgerState {
         self,
         pooled_fees: Value,
         tips: Value,
+        config: &BlockRewardsConfig,
     ) -> Result<(Self, Value, Value), LedgerError<Id>> {
-        let (block_rewards, shares) = self
-            .block_rewards
-            .distribute_block_reward(pooled_fees, self.epoch_state.total_stake)?;
+        let (block_rewards, shares) = self.block_rewards.distribute_block_reward(
+            pooled_fees,
+            self.epoch_state.total_stake,
+            config,
+        )?;
         let leader_reward = shares
             .leader
             .checked_add(tips)
@@ -959,13 +965,18 @@ fn update_storage_market(
     storage_gas_price: GasPrice,
     storage_gas_consumed_in_epoch: Gas,
     storage_gas_ema: Gas,
+    market: &StorageMarketConfig,
 ) -> (GasPrice, Gas) {
     let previous_price = u128::from(storage_gas_price.into_inner());
     let total_storage_gas = u128::from(storage_gas_consumed_in_epoch.into_inner());
     let previous_ema = u128::from(storage_gas_ema.into_inner());
 
-    let new_ema: Gas =
-        (((total_storage_gas + previous_ema) / STORAGE_MARKET_EMA_DENOMINATOR) as Value).into();
+    // `T(s) = β·C(s) + (1 - β)·T(s - 1)`.
+    let (beta_numerator, beta_denominator) = ratio_parts(market.ema_smoothing_factor);
+    let new_ema: Gas = (((beta_numerator * total_storage_gas
+        + (beta_denominator.get() - beta_numerator) * previous_ema)
+        / beta_denominator.get()) as Value)
+        .into();
     let new_ema_unsigned = u128::from(new_ema.into_inner());
     // Hold the price while the effective target is zero (genesis / sustained
     // zero usage). Without this guard `comparator <= 7*ema` is `0 <= 0` (true),
@@ -974,20 +985,32 @@ fn update_storage_market(
     if new_ema_unsigned == 0 {
         return (storage_gas_price, new_ema);
     }
-    let comparator = STORAGE_MARKET_CLAMP_DENOMINATOR * total_storage_gas;
-    let new_price = if comparator <= STORAGE_MARKET_CLAMP_DOWN_NUMERATOR * new_ema_unsigned {
-        ((previous_price * STORAGE_MARKET_CLAMP_DOWN_NUMERATOR)
-            .div_ceil(STORAGE_MARKET_CLAMP_DENOMINATOR) as Value)
-            .into()
-    } else if comparator >= STORAGE_MARKET_CLAMP_UP_NUMERATOR * new_ema_unsigned {
-        ((previous_price * STORAGE_MARKET_CLAMP_UP_NUMERATOR)
-            .div_ceil(STORAGE_MARKET_CLAMP_DENOMINATOR) as Value)
-            .into()
+    // The price follows usage against the target, by at most `α` either way.
+    let (alpha_numerator, alpha_denominator) = ratio_parts(market.max_adjustment_factor);
+    let (clamp_down, clamp_up) = (
+        alpha_denominator.get() - alpha_numerator,
+        alpha_denominator.get() + alpha_numerator,
+    );
+    let comparator = alpha_denominator.get() * total_storage_gas;
+    let new_price = if comparator <= clamp_down * new_ema_unsigned {
+        ((previous_price * clamp_down).div_ceil(alpha_denominator.get()) as Value).into()
+    } else if comparator >= clamp_up * new_ema_unsigned {
+        ((previous_price * clamp_up).div_ceil(alpha_denominator.get()) as Value).into()
     } else {
         ((previous_price * total_storage_gas).div_ceil(new_ema_unsigned) as Value).into()
     };
 
     (new_price, new_ema)
+}
+
+/// The numerator and the denominator of `fraction`, as the integers the
+/// markets compute with.
+fn ratio_parts(fraction: ProperFraction) -> (u128, NonZeroU128) {
+    let NonNegativeRatio {
+        numerator,
+        denominator,
+    } = fraction.get();
+    (u128::from(numerator), NonZeroU128::from(denominator))
 }
 
 #[expect(
@@ -1009,9 +1032,10 @@ pub mod tests {
 
     use lb_core::{
         crypto::{Digest as _, Hasher},
+        era::AcceptedForkDigests,
         mantle::{
             SignedOps,
-            gas::MainnetGasProfile,
+            gas::GasProfile,
             note_set::CommitmentMmr,
             notes::{NoteNullifier, derive_note_nullifier},
             ops::{ZkAndEd25519Proof, ZkTransferProof, sdp::SDPDeclareOp},
@@ -1024,13 +1048,14 @@ pub mod tests {
     use lb_key_management_system_keys::keys::{
         Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, kdf_public_key,
     };
-    use lb_utils::math::{NonNegativeRatio, PositiveF64};
+    use lb_utils::math::PositiveF64;
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
 
     use super::*;
     use crate::{
         Ledger,
+        config::EmissionRatio,
         leader_proof::LeaderProof,
         mantle::{
             pow::tx_density::ClosedEpochLoad,
@@ -1039,7 +1064,7 @@ pub mod tests {
                 rewards::{self},
             },
         },
-        test_utils::{schedule, single_era},
+        test_utils::{FORK_DIGEST, schedule, single_era},
     };
 
     type HeaderId = [u8; 32];
@@ -1170,7 +1195,7 @@ pub mod tests {
         proof.reward_value =
             computed_reward_value(ledger, parent, slot, &proof, &UncleSlots::default(), [])?;
         let mut update = ledger
-            .prepare_update::<_, _, MainnetGasProfile>(
+            .prepare_update(
                 id,
                 parent,
                 slot,
@@ -1247,11 +1272,8 @@ pub mod tests {
             .ok_or(LedgerError::ParentNotFound(parent))?
             .clone()
             .try_apply_header::<_, HeaderId>(slot, proof, uncle_slots, eras)?;
-        let (state, gas_and_fees, _, _) = state
-            .try_apply_block_transactions::<_, HeaderId, MainnetGasProfile>(
-                eras,
-                txs.into_iter(),
-            )?;
+        let (state, gas_and_fees, _, _) =
+            state.try_apply_block_transactions::<_, HeaderId>(eras, txs.into_iter())?;
         state.leader_reward(&gas_and_fees, eras)
     }
 
@@ -1289,6 +1311,7 @@ pub mod tests {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
                         message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        cover_replication_factor: 0,
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
@@ -1302,6 +1325,27 @@ pub mod tests {
             },
             // `alpha = 1/2`, `T_tx = 10`, `k = 4`, with a baseline that is a
             // perfect square so the reference load lands on it exactly.
+            max_transactions: 1024,
+            max_transactions_size: 2 * 1024 * 1024,
+            max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            execution_market: ExecutionMarketConfig {
+                max_gas_per_block: crate::config::MaxGasPerBlock::new(3_137_798).unwrap(),
+                fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
+            },
+            storage_market: StorageMarketConfig {
+                max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
+            },
+            block_rewards: BlockRewardsConfig::new(
+                3_000_000_000_000_000_000,
+                120_000_000_000_000_000.try_into().unwrap(),
+                10_512,
+                EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
+                ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            )
+            .unwrap(),
+            gas_profile: GAS_PROFILE,
             pow_config: crate::config::PoWConfig {
                 blend: crate::config::BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<234>(),
@@ -1312,11 +1356,15 @@ pub mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![FORK_DIGEST]),
         }
     }
 
     /// The balance the `PoW` reward pool of a test chain starts with.
     pub const GENESIS_POW_REWARD_POOL: lb_core::mantle::ops::pow::PowReward = 1_000_000_000;
+
+    /// The costs of the deployments' current gas profile.
+    pub const GAS_PROFILE: GasProfile = GasProfile::MAINNET;
 
     /// A reward config with claiming disabled, standing in for a real
     /// deployment config in tests that don't exercise the reward parameters.
@@ -1513,8 +1561,9 @@ pub mod tests {
         // the `effective_target == 0` guard, `8*0 <= 7*0` takes the clamp-down
         // branch and ratchets the price down 12.5% (1000 -> 875) every
         // zero-usage epoch.
+        let market = config().storage_market;
         let price: GasPrice = 1000.into();
-        let (new_price, new_ema) = update_storage_market(price, 0.into(), 0.into());
+        let (new_price, new_ema) = update_storage_market(price, 0.into(), 0.into(), &market);
         assert_eq!(
             new_price, price,
             "price must hold while the effective target (EMA) is zero"
@@ -1524,7 +1573,7 @@ pub mod tests {
         // Sanity: once there is a real (non-zero) EMA, the price still adjusts —
         // the guard only fires at a zero target. Zero usage against a non-zero
         // EMA clamps down as before.
-        let (clamped, _) = update_storage_market(price, 0.into(), 800.into());
+        let (clamped, _) = update_storage_market(price, 0.into(), 800.into(), &market);
         assert_eq!(clamped, GasPrice::from(875), "non-zero target still clamps");
     }
 
@@ -2103,8 +2152,9 @@ pub mod tests {
         let state = LedgerState::from_notes([genesis_note], &config(), Fr::ZERO);
         let reward_commitment = NoteCommitment(Fr::from(0x4444u64));
 
-        let (state, blend_share, leader_reward) =
-            state.distribute_block_reward::<()>(1_000, 7).unwrap();
+        let (state, blend_share, leader_reward) = state
+            .distribute_block_reward::<()>(1_000, 7, &config().block_rewards)
+            .unwrap();
         let state = state.append_leader_reward::<()>(reward_commitment).unwrap();
 
         // Stake 10_000 is far below target, so A_t = 1: no payout, the maximum release
@@ -2134,7 +2184,9 @@ pub mod tests {
         let genesis_note =
             notes::Note::new(10_000, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
         let state = LedgerState::from_notes([genesis_note], &config(), Fr::ZERO);
-        let (state, blend_share, _) = state.distribute_block_reward::<()>(0, 0).unwrap();
+        let (state, blend_share, _) = state
+            .distribute_block_reward::<()>(0, 0, &config().block_rewards)
+            .unwrap();
         assert_eq!(blend_share, 57_077_625_571);
         let reward = notes::Note::new(
             57_000_000_000,
@@ -2281,7 +2333,7 @@ pub mod tests {
 
         let mut tx_notes = TxNoteState::new();
         let (state, excess, events) = state
-            .try_apply_transfer::<(), MainnetGasProfile>(signed_operation, &mut tx_notes)
+            .try_apply_transfer::<()>(signed_operation, &mut tx_notes)
             .unwrap();
 
         assert_eq!(excess, 6);
@@ -2557,11 +2609,12 @@ pub mod tests {
     /// expensive.
     #[test]
     fn execution_price_rises_under_sustained_maximum_load() {
+        let market = config().execution_market;
         let mut state = genesis_state(&[note()]);
         let genesis_price = state.execution_base_fee().into_inner();
 
         for _ in 0..10_000 {
-            state = state.update_execution_market(crate::EXECUTION_GAS_LIMIT);
+            state = state.update_execution_market(market.max_gas_per_block.into(), &market);
         }
 
         assert!(
@@ -2576,16 +2629,17 @@ pub mod tests {
     /// execution price back up.
     #[test]
     fn execution_price_recovers_when_demand_returns_after_quiet_blocks() {
+        let market = config().execution_market;
         let mut state = genesis_state(&[note()]);
 
         for _ in 0..100 {
-            state = state.update_execution_market(0.into());
+            state = state.update_execution_market(0.into(), &market);
         }
 
         let quiet_price = state.execution_base_fee().into_inner();
 
         for _ in 0..10_000 {
-            state = state.update_execution_market(crate::EXECUTION_GAS_LIMIT);
+            state = state.update_execution_market(market.max_gas_per_block.into(), &market);
         }
 
         assert!(
@@ -2605,7 +2659,7 @@ pub mod tests {
         let heavy_usage: Gas = 1_000_000.into();
 
         for _ in 0..1_000 {
-            (price, ema) = update_storage_market(price, heavy_usage, ema);
+            (price, ema) = update_storage_market(price, heavy_usage, ema, &config().storage_market);
         }
 
         assert!(
@@ -2624,16 +2678,16 @@ pub mod tests {
         let heavy_usage: Gas = 1_000_000.into();
 
         for _ in 0..4 {
-            (price, ema) = update_storage_market(price, heavy_usage, ema);
+            (price, ema) = update_storage_market(price, heavy_usage, ema, &config().storage_market);
         }
         for _ in 0..4 {
-            (price, ema) = update_storage_market(price, 0.into(), ema);
+            (price, ema) = update_storage_market(price, 0.into(), ema, &config().storage_market);
         }
 
         let quiet_price = price.into_inner();
 
         for _ in 0..1_000 {
-            (price, ema) = update_storage_market(price, heavy_usage, ema);
+            (price, ema) = update_storage_market(price, heavy_usage, ema, &config().storage_market);
         }
 
         assert!(
@@ -2648,68 +2702,78 @@ pub mod tests {
         // empty epoch
         assert_eq!(
             (438.into(), 340.into()),
-            update_storage_market(500.into(), 0.into(), 681.into())
+            update_storage_market(500.into(), 0.into(), 681.into(), &config().storage_market)
         );
 
         // Some random values
         // 1) raw = 113 * 1.125 = 127.125 -> 128
         assert_eq!(
             (128.into(), 450.into()),
-            update_storage_market(113.into(), 600.into(), 300.into())
+            update_storage_market(113.into(), 600.into(), 300.into(), &config().storage_market)
         );
 
         // 2) raw = 113 * 0.875 = 98.875 -> 99
         assert_eq!(
             (99.into(), 500.into()),
-            update_storage_market(113.into(), 200.into(), 800.into())
+            update_storage_market(113.into(), 200.into(), 800.into(), &config().storage_market)
         );
 
         // 3) raw = 221 * 1.125 = 248.625 -> 249
         assert_eq!(
             (249.into(), 550.into()),
-            update_storage_market(221.into(), 900.into(), 200.into())
+            update_storage_market(221.into(), 900.into(), 200.into(), &config().storage_market)
         );
 
         // 4) raw = 221 * 0.875 = 193.375 -> 194
         assert_eq!(
             (194.into(), 500.into()),
-            update_storage_market(221.into(), 100.into(), 900.into())
+            update_storage_market(221.into(), 100.into(), 900.into(), &config().storage_market)
         );
 
         // 5) raw = 345 * 1.125 = 388.125 -> 389
         assert_eq!(
             (389.into(), 165.into()),
-            update_storage_market(345.into(), 250.into(), 80.into())
+            update_storage_market(345.into(), 250.into(), 80.into(), &config().storage_market)
         );
 
         // 6) raw = 345 * 0.875 = 301.875 -> 302
         assert_eq!(
             (302.into(), 400.into()),
-            update_storage_market(345.into(), 50.into(), 750.into())
+            update_storage_market(345.into(), 50.into(), 750.into(), &config().storage_market)
         );
 
         // 7) raw = 517 * 1.125 = 581.625 -> 582
         assert_eq!(
             (582.into(), 160.into()),
-            update_storage_market(517.into(), 220.into(), 100.into())
+            update_storage_market(517.into(), 220.into(), 100.into(), &config().storage_market)
         );
 
         // 8) raw = 517 * 0.875 = 452.375 -> 453
         assert_eq!(
             (453.into(), 485.into()),
-            update_storage_market(517.into(), 120.into(), 850.into())
+            update_storage_market(517.into(), 120.into(), 850.into(), &config().storage_market)
         );
 
         // 9) raw = 999 * 1.125 = 1123.875 -> 1124
         assert_eq!(
             (1124.into(), 650.into()),
-            update_storage_market(999.into(), 1000.into(), 300.into())
+            update_storage_market(
+                999.into(),
+                1000.into(),
+                300.into(),
+                &config().storage_market
+            )
         );
 
         // 10) raw = 999 * 0.875 = 874.125 -> 875
         assert_eq!(
             (875.into(), 650.into()),
-            update_storage_market(999.into(), 300.into(), 1000.into())
+            update_storage_market(
+                999.into(),
+                300.into(),
+                1000.into(),
+                &config().storage_market
+            )
         );
     }
 
@@ -2722,7 +2786,7 @@ pub mod tests {
         // price = ceil(10_000 * (10_982_293 + 1_582_009) / 12_551_192) = 10_011
         ledger.execution_base_fee = 10_000.into();
         ledger.average_execution_gas = 1_568_899.into();
-        ledger = ledger.update_execution_market(1_700_000.into());
+        ledger = ledger.update_execution_market(1_700_000.into(), &config().execution_market);
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
             (10_011.into(), 1_582_009.into())
@@ -2732,7 +2796,7 @@ pub mod tests {
         // price = ceil(10_000 * (10_982_293 + 1_552_009) / 12_551_192) = 9_987
         ledger.execution_base_fee = 10_000.into();
         ledger.average_execution_gas = 1_568_899.into();
-        ledger = ledger.update_execution_market(1_400_000.into());
+        ledger = ledger.update_execution_market(1_400_000.into(), &config().execution_market);
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
             (9_987.into(), 1_552_009.into())
@@ -2742,7 +2806,7 @@ pub mod tests {
         // price = ceil(20_000 * (10_982_293 + 1_150_000) / 12_551_192) = 19_333
         ledger.execution_base_fee = 20_000.into();
         ledger.average_execution_gas = 1_000_000.into();
-        ledger = ledger.update_execution_market(2_500_000.into());
+        ledger = ledger.update_execution_market(2_500_000.into(), &config().execution_market);
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
             (19_333.into(), 1_150_000.into())
@@ -2752,7 +2816,7 @@ pub mod tests {
         // price = ceil(15_000 * (10_982_293 + 1_850_000) / 12_551_192) = 15_336
         ledger.execution_base_fee = 15_000.into();
         ledger.average_execution_gas = 2_000_000.into();
-        ledger = ledger.update_execution_market(500_000.into());
+        ledger = ledger.update_execution_market(500_000.into(), &config().execution_market);
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
             (15_336.into(), 1_850_000.into())
@@ -2762,7 +2826,7 @@ pub mod tests {
         // price = ceil(30_000 * (10_982_293 + 1_720_000) / 12_551_192) = 30_362
         ledger.execution_base_fee = 30_000.into();
         ledger.average_execution_gas = 1_800_000.into();
-        ledger = ledger.update_execution_market(1_000_000.into());
+        ledger = ledger.update_execution_market(1_000_000.into(), &config().execution_market);
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
             (30_362.into(), 1_720_000.into())
@@ -2770,14 +2834,12 @@ pub mod tests {
     }
 
     #[test]
-    fn execution_market_constants_follow_the_gas_limit() {
-        assert_eq!(crate::EXECUTION_GAS_LIMIT, Gas::new(3_137_798));
-        let target = u128::from(crate::EXECUTION_GAS_LIMIT.into_inner() / 2);
-        assert_eq!(target, 1_568_899);
-        assert_eq!(EXECUTION_MARKET_BASE_FEE_NUMERATOR, 10_982_293);
-        assert_eq!(EXECUTION_MARKET_BASE_FEE_DENOMINATOR, 12_551_192);
-        assert_eq!(EXECUTION_MARKET_BASE_FEE_NUMERATOR, 7 * target);
-        assert_eq!(EXECUTION_MARKET_BASE_FEE_DENOMINATOR, 8 * target);
+    fn execution_market_targets_half_the_gas_limit() {
+        // 3,200,000 minus 62,202, the fixed costs of a block measured in the Gas Cost
+        // Determination, paid by the block rather than by the Operations.
+        let market = config().execution_market;
+        assert_eq!(Gas::from(market.max_gas_per_block), Gas::new(3_137_798));
+        assert_eq!(market.max_gas_per_block.target(), Gas::new(1_568_899));
     }
 
     #[test]

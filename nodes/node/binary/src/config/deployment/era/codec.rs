@@ -20,8 +20,9 @@
 //! field holds its position among the parameters that follow the number, so
 //! the fixtures show where each field lands and how wide it is.
 //!
-//! Every `encode_into` destructures its type without `..`, so a field added to
-//! any of them fails to compile until it is given its place in the encoding.
+//! The Blend, cryptarchia and time parameters derive their encoding, so a field
+//! added to any of them joins the digest where it is declared, and the fixtures
+//! stop passing until they pin it.
 
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
 

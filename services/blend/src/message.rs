@@ -1,7 +1,7 @@
 use core::fmt::{self, Debug, Formatter};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use lb_binary_codec::{bincode::SerializeOp, canonical::BinaryEncode};
+use lb_binary_codec::canonical::BinaryEncode;
 use lb_blend::message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
 use lb_core::{
     crypto::{Digest as _, Hasher},
@@ -119,13 +119,13 @@ impl DataPayload {
     /// Whether it fits is up to the payload body size of the epoch it is sent
     /// in, which Blend checks when the payload is submitted.
     // TODO: This will go once we move away from `Vec<u8>` and into strong types
-    // for each message type Blend supports. Then we can also implement `TryFrom`
+    // for each message type Blend supports. Then we can also implement `From`
     // directly.
-    pub fn try_from_transaction<Tx>(transaction: &Tx) -> Result<Self, TransactionNotBlendable>
+    pub fn from_transaction<Tx>(transaction: &Tx) -> Self
     where
-        Tx: SerializeOp,
+        Tx: BinaryEncode,
     {
-        Ok(Self::Transaction(transaction.to_bytes()?.to_vec()))
+        Self::Transaction(transaction.encode_to_vec())
     }
 
     /// Encodes a proposal for blending.
@@ -248,13 +248,6 @@ mod tests {
 pub struct PayloadTooLarge {
     pub size: usize,
     pub maximum: u16,
-}
-
-/// Why a transaction cannot be carried by the Blend network.
-#[derive(Debug, thiserror::Error)]
-pub enum TransactionNotBlendable {
-    #[error("Transaction cannot be encoded: {0}")]
-    Encoding(#[from] lb_binary_codec::bincode::Error),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]

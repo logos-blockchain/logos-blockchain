@@ -75,8 +75,8 @@ pub trait WalletServiceData:
     type Tx;
 }
 
-impl<Kms, Cryptarchia, Tx, RuntimeServiceId> WalletServiceData
-    for crate::WalletService<Kms, Cryptarchia, Tx, RuntimeServiceId>
+impl<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId> WalletServiceData
+    for crate::WalletService<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId>
 {
     type Kms = Kms;
     type Cryptarchia = Cryptarchia;
@@ -502,6 +502,7 @@ mod tests {
     use std::fmt::{self, Display, Formatter};
 
     use lb_core::mantle::{
+        gas::GasProfile,
         ops::channel::{ChannelId, ChannelKeyIndex},
         transactions::{GasPrices, tx_list::ops::OpsGasContext},
     };
@@ -554,6 +555,7 @@ mod tests {
                         gas_context: OpsGasContext::new(
                             std::iter::once((expected_channel_id, expected_threshold)).collect(),
                             expected_gas_prices,
+                            GasProfile::MAINNET,
                         ),
                     };
                     drop(resp_tx.send(Ok(context)));

@@ -5,7 +5,8 @@ use natpmp::{NatpmpAsync, Protocol, Response, new_tokio_natpmp};
 use tokio::{net::UdpSocket, time::timeout};
 
 use crate::{
-    behaviour::nat::address_mapper::errors::AddressMapperError, config::NatMappingSettings,
+    behaviour::nat::address_mapper::{errors::AddressMapperError, protocols::build_public_address},
+    config::NatMappingSettings,
 };
 
 type PortNumber = u16;
@@ -110,30 +111,6 @@ fn extract_port_and_protocol(
         .find_map(|p| match p {
             MaProto::Tcp(p) => Some((p, Protocol::TCP)),
             MaProto::Udp(p) => Some((p, Protocol::UDP)),
-            _ => None,
-        })
-        .ok_or_else(|| {
-            AddressMapperError::MultiaddrParseError(
-                "No TCP or UDP port found in multiaddr".to_owned(),
-            )
-        })
-}
-
-fn build_public_address(
-    local_address: &Multiaddr,
-    public_ip: Ipv4Addr,
-    public_port: PortNumber,
-) -> Result<Multiaddr, AddressMapperError> {
-    let with_ip = local_address
-        .replace(0, |_| Some(multiaddr::Protocol::Ip4(public_ip)))
-        .ok_or_else(|| {
-            AddressMapperError::MultiaddrParseError("No IP address found in multiaddr".to_owned())
-        })?;
-
-    with_ip
-        .replace(1, |p| match p {
-            multiaddr::Protocol::Tcp(_) => Some(multiaddr::Protocol::Tcp(public_port)),
-            multiaddr::Protocol::Udp(_) => Some(multiaddr::Protocol::Udp(public_port)),
             _ => None,
         })
         .ok_or_else(|| {

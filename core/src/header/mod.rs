@@ -6,7 +6,7 @@ use blake2::Digest as _;
 use lb_binary_codec::bincode::SerializeOp as _;
 use lb_binary_codec::{
     bincode::BoundedSerializeOp,
-    canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError},
+    canonical::{BinaryDecode, BinaryEncode, DecodeError},
 };
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Fr, fr_to_bytes};
@@ -26,7 +26,7 @@ pub const HEADER_BINCODE_SIZE: usize = <Slot as BoundedSerializeOp>::MAX_ENCODED
     + <ContentId as BoundedSerializeOp>::MAX_ENCODED_SIZE
     + <Groth16LeaderProof as BoundedSerializeOp>::MAX_ENCODED_SIZE;
 
-#[derive(Clone, Eq, PartialEq, Copy, Hash, PartialOrd, Ord, BinaryCodec)]
+#[derive(Clone, Eq, PartialEq, Copy, Hash, PartialOrd, Ord, BinaryEncode, BinaryDecode)]
 pub struct HeaderId([u8; 32]);
 
 impl HeaderId {
@@ -40,7 +40,7 @@ impl Debug for HeaderId {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Copy, Hash, BinaryCodec)]
+#[derive(Clone, Eq, PartialEq, Copy, Hash, BinaryEncode, BinaryDecode)]
 pub struct ContentId([u8; 32]);
 
 impl ContentId {
@@ -440,7 +440,7 @@ fn test_serde_json_rejects_oversized_hex() {
 #[test]
 fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
     let body_root = ContentId(
-        hex::decode("f1675fa1e6280b4819528b4ad56b89441534bf161c26ad81e083ffbf9cfb6910")
+        hex::decode("7883dfd36fe2e06d807dd7146405349f94170533f0cb2ff79a93878e010f50c2")
             .unwrap()
             .try_into()
             .unwrap(),
@@ -460,7 +460,7 @@ fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
     };
     assert_eq!(
         hex::encode(header(0x22).id().0),
-        "093b91ef899a4afba51f2d3674d0bf499320f73de4eb08d955250875b5ed2fba"
+        "8caa2c2bd19da15ae8a9d38c7155491c60418671ad076b2225b74bb9304f45dd"
     );
     assert_eq!(header(0x22).id(), header(0x23).id());
     // The proof is bound to the block ID, reduced modulo p.
@@ -473,7 +473,7 @@ fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
     let spec_header = Header::new(
         HeaderId([0x11; 32]),
         ContentId(
-            hex::decode("f1675fa1e6280b4819528b4ad56b89441534bf161c26ad81e083ffbf9cfb6910")
+            hex::decode("7883dfd36fe2e06d807dd7146405349f94170533f0cb2ff79a93878e010f50c2")
                 .unwrap()
                 .try_into()
                 .unwrap(),
@@ -488,7 +488,7 @@ fn block_id_matches_the_spec_vector_and_leaves_out_the_proof() {
     );
     assert_eq!(
         hex::encode(spec_header.id().0),
-        "093b91ef899a4afba51f2d3674d0bf499320f73de4eb08d955250875b5ed2fba"
+        "8caa2c2bd19da15ae8a9d38c7155491c60418671ad076b2225b74bb9304f45dd"
     );
 }
 
@@ -630,7 +630,7 @@ mod body_root_test_vectors {
     use super::*;
     use crate::{
         block::UncleHeaders,
-        mantle::{traits::Hashable as _, transactions::Ops},
+        mantle::{fixtures::ops::op_values::FORK_DIGEST, traits::Hashable as _, transactions::Ops},
         utils::merkle,
     };
 
@@ -697,7 +697,7 @@ mod body_root_test_vectors {
         //    operation's name.
         let txs_with_names: Vec<(&'static str, Ops)> = Ops::sample()
             .into_iter()
-            .map(|op| (op.as_str(), Ops::from([op])))
+            .map(|op| (op.as_str(), Ops::new(FORK_DIGEST, [op])))
             .collect();
         let txs: Vec<Ops> = txs_with_names.iter().map(|(_, tx)| tx.clone()).collect();
         println!("================================================================");
@@ -798,21 +798,21 @@ mod body_root_test_vectors {
     fn body_root_matches_the_spec_vectors() {
         let txs: Vec<Ops> = Ops::sample()
             .into_iter()
-            .map(|op| Ops::from([op]))
+            .map(|op| Ops::new(FORK_DIGEST, [op]))
             .collect();
         assert_eq!(
             hex::encode(merkle::calculate_transactions_root(&txs)),
-            "0c8c4739d9a4d699fc793e77903aec603c098edb244849978e73ee14ba034fa1"
+            "3d276961305ab4654533f94dd792b74d3e6d55d1474588ffb92564c542fb9247"
         );
         assert_eq!(
             hex::encode(crate::block::body_root(&UncleHeaders::empty(), &txs).0),
-            "f1675fa1e6280b4819528b4ad56b89441534bf161c26ad81e083ffbf9cfb6910"
+            "7883dfd36fe2e06d807dd7146405349f94170533f0cb2ff79a93878e010f50c2"
         );
         let uncles =
             UncleHeaders::try_new(vec![uncle(0x66), uncle(0x77)], VECTOR_MAX_UNCLES).unwrap();
         assert_eq!(
             hex::encode(crate::block::body_root(&uncles, &txs).0),
-            "15334deeabb803def2e1cacf774af0d7a41b93fb3587895c8f56e88dfe5d4183"
+            "55551037498e5ad87c4e92d0fbfd1698b9bd9c3ada705ec15bd73dd759845628"
         );
     }
 }

@@ -26,6 +26,7 @@ use crate::{
         },
         keystore::{KeyTitle, Keystore},
         mempool::ServiceConfig as MempoolServiceConfig,
+        migrations::ConfigVersion,
         network::serde::nat,
         parse_log_filter_layer,
         pow::serde::ClaimTarget,
@@ -440,9 +441,11 @@ fn init_config_writes_only_overrides_and_load_fills_them_from_the_keystore() {
         serde_yaml::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
     assert_eq!(
         written,
-        serde_yaml::from_str::<serde_yaml::Value>(
-            "{network: {backend: {swarm: {port: 4000}}}, tracing: {logger: {file: {directory: /logs}}}}"
-        )
+        serde_yaml::from_str::<serde_yaml::Value>(&format!(
+            "{{version: {}, network: {{backend: {{swarm: {{port: 4000}}}}}}, tracing: \
+             {{logger: {{file: {{directory: /logs}}}}}}}}",
+            ConfigVersion::current()
+        ))
         .unwrap()
     );
 

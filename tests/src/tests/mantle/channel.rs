@@ -119,10 +119,8 @@ async fn channel_deposit() {
     .expect("timed out waiting for the wallet to apply the inscription");
     wait_for_spendable(&validator.client, funding_pk, Duration::from_mins(2)).await;
 
-    let deposit_metadata: Metadata = format!("Mint {deposit_amount} to Alice in Zone")
-        .into_bytes()
-        .try_into()
-        .expect("Metadata too large for deposit op.");
+    let deposit_metadata =
+        Metadata::new_unchecked(format!("Mint {deposit_amount} to Alice in Zone").into_bytes());
     let body = ChannelDepositRequestBody {
         tip: None,
         channel_id,
@@ -467,8 +465,13 @@ fn channel_test_config(mut config: RunConfig) -> RunConfig {
             parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
             parameters.cryptarchia.security_param = NonZero::new(3).unwrap();
             parameters.cryptarchia.slot_activation_coeff =
-                NonNegativeRatio::new(1, 2.try_into().unwrap());
-        });
+                NonNegativeRatio::new(1, 2.try_into().unwrap())
+                    .try_into()
+                    .unwrap();
+            // The widest uncle reference window k allows, ⌊0.6k⌋.
+            parameters.cryptarchia.uncle_reference_window_in_block = 1;
+        })
+        .expect("The changed deployment must be valid.");
     config
 }
 

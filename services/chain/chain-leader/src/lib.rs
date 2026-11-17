@@ -10,7 +10,7 @@ mod tx_selection;
 mod wallet;
 
 use core::fmt::Debug;
-use std::{fmt::Display, pin::Pin, sync::Arc, time::Duration};
+use std::{fmt::Display, pin::Pin, sync::Arc};
 
 use futures::{Stream, StreamExt as _, stream};
 use lb_blend_service::message::proposal_diagnostic_timestamp_unix_ms;
@@ -20,9 +20,7 @@ use lb_chain_service::{
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    block::{
-        Block, BlockTransactions, Error as BlockError, MAX_BLOCK_TRANSACTIONS_SIZE, UncleHeaders,
-    },
+    block::{Block, BlockTransactions, Error as BlockError, UncleHeaders},
     header::HeaderId,
     mantle::{
         OpRef, SignedOps,
@@ -35,7 +33,10 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::ZkPublicKey};
-use lb_ledger::{EpochState, LedgerState, config::EraScheduledConfig};
+use lb_ledger::{
+    EpochState, LedgerState,
+    config::{EraScheduledConfig, config_for_slot},
+};
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
@@ -375,24 +376,16 @@ where
         )
         .await;
 
-        // Wait for other services to become ready, with timeout.
-        // (except Chain, ChainNetwork, Blend, and Wallet)
-        wait_until_services_are_ready!(
-            &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_mins(1)),
-            TxMempoolService<_, _, _, _, _>,
-            TimeService<_, _>,
-            PreloadKmsService<_>
-        )
-        .await?;
-        // Wait for the remaining dependencies to become ready, without timeout
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
             None,
-            CryptarchiaService, // becomes ready after recoverying blocks
-            ChainNetwork,       // becomes ready after IBD
-            BlendService,       // becomes ready after chain becomes online
-            Wallet              // becomes ready after Chain
+            TxMempoolService<_, _, _, _, _>,
+            TimeService<_, _>,
+            PreloadKmsService<_>,
+            CryptarchiaService,
+            ChainNetwork,
+            BlendService,
+            Wallet
         )
         .await?;
 
@@ -660,7 +653,11 @@ where
             reward_public_key
         )
     )]
-    #[expect(clippy::too_many_arguments, reason = "Need all args")]
+    #[expect(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        reason = "Need all args"
+    )]
     async fn propose_block(
         parent: HeaderId,
         slot: Slot,
@@ -727,7 +724,13 @@ where
         }
 
         let valid_tx_stream = stream::iter(selected_txs);
-        let txs = txs_for_block(valid_tx_stream).await;
+        let config = config_for_slot(era_schedule, slot);
+        let txs = txs_for_block(
+            valid_tx_stream,
+            config.max_transactions,
+            config.max_transactions_size,
+        )
+        .await;
 
         // The PoL proves the reward note of the block, whose value is the reward
         // of the transactions the block ends up holding.
@@ -761,8 +764,16 @@ where
             &private.entropy_contribution(),
         );
         let private = private.with_msg(msg);
+        let max_transactions_size = config.max_transactions_size;
         let block = spawn_blocking("logos/chain/leader-proof-blocking", move || {
-            assemble_block(parent, slot, uncle_headers, txs, private)
+            assemble_block(
+                parent,
+                slot,
+                uncle_headers,
+                txs,
+                max_transactions_size,
+                private,
+            )
         })
         .await??;
         debug!(
@@ -851,16 +862,21 @@ where
 }
 
 /// Select transactions for a block, truncating the stream at the first
-/// transaction that trips the block size or count limits.
-async fn txs_for_block<Tx, S>(mut txs: S) -> BlockTransactions<Tx>
+/// transaction that trips the era's limits: `max_transactions` transactions,
+/// taking at most `max_transactions_size` bytes.
+async fn txs_for_block<Tx, S>(
+    mut txs: S,
+    max_transactions: u16,
+    max_transactions_size: u32,
+) -> BlockTransactions<Tx>
 where
     Tx: StorageSize,
     S: Stream<Item = Tx> + Unpin,
 {
     let mut block_transactions_size: usize = 0;
-    let mut selected_txs = BlockTransactions::empty();
+    let mut selected_txs = Vec::new();
 
-    loop {
+    while selected_txs.len() < usize::from(max_transactions) {
         let Some(tx) = txs.next().await else {
             break;
         };
@@ -871,17 +887,16 @@ where
             break;
         };
 
-        if next_block_transactions_size > MAX_BLOCK_TRANSACTIONS_SIZE {
+        if next_block_transactions_size > max_transactions_size as usize {
             break;
         }
 
-        if selected_txs.try_push(tx).is_err() {
-            break;
-        }
+        selected_txs.push(tx);
         block_transactions_size = next_block_transactions_size;
     }
 
-    selected_txs
+    BlockTransactions::try_new(selected_txs, max_transactions)
+        .expect("No more transactions than the era allows are selected.")
 }
 
 #[cfg(test)]
@@ -899,35 +914,35 @@ mod tests {
         }
     }
 
+    /// The most transactions the tests' blocks may hold.
+    const MAX_TRANSACTIONS: u16 = 1024;
+    /// The most bytes the tests' blocks' transactions may take.
+    const MAX_TRANSACTIONS_SIZE: u32 = 2 * 1024 * 1024;
+    /// [`MAX_TRANSACTIONS_SIZE`], as transaction sizes are counted.
+    const MAX_SIZE: usize = MAX_TRANSACTIONS_SIZE as usize;
+
     #[tokio::test]
     async fn block_tx_selection_respects_transaction_count_limit() {
-        let txs = stream::iter(vec![
-            TestTx { size: 1 };
-            BlockTransactions::<TestTx>::MAX + 1
-        ]);
+        let txs = stream::iter(vec![TestTx { size: 1 }; usize::from(MAX_TRANSACTIONS) + 1]);
 
-        let selected = txs_for_block(txs).await;
+        let selected = txs_for_block(txs, MAX_TRANSACTIONS, MAX_TRANSACTIONS_SIZE).await;
 
-        assert_eq!(selected.len(), BlockTransactions::<TestTx>::MAX);
+        assert_eq!(selected.len(), usize::from(MAX_TRANSACTIONS));
     }
 
     #[tokio::test]
     async fn block_tx_selection_respects_block_size_limit() {
         let txs = stream::iter(vec![
-            TestTx {
-                size: MAX_BLOCK_TRANSACTIONS_SIZE / 2,
-            },
-            TestTx {
-                size: MAX_BLOCK_TRANSACTIONS_SIZE / 2,
-            },
+            TestTx { size: MAX_SIZE / 2 },
+            TestTx { size: MAX_SIZE / 2 },
             TestTx { size: 1 },
         ]);
 
-        let selected = txs_for_block(txs).await;
+        let selected = txs_for_block(txs, MAX_TRANSACTIONS, MAX_TRANSACTIONS_SIZE).await;
         let selected_size: usize = selected.iter().map(StorageSize::storage_size).sum();
 
         assert_eq!(selected.len(), 2);
-        assert_eq!(selected_size, MAX_BLOCK_TRANSACTIONS_SIZE);
+        assert_eq!(selected_size, MAX_SIZE);
     }
 
     #[tokio::test]
@@ -937,13 +952,11 @@ mod tests {
         // own) ahead of it — doing so could drop a dependency of the third.
         let txs = stream::iter(vec![
             TestTx { size: 10 },
-            TestTx {
-                size: MAX_BLOCK_TRANSACTIONS_SIZE,
-            },
+            TestTx { size: MAX_SIZE },
             TestTx { size: 10 },
         ]);
 
-        let selected = txs_for_block(txs).await;
+        let selected = txs_for_block(txs, MAX_TRANSACTIONS, MAX_TRANSACTIONS_SIZE).await;
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected.as_slice()[0].storage_size(), 10);
@@ -955,14 +968,9 @@ mod tests {
         // stops at it rather than skipping past to later transactions, which may
         // depend on it. (In practice such transactions are filtered out before
         // reaching here, but the prefix invariant must hold regardless.)
-        let txs = stream::iter(vec![
-            TestTx {
-                size: MAX_BLOCK_TRANSACTIONS_SIZE + 1,
-            },
-            TestTx { size: 1 },
-        ]);
+        let txs = stream::iter(vec![TestTx { size: MAX_SIZE + 1 }, TestTx { size: 1 }]);
 
-        let selected = txs_for_block(txs).await;
+        let selected = txs_for_block(txs, MAX_TRANSACTIONS, MAX_TRANSACTIONS_SIZE).await;
 
         assert!(selected.is_empty());
     }

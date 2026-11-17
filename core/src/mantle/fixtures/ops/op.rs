@@ -12,6 +12,7 @@ use crate::mantle::{
 
 codec_fixtures!(
     Op,
+    context = u32::MAX,
     Self::Transfer(TRANSFER.clone()) => TRANSFER_HEX,
     Self::ProgramRegister(PROGRAM_REGISTER.clone()) => PROGRAM_REGISTER_HEX,
     Self::ChannelConfig(CHANNEL_CONFIG.clone()) => CHANNEL_CONFIG_HEX,

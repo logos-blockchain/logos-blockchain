@@ -1,10 +1,10 @@
-use lb_binary_codec::canonical::BinaryCodec;
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use serde::{Deserialize, Serialize};
 
 use crate::mantle::ops::ZkTransferProof;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct ZkAndEd25519Proof {
     // ZkTransferAndEd25519SigProof = ZkTransfer Ed25519Signature
     pub zk_proof: ZkTransferProof,

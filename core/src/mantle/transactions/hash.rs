@@ -1,6 +1,9 @@
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
-use lb_binary_codec::{bincode::BoundedSerializeOp, canonical::BinaryCodec};
+use lb_binary_codec::{
+    bincode::BoundedSerializeOp,
+    canonical::{BinaryDecode, BinaryEncode},
+};
 use lb_groth16::Fr;
 
 use crate::{
@@ -9,7 +12,9 @@ use crate::{
 };
 
 /// The hash of a transaction
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord, BinaryCodec)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord, BinaryEncode, BinaryDecode,
+)]
 pub struct TxHash(pub Hash);
 serde_bytes_newtype!(TxHash, 32);
 display_hex_bytes_newtype!(TxHash);
@@ -24,7 +29,9 @@ pub const REFERENCE_PREFIX_BYTES: usize = 16;
 
 /// The leading [`REFERENCE_PREFIX_BYTES`] bytes of a [`TxHash`] — how a block
 /// proposal refers to a transaction that is already in a validator's mempool.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord, BinaryCodec)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord, BinaryEncode, BinaryDecode,
+)]
 pub struct TxHashPrefix(pub [u8; REFERENCE_PREFIX_BYTES]);
 serde_bytes_newtype!(TxHashPrefix, REFERENCE_PREFIX_BYTES);
 display_hex_bytes_newtype!(TxHashPrefix);

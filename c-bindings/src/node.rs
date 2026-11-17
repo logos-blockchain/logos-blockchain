@@ -1,9 +1,13 @@
 use std::ffi::{CStr, CString};
 
-use lb_core::mantle::transactions::genesis_tx::ChainId;
-use lb_node::RuntimeServiceId;
+use lb_core::{era::ForkDigest, mantle::transactions::genesis_tx::ChainId};
+use lb_node::{RuntimeServiceId, TimeService};
+use lb_time_service::TimeServiceMessage;
 use overwatch::overwatch::{Overwatch, OverwatchHandle, ServicePanic};
-use tokio::runtime::{Handle, Runtime};
+use tokio::{
+    runtime::{Handle, Runtime},
+    sync::oneshot,
+};
 
 use crate::{
     errors::{OperationStatus, OperationStatusCode},
@@ -40,10 +44,18 @@ pub struct LogosBlockchainNode {
     // be represented as a C string, which `get_chain_id` reports as an error
     // rather than failing node start.
     chain_id: Option<CString>,
+    // The fork digest of every era of the deployment, era `n` at position `n`,
+    // fixed like the chain ID. The era in force comes from the time service.
+    fork_digests: Vec<ForkDigest>,
 }
 
 impl LogosBlockchainNode {
-    pub fn new(overwatch: LogosBlockchainOverwatch, runtime: Runtime, chain_id: &ChainId) -> Self {
+    pub fn new(
+        overwatch: LogosBlockchainOverwatch,
+        runtime: Runtime,
+        chain_id: &ChainId,
+        fork_digests: Vec<ForkDigest>,
+    ) -> Self {
         // A `ChainId` is only bounded and UTF-8, so nothing stops it from
         // carrying an interior NUL that no C string can hold. That is a broken
         // deployment rather than a reason to refuse to run, so the node starts
@@ -62,7 +74,51 @@ impl LogosBlockchainNode {
             overwatch,
             runtime,
             chain_id,
+            fork_digests,
         }
+    }
+
+    /// The fork digest of the era the node's clock is in, which a transaction
+    /// signed now carries.
+    pub(crate) async fn fork_digest_in_force(&self) -> StatusResult<ForkDigest> {
+        let relay = self
+            .get_overwatch_handle()
+            .relay::<TimeService>()
+            .await
+            .map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::RelayError,
+                    format!("Failed to get relay to TimeService: {error}"),
+                )
+            })?;
+        let (sender, receiver) = oneshot::channel();
+        relay
+            .send(TimeServiceMessage::CurrentSlot { sender })
+            .await
+            .map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::ChannelSendError,
+                    format!("Failed to send current slot request: {error}"),
+                )
+            })?;
+        let era = receiver
+            .await
+            .map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::ChannelReceiveError,
+                    format!("Failed to receive current slot response: {error}"),
+                )
+            })?
+            .era;
+        self.fork_digests
+            .get(usize::from(era.into_inner()))
+            .copied()
+            .ok_or_else(|| {
+                OperationStatus::error(
+                    OperationStatusCode::ConfigurationError,
+                    format!("The deployment has no era {}", era.into_inner()),
+                )
+            })
     }
 
     /// The chain ID of the deployment this node runs, borrowed from the node,

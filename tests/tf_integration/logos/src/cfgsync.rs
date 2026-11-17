@@ -9,7 +9,7 @@ use testing_framework_core::{
 };
 use thiserror::Error;
 
-use crate::{DeploymentPlan, LbcEnv, local::build_node_run_config};
+use crate::{DeploymentPlan, LbcEnv, LbcNodeConfig, local::build_node_run_config};
 
 #[derive(Debug, Error)]
 #[error("{source}")]
@@ -24,21 +24,25 @@ impl StaticNodeConfigProvider for LbcEnv {
     fn build_node_config(
         deployment: &DeploymentPlan,
         node_index: usize,
-    ) -> Result<RunConfig, Self::Error> {
+    ) -> Result<LbcNodeConfig, Self::Error> {
         let node = &deployment.nodes()[node_index];
-        build_node_run_config(
+        let run_config = build_node_run_config(
             deployment,
             node,
             deployment.config().node_config_override(node.index()),
         )
-        .map_err(Into::into)
+        .map_err(NodeCfgsyncError::from)?;
+        Ok(LbcNodeConfig {
+            run_config,
+            binary_profile: deployment.config().node_binary_profile().clone(),
+        })
     }
 
     fn rewrite_for_hostnames(
         deployment: &DeploymentPlan,
         node_index: usize,
         hostnames: &[String],
-        config: &mut RunConfig,
+        config: &mut LbcNodeConfig,
     ) -> Result<(), Self::Error> {
         let rewritten_peers = rewrite_node_peers(deployment, node_index, hostnames)
             .map_err(NodeCfgsyncError::from)?;
@@ -49,8 +53,8 @@ impl StaticNodeConfigProvider for LbcEnv {
         Ok(())
     }
 
-    fn serialize_node_config(config: &RunConfig) -> Result<String, Self::Error> {
-        serde_yaml::to_string(config).map_err(|source| NodeCfgsyncError {
+    fn serialize_node_config(config: &LbcNodeConfig) -> Result<String, Self::Error> {
+        serde_yaml::to_string(&config.run_config).map_err(|source| NodeCfgsyncError {
             source: source.into(),
         })
     }

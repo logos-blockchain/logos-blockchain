@@ -6,7 +6,7 @@ use lb_core::{
         GenesisParameters, GenesisTime,
         ops::channel::{
             ChannelId, MsgId,
-            inscribe::{InscriptionOp, MiniBlocks},
+            inscribe::{Inscription, InscriptionOp, MiniBlocks},
         },
         transactions::genesis_tx::ChainId,
     },
@@ -55,10 +55,7 @@ pub fn inscribe<D: ZkDigest>(
 
     InscriptionOp {
         channel_id: ChannelId::from(EMPTY_CHANNEL_ID),
-        inscription: params
-            .encode_to_vec()
-            .try_into()
-            .expect("GenesisParameters encoding exceeded MAX_BYTES"),
+        inscription: Inscription::new_unchecked(params.encode_to_vec()),
         parent: MsgId::root(),
         signer: UnverifiedEd25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY)
             .expect("Constant EMPTY_ED25519_PUBLIC_KEY should be valid"),

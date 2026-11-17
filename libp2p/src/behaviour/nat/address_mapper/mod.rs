@@ -208,25 +208,17 @@ impl MappingState {
 
 impl StateTrait for ActiveState {
     fn poll<Mapper: NatMapper>(
-        self,
+        mut self,
         cx: &mut Context<'_>,
         settings: &NatMappingSettings,
     ) -> (PollResult, State) {
-        let mut renewal_timer = self.renewal_timer;
-        if renewal_timer.poll_unpin(cx).is_ready() {
+        if self.renewal_timer.poll_unpin(cx).is_ready() {
             (
                 Poll::Pending,
                 State::mapping::<Mapper>(self.local_address, *settings, false, 0),
             )
         } else {
-            (
-                Poll::Pending,
-                State::active(
-                    self.local_address,
-                    settings.lease_duration,
-                    settings.renewal_delay_fraction,
-                ),
-            )
+            (Poll::Pending, State::Active(self))
         }
     }
 }
@@ -551,7 +543,21 @@ mod tests {
         assert!(poll_until_active(&mut behaviour).await);
         assert_eq!(MockMapper::get_mapping_attempts_count(), 1);
 
-        time::advance(Duration::from_millis(1700)).await;
+        // The renewal is due after 1.6 s (80% of the lease). Polls before then
+        // must not push it back.
+        for _ in 0..3 {
+            time::advance(Duration::from_millis(500)).await;
+
+            poll_fn(|cx| {
+                drop(behaviour.poll(cx));
+                Poll::Ready(())
+            })
+            .await;
+
+            assert!(matches!(behaviour.state, State::Active { .. }));
+        }
+
+        time::advance(Duration::from_millis(200)).await;
 
         poll_fn(|cx| {
             drop(behaviour.poll(cx));

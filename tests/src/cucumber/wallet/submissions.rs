@@ -1447,10 +1447,12 @@ async fn reserve_user_wallet_transaction_submission(
         transaction_intent
     };
 
+    let fork_digest = world.fork_digest_in_force().await?;
     let submission = prepare_wallet_transaction_work_item(
         transaction_intent,
         funding_resources,
         priority_fee_percent,
+        fork_digest,
     )
     .map_err(wallet_transaction_error)
     .inspect_err(|e| {
@@ -1764,7 +1766,7 @@ fn group_key_for_wallet(world: &CucumberWorld, wallet_name: &str) -> Result<Stri
 #[cfg(test)]
 mod cache_removal_tests {
     use lb_chain_service::Epoch;
-    use lb_core::header::HeaderId;
+    use lb_core::{era::ForkDigest, header::HeaderId};
     use lb_groth16::Fr;
     use lb_mmr::MerklePath;
     use rand::{SeedableRng as _, seq::SliceRandom as _};
@@ -2049,6 +2051,7 @@ mod cache_removal_tests {
             intent,
             WalletFundingResources::new(source),
             priority_fee_percent,
+            ForkDigest::new([0x11; 32]),
         )
     }
 
@@ -2075,6 +2078,7 @@ mod cache_removal_tests {
             intent,
             WalletFundingResources::fee_sponsored(sender, fee_sponsor),
             0,
+            ForkDigest::new([0x11; 32]),
         )
     }
 
@@ -2110,7 +2114,7 @@ mod cache_removal_tests {
     #[test]
     fn workload_selection_uses_only_the_primary_when_no_dust_qualifies() {
         let pool = WorkloadUtxoPool::new(&[
-            workload_utxo(12_000, 0),
+            workload_utxo(20_000, 0),
             workload_utxo(9_000, 1),
             workload_utxo(8_000, 2),
         ]);
@@ -2122,11 +2126,11 @@ mod cache_removal_tests {
                 .iter()
                 .map(|utxo| utxo.note.value)
                 .collect::<Vec<_>>(),
-            vec![12_000]
+            vec![20_000]
         );
         let work_item = prepare_all_provided(&inputs, 8_000, unit_gas_prices(), 0)
             .expect("primary should fund the transfer");
-        assert_eq!(input_values(&work_item), vec![12_000]);
+        assert_eq!(input_values(&work_item), vec![20_000]);
     }
 
     #[test]
@@ -2159,32 +2163,27 @@ mod cache_removal_tests {
 
     #[test]
     fn workload_selection_uses_two_or_three_primary_inputs_only_when_needed() {
-        let two_input_utxos = [workload_utxo(8_000, 0), workload_utxo(8_000, 1)];
+        let two_input_utxos = [workload_utxo(12_000, 0), workload_utxo(12_000, 1)];
         let two_input_pool = WorkloadUtxoPool::new(&two_input_utxos);
         let two_input_candidates = two_input_pool.primary_candidates();
         let two_input_count = (1..=two_input_candidates.len())
             .find(|count| {
-                prepare_all_provided(
-                    &two_input_candidates[..*count],
-                    12_000,
-                    unit_gas_prices(),
-                    0,
-                )
-                .is_ok()
+                prepare_all_provided(&two_input_candidates[..*count], 8_000, unit_gas_prices(), 0)
+                    .is_ok()
             })
-            .expect("two 8,000 inputs should fund the transfer");
+            .expect("two 12,000 inputs should fund the transfer");
         assert_eq!(two_input_count, 2);
 
         let three_input_utxos = [
-            workload_utxo(8_000, 10),
-            workload_utxo(8_000, 11),
-            workload_utxo(8_000, 12),
+            workload_utxo(12_000, 10),
+            workload_utxo(12_000, 11),
+            workload_utxo(12_000, 12),
         ];
         let three_input_pool = WorkloadUtxoPool::new(&three_input_utxos);
         let three_input_candidates = three_input_pool.primary_candidates();
         let two_input_max_output = {
             let mut low = 0u64;
-            let mut high = 16_000u64;
+            let mut high = 24_000u64;
             while low < high {
                 let output_value = low + (high - low).div_ceil(2);
                 if prepare_all_provided(
@@ -2231,7 +2230,7 @@ mod cache_removal_tests {
                 )
                 .is_ok()
             })
-            .expect("three 8,000 inputs should fund the transfer");
+            .expect("three 12,000 inputs should fund the transfer");
         assert_eq!(three_input_count, 3);
     }
 
@@ -2276,7 +2275,7 @@ mod cache_removal_tests {
     #[test]
     fn workload_selection_adds_smallest_dust_and_excludes_medium_inputs() {
         let pool = WorkloadUtxoPool::new(&[
-            workload_utxo(14_000, 0),
+            workload_utxo(30_000, 0),
             workload_utxo(9_000, 1),
             workload_utxo(500, 2),
             workload_utxo(100, 3),
@@ -2292,11 +2291,11 @@ mod cache_removal_tests {
                 .map(|utxo| utxo.note.value)
                 .collect::<Vec<_>>(),
             // 500 is dust too, but the input limit leaves room for three dust inputs
-            vec![14_000, 1, 10, 100]
+            vec![30_000, 1, 10, 100]
         );
         let work_item = prepare_all_provided(&inputs, 8_000, unit_gas_prices(), 0)
             .expect("bounded primary and dust set should fund the transfer");
-        assert_eq!(input_values(&work_item), vec![14_000, 1, 10, 100]);
+        assert_eq!(input_values(&work_item), vec![30_000, 1, 10, 100]);
     }
 
     #[test]

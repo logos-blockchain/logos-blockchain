@@ -97,6 +97,7 @@ mod tests {
         Op, OpProof,
         batch::DeferredProofs,
         channel::Channels,
+        fixtures::ops::op_values::FORK_DIGEST,
         ledger::verification_mode::StandardMode,
         note_set::NoteSets,
         notes::{NoteNullifier, OutputCommitments},
@@ -129,12 +130,15 @@ mod tests {
             .expect("the channel holds a note set")
             .commitment_root();
 
-        let ops = Ops::from([Op::ChannelWithdraw(ChannelWithdrawOp {
-            channel_id,
-            inputs: [NoteNullifier(Fr::from(1u64))].into(),
-            commitment_merkle_root,
-            outputs: OutputCommitments::default(),
-        })]);
+        let ops = Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelWithdraw(ChannelWithdrawOp {
+                channel_id,
+                inputs: [NoteNullifier(Fr::from(1u64))].into(),
+                commitment_merkle_root,
+                outputs: OutputCommitments::default(),
+            })],
+        );
         let signed_tx = SignedOps::from_parts(
             ops,
             OpProofs::from([OpProof::ZkTransfer(ZkTransferProof::sample())]),

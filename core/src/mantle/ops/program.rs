@@ -1,11 +1,11 @@
-use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
     events::TxEvent,
     mantle::{
-        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
+        gas::{Gas, GasOverflow, GasProfile, OpGasCalculator, OpGasContext},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::StandardMode,
@@ -16,7 +16,7 @@ use crate::{
     },
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct ProgramRegisterOp {
     pub verification_key: ProgramVerificationKey,
 }
@@ -42,11 +42,15 @@ impl ProvableOperation for ProgramRegisterOp {
     const CODE: u8 = 0x01;
 }
 
-impl OperationGas<MainnetGasProfile> for ProgramRegisterOp {
-    const GAS_COST: Gas = Gas::new(15114);
+impl OpGasCalculator for ProgramRegisterOp {
+    fn execution_gas(
+        &self,
+        profile: &GasProfile,
+        _context: &impl OpGasContext,
+    ) -> Result<Gas, GasOverflow> {
+        Ok(profile.program_register)
+    }
 }
-
-impl OpGasCalculator<MainnetGasProfile> for ProgramRegisterOp {}
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum ProgramRegisterError {
@@ -106,7 +110,7 @@ impl ExecutableOperation for SignedOperation<ProgramRegisterOp, Verified, Standa
 
 #[cfg(test)]
 mod tests {
-    use lb_binary_codec::canonical::BinaryDecode as _;
+
     use lb_groth16::{
         Groth16VerificationKey,
         test_utils::{off_subgroup_g2, three_input_setup},
@@ -214,7 +218,7 @@ mod tests {
     #[test]
     fn program_register_op_execution_gas_is_15114() {
         assert_eq!(
-            ProgramRegisterOp::sample().execution_gas(&FixedThresholds(3)),
+            ProgramRegisterOp::sample().execution_gas(&GasProfile::MAINNET, &FixedThresholds(3)),
             Ok(Gas::new(15_114))
         );
     }

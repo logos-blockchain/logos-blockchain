@@ -1,4 +1,4 @@
-use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::{COMPRESSED_PROOF_SIZE, CompressedGroth16Proof, Fr, serde::serde_fr};
 use lb_key_management_system_keys::keys::{PK0, ZkPublicKey};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -85,7 +85,9 @@ compressed_proof!(ProgramProof, CompressedGroth16Proof);
 // Value (8 bytes), NoteNonce, NoteStakePk and ProgramNoteData (32 bytes each).
 const PROGRAM_NOTE_OPENING_SIZE: usize = 104;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode,
+)]
 pub struct ProgramNoteOpening {
     pub value: Value,
     #[serde(with = "serde_fr")]

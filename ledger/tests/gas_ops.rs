@@ -4,7 +4,7 @@
 //! Run with
 //!
 //! ```text
-//! GAS_BENCH_FILL=1000 taskset -c 8 cargo test -p logos-blockchain-ledger --release --features test-utils --test gas_ops -- --test-threads=1
+//! GAS_BENCH_FILL=1000 taskset -c 8 cargo test -p logos-blockchain-ledger --release --features test-utils --test gas_ops -- --ignored --test-threads=1
 //! ```
 //!
 //! The cycle counters are read through `perf_event`, on Linux only.
@@ -54,6 +54,7 @@ fn series(names: impl Iterator<Item = &'static str>) -> BTreeMap<&'static str, u
 }
 
 #[test]
+#[ignore = "applies every gas benchmark operation; run explicitly in release"]
 fn every_op_case_applies() {
     for shape in ops::op_shapes() {
         for (round, bytes) in shape.bytes.iter().enumerate() {
@@ -120,6 +121,7 @@ fn the_op_cases_cover_every_series() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn more_inputs_cost_more_cycles() {
     let mut counter = Counter::new().expect("counters must be available and the process pinned");
     let mut cases = ops::op_cases();
@@ -139,6 +141,7 @@ fn more_inputs_cost_more_cycles() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn a_larger_payload_costs_more_cycles() {
     let mut counter = Counter::new().expect("counters must be available and the process pinned");
     let mut cases = ops::op_cases();
@@ -156,6 +159,7 @@ fn a_larger_payload_costs_more_cycles() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn more_channel_keys_cost_more_cycles() {
     let mut counter = Counter::new().expect("counters must be available and the process pinned");
     let mut cases = ops::op_cases();
@@ -175,6 +179,7 @@ fn the_keys_of_the_key_series_are_distinct() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn longer_inscriptions_cost_more_cycles() {
     let mut counter = Counter::new().expect("counters must be available and the process pinned");
     let mut cases = ops::op_cases();
@@ -334,6 +339,7 @@ fn every_header_case_applies_and_releases_its_withdrawals() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn releasing_more_withdrawals_costs_more_cycles() {
     let mut counter = Counter::new().expect("counters must be available and the process pinned");
     let mut cases = block::block_cases();
@@ -368,6 +374,7 @@ fn the_mixed_block_verifies_each_of_its_deferred_proofs() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn the_mixed_block_measures_the_verification_of_its_proofs() {
     let mut counter = Counter::new().expect("counters must be available and the process pinned");
     let shape = mixed_shape("block/mixed");

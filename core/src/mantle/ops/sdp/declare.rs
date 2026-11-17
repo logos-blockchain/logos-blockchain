@@ -7,10 +7,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         batch::DeferredZkTransfer,
-        gas::{
-            EXECUTION_SIGNATURE_GAS, Gas, GasOverflow, MainnetGasProfile, OpGasCalculator,
-            OpGasContext, OperationGas, spend_gas,
-        },
+        gas::{Gas, GasOverflow, GasProfile, OpGasCalculator, OpGasContext},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
             ProviderIndex, VerifiableOperation,
@@ -145,17 +142,18 @@ impl ProvableOperation for SDPDeclareOp {
     const CODE: u8 = 0x20;
 }
 
-impl OperationGas<MainnetGasProfile> for SDPDeclareOp {
-    const GAS_COST: Gas = Gas::new(1693);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for SDPDeclareOp {
+impl OpGasCalculator for SDPDeclareOp {
     // The Operation, plus its signature and the spend of its notes into the
     // service note.
-    fn execution_gas(&self, _context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
-        Self::GAS_COST
-            .checked_add(EXECUTION_SIGNATURE_GAS)?
-            .checked_add(spend_gas(self.inputs.len(), 1)?)
+    fn execution_gas(
+        &self,
+        profile: &GasProfile,
+        _context: &impl OpGasContext,
+    ) -> Result<Gas, GasOverflow> {
+        profile
+            .sdp_declare
+            .checked_add(profile.signature)?
+            .checked_add(profile.spend_gas(self.inputs.len(), 1)?)
     }
 }
 
@@ -266,7 +264,7 @@ mod tests {
         mantle::{
             TxHash,
             batch::DeferredZkTransfer,
-            gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
+            gas::{Gas, GasProfile, OpGasCalculator as _, test_utils::FixedThresholds},
             ledger::{Declarations, ProviderIndex},
             note_set::{CommitmentMmr, NoteSet, NoteSetError, NoteSetIndex, NoteSets, TxNoteState},
             notes::{
@@ -710,7 +708,8 @@ mod tests {
             // 1693 + 557 + 4177 + 1758 + 58
             for threshold in [0, 1, 3] {
                 assert_eq!(
-                    SDPDeclareOp::sample().execution_gas(&FixedThresholds(threshold)),
+                    SDPDeclareOp::sample()
+                        .execution_gas(&GasProfile::MAINNET, &FixedThresholds(threshold)),
                     Ok(Gas::new(8_243))
                 );
             }

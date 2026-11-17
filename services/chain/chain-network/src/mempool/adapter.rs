@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use lb_core::{
+    block::TxInBlock,
     header::HeaderId,
     mantle::transactions::hash::{TxHash, TxHashPrefix},
 };
@@ -35,7 +36,7 @@ where
     async fn notify_canonical_chain_updated(
         &self,
         entered: HashMap<TxHash, Slot>,
-        reorged: Vec<Tx>,
+        reorged: Vec<TxInBlock<Tx>>,
     ) -> Result<(), overwatch::DynError> {
         self.mempool_relay
             .send(MempoolMsg::CanonicalChainUpdated { entered, reorged })

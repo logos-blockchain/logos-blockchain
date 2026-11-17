@@ -8,6 +8,6 @@ mod test_utils;
 pub use service::{
     AutoClaimSettings, AutoClaimStatus, AutoClaimTick, ClaimTarget, ClaimTargetStatus,
     ClaimableRewardsInfo, PoWEraSettings, PoWError, PoWMiningSettings, PoWService,
-    PoWServiceMessage, PoWServiceSettings, PoWServiceState, PoWStatus,
+    PoWServiceMessage, PoWServiceSettings, PoWServiceState, PoWStatus, single_claim_tx_size,
 };
 pub use tickets::{TicketGenerator, WinningTicket};

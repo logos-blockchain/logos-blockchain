@@ -1,10 +1,52 @@
 use std::{collections::HashSet, time::SystemTime};
 
-use lb_core::header::HeaderId;
+use lb_binary_codec::bincode::DeserializeOp as _;
+use lb_core::{era::ForkDigest, header::HeaderId};
+use lb_cryptarchia_engine::{EraSchedule, Slot};
+use lb_services_utils::overwatch::{RecoveryData, recovery::StorageRecoverySettings as _};
+use lb_storage_service::recovery::recovery_key;
 use overwatch::{DynError, services::state::ServiceState};
 use serde::{Deserialize, Serialize};
 
 use crate::{Cryptarchia, CryptarchiaSettings, Error, StartingState};
+
+/// The slot of the chain's tip, and the fork digest its era has under the
+/// schedule the tip was applied with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TipEra {
+    pub slot: Slot,
+    pub fork_digest: ForkDigest,
+}
+
+impl TipEra {
+    fn at(slot: Slot, fork_digests: &EraSchedule<ForkDigest>) -> Self {
+        Self {
+            slot,
+            fork_digest: *fork_digests.at_slot(slot).parameters,
+        }
+    }
+}
+
+/// The tip era of the state the chain service last saved, if it saved one,
+/// read from `recovery_data` without taking the state, which the service loads
+/// when it starts.
+///
+/// # Errors
+///
+/// If the saved state cannot be read or decoded.
+pub fn saved_tip_era(recovery_data: &RecoveryData) -> Result<Option<TipEra>, DynError> {
+    let Some(bytes) = recovery_data.get(&recovery_key(CryptarchiaSettings::RECOVERY_KEY_SUFFIX))?
+    else {
+        return Ok(None);
+    };
+    let state = CryptarchiaConsensusState::from_bytes(&bytes).map_err(|error| {
+        format!(
+            "The saved chain state cannot be read ({error}). Remove the node's state and sync \
+             again."
+        )
+    })?;
+    Ok(Some(state.tip_era))
+}
 
 /// The state the chain service saves on a timer, to restart from.
 ///
@@ -15,9 +57,10 @@ use crate::{Cryptarchia, CryptarchiaSettings, Error, StartingState};
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CryptarchiaConsensusState {
     pub(crate) tip: HeaderId,
+    pub(crate) tip_era: TipEra,
     pub(crate) lib: HeaderId,
     pub(crate) lib_block_length: u64,
-    pub(crate) lib_block_slot: lb_cryptarchia_engine::Slot,
+    pub(crate) lib_block_slot: Slot,
     /// The uncle slots in the LIB header.
     /// These are unlikely to be used for future uncle selections,
     /// given the depth of LIB. But, we save them because any blocks
@@ -48,6 +91,7 @@ impl CryptarchiaConsensusState {
     pub(crate) fn from_cryptarchia_and_unpruned_blocks(
         cryptarchia: &Cryptarchia,
         storage_blocks_to_remove: HashSet<HeaderId>,
+        fork_digests: &EraSchedule<ForkDigest>,
     ) -> Result<Self, DynError> {
         let lib = cryptarchia.consensus.lib_branch();
         if cryptarchia.ledger.state(&lib.id()).is_none() {
@@ -59,8 +103,10 @@ impl CryptarchiaConsensusState {
         let lib_block_slot = lib.slot();
         let lib_block_uncle_slots = lib.uncle_slots().clone();
 
+        let tip = cryptarchia.consensus.tip_branch();
         Ok(Self {
-            tip: cryptarchia.consensus.tip_branch().id(),
+            tip: tip.id(),
+            tip_era: TipEra::at(tip.slot(), fork_digests),
             lib: lib.id(),
             genesis_id: cryptarchia.genesis_id,
             lib_block_length,
@@ -84,12 +130,17 @@ impl ServiceState for CryptarchiaConsensusState {
     ) -> Result<Self, <Self as ServiceState>::Error> {
         let StartingState::Genesis { genesis_block } = &settings.starting_state;
         let genesis_id = genesis_block.header().id();
+        let (_, genesis_fork_digest) = settings.era_schedule.genesis().parameters;
 
         Ok(Self {
             tip: genesis_id,
+            tip_era: TipEra {
+                slot: Slot::genesis(),
+                fork_digest: *genesis_fork_digest,
+            },
             lib: genesis_id,
             lib_block_length: 0,
-            lib_block_slot: lb_cryptarchia_engine::Slot::default(),
+            lib_block_slot: Slot::default(),
             lib_block_uncle_slots: lb_cryptarchia_engine::UncleSlots::default(),
             genesis_id,
             storage_blocks_to_remove: HashSet::new(),
@@ -112,21 +163,31 @@ mod tests {
         time::Duration,
     };
 
-    use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
-    use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
+    use lb_binary_codec::bincode::SerializeOp as _;
+    use lb_core::{
+        era::AcceptedForkDigests,
+        mantle::gas::GasProfile,
+        sdp::{MinStake, ServiceParameters, ServiceType},
+    };
     use lb_cryptarchia_engine::{State::Bootstrapping, UncleSlots};
     use lb_ledger::{
-        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
+        config::{BlendPoWConfig, EmissionRatio, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
-    use lb_services_utils::overwatch::RecoveryData;
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
     use super::*;
     use crate::{
         BlockProviderConfig, BootstrapConfig, OfflineGracePeriodConfig, SyncConfig,
-        tests::{genesis_block_with, note, single_era},
+        tests::{genesis_block_with, ledger_config, note, single_era},
     };
+
+    const FORK_DIGEST: [u8; 32] = [0x22; 32];
+
+    /// The same fork digest for every era of `eras`.
+    fn fork_digests<Parameters>(eras: &EraSchedule<Parameters>) -> EraSchedule<ForkDigest> {
+        eras.map(|_| ForkDigest::from(FORK_DIGEST))
+    }
 
     /// A reward config with claiming disabled, standing in for a real
     /// deployment config in tests.
@@ -184,6 +245,7 @@ mod tests {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
                         message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        cover_replication_factor: 0,
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
@@ -195,6 +257,37 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            max_transactions: 1024,
+            max_transactions_size: 2 * 1024 * 1024,
+            max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            execution_market: lb_ledger::config::ExecutionMarketConfig {
+                max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_137_798).unwrap(),
+                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                    .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
+                    9,
+                    10.try_into().unwrap(),
+                )
+                .unwrap(),
+            },
+            storage_market: lb_ledger::config::StorageMarketConfig {
+                max_adjustment_factor: lb_utils::math::ProperFraction::new(
+                    1,
+                    8.try_into().unwrap(),
+                )
+                .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
+                    .unwrap(),
+            },
+            block_rewards: lb_ledger::config::BlockRewardsConfig::new(
+                3_000_000_000_000_000_000,
+                120_000_000_000_000_000.try_into().unwrap(),
+                10_512,
+                EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
+                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            )
+            .unwrap(),
+            gas_profile: GasProfile::MAINNET,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -205,6 +298,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
         };
 
         let (cryptarchia_engine, pruned_blocks) = {
@@ -312,6 +406,7 @@ mod tests {
             .stale_blocks()
             .copied()
             .collect::<HashSet<_>>();
+        let fork_digests = fork_digests(ledger_state.era_schedule());
         let recovery_state = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
             &Cryptarchia {
                 ledger: ledger_state,
@@ -319,10 +414,18 @@ mod tests {
                 genesis_id: genesis_header_id,
             },
             pruned_stale_blocks.clone(),
+            &fork_digests,
         )
         .unwrap();
 
         assert_eq!(recovery_state.tip, cryptarchia_engine.tip());
+        assert_eq!(
+            recovery_state.tip_era,
+            TipEra {
+                slot: cryptarchia_engine.tip_branch().slot(),
+                fork_digest: ForkDigest::from(FORK_DIGEST),
+            }
+        );
         assert_eq!(recovery_state.lib, cryptarchia_engine.lib());
         assert_eq!(
             &recovery_state.storage_blocks_to_remove,
@@ -369,6 +472,7 @@ mod tests {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
                         message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        cover_replication_factor: 0,
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
@@ -380,6 +484,37 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            max_transactions: 1024,
+            max_transactions_size: 2 * 1024 * 1024,
+            max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            execution_market: lb_ledger::config::ExecutionMarketConfig {
+                max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_137_798).unwrap(),
+                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                    .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
+                    9,
+                    10.try_into().unwrap(),
+                )
+                .unwrap(),
+            },
+            storage_market: lb_ledger::config::StorageMarketConfig {
+                max_adjustment_factor: lb_utils::math::ProperFraction::new(
+                    1,
+                    8.try_into().unwrap(),
+                )
+                .unwrap(),
+                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
+                    .unwrap(),
+            },
+            block_rewards: lb_ledger::config::BlockRewardsConfig::new(
+                3_000_000_000_000_000_000,
+                120_000_000_000_000_000.try_into().unwrap(),
+                10_512,
+                EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
+                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            )
+            .unwrap(),
+            gas_profile: GasProfile::MAINNET,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -390,6 +525,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
         };
 
         // Build a chain: b0 (genesis) - b1 - b2 - b3 - b4 - b5
@@ -406,8 +542,7 @@ mod tests {
         let mut parent = genesis_header_id;
         for (i, &block_id) in block_ids.iter().enumerate() {
             let slot = (i as u64 + 1).into();
-            let uncle_slots =
-                UncleSlots::try_new(vec![lb_cryptarchia_engine::Slot::from(i as u64)], 4).unwrap();
+            let uncle_slots = UncleSlots::try_new(vec![Slot::from(i as u64)], 4).unwrap();
             engine
                 .receive_block(block_id, parent, slot, uncle_slots)
                 .unwrap_or_else(|_| panic!("Block {block_id} should be added successfully"));
@@ -441,6 +576,7 @@ mod tests {
         let saved_state = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
             &original,
             HashSet::new(),
+            &fork_digests(original.ledger.era_schedule()),
         )
         .unwrap();
         let encoded_state = saved_state.to_bytes().unwrap();
@@ -508,7 +644,10 @@ mod tests {
         let (_, note) = note();
         let genesis = genesis_block_with(&[note]);
         let settings = CryptarchiaSettings {
-            era_schedule: single_era(crate::tests::ledger_config(NonZero::new(1).unwrap())),
+            era_schedule: Arc::new(
+                single_era(ledger_config(NonZero::new(1).unwrap()))
+                    .map(|era| (era.parameters.clone(), ForkDigest::from(FORK_DIGEST))),
+            ),
             starting_state: genesis.clone().into(),
             bootstrap: BootstrapConfig {
                 prolonged_bootstrap_period: Duration::ZERO,

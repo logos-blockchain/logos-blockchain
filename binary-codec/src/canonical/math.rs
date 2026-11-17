@@ -1,6 +1,6 @@
 use core::num::NonZero;
 
-use lb_utils::math::{NonNegativeF64, NonNegativeRatio, PositiveF64};
+use lb_utils::math::{NonNegativeF64, NonNegativeRatio, PositiveF64, ProperFraction};
 
 use super::{BinaryEncode, codec_fixtures};
 
@@ -59,3 +59,16 @@ codec_fixtures!(
     encode_only,
     NonNegativeRatio::new(1, NonZero::<u32>::new(2).unwrap()) => "0100000002000000"
 );
+
+// A fraction: the ratio it is.
+impl BinaryEncode for ProperFraction {
+    fn encoded_length(&self) -> usize {
+        self.get().encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.get().encode_into(out);
+    }
+}
+
+codec_fixtures!(ProperFraction, encode_only, ProperFraction::new(1, 2.try_into().unwrap()).unwrap() => "0100000002000000");

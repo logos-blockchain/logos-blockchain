@@ -1,4 +1,9 @@
+use core::num::{NonZeroI128, NonZeroU128};
+
 use lb_core::mantle::Value;
+use lb_utils::math::NonNegativeRatio;
+
+use crate::config::{BlockRewardsConfig, EmissionRatio};
 
 /// T, the blocks of the moving average.
 pub const POOLED_FEES_WINDOW: usize = 120;
@@ -6,16 +11,6 @@ pub const POOLED_FEES_WINDOW: usize = 120;
 pub const MAX_SUPPLY: Value = 10_000_000_000_000_000_000;
 /// `B_0`, the rewards reserve at genesis.
 pub const REWARDS_RESERVE_GENESIS: Value = 1_000_000_000_000_000_000;
-/// Denominator of `A_t`.
-const A_SCALE: i128 = 120_000_000_000_000_000;
-/// `D_0_target`.
-const STAKE_TARGET: i128 = 3_000_000_000_000_000_000;
-/// `alpha_a / (I_max * D_1_target * Delta_t * T)`, over `A_SCALE`.
-const FEE_AVG_NUMERATOR: i128 = 10_512;
-/// Numerator of `I_max * S_cap * Delta_t`.
-const RELEASE_NUMERATOR: i128 = 62_500_000_000_000;
-/// Denominator of `I_max * S_cap * Delta_t`.
-const RELEASE_DENOMINATOR: i128 = 657;
 
 #[derive(Clone, Copy, Debug, thiserror::Error, Eq, PartialEq)]
 pub enum BlockRewardsError {
@@ -96,14 +91,19 @@ impl BlockRewards {
         self,
         pooled_fees: Value,
         total_stake: Value,
+        config: &BlockRewardsConfig,
     ) -> Result<(Self, BlockRewardShares), BlockRewardsError> {
         let pooled_fees_window = self.pooled_fees_window.with_block(pooled_fees);
-        let (release, payout) =
-            block_reward(total_stake, &pooled_fees_window, self.rewards_reserve)?;
+        let (release, payout) = block_reward(
+            total_stake,
+            &pooled_fees_window,
+            self.rewards_reserve,
+            config,
+        )?;
         let reward = release
             .checked_add(payout)
             .ok_or(BlockRewardsError::OutOfRange)?;
-        let leader = leader_share(reward);
+        let leader = leader_share(reward, config);
         let blend = reward
             .checked_sub(leader)
             .ok_or(BlockRewardsError::OutOfRange)?;
@@ -176,38 +176,50 @@ impl BlockRewards {
     }
 }
 
-/// The reserve release and the pool payout of a block, their sum is its block
-/// reward.
+/// The reserve release and the pool payout of a block under the era's
+/// `config`, their sum is its block reward.
 pub fn block_reward(
     total_stake: Value,
     pooled_fees_window: &PooledFeesWindow,
     reserve: Value,
+    config: &BlockRewardsConfig,
 ) -> Result<(Value, Value), BlockRewardsError> {
+    let a_scale = NonZeroI128::from(config.emission_factor_scale()).get();
+    let EmissionRatio {
+        numerator: release_numerator,
+        denominator: release_denominator,
+    } = config.max_emission_per_block();
     // The pooled fees of a block never exceed the supply cap, so every product
-    // stays below 2^127.
+    // stays within the range `BlockRewardsConfig::new` checks.
     let sum_fees = pooled_fees_window
         .iter()
         .try_fold(0i128, |sum, &fee| sum.checked_add(i128::from(fee)))
         .ok_or(BlockRewardsError::OutOfRange)?;
-    let a = FEE_AVG_NUMERATOR
+    let a = i128::from(config.fee_average_numerator())
         .checked_mul(sum_fees)
         .and_then(|fees| {
-            STAKE_TARGET
+            i128::from(config.stake_target())
                 .checked_sub(i128::from(total_stake))?
                 .checked_add(fees)
         })
         .ok_or(BlockRewardsError::OutOfRange)?
-        .clamp(0, A_SCALE);
+        .clamp(0, a_scale);
     // The release cannot exceed what the reserve still holds.
-    let release = RELEASE_NUMERATOR
+    let release = i128::from(release_numerator)
         .checked_mul(a)
-        .and_then(|numerator| numerator.checked_div(RELEASE_DENOMINATOR * A_SCALE))
+        .and_then(|numerator| {
+            numerator.checked_div(
+                NonZeroI128::from(release_denominator)
+                    .get()
+                    .checked_mul(a_scale)?,
+            )
+        })
         .ok_or(BlockRewardsError::OutOfRange)?
         .min(i128::from(reserve));
-    let payout = A_SCALE
+    let payout = a_scale
         .checked_sub(a)
         .and_then(|weight| weight.checked_mul(sum_fees))
-        .and_then(|numerator| numerator.checked_div(POOLED_FEES_WINDOW as i128 * A_SCALE))
+        .and_then(|numerator| numerator.checked_div(POOLED_FEES_WINDOW as i128 * a_scale))
         .ok_or(BlockRewardsError::OutOfRange)?;
     Ok((
         Value::try_from(release).map_err(|_| BlockRewardsError::OutOfRange)?,
@@ -215,16 +227,46 @@ pub fn block_reward(
     ))
 }
 
+/// The leader's share of `block_reward`, rounded down: what the era's Blend
+/// share leaves.
 #[must_use]
-pub fn leader_share(block_reward: Value) -> Value {
-    Value::try_from(u128::from(block_reward) * 2 / 5).expect("two fifths of a Value fit in a Value")
+pub fn leader_share(block_reward: Value, config: &BlockRewardsConfig) -> Value {
+    let NonNegativeRatio {
+        numerator: blend_numerator,
+        denominator,
+    } = config.blend_share().get();
+    let denominator = NonZeroU128::from(denominator).get();
+    Value::try_from(
+        u128::from(block_reward) * (denominator - u128::from(blend_numerator)) / denominator,
+    )
+    .expect("a share of a Value fits in a Value")
 }
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZero;
+
+    use lb_utils::math::ProperFraction;
+
     use super::*;
 
     const STAKE_AT_TARGET: Value = 3_000_000_000_000_000_000;
+
+    /// The values of the block rewards specification, in units of `10^-9` LGO.
+    pub const CONFIG: BlockRewardsConfig = config();
+
+    pub const fn config() -> BlockRewardsConfig {
+        let Some(config) = BlockRewardsConfig::new(
+            STAKE_AT_TARGET,
+            NonZero::new(120_000_000_000_000_000).unwrap(),
+            10_512,
+            EmissionRatio::new(62_500_000_000_000, NonZero::new(657).unwrap()),
+            ProperFraction::new(6, NonZero::new(10).unwrap()).unwrap(),
+        ) else {
+            panic!("the specification values are within range")
+        };
+        config
+    }
 
     fn window_with_last(fee: Value) -> PooledFeesWindow {
         PooledFeesWindow::empty().with_block(fee)
@@ -246,7 +288,12 @@ mod tests {
         // No stake, no fees: A_t = 1, the maximum release 62_500 * 10^9 / 657 rounded
         // down.
         assert_eq!(
-            block_reward(0, &PooledFeesWindow::empty(), REWARDS_RESERVE_GENESIS),
+            block_reward(
+                0,
+                &PooledFeesWindow::empty(),
+                REWARDS_RESERVE_GENESIS,
+                &CONFIG
+            ),
             Ok((95_129_375_951, 0))
         );
         // Stake at target, one block pooled 10^12: A_t' = 10_512 * 10^12.
@@ -254,7 +301,8 @@ mod tests {
             block_reward(
                 STAKE_AT_TARGET,
                 &window_with_last(1_000_000_000_000),
-                REWARDS_RESERVE_GENESIS
+                REWARDS_RESERVE_GENESIS,
+                &CONFIG
             ),
             Ok((8_333_333_333, 7_603_333_333))
         );
@@ -264,21 +312,25 @@ mod tests {
             block_reward(
                 4_000_000_000_000_000_000,
                 &PooledFeesWindow::from([10_000_000_000; POOLED_FEES_WINDOW]),
-                REWARDS_RESERVE_GENESIS
+                REWARDS_RESERVE_GENESIS,
+                &CONFIG
             ),
             Ok((0, 10_000_000_000))
         );
         // The release is capped at the reserve.
-        assert_eq!(block_reward(0, &PooledFeesWindow::empty(), 5), Ok((5, 0)));
+        assert_eq!(
+            block_reward(0, &PooledFeesWindow::empty(), 5, &CONFIG),
+            Ok((5, 0))
+        );
     }
 
     #[test]
     fn leader_share_rounds_down_and_blend_takes_the_remainder() {
-        assert_eq!(leader_share(7), 2);
-        assert_eq!(leader_share(95_129_375_951), 38_051_750_380);
-        assert_eq!(leader_share(Value::MAX), 7_378_697_629_483_820_646);
+        assert_eq!(leader_share(7, &CONFIG), 2);
+        assert_eq!(leader_share(95_129_375_951, &CONFIG), 38_051_750_380);
+        assert_eq!(leader_share(Value::MAX, &CONFIG), 7_378_697_629_483_820_646);
         let (_, shares) = BlockRewards::genesis()
-            .distribute_block_reward(0, 0)
+            .distribute_block_reward(0, 0, &CONFIG)
             .unwrap();
         assert_eq!(
             shares,
@@ -296,7 +348,7 @@ mod tests {
             let pooled_fees = if block == 0 { 1_000_000_000_000 } else { 0 };
             let shares;
             (state, shares) = state
-                .distribute_block_reward(pooled_fees, STAKE_AT_TARGET)
+                .distribute_block_reward(pooled_fees, STAKE_AT_TARGET, &CONFIG)
                 .unwrap();
             assert_eq!(
                 shares,
@@ -312,7 +364,9 @@ mod tests {
 
         // The fee has left the window: with the stake at target and no fees, nothing is
         // released or paid.
-        let (state, shares) = state.distribute_block_reward(0, STAKE_AT_TARGET).unwrap();
+        let (state, shares) = state
+            .distribute_block_reward(0, STAKE_AT_TARGET, &CONFIG)
+            .unwrap();
         assert_eq!(
             shares,
             BlockRewardShares {
@@ -327,7 +381,7 @@ mod tests {
     #[test]
     fn block_reward_moves_tokens_between_stocks_only() {
         let (state, shares) = BlockRewards::genesis()
-            .distribute_block_reward(1_000_000_000_000, STAKE_AT_TARGET)
+            .distribute_block_reward(1_000_000_000_000, STAKE_AT_TARGET, &CONFIG)
             .unwrap();
         assert_eq!(state.rewards_reserve(), 999_999_991_666_666_667);
         assert_eq!(state.rewards_pool(), 992_396_666_667);
@@ -350,7 +404,7 @@ mod tests {
     #[test]
     fn settling_an_epoch_closes_the_pending_share_and_pays_nothing_from_it() {
         let (state, _) = BlockRewards::genesis()
-            .distribute_block_reward(1_000_000_000_000, STAKE_AT_TARGET)
+            .distribute_block_reward(1_000_000_000_000, STAKE_AT_TARGET, &CONFIG)
             .unwrap();
         assert_eq!(state.blend_rewards_closed(), 0);
 

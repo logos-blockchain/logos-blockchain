@@ -69,7 +69,7 @@ mod tests {
     use std::{collections::HashMap, num::NonZero};
 
     use ark_ff::{AdditiveGroup as _, Field as _};
-    use lb_binary_codec::canonical::{BinaryDecodeExt as _, DecodeError};
+    use lb_binary_codec::canonical::{BinaryDecode as _, DecodeError};
     use lb_blend_proofs::{
         quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
         selection::VerifiedProofOfSelection,
@@ -84,6 +84,8 @@ mod tests {
     use crate::{
         mantle::{
             Op, OpProof,
+            fixtures::ops::op_values::FORK_DIGEST,
+            gas::GasProfile,
             ledger::verification_mode::StandardMode,
             notes::{InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments},
             ops::{
@@ -99,7 +101,9 @@ mod tests {
                 transfer::TransferOp,
             },
             traits::{Hashable as _, MantleTx as _},
-            transactions::{GasPrices, OpProofs, SignedOps, states::Unverified, tx_list::Ops},
+            transactions::{
+                GasPrices, OpProofs, SignedOps, TxList, states::Unverified, tx_list::Ops,
+            },
         },
         proofs::channel_multi_sig_proof::ChannelMultiSigProof,
         sdp::{
@@ -107,6 +111,8 @@ mod tests {
             ServiceType, blend::ActivityProof,
         },
     };
+
+    const GAS_PROFILE: GasProfile = GasProfile::MAINNET;
 
     fn dbg_test_vector(actual: &str, expected: &str) {
         println!("{:32} {:32}", "actual", "expected");
@@ -137,13 +143,16 @@ mod tests {
     #[test]
     fn test_decode_signed_mantle_tx_with_inscribe() {
         let signing_key = Ed25519Key::from_bytes(&[4u8; 32]);
-        let tx = Ops::from([Op::ChannelInscribe(InscriptionOp {
-            channel_id: ChannelId::from([0xAA; 32]),
-            inscription: b"hello".into(),
-            parent: MsgId::from([0xBB; 32]),
-            signer: signing_key.public_key().into_unverified(),
-            mini_blocks: MiniBlocks::default(),
-        })]);
+        let tx = Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelInscribe(InscriptionOp {
+                channel_id: ChannelId::from([0xAA; 32]),
+                inscription: b"hello".into(),
+                parent: MsgId::from([0xBB; 32]),
+                signer: signing_key.public_key().into_unverified(),
+                mini_blocks: MiniBlocks::default(),
+            })],
+        );
 
         let tx_hash = tx.hash();
         let inscribe_sig = OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(
@@ -157,6 +166,7 @@ mod tests {
             reason = "Recommended String::push_str does not support chaining"
         )]
         let test_vector = String::new()
+            + "1111111111111111111111111111111111111111111111111111111111111111" // ForkDigest (32Byte)
             + "01"                                                               // OpCount
             + "11"                                                               // OpCode
             + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // ChannelID (32Byte)
@@ -165,8 +175,8 @@ mod tests {
             + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" // Parent (32Byte)
             + "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c" // Signer (32Byte)
             + "0000"                                                             // StepCount
-            + "27e257e71726bad757bf67bf377009c37f7403117b6cc841216bfc5679a8e1a3" // Signature (64Byte)
-            + "55a193639cc35b06b4d0992279c95292237e403d68ebbb543773b3311b4aca0c";
+            + "792ef3ce43ed5872656c85944909a7d9a4d0c429cba489ec207efdba7459c69a" // Signature (64Byte)
+            + "73f38bdb757d074ee13dbeb99fe17cbace7b56b0c565e3d3528b5bc29d198706";
 
         // ENCODING
         let encoded = hex::encode(signed_tx.encode());
@@ -177,33 +187,36 @@ mod tests {
 
         // DECODING
         let test_vector_bytes = hex::decode(test_vector).unwrap();
-        let (remaining, decoded_tx) = SignedOps::decode(&test_vector_bytes).unwrap();
+        let (remaining, decoded_tx) = SignedOps::decode(&test_vector_bytes, &u32::MAX).unwrap();
         assert_eq!(remaining, b"");
         assert_eq!(decoded_tx, signed_tx);
     }
     #[test]
     fn test_decode_signed_mantle_tx_with_multiple_ops() {
         let signing_key = Ed25519Key::from_bytes(&[4u8; 32]);
-        let tx = Ops::new_unchecked(vec![
-            Op::ChannelInscribe(InscriptionOp {
-                channel_id: ChannelId::from([0x11; 32]),
-                inscription: b"first".into(),
-                parent: MsgId::from([0x00; 32]),
-                signer: signing_key.public_key().into_unverified(),
-                mini_blocks: MiniBlocks::default(),
-            }),
-            Op::ChannelConfig(
-                ChannelConfigOp::new(
-                    ChannelId::from([0x22; 32]),
-                    MsgId::from([0x33; 32]),
-                    signing_key.public_key().into(),
-                    1.into(),
-                    2.into(),
-                    NonZero::<u16>::MIN,
-                )
-                .unwrap(),
-            ),
-        ]);
+        let tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![
+                Op::ChannelInscribe(InscriptionOp {
+                    channel_id: ChannelId::from([0x11; 32]),
+                    inscription: b"first".into(),
+                    parent: MsgId::from([0x00; 32]),
+                    signer: signing_key.public_key().into_unverified(),
+                    mini_blocks: MiniBlocks::default(),
+                }),
+                Op::ChannelConfig(
+                    ChannelConfigOp::new(
+                        ChannelId::from([0x22; 32]),
+                        MsgId::from([0x33; 32]),
+                        signing_key.public_key().into(),
+                        1.into(),
+                        2.into(),
+                        NonZero::<u16>::MIN,
+                    )
+                    .unwrap(),
+                ),
+            ]),
+        );
 
         let tx_hash = tx.hash();
         let sig = signing_key.sign_payload(tx_hash.as_signing_bytes());
@@ -221,14 +234,14 @@ mod tests {
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(tx, op_proofs).unwrap();
 
         let encoded = signed_tx.encode();
-        let (remaining, decoded_tx) = SignedOps::decode(&encoded).unwrap();
+        let (remaining, decoded_tx) = SignedOps::decode(&encoded, &u32::MAX).unwrap();
         assert_eq!(remaining, b"");
         assert_eq!(decoded_tx, signed_tx);
     }
 
     #[tokio::test]
     async fn test_large_payload_encoding_decoding() {
-        // Test payload sizes from 512kB up to 2MiB in 512kB increments
+        // Test payload sizes from a tenth of the inscription maximum up to it
         const MAX_SIZE: usize = inscribe::MAX_BYTES;
         const CHUNK_SIZE: usize = MAX_SIZE / 10;
 
@@ -250,7 +263,10 @@ mod tests {
                     mini_blocks: MiniBlocks::default(),
                 };
 
-                let tx = Ops::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]);
+                let tx = Ops::new(
+                    FORK_DIGEST,
+                    TxList::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]),
+                );
 
                 let tx_hash = tx.hash();
                 let op_sig = signing_key.sign_payload(tx_hash.as_signing_bytes());
@@ -261,7 +277,8 @@ mod tests {
 
                 let encoded = signed_ops.encode();
 
-                let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+                let gas_context =
+                    OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
                 let predicted_size =
                     minimum_signed_transaction_size(&signed_ops.op_refs(), &gas_context);
                 assert_eq!(
@@ -270,7 +287,7 @@ mod tests {
                     "Size mismatch at payload size {payload_size}",
                 );
 
-                let (remaining, decoded_tx) = SignedOps::decode(&encoded)
+                let (remaining, decoded_tx) = SignedOps::decode(&encoded, &u32::MAX)
                     .unwrap_or_else(|_| panic!("Failed to decode at payload size {payload_size}"));
 
                 assert!(
@@ -302,13 +319,16 @@ mod tests {
             6,
         );
 
-        let original_tx = Ops::new_unchecked(vec![Op::Transfer(transfer_op)]);
+        let original_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::Transfer(transfer_op)]),
+        );
 
         // Encode
         let encoded = original_tx.encode();
 
         // Decode
-        let (remaining, decoded_tx) = Ops::decode(&encoded).unwrap();
+        let (remaining, decoded_tx) = Ops::decode(&encoded, &u32::MAX).unwrap();
 
         // Verify
         assert_eq!(remaining, b"");
@@ -318,10 +338,10 @@ mod tests {
     #[test]
     fn test_minimum_signed_mantle_tx_size_empty_tx() {
         // Create an empty MantleTx
-        let mantle_tx = Ops::new_unchecked(vec![]);
+        let mantle_tx = Ops::new(FORK_DIGEST, TxList::new_unchecked(vec![]));
 
         // Predict size
-        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get actual size
@@ -338,16 +358,19 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let inscribe_op = InscriptionOp {
             channel_id: ChannelId::from([0xAA; 32]),
-            inscription: b"hello world".into(),
+            inscription: Inscription::new_unchecked(b"hello world".to_vec()),
             parent: MsgId::from([0xBB; 32]),
             signer: signing_key.public_key().into_unverified(),
             mini_blocks: MiniBlocks::default(),
         };
 
-        let mantle_tx = Ops::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]),
+        );
 
         // Predict size
-        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get actual size
@@ -371,14 +394,17 @@ mod tests {
             commitment_merkle_root: Fr::ZERO,
             inscription: Inscription::default(),
         };
-        let ops = Ops::from([Op::ChannelInscribe(InscriptionOp {
-            mini_blocks: [inscribe::MiniBlock::from([
-                Step::User(step.clone()),
-                Step::User(step),
-            ])]
-            .into(),
-            ..InscriptionOp::sample()
-        })]);
+        let ops = Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelInscribe(InscriptionOp {
+                mini_blocks: [inscribe::MiniBlock::from([
+                    Step::User(step.clone()),
+                    Step::User(step),
+                ])]
+                .into(),
+                ..InscriptionOp::sample()
+            })],
+        );
         let proof = ChannelInscribeProof::new(
             Ed25519Signature::zero(),
             vec![
@@ -392,7 +418,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            minimum_signed_transaction_size(&ops.by_ref(), &OpsGasContext::default()),
+            minimum_signed_transaction_size(
+                &ops.by_ref(),
+                &OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE)
+            ),
             signed.encode().len()
         );
     }
@@ -400,14 +429,17 @@ mod tests {
     #[test]
     fn minimum_size_counts_the_proofs_and_openings_of_a_program_step() {
         let operation = InscriptionOp::sample_with_step();
-        let ops = Ops::from([Op::ChannelInscribe(operation.clone())]);
+        let ops = Ops::new(FORK_DIGEST, [Op::ChannelInscribe(operation.clone())]);
         let proof = Op::ChannelInscribe(operation).sample_proof();
         assert_eq!(proof.encode().len(), 64 + 128 + 128 + (128 + 128 + 104));
         let signed =
             SignedOps::<Unverified, StandardMode>::from_parts(ops.clone(), OpProofs::from([proof]))
                 .unwrap();
         assert_eq!(
-            minimum_signed_transaction_size(&ops.by_ref(), &OpsGasContext::default()),
+            minimum_signed_transaction_size(
+                &ops.by_ref(),
+                &OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE)
+            ),
             signed.encode().len()
         );
     }
@@ -433,10 +465,13 @@ mod tests {
         )
         .unwrap();
 
-        let mantle_tx = Ops::new_unchecked(vec![Op::ChannelConfig(config_op)]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::ChannelConfig(config_op)]),
+        );
 
         // Predict size
-        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get the actual size.
@@ -474,10 +509,13 @@ mod tests {
             amount: 500,
         };
 
-        let mantle_tx = Ops::new_unchecked(vec![Op::SDPDeclare(sdp_declare_op)]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::SDPDeclare(sdp_declare_op)]),
+        );
 
         // Predict size
-        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get actual size
@@ -502,10 +540,13 @@ mod tests {
             excess_value: 1,
         };
 
-        let mantle_tx = Ops::new_unchecked(vec![Op::SDPWithdraw(sdp_withdraw_op)]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::SDPWithdraw(sdp_withdraw_op)]),
+        );
 
         // Predict size
-        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get actual size
@@ -536,9 +577,12 @@ mod tests {
             metadata,
         };
 
-        let mantle_tx = Ops::new_unchecked(vec![Op::SDPActive(sdp_active_op)]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::SDPActive(sdp_active_op)]),
+        );
 
-        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         let op_proofs = OpProofs::from([OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
@@ -558,7 +602,7 @@ mod tests {
 
         let inscribe_op = InscriptionOp {
             channel_id: ChannelId::from([0xAA; 32]),
-            inscription: b"test".into(),
+            inscription: Inscription::new_unchecked(b"test".to_vec()),
             parent: MsgId::from([0xBB; 32]),
             signer: signing_key.public_key().into_unverified(),
             mini_blocks: MiniBlocks::default(),
@@ -588,14 +632,17 @@ mod tests {
             metadata: ActivityMetadata::Blend(Box::new(blend_proof)),
         };
 
-        let mantle_tx = Ops::new_unchecked(vec![
-            Op::ChannelInscribe(inscribe_op),
-            Op::ChannelConfig(config_op),
-            Op::SDPActive(sdp_active_op),
-        ]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![
+                Op::ChannelInscribe(inscribe_op),
+                Op::ChannelConfig(config_op),
+                Op::SDPActive(sdp_active_op),
+            ]),
+        );
 
         // Predict size
-        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         let tx_hash = mantle_tx.hash();
@@ -626,10 +673,13 @@ mod tests {
             0,
         );
 
-        let mantle_tx = Ops::new_unchecked(vec![Op::Transfer(transfer_op)]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::Transfer(transfer_op)]),
+        );
 
         // Predict size
-        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get actual size
@@ -648,7 +698,9 @@ mod tests {
 
         let inscribe_op = InscriptionOp {
             channel_id: ChannelId::from([0x11; 32]),
-            inscription: b"complex test inscription with more data".into(),
+            inscription: Inscription::new_unchecked(
+                b"complex test inscription with more data".to_vec(),
+            ),
             parent: MsgId::from([0x22; 32]),
             signer: signing_key1.public_key().into_unverified(),
             mini_blocks: MiniBlocks::default(),
@@ -685,15 +737,18 @@ mod tests {
             amount: 500,
         };
 
-        let mantle_tx = Ops::new_unchecked(vec![
-            Op::ChannelInscribe(inscribe_op),
-            Op::ChannelConfig(config_op),
-            Op::SDPDeclare(sdp_declare_op),
-            Op::Transfer(transfer_op),
-        ]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![
+                Op::ChannelInscribe(inscribe_op),
+                Op::ChannelConfig(config_op),
+                Op::SDPDeclare(sdp_declare_op),
+                Op::Transfer(transfer_op),
+            ]),
+        );
 
         // Predict size
-        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE);
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get the actual size.
@@ -720,19 +775,23 @@ mod tests {
 
     #[test]
     fn test_encode_decode_channel_withdraw_tx() {
-        let mantle_tx = Ops::new_unchecked(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
-            channel_id: ChannelId::from([0xAB; 32]),
-            inputs: [NoteNullifier(Fr::ZERO)].into(),
-            commitment_merkle_root: Fr::ZERO,
-            outputs: OutputCommitments::default(),
-        })]);
+        let mantle_tx = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
+                channel_id: ChannelId::from([0xAB; 32]),
+                inputs: [NoteNullifier(Fr::ZERO)].into(),
+                commitment_merkle_root: Fr::ZERO,
+                outputs: OutputCommitments::default(),
+            })]),
+        );
         let op_proofs = OpProofs::from([OpProof::ZkTransfer(ZkTransferProof::new(
             CompressedGroth16Proof::from_bytes(&[0u8; 128]),
         ))]);
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();
 
         let encoded = signed_tx.encode();
-        let (remaining, decoded_tx) = SignedOps::<_, StandardMode>::decode(&encoded).unwrap();
+        let (remaining, decoded_tx) =
+            SignedOps::<_, StandardMode>::decode(&encoded, &u32::MAX).unwrap();
 
         assert_eq!(remaining, b"");
         assert_eq!(decoded_tx, signed_tx);
@@ -741,6 +800,9 @@ mod tests {
     // ==============================================================================
     // Security Tests - Memory Over-Allocation Protection
     // ==============================================================================
+
+    /// The most bytes the era the tests decode under allows an inscription.
+    const MAX_INSCRIPTION_SIZE: u32 = 1_024;
 
     #[test]
     fn test_decode_reject_oversized_inscription() {
@@ -751,14 +813,14 @@ mod tests {
         malicious_input.extend_from_slice(&[0x42; 32]);
 
         // Inscription length (u32) - exceeds MAX_INSCRIPTION_SIZE
-        let oversized_len = inscribe::MAX_BYTES + 1;
+        let oversized_len = MAX_INSCRIPTION_SIZE + 1;
         malicious_input.extend_from_slice(&oversized_len.to_le_bytes());
 
         // We don't need to include the actual inscription data because
         // the decoder should reject it before trying to read that much
 
         // Try to decode - should fail with TooLarge error
-        let result = InscriptionOp::decode(&malicious_input);
+        let result = InscriptionOp::decode(&malicious_input, &MAX_INSCRIPTION_SIZE);
         assert!(result.is_err(), "Should reject oversized inscription");
 
         // Verify it fails with the right error kind
@@ -785,7 +847,7 @@ mod tests {
             u8::MAX as usize + 1
         ];
 
-        let result = Ops::try_from(ops);
+        let result = TxList::try_from(ops).map(|ops| Ops::new(FORK_DIGEST, ops));
         assert_eq!(
             result,
             Err(BoundedError::TooManyItems {
@@ -803,7 +865,7 @@ mod tests {
         let valid_input = vec![u8::MAX];
 
         // Should not fail with TooLarge error (will fail with incomplete data)
-        let result = Ops::decode(&valid_input);
+        let result = Ops::decode(&valid_input, &u32::MAX);
         if let Err(err) = result {
             assert!(
                 !matches!(err, DecodeError::LengthOutOfBounds { .. }),
@@ -821,10 +883,10 @@ mod tests {
         valid_input.extend_from_slice(&[0x42; 32]);
 
         // Inscription length (u32) - exactly MAX_INSCRIPTION_SIZE
-        valid_input.extend_from_slice(&(inscribe::MAX_BYTES as u32).to_le_bytes());
+        valid_input.extend_from_slice(&MAX_INSCRIPTION_SIZE.to_le_bytes());
 
         // Inscription data (MAX_INSCRIPTION_SIZE bytes)
-        valid_input.extend_from_slice(&vec![0x01; inscribe::MAX_BYTES]);
+        valid_input.extend_from_slice(&vec![0x01; MAX_INSCRIPTION_SIZE as usize]);
 
         // Parent MsgId (32 bytes)
         valid_input.extend_from_slice(&[0x43; 32]);
@@ -838,14 +900,17 @@ mod tests {
         valid_input.extend_from_slice(&0u16.to_le_bytes());
 
         // Should succeed (though signature validation might fail later)
-        let result = InscriptionOp::decode(&valid_input);
+        let result = InscriptionOp::decode(&valid_input, &MAX_INSCRIPTION_SIZE);
         assert!(
             result.is_ok(),
             "Should accept inscription at MAX_INSCRIPTION_SIZE: {result:?}",
         );
 
         let (_, inscription_op) = result.unwrap();
-        assert_eq!(inscription_op.inscription.len(), inscribe::MAX_BYTES);
+        assert_eq!(
+            inscription_op.inscription.len(),
+            MAX_INSCRIPTION_SIZE as usize
+        );
     }
 
     #[test]
@@ -856,7 +921,7 @@ mod tests {
         encoded_config_op.extend_from_slice(&[0x33; 32]);
         encoded_config_op.extend_from_slice(&0u16.encode());
 
-        let err = ChannelConfigOp::decode(&encoded_config_op).unwrap_err();
+        let err = ChannelConfigOp::decode(&encoded_config_op, &()).unwrap_err();
         assert!(matches!(err, DecodeError::LengthOutOfBounds { len: 0, .. }));
     }
 
@@ -893,7 +958,7 @@ mod tests {
         valid_input.extend_from_slice(&1u16.encode());
         valid_input.extend_from_slice(&1u16.encode());
 
-        let result = ChannelConfigOp::decode(&valid_input);
+        let result = ChannelConfigOp::decode(&valid_input, &());
         assert!(result.is_ok(), "Should accept max key count: {result:?}");
 
         let (_, set_keys_op) = result.unwrap();
@@ -919,7 +984,7 @@ mod tests {
 
         // ... rest of SDPDeclare fields ...
 
-        let result = SDPDeclareOp::decode(&malicious_input);
+        let result = SDPDeclareOp::decode(&malicious_input, &());
         assert!(
             matches!(result, Err(DecodeError::LengthOutOfBounds { .. })),
             "Should reject at `MAX_LOCATOR_BYTE_SIZE + 1`",
@@ -945,7 +1010,7 @@ mod tests {
 
         // ... rest of SDPDeclare fields ...
 
-        let result = SDPDeclareOp::decode(&malicious_input);
+        let result = SDPDeclareOp::decode(&malicious_input, &());
         if let Err(ref err) = result {
             assert!(
                 !matches!(err, DecodeError::LengthOutOfBounds { .. }),
@@ -973,7 +1038,7 @@ mod tests {
         };
 
         let encoded = op.encode();
-        let result = SDPDeclareOp::decode(&encoded);
+        let result = SDPDeclareOp::decode(&encoded, &());
 
         assert!(
             matches!(result, Err(DecodeError::InvalidValue { .. })),
@@ -994,7 +1059,7 @@ mod tests {
         );
 
         // Decode should succeed and produce the same number of inputs
-        let result = InputNullifiers::decode(&encoded);
+        let result = InputNullifiers::decode(&encoded, &());
         assert!(result.is_ok(), "Should decode max input count");
         let (_, decoded_inputs) = result.unwrap();
         assert_eq!(
@@ -1018,7 +1083,7 @@ mod tests {
         );
 
         // Decode should succeed and produce the same number of outputs
-        let result = OutputCommitments::decode(&encoded);
+        let result = OutputCommitments::decode(&encoded, &());
         assert!(result.is_ok(), "Should decode max output count");
         let (_, decoded_outputs) = result.unwrap();
         assert_eq!(
@@ -1042,7 +1107,7 @@ mod tests {
             valid_input.extend_from_slice(&note_nullifier);
         }
 
-        let result = InputNullifiers::decode(&valid_input);
+        let result = InputNullifiers::decode(&valid_input, &());
         assert!(result.is_ok(), "Should accept max input count");
         let (_, inputs) = result.unwrap();
         assert_eq!(inputs.len(), u8::MAX as usize);
@@ -1055,7 +1120,7 @@ mod tests {
             valid_output.extend_from_slice(&[0x02; 32]);
         }
 
-        let result = OutputCommitments::decode(&valid_output);
+        let result = OutputCommitments::decode(&valid_output, &());
         assert!(result.is_ok(), "Should accept max output count");
         let (_, outputs) = result.unwrap();
         assert_eq!(outputs.len(), u8::MAX as usize);

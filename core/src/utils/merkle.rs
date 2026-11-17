@@ -36,18 +36,22 @@ mod tests {
     use super::*;
     use crate::mantle::{
         Op,
+        fixtures::ops::op_values::FORK_DIGEST,
         notes::{InputNullifiers, NoteCommitment},
         ops::transfer::TransferOp,
         transactions::tx_list::Ops,
     };
 
     fn create_random_tx(seed: u32) -> Ops {
-        Ops::from([Op::Transfer(TransferOp::new(
-            InputNullifiers::default(),
-            [NoteCommitment(Fr::from(u64::from(seed)))].into(),
-            Fr::ZERO,
-            0,
-        ))])
+        Ops::new(
+            FORK_DIGEST,
+            [Op::Transfer(TransferOp::new(
+                InputNullifiers::default(),
+                [NoteCommitment(Fr::from(u64::from(seed)))].into(),
+                Fr::ZERO,
+                0,
+            ))],
+        )
     }
 
     #[test]

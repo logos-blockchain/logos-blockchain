@@ -9,21 +9,22 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _, stream};
-use lb_binary_codec::bincode::{Error as CodecError, SerializeOp};
+use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_blend_service::{
     api::{ApiError as BlendApiError, BlendServiceApi, BlendServiceData},
-    message::{DataPayload, TransactionNotBlendable},
+    message::DataPayload,
 };
 use lb_chain_service::{
     ProcessedBlockEvent, Slot,
     api::{ApiError as ChainApiError, CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
+    era::ForkDigest,
     events::{Event, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
         Note, Op, OpProof, SignedOps, Value,
-        gas::MainnetGasProfile,
+        gas::GasProfile,
         ledger::verification_mode::StandardMode,
         note_set::NoteSetIndex,
         notes::{NoteNullifier, derive_note_nonce},
@@ -94,10 +95,6 @@ pub enum PoWError {
     TxBuilder(#[from] TxBuilderError),
     #[error("too many operation proofs: {0}")]
     OpProofs(#[from] BoundedError),
-    #[error("failed to encode transaction: {0}")]
-    Encode(#[from] CodecError),
-    #[error("transaction cannot be carried by the blend network: {0}")]
-    NotBlendable(#[from] TransactionNotBlendable),
     #[error("failed to publish to the blend network: {0}")]
     Publish(#[from] BlendApiError),
     #[error("failed to query the chain service: {0}")]
@@ -229,9 +226,14 @@ pub struct PoWEraSettings {
     /// When it is not, no claim can succeed, so auto-claim does not run in the
     /// era.
     pub rewards_enabled: bool,
-    /// The size of the body of a data payload in the era: the largest
-    /// transaction the network can deliver, so the largest claim transaction.
-    pub max_data_payload_body_size: usize,
+    /// The most bytes a claim transaction may take in the era: it is published
+    /// in the body of a Blend data payload and included in a block, so the
+    /// smaller of what the two carry.
+    pub max_claim_tx_size: usize,
+    /// The fork digest of the era, which the claims signed in it carry.
+    pub fork_digest: ForkDigest,
+    /// What the era's Operations cost, which a claim transaction pays for.
+    pub gas_profile: GasProfile,
 }
 
 /// One auto-claim destination: a key and the balance we want it to reach.
@@ -564,7 +566,7 @@ where
         // the era too. Finding it probes the encoding, so it is found once each time
         // the service enters an era rather than for every claim.
         let mut max_claims_in_payload =
-            max_claims_by_payload_size(current_era_settings.parameters.max_data_payload_body_size);
+            max_claims_by_payload_size(current_era_settings.parameters.max_claim_tx_size);
 
         // Dedicated thread pool for the CPU-heavy ticket search, keeping it off
         // Tokio's runtime threads.
@@ -659,6 +661,7 @@ where
                                 &auto_claim_settings.targets,
                                 &mut state,
                                 &settings.era_schedule,
+                                current_era_settings.parameters,
                                 max_claims_in_payload,
                             )
                             .await
@@ -751,7 +754,7 @@ where
                     if era > current_era_settings.era {
                         info!(target: LOG_TARGET, "PoW follows era {} from slot {}", era.into_inner(), u64::from(slot));
                         current_era_settings = settings.era_schedule.at_slot(slot);
-                        max_claims_in_payload = max_claims_by_payload_size(current_era_settings.parameters.max_data_payload_body_size);
+                        max_claims_in_payload = max_claims_by_payload_size(current_era_settings.parameters.max_claim_tx_size);
                     }
                     if let AutoClaimTick::Slots(period) = auto_claim_settings.tick
                         && is_auto_claiming
@@ -779,6 +782,7 @@ where
                     &mut state,
                     &state_updater,
                     &settings.era_schedule,
+                    current_era_settings.parameters,
                     max_claims_in_payload,
                 )
                 .await;
@@ -1116,6 +1120,7 @@ async fn run_auto_claim<CryptarchiaService, BlendService, WalletService, Runtime
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     era_schedule: &ServiceEraSchedule,
+    era_settings: &PoWEraSettings,
     max_claims_in_payload: usize,
 ) -> bool
 where
@@ -1152,6 +1157,7 @@ where
         state,
         state_updater,
         era_schedule,
+        era_settings,
         max_claims_in_payload,
     )
     .await;
@@ -1182,6 +1188,7 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, WalletService, Ru
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     era_schedule: &ServiceEraSchedule,
+    era_settings: &PoWEraSettings,
     max_claims_in_payload: usize,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -1207,6 +1214,7 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, WalletService, Ru
             claim_address,
             state,
             era_schedule,
+            era_settings,
             available_pool,
             max_claims_in_payload,
         )
@@ -1254,6 +1262,7 @@ async fn manual_claim<CryptarchiaService, BlendService, WalletService, RuntimeSe
     targets: &[ClaimTarget],
     state: &mut PoWServiceState,
     era_schedule: &ServiceEraSchedule,
+    era_settings: &PoWEraSettings,
     max_claims_in_payload: usize,
 ) -> Result<Option<TxHash>, PoWError>
 where
@@ -1284,6 +1293,7 @@ where
         claim_address,
         state,
         era_schedule,
+        era_settings,
         available_pool,
         max_claims_in_payload,
     )
@@ -1351,6 +1361,7 @@ async fn claim_ready_rewards<CryptarchiaService, BlendService, WalletService, Ru
     claim_address: ZkPublicKey,
     state: &mut PoWServiceState,
     era_schedule: &ServiceEraSchedule,
+    era_settings: &PoWEraSettings,
     available_pool: Value,
     max_claims_in_payload: usize,
 ) -> Result<Option<PublishedClaim>, PoWError>
@@ -1419,6 +1430,7 @@ where
         available_pool,
         &tickets,
         max_claims_in_payload,
+        era_settings.gas_profile,
     )
     .await?;
     // Capture the tx id before publishing consumes the signed tx, so it can be
@@ -1774,17 +1786,24 @@ fn claim_tx_size(claims: usize) -> Result<u64, PoWError> {
         &vec![0; groups],
     )?;
 
+    // Every fork digest has the same size, so any sizes the transaction.
     let ops = push_reward_claim_ops(
         MantleTxBuilder::new(),
         &probe_claims,
         without_openings(transfers),
     )?
-    .build()?;
+    .build(ForkDigest::new([0; 32]))?;
     let ops_proofs = claim_ops_proofs(claims, std::iter::repeat_n(proof, groups))?;
 
-    Ok(SerializeOp::bytes_size(
-        &SignedOps::<_, StandardMode>::from_parts(ops, ops_proofs)?,
-    )?)
+    Ok(SignedOps::<_, StandardMode>::from_parts(ops, ops_proofs)?.encoded_length() as u64)
+}
+
+/// Size, in bytes, of a transaction that claims a single reward: the smallest
+/// claim transaction, which a Blend payload must carry for any claim to be
+/// published.
+#[must_use]
+pub fn single_claim_tx_size() -> u64 {
+    claim_tx_size(1).expect("A transaction of a single claim builds.")
 }
 
 /// Largest claim count whose transaction still fits the body of a Blend
@@ -1805,7 +1824,7 @@ fn max_claims_by_payload_size(max_payload_body_size: usize) -> usize {
         .find(|&claims| {
             claim_tx_size(claims).is_ok_and(|size| size <= max_payload_body_size as u64)
         })
-        .expect("a single-claim tx fits a Blend payload")
+        .expect("the deployment checks that a single-claim tx fits a Blend payload and a block")
 }
 
 /// Builds and signs a single self-funding reward-claim transaction from a
@@ -1828,6 +1847,10 @@ fn max_claims_by_payload_size(max_payload_body_size: usize) -> usize {
 /// `reward_pool` is passed in rather than read from `ledger_state` so a caller
 /// publishing several transactions back to back can draw down its own running
 /// balance; see [`drain_ready_rewards`].
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The claim, its tickets and the era's gas profile"
+)]
 async fn build_reward_claim_tx<WalletService, RuntimeServiceId>(
     wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
     claim_address: ZkPublicKey,
@@ -1836,6 +1859,7 @@ async fn build_reward_claim_tx<WalletService, RuntimeServiceId>(
     reward_pool: Value,
     tickets: &[ClaimPowRewardOp],
     max_claims_in_payload: usize,
+    gas_profile: GasProfile,
 ) -> Result<(SignedOps<Preverified, StandardMode>, usize), PoWError>
 where
     WalletService: WalletServiceData,
@@ -1857,6 +1881,7 @@ where
         tip,
         reward_value,
         ledger_state.get_gas_prices(),
+        gas_profile,
         claims,
     )
     .await?;
@@ -1870,6 +1895,7 @@ async fn sign_reward_claims<WalletService, RuntimeServiceId>(
     tip: HeaderId,
     reward_value: Value,
     gas_prices: GasPrices,
+    gas_profile: GasProfile,
     claims: &[ClaimPowRewardOp],
 ) -> Result<SignedOps<Preverified, StandardMode>, PoWError>
 where
@@ -1894,6 +1920,7 @@ where
         &change_nonces,
         reward_value,
         gas_prices,
+        gas_profile,
         ledger_root,
         claims,
         &nullifiers,
@@ -1937,17 +1964,22 @@ fn reward_claim_count(
 /// the buffered reward notes against `ledger_root`, the ledger set root the
 /// buffer extends. Returns the unsigned builder, carrying the opening of every
 /// transfer, and the change notes.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The claim, its tickets and the era's gas profile"
+)]
 fn build_reward_claim_tx_inner(
     claim_address: ZkPublicKey,
     change_nonces: &[Fr],
     reward_value: Value,
     gas_prices: GasPrices,
+    gas_profile: GasProfile,
     ledger_root: Fr,
     claims: &[ClaimPowRewardOp],
     nullifiers: &[NoteNullifier],
 ) -> Result<(MantleTxBuilder, Vec<Note>), PoWError> {
     let context = OpsContext {
-        gas_context: OpsGasContext::new(HashMap::new(), gas_prices),
+        gas_context: OpsGasContext::new(HashMap::new(), gas_prices, gas_profile),
     };
 
     // Size the change against the final tx shape, then spread the fee across
@@ -2112,7 +2144,7 @@ where
     BlendService::NodeId: Send,
     RuntimeServiceId: Sync,
 {
-    let payload = DataPayload::try_from_transaction(&signed_tx)?;
+    let payload = DataPayload::from_transaction(&signed_tx);
     blend_api.publish(payload).await?;
     Ok(())
 }
@@ -2138,7 +2170,7 @@ fn estimate_reward_claim_fee(
         &vec![0; num_groups],
     )?;
     let fee = push_reward_claim_ops(MantleTxBuilder::new(), claims, without_openings(transfers))?
-        .minimum_gas_cost::<MainnetGasProfile>(context)?
+        .minimum_gas_cost(context)?
         .into_inner();
     Ok(fee)
 }
@@ -2152,9 +2184,10 @@ mod tests {
         sync::{Arc, LazyLock},
     };
 
-    use lb_binary_codec::bincode::SerializeOp as _;
+    use lb_binary_codec::canonical::BinaryEncode as _;
     use lb_chain_service::{Epoch, Slot};
     use lb_core::{
+        era::ForkDigest,
         header::HeaderId,
         mantle::{
             Note, Op, OpProof, OpProofRef, OpRef, SignedOps, Value,
@@ -2200,9 +2233,11 @@ mod tests {
         without_openings,
     };
     use crate::{
-        test_utils::{PAYLOAD_BODY_SIZE, era_schedule},
+        test_utils::{GAS_PROFILE, PAYLOAD_BODY_SIZE, era_schedule},
         tickets::WinningTicket,
     };
+
+    const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
 
     const REWARD: u64 = 1_000_000;
     const POOL: u64 = 1_000_000_000;
@@ -2295,6 +2330,7 @@ mod tests {
             &change_nonces(claims.len()),
             reward_value,
             gas_prices,
+            GAS_PROFILE,
             ledger_mmr(genesis).frontier_root(),
             claims,
             &nullifiers(claims, reward_value),
@@ -2330,7 +2366,7 @@ mod tests {
         genesis: &[Note],
     ) -> SignedOps<Unverified, StandardMode> {
         let openings = tx_builder.openings();
-        let ops = tx_builder.build().unwrap();
+        let ops = tx_builder.build(FORK_DIGEST).unwrap();
         let mut zk_proofs: HashMap<usize, ZkTransferProof> =
             wallet_witnesses(&ops, &openings, reward_value, genesis)
                 .unwrap()
@@ -2356,7 +2392,7 @@ mod tests {
 
     fn context() -> OpsContext {
         OpsContext {
-            gas_context: OpsGasContext::new(HashMap::default(), GasPrices::new(1, 1)),
+            gas_context: OpsGasContext::new(HashMap::default(), GasPrices::new(1, 1), GAS_PROFILE),
         }
     }
 
@@ -2365,7 +2401,7 @@ mod tests {
     /// op (via the ledger's stateless `preverify`), and the Blend payload
     /// body it is published in.
     fn assert_within_tx_limits(tx: &SignedOps<Unverified, StandardMode>) {
-        let size = tx.to_bytes().expect("built tx should serialize").len();
+        let size = tx.encoded_length();
         assert!(
             size <= PAYLOAD_BODY_SIZE,
             "tx of {size} bytes exceeds the {PAYLOAD_BODY_SIZE} a Blend payload carries"
@@ -2584,7 +2620,7 @@ mod tests {
         let tx =
             push_reward_claim_ops(MantleTxBuilder::new(), &claims, without_openings(transfers))
                 .unwrap()
-                .build()
+                .build(FORK_DIGEST)
                 .unwrap();
         let ops = tx.op_refs();
 
@@ -2830,6 +2866,7 @@ mod tests {
                 tip,
                 REWARD,
                 GasPrices::new(1, 1),
+                GAS_PROFILE,
                 &claims,
             )
             .await,
@@ -2840,7 +2877,7 @@ mod tests {
         // state of block 36 extended by its own reward note.
         wallet.apply_block(&block(41, 39, 99)).unwrap();
         let openings = tx_builder.openings();
-        let ops = tx_builder.build().unwrap();
+        let ops = tx_builder.build(FORK_DIGEST).unwrap();
         let known: KnownNotes = openings
             .values()
             .flat_map(|opening| opening.inputs.iter())
@@ -2889,7 +2926,7 @@ mod tests {
         )
         .unwrap();
         let openings = tx_builder.openings();
-        let ops = tx_builder.build().unwrap();
+        let ops = tx_builder.build(FORK_DIGEST).unwrap();
         assert!(matches!(
             wallet_witnesses(&ops, &openings, REWARD, &genesis),
             Err(WalletError::UnknownRoot { op_index: 1 })
@@ -3045,7 +3082,7 @@ mod tests {
             .unwrap();
             let tx = sign_locally(tx_builder, REWARD, &[]);
             assert_eq!(
-                tx.to_bytes().unwrap().len() as u64,
+                tx.encoded_length() as u64,
                 claim_tx_size(claims).unwrap(),
                 "probe disagrees with a signed tx at {claims} claim(s)"
             );

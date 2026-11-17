@@ -25,11 +25,12 @@ use std::{
 };
 
 use lb_core::{
+    era::{AcceptedForkDigests, ForkDigest},
     header::HeaderId,
     mantle::{
         Op, OpProof, SignedOps,
         batch::DeferredProofs,
-        gas::MainnetGasProfile,
+        gas::GasProfile,
         ledger::verification_mode::StandardMode,
         note_set::CommitmentMmr,
         notes::{self, derive_note_nullifier},
@@ -50,7 +51,9 @@ use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
 use logos_blockchain_ledger::{
     Config, LedgerState,
-    config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
+    config::{
+        BlendPoWConfig, EmissionRatio, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig,
+    },
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
 use time::OffsetDateTime;
@@ -262,7 +265,7 @@ fn apply(
 ) -> (LedgerState, DeferredProofs) {
     let (state, gas_and_fees, _, deferred) = state
         .clone()
-        .try_apply_block_transactions::<_, HeaderId, MainnetGasProfile>(&TX_POOL.eras, txs)
+        .try_apply_block_transactions::<_, HeaderId>(&TX_POOL.eras, txs)
         .expect("block should apply");
     let reward_value = state
         .leader_reward::<HeaderId>(&gas_and_fees, &TX_POOL.eras)
@@ -299,7 +302,7 @@ fn build_tx(
         // Most of the tx's value goes as a tip, to withstand gas cost increases.
         9_999_999_999_999,
     );
-    let ops = Ops::from([Op::Transfer(transfer_op)]);
+    let ops = Ops::new(ForkDigest::new([0x11; 32]), [Op::Transfer(transfer_op)]);
     let proof = prove_transfer(
         &[(note, secret_key, path)],
         &[output],
@@ -358,6 +361,7 @@ fn config() -> Config {
                 blend: rewards::blend::RewardsParameters {
                     rounds_per_epoch: epoch_length.try_into().unwrap(),
                     message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                    cover_replication_factor: 0,
                     num_blend_layers: NonZero::new(3).unwrap(),
                     minimum_network_size: NonZero::new(1).unwrap(),
                     data_replication_factor: 0,
@@ -369,6 +373,32 @@ fn config() -> Config {
                 timestamp: 0,
             },
         },
+        max_transactions: 1024,
+        max_transactions_size: 2 * 1024 * 1024,
+        max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+        execution_market: logos_blockchain_ledger::config::ExecutionMarketConfig {
+            max_gas_per_block: logos_blockchain_ledger::config::MaxGasPerBlock::new(3_137_798)
+                .unwrap(),
+            fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                .unwrap(),
+            ema_smoothing_factor: lb_utils::math::ProperFraction::new(9, 10.try_into().unwrap())
+                .unwrap(),
+        },
+        storage_market: logos_blockchain_ledger::config::StorageMarketConfig {
+            max_adjustment_factor: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                .unwrap(),
+            ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
+                .unwrap(),
+        },
+        block_rewards: logos_blockchain_ledger::config::BlockRewardsConfig::new(
+            3_000_000_000_000_000_000,
+            120_000_000_000_000_000.try_into().unwrap(),
+            10_512,
+            EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
+            lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+        )
+        .unwrap(),
+        gas_profile: GasProfile::MAINNET,
         pow_config: PoWConfig {
             blend: BlendPoWConfig {
                 base_difficulty: ModulusShift::new::<234>(),
@@ -392,5 +422,6 @@ fn config() -> Config {
                 slot_window: NonZero::new(100).unwrap(),
             },
         },
+        accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
     }
 }

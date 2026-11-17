@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use lb_core::{
+    block::TxInBlock,
     header::HeaderId,
     mantle::transactions::hash::{TxHash, TxHashPrefix},
 };
@@ -21,12 +22,13 @@ pub trait MempoolAdapter<Tx>: Send + Sync {
     /// - `entered`: txs carried by the blocks that entered the canonical chain,
     ///   each mapped to the slot of the block carrying it.
     /// - `reorged`: txs carried by the blocks that left the canonical chain and
-    ///   not by the blocks now in it, which the mempool admits again. Empty
-    ///   when the chain only grows.
+    ///   not by the blocks now in it, each with the slot of the block carrying
+    ///   it, which the mempool admits again unless they are older than the TTL.
+    ///   Empty when the chain only grows.
     async fn notify_canonical_chain_updated(
         &self,
         entered: HashMap<TxHash, Slot>,
-        reorged: Vec<Tx>,
+        reorged: Vec<TxInBlock<Tx>>,
     ) -> Result<(), overwatch::DynError>;
 
     /// Tell the mempool that `block_id`, at `slot`, has been processed, and

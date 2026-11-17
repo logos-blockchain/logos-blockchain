@@ -3,9 +3,7 @@ use std::marker::PhantomData;
 use crate::{
     events::TxEvent,
     mantle::{
-        GasProfile,
         batch::{DeferrableProof, DeferredProofs},
-        gas::{Gas, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::VerificationMode,
@@ -159,16 +157,6 @@ where
     }
 }
 
-impl<Profile, T, State, Mode> OperationGas<Profile> for SignedOperation<T, State, Mode>
-where
-    Profile: GasProfile,
-    T: OperationGas<Profile> + ProvableOperation,
-    State: VerificationState,
-    Mode: VerificationMode,
-{
-    const GAS_COST: Gas = T::GAS_COST;
-}
-
 #[cfg(test)]
 mod tests {
     use lb_cryptarchia_engine::Slot;
@@ -180,7 +168,6 @@ mod tests {
         mantle::{
             TxHash,
             channel::{Channels, Error},
-            gas::MainnetGasProfile,
             ledger::verification_mode::StandardMode,
             note_set::{NoteSets, TxNoteState},
             notes::{NoteNullifier, OutputCommitments},
@@ -398,16 +385,6 @@ mod tests {
                     channel_id: channel_id()
                 }
             ))
-        );
-    }
-
-    #[test]
-    fn gas_cost_forwards_the_operation_gas_cost() {
-        assert_eq!(
-            <SignedOperation<InscriptionOp, Unverified, StandardMode> as OperationGas<
-                MainnetGasProfile,
-            >>::GAS_COST,
-            <InscriptionOp as OperationGas<MainnetGasProfile>>::GAS_COST
         );
     }
 }

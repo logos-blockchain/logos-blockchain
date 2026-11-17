@@ -7,10 +7,7 @@ use super::{SDPActiveOp, SdpError, validate_declaration_id, validate_nonce};
 use crate::{
     events::TxEvent,
     mantle::{
-        gas::{
-            EXECUTION_SIGNATURE_GAS, Gas, GasOverflow, MainnetGasProfile, OpGasCalculator,
-            OpGasContext, OperationGas,
-        },
+        gas::{Gas, GasOverflow, GasProfile, OpGasCalculator, OpGasContext},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
             VerifiableOperation,
@@ -43,14 +40,14 @@ impl ProvableOperation for SDPActiveOp {
     const CODE: u8 = 0x22;
 }
 
-impl OperationGas<MainnetGasProfile> for SDPActiveOp {
-    const GAS_COST: Gas = Gas::new(15117);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for SDPActiveOp {
+impl OpGasCalculator for SDPActiveOp {
     // The Operation, plus its signature.
-    fn execution_gas(&self, _context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
-        Self::GAS_COST.checked_add(EXECUTION_SIGNATURE_GAS)
+    fn execution_gas(
+        &self,
+        profile: &GasProfile,
+        _context: &impl OpGasContext,
+    ) -> Result<Gas, GasOverflow> {
+        profile.sdp_active.checked_add(profile.signature)
     }
 }
 
@@ -140,7 +137,7 @@ mod tests {
     use crate::{
         mantle::{
             TxHash,
-            gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
+            gas::{Gas, GasProfile, OpGasCalculator as _, test_utils::FixedThresholds},
             ledger::{
                 Declarations, PreverifiableOperation as _, ProvableOperation,
                 VerifiableOperation as _, verification_mode::StandardMode,
@@ -580,7 +577,8 @@ mod tests {
     fn sdp_active_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
             assert_eq!(
-                SDPActiveOp::sample().execution_gas(&FixedThresholds(threshold)),
+                SDPActiveOp::sample()
+                    .execution_gas(&GasProfile::MAINNET, &FixedThresholds(threshold)),
                 // 15117 + 557
                 Ok(Gas::new(15_674))
             );

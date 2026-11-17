@@ -169,7 +169,10 @@ mod tests {
     use lb_binary_codec::bincode::{
         self, BoundedSerializeOp, DeserializeOp as _, SerializeOp as _,
     };
-    use lb_core::{block::Block, header::HeaderId};
+    use lb_core::{
+        block::{Block, BlockLimits},
+        header::HeaderId,
+    };
 
     use super::{
         BlocksRequest, BlocksResponse, KnownBlocks, MAX_REQUEST_MESSAGE_BINCODE_SIZE,
@@ -289,10 +292,17 @@ mod tests {
             let ordinary = response.to_bytes().unwrap();
 
             assert_eq!(ordinary.len(), expected_size);
-            // The smallest bound an era can set: the one of an era without uncles.
+            // The smallest bound an era could set: the one of an era without
+            // uncles or transaction bytes.
             assert!(
                 ordinary.len()
-                    <= max_blocks_response_bincode_size(Block::<()>::max_encoded_size(0))
+                    <= max_blocks_response_bincode_size(Block::<()>::max_encoded_size(
+                        BlockLimits {
+                            max_uncles: 0,
+                            max_transactions: 0,
+                            max_transactions_size: 0,
+                        }
+                    ))
             );
 
             match (expected, BlocksResponse::from_bytes(&ordinary).unwrap()) {

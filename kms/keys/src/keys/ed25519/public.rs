@@ -1,7 +1,7 @@
 use core::fmt::{self, Debug, Formatter};
 
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SignatureError, VerifyingKey};
-use lb_binary_codec::bincode::BoundedSerializeOp;
+use lb_binary_codec::{bincode::BoundedSerializeOp, canonical::BinaryDecode};
 use lb_utils::serde::{deserialize_bytes_array, serialize_bytes_array};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 
@@ -10,7 +10,8 @@ use crate::keys::{Ed25519Signature, UnverifiedX25519PublicKey, ed25519::x25519::
 pub const KEY_SIZE: usize = PUBLIC_KEY_LENGTH;
 
 /// An Ed25519 public key that has not been verified for small order.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, BinaryDecode)]
+#[decode(try_from = "[u8; KEY_SIZE]")]
 pub struct UnverifiedPublicKey(VerifyingKey);
 
 impl Serialize for UnverifiedPublicKey {
@@ -89,6 +90,14 @@ impl BoundedSerializeOp for UnverifiedPublicKey {
     type Bytes = [u8; KEY_SIZE];
 }
 
+impl TryFrom<[u8; KEY_SIZE]> for UnverifiedPublicKey {
+    type Error = SignatureError;
+
+    fn try_from(bytes: [u8; KEY_SIZE]) -> Result<Self, Self::Error> {
+        Self::from_bytes(&bytes)
+    }
+}
+
 impl From<VerifyingKey> for UnverifiedPublicKey {
     fn from(value: VerifyingKey) -> Self {
         Self(value)
@@ -107,8 +116,9 @@ impl AsRef<[u8]> for UnverifiedPublicKey {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryDecode)]
 #[serde(try_from = "UnverifiedPublicKey")]
+#[decode(try_from = "UnverifiedPublicKey")]
 pub struct PublicKey(UnverifiedPublicKey);
 
 #[derive(thiserror::Error, Debug)]

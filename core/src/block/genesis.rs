@@ -22,7 +22,8 @@ use crate::{
         },
         transactions::{
             Distribution, GENESIS_REQUIRED_OPS, GenesisAllocation, GenesisTx,
-            MAX_GENESIS_DECLARATIONS, OpProofs, Ops, SignedOps, VerificationError, genesis_tx,
+            MAX_GENESIS_DECLARATIONS, OpProofs, Ops, SignedOps, TxList, VerificationError,
+            genesis_tx,
         },
     },
 };
@@ -169,7 +170,8 @@ impl GenesisBlock {
     #[must_use]
     pub fn genesis(genesis_tx: GenesisTx) -> Self {
         let header = Header::genesis(&genesis_tx);
-        let transactions = BlockTransactions::from([genesis_tx]);
+        let transactions = BlockTransactions::try_new(vec![genesis_tx], 1)
+            .expect("One transaction is within a maximum of one.");
         Self(Block {
             header,
             uncle_headers: UncleHeaders::empty(),
@@ -909,12 +911,14 @@ fn genesis_ops(
     .chain(sdp_declarations.into_iter().map(Op::SDPDeclare))
     .collect();
     let n = ops.len();
-    Ops::try_from(ops).map_err(|_| {
-        // This should never happen because the builder doesn't allow more
-        // ops than can fit in a genesis tx, but we have to handle the error
-        // just in case.
-        Error::InvalidGenesisTx(genesis_tx::Error::TooManyOps { count: n })
-    })
+    TxList::try_from(ops)
+        .map(|ops| Ops::new(GenesisTx::FORK_DIGEST, ops))
+        .map_err(|_| {
+            // This should never happen because the builder doesn't allow more
+            // ops than can fit in a genesis tx, but we have to handle the error
+            // just in case.
+            Error::InvalidGenesisTx(genesis_tx::Error::TooManyOps { count: n })
+        })
 }
 
 // Genesis Validation Exemptions 1: no proof is verified at Genesis, the
@@ -1436,7 +1440,11 @@ mod tests {
             .collect::<Vec<_>>();
         let ops_proofs = OpProofs::new_unchecked(proofs_vec);
 
-        SignedOps::from_parts_trusted(Ops::new_unchecked(ops), ops_proofs).unwrap()
+        SignedOps::from_parts_trusted(
+            Ops::new(GenesisTx::FORK_DIGEST, TxList::new_unchecked(ops)),
+            ops_proofs,
+        )
+        .unwrap()
     }
 
     fn make_genesis_tx(extra_ops: Vec<Op>) -> GenesisTx {

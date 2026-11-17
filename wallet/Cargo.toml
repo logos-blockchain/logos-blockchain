@@ -17,13 +17,11 @@ lb-core                       = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
-lb-ledger                     = { workspace = true }
 lb-log-targets                = { workspace = true }
 lb-mmr                        = { workspace = true }
 lb-note-encryption            = { workspace = true }
 lb-utils                      = { workspace = true }
 lb-zktransfer                 = { workspace = true }
-num-bigint                    = { workspace = true }
 rand_core                     = { workspace = true }
 rpds                          = { features = ["serde"], workspace = true }
 serde                         = { features = ["derive"], workspace = true }
@@ -31,11 +29,9 @@ thiserror                     = { workspace = true }
 tracing                       = { workspace = true }
 
 [dev-dependencies]
-bincode               = { workspace = true }
 hex                   = { features = ["alloc"], workspace = true }
 lb-core               = { features = ["test-utils"], workspace = true }
 lb-cryptarchia-engine = { workspace = true }
-lb-pol                = { workspace = true }
 lb-utils              = { workspace = true }
 rand                  = { features = ["std", "std_rng"], workspace = true }
 serde_json            = { features = ["std"], workspace = true }
