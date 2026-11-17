@@ -3,6 +3,7 @@ mod chain_inputs;
 mod common_inputs;
 mod inputs;
 mod pow_inputs;
+mod proving_key;
 mod verification_key;
 mod wallet_inputs;
 mod witness;
@@ -64,10 +65,7 @@ const LOG_TARGET: &str = proofs::POQ;
 ///   serialization or deserialization.
 pub fn prove(inputs: PoQWitnessInputs) -> Result<(PoQProof, PoQVerifierInput), ProveError> {
     let witness = witness::generate_witness(inputs)?;
-    let result = lb_circuits_prover::Rapidsnark::prove(
-        lbc_poq_sys::artifacts::PROVING_KEY,
-        witness.as_ref(),
-    )?;
+    let result = lb_circuits_prover::Rapidsnark::prove(*proving_key::POQ_PK, witness.as_ref())?;
     let proof: Groth16ProofJsonDeser = serde_json::from_str(&result.proof)?;
     let verifier_inputs: PoQVerifierInputJson = serde_json::from_str(&result.public_signals)?;
     let proof: Groth16Proof = proof.try_into().map_err(ProveError::Groth16JsonProof)?;

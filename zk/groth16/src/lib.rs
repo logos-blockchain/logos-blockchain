@@ -1,6 +1,7 @@
 mod circuit_integer;
 mod curve;
 mod from_json_error;
+mod key_integrity;
 mod proof;
 pub use proof::{COMPRESSED_PROOF_SIZE, CompressSize, CompressedProof};
 mod protocol;
@@ -18,6 +19,7 @@ pub use ark_bn254::{Bn254, Fr};
 pub use ark_ff::{AdditiveGroup, Field};
 use ark_ff::{BigInteger as _, PrimeField as _};
 pub use circuit_integer::{CircuitInteger, CircuitIntegerOutOfRange};
+pub use key_integrity::{key_sha256, pinned_key};
 pub use modulus_shift::{ModulusShift, ModulusShiftOutOfRange};
 use num_bigint::BigUint;
 pub use verifier::{VerificationError, groth16_batch_verify, groth16_verify};

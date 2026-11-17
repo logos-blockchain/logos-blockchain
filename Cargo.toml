@@ -186,6 +186,9 @@ lb-zksign                          = { default-features = false, package = "logo
 logos-blockchain-tests             = { default-features = false, path = "./tests" }
 # When bumping any lbc-* tag, also update the logos-blockchain-circuits flake input tag in flake.nix
 # and run `nix flake lock --update-input logos-blockchain-circuits`.
+# A tag does not identify the key bytes: the proving and verification keys embedded from the lbc-*-sys crates are
+# pinned by SHA-256 digest in zk/proofs/{poc,pol,poq,zksign}/src/{proving_key,verification_key}/mod.rs and checked
+# when they are loaded. Update those pins on a bump, after checking the new keys against the published setup output.
 lbc-poc-sys                      = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poc-sys", tag = "v0.5.7" }
 lbc-pol-sys                      = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-pol-sys", tag = "v0.5.7" }
 lbc-poq-sys                      = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poq-sys", tag = "v0.5.7" }
@@ -297,6 +300,7 @@ serde_urlencoded      = { default-features = false, version = "0.7.1" }
 serde_with            = { default-features = false, version = "3.14.0" }
 serde_yaml            = { default-features = false, version = "0.9.33" }
 serial_test           = { default-features = false, version = "3.1.1" }
+sha2                  = { default-features = false, version = "0.10" }
 sntpc                 = { default-features = false, version = "0.5" }
 strum                 = { default-features = false, version = "0.27" }
 strum_macros          = { default-features = false, version = "0.27.2" }

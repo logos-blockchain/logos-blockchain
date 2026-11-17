@@ -1,5 +1,6 @@
 mod inputs;
 mod private;
+mod proving_key;
 mod public;
 mod verification_key;
 mod witness;
@@ -59,11 +60,8 @@ pub fn prove(
     inputs: ZkSignWitnessInputs,
 ) -> Result<(ZkSignProof, ZkSignVerifierInputs), ProveError> {
     let witness = witness::generate_witness(inputs)?;
-    let result = lb_circuits_prover::Rapidsnark::prove(
-        lbc_signature_sys::artifacts::PROVING_KEY,
-        witness.as_ref(),
-    )
-    .map_err(lbp_error::Error::from)?;
+    let result = lb_circuits_prover::Rapidsnark::prove(*proving_key::ZKSIGN_PK, witness.as_ref())
+        .map_err(lbp_error::Error::from)?;
     let proof: Groth16ProofJsonDeser =
         serde_json::from_str(&result.proof).map_err(lbp_error::Error::from)?;
     let verifier_inputs: ZkSignVerifierInputsJson =
