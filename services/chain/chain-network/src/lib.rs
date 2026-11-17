@@ -102,6 +102,8 @@ pub enum Error {
     Mempool(String),
     #[error("Block header id not found: {0}")]
     HeaderIdNotFound(HeaderId),
+    #[error("The initial block download is still running")]
+    InitialBlockDownloadRunning,
     #[error(transparent)]
     BoundedError(#[from] BoundedError),
 }
@@ -120,6 +122,9 @@ impl From<lb_core::block::Error> for Error {
     }
 }
 
+/// What other services ask of chain-network. They are to ask only once it's
+/// ready, which it is when the initial block download is done: until then,
+/// every message is refused.
 #[derive(Debug)]
 #[expect(
     clippy::large_enum_variant,
@@ -399,7 +404,7 @@ where
                     ingestion.complete_era_transition(transition_end.era()).await;
                 }
                 Some(msg) = self.service_resources_handle.inbound_relay.next() => {
-                    Self::handle_message(msg, &self.received_proposals_sender, &ingestion).await;
+                    Self::refuse_message(msg);
                 }
                 result = ingestion.task() => panic!("Block ingestion stopped: {result:?}"),
             }
@@ -598,6 +603,29 @@ where
     fn note_received_proposal(&self, proposal: &Proposal) {
         if self.received_proposals_sender.receiver_count() > 0 {
             drop(self.received_proposals_sender.send(proposal.clone()));
+        }
+    }
+
+    /// Refuses `msg`, which came before the initial block download was done,
+    /// and so before this service was ready.
+    fn refuse_message(msg: Message<Mempool::Item>) {
+        match msg {
+            Message::SubscribeToProposals { result_sender } => {
+                error!(
+                    target: LOG_TARGET,
+                    "Refusing a proposal subscription during the initial block download"
+                );
+                drop(result_sender);
+            }
+            Message::ApplyBlockAndReconcileMempool { resp, .. } => {
+                error!(
+                    target: LOG_TARGET,
+                    "Refusing to apply a block during the initial block download"
+                );
+                if resp.send(Err(Error::InitialBlockDownloadRunning)).is_err() {
+                    debug!(target: LOG_TARGET, "The requester hung up before the refusal");
+                }
+            }
         }
     }
 
