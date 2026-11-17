@@ -178,14 +178,9 @@ impl NullifierStorage {
         Ok(state)
     }
 
-    /// Makes the trees of the state of block `block_id` the base of the DB:
-    /// the trees every later block builds on. Changes the state has not
-    /// written yet, as a genesis state has, are written first. A state
-    /// restored from the DB already is the base.
-    ///
-    /// Returns the changes as one atomic write ([`WriteBatch`]), for the caller
-    /// to apply before collecting the garbage.
-    pub fn finalize_base(
+    /// Makes the state of block `block_id` the base of the store, committing it
+    /// first if it has new nullifiers.
+    pub fn finalize(
         &self,
         block_id: BlockId,
         state: CryptarchiaLedger,

@@ -325,7 +325,7 @@ where
             .mantle_ledger
             .add_seen_block(id.into(), slot, &era_schedule);
         let storage = NullifierStorage::new(Arc::clone(state.latest_note_sets().store()));
-        let (base, mut batch) = storage.finalize_base(block_id(id), state.cryptarchia_ledger)?;
+        let (base, mut batch) = storage.finalize(block_id(id), state.cryptarchia_ledger)?;
         state.cryptarchia_ledger = base;
         if let Some(bytes) = lib_state_bytes(&id, &state)? {
             batch.put(Bytes::from_static(LIB_STATE_KEY), bytes);
