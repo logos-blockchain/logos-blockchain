@@ -47,8 +47,10 @@ pub fn generate_activity_proof(
         blend_params.rounds_per_epoch,
         blend_params.message_frequency_per_round,
         blend_params.num_blend_layers,
+        blend_params.cover_replication_factor,
         SINGLE_NODE_SNAPSHOT_SIZE,
-    );
+    )
+    .expect("Core Quota must fit within the width the `PoQ` circuit allows.");
     let num_blend_layers = blend_params.num_blend_layers.get();
     let message_quota = Quota::try_new(
         num_blend_layers + (num_blend_layers * blend_params.data_replication_factor),

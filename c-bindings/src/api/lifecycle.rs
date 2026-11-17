@@ -112,6 +112,12 @@ unsafe fn initialize_lb_node(
     // Captured before the run config is consumed, so the node handle can answer
     // for its chain without querying a service for a value that cannot change.
     let chain_id = run_config.deployment.chain_id();
+    let fork_digests = run_config
+        .deployment
+        .era_schedule()
+        .iter()
+        .map(|era| era.parameters.fork_digest)
+        .collect();
 
     let runtime = Runtime::new().expect("Failed to create Tokio runtime");
     let app = run_node_from_config(run_config, Some(runtime.handle().clone())).map_err(|e| {
@@ -142,7 +148,12 @@ unsafe fn initialize_lb_node(
         Ok(())
     })?;
 
-    Ok(LogosBlockchainNode::new(app, runtime, &chain_id))
+    Ok(LogosBlockchainNode::new(
+        app,
+        runtime,
+        &chain_id,
+        fork_digests,
+    ))
 }
 
 /// Builds the run configuration a node started with these paths would use.
@@ -332,6 +343,9 @@ mod test {
             )
             .expect("Standalone user config should deserialize");
             node_config.state.base_folder = state_dir_path;
+            if let Some(file) = node_config.tracing.logger.file.as_mut() {
+                file.directory = log_dir;
+            }
             node_config.api.backend.listen_address = "127.0.0.1:0"
                 .parse()
                 .expect("Local address should be correct");

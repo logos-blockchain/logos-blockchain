@@ -4,9 +4,10 @@ use std::{
     time::Duration,
 };
 
+use lb_config::deployment::GAS_PROFILE;
 use lb_core::mantle::{
     Note,
-    gas::{GasCost, MainnetGasProfile},
+    gas::GasCost,
     note_set::NoteSetIndex,
     notes::NoteNullifier,
     transactions::{
@@ -473,10 +474,11 @@ fn finalize_fee(builder: &MantleTxBuilder) -> Result<u64, StepError> {
                 GENESIS_EXECUTION_GAS_PRICE.into_inner(),
                 DEFAULT_STORAGE_GAS_PRICE,
             ),
+            GAS_PROFILE,
         ),
     };
     builder
-        .minimum_gas_cost::<MainnetGasProfile>(&context)
+        .minimum_gas_cost(&context)
         .map(GasCost::into_inner)
         .map_err(|error| StepError::LogicalError {
             message: error.to_string(),

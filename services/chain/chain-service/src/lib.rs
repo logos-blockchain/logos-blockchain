@@ -17,7 +17,6 @@ use std::{
     marker::PhantomData,
     pin::Pin,
     sync::Arc,
-    time::Duration,
 };
 
 use educe::Educe;
@@ -25,19 +24,19 @@ use futures::{Stream, TryStreamExt as _};
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
-    block::{Block, UncleHeaders, genesis::GenesisBlock},
+    block::{Block, TxInBlock, UncleHeaders, genesis::GenesisBlock},
+    era::ForkDigest,
     events::Events,
     header::{Header, HeaderId},
     mantle::{
         TxHash,
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
         transactions::states::Preverified,
     },
     sdp::{Declaration, DeclarationId},
 };
-use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots};
+use lb_cryptarchia_engine::{Branch, EraSchedule, PrunedBlocks, ReorgedBlocks, UncleSlots};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
 use lb_kv_store::{DynKvStore, ErasedKv, KvStoreSettings, OpenKvStore};
 pub use lb_ledger::EpochState;
@@ -71,7 +70,7 @@ use tracing_futures::Instrument as _;
 pub use crate::{
     bootstrap::config::{BootstrapConfig, OfflineGracePeriodConfig},
     service::phases::PhaseTag,
-    states::CryptarchiaConsensusState,
+    states::{CryptarchiaConsensusState, TipEra, saved_tip_era},
     sync::config::{BlockProviderConfig, SyncConfig},
     uncle::UncleError,
 };
@@ -211,6 +210,11 @@ pub enum Query {
     LibSubscribe {
         sender: oneshot::Sender<broadcast::Receiver<LibUpdate>>,
     },
+    /// Returns the ID and slot of the block of the highest slot in the block
+    /// tree.
+    HighestBlock {
+        reply_channel: oneshot::Sender<(HeaderId, Slot)>,
+    },
     GetHeaders {
         from_descendant: Option<HeaderId>,
         to_ancestor: Option<HeaderId>,
@@ -342,8 +346,9 @@ pub struct AppliedBlock<Tx> {
     /// was not canonical, each mapped to the slot of the block carrying it.
     pub newly_canonical_txs: HashMap<TxHash, Slot>,
     /// Transactions carried by the blocks that left the canonical chain,
-    /// except those also carried by the blocks that entered it.
-    pub reorged_txs: Vec<Tx>,
+    /// except those also carried by the blocks that entered it, each with
+    /// the slot of the block carrying it.
+    pub reorged_txs: Vec<TxInBlock<Tx>>,
     /// The slot of the latest immutable block after applying the block.
     pub lib_slot: Slot,
 }
@@ -501,6 +506,17 @@ impl Cryptarchia {
         self.consensus.lib_branch()
     }
 
+    /// The block of the highest slot in the block tree. It is a tip, since a
+    /// block's slot is higher than its parent's.
+    #[must_use]
+    pub fn highest_branch(&self) -> &Branch<HeaderId> {
+        self.consensus
+            .branches()
+            .branches()
+            .max_by_key(|branch| branch.slot())
+            .expect("the block tree has at least one tip")
+    }
+
     /// Try to apply a block to the chain.
     #[cfg(test)]
     fn try_apply_block<Tx>(
@@ -568,7 +584,7 @@ impl Cryptarchia {
         // checking if the block is accepted by the consensus engine.
         let update = self
             .ledger
-            .prepare_update::<_, _, MainnetGasProfile>(
+            .prepare_update(
                 id,
                 parent,
                 slot,
@@ -734,7 +750,7 @@ impl Cryptarchia {
 
 #[derive(Debug, Clone)]
 pub struct CryptarchiaSettings {
-    pub era_schedule: Arc<EraScheduledConfig>,
+    pub era_schedule: Arc<EraSchedule<(lb_ledger::Config, ForkDigest)>>,
     pub starting_state: StartingState,
     pub bootstrap: BootstrapConfig,
     pub sync: SyncConfig,
@@ -811,7 +827,7 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + Unpin
@@ -819,6 +835,7 @@ where
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     RuntimeServiceId: Debug
+        + Clone
         + Send
         + Sync
         + Display
@@ -852,6 +869,7 @@ where
         })
     }
 
+    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     async fn run(self) -> Result<(), DynError> {
         let relays: CryptarchiaConsensusRelays<Tx> =
             CryptarchiaConsensusRelays::from_service_resources_handle::<
@@ -871,7 +889,7 @@ where
 
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             BlockBroadcastService<_>,
             StorageService<_>,
             TimeService<_, _>
@@ -879,6 +897,7 @@ where
         .await?;
 
         let (current_slot, slot_timer) = Self::get_slot_timer(&relays).await?;
+        let fork_digests = Arc::new(era_schedule.map(|era| era.parameters.1));
 
         let InitializedCryptarchia {
             cryptarchia,
@@ -889,7 +908,7 @@ where
             &self.nullifier_store,
             &starting_state,
             &bootstrap_config,
-            era_schedule,
+            Arc::new(era_schedule.map(|era| era.parameters.0.clone())),
             &relays,
             &self.new_block_subscription_sender,
             &self.lib_subscription_sender,
@@ -911,6 +930,7 @@ where
             persist_recovery_state(
                 &cryptarchia,
                 storage_blocks_to_remove.clone(),
+                &fork_digests,
                 &self.service_resources_handle.state_updater,
             );
         }
@@ -942,6 +962,7 @@ where
             cryptarchia,
             service_resources_handle.inbound_relay,
             service_resources_handle.state_updater,
+            fork_digests,
             new_block_subscription_sender,
             lib_subscription_sender,
             chain_online_notifier,
@@ -996,7 +1017,7 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + Unpin

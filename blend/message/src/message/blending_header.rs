@@ -1,4 +1,4 @@
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_blend_crypto::pseudo_random_sized_bytes;
 use lb_blend_proofs::{
     quota::{PROOF_OF_QUOTA_SIZE, ProofOfQuota, VerifiedProofOfQuota},
@@ -14,7 +14,7 @@ use crate::crypto::domains;
 
 /// A blending header that is fully decapsulated.
 /// This must be encapsulated when being sent to the blend network.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct BlendingHeader {
     pub signing_pubkey: Ed25519PublicKey,
     pub proof_of_quota: ProofOfQuota,
@@ -75,43 +75,3 @@ pub const BLENDING_HEADER_ENCODED_SIZE: usize = ED25519_PUBLIC_KEY_SIZE
     .unwrap()
     .checked_add(size_of::<bool>())
     .unwrap();
-
-impl BinaryEncode for BlendingHeader {
-    fn encoded_length(&self) -> usize {
-        BLENDING_HEADER_ENCODED_SIZE
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.signing_pubkey.encode_into(out);
-        self.proof_of_quota.encode_into(out);
-        self.signature.encode_into(out);
-        self.proof_of_selection.encode_into(out);
-        self.is_last.encode_into(out);
-    }
-}
-
-impl BinaryDecode for BlendingHeader {
-    type Context = ();
-
-    fn decode<'input>(
-        input: &'input [u8],
-        (): &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, signing_pubkey) = Ed25519PublicKey::decode(input, &())?;
-        let (input, proof_of_quota) = ProofOfQuota::decode(input, &())?;
-        let (input, signature) = Ed25519Signature::decode(input, &())?;
-        let (input, proof_of_selection) = ProofOfSelection::decode(input, &())?;
-        let (input, is_last) = bool::decode(input, &())?;
-
-        Ok((
-            input,
-            Self {
-                signing_pubkey,
-                proof_of_quota,
-                signature,
-                proof_of_selection,
-                is_last,
-            },
-        ))
-    }
-}

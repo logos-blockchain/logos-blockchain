@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use lb_binary_codec::canonical::BinaryCodec;
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_cryptarchia_engine::Slot;
 use lb_program_spend::ZkProgramSpendInputsError;
 use lb_zktransfer::ZkTransferInputsError;
@@ -24,7 +24,7 @@ use crate::{
     },
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, BinaryEncode, BinaryDecode)]
 pub struct SlotTimeframe(u32);
 
 impl From<u32> for SlotTimeframe {
@@ -39,7 +39,7 @@ impl From<SlotTimeframe> for u32 {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, BinaryEncode, BinaryDecode)]
 pub struct SlotTimeout(u32);
 
 impl From<u32> for SlotTimeout {

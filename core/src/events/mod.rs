@@ -199,9 +199,7 @@ mod tests {
         let tx_hash = TxHash([1u8; 32]);
         let op_id: Hash = [2u8; 32];
         let channel_id = ChannelId::from([7u8; 32]);
-        let metadata: Metadata = vec![9u8, 8, 7]
-            .try_into()
-            .expect("metadata is within the size bound");
+        let metadata = Metadata::new_unchecked(vec![9u8, 8, 7]);
 
         let events = Events::from(Event::Tx(TxEvent::new(
             tx_hash,

@@ -1,4 +1,4 @@
-use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_groth16::{Fr, serde::serde_fr};
 use lb_mmr::MerklePath;
 use lb_zktransfer::{
@@ -15,10 +15,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         batch::DeferredZkTransfer,
-        gas::{
-            Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OpGasContext, OperationGas,
-            spend_gas,
-        },
+        gas::{Gas, GasOverflow, GasProfile, OpGasCalculator, OpGasContext},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Value,
             VerifiableOperation,
@@ -37,7 +34,7 @@ use crate::{
     },
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct TransferOp {
     pub inputs: InputNullifiers,
     pub outputs: OutputCommitments,
@@ -104,14 +101,16 @@ impl ProvableOperation for TransferOp {
     const CODE: u8 = 0x00;
 }
 
-impl OperationGas<MainnetGasProfile> for TransferOp {
-    const GAS_COST: Gas = Gas::new(10);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for TransferOp {
+impl OpGasCalculator for TransferOp {
     // The Operation, plus the spend of its notes.
-    fn execution_gas(&self, _context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
-        Self::GAS_COST.checked_add(spend_gas(self.inputs.len(), self.outputs.len())?)
+    fn execution_gas(
+        &self,
+        profile: &GasProfile,
+        _context: &impl OpGasContext,
+    ) -> Result<Gas, GasOverflow> {
+        profile
+            .transfer
+            .checked_add(profile.spend_gas(self.inputs.len(), self.outputs.len())?)
     }
 }
 
@@ -276,7 +275,8 @@ mod test {
         for threshold in [0, 1, 3] {
             // 2 inputs, 2 outputs, nothing buffered: 10 + 4177 + 2 * 1758 + 2 * 58
             assert_eq!(
-                TransferOp::sample().execution_gas(&FixedThresholds(threshold)),
+                TransferOp::sample()
+                    .execution_gas(&GasProfile::MAINNET, &FixedThresholds(threshold)),
                 Ok(Gas::new(7_819))
             );
         }

@@ -27,7 +27,6 @@ use lb_core::{
     crypto::{Digest as _, Hasher},
     mantle::{
         Note, SignedOps, Value,
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         note_set::NoteSets,
         ops::channel::withdraw::PendingWithdrawals,
@@ -378,7 +377,7 @@ fn apply_block_to_ledger(
     proof.reward_value = computed_reward_value(ledger, parent, slot, &proof, uncle_slots, [])
         .expect("the reward of the block");
     let update = ledger
-        .prepare_update::<_, _, MainnetGasProfile>(
+        .prepare_update(
             id,
             parent,
             slot,

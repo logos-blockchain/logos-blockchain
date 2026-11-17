@@ -4,7 +4,7 @@ use lb_c_macros::panic_to_error;
 
 use crate::{
     LogosBlockchainNode, OperationStatus, errors::OperationStatusCode, result::FfiStatusResult,
-    return_error_if_null_pointer,
+    return_error_if_null_pointer, unwrap_or_return_error,
 };
 
 /// Result type for [`get_chain_id`]. On success, `value` is a pointer to a
@@ -58,6 +58,56 @@ pub unsafe extern "C" fn get_chain_id(node: *const LogosBlockchainNode) -> FfiGe
     match CString::new(chain_id.to_bytes()) {
         Ok(chain_id) => FfiGetChainIdResult::ok(chain_id.into_raw()),
         Err(error) => FfiGetChainIdResult::err(OperationStatus::error(
+            OperationStatusCode::RuntimeError,
+            format!("Failed to create CString: {error}"),
+        )),
+    }
+}
+
+/// Result type for [`get_fork_digest`]. On success, `value` is a pointer to a
+/// NUL-terminated C string holding the fork digest in lowercase hexadecimal.
+pub type FfiGetForkDigestResult = FfiStatusResult<*mut c_char>;
+
+/// Returns the fork digest a transaction signed now must carry: that of the era
+/// the node's clock is in, in lowercase hexadecimal, as a transaction's JSON
+/// carries it.
+///
+/// The fork digest changes when an era starts, so a caller asks for it right
+/// before signing a transaction rather than keeping it.
+///
+/// # Arguments
+///
+/// - `node`: A pointer to the node returned by
+///   [`start_lb_node`](super::lifecycle::start_lb_node).
+///
+/// # Returns
+///
+/// A [`FfiGetForkDigestResult`] containing a pointer to an allocated C string
+/// on success, or an [`OperationStatus`] error on failure.
+///
+/// # Safety
+///
+/// `node` must be a valid pointer to a [`LogosBlockchainNode`] that has not
+/// been stopped.
+///
+/// # Memory Management
+///
+/// This function allocates memory for the output C string. The caller must
+/// free this memory using the [`free_cstring`](super::free_cstring) function.
+#[must_use]
+#[panic_to_error]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn get_fork_digest(
+    node: *const LogosBlockchainNode,
+) -> FfiGetForkDigestResult {
+    return_error_if_null_pointer!(node);
+    let node = unsafe { &*node };
+    let runtime_handle = unwrap_or_return_error!(node.get_runtime_handle());
+    let fork_digest = unwrap_or_return_error!(runtime_handle.block_on(node.fork_digest_in_force()));
+
+    match CString::new(hex::encode(<[u8; 32]>::from(fork_digest))) {
+        Ok(fork_digest) => FfiGetForkDigestResult::ok(fork_digest.into_raw()),
+        Err(error) => FfiGetForkDigestResult::err(OperationStatus::error(
             OperationStatusCode::RuntimeError,
             format!("Failed to create CString: {error}"),
         )),

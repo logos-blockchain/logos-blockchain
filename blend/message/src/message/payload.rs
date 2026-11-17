@@ -7,7 +7,7 @@ use crate::Error;
 
 /// The length of the unpadded portion of a payload body, at most the size the
 /// body is padded to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryEncode)]
 #[serde(transparent)]
 struct PayloadBodyLen(u16);
 
@@ -26,16 +26,6 @@ impl PayloadBodyLen {
 impl From<PayloadBodyLen> for usize {
     fn from(value: PayloadBodyLen) -> Self {
         Self::from(value.0)
-    }
-}
-
-impl BinaryEncode for PayloadBodyLen {
-    fn encoded_length(&self) -> usize {
-        self.0.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.0.encode_into(out);
     }
 }
 
@@ -61,8 +51,9 @@ impl BinaryDecode for PayloadBodyLen {
 
 codec_fixtures!(PayloadBodyLen, context = 0, PayloadBodyLen(0) => "0000");
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, BinaryDecode)]
 #[repr(u8)]
+#[decode(try_from = "u8")]
 pub enum PayloadType {
     Cover = 0x00,
     BlockProposal = 0x01,
@@ -106,20 +97,6 @@ impl BinaryEncode for PayloadType {
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         (*self as u8).encode_into(out);
-    }
-}
-
-impl BinaryDecode for PayloadType {
-    type Context = ();
-
-    fn decode<'input>(
-        input: &'input [u8],
-        (): &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (remaining, discriminant) = u8::decode(input, &())?;
-        let payload_type = Self::try_from(discriminant)
-            .map_err(|()| DecodeError::unknown_discriminant::<Self>(u64::from(discriminant)))?;
-        Ok((remaining, payload_type))
     }
 }
 
@@ -314,9 +291,10 @@ pub fn payload_encoded_size(body_size: u16) -> usize {
 
 /// A payload that is fully decapsulated.
 /// This must be encapsulated when being sent to the blend network.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct Payload {
     payload_type: PayloadType,
+    #[context]
     body: PaddedPayloadBody,
 }
 
@@ -337,33 +315,5 @@ impl Payload {
 
     pub fn into_components(self) -> (PayloadType, Vec<u8>) {
         (self.payload_type(), self.body().to_vec())
-    }
-}
-
-impl BinaryEncode for Payload {
-    fn encoded_length(&self) -> usize {
-        self.payload_type
-            .encoded_length()
-            .checked_add(self.body.encoded_length())
-            .unwrap()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.payload_type.encode_into(out);
-        self.body.encode_into(out);
-    }
-}
-
-impl BinaryDecode for Payload {
-    /// The size the body is padded to.
-    type Context = u16;
-
-    fn decode<'input>(
-        input: &'input [u8],
-        body_size: &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, payload_type) = PayloadType::decode(input, &())?;
-        let (input, body) = PaddedPayloadBody::decode(input, body_size)?;
-        Ok((input, Self { payload_type, body }))
     }
 }

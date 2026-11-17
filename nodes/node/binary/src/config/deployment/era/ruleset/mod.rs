@@ -2,6 +2,8 @@ use core::{num::NonZero, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::deployment::InvalidDeployment;
+
 pub mod v1;
 
 /// The rules an era runs under, named by their version, with the values of
@@ -21,6 +23,27 @@ impl EraRuleset {
     pub(super) const fn version(&self) -> u16 {
         match self {
             Self::V1(_) => 1,
+        }
+    }
+
+    /// Checks the era's parameters, alone and against those of the era before
+    /// it, `previous`, if there is one, refusing the first value found
+    /// invalid.
+    pub(super) fn validate(&self, previous: Option<&Self>) -> Result<(), InvalidDeployment> {
+        match self {
+            Self::V1(parameters) => {
+                parameters.validate(previous.map(|Self::V1(previous)| previous))
+            }
+        }
+    }
+
+    /// Whether an era of this ruleset refuses the transactions of the eras
+    /// before it, coming after an era of the ruleset `previous`. An era whose
+    /// ruleset changes how transactions are encoded or validated must.
+    #[must_use]
+    pub(crate) const fn refuses_earlier_transactions(&self, previous: &Self) -> bool {
+        match (previous, self) {
+            (Self::V1(_), Self::V1(_)) => false,
         }
     }
 
@@ -45,7 +68,7 @@ impl EraRuleset {
     pub fn blend_payload_body_size(&self) -> u16 {
         match self {
             Self::V1(parameters) => u16::try_from(parameters.cryptarchia.max_proposal_size())
-                .expect("max proposal size fits in u16"),
+                .expect("The era's checks keep its largest proposal within a Blend payload."),
         }
     }
 

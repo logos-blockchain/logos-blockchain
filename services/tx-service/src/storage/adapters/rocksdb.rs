@@ -42,7 +42,7 @@ where
         + 'static
         + Serialize
         + for<'de> Deserialize<'de>
-        + BinaryDecode<Context = ()>
+        + BinaryDecode<Context = u32>
         + Hashable<Hash = TxHash>
         + StorageSize,
     Key: Clone + Send + Sync + 'static + Into<TxHash>,

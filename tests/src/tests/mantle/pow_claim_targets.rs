@@ -7,7 +7,7 @@ use lb_groth16::Fr;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::config::{RunConfig, pow::serde::ClaimTarget};
 use lb_testing_framework::{
-    DeploymentBuilder, LbcManualCluster, TopologyConfig as TfTopologyConfig,
+    DeploymentBuilder, LbcManualCluster, LbcNodeConfig, TopologyConfig as TfTopologyConfig,
 };
 use logos_blockchain_tests::{
     common::manual_cluster::build_local_manual_cluster, cucumber::defaults::E2E_ARTIFACTS_DIR,
@@ -74,7 +74,10 @@ async fn start(
                     .with_peers(PeerSelection::None)
                     .with_persist_dir(scenario_base_dir.join(name))
                     .with_start_timeout(START_TIMEOUT)
-                    .create_patch(move |config| Ok::<_, DynError>(paying(config, target))),
+                    .create_patch(move |mut config: LbcNodeConfig| {
+                        config.run_config = paying(config.run_config, target);
+                        Ok::<_, DynError>(config)
+                    }),
             )
             .await,
     );

@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use lb_binary_codec::canonical::BinaryCodec;
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_poseidon2::Digest as _;
 use lb_program_spend::check_bounds;
@@ -27,7 +27,7 @@ static PROGRAM_DEPOSITS_V1: LazyLock<Fr> = LazyLock::new(|| {
 
 // A step paying a program from the user notes of its holder, consumed by the
 // next program step of its mini-block.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct ProgramDeposit {
     #[serde(with = "serde_fr")]
     pub program_id: ProgramId,
@@ -70,7 +70,7 @@ impl ProgramDeposit {
 
 // A step executing a program: it consumes the program deposits after the
 // previous program step of its mini-block.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct ProgramStep {
     #[serde(with = "serde_fr")]
     pub program_id: ProgramId,
@@ -260,7 +260,6 @@ pub mod test_utils {
 #[cfg(test)]
 mod tests {
     use ark_ff::PrimeField as _;
-    use lb_binary_codec::canonical::BinaryEncode as _;
     use lb_groth16::{AdditiveGroup as _, Field as _};
 
     use super::*;

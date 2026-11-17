@@ -3,6 +3,7 @@ use core::{
     time::Duration,
 };
 
+use lb_http_api_common::settings::{CorsOrigin, HostName};
 use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -19,8 +20,13 @@ pub struct Config {
 pub struct AxumBackendSettings {
     /// Listening address.
     pub listen_address: core::net::SocketAddr,
-    /// Allowed origins for these server deployment requests.
-    pub cors_origins: Vec<String>,
+    /// Browser origins allowed to use the API, such as `https://app.example`.
+    /// A page from any other origin is refused.
+    pub cors_origins: Vec<CorsOrigin>,
+    /// Host names the API answers to, such as `node.example`, on top of
+    /// `localhost` and any IP address. A request for any other name is refused,
+    /// which is what stops a web page from reaching the API by DNS rebinding.
+    pub allowed_hosts: Vec<HostName>,
     /// Timeout for API requests.
     #[serde_as(as = "MinimalBoundedDuration<1, SECOND>")]
     pub timeout: Duration,
@@ -47,6 +53,7 @@ impl Default for AxumBackendSettings {
         Self {
             listen_address: Self::default_listening_address(Self::default_port()),
             cors_origins: Vec::default(),
+            allowed_hosts: Vec::default(),
             timeout: Duration::from_secs(30),
             max_body_size: 10 * 1024 * 1024,
             max_concurrent_requests: 500,

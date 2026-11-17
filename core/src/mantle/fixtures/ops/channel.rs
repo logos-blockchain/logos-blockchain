@@ -17,7 +17,7 @@ use crate::{
         notes::{InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments},
         ops::channel::{
             ChannelId, MsgId,
-            config::ChannelConfigOp,
+            config::{ChannelConfigFields, ChannelConfigOp},
             deposit::{DepositOp, Metadata},
             inscribe::{Inscription, InscriptionOp, MiniBlocks, Step, UserStep},
             program_step::{ProgramDeposit, ProgramStep},
@@ -29,6 +29,8 @@ use crate::{
 
 codec_fixtures!(ChannelId, Self::from([0u8; 32]) => "0000000000000000000000000000000000000000000000000000000000000000");
 codec_fixtures!(MsgId, Self::from([0u8; 32]) => "0000000000000000000000000000000000000000000000000000000000000000");
+const MINIMAL_CHANNEL_CONFIG_HEX: &str = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100010101010101010101010101010101010101010101010101010101010101010100000000000000000100";
+
 codec_fixtures!(
     ChannelConfigOp,
     Self::new(
@@ -39,11 +41,24 @@ codec_fixtures!(
         SlotTimeout::from(0u32),
         NonZero::<u16>::MIN,
     )
-    .unwrap() => "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100010101010101010101010101010101010101010101010101010101010101010100000000000000000100",
+    .unwrap() => MINIMAL_CHANNEL_CONFIG_HEX,
     CHANNEL_CONFIG.clone() => CHANNEL_CONFIG_PAYLOAD_HEX,
 );
 codec_fixtures!(
+    ChannelConfigFields,
+    decode_only,
+    Self {
+        channel: ChannelId::from([0u8; 32]),
+        parent: MsgId::from([0u8; 32]),
+        keys: [Ed25519PublicKey::from_bytes(&[1u8; _]).unwrap()].into(),
+        posting_timeframe: SlotTimeframe::from(0u32),
+        posting_timeout: SlotTimeout::from(0u32),
+        configuration_threshold: NonZero::<u16>::MIN,
+    } => MINIMAL_CHANNEL_CONFIG_HEX
+);
+codec_fixtures!(
     DepositOp,
+    context = u32::MAX,
     Self {
         channel_id: ChannelId::from([0u8; 32]),
         inputs: InputNullifiers::default(),
@@ -56,9 +71,10 @@ codec_fixtures!(
 );
 codec_fixtures!(
     InscriptionOp,
+    context = u32::MAX,
     Self {
         channel_id: ChannelId::from([0u8; 32]),
-        inscription: b"genesis".into(),
+        inscription: Inscription::new_unchecked(b"genesis".to_vec()),
         parent: MsgId::from([0u8; 32]),
         signer: UnverifiedEd25519PublicKey::from_bytes(&[0u8; _]).unwrap(),
         mini_blocks: MiniBlocks::default(),

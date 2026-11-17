@@ -46,9 +46,9 @@ use crate::{
     LogosBlockchainNode, OperationStatus, OperationStatusCode,
     api::{
         blend::{blend_info, blend_join_as_core_node},
-        chain::get_chain_id,
+        chain::{get_chain_id, get_fork_digest},
         channel::get_channel_state,
-        config::{GenerateConfigArgs, generate_user_config, participate},
+        config::{GenerateConfigArgs, generate_user_config, participate, show_config},
         cryptarchia::{free_cryptarchia_info, get_block_events, get_cryptarchia_info},
         deployment::{free_deployment_info, get_deployment_info},
         free_cstring,
@@ -153,8 +153,8 @@ struct TestConfigPaths {
 impl TestConfigPaths {
     fn new() -> Self {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        std::fs::create_dir_all(temp_dir.path().join("state/logs"))
-            .expect("Failed to create log dir");
+        let log_dir = temp_dir.path().join("state/logs");
+        std::fs::create_dir_all(&log_dir).expect("Failed to create log dir");
 
         let node_config_path = temp_dir.path().join("standalone-node-config.yaml");
 
@@ -164,6 +164,9 @@ impl TestConfigPaths {
         )
         .expect("Standalone user config should deserialize");
         node_config.state.base_folder = temp_dir.path().join("state");
+        if let Some(file) = node_config.tracing.logger.file.as_mut() {
+            file.directory = log_dir;
+        }
         node_config.api.backend.listen_address = "127.0.0.1:0"
             .parse()
             .expect("Local address should be correct");
@@ -208,6 +211,7 @@ mod no_node {
 
         unsafe {
             assert_eq!(code(get_chain_id(node)), np);
+            assert_eq!(code(get_fork_digest(node)), np);
             assert_eq!(code(get_network_info(node)), np);
             assert_eq!(code(get_channel_state(node, id.as_ptr())), np);
             assert_eq!(code(get_time_info(node)), np);
@@ -248,6 +252,7 @@ mod no_node {
             assert_eq!(code(start_lb_node(null_s, null_s)), np);
             assert_eq!(code(start_lb_node(null_s, s)), np);
             assert_eq!(code(get_peer_id(null_s)), np);
+            assert_eq!(code(show_config(null_s)), np);
             assert_eq!(code(participate(null_s, s, null_s, null_port)), np);
             assert_eq!(code(participate(s, null_s, null_s, null_port)), np);
             assert_eq!(code(generate_key(null_s, KeyType::Zk as u32, null_s)), np);
@@ -526,6 +531,10 @@ mod no_node {
         assert!(result.is_ok());
         assert!(unsafe { free_cstring(result.value) }.is_ok());
 
+        let result = unsafe { show_config(output.as_ptr()) };
+        assert!(result.is_ok());
+        assert!(unsafe { free_cstring(result.value) }.is_ok());
+
         let result = unsafe { generate_key(kms.as_ptr(), KeyType::Zk as u32, ptr::null()) };
         assert!(result.is_ok());
         assert!(unsafe { free_cstring(result.value) }.is_ok());
@@ -755,6 +764,10 @@ mod with_node {
             // ---- plain getters ----
             assert_eq!(
                 string_result("get_chain_id", get_chain_id(node)),
+                OperationStatusCode::Ok
+            );
+            assert_eq!(
+                string_result("get_fork_digest", get_fork_digest(node)),
                 OperationStatusCode::Ok
             );
 

@@ -127,6 +127,9 @@ pub struct EraSchedulerSettings {
 pub struct EraCoverTrafficSettings {
     /// `F_c`: frequency at which cover messages are generated per round.
     pub message_frequency_per_round: PositiveF64,
+    /// `R_c`: the redundancy of cover messages. A core node's quota, and so the
+    /// cover messages it sends, grow to `1 + R_c` times what `F_c` gives.
+    pub replication_factor: u64,
 }
 
 #[cfg(test)]
@@ -134,6 +137,7 @@ impl Default for EraCoverTrafficSettings {
     fn default() -> Self {
         Self {
             message_frequency_per_round: 1.try_into().unwrap(),
+            replication_factor: 0,
         }
     }
 }
@@ -150,8 +154,10 @@ impl EraCoverTrafficSettings {
             timings.rounds_per_epoch,
             self.message_frequency_per_round,
             num_blend_layers,
+            self.replication_factor,
             membership_size,
         )
+        .expect("The deployment checks that the Core Quota fits the `PoQ` circuit.")
     }
 }
 

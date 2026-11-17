@@ -10,7 +10,7 @@ use std::fmt::{Display, Formatter};
 use ark_ff::PrimeField as _;
 use lb_binary_codec::{
     bincode::BoundedSerializeOp,
-    canonical::{BinaryCodec, BinaryEncode},
+    canonical::{BinaryDecode, BinaryEncode},
 };
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnverifiedEd25519PublicKey};
@@ -35,7 +35,7 @@ type ChannelKeys<Key> = NonEmptyBoundedVec<Key, CHANNEL_MAX_KEYS>;
 pub type VerifiedChannelKeys = ChannelKeys<Ed25519PublicKey>;
 pub type UnverifiedChannelKeys = ChannelKeys<UnverifiedEd25519PublicKey>;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, BinaryCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, BinaryEncode, BinaryDecode)]
 pub struct ChannelId([u8; 32]);
 serde_bytes_newtype!(ChannelId, 32);
 
@@ -67,7 +67,7 @@ impl Display for ChannelId {
 }
 
 /// The id of the previous message in the channel
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, BinaryCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, BinaryEncode, BinaryDecode)]
 pub struct MsgId([u8; 32]);
 serde_bytes_newtype!(MsgId, 32);
 

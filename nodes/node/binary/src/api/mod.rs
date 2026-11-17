@@ -1,4 +1,5 @@
 pub mod backend;
+mod browser_access;
 mod errors;
 pub mod handlers;
 mod openapi;

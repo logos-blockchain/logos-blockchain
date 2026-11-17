@@ -723,7 +723,7 @@ mod tests {
 
     use futures::StreamExt as _;
     use lb_core::{
-        block::{Block, MAX_BLOCK_TRANSACTIONS_SIZE},
+        block::{Block, BlockLimits},
         header::HeaderId,
     };
     use lb_cryptarchia_engine::Slot;
@@ -1326,7 +1326,7 @@ mod tests {
             provider_swarm,
             LargeBlocksProvider {
                 blocks_count: 60,
-                block_size: MAX_BLOCK_TRANSACTIONS_SIZE,
+                block_size: BLOCK_LIMITS.max_transactions_size as usize,
             },
         ));
         let request = |swarm: &mut Swarm<Behaviour>| {
@@ -1634,6 +1634,13 @@ mod tests {
         (blocks, errors)
     }
 
+    /// The limits of the tests' blocks: 4 uncles, and 2 MiB of transactions.
+    const BLOCK_LIMITS: BlockLimits = BlockLimits {
+        max_uncles: 4,
+        max_transactions: 1024,
+        max_transactions_size: 2 * 1024 * 1024,
+    };
+
     fn new_swarm_with_quic(config: Config) -> Swarm<Behaviour> {
         let keypair = libp2p::identity::Keypair::generate_ed25519();
         libp2p::SwarmBuilder::with_existing_identity(keypair)
@@ -1645,7 +1652,7 @@ mod tests {
                 Behaviour::new(
                     StreamProtocol::new("/tests/chain-sync"),
                     config,
-                    Block::<()>::max_encoded_size(4),
+                    Block::<()>::max_encoded_size(BLOCK_LIMITS),
                 )
             })
             .unwrap()

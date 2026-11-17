@@ -10,8 +10,9 @@ use crate::{
     UserConfig,
     cli::InitArgs,
     config::{
-        check_leader_funding_key, check_pow_claim_targets, keystore::Keystore, update_api,
-        update_blend, update_cryptarchia, update_network, update_sdp, update_state, update_tracing,
+        changed_values, check_leader_funding_key, check_pow_claim_targets, keystore::Keystore,
+        update_api, update_blend, update_cryptarchia, update_network, update_sdp, update_state,
+        update_tracing, with_version,
     },
 };
 
@@ -48,11 +49,13 @@ pub fn run(mut args: InitArgs) -> Result<()> {
     check_leader_funding_key(&config)?;
     check_pow_claim_targets(&config)?;
 
-    let overrides = changed_values(
-        &serde_yaml::to_value(&defaults)?,
-        serde_yaml::to_value(&config)?,
-    )
-    .unwrap_or_else(|| Value::Mapping(Mapping::new()));
+    let overrides = with_version(
+        changed_values(
+            &serde_yaml::to_value(&defaults)?,
+            serde_yaml::to_value(&config)?,
+        )
+        .unwrap_or_else(|| Value::Mapping(Mapping::new())),
+    );
     // Nothing is written before every override has been validated.
     if !existing_keystore {
         write_creating_parent_dirs(
@@ -115,26 +118,6 @@ fn apply(config: &mut UserConfig, args: InitArgs) -> Result<()> {
     update_state(&mut config.state, state);
 
     Ok(())
-}
-
-/// The part of `after` that differs from `before`, or `None` when nothing does.
-fn changed_values(before: &Value, after: Value) -> Option<Value> {
-    match (before, after) {
-        (Value::Mapping(before), Value::Mapping(after)) => {
-            let changed: Mapping = after
-                .into_iter()
-                .filter_map(|(key, value)| {
-                    let value = match before.get(&key) {
-                        Some(previous) => changed_values(previous, value)?,
-                        None => value,
-                    };
-                    Some((key, value))
-                })
-                .collect();
-            (!changed.is_empty()).then_some(Value::Mapping(changed))
-        }
-        (before, after) => (*before != after).then_some(after),
-    }
 }
 
 #[cfg(test)]

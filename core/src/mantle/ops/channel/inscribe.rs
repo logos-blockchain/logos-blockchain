@@ -1,7 +1,7 @@
 use std::{collections::HashSet, iter::Chain, slice, sync::Arc};
 
 use ark_ff::PrimeField as _;
-use lb_binary_codec::canonical::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Fr, serde::serde_fr};
 #[cfg(any(test, feature = "test-utils"))]
@@ -23,11 +23,7 @@ use crate::{
             InscriptionDeferredProofs, ProgramProofInput,
         },
         channel::{ChannelState, Channels, Error, channel_note_set},
-        gas::{
-            EXECUTION_OPENING_GAS, EXECUTION_PROGRAM_DEPOSIT_GAS, EXECUTION_PROGRAM_STEP_GAS,
-            EXECUTION_SIGNATURE_GAS, EXECUTION_USER_STEP_GAS, Gas, GasOverflow, MainnetGasProfile,
-            OpGasCalculator, OpGasContext, OperationGas, spend_gas,
-        },
+        gas::{Gas, GasOverflow, GasProfile, OpGasCalculator, OpGasContext},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{StandardMode, VerificationMode},
@@ -88,7 +84,7 @@ pub const MAX_MINI_BLOCKS: usize = u16::MAX as usize; // MiniBlockCount = UINT16
 pub type MiniBlock = NonEmptyBoundedVec<Step, MAX_CHANNEL_STEPS>;
 pub type MiniBlocks = UpperBoundedVec<MiniBlock, MAX_MINI_BLOCKS>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct UserStep {
     pub inputs: InputNullifiers,
     pub outputs: OutputCommitments,
@@ -351,13 +347,26 @@ impl BinaryEncode for InscriptionOp {
 }
 
 impl BinaryDecode for InscriptionOp {
-    type Context = ();
+    /// The most bytes the era the inscription is decoded under allows its
+    /// inscriptions together.
+    type Context = u32;
 
     fn decode<'input>(
         input: &'input [u8],
-        (): &Self::Context,
+        max_op_data_size: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
+        let max = usize::try_from(*max_op_data_size).unwrap_or(usize::MAX);
         let (rest, channel_id) = ChannelId::decode(input, &())?;
+        // The era bounds the inscription before its bytes are read.
+        let (_, inscription_len) = u32::decode(rest, &())?;
+        let inscription_len = usize::try_from(inscription_len).unwrap_or(usize::MAX);
+        if inscription_len > max {
+            return Err(DecodeError::length_out_of_bounds::<Inscription>(
+                inscription_len,
+                0,
+                max,
+            ));
+        }
         let (rest, inscription) = Inscription::decode(rest, &())?;
         let (rest, parent) = MsgId::decode(rest, &())?;
         let (rest, signer) = UnverifiedEd25519PublicKey::decode(rest, &())?;
@@ -369,9 +378,9 @@ impl BinaryDecode for InscriptionOp {
             signer,
             mini_blocks,
         };
-        if operation.inscriptions_len() > MAX_BYTES {
+        if operation.inscriptions_len() > max {
             return Err(DecodeError::invalid_value::<Self>(
-                "the inscriptions of an inscribe total more than MAX_OPERATION_DATA_SIZE bytes",
+                "the inscriptions of an inscribe total more than the era's max_op_data_size bytes",
             ));
         }
         Ok((rest, operation))
@@ -387,7 +396,7 @@ impl InscriptionOp {
     }
 
     /// The bytes of the inscription and of the inscriptions of the steps, which
-    /// count together against `MAX_OPERATION_DATA_SIZE`.
+    /// count together against the era's `max_op_data_size`.
     #[must_use]
     pub fn inscriptions_len(&self) -> usize {
         self.inscription.len()
@@ -469,7 +478,7 @@ impl InscriptionOp {
     pub fn sample() -> Self {
         Self {
             channel_id: ChannelId::from([14u8; 32]),
-            inscription: b"hello logos".into(),
+            inscription: Inscription::new_unchecked(b"hello logos".to_vec()),
             parent: MsgId::root(),
             signer: Ed25519Key::from_bytes(&[15; 32])
                 .public_key()
@@ -530,31 +539,34 @@ impl ProvableOperation for InscriptionOp {
     const CODE: u8 = 0x11;
 }
 
-impl OperationGas<MainnetGasProfile> for InscriptionOp {
-    const GAS_COST: Gas = Gas::new(26);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for InscriptionOp {
+impl OpGasCalculator for InscriptionOp {
     // The Operation and its signature, plus each step beyond its spend: a user
     // step, a program deposit, or a program step with its program proof and an
     // opening per program note, the spend of a program step covering its program
     // outputs and its outputs.
-    fn execution_gas(&self, _context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
-        let mut gas = Self::GAS_COST.checked_add(EXECUTION_SIGNATURE_GAS)?;
+    fn execution_gas(
+        &self,
+        profile: &GasProfile,
+        _context: &impl OpGasContext,
+    ) -> Result<Gas, GasOverflow> {
+        let mut gas = profile.channel_inscribe.checked_add(profile.signature)?;
         for step in self.steps() {
             let step_gas = match step {
-                Step::User(step) => EXECUTION_USER_STEP_GAS
-                    .checked_add(spend_gas(step.inputs.len(), step.outputs.len())?)?,
-                Step::ProgramDeposit(deposit) => EXECUTION_PROGRAM_DEPOSIT_GAS
-                    .checked_add(spend_gas(deposit.inputs.len(), deposit.outputs.len())?)?,
+                Step::User(step) => profile
+                    .user_step
+                    .checked_add(profile.spend_gas(step.inputs.len(), step.outputs.len())?)?,
+                Step::ProgramDeposit(deposit) => profile
+                    .program_deposit
+                    .checked_add(profile.spend_gas(deposit.inputs.len(), deposit.outputs.len())?)?,
                 Step::Program(step) => {
                     let program_notes = step.program_outputs.len();
                     let outputs = program_notes
                         .checked_add(step.outputs.len())
                         .ok_or(GasOverflow)?;
-                    EXECUTION_PROGRAM_STEP_GAS
-                        .checked_add(spend_gas(step.inputs.len(), outputs)?)?
-                        .checked_add(EXECUTION_OPENING_GAS.checked_mul(
+                    profile
+                        .program_step
+                        .checked_add(profile.spend_gas(step.inputs.len(), outputs)?)?
+                        .checked_add(profile.opening.checked_mul(
                             Value::try_from(program_notes).map_err(|_| GasOverflow)?,
                         )?)?
                 }
@@ -982,7 +994,7 @@ mod tests {
     fn sample() -> InscriptionOp {
         InscriptionOp {
             channel_id: ChannelId([0u8; 32]),
-            inscription: b"genesis".into(),
+            inscription: Inscription::new_unchecked(b"genesis".to_vec()),
             parent: MsgId([0u8; 32]),
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
             mini_blocks: MiniBlocks::default(),
@@ -1039,10 +1051,11 @@ mod tests {
             }
         };
 
+        let max_op_data_size = u32::try_from(MAX_BYTES).unwrap();
         let at_the_limit = inscribed(0);
         assert_eq!(at_the_limit.inscriptions_len(), MAX_BYTES);
         assert_eq!(
-            InscriptionOp::decode(&at_the_limit.encode(), &())
+            InscriptionOp::decode(&at_the_limit.encode(), &max_op_data_size)
                 .unwrap()
                 .1,
             at_the_limit
@@ -1050,7 +1063,7 @@ mod tests {
 
         let over = inscribed(1);
         assert!(matches!(
-            InscriptionOp::decode(&over.encode(), &()),
+            InscriptionOp::decode(&over.encode(), &max_op_data_size),
             Err(DecodeError::InvalidValue { .. })
         ));
         let steps: Vec<Step> = over.steps().cloned().collect();
@@ -1102,13 +1115,13 @@ mod tests {
 
         assert_eq!(
             signed_operation.preverify(&InscriptionPreverificationContext {
-                tx_hash_view: &signed_view
+                tx_hash_view: &signed_view,
             }),
             Ok(())
         );
         assert_eq!(
             signed_operation.preverify(&InscriptionPreverificationContext {
-                tx_hash_view: &other_view
+                tx_hash_view: &other_view,
             }),
             Err(Error::InvalidSignature)
         );
@@ -1126,7 +1139,7 @@ mod tests {
 
         assert_eq!(
             signed_operation.preverify(&InscriptionPreverificationContext {
-                tx_hash_view: &tx_hash_view
+                tx_hash_view: &tx_hash_view,
             }),
             Err(Error::InvalidSignature)
         );
@@ -1429,7 +1442,8 @@ mod tests {
     fn inscription_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
             assert_eq!(
-                InscriptionOp::sample().execution_gas(&FixedThresholds(threshold)),
+                InscriptionOp::sample()
+                    .execution_gas(&GasProfile::MAINNET, &FixedThresholds(threshold)),
                 // 26 + 557
                 Ok(Gas::new(583))
             );
@@ -1449,7 +1463,7 @@ mod tests {
             let operation = with_steps(vec![Step::User(step.clone()); steps]);
             for threshold in [0, 3] {
                 assert_eq!(
-                    operation.execution_gas(&FixedThresholds(threshold)),
+                    operation.execution_gas(&GasProfile::MAINNET, &FixedThresholds(threshold)),
                     Ok(Gas::new(expected))
                 );
             }
@@ -1486,7 +1500,7 @@ mod tests {
         ] {
             let operation = with_steps(steps);
             assert_eq!(
-                operation.execution_gas(&FixedThresholds(3)),
+                operation.execution_gas(&GasProfile::MAINNET, &FixedThresholds(3)),
                 Ok(Gas::new(expected))
             );
         }
@@ -1503,7 +1517,7 @@ mod tests {
         // 583 + 13528 + the spend of two inputs and three outputs (4177 + 2 * 1758 +
         // 3 * 58) + two openings (2 * 470)
         assert_eq!(
-            operation.execution_gas(&FixedThresholds(3)),
+            operation.execution_gas(&GasProfile::MAINNET, &FixedThresholds(3)),
             Ok(Gas::new(583 + 13_528 + 7_867 + 940))
         );
     }

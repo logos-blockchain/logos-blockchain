@@ -8,7 +8,8 @@ use lb_groth16::Fr;
 
 use crate::{
     block::{
-        Block, BlockTransactionReferences, BlockTransactions, Proposal, References, UncleHeaders,
+        Block, BlockLimits, BlockTransactionReferences, BlockTransactions, Proposal, References,
+        UncleHeaders,
     },
     header::{ContentId, Header, HeaderId},
     mantle::{
@@ -21,16 +22,25 @@ use crate::{
 
 /// The three real references every reference fixture below is built from.
 fn three_references() -> BlockTransactionReferences {
-    [
-        TxHash([0x01u8; 32]).prefix(),
-        TxHash([0x02u8; 32]).prefix(),
-        TxHash([0x03u8; 32]).prefix(),
-    ]
-    .into()
+    BlockTransactionReferences::try_new(
+        vec![
+            TxHash([0x01u8; 32]).prefix(),
+            TxHash([0x02u8; 32]).prefix(),
+            TxHash([0x03u8; 32]).prefix(),
+        ],
+        FIXTURE_LIMITS.max_transactions,
+    )
+    .unwrap()
 }
 
 /// The uncle maximum the fixtures are built and decoded under.
 const FIXTURE_MAX_UNCLES: u8 = 4;
+/// The limits the fixtures are built and decoded under.
+const FIXTURE_LIMITS: BlockLimits = BlockLimits {
+    max_uncles: FIXTURE_MAX_UNCLES,
+    max_transactions: 1024,
+    max_transactions_size: 2 * 1024 * 1024,
+};
 
 fn three_uncle_headers() -> UncleHeaders {
     UncleHeaders::try_new(
@@ -56,6 +66,7 @@ fn header(id: u8) -> Header {
 
 codec_fixtures!(
     References,
+    context = FIXTURE_LIMITS.max_transactions,
     Self { mempool_transactions: three_references() } => "0300010101010101010101010101010101010202020202020202020202020202020203030303030303030303030303030303"
 );
 
@@ -74,7 +85,7 @@ codec_fixtures!(
 // little-endian length prefix ahead of its 3 * 16-byte hash prefixes.
 codec_fixtures!(
     Proposal,
-    context = FIXTURE_MAX_UNCLES,
+    context = FIXTURE_LIMITS,
     Self {
         header: header(0x00),
         uncle_headers: three_uncle_headers(),
@@ -100,6 +111,7 @@ where
         three_uncle_headers(),
         proof,
         BlockTransactions::empty(),
+        FIXTURE_LIMITS.max_transactions_size,
     )
     .expect("The fixture block is valid.")
 }
@@ -127,7 +139,7 @@ where
 mod tests {
     use lb_binary_codec::canonical::assert_codec_fixtures_with;
 
-    use super::FIXTURE_MAX_UNCLES;
+    use super::FIXTURE_LIMITS;
     use crate::{
         block::Block,
         mantle::{
@@ -139,7 +151,11 @@ mod tests {
     #[test]
     fn block_fixtures_round_trip() {
         assert_codec_fixtures_with::<Block<SignedOps<Preverified, StandardMode>>, _>(|| {
-            (FIXTURE_MAX_UNCLES, ())
+            (
+                FIXTURE_LIMITS.max_uncles,
+                FIXTURE_LIMITS.max_transactions_size,
+                (FIXTURE_LIMITS.max_transactions, u32::MAX),
+            )
         });
     }
 }

@@ -2,14 +2,17 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use lb_core::mantle::{
-    Op, OpProof, OpRef, SignedOps, TxHash,
-    gas::{MainnetGasProfile, TxGasCalculator as _},
-    notes::NoteNullifier,
-    ops::{ChannelInscribeProof, ZkTransferProof, transfer::test_utils::prove_transfer},
-    traits::Hashable as _,
-    transactions::{
-        MantleTxBuilder, OpProofs, Ops, builder::ZkTransferOpening, tx_list::ops::OpsContext,
+use lb_core::{
+    era::ForkDigest,
+    mantle::{
+        Op, OpProof, OpRef, SignedOps, TxHash,
+        gas::TxGasCalculator as _,
+        notes::NoteNullifier,
+        ops::{ChannelInscribeProof, ZkTransferProof, transfer::test_utils::prove_transfer},
+        traits::Hashable as _,
+        transactions::{
+            MantleTxBuilder, OpProofs, Ops, builder::ZkTransferOpening, tx_list::ops::OpsContext,
+        },
     },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, UnsecuredZkKey, ZkKey, ZkPublicKey};
@@ -25,6 +28,7 @@ pub(super) type WalletTransferSigners = HashMap<NoteNullifier, (OwnedNote, ZkKey
 
 pub(super) fn sign_prepared_wallet_transaction(
     funded_builder: MantleTxBuilder,
+    fork_digest: ForkDigest,
     context: &OpsContext,
     tx_hash: TxHash,
     transfer_proofs: OpProofs,
@@ -36,7 +40,7 @@ pub(super) fn sign_prepared_wallet_transaction(
         .into_values()
         .flat_map(|opening| opening.outputs)
         .collect();
-    let mantle_tx = funded_builder.build()?;
+    let mantle_tx = funded_builder.build(fork_digest)?;
     let op_proofs = {
         let mut leading_op_proofs_vec = leading_op_proofs.into_inner().into_inner();
         leading_op_proofs_vec.extend(transfer_proofs);
@@ -46,7 +50,7 @@ pub(super) fn sign_prepared_wallet_transaction(
     let signed_tx = SignedOps::from_parts(mantle_tx, op_proofs)?.preverify()?;
     let mandatory_fee_at_preparation = signed_tx
         .op_refs()
-        .total_gas_cost::<MainnetGasProfile>(&context.gas_context)?
+        .total_gas_cost(&context.gas_context)?
         .into_inner();
     // The excess of a Transfer is what it pays.
     let paid_fee = signed_tx
@@ -203,8 +207,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[0x42; 32]);
         let operation = InscriptionOp {
             channel_id: ChannelId::from([0x24; 32]),
-            inscription: Inscription::try_from(1u64.to_le_bytes().to_vec())
-                .expect("small fixed-width payload"),
+            inscription: Inscription::new_unchecked(1u64.to_le_bytes().to_vec()),
             parent: MsgId::root(),
             signer: signing_key.public_key().into_unverified(),
             mini_blocks: MiniBlocks::default(),

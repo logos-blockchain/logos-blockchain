@@ -8,10 +8,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         batch::DeferredZkTransfer,
-        gas::{
-            EXECUTION_SIGNATURE_GAS, Gas, GasOverflow, MainnetGasProfile, OpGasCalculator,
-            OpGasContext, OperationGas, root_gas, spend_gas,
-        },
+        gas::{Gas, GasOverflow, GasProfile, OpGasCalculator, OpGasContext},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
             VerifiableOperation,
@@ -62,18 +59,19 @@ impl OpId for SDPWithdrawOp {
     }
 }
 
-impl OperationGas<MainnetGasProfile> for SDPWithdrawOp {
-    const GAS_COST: Gas = Gas::new(0);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for SDPWithdrawOp {
+impl OpGasCalculator for SDPWithdrawOp {
     // The Operation, plus its signature, the spend of the service note and the
     // root of the note alone, the empty MMR extended by one commitment.
-    fn execution_gas(&self, _context: &impl OpGasContext) -> Result<Gas, GasOverflow> {
-        Self::GAS_COST
-            .checked_add(EXECUTION_SIGNATURE_GAS)?
-            .checked_add(spend_gas(1, self.outputs.len())?)?
-            .checked_add(root_gas(1)?)
+    fn execution_gas(
+        &self,
+        profile: &GasProfile,
+        _context: &impl OpGasContext,
+    ) -> Result<Gas, GasOverflow> {
+        profile
+            .sdp_withdraw
+            .checked_add(profile.signature)?
+            .checked_add(profile.spend_gas(1, self.outputs.len())?)?
+            .checked_add(profile.root_gas(1)?)
     }
 }
 
@@ -600,7 +598,8 @@ mod tests {
         // of the note alone, 2332 + 60
         for threshold in [0, 1, 3] {
             assert_eq!(
-                SDPWithdrawOp::sample().execution_gas(&FixedThresholds(threshold)),
+                SDPWithdrawOp::sample()
+                    .execution_gas(&GasProfile::MAINNET, &FixedThresholds(threshold)),
                 Ok(Gas::new(8_942))
             );
         }

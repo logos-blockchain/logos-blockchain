@@ -4,7 +4,7 @@ Feature: Blend diagnostics
   Scenario Outline: Observe TSI after majority Blend provider outage and partial recovery parameter_set=<parameter_set>
     Given I have a cluster with capacity of 10 nodes
     And the first 10 nodes are declared as blend providers
-    And the cluster uses diagnostic parameter set "<parameter_set>"
+    And the cluster uses parameter set "<parameter_set>"
     And the cluster uses SDP funding of 10000000 per provider split across 5 notes
 
     And I start node "NODE_2"
@@ -42,7 +42,6 @@ Feature: Blend diagnostics
 
     Examples:
       | parameter_set          |
-      | clean_control          |
       | testnet_representative |
       | fast_repro             |
 
@@ -53,7 +52,7 @@ Feature: Blend diagnostics
     And the cluster uses SDP funding of 10000000 per provider split across 5 notes
 
     And the cluster uses cryptarchia security parameter <k>
-    # Cap W at k-1 (floor 1) to reduce pruning-related instability while retaining uncle activity.
+    # W is the widest that k allows, floor(0.6k), to reduce pruning-related instability while retaining uncle activity.
     And I have deployment config override "eras.0.cryptarchia.uncle_reference_window_in_block" as "<uncle_window>"
     And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "1"
     And I have deployment config override "eras.0.cryptarchia.epoch_config.epoch_stake_distribution_stabilization" as "<p1>"
@@ -84,10 +83,10 @@ Feature: Blend diagnostics
 
     Examples:
       | k  | uncle_window | p1 | p2 | p3 | f_denominator | transitions |
-      | 3  | 2            | 1  | 1  | 1  | 10            | 10          |
-      | 5  | 4            | 3  | 3  | 4  | 10            | 10          |
-      | 10 | 9            | 3  | 3  | 4  | 30            | 10          |
-      | 15 | 12           | 3  | 3  | 4  | 30            | 10          |
+      | 3  | 1            | 1  | 1  | 1  | 10            | 10          |
+      | 5  | 3            | 3  | 3  | 4  | 10            | 10          |
+      | 10 | 6            | 3  | 3  | 4  | 30            | 10          |
+      | 15 | 9            | 3  | 3  | 4  | 30            | 10          |
       | 20 | 12           | 3  | 3  | 4  | 30            | 10          |
       | 25 | 12           | 3  | 3  | 4  | 30            | 10          |
       | 30 | 12           | 3  | 3  | 4  | 30            | 10          |
@@ -97,7 +96,7 @@ Feature: Blend diagnostics
   Scenario Outline: Observe EDGE fork churn after Blend provider reachability outage and partial recovery parameter_set=<parameter_set>
     Given I have a cluster with capacity of 12 nodes
     And the first 8 nodes are declared as blend providers
-    And the cluster uses diagnostic parameter set "<parameter_set>"
+    And the cluster uses parameter set "<parameter_set>"
     And the cluster uses SDP funding of 10000000 per provider split across 5 notes
     And Blend provider endpoints use controllable test relays
 
@@ -151,7 +150,7 @@ Feature: Blend diagnostics
 
     Given I have a cluster with capacity of 12 nodes
     And the first 8 nodes are declared as blend providers
-    And the cluster uses diagnostic parameter set "<parameter_set>"
+    And the cluster uses parameter set "<parameter_set>"
     And the cluster uses SDP funding of 10000000 per provider split across 5 notes
     And I have deployment config override "eras.0.blend.common.num_blend_layers" as "1"
     And I have deployment config override "eras.0.blend.common.data_replication_factor" as "1"
@@ -201,7 +200,7 @@ Feature: Blend diagnostics
       | 12            | 5           | 110000000    |
     And I have a cluster with capacity of 12 nodes
     And the first 8 nodes are declared as blend providers
-    And the cluster uses diagnostic parameter set "<parameter_set>"
+    And the cluster uses parameter set "<parameter_set>"
     And the cluster uses SDP funding of 10000000 per provider split across 5 notes
     And I have deployment config override "eras.0.blend.common.num_blend_layers" as "1"
     And I have deployment config override "eras.0.blend.common.data_replication_factor" as "1"
@@ -269,7 +268,7 @@ Feature: Blend diagnostics
       | 12            | 5           | 110000000     |
     And I have a cluster with capacity of 12 nodes
     And the first 8 nodes are declared as blend providers
-    And the cluster uses diagnostic parameter set "<parameter_set>"
+    And the cluster uses parameter set "<parameter_set>"
     And the cluster uses SDP funding of 10000000 per provider split across 5 notes
     And I have deployment config override "eras.0.blend.common.num_blend_layers" as "1"
     And I have deployment config override "eras.0.blend.common.data_replication_factor" as "1"

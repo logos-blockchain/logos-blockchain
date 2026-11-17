@@ -84,21 +84,14 @@ impl<'schedule> EraTransitionsTracker<'schedule> {
             .schedule
             .get(Era::new(era.into_inner().strict_add(1)))
             .expect("a transition period opens when the next era starts");
-        // In nanoseconds, so that slots of any length, sub-second ones included,
-        // are measured exactly.
-        let era_transition_period_in_nanos = era_settings
-            .timing
-            .slot_duration
-            .as_nanos()
-            .checked_mul(u128::from(era_settings.transition_slots))
-            .expect("a transition period must fit in nanoseconds");
-        let transition_period_duration_in_next_era_slots = era_transition_period_in_nanos
-            .div_ceil(next_era_schedule.parameters.timing.slot_duration.as_nanos());
+        let transition_period_in_next_era_slots = era_settings
+            .transition_period_in_slots_of(next_era_schedule.parameters)
+            .expect("a transition period must fit in slots");
         Slot::new(
-            next_era_schedule.first_slot.into_inner().strict_add(
-                u64::try_from(transition_period_duration_in_next_era_slots)
-                    .expect("a transition period must fit in slots"),
-            ),
+            next_era_schedule
+                .first_slot
+                .into_inner()
+                .strict_add(transition_period_in_next_era_slots),
         )
     }
 }

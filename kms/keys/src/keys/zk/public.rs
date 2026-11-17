@@ -1,8 +1,22 @@
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_groth16::{AdditiveGroup as _, Fr};
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    Ord,
+    BinaryEncode,
+    BinaryDecode,
+)]
 #[serde(transparent)]
 pub struct PublicKey(#[serde(with = "lb_groth16::serde::serde_fr")] Fr);
 

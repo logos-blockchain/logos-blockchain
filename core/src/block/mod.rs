@@ -5,11 +5,9 @@ mod uncle;
 
 use core::fmt::Debug;
 
-use lb_binary_codec::canonical::{
-    BinaryCodec, BinaryDecode, BinaryEncode, DecodeError, length_prefix_len,
-};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_cryptarchia_engine::Slot;
-use lb_utils::bounded::{BoundedError, BoundedVec, UpperBoundedVec};
+use lb_utils::bounded::{BoundedError, UpperRuntimeBoundedVec};
 use serde::{Deserialize, Serialize};
 pub use uncle::UncleHeaders;
 
@@ -24,17 +22,20 @@ use crate::{
     utils::merkle,
 };
 
-/// The maximum number of transactions allowed in a block.
-const MAX_BLOCK_TRANSACTIONS: usize = 1024;
-/// The bytes a block's transactions, or a proposal's references to them, are
-/// counted in when canonically encoded: the length prefix of a collection of
-/// at most [`MAX_BLOCK_TRANSACTIONS`] items.
-const BLOCK_TRANSACTIONS_COUNT_SIZE: usize = length_prefix_len::<MAX_BLOCK_TRANSACTIONS>();
-/// The maximum total size of all transactions in a block, in bytes (2 MiB).
-/// Note: This is not the total block size.
-pub const MAX_BLOCK_TRANSACTIONS_SIZE: usize = 1024 * 1024 * 2;
-
 pub type BlockNumber = u64;
+
+/// The most uncles, transactions and transaction bytes the era of a block
+/// allows: what the block, or a proposal of it, is built and decoded under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlockLimits {
+    /// The most uncles a block may reference.
+    pub max_uncles: u8,
+    /// The most transactions a block may hold.
+    pub max_transactions: u16,
+    /// The most bytes a block's transactions may take in their canonical
+    /// encoding, their count aside. Not the size of the whole block.
+    pub max_transactions_size: u32,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -57,48 +58,24 @@ pub enum HeaderError {
     GenesisSlot,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, BinaryEncode)]
 pub struct Proposal {
     pub header: Header,
     pub uncle_headers: UncleHeaders,
     pub references: References,
 }
 
-impl BinaryEncode for Proposal {
-    fn encoded_length(&self) -> usize {
-        let Self {
-            header,
-            uncle_headers,
-            references,
-        } = self;
-
-        header.encoded_length() + uncle_headers.encoded_length() + references.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let Self {
-            header,
-            uncle_headers,
-            references,
-        } = self;
-
-        header.encode_into(out);
-        uncle_headers.encode_into(out);
-        references.encode_into(out);
-    }
-}
-
 impl BinaryDecode for Proposal {
-    /// The most uncles the era of the proposal's slot allows.
-    type Context = u8;
+    /// The limits of the era of the proposal's slot.
+    type Context = BlockLimits;
 
     fn decode<'input>(
         input: &'input [u8],
-        max_uncles: &Self::Context,
+        limits: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
         let (input, header) = Header::decode(input, &())?;
-        let (input, uncle_headers) = UncleHeaders::decode(input, max_uncles)?;
-        let (input, references) = References::decode(input, &())?;
+        let (input, uncle_headers) = UncleHeaders::decode(input, &limits.max_uncles)?;
+        let (input, references) = References::decode(input, &limits.max_transactions)?;
         Ok((
             input,
             Self {
@@ -110,21 +87,45 @@ impl BinaryDecode for Proposal {
     }
 }
 
-/// Transaction-hash prefixes referenced by a block proposal.
-pub type BlockTransactionReferences = UpperBoundedVec<TxHashPrefix, MAX_BLOCK_TRANSACTIONS>;
+/// Transaction-hash prefixes referenced by a block proposal, at most as many as
+/// the era of the proposal allows transactions.
+pub type BlockTransactionReferences = UpperRuntimeBoundedVec<TxHashPrefix, u16>;
 
 /// References to transactions that are included in a block proposal.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, BinaryEncode)]
 pub struct References {
     /// Bounded hashes of the transactions that are included in the block
     /// proposal.
     pub mempool_transactions: BlockTransactionReferences,
 }
 
+impl BinaryDecode for References {
+    /// The most transactions the era of the proposal allows, which decoding
+    /// holds the count to.
+    type Context = u16;
+
+    fn decode<'input>(
+        input: &'input [u8],
+        max_transactions: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, mempool_transactions) =
+            BlockTransactionReferences::decode(input, &(*max_transactions, ()))?;
+        Ok((
+            input,
+            Self {
+                mempool_transactions,
+            },
+        ))
+    }
+}
+
 impl References {
-    /// Maximum canonical representation of the bounded transaction references.
-    pub const MAX_CANONICAL_ENCODED_SIZE: usize = BLOCK_TRANSACTIONS_COUNT_SIZE
-        + BlockTransactionReferences::MAX * TxHashPrefix::CANONICAL_ENCODED_SIZE;
+    /// The largest canonical encoding of the references of a proposal whose
+    /// era allows `max_transactions`.
+    #[must_use]
+    pub fn max_encoded_size(max_transactions: u16) -> usize {
+        size_of::<u16>() + usize::from(max_transactions) * TxHashPrefix::CANONICAL_ENCODED_SIZE
+    }
 
     /// Constructs a `References` instance from a list of transactions,
     /// extracting their hashes.
@@ -166,8 +167,9 @@ where
         let raw = RawBlock::<Tx>::deserialize(deserializer)?;
 
         // Serde reads blocks a node serves through its API, already checked
-        // against their era by that node, so it holds them to no era.
-        Self::reconstruct(raw.header, raw.uncle_headers, raw.transactions)
+        // against their era by that node, so it holds them to no era: their
+        // transactions to the most bytes an era's limit can be.
+        Self::reconstruct(raw.header, raw.uncle_headers, raw.transactions, u32::MAX)
             .map_err(serde::de::Error::custom)
     }
 }
@@ -204,34 +206,37 @@ impl<Tx> BinaryDecode for Block<Tx>
 where
     Tx: BinaryDecode + Hashable<Hash = TxHash> + StorageSize,
 {
-    /// The most uncles the era of the block's slot allows.
-    type Context = (u8, Tx::Context);
+    /// The most uncles the era of the block's slot allows, the most bytes that
+    /// era allows the block's transactions, then the context of its
+    /// transactions: the most transactions that era allows, with the
+    /// transactions' own context.
+    type Context = (u8, u32, (u16, Tx::Context));
 
     fn decode<'input>(
         input: &'input [u8],
-        (max_uncles, tx_context): &Self::Context,
+        (max_uncles, max_transactions_size, transactions_context): &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
         let (input, header) = Header::decode(input, &())?;
         let (input, uncle_headers) = UncleHeaders::decode(input, max_uncles)?;
-        let (input, transactions) = BlockTransactions::<Tx>::decode(input, tx_context)?;
-        let block = Self::reconstruct(header, uncle_headers, transactions)
+        let (input, transactions) = BlockTransactions::<Tx>::decode(input, transactions_context)?;
+        let block = Self::reconstruct(header, uncle_headers, transactions, *max_transactions_size)
             .map_err(|error| DecodeError::invalid_value::<Self>(error.to_string()))?;
         Ok((input, block))
     }
 }
 
 impl Proposal {
-    /// Maximum canonical encoded size of a block proposal whose era allows
-    /// `max_uncles`.
+    /// Maximum canonical encoded size of a block proposal whose era has
+    /// `limits`.
     ///
     /// The bound is composed from the maxima owned by each component rather
     /// than being an unexplained total. It describes the canonical encoding,
     /// not the configured-bincode representation.
     #[must_use]
-    pub fn max_encoded_size(max_uncles: u8) -> usize {
+    pub fn max_encoded_size(limits: BlockLimits) -> usize {
         Header::CANONICAL_ENCODED_SIZE
-            + UncleHeaders::max_encoded_size(max_uncles)
-            + References::MAX_CANONICAL_ENCODED_SIZE
+            + UncleHeaders::max_encoded_size(limits.max_uncles)
+            + References::max_encoded_size(limits.max_transactions)
     }
 
     #[must_use]
@@ -256,20 +261,24 @@ impl Proposal {
     }
 }
 
-/// Validated transaction payload for blocks.
+/// Validated transaction payload for blocks: at most as many transactions as
+/// the era of the block allows.
 ///
-/// The block stores transactions as this bounded vector directly, so the
-/// transaction-count limit is enforced at construction and deserialization
-/// boundaries.
-pub type BlockTransactions<Tx> = BoundedVec<Tx, 0, MAX_BLOCK_TRANSACTIONS>;
+/// The count is checked against the era's maximum, a `u16`, when the
+/// transactions are built or decoded. Serde reads them without an era, under
+/// the largest maximum of the type.
+pub type BlockTransactions<Tx> = UpperRuntimeBoundedVec<Tx, u16>;
 
 impl<Tx> Block<Tx> {
+    /// A block of `slot`, whose era allows its transactions
+    /// `max_transactions_size` bytes.
     pub fn create(
         parent_block: HeaderId,
         slot: Slot,
         uncle_headers: UncleHeaders,
         proof_of_leadership: Groth16LeaderProof,
         transactions: BlockTransactions<Tx>,
+        max_transactions_size: u32,
     ) -> Result<Self, Error>
     where
         Tx: Hashable<Hash = TxHash> + StorageSize,
@@ -295,15 +304,18 @@ impl<Tx> Block<Tx> {
         };
 
         // 6. Size is ok
-        block.validate_total_transactions_size()?;
+        block.validate_total_transactions_size(max_transactions_size)?;
 
         Ok(block)
     }
 
+    /// A block rebuilt from its parts, checked as an era that allows its
+    /// transactions `max_transactions_size` bytes does.
     pub fn reconstruct(
         header: Header,
         uncle_headers: UncleHeaders,
         transactions: BlockTransactions<Tx>,
+        max_transactions_size: u32,
     ) -> Result<Self, Error>
     where
         Tx: Hashable<Hash = TxHash> + StorageSize,
@@ -313,12 +325,12 @@ impl<Tx> Block<Tx> {
             uncle_headers,
             transactions,
         };
-        let block = block.into_verified()?;
+        let block = block.into_verified(max_transactions_size)?;
 
         Ok(block)
     }
 
-    fn into_verified(self) -> Result<Self, Error>
+    fn into_verified(self, max_transactions_size: u32) -> Result<Self, Error>
     where
         Tx: Hashable<Hash = TxHash> + StorageSize,
     {
@@ -326,7 +338,7 @@ impl<Tx> Block<Tx> {
         verify_header_alone(&self.header)?;
 
         // 2. Size is ok
-        self.validate_total_transactions_size()?;
+        self.validate_total_transactions_size(max_transactions_size)?;
 
         // 3. Body root matches the carried uncle headers and transactions
         self.validate_body_root()?;
@@ -334,21 +346,22 @@ impl<Tx> Block<Tx> {
         Ok(self)
     }
 
-    /// Maximum canonical encoded size of a block whose era allows
-    /// `max_uncles`: its transactions take at most
-    /// [`MAX_BLOCK_TRANSACTIONS_SIZE`] bytes besides their count.
+    /// Maximum canonical encoded size of a block whose era has `limits`: its
+    /// transactions take at most `limits.max_transactions_size` bytes besides
+    /// their count.
     #[must_use]
-    pub fn max_encoded_size(max_uncles: u8) -> usize {
+    pub fn max_encoded_size(limits: BlockLimits) -> usize {
         Header::CANONICAL_ENCODED_SIZE
-            + UncleHeaders::max_encoded_size(max_uncles)
-            + BLOCK_TRANSACTIONS_COUNT_SIZE
-            + MAX_BLOCK_TRANSACTIONS_SIZE
+            + UncleHeaders::max_encoded_size(limits.max_uncles)
+            + size_of::<u16>()
+            + limits.max_transactions_size as usize
     }
 
-    fn validate_total_transactions_size(&self) -> Result<usize, Error>
+    fn validate_total_transactions_size(&self, max_transactions_size: u32) -> Result<usize, Error>
     where
         Tx: Hashable<Hash = TxHash> + StorageSize,
     {
+        let max = max_transactions_size as usize;
         let mut total = 0usize;
 
         for item in &self.transactions {
@@ -356,14 +369,11 @@ impl<Tx> Block<Tx> {
                 .checked_add(item.storage_size())
                 .ok_or(Error::ContentTooBig {
                     size: usize::MAX,
-                    max: MAX_BLOCK_TRANSACTIONS_SIZE,
+                    max,
                 })?;
 
-            if total > MAX_BLOCK_TRANSACTIONS_SIZE {
-                return Err(Error::ContentTooBig {
-                    size: total,
-                    max: MAX_BLOCK_TRANSACTIONS_SIZE,
-                });
+            if total > max {
+                return Err(Error::ContentTooBig { size: total, max });
             }
         }
 
@@ -418,6 +428,13 @@ impl<Tx> Block<Tx> {
     }
 }
 
+/// A transaction carried by a block, with the slot of that block.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TxInBlock<Tx> {
+    pub tx: Tx,
+    pub slot: Slot,
+}
+
 /// Validates the header using only the content within the header.
 ///
 /// This does not check `body_root` because it commits to a body this function
@@ -453,10 +470,18 @@ mod tests {
     use lb_key_management_system_keys::keys::ZkPublicKey;
 
     use super::*;
-    use crate::mantle::{traits::hashable, transactions::Ops};
+    use crate::mantle::{
+        fixtures::ops::op_values::FORK_DIGEST,
+        traits::hashable,
+        transactions::{Ops, TxList},
+    };
 
     /// The most uncles the tests' blocks may reference.
     pub const TEST_MAX_UNCLES: u8 = 4;
+    /// The most transactions the tests' blocks may hold.
+    pub const TEST_MAX_TRANSACTIONS: u16 = 1024;
+    /// The most bytes the tests' blocks' transactions may take.
+    pub const TEST_MAX_TRANSACTIONS_SIZE: u32 = 2 * 1024 * 1024;
 
     pub fn create_proof() -> Groth16LeaderProof {
         let (_, private_inputs) = crate::proofs::leader_proof::test_utils::note_set_leader_inputs(
@@ -470,7 +495,7 @@ mod tests {
     }
 
     fn create_tx(count: usize) -> Vec<Ops> {
-        iter::repeat_with(|| Ops::new_unchecked(vec![]))
+        iter::repeat_with(|| Ops::new(FORK_DIGEST, TxList::new_unchecked(vec![])))
             .take(count)
             .collect()
     }
@@ -508,29 +533,37 @@ mod tests {
             UncleHeaders::empty(),
             proof_of_leadership.clone(),
             transactions,
+            TEST_MAX_TRANSACTIONS_SIZE,
         )
         .expect("Valid block should be created");
 
-        let transactions = BlockTransactions::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap();
+        let transactions = BlockTransactions::try_new(
+            create_tx(usize::from(TEST_MAX_TRANSACTIONS)),
+            TEST_MAX_TRANSACTIONS,
+        )
+        .unwrap();
         let _valid_block: Block<Ops> = Block::create(
             parent_block,
             slot,
             UncleHeaders::empty(),
             proof_of_leadership,
             transactions,
+            TEST_MAX_TRANSACTIONS_SIZE,
         )
         .expect("Valid block should be created");
 
-        let invalid_transaction_inputs_result =
-            BlockTransactions::<Ops>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS + 1));
+        let invalid_transaction_inputs_result = BlockTransactions::<Ops>::try_new(
+            create_tx(usize::from(TEST_MAX_TRANSACTIONS) + 1),
+            TEST_MAX_TRANSACTIONS,
+        );
 
         assert!(invalid_transaction_inputs_result.is_err());
         let error = invalid_transaction_inputs_result.unwrap_err();
 
         match error {
             BoundedError::TooManyItems { count, max } => {
-                assert_eq!(count, MAX_BLOCK_TRANSACTIONS + 1);
-                assert_eq!(max, MAX_BLOCK_TRANSACTIONS);
+                assert_eq!(count, usize::from(TEST_MAX_TRANSACTIONS) + 1);
+                assert_eq!(max, usize::from(TEST_MAX_TRANSACTIONS));
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -539,11 +572,14 @@ mod tests {
     #[test]
     fn proposal_references_preserve_transaction_hash_prefixes_and_order() {
         let parent_block = [0u8; 32].into();
-        let transactions = BlockTransactions::<IndexedTestMantleTx>::try_from(vec![
-            IndexedTestMantleTx { index: 1 },
-            IndexedTestMantleTx { index: 2 },
-            IndexedTestMantleTx { index: 3 },
-        ])
+        let transactions = BlockTransactions::<IndexedTestMantleTx>::try_new(
+            vec![
+                IndexedTestMantleTx { index: 1 },
+                IndexedTestMantleTx { index: 2 },
+                IndexedTestMantleTx { index: 3 },
+            ],
+            TEST_MAX_TRANSACTIONS,
+        )
         .unwrap();
         let expected_prefixes: Vec<_> = transactions
             .iter()
@@ -556,6 +592,7 @@ mod tests {
             UncleHeaders::empty(),
             create_proof(),
             transactions,
+            TEST_MAX_TRANSACTIONS_SIZE,
         )
         .unwrap()
         .to_proposal();
@@ -574,7 +611,12 @@ mod tests {
             Slot::from(42u64),
             UncleHeaders::empty(),
             create_proof(),
-            BlockTransactions::<Ops>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap(),
+            BlockTransactions::<Ops>::try_new(
+                create_tx(usize::from(TEST_MAX_TRANSACTIONS)),
+                TEST_MAX_TRANSACTIONS,
+            )
+            .unwrap(),
+            TEST_MAX_TRANSACTIONS_SIZE,
         )
         .unwrap();
 
@@ -582,48 +624,7 @@ mod tests {
 
         assert_eq!(
             proposal.mempool_transactions().len(),
-            MAX_BLOCK_TRANSACTIONS
-        );
-    }
-
-    #[test]
-    fn proposal_deserialization_rejects_excess_transaction_references() {
-        #[derive(Serialize)]
-        struct LegacyReferences {
-            mempool_transactions: Vec<TxHashPrefix>,
-        }
-
-        #[derive(Serialize)]
-        struct LegacyProposal {
-            header: Header,
-            uncle_headers: UncleHeaders,
-            references: LegacyReferences,
-        }
-
-        let proposal = Block::create(
-            [0u8; 32].into(),
-            Slot::from(42u64),
-            UncleHeaders::empty(),
-            create_proof(),
-            BlockTransactions::<Ops>::empty(),
-        )
-        .unwrap()
-        .to_proposal();
-        let legacy = LegacyProposal {
-            header: proposal.header.clone(),
-            uncle_headers: proposal.uncle_headers,
-            references: LegacyReferences {
-                mempool_transactions: vec![TxHashPrefix::default(); MAX_BLOCK_TRANSACTIONS + 1],
-            },
-        };
-        let bytes = bincode::serialize(&legacy).unwrap();
-
-        let error = <Proposal as lb_binary_codec::bincode::DeserializeOp>::from_bytes(&bytes)
-            .expect_err("proposal with too many transaction references must be rejected");
-
-        assert!(
-            error.to_string().contains("exceeds maximum"),
-            "unexpected deserialization error: {error}"
+            usize::from(TEST_MAX_TRANSACTIONS)
         );
     }
 
@@ -660,29 +661,40 @@ mod tests {
             UncleHeaders::empty(),
             proof_of_leadership.clone(),
             transactions,
+            TEST_MAX_TRANSACTIONS_SIZE,
         )
         .expect("Valid block should be created");
 
-        let transactions: BlockTransactions<TestMantleTx<MAX_BLOCK_TRANSACTIONS_SIZE>> =
-            BlockTransactions::try_from(vec![TestMantleTx::<MAX_BLOCK_TRANSACTIONS_SIZE>]).unwrap();
+        let transactions: BlockTransactions<TestMantleTx<{ TEST_MAX_TRANSACTIONS_SIZE as usize }>> =
+            BlockTransactions::try_new(
+                vec![TestMantleTx::<{ TEST_MAX_TRANSACTIONS_SIZE as usize }>],
+                TEST_MAX_TRANSACTIONS,
+            )
+            .unwrap();
         let _valid_block = Block::create(
             parent_block,
             slot,
             UncleHeaders::empty(),
             proof_of_leadership.clone(),
             transactions,
+            TEST_MAX_TRANSACTIONS_SIZE,
         )
         .expect("Valid block should be created");
 
-        let oversized: BlockTransactions<TestMantleTx<{ MAX_BLOCK_TRANSACTIONS_SIZE + 1 }>> =
-            BlockTransactions::try_from(vec![TestMantleTx::<{ MAX_BLOCK_TRANSACTIONS_SIZE + 1 }>])
-                .unwrap();
+        let oversized: BlockTransactions<
+            TestMantleTx<{ TEST_MAX_TRANSACTIONS_SIZE as usize + 1 }>,
+        > = BlockTransactions::try_new(
+            vec![TestMantleTx::<{ TEST_MAX_TRANSACTIONS_SIZE as usize + 1 }>],
+            TEST_MAX_TRANSACTIONS,
+        )
+        .unwrap();
         let invalid_transaction_inputs_result = Block::create(
             parent_block,
             slot,
             UncleHeaders::empty(),
             proof_of_leadership,
             oversized,
+            TEST_MAX_TRANSACTIONS_SIZE,
         );
 
         assert!(invalid_transaction_inputs_result.is_err());
@@ -690,17 +702,11 @@ mod tests {
 
         match error {
             Error::ContentTooBig { size, max } => {
-                assert_eq!(size, MAX_BLOCK_TRANSACTIONS_SIZE + 1);
-                assert_eq!(max, MAX_BLOCK_TRANSACTIONS_SIZE);
+                assert_eq!(size, TEST_MAX_TRANSACTIONS_SIZE as usize + 1);
+                assert_eq!(max, TEST_MAX_TRANSACTIONS_SIZE as usize);
             }
             other => panic!("unexpected error: {other:?}"),
         }
-    }
-
-    #[test]
-    fn global_block_limits_are_reflective_in_block_transaction_bounds() {
-        assert_eq!(BlockTransactions::<Ops>::MIN, 0);
-        assert_eq!(BlockTransactions::<Ops>::MAX, MAX_BLOCK_TRANSACTIONS);
     }
 
     #[test]
@@ -716,6 +722,7 @@ mod tests {
             UncleHeaders::empty(),
             proof,
             txs,
+            TEST_MAX_TRANSACTIONS_SIZE,
         )
         .unwrap_err();
 
@@ -730,19 +737,18 @@ mod tests {
         let parent_block = [0u8; 32].into();
         let proof = create_proof();
 
-        // Create a valid NON-genesis block first so we can reuse a valid signature
-        // shape.
+        // Create a valid NON-genesis block first so we can reuse its body root.
         let valid = Block::create(
             parent_block,
             Slot::from(1u64),
             UncleHeaders::empty(),
             proof.clone(),
             BlockTransactions::<Ops>::empty(),
+            TEST_MAX_TRANSACTIONS_SIZE,
         )
         .expect("valid non-genesis block");
 
-        // Rebuild header at genesis slot and sign it so signature itself is still
-        // consistent.
+        // Rebuild the header at the genesis slot.
         let genesis_header = Header::new(
             parent_block,
             *valid.header().body_root(),
@@ -754,6 +760,7 @@ mod tests {
             genesis_header,
             UncleHeaders::empty(),
             BlockTransactions::<Ops>::empty(),
+            TEST_MAX_TRANSACTIONS_SIZE,
         )
         .expect_err("genesis slot must be rejected by reconstruct path");
 
@@ -774,12 +781,21 @@ mod tests {
             Slot::from(42u64),
             UncleHeaders::try_new(uncles, TEST_MAX_UNCLES).unwrap(),
             proof,
-            BlockTransactions::<Ops>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap(),
+            BlockTransactions::<Ops>::try_new(
+                create_tx(usize::from(TEST_MAX_TRANSACTIONS)),
+                TEST_MAX_TRANSACTIONS,
+            )
+            .unwrap(),
+            TEST_MAX_TRANSACTIONS_SIZE,
         )
         .expect("valid block")
         .to_proposal();
 
-        let max_size = Proposal::max_encoded_size(TEST_MAX_UNCLES);
+        let max_size = Proposal::max_encoded_size(BlockLimits {
+            max_uncles: TEST_MAX_UNCLES,
+            max_transactions: TEST_MAX_TRANSACTIONS,
+            max_transactions_size: TEST_MAX_TRANSACTIONS_SIZE,
+        });
         assert_eq!(proposal.encoded_length(), max_size);
         assert_eq!(proposal.encode().len(), max_size);
         // Under 4 uncles, the size Blend pads every payload to.
@@ -788,18 +804,23 @@ mod tests {
 
     #[test]
     fn maximum_proposal_size_follows_the_header() {
+        let limits = BlockLimits {
+            max_uncles: TEST_MAX_UNCLES,
+            max_transactions: TEST_MAX_TRANSACTIONS,
+            max_transactions_size: TEST_MAX_TRANSACTIONS_SIZE,
+        };
         assert_eq!(
             UncleHeaders::max_encoded_size(TEST_MAX_UNCLES),
             1 + usize::from(TEST_MAX_UNCLES) * Header::CANONICAL_ENCODED_SIZE
         );
         // 273 byte header, 4 uncle headers, 1024 references.
         assert_eq!(
-            Proposal::max_encoded_size(TEST_MAX_UNCLES),
+            Proposal::max_encoded_size(limits),
             273 + 1 + 4 * 273 + 16_386
         );
         assert_eq!(Groth16LeaderProof::CANONICAL_ENCODED_SIZE, 200);
         assert_eq!(Header::CANONICAL_ENCODED_SIZE, 273);
-        assert_eq!(Proposal::max_encoded_size(TEST_MAX_UNCLES), 17_752);
+        assert_eq!(Proposal::max_encoded_size(limits), 17_752);
     }
 
     #[test]
@@ -812,7 +833,7 @@ mod tests {
         .unwrap();
 
         block_with_uncles(uncles, proof)
-            .into_verified()
+            .into_verified(TEST_MAX_TRANSACTIONS_SIZE)
             .expect("the carried headers are the ones the body root commits to");
     }
 
@@ -825,7 +846,7 @@ mod tests {
         block.uncle_headers = UncleHeaders::empty();
 
         assert!(matches!(
-            block.into_verified(),
+            block.into_verified(TEST_MAX_TRANSACTIONS_SIZE),
             Err(Error::BodyRootMismatch)
         ));
     }
@@ -841,7 +862,7 @@ mod tests {
             UncleHeaders::try_new(vec![uncle_header(2, &proof)], TEST_MAX_UNCLES).unwrap();
 
         assert!(matches!(
-            block.into_verified(),
+            block.into_verified(TEST_MAX_TRANSACTIONS_SIZE),
             Err(Error::BodyRootMismatch)
         ));
     }
@@ -858,7 +879,7 @@ mod tests {
         block.uncle_headers = UncleHeaders::try_new(vec![second, first], TEST_MAX_UNCLES).unwrap();
 
         assert!(matches!(
-            block.into_verified(),
+            block.into_verified(TEST_MAX_TRANSACTIONS_SIZE),
             Err(Error::BodyRootMismatch)
         ));
     }
@@ -879,6 +900,7 @@ mod tests {
             uncle_headers,
             proof,
             BlockTransactions::empty(),
+            TEST_MAX_TRANSACTIONS_SIZE,
         )
         .expect("block creation should succeed")
     }

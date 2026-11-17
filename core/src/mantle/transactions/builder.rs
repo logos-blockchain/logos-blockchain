@@ -11,14 +11,15 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
+    era::ForkDigest,
     mantle::{
-        GasProfile, Note, Op, Value,
+        Note, Op, Value,
         gas::{GasCost, GasOverflow, TxGasCalculator as _},
         notes::{InputNullifiers, NoteNullifier, OutputCommitments},
         ops::transfer::TransferOp,
         transactions::{
-            Ops,
-            tx_list::ops::{OpsContext, mantle_spec},
+            Ops, TxList,
+            tx_list::ops::{OpsContext, unbuilt_tx},
         },
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
@@ -95,7 +96,8 @@ impl From<u64> for PriorityFee {
     }
 }
 
-/// Builds an [`Ops`] incrementally.
+/// Builds an [`Ops`] incrementally. The transaction gets its fork digest when
+/// it is built, from whoever signs it.
 ///
 /// The builder is intentionally free of any [`OpsContext`]: gas prices are
 /// tip-dependent, so the context is supplied as a parameter to the fee-aware
@@ -105,8 +107,9 @@ impl From<u64> for PriorityFee {
 /// HTTP) to be funded against a freshly fetched context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MantleTxBuilder {
-    #[serde(rename = "mantle_tx", with = "mantle_spec")] // Shape as per spec
-    ops: Ops,
+    // The spec's transaction shape, without the fork digest it gets when built.
+    #[serde(rename = "mantle_tx", with = "unbuilt_tx")]
+    ops: TxList<Op>,
     funding_inputs: FundingInputs,
     funding_outputs: FundingOutputs,
     // The ledger set root the funding notes are proven against
@@ -129,7 +132,7 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            ops: Ops::empty(),
+            ops: TxList::empty(),
             funding_inputs: FundingInputs::empty(),
             funding_outputs: FundingOutputs::empty(),
             funding_root: Fr::ZERO,
@@ -158,7 +161,6 @@ impl MantleTxBuilder {
     pub fn extend_ops(mut self, ops: impl IntoIterator<Item = Op>) -> Result<Self, TxBuilderError> {
         for op in ops {
             self.ops
-                .0
                 .try_push(op)
                 .map_err(|err| TxBuilderError::from((err, BoundedTag::Ops)))?;
         }
@@ -197,7 +199,7 @@ impl MantleTxBuilder {
 
     /// Return a positive change output while reserving the requested
     /// priority fee above the final transaction's mandatory fee.
-    pub fn return_change<G: GasProfile>(
+    pub fn return_change(
         self,
         context: &OpsContext,
         change_pk: ZkPublicKey,
@@ -207,8 +209,7 @@ impl MantleTxBuilder {
         // Calculate the mandatory fee with a dummy change note so the reserve
         // is based on the final transaction shape.
         let candidate = self.with_dummy_change_note()?;
-        let available_change =
-            candidate.funding_delta_with_priority_fee::<G>(context, priority_fee)?;
+        let available_change = candidate.funding_delta_with_priority_fee(context, priority_fee)?;
 
         match available_change.cmp(&1) {
             Ordering::Less => {
@@ -265,32 +266,28 @@ impl MantleTxBuilder {
     /// Predicts the minimum gas cost of the transaction once signed.
     /// See [`TxGasCalculator::total_gas_cost`] to understand why this is
     /// only a minimum, not an exact cost.
-    pub fn minimum_gas_cost<G: GasProfile>(
-        &self,
-        context: &OpsContext,
-    ) -> Result<GasCost, TxBuilderError> {
+    pub fn minimum_gas_cost(&self, context: &OpsContext) -> Result<GasCost, TxBuilderError> {
         // The excess value has a fixed width, so the funding Transfer costs the
-        // same before the builder balances.
-        let build = self.ops_with_funding(0)?;
-        Ok(build.by_ref().total_gas_cost::<G>(&context.gas_context)?)
+        // same before the builder balances. Every fork digest has the same size,
+        // so the one the transaction will carry does not change its gas either:
+        // any prices it.
+        let build = self.ops_with_funding(ForkDigest::new([0; 32]), 0)?;
+        Ok(build.by_ref().total_gas_cost(&context.gas_context)?)
     }
 
-    pub fn funding_delta<G: GasProfile>(
-        &self,
-        context: &OpsContext,
-    ) -> Result<i128, TxBuilderError> {
-        Ok(self.net_balance() - i128::from(self.minimum_gas_cost::<G>(context)?.into_inner()))
+    pub fn funding_delta(&self, context: &OpsContext) -> Result<i128, TxBuilderError> {
+        Ok(self.net_balance() - i128::from(self.minimum_gas_cost(context)?.into_inner()))
     }
 
     /// Returns the balance remaining after the mandatory fee and the
     /// percentage-based priority fee reserve.
-    pub fn funding_delta_with_priority_fee<G: GasProfile>(
+    pub fn funding_delta_with_priority_fee(
         &self,
         context: &OpsContext,
         priority_fee: impl Into<PriorityFee>,
     ) -> Result<i128, TxBuilderError> {
         let priority_fee = priority_fee.into();
-        let mandatory_fee = self.minimum_gas_cost::<G>(context)?.into_inner();
+        let mandatory_fee = self.minimum_gas_cost(context)?.into_inner();
         let mut required_fee = Self::required_fee(mandatory_fee, priority_fee.percent)?;
         if let Some(max_fee) = priority_fee.max_fee {
             required_fee = required_fee.min(max_fee.into_inner().max(mandatory_fee));
@@ -374,14 +371,16 @@ impl MantleTxBuilder {
 
     // TODO: Change this to a `Result` if genesis tx already contains max number of
     // ops.
-    pub fn build(self) -> Result<Ops, TxBuilderError> {
+    /// The transaction, to be signed under the fork digest `fork_digest`,
+    /// with the funding Transfer as its last operation.
+    pub fn build(self, fork_digest: ForkDigest) -> Result<Ops, TxBuilderError> {
         if self.funding_inputs.is_empty() && !self.funding_outputs.is_empty() {
             return Err(TxBuilderError::FundingWithoutInputs);
         }
         let net_balance = self.net_balance();
         let excess_value = Value::try_from(net_balance)
             .map_err(|_| TxBuilderError::NegativeNetBalance { net_balance })?;
-        self.ops_with_funding(excess_value)
+        self.ops_with_funding(fork_digest, excess_value)
     }
 
     const fn funds(&self) -> bool {
@@ -390,7 +389,11 @@ impl MantleTxBuilder {
 
     // The Operations followed by the funding Transfer, when the builder funds
     // the transaction.
-    fn ops_with_funding(&self, excess_value: Value) -> Result<Ops, TxBuilderError> {
+    fn ops_with_funding(
+        &self,
+        fork_digest: ForkDigest,
+        excess_value: Value,
+    ) -> Result<Ops, TxBuilderError> {
         let mut ops = self.ops.clone();
         if self.funds() {
             let inputs = InputNullifiers::try_from_iter(
@@ -400,16 +403,15 @@ impl MantleTxBuilder {
             let outputs =
                 OutputCommitments::try_from_iter(self.funding_outputs.iter().map(Note::commitment))
                     .map_err(|err| TxBuilderError::from((err, BoundedTag::Outputs)))?;
-            ops.0
-                .try_push(Op::Transfer(TransferOp::new(
-                    inputs,
-                    outputs,
-                    self.funding_root,
-                    excess_value,
-                )))
-                .map_err(|err| TxBuilderError::from((err, BoundedTag::Ops)))?;
+            ops.try_push(Op::Transfer(TransferOp::new(
+                inputs,
+                outputs,
+                self.funding_root,
+                excess_value,
+            )))
+            .map_err(|err| TxBuilderError::from((err, BoundedTag::Ops)))?;
         }
-        Ok(ops)
+        Ok(Ops::new(fork_digest, ops))
     }
 }
 
@@ -420,15 +422,18 @@ mod tests {
 
     use super::*;
     use crate::mantle::{
-        gas::MainnetGasProfile,
+        fixtures::ops::op_values::FORK_DIGEST,
+        gas::GasProfile,
         ops::channel::{
             ChannelId,
-            deposit::DepositOp,
-            inscribe::{InscriptionOp, MiniBlocks},
+            deposit::{DepositOp, Metadata},
+            inscribe::{Inscription, InscriptionOp, MiniBlocks},
             withdraw::ChannelWithdrawOp,
         },
         transactions::{GasPrices, tx_list::ops::OpsGasContext},
     };
+
+    const GAS_PROFILE: GasProfile = GasProfile::MAINNET;
 
     fn funding_note(value: Value, nonce: u64, nullifier: u64) -> FundingNote {
         FundingNote {
@@ -445,7 +450,7 @@ mod tests {
         let builder = MantleTxBuilder::new()
             .push_op(Op::ChannelInscribe(InscriptionOp {
                 channel_id: [0; 32].into(),
-                inscription: b"hello".into(),
+                inscription: Inscription::new_unchecked(b"hello".to_vec()),
                 parent: [1; 32].into(),
                 signer: Ed25519Key::from_bytes(&[0; 32])
                     .public_key()
@@ -465,7 +470,10 @@ mod tests {
         assert_eq!(restored.net_balance(), builder.net_balance());
         assert_eq!(restored.funding_inputs(), builder.funding_inputs());
         assert_eq!(restored.openings(), builder.openings());
-        assert_eq!(restored.build().unwrap(), builder.build().unwrap());
+        assert_eq!(
+            restored.build(FORK_DIGEST).unwrap(),
+            builder.build(FORK_DIGEST).unwrap()
+        );
     }
 
     #[test]
@@ -473,7 +481,7 @@ mod tests {
         // Build an operation
         let op = InscriptionOp {
             channel_id: [0; 32].into(),
-            inscription: b"hello".into(),
+            inscription: Inscription::new_unchecked(b"hello".to_vec()),
             parent: [1; 32].into(),
             signer: Ed25519Key::from_bytes(&[0; 32])
                 .public_key()
@@ -483,7 +491,7 @@ mod tests {
 
         // Init a tx builder
         let context = OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0)),
+            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE),
         };
         let builder = MantleTxBuilder::new()
             .push_op(Op::ChannelInscribe(op))
@@ -491,12 +499,7 @@ mod tests {
 
         // Check that the tx is already balanced because of zero gas price
         assert_eq!(builder.net_balance(), 0);
-        assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
-            0
-        );
+        assert_eq!(builder.funding_delta(&context).unwrap(), 0);
     }
 
     #[test]
@@ -508,12 +511,12 @@ mod tests {
             commitment_merkle_root: Fr::ZERO,
             outputs: OutputCommitments::default(),
             excess_value: 0,
-            metadata: b"Mint 1 to Alice in Zone".into(),
+            metadata: Metadata::new_unchecked(b"Mint 1 to Alice in Zone".to_vec()),
         };
 
         // Init a tx builder
         let context = OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0)),
+            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE),
         };
         let builder = MantleTxBuilder::new()
             .push_op(Op::ChannelDeposit(op))
@@ -521,12 +524,7 @@ mod tests {
 
         // Check that the tx is already balanced because of zero gas price
         assert_eq!(builder.net_balance(), 0);
-        assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
-            0
-        );
+        assert_eq!(builder.funding_delta(&context).unwrap(), 0);
     }
 
     #[test]
@@ -541,7 +539,7 @@ mod tests {
 
         // Init a tx builder
         let context = OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0)),
+            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE),
         };
         let builder = MantleTxBuilder::new()
             .push_op(Op::ChannelWithdraw(op))
@@ -549,12 +547,7 @@ mod tests {
 
         // Check that the tx is already balanced because of zero gas price
         assert_eq!(builder.net_balance(), 0);
-        assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
-            0
-        );
+        assert_eq!(builder.funding_delta(&context).unwrap(), 0);
     }
 
     #[test]
@@ -562,12 +555,12 @@ mod tests {
         // Init a tx builder for sending 30 to the recipient
         let channel_id = ChannelId::from([0; 32]);
         let context = OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0)),
+            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE),
         };
         let builder = MantleTxBuilder::new()
             .push_op(Op::ChannelInscribe(InscriptionOp {
                 channel_id,
-                inscription: b"hello".into(),
+                inscription: Inscription::new_unchecked(b"hello".to_vec()),
                 parent: [1; 32].into(),
                 signer: Ed25519Key::from_bytes(&[0; 32])
                     .public_key()
@@ -581,7 +574,7 @@ mod tests {
                 commitment_merkle_root: Fr::ZERO,
                 outputs: OutputCommitments::default(),
                 excess_value: 0,
-                metadata: b"Mint 10 to Alice in Zone".into(),
+                metadata: Metadata::new_unchecked(b"Mint 10 to Alice in Zone".to_vec()),
             }))
             .unwrap()
             .push_op(Op::ChannelWithdraw(ChannelWithdrawOp {
@@ -597,9 +590,7 @@ mod tests {
         // Check the balance before funding tx
         assert_eq!(builder.net_balance(), -40);
         assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
+            builder.funding_delta(&context).unwrap(),
             -40 // zero gas price for now
         );
 
@@ -611,9 +602,7 @@ mod tests {
         // Check the tx is balanced
         assert_eq!(builder.net_balance(), 0);
         assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
+            builder.funding_delta(&context).unwrap(),
             0 // zero gas price for now
         );
     }
@@ -636,7 +625,12 @@ mod tests {
         );
         let openings = builder.openings();
 
-        let ops: Vec<Op> = builder.build().unwrap().iter().cloned().collect();
+        let ops: Vec<Op> = builder
+            .build(FORK_DIGEST)
+            .unwrap()
+            .iter()
+            .cloned()
+            .collect();
         assert_eq!(ops.len(), 2);
         assert_eq!(
             ops[1],
@@ -677,7 +671,7 @@ mod tests {
             .add_ledger_output(Note::new(1, Fr::ONE, ZkPublicKey::zero()))
             .unwrap();
         assert!(matches!(
-            builder.build(),
+            builder.build(FORK_DIGEST),
             Err(TxBuilderError::FundingWithoutInputs)
         ));
     }

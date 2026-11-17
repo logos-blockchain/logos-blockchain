@@ -71,6 +71,14 @@ CI expects `target/release/logos-blockchain-node` to already exist, or
 `LOGOS_BLOCKCHAIN_NODE_BIN` to point at the prebuilt binary. It does not build
 node binaries inside the test process.
 
+Managed Tokio-console builds use a compiler wrapper to enable `--cfg
+tokio_unstable` for dependencies as well as the node. The wrapper composes
+wrappers supplied through `RUSTC_WRAPPER` or `CARGO_BUILD_RUSTC_WRAPPER`, but
+overrides `build.rustc-wrapper` in Cargo configuration files. To use a custom
+Cargo-configured wrapper, prebuild the node with the `testing,tokio-console`
+features and `--cfg tokio_unstable`, then provide its path through
+`LOGOS_BLOCKCHAIN_NODE_BIN`.
+
 ### 1. Run a specific test
 
 _**MacOS or Linux**_
@@ -155,24 +163,7 @@ Filtering based on test names can be done using the `--name` option. For example
 cargo test -p logos-blockchain-tests --release --features cucumber --test cucumber -- --name "Idle smoke"
 ```
 
-ZoneSDK and Logos SQL have separate test crates under `tests/clients`. Each owns its scenarios, client state and runner. Both reuse the node setup and reporting; SQL also reuses ZoneSDK's channel setup and steps. From the workspace root:
-
-```bash
-cargo test -p logos-blockchain-zone-tests --features cucumber --test cucumber -- --tags "@zone_ci"
-cargo test -p logos-blockchain-sql-tests --features cucumber --test cucumber -- --tags "@logos_sql_ci"
-```
-
-Artifacts are saved under each crate's `cucumber_tests/temp` directory. The settlement benchmark belongs to `logos-blockchain-sql-tests`; run it with `--release` and `--tags "@logos_sql_benchmark"`.
-
-The password-manager scenario drives the actual example executable:
-
-```bash
-cargo build -p logos-sql --example password_manager
-cargo test -p logos-blockchain-sql-tests --features cucumber --test cucumber -- --tags "@password_manager"
-```
-
-Set `PASSWORD_MANAGER_BIN` to an absolute executable path when using a different build directory or profile.
-The scenario saves the application's stdout and stderr alongside its database in the scenario artifacts.
+Zone SDK and SQL tests now live in [logos-zone-sdk](https://github.com/logos-blockchain/logos-zone-sdk). That repository reuses this repository's node test support.
 
 For more information on running Cucumber tests, refer to https://github.com/cucumber-rs/cucumber or 
 https://cucumber.io/docs.

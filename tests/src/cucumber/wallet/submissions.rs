@@ -1447,10 +1447,12 @@ async fn reserve_user_wallet_transaction_submission(
         transaction_intent
     };
 
+    let fork_digest = world.fork_digest_in_force().await?;
     let submission = prepare_wallet_transaction_work_item(
         transaction_intent,
         funding_resources,
         priority_fee_percent,
+        fork_digest,
     )
     .map_err(wallet_transaction_error)
     .inspect_err(|e| {
@@ -1764,7 +1766,7 @@ fn group_key_for_wallet(world: &CucumberWorld, wallet_name: &str) -> Result<Stri
 #[cfg(test)]
 mod cache_removal_tests {
     use lb_chain_service::Epoch;
-    use lb_core::header::HeaderId;
+    use lb_core::{era::ForkDigest, header::HeaderId};
     use lb_groth16::Fr;
     use lb_mmr::MerklePath;
     use rand::{SeedableRng as _, seq::SliceRandom as _};
@@ -2049,6 +2051,7 @@ mod cache_removal_tests {
             intent,
             WalletFundingResources::new(source),
             priority_fee_percent,
+            ForkDigest::new([0x11; 32]),
         )
     }
 
@@ -2075,6 +2078,7 @@ mod cache_removal_tests {
             intent,
             WalletFundingResources::fee_sponsored(sender, fee_sponsor),
             0,
+            ForkDigest::new([0x11; 32]),
         )
     }
 

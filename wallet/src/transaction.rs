@@ -392,13 +392,13 @@ mod tests {
     use std::collections::HashSet;
 
     use lb_core::mantle::{
-        gas::MainnetGasProfile,
+        gas::GasProfile,
         ops::{
             sdp::{SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferOp,
         },
         transactions::{
-            GasPrices,
+            GasPrices, TxList,
             builder::MantleTxBuilder,
             tx_list::ops::{OpsContext, OpsGasContext},
         },
@@ -408,16 +408,24 @@ mod tests {
     use super::*;
     use crate::{
         DEFAULT_FEE_MARGIN_PERCENT,
-        test_utils::{known, nullifier, pk},
+        test_utils::{FORK_DIGEST, known, nullifier, pk},
     };
 
     fn free_context() -> OpsContext {
         OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0)),
+            gas_context: OpsGasContext::new(
+                HashMap::new(),
+                GasPrices::new(0, 0),
+                GasProfile::MAINNET,
+            ),
         }
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Walks the witnesses of every operation of one transaction."
+    )]
     fn op_witnesses_chain_the_buffer_and_prove_withdrawals_against_the_service_note() {
         let owned = Note::new(1_000, Fr::from(1u64), pk(1));
         let service = Note::new(500, Fr::from(2u64), pk(3));
@@ -432,26 +440,29 @@ mod tests {
         let state = WalletState::from_genesis(&known, &[owned], &[service], Epoch::new(0)).unwrap();
         let root = state.commitments[&NoteSetIndex::Ledger].frontier_root();
 
-        let ops = Ops::new_unchecked(vec![
-            Op::Transfer(TransferOp::new(
-                [nullifier(1)].into(),
-                [exact.commitment(), change.commitment()].into(),
-                root,
-                0,
-            )),
-            Op::SDPDeclare(SDPDeclareOp {
-                inputs: [nullifier(5)].into(),
-                commitment_merkle_root: root,
-                amount: 600,
-                ..SDPDeclareOp::sample()
-            }),
-            Op::SDPWithdraw(SDPWithdrawOp {
-                service_note_nullifier: nullifier(2),
-                outputs: [returned.commitment()].into(),
-                excess_value: 0,
-                ..SDPWithdrawOp::sample()
-            }),
-        ]);
+        let ops = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![
+                Op::Transfer(TransferOp::new(
+                    [nullifier(1)].into(),
+                    [exact.commitment(), change.commitment()].into(),
+                    root,
+                    0,
+                )),
+                Op::SDPDeclare(SDPDeclareOp {
+                    inputs: [nullifier(5)].into(),
+                    commitment_merkle_root: root,
+                    amount: 600,
+                    ..SDPDeclareOp::sample()
+                }),
+                Op::SDPWithdraw(SDPWithdrawOp {
+                    service_note_nullifier: nullifier(2),
+                    outputs: [returned.commitment()].into(),
+                    excess_value: 0,
+                    ..SDPWithdrawOp::sample()
+                }),
+            ]),
+        );
         let openings = BTreeMap::from([
             (
                 0,
@@ -530,16 +541,19 @@ mod tests {
         let known = known(&[(owned, NoteSetIndex::Ledger, nullifier(1))]);
         let state = WalletState::from_genesis(&known, &[owned], &[], Epoch::new(0)).unwrap();
         let root = state.commitments[&NoteSetIndex::Ledger].frontier_root();
-        let ops = Ops::new_unchecked(vec![
-            // proven by the caller, with a note the wallet does not know
-            Op::Transfer(TransferOp::new(
-                [nullifier(9)].into(),
-                [foreign.commitment()].into(),
-                Fr::from(3u64),
-                0,
-            )),
-            Op::Transfer(TransferOp::new([nullifier(1)].into(), [].into(), root, 0)),
-        ]);
+        let ops = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![
+                // proven by the caller, with a note the wallet does not know
+                Op::Transfer(TransferOp::new(
+                    [nullifier(9)].into(),
+                    [foreign.commitment()].into(),
+                    Fr::from(3u64),
+                    0,
+                )),
+                Op::Transfer(TransferOp::new([nullifier(1)].into(), [].into(), root, 0)),
+            ]),
+        );
         let openings = BTreeMap::from([(
             1,
             ZkTransferOpening {
@@ -599,7 +613,7 @@ mod tests {
         let builder = MantleTxBuilder::new().add_ledger_output(output).unwrap();
 
         let funded = state
-            .fund_tx::<MainnetGasProfile>(
+            .fund_tx(
                 &builder,
                 pk(1),
                 Fr::from(10u64),
@@ -618,7 +632,7 @@ mod tests {
             vec![(300, nullifier(2)), (200, nullifier(3))]
         );
         let change = Note::new(150, Fr::from(10u64), pk(1));
-        let ops: Vec<Op> = funded.build().unwrap().iter().cloned().collect();
+        let ops: Vec<Op> = funded.build(FORK_DIGEST).unwrap().iter().cloned().collect();
         assert_eq!(
             ops,
             vec![Op::Transfer(TransferOp::new(
@@ -647,7 +661,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             state
-                .fund_tx::<MainnetGasProfile>(
+                .fund_tx(
                     &builder,
                     pk(1),
                     Fr::from(10u64),
@@ -670,12 +684,16 @@ mod tests {
             .add_ledger_output(Note::new(5, Fr::from(9u64), pk(2)))
             .unwrap();
         let context = |execution: u64, storage: u64| OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(execution, storage)),
+            gas_context: OpsGasContext::new(
+                HashMap::new(),
+                GasPrices::new(execution, storage),
+                GasProfile::MAINNET,
+            ),
         };
         let (execution, storage) = (60_563_532, 753_662_110);
         let fund = |margin| {
             state
-                .fund_tx::<MainnetGasProfile>(
+                .fund_tx(
                     &builder,
                     pk(1),
                     Fr::from(10u64),
@@ -690,12 +708,7 @@ mod tests {
         let raised = context((execution * 9).div_ceil(8), (storage * 9).div_ceil(8));
         let still_funded = |funded: &MantleTxBuilder| {
             funded.net_balance()
-                >= i128::from(
-                    funded
-                        .minimum_gas_cost::<MainnetGasProfile>(&raised)
-                        .unwrap()
-                        .into_inner(),
-                )
+                >= i128::from(funded.minimum_gas_cost(&raised).unwrap().into_inner())
         };
 
         assert!(!still_funded(&fund(0)));

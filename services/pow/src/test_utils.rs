@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use lb_core::{era::ForkDigest, mantle::gas::GasProfile};
 use lb_time::era::{EraEntriesAfterGenesis, EraSchedule, EraTiming};
 use time::OffsetDateTime;
 
@@ -16,6 +17,9 @@ pub const SLOTS_PER_EPOCH: u64 = 100;
 /// The size of a Blend payload body in the eras [`era_schedule`] builds: the
 /// largest block proposal of an era that allows four uncles.
 pub const PAYLOAD_BODY_SIZE: usize = 17_752;
+
+/// The costs of the deployments' current gas profile.
+pub const GAS_PROFILE: GasProfile = GasProfile::MAINNET;
 
 /// A schedule with an era per reward window of `reward_windows`, era `i`
 /// starting at epoch `i` with the reward window `reward_windows[i]`, rewards
@@ -37,6 +41,8 @@ pub fn era_schedule(reward_windows: &[u64]) -> ServiceEraSchedule {
             slot_window: NonZeroU64::new(reward_windows[usize::from(era.era.into_inner())])
                 .unwrap(),
             rewards_enabled: true,
-            max_data_payload_body_size: PAYLOAD_BODY_SIZE,
+            max_claim_tx_size: PAYLOAD_BODY_SIZE,
+            fork_digest: ForkDigest::new([0x11; 32]),
+            gas_profile: GAS_PROFILE,
         })
 }

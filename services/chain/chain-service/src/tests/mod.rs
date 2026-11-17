@@ -9,15 +9,16 @@ use futures::StreamExt as _;
 use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_core::{
     block::{
-        Block, BlockTransactions, UncleHeaders, body_root,
+        Block, BlockTransactions, TxInBlock, UncleHeaders, body_root,
         genesis::{GenesisBlock, GenesisBlockBuilder},
     },
     crypto::ZkHasher,
+    era::{AcceptedForkDigests, ForkDigest},
     header::{ContentId, Header, block_id, pol_msg},
     mantle::{
         GenesisParameters, GenesisTime, Note, Op, OpProof, SignedOps, Value,
         channel::Channels,
-        gas::{MainnetGasProfile, TxGasCalculator as _},
+        gas::{GasProfile, TxGasCalculator as _},
         ledger::verification_mode::StandardMode,
         note_set::{CommitmentMmr, NoteSetIndex},
         notes::{NoteCommitment, OutputCommitments, derive_note_nullifier},
@@ -55,7 +56,10 @@ use lb_key_management_system_keys::keys::{
 use lb_kv_store::MemKv;
 use lb_ledger::{
     GENESIS_STAKE_SUPPLY, LedgerState,
-    config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
+    config::{
+        BlendPoWConfig, EmissionRatio, EraScheduledConfig, ModulusShift, PoWConfig,
+        RewardPoWConfig, config_for_slot,
+    },
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
 use lb_mmr::MerklePath;
@@ -78,7 +82,7 @@ use tokio::{
 
 use crate::{
     BlockOrigin, BootstrapConfig, Cryptarchia, CryptarchiaConsensus, CryptarchiaConsensusState,
-    Error, OfflineGracePeriodConfig,
+    Error, OfflineGracePeriodConfig, TipEra,
     relays::CryptarchiaConsensusRelays,
     service::{get_block_ids, process_block},
 };
@@ -370,6 +374,10 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
     anchor_at(&stored, &b1);
     let recovery_state = CryptarchiaConsensusState {
         tip: b2_id,
+        tip_era: TipEra {
+            slot: b2_slot,
+            fork_digest: ForkDigest::from([0; 32]),
+        },
         lib: b1_id,
         lib_block_length: 1,
         lib_block_slot: b1.header().slot(),
@@ -464,6 +472,10 @@ async fn recovery_chain_with_tip_ahead_of_current_slot() {
     anchor_at(&stored, b1);
     let recovery_state = CryptarchiaConsensusState {
         tip: b2_id,
+        tip_era: TipEra {
+            slot: b2.header().slot(),
+            fork_digest: ForkDigest::from([0; 32]),
+        },
         lib: b1_id,
         lib_block_length: 1,
         lib_block_slot: b1.header().slot(),
@@ -583,6 +595,10 @@ async fn get_block_ids_past_recovered_lib() {
     anchor_at(&stored, b1);
     let recovery_state = CryptarchiaConsensusState {
         tip: b2_id,
+        tip_era: TipEra {
+            slot: b2.header().slot(),
+            fork_digest: ForkDigest::from([0; 32]),
+        },
         lib: b1_id,
         lib_block_length: 1,
         lib_block_slot: b1.header().slot(),
@@ -673,6 +689,11 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     assert!(lib_rx.try_recv().is_err());
 }
 
+/// `tx`, carried by a block at `slot`.
+const fn tx_in_block<Tx>(tx: Tx, slot: Slot) -> TxInBlock<Tx> {
+    TxInBlock { tx, slot }
+}
+
 /// A fork switch reports the transactions of every block that entered the
 /// canonical chain, and reorgs only the transactions of the displaced blocks
 /// that the adopted branch does not carry.
@@ -723,7 +744,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         &paths[0],
         Slot::new(1),
         UncleHeaders::empty(),
-        BlockTransactions::from([tx1.clone()]),
+        BlockTransactions::try_new(vec![tx1.clone()], u16::MAX).unwrap(),
     )
     .unwrap();
     fork_view
@@ -737,7 +758,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         &paths[0],
         f1.header().slot().strict_add(1.into()),
         UncleHeaders::empty(),
-        BlockTransactions::from([tx2.clone()]),
+        BlockTransactions::try_new(vec![tx2.clone()], u16::MAX).unwrap(),
     )
     .unwrap();
 
@@ -750,7 +771,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         &paths[0],
         Slot::new(1),
         UncleHeaders::empty(),
-        BlockTransactions::from([tx1.clone(), tx3.clone()]),
+        BlockTransactions::try_new(vec![tx1.clone(), tx3.clone()], u16::MAX).unwrap(),
     )
     .unwrap();
 
@@ -789,7 +810,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         outcome.newly_canonical_txs,
         HashMap::from([(tx1.hash(), f1_slot), (tx2.hash(), f2_slot)])
     );
-    assert_eq!(outcome.reorged_txs, vec![tx3]);
+    assert_eq!(outcome.reorged_txs, vec![tx_in_block(tx3, b1_slot)]);
     assert_eq!(cryptarchia.tip(), f2.header().id());
 }
 
@@ -816,7 +837,8 @@ fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
         &commitment_paths(&[note])[0],
         Slot::new(1),
         UncleHeaders::empty(),
-        BlockTransactions::from([transfer_tx_with_fake_sig(&note, &fake_key)]),
+        BlockTransactions::try_new(vec![transfer_tx_with_fake_sig(&note, &fake_key)], u16::MAX)
+            .unwrap(),
     )
     .expect("should find a winning slot");
 
@@ -859,7 +881,11 @@ fn a_copy_failing_an_operation_proof_leaves_the_genuine_block_applicable() {
         &paths[0],
         Slot::new(1),
         UncleHeaders::empty(),
-        BlockTransactions::from([burn_tx(&funding_note, funding_key, &paths[1])]),
+        BlockTransactions::try_new(
+            vec![burn_tx(&funding_note, funding_key, &paths[1])],
+            u16::MAX,
+        )
+        .unwrap(),
     )
     .expect("should find a winning slot");
     let id = block.header().id();
@@ -871,13 +897,20 @@ fn a_copy_failing_an_operation_proof_leaves_the_genuine_block_applicable() {
     let copy: Block<SignedOps<Preverified, StandardMode>> = Block::reconstruct(
         block.header().clone(),
         UncleHeaders::empty(),
-        BlockTransactions::from([SignedOps::from_parts(
-            burn_ops(&funding_note, funding_key, &paths[1]),
-            tampered_proof,
+        BlockTransactions::try_new(
+            vec![
+                SignedOps::from_parts(
+                    burn_ops(&funding_note, funding_key, &paths[1]),
+                    tampered_proof,
+                )
+                .unwrap()
+                .preverify()
+                .unwrap(),
+            ],
+            u16::MAX,
         )
-        .unwrap()
-        .preverify()
-        .unwrap()]),
+        .unwrap(),
+        u32::MAX,
     )
     .expect("the body root does not cover the Operation proofs");
     assert_eq!(copy.header().id(), id);
@@ -945,13 +978,17 @@ fn a_copy_with_one_signature_too_many_leaves_the_genuine_block_applicable() {
         &paths[0],
         Slot::new(1),
         UncleHeaders::empty(),
-        BlockTransactions::from([channel_config_tx(
-            &create_note,
-            create_key,
-            &paths[1],
-            create_op.clone(),
-            &[],
-        )]),
+        BlockTransactions::try_new(
+            vec![channel_config_tx(
+                &create_note,
+                create_key,
+                &paths[1],
+                create_op.clone(),
+                &[],
+            )],
+            u16::MAX,
+        )
+        .unwrap(),
     )
     .expect("should find a winning slot");
     let parent_id = parent.header().id();
@@ -975,7 +1012,7 @@ fn a_copy_with_one_signature_too_many_leaves_the_genuine_block_applicable() {
         &paths[0],
         parent_slot.strict_add(1.into()),
         UncleHeaders::empty(),
-        BlockTransactions::from([update_tx(&[&channel_keys[0]])]),
+        BlockTransactions::try_new(vec![update_tx(&[&channel_keys[0]])], u16::MAX).unwrap(),
     )
     .expect("should find a winning slot");
     let id = block.header().id();
@@ -984,7 +1021,12 @@ fn a_copy_with_one_signature_too_many_leaves_the_genuine_block_applicable() {
     let copy: Block<SignedOps<Preverified, StandardMode>> = Block::reconstruct(
         block.header().clone(),
         UncleHeaders::empty(),
-        BlockTransactions::from([update_tx(&[&channel_keys[0], &channel_keys[1]])]),
+        BlockTransactions::try_new(
+            vec![update_tx(&[&channel_keys[0], &channel_keys[1]])],
+            u16::MAX,
+        )
+        .unwrap(),
+        u32::MAX,
     )
     .expect("the body root does not cover the Operation proofs");
     assert_eq!(copy.header().id(), id);
@@ -1078,10 +1120,14 @@ fn transfer_tx_with_fake_sig(
     fake_key: &ZkKey,
 ) -> SignedOps<Preverified, StandardMode> {
     let mut output_note = Note::new(1, Fr::ZERO, fake_key.to_public_key());
-    let gas_context = OpsGasContext::from_channels(&Channels::new(), GasPrices::default());
+    let gas_context = OpsGasContext::from_channels(
+        &Channels::new(),
+        GasPrices::default(),
+        ledger_config(NonZero::new(1).unwrap()).gas_profile,
+    );
     let fees = transfer_tx(note, output_note, fake_key, 0)
         .op_refs()
-        .total_gas_cost::<MainnetGasProfile>(&gas_context)
+        .total_gas_cost(&gas_context)
         .unwrap();
     output_note.value = note.value - fees.into_inner();
 
@@ -1089,6 +1135,9 @@ fn transfer_tx_with_fake_sig(
         .preverify()
         .expect("a fake signature is only caught by the stateful checks")
 }
+
+/// The fork digest the transactions of these tests carry.
+const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
 
 /// The Operation spending `note` with no outputs.
 fn burn_op(note: &Note, secret_key: Fr, path: &MerklePath) -> Op {
@@ -1106,7 +1155,7 @@ fn burn_op(note: &Note, secret_key: Fr, path: &MerklePath) -> Op {
 
 /// The Operations of a tx spending `note` with no outputs.
 fn burn_ops(note: &Note, secret_key: Fr, path: &MerklePath) -> Ops {
-    Ops::from([burn_op(note, secret_key, path)])
+    Ops::new(FORK_DIGEST, [burn_op(note, secret_key, path)])
 }
 
 /// Creates a tx spending `note` to pay for `config_op`, signed by `signers`
@@ -1118,10 +1167,13 @@ fn channel_config_tx(
     config_op: ChannelConfigOp,
     signers: &[&Ed25519Key],
 ) -> SignedOps<Preverified, StandardMode> {
-    let ops = Ops::from([
-        burn_op(note, secret_key, path),
-        Op::ChannelConfig(config_op),
-    ]);
+    let ops = Ops::new(
+        FORK_DIGEST,
+        [
+            burn_op(note, secret_key, path),
+            Op::ChannelConfig(config_op),
+        ],
+    );
     let tx_hash = ops.hash();
     let signatures = IndexedSignatures::try_from_iter(
         (0..)
@@ -1180,7 +1232,7 @@ fn transfer_tx(
         commitment_paths(std::slice::from_ref(note))[0].root::<ZkHasher>(note.commitment().0),
         excess_value,
     );
-    let ops = Ops::from([Op::Transfer(transfer_op)]);
+    let ops = Ops::new(FORK_DIGEST, [Op::Transfer(transfer_op)]);
     let op_proofs = OpProofs::from([OpProof::ZkTransfer(ZkTransferProof::new(
         CompressedGroth16Proof::from_bytes(&[0u8; 128]),
     ))]);
@@ -1350,6 +1402,7 @@ fn ledger_config_with_uncles(
                 blend: rewards::blend::RewardsParameters {
                     rounds_per_epoch: epoch_length.try_into().unwrap(),
                     message_frequency_per_round: 1.0.try_into().unwrap(),
+                    cover_replication_factor: 0,
                     num_blend_layers: 3.try_into().unwrap(),
                     minimum_network_size: 1.try_into().unwrap(),
                     data_replication_factor: 0,
@@ -1361,6 +1414,31 @@ fn ledger_config_with_uncles(
                 timestamp: 0,
             },
         },
+        max_transactions: 1024,
+        max_transactions_size: 2 * 1024 * 1024,
+        max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+        execution_market: lb_ledger::config::ExecutionMarketConfig {
+            max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_137_798).unwrap(),
+            fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                .unwrap(),
+            ema_smoothing_factor: lb_utils::math::ProperFraction::new(9, 10.try_into().unwrap())
+                .unwrap(),
+        },
+        storage_market: lb_ledger::config::StorageMarketConfig {
+            max_adjustment_factor: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                .unwrap(),
+            ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
+                .unwrap(),
+        },
+        block_rewards: lb_ledger::config::BlockRewardsConfig::new(
+            3_000_000_000_000_000_000,
+            120_000_000_000_000_000.try_into().unwrap(),
+            10_512,
+            EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
+            lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+        )
+        .unwrap(),
+        gas_profile: GasProfile::MAINNET,
         pow_config: PoWConfig {
             blend: BlendPoWConfig {
                 base_difficulty: ModulusShift::new::<19>(),
@@ -1371,6 +1449,7 @@ fn ledger_config_with_uncles(
             },
             reward: disabled_reward_config(),
         },
+        accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
     }
 }
 
@@ -1507,10 +1586,7 @@ fn computed_reward_value(
         .clone()
         .try_apply_header::<_, HeaderId>(slot, &UnprovenHeader, &uncle_headers.slots(), eras)
         .and_then(|(state, _)| {
-            state.try_apply_block_transactions::<_, HeaderId, MainnetGasProfile>(
-                eras,
-                transactions.iter().cloned(),
-            )
+            state.try_apply_block_transactions::<_, HeaderId>(eras, transactions.iter().cloned())
         })
         .and_then(|(state, gas_and_fees, _, _)| state.leader_reward(&gas_and_fees, eras))
         .unwrap_or(0)
@@ -1587,7 +1663,15 @@ fn build_block_paying(
         );
         let proof = Groth16LeaderProof::prove(unbound.with_msg(pol_msg(&id))).unwrap();
 
-        let block = Block::create(parent, slot.into(), uncle_headers, proof, transactions).unwrap();
+        let block = Block::create(
+            parent,
+            slot.into(),
+            uncle_headers,
+            proof,
+            transactions,
+            config_for_slot(cryptarchia.ledger.era_schedule(), slot.into()).max_transactions_size,
+        )
+        .unwrap();
         return Some((block, reward_key));
     }
 
@@ -1755,7 +1839,7 @@ pub fn note() -> (Fr, Note) {
 
 pub fn spawn_storage_service(mut rx: mpsc::Receiver<StorageMsg>) -> (JoinHandle<()>, TempDir) {
     let db_dir = TempDir::new().unwrap();
-    let mut backend = RocksBackend::new(RocksBackendSettings {
+    let backend = RocksBackend::new(RocksBackendSettings {
         db_path: db_dir.path().join("db"),
         read_only: false,
         column_family: None,
@@ -1764,7 +1848,7 @@ pub fn spawn_storage_service(mut rx: mpsc::Receiver<StorageMsg>) -> (JoinHandle<
 
     let handle = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            StorageService::<TestRuntimeServiceId>::handle_storage_message(msg, &mut backend).await;
+            StorageService::<TestRuntimeServiceId>::handle_storage_message(msg, &backend);
         }
     });
 

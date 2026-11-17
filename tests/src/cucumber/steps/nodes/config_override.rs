@@ -762,68 +762,34 @@ mod tests {
         );
     }
 
-    #[test]
-    fn testnet_representative_profile_applies_epoch_and_blend_settings() {
-        let mut config = test_run_config("testnet_blend_diagnostic_overrides");
+    #[tokio::test]
+    async fn testnet_representative_profile_selects_shared_parameter_set() {
         let mut world = CucumberWorld::default();
         let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
         world.lifecycle.scenario_base_dir = temp_dir.path().to_owned();
 
-        crate::cucumber::steps::nodes::diagnostics::set_blend_diagnostic_parameter_set(
+        crate::cucumber::steps::nodes::diagnostics::set_cucumber_parameter_set(
             &mut world,
             "test-step",
             "testnet_representative",
         )
+        .await
         .expect("testnet representative profile");
 
-        set_deployment_config_override(
-            &mut world,
-            "test-step",
-            "eras.0.blend.common.num_blend_layers",
-            "1",
-        )
-        .expect("Blend layer override");
-        set_deployment_config_override(
-            &mut world,
-            "test-step",
-            "eras.0.blend.common.data_replication_factor",
-            "1",
-        )
-        .expect("Blend replication override");
-        set_deployment_config_override(
-            &mut world,
-            "test-step",
-            "eras.0.blend.core.scheduler.delayer.maximum_release_delay_in_rounds",
-            "1",
-        )
-        .expect("Blend release delay override");
-
-        world
-            .startup
-            .manual_node_config_overrides
-            .apply_to(&mut config);
-        apply_deployment_config_overrides(&mut config, &world.startup.deployment_config_overrides)
-            .expect("apply diagnostic deployment overrides");
-
-        let cryptarchia = &config.deployment.genesis_era_parameters().cryptarchia;
-        assert_eq!(cryptarchia.security_param.get(), 10);
-        assert_eq!(cryptarchia.slot_activation_coeff.numerator, 1);
-        assert_eq!(cryptarchia.slot_activation_coeff.denominator.get(), 30);
-        assert_eq!(cryptarchia.slots_per_epoch(), 3_000);
-
-        let blend = &config.deployment.genesis_era_parameters().blend;
-        assert_eq!(blend.common.num_blend_layers.get(), 1);
-        assert_eq!(blend.common.data_replication_factor, 1);
         assert_eq!(
-            blend
-                .core
-                .scheduler
-                .delayer
-                .maximum_release_delay_in_rounds
-                .get(),
-            1
+            world.cluster.cucumber_parameter_set,
+            lb_testing_framework::configs::deployment::CucumberParameterSet::from_name(
+                "testnet_representative"
+            )
         );
-        assert_eq!(blend.common.network_absorption_in_rounds.get(), 2);
+        assert!(world.startup.deployment_config_overrides.is_empty());
+        assert!(
+            world
+                .startup
+                .manual_node_config_overrides
+                .cryptarchia_security_param
+                .is_none()
+        );
     }
 
     #[test]

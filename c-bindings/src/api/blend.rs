@@ -1,5 +1,6 @@
 use std::ffi::{CString, c_char};
 
+use lb_api_service::http::blend::blend_join_network;
 use lb_blend_service::message::NetworkInfo;
 use lb_c_macros::panic_to_error;
 use lb_core::sdp::{self, Locator};
@@ -78,10 +79,11 @@ pub unsafe extern "C" fn blend_join_as_core_node(
 
     let runtime_handle = unwrap_or_return_error!(node.get_runtime_handle());
     let result: StatusResult<SdpSubmission> = runtime_handle.block_on(async {
-        lb_api_service::http::blend::blend_join_network::<
-            BlendService<RuntimeServiceId>,
-            RuntimeServiceId,
-        >(node.get_overwatch_handle(), locator, amount)
+        blend_join_network::<BlendService<RuntimeServiceId>, RuntimeServiceId>(
+            node.get_overwatch_handle(),
+            locator,
+            amount,
+        )
         .await
         .map_err(|error| {
             OperationStatus::error(

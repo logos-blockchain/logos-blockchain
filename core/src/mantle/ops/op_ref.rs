@@ -2,8 +2,8 @@ use lb_binary_codec::canonical::BinaryEncode;
 use serde::{Serialize, Serializer};
 
 use crate::mantle::{
-    GasProfile, Op,
-    gas::{Gas, GasOverflow, OpGasCalculator as _, OpGasContext, OperationGas},
+    Op,
+    gas::{Gas, GasOverflow, GasProfile, OpGasCalculator as _, OpGasContext},
     ledger::ProvableOperation,
     ops::{
         channel::{
@@ -32,14 +32,6 @@ pub enum OpRef<'a> {
     ProgramRegister(&'a ProgramRegisterOp),
 }
 
-const fn gas_cost_of<T, Profile>(_op: &T) -> Gas
-where
-    T: OperationGas<Profile>,
-    Profile: GasProfile,
-{
-    T::GAS_COST
-}
-
 const fn code_of<T>(_op: &T) -> u8
 where
     T: ProvableOperation,
@@ -48,37 +40,24 @@ where
 }
 
 impl OpRef<'_> {
-    #[must_use]
-    pub const fn gas_cost<Profile: GasProfile>(&self) -> Gas {
-        match self {
-            Self::ChannelInscribe(op) => gas_cost_of(op),
-            Self::ChannelConfig(op) => gas_cost_of(op),
-            Self::ChannelDeposit(op) => gas_cost_of(op),
-            Self::ChannelWithdraw(op) => gas_cost_of(op),
-            Self::SDPDeclare(op) => gas_cost_of(op),
-            Self::SDPWithdraw(op) => gas_cost_of(op),
-            Self::SDPActive(op) => gas_cost_of(op),
-            Self::Transfer(op) => gas_cost_of(op),
-            Self::ClaimPowReward(op) => gas_cost_of(op),
-            Self::ProgramRegister(op) => gas_cost_of(op),
-        }
-    }
-
-    pub fn execution_gas<Profile: GasProfile>(
+    /// The Execution Gas of the Operation under the era's `profile`, against
+    /// the thresholds in force in `context`.
+    pub fn execution_gas(
         &self,
-        thresholds: &impl OpGasContext,
+        profile: &GasProfile,
+        context: &impl OpGasContext,
     ) -> Result<Gas, GasOverflow> {
         match self {
-            Self::ChannelInscribe(op) => op.execution_gas(thresholds),
-            Self::ChannelConfig(op) => op.execution_gas(thresholds),
-            Self::ChannelDeposit(op) => op.execution_gas(thresholds),
-            Self::ChannelWithdraw(op) => op.execution_gas(thresholds),
-            Self::SDPDeclare(op) => op.execution_gas(thresholds),
-            Self::SDPWithdraw(op) => op.execution_gas(thresholds),
-            Self::SDPActive(op) => op.execution_gas(thresholds),
-            Self::Transfer(op) => op.execution_gas(thresholds),
-            Self::ClaimPowReward(op) => op.execution_gas(thresholds),
-            Self::ProgramRegister(op) => op.execution_gas(thresholds),
+            Self::ChannelInscribe(op) => op.execution_gas(profile, context),
+            Self::ChannelConfig(op) => op.execution_gas(profile, context),
+            Self::ChannelDeposit(op) => op.execution_gas(profile, context),
+            Self::ChannelWithdraw(op) => op.execution_gas(profile, context),
+            Self::SDPDeclare(op) => op.execution_gas(profile, context),
+            Self::SDPWithdraw(op) => op.execution_gas(profile, context),
+            Self::SDPActive(op) => op.execution_gas(profile, context),
+            Self::Transfer(op) => op.execution_gas(profile, context),
+            Self::ClaimPowReward(op) => op.execution_gas(profile, context),
+            Self::ProgramRegister(op) => op.execution_gas(profile, context),
         }
     }
 

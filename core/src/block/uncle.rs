@@ -12,7 +12,7 @@ use crate::header::{Header, HeaderId};
 /// maximum, when the headers are built or decoded. Serde reads them without
 /// an era, under the largest maximum allowed by the type used for length
 /// prefix.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryEncode)]
 pub struct UncleHeaders(UpperRuntimeBoundedVec<Header, u8>);
 
 impl UncleHeaders {
@@ -59,16 +59,6 @@ impl UncleHeaders {
 
     pub fn iter(&self) -> impl Iterator<Item = &Header> {
         self.0.iter()
-    }
-}
-
-impl BinaryEncode for UncleHeaders {
-    fn encoded_length(&self) -> usize {
-        self.0.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.0.encode_into(out);
     }
 }
 

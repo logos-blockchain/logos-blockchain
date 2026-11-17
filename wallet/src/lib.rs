@@ -13,7 +13,7 @@ use lb_core::{
     events::{BlockEvent, Event, Events, HeaderEvent, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
-        GasProfile, Note, TxHash, Value,
+        Note, TxHash, Value,
         gas::GasOverflow,
         ledger::verification_mode::StandardMode,
         note_set::{CommitmentMmr, NoteSetIndex, NoteSetUpdate},
@@ -291,7 +291,7 @@ impl WalletState {
     /// becomes the transaction's effective priority tip. `0` funds to the exact
     /// minimum.
     #[expect(clippy::too_many_arguments, reason = "the funding inputs")]
-    pub fn fund_tx<G: GasProfile>(
+    pub fn fund_tx(
         &self,
         tx_builder: &MantleTxBuilder,
         change_pk: ZkPublicKey,
@@ -320,12 +320,12 @@ impl WalletState {
         // supplied inputs. In that case we must not pull in an extra input (and
         // the change note it would require).
         match tx_builder
-            .funding_delta_with_priority_fee::<G>(context, priority_fee)?
+            .funding_delta_with_priority_fee(context, priority_fee)?
             .cmp(&0)
         {
             Ordering::Equal => return Ok(tx_builder.clone()),
             Ordering::Greater => {
-                if let Some(tx_with_change) = tx_builder.clone().return_change::<G>(
+                if let Some(tx_with_change) = tx_builder.clone().return_change(
                     context,
                     change_pk,
                     change_nonce,
@@ -349,7 +349,7 @@ impl WalletState {
             )?;
 
             let funding_delta =
-                funded_tx_builder.funding_delta_with_priority_fee::<G>(context, priority_fee)?;
+                funded_tx_builder.funding_delta_with_priority_fee(context, priority_fee)?;
 
             match funding_delta.cmp(&0) {
                 Ordering::Less => {
@@ -364,7 +364,7 @@ impl WalletState {
                     // We have enough balance, but we need to introduce a change note.
                     // The change note will slightly increase the storage cost of the tx so there is
                     // a chance that we will not be able to fund the tx with the change note.
-                    if let Some(tx_with_change) = funded_tx_builder.return_change::<G>(
+                    if let Some(tx_with_change) = funded_tx_builder.return_change(
                         context,
                         change_pk,
                         change_nonce,
@@ -697,7 +697,7 @@ impl<KeyId> Wallet<KeyId> {
         clippy::too_many_arguments,
         reason = "thin passthrough to `WalletState::fund_tx` plus the tip"
     )]
-    pub fn fund_tx<G: GasProfile>(
+    pub fn fund_tx(
         &self,
         tip: HeaderId,
         tx_builder: &MantleTxBuilder,
@@ -708,7 +708,7 @@ impl<KeyId> Wallet<KeyId> {
         excluded: &HashSet<NoteNullifier>,
         priority_fee: impl Into<PriorityFee>,
     ) -> Result<MantleTxBuilder, WalletError> {
-        self.spend_state(tip)?.fund_tx::<G>(
+        self.spend_state(tip)?.fund_tx(
             tx_builder,
             change_pk,
             change_nonce,
@@ -813,7 +813,12 @@ pub struct WalletBalance {
 
 #[cfg(test)]
 pub(crate) mod test_utils {
+    use lb_core::era::ForkDigest;
+
     use super::*;
+
+    /// The fork digest the transactions of these tests carry.
+    pub const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
 
     pub fn pk(v: u64) -> ZkPublicKey {
         ZkPublicKey::new(Fr::from(v))
@@ -846,7 +851,7 @@ mod tests {
         crypto::ZkHasher,
         mantle::{
             Op,
-            gas::{GasCost, MainnetGasProfile},
+            gas::{GasCost, GasProfile},
             ops::{channel::inscribe::InscriptionOp, pow::PowNullifier, sdp::SDPDeclareOp},
             transactions::{GasPrices, tx_list::ops::OpsGasContext},
         },
@@ -855,7 +860,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        test_utils::{known, nullifier, pk},
+        test_utils::{FORK_DIGEST, known, nullifier, pk},
         transaction::{WitnessContext, op_witnesses},
     };
 
@@ -1197,7 +1202,7 @@ mod tests {
 
     fn context(gas_prices: GasPrices) -> OpsContext {
         OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), gas_prices),
+            gas_context: OpsGasContext::new(HashMap::new(), gas_prices, GasProfile::MAINNET),
         }
     }
 
@@ -1217,7 +1222,7 @@ mod tests {
 
     // The funding Transfer, which `build` appends last.
     fn funding_transfer(tx_builder: MantleTxBuilder) -> TransferOp {
-        match tx_builder.build().unwrap().iter().last() {
+        match tx_builder.build(FORK_DIGEST).unwrap().iter().last() {
             Some(Op::Transfer(transfer_op)) => transfer_op.clone(),
             _ => panic!("last op must be a transfer"),
         }
@@ -1284,7 +1289,7 @@ mod tests {
         let context = context(GasPrices::new(1, 1));
         let fund = |wallet: &Wallet<u8>, tip: u8| {
             wallet
-                .fund_tx::<MainnetGasProfile>(
+                .fund_tx(
                     block_id(tip),
                     &MantleTxBuilder::new(),
                     alice,
@@ -1311,7 +1316,7 @@ mod tests {
             ))
             .unwrap();
         let openings = funded.openings();
-        let ops = funded.build().unwrap();
+        let ops = funded.build(FORK_DIGEST).unwrap();
         let witnesses = op_witnesses(
             &wallet.spend_state(block_id(40)).unwrap(),
             &known,
@@ -1377,7 +1382,7 @@ mod tests {
 
         assert_eq!(
             wallet
-                .fund_tx::<MainnetGasProfile>(
+                .fund_tx(
                     block_id(41),
                     &MantleTxBuilder::new(),
                     alice,
@@ -1400,7 +1405,7 @@ mod tests {
         let wallet = wallet_on_chain(known_notes, &[], &[(37, note)], 41);
         let context = context(GasPrices::new(1, 1));
         let fund = |tip: u8| {
-            wallet.fund_tx::<MainnetGasProfile>(
+            wallet.fund_tx(
                 block_id(tip),
                 &MantleTxBuilder::new(),
                 alice,
@@ -1455,7 +1460,7 @@ mod tests {
 
         // Fund the transaction
         let funded_tx_builder = wallet_state
-            .fund_tx::<MainnetGasProfile>(
+            .fund_tx(
                 &MantleTxBuilder::new(),
                 alice,
                 change_nonce,
@@ -1467,18 +1472,18 @@ mod tests {
             .unwrap();
 
         let fee = funded_tx_builder
-            .minimum_gas_cost::<MainnetGasProfile>(&context)
+            .minimum_gas_cost(&context)
             .unwrap()
             .into_inner();
-        // The cost with a change note, 6246: 236 bytes at a storage price of 1, and
-        // 10 + 4177 + 1758 + 58 + 236 * 30 // 1000 = 6010 Execution Gas at a price
+        // The cost with a change note, 6279: 268 bytes at a storage price of 1, and
+        // 10 + 4177 + 1758 + 58 + 268 * 30 // 1000 = 6011 Execution Gas at a price
         // of 1.
-        assert_eq!(6246, fee);
+        assert_eq!(6279, fee);
         assert_eq!(i128::from(fee), funded_tx_builder.net_balance());
         assert_eq!(
             0,
             funded_tx_builder
-                .funding_delta_with_priority_fee::<MainnetGasProfile>(&context, 0)
+                .funding_delta_with_priority_fee(&context, 0)
                 .unwrap()
         );
 
@@ -1502,12 +1507,12 @@ mod tests {
         let tx_builder = MantleTxBuilder::new();
         let priority_fee_percent = 12;
         let mandatory_fee_without_change = with_zero_input(&tx_builder)
-            .minimum_gas_cost::<MainnetGasProfile>(&context)
+            .minimum_gas_cost(&context)
             .unwrap()
             .into_inner();
 
         let funded_tx_builder = wallet_state
-            .fund_tx::<MainnetGasProfile>(
+            .fund_tx(
                 &tx_builder,
                 alice,
                 change_nonce,
@@ -1521,11 +1526,11 @@ mod tests {
         // The final mandatory fee includes the change output, and the tip is
         // the rounded-up percentage of that final fee.
         let mandatory_fee = funded_tx_builder
-            .minimum_gas_cost::<MainnetGasProfile>(&context)
+            .minimum_gas_cost(&context)
             .unwrap()
             .into_inner();
-        assert_eq!(mandatory_fee_without_change, 6155);
-        assert_eq!(mandatory_fee, 6246);
+        assert_eq!(mandatory_fee_without_change, 6188);
+        assert_eq!(mandatory_fee, 6279);
         let priority_fee_amount = (mandatory_fee * priority_fee_percent).div_ceil(100);
         assert_eq!(
             i128::from(mandatory_fee + priority_fee_amount),
@@ -1534,10 +1539,7 @@ mod tests {
         assert_eq!(
             0,
             funded_tx_builder
-                .funding_delta_with_priority_fee::<MainnetGasProfile>(
-                    &context,
-                    priority_fee_percent
-                )
+                .funding_delta_with_priority_fee(&context, priority_fee_percent)
                 .unwrap()
         );
 
@@ -1562,7 +1564,7 @@ mod tests {
         let context = context(GasPrices::new(1, 1));
         // The mandatory fee of the transaction funded with a change output.
         let mandatory_fee = wallet_state
-            .fund_tx::<MainnetGasProfile>(
+            .fund_tx(
                 &MantleTxBuilder::new(),
                 alice,
                 Fr::from(3u64),
@@ -1572,13 +1574,13 @@ mod tests {
                 0,
             )
             .unwrap()
-            .minimum_gas_cost::<MainnetGasProfile>(&context)
+            .minimum_gas_cost(&context)
             .unwrap()
             .into_inner();
 
         for max_fee in [mandatory_fee, mandatory_fee + 1] {
             let funded_tx_builder = wallet_state
-                .fund_tx::<MainnetGasProfile>(
+                .fund_tx(
                     &MantleTxBuilder::new(),
                     alice,
                     Fr::from(3u64),
@@ -1594,7 +1596,7 @@ mod tests {
 
             assert_eq!(
                 funded_tx_builder
-                    .minimum_gas_cost::<MainnetGasProfile>(&context)
+                    .minimum_gas_cost(&context)
                     .unwrap()
                     .into_inner(),
                 mandatory_fee
@@ -1617,15 +1619,10 @@ mod tests {
             .push_op(Op::ChannelInscribe(InscriptionOp::sample()))
             .unwrap();
 
-        assert_eq!(
-            0,
-            tx_builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap()
-        );
+        assert_eq!(0, tx_builder.funding_delta(&context).unwrap());
 
         let funded_tx_builder = wallet_state
-            .fund_tx::<MainnetGasProfile>(
+            .fund_tx(
                 &tx_builder,
                 alice,
                 Fr::from(3u64),
@@ -1641,7 +1638,7 @@ mod tests {
         assert_eq!(0, funded_tx_builder.net_balance());
 
         // No funding Transfer is appended, so the built tx carries no transfer op.
-        let funded_tx = funded_tx_builder.build().unwrap();
+        let funded_tx = funded_tx_builder.build(FORK_DIGEST).unwrap();
         assert!(
             !funded_tx.iter().any(|op| matches!(op, Op::Transfer(_))),
             "a fee-less transaction must not contain a transfer op"
@@ -1673,7 +1670,7 @@ mod tests {
             .unwrap();
 
         // Fund the transaction
-        let fund_attempt = wallet_state.fund_tx::<MainnetGasProfile>(
+        let fund_attempt = wallet_state.fund_tx(
             &tx_builder,
             alice,
             Fr::from(5u64),
@@ -1699,7 +1696,7 @@ mod tests {
         let context = context(GasPrices::new(1, 1));
 
         // Fund the transaction
-        let fund_attempt = wallet_state.fund_tx::<MainnetGasProfile>(
+        let fund_attempt = wallet_state.fund_tx(
             &MantleTxBuilder::new(),
             alice,
             Fr::from(1u64),
@@ -1744,7 +1741,7 @@ mod tests {
         let context = context(GasPrices::new(1, 1));
 
         // Fund the transaction
-        let fund_attempt = wallet_state.fund_tx::<MainnetGasProfile>(
+        let fund_attempt = wallet_state.fund_tx(
             &MantleTxBuilder::new(),
             alice,
             Fr::from(3u64),
@@ -1776,7 +1773,7 @@ mod tests {
         let tx_builder = MantleTxBuilder::new();
 
         // Attempt to fund the transaction with Alice's notes.
-        let fund_attempt = wallet_state.fund_tx::<MainnetGasProfile>(
+        let fund_attempt = wallet_state.fund_tx(
             &tx_builder,
             alice,
             Fr::from(2u64),
@@ -1793,7 +1790,7 @@ mod tests {
 
         // Fund the transaction with Bob's notes.
         wallet_state
-            .fund_tx::<MainnetGasProfile>(
+            .fund_tx(
                 &tx_builder,
                 bob,
                 Fr::from(2u64),
@@ -1817,7 +1814,7 @@ mod tests {
                 NoteSetIndex::Ledger,
                 nullifier(1),
             )])
-            .fund_tx::<MainnetGasProfile>(
+            .fund_tx(
                 &tx_builder,
                 alice,
                 change_nonce,
@@ -1830,12 +1827,12 @@ mod tests {
 
         // Determine gas cost without change note
         let cost_without_change = with_zero_input(&tx_builder)
-            .minimum_gas_cost::<MainnetGasProfile>(&context)
+            .minimum_gas_cost(&context)
             .unwrap()
             .into_inner();
-        // 204 bytes at a storage price of 1, and 10 + 4177 + 1758 + 204 * 30 // 1000 =
-        // 5951 Execution Gas at a price of 1.
-        assert_eq!(6155, cost_without_change);
+        // 236 bytes at a storage price of 1, and 10 + 4177 + 1758 + 236 * 30 // 1000 =
+        // 5952 Execution Gas at a price of 1.
+        assert_eq!(6188, cost_without_change);
 
         // We can fund the tx if the note value is exactly the gas cost without change
         // note
@@ -1851,10 +1848,10 @@ mod tests {
         let cost_with_change = with_zero_input(&tx_builder)
             .with_dummy_change_note()
             .unwrap()
-            .minimum_gas_cost::<MainnetGasProfile>(&context)
+            .minimum_gas_cost(&context)
             .unwrap()
             .into_inner();
-        assert_eq!(6246, cost_with_change);
+        assert_eq!(6279, cost_with_change);
 
         for value in cost_without_change + 1..=cost_with_change {
             // this region of note values will fail to fund the tx.

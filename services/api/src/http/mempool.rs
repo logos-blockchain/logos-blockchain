@@ -3,7 +3,10 @@ use std::fmt::Display;
 
 use lb_core::{
     header::HeaderId,
-    mantle::{traits::MantleTx, transactions::hash::PrefixedKey},
+    mantle::{
+        traits::{MantleTx, StorageSize},
+        transactions::hash::PrefixedKey,
+    },
 };
 use lb_network_service::backends::NetworkBackend;
 use lb_storage_service::StorageService;
@@ -43,7 +46,15 @@ where
         > + Clone
         + 'static,
     StorageAdapter::Error: Debug,
-    Item: Clone + Debug + Send + Sync + Serialize + DeserializeOwned + MantleTx + 'static,
+    Item: Clone
+        + Debug
+        + Send
+        + Sync
+        + Serialize
+        + DeserializeOwned
+        + MantleTx
+        + StorageSize
+        + 'static,
     Item::Hash: Clone
         + Debug
         + Ord

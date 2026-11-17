@@ -10,7 +10,7 @@
 use core::fmt::{self, Debug, Formatter};
 
 use blake2::Digest as _;
-use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode, codec_fixtures};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, codec_fixtures};
 use lb_time::Epoch;
 pub use lb_time::Era;
 
@@ -21,7 +21,7 @@ use crate::{
 };
 
 /// The digest of an era: of the epoch it starts at, and of its parameters.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, BinaryCodec)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, BinaryEncode, BinaryDecode)]
 pub struct EraDigest([u8; 32]);
 
 const ERA_DIGEST_V1: &[u8] = b"ERA_DIGEST_V1";
@@ -66,12 +66,17 @@ codec_fixtures!(EraDigest, Self([0x11u8; 32]) => "111111111111111111111111111111
 
 /// The digest of a fork: the chain of eras a chain has activated since its
 /// genesis.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, BinaryCodec)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, BinaryEncode, BinaryDecode)]
 pub struct ForkDigest([u8; 32]);
 
 const FORK_DIGEST_V1: &[u8] = b"FORK_DIGEST_V1";
 
 impl ForkDigest {
+    #[must_use]
+    pub const fn new(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
     /// `blake2b256(b"FORK_DIGEST_V1" || genesis_id || era_0 || … || era_n)`,
     /// over the canonical encodings of the genesis block ID and of the digest
     /// of each activated era, in activation order.
@@ -111,6 +116,26 @@ impl From<ForkDigest> for [u8; 32] {
 display_hex_bytes_newtype!(ForkDigest);
 serde_bytes_newtype!(ForkDigest, 32);
 codec_fixtures!(ForkDigest, Self([0x22u8; 32]) => "2222222222222222222222222222222222222222222222222222222222222222");
+
+/// The fork digests an era accepts on transactions: its own, and those of the
+/// eras before it back to the latest era that refuses the transactions of the
+/// eras before it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct AcceptedForkDigests(Vec<ForkDigest>);
+
+impl AcceptedForkDigests {
+    #[must_use]
+    pub const fn new(fork_digests: Vec<ForkDigest>) -> Self {
+        Self(fork_digests)
+    }
+
+    /// Whether a transaction carrying `fork_digest` is valid under the era.
+    #[must_use]
+    pub fn accepts(&self, fork_digest: &ForkDigest) -> bool {
+        self.0.contains(fork_digest)
+    }
+}
 
 #[cfg(test)]
 mod tests {

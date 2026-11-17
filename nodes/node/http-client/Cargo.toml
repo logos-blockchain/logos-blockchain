@@ -23,6 +23,7 @@ lb-http-api-common            = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-log-targets                = { workspace = true }
 lb-sdp-service                = { workspace = true }
+lb-utils                      = { workspace = true }
 lb-version                    = { workspace = true }
 log                           = { workspace = true }
 reqwest                       = { features = ["http2", "json", "rustls-tls", "stream"], workspace = true }

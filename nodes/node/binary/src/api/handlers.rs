@@ -23,6 +23,7 @@ use lb_chain_service::{
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
+    era::ForkDigest,
     header::HeaderId,
     mantle::{
         Note, Op, TxHash,
@@ -42,9 +43,9 @@ use lb_http_api_common::{
     EraTiming, TimeInfo,
     bodies::{
         blend::JoinBlendRequestBody,
-        chain::ChainIdResponseBody,
+        chain::{ChainForkResponseBody, ChainIdResponseBody},
         channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
-        mantle::GasPricesResponseBody,
+        mantle::{GasPricesResponseBody, LimitsResponseBody},
         wallet::{
             balance::WalletBalanceResponseBody,
             transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
@@ -507,6 +508,51 @@ pub async fn version() -> Response {
 )]
 pub async fn chain_id(Extension(chain_id): Extension<ChainId>) -> Response {
     Json(ChainIdResponseBody { chain_id }).into_response()
+}
+
+/// The era in force comes from the time service's clock, and its fork digest
+/// from the deployment, handed to the API backend like the chain ID.
+#[utoipa::path(
+    get,
+    path = paths::CHAIN_FORK,
+    responses(
+        (status = 200, description = "The fork digest a transaction signed now carries", body = ChainForkResponseBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn chain_fork<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Extension(fork_digests): Extension<Vec<ForkDigest>>,
+) -> Response
+where
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<TimeService>,
+{
+    make_request_and_return_response!(async {
+        let fork_digest = fork_digest_in_force(&handle, &fork_digests).await?;
+        Ok::<_, DynError>(ChainForkResponseBody { fork_digest })
+    })
+}
+
+/// The fork digest, of `fork_digests`, of the era the time service's clock is
+/// in.
+async fn fork_digest_in_force<RuntimeServiceId>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+    fork_digests: &[ForkDigest],
+) -> Result<ForkDigest, DynError>
+where
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<TimeService>,
+{
+    let (sender, receiver) = oneshot::channel();
+    handle
+        .relay::<TimeService>()
+        .await?
+        .send(TimeServiceMessage::CurrentSlot { sender })
+        .await?;
+    let era = receiver.await?.era;
+    fork_digests
+        .get(usize::from(era.into_inner()))
+        .copied()
+        .ok_or_else(|| format!("The deployment has no era {}", era.into_inner()).into())
 }
 
 #[derive(Deserialize)]
@@ -1772,6 +1818,55 @@ where
 
 #[utoipa::path(
     get,
+    path = paths::MANTLE_LIMITS,
+    responses(
+        (status = 200, description = "Get what a transaction must fit in the era of the current slot"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn get_limits<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    RuntimeServiceId: AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + AsServiceId<TimeService>
+        + Debug
+        + Sync
+        + Display
+        + Send
+        + 'static,
+{
+    let relay = match handle.relay::<TimeService>().await {
+        Ok(relay) => relay,
+        Err(error) => {
+            return ApiError::internal(error).into_response();
+        }
+    };
+    let (sender, receiver) = oneshot::channel();
+    if let Err(error) = relay.send(TimeServiceMessage::CurrentSlot { sender }).await {
+        return ApiError::internal(error).into_response();
+    }
+    let slot = match receiver.await {
+        Ok(tick) => tick.slot,
+        Err(error) => {
+            return ApiError::internal(error).into_response();
+        }
+    };
+
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(&handle)
+            .await;
+    match chain_api.get_ledger_config(slot).await {
+        Ok(config) => Json(LimitsResponseBody {
+            max_op_data_size: config.max_op_data_size,
+        })
+        .into_response(),
+        Err(error) => ApiError::internal(error).into_response(),
+    }
+}
+
+#[utoipa::path(
+    get,
     path = paths::BLOCKS_STREAM,
     responses(
         (status = 200, description = "Stream of processed blocks with chain state"),
@@ -2219,6 +2314,7 @@ pub mod wallet {
             + 'static
             + AsServiceId<StorageService<RuntimeServiceId>>
             + AsServiceId<WalletService>
+            + AsServiceId<TimeService>
             + AsServiceId<
                 TxMempoolService<
                     MempoolNetworkAdapter<

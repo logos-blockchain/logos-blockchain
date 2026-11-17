@@ -1,7 +1,7 @@
 use std::sync::LazyLock;
 
 use ark_ff::{AdditiveGroup as _, PrimeField as _};
-use lb_binary_codec::canonical::BinaryCodec;
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
@@ -28,7 +28,18 @@ static NOTE_NONCE_V1: LazyLock<Fr> = LazyLock::new(|| {
 });
 
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, BinaryCodec,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    BinaryEncode,
+    BinaryDecode,
 )]
 #[serde(transparent)]
 pub struct NoteCommitment(#[serde(with = "serde_fr")] pub Fr);
@@ -40,7 +51,18 @@ impl AsRef<Fr> for NoteCommitment {
 }
 
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, BinaryCodec,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    BinaryEncode,
+    BinaryDecode,
 )]
 #[serde(transparent)]
 pub struct NoteNullifier(#[serde(with = "serde_fr")] pub Fr);
