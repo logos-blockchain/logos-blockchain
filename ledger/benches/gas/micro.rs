@@ -10,7 +10,6 @@ use lb_core::{
     mantle::{
         Op, OpProof, SignedOps,
         batch::{DeferredProofs, DeferredZkProgramSpend},
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         note_set::{NoteSet, NoteSets, RECENT_ROOTS_WINDOW, TxBuffer, TxRoots, eligible_leaf},
         notes::{InputNullifiers, NoteNullifier, OutputCommitments},
@@ -39,7 +38,7 @@ use rand::{Rng as _, SeedableRng as _, rngs::StdRng};
 
 use crate::{
     cycles::{Case, Counter, ROUNDS, in_turn},
-    fixture::{HeaderId, commitments, filled_state, nullifiers, program_key, signed},
+    fixture::{FORK_DIGEST, HeaderId, commitments, filled_state, nullifiers, program_key, signed},
 };
 
 const BATCH_SIZES: [u64; 9] = [1, 2, 4, 8, 16, 32, 64, 128, 256];
@@ -345,6 +344,8 @@ fn decode_cases() -> Vec<Case> {
     INSCRIBED_BYTES
         .into_iter()
         .map(|bytes| {
+            let max_op_data_size =
+                crate::fixture::parameters(&filled_state().config).max_op_data_size;
             let encoded = signed(
                 vec![inscription(bytes as usize)],
                 &filled_state().channel_key,
@@ -355,8 +356,11 @@ fn decode_cases() -> Vec<Case> {
                 vec![("bytes", bytes)],
                 || (),
                 move |()| {
-                    <SignedOps<Unverified, StandardMode> as BinaryDecode>::decode(&encoded, &())
-                        .map(|(_, tx)| tx)
+                    <SignedOps<Unverified, StandardMode> as BinaryDecode>::decode(
+                        &encoded,
+                        &max_op_data_size,
+                    )
+                    .map(|(_, tx)| tx)
                 },
             )
         })
@@ -420,7 +424,7 @@ fn point_cases() -> Vec<Case> {
 // verifies its signature strictly.
 fn ed25519_case() -> Case {
     let fixture = filled_state();
-    let message = *Ops::new_unchecked(vec![inscription(1)])
+    let message = *Ops::new(FORK_DIGEST, [inscription(1)])
         .hash()
         .as_signing_bytes();
     let signature = fixture.channel_key.sign_payload(&message);
@@ -475,13 +479,16 @@ fn applied_program_spend() -> DeferredZkProgramSpend {
         .flat_map(Bounded::iter)
         .map(|step| StepProof::sample_for(step.into()))
         .collect();
-    let ops = Ops::new_unchecked(vec![Op::ChannelInscribe(InscriptionOp {
-        channel_id: fixture.channel,
-        inscription: [1].into(),
-        parent: tip,
-        signer: fixture.channel_key.public_key().into_unverified(),
-        mini_blocks,
-    })]);
+    let ops = Ops::new(
+        FORK_DIGEST,
+        [Op::ChannelInscribe(InscriptionOp {
+            channel_id: fixture.channel,
+            inscription: [1].into(),
+            parent: tip,
+            signer: fixture.channel_key.public_key().into_unverified(),
+            mini_blocks,
+        })],
+    );
     let signature = fixture
         .channel_key
         .sign_payload(ops.hash().as_signing_bytes());
@@ -495,7 +502,7 @@ fn applied_program_spend() -> DeferredZkProgramSpend {
     let (_, _, _, deferred) = fixture
         .state
         .clone()
-        .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(&fixture.config, &tx)
+        .try_apply_transaction::<_, HeaderId>(&fixture.config, &tx)
         .expect("the program step applies");
     let spend = &deferred.program_spends()[0];
     DeferredZkProgramSpend::new(*spend.proof(), *spend.inputs())
