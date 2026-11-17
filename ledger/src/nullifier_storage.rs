@@ -51,8 +51,7 @@ fn written_key(version: Version) -> Vec<u8> {
 }
 
 /// The key of the saved [`crate::LibState`]. It differs from the first byte of
-/// every other key: the note sets (`L`, `S`, `C`), [`VERSIONS_NAMESPACE`] and
-/// [`WRITTEN_NAMESPACE`].
+/// every other key.
 pub const LIB_STATE_KEY: &[u8] = b"A";
 
 /// The store of the nullifier trees of a ledger, and the versions of its
