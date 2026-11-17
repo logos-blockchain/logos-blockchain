@@ -36,6 +36,7 @@ use lb_libp2p::{
 use lb_log_targets::network_service;
 use lb_time::Era;
 use lb_utils::tokio::task::spawn;
+use rand_010::SeedableRng;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::StreamExt as _;
 
@@ -87,8 +88,8 @@ struct AdvertisedProtocols {
     protocols: HashSet<Libp2pStreamProtocol>,
 }
 
-pub struct SwarmHandler<R: rand_010::Rng + rand_010::SeedableRng + Send + 'static> {
-    pub swarm: Swarm<R>,
+pub struct SwarmHandler<Rng: rand_010::Rng + SeedableRng + Send + 'static> {
+    pub swarm: Swarm<Rng>,
     pub pending_dials: HashMap<ConnectionId, Dial>,
     pub commands_tx: mpsc::Sender<Command>,
     pub commands_rx: mpsc::Receiver<Command>,
@@ -124,7 +125,7 @@ const BACKOFF: u64 = 5;
 // TODO: make this configurable
 const MAX_RETRY: usize = 3;
 
-impl<R: rand_010::Rng + rand_010::SeedableRng + Send + 'static> SwarmHandler<R> {
+impl<Rng: rand_010::Rng + SeedableRng + Send + 'static> SwarmHandler<Rng> {
     pub fn new(
         config: Libp2pConfig,
         current_era: Era,
@@ -132,7 +133,7 @@ impl<R: rand_010::Rng + rand_010::SeedableRng + Send + 'static> SwarmHandler<R> 
         commands_rx: mpsc::Receiver<Command>,
         pubsub_events_tx: broadcast::Sender<Message>,
         chainsync_events_tx: broadcast::Sender<ChainSyncEvent>,
-        rng: R,
+        rng: Rng,
     ) -> Self {
         let Libp2pConfig {
             inner,
@@ -210,7 +211,7 @@ impl<R: rand_010::Rng + rand_010::SeedableRng + Send + 'static> SwarmHandler<R> 
         }
     }
 
-    fn handle_event(&mut self, event: SwarmEvent<BehaviourEvent<R>>) {
+    fn handle_event(&mut self, event: SwarmEvent<BehaviourEvent<Rng>>) {
         match event {
             SwarmEvent::Behaviour(behaviour_event) => {
                 self.handle_behaviour_event(behaviour_event);
@@ -221,7 +222,7 @@ impl<R: rand_010::Rng + rand_010::SeedableRng + Send + 'static> SwarmHandler<R> 
         }
     }
 
-    fn handle_behaviour_event(&mut self, behaviour_event: BehaviourEvent<R>) {
+    fn handle_behaviour_event(&mut self, behaviour_event: BehaviourEvent<Rng>) {
         match behaviour_event {
             BehaviourEvent::Gossipsub(event) => {
                 self.handle_gossipsub_event(event);
@@ -243,7 +244,7 @@ impl<R: rand_010::Rng + rand_010::SeedableRng + Send + 'static> SwarmHandler<R> 
         clippy::cognitive_complexity,
         reason = "TODO: Address this at some point."
     )]
-    fn handle_swarm_event(&mut self, event: SwarmEvent<BehaviourEvent<R>>) {
+    fn handle_swarm_event(&mut self, event: SwarmEvent<BehaviourEvent<Rng>>) {
         match event {
             SwarmEvent::ConnectionEstablished {
                 peer_id,
@@ -606,7 +607,7 @@ mod tests {
 
     use lb_core::header::HeaderId;
     use lb_time::era::{EraEntriesAfterGenesis, EraSchedule, EraTiming};
-    use rand_010::{SeedableRng as _, rngs::StdRng};
+    use rand_010::rngs::StdRng;
     use testing_framework_tools::net::get_available_udp_port;
     use time::OffsetDateTime;
     use tracing_subscriber::EnvFilter;

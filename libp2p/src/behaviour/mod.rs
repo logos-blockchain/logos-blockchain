@@ -8,6 +8,7 @@ use std::{collections::HashMap, error::Error};
 use lb_cryptarchia_sync::ChainSyncError;
 use lb_utils::net::MAX_WIRE_MESSAGE_SIZE;
 use libp2p::{PeerId, StreamProtocol, autonat, identify, identity, kad};
+use rand_010::SeedableRng;
 use thiserror::Error;
 
 use crate::{
@@ -50,12 +51,12 @@ pub enum BehaviourError {
 )]
 mod composed {
     use libp2p::{autonat, identify, kad, swarm::NetworkBehaviour};
-    use rand::RngCore;
+    use rand_010::SeedableRng;
 
     use super::nat;
 
     #[derive(NetworkBehaviour)]
-    pub struct Behaviour<Rng: rand_010::Rng + Send + 'static> {
+    pub struct Behaviour<Rng: rand_010::Rng + SeedableRng + Send + 'static> {
         pub(crate) gossipsub: libp2p::gossipsub::Behaviour,
         // todo: support persistent store if needed
         pub(crate) kademlia: kad::Behaviour<kad::store::MemoryStore>,
@@ -140,7 +141,7 @@ mod tests {
 
     use lb_cryptarchia_sync::Config as ChainSyncConfig;
     use libp2p::gossipsub as libp2p_gossipsub;
-    use rand_010::{SeedableRng as _, rngs::StdRng};
+    use rand_010::rngs::StdRng;
 
     use super::*;
     use crate::behaviour::gossipsub::configure_topic_size_limits;

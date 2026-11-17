@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use lb_libp2p::{behaviour::gossipsub::swarm_ext::topic_hash, gossipsub};
 use lb_log_targets::network_service;
 use lb_utils::tokio::task::spawn;
+use rand_010::SeedableRng;
 
 use crate::backends::libp2p::{
     Command,
@@ -47,7 +48,7 @@ pub enum PubSubCommand {
     },
 }
 
-impl<R: rand_010::Rng + rand_010::SeedableRng + Send + 'static> SwarmHandler<R> {
+impl<Rng: rand_010::Rng + SeedableRng + Send + 'static> SwarmHandler<Rng> {
     #[expect(
         clippy::cognitive_complexity,
         reason = "This command dispatcher intentionally handles all PubSub commands."

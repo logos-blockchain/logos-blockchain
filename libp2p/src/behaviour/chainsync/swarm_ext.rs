@@ -2,13 +2,14 @@ use std::collections::HashSet;
 
 use lb_cryptarchia_sync::{BoxedStream, ChainSyncError, HeaderId, SerialisedBlock, TipResponse};
 use libp2p::PeerId;
+use rand_010::SeedableRng;
 use tokio::sync::oneshot;
 
 use crate::{Swarm, behaviour::BehaviourError, protocol_name::StreamProtocol};
 
 type SerialisedBlockStream = BoxedStream<Result<SerialisedBlock, ChainSyncError>>;
 
-impl<R: rand_010::Rng + rand_010::SeedableRng + Send + 'static> Swarm<R> {
+impl<Rng: rand_010::Rng + SeedableRng + Send + 'static> Swarm<Rng> {
     /// Starts a new era of chain sync, over the connections already open: every
     /// request goes over `protocol_name` from now on, and the protocol of the
     /// era before is refused, while the requests already under way on it run
