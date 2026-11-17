@@ -935,12 +935,26 @@ fn a_copy_failing_an_operation_proof_leaves_the_genuine_block_applicable() {
 /// it. A copy with one genuine signature too many fails as a bad copy, before
 /// the reward is compared, and the genuine block stays applicable.
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "keep the forged-copy and genuine-block checks in one test"
+)]
 fn a_copy_with_one_signature_too_many_leaves_the_genuine_block_applicable() {
     let config = ledger_config(NonZero::<u32>::new(1).unwrap());
     let genesis_id: HeaderId = [0; 32].into();
     let (secret_key, leader_note) = note();
     let (create_key, create_note) = note();
+    let create_note = Note::new(
+        1_000_000_000_000_000,
+        create_note.nonce,
+        create_note.public_key,
+    );
     let (update_key, update_note) = note();
+    let update_note = Note::new(
+        1_000_000_000_000_000,
+        update_note.nonce,
+        update_note.public_key,
+    );
     let genesis_notes = [leader_note, create_note, update_note];
     let paths = commitment_paths(&genesis_notes);
     let mut cryptarchia = Cryptarchia::from_genesis(

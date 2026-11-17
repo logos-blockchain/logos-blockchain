@@ -4,7 +4,7 @@
 //! Run with
 //!
 //! ```text
-//! GAS_BENCH_FILL=1000 taskset -c 8 cargo test -p logos-blockchain-ledger --release --features test-utils --test gas_micro -- --test-threads=1
+//! GAS_BENCH_FILL=1000 taskset -c 8 cargo test -p logos-blockchain-ledger --release --features test-utils --test gas_micro -- --ignored --test-threads=1
 //! ```
 //!
 //! The cycle counters are read through `perf_event`, on Linux only.
@@ -50,6 +50,7 @@ fn assert_costlier(cases: &mut [Case], more: (&str, &[(&str, u64)]), less: (&str
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn micro_cases_run() {
     let mut cases = micro::micro_cases();
     assert!(!cases.is_empty());
@@ -76,6 +77,7 @@ fn case_names_are_grouped_and_unique() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn poseidon2_digest_of_four_costs_more_than_a_compression() {
     assert_costlier(
         &mut micro::micro_cases(),
@@ -85,6 +87,7 @@ fn poseidon2_digest_of_four_costs_more_than_a_compression() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn imt_insert_costs_more_than_imt_contains() {
     assert_costlier(
         &mut micro::micro_cases(),
@@ -94,6 +97,7 @@ fn imt_insert_costs_more_than_imt_contains() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn mmr_push_costs_more_with_more_merges_and_the_root_hashes_every_height() {
     let mut cases = micro::micro_cases();
     assert_costlier(
@@ -109,6 +113,7 @@ fn mmr_push_costs_more_with_more_merges_and_the_root_hashes_every_height() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn step_root_costs_more_with_more_buffered_commitments() {
     let mut cases = micro::micro_cases();
     assert_costlier(
@@ -124,6 +129,7 @@ fn step_root_costs_more_with_more_buffered_commitments() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn end_block_of_one_set_costs_more_than_its_eligible_leaf() {
     assert_costlier(
         &mut micro::micro_cases(),
@@ -133,6 +139,7 @@ fn end_block_of_one_set_costs_more_than_its_eligible_leaf() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn end_block_costs_more_with_more_deferred_nullifiers() {
     assert_costlier(
         &mut micro::micro_cases(),
@@ -169,6 +176,7 @@ fn the_ledger_set_holds_its_recent_roots() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn blake2b_costs_more_on_more_bytes() {
     assert_costlier(
         &mut micro::micro_cases(),
@@ -178,6 +186,7 @@ fn blake2b_costs_more_on_more_bytes() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn decode_tx_costs_more_on_a_longer_inscription() {
     assert_costlier(
         &mut micro::micro_cases(),
@@ -187,6 +196,7 @@ fn decode_tx_costs_more_on_a_longer_inscription() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn g2_decompression_costs_more_than_g1_and_than_its_subgroup_check() {
     let mut cases = micro::micro_cases();
     assert_costlier(
@@ -202,6 +212,7 @@ fn g2_decompression_costs_more_than_g1_and_than_its_subgroup_check() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn ed25519_verify_costs_more_than_hashing_its_message() {
     assert_costlier(
         &mut micro::micro_cases(),
@@ -211,6 +222,7 @@ fn ed25519_verify_costs_more_than_hashing_its_message() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn groth16_batches_cost_more_with_more_proofs() {
     let mut cases = micro::micro_cases();
     for inputs in [3, 27, 37] {
@@ -233,6 +245,7 @@ fn program_spend_batch_inputs_are_full_size() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn program_proof_verification_costs_more_than_its_key_lines() {
     assert_costlier(
         &mut micro::micro_cases(),
@@ -242,6 +255,7 @@ fn program_proof_verification_costs_more_than_its_key_lines() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn key_preparation_costs_more_than_each_of_its_parts() {
     let mut cases = micro::micro_cases();
     assert_costlier(
@@ -262,6 +276,7 @@ fn key_preparation_costs_more_than_each_of_its_parts() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn pol_verify_costs_more_than_one_pairing() {
     assert_costlier(
         &mut micro::micro_cases(),

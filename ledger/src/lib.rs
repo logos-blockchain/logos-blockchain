@@ -743,6 +743,15 @@ impl LedgerState {
         self
     }
 
+    /// Replaces the genesis note sets and their epoch snapshots, for benchmarks
+    /// that build a state with a different genesis configuration.
+    #[cfg(feature = "test-utils")]
+    #[must_use]
+    pub fn with_genesis_note_sets(mut self, note_sets: NoteSets) -> Self {
+        self.cryptarchia_ledger = self.cryptarchia_ledger.with_genesis_note_sets(note_sets);
+        self
+    }
+
     /// total estimated stake and on the average of fees consumed per block over
     /// the last `POOLED_FEES_WINDOW` blocks. See the block rewards
     /// specification: <https://lip.logos.co/blockchain/raw/block-rewards.html>

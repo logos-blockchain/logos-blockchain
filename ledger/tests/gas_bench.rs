@@ -3,7 +3,7 @@
 //! Run with
 //!
 //! ```text
-//! GAS_BENCH_FILL=1000 taskset -c 8 cargo test -p logos-blockchain-ledger --release --features test-utils --test gas_bench -- --test-threads=1
+//! GAS_BENCH_FILL=1000 taskset -c 8 cargo test -p logos-blockchain-ledger --release --features test-utils --test gas_bench -- --ignored --test-threads=1
 //! ```
 //!
 //! The cycle counters are read through `perf_event`, on Linux only.
@@ -33,6 +33,7 @@ fn spin(iterations: u64) -> u64 {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn busy_loop_scales_linearly() {
     let mut counter = Counter::new().expect("counters must be available and the process pinned");
     let single = counter.measure(|| (), |()| spin(1_000_000));
@@ -42,6 +43,7 @@ fn busy_loop_scales_linearly() {
 }
 
 #[test]
+#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn setup_is_not_counted() {
     let mut counter = Counter::new().expect("counters must be available and the process pinned");
     let cycles = counter.measure(|| spin(50_000_000), |_| ());

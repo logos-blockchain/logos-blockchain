@@ -10,9 +10,10 @@ use std::{
 };
 
 use lb_core::{
+    era::{AcceptedForkDigests, ForkDigest},
     mantle::{
         Op, OpProof, SignedOps,
-        gas::MainnetGasProfile,
+        gas::GasProfile,
         ledger::verification_mode::StandardMode,
         note_set::NoteSetIndex,
         notes::{self, NoteCommitment, NoteNullifier, ProgramId},
@@ -26,7 +27,7 @@ use lb_core::{
         },
         programs::{ProgramVerificationKey, derive_program_id},
         traits::Hashable as _,
-        transactions::{GasPrices, OpProofs, Ops, states::Preverified},
+        transactions::{GasPrices, OpProofs, Ops, TxList, states::Preverified},
     },
     sdp::{MinStake, ServiceParameters, ServiceType},
 };
@@ -38,8 +39,9 @@ use lb_utils::math::{NonNegativeRatio, PositiveF64};
 use logos_blockchain_ledger::{
     Config, LedgerState,
     config::{
-        BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig,
-        config_for_slot,
+        BlendPoWConfig, BlockRewardsConfig, EmissionRatio, EraScheduledConfig,
+        ExecutionMarketConfig, MaxGasPerBlock, ModulusShift, PoWConfig, RewardPoWConfig,
+        StorageMarketConfig, config_for_slot,
     },
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
@@ -48,13 +50,19 @@ use time::OffsetDateTime;
 
 pub type HeaderId = [u8; 32];
 
+pub const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
+
 /// The number of nullifiers in each filled note set, one less than its
 /// commitments, unless `GAS_BENCH_FILL` sets another, which only shortens the
 /// fill while developing a case: the measures are taken at the default.
 pub const DEFAULT_FILL: usize = 1_000_000;
 
 pub fn fill() -> usize {
-    fill_from(std::env::var("GAS_BENCH_FILL").ok().as_deref())
+    match std::env::var("GAS_BENCH_FILL") {
+        Ok(value) => fill_from(Some(&value)),
+        Err(_) if cfg!(test) => 1_000,
+        Err(_) => DEFAULT_FILL,
+    }
 }
 
 pub fn fill_from(variable: Option<&str>) -> usize {
@@ -106,7 +114,7 @@ fn fresh(count: usize, salt: u64, kind: u128) -> impl Iterator<Item = Fr> {
 /// Signs `ops` with `key` for every inscription, and gives every other
 /// Operation an empty proof.
 pub fn signed(ops: Vec<Op>, key: &Ed25519Key) -> SignedOps<Preverified, StandardMode> {
-    let ops = Ops::new_unchecked(ops);
+    let ops = Ops::new(FORK_DIGEST, TxList::new_unchecked(ops));
     let tx_hash = ops.hash();
     let proofs = ops
         .iter()
@@ -134,7 +142,7 @@ fn apply(
     tx: &SignedOps<Preverified, StandardMode>,
 ) -> LedgerState {
     state
-        .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(config, tx)
+        .try_apply_transaction::<_, HeaderId>(config, tx)
         .expect("the setup transaction applies")
         .0
 }
@@ -270,6 +278,7 @@ fn era_parameters() -> Config {
                 blend: rewards::blend::RewardsParameters {
                     rounds_per_epoch: epoch_length.try_into().unwrap(),
                     message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                    cover_replication_factor: 0,
                     num_blend_layers: NonZero::new(3).unwrap(),
                     minimum_network_size: NonZero::new(1).unwrap(),
                     data_replication_factor: 0,
@@ -281,6 +290,31 @@ fn era_parameters() -> Config {
                 timestamp: 0,
             },
         },
+        max_transactions: 1024,
+        max_transactions_size: 2 * 1024 * 1024,
+        max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+        execution_market: ExecutionMarketConfig {
+            max_gas_per_block: MaxGasPerBlock::new(3_137_798).unwrap(),
+            fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                .unwrap(),
+            ema_smoothing_factor: lb_utils::math::ProperFraction::new(9, 10.try_into().unwrap())
+                .unwrap(),
+        },
+        storage_market: StorageMarketConfig {
+            max_adjustment_factor: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
+                .unwrap(),
+            ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
+                .unwrap(),
+        },
+        block_rewards: BlockRewardsConfig::new(
+            3_000_000_000_000_000_000,
+            120_000_000_000_000_000.try_into().unwrap(),
+            10_512,
+            EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
+            lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+        )
+        .unwrap(),
+        gas_profile: GasProfile::MAINNET,
         pow_config: PoWConfig {
             blend: BlendPoWConfig {
                 base_difficulty: ModulusShift::new::<234>(),
@@ -302,5 +336,6 @@ fn era_parameters() -> Config {
                 slot_window: NonZero::new(100).unwrap(),
             },
         },
+        accepted_fork_digests: AcceptedForkDigests::new(vec![FORK_DIGEST]),
     }
 }

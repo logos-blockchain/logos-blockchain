@@ -18,7 +18,6 @@ use lb_core::{
     mantle::{
         Op, OpProof, SignedOps, Value,
         batch::{DeferredProof, DeferredProofs},
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         note_set::NoteSetIndex,
         notes::NoteCommitment,
@@ -41,7 +40,7 @@ use logos_blockchain_ledger::{LedgerState, config::EraScheduledConfig};
 
 use crate::{
     cycles::Case,
-    fixture::{HeaderId, commitments, filled_state, nullifiers, signed},
+    fixture::{HeaderId, commitments, filled_state, nullifiers, parameters, signed},
     ops::{
         AcceptedLeadership, ProgramShape, channel_tip, deposit_op, encode, encode_inscription,
         fresh_commitments, fresh_nullifiers, inscription, io_dims, next_epoch, program_steps,
@@ -223,10 +222,13 @@ fn reward_commitment() -> NoteCommitment {
     NoteCommitment(Fr::from(3u64))
 }
 
-fn preverified(txs: &[Vec<u8>]) -> Result<Vec<SignedOps<Preverified, StandardMode>>, String> {
+fn preverified(
+    txs: &[Vec<u8>],
+    max_op_data_size: u32,
+) -> Result<Vec<SignedOps<Preverified, StandardMode>>, String> {
     txs.iter()
         .map(|bytes| {
-            SignedOps::<Unverified, StandardMode>::decode_all(bytes, &())
+            SignedOps::<Unverified, StandardMode>::decode_all(bytes, &max_op_data_size)
                 .map_err(|error| format!("decode: {error}"))?
                 .preverify()
                 .map_err(|error| format!("preverify: {error}"))
@@ -241,11 +243,12 @@ fn leader_reward_of(
     config: &EraScheduledConfig,
     txs: &[Vec<u8>],
 ) -> Result<Value, String> {
+    let max_op_data_size = parameters(config).max_op_data_size;
     let (state, gas_and_fees, _, _) = state
         .clone()
-        .try_apply_block_transactions::<_, HeaderId, MainnetGasProfile>(
+        .try_apply_block_transactions::<_, HeaderId>(
             config,
-            preverified(txs)?.into_iter(),
+            preverified(txs, max_op_data_size)?.into_iter(),
         )
         .map_err(|error| format!("apply: {error}"))?;
     state
@@ -261,9 +264,9 @@ pub fn execute_paying(
     reward_value: Value,
     txs: &[Vec<u8>],
 ) -> Result<AppliedBlock, String> {
-    let txs = preverified(txs)?;
+    let txs = preverified(txs, parameters(config).max_op_data_size)?;
     state
-        .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
+        .try_apply_block_contents::<_, HeaderId>(
             config,
             reward_commitment(),
             reward_value,
@@ -422,7 +425,7 @@ fn sdp_release_header(withdrawals: usize) -> HeaderShape {
         dims: vec![("withdrawals", withdrawals as u64)],
         state,
         config: config.clone(),
-        slot: Slot::from(release * crate::fixture::parameters(config).epoch_length()),
+        slot: Slot::from(release * parameters(config).epoch_length()),
         released,
     }
 }
@@ -447,7 +450,7 @@ static CHANNELS_STATE: LazyLock<LedgerState> = LazyLock::new(|| {
     let (state, gas_and_fees, ..) = fixture
         .state
         .clone()
-        .try_apply_block_transactions::<_, HeaderId, MainnetGasProfile>(
+        .try_apply_block_transactions::<_, HeaderId>(
             &fixture.config,
             std::iter::once(signed(creations, &fixture.channel_key)),
         )
@@ -588,7 +591,7 @@ fn mixed() -> BlockShape {
 }
 
 fn epoch_of(config: &EraScheduledConfig, slot: Slot) -> Epoch {
-    let parameters = crate::fixture::parameters(config);
+    let parameters = parameters(config);
     parameters
         .epoch_config
         .epoch(slot, parameters.base_period_length())
