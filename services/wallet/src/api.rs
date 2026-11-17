@@ -14,6 +14,7 @@ use lb_core::{
 use lb_key_management_system_service::keys::{
     Ed25519Key, ZkPublicKey, ZkPublicKeys, ZkSignature, secured_key::SecuredKey,
 };
+use lb_ledger::UtxoTree;
 use lb_utils::bounded::BoundedError;
 use lb_wallet::WalletBalance;
 use overwatch::{
@@ -261,14 +262,22 @@ where
         Ok(rx.await??)
     }
 
+    /// Returns the wallet's notes at `tip` (or at the current tip when `tip` is
+    /// `None`) that are in `aged_utxos`, the aged UTXO set of the epoch the
+    /// caller leads in, along with the key ids needed to prove leadership.
     pub async fn get_leader_aged_notes(
         &self,
         tip: Option<HeaderId>,
+        aged_utxos: UtxoTree,
     ) -> Result<TipResponse<Vec<UtxoWithKeyId>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
-            .send(WalletMsg::GetLeaderAgedNotes { tip, resp_tx })
+            .send(WalletMsg::GetLeaderAgedNotes {
+                tip,
+                aged_utxos,
+                resp_tx,
+            })
             .await?;
 
         Ok(rx.await??)

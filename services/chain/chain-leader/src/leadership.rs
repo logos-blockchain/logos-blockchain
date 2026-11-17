@@ -344,6 +344,17 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
             eligible_aged,
             source,
         } = slot_context;
+        // The notes the Blend leadership scan checks for the whole epoch.
+        tracing::info!(
+            target: LOG_TARGET,
+            event = "leader_eligible_notes",
+            path = "blend_scan",
+            slot = u64::from(slot),
+            epoch = u32::from(epoch),
+            note_count = eligible_aged.len(),
+            total_value = eligible_aged.iter().map(|note| note.utxo.note.value).sum::<u64>(),
+            "Eligible notes for the Blend leadership scan"
+        );
         let state = PolEpochState {
             nonce: epoch_state.nonce,
             aged_utxo_root: epoch_state.utxo_merkle_root(),
@@ -446,8 +457,11 @@ where
         .await
         .ok()?
         .ok()?;
+    // Filter the wallet's notes by the aged UTXO set of the slot's epoch, not
+    // the one of the tip's epoch: on the first slots of an epoch, before any
+    // block of it is on the chain, the two differ.
     let eligible_utxos = wallet_api
-        .get_leader_aged_notes(Some(wallet_tip))
+        .get_leader_aged_notes(Some(wallet_tip), epoch_state.utxos.clone())
         .await
         .ok()?;
     let eligible = eligible_utxos

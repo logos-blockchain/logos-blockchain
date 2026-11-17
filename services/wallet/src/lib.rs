@@ -46,7 +46,7 @@ use lb_key_management_system_service::{
     },
     operators::zk::voucher::UnsafeVoucherOperator,
 };
-use lb_ledger::LedgerState;
+use lb_ledger::{LedgerState, UtxoTree};
 use lb_log_targets::wallet;
 use lb_mmr::MerklePath;
 use lb_services_utils::{
@@ -195,6 +195,9 @@ pub enum WalletMsg {
     },
     GetLeaderAgedNotes {
         tip: Option<HeaderId>,
+        /// Aged UTXO set of the epoch the caller leads in. The wallet's notes
+        /// at `tip` that are in this set are returned.
+        aged_utxos: UtxoTree,
         resp_tx: Sender<Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError>>,
     },
     GetLeaderAgedNotesInfo {
@@ -863,14 +866,20 @@ where
                     debug!(target: LOG_TARGET, "Failed to respond to SignTxWithZk");
                 }
             }
-            WalletMsg::GetLeaderAgedNotes { tip, resp_tx } => {
-                let response = Self::leader_aged_notes_at(tip, state.wallet(), cryptarchia).await;
+            WalletMsg::GetLeaderAgedNotes {
+                tip,
+                aged_utxos,
+                resp_tx,
+            } => {
+                let response =
+                    Self::leader_aged_notes_at(tip, Some(&aged_utxos), state.wallet(), cryptarchia)
+                        .await;
                 if resp_tx.send(response).is_err() {
                     debug!(target: LOG_TARGET, "Failed to respond to GetLeaderAgedNotes");
                 }
             }
             WalletMsg::GetLeaderAgedNotesInfo { tip, resp_tx } => {
-                let response = Self::leader_aged_notes_at(tip, state.wallet(), cryptarchia)
+                let response = Self::leader_aged_notes_at(tip, None, state.wallet(), cryptarchia)
                     .await
                     .map(|TipResponse { tip, response }| TipResponse {
                         tip,
@@ -1250,37 +1259,38 @@ where
         )?)
     }
 
-    /// Resolves the wallet-owned UTXOs that are eligible to lead at `tip`
-    /// (or at the current tip when `tip` is `None`), paired with the key ids
+    /// Resolves the wallet-owned UTXOs at `tip` (or at the current tip when
+    /// `tip` is `None`) that are in the aged UTXO set, paired with the key ids
     /// needed to build a leadership proof for them.
+    ///
+    /// The aged UTXO set is `aged_utxos` when given, otherwise the one of the
+    /// epoch of `tip`.
     async fn leader_aged_notes_at(
         tip: Option<HeaderId>,
+        aged_utxos: Option<&UtxoTree>,
         wallet: &Wallet,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
     ) -> Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError> {
         let tip = Self::msg_tip_or_latest(tip, cryptarchia).await?;
-        let ledger_state = Self::ledger_state_at(tip, cryptarchia).await?;
 
         let wallet_state = wallet.wallet_state_at(tip).map_err(|err| {
             error!(target: LOG_TARGET, err = ?err, "Failed to fetch wallet state");
             WalletServiceError::FailedToFetchWalletStateForBlock(tip)
         })?;
 
-        let aged_utxos = ledger_state.epoch_state().utxos.utxos();
-        let eligible_utxos = wallet_state
-            .utxos
-            .iter()
-            .filter(|(note_id, _)| aged_utxos.contains_key(note_id))
-            .filter_map(|(_, utxo)| {
-                wallet
-                    .known_keys()
-                    .get(&utxo.note.pk)
-                    .map(|key_id| UtxoWithKeyId {
-                        utxo: *utxo,
-                        key_id: key_id.clone(),
-                    })
-            })
-            .collect();
+        let tip_epoch_utxos;
+        let aged_utxos = if let Some(aged_utxos) = aged_utxos {
+            aged_utxos
+        } else {
+            tip_epoch_utxos = Self::ledger_state_at(tip, cryptarchia)
+                .await?
+                .epoch_state()
+                .utxos
+                .clone();
+            &tip_epoch_utxos
+        };
+        let eligible_utxos =
+            leader_eligible_notes(wallet_state.utxos.values(), aged_utxos, wallet.known_keys());
 
         Ok(TipResponse {
             tip,
@@ -1866,5 +1876,101 @@ fn log_lib_update(lib_update: &LibUpdate) {
             immutable_blocks_count,
             "Received LIB update"
         );
+    }
+}
+
+/// Pairs each of `wallet_utxos` that is in `aged_utxos` with the key id of its
+/// owner. Notes whose owner key is unknown to the wallet are left out.
+fn leader_eligible_notes<'a>(
+    wallet_utxos: impl IntoIterator<Item = &'a Utxo>,
+    aged_utxos: &UtxoTree,
+    known_keys: &HashMap<ZkPublicKey, KeyId>,
+) -> Vec<UtxoWithKeyId> {
+    wallet_utxos
+        .into_iter()
+        .filter(|utxo| aged_utxos.contains(&utxo.id()))
+        .filter_map(|utxo| {
+            known_keys.get(&utxo.note.pk).map(|key_id| UtxoWithKeyId {
+                utxo: *utxo,
+                key_id: key_id.clone(),
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_core::mantle::Note;
+    use lb_groth16::Fr;
+
+    use super::*;
+
+    /// A note that is aged in the requested epoch but not in the epoch of the
+    /// tip is returned. This is the case on the first slots of an epoch,
+    /// before any block of it is on the chain.
+    #[test]
+    fn leader_eligible_notes_uses_given_aged_set() {
+        let (pk, key_id) = key(1);
+        let old = utxo(0, 100, pk);
+        let new = utxo(1, 200, pk);
+        let known_keys = HashMap::from([(pk, key_id)]);
+
+        let previous_epoch_aged = aged([old]);
+        let current_epoch_aged = aged([old, new]);
+
+        assert_eq!(
+            values(&leader_eligible_notes(
+                [&old, &new],
+                &previous_epoch_aged,
+                &known_keys
+            )),
+            vec![100]
+        );
+        assert_eq!(
+            values(&leader_eligible_notes(
+                [&old, &new],
+                &current_epoch_aged,
+                &known_keys
+            )),
+            vec![100, 200]
+        );
+    }
+
+    /// Aged notes that the wallet no longer holds, or whose owner key the
+    /// wallet does not know, are not returned.
+    #[test]
+    fn leader_eligible_notes_requires_wallet_note_and_known_key() {
+        let (pk, key_id) = key(1);
+        let (unknown_pk, _) = key(2);
+        let held = utxo(0, 100, pk);
+        let spent = utxo(1, 200, pk);
+        let foreign = utxo(2, 300, unknown_pk);
+        let known_keys = HashMap::from([(pk, key_id)]);
+
+        let notes = leader_eligible_notes(
+            [&held, &foreign],
+            &aged([held, spent, foreign]),
+            &known_keys,
+        );
+
+        assert_eq!(values(&notes), vec![100]);
+    }
+
+    fn key(v: u64) -> (ZkPublicKey, KeyId) {
+        (ZkPublicKey::from(Fr::from(v)), format!("key-{v}"))
+    }
+
+    fn utxo(op: u8, value: Value, pk: ZkPublicKey) -> Utxo {
+        Utxo::new([op; 32], 0, Note::new(value, pk))
+    }
+
+    fn aged<const N: usize>(utxos: [Utxo; N]) -> UtxoTree {
+        utxos.into_iter().map(|utxo| (utxo.id(), utxo)).collect()
+    }
+
+    fn values(notes: &[UtxoWithKeyId]) -> Vec<Value> {
+        let mut values: Vec<_> = notes.iter().map(|note| note.utxo.note.value).collect();
+        values.sort_unstable();
+        values
     }
 }
