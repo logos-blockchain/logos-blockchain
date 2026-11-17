@@ -513,7 +513,7 @@ where
                             Err(DoNotProcessBlock::AlreadyApplied) => continue,
                         }
 
-                        Self::log_received_block(&block);
+                        Self::log_received_block(block.transactions_iter().len());
 
                         match Self::apply_block(block, &relays).await {
                             Ok(()) => {
@@ -787,7 +787,7 @@ where
     ) where
         RuntimeServiceId: Send + Sync + 'static,
     {
-        Self::log_received_block(&block);
+        Self::log_received_block(block.transactions_iter().len());
 
         let block_id = block.header().id();
         let started_at = Instant::now();
@@ -834,9 +834,8 @@ where
         .await
     }
 
-    fn log_received_block(block: &Block<Mempool::Item>) {
+    fn log_received_block(transactions: usize) {
         let content_size = 0; // TODO: calculate the actual content size
-        let transactions = block.transactions_iter().len();
 
         trace!(target: LOG_TARGET, {
             counter.received_blocks = 1,
@@ -1092,7 +1091,7 @@ where
     target = LOG_TARGET,
     level = "debug",
     skip(block, cryptarchia, mempool),
-    fields(block_id = %block.header().id(), tx_count = block.transactions().len())
+    fields(block_id = %block.header().id(), tx_count = block.transactions_iter().len())
 )]
 async fn apply_block_with_verified_header_and_reconcile_mempool<Cryptarchia, Mempool>(
     block: BlockWithVerifiedHeader<Cryptarchia::Tx>,

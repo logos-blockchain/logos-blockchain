@@ -1,7 +1,5 @@
 //! Block Header Verification, and the types of what passed it.
 
-use std::ops::Deref;
-
 use lb_binary_codec::canonical::BinaryDecode;
 use lb_core::{
     block::{Block, BlockTransactions, UncleHeaders, verify_header_alone, verify_header_signature},
@@ -152,13 +150,19 @@ impl<Tx> BlockWithVerifiedHeader<Tx> {
     pub(crate) const fn new_unchecked(block: Block<Tx>) -> Self {
         Self(block)
     }
-}
 
-impl<Tx> Deref for BlockWithVerifiedHeader<Tx> {
-    type Target = Block<Tx>;
+    #[must_use]
+    pub const fn header(&self) -> &Header {
+        self.0.header()
+    }
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    #[must_use]
+    pub const fn uncle_headers(&self) -> &UncleHeaders {
+        self.0.uncle_headers()
+    }
+
+    pub fn transactions_iter(&self) -> impl ExactSizeIterator<Item = &Tx> + '_ {
+        self.0.transactions_iter()
     }
 }
 
