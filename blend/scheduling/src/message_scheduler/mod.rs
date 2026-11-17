@@ -129,16 +129,24 @@ where
 
             interval
         };
+        // A generated message goes out at the start of the round after the one
+        // it was generated in, so none generated in this epoch goes out in its
+        // first round, which starts with the epoch. The clock starts at the
+        // second round: a node whose clock runs behind ours by less than a round
+        // has entered the epoch by then.
         let round_clock = Box::new(
             IntervalStream::new(interval)
                 .enumerate()
+                .skip(1)
                 .map(|(round, _)| (round as u128).into()),
         )
         .fork();
 
         let cover_traffic = EpochCoverTraffic::new(
             crate::cover_traffic::Settings {
-                rounds_per_epoch: settings.rounds_per_epoch,
+                // The rounds the clock ticks in.
+                rounds_per_epoch: NonZeroU64::new(settings.rounds_per_epoch.get() - 1)
+                    .unwrap_or(NonZeroU64::MIN),
                 // Floor division: each cover message consumes `num_blend_layers`
                 // proofs from a hard cap of `core_quota`. Using `div_ceil` would
                 // schedule one extra emission whenever the quota is not an exact

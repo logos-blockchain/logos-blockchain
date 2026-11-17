@@ -4,7 +4,8 @@ use testing_framework_core::scenario::DynError;
 const SDP_DECLARE_OPCODE: u64 = 0x20;
 
 /// The supported Logos and Nimbos deployment YAML layouts are very similar.
-/// Only two field names need translating here; all other data is preserved.
+/// Only one field name needs translating here, and one field adding; all other
+/// data is preserved.
 pub fn from_logos_yaml(source: &str) -> Result<String, DynError> {
     let mut output: Value = serde_yaml::from_str(source)?;
     let cryptarchia = output
@@ -20,15 +21,11 @@ pub fn from_logos_yaml(source: &str) -> Result<String, DynError> {
         .and_then(Value::as_mapping_mut)
         .ok_or("Nimbos preparation requires a min_stake mapping")?;
 
-    // Block activation and epoch activation coincide only at genesis (zero).
-    if min_stake
-        .get("timestamp")
-        .is_some_and(|timestamp| timestamp.as_u64() != Some(0))
-    {
-        return Err("Nimbos preparation cannot translate a nonzero minimum-stake block activation into an epoch".into());
+    // Nimbos records the epoch a minimum stake takes effect from. Logos takes
+    // its values from their era instead, and the genesis era starts at epoch 0.
+    if !min_stake.contains_key("epoch") {
+        min_stake.insert("epoch".into(), 0.into());
     }
-
-    rename_required_field(min_stake, "timestamp", "epoch")?;
 
     let transactions = cryptarchia
         .get_mut("genesis_block")
@@ -110,7 +107,7 @@ cryptarchia:
   sdp_config:
     service_params:
       BN: { inactivity_period: 10, epoch: 0 }
-    min_stake: { threshold: 100, timestamp: 0 }
+    min_stake: { threshold: 100 }
   gossipsub_protocol: /cryptarchia/test
   consensus_excluded_keys: [excluded-key]
   genesis_block:
@@ -145,7 +142,7 @@ cryptarchia:
         let converted: Value =
             serde_yaml::from_str(&from_logos_yaml(LOGOS_INPUT).unwrap()).unwrap();
         let expected_yaml = LOGOS_INPUT
-            .replace("timestamp: 0", "epoch: 0")
+            .replace("{ threshold: 100 }", "{ threshold: 100, epoch: 0 }")
             .replace("service_note_id:", "locked_note_id:");
         let expected: Value = serde_yaml::from_str(&expected_yaml).unwrap();
 

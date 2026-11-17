@@ -144,7 +144,7 @@ mod tests {
     use std::str::FromStr as _;
 
     use lb_pol::LotteryConstants;
-    use lb_utils::math::NonNegativeRatio;
+    use lb_utils::math::ProperFraction;
     use num_bigint::BigUint;
 
     use super::*;
@@ -316,7 +316,7 @@ mod tests {
     #[test]
     fn test_leader_full_flow() {
         let (lottery_0, lottery_1) =
-            LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
+            LotteryConstants::new(ProperFraction::new(1, 10.try_into().unwrap()).unwrap())
                 .compute_lottery_values(5000);
         let chain_data = PoQChainInputsData {
             core_root: BigUint::from_str(

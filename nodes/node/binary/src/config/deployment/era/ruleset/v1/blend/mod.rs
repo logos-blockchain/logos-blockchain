@@ -5,10 +5,10 @@ use core::{
 };
 
 use lb_binary_codec::canonical::BinaryEncode;
-use lb_blend_service::settings::EraTimingSettings;
+use lb_blend_service::settings::{EraTimingSettings, max_data_message_delay_in_rounds};
 use lb_core::blend::core_quota;
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
-use lb_utils::math::PositiveF64;
+use lb_utils::math::{NonNegativeRatio, PositiveRatio};
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
 
@@ -93,21 +93,29 @@ impl Settings {
     /// neighbour sends a node every message but the ones it first received
     /// from that node, so one with the fewest connections, `Φ_CC − 1`, each as
     /// likely to bring a message first, delivers `(Φ_CC − 2) / (Φ_CC − 1)` of
-    /// them. Only `W` is rounded. The deployment checks that `Φ_CC` is at
-    /// least 3 when it loads, so `Φ_CC − 2` is never zero.
+    /// them. Only `W` is rounded, from an exact quotient: `F_C` is a ratio,
+    /// so both sides are whole numbers once multiplied by its denominator. The
+    /// deployment checks that `Φ_CC` is in 3 to 5 when it loads, so
+    /// `Φ_CC − 2` is never zero and neither side passes a `u128`.
     #[must_use]
     pub const fn rounds_per_observation_window(&self) -> NonZeroU128 {
-        let peering_degree = self.core.target_peering_degree.get() as f64;
+        let peering_degree = self.core.target_peering_degree.get() as u128;
         let cover = &self.core.scheduler.cover;
-        let cover_messages_per_round = cover.message_frequency_per_round.get()
-            * (1.0 + cover.replication_factor.get() as f64)
-            * self.common.num_blend_layers.get() as f64;
-        let expected_deliveries = self.core.expected_deliveries_per_observation_window.get() as f64;
-        let rounds = expected_deliveries * (peering_degree - 1.0)
-            / ((peering_degree - 2.0) * cover_messages_per_round);
-        NonZeroU128::new(rounds.ceil() as u128).expect(
-            "The cover traffic of a round must be finite, so the window spans at least one round.",
-        )
+        let NonNegativeRatio {
+            numerator,
+            denominator,
+        } = cover.message_frequency_per_round.get();
+        // `M_W` and the cover messages of a round, `F_C · (1 + R_C) · β_C`,
+        // both times the denominator of `F_C`.
+        let messages = self.core.expected_deliveries_per_observation_window.get() as u128
+            * (peering_degree - 1)
+            * denominator.get() as u128;
+        let cover_messages_per_round = (peering_degree - 2)
+            * numerator as u128
+            * (1 + cover.replication_factor.get() as u128)
+            * self.common.num_blend_layers.get() as u128;
+        NonZeroU128::new(messages.div_ceil(cover_messages_per_round))
+            .expect("A window that carries messages spans at least one round.")
     }
 
     /// `r₁ = ⌊(2V/3) / (Φ_CC + 1)⌋`: the messages a core connection may carry
@@ -214,13 +222,28 @@ impl Settings {
         Duration::from_secs(slot_duration.as_secs() * self.epoch_transition_slots(slots_per_block))
     }
 
-    /// Length of the epoch transition period, in slots.
+    /// `T`: the length of the epoch transition period, in slots, a round
+    /// lasting one slot.
     ///
-    /// The Blend spec defines this as roughly the same time it takes to propose
-    /// a new block.
+    /// Roughly the time it takes to propose a new block, as the Blend spec
+    /// sets it, but at least a round longer than the `T_M` rounds a message
+    /// takes to cross the network: `T ≥ T_M + T_C`, honest clocks differing by
+    /// `T_C`, less than a round. A node whose clock runs ahead still processes
+    /// the past epoch's messages that are crossing the network.
     #[must_use]
     pub const fn epoch_transition_slots(&self, slots_per_block: u64) -> u64 {
-        slots_per_block
+        let message_traversal = max_data_message_delay_in_rounds(
+            self.common.num_blend_layers,
+            self.core.scheduler.delayer.maximum_release_delay_in_rounds,
+            self.common.network_absorption_in_rounds,
+        )
+        .get();
+        let shortest = message_traversal.saturating_add(1);
+        if slots_per_block > shortest {
+            slots_per_block
+        } else {
+            shortest
+        }
     }
 
     #[must_use]
@@ -303,7 +326,7 @@ pub struct SchedulerSettings {
 #[derive(Serialize, Deserialize, Clone, Debug, BinaryEncode)]
 pub struct CoverTrafficSettings {
     /// `F_c`: frequency at which cover messages are generated per round.
-    pub message_frequency_per_round: PositiveF64,
+    pub message_frequency_per_round: PositiveRatio,
     /// `R_c`: the redundancy of cover messages. A core node's quota, and so the
     /// cover messages it sends, grow to `1 + R_c` times what `F_c` gives.
     pub replication_factor: CoverReplicationFactor,
@@ -362,7 +385,7 @@ pub struct MessageDelayerSettings {
 mod tests {
     use core::num::{NonZeroU32, NonZeroU64};
 
-    use lb_utils::math::PositiveF64;
+    use lb_utils::math::PositiveRatio;
 
     use super::{CoverReplicationFactor, Settings};
     use crate::config::DeploymentSettings;
@@ -372,7 +395,7 @@ mod tests {
     fn with_window_inputs(
         expected_deliveries_per_observation_window: u64,
         target_peering_degree: u32,
-        message_frequency_per_round: f64,
+        (frequency_numerator, frequency_denominator): (u32, u32),
         num_blend_layers: u64,
     ) -> Settings {
         let mut settings = DeploymentSettings::default()
@@ -382,8 +405,11 @@ mod tests {
         settings.core.expected_deliveries_per_observation_window =
             NonZeroU64::new(expected_deliveries_per_observation_window).unwrap();
         settings.core.target_peering_degree = NonZeroU32::new(target_peering_degree).unwrap();
-        settings.core.scheduler.cover.message_frequency_per_round =
-            PositiveF64::try_from(message_frequency_per_round).unwrap();
+        settings.core.scheduler.cover.message_frequency_per_round = PositiveRatio::new(
+            frequency_numerator,
+            NonZeroU32::new(frequency_denominator).unwrap(),
+        )
+        .unwrap();
         settings.common.num_blend_layers = NonZeroU64::new(num_blend_layers).unwrap();
         settings
     }
@@ -394,7 +420,7 @@ mod tests {
     #[test]
     fn the_window_is_30_rounds_at_the_reference_parameters() {
         assert_eq!(
-            with_window_inputs(60, 4, 1.0, 3)
+            with_window_inputs(60, 4, (1, 1), 3)
                 .rounds_per_observation_window()
                 .get(),
             30
@@ -406,7 +432,7 @@ mod tests {
     #[test]
     fn the_window_is_90_rounds_at_the_testnet_parameters() {
         assert_eq!(
-            with_window_inputs(60, 4, 1.0, 1)
+            with_window_inputs(60, 4, (1, 1), 1)
                 .rounds_per_observation_window()
                 .get(),
             90
@@ -418,7 +444,7 @@ mod tests {
     #[test]
     fn the_window_is_40_rounds_at_a_peering_degree_of_3() {
         assert_eq!(
-            with_window_inputs(60, 3, 1.0, 3)
+            with_window_inputs(60, 3, (1, 1), 3)
                 .rounds_per_observation_window()
                 .get(),
             40
@@ -431,11 +457,45 @@ mod tests {
     #[test]
     fn a_window_between_two_rounds_rounds_up() {
         assert_eq!(
-            with_window_inputs(60, 5, 1.0, 3)
+            with_window_inputs(60, 5, (1, 1), 3)
                 .rounds_per_observation_window()
                 .get(),
             27
         );
+    }
+
+    /// The reference parameters at an `F_C` of 3/10: 90 messages over 0.9 of
+    /// them a round take exactly 100 rounds, which a double makes
+    /// 100.00000000000001, and its ceiling 101.
+    #[test]
+    fn the_window_is_counted_exactly() {
+        assert_eq!(
+            with_window_inputs(60, 4, (3, 10), 3)
+                .rounds_per_observation_window()
+                .get(),
+            100
+        );
+    }
+
+    /// 3 blending layers, holding a message 3 rounds each and carrying it 2 at
+    /// each hop, take 15 rounds to cross the network: a period of 30 slots
+    /// covers them, and one of 10 grows to 16.
+    #[test]
+    fn the_transition_period_outlasts_a_message_traversal_by_a_round() {
+        let mut settings = DeploymentSettings::default()
+            .genesis_era_parameters()
+            .blend
+            .clone();
+        settings.common.num_blend_layers = NonZeroU64::new(3).unwrap();
+        settings.common.network_absorption_in_rounds = NonZeroU64::new(2).unwrap();
+        settings
+            .core
+            .scheduler
+            .delayer
+            .maximum_release_delay_in_rounds = NonZeroU64::new(3).unwrap();
+
+        assert_eq!(settings.epoch_transition_slots(30), 30);
+        assert_eq!(settings.epoch_transition_slots(10), 16);
     }
 
     #[test]

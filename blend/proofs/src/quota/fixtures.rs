@@ -1,5 +1,5 @@
 use lb_pol::LotteryConstants;
-use lb_utils::math::NonNegativeRatio;
+use lb_utils::math::ProperFraction;
 use num_bigint::BigUint;
 
 use crate::quota::{
@@ -22,7 +22,7 @@ pub fn valid_proof_of_core_quota_inputs(
     core_quota: Quota,
 ) -> (PublicInputs, ProofOfCoreQuotaInputs) {
     let (lottery_0, lottery_1) =
-        LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
+        LotteryConstants::new(ProperFraction::new(1, 10.try_into().unwrap()).unwrap())
             .compute_lottery_values(1);
     let public_inputs = PublicInputs {
         signing_key,
@@ -150,7 +150,7 @@ pub fn valid_proof_of_leadership_quota_inputs(
     leader_quota: Quota,
 ) -> (PublicInputs, ProofOfLeadershipQuotaInputs) {
     let (lottery_0, lottery_1) =
-        LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
+        LotteryConstants::new(ProperFraction::new(1, 10.try_into().unwrap()).unwrap())
             .compute_lottery_values(1);
     let public_inputs = PublicInputs {
         signing_key,

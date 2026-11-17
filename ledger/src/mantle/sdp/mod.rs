@@ -127,14 +127,14 @@ impl Service {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Config {
     pub service_params: std::sync::Arc<HashMap<ServiceType, ServiceParameters>>,
     pub service_rewards_params: ServiceRewardsParameters,
     pub min_stake: MinStake,
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ServiceRewardsParameters {
     pub blend: blend::RewardsParameters,
 }
@@ -671,7 +671,10 @@ pub struct HeaderEffect {
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, sync::Arc};
+    use std::{
+        num::{NonZeroU32, NonZeroU64},
+        sync::Arc,
+    };
 
     use lb_core::{
         mantle::{
@@ -690,7 +693,7 @@ mod tests {
     };
     use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey, ZkSignature};
-    use lb_utils::math::PositiveF64;
+    use lb_utils::math::PositiveRatio;
     use num_bigint::BigUint;
 
     use super::*;
@@ -707,7 +710,7 @@ mod tests {
             service_rewards_params: ServiceRewardsParameters {
                 blend: blend::RewardsParameters {
                     rounds_per_epoch: NonZeroU64::new(10).unwrap(),
-                    message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                    message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN).unwrap(),
                     cover_replication_factor: 0,
                     num_blend_layers: NonZeroU64::new(3).unwrap(),
                     minimum_network_size: NonZeroU64::new(1).unwrap(),
@@ -715,10 +718,7 @@ mod tests {
                     activity_threshold_sensitivity: 1,
                 },
             },
-            min_stake: MinStake {
-                threshold: 1,
-                timestamp: 0,
-            },
+            min_stake: MinStake { threshold: 1 },
         }
     }
 
@@ -820,10 +820,7 @@ mod tests {
                 provider_index: ledger
                     .get_provider_index_by_service(ServiceType::BlendNetwork)
                     .expect("Blend service is registered"),
-                min_stake: &MinStake {
-                    threshold: 1,
-                    timestamp: 0,
-                },
+                min_stake: &MinStake { threshold: 1 },
             })
             .map(|_| ())
     }
@@ -854,7 +851,6 @@ mod tests {
     fn withdrawn_declaration_releases_its_note_and_provider_binding() {
         let config = setup(ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
-            epoch: 0.into(),
         });
         let (zk_key, utxo) = utxo_with_sk();
         let note_id = utxo.id();
@@ -930,7 +926,6 @@ mod tests {
     fn failed_activity_does_not_return_partially_updated_ledger() {
         let config = setup(ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
-            epoch: 0.into(),
         });
         let epoch0 = dummy_epoch_state(0.into());
         let ledger = dummy_sdp_ledger(0.into(), &config);
@@ -987,7 +982,6 @@ mod tests {
     fn active_declarations_filters_out_inactive() {
         let config = setup(ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
-            epoch: 0.into(),
         });
 
         let epoch0 = dummy_epoch_state(0.into());
@@ -1056,7 +1050,6 @@ mod tests {
     fn active_declarations_includes_genesis_at_epochs_0_and_1() {
         let config = setup(ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
-            epoch: 0.into(),
         });
 
         // Build an SDP ledger with a declaration at epoch 0.
@@ -1105,7 +1098,6 @@ mod tests {
         // is the withdrawn-effective-epoch check.
         let config = setup(ServiceParameters {
             inactivity_period: 100.try_into().unwrap(),
-            epoch: 0.into(),
         });
 
         let epoch0 = dummy_epoch_state(0.into());
@@ -1192,7 +1184,6 @@ mod tests {
     fn active_message_refreshes_declaration() {
         let config = setup(ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
-            epoch: 0.into(),
         });
 
         // Init ledger with no declaration
@@ -1322,7 +1313,6 @@ mod tests {
     fn rewards_distributed_to_active_provider() {
         let config = setup(ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
-            epoch: 0.into(),
         });
 
         // Init ledger with no declaration.
@@ -1452,7 +1442,6 @@ mod tests {
     fn accepts_reused_ids_after_withdrawn_epoch() {
         let config = setup(ServiceParameters {
             inactivity_period: 20.try_into().unwrap(),
-            epoch: 0.into(),
         });
 
         let signing_key = create_signing_key();
@@ -1662,7 +1651,6 @@ mod tests {
     fn rejects_unmined_withdraw_from_previous_declaration_lifecycle() {
         let config = setup(ServiceParameters {
             inactivity_period: 20.try_into().unwrap(),
-            epoch: 0.into(),
         });
         let signing_key = create_signing_key();
         let declaration_key = create_zk_key(1);
@@ -1849,7 +1837,6 @@ mod tests {
     fn test_withdraw_provider() {
         let config = setup(ServiceParameters {
             inactivity_period: 20.try_into().unwrap(),
-            epoch: 0.into(),
         });
 
         let service_a = ServiceType::BlendNetwork;
@@ -1972,7 +1959,6 @@ mod tests {
     fn last_served_epoch_is_rewarded_before_removal() {
         let config = setup(ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
-            epoch: 0.into(),
         });
 
         let epoch0 = dummy_epoch_state(0.into());

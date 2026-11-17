@@ -171,7 +171,6 @@ fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
                             service_type,
                             ServiceParameters {
                                 inactivity_period: service_params.inactivity_period,
-                                epoch: service_params.epoch,
                             },
                         )
                     })

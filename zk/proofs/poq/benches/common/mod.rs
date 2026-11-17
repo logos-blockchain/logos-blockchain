@@ -6,7 +6,7 @@
 use std::str::FromStr as _;
 
 use lb_pol::LotteryConstants;
-use lb_utils::math::NonNegativeRatio;
+use lb_utils::math::ProperFraction;
 use logos_blockchain_poq::{
     KeyIndex, PoQBlendInputsData, PoQChainInputsData, PoQCommonInputsData, PoQSelector,
     PoQWalletInputsData, PoQWitnessInputs, Quota,
@@ -20,7 +20,7 @@ use num_bigint::BigUint;
 const QUOTA: Quota = Quota::new::<64>();
 
 fn lottery() -> (lb_groth16::Fr, lb_groth16::Fr) {
-    LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
+    LotteryConstants::new(ProperFraction::new(1, 10.try_into().unwrap()).unwrap())
         .compute_lottery_values(5000)
 }
 
