@@ -72,6 +72,7 @@ use overwatch::{
 };
 use rand::{RngCore as _, rngs::OsRng};
 use serde::{Serialize, de::DeserializeOwned};
+use strum_macros::AsRefStr;
 use tokio::{
     sync::{oneshot, oneshot::Sender},
     task::JoinError,
@@ -154,7 +155,7 @@ pub enum WalletServiceError {
     InvalidSigner([u8; ED25519_PUBLIC_KEY_SIZE]),
 }
 
-#[derive(Debug)]
+#[derive(Debug, AsRefStr)]
 pub enum WalletMsg {
     GetBalance {
         tip: Option<HeaderId>,
@@ -652,8 +653,10 @@ where
         {
             warn!(
                 target: LOG_TARGET,
+                message_kind = msg.as_ref(),
+                requested_tip = ?msg.tip(),
                 err = ?err,
-                "Failed backfilling wallet to message tip; continuing to process the message {msg:?}"
+                "Failed backfilling wallet to message tip; continuing to process the message"
             );
         }
 

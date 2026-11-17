@@ -5618,6 +5618,7 @@ dependencies = [
  "rand 0.8.8",
  "serde",
  "serde_json",
+ "strum_macros",
  "thiserror 2.0.21",
  "time",
  "tokio",
