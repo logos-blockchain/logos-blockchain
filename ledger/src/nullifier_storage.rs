@@ -25,8 +25,8 @@
 //!
 //! Each time the base moves to a new LIB, the [`crate::LibState`] (the LIB and
 //! its ledger state) may also be written under [`LIB_STATE_KEY`], in the same
-//! batch. A restart reads it to start from the LIB, so it always matches the
-//! trees in the store, whenever the node stops.
+//! atomic write. A restart reads it to start from the LIB, so it always matches
+//! the trees in the DB, whenever the node stops.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -185,13 +185,13 @@ impl NullifierStorage {
         Ok(state)
     }
 
-    /// Makes the trees of the state of block `block_id` the base of the store:
+    /// Makes the trees of the state of block `block_id` the base of the DB:
     /// the trees every later block builds on. Changes the state has not
     /// written yet, as a genesis state has, are written first. A state
-    /// restored from the store already is the base.
+    /// restored from the DB already is the base.
     ///
-    /// Returns the write batch, for the caller to write before collecting the
-    /// garbage.
+    /// Returns the changes as one atomic write ([`WriteBatch`]), for the caller
+    /// to apply before collecting the garbage.
     pub fn finalize_base(
         &self,
         block_id: BlockId,
@@ -623,7 +623,7 @@ mod tests {
             Arc::clone(&self.store)
         }
 
-        // The ledger a restart restores from the LIB state of the store.
+        // The ledger a restart restores from the LIB state of the DB.
         fn restore(&self) -> Restored<Id, u8> {
             Ledger::restore(&self.dyn_store(), Arc::clone(self.ledger.era_schedule()))
                 .unwrap()

@@ -170,13 +170,13 @@ fn block_id<Id: Into<BlockHash>>(id: Id) -> BlockId {
 }
 
 /// The LIB, its ledger state, and what the consensus keeps of the LIB block
-/// (`info`), saved in the nullifier store so that a restarted node can start
-/// from the LIB.
+/// (`info`), saved in the nullifier DB (RocksDB) so that a restarted node can
+/// start from the LIB.
 ///
-/// The nullifier trees are kept in the store, not in [`LedgerState`], and the
-/// store deletes old tree nodes each time the LIB moves. The LIB state is
-/// written in the same batch as that move, so after a restart it always
-/// matches the trees in the store.
+/// The nullifier trees are kept in the DB, not in [`LedgerState`], and the
+/// DB deletes old tree nodes each time the LIB moves. The LIB state is saved
+/// together with that move, in one atomic write, so after a restart it always
+/// matches the trees in the DB.
 ///
 /// Written by [`Ledger::new_with_lib_state`] and
 /// [`Ledger::apply_pruning_with_lib_state`], read by [`Ledger::restore`].
@@ -205,7 +205,7 @@ fn encode_lib_state<Id: serde::Serialize, Info: serde::Serialize>(
         .map_err(|error| LedgerError::LibState(error.to_string()))
 }
 
-/// A ledger rebuilt from the LIB state saved in its store (see
+/// A ledger rebuilt from the LIB state saved in its DB (see
 /// [`Ledger::restore`]).
 pub struct Restored<Id: Eq + Hash, Info> {
     pub ledger: Ledger<Id>,
@@ -215,7 +215,7 @@ pub struct Restored<Id: Eq + Hash, Info> {
 
 /// The states of the blocks the chain holds: the LIB and the blocks above it.
 ///
-/// The nullifier trees of the states are kept in the nullifier store, not in
+/// The nullifier trees of the states are kept in the nullifier DB, not in
 /// memory (see [`nullifier_storage`]): [`Self::commit_update`] writes the trees
 /// of each block, and [`Self::apply_pruning`] moves the LIB up and deletes the
 /// pruned blocks.
@@ -249,7 +249,7 @@ where
     Id: Eq + Hash + Copy,
 {
     /// A ledger with the state of block `id` as its LIB. The nullifier trees of
-    /// the state become the base of the nullifier store: the trees every later
+    /// the state become the base of the nullifier DB: the trees every later
     /// block builds on.
     pub fn new(
         id: Id,

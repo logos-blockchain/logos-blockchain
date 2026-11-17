@@ -51,7 +51,7 @@ pub fn saved_tip_era(recovery_data: &RecoveryData) -> Result<Option<TipEra>, Dyn
 /// The state the chain service saves on a timer, to restart from.
 ///
 /// It does not hold the ledger state of the LIB: that is the
-/// [`lb_ledger::LibState`] saved in the nullifier store each time the LIB
+/// [`lb_ledger::LibState`] saved in the nullifier DB each time the LIB
 /// moves, which a restart starts from. The LIB saved here may be older.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CryptarchiaConsensusState {
@@ -557,7 +557,7 @@ mod tests {
         );
 
         // Build the full Cryptarchia (with ledger) to get info() before save,
-        // its store finalized at the LIB with the LIB state of the LIB.
+        // its DB finalized at the LIB with the LIB state of the LIB.
         let original = Cryptarchia {
             consensus: engine.clone(),
             ledger: lb_ledger::Ledger::new_with_lib_state(
@@ -582,7 +582,7 @@ mod tests {
         let saved_state = CryptarchiaConsensusState::from_bytes(&encoded_state).unwrap();
 
         // Restore (simulates initialize_cryptarchia on restart): a new
-        // Cryptarchia from the LIB recorded in the LIB state of the store.
+        // Cryptarchia from the LIB recorded in the LIB state of the DB.
         let eras = single_era(ledger_config);
         let mut restored = Cryptarchia::from_restored(
             lb_ledger::Ledger::restore(original.ledger.store(), Arc::clone(&eras))
