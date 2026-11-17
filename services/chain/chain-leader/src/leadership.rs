@@ -344,16 +344,15 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
             eligible_aged,
             source,
         } = slot_context;
-        // The notes the Blend leadership scan checks for the whole epoch.
         tracing::info!(
             target: LOG_TARGET,
             event = "leader_eligible_notes",
-            path = "blend_scan",
-            slot = u64::from(slot),
-            epoch = u32::from(epoch),
+            path = "winning_slot_scan",
+            slot = ?slot,
+            epoch = ?epoch,
             note_count = eligible_aged.len(),
             total_value = eligible_aged.iter().map(|note| note.utxo.note.value).sum::<u64>(),
-            "Eligible notes for the Blend leadership scan"
+            "Eligible notes for the winning slot scan"
         );
         let state = PolEpochState {
             nonce: epoch_state.nonce,

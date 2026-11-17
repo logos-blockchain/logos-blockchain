@@ -471,8 +471,8 @@ where
                             target: LOG_TARGET,
                             event = "leader_eligible_notes",
                             path = "block_production",
-                            slot = u64::from(slot),
-                            epoch = u32::from(epoch),
+                            slot = ?slot,
+                            epoch = ?epoch,
                             note_count = eligible_aged.len(),
                             total_value = eligible_aged.iter().map(|note| note.utxo.note.value).sum::<u64>(),
                             "Eligible notes for block production"
