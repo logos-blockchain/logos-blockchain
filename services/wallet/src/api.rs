@@ -262,19 +262,18 @@ where
         Ok(rx.await??)
     }
 
-    /// Returns the wallet's notes at `tip` (or at the current tip when `tip` is
-    /// `None`) that are in `aged_utxos`, the aged UTXO set of the epoch the
-    /// caller leads in.
+    /// Returns the wallet's notes that are unspent at `parent` and in
+    /// `aged_utxos`, the aged UTXO set of the epoch the caller leads in.
     pub async fn get_leader_aged_notes(
         &self,
-        tip: Option<HeaderId>,
+        parent: HeaderId,
         aged_utxos: UtxoTree,
     ) -> Result<TipResponse<Vec<UtxoWithKeyId>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
             .send(WalletMsg::GetLeaderAgedNotes {
-                tip,
+                parent,
                 aged_utxos,
                 resp_tx,
             })
