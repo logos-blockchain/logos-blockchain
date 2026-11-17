@@ -703,11 +703,9 @@ mod tests {
         let (commands_tx, commands_rx) = mpsc::channel(1);
         let (pubsub_events_tx, _) = broadcast::channel(1);
         let (chainsync_events_tx, _) = broadcast::channel(1);
-        let config =
-            create_libp2p_config(vec![], get_available_udp_port().unwrap(), HashMap::new());
+        let config = create_libp2p_config(vec![], get_available_udp_port().unwrap());
         let mut handler = SwarmHandler::new(
             config,
-            Era::genesis(),
             commands_tx.clone(),
             commands_rx,
             pubsub_events_tx,
