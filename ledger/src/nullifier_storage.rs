@@ -654,7 +654,7 @@ mod tests {
                 .unwrap();
             let lib = self.engine.lib();
             self.ledger
-                .apply_pruning_with_lib_state(lib, &pruned, &lib[0])
+                .prune_with_lib_state(lib, &pruned, &lib[0])
                 .unwrap();
             let ledger = &self.ledger;
             self.oracles

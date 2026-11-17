@@ -697,7 +697,7 @@ impl Cryptarchia {
         let info = LibInfo::of(self.lib_branch());
         match self
             .ledger
-            .apply_pruning_with_lib_state(self.lib(), pruned_blocks, &info)
+            .prune_with_lib_state(self.lib(), pruned_blocks, &info)
         {
             Ok(pruned_states_count) => {
                 if pruned_states_count != pruned_blocks.len() {

@@ -179,7 +179,7 @@ fn block_id<Id: Into<BlockHash>>(id: Id) -> BlockId {
 /// matches the trees in the DB.
 ///
 /// Written by [`Ledger::new_with_lib_state`] and
-/// [`Ledger::apply_pruning_with_lib_state`], read by [`Ledger::restore`].
+/// [`Ledger::prune_with_lib_state`], read by [`Ledger::restore`].
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LibState<Id, Info> {
     pub lib: Id,
@@ -217,7 +217,7 @@ pub struct Restored<Id: Eq + Hash, Info> {
 ///
 /// The nullifier trees of the states are kept in the nullifier DB, not in
 /// memory (see [`nullifier_storage`]): [`Self::commit_update`] writes the trees
-/// of each block, and [`Self::apply_pruning`] moves the LIB up and deletes the
+/// of each block, and [`Self::prune`] moves the LIB up and deletes the
 /// pruned blocks.
 #[derive(Clone)]
 pub struct Ledger<Id: Eq + Hash> {
@@ -440,20 +440,16 @@ where
     /// Nothing happens when nothing is pruned: the LIB did not move.
     ///
     /// Returns the number of states removed.
-    pub fn apply_pruning(
-        &mut self,
-        lib: Id,
-        pruned: &PrunedBlocks<Id>,
-    ) -> Result<usize, LedgerError<Id>>
+    pub fn prune(&mut self, lib: Id, pruned: &PrunedBlocks<Id>) -> Result<usize, LedgerError<Id>>
     where
         Id: Into<BlockHash>,
     {
-        self.prune_with(lib, pruned, |_, _| Ok(None))
+        self.prune_inner(lib, pruned, |_, _| Ok(None))
     }
 
-    /// Like [`Self::apply_pruning`], and also saves the [`LibState`] of `lib`
+    /// Like [`Self::prune`], and also saves the [`LibState`] of `lib`
     /// with `info`, in the same write that moves the base to `lib`.
-    pub fn apply_pruning_with_lib_state<Info: serde::Serialize>(
+    pub fn prune_with_lib_state<Info: serde::Serialize>(
         &mut self,
         lib: Id,
         pruned: &PrunedBlocks<Id>,
@@ -462,12 +458,12 @@ where
     where
         Id: Into<BlockHash> + serde::Serialize,
     {
-        self.prune_with(lib, pruned, |lib, state| {
+        self.prune_inner(lib, pruned, |lib, state| {
             encode_lib_state(lib, state, info).map(Some)
         })
     }
 
-    fn prune_with(
+    fn prune_inner(
         &mut self,
         lib: Id,
         pruned: &PrunedBlocks<Id>,
