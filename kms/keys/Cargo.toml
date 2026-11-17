@@ -19,12 +19,10 @@ bip39                           = { features = ["rand", "std", "zeroize"], works
 blake2                          = { workspace = true }
 bytes                           = { workspace = true }
 ed25519-dalek                   = { features = ["rand_core", "serde", "std", "zeroize"], workspace = true }
-generic-array                   = { workspace = true }
 hex                             = { workspace = true }
 lb-binary-codec                 = { workspace = true }
 lb-groth16                      = { workspace = true }
 lb-key-management-system-macros = { workspace = true }
-lb-log-targets                  = { workspace = true }
 lb-poseidon2                    = { workspace = true }
 lb-utils                        = { workspace = true }
 lb-zktransfer                   = { workspace = true }
@@ -33,7 +31,6 @@ rand_core                       = { workspace = true }
 serde                           = { features = ["derive"], workspace = true }
 subtle                          = { workspace = true }
 thiserror                       = { workspace = true }
-tracing                         = { workspace = true }
 utoipa                          = { features = ["macros"], optional = true, workspace = true }
 x25519-dalek                    = { features = ["serde", "static_secrets", "zeroize"], workspace = true }
 zeroize                         = { workspace = true }

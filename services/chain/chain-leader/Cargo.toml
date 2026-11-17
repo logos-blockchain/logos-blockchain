@@ -33,7 +33,6 @@ lb-tx-service                    = { workspace = true }
 lb-utils                         = { features = ["tokio"], workspace = true }
 lb-wallet-service                = { workspace = true }
 overwatch                        = { workspace = true }
-rand                             = { workspace = true }
 serde                            = { workspace = true }
 thiserror                        = { workspace = true }
 tokio                            = { workspace = true }

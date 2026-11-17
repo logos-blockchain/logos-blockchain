@@ -16,7 +16,6 @@ workspace = true
 [dependencies]
 ark-ff                        = { workspace = true }
 bincode                       = { workspace = true }
-bitvec                        = { workspace = true }
 blake2                        = { workspace = true }
 bytes                         = { workspace = true }
 hex                           = { features = ["alloc"], workspace = true }
