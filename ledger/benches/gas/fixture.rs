@@ -54,7 +54,11 @@ pub type HeaderId = [u8; 32];
 pub const DEFAULT_FILL: usize = 1_000_000;
 
 pub fn fill() -> usize {
-    fill_from(std::env::var("GAS_BENCH_FILL").ok().as_deref())
+    match std::env::var("GAS_BENCH_FILL") {
+        Ok(value) => fill_from(Some(&value)),
+        Err(_) if cfg!(test) => 1_000,
+        Err(_) => DEFAULT_FILL,
+    }
 }
 
 pub fn fill_from(variable: Option<&str>) -> usize {

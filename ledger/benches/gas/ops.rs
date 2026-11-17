@@ -953,7 +953,7 @@ fn claim_pow() -> OpShape {
     let genesis = Note::new(1, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
     let state = LedgerState::from_notes([genesis], &parameters, 1_000_000_000)
         .with_gas_prices(&GasPrices::new(0, 0))
-        .with_latest_note_sets(fixture.state.latest_note_sets().clone());
+        .with_genesis_note_sets(fixture.state.latest_note_sets().clone());
     let config = crate::fixture::single_era(parameters);
     let ledger = Ledger::new(ANCHOR, state, Arc::new(config.clone()))
         .expect("the anchor state commits to the in-memory store of its note sets");
