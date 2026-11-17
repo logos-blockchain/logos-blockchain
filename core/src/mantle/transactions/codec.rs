@@ -85,7 +85,7 @@ mod tests {
         mantle::{
             Op, OpProof,
             fixtures::ops::op_values::FORK_DIGEST,
-            gas::GasProfile,
+            gas::test_utils::GAS_PROFILE,
             ledger::verification_mode::StandardMode,
             notes::{InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments},
             ops::{
@@ -111,8 +111,6 @@ mod tests {
             ServiceType, blend::ActivityProof,
         },
     };
-
-    const GAS_PROFILE: GasProfile = GasProfile::MAINNET;
 
     fn dbg_test_vector(actual: &str, expected: &str) {
         println!("{:32} {:32}", "actual", "expected");
@@ -147,7 +145,7 @@ mod tests {
             FORK_DIGEST,
             [Op::ChannelInscribe(InscriptionOp {
                 channel_id: ChannelId::from([0xAA; 32]),
-                inscription: b"hello".into(),
+                inscription: Inscription::new_unchecked(b"hello".to_vec()),
                 parent: MsgId::from([0xBB; 32]),
                 signer: signing_key.public_key().into_unverified(),
                 mini_blocks: MiniBlocks::default(),
@@ -199,7 +197,7 @@ mod tests {
             TxList::new_unchecked(vec![
                 Op::ChannelInscribe(InscriptionOp {
                     channel_id: ChannelId::from([0x11; 32]),
-                    inscription: b"first".into(),
+                    inscription: Inscription::new_unchecked(b"first".to_vec()),
                     parent: MsgId::from([0x00; 32]),
                     signer: signing_key.public_key().into_unverified(),
                     mini_blocks: MiniBlocks::default(),
@@ -241,8 +239,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_large_payload_encoding_decoding() {
-        // Test payload sizes from a tenth of the inscription maximum up to it
-        const MAX_SIZE: usize = inscribe::MAX_BYTES;
+        // Test payload sizes from 512kB up to 2MiB in 512kB increments
+        const MAX_SIZE: usize = 2 * 1024 * 1024;
         const CHUNK_SIZE: usize = MAX_SIZE / 10;
 
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);

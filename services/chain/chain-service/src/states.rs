@@ -165,7 +165,6 @@ mod tests {
     use lb_binary_codec::bincode::SerializeOp as _;
     use lb_core::{
         era::AcceptedForkDigests,
-        mantle::gas::GasProfile,
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::{State::Bootstrapping, UncleSlots};
@@ -178,7 +177,7 @@ mod tests {
     use super::*;
     use crate::{
         BlockProviderConfig, BootstrapConfig, OfflineGracePeriodConfig, SyncConfig,
-        tests::{genesis_block_with, ledger_config, note, single_era},
+        tests::{GAS_PROFILE, genesis_block_with, ledger_config, note, single_era},
     };
 
     const FORK_DIGEST: [u8; 32] = [0x22; 32];
@@ -259,6 +258,8 @@ mod tests {
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            root_window: 1024,
+            channel_withdraw_delay: 86_400.into(),
             execution_market: lb_ledger::config::ExecutionMarketConfig {
                 max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_137_798).unwrap(),
                 fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
@@ -281,12 +282,13 @@ mod tests {
             block_rewards: lb_ledger::config::BlockRewardsConfig::new(
                 3_000_000_000_000_000_000,
                 120_000_000_000_000_000.try_into().unwrap(),
+                120.try_into().unwrap(),
                 10_512,
                 EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
                 lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
-            gas_profile: GasProfile::MAINNET,
+            gas_profile: GAS_PROFILE,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -486,6 +488,8 @@ mod tests {
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            root_window: 1024,
+            channel_withdraw_delay: 86_400.into(),
             execution_market: lb_ledger::config::ExecutionMarketConfig {
                 max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_137_798).unwrap(),
                 fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
@@ -508,12 +512,13 @@ mod tests {
             block_rewards: lb_ledger::config::BlockRewardsConfig::new(
                 3_000_000_000_000_000_000,
                 120_000_000_000_000_000.try_into().unwrap(),
+                120.try_into().unwrap(),
                 10_512,
                 EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
                 lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
-            gas_profile: GasProfile::MAINNET,
+            gas_profile: GAS_PROFILE,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),

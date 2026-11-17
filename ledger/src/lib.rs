@@ -761,7 +761,7 @@ impl LedgerState {
     }
 
     /// total estimated stake and on the average of fees consumed per block over
-    /// the last `POOLED_FEES_WINDOW` blocks. See the block rewards
+    /// the window of blocks of the era. See the block rewards
     /// specification: <https://lip.logos.co/blockchain/raw/block-rewards.html>
     fn compute_block_rewards<Id>(
         mut self,
@@ -990,7 +990,7 @@ impl LedgerState {
             .append_leader_reward(reward_commitment)?;
         let (cryptarchia_ledger, updates) = self
             .cryptarchia_ledger
-            .end_block_with_updates(self.block_number)?;
+            .end_block_with_updates(self.block_number, config.root_window)?;
         self.cryptarchia_ledger = cryptarchia_ledger;
         let block_events = std::iter::once(BlockEvent::LeaderRewardPaid {
             commitment: reward_commitment,
@@ -1063,7 +1063,8 @@ impl LedgerState {
         )?;
         // Once the whole genesis transaction is executed every note set records its
         // root, and the epoch states and the Blend inputs are taken from the result.
-        let cryptarchia_ledger = cryptarchia_ledger.with_genesis_note_sets(note_sets.end_block(0)?);
+        let cryptarchia_ledger =
+            cryptarchia_ledger.with_genesis_note_sets(note_sets.end_block(0, config.root_window)?);
         let mantle_ledger =
             mantle_ledger.with_genesis_epoch_state(config, cryptarchia_ledger.epoch_state());
         let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(&mantle_ledger.sdp, config);
@@ -1289,6 +1290,7 @@ impl LedgerState {
                         channels: self.mantle_ledger.channels(),
                         pending_withdrawals: self.cryptarchia_ledger.pending_withdrawals.clone(),
                         block_slot: self.cryptarchia_ledger.slot,
+                        withdraw_delay: config.channel_withdraw_delay,
                     })
                     .map_err(|(_signed_operation, error)| mantle::Error::Channel(error))?;
                 self.cryptarchia_ledger.pending_withdrawals = result.pending_withdrawals;
@@ -1528,7 +1530,7 @@ const fn check_op_data_size<Id>(size: usize, config: &Config) -> Result<(), Ledg
 mod tests {
     use std::num::NonZero;
 
-    use cryptarchia::tests::{GENESIS_POW_REWARD_POOL, config, generate_proof};
+    use cryptarchia::tests::{GAS_PROFILE, GENESIS_POW_REWARD_POOL, config, generate_proof};
     use lb_binary_codec::canonical::BinaryEncode as _;
     use lb_core::{
         block::genesis::GenesisBlockBuilder,
@@ -1553,9 +1555,7 @@ mod tests {
                     deposit::{DepositOp, Metadata},
                     inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step, UserStep},
                     program_step::{ProgramDeposit, ProgramStep},
-                    withdraw::{
-                        ChannelWithdrawOp, PendingWithdrawal, PendingWithdrawals, WITHDRAW_DELAY,
-                    },
+                    withdraw::{ChannelWithdrawOp, PendingWithdrawal, PendingWithdrawals},
                 },
                 op_proof::samples::SampleProof as _,
                 program::ProgramRegisterOp,
@@ -1699,7 +1699,7 @@ mod tests {
                     .execute_adding(&[genesis_note.commitment(), added, reward_commitment])
                     .unwrap(),
             )
-            .end_block(5)
+            .end_block(5, 1024)
             .unwrap();
         assert_eq!(
             state.latest_note_sets().eligible_root(),
@@ -2090,11 +2090,8 @@ mod tests {
         let mut state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
         update_ledger_prices(&mut state, 1, 1);
         let root = ledger_root(&state);
-        let gas_context = OpsGasContext::from_channels(
-            &Channels::new(),
-            state.get_gas_prices(),
-            GasProfile::MAINNET,
-        );
+        let gas_context =
+            OpsGasContext::from_channels(&Channels::new(), state.get_gas_prices(), GAS_PROFILE);
         let fees = transfer_tx(vec![spend(1, 10, root, 0)])
             .op_refs()
             .total_gas_cost(&gas_context)
@@ -2935,11 +2932,8 @@ mod tests {
                 0,
             ))],
         );
-        let gas_context = OpsGasContext::from_channels(
-            &Channels::new(),
-            GasPrices::new(1, 1),
-            GasProfile::MAINNET,
-        );
+        let gas_context =
+            OpsGasContext::from_channels(&Channels::new(), GasPrices::new(1, 1), GAS_PROFILE);
         let fees = draft
             .by_ref()
             .total_gas_cost(&gas_context)
@@ -3599,7 +3593,7 @@ mod tests {
         };
         let inscribe = InscriptionOp {
             channel_id,
-            inscription: [1].into(),
+            inscription: Inscription::new_unchecked(vec![1]),
             parent: channel.tip_message,
             signer: verifying_key.into_unverified(),
             mini_blocks: one_step(11, 12, channel_root),
@@ -3664,14 +3658,14 @@ mod tests {
             .commitment_root();
         let first = InscriptionOp {
             channel_id,
-            inscription: [1].into(),
+            inscription: Inscription::new_unchecked(vec![1]),
             parent: channel.tip_message,
             signer: verifying_key.into_unverified(),
             mini_blocks: one_step(11, 12, channel_root),
         };
         let second = InscriptionOp {
             parent: first.id(),
-            inscription: [2].into(),
+            inscription: Inscription::new_unchecked(vec![2]),
             mini_blocks: one_step(11, 13, channel_root),
             ..first
         };
@@ -3788,7 +3782,7 @@ mod tests {
         let key = test_program_key();
         let inscribe = InscriptionOp {
             channel_id,
-            inscription: [1].into(),
+            inscription: Inscription::new_unchecked(vec![1]),
             parent: channel.tip_message,
             signer: verifying_key.into_unverified(),
             mini_blocks: program_steps(derive_program_id(&key), 11, 12, channel_root),
@@ -3866,7 +3860,7 @@ mod tests {
             .commitment_root();
         let inscribe = InscriptionOp {
             channel_id,
-            inscription: [1].into(),
+            inscription: Inscription::new_unchecked(vec![1]),
             parent: channel.tip_message,
             signer: verifying_key.into_unverified(),
             mini_blocks: program_steps(
@@ -3928,7 +3922,7 @@ mod tests {
         };
         let inscribe = InscriptionOp {
             channel_id,
-            inscription: [1].into(),
+            inscription: Inscription::new_unchecked(vec![1]),
             parent: channel.tip_message,
             signer: verifying_key.into_unverified(),
             mini_blocks: program_steps(derive_program_id(&key), 11, 12, channel_root),
@@ -4023,14 +4017,14 @@ mod tests {
         );
         let creation = InscriptionOp {
             channel_id,
-            inscription: [1].into(),
+            inscription: Inscription::new_unchecked(vec![1]),
             parent: MsgId::root(),
             signer: verifying_key.into_unverified(),
             mini_blocks: MiniBlocks::default(),
         };
         let inscribe = InscriptionOp {
             channel_id,
-            inscription: [2].into(),
+            inscription: Inscription::new_unchecked(vec![2]),
             parent: creation.id(),
             signer: verifying_key.into_unverified(),
             mini_blocks: [MiniBlock::try_from(steps).unwrap()].into(),
@@ -4052,7 +4046,7 @@ mod tests {
         let gas_context = OpsGasContext::from_channels(
             state.mantle_ledger().channels(),
             state.get_gas_prices(),
-            GasProfile::MAINNET,
+            GAS_PROFILE,
         );
         let estimated = tx
             .op_refs()
@@ -4091,9 +4085,7 @@ mod tests {
             )
         );
         // The bytes of the transaction and the one channel note set it changed.
-        let terms = GasProfile::MAINNET
-            .tx_terms_gas(tx.storage_size(), 1)
-            .unwrap();
+        let terms = GAS_PROFILE.tx_terms_gas(tx.storage_size(), 1).unwrap();
         assert_eq!(
             gas_and_fees.execution_gas,
             operations_gas.checked_add(terms).unwrap()
@@ -4159,7 +4151,7 @@ mod tests {
                 .map(|w| (w.due, w.note_set_index))
                 .collect::<Vec<_>>(),
             vec![(
-                state.slot().strict_add(Slot::from(WITHDRAW_DELAY)),
+                state.slot().strict_add(test_config.channel_withdraw_delay),
                 NoteSetIndex::Channel(channel_id)
             )]
         );
@@ -4298,7 +4290,7 @@ mod tests {
         let gas_context = OpsGasContext::from_channels(
             state.mantle_ledger().channels(),
             prices.clone(),
-            GasProfile::MAINNET,
+            GAS_PROFILE,
         );
         let predicted = tx.op_refs().total_gas_cost(&gas_context).unwrap();
 
@@ -4312,11 +4304,7 @@ mod tests {
 
         // The transaction adds its bytes and the one channel note set it changed.
         let execution_gas = operations_gas
-            .checked_add(
-                GasProfile::MAINNET
-                    .tx_terms_gas(tx.storage_size(), 1)
-                    .unwrap(),
-            )
+            .checked_add(GAS_PROFILE.tx_terms_gas(tx.storage_size(), 1).unwrap())
             .unwrap();
 
         let storage_gas = Gas::new(tx.storage_size() as u64);
@@ -4682,11 +4670,8 @@ mod tests {
             root,
             0,
         );
-        let gas_context = OpsGasContext::from_channels(
-            &Channels::new(),
-            ledger.get_gas_prices(),
-            GasProfile::MAINNET,
-        );
+        let gas_context =
+            OpsGasContext::from_channels(&Channels::new(), ledger.get_gas_prices(), GAS_PROFILE);
         let fees = tx.op_refs().total_gas_cost(&gas_context).unwrap();
         let tx = create_tx(
             vec![NoteNullifier(Fr::ONE)],
@@ -4754,11 +4739,8 @@ mod tests {
         update_ledger_prices(&mut ledger, 1, 1);
         let ledger_set_before = ledger.latest_note_sets().ledger().clone();
         let reward_commitment = NoteCommitment(Fr::from(0x4444u64));
-        let gas_context = OpsGasContext::from_channels(
-            &Channels::new(),
-            ledger.get_gas_prices(),
-            GasProfile::MAINNET,
-        );
+        let gas_context =
+            OpsGasContext::from_channels(&Channels::new(), ledger.get_gas_prices(), GAS_PROFILE);
         let fees = tx.op_refs().total_gas_cost(&gas_context).unwrap();
         let tx = create_tx(
             vec![NoteNullifier(Fr::ONE)],

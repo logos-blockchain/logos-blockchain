@@ -26,7 +26,7 @@ use lb_core::{
             channel::{
                 ChannelId, MsgId,
                 inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step, UserStep},
-                withdraw::{ChannelWithdrawOp, WITHDRAW_DELAY},
+                withdraw::ChannelWithdrawOp,
             },
             sdp::SDPWithdrawOp,
         },
@@ -373,7 +373,9 @@ fn withdrawals_header(
         })
         .collect();
     let (state, ..) = execute(state, config, &txs).expect("the withdrawals apply");
-    let due = state.slot().strict_add(Slot::from(WITHDRAW_DELAY));
+    let due = state
+        .slot()
+        .strict_add(parameters(config).channel_withdraw_delay);
     let parent = Slot::from(u64::from(due) - 1);
     assert_eq!(
         epoch_of(config, parent),
@@ -440,7 +442,7 @@ static CHANNELS_STATE: LazyLock<LedgerState> = LazyLock::new(|| {
         .map(|index| {
             Op::ChannelInscribe(InscriptionOp {
                 channel_id: channel(index),
-                inscription: [0].into(),
+                inscription: Inscription::new_unchecked(vec![0]),
                 parent: MsgId::root(),
                 signer: fixture.channel_key.public_key().into_unverified(),
                 mini_blocks: MiniBlocks::default(),
@@ -495,7 +497,7 @@ fn note_sets_shape(changed: usize) -> BlockShape {
             let salt = 500 + index as u64;
             let op = InscriptionOp {
                 channel_id: channel(index),
-                inscription: [1].into(),
+                inscription: Inscription::new_unchecked(vec![1]),
                 parent: channel_state.tip_message,
                 signer: fixture.channel_key.public_key().into_unverified(),
                 mini_blocks: [MiniBlock::from([Step::User(UserStep {

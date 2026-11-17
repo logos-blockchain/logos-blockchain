@@ -227,8 +227,7 @@ async fn create_channel(
     let tx_builder = MantleTxBuilder::new()
         .push_op(Op::ChannelInscribe(InscriptionOp {
             channel_id,
-            inscription: Inscription::try_from(b"channel deposit test".to_vec())
-                .expect("inscription payload should fit"),
+            inscription: Inscription::new_unchecked(b"channel deposit test".to_vec()),
             parent: MsgId::root(),
             signer: signing_key.public_key().into_unverified(),
             mini_blocks: MiniBlocks::default(),

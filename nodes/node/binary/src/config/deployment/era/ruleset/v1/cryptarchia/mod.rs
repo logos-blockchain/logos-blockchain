@@ -6,7 +6,7 @@ use core::{
 use lb_binary_codec::canonical::BinaryEncode;
 use lb_chain_service::Epoch;
 use lb_core::{
-    block::{Block, BlockLimits, Proposal},
+    block::{Block, BlockLimits, BlockNumber, Proposal},
     mantle::gas::{Gas, GasProfile},
     sdp::{InactivityPeriod, MinStake, ServiceType},
 };
@@ -23,6 +23,7 @@ use lb_utils::{
     math::{NonNegativeF64, NonNegativeRatio},
     net::MAX_WIRE_MESSAGE_SIZE,
 };
+use lb_wallet_service::SPEND_ROOT_DEPTH;
 use serde::{Deserialize, Serialize};
 use strum::{EnumCount as _, IntoEnumIterator as _};
 
@@ -49,6 +50,12 @@ pub struct Settings {
     /// The most bytes a block's transactions may take in their canonical
     /// encoding.
     pub max_transactions_size: u32,
+    /// `ROOT_WINDOW`: how many blocks a commitment root stays referenceable
+    /// once a block supersedes it.
+    pub root_window: BlockNumber,
+    /// `WITHDRAW_DELAY`: the slots between a channel withdrawal and its
+    /// release.
+    pub channel_withdraw_delay: NonZeroU64,
     pub sdp_config: SdpConfig,
     pub pow_config: PoWConfig,
     pub execution_market: ExecutionMarketConfig,
@@ -93,6 +100,7 @@ impl Settings {
         }
 
         self.validate_sizes()?;
+        self.validate_root_window()?;
 
         // A cost above what a block may consume could never be paid, by the
         // protocol's own Operations (reward claims, SDP activity) included.
@@ -167,6 +175,18 @@ impl Settings {
         self.pow_config.reward.validate().map_err(|error| {
             InvalidDeployment::new(format!("Invalid PoW reward parameters: {error}."))
         })
+    }
+
+    /// Checks that a transaction of the next block can still reference the root
+    /// a wallet spends against, `SPEND_ROOT_DEPTH` blocks below its tip.
+    fn validate_root_window(&self) -> Result<(), InvalidDeployment> {
+        ensure!(
+            self.root_window > SPEND_ROOT_DEPTH as BlockNumber,
+            "The root window of {} blocks does not reach the root {SPEND_ROOT_DEPTH} blocks below \
+             the tip that a wallet spends against.",
+            self.root_window
+        );
+        Ok(())
     }
 
     /// Checks that the era's largest proposal fits a Blend payload and its

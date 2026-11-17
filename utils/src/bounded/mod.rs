@@ -43,8 +43,9 @@ pub mod ordered_set;
 pub use ordered_set::{BoundedOrderedSet, NonEmptyBoundedOrderedSet, UpperBoundedOrderedSet};
 pub mod runtime;
 pub use runtime::{
-    NonEmptyRuntimeBoundedVec, ResizableRuntimeBounded, ResizableRuntimeBoundedVec, RuntimeBounded,
-    RuntimeBoundedVec, RuntimeMax, UpperRuntimeBoundedVec,
+    NonEmptyRuntimeBoundedVec, ResizableRuntimeBounded, ResizableRuntimeBoundedVec,
+    ResizableRuntimeBoundedVecDeque, RuntimeBounded, RuntimeBoundedVec, RuntimeMax,
+    UpperRuntimeBoundedVec,
 };
 pub mod string;
 pub use string::BoundedString;
@@ -53,6 +54,7 @@ pub use vec::{
     BoundedVec, LowerBoundedVec, MaxBoundedVec, NonEmptyBoundedVec, UpperBoundedVec,
     deserialize_bounded_sequence,
 };
+mod vec_deque;
 
 mod collection;
 

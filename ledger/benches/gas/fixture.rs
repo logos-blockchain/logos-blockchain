@@ -10,10 +10,11 @@ use std::{
 };
 
 use lb_core::{
+    block::BlockNumber,
     era::{AcceptedForkDigests, ForkDigest},
     mantle::{
         Op, OpProof, SignedOps,
-        gas::GasProfile,
+        gas::{Gas, GasProfile},
         ledger::verification_mode::StandardMode,
         note_set::NoteSetIndex,
         notes::{self, NoteCommitment, NoteNullifier, ProgramId},
@@ -21,7 +22,7 @@ use lb_core::{
             ChannelInscribeProof, NoOpProof,
             channel::{
                 ChannelId, MsgId,
-                inscribe::{InscriptionOp, MiniBlocks},
+                inscribe::{Inscription, InscriptionOp, MiniBlocks},
             },
             program::ProgramRegisterOp,
         },
@@ -51,6 +52,9 @@ use time::OffsetDateTime;
 pub type HeaderId = [u8; 32];
 
 pub const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
+
+/// The root window of the fixture's era, the deployment's.
+pub const ROOT_WINDOW: BlockNumber = 1024;
 
 /// The number of nullifiers in each filled note set, one less than its
 /// commitments, unless `GAS_BENCH_FILL` sets another, which only shortens the
@@ -162,7 +166,7 @@ fn build() -> Fixture {
 
     let create_channel = Op::ChannelInscribe(InscriptionOp {
         channel_id: channel,
-        inscription: [0].into(),
+        inscription: Inscription::new_unchecked(vec![0]),
         parent: MsgId::root(),
         signer: channel_key.public_key().into_unverified(),
         mini_blocks: MiniBlocks::default(),
@@ -211,7 +215,7 @@ fn build() -> Fixture {
     }
     let state = state.with_latest_note_sets(
         note_sets
-            .end_block(0)
+            .end_block(0, ROOT_WINDOW)
             .expect("the note sets live in memory, which cannot fail"),
     );
 
@@ -247,6 +251,32 @@ pub fn single_era(config: Config) -> EraScheduledConfig {
     .expect("a single era resolves")
     .map(move |_| config.clone())
 }
+
+/// The costs of the deployments' current gas profile.
+const GAS_PROFILE: GasProfile = GasProfile {
+    transfer: Gas::new(10),
+    program_register: Gas::new(15114),
+    channel_config: Gas::new(24),
+    channel_inscribe: Gas::new(26),
+    channel_deposit: Gas::new(26),
+    channel_withdraw: Gas::new(33),
+    sdp_declare: Gas::new(1693),
+    sdp_withdraw: Gas::new(0),
+    sdp_active: Gas::new(15117),
+    claim_pow_reward: Gas::new(1506),
+    kilobyte: Gas::new(30),
+    note_set: Gas::new(8961),
+    proof: Gas::new(4177),
+    root: Gas::new(2332),
+    buffered: Gas::new(60),
+    nullifier: Gas::new(1758),
+    commitment: Gas::new(58),
+    signature: Gas::new(557),
+    user_step: Gas::new(28),
+    program_deposit: Gas::new(144),
+    program_step: Gas::new(13528),
+    opening: Gas::new(470),
+};
 
 fn era_parameters() -> Config {
     let epoch_config = EpochConfig {
@@ -293,6 +323,8 @@ fn era_parameters() -> Config {
         max_transactions: 1024,
         max_transactions_size: 2 * 1024 * 1024,
         max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+        root_window: ROOT_WINDOW,
+        channel_withdraw_delay: 86_400.into(),
         execution_market: ExecutionMarketConfig {
             max_gas_per_block: MaxGasPerBlock::new(3_137_798).unwrap(),
             fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
@@ -309,12 +341,13 @@ fn era_parameters() -> Config {
         block_rewards: BlockRewardsConfig::new(
             3_000_000_000_000_000_000,
             120_000_000_000_000_000.try_into().unwrap(),
+            120.try_into().unwrap(),
             10_512,
             EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
             lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
         )
         .unwrap(),
-        gas_profile: GasProfile::MAINNET,
+        gas_profile: GAS_PROFILE,
         pow_config: PoWConfig {
             blend: BlendPoWConfig {
                 base_difficulty: ModulusShift::new::<234>(),

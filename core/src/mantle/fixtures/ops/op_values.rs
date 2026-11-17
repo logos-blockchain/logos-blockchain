@@ -16,7 +16,7 @@ use crate::{
                 ChannelId, MsgId,
                 config::ChannelConfigOp,
                 deposit::{DepositOp, Metadata},
-                inscribe::{InscriptionOp, MiniBlock, Step, UserStep},
+                inscribe::{Inscription, InscriptionOp, MiniBlock, Step, UserStep},
                 program_step::{ProgramDeposit, ProgramStep},
                 withdraw::ChannelWithdrawOp,
             },
@@ -69,7 +69,7 @@ pub static CHANNEL_CONFIG: LazyLock<ChannelConfigOp> = LazyLock::new(|| {
 
 pub static INSCRIPTION: LazyLock<InscriptionOp> = LazyLock::new(|| InscriptionOp {
     channel_id: ChannelId::from([14u8; 32]),
-    inscription: b"hello logos".into(),
+    inscription: Inscription::new_unchecked(b"hello logos".to_vec()),
     parent: MsgId::root(),
     signer: Ed25519Key::from_bytes(&[15u8; 32])
         .public_key()
@@ -79,7 +79,7 @@ pub static INSCRIPTION: LazyLock<InscriptionOp> = LazyLock::new(|| InscriptionOp
             inputs: [NoteNullifier(Fr::from(0x23u64))].into(),
             outputs: [NoteCommitment(Fr::from(0x24u64))].into(),
             commitment_merkle_root: Fr::from(0x25u64),
-            inscription: b"step-inscription".into(),
+            inscription: Inscription::new_unchecked(b"step-inscription".to_vec()),
         }),
         Step::ProgramDeposit(ProgramDeposit {
             program_id: Fr::from(0x34u64),
@@ -88,7 +88,7 @@ pub static INSCRIPTION: LazyLock<InscriptionOp> = LazyLock::new(|| InscriptionOp
             commitment_merkle_root: Fr::from(0x37u64),
             value: 0x38,
             intent: Fr::from(0x39u64),
-            inscription: b"deposit-inscription".into(),
+            inscription: Inscription::new_unchecked(b"deposit-inscription".to_vec()),
         }),
         Step::Program(ProgramStep {
             program_id: Fr::from(0x34u64),
@@ -97,7 +97,7 @@ pub static INSCRIPTION: LazyLock<InscriptionOp> = LazyLock::new(|| InscriptionOp
             outputs: OutputCommitments::default(),
             commitment_merkle_root: Fr::from(0x3cu64),
             program_step_id: Fr::from(0x3du64),
-            inscription: b"program-step-inscription".into(),
+            inscription: Inscription::new_unchecked(b"program-step-inscription".to_vec()),
         }),
     ])]
     .into(),

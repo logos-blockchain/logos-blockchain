@@ -215,6 +215,8 @@ mod tests {
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            root_window: 1024,
+            channel_withdraw_delay: 86_400.into(),
             execution_market: crate::config::ExecutionMarketConfig {
                 max_gas_per_block: crate::config::MaxGasPerBlock::new(3_137_798).unwrap(),
                 fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
@@ -237,6 +239,7 @@ mod tests {
             block_rewards: crate::config::BlockRewardsConfig::new(
                 3_000_000_000_000_000_000,
                 120_000_000_000_000_000.try_into().unwrap(),
+                120.try_into().unwrap(),
                 10_512,
                 EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
                 lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),

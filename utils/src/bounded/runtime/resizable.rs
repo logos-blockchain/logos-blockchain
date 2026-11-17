@@ -1,4 +1,5 @@
 use core::{ops::Deref, slice::IterMut};
+use std::collections::VecDeque;
 
 use crate::bounded::{
     BoundedError, BoundedLen,
@@ -11,7 +12,7 @@ use crate::bounded::{
 /// Reads go through the checked value it wraps. It has no codec and no serde:
 /// once built, it is turned into that value ([`Self::into_bounded`]), which is
 /// what gets encoded, stored or sent.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResizableRuntimeBounded<T, Max, const MIN: usize> {
     bounded: RuntimeBounded<T, Max, MIN>,
     max_len: Max,
@@ -84,8 +85,8 @@ impl<T, Max, const MIN: usize> ResizableRuntimeBounded<Vec<T>, Max, MIN> {
             return Ok(None);
         }
 
-        // `-1` will never underflow because we already checked that the length is
-        // greater than MIN.
+        // `-1` will never underflow because we already checked that the length
+        // is greater than MIN.
         self.try_remove(self.len() - 1).map(Some)
     }
 
@@ -96,8 +97,8 @@ impl<T, Max, const MIN: usize> ResizableRuntimeBounded<Vec<T>, Max, MIN> {
     /// [`BoundedError::TooFewItems`] when removing the element would violate
     /// `MIN`.
     pub fn try_remove(&mut self, index: usize) -> Result<T, BoundedError> {
-        // This check also guards against an empty vec, `index >= 0` and `self.len() =
-        // 0` will return and error
+        // This check also guards against an empty vec, `index >= 0` and
+        // `self.len() = 0` will return and error
         if index >= self.len() {
             return Err(BoundedError::IndexOutOfBounds {
                 index,
@@ -173,6 +174,67 @@ where
     }
 }
 
+/// A runtime-bounded `VecDeque<T>` that keeps its maximum, to grow and shrink
+/// within `[MIN, max_len]`.
+pub type ResizableRuntimeBoundedVecDeque<T, Max, const MIN: usize> =
+    ResizableRuntimeBounded<VecDeque<T>, Max, MIN>;
+
+impl<T, Max, const MIN: usize> ResizableRuntimeBounded<VecDeque<T>, Max, MIN> {
+    /// Constructs an empty deque bounded by `max_len`.
+    ///
+    /// This is only valid when `MIN` is zero, and fails to compile otherwise.
+    #[must_use]
+    pub const fn empty(max_len: Max) -> Self {
+        const {
+            assert!(MIN == 0, "Cannot construct an empty deque when MIN > 0");
+        }
+        Self {
+            bounded: RuntimeBounded::new_unchecked(VecDeque::new()),
+            max_len,
+        }
+    }
+}
+
+impl<T, Max, const MIN: usize> ResizableRuntimeBounded<VecDeque<T>, Max, MIN>
+where
+    Max: RuntimeMax,
+{
+    /// Appends `item` at the back. At the maximum length the front element
+    /// makes room: it is removed and returned.
+    pub fn push_back_evicting(&mut self, item: T) -> Option<T> {
+        let max = self.max_len.to_usize();
+        if max == 0 {
+            return Some(item);
+        }
+        let evicted = if self.bounded.inner.len() >= max {
+            self.bounded.inner.pop_front()
+        } else {
+            None
+        };
+        self.bounded.inner.push_back(item);
+        evicted
+    }
+
+    /// Bounds the deque by `max_len` from now on, removing the front elements
+    /// past it.
+    ///
+    /// Returns [`BoundedError::TooFewItems`], and leaves the deque unchanged,
+    /// when `max_len` is below `MIN`.
+    pub fn try_set_max_len(&mut self, max_len: Max) -> Result<(), BoundedError> {
+        let max = max_len.to_usize();
+        if max < MIN {
+            return Err(BoundedError::TooFewItems {
+                count: max,
+                min: MIN,
+            });
+        }
+        let excess = self.bounded.inner.len().saturating_sub(max);
+        self.bounded.inner.drain(..excess);
+        self.max_len = max_len;
+        Ok(())
+    }
+}
+
 impl<'a, T, Max, const MIN: usize> IntoIterator
     for &'a mut ResizableRuntimeBounded<Vec<T>, Max, MIN>
 {
@@ -186,7 +248,41 @@ impl<'a, T, Max, const MIN: usize> IntoIterator
 
 #[cfg(test)]
 mod tests {
-    use crate::bounded::{BoundedError, ResizableRuntimeBoundedVec};
+    use std::collections::VecDeque;
+
+    use crate::bounded::{
+        BoundedError, ResizableRuntimeBoundedVec, ResizableRuntimeBoundedVecDeque,
+    };
+
+    #[test]
+    fn a_full_deque_evicts_its_front_to_push() {
+        let mut bounded =
+            ResizableRuntimeBoundedVecDeque::<u8, u8, 0>::try_new(VecDeque::from([1, 2]), 2)
+                .unwrap();
+
+        assert_eq!(bounded.push_back_evicting(3), Some(1));
+        assert_eq!(bounded.as_inner(), &VecDeque::from([2, 3]));
+    }
+
+    #[test]
+    fn a_new_maximum_drops_the_front_and_keeps_the_minimum() {
+        let mut bounded =
+            ResizableRuntimeBoundedVecDeque::<u8, u8, 1>::try_new(VecDeque::from([1, 2, 3]), 3)
+                .unwrap();
+
+        assert_eq!(
+            bounded.try_set_max_len(0),
+            Err(BoundedError::TooFewItems { count: 0, min: 1 })
+        );
+        assert_eq!(bounded.as_inner(), &VecDeque::from([1, 2, 3]));
+        assert_eq!(bounded.try_set_max_len(1), Ok(()));
+        assert_eq!(bounded.as_inner(), &VecDeque::from([3]));
+        assert_eq!(bounded.push_back_evicting(4), Some(3));
+        // A larger maximum keeps what the deque holds and lets it grow.
+        assert_eq!(bounded.try_set_max_len(3), Ok(()));
+        assert_eq!(bounded.push_back_evicting(5), None);
+        assert_eq!(bounded.as_inner(), &VecDeque::from([4, 5]));
+    }
 
     #[test]
     fn try_push_rejects_growth_past_the_maximum() {

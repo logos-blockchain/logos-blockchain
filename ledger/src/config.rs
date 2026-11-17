@@ -1,7 +1,8 @@
-use std::num::{NonZero, NonZeroU32, NonZeroU64, NonZeroU128};
+use std::num::{NonZero, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU128};
 
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
 use lb_core::{
+    block::BlockNumber,
     era::AcceptedForkDigests,
     mantle::{
         Value,
@@ -15,7 +16,7 @@ use lb_pol::LotteryConstants;
 use lb_time::era::EpochLength;
 use lb_utils::math::ProperFraction;
 
-use crate::block_rewards::{MAX_SUPPLY, POOLED_FEES_WINDOW};
+use crate::block_rewards::MAX_SUPPLY;
 
 /// The config of every era: each block is applied under the config of the era
 /// of its slot, and each epoch is settled under the config of its era.
@@ -33,6 +34,12 @@ pub struct Config {
     /// The most bytes of data an Operation may carry: an inscription, or a
     /// deposit's metadata.
     pub max_op_data_size: u32,
+    /// `ROOT_WINDOW`: how many blocks a commitment root stays referenceable
+    /// once a block supersedes it.
+    pub root_window: BlockNumber,
+    /// `WITHDRAW_DELAY`: the slots between a channel withdrawal and its
+    /// release.
+    pub channel_withdraw_delay: Slot,
     pub sdp_config: crate::mantle::sdp::Config,
     pub pow_config: PoWConfig,
     pub accepted_fork_digests: AcceptedForkDigests,
@@ -695,8 +702,12 @@ pub struct BlockRewardsConfig {
     /// release is in full, and the scale of the release's weight `A_t` in a
     /// reward.
     emission_factor_scale: NonZeroU64,
+    /// `T`: the blocks whose pooled fees the window averages. A window that
+    /// grows at an era counts the blocks it lacks as pooling nothing.
+    pooled_fees_window: NonZeroU16,
     /// `FEE_AVG_NUMERATOR`: how much each unit of the fees pooled over the
-    /// window adds to the release's weight.
+    /// window adds to the release's weight. It carries `1/T`, so an era
+    /// changing `T` restates it.
     fee_average_numerator: u64,
     /// `I_max · S_cap · Δt`: a block's release in full.
     max_emission_per_block: EmissionRatio,
@@ -710,6 +721,7 @@ pub struct BlockRewardsConfig {
 struct BlockRewardsFields {
     stake_target: Value,
     emission_factor_scale: NonZeroU64,
+    pooled_fees_window: NonZeroU16,
     fee_average_numerator: u64,
     max_emission_per_block: EmissionRatio,
     blend_share: ProperFraction,
@@ -717,17 +729,18 @@ struct BlockRewardsFields {
 
 impl BlockRewardsConfig {
     /// The block rewards of these values, unless a step of a reward could
-    /// overflow an `i128` while the window pools at most
-    /// [`POOLED_FEES_WINDOW`] times the supply cap.
+    /// overflow an `i128` while the window pools at most `pooled_fees_window`
+    /// times the supply cap.
     #[must_use]
     pub const fn new(
         stake_target: Value,
         emission_factor_scale: NonZeroU64,
+        pooled_fees_window: NonZeroU16,
         fee_average_numerator: u64,
         max_emission_per_block: EmissionRatio,
         blend_share: ProperFraction,
     ) -> Option<Self> {
-        let pooled_fees = POOLED_FEES_WINDOW as i128 * MAX_SUPPLY as i128;
+        let pooled_fees = pooled_fees_window.get() as i128 * MAX_SUPPLY as i128;
         let scale = emission_factor_scale.get() as i128;
         // The release's weight, its release and the pool's payout.
         let weight = match (fee_average_numerator as i128).checked_mul(pooled_fees) {
@@ -742,6 +755,7 @@ impl BlockRewardsConfig {
             (Some(_), Some(_), Some(_), Some(_)) => Some(Self {
                 stake_target,
                 emission_factor_scale,
+                pooled_fees_window,
                 fee_average_numerator,
                 max_emission_per_block,
                 blend_share,
@@ -760,6 +774,12 @@ impl BlockRewardsConfig {
     #[must_use]
     pub const fn emission_factor_scale(&self) -> NonZeroU64 {
         self.emission_factor_scale
+    }
+
+    /// `T`.
+    #[must_use]
+    pub const fn pooled_fees_window(&self) -> NonZeroU16 {
+        self.pooled_fees_window
     }
 
     /// `FEE_AVG_NUMERATOR`.
@@ -788,6 +808,7 @@ impl TryFrom<BlockRewardsFields> for BlockRewardsConfig {
         BlockRewardsFields {
             stake_target,
             emission_factor_scale,
+            pooled_fees_window,
             fee_average_numerator,
             max_emission_per_block,
             blend_share,
@@ -796,6 +817,7 @@ impl TryFrom<BlockRewardsFields> for BlockRewardsConfig {
         Self::new(
             stake_target,
             emission_factor_scale,
+            pooled_fees_window,
             fee_average_numerator,
             max_emission_per_block,
             blend_share,
@@ -803,8 +825,9 @@ impl TryFrom<BlockRewardsFields> for BlockRewardsConfig {
         .ok_or_else(|| {
             format!(
                 "The block rewards' stake target, {stake_target}, scale, {emission_factor_scale}, \
-                 fee average numerator, {fee_average_numerator}, and emission per block, {}/{}, \
-                 let a reward overflow an i128.",
+                 window of {pooled_fees_window} blocks, fee average numerator, \
+                 {fee_average_numerator}, and emission per block, {}/{}, let a reward overflow an \
+                 i128.",
                 max_emission_per_block.numerator, max_emission_per_block.denominator
             )
         })
@@ -816,6 +839,7 @@ impl From<BlockRewardsConfig> for BlockRewardsFields {
         BlockRewardsConfig {
             stake_target,
             emission_factor_scale,
+            pooled_fees_window,
             fee_average_numerator,
             max_emission_per_block,
             blend_share,
@@ -824,6 +848,7 @@ impl From<BlockRewardsConfig> for BlockRewardsFields {
         Self {
             stake_target,
             emission_factor_scale,
+            pooled_fees_window,
             fee_average_numerator,
             max_emission_per_block,
             blend_share,
@@ -838,12 +863,14 @@ impl BinaryEncode for BlockRewardsConfig {
         let Self {
             stake_target,
             emission_factor_scale,
+            pooled_fees_window,
             fee_average_numerator,
             max_emission_per_block,
             blend_share,
         } = self;
         stake_target.encoded_length()
             + emission_factor_scale.encoded_length()
+            + pooled_fees_window.encoded_length()
             + fee_average_numerator.encoded_length()
             + max_emission_per_block.encoded_length()
             + blend_share.encoded_length()
@@ -853,12 +880,14 @@ impl BinaryEncode for BlockRewardsConfig {
         let Self {
             stake_target,
             emission_factor_scale,
+            pooled_fees_window,
             fee_average_numerator,
             max_emission_per_block,
             blend_share,
         } = self;
         stake_target.encode_into(out);
         emission_factor_scale.encode_into(out);
+        pooled_fees_window.encode_into(out);
         fee_average_numerator.encode_into(out);
         max_emission_per_block.encode_into(out);
         blend_share.encode_into(out);
@@ -866,8 +895,8 @@ impl BinaryEncode for BlockRewardsConfig {
 }
 
 /// The encoding of the fixture below, one field per group.
-const BLOCK_REWARDS_CONFIG_HEX: &str = "3500000000000000 3600000000000000 3700000000000000 3800000000000000 3900000000000000 3a000000 \
-     3b000000";
+const BLOCK_REWARDS_CONFIG_HEX: &str = "3500000000000000 3600000000000000 3c00 3700000000000000 3800000000000000 3900000000000000 \
+     3a000000 3b000000";
 
 codec_fixtures!(
     BlockRewardsConfig,
@@ -875,6 +904,7 @@ codec_fixtures!(
     BlockRewardsConfig::new(
         53,
         NonZeroU64::new(54).unwrap(),
+        NonZeroU16::new(60).unwrap(),
         55,
         EmissionRatio::new(56, NonZeroU64::new(57).unwrap()),
         ProperFraction::new(58, NonZeroU32::new(59).unwrap()).unwrap(),
@@ -1048,6 +1078,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::too_many_lines, reason = "Spells out a whole era config.")]
     fn epoch_snapshots() {
         let epoch_config = EpochConfig {
             epoch_stake_distribution_stabilization: NonZero::new(3u8).unwrap(),
@@ -1096,6 +1127,8 @@ mod tests {
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            root_window: 1024,
+            channel_withdraw_delay: 86_400.into(),
             execution_market: crate::config::ExecutionMarketConfig {
                 max_gas_per_block: crate::config::MaxGasPerBlock::new(3_137_798).unwrap(),
                 fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
@@ -1118,6 +1151,7 @@ mod tests {
             block_rewards: crate::config::BlockRewardsConfig::new(
                 3_000_000_000_000_000_000,
                 120_000_000_000_000_000.try_into().unwrap(),
+                120.try_into().unwrap(),
                 10_512,
                 EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
                 lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
@@ -1199,6 +1233,8 @@ mod tests {
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            root_window: 1024,
+            channel_withdraw_delay: 86_400.into(),
             execution_market: crate::config::ExecutionMarketConfig {
                 max_gas_per_block: crate::config::MaxGasPerBlock::new(3_137_798).unwrap(),
                 fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
@@ -1221,6 +1257,7 @@ mod tests {
             block_rewards: crate::config::BlockRewardsConfig::new(
                 3_000_000_000_000_000_000,
                 120_000_000_000_000_000.try_into().unwrap(),
+                120.try_into().unwrap(),
                 10_512,
                 EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
                 lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
@@ -1318,6 +1355,8 @@ mod tests {
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            root_window: 1024,
+            channel_withdraw_delay: 86_400.into(),
             execution_market: crate::config::ExecutionMarketConfig {
                 max_gas_per_block: crate::config::MaxGasPerBlock::new(3_137_798).unwrap(),
                 fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
@@ -1340,6 +1379,7 @@ mod tests {
             block_rewards: crate::config::BlockRewardsConfig::new(
                 3_000_000_000_000_000_000,
                 120_000_000_000_000_000.try_into().unwrap(),
+                120.try_into().unwrap(),
                 10_512,
                 EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
                 lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),

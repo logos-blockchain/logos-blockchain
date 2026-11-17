@@ -374,7 +374,10 @@ mod tests {
     #[test]
     fn execution_gas_follows_the_mantle_gas_table() {
         use crate::mantle::{
-            gas::{Gas, GasProfile, test_utils::FixedThresholds},
+            gas::{
+                Gas,
+                test_utils::{FixedThresholds, GAS_PROFILE},
+            },
             ops::{
                 channel::{
                     config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
@@ -409,8 +412,7 @@ mod tests {
             (Op::ClaimPowReward(ClaimPowRewardOp::sample()), 1_506),
         ] {
             assert_eq!(
-                op.by_ref()
-                    .execution_gas(&GasProfile::MAINNET, &FixedThresholds(2)),
+                op.by_ref().execution_gas(&GAS_PROFILE, &FixedThresholds(2)),
                 Ok(Gas::new(gas)),
                 "{}",
                 op.as_str()

@@ -118,7 +118,9 @@ mod tests {
 
     use super::*;
     use crate::mantle::{
-        VerificationError, gas::test_utils::FixedThresholds, programs::derive_program_id,
+        VerificationError,
+        gas::test_utils::{FixedThresholds, GAS_PROFILE},
+        programs::derive_program_id,
     };
 
     fn valid_key() -> ProgramVerificationKey {
@@ -218,7 +220,7 @@ mod tests {
     #[test]
     fn program_register_op_execution_gas_is_15114() {
         assert_eq!(
-            ProgramRegisterOp::sample().execution_gas(&GasProfile::MAINNET, &FixedThresholds(3)),
+            ProgramRegisterOp::sample().execution_gas(&GAS_PROFILE, &FixedThresholds(3)),
             Ok(Gas::new(15_114))
         );
     }

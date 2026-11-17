@@ -61,7 +61,7 @@ use lb_storage_service::{api::StorageApi, recovery::StorageRecoveryBackend};
 use lb_time::era::{EpochLength, EraSchedule};
 use lb_time_service::{EraEvent, TimeService, api::TimeServiceApi};
 use lb_utils::bounded::BoundedError;
-pub use lb_wallet::DEFAULT_FEE_MARGIN_PERCENT;
+pub use lb_wallet::{DEFAULT_FEE_MARGIN_PERCENT, SPEND_ROOT_DEPTH};
 use lb_wallet::{
     KnownNote, KnownNotes, OwnedNote, WalletBalance, WalletBlock, WalletError, WalletState,
     transaction::{OpWitness, WitnessContext, op_witness_at, op_witnesses},
@@ -1976,13 +1976,42 @@ const fn op_proof(
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::ops::{
-        sdp::{SDPActiveOp, SDPDeclareOp},
-        transfer::TransferOp,
+    use lb_core::mantle::{
+        gas::Gas,
+        ops::{
+            sdp::{SDPActiveOp, SDPDeclareOp},
+            transfer::TransferOp,
+        },
     };
     use lb_groth16::CompressedGroth16Proof;
 
     use super::*;
+
+    /// The costs of the deployments' current gas profile.
+    pub const GAS_PROFILE: GasProfile = GasProfile {
+        transfer: Gas::new(10),
+        program_register: Gas::new(15114),
+        channel_config: Gas::new(24),
+        channel_inscribe: Gas::new(26),
+        channel_deposit: Gas::new(26),
+        channel_withdraw: Gas::new(33),
+        sdp_declare: Gas::new(1693),
+        sdp_withdraw: Gas::new(0),
+        sdp_active: Gas::new(15117),
+        claim_pow_reward: Gas::new(1506),
+        kilobyte: Gas::new(30),
+        note_set: Gas::new(8961),
+        proof: Gas::new(4177),
+        root: Gas::new(2332),
+        buffered: Gas::new(60),
+        nullifier: Gas::new(1758),
+        commitment: Gas::new(58),
+        signature: Gas::new(557),
+        user_step: Gas::new(28),
+        program_deposit: Gas::new(144),
+        program_step: Gas::new(13528),
+        opening: Gas::new(470),
+    };
 
     #[test]
     fn op_proof_pairs_each_operation_with_its_proof_type() {

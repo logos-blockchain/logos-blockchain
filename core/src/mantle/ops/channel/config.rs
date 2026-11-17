@@ -344,7 +344,7 @@ mod tests {
     use crate::mantle::{
         TxHash,
         channel::ChannelState,
-        gas::test_utils::FixedThresholds,
+        gas::test_utils::{FixedThresholds, GAS_PROFILE},
         note_set::{NoteSet, TypedNoteSet},
         ops::channel::verification::test_utils::create_channel_multi_sig_proof,
         transactions::tx_list::signed_ops::test_utils::make_channel_state,
@@ -786,7 +786,7 @@ mod tests {
         for (threshold, expected) in [(1, 581), (2, 1_138), (3, 1_695)] {
             assert_eq!(
                 crate::mantle::OpRef::from(&ChannelConfigOp::sample())
-                    .execution_gas(&GasProfile::MAINNET, &FixedThresholds(threshold)),
+                    .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(expected))
             );
         }
@@ -795,7 +795,7 @@ mod tests {
     #[test]
     fn channel_config_op_execution_gas_is_its_base_cost_against_an_unknown_channel() {
         assert_eq!(
-            ChannelConfigOp::sample().execution_gas(&GasProfile::MAINNET, &FixedThresholds(0)),
+            ChannelConfigOp::sample().execution_gas(&GAS_PROFILE, &FixedThresholds(0)),
             Ok(Gas::new(24))
         );
     }

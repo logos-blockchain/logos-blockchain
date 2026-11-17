@@ -580,7 +580,7 @@ mod tests {
         for (index, nullifiers) in spent {
             note_sets = spend(&note_sets, *index, nullifiers);
         }
-        state.cryptarchia_ledger.note_sets = note_sets.end_block(state.block_number).unwrap();
+        state.cryptarchia_ledger.note_sets = note_sets.end_block(state.block_number, 1024).unwrap();
         BatchVerifiedUpdate {
             id,
             state,

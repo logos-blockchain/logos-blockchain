@@ -21,13 +21,6 @@ use crate::{
     utils::serde_bytes_newtype,
 };
 
-/// `MAX_OPERATION_DATA_SIZE` of Mantle Transaction Encoding.
-///
-/// It bounds the inscriptions of a `ChannelInscribe` and of its steps
-/// together, and the inscription of a `ChannelDeposit`, excluding their
-/// `UINT32` length prefixes.
-pub const MAX_OPERATION_DATA_SIZE: usize = 1_835_008;
-
 pub type ChannelKeyIndex = u16;
 
 pub const CHANNEL_MAX_KEYS: usize = u16::MAX as usize;

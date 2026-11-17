@@ -30,7 +30,7 @@ use lb_core::{
     mantle::{
         Op, OpProof, SignedOps,
         batch::DeferredProofs,
-        gas::GasProfile,
+        gas::{Gas, GasProfile},
         ledger::verification_mode::StandardMode,
         note_set::CommitmentMmr,
         notes::{self, derive_note_nullifier},
@@ -331,6 +331,32 @@ fn single_era(config: Config) -> EraScheduledConfig {
     .map(move |_| config.clone())
 }
 
+/// The costs of the deployments' current gas profile.
+const GAS_PROFILE: GasProfile = GasProfile {
+    transfer: Gas::new(10),
+    program_register: Gas::new(15114),
+    channel_config: Gas::new(24),
+    channel_inscribe: Gas::new(26),
+    channel_deposit: Gas::new(26),
+    channel_withdraw: Gas::new(33),
+    sdp_declare: Gas::new(1693),
+    sdp_withdraw: Gas::new(0),
+    sdp_active: Gas::new(15117),
+    claim_pow_reward: Gas::new(1506),
+    kilobyte: Gas::new(30),
+    note_set: Gas::new(8961),
+    proof: Gas::new(4177),
+    root: Gas::new(2332),
+    buffered: Gas::new(60),
+    nullifier: Gas::new(1758),
+    commitment: Gas::new(58),
+    signature: Gas::new(557),
+    user_step: Gas::new(28),
+    program_deposit: Gas::new(144),
+    program_step: Gas::new(13528),
+    opening: Gas::new(470),
+};
+
 fn config() -> Config {
     let epoch_config = EpochConfig {
         epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
@@ -376,6 +402,8 @@ fn config() -> Config {
         max_transactions: 1024,
         max_transactions_size: 2 * 1024 * 1024,
         max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+        root_window: 1024,
+        channel_withdraw_delay: 86_400.into(),
         execution_market: logos_blockchain_ledger::config::ExecutionMarketConfig {
             max_gas_per_block: logos_blockchain_ledger::config::MaxGasPerBlock::new(3_137_798)
                 .unwrap(),
@@ -393,12 +421,13 @@ fn config() -> Config {
         block_rewards: logos_blockchain_ledger::config::BlockRewardsConfig::new(
             3_000_000_000_000_000_000,
             120_000_000_000_000_000.try_into().unwrap(),
+            120.try_into().unwrap(),
             10_512,
             EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
             lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
         )
         .unwrap(),
-        gas_profile: GasProfile::MAINNET,
+        gas_profile: GAS_PROFILE,
         pow_config: PoWConfig {
             blend: BlendPoWConfig {
                 base_difficulty: ModulusShift::new::<234>(),

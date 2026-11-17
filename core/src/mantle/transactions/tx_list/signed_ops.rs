@@ -530,7 +530,7 @@ mod tests {
         Op, OpProof, SignedOps, VerificationError,
         channel::{Channels, Error as ChannelError},
         fixtures::ops::op_values::FORK_DIGEST,
-        gas::{GasProfile, TxGasCalculator as _},
+        gas::{TxGasCalculator as _, test_utils::GAS_PROFILE},
         ledger::verification_mode::StandardMode,
         notes::{InputNullifiers, Note, NoteNullifier, OutputCommitments},
         ops::{
@@ -674,7 +674,7 @@ mod tests {
         let context = OpsGasContext::new(
             [(config_channel, config_threshold)].into(),
             GasPrices::new(1, 0),
-            GasProfile::MAINNET,
+            GAS_PROFILE,
         );
 
         let gas = mantle_tx
@@ -690,7 +690,7 @@ mod tests {
         // The bytes of the transaction alone: the deposit, with no output, adds
         // nothing to its channel set, and the withdrawal changes its channel set
         // only when it is released.
-        let expected_terms = GasProfile::MAINNET
+        let expected_terms = GAS_PROFILE
             .tx_terms_gas(
                 minimum_signed_transaction_size(&mantle_tx.by_ref(), &context),
                 0,
@@ -727,15 +727,15 @@ mod tests {
         let state = TxGasState::new(&channels);
         let config_gas = config_op
             .by_ref()
-            .execution_gas(&GasProfile::MAINNET, &state)
+            .execution_gas(&GAS_PROFILE, &state)
             .unwrap();
         let deposit_gas = deposit_op
             .by_ref()
-            .execution_gas(&GasProfile::MAINNET, &state)
+            .execution_gas(&GAS_PROFILE, &state)
             .unwrap();
         let withdraw_gas = withdraw_op
             .by_ref()
-            .execution_gas(&GasProfile::MAINNET, &state)
+            .execution_gas(&GAS_PROFILE, &state)
             .unwrap();
 
         assert_eq!(config_gas.into_inner(), 24 + 3 * 557);
@@ -752,7 +752,7 @@ mod tests {
 
         let gas = config_op
             .by_ref()
-            .execution_gas(&GasProfile::MAINNET, &TxGasState::new(Channels::new()))
+            .execution_gas(&GAS_PROFILE, &TxGasState::new(Channels::new()))
             .unwrap();
 
         assert_eq!(gas.into_inner(), 24);
