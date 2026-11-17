@@ -5,13 +5,12 @@ use libp2p::{
     Multiaddr, PeerId, StreamProtocol,
     kad::{PeerInfo, QueryId, RoutingUpdate},
 };
-use rand::RngCore;
 
 use crate::behaviour::Behaviour;
 
 const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::KADEMLIA;
 
-impl<R: Clone + Send + RngCore + 'static> Behaviour<R> {
+impl<R: rand_010::Rng + rand_010::SeedableRng + Send + 'static> Behaviour<R> {
     pub(crate) fn kademlia_add_address(&mut self, peer_id: PeerId, addr: &Multiaddr) {
         match self.kademlia.add_address(&peer_id, addr.clone()) {
             RoutingUpdate::Success => {

@@ -19,7 +19,6 @@ use libp2p::{
         NewListenAddr, THandler, THandlerInEvent, THandlerOutEvent, ToSwarm,
     },
 };
-use rand::RngCore;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::{
@@ -40,7 +39,7 @@ const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::nat::INNER;
 
 pub struct InnerNatBehaviour<Rng, Mapper, Detector>
 where
-    Rng: RngCore + 'static,
+    Rng: rand_010::Rng + 'static,
 {
     /// `AutoNAT` client behaviour which is used to confirm if addresses of our
     /// node are indeed publicly reachable.
@@ -71,7 +70,7 @@ where
 
 pub type NatBehaviour<Rng> = InnerNatBehaviour<Rng, ProtocolManager, SystemGatewayDetector>;
 
-impl<Rng: RngCore + 'static> NatBehaviour<Rng> {
+impl<Rng: rand_010::Rng + 'static> NatBehaviour<Rng> {
     pub fn new(rng: Rng, settings: &TraversalSettings) -> Self {
         let address_mapper_behaviour =
             AddressMapperBehaviour::<ProtocolManager>::new(settings.mapping);
@@ -85,7 +84,7 @@ impl<Rng: RngCore + 'static> NatBehaviour<Rng> {
 
 impl<Rng, Mapper, Detector> InnerNatBehaviour<Rng, Mapper, Detector>
 where
-    Rng: RngCore + 'static,
+    Rng: rand_010::Rng + 'static,
 {
     fn create(
         rng: Rng,
@@ -118,7 +117,7 @@ where
 
 impl<Rng, Mapper, Detector> InnerNatBehaviour<Rng, Mapper, Detector>
 where
-    Rng: RngCore + 'static,
+    Rng: rand_010::Rng + 'static,
     Detector: GatewayDetector,
 {
     /// The first listen address on the network interface that holds the
@@ -147,7 +146,7 @@ fn first_address_on<'listen>(
 
 impl<Rng, Mapper, Detector> NetworkBehaviour for InnerNatBehaviour<Rng, Mapper, Detector>
 where
-    Rng: RngCore + 'static,
+    Rng: rand_010::Rng + 'static,
     Mapper: NatMapper + 'static,
     Detector: GatewayDetector + 'static,
 {

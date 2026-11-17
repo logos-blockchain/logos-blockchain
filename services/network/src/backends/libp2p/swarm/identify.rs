@@ -5,13 +5,12 @@ use lb_libp2p::{
     libp2p::{StreamProtocol as Libp2pStreamProtocol, identify},
 };
 use lb_log_targets::network_service;
-use rand::RngCore;
 
 use crate::backends::libp2p::swarm::{AdvertisedProtocols, SwarmHandler};
 
 const LOG_TARGET: &str = network_service::backends::libp2p::IDENTIFY;
 
-impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
+impl<R: rand_010::Rng + rand_010::SeedableRng + Send + 'static> SwarmHandler<R> {
     pub(super) fn handle_identify_event(&mut self, event: identify::Event) {
         match event {
             identify::Event::Received { peer_id, info, .. } => {

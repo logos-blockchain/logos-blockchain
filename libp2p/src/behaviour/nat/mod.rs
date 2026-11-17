@@ -10,7 +10,6 @@ use libp2p::{
         behaviour::toggle::{Toggle, ToggleConnectionHandler},
     },
 };
-use rand::RngCore;
 
 mod address_mapper;
 mod gateway_monitor;
@@ -24,7 +23,7 @@ use crate::{
 
 /// This behaviour is responsible for confirming that the addresses of the node
 /// are publicly reachable.
-pub struct Behaviour<Rng: RngCore + 'static> {
+pub struct Behaviour<Rng: rand_010::Rng + 'static> {
     /// The static public listen address is passed through this variable to
     /// the `poll()` method. Unused if the node is not configured with a static
     /// public IP address.
@@ -35,7 +34,7 @@ pub struct Behaviour<Rng: RngCore + 'static> {
     inner_behaviour: Toggle<NatBehaviour<Rng>>,
 }
 
-impl<Rng: RngCore + 'static> Behaviour<Rng> {
+impl<Rng: rand_010::Rng + 'static> Behaviour<Rng> {
     pub fn new(rng: Rng, nat_config: &NatSettings) -> Self {
         match nat_config {
             NatSettings::Static { external_address } => Self {
@@ -53,7 +52,7 @@ impl<Rng: RngCore + 'static> Behaviour<Rng> {
     }
 }
 
-impl<Rng: RngCore + 'static> NetworkBehaviour for Behaviour<Rng> {
+impl<Rng: rand_010::Rng + 'static> NetworkBehaviour for Behaviour<Rng> {
     type ConnectionHandler = ToggleConnectionHandler<
         <autonat::v2::client::Behaviour<Rng> as NetworkBehaviour>::ConnectionHandler,
     >;
@@ -163,7 +162,7 @@ mod tests {
 
     use libp2p::{Swarm, identify, identity, swarm::SwarmEvent};
     use libp2p_swarm_test::SwarmExt as _;
-    use rand::rngs::OsRng;
+    use rand_010::{SeedableRng as _, rngs::StdRng};
     use tokio::time::timeout;
     use tracing_subscriber::{EnvFilter, fmt::TestWriter};
 
@@ -172,7 +171,7 @@ mod tests {
 
     #[derive(NetworkBehaviour)]
     pub struct Client {
-        nat: Behaviour<OsRng>,
+        nat: Behaviour<StdRng>,
         identify: identify::Behaviour,
     }
 
@@ -186,7 +185,8 @@ mod tests {
                 ..Default::default()
             });
 
-            let nat = Behaviour::new(OsRng, &settings);
+            let rng = StdRng::seed_from_u64(1);
+            let nat = Behaviour::new(rng, &settings);
             let identify =
                 identify::Behaviour::new(identify::Config::new("/unittest".into(), public_key));
             Self { nat, identify }
@@ -195,13 +195,14 @@ mod tests {
 
     #[derive(NetworkBehaviour)]
     pub struct Server {
-        autonat_server: autonat::v2::server::Behaviour<OsRng>,
+        autonat_server: autonat::v2::server::Behaviour<StdRng>,
         identify: identify::Behaviour,
     }
 
     impl Server {
         pub fn new(public_key: identity::PublicKey) -> Self {
-            let autonat_server = autonat::v2::server::Behaviour::new(OsRng);
+            let rng = StdRng::seed_from_u64(2);
+            let autonat_server = autonat::v2::server::Behaviour::new(rng);
             let identify =
                 identify::Behaviour::new(identify::Config::new("/unittest".into(), public_key));
             Self {
@@ -303,7 +304,8 @@ mod tests {
             external_address: addr.clone(),
         };
 
-        let mut behavior = Behaviour::new(OsRng, &settings);
+        let rng = StdRng::seed_from_u64(3);
+        let mut behavior = Behaviour::new(rng, &settings);
 
         let waker = std::task::Waker::noop();
         let mut cx = Context::from_waker(waker);

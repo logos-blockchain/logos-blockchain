@@ -22,7 +22,6 @@ use libp2p::{
     swarm::{ConnectionId, DialError, SwarmEvent, dial_opts::DialOpts},
 };
 use multiaddr::multiaddr;
-use rand::RngCore;
 
 pub use crate::{
     SwarmConfig,
@@ -36,12 +35,12 @@ const IDLE_CONN_TIMEOUT: Duration = Duration::from_mins(5);
 const LOG_TARGET: &str = lb_log_targets_libp2p::ROOT;
 
 /// Wraps [`libp2p::Swarm`], and config it for use within Logos blockchain.
-pub struct Swarm<R: Clone + Send + RngCore + 'static> {
+pub struct Swarm<R: rand_010::Rng + rand_010::SeedableRng + Send + 'static> {
     // A core libp2p swarm
     pub(crate) swarm: libp2p::Swarm<Behaviour<R>>,
 }
 
-impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
+impl<R: rand_010::Rng + rand_010::SeedableRng + Send + 'static> Swarm<R> {
     /// Builds a [`Swarm`] configured for use with Logos blockchain on top of a
     /// tokio executor, whose chain sync carries blocks of up to
     /// `chain_sync_max_block_size` bytes.
@@ -134,7 +133,7 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
     }
 }
 
-impl<R: Clone + Send + RngCore + 'static> futures::Stream for Swarm<R> {
+impl<R: rand_010::Rng + rand_010::SeedableRng + Send + 'static> futures::Stream for Swarm<R> {
     type Item = SwarmEvent<BehaviourEvent<R>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -163,8 +162,7 @@ pub fn system_dns_config() -> (ResolverConfig, ResolverOpts) {
             target: LOG_TARGET,
             "Failed to read the system DNS configuration, so DNS addresses will fail to dial until the swarm is built again: {e}"
         );
-        // Not `ResolverConfig::default()`, which sends every lookup to
-        // Google's public resolvers.
-        (ResolverConfig::new(), ResolverOpts::default())
+        // No DNS servers: DNS dials fail until the swarm is rebuilt.
+        (ResolverConfig::from_name_servers(vec![]), ResolverOpts::default())
     })
 }

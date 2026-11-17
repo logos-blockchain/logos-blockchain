@@ -10,8 +10,7 @@ use lb_log_targets::network_service;
 use lb_time::Era;
 use lb_utils::tokio::task::spawn_on;
 use overwatch::overwatch::handle::OverwatchHandle;
-use rand::SeedableRng as _;
-use rand_chacha::ChaCha20Rng;
+use rand_010::rngs::ChaCha20Rng;
 use tokio::sync::{broadcast, broadcast::Sender, mpsc};
 use tokio_stream::wrappers::BroadcastStream;
 
@@ -47,7 +46,7 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Libp2p {
         current_era: Era,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     ) -> Self {
-        let rng = ChaCha20Rng::from_entropy();
+        let rng: ChaCha20Rng = rand_010::make_rng();
         let (commands_tx, commands_rx) = mpsc::channel(BUFFER_SIZE);
 
         let (pubsub_events_tx, _) = broadcast::channel(BUFFER_SIZE);

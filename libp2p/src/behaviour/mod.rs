@@ -8,7 +8,6 @@ use std::{collections::HashMap, error::Error};
 use lb_cryptarchia_sync::ChainSyncError;
 use lb_utils::net::MAX_WIRE_MESSAGE_SIZE;
 use libp2p::{PeerId, StreamProtocol, autonat, identify, identity, kad};
-use rand::RngCore;
 use thiserror::Error;
 
 use crate::{
@@ -56,7 +55,7 @@ mod composed {
     use super::nat;
 
     #[derive(NetworkBehaviour)]
-    pub struct Behaviour<Rng: Clone + Send + RngCore + 'static> {
+    pub struct Behaviour<Rng: rand_010::Rng + Send + 'static> {
         pub(crate) gossipsub: libp2p::gossipsub::Behaviour,
         // todo: support persistent store if needed
         pub(crate) kademlia: kad::Behaviour<kad::store::MemoryStore>,
@@ -68,10 +67,10 @@ mod composed {
     }
 }
 
-impl<Rng: Clone + Send + RngCore + 'static> Behaviour<Rng> {
+impl<Rng: rand_010::Rng + SeedableRng + Send + 'static> Behaviour<Rng> {
     pub(crate) fn new(
         config: BehaviourConfig,
-        rng: Rng,
+        mut rng: Rng,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let BehaviourConfig {
             gossipsub_config,
@@ -115,7 +114,7 @@ impl<Rng: Clone + Send + RngCore + 'static> Behaviour<Rng> {
             kademlia_config.to_libp2p_config(kad_protocol_name),
         );
 
-        let autonat_server = autonat::v2::server::Behaviour::new(rng.clone());
+        let autonat_server = autonat::v2::server::Behaviour::new(rng.fork());
         let nat = nat::Behaviour::new(rng, &nat_config);
 
         let chain_sync = lb_cryptarchia_sync::Behaviour::new(
@@ -141,7 +140,7 @@ mod tests {
 
     use lb_cryptarchia_sync::Config as ChainSyncConfig;
     use libp2p::gossipsub as libp2p_gossipsub;
-    use rand::rngs::OsRng;
+    use rand_010::{SeedableRng as _, rngs::StdRng};
 
     use super::*;
     use crate::behaviour::gossipsub::configure_topic_size_limits;
@@ -163,7 +162,8 @@ mod tests {
         .unwrap();
         let topic_limit = gossipsub_config.max_transmit_size_for_topic(&topic_hash);
 
-        let mut behaviour = Behaviour::<OsRng>::new(
+        let rng = StdRng::seed_from_u64(0);
+        let mut behaviour = Behaviour::<StdRng>::new(
             BehaviourConfig {
                 gossipsub_config,
                 kademlia_config: KademliaSettings::default(),
@@ -181,7 +181,7 @@ mod tests {
                 chain_sync_max_block_size: 1_024,
                 max_data_size_by_topic: HashMap::new(),
             },
-            OsRng,
+            rng,
         )
         .unwrap();
 
