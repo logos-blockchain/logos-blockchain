@@ -153,7 +153,6 @@ prefix.
 | `GcKey { end_len, version }` | `G ‖ end_len ‖ version` | `GcMarker` (empty struct) | from the finalization of `version` until it is garbage collected |
 | `NullifierKey { nullifier }` | `N ‖ nullifier_be32` | `IndexEntry { leaf_index }` | finalized nullifiers only, append-only |
 | `BlockVersionKey { block_id }` | `B ‖ block_id` | `Version` | until the block is finalized or discarded |
-| `LiveVersionKey { version }` | `L ‖ version` | `LiveVersion { block_id }` | until the block is finalized or discarded |
 | `MetaKey` | `M` | `BaseMeta { len, root: Child, block_id }` | overwritten at each finalize (single writer) |
 | `NextVersionKey` | `C` | `Version` | overwritten at each commit (single writer) |
 
@@ -186,7 +185,7 @@ pub struct NullifierLeaf { pub nullifier: Fr, pub next_nullifier: Fr }
 - Nodes are immutable, so a process-wide LRU `NodeCache` keyed by `NodeKey`
   would never have to be invalidated, only evicted. **Not implemented yet**:
   the backend's own block cache serves the hot top levels for now.
-- The `B`, `L` and `C` keys belong to the `VersionRegistry`, shared by the
+- The `B` and `C` keys belong to the `VersionRegistry`, shared by the
   trees of a ledger; the other keys to each tree, under its own namespace.
 
 ---
@@ -286,7 +285,7 @@ fully described by its `len` and `root`.
 - A state without a pending block commits to itself, with no writes and no
   record (an empty block).
 - Siblings get distinct versions, so **they never write the same key**.
-- Versions come from the `VersionRegistry` (`B`/`L`/`C` keys). A block that
+- Versions come from the `VersionRegistry` (`B`/`C` keys). A block that
   already has a version (a replay at restart) gets it back, and the recomputed
   nodes are byte-identical, so the writes are idempotent.
 
@@ -407,7 +406,7 @@ What a pruned fork owns, and what discarding it does:
 | `NodeKey { version: v, .. }` of each fork block | the fork only | **deleted**: `DeletePrefix(H ‖ v)` |
 | `StaleKey { replaced_by: v, .. }` | the fork only | **deleted**: `DeletePrefix(S ‖ v)`. The node it points to is **not** deleted |
 | Nodes read but not written (written by canonical ancestors) | the canonical chain | kept |
-| `BlockVersionKey { block_id }`, `LiveVersionKey { v }` | the fork only | **deleted** (`VersionRegistry::release_writes`) |
+| `BlockVersionKey { block_id }` | the fork only | **deleted** (`VersionRegistry::release_writes`) |
 | Base index (`NullifierKey`), `GcKey` | finalized blocks only | untouched; fork blocks never reach them |
 | Overlay `index`, `BlockRecord`s | the fork's states | freed when the states are dropped from `Ledger` (`rpds` refcounts) |
 
@@ -443,7 +442,7 @@ returned to chain-service.
 | Pruned forks sharing blocks | The engine returns each block once (`prune_fork` stops at already removed blocks), so each version is discarded once |
 | Block prepared but never committed | No version and no writes, so discarding is a no-op |
 | A clone of a discarded state still held (API call in flight, wallet, leader) | Reads fail with `ImtError::MissingNode(NodeKey)`, distinct from `Storage` |
-| Crash between the engine's pruning and the batch | On restart, the fork's `LiveVersionKey` is not reused by the replay, and the startup GC discards it |
+| Crash between the engine's pruning and the batch | On restart, the replay does not apply the fork again, so `Ledger::discard_lost_blocks` finds it in `BlockVersionKey` and discards it |
 | Crash between the finalize batch and the GC batch | The `G` keys stay; the next `collect_garbage` handles them |
 | Epoch snapshot below the LIB | Readable through the length filter and the GC floor; after a restart through `from_snapshot` |
 | Engine and ledger disagree (a surviving descendant of a discarded block) | Impossible given `prune_fork`; could be checked in debug builds through `unfinalized_versions` |
@@ -662,8 +661,8 @@ holding the trees (core, ledger) depend on the trait only.
      not descend from it, fall back to the LIB, as the recovery does today.
      `commit_update` **reuses** the version found in `BlockVersionKey`: the
      recomputed nodes are byte-identical, so the writes are idempotent.
-  3. Discard every `LiveVersionKey` that the replay did not reuse (forks lost
-     at the restart, or a crash before a pruning batch):
+  3. Discard every block in `BlockVersionKey` that the replay did not apply
+     again (forks lost at the restart, or a crash before a pruning batch):
      `Ledger::discard_lost_blocks`, each in the sets it recorded under `W`,
      so a lost fork's channel set needs no state to be cleaned up.
 

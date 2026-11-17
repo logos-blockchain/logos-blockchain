@@ -33,9 +33,9 @@ use std::{
 
 use ark_ff::AdditiveGroup as _;
 pub use layout::{
-    BaseMeta, BlockId, BlockVersionKey, Child, CodecError, GcKey, GcMarker, IndexEntry,
-    LiveVersion, LiveVersionKey, MetaKey, NextVersionKey, NodeKey, NodePosition, NullifierKey,
-    StaleKey, StaleMarker, StoreKey, StoreValue, StoredNode, Version,
+    BaseMeta, BlockId, BlockVersionKey, Child, CodecError, GcKey, GcMarker, IndexEntry, MetaKey,
+    NextVersionKey, NodeKey, NodePosition, NullifierKey, StaleKey, StaleMarker, StoreKey,
+    StoreValue, StoredNode, Version,
 };
 use lb_dynamic_merkle::{MerkleHasher as _, MerkleNode, MerklePath};
 use lb_kv_store::{KvStore, WriteBatch};
