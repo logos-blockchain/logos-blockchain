@@ -11,9 +11,6 @@ use super::{
 #[derive(Debug)]
 pub struct VersionAllocation {
     pub version: Version,
-    /// Whether the block already had this version, as when blocks are replayed
-    /// at restart.
-    pub reused: bool,
     pub writes: WriteBatch,
 }
 
@@ -53,7 +50,6 @@ impl<S: KvStore> VersionRegistry<S> {
         if let Some(version) = self.lookup(block_id)? {
             return Ok(VersionAllocation {
                 version,
-                reused: true,
                 writes: WriteBatch::new(),
             });
         }
@@ -74,11 +70,7 @@ impl<S: KvStore> VersionRegistry<S> {
                 LiveVersion { block_id }.encode(),
             )
             .put(NextVersionKey.encode(), version.next().encode());
-        Ok(VersionAllocation {
-            version,
-            reused: false,
-            writes,
-        })
+        Ok(VersionAllocation { version, writes })
     }
 
     /// The writes forgetting the version of a block, once it is final or
