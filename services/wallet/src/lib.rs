@@ -21,13 +21,18 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, Op, OpProof, SignedOps, TxHash, Value, VerificationError,
+        channel::channel_note_set,
         gas::{GasCost, GasOverflow, GasProfile},
         ledger::verification_mode::StandardMode,
         note_set::NoteSetIndex,
-        notes::{NoteCommitment, NoteNullifier},
+        notes::{NoteCommitment, NoteNullifier, OutputCommitments, ProgramId},
         ops::{
             ChannelInscribeProof, NoOpProof, OpRef, ZkAndEd25519Proof, ZkTransferProof,
-            channel::ChannelId,
+            channel::{
+                ChannelId,
+                inscribe::{Inscription, Step, UserStep, user_step_id},
+                program_step::{ProgramDeposit, program_deposit_id},
+            },
         },
         traits::{GenesisTx as _, Hashable as _, MantleTx as _, SignedMantleTx, StorageSize},
         transactions::{
@@ -64,7 +69,7 @@ use lb_utils::bounded::BoundedError;
 pub use lb_wallet::{DEFAULT_FEE_MARGIN_PERCENT, SPEND_ROOT_DEPTH};
 use lb_wallet::{
     KnownNote, KnownNotes, OwnedNote, WalletBalance, WalletBlock, WalletError, WalletState,
-    transaction::{OpWitness, WitnessContext, op_witness_at, op_witnesses},
+    transaction::{OpWitness, WitnessContext, op_witness_at, op_witnesses, step_witness},
 };
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -130,6 +135,9 @@ pub enum WalletServiceError {
     #[error("The wallet holds no key for {0:?}")]
     UnknownKey(ZkPublicKey),
 
+    #[error("Channel {0:?} has no note set")]
+    ChannelWithoutNoteSet(ChannelId),
+
     #[error("Failed to read or write the persisted state of the wallet: {0}")]
     PersistedState(DynError),
 
@@ -152,6 +160,35 @@ pub enum WalletServiceError {
     VerificationError(#[from] VerificationError),
     #[error("Failed to generated signature for weak public key {}", hex::encode(.0))]
     InvalidSigner([u8; ED25519_PUBLIC_KEY_SIZE]),
+}
+
+/// A step a holder asks its wallet to build from its notes of a channel.
+#[derive(Debug)]
+pub struct ChannelStepRequest {
+    pub channel_id: ChannelId,
+    /// The channel notes the step creates, by holder key.
+    pub payments: Vec<(ZkPublicKey, Value)>,
+    /// Makes the step a program deposit.
+    pub program_deposit: Option<ProgramPayment>,
+    pub inscription: Inscription,
+    pub change_pk: ZkPublicKey,
+    pub holder_pks: Vec<ZkPublicKey>,
+}
+
+#[derive(Debug)]
+pub struct ProgramPayment {
+    pub program_id: ProgramId,
+    pub value: Value,
+    pub intent: Fr,
+}
+
+/// A step with its proof and the openings of the notes it creates, the
+/// change last.
+#[derive(Debug)]
+pub struct ChannelStep {
+    pub step: Step,
+    pub proof: ZkTransferProof,
+    pub outputs: Vec<Note>,
 }
 
 #[derive(Debug)]
@@ -228,6 +265,11 @@ pub enum WalletMsg {
         note: Note,
         note_set: NoteSetIndex,
         resp_tx: Sender<Result<KnownNote, WalletServiceError>>,
+    },
+    ProveChannelStep {
+        tip: Option<HeaderId>,
+        request: ChannelStepRequest,
+        resp_tx: Sender<Result<TipResponse<ChannelStep>, WalletServiceError>>,
     },
     GetKnownAddresses {
         resp_tx: Sender<Result<Vec<ZkPublicKey>, WalletServiceError>>,
@@ -336,6 +378,7 @@ impl WalletMsg {
             | Self::GetLeaderAgedNotes { tip, .. }
             | Self::GetLeaderAgedNotesInfo { tip, .. }
             | Self::SpendRoot { tip, .. }
+            | Self::ProveChannelStep { tip, .. }
             | Self::GetTxContext { block_id: tip, .. } => *tip,
             Self::SignTxWithEd25519 { .. }
             | Self::GenerateRewardKey { .. }
@@ -951,6 +994,33 @@ where
                     debug!(target: LOG_TARGET, "Failed to respond to ImportNote");
                 }
             }
+            WalletMsg::ProveChannelStep {
+                tip,
+                request,
+                resp_tx,
+            } => {
+                let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
+                    Ok(tip) => tip,
+                    Err(err) => {
+                        Self::send_err(resp_tx, err);
+                        return;
+                    }
+                };
+                let response = Self::prove_channel_step(tip, request, state, kms)
+                    .await
+                    .map(|response| TipResponse { tip, response });
+                let spent = response.as_ref().ok().map(|proven| {
+                    let inputs = proven.response.step.inputs();
+                    inputs.iter().copied().collect::<Vec<_>>()
+                });
+                if let Some(spent) = &spent {
+                    state.reserve_pending_notes(spent.iter().copied());
+                }
+                if resp_tx.send(response).is_err() {
+                    state.release_pending_notes(spent.unwrap_or_default());
+                    debug!(target: LOG_TARGET, "Failed to respond to ProveChannelStep");
+                }
+            }
             WalletMsg::GetKnownAddresses { resp_tx } => {
                 Self::get_known_addresses(state.wallet(), resp_tx);
             }
@@ -1361,6 +1431,89 @@ where
         let known_note = Self::held_note(note, note_set, state, kms).await?;
         state.add_known_notes([known_note]);
         Ok(known_note)
+    }
+
+    // A user step, or a program deposit, spending the channel notes of the
+    // wallet, with its ZkTransfer. The wallet follows the notes the step pays
+    // to its own keys.
+    async fn prove_channel_step(
+        tip: HeaderId,
+        request: ChannelStepRequest,
+        state: &mut ServiceState<'_>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<ChannelStep, WalletServiceError> {
+        let ChannelStepRequest {
+            channel_id,
+            payments,
+            program_deposit,
+            inscription,
+            change_pk,
+            holder_pks,
+        } = request;
+        let note_set = channel_note_set(channel_id)
+            .ok_or(WalletServiceError::ChannelWithoutNoteSet(channel_id))?;
+        let paid = payments
+            .into_iter()
+            .map(|(public_key, value)| Note::new(value, random_nonce(), public_key))
+            .collect();
+        let (inputs, opening, commitment_merkle_root) = state.note_set_spend(
+            tip,
+            note_set,
+            paid,
+            program_deposit.as_ref().map_or(0, |deposit| deposit.value),
+            change_pk,
+            random_nonce(),
+            holder_pks,
+        )?;
+        let outputs =
+            OutputCommitments::try_from_iter(opening.outputs.iter().map(Note::commitment))
+                .map_err(WalletError::from)?;
+        let (step, msg) = if let Some(deposit) = program_deposit {
+            let deposit = ProgramDeposit {
+                program_id: deposit.program_id,
+                inputs,
+                outputs,
+                commitment_merkle_root,
+                value: deposit.value,
+                intent: deposit.intent,
+                inscription,
+            };
+            let msg = program_deposit_id(&channel_id, &deposit);
+            (Step::ProgramDeposit(deposit), msg)
+        } else {
+            let step = UserStep {
+                inputs,
+                outputs,
+                commitment_merkle_root,
+                inscription,
+            };
+            let msg = user_step_id(&channel_id, &step);
+            (Step::User(step), msg)
+        };
+
+        let witness = step_witness(
+            &state.wallet().spend_state(tip)?,
+            state.wallet().known_notes(),
+            note_set,
+            step.inputs(),
+            &opening,
+            msg,
+        )?;
+        let proof = Self::prove_witness(witness, kms).await?;
+
+        let mut known_notes = Vec::new();
+        for note in &opening.outputs {
+            if let Some(key_id) = state.wallet().known_keys().get(&note.public_key).cloned() {
+                known_notes.push(Self::known_note(kms, key_id, *note, note_set).await?);
+            }
+        }
+        state.add_known_notes(known_notes);
+
+        Ok(ChannelStep {
+            step,
+            proof,
+            outputs: opening.outputs,
+        })
     }
 
     // A new leader reward note under `public_key`, with a private random nonce.

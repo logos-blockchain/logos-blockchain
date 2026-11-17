@@ -91,6 +91,25 @@ pub fn op_witness_at(
     .ok_or(WalletError::MissingOpening { op_index })
 }
 
+// The witness of a channel step spending `nullifiers` of `note_set`, proven
+// against the root of `state`: the step of a mini-block that starts on an
+// empty buffer.
+pub fn step_witness(
+    state: &WalletState,
+    known: &KnownNotes,
+    note_set: NoteSetIndex,
+    nullifiers: &[NoteNullifier],
+    opening: &ZkTransferOpening,
+    msg: Fr,
+) -> Result<OpWitness, WalletError> {
+    let spend = Spend::InSet {
+        note_set,
+        nullifiers,
+        commitment_merkle_root: state.root_of(note_set),
+    };
+    op_witness(state, known, &Appended::new(), 0, opening, spend, msg)
+}
+
 fn witnesses_of(
     state: &WalletState,
     known: &KnownNotes,
@@ -527,6 +546,85 @@ mod tests {
             vec![vec![pk(1)], vec![pk(1)], vec![pk(3)]]
         );
         assert!(witnesses.iter().all(|w| w.witness.msg() == Fr::from(77u64)));
+    }
+
+    #[test]
+    fn step_witness_spends_the_channel_notes_against_the_root_of_their_set() {
+        let channel = NoteSetIndex::Channel(ChannelId::from([2; 32]));
+        let small = Note::new(300, Fr::from(1u64), pk(1));
+        let large = Note::new(700, Fr::from(2u64), pk(1));
+        let ledger = Note::new(900, Fr::from(3u64), pk(1));
+        let known = known(&[
+            (small, channel, nullifier(1)),
+            (large, channel, nullifier(2)),
+            (ledger, NoteSetIndex::Ledger, nullifier(3)),
+        ]);
+        let state = WalletState::from_genesis(&known, &[ledger], &[], Epoch::new(0))
+            .unwrap()
+            .apply_block(
+                &known,
+                &crate::WalletBlock {
+                    id: [1; 32].into(),
+                    parent: [0; 32].into(),
+                    epoch: Epoch::new(0),
+                    updates: vec![lb_core::mantle::note_set::NoteSetUpdate {
+                        note_set: channel,
+                        nullifiers: vec![],
+                        commitments: vec![small.commitment(), large.commitment()],
+                    }],
+                    revealed: vec![],
+                },
+            )
+            .unwrap();
+        let root = state.commitments[&channel].frontier_root();
+        let paid = Note::new(500, Fr::from(4u64), pk(2));
+
+        let (nullifiers, opening, spend_root) = state
+            .note_set_spend(
+                channel,
+                vec![paid],
+                100,
+                pk(1),
+                Fr::from(5u64),
+                [pk(1)],
+                &HashSet::new(),
+            )
+            .unwrap();
+
+        // the largest note covers the payment and the excess, the rest is change
+        assert_eq!(nullifiers.as_slice(), [nullifier(2)]);
+        assert_eq!(opening.inputs, vec![large]);
+        assert_eq!(
+            opening.outputs,
+            vec![paid, Note::new(100, Fr::from(5u64), pk(1))]
+        );
+        assert_eq!(spend_root, root);
+
+        let witness = step_witness(
+            &state,
+            &known,
+            channel,
+            &nullifiers,
+            &opening,
+            Fr::from(77u64),
+        )
+        .unwrap();
+        assert_eq!(witness.witness.tx_commitment_root(), root);
+        assert_eq!(witness.signers, vec![pk(1)]);
+
+        // the notes of the other sets do not pay for a channel step
+        assert_eq!(
+            state.note_set_spend(
+                channel,
+                vec![Note::new(1_001, Fr::from(6u64), pk(2))],
+                0,
+                pk(1),
+                Fr::from(7u64),
+                [pk(1)],
+                &HashSet::new(),
+            ),
+            Err(WalletError::InsufficientFunds { available: 1_000 })
+        );
     }
 
     #[test]

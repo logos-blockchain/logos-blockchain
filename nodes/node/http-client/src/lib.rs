@@ -24,6 +24,7 @@ use lb_http_api_common::{
     bodies::{
         blend::JoinBlendRequestBody,
         chain::{ChainForkResponseBody, ChainIdResponseBody},
+        channel::{ChannelStepRequestBody, ChannelStepResponseBody},
         mantle::{GasPricesResponseBody, LimitsResponseBody},
         wallet::{
             aged_notes::LeaderAgedNotesResponseBody,
@@ -36,9 +37,10 @@ use lb_http_api_common::{
     paths::{
         BLEND_DISPERSE_TRANSACTION, BLEND_JOIN_NETWORK, BLEND_PENDING_TRANSACTIONS, BLOCK_EVENTS,
         BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHAIN_FORK, CHAIN_ID, CHANNEL,
-        CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_AGED_NOTES, MANTLE_GAS_PRICES,
-        MANTLE_LIMITS, MANTLE_SDP_FINALIZED_DECLARATION, MANTLE_SDP_FINALIZED_DECLARATIONS,
-        MEMPOOL_ADD_TX, NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
+        CHANNEL_STEP, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_AGED_NOTES,
+        MANTLE_GAS_PRICES, MANTLE_LIMITS, MANTLE_SDP_FINALIZED_DECLARATION,
+        MANTLE_SDP_FINALIZED_DECLARATIONS, MEMPOOL_ADD_TX, NODE_VERSION, SDP_POST_DECLARATION,
+        TIME_INFO,
         wallet::{BALANCE, FUND, IMPORT_NOTE, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
@@ -785,6 +787,20 @@ impl CommonHttpClient {
     ) -> Result<WalletFundResponseBody, Error> {
         let request_url = base_url
             .join(FUND.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
+    /// Request a user step, or a program deposit, built and proven from the
+    /// notes the node's wallet holds in a channel.
+    pub async fn channel_step(
+        &self,
+        base_url: Url,
+        body: ChannelStepRequestBody,
+    ) -> Result<ChannelStepResponseBody, Error> {
+        let request_url = base_url
+            .join(CHANNEL_STEP.trim_start_matches('/'))
             .map_err(Error::Url)?;
 
         self.post(request_url, &body).await

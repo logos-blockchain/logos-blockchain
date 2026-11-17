@@ -186,15 +186,21 @@ impl WalletState {
         &self,
         pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
     ) -> Vec<OwnedNote> {
+        self.notes_owned_in(NoteSetIndex::Ledger, pks)
+    }
+
+    fn notes_owned_in(
+        &self,
+        note_set: NoteSetIndex,
+        pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
+    ) -> Vec<OwnedNote> {
         let pks = pks
             .into_iter()
             .map(|pk| *pk.borrow())
             .collect::<HashSet<_>>();
         self.notes
             .values()
-            .filter(|owned| {
-                owned.note_set == NoteSetIndex::Ledger && pks.contains(&owned.note.public_key)
-            })
+            .filter(|owned| owned.note_set == note_set && pks.contains(&owned.note.public_key))
             .cloned()
             .collect()
     }
@@ -310,7 +316,7 @@ impl WalletState {
             .nullifiers_consumed()
             .chain(excluded.iter().copied())
             .collect::<HashSet<_>>();
-        let mut notes = self.funding_candidates(pks, &excluded);
+        let mut notes = self.spend_candidates(NoteSetIndex::Ledger, pks, &excluded);
         // A ZkTransfer spends at most four notes.
         notes.truncate(MAX_INPUTS.saturating_sub(tx_builder.funding_inputs().len()));
         let funding_root = self.ledger_root();
@@ -399,7 +405,7 @@ impl WalletState {
         // The smallest note covering `value` alone, else the smallest notes that
         // do, else the largest ones, so the larger notes stay free to fund the
         // fee whenever they can.
-        let candidates = self.funding_candidates(pks, excluded);
+        let candidates = self.spend_candidates(NoteSetIndex::Ledger, pks, excluded);
         let (inputs, total) = if let Some(owned) = candidates
             .iter()
             .rev()
@@ -435,14 +441,50 @@ impl WalletState {
         Ok((op, opening))
     }
 
-    // The spendable ledger notes of `pks`, largest first.
-    fn funding_candidates(
+    // A spend of the notes of `pks` in `note_set` creating `outputs` and
+    // leaving `excess`, the rest back to `change_pk`: the nullifiers, the
+    // opening and the root of the set they are proven against.
+    #[expect(clippy::too_many_arguments, reason = "the notes it creates")]
+    pub fn note_set_spend(
         &self,
+        note_set: NoteSetIndex,
+        mut outputs: Vec<Note>,
+        excess: Value,
+        change_pk: ZkPublicKey,
+        change_nonce: Fr,
+        pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
+        excluded: &HashSet<NoteNullifier>,
+    ) -> Result<(InputNullifiers, ZkTransferOpening, Fr), WalletError> {
+        let value = outputs
+            .iter()
+            .try_fold(excess, |total, note| total.checked_add(note.value))
+            .ok_or(GasOverflow)?;
+        let candidates = self.spend_candidates(note_set, pks, excluded);
+        let (inputs, total) = covering_prefix(candidates.iter(), value)?;
+        let Some(rest) = total.checked_sub(value) else {
+            return Err(WalletError::InsufficientFunds { available: total });
+        };
+        if rest > 0 {
+            outputs.push(Note::new(rest, change_nonce, change_pk));
+        }
+        let nullifiers =
+            InputNullifiers::try_from_iter(inputs.iter().map(|owned| owned.nullifier))?;
+        let opening = ZkTransferOpening {
+            inputs: inputs.iter().map(|owned| owned.note).collect(),
+            outputs,
+        };
+        Ok((nullifiers, opening, self.root_of(note_set)))
+    }
+
+    // The spendable notes of `pks` in `note_set`, largest first.
+    fn spend_candidates(
+        &self,
+        note_set: NoteSetIndex,
         pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
         excluded: &HashSet<NoteNullifier>,
     ) -> Vec<OwnedNote> {
         let mut notes = self
-            .notes_owned_by_pks(pks)
+            .notes_owned_in(note_set, pks)
             .into_iter()
             .filter(|owned| !excluded.contains(&owned.nullifier))
             .collect::<Vec<_>>();
@@ -452,7 +494,11 @@ impl WalletState {
     }
 
     fn ledger_root(&self) -> Fr {
-        self.commitments.get(&NoteSetIndex::Ledger).map_or_else(
+        self.root_of(NoteSetIndex::Ledger)
+    }
+
+    pub(crate) fn root_of(&self, note_set: NoteSetIndex) -> Fr {
+        self.commitments.get(&note_set).map_or_else(
             || CommitmentMmr::new().frontier_root(),
             CommitmentMmr::frontier_root,
         )

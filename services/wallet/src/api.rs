@@ -29,8 +29,8 @@ use overwatch::{
 use tokio::sync::oneshot::{self, error::RecvError};
 
 use crate::{
-    AgedNote, LeaderAgedNotesInfo, TipResponse, WalletMsg, WalletServiceError,
-    WalletServiceSettings,
+    AgedNote, ChannelStep, ChannelStepRequest, LeaderAgedNotesInfo, TipResponse, WalletMsg,
+    WalletServiceError, WalletServiceSettings,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -274,6 +274,24 @@ where
             .send(WalletMsg::ImportNote {
                 note,
                 note_set,
+                resp_tx,
+            })
+            .await?;
+        Ok(rx.await??)
+    }
+
+    /// A user step, or a program deposit, spending the channel notes of the
+    /// wallet, with its proof.
+    pub async fn prove_channel_step(
+        &self,
+        tip: Option<HeaderId>,
+        request: ChannelStepRequest,
+    ) -> Result<TipResponse<ChannelStep>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::ProveChannelStep {
+                tip,
+                request,
                 resp_tx,
             })
             .await?;

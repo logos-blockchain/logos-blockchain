@@ -3,10 +3,19 @@ use lb_core::{
     mantle::{
         Note, Value,
         gas::GasCost,
-        ops::channel::{ChannelId, deposit::Metadata},
+        notes::ProgramId,
+        ops::{
+            ZkTransferProof,
+            channel::{
+                ChannelId,
+                deposit::Metadata,
+                inscribe::{Inscription, Step, serde_inscription},
+            },
+        },
         transactions::hash::TxHash,
     },
 };
+use lb_groth16::{Fr, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
 
@@ -29,4 +38,47 @@ pub struct ChannelDepositResponseBody {
     /// The note paid to the holder in the channel. A holder whose wallet is not
     /// this node's imports it to withdraw it.
     pub holder_note: Note,
+}
+
+/// A user step, or a program deposit, built from the notes this node's wallet
+/// holds in the channel.
+#[derive(Serialize, Deserialize)]
+pub struct ChannelStepRequestBody {
+    pub tip: Option<HeaderId>,
+    pub channel_id: ChannelId,
+    /// The channel notes the step creates.
+    pub payments: Vec<ChannelPayment>,
+    /// Makes the step a program deposit.
+    pub program_deposit: Option<ProgramDepositBody>,
+    #[serde(with = "serde_inscription")]
+    pub inscription: Inscription,
+    pub change_public_key: ZkPublicKey,
+    pub holder_public_keys: Vec<ZkPublicKey>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ChannelPayment {
+    pub public_key: ZkPublicKey,
+    pub value: Value,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ProgramDepositBody {
+    #[serde(with = "serde_fr")]
+    pub program_id: ProgramId,
+    pub value: Value,
+    #[serde(with = "serde_fr")]
+    pub intent: Fr,
+}
+
+/// The step and its proof, for the sequencer of the channel to inscribe in
+/// a mini-block that starts on an empty buffer.
+#[derive(Serialize, Deserialize)]
+pub struct ChannelStepResponseBody {
+    pub tip: HeaderId,
+    pub step: Step,
+    pub proof: ZkTransferProof,
+    /// The openings of the notes the step creates, the change last. A payee
+    /// whose wallet is not this node's imports its note to spend it.
+    pub outputs: Vec<Note>,
 }

@@ -44,7 +44,10 @@ use lb_http_api_common::{
     bodies::{
         blend::JoinBlendRequestBody,
         chain::{ChainForkResponseBody, ChainIdResponseBody},
-        channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
+        channel::{
+            ChannelDepositRequestBody, ChannelDepositResponseBody, ChannelStepRequestBody,
+            ChannelStepResponseBody,
+        },
         mantle::{GasPricesResponseBody, LimitsResponseBody},
         wallet::{
             balance::WalletBalanceResponseBody,
@@ -69,7 +72,10 @@ use lb_tx_service::{
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
 };
 use lb_version::BuildVersionInfo;
-use lb_wallet_service::api::{WalletApi, WalletServiceData, added_nullifiers};
+use lb_wallet_service::{
+    ChannelStepRequest, ProgramPayment,
+    api::{WalletApi, WalletServiceData, added_nullifiers},
+};
 use overwatch::{
     overwatch::handle::OverwatchHandle,
     services::{AsServiceId, ServiceData},
@@ -1080,6 +1086,53 @@ fn channel_response(result: Result<Option<ChannelState>, DynError>) -> Response 
         Ok(None) => ApiError::NotFound("Channel not found".into()).into_response(),
         Err(error) => ApiError::Internal(error).into_response(),
     }
+}
+
+#[utoipa::path(
+    post,
+    path = paths::CHANNEL_STEP,
+    responses(
+        (status = 200, description = "A channel step with its proof"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn channel_step<WalletService, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(req): Json<ChannelStepRequestBody>,
+) -> Response
+where
+    WalletService: WalletServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
+{
+    make_request_and_return_response!(async {
+        let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+            handle.relay::<WalletService>().await?,
+        );
+        let request = ChannelStepRequest {
+            channel_id: req.channel_id,
+            payments: req
+                .payments
+                .into_iter()
+                .map(|payment| (payment.public_key, payment.value))
+                .collect(),
+            program_deposit: req.program_deposit.map(|deposit| ProgramPayment {
+                program_id: deposit.program_id,
+                value: deposit.value,
+                intent: deposit.intent,
+            }),
+            inscription: req.inscription,
+            change_pk: req.change_public_key,
+            holder_pks: req.holder_public_keys,
+        };
+        let lb_wallet_service::TipResponse { tip, response } =
+            wallet.prove_channel_step(req.tip, request).await?;
+        Ok::<_, DynError>(ChannelStepResponseBody {
+            tip,
+            step: response.step,
+            proof: response.proof,
+            outputs: response.outputs,
+        })
+    })
 }
 
 #[utoipa::path(
