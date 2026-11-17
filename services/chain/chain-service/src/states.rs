@@ -1,4 +1,7 @@
-use std::{collections::HashSet, time::SystemTime};
+use std::{
+    collections::{BTreeMap, HashSet},
+    time::SystemTime,
+};
 
 use lb_binary_codec::bincode::DeserializeOp as _;
 use lb_core::{era::ForkDigest, header::HeaderId};
@@ -71,6 +74,11 @@ pub struct CryptarchiaConsensusState {
     /// been deleted from the persistence layer because of some unexpected
     /// error.
     pub(crate) storage_blocks_to_remove: HashSet<HeaderId>,
+    /// The immutable index entries of finalized blocks a write failed to store.
+    /// The anchor of the nullifier store may already be above them, so a
+    /// restart, which replays the chain above the anchor, doesn't index them
+    /// again: they are retried instead.
+    pub(crate) immutable_blocks_to_index: BTreeMap<Slot, HeaderId>,
     /// Last engine state and timestamp for offline grace period tracking
     pub(crate) last_engine_state: Option<LastEngineState>,
 }
@@ -86,10 +94,11 @@ impl CryptarchiaConsensusState {
     ///
     /// Furthermore, it allows to specify blocks deleted from the cryptarchia
     /// engine (hence not tracked anymore) but that should be deleted from the
-    /// persistence layer.
+    /// persistence layer, and the immutable index entries still to store.
     pub(crate) fn from_cryptarchia_and_unpruned_blocks(
         cryptarchia: &Cryptarchia,
         storage_blocks_to_remove: HashSet<HeaderId>,
+        immutable_blocks_to_index: BTreeMap<Slot, HeaderId>,
         fork_digests: &EraSchedule<ForkDigest>,
     ) -> Result<Self, DynError> {
         let lib = cryptarchia.consensus.lib_branch();
@@ -112,6 +121,7 @@ impl CryptarchiaConsensusState {
             lib_block_slot,
             lib_block_uncle_slots,
             storage_blocks_to_remove,
+            immutable_blocks_to_index,
             last_engine_state: Some(LastEngineState {
                 timestamp: SystemTime::now(),
                 state: *cryptarchia.consensus.state(),
@@ -143,6 +153,7 @@ impl ServiceState for CryptarchiaConsensusState {
             lib_block_uncle_slots: lb_cryptarchia_engine::UncleSlots::default(),
             genesis_id,
             storage_blocks_to_remove: HashSet::new(),
+            immutable_blocks_to_index: BTreeMap::new(),
             last_engine_state: None,
         })
     }
@@ -415,6 +426,7 @@ mod tests {
                 genesis_id: genesis_header_id,
             },
             pruned_stale_blocks.clone(),
+            BTreeMap::new(),
             &fork_digests,
         )
         .unwrap();
@@ -580,6 +592,7 @@ mod tests {
         let saved_state = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
             &original,
             HashSet::new(),
+            BTreeMap::new(),
             &fork_digests(original.ledger.era_schedule()),
         )
         .unwrap();

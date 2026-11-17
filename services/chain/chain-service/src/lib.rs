@@ -82,7 +82,7 @@ use crate::{
     relays::CryptarchiaConsensusRelays,
     service::{
         Service, delete_stale_blocks_from_storage, load_block_ids_from_storage,
-        persist_recovery_state, process_block,
+        persist_recovery_state, process_block, store_immutable_blocks_index,
     },
     sync::block_provider::BlockProvider,
 };
@@ -714,18 +714,21 @@ impl Cryptarchia {
         }
     }
 
+    /// Switches the engine to online, which prunes the blocks the switch
+    /// finalizes. Their ledger states are left to
+    /// [`Self::prune_ledger_states`], which the caller runs once the immutable
+    /// index of the pruned blocks is stored: it writes the anchor, from which a
+    /// restart replays the chain.
     fn online(self) -> (Self, PrunedBlocks<HeaderId>) {
         let (consensus, pruned_blocks) = self.consensus.online();
-        let mut cryptarchia = Self {
-            ledger: self.ledger,
-            consensus,
-            genesis_id: self.genesis_id,
-        };
-
-        // Prune the ledger states of all the pruned blocks.
-        cryptarchia.prune_ledger_states(&pruned_blocks);
-
-        (cryptarchia, pruned_blocks)
+        (
+            Self {
+                ledger: self.ledger,
+                consensus,
+                genesis_id: self.genesis_id,
+            },
+            pruned_blocks,
+        )
     }
 
     const fn is_bootstrapping(&self) -> bool {
@@ -919,10 +922,18 @@ where
         )
         .await;
 
+        let immutable_blocks_to_index = store_immutable_blocks_index(
+            BTreeMap::new(),
+            &self.state.immutable_blocks_to_index,
+            relays.storage(),
+        )
+        .await;
+
         if fell_back_to_lib {
             persist_recovery_state(
                 &cryptarchia,
                 storage_blocks_to_remove.clone(),
+                immutable_blocks_to_index.clone(),
                 &fork_digests,
                 &self.service_resources_handle.state_updater,
             );
@@ -961,6 +972,7 @@ where
             chain_online_notifier,
             current_slot,
             storage_blocks_to_remove,
+            immutable_blocks_to_index,
             relays,
             sync_blocks_provider,
             slot_timer,

@@ -1,8 +1,8 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::{self, Display},
     num::NonZero,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use futures::StreamExt as _;
@@ -81,13 +81,15 @@ use tokio::{
 
 use crate::{
     BlockWithVerifiedHeader, BootstrapConfig, Cryptarchia, CryptarchiaConsensus,
-    CryptarchiaConsensusState, Error, OfflineGracePeriodConfig, TipEra,
+    CryptarchiaConsensusState, Error, LibInfo, OfflineGracePeriodConfig, TipEra,
     relays::CryptarchiaConsensusRelays,
-    service::{get_block_ids, process_block},
+    service::{get_block_ids, go_online, process_block, store_immutable_blocks_index},
 };
 
-#[test]
-fn cryptarchia_switch_to_online() {
+/// A bootstrapping chain `G -- B1 -- B2 -- B3` with `k = 1`, and the slots and
+/// IDs of its blocks: going online finalizes `B2` and prunes `G` and `B1` as
+/// immutable.
+fn bootstrapping_chain_of_three_blocks() -> (Cryptarchia, Vec<(Slot, HeaderId)>) {
     let k = NonZero::<u32>::new(1).unwrap();
     let config = ledger_config(k);
 
@@ -101,15 +103,14 @@ fn cryptarchia_switch_to_online() {
     )
     .unwrap();
 
-    // Add 3 new blocks to the chain
-    let mut block_ids = vec![genesis_id];
+    let mut blocks = vec![(Slot::genesis(), genesis_id)];
     let mut slot = Slot::new(1);
-    while block_ids.len() < 4 {
+    while blocks.len() < 4 {
         // TODO: Use a mock proof system instead of expensive real proof generation,
         // by refactoring `Cryptarchia`.
         let (block, _) = try_build_block(
             &cryptarchia,
-            *block_ids.last().unwrap(),
+            blocks.last().unwrap().1,
             &note,
             secret_key,
             slot,
@@ -126,13 +127,21 @@ fn cryptarchia_switch_to_online() {
         assert!(pruned_blocks.is_empty());
         assert!(reorged_blocks.is_empty());
 
-        block_ids.push(block_header_id);
+        blocks.push((block_header_slot, block_header_id));
         slot = block_header_slot.strict_add(1.into());
     }
+    (cryptarchia, blocks)
+}
+
+#[test]
+fn cryptarchia_switch_to_online() {
+    let (cryptarchia, blocks) = bootstrapping_chain_of_three_blocks();
+    let block_ids = blocks.iter().map(|(_, id)| *id).collect::<Vec<_>>();
 
     // Now, the chain is [G, B1, B2, B3].
     // We now switch to Online and check that LIB advances to B2.
-    let (cryptarchia, pruned_blocks) = cryptarchia.online();
+    let (mut cryptarchia, pruned_blocks) = cryptarchia.online();
+    cryptarchia.prune_ledger_states(&pruned_blocks);
     assert_eq!(cryptarchia.lib(), block_ids[2]);
     // All immutable blocks (G, B1, excluding LIB) should have been pruned
     assert_eq!(
@@ -146,6 +155,117 @@ fn cryptarchia_switch_to_online() {
     // Check the ledger states of immutable blocks have been pruned
     assert!(cryptarchia.ledger.state(&block_ids[0]).is_none());
     assert!(cryptarchia.ledger.state(&block_ids[1]).is_none());
+}
+
+/// An immutable index write as the storage received it.
+struct IndexWrite {
+    ids: BTreeMap<Slot, HeaderId>,
+    // The LIB of the anchor of the nullifier store when the write arrived.
+    anchor: Option<HeaderId>,
+}
+
+/// A storage that only takes immutable index writes, failing the first
+/// `failures` of them.
+struct IndexStorage {
+    api: StorageApi<SignedOps<Preverified, StandardMode>>,
+    writes: Arc<Mutex<Vec<IndexWrite>>>,
+    stored: Arc<Mutex<BTreeMap<Slot, HeaderId>>>,
+}
+
+impl IndexStorage {
+    fn spawn(cryptarchia: &Cryptarchia, mut failures: usize) -> Self {
+        let store = Arc::clone(cryptarchia.ledger.store());
+        let era_schedule = Arc::clone(cryptarchia.ledger.era_schedule());
+        let (storage_tx, mut storage_rx) = mpsc::channel(10);
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let stored = Arc::new(Mutex::new(BTreeMap::new()));
+        let (task_writes, task_stored) = (Arc::clone(&writes), Arc::clone(&stored));
+        tokio::spawn(async move {
+            while let Some(msg) = storage_rx.recv().await {
+                let StorageMsg::StoreImmutableBlockIds { ids, response_tx } = msg else {
+                    panic!("only immutable index writes are expected, got {msg:?}");
+                };
+                let anchor = lb_ledger::Ledger::<HeaderId>::restore::<LibInfo>(
+                    &store,
+                    Arc::clone(&era_schedule),
+                )
+                .unwrap()
+                .map(|restored| restored.lib);
+                let result = if failures > 0 {
+                    failures -= 1;
+                    Err("the index write failed".to_owned())
+                } else {
+                    task_stored.lock().unwrap().extend(ids.clone());
+                    Ok(())
+                };
+                task_writes.lock().unwrap().push(IndexWrite { ids, anchor });
+                drop(response_tx.send(result));
+            }
+        });
+        Self {
+            api: StorageApi::new(OutboundRelay::new(storage_tx)),
+            writes,
+            stored,
+        }
+    }
+
+    fn stored(&self) -> BTreeMap<Slot, HeaderId> {
+        self.stored.lock().unwrap().clone()
+    }
+}
+
+fn anchored_lib(cryptarchia: &Cryptarchia) -> Option<HeaderId> {
+    lb_ledger::Ledger::<HeaderId>::restore::<LibInfo>(
+        cryptarchia.ledger.store(),
+        Arc::clone(cryptarchia.ledger.era_schedule()),
+    )
+    .unwrap()
+    .map(|restored| restored.lib)
+}
+
+// A restart replays the chain above the anchor, so a stop between the two
+// writes switches to online again, and indexes the blocks again.
+#[tokio::test]
+async fn going_online_stores_the_immutable_index_before_the_anchor() {
+    let (cryptarchia, blocks) = bootstrapping_chain_of_three_blocks();
+    let storage = IndexStorage::spawn(&cryptarchia, 0);
+
+    let (cryptarchia, _, failed) = go_online(cryptarchia, &BTreeMap::new(), &storage.api).await;
+
+    assert!(failed.is_empty());
+    let writes = core::mem::take(&mut *storage.writes.lock().unwrap());
+    let [write] = writes.as_slice() else {
+        panic!("one index write is expected, got {}", writes.len());
+    };
+    // `G`, `B1` and the new LIB, `B2`.
+    let finalized = blocks[..3].iter().copied().collect::<BTreeMap<_, _>>();
+    assert_eq!(write.ids, finalized);
+    // Still the old LIB: the new one is anchored once the index is stored.
+    assert_eq!(write.anchor, Some(blocks[0].1));
+    assert_eq!(anchored_lib(&cryptarchia), Some(blocks[2].1));
+    assert_eq!(storage.stored(), finalized);
+}
+
+#[tokio::test]
+async fn a_failed_immutable_index_write_is_retried_whole() {
+    let (cryptarchia, blocks) = bootstrapping_chain_of_three_blocks();
+    let storage = IndexStorage::spawn(&cryptarchia, 1);
+
+    let (cryptarchia, _, failed) = go_online(cryptarchia, &BTreeMap::new(), &storage.api).await;
+
+    let finalized = blocks[..3].iter().copied().collect::<BTreeMap<_, _>>();
+    assert_eq!(failed, finalized);
+    // The ledger is finalized all the same.
+    assert_eq!(anchored_lib(&cryptarchia), Some(blocks[2].1));
+    assert!(storage.stored().is_empty());
+
+    // The next index write carries the failed entries with its own.
+    let later = (Slot::new(1000), HeaderId::from([9; 32]));
+    let failed = store_immutable_blocks_index(BTreeMap::from([later]), &failed, &storage.api).await;
+    assert!(failed.is_empty());
+    let mut expected = finalized;
+    expected.insert(later.0, later.1);
+    assert_eq!(storage.stored(), expected);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -373,6 +493,7 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
         lib_block_uncle_slots: UncleSlots::default(),
         genesis_id: GENESIS_ID.into(),
         storage_blocks_to_remove: HashSet::new(),
+        immutable_blocks_to_index: BTreeMap::new(),
         last_engine_state: None,
     };
     let bootstrap_config = BootstrapConfig {
@@ -561,6 +682,7 @@ async fn get_block_ids_past_recovered_lib() {
         lib_block_uncle_slots: UncleSlots::default(),
         genesis_id: GENESIS_ID.into(),
         storage_blocks_to_remove: HashSet::new(),
+        immutable_blocks_to_index: BTreeMap::new(),
         last_engine_state: None,
     };
     let bootstrap_config = BootstrapConfig {
@@ -1728,7 +1850,7 @@ fn write_lib_state_at(stored: &Cryptarchia, lib: &Block<SignedOps<Preverified, S
         header.id(),
         stored.ledger.state(&header.id()).unwrap().clone(),
         Arc::clone(stored.ledger.era_schedule()),
-        &crate::LibInfo {
+        &LibInfo {
             parent: header.parent(),
             slot: header.slot(),
             length: 1,
