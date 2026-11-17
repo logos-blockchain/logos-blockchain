@@ -23,10 +23,10 @@
 //! stake distribution freeze. They are all canonical states once their block is
 //! final, the snapshots reading the store below its finalized base.
 //!
-//! Every finalization may also write an anchor under [`ANCHOR_KEY`], in its
-//! batch: what a restart needs to read the store again, starting from its base
-//! (see [`crate::Anchor`]). The store and the anchor never disagree, whatever
-//! the moment the node stops.
+//! Each time the base moves to a new LIB, the [`crate::LibState`] (the LIB and
+//! its ledger state) may also be written under [`LIB_STATE_KEY`], in the same
+//! atomic write. A restart reads it to start from the LIB, so it always matches
+//! the trees in the DB, whenever the node stops.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -50,9 +50,9 @@ fn written_key(version: Version) -> Vec<u8> {
     version.0.to_be_bytes().to_vec()
 }
 
-/// The key of the anchor of the finalized base, next to the namespaces of the
-/// note sets and of the [`VersionRegistry`].
-pub const ANCHOR_KEY: &[u8] = b"A";
+/// The key of the saved [`crate::LibState`]. It differs from the first byte of
+/// every other key.
+pub const LIB_STATE_KEY: &[u8] = b"A";
 
 /// The store of the nullifier trees of a ledger, and the versions of its
 /// committed blocks.
@@ -97,13 +97,13 @@ impl NullifierStorage {
         write(&self.store, batch)
     }
 
-    /// The anchor written with the last finalization, if any.
-    pub fn read_anchor(store: &DynKvStore) -> Result<Option<Bytes>, NoteSetError> {
-        store.get(ANCHOR_KEY).map_err(storage_error)
+    /// The [`crate::LibState`] saved with the last move of the base, if any.
+    pub fn read_lib_state(store: &DynKvStore) -> Result<Option<Bytes>, NoteSetError> {
+        store.get(LIB_STATE_KEY).map_err(storage_error)
     }
 
-    /// Deletes everything `store` holds, as when what it holds has no anchor
-    /// to be read again from.
+    /// Deletes everything in `store`. Used when `store` has no LIB state, so
+    /// nothing in it can be read again.
     pub fn clear(store: &DynKvStore) -> Result<(), NoteSetError> {
         let mut batch = WriteBatch::new();
         batch.delete_prefix(Bytes::new());
@@ -184,13 +184,14 @@ impl NullifierStorage {
         Ok(state)
     }
 
-    /// Makes the state of block `block_id`, the root of a ledger, the finalized
-    /// base of the store: committed first if it has a pending block, as the
-    /// genesis state does. A state restored from the store already is its base.
+    /// Makes the trees of the state of block `block_id` the base of the DB:
+    /// the trees every later block builds on. Changes the state has not
+    /// written yet, as a genesis state has, are written first. A state
+    /// restored from the DB already is the base.
     ///
-    /// Returns the batch finalizing it, for the caller to write, then collect
-    /// the garbage.
-    pub fn make_root(
+    /// Returns the changes as one atomic write ([`WriteBatch`]), for the caller
+    /// to apply before collecting the garbage.
+    pub fn finalize_base(
         &self,
         block_id: BlockId,
         state: CryptarchiaLedger,
@@ -319,8 +320,8 @@ pub fn retention_floors<'a>(
     floors
 }
 
-/// The note sets of `state`, decoded from an anchor, attached to `store`: those
-/// of the state itself must be its finalized base.
+/// Connects the note sets of `state`, read from a saved LIB state, to the trees
+/// in `store`. The trees of `state` itself must be the base of `store`.
 pub fn attach_state(
     state: CryptarchiaLedger,
     store: &DynKvStore,
@@ -552,7 +553,7 @@ mod tests {
     }
 
     /// A ledger and the consensus engine driving its pruning, with what each
-    /// set of each kept block should hold. Each finalization writes an anchor
+    /// set of each kept block should hold. Each finalization writes a LIB state
     /// whose info is the first byte of the id of the LIB.
     struct Chain {
         ledger: Ledger<Id>,
@@ -604,7 +605,8 @@ mod tests {
                 Arc::new(eras.map(|era| era.parameters.consensus_config.clone())),
                 State::Online,
             );
-            let ledger = Ledger::new_anchored(GENESIS, state, Arc::new(eras), &GENESIS[0]).unwrap();
+            let ledger =
+                Ledger::new_with_lib_state(GENESIS, state, Arc::new(eras), &GENESIS[0]).unwrap();
             let genesis = HashMap::from([(LEDGER_SET, Oracle::new())]);
             Self {
                 ledger,
@@ -620,11 +622,11 @@ mod tests {
             Arc::clone(&self.store)
         }
 
-        // The ledger a restart restores from the anchor of the store.
+        // The ledger a restart restores from the LIB state of the DB.
         fn restore(&self) -> Restored<Id, u8> {
             Ledger::restore(&self.dyn_store(), Arc::clone(self.ledger.era_schedule()))
                 .unwrap()
-                .expect("the store has an anchor")
+                .expect("the store has a LIB state")
         }
 
         fn state(&self, id: &Id) -> &CryptarchiaLedger {
@@ -651,7 +653,7 @@ mod tests {
                 .unwrap();
             let lib = self.engine.lib();
             self.ledger
-                .apply_pruning_anchored(lib, &pruned, &lib[0])
+                .prune_with_lib_state(lib, &pruned, &lib[0])
                 .unwrap();
             let ledger = &self.ledger;
             self.oracles
@@ -1012,7 +1014,7 @@ mod tests {
             info,
         } = Ledger::<Id>::restore::<u8>(&store, eras)
             .unwrap()
-            .expect("the store has an anchor");
+            .expect("the store has a LIB state");
         assert_eq!((restored_lib, info), (lib, lib[0]));
         assert_eq!(
             ledger
@@ -1048,7 +1050,7 @@ mod tests {
     }
 
     #[test]
-    fn test_a_store_without_anchor_restores_nothing() {
+    fn test_a_store_without_lib_state_restores_nothing() {
         let store = ErasedKv::into_dyn(MemKv::new());
         let config = config();
         let state = LedgerState::from_notes([], &config, GENESIS_POW_REWARD_POOL)
@@ -1060,7 +1062,7 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        // a ledger created without anchor writes none
+        // a ledger created without LIB state writes none
         let ledger = Ledger::new(GENESIS, state, Arc::clone(&eras)).unwrap();
         assert!(
             Ledger::<Id>::restore::<u8>(ledger.storage.store(), eras)

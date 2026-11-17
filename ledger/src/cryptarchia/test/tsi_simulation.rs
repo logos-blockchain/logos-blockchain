@@ -348,7 +348,7 @@ fn apply_block(
         .receive_block(block, parent, slot, uncle_slots)
         .expect("engine update");
     ledger
-        .apply_pruning(engine.lib(), &pruned)
+        .prune(engine.lib(), &pruned)
         .expect("the pruned states are removed");
 }
 

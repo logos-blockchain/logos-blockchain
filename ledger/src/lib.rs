@@ -58,7 +58,7 @@ use lb_kv_store::{Bytes, DynKvStore};
 use lb_log_targets::{diagnostic::BLEND_REACHABILITY, ledger};
 use mantle::LedgerState as MantleLedger;
 use nullifier_storage::{
-    ANCHOR_KEY, NullifierStorage, PrunedVersions, attach_state, move_state, rebase_state,
+    LIB_STATE_KEY, NullifierStorage, PrunedVersions, attach_state, move_state, rebase_state,
 };
 use rpds::HashTrieMapSync;
 use thiserror::Error;
@@ -161,48 +161,52 @@ pub enum LedgerError<Id> {
     WrongRewardValue { header: Value, computed: Value },
     #[error("The state of the LIB {0:?} could not be found")]
     LibNotFound(Id),
-    #[error("The anchor of the nullifier store could not be encoded or decoded: {0}")]
-    Anchor(String),
+    #[error("The LIB state could not be encoded or decoded: {0}")]
+    LibState(String),
 }
 
 fn block_id<Id: Into<BlockHash>>(id: Id) -> BlockId {
     BlockId(id.into())
 }
 
-/// What a restart needs to read the nullifier store of a ledger again: its
-/// LIB, the state of the LIB, and what the consensus keeps of the LIB block
-/// (`info`).
+/// The LIB, its ledger state, and what the consensus keeps of the LIB block
+/// (`info`), saved in the nullifier DB (`RocksDB`) so that a restarted node can
+/// start from the LIB.
 ///
-/// [`Ledger::new_anchored`] and [`Ledger::apply_pruning_anchored`] write it in
-/// the batch that finalizes the LIB, so it describes the finalized base of the
-/// store at every moment, while a state saved elsewhere may lag behind it.
-/// [`Ledger::restore`] reads it back.
+/// The nullifier trees are kept in the DB, not in [`LedgerState`], and the
+/// DB deletes old tree nodes each time the LIB moves. The LIB state is saved
+/// together with that move, in one atomic write, so after a restart it always
+/// matches the trees in the DB.
+///
+/// Written by [`Ledger::new_with_lib_state`] and
+/// [`Ledger::prune_with_lib_state`], read by [`Ledger::restore`].
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Anchor<Id, Info> {
+pub struct LibState<Id, Info> {
     pub lib: Id,
     pub state: LedgerState,
     pub info: Info,
 }
 
-// The encoding of an anchor, borrowed from what it is made of.
+// Serializes as a [`LibState`] without cloning its fields.
 #[derive(serde::Serialize)]
-#[serde(rename = "Anchor")]
-struct AnchorRef<'a, Id, Info> {
+#[serde(rename = "LibState")]
+struct LibStateRef<'a, Id, Info> {
     lib: &'a Id,
     state: &'a LedgerState,
     info: &'a Info,
 }
 
-fn encode_anchor<Id: serde::Serialize, Info: serde::Serialize>(
+fn encode_lib_state<Id: serde::Serialize, Info: serde::Serialize>(
     lib: &Id,
     state: &LedgerState,
     info: &Info,
 ) -> Result<Bytes, LedgerError<Id>> {
-    lb_binary_codec::bincode::SerializeOp::to_bytes(&AnchorRef { lib, state, info })
-        .map_err(|error| LedgerError::Anchor(error.to_string()))
+    lb_binary_codec::bincode::SerializeOp::to_bytes(&LibStateRef { lib, state, info })
+        .map_err(|error| LedgerError::LibState(error.to_string()))
 }
 
-/// A ledger restored from the anchor of its store (see [`Ledger::restore`]).
+/// A ledger rebuilt from the LIB state saved in its DB (see
+/// [`Ledger::restore`]).
 pub struct Restored<Id: Eq + Hash, Info> {
     pub ledger: Ledger<Id>,
     pub lib: Id,
@@ -211,9 +215,10 @@ pub struct Restored<Id: Eq + Hash, Info> {
 
 /// The states of the blocks the chain holds: the LIB and the blocks above it.
 ///
-/// The nullifier trees of the states are kept in the store of the root state
-/// (see [`nullifier_storage`]): [`Self::commit_update`] writes each block, and
-/// [`Self::apply_pruning`] finalizes the LIB and removes the pruned blocks.
+/// The nullifier trees of the states are kept in the nullifier DB, not in
+/// memory (see [`nullifier_storage`]): [`Self::commit_update`] writes the trees
+/// of each block, and [`Self::prune`] moves the LIB up and deletes the
+/// pruned blocks.
 #[derive(Clone)]
 pub struct Ledger<Id: Eq + Hash> {
     states: HashTrieMapSync<Id, LedgerState>,
@@ -243,10 +248,9 @@ impl<Id> Ledger<Id>
 where
     Id: Eq + Hash + Copy,
 {
-    /// A ledger whose root, and LIB, is the state of block `id`. Its nullifier
-    /// trees are kept in the store of its note sets: the state becomes the
-    /// finalized base of that store, committed first if it has a pending
-    /// block, as a genesis state does.
+    /// A ledger with the state of block `id` as its LIB. The nullifier trees of
+    /// the state become the base of the nullifier DB: the trees every later
+    /// block builds on.
     pub fn new(
         id: Id,
         state: LedgerState,
@@ -255,12 +259,12 @@ where
     where
         Id: Into<BlockHash>,
     {
-        Self::with_root(id, state, era_schedule, |_, _| Ok(None))
+        Self::with_lib(id, state, era_schedule, |_, _| Ok(None))
     }
 
-    /// Like [`Self::new`], writing the [`Anchor`] of the root with `info` in
-    /// the batch that finalizes it.
-    pub fn new_anchored<Info: serde::Serialize>(
+    /// Like [`Self::new`], and also saves the [`LibState`] with `info`, in the
+    /// same write as the base.
+    pub fn new_with_lib_state<Info: serde::Serialize>(
         id: Id,
         state: LedgerState,
         era_schedule: Arc<EraScheduledConfig>,
@@ -269,16 +273,17 @@ where
     where
         Id: Into<BlockHash> + serde::Serialize,
     {
-        Self::with_root(id, state, era_schedule, |id, state| {
-            encode_anchor(id, state, info).map(Some)
+        Self::with_lib(id, state, era_schedule, |id, state| {
+            encode_lib_state(id, state, info).map(Some)
         })
     }
 
-    /// The ledger whose root is the LIB of the anchor of `store`, its state
-    /// attached to the store, or `None` if the store has no anchor. The blocks
-    /// above the LIB are applied again with [`Self::commit_update`], which
-    /// reuses their versions, then [`Self::discard_lost_blocks`] deletes what
-    /// the others wrote.
+    /// Rebuilds the ledger from the [`LibState`] saved in `store`, with its LIB
+    /// as the only block, or returns `None` if `store` has none.
+    ///
+    /// The caller then applies the blocks above the LIB again with
+    /// [`Self::commit_update`], which reuses what they already wrote, and calls
+    /// [`Self::discard_lost_blocks`] to delete what other blocks wrote.
     pub fn restore<Info: serde::de::DeserializeOwned>(
         store: &DynKvStore,
         era_schedule: Arc<EraScheduledConfig>,
@@ -286,30 +291,33 @@ where
     where
         Id: Into<BlockHash> + serde::de::DeserializeOwned,
     {
-        let Some(bytes) = NullifierStorage::read_anchor(store)? else {
+        let Some(bytes) = NullifierStorage::read_lib_state(store)? else {
             return Ok(None);
         };
-        let Anchor { lib, state, info } =
-            <Anchor<Id, Info> as lb_binary_codec::bincode::DeserializeOp>::from_bytes(&bytes)
-                .map_err(|error| LedgerError::Anchor(error.to_string()))?;
+        let LibState { lib, state, info } =
+            <LibState<Id, Info> as lb_binary_codec::bincode::DeserializeOp>::from_bytes(&bytes)
+                .map_err(|error| LedgerError::LibState(error.to_string()))?;
         let mut state = state;
         state.cryptarchia_ledger = attach_state(state.cryptarchia_ledger, store)?;
-        let ledger = Self::with_root(lib, state, era_schedule, |_, _| Ok(None))?;
+        let ledger = Self::with_lib(lib, state, era_schedule, |_, _| Ok(None))?;
         Ok(Some(Restored { ledger, lib, info }))
     }
 
-    // The ledger whose root is `state`, made the finalized base of its store
-    // in one batch with the anchor `anchor` encodes, if any.
-    fn with_root(
+    // Creates a ledger with `state` as its LIB, and saves the nullifier trees of
+    // `state` in the DB as the base: the trees all later blocks build on.
+    //
+    // `lib_state_bytes` encodes the [`LibState`] to save in the same atomic
+    // write, or returns `None` if it is already saved.
+    fn with_lib(
         id: Id,
         mut state: LedgerState,
         era_schedule: Arc<EraScheduledConfig>,
-        anchor: impl FnOnce(&Id, &LedgerState) -> Result<Option<Bytes>, LedgerError<Id>>,
+        lib_state_bytes: impl FnOnce(&Id, &LedgerState) -> Result<Option<Bytes>, LedgerError<Id>>,
     ) -> Result<Self, LedgerError<Id>>
     where
         Id: Into<BlockHash>,
     {
-        // Record the root block among the recently seen blocks, so early
+        // Record the LIB block among the recently seen blocks, so early
         // `PoW` reward claims can anchor to it. Later blocks are recorded
         // as they are applied in `try_update`.
         let slot = state.slot();
@@ -317,10 +325,10 @@ where
             .mantle_ledger
             .add_seen_block(id.into(), slot, &era_schedule);
         let storage = NullifierStorage::new(Arc::clone(state.latest_note_sets().store()));
-        let (root, mut batch) = storage.make_root(block_id(id), state.cryptarchia_ledger)?;
-        state.cryptarchia_ledger = root;
-        if let Some(bytes) = anchor(&id, &state)? {
-            batch.put(Bytes::from_static(ANCHOR_KEY), bytes);
+        let (base, mut batch) = storage.finalize_base(block_id(id), state.cryptarchia_ledger)?;
+        state.cryptarchia_ledger = base;
+        if let Some(bytes) = lib_state_bytes(&id, &state)? {
+            batch.put(Bytes::from_static(LIB_STATE_KEY), bytes);
         }
         storage.write(batch)?;
         storage.collect_garbage(
@@ -421,31 +429,31 @@ where
         &self.era_schedule
     }
 
-    /// Follows the LIB to `lib` once the consensus pruned the `pruned` blocks:
-    /// the state of `lib` becomes the finalized base of the store, and the
-    /// states of the pruned blocks are removed, with everything the stale ones
-    /// wrote. The nodes no kept state reads anymore are then deleted (see
-    /// [`nullifier_storage::retention_floors`]).
+    /// Moves the LIB up to `lib` after the consensus pruned the `pruned`
+    /// blocks.
+    ///
+    /// - The states of the pruned blocks are deleted from memory.
+    /// - The tree nodes written by pruned forks are deleted from the DB.
+    /// - The trees of `lib` become the base of the DB: the trees all later
+    ///   blocks build on.
+    /// - Old tree nodes that no remaining state reads are then deleted (see
+    ///   [`nullifier_storage::retention_floors`]).
     ///
     /// The pruned blocks must be every block that is not `lib` or one of its
     /// descendants, as [`lb_cryptarchia_engine::Cryptarchia`] prunes them.
     /// Nothing happens when nothing is pruned: the LIB did not move.
     ///
     /// Returns the number of states removed.
-    pub fn apply_pruning(
-        &mut self,
-        lib: Id,
-        pruned: &PrunedBlocks<Id>,
-    ) -> Result<usize, LedgerError<Id>>
+    pub fn prune(&mut self, lib: Id, pruned: &PrunedBlocks<Id>) -> Result<usize, LedgerError<Id>>
     where
         Id: Into<BlockHash>,
     {
-        self.prune_with(lib, pruned, |_, _| Ok(None))
+        self.prune_inner(lib, pruned, |_, _| Ok(None))
     }
 
-    /// Like [`Self::apply_pruning`], writing the [`Anchor`] of `lib` with
-    /// `info` in the batch that finalizes it.
-    pub fn apply_pruning_anchored<Info: serde::Serialize>(
+    /// Like [`Self::prune`], and also saves the [`LibState`] of `lib`
+    /// with `info`, in the same write that moves the base to `lib`.
+    pub fn prune_with_lib_state<Info: serde::Serialize>(
         &mut self,
         lib: Id,
         pruned: &PrunedBlocks<Id>,
@@ -454,16 +462,16 @@ where
     where
         Id: Into<BlockHash> + serde::Serialize,
     {
-        self.prune_with(lib, pruned, |lib, state| {
-            encode_anchor(lib, state, info).map(Some)
+        self.prune_inner(lib, pruned, |lib, state| {
+            encode_lib_state(lib, state, info).map(Some)
         })
     }
 
-    fn prune_with(
+    fn prune_inner(
         &mut self,
         lib: Id,
         pruned: &PrunedBlocks<Id>,
-        anchor: impl FnOnce(&Id, &LedgerState) -> Result<Option<Bytes>, LedgerError<Id>>,
+        lib_state_bytes: impl FnOnce(&Id, &LedgerState) -> Result<Option<Bytes>, LedgerError<Id>>,
     ) -> Result<usize, LedgerError<Id>>
     where
         Id: Into<BlockHash>,
@@ -495,8 +503,8 @@ where
             cryptarchia_ledger: lib_ledger,
             ..lib_state
         };
-        if let Some(bytes) = anchor(&lib, &lib_state)? {
-            batch.put(Bytes::from_static(ANCHOR_KEY), bytes);
+        if let Some(bytes) = lib_state_bytes(&lib, &lib_state)? {
+            batch.put(Bytes::from_static(LIB_STATE_KEY), bytes);
         }
         self.storage.write(batch)?;
 

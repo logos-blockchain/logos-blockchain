@@ -371,7 +371,7 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
     }
 
     // The store was finalized at `B1` before the restart.
-    anchor_at(&stored, &b1);
+    write_lib_state_at(&stored, &b1);
     let recovery_state = CryptarchiaConsensusState {
         tip: b2_id,
         tip_era: TipEra {
@@ -469,7 +469,7 @@ async fn recovery_chain_with_tip_ahead_of_current_slot() {
     let current_slot = b2.header().slot().checked_sub(1.into()).unwrap();
 
     // The store was finalized at `B1` before the restart.
-    anchor_at(&stored, b1);
+    write_lib_state_at(&stored, b1);
     let recovery_state = CryptarchiaConsensusState {
         tip: b2_id,
         tip_era: TipEra {
@@ -592,7 +592,7 @@ async fn get_block_ids_past_recovered_lib() {
     let (b1_id, b2_id) = (b1.header().id(), b2.header().id());
 
     // The store was finalized at `B1` before the restart.
-    anchor_at(&stored, b1);
+    write_lib_state_at(&stored, b1);
     let recovery_state = CryptarchiaConsensusState {
         tip: b2_id,
         tip_era: TipEra {
@@ -1754,10 +1754,10 @@ pub const GENESIS_ID: [u8; 32] = [0; 32];
 
 /// A chain with only the genesis block, holding `note`.
 /// Finalizes the nullifier store of `stored` at `lib`, a child of genesis,
-/// with its anchor, as the pruning making it the LIB does.
-fn anchor_at(stored: &Cryptarchia, lib: &Block<SignedOps<Preverified, StandardMode>>) {
+/// with its LIB state, as the pruning making it the LIB does.
+fn write_lib_state_at(stored: &Cryptarchia, lib: &Block<SignedOps<Preverified, StandardMode>>) {
     let header = lib.header();
-    lb_ledger::Ledger::new_anchored(
+    lb_ledger::Ledger::new_with_lib_state(
         header.id(),
         stored.ledger.state(&header.id()).unwrap().clone(),
         Arc::clone(stored.ledger.era_schedule()),
