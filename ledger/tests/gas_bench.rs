@@ -79,7 +79,11 @@ mod filled_ledger {
         let fixture = filled_state();
         for index in [NoteSetIndex::Ledger, fixture.channel_set] {
             let set = fixture.state.latest_note_sets().get(index).unwrap();
-            assert_eq!(set.nullifiers().len(), fill() + 1, "set {index}");
+            assert_eq!(
+                set.nullifiers().len(),
+                u64::try_from(fill()).expect("fill fits in u64") + 1,
+                "set {index}"
+            );
             assert!(set.commitments().len() >= fill(), "set {index}");
         }
     }
@@ -101,9 +105,15 @@ mod filled_ledger {
     fn fresh_nullifiers_are_scattered_among_the_filled_ones() {
         let fixture = filled_state();
         let set = fixture.state.latest_note_sets().ledger();
-        let low_leaves: std::collections::HashSet<u64> = nullifiers(16, 0)
+        let low_leaves: std::collections::HashSet<_> = nullifiers(16, 0)
             .iter()
-            .map(|nullifier| set.nullifiers().low_leaf(&nullifier.0).unwrap().0)
+            .map(|nullifier| {
+                set.nullifiers()
+                    .low_leaf(&nullifier.0)
+                    .unwrap()
+                    .unwrap()
+                    .index
+            })
             .collect();
         assert_eq!(low_leaves.len(), 16);
     }
