@@ -244,6 +244,59 @@ pub mod import {
     }
 }
 
+pub mod delivery {
+    use lb_core::{
+        header::HeaderId,
+        mantle::{Note, TxHash, Value},
+    };
+    use lb_key_management_system_keys::keys::ZkPublicKey;
+    use serde::{Deserialize, Serialize};
+
+    /// The address senders pay a key of this node's wallet at, as its Bech32m
+    /// string: the public key and the key note ciphertexts are encrypted to.
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletAddressResponseBody {
+        pub address: String,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletTransferFundsToAddressRequestBody {
+        pub tip: Option<HeaderId>,
+        pub change_public_key: ZkPublicKey,
+        pub funding_public_keys: Vec<ZkPublicKey>,
+        /// The Bech32m address of the recipient.
+        pub recipient_address: String,
+        pub amount: Value,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletTransferFundsToAddressResponseBody {
+        pub hash: TxHash,
+        /// The delivery message of the note paid to the recipient, in hex: its
+        /// commitment, then its value and nonce encrypted to the recipient.
+        /// The sender hands it over or publishes it. `None` when the address
+        /// holds no encryption key.
+        pub delivery_message: Option<String>,
+        /// The note paid to the recipient, in the clear, when the address
+        /// holds no encryption key: the sender gives it to the recipient by
+        /// other means, and the recipient imports it. `None` otherwise.
+        pub recipient_note: Option<Note>,
+    }
+
+    /// Delivery messages of notes paid to this node's wallet, in hex.
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletImportDeliveryMessagesRequestBody {
+        pub messages: Vec<String>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletImportDeliveryMessagesResponseBody {
+        /// The messages the wallet keeps until a block appends their
+        /// commitment.
+        pub kept: usize,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{Note, note_set::NoteSetIndex};

@@ -17,8 +17,9 @@ use lb_core::{
 };
 use lb_groth16::Fr;
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, secured_key::SecuredKey};
+use lb_note_encryption::DeliveryMessage;
 use lb_utils::bounded::BoundedError;
-use lb_wallet::{KnownNote, OwnedNote, WalletBalance};
+use lb_wallet::{KnownNote, OwnedNote, WalletBalance, address::Address, delivery::deliver};
 use overwatch::{
     overwatch::OverwatchHandle,
     services::{
@@ -26,6 +27,7 @@ use overwatch::{
         relay::{OutboundRelay, OutboundRelayError},
     },
 };
+use rand::rngs::OsRng;
 use tokio::sync::oneshot::{self, error::RecvError};
 
 use crate::{
@@ -51,6 +53,18 @@ impl From<OutboundRelayError<WalletMsg>> for WalletApiError {
     fn from(value: OutboundRelayError<WalletMsg>) -> Self {
         Self::RelaySend(Box::new(value))
     }
+}
+
+/// A signed transfer to an address, with what the sender keeps and hands over
+/// for the note it creates.
+pub struct TransferTo {
+    pub transaction: SignedOps<Preverified, StandardMode>,
+    /// The note the transfer creates. The sender keeps it, to deliver it
+    /// again if the recipient asks.
+    pub note: Note,
+    /// The delivery message of the note, when the address holds the
+    /// encryption key of its recipient.
+    pub delivery: Option<DeliveryMessage>,
 }
 
 pub trait WalletServiceData:
@@ -264,6 +278,18 @@ where
         Ok(rx.await??)
     }
 
+    /// The address a sender pays `public_key` at, a key of this wallet.
+    pub async fn address(&self, public_key: ZkPublicKey) -> Result<Address, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::GetAddress {
+                public_key,
+                resp_tx,
+            })
+            .await?;
+        Ok(rx.await??)
+    }
+
     pub async fn import_note(
         &self,
         note: Note,
@@ -349,6 +375,52 @@ where
             tip,
             response: (response, note),
         })
+    }
+
+    /// The signed transfer of `amount` to `recipient`, and the delivery
+    /// message of the note it creates, for the sender to hand over or
+    /// publish. There is none when the address holds no encryption key: the
+    /// sender then gives the recipient the note by other means.
+    pub async fn transfer_funds_to(
+        &self,
+        tip: Option<HeaderId>,
+        change_pk: ZkPublicKey,
+        funding_pks: Vec<ZkPublicKey>,
+        recipient: &Address,
+        amount: Value,
+    ) -> Result<TipResponse<TransferTo>, WalletApiError> {
+        let TipResponse {
+            tip,
+            response: (transaction, note),
+        } = self
+            .transfer_funds(tip, change_pk, funding_pks, recipient.public_key, amount)
+            .await?;
+        let delivery = recipient
+            .encryption_key
+            .as_ref()
+            .map(|encryption_key| deliver(&note, encryption_key, &mut OsRng));
+        Ok(TipResponse {
+            tip,
+            response: TransferTo {
+                transaction,
+                note,
+                delivery,
+            },
+        })
+    }
+
+    /// Hands the wallet the delivery messages of notes paid to it, and tells
+    /// how many it keeps. The wallet opens a message when a block appends its
+    /// commitment.
+    pub async fn import_delivery_messages(
+        &self,
+        messages: Vec<DeliveryMessage>,
+    ) -> Result<usize, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::ImportDeliveryMessages { messages, resp_tx })
+            .await?;
+        Ok(rx.await?)
     }
 
     pub async fn sign_tx(

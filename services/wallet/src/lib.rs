@@ -48,11 +48,16 @@ use lb_key_management_system_service::{
         ED25519_PUBLIC_KEY_SIZE, Ed25519Key, Ed25519PublicKey, Ed25519Signature, Key, KeyOperators,
         PayloadEncoding, SignatureEncoding, ZkKey, ZkPublicKey, secured_key::SecuredKey,
     },
-    operators::zk::{nullifier::DeriveNullifier, voucher::UnsafeVoucherOperator},
+    operators::zk::{
+        note_encryption::{DeriveNoteEncryptionKey, OpenDeliveryMessages},
+        nullifier::DeriveNullifier,
+        voucher::UnsafeVoucherOperator,
+    },
 };
 use lb_ledger::LedgerState;
 use lb_log_targets::wallet;
 use lb_mmr::MerklePath;
+use lb_note_encryption::DeliveryMessage;
 use lb_services_utils::{
     overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings},
     wait_until_services_are_ready,
@@ -63,6 +68,7 @@ use lb_utils::bounded::BoundedError;
 pub use lb_wallet::DEFAULT_FEE_MARGIN_PERCENT;
 use lb_wallet::{
     KnownNote, KnownNotes, OwnedNote, WalletBalance, WalletBlock, WalletError, WalletState,
+    address::Address,
     transaction::{OpWitness, WitnessContext, op_witness_at, op_witnesses},
 };
 use overwatch::{
@@ -231,6 +237,20 @@ pub enum WalletMsg {
     GetKnownAddresses {
         resp_tx: Sender<Result<Vec<ZkPublicKey>, WalletServiceError>>,
     },
+    // The address a sender pays `public_key` at: the key and the key its
+    // note ciphertexts are encrypted to.
+    GetAddress {
+        public_key: ZkPublicKey,
+        resp_tx: Sender<Result<Address, WalletServiceError>>,
+    },
+    // Keeps the delivery messages of notes paid to the wallet until a block
+    // appends their commitment, and answers with how many are kept. A message
+    // whose commitment a block already appended finds no note: the wallet
+    // adopts a note when its commitment is appended, as for an imported one.
+    ImportDeliveryMessages {
+        messages: Vec<DeliveryMessage>,
+        resp_tx: Sender<usize>,
+    },
     GetTxContext {
         block_id: Option<HeaderId>,
         resp_tx: Sender<Result<OpsContext, WalletServiceError>>,
@@ -341,6 +361,8 @@ impl WalletMsg {
             | Self::NewLeaderReward { .. }
             | Self::ImportNote { .. }
             | Self::GetKnownAddresses { .. }
+            | Self::GetAddress { .. }
+            | Self::ImportDeliveryMessages { .. }
             | Self::ReleasePendingNotes { .. } => None,
         }
     }
@@ -913,6 +935,23 @@ where
             WalletMsg::GetKnownAddresses { resp_tx } => {
                 Self::get_known_addresses(state.wallet(), resp_tx);
             }
+            WalletMsg::GetAddress {
+                public_key,
+                resp_tx,
+            } => {
+                let result = Self::address(public_key, state, kms).await;
+                if resp_tx.send(result).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to GetAddress");
+                }
+            }
+            WalletMsg::ImportDeliveryMessages { messages, resp_tx } => {
+                if resp_tx
+                    .send(state.add_pending_deliveries(messages))
+                    .is_err()
+                {
+                    debug!(target: LOG_TARGET, "Failed to respond to ImportDeliveryMessages");
+                }
+            }
             WalletMsg::GetTxContext { block_id, resp_tx } => {
                 Self::get_tx_context(block_id, resp_tx, cryptarchia).await;
             }
@@ -1308,6 +1347,37 @@ where
         Self::known_note(kms, key_id, note, note_set).await
     }
 
+    // The address of `public_key`, a key of the wallet, with the note
+    // encryption key the KMS derives for it.
+    async fn address(
+        public_key: ZkPublicKey,
+        state: &ServiceState<'_>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<Address, WalletServiceError> {
+        let key_id = state
+            .wallet()
+            .known_keys()
+            .get(&public_key)
+            .cloned()
+            .ok_or(WalletServiceError::UnknownKey(public_key))?;
+        let (output_tx, output_rx) = oneshot::channel();
+        kms.execute(
+            key_id,
+            KeyOperators::Zk(Box::new(DeriveNoteEncryptionKey::new(output_tx))),
+        )
+        .await
+        .map_err(|error| WalletServiceError::KmsApi(Box::new(error)))?;
+        let encryption_key = output_rx.await.map_err(|_| {
+            WalletServiceError::KmsApi(
+                "KMS API did not respond with the note encryption key".into(),
+            )
+        })?;
+        Ok(Address {
+            public_key,
+            encryption_key: Some(encryption_key),
+        })
+    }
+
     async fn import_note(
         note: Note,
         note_set: NoteSetIndex,
@@ -1450,6 +1520,55 @@ where
             }
             let known_note = Self::known_note(kms, key_id, *note, *note_set).await?;
             state.add_known_notes([known_note]);
+        }
+        Self::add_delivered_notes(block, state, kms).await
+    }
+
+    // Opens the delivery messages kept for the commitments `block` appends,
+    // with every key of the wallet, and registers the notes they deliver, so
+    // that applying the block adopts them. A message is opened here and not
+    // when it is received: the wallet decapsulates only the ciphertexts whose
+    // commitment is in a note set. A message no key opens is not for this
+    // wallet and is dropped with the others.
+    async fn add_delivered_notes(
+        block: &WalletBlock,
+        state: &mut ServiceState<'_>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<(), WalletServiceError> {
+        for update in &block.updates {
+            let messages = state.pending_deliveries_of(&update.commitments);
+            if messages.is_empty() {
+                continue;
+            }
+            let key_ids = state
+                .wallet()
+                .known_keys()
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
+            for key_id in key_ids {
+                let (output_tx, output_rx) = oneshot::channel();
+                kms.execute(
+                    key_id.clone(),
+                    KeyOperators::Zk(Box::new(OpenDeliveryMessages::new(
+                        messages.clone(),
+                        output_tx,
+                    ))),
+                )
+                .await
+                .map_err(|error| WalletServiceError::KmsApi(Box::new(error)))?;
+                let notes = output_rx.await.map_err(|_| {
+                    WalletServiceError::KmsApi(
+                        "KMS API did not respond with the delivered notes".into(),
+                    )
+                })?;
+                for note in notes.into_iter().flatten() {
+                    let known_note =
+                        Self::known_note(kms, key_id.clone(), note, update.note_set).await?;
+                    state.add_known_notes([known_note]);
+                }
+            }
+            state.forget_pending_deliveries(&update.commitments);
         }
         Ok(())
     }

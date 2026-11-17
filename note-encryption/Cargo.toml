@@ -1,0 +1,28 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-note-encryption"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+blake2           = { workspace = true }
+chacha20poly1305 = { workspace = true }
+hybrid-array     = { workspace = true }
+rand_core        = { workspace = true }
+x-wing           = { features = ["zeroize"], workspace = true }
+
+[dev-dependencies]
+hex                           = { features = ["alloc"], workspace = true }
+lb-core                       = { workspace = true }
+lb-groth16                    = { workspace = true }
+lb-key-management-system-keys = { workspace = true }
+rand                          = { features = ["std", "std_rng"], workspace = true }
+serde_json                    = { features = ["std"], workspace = true }

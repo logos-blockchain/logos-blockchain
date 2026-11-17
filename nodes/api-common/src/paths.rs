@@ -50,6 +50,10 @@ pub mod wallet {
     pub const SIGN_TX_ED25519: &str = "/wallet/sign/ed25519";
     pub const FUND: &str = "/wallet/fund";
     pub const IMPORT_NOTE: &str = "/wallet/notes/import";
+    pub const ADDRESS: &str = "/wallet/{public_key}/address";
+    pub const TRANSACTIONS_TRANSFER_FUNDS_TO_ADDRESS: &str =
+        "/wallet/transactions/transfer-funds-to-address";
+    pub const IMPORT_DELIVERY_MESSAGES: &str = "/wallet/delivery-messages/import";
 }
 
 pub mod admin {

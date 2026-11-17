@@ -65,6 +65,9 @@ macro_rules! api_routes {
             post lb_http_api_common::paths::wallet::SIGN_TX_ED25519 => crate::api::handlers::wallet::sign_tx_ed25519, wallet::sign_tx_ed25519::<WalletService, MempoolStorageAdapter, _>;
             post lb_http_api_common::paths::wallet::FUND => crate::api::handlers::wallet::fund, wallet::fund::<WalletService, MempoolStorageAdapter, _>;
             post lb_http_api_common::paths::wallet::IMPORT_NOTE => crate::api::handlers::wallet::import_note, wallet::import_note::<WalletService, _>;
+            get lb_http_api_common::paths::wallet::ADDRESS => crate::api::handlers::wallet::get_address, wallet::get_address::<WalletService, _>;
+            post lb_http_api_common::paths::wallet::TRANSACTIONS_TRANSFER_FUNDS_TO_ADDRESS => crate::api::handlers::wallet::post_transactions_transfer_funds_to_address, wallet::post_transactions_transfer_funds_to_address::<WalletService, MempoolStorageAdapter, _>;
+            post lb_http_api_common::paths::wallet::IMPORT_DELIVERY_MESSAGES => crate::api::handlers::wallet::import_delivery_messages, wallet::import_delivery_messages::<WalletService, _>;
             put lb_http_api_common::paths::admin::TRACING_FILTER => crate::api::tracing::reload_tracing_filter, reload_tracing_filter::<RuntimeServiceId>;
             get lb_http_api_common::paths::BLOCKS_STREAM => crate::api::handlers::blocks_stream, blocks_stream::<CryptarchiaConsensus<_, _, _, _>, RuntimeServiceId>;
             get lb_http_api_common::paths::BLOCKS_RANGE_STREAM => crate::api::handlers::blocks_range_stream, blocks_range_stream::<RuntimeServiceId>;

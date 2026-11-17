@@ -63,6 +63,7 @@ members = [
   "nodes/node/binary",
   "nodes/node/http-client",
   "nodes/version",
+  "note-encryption",
   "services/api",
   "services/blend",
   "services/chain/broadcast-service",
@@ -161,6 +162,7 @@ lb-merkle-tree                     = { default-features = false, package = "logo
 lb-mmr                             = { default-features = false, package = "logos-blockchain-mmr", path = "./mmr" }
 lb-network-service                 = { default-features = false, package = "logos-blockchain-network-service", path = "./services/network" }
 lb-node                            = { default-features = false, package = "logos-blockchain-node", path = "./nodes/node/binary" }
+lb-note-encryption                 = { default-features = false, package = "logos-blockchain-note-encryption", path = "./note-encryption" }
 lb-pol                             = { default-features = false, package = "logos-blockchain-pol", path = "./zk/proofs/pol" }
 lb-poq                             = { default-features = false, package = "logos-blockchain-poq", path = "./zk/proofs/poq" }
 lb-poseidon2                       = { default-features = false, package = "logos-blockchain-poseidon2", path = "./zk/poseidon2" }
@@ -245,6 +247,7 @@ futures-util                       = { default-features = false, version = "0.3.
 generic-array                      = { default-features = false, version = "1.2" }
 hex                                = { default-features = false, version = "0.4" }
 hickory-resolver                   = { default-features = false, version = "0.25" }
+hybrid-array                       = { default-features = false, version = "0.4" }
 http                               = { default-features = false, version = "1.3" }
 humantime                          = { default-features = false, version = "2.1" }
 igd-next                           = { default-features = false, version = "0.16.1" }
@@ -332,6 +335,7 @@ utoipa                = { default-features = false, version = "6.0" }
 utoipa-swagger-ui     = { default-features = false, version = "10.0" }
 uuid                  = { default-features = false, version = "1" }
 validator             = { default-features = false, version = "0.20.0" }
+x-wing                = { default-features = false, version = "0.1.1" }
 x25519-dalek          = { default-features = false, version = "2" }
 zerocopy              = { default-features = false, version = "0.8.26" }
 zeroize               = { default-features = false, version = "1" }

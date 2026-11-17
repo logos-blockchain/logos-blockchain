@@ -19,6 +19,7 @@ lb-core                       = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { features = ["unsafe"], workspace = true }
 lb-log-targets                = { workspace = true }
+lb-note-encryption            = { workspace = true }
 lb-pol                        = { workspace = true }
 lb-poseidon2                  = { workspace = true }
 lb-utils                      = { features = ["tokio"], workspace = true }
@@ -27,6 +28,7 @@ tracing                       = { workspace = true }
 
 [dev-dependencies]
 lb-core = { features = ["test-utils"], workspace = true }
+rand    = { features = ["std", "std_rng"], workspace = true }
 tokio   = { features = ["macros", "rt"], workspace = true }
 
 [features]

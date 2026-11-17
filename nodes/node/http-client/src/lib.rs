@@ -28,6 +28,11 @@ use lb_http_api_common::{
         wallet::{
             aged_notes::LeaderAgedNotesResponseBody,
             balance::WalletBalanceResponseBody,
+            delivery::{
+                WalletAddressResponseBody, WalletImportDeliveryMessagesRequestBody,
+                WalletImportDeliveryMessagesResponseBody, WalletTransferFundsToAddressRequestBody,
+                WalletTransferFundsToAddressResponseBody,
+            },
             fund::{WalletFundRequestBody, WalletFundResponseBody},
             import::WalletImportNoteRequestBody,
             transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
@@ -39,7 +44,10 @@ use lb_http_api_common::{
         CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_AGED_NOTES, MANTLE_GAS_PRICES,
         MANTLE_SDP_FINALIZED_DECLARATION, MANTLE_SDP_FINALIZED_DECLARATIONS, MEMPOOL_ADD_TX,
         NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
-        wallet::{BALANCE, FUND, IMPORT_NOTE, TRANSACTIONS_TRANSFER_FUNDS},
+        wallet::{
+            ADDRESS, BALANCE, FUND, IMPORT_DELIVERY_MESSAGES, IMPORT_NOTE,
+            TRANSACTIONS_TRANSFER_FUNDS, TRANSACTIONS_TRANSFER_FUNDS_TO_ADDRESS,
+        },
     },
     queries::BlocksStreamQuery,
     settings::default_max_body_size,
@@ -778,6 +786,49 @@ impl CommonHttpClient {
     ) -> Result<(), Error> {
         let request_url = base_url
             .join(IMPORT_NOTE.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
+    /// Get the address senders pay `zk_pk` at, a key of the node's wallet.
+    pub async fn get_address(
+        &self,
+        base_url: Url,
+        zk_pk: ZkPublicKey,
+    ) -> Result<WalletAddressResponseBody, Error> {
+        let key_id = hex::encode(fr_to_bytes(zk_pk.as_fr()));
+        let request_url = base_url
+            .join(&ADDRESS.replace("{public_key}", &key_id))
+            .map_err(Error::Url)?;
+
+        self.get::<(), WalletAddressResponseBody>(request_url, None)
+            .await
+    }
+
+    /// Post a request to transfer funds to an address, and get the delivery
+    /// message of the note the transfer pays.
+    pub async fn transfer_funds_to_address(
+        &self,
+        base_url: Url,
+        body: WalletTransferFundsToAddressRequestBody,
+    ) -> Result<WalletTransferFundsToAddressResponseBody, Error> {
+        let request_url = base_url
+            .join(TRANSACTIONS_TRANSFER_FUNDS_TO_ADDRESS.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
+    /// Post delivery messages of notes paid to the node's wallet, which opens
+    /// each of them once a block appends its commitment.
+    pub async fn import_delivery_messages(
+        &self,
+        base_url: Url,
+        body: WalletImportDeliveryMessagesRequestBody,
+    ) -> Result<WalletImportDeliveryMessagesResponseBody, Error> {
+        let request_url = base_url
+            .join(IMPORT_DELIVERY_MESSAGES.trim_start_matches('/'))
             .map_err(Error::Url)?;
 
         self.post(request_url, &body).await

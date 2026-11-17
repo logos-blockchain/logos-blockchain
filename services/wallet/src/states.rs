@@ -7,7 +7,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         GasProfile, Note, Value,
-        notes::NoteNullifier,
+        notes::{NoteCommitment, NoteNullifier},
         ops::transfer::TransferOp,
         transactions::{
             MantleTxBuilder,
@@ -19,7 +19,10 @@ use lb_core::{
 use lb_groth16::Fr;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_log_targets::wallet;
-use lb_wallet::{KnownNote, KnownNotes, WalletBlock, WalletError, WalletState};
+use lb_note_encryption::DeliveryMessage;
+use lb_wallet::{
+    KnownNote, KnownNotes, WalletBlock, WalletError, WalletState, delivery::delivered_commitment,
+};
 use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
@@ -108,6 +111,42 @@ impl PendingNotes {
     }
 }
 
+/// The delivery messages whose commitment no applied block has appended yet.
+/// A message is opened when a block appends its commitment, and not before:
+/// the wallet decapsulates only the ciphertexts whose commitment is in a note
+/// set. Ephemeral: rebuilt empty on restart.
+#[derive(Default)]
+struct PendingDeliveries {
+    messages: HashMap<NoteCommitment, DeliveryMessage>,
+}
+
+impl PendingDeliveries {
+    // Keeps `messages` and tells how many: a message whose commitment is not
+    // a field element is dropped, and a second message for a commitment
+    // replaces the first.
+    fn add(&mut self, messages: impl IntoIterator<Item = DeliveryMessage>) -> usize {
+        messages
+            .into_iter()
+            .filter_map(|message| Some((delivered_commitment(&message)?, message)))
+            .map(|(commitment, message)| self.messages.insert(commitment, message))
+            .count()
+    }
+
+    // The kept messages of `commitments`.
+    fn of(&self, commitments: &[NoteCommitment]) -> Vec<DeliveryMessage> {
+        commitments
+            .iter()
+            .filter_map(|commitment| self.messages.get(commitment).cloned())
+            .collect()
+    }
+
+    fn forget(&mut self, commitments: &[NoteCommitment]) {
+        for commitment in commitments {
+            self.messages.remove(commitment);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryState {
     /// [`WalletState`] at the last known LIB.
@@ -151,6 +190,7 @@ pub struct ServiceState<'u> {
     // opens them, so the service writes them to storage itself, and confirmed,
     // before handing one out.
     reward_notes: KnownNotes,
+    pending_deliveries: PendingDeliveries,
 }
 
 impl<'u> ServiceState<'u> {
@@ -224,7 +264,23 @@ impl<'u> ServiceState<'u> {
             pending_note_expiry_blocks: settings.pending_note_expiry_blocks,
             fee_margin_percent: settings.fee_margin_percent,
             reward_notes: KnownNotes::new(),
+            pending_deliveries: PendingDeliveries::default(),
         }
+    }
+
+    pub fn add_pending_deliveries(
+        &mut self,
+        messages: impl IntoIterator<Item = DeliveryMessage>,
+    ) -> usize {
+        self.pending_deliveries.add(messages)
+    }
+
+    pub fn pending_deliveries_of(&self, commitments: &[NoteCommitment]) -> Vec<DeliveryMessage> {
+        self.pending_deliveries.of(commitments)
+    }
+
+    pub fn forget_pending_deliveries(&mut self, commitments: &[NoteCommitment]) {
+        self.pending_deliveries.forget(commitments);
     }
 
     // the priority fee percentage of a funding that names none
@@ -426,7 +482,7 @@ fn known_keys(settings: &WalletServiceSettings) -> impl Iterator<Item = (ZkPubli
 mod tests {
     use core::{num::NonZero, time::Duration};
 
-    use lb_core::mantle::{note_set::NoteSetIndex, notes::NoteCommitment};
+    use lb_core::mantle::note_set::NoteSetIndex;
     use lb_groth16::Field as _;
 
     use super::*;
@@ -455,6 +511,33 @@ mod tests {
             epoch_length: timing.epoch_length,
             security_param: NonZero::new(5).unwrap(),
         })
+    }
+
+    #[test]
+    fn a_delivery_message_is_kept_until_its_commitment_is_forgotten() {
+        use lb_note_encryption::NOTE_CIPHERTEXT_SIZE;
+
+        let message = |commitment: NoteCommitment| DeliveryMessage {
+            commitment: lb_groth16::fr_to_bytes(&commitment.0),
+            ciphertext: [0; NOTE_CIPHERTEXT_SIZE],
+        };
+        let (first, second) = (NoteCommitment(Fr::ONE), NoteCommitment(Fr::from(2u64)));
+        // Its commitment is the modulus, which no note set holds.
+        let invalid = DeliveryMessage {
+            commitment: lb_groth16::fr_modulus().to_bytes_le().try_into().unwrap(),
+            ciphertext: [0; NOTE_CIPHERTEXT_SIZE],
+        };
+        let mut pending = PendingDeliveries::default();
+
+        assert_eq!(pending.add([message(first), message(second), invalid]), 2);
+        // A block appending the first commitment and one the wallet holds no
+        // message for.
+        let appended = [first, NoteCommitment(Fr::from(3u64))];
+        assert_eq!(pending.of(&appended), vec![message(first)]);
+
+        pending.forget(&appended);
+        assert_eq!(pending.of(&appended), vec![]);
+        assert_eq!(pending.of(&[second]), vec![message(second)]);
     }
 
     #[test]
