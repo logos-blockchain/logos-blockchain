@@ -43,10 +43,10 @@ pub const VERSIONS_NAMESPACE: &[u8] = b"V";
 
 /// The namespace of the note sets each committed block wrote to, by version,
 /// so that pruning the block deletes its writes in those sets alone.
-pub const WRITTEN_NAMESPACE: &[u8] = b"W";
+pub const WRITTEN_SETS_NAMESPACE: &[u8] = b"W";
 
 // The key of the sets the block of `version` wrote to.
-fn written_key(version: Version) -> Vec<u8> {
+fn written_sets_key(version: Version) -> Vec<u8> {
     version.0.to_be_bytes().to_vec()
 }
 
@@ -61,7 +61,7 @@ pub struct NullifierStorage {
     store: DynKvStore,
     versions: VersionRegistry<Prefixed<DynKvStore>>,
     versions_store: Prefixed<DynKvStore>,
-    written_store: Prefixed<DynKvStore>,
+    written_sets_store: Prefixed<DynKvStore>,
 }
 
 /// The blocks [`NullifierStorage::prune`] removes from the store.
@@ -78,12 +78,12 @@ impl NullifierStorage {
     #[must_use]
     pub fn new(store: DynKvStore) -> Self {
         let versions_store = Prefixed::new(Arc::clone(&store), VERSIONS_NAMESPACE);
-        let written_store = Prefixed::new(Arc::clone(&store), WRITTEN_NAMESPACE);
+        let written_sets_store = Prefixed::new(Arc::clone(&store), WRITTEN_SETS_NAMESPACE);
         Self {
             store,
             versions: VersionRegistry::new(versions_store.clone()),
             versions_store,
-            written_store,
+            written_sets_store,
         }
     }
 
@@ -122,39 +122,39 @@ impl NullifierStorage {
             batch.append(self.versions_batch(
                 VersionRegistry::<Prefixed<DynKvStore>>::release_writes(block_id),
             ));
-            batch.append(self.forget_written(version));
+            batch.append(self.forget_written_sets(version));
         }
         Ok(())
     }
 
     // The writes forgetting the sets the block of `version` wrote to.
-    fn forget_written(&self, version: Version) -> WriteBatch {
-        let mut written = WriteBatch::new();
-        written.delete(written_key(version));
-        self.written_store.namespace_batch(written)
+    fn forget_written_sets(&self, version: Version) -> WriteBatch {
+        let mut writes = WriteBatch::new();
+        writes.delete(written_sets_key(version));
+        self.written_sets_store.namespace_batch(writes)
     }
 
     // The writes recording that the block of `version` wrote to `sets`.
-    fn record_written(
+    fn record_written_sets(
         &self,
         version: Version,
         sets: &[NoteSetIndex],
     ) -> Result<WriteBatch, NoteSetError> {
-        let mut written = WriteBatch::new();
+        let mut writes = WriteBatch::new();
         if !sets.is_empty() {
             let bytes = sets.to_bytes().map_err(|error| {
                 NoteSetError::Imt(ImtError::Corrupted(format!("written note sets: {error}")))
             })?;
-            written.put(written_key(version), bytes);
+            writes.put(written_sets_key(version), bytes);
         }
-        Ok(self.written_store.namespace_batch(written))
+        Ok(self.written_sets_store.namespace_batch(writes))
     }
 
     /// The note sets the block of `version` wrote to, none if it wrote nothing.
-    pub fn written(&self, version: Version) -> Result<Vec<NoteSetIndex>, NoteSetError> {
+    pub fn written_sets(&self, version: Version) -> Result<Vec<NoteSetIndex>, NoteSetError> {
         let Some(bytes) = self
-            .written_store
-            .get(&written_key(version))
+            .written_sets_store
+            .get(&written_sets_key(version))
             .map_err(storage_error)?
         else {
             return Ok(Vec::new());
@@ -176,7 +176,7 @@ impl NullifierStorage {
         let (state, committed) = commit_state(state, allocation.version)?;
         let mut batch = self.versions_batch(allocation.writes);
         batch.append(committed.writes);
-        batch.append(self.record_written(allocation.version, &committed.written)?);
+        batch.append(self.record_written_sets(allocation.version, &committed.written_sets)?);
         self.write(batch)?;
         Ok(state)
     }
@@ -224,7 +224,7 @@ impl NullifierStorage {
             if let Some(version) = self.versions.lookup(*block_id)? {
                 batch.append(NoteSets::discard_writes(
                     &self.store,
-                    self.written(version)?,
+                    self.written_sets(version)?,
                     version,
                 ));
             }
@@ -252,10 +252,10 @@ impl NullifierStorage {
             }
             batch.append(NoteSets::discard_writes(
                 &self.store,
-                self.written(live.version)?,
+                self.written_sets(live.version)?,
                 live.version,
             ));
-            batch.append(self.forget_written(live.version));
+            batch.append(self.forget_written_sets(live.version));
             batch.append(self.versions_batch(
                 VersionRegistry::<Prefixed<DynKvStore>>::release_writes(live.block_id),
             ));
@@ -868,7 +868,7 @@ mod tests {
         let fork_version = chain.version(fork);
         assert!(chain.written(doomed_set, fork_version) > 0);
         assert_eq!(
-            chain.ledger.storage.written(fork_version).unwrap(),
+            chain.ledger.storage.written_sets(fork_version).unwrap(),
             vec![doomed_set]
         );
         let mut tip = chain.extend(b1, &[2]);
@@ -879,7 +879,7 @@ mod tests {
         // gone with the record of them.
         assert!(chain.state(&tip).note_sets.channel(&channel(3)).is_none());
         assert_eq!(chain.written(doomed_set, fork_version), 0);
-        assert_eq!(chain.ledger.storage.written(fork_version).unwrap(), []);
+        assert_eq!(chain.ledger.storage.written_sets(fork_version).unwrap(), []);
         chain.check(&PROBES);
     }
 

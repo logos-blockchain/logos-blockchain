@@ -524,7 +524,7 @@ each makes the suite fail.
   store (`Prefixed::namespace_batch`): `NoteSets::commit(version)`,
   `finalize(block_id)`, `rebase()`, and the static `discard_writes(store,
   written, version)` and `collect_garbage(store, index, floor_len)`.
-  `commit` also returns the sets it wrote to (`CommittedSets::written`).
+  `commit` also returns the sets it wrote to (`CommittedSets::written_sets`).
 - `PartialEq`: a tree compares by `len` and root (`Imt` hashes a pending
   block not sealed yet). `NoteSets` ignores its store; `NoteSet` and
   `NoteSets` are no longer `Eq`, nor is `EpochState`.

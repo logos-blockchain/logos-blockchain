@@ -858,7 +858,7 @@ pub struct CommittedSets {
     pub sets: NoteSets,
     pub writes: WriteBatch,
     /// The sets with a block written, whose namespaces the writes touch.
-    pub written: Vec<NoteSetIndex>,
+    pub written_sets: Vec<NoteSetIndex>,
 }
 
 impl NoteSets {
@@ -1218,12 +1218,12 @@ impl NoteSets {
     ) -> Result<CommittedSets, NoteSetError> {
         let mut sets = self.clone();
         let mut writes = WriteBatch::new();
-        let mut written = Vec::new();
+        let mut written_sets = Vec::new();
         for (index, set) in self.sets() {
             let (nullifiers, set_writes) = step(&set.nullifiers)?;
             if !set_writes.is_empty() {
                 writes.append(set.nullifiers.store().namespace_batch(set_writes));
-                written.push(index);
+                written_sets.push(index);
             }
             sets.replace(
                 index,
@@ -1236,7 +1236,7 @@ impl NoteSets {
         Ok(CommittedSets {
             sets,
             writes,
-            written,
+            written_sets,
         })
     }
 
@@ -1269,15 +1269,15 @@ impl NoteSets {
     }
 
     /// The writes deleting what the block of `version` wrote in the sets
-    /// `written` of `store`, once its fork is pruned.
+    /// `written_sets` of `store`, once its fork is pruned.
     #[must_use]
     pub fn discard_writes(
         store: &DynKvStore,
-        written: impl IntoIterator<Item = NoteSetIndex>,
+        written_sets: impl IntoIterator<Item = NoteSetIndex>,
         version: Version,
     ) -> WriteBatch {
         let mut batch = WriteBatch::new();
-        for index in written {
+        for index in written_sets {
             batch.append(
                 set_store(store, index).namespace_batch(NullifierImt::discard_writes(version)),
             );
