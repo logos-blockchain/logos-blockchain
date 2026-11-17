@@ -147,6 +147,10 @@ pub struct WalletState {
     // snapshot the next epoch will use
     pub next_aged_paths: rpds::HashTrieMapSync<NoteCommitment, MerklePath>,
     pub epoch: Epoch,
+    // The nullifiers of the owned notes spent in each set. A spent note is not
+    // adopted again when its commitment is appended to the set once more: the
+    // copy has the same nullifier, so it can't be spent.
+    pub spent: rpds::HashTrieSetSync<(NoteSetIndex, NoteNullifier)>,
 }
 
 impl WalletState {
@@ -158,6 +162,7 @@ impl WalletState {
     ) -> Result<Self, WalletError> {
         let mut commitments = rpds::HashTrieMapSync::new_sync();
         let mut notes = rpds::HashTrieMapSync::new_sync();
+        let mut spent = rpds::HashTrieSetSync::new_sync();
         for (note_set, set_notes) in [
             (NoteSetIndex::Ledger, genesis_notes),
             (NoteSetIndex::Sdp, genesis_service_notes),
@@ -168,7 +173,7 @@ impl WalletState {
                 nullifiers: vec![],
                 commitments: set_notes.iter().map(Note::commitment).collect(),
             };
-            apply_update(&mut commitments, &mut notes, known, &update)?;
+            apply_update(&mut commitments, &mut notes, &mut spent, known, &update)?;
         }
         // both genesis epoch states hold the genesis sets
         let paths = current_paths(&notes);
@@ -178,6 +183,7 @@ impl WalletState {
             aged_paths: paths.clone(),
             next_aged_paths: paths,
             epoch,
+            spent,
         })
     }
 
@@ -273,8 +279,9 @@ impl WalletState {
 
         let mut commitments = self.commitments.clone();
         let mut notes = self.notes.clone();
+        let mut spent = self.spent.clone();
         for update in &block.updates {
-            apply_update(&mut commitments, &mut notes, known, update)?;
+            apply_update(&mut commitments, &mut notes, &mut spent, known, update)?;
         }
 
         Ok(Self {
@@ -283,6 +290,7 @@ impl WalletState {
             aged_paths,
             next_aged_paths,
             epoch: block.epoch,
+            spent,
         })
     }
 
@@ -494,11 +502,13 @@ fn current_paths(
 }
 
 // Append the commitments of `update` to its set, keeping the paths of the
-// owned notes of the set valid and adopting the known ones, then drop the
-// owned notes whose nullifier it inserted.
+// owned notes of the set valid and adopting the known ones not spent in the
+// set yet, then drop the owned notes whose nullifier it inserted and record
+// them as spent.
 fn apply_update(
     commitments: &mut rpds::HashTrieMapSync<NoteSetIndex, CommitmentMmr>,
     notes: &mut rpds::HashTrieMapSync<NoteCommitment, OwnedNote>,
+    spent: &mut rpds::HashTrieSetSync<(NoteSetIndex, NoteNullifier)>,
     known: &KnownNotes,
     update: &NoteSetUpdate,
 ) -> Result<(), WalletError> {
@@ -527,10 +537,9 @@ fn apply_update(
                     PushWithPathsError::InvalidTrackedPath(error) => error.into(),
                 })?;
         mmr = next;
-        if let Some(known_note) = known
-            .get(commitment)
-            .filter(|known| known.note_set == note_set)
-        {
+        if let Some(known_note) = known.get(commitment).filter(|known| {
+            known.note_set == note_set && !spent.contains(&(note_set, known.nullifier))
+        }) {
             owned.push(*known_note);
             paths.push(path);
         }
@@ -554,6 +563,7 @@ fn apply_update(
     for nullifier in &update.nullifiers {
         if let Some(commitment) = by_nullifier.get(nullifier) {
             notes.remove_mut(commitment);
+            spent.insert_mut((note_set, *nullifier));
         }
     }
     Ok(())
@@ -987,6 +997,120 @@ mod tests {
             .unwrap();
         assert!(state.notes.is_empty());
         assert_eq!(state.balance(pk(1)), None);
+    }
+
+    fn spend_of(nullifier: NoteNullifier, commitments: Vec<NoteCommitment>) -> NoteSetUpdate {
+        NoteSetUpdate {
+            note_set: NoteSetIndex::Ledger,
+            nullifiers: vec![nullifier],
+            commitments,
+        }
+    }
+
+    // A copy of a spent note has its nullifier, so it is not a payment.
+    #[test]
+    fn a_repeated_commitment_does_not_restore_a_spent_note() {
+        let owned = Note::new(100, Fr::from(1u64), pk(1));
+        let known = known(&[(owned, NoteSetIndex::Ledger, nullifier(1))]);
+        let state = WalletState::from_genesis(&known, &[owned], &[], Epoch::new(0)).unwrap();
+
+        // Repeated before the spend, it is one note.
+        let state = state
+            .apply_block(
+                &known,
+                &block(
+                    1,
+                    0,
+                    0,
+                    vec![appended(NoteSetIndex::Ledger, vec![owned.commitment()])],
+                ),
+            )
+            .unwrap();
+        assert_eq!(state.balance(pk(1)).unwrap().balance, 100);
+
+        let state = state
+            .apply_block(
+                &known,
+                &block(2, 1, 0, vec![spend_of(nullifier(1), vec![])]),
+            )
+            .unwrap();
+        let state = state
+            .apply_block(
+                &known,
+                &block(
+                    3,
+                    2,
+                    0,
+                    vec![appended(NoteSetIndex::Ledger, vec![owned.commitment()])],
+                ),
+            )
+            .unwrap();
+        assert!(state.notes.is_empty());
+        assert_eq!(state.balance(pk(1)), None);
+    }
+
+    #[test]
+    fn a_note_received_and_spent_in_one_block_stays_spent() {
+        let owned = Note::new(100, Fr::from(1u64), pk(1));
+        let known = known(&[(owned, NoteSetIndex::Ledger, nullifier(1))]);
+        let state = WalletState::from_genesis(&known, &[], &[], Epoch::new(0)).unwrap();
+
+        let state = state
+            .apply_block(
+                &known,
+                &block(
+                    1,
+                    0,
+                    0,
+                    vec![spend_of(
+                        nullifier(1),
+                        vec![owned.commitment(), owned.commitment()],
+                    )],
+                ),
+            )
+            .unwrap();
+        assert!(state.notes.is_empty());
+
+        let state = state
+            .apply_block(
+                &known,
+                &block(
+                    2,
+                    1,
+                    0,
+                    vec![appended(NoteSetIndex::Ledger, vec![owned.commitment()])],
+                ),
+            )
+            .unwrap();
+        assert!(state.notes.is_empty());
+    }
+
+    // The spends of a fork stay on it: a sibling of the spend still holds the
+    // note, a copy of it included.
+    #[test]
+    fn a_fork_without_the_spend_holds_the_note() {
+        let owned = Note::new(100, Fr::from(1u64), pk(1));
+        let known = known(&[(owned, NoteSetIndex::Ledger, nullifier(1))]);
+        let mut wallet: Wallet<u8> =
+            Wallet::from_genesis([], known, block_id(0), &[owned], &[]).unwrap();
+        let repeat = || vec![appended(NoteSetIndex::Ledger, vec![owned.commitment()])];
+
+        wallet
+            .apply_block(&block(1, 0, 0, vec![spend_of(nullifier(1), vec![])]))
+            .unwrap();
+        wallet.apply_block(&block(2, 1, 0, repeat())).unwrap();
+        // The sibling of the spend.
+        wallet.apply_block(&block(3, 0, 0, repeat())).unwrap();
+
+        let balance_at = |id| {
+            wallet
+                .wallet_state_at(block_id(id))
+                .unwrap()
+                .balance(pk(1))
+                .map(|balance| balance.balance)
+        };
+        assert_eq!(balance_at(2), None);
+        assert_eq!(balance_at(3), Some(100));
     }
 
     #[test]
