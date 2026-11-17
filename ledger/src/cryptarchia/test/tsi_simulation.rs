@@ -32,6 +32,7 @@ use lb_core::{
             GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, states::Preverified,
         },
     },
+    proofs::leader_proof::LeaderProof as _,
     sdp::Declarations,
 };
 use lb_cryptarchia_engine::{Branch, Cryptarchia, Slot, State, UncleSlots};
@@ -375,12 +376,16 @@ fn apply_block_to_ledger(
         .expect("epoch state update");
     let id = block_id(parent, slot);
     let proof = generate_proof(&parent_state, &utxo, slot);
+    // The ledger applies a header without verifying its proof of leadership,
+    // so verify it here as Block Header Verification does.
+    assert!(proof.verify(&ledger.leader_public(parent, slot).expect("leader public")));
     let update = ledger
         .prepare_update(
             id,
             parent,
             slot,
-            &proof,
+            &proof.entropy(),
+            *proof.voucher_cm(),
             uncle_slots,
             std::iter::empty::<SignedOps<Preverified, StandardMode>>(),
         )

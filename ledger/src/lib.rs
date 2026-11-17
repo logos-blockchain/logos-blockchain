@@ -35,7 +35,7 @@ use lb_core::{
                 channel_transfer::ChannelTransferExecutionContext,
                 deposit::DepositExecutionContext, withdraw::WithdrawExecutionContext,
             },
-            leader_claim::LeaderClaimExecutionContext,
+            leader_claim::{LeaderClaimExecutionContext, VoucherCm},
             pow::{ClaimPoWRewardExecutionContext, PowReward},
             sdp::{SDPActiveOp, SDPDeclareOp},
         },
@@ -47,7 +47,7 @@ use lb_core::{
             tx_list::ops::{OpsContext, OpsGasContext},
         },
     },
-    proofs::leader_proof,
+    proofs::leader_proof::LeaderPublic,
 };
 use lb_cryptarchia_engine::{Slot, UncleSlots};
 use lb_groth16::{AdditiveGroup as _, Fr};
@@ -150,23 +150,27 @@ where
         }
     }
 
-    /// Prepare to add a new [`LedgerState`] by applying the given proof and
-    /// transactions on top of the parent state.
+    /// Prepare to add a new [`LedgerState`] by applying the given header
+    /// components and transactions on top of the parent state.
+    ///
+    /// The header components must come from a header that passed Block Header
+    /// Verification, since this does not verify the proof of leadership.
     ///
     /// On success, a new [`LedgerState`] is returned, which can then be
     /// committed by calling [`Self::commit_update`].
-    pub fn prepare_update<Tx, LeaderProof>(
+    #[expect(clippy::too_many_arguments, reason = "Need all args")]
+    pub fn prepare_update<Tx>(
         &self,
         id: Id,
         parent_id: Id,
         slot: Slot,
-        proof: &LeaderProof,
+        proof_entropy: &Fr,
+        voucher_cm: VoucherCm,
         uncle_slots: &UncleSlots,
         txs: impl Iterator<Item = Tx>,
     ) -> Result<PreparedUpdate<Id>, LedgerError<Id>>
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
-        LeaderProof: leader_proof::LeaderProof,
         Id: Into<BlockHash>,
     {
         let parent_state = self
@@ -177,7 +181,8 @@ where
         let (new_state, events, deferred_proofs) = parent_state.clone().try_update(
             id,
             slot,
-            proof,
+            proof_entropy,
+            voucher_cm,
             uncle_slots,
             txs,
             &self.era_schedule,
@@ -199,6 +204,15 @@ where
     #[must_use]
     pub const fn era_schedule(&self) -> &Arc<EraScheduledConfig> {
         &self.era_schedule
+    }
+
+    /// Returns the public inputs that a `PoL` for a block at `slot` with
+    /// `parent` must be verified against.
+    pub fn leader_public(&self, parent: Id, slot: Slot) -> Result<LeaderPublic, LedgerError<Id>> {
+        self.states
+            .get(&parent)
+            .ok_or(LedgerError::ParentNotFound(parent))?
+            .leader_public(slot, &self.era_schedule)
     }
 
     /// Removes the state stored for the given block id.
@@ -230,21 +244,23 @@ pub struct LedgerState {
 }
 
 impl LedgerState {
-    fn try_update<Tx, LeaderProof, Id>(
+    #[expect(clippy::too_many_arguments, reason = "Need all args")]
+    fn try_update<Tx, Id>(
         self,
         block_id: Id,
         slot: Slot,
-        proof: &LeaderProof,
+        proof_entropy: &Fr,
+        voucher_cm: VoucherCm,
         uncle_slots: &UncleSlots,
         txs: impl Iterator<Item = Tx>,
         eras: &EraScheduledConfig,
     ) -> Result<(Self, Events, DeferredProofs), LedgerError<Id>>
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
-        LeaderProof: leader_proof::LeaderProof,
         Id: Into<BlockHash>,
     {
-        let (mut state, header_events) = self.try_apply_header(slot, proof, uncle_slots, eras)?;
+        let (mut state, header_events) =
+            self.try_apply_header(slot, proof_entropy, voucher_cm, uncle_slots, eras)?;
         // Record the applied block among the recently seen blocks `PoW`
         // claims may anchor to. This is the canonical apply path, where the
         // block's id is known — unlike a proposer's direct
@@ -284,34 +300,30 @@ impl LedgerState {
     /// transactions that should be applied before that.
     ///
     /// Returns any [`HeaderEvent`]s emitted while processing the header.
-    pub fn try_apply_header<LeaderProof, Id>(
+    pub fn try_apply_header<Id>(
         self,
         slot: Slot,
-        proof: &LeaderProof,
+        proof_entropy: &Fr,
+        voucher_cm: VoucherCm,
         uncle_slots: &UncleSlots,
         eras: &EraScheduledConfig,
-    ) -> Result<(Self, Vec<HeaderEvent>), LedgerError<Id>>
-    where
-        LeaderProof: leader_proof::LeaderProof,
-    {
+    ) -> Result<(Self, Vec<HeaderEvent>), LedgerError<Id>> {
         let last_epoch_state = self.cryptarchia_ledger.epoch_state().clone();
-        let mut cryptarchia_ledger = self
-            .cryptarchia_ledger
-            .try_apply_header::<LeaderProof, Id>(
-                slot,
-                proof,
-                uncle_slots,
-                // TODO: threading SDP here because EpochState is currently embedded in
-                // CryptarchiaLedger.
-                // In the future, we will pull EpochState up into LedgerState.
-                &self.mantle_ledger.sdp,
-                &self.mantle_ledger.pow,
-                eras,
-            )?;
+        let mut cryptarchia_ledger = self.cryptarchia_ledger.try_apply_header::<Id>(
+            slot,
+            proof_entropy,
+            uncle_slots,
+            // TODO: threading SDP here because EpochState is currently embedded in
+            // CryptarchiaLedger.
+            // In the future, we will pull EpochState up into LedgerState.
+            &self.mantle_ledger.sdp,
+            &self.mantle_ledger.pow,
+            eras,
+        )?;
         let (mantle_ledger, effect) = self.mantle_ledger.try_apply_header(
             &last_epoch_state,
             cryptarchia_ledger.epoch_state(),
-            *proof.voucher_cm(),
+            voucher_cm,
             eras,
         )?;
 
@@ -333,20 +345,15 @@ impl LedgerState {
         ))
     }
 
-    /// Verifies a leadership proof for a block at `slot` whose parent is the
-    /// block this state belongs to, leaving the state untouched.
-    pub fn verify_proof_of_leadership<LeaderProof, Id>(
+    /// Returns the public inputs that a `PoL` for a block at `slot` must be
+    /// verified against.
+    pub fn leader_public<Id>(
         &self,
         slot: Slot,
-        proof: &LeaderProof,
         eras: &EraScheduledConfig,
-    ) -> Result<(), LedgerError<Id>>
-    where
-        LeaderProof: leader_proof::LeaderProof,
-    {
-        self.cryptarchia_ledger.verify_proof_of_leadership(
+    ) -> Result<LeaderPublic, LedgerError<Id>> {
+        self.cryptarchia_ledger.leader_public(
             slot,
-            proof,
             &self.mantle_ledger.sdp,
             &self.mantle_ledger.pow,
             eras,
@@ -1044,6 +1051,7 @@ mod tests {
         proofs::{
             channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
             leader_claim_proof::Groth16LeaderClaimProof,
+            leader_proof::LeaderProof as _,
         },
         sdp::{ActivityMetadata, DeclarationId, Nonce},
     };
@@ -1340,7 +1348,8 @@ mod tests {
                 new_id,
                 genesis_id,
                 Slot::from(1u64),
-                &proof,
+                &proof.entropy(),
+                *proof.voucher_cm(),
                 &UncleSlots::default(),
                 std::iter::once(tx),
             )
