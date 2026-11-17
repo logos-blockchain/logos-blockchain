@@ -211,7 +211,7 @@ pub struct Restored<Id: Eq + Hash, Info> {
 
 /// The states of the blocks the chain holds: the LIB and the blocks above it.
 ///
-/// The nullifier trees of the states are kept in the store of the root state
+/// The nullifier trees of the states are kept in the store of the LIB state
 /// (see [`nullifier_storage`]): [`Self::commit_update`] writes each block, and
 /// [`Self::apply_pruning`] finalizes the LIB and removes the pruned blocks.
 #[derive(Clone)]
@@ -243,7 +243,7 @@ impl<Id> Ledger<Id>
 where
     Id: Eq + Hash + Copy,
 {
-    /// A ledger whose root, and LIB, is the state of block `id`. Its nullifier
+    /// A ledger whose LIB is the state of block `id`. Its nullifier
     /// trees are kept in the store of its note sets: the state becomes the
     /// finalized base of that store, committed first if it has a pending
     /// block, as a genesis state does.
@@ -255,10 +255,10 @@ where
     where
         Id: Into<BlockHash>,
     {
-        Self::with_root(id, state, era_schedule, |_, _| Ok(None))
+        Self::with_lib(id, state, era_schedule, |_, _| Ok(None))
     }
 
-    /// Like [`Self::new`], writing the [`LibState`] of the root with `info` in
+    /// Like [`Self::new`], writing the [`LibState`] of the LIB with `info` in
     /// the batch that finalizes it.
     pub fn new_with_lib_state<Info: serde::Serialize>(
         id: Id,
@@ -269,12 +269,12 @@ where
     where
         Id: Into<BlockHash> + serde::Serialize,
     {
-        Self::with_root(id, state, era_schedule, |id, state| {
+        Self::with_lib(id, state, era_schedule, |id, state| {
             encode_lib_state(id, state, info).map(Some)
         })
     }
 
-    /// The ledger whose root is the LIB recorded in the LIB state of `store`,
+    /// The ledger whose LIB is the one recorded in the LIB state of `store`,
     /// its state attached to the store, or `None` if the store has no LIB
     /// state. The blocks above the LIB are applied again with
     /// [`Self::commit_update`], which reuses their versions, then
@@ -294,13 +294,13 @@ where
                 .map_err(|error| LedgerError::LibState(error.to_string()))?;
         let mut state = state;
         state.cryptarchia_ledger = attach_state(state.cryptarchia_ledger, store)?;
-        let ledger = Self::with_root(lib, state, era_schedule, |_, _| Ok(None))?;
+        let ledger = Self::with_lib(lib, state, era_schedule, |_, _| Ok(None))?;
         Ok(Some(Restored { ledger, lib, info }))
     }
 
-    // The ledger whose root is `state`, made the finalized base of its store
+    // The ledger whose LIB state is `state`, made the finalized base of its store
     // in one batch with the LIB state `lib_state_bytes` encodes, if any.
-    fn with_root(
+    fn with_lib(
         id: Id,
         mut state: LedgerState,
         era_schedule: Arc<EraScheduledConfig>,
@@ -309,7 +309,7 @@ where
     where
         Id: Into<BlockHash>,
     {
-        // Record the root block among the recently seen blocks, so early
+        // Record the LIB block among the recently seen blocks, so early
         // `PoW` reward claims can anchor to it. Later blocks are recorded
         // as they are applied in `try_update`.
         let slot = state.slot();
@@ -317,8 +317,8 @@ where
             .mantle_ledger
             .add_seen_block(id.into(), slot, &era_schedule);
         let storage = NullifierStorage::new(Arc::clone(state.latest_note_sets().store()));
-        let (root, mut batch) = storage.make_root(block_id(id), state.cryptarchia_ledger)?;
-        state.cryptarchia_ledger = root;
+        let (base, mut batch) = storage.finalize_base(block_id(id), state.cryptarchia_ledger)?;
+        state.cryptarchia_ledger = base;
         if let Some(bytes) = lib_state_bytes(&id, &state)? {
             batch.put(Bytes::from_static(LIB_STATE_KEY), bytes);
         }

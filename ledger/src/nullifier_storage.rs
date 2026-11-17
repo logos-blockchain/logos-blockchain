@@ -184,13 +184,13 @@ impl NullifierStorage {
         Ok(state)
     }
 
-    /// Makes the state of block `block_id`, the root of a ledger, the finalized
+    /// Makes the state of block `block_id`, the LIB of a ledger, the finalized
     /// base of the store: committed first if it has a pending block, as the
     /// genesis state does. A state restored from the store already is its base.
     ///
     /// Returns the batch finalizing it, for the caller to write, then collect
     /// the garbage.
-    pub fn make_root(
+    pub fn finalize_base(
         &self,
         block_id: BlockId,
         state: CryptarchiaLedger,
