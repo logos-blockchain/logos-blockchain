@@ -44,8 +44,9 @@ pub type NoteCiphertext = [u8; NOTE_CIPHERTEXT_SIZE];
 
 /// The key a wallet opens its note ciphertexts with, `sk_enc`.
 ///
-/// It is a viewing key: it opens every ciphertext addressed to the wallet and
-/// spends nothing.
+/// It is a decryption key and nothing more: it opens every ciphertext
+/// addressed to the wallet, spends nothing and shows nothing of what the wallet
+/// spent.
 pub struct DecapsulationKey(x_wing::DecapsulationKey);
 
 impl DecapsulationKey {
