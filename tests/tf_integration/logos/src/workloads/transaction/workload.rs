@@ -6,7 +6,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use lb_config::deployment::GAS_PROFILE;
+use lb_config::{consensus::GENESIS_GAS_PRICE, deployment::GAS_PROFILE};
 use lb_core::{
     era::ForkDigest,
     mantle::{
@@ -209,7 +209,11 @@ impl<'a> Submission<'a> {
     }
 
     async fn execute(mut self) -> Result<(), DynError> {
-        let gas_context = OpsGasContext::new(HashMap::new(), GasPrices::default(), GAS_PROFILE);
+        let gas_context = OpsGasContext::new(
+            HashMap::new(),
+            GasPrices::new(GENESIS_GAS_PRICE.get(), GENESIS_GAS_PRICE.get()),
+            GAS_PROFILE,
+        );
         while let Some(input) = self.plan.pop_front() {
             submit_wallet_transaction(self.ctx, &input, gas_context.clone()).await?;
             if !self.interval.is_zero() {

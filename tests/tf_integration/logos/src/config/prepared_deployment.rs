@@ -85,8 +85,11 @@ fn shared_inputs(
 
 #[cfg(test)]
 mod tests {
-    use lb_config::{consensus::BLEND_DECLARATION_AMOUNT, funding::GENESIS_STAKE_SUPPLY};
-    use lb_core::mantle::{ops::OpRef, traits::MantleTx as _, transactions::UNITS_PER_LGO};
+    use lb_config::{
+        consensus::{BLEND_DECLARATION_AMOUNT, UNITS_PER_LGO},
+        funding::GENESIS_STAKE_SUPPLY,
+    };
+    use lb_core::mantle::{ops::OpRef, traits::MantleTx as _};
     use lb_key_management_system_service::keys::Key;
     use lb_libp2p::identity::ed25519;
     use lb_sdp_service::DeclarationConfig;

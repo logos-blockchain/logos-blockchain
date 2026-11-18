@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use lb_config::deployment::GAS_PROFILE;
+use lb_config::{consensus::GENESIS_GAS_PRICE, deployment::GAS_PROFILE};
 use lb_core::mantle::{
     OpProof,
     ops::{
@@ -11,7 +11,7 @@ use lb_core::mantle::{
         },
     },
     transactions::{
-        GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GasPrices, MantleTxBuilder,
+        GasPrices, MantleTxBuilder,
         hash::TxHash,
         tx_list::ops::{OpsContext, OpsGasContext},
     },
@@ -27,10 +27,7 @@ pub fn build_inscription_tx_builder(
     let tx_context = OpsContext {
         gas_context: OpsGasContext::new(
             HashMap::new(),
-            GasPrices {
-                execution_base_gas_price: GENESIS_EXECUTION_GAS_PRICE,
-                storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
-            },
+            GasPrices::new(GENESIS_GAS_PRICE.get(), GENESIS_GAS_PRICE.get()),
             GAS_PROFILE,
         ),
     };

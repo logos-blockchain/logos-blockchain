@@ -4,14 +4,14 @@ use std::{
     time::Duration,
 };
 
-use lb_config::deployment::GAS_PROFILE;
+use lb_config::{consensus::GENESIS_GAS_PRICE, deployment::GAS_PROFILE};
 use lb_core::mantle::{
     Note,
     gas::GasCost,
     note_set::NoteSetIndex,
     notes::NoteNullifier,
     transactions::{
-        GENESIS_EXECUTION_GAS_PRICE, GasPrices, MantleTxBuilder, OpProofs,
+        GasPrices, MantleTxBuilder, OpProofs,
         tx_list::ops::{OpsContext, OpsGasContext},
     },
 };
@@ -470,10 +470,7 @@ fn finalize_fee(builder: &MantleTxBuilder) -> Result<u64, StepError> {
     let context = OpsContext {
         gas_context: OpsGasContext::new(
             HashMap::new(),
-            GasPrices::new(
-                GENESIS_EXECUTION_GAS_PRICE.into_inner(),
-                DEFAULT_STORAGE_GAS_PRICE,
-            ),
+            GasPrices::new(GENESIS_GAS_PRICE.get(), DEFAULT_STORAGE_GAS_PRICE),
             GAS_PROFILE,
         ),
     };
