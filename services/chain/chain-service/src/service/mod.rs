@@ -233,6 +233,9 @@ where
     chain_online_notifier: ChainOnlineNotifier,
     current_slot: Slot,
     storage_blocks_to_remove: HashSet<HeaderId>,
+    /// The immutable index entries a write failed to store, retried with the
+    /// next block.
+    immutable_blocks_to_index: BTreeMap<Slot, HeaderId>,
     relays: CryptarchiaConsensusRelays<Tx>,
     sync_blocks_provider: BlockProvider<Tx>,
     slot_timer: lb_time_service::EpochSlotTickStream,
@@ -273,6 +276,7 @@ where
             chain_online_notifier: self.chain_online_notifier,
             current_slot: self.current_slot,
             storage_blocks_to_remove: self.storage_blocks_to_remove,
+            immutable_blocks_to_index: self.immutable_blocks_to_index,
             relays: self.relays,
             sync_blocks_provider: self.sync_blocks_provider,
             slot_timer: self.slot_timer,
@@ -343,6 +347,13 @@ where
         self.storage_blocks_to_remove = delete_stale_blocks_from_storage(
             outcome.pruned_blocks.stale_blocks().copied(),
             &self.storage_blocks_to_remove,
+            self.relays.storage(),
+        )
+        .await;
+        // The block stored its own immutable index with its data.
+        self.immutable_blocks_to_index = store_immutable_blocks_index(
+            BTreeMap::new(),
+            &self.immutable_blocks_to_index,
             self.relays.storage(),
         )
         .await;
@@ -632,6 +643,7 @@ where
         persist_recovery_state(
             &self.cryptarchia,
             self.storage_blocks_to_remove.clone(),
+            self.immutable_blocks_to_index.clone(),
             &self.fork_digests,
             &self.state_updater,
         );
@@ -1454,6 +1466,59 @@ fn immutable_blocks_index(
     immutable_blocks
 }
 
+/// Stores the immutable index of `immutable_blocks` together with `failed`,
+/// the entries earlier writes failed to store. Returns the entries to retry:
+/// none once the write succeeds, all of them otherwise.
+pub async fn store_immutable_blocks_index<Tx>(
+    immutable_blocks: BTreeMap<Slot, HeaderId>,
+    failed: &BTreeMap<Slot, HeaderId>,
+    storage: &StorageApi<Tx>,
+) -> BTreeMap<Slot, HeaderId> {
+    let mut entries = failed.clone();
+    entries.extend(immutable_blocks);
+    if entries.is_empty() {
+        return entries;
+    }
+    match storage.store_immutable_block_ids(entries.clone()).await {
+        Ok(()) => BTreeMap::new(),
+        Err(error) => {
+            error!(
+                target: LOG_TARGET,
+                %error,
+                entries = entries.len(),
+                "failed to store immutable block IDs, retried with the next block"
+            );
+            entries
+        }
+    }
+}
+
+/// Switches `cryptarchia` to online and finalizes the blocks it prunes: their
+/// immutable index first, then the anchor of the new LIB. A restart replays the
+/// chain above the anchor, so a stop between the two writes switches again and
+/// indexes the blocks again. Returns the index entries to retry, as
+/// [`store_immutable_blocks_index`] does: the ledger is finalized either way.
+pub async fn go_online<Tx>(
+    cryptarchia: Cryptarchia,
+    failed_index: &BTreeMap<Slot, HeaderId>,
+    storage: &StorageApi<Tx>,
+) -> (
+    Cryptarchia,
+    PrunedBlocks<HeaderId>,
+    BTreeMap<Slot, HeaderId>,
+) {
+    let (mut cryptarchia, pruned_blocks) = cryptarchia.online();
+    let immutable_blocks = immutable_blocks_index(
+        &pruned_blocks,
+        None,
+        cryptarchia.lib(),
+        cryptarchia.lib_branch().slot(),
+    );
+    let failed_index = store_immutable_blocks_index(immutable_blocks, failed_index, storage).await;
+    cryptarchia.prune_ledger_states(&pruned_blocks);
+    (cryptarchia, pruned_blocks, failed_index)
+}
+
 async fn broadcast_finalized_block(
     broadcast_relay: &BroadcastRelay,
     block_info: BlockInfo,
@@ -1468,12 +1533,14 @@ async fn broadcast_finalized_block(
 pub fn persist_recovery_state(
     cryptarchia: &Cryptarchia,
     storage_blocks_to_remove: HashSet<HeaderId>,
+    immutable_blocks_to_index: BTreeMap<Slot, HeaderId>,
     fork_digests: &EraSchedule<ForkDigest>,
     state_updater: &StateUpdater<Option<CryptarchiaConsensusState>>,
 ) {
     match CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
         cryptarchia,
         storage_blocks_to_remove,
+        immutable_blocks_to_index,
         fork_digests,
     ) {
         Ok(state) => {

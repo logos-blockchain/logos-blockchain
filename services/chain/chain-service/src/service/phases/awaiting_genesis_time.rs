@@ -1,5 +1,10 @@
 use core::fmt::{self, Debug};
-use std::{collections::HashSet, pin::Pin, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashSet},
+    pin::Pin,
+    sync::Arc,
+    time::Duration,
+};
 
 use futures::StreamExt as _;
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
@@ -80,6 +85,7 @@ where
         chain_online_notifier: ChainOnlineNotifier,
         current_slot: Slot,
         storage_blocks_to_remove: HashSet<HeaderId>,
+        immutable_blocks_to_index: BTreeMap<Slot, HeaderId>,
         relays: CryptarchiaConsensusRelays<Tx>,
         sync_blocks_provider: BlockProvider<Tx>,
         slot_timer: lb_time_service::EpochSlotTickStream,
@@ -101,6 +107,7 @@ where
             chain_online_notifier,
             current_slot,
             storage_blocks_to_remove,
+            immutable_blocks_to_index,
             relays,
             sync_blocks_provider,
             slot_timer,
