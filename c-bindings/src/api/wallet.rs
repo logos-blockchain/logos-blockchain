@@ -777,14 +777,6 @@ pub unsafe extern "C" fn transfer_funds(
     let arguments = unsafe { &*arguments };
     unwrap_or_return_error!(unsafe { arguments.validate() });
 
-    let node = unsafe { &*node };
-    let tip = if arguments.optional_tip.is_null() {
-        unwrap_or_return_error!(get_cryptarchia_info_sync(node))
-            .cryptarchia_info
-            .tip
-    } else {
-        lb_core::header::HeaderId::from(unsafe { *arguments.optional_tip })
-    };
     let change_public_key =
         unwrap_or_return_error!(unsafe { parse_public_key(arguments.change_public_key) });
     let funding_public_keys = {
@@ -806,6 +798,15 @@ pub unsafe extern "C" fn transfer_funds(
     let recipient_public_key =
         unwrap_or_return_error!(unsafe { parse_public_key(arguments.recipient_public_key) });
     let amount = Value::from(arguments.amount);
+
+    let node = unsafe { &*node };
+    let tip = if arguments.optional_tip.is_null() {
+        unwrap_or_return_error!(get_cryptarchia_info_sync(node))
+            .cryptarchia_info
+            .tip
+    } else {
+        lb_core::header::HeaderId::from(unsafe { *arguments.optional_tip })
+    };
 
     let (transaction, recipient_note) = unwrap_or_return_error!(transfer_funds_sync(
         node,
@@ -1144,15 +1145,6 @@ pub unsafe extern "C" fn channel_deposit(
     let arguments = unsafe { &*arguments };
     unwrap_or_return_error!(unsafe { arguments.validate() });
 
-    let node = unsafe { &*node };
-    let tip = if arguments.optional_tip.is_null() {
-        unwrap_or_return_error!(get_cryptarchia_info_sync(node))
-            .cryptarchia_info
-            .tip
-    } else {
-        lb_core::header::HeaderId::from(unsafe { *arguments.optional_tip })
-    };
-
     let channel_id = {
         let bytes = unsafe { std::slice::from_raw_parts(arguments.channel_id, 32) };
         let Ok(array): Result<[u8; 32], _> = bytes.try_into() else {
@@ -1182,6 +1174,15 @@ pub unsafe extern "C" fn channel_deposit(
             )
         }
     ));
+
+    let node = unsafe { &*node };
+    let tip = if arguments.optional_tip.is_null() {
+        unwrap_or_return_error!(get_cryptarchia_info_sync(node))
+            .cryptarchia_info
+            .tip
+    } else {
+        lb_core::header::HeaderId::from(unsafe { *arguments.optional_tip })
+    };
 
     let transaction = unwrap_or_return_error!(channel_deposit_sync(
         node,
