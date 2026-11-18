@@ -4302,6 +4302,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-api-types"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_urlencoded",
+ "url",
+ "utoipa",
+ "validator",
+]
+
+[[package]]
 name = "logos-blockchain-binary-codec"
 version = "0.0.0"
 dependencies = [
@@ -4986,6 +4997,7 @@ name = "logos-blockchain-http-api-common"
 version = "0.0.0"
 dependencies = [
  "axum 0.8.9",
+ "logos-blockchain-api-types",
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-log-targets",
@@ -4993,14 +5005,12 @@ dependencies = [
  "pprof",
  "serde",
  "serde_json",
- "serde_urlencoded",
  "serde_with",
  "time",
  "tokio",
  "tracing",
  "url",
  "utoipa",
- "validator",
 ]
 
 [[package]]
