@@ -1085,12 +1085,23 @@ where
         self.root.version.is_some() || !self.unfinalized.is_empty()
     }
 
+    /// Whether the state holds committed blocks above the base it was read
+    /// from, which [`Self::rebase`] drops once the base takes them over.
+    #[must_use]
+    pub fn has_unfinalized_blocks(&self) -> bool {
+        !self.unfinalized.is_empty()
+    }
+
     /// Drops from memory the blocks of the state the finalized base of the
     /// store holds, so that the memory of a state follows the base. It only
     /// frees memory: the dropped nullifiers are in the base index.
     ///
-    /// A tree whose store holds no finalized base yet is returned as is.
+    /// A tree whose store holds no finalized base yet is returned as is, and
+    /// so is one without unfinalized blocks, without reading the store.
     pub fn rebase(&self) -> Result<Self, ImtError> {
+        if !self.has_unfinalized_blocks() {
+            return Ok(self.clone());
+        }
         let Some(meta) = Self::read_meta(&self.store)? else {
             return Ok(self.clone());
         };
