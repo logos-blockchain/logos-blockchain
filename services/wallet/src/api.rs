@@ -4,11 +4,12 @@ use lb_chain_service::Epoch;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Note, OpProof, SignedOps, Value,
+        Note, Op, OpProof, SignedOps, Value,
         gas::GasCost,
         ledger::verification_mode::StandardMode,
         note_set::NoteSetIndex,
         notes::{NoteCommitment, NoteNullifier},
+        ops::{channel::inscribe::Inscription, inscribe::InscribeOp},
         transactions::{
             MantleTxBuilder, Ops, TxBuilderError, hash::TxHash, states::Preverified,
             tx_list::ops::OpsContext,
@@ -17,7 +18,7 @@ use lb_core::{
 };
 use lb_groth16::Fr;
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, secured_key::SecuredKey};
-use lb_note_encryption::DeliveryMessage;
+use lb_note_encryption::{DeliveryMessage, delivery_inscription};
 use lb_utils::bounded::BoundedError;
 use lb_wallet::{KnownNote, OwnedNote, WalletBalance, address::Address, delivery::deliver};
 use overwatch::{
@@ -379,7 +380,7 @@ where
     ) -> Result<TipResponse<(SignedOps<Preverified, StandardMode>, Note)>, WalletApiError> {
         let note = Note::new(amount, crate::random_nonce(), recipient_pk);
         let TipResponse { tip, response } = self
-            .transfer_note(tip, change_pk, funding_pks, note)
+            .transfer_note(tip, change_pk, funding_pks, note, None)
             .await?;
         Ok(TipResponse {
             tip,
@@ -387,18 +388,29 @@ where
         })
     }
 
-    // The signed transfer creating `note` in the ledger note set.
+    // The signed transfer creating `note` in the ledger note set. It commits
+    // to `delivery`, the delivery message of the note, in an inscribe.
     async fn transfer_note(
         &self,
         tip: Option<HeaderId>,
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
         note: Note,
+        delivery: Option<&DeliveryMessage>,
     ) -> Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletApiError> {
         if self.get_known_addresses().await?.contains(&note.public_key) {
             self.import_note(note, NoteSetIndex::Ledger).await?;
         }
-        let mantle_tx_builder = MantleTxBuilder::new().add_ledger_output(note)?;
+        let mantle_tx_builder = match delivery {
+            Some(delivery) => MantleTxBuilder::new().push_op(Op::Inscribe(InscribeOp {
+                inscription: Inscription::try_new(
+                    delivery_inscription(core::slice::from_ref(delivery)).to_vec(),
+                    u32::MAX,
+                )?,
+            }))?,
+            None => MantleTxBuilder::new(),
+        }
+        .add_ledger_output(note)?;
         let funded_tx_builder = self
             .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks, None, None)
             .await?;
@@ -410,6 +422,9 @@ where
     /// message of the note it creates, for the sender to hand over or
     /// publish. There is none when the address holds no encryption key: the
     /// sender then gives the recipient the note by other means.
+    ///
+    /// The transfer commits to the delivery message in an inscribe, so that
+    /// whoever carries the message can check it against the transaction.
     ///
     /// The note takes the public key of the recipient as staking key, unless
     /// the recipient named another to the sender, given as `staking_key`. The
@@ -427,11 +442,12 @@ where
             stake_public_key: staking_key.unwrap_or(recipient.public_key),
             ..Note::new(amount, crate::random_nonce(), recipient.public_key)
         };
+        let delivery = delivery_of(&note, recipient);
         let TipResponse {
             tip,
             response: transaction,
         } = self
-            .transfer_note(tip, change_pk, funding_pks, note)
+            .transfer_note(tip, change_pk, funding_pks, note, delivery.as_ref())
             .await?;
         self.record_sent_note(note).await?;
         Ok(TipResponse {
@@ -439,7 +455,7 @@ where
             response: TransferTo {
                 transaction,
                 note,
-                delivery: delivery_of(&note, recipient),
+                delivery,
             },
         })
     }

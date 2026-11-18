@@ -1,7 +1,11 @@
 use std::time::Duration;
 
 use lb_core::mantle::{
-    Note, note_set::NoteSetIndex, notes::NoteCommitment, transactions::UNITS_PER_LGO,
+    Note, OpRef,
+    note_set::NoteSetIndex,
+    notes::NoteCommitment,
+    traits::Hashable as _,
+    transactions::{UNITS_PER_LGO, hash::TxHash},
 };
 use lb_groth16::{fr_from_bytes, fr_to_bytes};
 use lb_http_api_common::bodies::wallet::{
@@ -19,9 +23,15 @@ use lb_testing_framework::{
     NodeHttpClient,
     configs::wallet::{WalletAccount, WalletConfig},
 };
-use lb_wallet::address::{Address, Network};
-use logos_blockchain_tests::common::manual_cluster::{
-    api_url, get_wallet_balance, start_fast_cluster_with_wallet, wait_for_nodes_height,
+use lb_wallet::{
+    address::{Address, Network},
+    delivery::{DeliveryMessage, delivery_inscription},
+};
+use logos_blockchain_tests::common::{
+    chain::scan_chain_until,
+    manual_cluster::{
+        api_url, get_wallet_balance, start_fast_cluster_with_wallet, wait_for_nodes_height,
+    },
 };
 use reqwest::{Response, StatusCode};
 use serde::Serialize;
@@ -46,7 +56,9 @@ const BLOCKS_PAST_THE_HELD_STATES: u64 = 25;
 /// 1. The delivery message of the first payment is lost. The receiver sees the
 ///    commitment in a block and finds no note. The sender delivers the note
 ///    again from its records, and the receiver, handed the message after its
-///    block, applies the block again.
+///    block, applies the block again. The transfer holds one inscribe, the
+///    delivery inscription of the message the sender first made: the second
+///    encryption of the note is not the one the chain commits to.
 /// 2. The second payment is delivered before its block, and the receiver
 ///    restarts with the message pending. The wallet opens the message it wrote
 ///    to storage when the block is applied.
@@ -147,12 +159,16 @@ async fn a_delivered_note_reaches_the_wallet_of_its_recipient_and_is_spent() {
 
     // 1. The message of the first payment is lost, and its block is applied
     // by both nodes: the chain alone gives the wallet of the receiver nothing.
-    let lost = transfer_to(sender, payer_pk, &address, None)
-        .await
+    let first = transfer_to(sender, payer_pk, &address, None).await;
+    let lost = first
         .delivery_message
         .expect("a full address is encrypted to");
     assert_eq!(lost.len(), 2 * 1208, "a delivery message is 1208 bytes");
     wait_for_balance(sender, recipient_pk, |held| held == balance(1)).await;
+    assert_eq!(
+        inscriptions_of(sender, first.hash).await,
+        [inscription_of(&lost)]
+    );
     wait_for_nodes_height(&[receiver], height(sender).await, TIMEOUT).await;
     assert_eq!(get_wallet_balance(receiver, recipient_pk).await, balance(0));
     // The sender kept the note, and encrypts it again: another ciphertext
@@ -174,6 +190,7 @@ async fn a_delivered_note_reaches_the_wallet_of_its_recipient_and_is_spent() {
         .expect("a full address is encrypted to");
     assert_ne!(redelivered, lost);
     assert_eq!(commitment_of(&redelivered), commitment_of(&lost));
+    assert_ne!(inscription_of(&redelivered), inscription_of(&lost));
     // The message arrives after its block: the wallet applies the block again
     // and finds the note.
     assert_eq!(import(receiver, &redelivered).await, 1);
@@ -216,6 +233,11 @@ async fn a_delivered_note_reaches_the_wallet_of_its_recipient_and_is_spent() {
         .expect("a key-only address gets its note in the clear");
     import_note(receiver, note).await;
     wait_for_balance(receiver, recipient_pk, |held| held == balance(3)).await;
+    assert_eq!(
+        inscriptions_of(sender, in_the_clear.hash).await,
+        [] as [Vec<u8>; 0],
+        "a note handed over in the clear has no delivery message to commit to"
+    );
 
     // 4. The receiver names a staking key, here the key of the payer, and
     // the sender commits the note to it. The ciphertext carries no key: the
@@ -307,6 +329,50 @@ async fn height(node: &NodeHttpClient) -> u64 {
         .expect("the node should give its height")
         .cryptarchia_info
         .height
+}
+
+// The inscription a transfer commits to a delivery message, in hex, with.
+fn inscription_of(delivery_message: &str) -> Vec<u8> {
+    let message = DeliveryMessage::from_bytes(&hex::decode(delivery_message).expect("hex"))
+        .expect("a delivery message is 1208 bytes");
+    delivery_inscription(&[message]).to_vec()
+}
+
+// The inscriptions of the inscribes of the transaction `hash`, which a block
+// of the chain of `node` holds.
+async fn inscriptions_of(node: &NodeHttpClient, hash: TxHash) -> Vec<Vec<u8>> {
+    let tip = node
+        .consensus_info()
+        .await
+        .expect("the node should give its tip")
+        .cryptarchia_info
+        .tip;
+    scan_chain_until(
+        tip,
+        &mut std::collections::HashSet::new(),
+        async |header_id| {
+            node.block(&header_id)
+                .await
+                .expect("the node should give its blocks")
+        },
+        |block| {
+            let transaction = block
+                .transactions
+                .iter()
+                .find(|transaction| transaction.hash() == hash)?;
+            Some(
+                transaction
+                    .op_refs_iter()
+                    .filter_map(|op| match op {
+                        OpRef::Inscribe(inscribe) => Some(inscribe.inscription.to_vec()),
+                        _ => None,
+                    })
+                    .collect(),
+            )
+        },
+    )
+    .await
+    .expect("a block should hold the transaction")
 }
 
 // The commitment a delivery message, in hex, starts with.

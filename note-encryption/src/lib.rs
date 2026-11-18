@@ -35,6 +35,12 @@ const TAG_SIZE: usize = 16;
 const NOTE_ENC_DST: &[u8] = b"LOGOS_NOTE_ENC_V1";
 const WALLET_ENC_SK_DST: &[u8] = b"WALLET_ENC_SK_V1";
 
+/// The tag that opens the inscription of a Mantle Transaction committing to
+/// its delivery messages.
+pub const NOTE_DELIVERY_TAG: [u8; 16] = *b"NOTE_DELIVERY_V1";
+/// Size of a delivery inscription: the tag, then the delivery hash.
+pub const DELIVERY_INSCRIPTION_SIZE: usize = NOTE_DELIVERY_TAG.len() + 32;
+
 /// A note commitment, as the 32-byte little-endian encoding of its field
 /// element.
 pub type Commitment = [u8; COMMITMENT_SIZE];
@@ -119,6 +125,26 @@ impl DeliveryMessage {
             ciphertext: ciphertext.try_into().ok()?,
         })
     }
+}
+
+/// The inscription a sender commits to `messages` with, in an `INSCRIBE`
+/// Operation of the Mantle Transaction that creates their notes: the tag, then
+/// `BLAKE2b-256(NOTE_DELIVERY_V1 || messages)`.
+///
+/// `messages` are those of the outputs of the transaction, in the order of its
+/// Operations and of their outputs.
+#[must_use]
+pub fn delivery_inscription(messages: &[DeliveryMessage]) -> [u8; DELIVERY_INSCRIPTION_SIZE] {
+    let mut hasher = Blake2b::<U32>::new();
+    hasher.update(NOTE_DELIVERY_TAG);
+    for message in messages {
+        hasher.update(message.to_bytes());
+    }
+    let mut inscription = [0; DELIVERY_INSCRIPTION_SIZE];
+    let (tag, hash) = inscription.split_at_mut(NOTE_DELIVERY_TAG.len());
+    tag.copy_from_slice(&NOTE_DELIVERY_TAG);
+    hash.copy_from_slice(&hasher.finalize());
+    inscription
 }
 
 /// Encrypts the `value` and the `nonce` of the note of `commitment` to
@@ -277,6 +303,21 @@ mod tests {
             );
             assert_eq!(ciphertext.to_vec(), bytes(&vector["note_ct"]));
         }
+    }
+
+    // Mantle test vectors, Delivery Hash.
+    #[test]
+    fn the_delivery_inscription_of_the_first_vector_is_that_of_the_specification() {
+        let vector = &vectors()["encrypt_note"]["1"];
+        let message = DeliveryMessage {
+            commitment: array(&vector["cm"]),
+            ciphertext: array(&vector["note_ct"]),
+        };
+
+        assert_eq!(
+            hex::encode(delivery_inscription(&[message])),
+            "4e4f54455f44454c49564552595f5631a352841f541aba1aab7d3abbb1eb4487e71756050f5c5acb757a62f8d8a14f91"
+        );
     }
 
     // The seven cases the specification lists for each vector.

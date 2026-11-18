@@ -4,7 +4,8 @@
 
 use lb_core::mantle::{Note, notes::NoteCommitment};
 use lb_groth16::{fr_from_bytes, fr_to_bytes};
-use lb_note_encryption::{DeliveryMessage, EncapsulationKey, encrypt_note};
+pub use lb_note_encryption::{DeliveryMessage, delivery_inscription};
+use lb_note_encryption::{EncapsulationKey, encrypt_note};
 use rand_core::{CryptoRng, RngCore};
 
 /// The message a sender hands the recipient of `note`: its commitment, and
