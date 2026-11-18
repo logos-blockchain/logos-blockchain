@@ -1,7 +1,8 @@
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Fr, serde::serde_fr};
-use serde::{Deserialize, Serialize};
+use rpds::{RedBlackTreeMapSync, RedBlackTreeSetSync};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[cfg(any(test, feature = "test-utils"))]
 use crate::mantle::notes::{NoteCommitment, NoteNullifier};
@@ -75,40 +76,99 @@ pub struct PendingWithdrawal {
 // The channel and SDP withdrawals waiting for their due slot, in posting order.
 // An SDP withdrawal is due at the start of an epoch and a channel withdrawal
 // the withdrawal delay of its era after its posting, so posting order is not
-// due order.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PendingWithdrawals(rpds::QueueSync<PendingWithdrawal>);
+// due order: the withdrawals are also indexed by due slot, so that a block
+// reads the ones due at its slot, not every pending one.
+#[derive(Clone, Debug, Default)]
+pub struct PendingWithdrawals {
+    // The withdrawals by their position in posting order.
+    by_posting: RedBlackTreeMapSync<u64, PendingWithdrawal>,
+    // The due slot and the posting position of each withdrawal.
+    by_due: RedBlackTreeSetSync<(Slot, u64)>,
+    // The posting position of the next withdrawal.
+    next: u64,
+}
+
+// The withdrawals in posting order, whatever positions they were posted at.
+impl PartialEq for PendingWithdrawals {
+    fn eq(&self, other: &Self) -> bool {
+        self.iter().eq(other.iter())
+    }
+}
+
+impl Eq for PendingWithdrawals {}
+
+// A sequence of the withdrawals in posting order.
+impl Serialize for PendingWithdrawals {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.iter())
+    }
+}
+
+impl<'de> Deserialize<'de> for PendingWithdrawals {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Vec::<PendingWithdrawal>::deserialize(deserializer)?
+            .into_iter()
+            .fold(Self::new(), Self::push))
+    }
+}
 
 impl PendingWithdrawals {
     #[must_use]
     pub fn new() -> Self {
-        Self(rpds::QueueSync::new_sync())
+        Self {
+            by_posting: RedBlackTreeMapSync::new_sync(),
+            by_due: RedBlackTreeSetSync::new_sync(),
+            next: 0,
+        }
     }
 
     #[must_use]
-    pub fn push(self, withdrawal: PendingWithdrawal) -> Self {
-        Self(self.0.enqueue(withdrawal))
+    pub fn push(mut self, withdrawal: PendingWithdrawal) -> Self {
+        let position = self.next;
+        self.next += 1;
+        self.by_due.insert_mut((withdrawal.due, position));
+        self.by_posting.insert_mut(position, withdrawal);
+        self
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &PendingWithdrawal> {
-        self.0.iter()
+        self.by_posting.values()
     }
 
     // Applies, in posting order, every withdrawal due at `block_slot` whose
     // inputs are unspent, drops the other due ones, keeps the rest. An SDP
     // withdrawal has no input, so it is always applied.
     pub fn release(
-        self,
+        mut self,
         mut note_sets: NoteSets,
         block_slot: Slot,
     ) -> Result<(Self, NoteSets, Vec<PendingWithdrawal>), NoteSetError> {
-        let mut pending = rpds::QueueSync::new_sync();
+        let due = self
+            .by_due
+            .range(..=(block_slot, u64::MAX))
+            .copied()
+            .collect::<Vec<_>>();
+        let mut positions = due
+            .iter()
+            .map(|(_, position)| *position)
+            .collect::<Vec<_>>();
+        positions.sort_unstable();
+        let mut due_withdrawals = Vec::with_capacity(positions.len());
+        for position in positions {
+            let withdrawal = self
+                .by_posting
+                .get(&position)
+                .expect("an indexed withdrawal is pending")
+                .clone();
+            self.by_posting.remove_mut(&position);
+            due_withdrawals.push(withdrawal);
+        }
+        for key in &due {
+            self.by_due.remove_mut(key);
+        }
+
         let mut released = Vec::new();
-        for withdrawal in self.0.iter().cloned() {
-            if withdrawal.due > block_slot {
-                pending.enqueue_mut(withdrawal);
-                continue;
-            }
+        for withdrawal in due_withdrawals {
             let set = note_sets
                 .get(withdrawal.note_set_index)
                 .expect("a withdrawal's note set exists")
@@ -127,7 +187,7 @@ impl PendingWithdrawals {
             note_sets = note_sets.update_ledger(ledger);
             released.push(withdrawal);
         }
-        Ok((Self(pending), note_sets, released))
+        Ok((self, note_sets, released))
     }
 }
 
@@ -528,5 +588,62 @@ mod test {
             withdrawals.release(note_sets, Slot::from(100u64)).unwrap();
         assert_eq!(released, vec![pending(100, 5, 50), sdp(100, 60)]);
         assert_eq!(withdrawals.iter().collect::<Vec<_>>(), vec![&sdp(200, 40)]);
+    }
+
+    /// After skipped slots, a block releases every withdrawal that fell due
+    /// since the last one, in posting order rather than due order, and keeps
+    /// the posting order of the ones still pending with those posted later.
+    #[test]
+    fn release_after_skipped_slots_applies_every_due_withdrawal_in_posting_order() {
+        let (_, note_sets) = state();
+        let withdrawals = PendingWithdrawals::new()
+            .push(pending(105, 5, 50))
+            .push(pending(300, 6, 60))
+            .push(pending(100, 7, 70))
+            .push(pending(110, 8, 80))
+            .push(pending(103, 9, 90));
+
+        let (withdrawals, _, released) =
+            withdrawals.release(note_sets, Slot::from(110u64)).unwrap();
+
+        assert_eq!(
+            released,
+            vec![
+                pending(105, 5, 50),
+                pending(100, 7, 70),
+                pending(110, 8, 80),
+                pending(103, 9, 90),
+            ]
+        );
+        let withdrawals = withdrawals.push(pending(200, 10, 100));
+        assert_eq!(
+            withdrawals.iter().collect::<Vec<_>>(),
+            vec![&pending(300, 6, 60), &pending(200, 10, 100)]
+        );
+    }
+
+    /// The withdrawals are encoded in posting order, and decode to the same.
+    #[test]
+    fn pending_withdrawals_round_trip_in_posting_order() {
+        let (remaining, _, _) = PendingWithdrawals::new()
+            .push(pending(100, 5, 50))
+            .push(pending(300, 6, 60))
+            .push(pending(200, 7, 70))
+            .release(state().1, Slot::from(100u64))
+            .unwrap();
+        let withdrawals = remaining.push(pending(150, 8, 80));
+
+        let decoded: PendingWithdrawals =
+            serde_json::from_str(&serde_json::to_string(&withdrawals).unwrap()).unwrap();
+
+        assert_eq!(decoded, withdrawals);
+        assert_eq!(
+            decoded.iter().collect::<Vec<_>>(),
+            vec![
+                &pending(300, 6, 60),
+                &pending(200, 7, 70),
+                &pending(150, 8, 80)
+            ]
+        );
     }
 }
