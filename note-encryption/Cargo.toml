@@ -9,6 +9,10 @@ readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }
 
+[[bench]]
+harness = false
+name    = "note_encryption"
+
 [lints]
 workspace = true
 
@@ -20,6 +24,7 @@ rand_core        = { workspace = true }
 x-wing           = { features = ["zeroize"], workspace = true }
 
 [dev-dependencies]
+divan                         = { workspace = true }
 hex                           = { features = ["alloc"], workspace = true }
 lb-core                       = { workspace = true }
 lb-groth16                    = { workspace = true }
