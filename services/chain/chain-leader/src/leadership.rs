@@ -67,12 +67,28 @@ pub async fn find_winning_note<RuntimeServiceId>(
             .await
         {
             Ok(true) => {
+                tracing::debug!(
+                    target: LOG_TARGET,
+                    "leader for slot {:?}, {:?}/{:?}",
+                    slot,
+                    note.note.note.value,
+                    epoch_state.total_stake()
+                );
                 // A winning note whose witness fails, such as one spent since
                 // the epoch snapshot, leaves the slot to the next winning note.
-                if let Some(winning) = with_witness(note, public_inputs, epoch_state, latest, slot)
-                {
-                    return Some(winning);
-                }
+                let Some(wallet_inputs) = leader_wallet_inputs(note, epoch_state, latest, slot)
+                else {
+                    continue;
+                };
+                return Some(WinningNote {
+                    note: AgedNote {
+                        note: note.note.clone(),
+                        aged_path: note.aged_path.clone(),
+                        key_id: note.key_id.clone(),
+                    },
+                    public_inputs,
+                    wallet_inputs,
+                });
             }
             Ok(false) => non_winning_notes += 1,
             Err(e) => {
@@ -98,59 +114,32 @@ pub async fn find_winning_note<RuntimeServiceId>(
     None
 }
 
-// `note` winning with `public_inputs`, unless its witness fails.
-fn with_witness(
-    note: &AgedNote,
-    public_inputs: LeaderPublic,
-    epoch_state: &EpochState,
-    latest: &NoteSets,
-    slot: Slot,
-) -> Option<WinningNote> {
-    tracing::debug!(
-        target: LOG_TARGET,
-        "leader for slot {:?}, {:?}/{:?}",
-        slot,
-        note.note.note.value,
-        epoch_state.total_stake()
-    );
-    match leader_wallet_inputs(note, epoch_state, latest) {
-        Ok(wallet_inputs) => Some(WinningNote {
-            note: AgedNote {
-                note: note.note.clone(),
-                aged_path: note.aged_path.clone(),
-                key_id: note.key_id.clone(),
-            },
-            public_inputs,
-            wallet_inputs,
-        }),
-        Err(e) => {
-            metrics::consensus_proposals_create_failed("private_inputs");
-            tracing::error!(
-                target: LOG_TARGET,
-                "Failed to build the witness of winning note {:?} for {slot:?}: {e}",
-                note.note.note.commitment(),
-            );
-            None
-        }
-    }
-}
-
 // The wallet half of the PoL witness of an aged note, proven against the aged
-// note sets of the epoch and the `latest` note sets.
+// note sets of the epoch and the `latest` note sets, or `None` if it fails.
 fn leader_wallet_inputs(
     aged: &AgedNote,
     epoch_state: &EpochState,
     latest: &NoteSets,
-) -> Result<PolWalletInputsData, PrivateInputsError> {
+    slot: Slot,
+) -> Option<PolWalletInputsData> {
     let note = &aged.note;
-    Ok(pol_wallet_inputs(
+    pol_wallet_inputs(
         &note.note,
         note.note_set,
         &note.nullifier,
         &aged.aged_path,
         &epoch_state.note_sets,
         latest,
-    )?)
+    )
+    .inspect_err(|e| {
+        metrics::consensus_proposals_create_failed("private_inputs");
+        tracing::error!(
+            target: LOG_TARGET,
+            "Failed to build the witness of winning note {:?} for {slot:?}: {e}",
+            note.note.commitment(),
+        );
+    })
+    .ok()
 }
 
 // C_LEAD and eligible_LATEST.
