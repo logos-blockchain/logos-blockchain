@@ -293,6 +293,7 @@ const GAS_PROFILE: GasProfile = GasProfile {
     opening: Gas::new(470),
 };
 
+#[expect(clippy::too_many_lines, reason = "Fixture function.")]
 fn era_parameters() -> Config {
     let epoch_config = EpochConfig {
         epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
@@ -357,22 +358,19 @@ fn era_parameters() -> Config {
             BlockRewardsParameters {
                 max_emission_rate: lb_utils::math::ProperFraction::new(1, 100.try_into().unwrap())
                     .unwrap(),
-                min_emission_rate: lb_utils::math::NonNegativeRatio::new(0, 1.try_into().unwrap()),
+                min_emission_rate: NonNegativeRatio::new(0, 1.try_into().unwrap()),
                 stake_target: lb_utils::math::ProperFraction::new(3, 10.try_into().unwrap())
                     .unwrap(),
-                pooled_fees_target: lb_utils::math::NonNegativeRatio::new(1, 1.try_into().unwrap()),
-                stake_deviation_weight: lb_utils::math::NonNegativeRatio::new(
-                    1,
-                    4.try_into().unwrap(),
-                ),
-                pooled_fees_weight: lb_utils::math::NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                pooled_fees_target: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                stake_deviation_weight: NonNegativeRatio::new(1, 4.try_into().unwrap()),
+                pooled_fees_weight: NonNegativeRatio::new(1, 1.try_into().unwrap()),
                 pooled_fees_window: 120.try_into().unwrap(),
                 blend_share: lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap())
                     .unwrap(),
             },
             10_000_000_000_000_000_000,
             1.try_into().unwrap(),
-            lb_utils::math::NonNegativeRatio::new(1, 30.try_into().unwrap()),
+            NonNegativeRatio::new(1, 30.try_into().unwrap()),
         )
         .unwrap(),
         gas_profile: GAS_PROFILE,

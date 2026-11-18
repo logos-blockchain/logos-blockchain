@@ -33,7 +33,7 @@ use lb_blend_proofs::{
     },
     selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},
 };
-use lb_key_management_system_keys::keys::{UnsecuredEd25519Key, UnsecuredZkKey, kdf_public_key};
+use lb_key_management_system_keys::keys::{UnsecuredEd25519Key, UnsecuredZkKey};
 use logos_blockchain_blend_message::{
     PaddedPayloadBody, PayloadType,
     crypto::proofs::{PoQVerificationInputsMinusSigningKey, RealProofsVerifier},
