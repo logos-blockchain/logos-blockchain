@@ -25,9 +25,12 @@ use lb_core::{
     },
 };
 use lb_http_api_common::{
-    bodies::wallet::{
-        fund::{WalletFundRequestBody, WalletFundResponseBody},
-        transfer_funds::WalletTransferFundsRequestBody,
+    bodies::{
+        mantle::MantleTxFeeRequestBody,
+        wallet::{
+            fund::{WalletFundRequestBody, WalletFundResponseBody},
+            transfer_funds::WalletTransferFundsRequestBody,
+        },
     },
     queries::{BlockFilter, BlockSortOrder, BlocksStreamQuery},
 };
@@ -98,6 +101,50 @@ pub async fn prepare_self_transfer_with_tip(
     Ok(())
 }
 
+/// Quotes a self-transfer through `/mantle/tx-fee`, funds it at the quoted
+/// tip, and checks the funding pays the quote: the wallet holds one note,
+/// which covers the fee alone.
+pub async fn fund_self_transfer_at_quoted_fee(
+    world: &mut CucumberWorld,
+    step: &Step,
+    wallet_name: &str,
+    node_name: &str,
+) -> StepResult {
+    let account = user_wallet_account(world, step, wallet_name)?;
+    let client = world.resolve_node_http_client(node_name)?;
+    let quote = client
+        .tx_fee(MantleTxFeeRequestBody {
+            tip: None,
+            tx_builder: MantleTxBuilder::new(),
+        })
+        .await
+        .map_err(|source| StepError::StepFail {
+            message: format!(
+                "Step `{}` error: tx fee request failed: {source}",
+                step.value
+            ),
+        })?;
+    let (response, prices) =
+        fund_self_transfer(&client, step, Some(quote.tip), account.public_key(), 0).await?;
+    let signed_tx = assemble_funded_transaction(response, step)?;
+    let funded_fee = mandatory_fee(step, &signed_tx, &prices)?;
+    info!(
+        target: TARGET,
+        "Quoted fee {:?} at tip {:?}; funding from wallet '{wallet_name}' pays {funded_fee:?}",
+        quote.tx_fee,
+        quote.tip,
+    );
+    if funded_fee != quote.tx_fee {
+        return Err(StepError::StepFail {
+            message: format!(
+                "Step `{}` error: funding from one note pays {funded_fee:?}, the quote is {:?}",
+                step.value, quote.tx_fee
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Funds a self-transfer through `/wallet/fund` with a percentage reserve.
 pub async fn prepare_wallet_funded_self_transfer_with_priority_fee(
     world: &mut CucumberWorld,
@@ -111,7 +158,7 @@ pub async fn prepare_wallet_funded_self_transfer_with_priority_fee(
     let client = world.resolve_node_http_client(node_name)?;
     let funding_pk = account.public_key();
     let (response, prices) =
-        fund_self_transfer(&client, step, funding_pk, priority_fee_percent).await?;
+        fund_self_transfer(&client, step, None, funding_pk, priority_fee_percent).await?;
     let signed_tx = assemble_funded_transaction(response, step)?;
     let prepared_fee =
         record_prepared_priority_fee(step, &signed_tx, &prices, priority_fee_percent)?;
@@ -138,12 +185,13 @@ pub async fn prepare_wallet_funded_self_transfer_with_priority_fee(
 async fn fund_self_transfer(
     client: &NodeHttpClient,
     step: &Step,
+    tip: Option<HeaderId>,
     funding_pk: ZkPublicKey,
     priority_fee_percent: u64,
 ) -> Result<(WalletFundResponseBody, GasPrices), StepError> {
     let response = client
         .fund_tx(WalletFundRequestBody {
-            tip: None,
+            tip,
             tx_builder: MantleTxBuilder::new(),
             change_public_key: funding_pk,
             funding_public_keys: vec![funding_pk],
@@ -205,23 +253,31 @@ fn assemble_funded_transaction(
         })
 }
 
+/// The mandatory fee of a signed transaction at `prices`.
+fn mandatory_fee(
+    step: &Step,
+    signed_tx: &SignedOps<Preverified, StandardMode>,
+    prices: &GasPrices,
+) -> Result<GasCost, StepError> {
+    let gas_context = OpsGasContext::new(HashMap::new(), prices.clone(), GAS_PROFILE);
+    signed_tx
+        .op_refs()
+        .total_gas_cost(&gas_context)
+        .map_err(|source| StepError::StepFail {
+            message: format!(
+                "Step `{}` error: mandatory fee calculation failed: {source}",
+                step.value
+            ),
+        })
+}
+
 fn record_prepared_priority_fee(
     step: &Step,
     signed_tx: &SignedOps<Preverified, StandardMode>,
     prices: &GasPrices,
     priority_fee_percent: u64,
 ) -> Result<PreparedPriorityFee, StepError> {
-    let gas_context = OpsGasContext::new(HashMap::new(), prices.clone(), GAS_PROFILE);
-    let initial_mandatory_fee = signed_tx
-        .op_refs()
-        .total_gas_cost(&gas_context)
-        .map_err(|source| StepError::StepFail {
-            message: format!(
-                "Step `{}` error: initial mandatory fee calculation failed: {source}",
-                step.value
-            ),
-        })?
-        .into_inner();
+    let initial_mandatory_fee = mandatory_fee(step, signed_tx, prices)?.into_inner();
     let initial_reserve =
         fee_spec::priority_fee_amount(initial_mandatory_fee, priority_fee_percent).map_err(
             |message| StepError::StepFail {

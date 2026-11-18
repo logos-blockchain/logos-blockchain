@@ -8,6 +8,7 @@ pub const MANTLE_SDP_FINALIZED_DECLARATIONS: &str =
     "/mantle/sdp/finalized/declarations/{service_type}";
 pub const MANTLE_GAS_PRICES: &str = "/mantle/gas-prices";
 pub const MANTLE_LIMITS: &str = "/mantle/limits";
+pub const MANTLE_TX_FEE: &str = "/mantle/tx-fee";
 pub const CHAIN_ID: &str = "/chain/id";
 pub const CHAIN_FORK: &str = "/chain/fork";
 pub const CRYPTARCHIA_INFO: &str = "/cryptarchia/info";

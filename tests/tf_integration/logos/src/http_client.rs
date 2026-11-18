@@ -24,7 +24,7 @@ use lb_http_api_common::{
             ChannelStepRequestBody, ChannelStepResponseBody, ChannelWithdrawRequestBody,
             ChannelWithdrawResponseBody,
         },
-        mantle::GasPricesResponseBody,
+        mantle::{GasPricesResponseBody, MantleTxFeeRequestBody, MantleTxFeeResponseBody},
         wallet::{
             aged_notes::LeaderAgedNotesResponseBody,
             balance::WalletBalanceResponseBody,
@@ -135,6 +135,19 @@ impl NodeHttpClient {
         self.with_timeout(
             "Gas prices request",
             self.http_client.gas_prices(self.base_url.clone(), tip),
+        )
+        .await
+    }
+
+    /// What a transaction costs once funded, at the tip of the request or
+    /// the current one.
+    pub async fn tx_fee(
+        &self,
+        body: MantleTxFeeRequestBody,
+    ) -> Result<MantleTxFeeResponseBody, Error> {
+        self.with_timeout(
+            "Tx fee request",
+            self.http_client.tx_fee(self.base_url.clone(), body),
         )
         .await
     }

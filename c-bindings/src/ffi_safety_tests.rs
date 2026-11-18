@@ -54,6 +54,7 @@ use crate::{
         free_cstring,
         keys::{KeyType, add_key, generate_key, remove_key},
         lifecycle::{shutdown_node, start_lb_node},
+        mantle::mantle_tx_fee,
         metrics::get_open_metrics,
         network::get_network_info,
         peer::get_peer_id,
@@ -237,6 +238,7 @@ mod no_node {
             assert_eq!(code(transfer_funds(node, ptr::null())), np);
             assert_eq!(code(channel_deposit(node, ptr::null())), np);
             assert_eq!(code(wallet_fund_tx(node, s)), np);
+            assert_eq!(code(mantle_tx_fee(node, s)), np);
             assert_eq!(code(submit_signed_transaction(node, s)), np);
             assert_eq!(code(pow_start_mining(node)), np);
             assert_eq!(code(pow_stop_mining(node)), np);
@@ -967,6 +969,10 @@ mod with_node {
             for json in [c"{", c"{}", c"null", not_utf8.as_c_str()] {
                 assert_ne!(
                     string_result("wallet_fund_tx", wallet_fund_tx(node, json.as_ptr())),
+                    OperationStatusCode::Ok
+                );
+                assert_ne!(
+                    string_result("mantle_tx_fee", mantle_tx_fee(node, json.as_ptr())),
                     OperationStatusCode::Ok
                 );
                 assert_ne!(

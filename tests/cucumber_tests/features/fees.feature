@@ -140,3 +140,19 @@ Feature: Fees
     And wallet "RECIPIENT_A" has exactly 501 LGO in 120 seconds
     And wallet "RECIPIENT_B" has exactly 502 LGO in 120 seconds
     Then I stop all nodes
+
+  # /mantle/tx-fee prices a transaction as the wallet will fund it, against
+  # the ledger state at a tip: one input and a change note, which is what a
+  # wallet holding one note that covers the fee adds.
+  @fees_ci
+  Scenario: The node quotes what funding a transaction will charge
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 1           | 10000        |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet resources:
+      | node_name | account_index | wallet_name | connected_to |
+      | NODE_1    | 1             | WALLET_1A   |              |
+    When node "NODE_1" is at height 1 in 180 seconds
+    Then node "NODE_1" quotes the fee that funding a self-transfer from wallet "WALLET_1A" pays
+    Then I stop all nodes

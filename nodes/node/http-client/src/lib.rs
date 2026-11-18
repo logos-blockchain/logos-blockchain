@@ -28,7 +28,10 @@ use lb_http_api_common::{
             ChannelStepRequestBody, ChannelStepResponseBody, ChannelWithdrawRequestBody,
             ChannelWithdrawResponseBody,
         },
-        mantle::{GasPricesResponseBody, LimitsResponseBody},
+        mantle::{
+            GasPricesResponseBody, LimitsResponseBody, MantleTxFeeRequestBody,
+            MantleTxFeeResponseBody,
+        },
         wallet::{
             aged_notes::LeaderAgedNotesResponseBody,
             balance::WalletBalanceResponseBody,
@@ -42,8 +45,8 @@ use lb_http_api_common::{
         BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHAIN_FORK, CHAIN_ID, CHANNEL,
         CHANNEL_STEP, CHANNEL_WITHDRAW, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM,
         LEADER_AGED_NOTES, MANTLE_GAS_PRICES, MANTLE_LIMITS, MANTLE_SDP_FINALIZED_DECLARATION,
-        MANTLE_SDP_FINALIZED_DECLARATIONS, MEMPOOL_ADD_TX, NODE_VERSION, SDP_POST_DECLARATION,
-        TIME_INFO,
+        MANTLE_SDP_FINALIZED_DECLARATIONS, MANTLE_TX_FEE, MEMPOOL_ADD_TX, NODE_VERSION,
+        SDP_POST_DECLARATION, TIME_INFO,
         wallet::{BALANCE, FUND, IMPORT_NOTE, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
@@ -490,6 +493,20 @@ impl CommonHttpClient {
 
         self.get::<(), GasPricesResponseBody>(request_url, None)
             .await
+    }
+
+    /// What a transaction costs once funded, at the tip of the request or
+    /// the current one.
+    pub async fn tx_fee(
+        &self,
+        base_url: Url,
+        body: MantleTxFeeRequestBody,
+    ) -> Result<MantleTxFeeResponseBody, Error> {
+        let request_url = base_url
+            .join(MANTLE_TX_FEE.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
     }
 
     /// Get what a transaction must fit in the era of the node's current slot.
