@@ -5,6 +5,8 @@
 //! unit-suffixed keys; they are all humantime strings (`5s`, `250ms`) now.
 //! Kademlia's `caching` became `cache_size`, `enable_open_metrics` is gone and
 //! the built-in log filter 0.3.2 wrote into every config is no longer written.
+//! libp2p renamed three gossipsub limits and dropped
+//! `published_message_ids_cache_time`.
 //!
 //! 0.3.2 also wrote every default into the config. Those still the default are
 //! dropped when the upgraded config is written sparse; those that aren't,
@@ -27,6 +29,18 @@ use crate::config::{TracingConfig, tracing::serde::filter::Layer};
 
 const KADEMLIA: &[&str] = &["network", "backend", "swarm", "kademlia"];
 const CHAIN_SYNC: &[&str] = &["network", "backend", "swarm", "chain_sync"];
+const GOSSIPSUB: &[&str] = &["network", "backend", "swarm", "gossipsub"];
+
+/// Keys libp2p renamed: their section, and their key then and now.
+const RENAMED_KEYS: &[(&[&str], &str, &str)] = &[
+    (GOSSIPSUB, "max_ihave_length", "max_control_messages_sent"),
+    (
+        GOSSIPSUB,
+        "max_ihave_messages",
+        "max_ihave_messages_heartbeat",
+    ),
+    (GOSSIPSUB, "max_messages_per_rpc", "max_publish_messages"),
+];
 
 /// Durations 0.3.2 wrote as bare integers: their section, their key then and
 /// now, and their unit in milliseconds.
@@ -134,6 +148,22 @@ pub fn migrate(config: &mut Value) -> Result<()> {
         };
         kademlia.insert("cache_size".into(), cache_size);
     }
+    if let Some(gossipsub) = mapping_at(config, GOSSIPSUB) {
+        gossipsub.remove("published_message_ids_cache_time");
+        // `null` was no limit, which libp2p no longer allows: the default
+        // limit applies.
+        if gossipsub.get("max_messages_per_rpc") == Some(&Value::Null) {
+            gossipsub.remove("max_messages_per_rpc");
+        }
+    }
+    for (section, old, new) in RENAMED_KEYS {
+        if let Some(section) = mapping_at(config, section)
+            && let Some(value) = section.remove(*old)
+            && !section.contains_key(*new)
+        {
+            section.insert((*new).into(), value);
+        }
+    }
     // Only alongside other changes: a current config may have them on purpose.
     if *config != original {
         drop_built_in_log_filter(config);
@@ -232,7 +262,7 @@ api: {backend: {timeout: 45, max_body_size: 10}}
 network:
   backend:
     swarm:
-      gossipsub: {heartbeat_interval: {secs: 1, nanos: 0}}
+      gossipsub: {heartbeat_interval: {secs: 1, nanos: 0}, max_ihave_length: 4000, max_ihave_messages: 20, max_messages_per_rpc: null, published_message_ids_cache_time: {secs: 10, nanos: 0}}
       kademlia: {query_timeout_secs: 90, periodic_bootstrap_interval_secs: null, caching: {type: Enabled, config: {max_peers: 7}}}
       identify: {interval_secs: 300}
       chain_sync: {peer_response_timeout: 1500}
@@ -256,7 +286,7 @@ api: {backend: {timeout: 45s, max_body_size: 10}}
 network:
   backend:
     swarm:
-      gossipsub: {heartbeat_interval: 1s}
+      gossipsub: {heartbeat_interval: 1s, max_control_messages_sent: 4000, max_ihave_messages_heartbeat: 20}
       kademlia: {query_timeout: 1m 30s, periodic_bootstrap_interval: null, cache_size: 7}
       identify: {interval: 5m}
       chain_sync: {peer_response_timeout: 1s 500ms}
@@ -277,7 +307,7 @@ tracing:
         // Disabled caching, a custom prefix and a customised filter are kept.
         let mut config = yaml(
             "
-network: {backend: {swarm: {kademlia: {caching: {type: Disabled}}}}}
+network: {backend: {swarm: {kademlia: {caching: {type: Disabled}}, gossipsub: {max_messages_per_rpc: 100}}}}
 tracing: {logger: {file: {prefix: node-a}}, filter: !Env {filters: {'*': DEBUG}}}
 ",
         );
@@ -286,7 +316,7 @@ tracing: {logger: {file: {prefix: node-a}}, filter: !Env {filters: {'*': DEBUG}}
             config,
             yaml(
                 "
-network: {backend: {swarm: {kademlia: {cache_size: null}}}}
+network: {backend: {swarm: {kademlia: {cache_size: null}, gossipsub: {max_publish_messages: 100}}}}
 tracing: {logger: {file: {prefix: node-a}}, filter: !Env {filters: {'*': DEBUG}}}
 "
             )

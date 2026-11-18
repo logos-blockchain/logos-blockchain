@@ -22,7 +22,7 @@ use libp2p::{
     swarm::{ConnectionId, DialError, SwarmEvent, dial_opts::DialOpts},
 };
 use multiaddr::multiaddr;
-use rand::RngCore;
+use rand_010::SeedableRng;
 
 pub use crate::{
     SwarmConfig,
@@ -36,12 +36,12 @@ const IDLE_CONN_TIMEOUT: Duration = Duration::from_mins(5);
 const LOG_TARGET: &str = lb_log_targets_libp2p::ROOT;
 
 /// Wraps [`libp2p::Swarm`], and config it for use within Logos blockchain.
-pub struct Swarm<R: Clone + Send + RngCore + 'static> {
+pub struct Swarm<Rng: rand_010::Rng + SeedableRng + Send + 'static> {
     // A core libp2p swarm
-    pub(crate) swarm: libp2p::Swarm<Behaviour<R>>,
+    pub(crate) swarm: libp2p::Swarm<Behaviour<Rng>>,
 }
 
-impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
+impl<Rng: rand_010::Rng + SeedableRng + Send + 'static> Swarm<Rng> {
     /// Builds a [`Swarm`] configured for use with Logos blockchain on top of a
     /// tokio executor, whose chain sync carries blocks of up to
     /// `chain_sync_max_block_size` bytes.
@@ -50,7 +50,7 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
         chain_sync_protocol_name: StreamProtocol,
         chain_sync_max_block_size: usize,
         max_data_size_by_topic: HashMap<libp2p::gossipsub::TopicHash, usize>,
-        rng: R,
+        rng: Rng,
     ) -> Result<Self, Box<dyn Error>> {
         let keypair =
             libp2p::identity::Keypair::from(ed25519::Keypair::from(config.node_key.clone()));
@@ -129,13 +129,13 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
     }
 
     /// Returns a reference to the underlying [`libp2p::Swarm`]
-    pub const fn swarm(&self) -> &libp2p::Swarm<Behaviour<R>> {
+    pub const fn swarm(&self) -> &libp2p::Swarm<Behaviour<Rng>> {
         &self.swarm
     }
 }
 
-impl<R: Clone + Send + RngCore + 'static> futures::Stream for Swarm<R> {
-    type Item = SwarmEvent<BehaviourEvent<R>>;
+impl<Rng: rand_010::Rng + SeedableRng + Send + 'static> futures::Stream for Swarm<Rng> {
+    type Item = SwarmEvent<BehaviourEvent<Rng>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         Pin::new(&mut self.swarm).poll_next(cx)
@@ -163,8 +163,7 @@ pub fn system_dns_config() -> (ResolverConfig, ResolverOpts) {
             target: LOG_TARGET,
             "Failed to read the system DNS configuration, so DNS addresses will fail to dial until the swarm is built again: {e}"
         );
-        // Not `ResolverConfig::default()`, which sends every lookup to
-        // Google's public resolvers.
-        (ResolverConfig::new(), ResolverOpts::default())
+        // No DNS servers: DNS dials fail until the swarm is rebuilt.
+        (ResolverConfig::from_name_servers(vec![]), ResolverOpts::default())
     })
 }

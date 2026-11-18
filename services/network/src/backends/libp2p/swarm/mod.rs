@@ -36,7 +36,7 @@ use lb_libp2p::{
 use lb_log_targets::network_service;
 use lb_time::Era;
 use lb_utils::tokio::task::spawn;
-use rand::RngCore;
+use rand_010::SeedableRng;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::StreamExt as _;
 
@@ -88,8 +88,8 @@ struct AdvertisedProtocols {
     protocols: HashSet<Libp2pStreamProtocol>,
 }
 
-pub struct SwarmHandler<R: Clone + Send + RngCore + 'static> {
-    pub swarm: Swarm<R>,
+pub struct SwarmHandler<Rng: rand_010::Rng + SeedableRng + Send + 'static> {
+    pub swarm: Swarm<Rng>,
     pub pending_dials: HashMap<ConnectionId, Dial>,
     pub commands_tx: mpsc::Sender<Command>,
     pub commands_rx: mpsc::Receiver<Command>,
@@ -125,7 +125,7 @@ const BACKOFF: u64 = 5;
 // TODO: make this configurable
 const MAX_RETRY: usize = 3;
 
-impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
+impl<Rng: rand_010::Rng + SeedableRng + Send + 'static> SwarmHandler<Rng> {
     pub fn new(
         config: Libp2pConfig,
         current_era: Era,
@@ -133,7 +133,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         commands_rx: mpsc::Receiver<Command>,
         pubsub_events_tx: broadcast::Sender<Message>,
         chainsync_events_tx: broadcast::Sender<ChainSyncEvent>,
-        rng: R,
+        rng: Rng,
     ) -> Self {
         let Libp2pConfig {
             inner,
@@ -211,7 +211,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         }
     }
 
-    fn handle_event(&mut self, event: SwarmEvent<BehaviourEvent<R>>) {
+    fn handle_event(&mut self, event: SwarmEvent<BehaviourEvent<Rng>>) {
         match event {
             SwarmEvent::Behaviour(behaviour_event) => {
                 self.handle_behaviour_event(behaviour_event);
@@ -222,7 +222,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         }
     }
 
-    fn handle_behaviour_event(&mut self, behaviour_event: BehaviourEvent<R>) {
+    fn handle_behaviour_event(&mut self, behaviour_event: BehaviourEvent<Rng>) {
         match behaviour_event {
             BehaviourEvent::Gossipsub(event) => {
                 self.handle_gossipsub_event(event);
@@ -244,7 +244,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         clippy::cognitive_complexity,
         reason = "TODO: Address this at some point."
     )]
-    fn handle_swarm_event(&mut self, event: SwarmEvent<BehaviourEvent<R>>) {
+    fn handle_swarm_event(&mut self, event: SwarmEvent<BehaviourEvent<Rng>>) {
         match event {
             SwarmEvent::ConnectionEstablished {
                 peer_id,
@@ -607,7 +607,7 @@ mod tests {
 
     use lb_core::header::HeaderId;
     use lb_time::era::{EraEntriesAfterGenesis, EraSchedule, EraTiming};
-    use rand::rngs::OsRng;
+    use rand_010::rngs::StdRng;
     use testing_framework_tools::net::get_available_udp_port;
     use time::OffsetDateTime;
     use tracing_subscriber::EnvFilter;
@@ -725,11 +725,11 @@ mod tests {
         })
     }
 
-    fn create_handler() -> SwarmHandler<OsRng> {
+    fn create_handler() -> SwarmHandler<StdRng> {
         create_handler_with_eras(one_era(HashMap::new()))
     }
 
-    fn create_handler_with_eras(era_schedule: Libp2pEraSchedule) -> SwarmHandler<OsRng> {
+    fn create_handler_with_eras(era_schedule: Libp2pEraSchedule) -> SwarmHandler<StdRng> {
         let (tx, rx) = mpsc::channel(10);
         let (pubsub_events_tx, _) = broadcast::channel(10);
         let (chainsync_events_tx, _) = broadcast::channel(10);
@@ -746,7 +746,7 @@ mod tests {
             rx,
             pubsub_events_tx,
             chainsync_events_tx,
-            OsRng,
+            StdRng::seed_from_u64(0),
         )
     }
 
@@ -800,7 +800,7 @@ mod tests {
     fn create_gossipsub_handler(
         topic: TopicHash,
         max_data_size: usize,
-    ) -> (SwarmHandler<OsRng>, broadcast::Receiver<Message>) {
+    ) -> (SwarmHandler<StdRng>, broadcast::Receiver<Message>) {
         let (commands_tx, commands_rx) = mpsc::channel(1);
         let (pubsub_events_tx, pubsub_events_rx) = broadcast::channel(1);
         let (chainsync_events_tx, _) = broadcast::channel(1);
@@ -817,7 +817,7 @@ mod tests {
             commands_rx,
             pubsub_events_tx,
             chainsync_events_tx,
-            OsRng,
+            StdRng::seed_from_u64(1),
         );
 
         (handler, pubsub_events_rx)
@@ -960,7 +960,7 @@ mod tests {
             commands_rx,
             pubsub_events_tx,
             chainsync_events_tx,
-            OsRng,
+            StdRng::seed_from_u64(2),
         );
         let initial_peers = (1..=3)
             .map(|port| {
@@ -1004,7 +1004,7 @@ mod tests {
             bootstrap_commands_rx,
             bootstrap_pubsub_events_tx,
             bootstrap_chainsync_events_tx,
-            OsRng,
+            StdRng::seed_from_u64(3),
         );
         bootstrap.handle_pubsub_command(PubSubCommand::Subscribe(topic.to_owned()));
         let bootstrap_peer_id = *bootstrap.swarm.swarm().local_peer_id();
@@ -1035,7 +1035,7 @@ mod tests {
             peer_commands_rx,
             peer_pubsub_events_tx,
             peer_chainsync_events_tx,
-            OsRng,
+            StdRng::seed_from_u64(4),
         );
         peer.handle_pubsub_command(PubSubCommand::Subscribe(topic.to_owned()));
         let peer_task = tokio::spawn(async move {
@@ -1312,7 +1312,7 @@ mod tests {
             rx1,
             pubsub_events_tx,
             chainsync_events_tx,
-            OsRng,
+            StdRng::seed_from_u64(5),
         );
 
         let bootstrap_node_peer_id = *bootstrap_node.swarm.swarm().local_peer_id();
@@ -1372,7 +1372,7 @@ mod tests {
                 rx,
                 pubsub_events_tx,
                 chainsync_events_tx,
-                OsRng,
+                StdRng::seed_from_u64(6),
             );
 
             let peer_id = *handler.swarm.swarm().local_peer_id();
@@ -1477,7 +1477,7 @@ mod tests {
             rx,
             pubsub_events_tx,
             chainsync_events_tx,
-            OsRng,
+            StdRng::seed_from_u64(7),
         );
 
         let remote_peer = PeerId::random();
@@ -1561,7 +1561,7 @@ mod tests {
             rx,
             pubsub_events_tx,
             chainsync_events_tx,
-            OsRng,
+            StdRng::seed_from_u64(8),
         );
 
         // A peer learned via discovery (Kademlia/Identify), i.e. NOT through
@@ -1628,7 +1628,7 @@ mod tests {
             rx,
             pubsub_events_tx,
             chainsync_events_tx,
-            OsRng,
+            StdRng::seed_from_u64(9),
         );
 
         let expected_peers: Vec<(PeerId, Multiaddr)> = std::iter::repeat_with(|| {
@@ -1679,7 +1679,7 @@ mod tests {
             rx,
             pubsub_events_tx,
             chainsync_events_tx,
-            OsRng,
+            StdRng::seed_from_u64(10),
         );
 
         handler.bootstrap_kad_from_peers(&vec![]);

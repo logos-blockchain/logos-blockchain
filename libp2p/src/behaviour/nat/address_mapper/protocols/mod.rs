@@ -107,8 +107,6 @@ mod tests {
 
 #[cfg(test)]
 mod real_gateway_tests {
-    use rand::{Rng as _, thread_rng};
-
     use super::*;
 
     /// Run with: `NAT_TEST_LOCAL_IP="192.168.1.100`" cargo test
@@ -117,7 +115,7 @@ mod real_gateway_tests {
     #[ignore = "Runs against a real gateway"]
     async fn map_address_via_protocol_manager_real_gateway() {
         let local_ip = std::env::var("NAT_TEST_LOCAL_IP").expect("NAT_TEST_LOCAL_IP");
-        let random_port: u64 = thread_rng().gen_range(10000..=64000);
+        let random_port: u64 = rand_010::random_range(10000..=64000);
         let local_address = format!("/ip4/{local_ip}/tcp/{random_port}");
 
         println!("Testing NAT mapping for local address: {local_address}");

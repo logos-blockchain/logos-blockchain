@@ -40,7 +40,7 @@ multiaddr = { workspace = true }
 natpmp = { features = ["tokio"], workspace = true }
 netdev = { workspace = true }
 num_enum = { workspace = true }
-rand = { workspace = true }
+rand_010 = { features = ["thread_rng"], workspace = true }
 serde = { features = ["derive"], workspace = true }
 serde_with = { features = ["macros"], workspace = true }
 thiserror = { workspace = true }

@@ -27,7 +27,7 @@ lb-tracing          = { workspace = true }
 lb-utils            = { features = ["tokio"], workspace = true }
 overwatch           = { workspace = true }
 rand                = { features = ["std"], workspace = true }
-rand_chacha         = { workspace = true }
+rand_010            = { features = ["chacha", "sys_rng"], workspace = true }
 serde               = { features = ["derive"], workspace = true }
 tokio               = { features = ["macros", "sync"], workspace = true }
 tokio-stream        = { workspace = true }
@@ -37,6 +37,7 @@ utoipa              = { features = ["macros"], optional = true, workspace = true
 [dev-dependencies]
 chrono                  = { features = ["now"], workspace = true }
 lb-utils                = { workspace = true }
+rand_010                = { features = ["std_rng"], workspace = true }
 testing-framework-tools = { workspace = true }
 time                    = { workspace = true }
 tracing-subscriber      = { features = ["env-filter", "fmt", "std"], workspace = true }

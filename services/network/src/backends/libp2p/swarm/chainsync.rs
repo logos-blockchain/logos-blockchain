@@ -5,7 +5,7 @@ use lb_libp2p::{
     cryptarchia_sync::{BoxedStream, ChainSyncError, HeaderId, SerialisedBlock, TipResponse},
 };
 use lb_log_targets::network_service;
-use rand::RngCore;
+use rand_010::SeedableRng;
 use tokio::sync::{broadcast::error::SendError, oneshot};
 
 use crate::{backends::libp2p::swarm::SwarmHandler, message::ChainSyncEvent};
@@ -58,7 +58,7 @@ impl Debug for ChainSyncCommand {
     }
 }
 
-impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
+impl<Rng: rand_010::Rng + SeedableRng + Send + 'static> SwarmHandler<Rng> {
     #[expect(
         clippy::cognitive_complexity,
         reason = "The command handler keeps all chainsync command dispatch in one place."
