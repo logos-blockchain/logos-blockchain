@@ -275,6 +275,31 @@ impl MantleTxBuilder {
         Ok(build.by_ref().total_gas_cost(&context.gas_context)?)
     }
 
+    /// Predicts what the transaction costs once a wallet funds it. Mandatory
+    /// fee only, before any priority reserve: the builder as it stands, or
+    /// with one input and a change note when it has no input, which is what
+    /// a wallet whose note covers the fee adds.
+    pub fn funded_gas_cost(&self, context: &OpsContext) -> Result<GasCost, TxBuilderError> {
+        if self.funding_inputs.is_empty() {
+            self.funded_with_placeholders(1)?.minimum_gas_cost(context)
+        } else {
+            self.minimum_gas_cost(context)
+        }
+    }
+
+    // The builder with `inputs` more funding inputs and a change note, all
+    // placeholders: they encode to the size of real ones, which is what the
+    // fee prices.
+    fn funded_with_placeholders(&self, inputs: usize) -> Result<Self, TxBuilderError> {
+        let placeholder = FundingNote {
+            note: Note::new(0, Fr::ZERO, ZkPublicKey::zero()),
+            nullifier: NoteNullifier(Fr::ZERO),
+        };
+        self.clone()
+            .extend_funding_inputs(self.funding_root, std::iter::repeat_n(placeholder, inputs))?
+            .with_dummy_change_note()
+    }
+
     pub fn funding_delta(&self, context: &OpsContext) -> Result<i128, TxBuilderError> {
         Ok(self.net_balance() - i128::from(self.minimum_gas_cost(context)?.into_inner()))
     }
@@ -649,6 +674,29 @@ mod tests {
                 }
             )])
         );
+    }
+
+    #[test]
+    fn funded_gas_cost_prices_the_fee_transfer_a_wallet_adds() {
+        let context = OpsContext {
+            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(1, 1), GAS_PROFILE),
+        };
+        let unfunded = MantleTxBuilder::new()
+            .push_op(Op::ChannelInscribe(InscriptionOp::sample()))
+            .unwrap();
+        let bare_ops = unfunded.minimum_gas_cost(&context).unwrap();
+        let fee = unfunded.funded_gas_cost(&context).unwrap();
+        assert!(bare_ops < fee, "the fee transfer is priced");
+
+        // A wallet funding with one note pays the prediction exactly, and a
+        // builder with inputs is priced as it stands.
+        let funded = unfunded
+            .extend_funding_inputs(Fr::from(5u64), [funding_note(1_000, 1, 3)])
+            .unwrap()
+            .add_ledger_output(Note::new(1, Fr::ONE, ZkPublicKey::zero()))
+            .unwrap();
+        assert_eq!(funded.minimum_gas_cost(&context).unwrap(), fee);
+        assert_eq!(funded.funded_gas_cost(&context).unwrap(), fee);
     }
 
     #[test]

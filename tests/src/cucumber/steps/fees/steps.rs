@@ -133,6 +133,18 @@ async fn step_gas_prices_are(
     .await
 }
 
+#[then(
+    expr = "node {string} quotes the fee that funding a self-transfer from wallet {string} pays"
+)]
+async fn step_quoted_fee_is_paid_by_funding(
+    world: &mut CucumberWorld,
+    step: &Step,
+    node_name: String,
+    wallet_name: String,
+) -> StepResult {
+    actions::fund_self_transfer_at_quoted_fee(world, step, &wallet_name, &node_name).await
+}
+
 #[when(
     expr = "I submit an exactly funded self-transfer from wallet {string} via node {string} \
             as {string}"

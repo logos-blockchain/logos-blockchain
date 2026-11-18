@@ -39,7 +39,7 @@ use super::handlers::{
     cryptarchia_info, cryptarchia_lib_stream, dial_peer, get_finalized_sdp_declaration,
     get_finalized_sdp_declarations, get_gas_prices, get_limits, get_sdp_declarations,
     get_sdp_snapshot, immutable_blocks, libp2p_info, mantle_metrics, mantle_status, mempool_view,
-    time_info, transaction, version, wallet,
+    time_info, transaction, tx_fee, version, wallet,
 };
 use crate::{
     BlendService, PoWService, TracingService, ValidatedTx, WalletService,

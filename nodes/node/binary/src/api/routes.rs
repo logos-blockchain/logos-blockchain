@@ -63,6 +63,7 @@ macro_rules! api_routes {
             get lb_http_api_common::paths::wallet::BALANCE => crate::api::handlers::wallet::get_balance, wallet::get_balance::<WalletService, _>;
             get lb_http_api_common::paths::MANTLE_GAS_PRICES => crate::api::handlers::get_gas_prices, get_gas_prices::<RuntimeServiceId>;
             get lb_http_api_common::paths::MANTLE_LIMITS => crate::api::handlers::get_limits, get_limits::<RuntimeServiceId>;
+            post lb_http_api_common::paths::MANTLE_TX_FEE => crate::api::handlers::tx_fee, tx_fee::<RuntimeServiceId>;
             post lb_http_api_common::paths::wallet::TRANSACTIONS_TRANSFER_FUNDS => crate::api::handlers::wallet::post_transactions_transfer_funds, wallet::post_transactions_transfer_funds::<WalletService, MempoolStorageAdapter, _>;
             post lb_http_api_common::paths::wallet::SIGN_TX_ED25519 => crate::api::handlers::wallet::sign_tx_ed25519, wallet::sign_tx_ed25519::<WalletService, MempoolStorageAdapter, _>;
             post lb_http_api_common::paths::wallet::FUND => crate::api::handlers::wallet::fund, wallet::fund::<WalletService, MempoolStorageAdapter, _>;

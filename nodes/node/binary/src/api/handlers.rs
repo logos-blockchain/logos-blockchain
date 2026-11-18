@@ -45,7 +45,10 @@ use lb_http_api_common::{
         blend::JoinBlendRequestBody,
         chain::{ChainForkResponseBody, ChainIdResponseBody},
         channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
-        mantle::{GasPricesResponseBody, LimitsResponseBody},
+        mantle::{
+            GasPricesResponseBody, LimitsResponseBody, MantleTxFeeRequestBody,
+            MantleTxFeeResponseBody,
+        },
         wallet::{
             balance::WalletBalanceResponseBody,
             transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
@@ -1815,6 +1818,31 @@ where
         Ok(None) => ApiError::NotFound("Ledger state not found for block".into()).into_response(),
         Err(error) => ApiError::internal(error).into_response(),
     }
+}
+
+#[utoipa::path(
+    post,
+    path = paths::MANTLE_TX_FEE,
+    responses(
+        (status = 200, description = "What the transaction costs once funded at the tip"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn tx_fee<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(req): Json<MantleTxFeeRequestBody>,
+) -> Response
+where
+    RuntimeServiceId:
+        AsServiceId<Cryptarchia<RuntimeServiceId>> + Debug + Sync + Display + Send + 'static,
+{
+    make_request_and_return_response!(async {
+        let priced = mantle::tx_fee::<RuntimeServiceId>(&handle, req.tip, &req.tx_builder).await?;
+        Ok::<_, DynError>(MantleTxFeeResponseBody {
+            tip: priced.tip,
+            tx_fee: priced.fee,
+        })
+    })
 }
 
 #[utoipa::path(

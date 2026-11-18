@@ -6,6 +6,7 @@ pub mod cryptarchia;
 pub mod deployment;
 pub mod keys;
 pub mod lifecycle;
+pub mod mantle;
 pub(crate) mod memory;
 pub mod metrics;
 pub mod network;

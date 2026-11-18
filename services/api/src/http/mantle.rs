@@ -14,10 +14,11 @@ use lb_core::{
     mantle::{
         SignedOps,
         channel::ChannelState,
+        gas::GasCost,
         ledger::verification_mode::StandardMode,
         ops::channel::ChannelId,
         traits::{Hashable, StorageSize},
-        transactions::{hash::TxHash, states::Preverified},
+        transactions::{MantleTxBuilder, hash::TxHash, states::Preverified},
     },
     sdp::{Declaration, DeclarationId, ServiceType},
 };
@@ -66,6 +67,43 @@ pub type MempoolService<StorageAdapter, TimeBackend, RuntimeServiceId> = TxMempo
     TimeBackend,
     RuntimeServiceId,
 >;
+
+/// The fee of a transaction at a tip.
+pub struct TxFeeAtTip {
+    pub tip: HeaderId,
+    pub fee: GasCost,
+}
+
+/// What `tx_builder` costs once funded at `tip`, or at the current tip:
+/// priced against the ledger state there, under the gas profile of its era.
+pub async fn tx_fee<RuntimeServiceId>(
+    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
+    tip: Option<HeaderId>,
+    tx_builder: &MantleTxBuilder,
+) -> Result<TxFeeAtTip, super::DynError>
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
+    let tip = match tip {
+        Some(tip) => tip,
+        None => {
+            cryptarchia_info::<RuntimeServiceId>(handle)
+                .await?
+                .cryptarchia_info
+                .tip
+        }
+    };
+    let ledger_state = chain_api
+        .get_ledger_state(tip)
+        .await?
+        .ok_or("ledger state not found for block")?;
+    let config = chain_api.get_ledger_config(ledger_state.slot()).await?;
+    let fee = tx_builder.funded_gas_cost(&ledger_state.tx_context(config.gas_profile))?;
+    Ok(TxFeeAtTip { tip, fee })
+}
 
 pub async fn channel_state<RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
